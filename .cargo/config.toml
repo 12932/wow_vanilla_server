@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-Ctarget-cpu=native"]
+
+[env]
+WOW_VANILLA_WORLDDB = "mangos0.sqlite"

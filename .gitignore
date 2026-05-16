@@ -1,0 +1,22 @@
+.idea
+target
+
+# Tracy CPU profiles — large, regenerated on demand. Saved to repo root
+# during perf investigations but never meant to be checked in.
+*.tracy
+*.tracy.zstd
+*.zstd
+
+# Server runtime artifacts.
+snapshot.bin
+
+# Mangos worlddb dump. ~30 MB binary; everyone should have their own copy
+# at the path pointed to by WOW_VANILLA_WORLDDB.
+mangos0.sqlite
+
+# Per-user Claude Code state (scheduled tasks, locks, plans, etc.).
+.claude/
+
+# Local environment (realm address, future secrets). Never commit;
+# `.env.example` is the tracked template.
+.env
