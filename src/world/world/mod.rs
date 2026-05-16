@@ -1645,19 +1645,29 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
         .set_unit_displayid(race.display_id(character.gender))
         .set_unit_nativedisplayid(race.display_id(character.gender));
 
-    for (i, (item, slot)) in character.inventory.all_slots().iter().enumerate() {
-        if let Some(item) = item {
-            if let Ok(index) = VisibleItemIndex::try_from(i) {
-                let visible_item = VisibleItem::new(
-                    Guid::zero(),
-                    item.item.entry(),
-                    [0, 0],
-                    item.item.random_property() as u32,
-                    0,
-                );
-                mask = mask.set_player_visible_item(visible_item, index);
-            }
-            mask = mask.set_player_field_inv(*slot, item.guid);
+    // Visible-item slots only — `set_player_visible_item` carries the item
+    // ENTRY + enchants, which is what the client needs to render gear on
+    // the unit. We deliberately do NOT call `set_player_field_inv` here:
+    // that field expects a properly-typed item GUID (`HIGHGUID_ITEM` =
+    // 0x4000 in the high 32 bits), but our `db.new_guid()` hands out
+    // type-less counters that look identical to player GUIDs on the wire.
+    // Shipping those over `PLAYER_FIELD_INV_*` to an observer makes the
+    // client interpret the slot as referring to a player guid, fails the
+    // item lookup, and crashes on render. The puppet path
+    // (`get_update_simulated_player_mask`) skips this for the same reason
+    // and renders cleanly. Revisit when item guids get proper type bits.
+    for (i, (item, _slot)) in character.inventory.all_slots().iter().enumerate() {
+        if let Some(item) = item
+            && let Ok(index) = VisibleItemIndex::try_from(i)
+        {
+            let visible_item = VisibleItem::new(
+                Guid::zero(),
+                item.item.entry(),
+                [0, 0],
+                item.item.random_property() as u32,
+                0,
+            );
+            mask = mask.set_player_visible_item(visible_item, index);
         }
     }
 
