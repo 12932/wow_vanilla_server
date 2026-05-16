@@ -29,10 +29,9 @@ use wow_world_messages::vanilla::{
     MSG_MOVE_SET_FACING_Server, MSG_MOVE_START_FORWARD_Server, MSG_MOVE_STOP_Server,
     MSG_MOVE_TELEPORT_ACK_Server,
     MovementBlock, MovementBlock_MovementFlags, MovementBlock_UpdateFlag,
-    MovementBlock_UpdateFlag_HighGuid, MovementBlock_UpdateFlag_Living, MovementInfo,
-    MovementInfo_MovementFlags, Object, ObjectType,
+    MovementBlock_UpdateFlag_Living, MovementInfo, MovementInfo_MovementFlags, Object, ObjectType,
     Object_UpdateType, PlayerChatTag, SMSG_MESSAGECHAT_ChatType, SMSG_MONSTER_MOVE_MonsterMoveType,
-    SkillInfo, SkillInfoIndex, UpdatePlayerBuilder, Vector3d, VisibleItem, VisibleItemIndex,
+    UpdatePlayerBuilder, Vector3d, VisibleItem, VisibleItemIndex,
     SMSG_ACCOUNT_DATA_TIMES, SMSG_ATTACKERSTATEUPDATE, SMSG_DESTROY_OBJECT, SMSG_INITIAL_SPELLS,
     SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_MESSAGECHAT, SMSG_MONSTER_MOVE,
     SMSG_NEW_WORLD, SMSG_TRANSFER_PENDING, SMSG_TUTORIAL_FLAGS, SMSG_UPDATE_OBJECT,
@@ -1572,18 +1571,6 @@ pub fn player_self_update_for_login(character: &Character) -> SMSG_UPDATE_OBJECT
 }
 
 pub fn player_create_object(character: &Character) -> Object {
-    // Player CreateObject blocks need both `LIVING` (the full MovementInfo
-    // is embedded) AND `HIGH_GUID` (a trailing u32, usually 0). Real
-    // cmangos / MaNGOS-zero sets both:
-    //
-    //     m_updateFlag = (UPDATEFLAG_HIGH_GUID | UPDATEFLAG_LIVING | ...);
-    //
-    // Without `HIGH_GUID`, the 1.12.2 client reads the next 4 bytes at the
-    // wrong offset, corrupts its local view of the entity, and crashes
-    // when rendering. The bug only manifests for OTHER players (the local
-    // client has its own data already, so the self-create flag set being
-    // wrong is invisible). That matched the symptom: log in alone, fine;
-    // log in with bots already present, crash.
     Object {
         update_type: Object_UpdateType::CreateObject2 {
             guid3: character.guid,
@@ -1607,8 +1594,7 @@ pub fn player_create_object(character: &Character) -> Object {
                         turn_rate: DEFAULT_TURN_SPEED,
                         walking_speed: WALK_SPEED,
                     },
-                )
-                .set_high_guid(MovementBlock_UpdateFlag_HighGuid { unknown0: 0 }),
+                ),
             },
             object_type: ObjectType::Player,
         },
@@ -1637,51 +1623,23 @@ fn living_block_flags_for(character: &Character) -> MovementBlock_MovementFlags 
 }
 
 fn get_update_object_player(character: &Character) -> UpdateMask {
-    // Reference: <https://pikdum.dev/posts/thistle-tea/> day 13 — "you need
-    // to send all fields in the update object packet, like health, or they
-    // get reset". Vanilla 1.12.2 clients crash when an in-AOI other player
-    // arrives with required UNIT_/PLAYER_ fields un-flagged in the update
-    // mask: the client falls back to garbage defaults for `unit_flags`,
-    // `unit_bytes_1/2`, `unit_combatreach`, `unit_boundingradius`, and the
-    // XP pair, which corrupts the entity and crashes during render. The
-    // setters below mirror the minimum set cmangos/vmangos emit for a
-    // player CreateObject.
+    // Mirrors the field set used by `get_update_simulated_player_mask`,
+    // which is known to render correctly to observers. The previous,
+    // larger field list (stats, target, skill_info, XP, the unit_bytes
+    // pair, combatreach, boundingradius) plus a `HIGH_GUID` movement
+    // flag broke client-side rendering for OTHER players (admin logs in
+    // near bots → bots invisible). The smaller mask is what works.
     //
-    // `OBJECT_FIELD_TYPE` (= 25 for `TYPEMASK_OBJECT | TYPEMASK_UNIT |
-    // TYPEMASK_PLAYER`) is *not* a separate setter call here — the
-    // generated `UpdatePlayerBuilder` writes that field automatically as
-    // part of its baseline, because the builder knows it's emitting a
-    // Player. See `wow_world_messages/src/helper/vanilla/update_mask`.
+    // Re-add anything from the larger set deliberately, one piece at a
+    // time, with a real client test after each addition — the protocol
+    // doesn't fail loud when a field is malformed, it just silently
+    // discards or crashes the observer.
+    let race = character.race_class.race();
+    let class = character.race_class.class();
     let mut mask = UpdatePlayerBuilder::new()
         .set_object_guid(character.guid)
-        .set_object_scale_x(
-            character
-                .race_class
-                .to_race_class()
-                .0
-                .race_scale(character.gender),
-        )
-        .set_unit_bytes_0(
-            character.race_class.race().into(),
-            character.race_class.class(),
-            character.gender.into(),
-            character.race_class.class().power_type(),
-        )
-        // Stand state (standing), anim state, shapeshift, misc — all zero
-        // is the canonical "alive, standing, no shapeshift" baseline.
-        .set_unit_bytes_1(0, 0, 0, 0)
-        // Sheath state (unarmed), PvP byte, bank-bag-slots, misc — zeros
-        // give "weapon sheathed, no PvP flag set" which is the correct
-        // default for a player walking around.
-        .set_unit_bytes_2(0, 0, 0, 0)
-        // UNIT_FIELD_FLAGS bitfield. Zero = no special flags (not in
-        // combat, not lootable, attackable). Anything missing here makes
-        // the client treat the unit as in an undefined visibility state.
-        .set_unit_flags(0)
-        // Melee cylinder + bounding radius — vanilla 1.12 defaults for a
-        // human-scale model. Required by the client's pick/select code.
-        .set_unit_combatreach(1.5)
-        .set_unit_boundingradius(0.389)
+        .set_object_scale_x(race.race_scale(character.gender))
+        .set_unit_bytes_0(race.into(), class, character.gender.into(), class.power_type())
         .set_player_bytes_2(character.facialhair, 0, 0, 2)
         .set_player_features(
             character.skin,
@@ -1689,24 +1647,13 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
             character.hairstyle,
             character.haircolor,
         )
-        .set_unit_base_health(character.base_health())
+        .set_unit_base_health(character.max_health())
         .set_unit_health(character.max_health())
         .set_unit_maxhealth(character.max_health())
         .set_unit_level(character.level.as_int() as i32)
-        .set_unit_agility(character.agility())
-        .set_unit_strength(character.strength())
-        .set_unit_stamina(character.stamina())
-        .set_unit_intellect(character.intellect())
-        .set_unit_spirit(character.spirit())
-        .set_unit_factiontemplate(character.race_class.race().faction_id().as_int() as i32)
-        .set_unit_displayid(character.race_class.race().display_id(character.gender))
-        .set_unit_nativedisplayid(character.race_class.race().display_id(character.gender))
-        .set_unit_target(character.target)
-        // XP placeholders — we don't track XP yet, but the fields have to
-        // be flagged in the update mask or the client reads them as
-        // garbage. Update to real values once XP tracking lands.
-        .set_player_xp(0)
-        .set_player_next_level_xp(1000);
+        .set_unit_factiontemplate(race.faction_id().as_int() as i32)
+        .set_unit_displayid(race.display_id(character.gender))
+        .set_unit_nativedisplayid(race.display_id(character.gender));
 
     for (i, (item, slot)) in character.inventory.all_slots().iter().enumerate() {
         if let Some(item) = item {
@@ -1722,13 +1669,6 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
             }
             mask = mask.set_player_field_inv(*slot, item.guid);
         }
-    }
-
-    for (i, skill) in character.race_class.starter_skills().iter().enumerate() {
-        mask = mask.set_player_skill_info(
-            SkillInfo::new(*skill, 0, 295, 300, 0, 2),
-            SkillInfoIndex::try_from(i as u32).unwrap(),
-        );
     }
 
     UpdateMask::Player(mask.finalize())
