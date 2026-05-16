@@ -30,6 +30,19 @@ async fn main() {
         .with(tracing_tracy::TracyLayer::default())
         .init();
 
+    // Raise our own file-descriptor soft limit toward the hard limit so a
+    // few thousand concurrent client sockets don't trip `EMFILE` on accept.
+    // On Linux the default shell-inherited soft limit is usually 1024 while
+    // the hard limit is 1 048 576 — a process can raise its own soft limit
+    // up to the hard limit without root, which is exactly what we do here.
+    // No-op on Windows (rlimit returns Ok with the requested value).
+    match rlimit::increase_nofile_limit(1_048_576) {
+        Ok(new_soft) => tracing::info!("raised fd soft limit to {new_soft}"),
+        Err(e) => tracing::warn!(
+            "could not raise fd limit (you may hit EMFILE under load): {e}"
+        ),
+    }
+
     let users = Arc::new(Mutex::new(AHashMap::new()));
 
     let auth_server = tokio::spawn(auth::auth(users.clone()));
