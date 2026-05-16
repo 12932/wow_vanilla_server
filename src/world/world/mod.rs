@@ -803,9 +803,16 @@ impl World {
             .iter()
             .filter_map(|(k, c)| c.reader_is_finished().then_some(k))
             .collect();
+        // Group stale-disconnect guids by map so a mass-drop (e.g. 800 bots
+        // hitting Ctrl-C simultaneously) becomes ONE `OutOfRangeObjects`
+        // packet per observer, not N individual `SMSG_DESTROY_OBJECT`
+        // broadcasts. Previously the latter pattern flooded each observer's
+        // per-client outbound channel past `OUTBOUND_CHANNEL_CAPACITY = 512`;
+        // anything past that got dropped silently via `try_send`'s `Full`
+        // path, leaving stale phantoms in admin's view of the world.
+        let mut stale_by_map: ahash::AHashMap<Map, Vec<Guid>> = ahash::AHashMap::new();
         for key in stale_client_keys {
             let c = self.clients.remove(key);
-            let logout_pos = c.character().info.position;
             let logout_map = c.character().map;
             let guid = c.character().guid;
             db.replace_character_data(c.character().clone());
@@ -814,13 +821,34 @@ impl World {
                 c.character().name,
                 guid
             );
-            aoi::broadcast_within_aoi(
-                SMSG_DESTROY_OBJECT { guid },
-                logout_pos,
-                logout_map,
-                &mut self.clients,
-            )
-            .await;
+            stale_by_map.entry(logout_map).or_default().push(guid);
+        }
+        for (map, guids) in stale_by_map {
+            // Wrap the dead-guid list in a single SMSG_UPDATE_OBJECT carrying
+            // `OutOfRangeObjects { guids }`. The 1.12.2 client treats this
+            // as "remove all these entities from your local table" — same
+            // visual effect as N individual DESTROY_OBJECTs but one packet
+            // per observer. Send to every remaining client on that map; the
+            // client ignores guids it doesn't know about, so skipping the
+            // AOI distance check here is harmless and lets us shortcut a
+            // per-recipient distance walk.
+            let total = guids.len();
+            let msg = SMSG_UPDATE_OBJECT {
+                has_transport: 0,
+                objects: vec![Object {
+                    update_type: Object_UpdateType::OutOfRangeObjects { guids },
+                }],
+            };
+            let mut delivered = 0_usize;
+            for (_, c) in self.clients.iter_mut() {
+                if c.character().map == map {
+                    c.send_message(msg.clone()).await;
+                    delivered += 1;
+                }
+            }
+            tracing::debug!(
+                "Despawned {total} stale clients on map {map:?} -> notified {delivered} observers"
+            );
         }
 
         while let Some((i, _)) = self
