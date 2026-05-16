@@ -46,6 +46,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 rand = "0.10.1"
 dotenvy = "0.15.7"
 gethostname = "1.1.0"
+rlimit = "0.10.2"
 
 [[bin]]
 name = "wow_vanilla_server"
