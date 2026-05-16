@@ -206,10 +206,32 @@ async fn spawn_n(
     metrics
         .target_bots
         .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-    for _ in 0..count {
+
+    // Emit ~10 progress lines per spawn batch so the operator can see the
+    // ramp progressing without waiting for the per-second metrics tick.
+    // Clamp the step to at least 1 so very small batches (count=1) still
+    // log once at completion.
+    let progress_step = (count / 10).max(1);
+    let start = std::time::Instant::now();
+
+    for i in 0..count {
         let slot = next_slot.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let handle = spawn(slot, bot_cfg.clone(), metrics.clone());
         bots.lock().await.insert(handle);
+
+        let spawned = i + 1;
+        if spawned % progress_step == 0 || spawned == count {
+            let m = metrics.snapshot();
+            info!(
+                "spawn progress: {spawned}/{count} requested ({:.0}%) | auth ok {ok} fail {fail} | world ok {wok} | t={t:.1}s",
+                100.0 * spawned as f64 / count as f64,
+                ok = m.auth_ok,
+                fail = m.auth_fail,
+                wok = m.world_ok,
+                t = start.elapsed().as_secs_f64(),
+            );
+        }
+
         tokio::time::sleep(stagger).await;
     }
 }
