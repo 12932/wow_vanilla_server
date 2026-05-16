@@ -593,9 +593,14 @@ pub(crate) async fn gm_command(
         }
         GmCommand::Swifty => {
             // Every connected player (including the GM caller) appears to
-            // yell "swifty invasion" — pure visual gag for stress tests and
-            // demos. Yells are visible to everyone connected; we skip the
-            // usual YELL-range distance check by design.
+            // yell a randomized "SWIFTY INVASION" — pure visual gag for
+            // stress tests and demos. Yells are visible to everyone
+            // connected; we skip the usual YELL-range distance check by
+            // design.
+            //
+            // Each yell is independently randomized so the chat log fills
+            // with a chaotic mix of "SWIFTY INVASION", "SWIFTYYYY INVASION",
+            // "SWIFTY INVASIONNNNN!!!!", etc.
             //
             // Snapshot the sender guids up front so we don't double-borrow
             // entities.clients() while iterating. The GM caller is held
@@ -619,7 +624,7 @@ pub(crate) async fn gm_command(
                         speech_bubble_credit: sender,
                     },
                     language: Language::Universal,
-                    message: "swifty invasion".to_string(),
+                    message: swifty_invasion_yell(),
                     tag: PlayerChatTag::None,
                 };
                 client.send_message(msg.clone()).await;
@@ -660,4 +665,46 @@ pub(crate) fn random_name() -> String {
     (0..len)
         .map(|_| (b'a' + (next_rand() % 26) as u8) as char)
         .collect()
+}
+
+/// Pick one randomized "SWIFTY INVASION" variant for the `.swifty` GM
+/// command. Independently rolls four knobs:
+///
+/// - elongate the trailing `Y` of `SWIFTY` (2..=10 extra Ys)
+/// - elongate the trailing `N` of `INVASION` (2..=14 extra Ns)
+/// - append exclamation marks (0..=24)
+/// - rare ~1-in-8 chance of repeating the whole phrase twice ("SWIFTY
+///   INVASION SWIFTY INVASION") for extra chaos in the chat log
+///
+/// All four knobs roll independently, so the same call can produce things
+/// like `SWIFTY INVASION`, `SWIFTYYYY INVASION`, `SWIFTY INVASIONNNNN!!!!`,
+/// `SWIFTYYYY INVASIONNNN!!!!!!!`, etc.
+fn swifty_invasion_yell() -> String {
+    let r = next_rand();
+    let elongate_swifty = (r & 0b001) != 0;
+    let elongate_invasion = (r & 0b010) != 0;
+    let repeat_phrase = (r & 0b111_0000) == 0; // ~1/8
+
+    let swifty = if elongate_swifty {
+        let extra = 2 + (next_rand() % 9) as usize; // 2..=10
+        format!("SWIFT{}", "Y".repeat(extra + 1))
+    } else {
+        "SWIFTY".to_string()
+    };
+
+    let invasion = if elongate_invasion {
+        let extra = 2 + (next_rand() % 13) as usize; // 2..=14
+        format!("INVASIO{}", "N".repeat(extra + 1))
+    } else {
+        "INVASION".to_string()
+    };
+
+    let exclamations = "!".repeat((next_rand() % 25) as usize); // 0..=24
+    let base = format!("{swifty} {invasion}");
+
+    if repeat_phrase {
+        format!("{base} {base}{exclamations}")
+    } else {
+        format!("{base}{exclamations}")
+    }
 }
