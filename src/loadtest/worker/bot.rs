@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
+use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::ClientMessage as _;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::CMSG_PING;
@@ -99,7 +101,14 @@ async fn run_bot(
         character_guid: _,
     } = session;
 
-    // Reader future: drain incoming encrypted messages until error/EOF.
+    // Reader future: drain incoming encrypted messages. Only IO errors
+    // exit the loop — parse errors and unknown opcodes get skipped, the
+    // same way a real WoW client tolerates server packets it doesn't
+    // understand. Without this the bot's read task previously exited on
+    // ANY error (including a single unmodeled opcode from the server),
+    // which dropped the TCP connection and made the server log them as
+    // "stale clients". That capped sustained bot counts around ~510 in
+    // an 800-bot ramp.
     let read_metrics = metrics.clone();
     let read_fut = async move {
         let mut reader = reader;
@@ -109,8 +118,26 @@ async fn run_bot(
                 Ok(_) => {
                     read_metrics.messages_in.fetch_add(1, Ordering::Relaxed);
                 }
-                Err(e) => {
-                    tracing::trace!("bot {slot} reader exit: {e:?}");
+                Err(ExpectedOpcodeError::Opcode { opcode, size, name }) => {
+                    // Skip the body so the stream cursor lines up with the
+                    // next opcode boundary. If the body read fails we
+                    // disconnect for real.
+                    let mut body = vec![0_u8; size as usize];
+                    if reader.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    tracing::trace!(
+                        "bot {slot} skipped unhandled opcode {name:?} (0x{opcode:X}, {size} bytes)"
+                    );
+                }
+                Err(ExpectedOpcodeError::Parse(e)) => {
+                    tracing::trace!("bot {slot} parse error: {e:?}");
+                    // Parse errors usually mean we lost frame sync — bail
+                    // out for the bot rather than trying to resynchronize.
+                    return;
+                }
+                Err(ExpectedOpcodeError::Io(e)) => {
+                    tracing::trace!("bot {slot} reader exit (io): {e}");
                     return;
                 }
             }

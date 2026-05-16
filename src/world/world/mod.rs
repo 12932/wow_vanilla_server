@@ -29,7 +29,8 @@ use wow_world_messages::vanilla::{
     MSG_MOVE_SET_FACING_Server, MSG_MOVE_START_FORWARD_Server, MSG_MOVE_STOP_Server,
     MSG_MOVE_TELEPORT_ACK_Server,
     MovementBlock, MovementBlock_MovementFlags, MovementBlock_UpdateFlag,
-    MovementBlock_UpdateFlag_Living, MovementInfo, MovementInfo_MovementFlags, Object, ObjectType,
+    MovementBlock_UpdateFlag_HighGuid, MovementBlock_UpdateFlag_Living, MovementInfo,
+    MovementInfo_MovementFlags, Object, ObjectType,
     Object_UpdateType, PlayerChatTag, SMSG_MESSAGECHAT_ChatType, SMSG_MONSTER_MOVE_MonsterMoveType,
     SkillInfo, SkillInfoIndex, UpdatePlayerBuilder, Vector3d, VisibleItem, VisibleItemIndex,
     SMSG_ACCOUNT_DATA_TIMES, SMSG_ATTACKERSTATEUPDATE, SMSG_DESTROY_OBJECT, SMSG_INITIAL_SPELLS,
@@ -1571,6 +1572,18 @@ pub fn player_self_update_for_login(character: &Character) -> SMSG_UPDATE_OBJECT
 }
 
 pub fn player_create_object(character: &Character) -> Object {
+    // Player CreateObject blocks need both `LIVING` (the full MovementInfo
+    // is embedded) AND `HIGH_GUID` (a trailing u32, usually 0). Real
+    // cmangos / MaNGOS-zero sets both:
+    //
+    //     m_updateFlag = (UPDATEFLAG_HIGH_GUID | UPDATEFLAG_LIVING | ...);
+    //
+    // Without `HIGH_GUID`, the 1.12.2 client reads the next 4 bytes at the
+    // wrong offset, corrupts its local view of the entity, and crashes
+    // when rendering. The bug only manifests for OTHER players (the local
+    // client has its own data already, so the self-create flag set being
+    // wrong is invisible). That matched the symptom: log in alone, fine;
+    // log in with bots already present, crash.
     Object {
         update_type: Object_UpdateType::CreateObject2 {
             guid3: character.guid,
@@ -1594,7 +1607,8 @@ pub fn player_create_object(character: &Character) -> Object {
                         turn_rate: DEFAULT_TURN_SPEED,
                         walking_speed: WALK_SPEED,
                     },
-                ),
+                )
+                .set_high_guid(MovementBlock_UpdateFlag_HighGuid { unknown0: 0 }),
             },
             object_type: ObjectType::Player,
         },
