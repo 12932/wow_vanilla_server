@@ -1571,6 +1571,21 @@ pub fn player_self_update_for_login(character: &Character) -> SMSG_UPDATE_OBJECT
 }
 
 pub fn player_create_object(character: &Character) -> Object {
+    // MovementBlock flags inside a CreateObject must be conservative —
+    // either FORWARD or empty. Including strafe/backward bits here
+    // crashes the 1.12.2 client: those states are transient and the
+    // client only expects them via explicit MSG_MOVE_START_STRAFE_*
+    // opcodes that follow a stable spawn. The puppet path
+    // (`simulated_create_object`) uses the same conservative rule and
+    // renders correctly. If the observer needs to see the player
+    // strafing right now, the follow-up MSG_MOVE_START_* sent in
+    // `promote_logged_in` (or the next coalescer flush) re-establishes
+    // that state cleanly.
+    let flags = if character.info.flags.get_forward() {
+        MovementBlock_MovementFlags::new_forward()
+    } else {
+        MovementBlock_MovementFlags::empty()
+    };
     Object {
         update_type: Object_UpdateType::CreateObject2 {
             guid3: character.guid,
@@ -1581,11 +1596,7 @@ pub fn player_create_object(character: &Character) -> Object {
                         backwards_running_speed: DEFAULT_RUNNING_BACKWARDS_SPEED,
                         backwards_swimming_speed: 0.0,
                         fall_time: 0.0,
-                        // Propagate the player's current movement direction so
-                        // observers see them mid-step (running/strafing) when
-                        // they enter AOI mid-motion. Previously hardcoded to
-                        // `empty()`, which made bots appear frozen on relog.
-                        flags: living_block_flags_for(character),
+                        flags,
                         living_orientation: character.info.orientation,
                         living_position: character.info.position,
                         running_speed: character.movement_speed,
@@ -1599,27 +1610,6 @@ pub fn player_create_object(character: &Character) -> Object {
             object_type: ObjectType::Player,
         },
     }
-}
-
-/// Derive the `MovementBlock` flag set from a player's authoritative
-/// `MovementInfo`. Mirrors `Creature::living_block_flags` so newly-visible
-/// moving players animate the same way moving creatures do.
-fn living_block_flags_for(character: &Character) -> MovementBlock_MovementFlags {
-    let f = &character.info.flags;
-    let mut block = MovementBlock_MovementFlags::empty();
-    if f.get_forward() {
-        block = block.set_forward();
-    }
-    if f.get_backward() {
-        block = block.set_backward();
-    }
-    if f.get_strafe_left() {
-        block = block.set_strafe_left();
-    }
-    if f.get_strafe_right() {
-        block = block.set_strafe_right();
-    }
-    block
 }
 
 fn get_update_object_player(character: &Character) -> UpdateMask {
