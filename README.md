@@ -177,51 +177,6 @@ Type these in chat as a logged-in character.
 | `.worlddbinfo` | Print mangos worlddb load stats. |
 | `.swifty` | Every connected player yells "swifty invasion". Demo/stress command. |
 
-## Architecture sketch
-
-```
-                    ┌────────────────────────┐
-                    │   wow_vanilla_server   │
-                    │   (one process)        │
-                    │                        │
-   :3724  ──────►   │  auth.rs               │
-                    │   (SRP6, realm list)   │
-                    │             │          │
-                    │             ▼          │
-                    │  Arc<Mutex<HashMap<    │
-                    │   username, SrpServer  │
-                    │     >>> shared key map │
-                    │             │          │
-                    │             ▼          │
-   :8085  ──────►   │  world/mod.rs          │
-                    │   (TCP accept, ARC4    │
-                    │    handshake, char     │
-                    │    screen)             │
-                    │             │          │
-                    │             ▼          │
-                    │  world/world/mod.rs    │
-                    │   (10 Hz tick:         │
-                    │    drain → chrscreen   │
-                    │    → promote_logged_in │
-                    │    → per_client_loop   │
-                    │    → flush_movement    │
-                    │    → apply_commands    │
-                    │    → tick_creatures    │
-                    │    → tick_sims         │
-                    │    → tick_corpses      │
-                    │    → drain_logouts)    │
-                    │             │          │
-                    │             ▼          │
-                    │  Per-client outbound   │
-                    │  mpsc + writer task    │
-                    │  (one per client)      │
-                    └────────────────────────┘
-```
-
-The tick is sequential (one thread, one phase at a time). The only intra-phase parallelism is `rayon::par_iter` over `aggro_creature_keys` in `tick_creature_ai`. Per-client socket writes happen in dedicated writer tasks that drain bounded mpsc channels — the tick `try_send`s frames and never `.await`s on a socket.
-
-For a more thorough tour see [`AGENTS.md`](AGENTS.md).
-
 ## Development workflow
 
 ```sh
