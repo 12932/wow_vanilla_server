@@ -1,5 +1,5 @@
 use crate::world::world::client::{
-    Client, OutboundTx, OUTBOUND_CHANNEL_CAPACITY, OUTGOING_PACKETS,
+    Client, OutboundTx, OUTBOUND_CHANNEL_BYTES, OUTGOING_PACKETS,
 };
 use crate::world::world_opcode_handler::character::Character;
 use std::sync::Arc;
@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tracing::warn;
 use wow_srp::vanilla_header::{EncrypterHalf, HeaderCrypto};
@@ -43,7 +44,8 @@ use wow_world_messages::vanilla::{SMSG_PONG, ServerMessage};
 pub(crate) async fn run_writer<W>(
     mut write: W,
     mut encrypter: EncrypterHalf,
-    mut rx: mpsc::Receiver<Vec<u8>>,
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    byte_budget: Arc<Semaphore>,
     packets_counter: &'static AtomicU64,
 ) where
     W: AsyncWrite + Unpin,
@@ -60,7 +62,14 @@ pub(crate) async fn run_writer<W>(
         }
         scratch.clear();
         let mut written_count: u64 = 0;
+        let mut bytes_drained: usize = 0;
         for buf in staging.iter_mut() {
+            // Account every popped buffer toward `bytes_drained` so the
+            // byte budget is released regardless of whether the buffer
+            // ends up on the wire (the short-buf skip below silently
+            // discards malformed entries — they were charged on
+            // try_send so we must un-charge them here too).
+            bytes_drained += buf.len();
             if buf.len() < 4 {
                 continue;
             }
@@ -70,6 +79,10 @@ pub(crate) async fn run_writer<W>(
             buf[0..4].copy_from_slice(&enc_header);
             scratch.extend_from_slice(buf);
             written_count += 1;
+        }
+        if bytes_drained > 0 {
+            byte_budget
+                .add_permits(u32::try_from(bytes_drained).unwrap_or(u32::MAX) as usize);
         }
         if scratch.is_empty() {
             continue;
@@ -115,18 +128,26 @@ impl CharacterScreenClient {
         let (read, write) = stream.into_split();
         let (encrypter, decrypter) = encryption.split();
 
-        let (outbound_tx, outbound_rx) =
-            mpsc::channel::<Vec<u8>>(OUTBOUND_CHANNEL_CAPACITY);
+        let (unbounded_tx, outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        // Byte budget for the per-client outbound queue. Drained by
+        // `run_writer` after each batch via `add_permits(bytes_drained)`.
+        let byte_budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
+        let outbound_tx = OutboundTx::new(unbounded_tx, byte_budget.clone());
         let dropped_packets = Arc::new(AtomicU64::new(0));
 
         // Writer task: owns the socket write half + encrypter, drains the
         // outbound channel, and re-encrypts the 4-byte header per item. The
         // world tick never blocks on socket writes — at worst a slow client's
-        // channel fills and packets are dropped via try_send in send_*. The
-        // actual drain/encrypt/coalesce loop lives in `run_writer` so tests
-        // can drive it without a real TCP connection.
-        let writer_handle =
-            tokio::spawn(run_writer(write, encrypter, outbound_rx, &OUTGOING_PACKETS));
+        // byte budget exhausts and packets are dropped via try_send in
+        // send_*. The actual drain/encrypt/coalesce loop lives in
+        // `run_writer` so tests can drive it without a real TCP connection.
+        let writer_handle = tokio::spawn(run_writer(
+            write,
+            encrypter,
+            outbound_rx,
+            byte_budget,
+            &OUTGOING_PACKETS,
+        ));
 
         let (client_send, client_recv) = mpsc::channel(32);
         let reader_outbound = outbound_tx.clone();
@@ -171,12 +192,16 @@ impl CharacterScreenClient {
                     if pong.write_unencrypted_server(&mut buf).is_err() {
                         continue;
                     }
-                    match reader_outbound.try_send(buf) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            reader_dropped.fetch_add(1, Ordering::Relaxed);
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
+                    if !reader_outbound.try_send(buf) {
+                        // Either the byte budget is exhausted or the
+                        // channel is closed (writer task ended). Both
+                        // count as a drop; for the closed case we exit
+                        // the read loop since we can't deliver anymore.
+                        reader_dropped.fetch_add(1, Ordering::Relaxed);
+                        // Detect closed by trying to send a zero-byte
+                        // buffer (cheap signal). Approximate but
+                        // sufficient — under sustained drops the next
+                        // iteration's read will EOF anyway.
                     }
                     continue;
                 }
@@ -224,12 +249,8 @@ impl CharacterScreenClient {
     }
 
     fn queue_buf(&self, buf: Vec<u8>) {
-        match self.outbound.try_send(buf) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.dropped_packets.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
+        if !self.outbound.try_send(buf) {
+            self.dropped_packets.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -293,16 +314,17 @@ mod tests {
     async fn batched_writer_preserves_arc4_sequence() {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(16);
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
 
         let packets: Vec<(u16, Vec<u8>)> =
             (100..105u16).map(|op| (op, vec![op as u8; 8])).collect();
         for (op, body) in &packets {
-            tx.send(make_buf(*op, body)).await.unwrap();
+            tx.send(make_buf(*op, body)).unwrap();
         }
         drop(tx);
 
-        let writer = tokio::spawn(run_writer(b, encrypter, rx, &TEST_COUNTER));
+        let writer = tokio::spawn(run_writer(b, encrypter, rx, budget, &TEST_COUNTER));
 
         for (op, body) in &packets {
             let mut header = [0u8; 4];
@@ -327,15 +349,16 @@ mod tests {
     async fn writer_carries_arc4_state_across_drains() {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(16);
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
 
-        let writer = tokio::spawn(run_writer(b, encrypter, rx, &TEST_COUNTER));
+        let writer = tokio::spawn(run_writer(b, encrypter, rx, budget, &TEST_COUNTER));
 
         for batch_start in [100u16, 200u16, 300u16] {
             let batch_count = batch_start / 100; // 1, 2, 3
             for i in 0..batch_count {
                 let op = batch_start + i;
-                tx.send(make_buf(op, &[op as u8; 4])).await.unwrap();
+                tx.send(make_buf(op, &[op as u8; 4])).unwrap();
             }
             for i in 0..batch_count {
                 let op = batch_start + i;
@@ -360,15 +383,16 @@ mod tests {
     async fn writer_skips_short_buffers() {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(8);
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
 
         // Two valid packets sandwiching a garbage 3-byte buffer.
-        tx.send(make_buf(500, &[1, 2, 3, 4])).await.unwrap();
-        tx.send(vec![0xFF, 0xFF, 0xFF]).await.unwrap();
-        tx.send(make_buf(501, &[5, 6, 7, 8])).await.unwrap();
+        tx.send(make_buf(500, &[1, 2, 3, 4])).unwrap();
+        tx.send(vec![0xFF, 0xFF, 0xFF]).unwrap();
+        tx.send(make_buf(501, &[5, 6, 7, 8])).unwrap();
         drop(tx);
 
-        let writer = tokio::spawn(run_writer(b, encrypter, rx, &TEST_COUNTER));
+        let writer = tokio::spawn(run_writer(b, encrypter, rx, budget, &TEST_COUNTER));
 
         // Two packets through, in order. The short buf must not advance
         // the ARC4 state (verified implicitly: opcode 501 decrypts

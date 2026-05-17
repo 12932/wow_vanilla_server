@@ -57,6 +57,11 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
 /// `[size_BE u16][opcode_LE u16][body]` *once*, then clones that buffer
 /// into each recipient's outbound channel. The writer task re-encrypts the
 /// 4-byte header per recipient (encryption is stateful per stream).
+///
+/// Returns `(recipients, frame_bytes)` so the caller can aggregate
+/// per-tick throughput plots without re-walking the slab. `frame_bytes`
+/// is the per-recipient cost — total bytes broadcast is
+/// `recipients * frame_bytes`.
 #[tracing::instrument(level = "info", skip_all, name = "broadcast_opcode_within_aoi")]
 pub fn broadcast_opcode_within_aoi(
     msg: &ServerOpcodeMessage,
@@ -64,24 +69,28 @@ pub fn broadcast_opcode_within_aoi(
     anchor_map: Map,
     exclude_guid: Option<Guid>,
     clients: &mut Slab<Client>,
-) {
+) -> (usize, usize) {
     write_server_test(msg);
 
     // Serialize once into the wire framing the writer task expects.
     let mut frame = Vec::new();
     if let Err(e) = msg.write_unencrypted_server(&mut frame) {
         tracing::warn!("broadcast_opcode_within_aoi: serialize failed: {e}");
-        return;
+        return (0, 0);
     }
+    let frame_bytes = frame.len();
 
+    let mut recipients = 0_usize;
     for (_, c) in clients.iter_mut() {
         if Some(c.character().guid) == exclude_guid {
             continue;
         }
         if c.character().map == anchor_map && within_aoi(&c.character().info.position, &anchor) {
             c.try_queue_frame(frame.clone());
+            recipients += 1;
         }
     }
+    (recipients, frame_bytes)
 }
 
 #[cfg(test)]

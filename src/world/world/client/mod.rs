@@ -25,11 +25,17 @@
 //! its TCP buffer, only that client's writer task stalls, not the world
 //! tick.
 //!
-//! When the channel fills (i.e., a single client is so far behind that we've
-//! buffered `CHANNEL_CAPACITY` packets for it), `try_send` returns `Full` and
-//! we drop the packet — there's no point queueing minutes of stale state. The
-//! per-client `dropped_packets` counter is logged occasionally so an operator
-//! can tell which clients are flailing.
+//! When the **byte budget** fills (i.e., a single client is so far behind
+//! that we've buffered `OUTBOUND_CHANNEL_BYTES` of pending payload for it),
+//! `try_send` returns false and we drop the packet — there's no point
+//! queueing minutes of stale state. Sizing is by bytes rather than by
+//! message count because message sizes range from ~30 bytes (movement
+//! heartbeats) to ~11 KB (a mass `SMSG_UPDATE_OBJECT` with thousands of
+//! `OutOfRangeObjects` guids); a count-based cap of 512 messages was fine
+//! at typical traffic but couldn't admit the big destroy-broadcast under
+//! a 1400-bot mass-disconnect with the channel already partly full. The
+//! per-client `dropped_packets` counter is logged on transition from
+//! 0 → nonzero so an operator can tell which clients are flailing.
 
 pub(crate) mod character_screen_client;
 
@@ -40,6 +46,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 /// Monotonically increasing counter of successful socket writes (any opcode,
@@ -53,10 +60,14 @@ pub fn outgoing_packet_count() -> u64 {
     OUTGOING_PACKETS.load(Ordering::Relaxed)
 }
 
-/// Per-client outbound channel depth. With 30 Hz ticks and ~50 broadcasts per
-/// tick at peak, 512 lets a writer task fall ~10 seconds behind before we
-/// start shedding packets — well beyond what a healthy client ever needs.
-pub(crate) const OUTBOUND_CHANNEL_CAPACITY: usize = 512;
+/// Per-client outbound byte budget. 1 MiB of pending payload per client.
+/// At 10 000 simultaneous clients this caps total in-flight buffer memory
+/// at ~10 GiB — a deliberate ceiling the operator is comfortable with.
+/// Sized by bytes (not messages) so that a single huge `SMSG_UPDATE_OBJECT`
+/// (e.g. mass-disconnect `OutOfRangeObjects` carrying thousands of guids)
+/// always fits as long as there's enough budget left, regardless of how
+/// many small movement-heartbeat frames are queued ahead of it.
+pub(crate) const OUTBOUND_CHANNEL_BYTES: usize = 1024 * 1024;
 
 use wow_world_base::geometry::distance_between;
 use wow_world_base::vanilla::position::Position;
@@ -67,10 +78,58 @@ use wow_world_messages::vanilla::{
 };
 use wow_world_messages::Guid;
 
-/// Sender half of the per-client outbound channel. Cloned by the reader task
-/// (for pongs) and held by the `PlayerSession` / `CharacterScreenClient` (for
-/// world-tick sends).
-pub(crate) type OutboundTx = mpsc::Sender<Vec<u8>>;
+/// Sender half of the per-client outbound channel paired with a per-client
+/// byte budget. Cloned by the reader task (for pongs) and held by the
+/// `PlayerSession` / `CharacterScreenClient` (for world-tick sends).
+///
+/// Channel is **unbounded** at the mpsc layer; backpressure is enforced
+/// via the shared `Semaphore` of `OUTBOUND_CHANNEL_BYTES` permits. Each
+/// `try_send` acquires `buf.len()` permits up front (forgetting them so
+/// they don't auto-release on drop); the writer task `add_permits`
+/// the same count after popping each buffer. Net result: at most
+/// `OUTBOUND_CHANNEL_BYTES` of payload is pending per client, regardless
+/// of whether the queue is one 1 MiB packet or 30 000 30-byte heartbeats.
+#[derive(Clone)]
+pub(crate) struct OutboundTx {
+    sender: mpsc::UnboundedSender<Vec<u8>>,
+    byte_budget: Arc<Semaphore>,
+}
+
+impl OutboundTx {
+    pub(crate) fn new(
+        sender: mpsc::UnboundedSender<Vec<u8>>,
+        byte_budget: Arc<Semaphore>,
+    ) -> Self {
+        Self { sender, byte_budget }
+    }
+
+    /// Try to enqueue `buf`. Returns `true` if the bytes were admitted.
+    /// Returns `false` if the byte budget is exhausted (1 MiB pending) or
+    /// the channel is closed (peer disconnected). Caller treats both as
+    /// "drop and increment the counter".
+    pub(crate) fn try_send(&self, buf: Vec<u8>) -> bool {
+        let n = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        match self.byte_budget.try_acquire_many(n) {
+            Ok(permit) => {
+                // Forget the permit — it's released by the writer task
+                // via `add_permits(buf.len())` after the buffer is
+                // dequeued. Without `forget` it would auto-release on
+                // drop here, defeating the budget.
+                permit.forget();
+                self.sender.send(buf).is_ok()
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for OutboundTx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutboundTx")
+            .field("byte_budget_available", &self.byte_budget.available_permits())
+            .finish()
+    }
+}
 
 /// Network half of a connected player: outbound channel, reader task, inbound
 /// channel, account name, and protocol-flow flags. Game-state mutations
@@ -133,18 +192,25 @@ impl PlayerSession {
         self.queue_buf(buf)
     }
 
-    /// Returns `true` if the buffer was queued, `false` if the channel was
-    /// full (slow client) or closed (disconnected). Drops are counted so we
-    /// can spot which clients are falling behind.
+    /// Returns `true` if the buffer was queued, `false` if the byte budget
+    /// was exhausted or the channel was closed (disconnected). Drops are
+    /// counted so we can spot which clients are falling behind. On the
+    /// first drop per client we log a warning so the problem surfaces
+    /// without an operator having to scrape the counter.
     fn queue_buf(&self, buf: Vec<u8>) -> bool {
-        match self.outbound.try_send(buf) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.dropped_packets.fetch_add(1, Ordering::Relaxed);
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        if self.outbound.try_send(buf) {
+            return true;
         }
+        let prior = self.dropped_packets.fetch_add(1, Ordering::Relaxed);
+        if prior == 0 {
+            tracing::warn!(
+                "outbound byte budget exhausted for {} ({}); dropping packets — \
+                 client is falling behind",
+                self.account_name,
+                std::any::type_name::<Self>(),
+            );
+        }
+        false
     }
 
     pub async fn send_system_message(&mut self, s: impl Into<String>) {
