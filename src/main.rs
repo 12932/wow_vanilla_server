@@ -12,8 +12,44 @@ use wow_vanilla_server::{auth, config, world};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Both tokio and rayon default their worker counts to
+    // `num_cpus::get()`. Letting both pools have everything would
+    // double-subscribe the cores — every rayon worker would compete
+    // with a tokio worker that's already runnable, producing
+    // context-switch storms under load. Split the cores explicitly.
+    //
+    // The world tick monopolizes ONE tokio worker for its whole
+    // duration; during the broadcast phase that worker blocks on
+    // rayon's `par_iter`, so rayon's pool runs concurrently with the
+    // OTHER tokio workers (which are busy serving per-client TCP
+    // read/write tasks). Giving each pool about half the cores keeps
+    // both fully utilized without thrash. Minimum of 1 thread on each
+    // side so single-core machines still boot.
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    let rayon_threads = (cores / 2).max(1);
+    let tokio_workers = cores.saturating_sub(rayon_threads).max(1);
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(rayon_threads)
+        .thread_name(|i| format!("rayon-{i}"))
+        .build_global()
+        .expect("rayon global pool init");
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(tokio_workers)
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    runtime.block_on(async move {
+        async_main(cores, rayon_threads, tokio_workers).await;
+    });
+}
+
+async fn async_main(cores: usize, rayon_threads: usize, tokio_workers: usize) {
     // Load `.env` from the working directory if present. Missing file is
     // fine — env-var-only deployments (systemd `Environment=`, container
     // `-e`, etc.) keep working. Existing process env always wins over the
@@ -57,6 +93,10 @@ async fn main() {
     if tracy_enabled {
         tracing::info!("Tracy profiler enabled (WOW_TRACY=1); attach a Tracy GUI to collect");
     }
+
+    tracing::info!(
+        "thread pools: {cores} cores total -> tokio_workers={tokio_workers}, rayon_threads={rayon_threads}"
+    );
 
     // Load behavior config (AOI radius, tick rate, combat numbers, etc.)
     // after tracing init so the load log messages are visible. Missing

@@ -130,7 +130,10 @@ impl std::fmt::Debug for OutboundTx {
 /// (combat, AI, spells) should never need this — take `&mut Player` instead.
 #[derive(Debug)]
 pub struct PlayerSession {
-    pub(crate) account_name: String,
+    /// `Arc<str>` so the broadcast view (`BroadcastTarget`) can clone
+    /// this for free — cloning a `String` per recipient per tick would
+    /// be a fresh heap alloc + memcpy at 2500-bot density.
+    pub(crate) account_name: Arc<str>,
     pub(crate) outbound: OutboundTx,
     pub(crate) dropped_packets: Arc<AtomicU64>,
     pub(crate) received_messages: Receiver<ClientOpcodeMessage>,
@@ -192,16 +195,6 @@ impl PlayerSession {
         buf.extend_from_slice(&opcode.to_le_bytes());
         buf.extend_from_slice(body);
         self.queue_buf(Arc::<[u8]>::from(buf))
-    }
-
-    /// Queue a fully-framed `[size_BE u16][opcode_LE u16][body]` buffer
-    /// directly onto the outbound channel. The writer task re-encrypts the
-    /// 4-byte header before writing to the socket. Used by the opcode-enum
-    /// broadcast path so we serialize once and refcount-bump the framed
-    /// buffer per recipient instead of allocating + memcpy'ing per recipient.
-    #[inline]
-    pub(crate) fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
-        self.queue_buf(buf)
     }
 
     /// Returns `true` if the buffer was queued, `false` if the byte budget
@@ -332,7 +325,7 @@ impl Client {
         received_messages: Receiver<ClientOpcodeMessage>,
         outbound: OutboundTx,
         dropped_packets: Arc<AtomicU64>,
-        account_name: String,
+        account_name: Arc<str>,
         reader_handle: JoinHandle<()>,
         writer_handle: JoinHandle<()>,
     ) -> Self {
@@ -362,6 +355,25 @@ impl Client {
         self.player.character_mut()
     }
 
+    /// Snapshot a [`crate::world::aoi::BroadcastTarget`] for this
+    /// client. Built once per tick at the top of the broadcast phase
+    /// — the resulting `Vec<BroadcastTarget>` is the rayon-iterable,
+    /// `Sync`-safe view that the fan-out loop consumes instead of
+    /// `&Slab<Client>` (which is `!Sync` because `Client` embeds a
+    /// `tokio::sync::mpsc::Receiver`).
+    #[inline]
+    pub fn broadcast_target(&self) -> crate::world::aoi::BroadcastTarget {
+        let ch = self.character();
+        crate::world::aoi::BroadcastTarget {
+            map: ch.map,
+            position: ch.info.position,
+            guid: ch.guid,
+            outbound: self.session.outbound.clone(),
+            dropped_packets: Arc::clone(&self.session.dropped_packets),
+            account_name: Arc::clone(&self.session.account_name),
+        }
+    }
+
     pub fn set_movement_info(&mut self, info: MovementInfo) {
         self.player.set_movement_info(info);
     }
@@ -380,11 +392,6 @@ impl Client {
 
     pub(crate) async fn send_raw(&mut self, opcode: u16, body: &[u8]) -> bool {
         self.session.send_raw(opcode, body).await
-    }
-
-    #[inline]
-    pub(crate) fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
-        self.session.try_queue_frame(buf)
     }
 
     pub async fn send_system_message(&mut self, s: impl Into<String>) {

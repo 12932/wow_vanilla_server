@@ -1,11 +1,74 @@
-use crate::world::world::client::Client;
+use crate::world::world::client::{Client, OutboundTx};
 use crate::world::world_opcode_handler::{write_message_test, write_server_test};
+use rayon::prelude::*;
 use slab::Slab;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use wow_world_base::vanilla::Map;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{ServerMessage, Vector3d};
+
+/// `Sync`-safe per-client broadcast handle. Snapshotted from every
+/// `Client` at the top of the broadcast phase so the fan-out loop can
+/// run on a rayon thread pool without needing `Client: Sync` — `Client`
+/// embeds a `tokio::sync::mpsc::Receiver` which is single-consumer and
+/// therefore `!Sync`, blocking direct rayon iteration over `&Slab<Client>`.
+///
+/// Every field is either `Copy` (Map, Vector3d, Guid) or `Arc`-backed
+/// (`OutboundTx` is `Clone` with internally-Arc'd channel + semaphore,
+/// `dropped_packets` is shared with the source `Client`, `account_name`
+/// is `Arc<str>`). Building one is a handful of refcount bumps — at
+/// 2500 clients × 10 Hz that's ~25 k Arc clones/sec, well-within budget.
+#[derive(Debug)]
+pub struct BroadcastTarget {
+    pub map: Map,
+    pub position: Vector3d,
+    pub guid: Guid,
+    pub outbound: OutboundTx,
+    /// Shared with the source `Client::session.dropped_packets`. The
+    /// broadcast view bumps it on `try_send` failure, exactly like
+    /// `PlayerSession::queue_buf` does. Same Arc, same counter.
+    pub dropped_packets: Arc<AtomicU64>,
+    /// Used only inside the cold-path warn — first drop per client
+    /// emits a `tracing::warn` naming the account.
+    pub account_name: Arc<str>,
+}
+
+impl BroadcastTarget {
+    /// Try to queue a pre-framed buffer on this client's outbound
+    /// channel. Mirrors `PlayerSession::queue_buf`: success → return
+    /// `true`; failure → bump the shared dropped-packet counter and
+    /// (on the first drop) log a warn, then return `false`.
+    ///
+    /// Marked `#[inline]` because the broadcast loop calls this once
+    /// per recipient — at 2500 clients × 230 sources/tick the call
+    /// site is the inner-most hot loop on the broadcast path.
+    #[inline]
+    pub fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
+        if self.outbound.try_send(buf) {
+            return true;
+        }
+        self.note_drop();
+        false
+    }
+
+    /// Cold tail of [`Self::try_queue_frame`]. Same first-drop-only
+    /// warn behavior as `PlayerSession::queue_buf_dropped`; pulled out
+    /// so LLVM keeps the success path straight-line.
+    #[cold]
+    #[inline(never)]
+    fn note_drop(&self) {
+        let prior = self.dropped_packets.fetch_add(1, Ordering::Relaxed);
+        if prior == 0 {
+            tracing::warn!(
+                "outbound byte budget exhausted for {} (BroadcastTarget); \
+                 dropping packets — client is falling behind",
+                self.account_name,
+            );
+        }
+    }
+}
 
 /// Horizontal radius (yards) at which players are mutually visible.
 /// Z is **deliberately ignored**: a target 200 units above me is still
@@ -95,7 +158,7 @@ pub fn broadcast_opcode_within_aoi(
     anchor: Vector3d,
     anchor_map: Map,
     exclude_guid: Option<Guid>,
-    clients: &Slab<Client>,
+    targets: &[BroadcastTarget],
 ) -> (usize, usize) {
     write_server_test(msg);
 
@@ -122,27 +185,38 @@ pub fn broadcast_opcode_within_aoi(
     let r = crate::config::config().network.aoi_radius_yards;
     let r_sq = r * r;
 
-    let mut recipients = 0_usize;
-    for (_, c) in clients.iter() {
-        // Cache `c.character()` once per iter — the field accessor is
-        // trivially `&self.character` but the compiler can't always
-        // prove it across the three reads below, so spell it once.
-        let ch = c.character();
-        if ch.map != anchor_map {
-            continue;
-        }
-        if !within_aoi_sq(&ch.info.position, &anchor, r_sq) {
-            continue;
-        }
-        if Some(ch.guid) == exclude_guid {
-            // Broadcaster themselves — 1-in-N rare; keep this check
-            // last so the common path skips it via the early-continues
-            // above on the cheaper map/AOI rejections.
-            continue;
-        }
-        c.try_queue_frame(Arc::clone(&frame));
-        recipients += 1;
-    }
+    // Rayon par-iter the fan-out. Each iter is independent: the AOI
+    // check is read-only on the target's snapshotted position; the
+    // send touches only the per-target kanal channel (multi-producer)
+    // and the per-target dropped-packet counter (Atomic). The only
+    // cross-thread contention is the `Arc<[u8]>` frame's refcount
+    // cache line bouncing — at 2500 clients × ~5 ns/atomic that's
+    // ~12 µs of coherency traffic per broadcast call, negligible vs
+    // the multi-core wall-time saving.
+    //
+    // `filter_map` + `sum` is preferred over `for_each` + atomic
+    // counter: rayon's reduce machinery aggregates the per-worker
+    // counts locally and combines once at the end, avoiding the
+    // contention an `AtomicUsize::fetch_add` would create.
+    let recipients: usize = targets
+        .par_iter()
+        .filter_map(|t| {
+            if t.map != anchor_map {
+                return None;
+            }
+            if !within_aoi_sq(&t.position, &anchor, r_sq) {
+                return None;
+            }
+            if Some(t.guid) == exclude_guid {
+                // Broadcaster themselves — 1-in-N rare; keep this
+                // check last so the cheaper map/AOI rejections
+                // short-circuit first.
+                return None;
+            }
+            t.try_queue_frame(Arc::clone(&frame));
+            Some(1_usize)
+        })
+        .sum();
     (recipients, frame_bytes)
 }
 

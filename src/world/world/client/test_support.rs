@@ -96,12 +96,13 @@ pub fn synthetic_client(character: Character, account_name: impl Into<String>) -
     // the disconnect path so it never observes this.
     let reader_handle = tokio::spawn(async {});
 
+    let account_name: Arc<str> = Arc::from(account_name.into().into_boxed_str());
     Client::from_parts(
         character,
         client_recv,
         outbound,
         dropped_packets,
-        account_name.into(),
+        account_name,
         reader_handle,
         writer_handle,
     )

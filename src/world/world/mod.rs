@@ -134,6 +134,15 @@ pub struct World {
     scratch_to_park: Vec<(Instant, usize)>,
     scratch_parked_set: ahash::AHashSet<usize>,
     scratch_expired_roots: Vec<(Guid, Map, Vector3d, MovementInfo)>,
+
+    /// Per-tick `Sync`-safe view of `self.clients`, rebuilt at the top of
+    /// the broadcast phase from each `Client::broadcast_target()`. Fed to
+    /// `aoi::broadcast_opcode_within_aoi` so it can rayon-iterate the
+    /// fan-out across cores — `Slab<Client>` itself isn't `Sync` because
+    /// `Client` holds a `tokio::sync::mpsc::Receiver`. The `Vec` capacity
+    /// is reused tick-over-tick so the build step is `.clear()` + extend
+    /// (no realloc when client count is stable).
+    broadcast_view: Vec<crate::world::aoi::BroadcastTarget>,
 }
 
 #[derive(Debug)]
@@ -256,6 +265,7 @@ impl World {
             scratch_to_park: Vec::new(),
             scratch_parked_set: ahash::AHashSet::new(),
             scratch_expired_roots: Vec::new(),
+            broadcast_view: Vec::new(),
         }
     }
 
@@ -336,6 +346,7 @@ impl World {
             scratch_to_park: Vec::new(),
             scratch_parked_set: ahash::AHashSet::new(),
             scratch_expired_roots: Vec::new(),
+            broadcast_view: Vec::new(),
         };
         for character in characters {
             let account = character.account.clone();
@@ -1485,6 +1496,32 @@ impl World {
         .await;
         t_per_client = phase.elapsed();
 
+        // Build the per-tick `Sync`-safe broadcast view. Required because
+        // rayon can't share `&Client` across threads (Client embeds a
+        // `tokio::sync::mpsc::Receiver` which is `!Sync`); the view
+        // snapshots the broadcast-relevant fields (map, position, guid,
+        // outbound sender, dropped-packet counter, account name) into a
+        // `Send + Sync` struct that rayon's par_iter can consume.
+        //
+        // Built AFTER per_client_loop (so positions reflect this tick's
+        // movement) and BEFORE flush + AOI transitions. Reused via
+        // `clear()` + `extend` so the underlying Vec capacity is amortized
+        // across ticks — at stable population there's no realloc.
+        let phase = Instant::now();
+        {
+            let _s = tracing::info_span!("build_broadcast_view").entered();
+            self.broadcast_view.clear();
+            self.broadcast_view
+                .extend(self.clients.iter().map(|(_, c)| c.broadcast_target()));
+        }
+        let t_build_view = phase.elapsed();
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(
+                tracy_client::plot_name!("broadcast_view_len"),
+                self.broadcast_view.len() as f64,
+            );
+        }
+
         // Flush coalesced movement broadcasts. Each entry was queued by a
         // movement opcode handler this tick; we issue at most one broadcast
         // per source per tick via the serialize-once `broadcast_opcode_within_aoi`
@@ -1542,7 +1579,7 @@ impl World {
                     pm.anchor,
                     pm.map,
                     Some(source_guid),
-                    &self.clients,
+                    &self.broadcast_view,
                 );
                 sources += 1;
                 recipients += r;
@@ -1798,12 +1835,13 @@ impl World {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             tracing::warn!(
                 target: "tick_slow",
-                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} flush={:.1} aoi={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
+                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} build_view={:.1} flush={:.1} aoi={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
                 ms(total),
                 ms(t_drain),
                 ms(t_chrscreen),
                 ms(t_promote),
                 ms(t_per_client),
+                ms(t_build_view),
                 ms(t_flush),
                 ms(t_aoi),
                 ms(t_apply_cmds),
@@ -2638,4 +2676,86 @@ pub async fn prepare_teleport(p: Position, client: &mut Client) {
     client.character_mut().info.orientation = p.orientation;
     client.character_mut().map = p.map;
     client.set_in_process_of_teleport(true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(x: f32, y: f32, z: f32) -> Vector3d {
+        Vector3d { x, y, z }
+    }
+
+    #[test]
+    fn grid_cell_for_origin_is_zero_zero() {
+        let (_, cx, cy) = grid_cell_for(Map::EasternKingdoms, 0.0, 0.0);
+        assert_eq!((cx, cy), (0, 0));
+    }
+
+    #[test]
+    fn grid_cell_for_positive_inside_first_cell() {
+        // (1, 1) and (CELL-0.01, CELL-0.01) both land in cell (0, 0).
+        let (_, cx, cy) = grid_cell_for(Map::EasternKingdoms, 1.0, 1.0);
+        assert_eq!((cx, cy), (0, 0));
+        let (_, cx, cy) = grid_cell_for(
+            Map::EasternKingdoms,
+            CREATURE_GRID_CELL_YD - 0.01,
+            CREATURE_GRID_CELL_YD - 0.01,
+        );
+        assert_eq!((cx, cy), (0, 0));
+    }
+
+    #[test]
+    fn grid_cell_for_boundary_at_cell_size_jumps_to_next_cell() {
+        // Exactly CELL_YD on the X axis is in cell 1, not 0. This is the
+        // classic floor-vs-truncate trap: `as i32` truncates toward zero,
+        // so a naive `(x / CELL) as i32` would land 249.99 → 0 (correct)
+        // and 250.00 → 1 (correct), BUT -0.01 → 0 (wrong — should be -1).
+        // The explicit `.floor()` is what makes negatives behave.
+        let (_, cx, _) = grid_cell_for(Map::EasternKingdoms, CREATURE_GRID_CELL_YD, 0.0);
+        assert_eq!(cx, 1);
+        let (_, _, cy) = grid_cell_for(Map::EasternKingdoms, 0.0, CREATURE_GRID_CELL_YD);
+        assert_eq!(cy, 1);
+    }
+
+    #[test]
+    fn grid_cell_for_small_negative_lands_in_cell_minus_one() {
+        // Regression guard for the truncate-vs-floor footgun (see comment
+        // above). Without `.floor()`, this returned (0, 0) — wrong, and
+        // would silently put creatures into the wrong neighbor cell.
+        let (_, cx, cy) = grid_cell_for(Map::EasternKingdoms, -0.01, -0.01);
+        assert_eq!((cx, cy), (-1, -1));
+    }
+
+    #[test]
+    fn grid_cell_for_preserves_map() {
+        let (m, _, _) = grid_cell_for(Map::Kalimdor, 100.0, 200.0);
+        assert_eq!(m, Map::Kalimdor);
+    }
+
+    #[test]
+    fn squared_xy_dist_same_point_is_zero() {
+        assert_eq!(squared_xy_dist(&v(0.0, 0.0, 0.0), &v(0.0, 0.0, 0.0)), 0.0);
+        assert_eq!(squared_xy_dist(&v(42.5, -7.0, 1.0), &v(42.5, -7.0, 1.0)), 0.0);
+    }
+
+    #[test]
+    fn squared_xy_dist_axis_aligned() {
+        // 3-yard separation on x only: squared distance = 9.
+        assert_eq!(squared_xy_dist(&v(0.0, 0.0, 0.0), &v(3.0, 0.0, 0.0)), 9.0);
+    }
+
+    #[test]
+    fn squared_xy_dist_diagonal_is_x_plus_y_squared() {
+        // 3-4-5 triangle in the XY plane.
+        assert_eq!(squared_xy_dist(&v(0.0, 0.0, 0.0), &v(3.0, 4.0, 0.0)), 25.0);
+    }
+
+    #[test]
+    fn squared_xy_dist_ignores_z() {
+        // Two points at the same (x, y) with huge z gap are still at
+        // distance 0 in this 2D metric. Z is deliberately dropped — same
+        // contract as `aoi::within_aoi`.
+        assert_eq!(squared_xy_dist(&v(5.0, 5.0, 0.0), &v(5.0, 5.0, 1000.0)), 0.0);
+    }
 }
