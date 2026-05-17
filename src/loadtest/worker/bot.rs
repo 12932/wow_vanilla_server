@@ -241,7 +241,7 @@ fn observe_movement(state: &Mutex<PvpState>, own_guid: wow_world_messages::Guid,
     if let ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(s) = msg
         && let Ok(mut state) = state.lock()
     {
-        state.record_attack_seen(s.target, s.total_damage, own_guid);
+        state.record_attack_seen(s.attacker, s.target, s.total_damage, own_guid);
     }
 
     let (guid, pos) = match msg {

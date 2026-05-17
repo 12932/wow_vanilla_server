@@ -57,6 +57,13 @@ pub struct PvpState {
     /// Total damage we've observed landing on `current_target`, summed
     /// across every attacker. Crossing `PVP_MAX_HEALTH` drops the lock.
     pub damage_dealt_to_target: u32,
+    /// Most recent attacker (from inbound `SMSG_ATTACKERSTATEUPDATE`
+    /// where `target == own_guid`). One-shot signal consumed by
+    /// [`acquire_target_if_needed`] — set whenever a hit lands on us,
+    /// taken when we next pick a target. Lets a bot retaliate against
+    /// whoever just hit it instead of standing idle / rolling a random
+    /// unrelated bot.
+    pub last_attacker: Option<Guid>,
 }
 
 impl PvpState {
@@ -68,10 +75,13 @@ impl PvpState {
         self.seen.get(&guid).map(|(p, _)| *p)
     }
 
-    /// If we don't have a target yet, pick a random one from the
-    /// position cache that isn't `exclude` (our own guid). Resets the
-    /// damage-dealt counter for the new target. Stale entries get
-    /// pruned in the same pass.
+    /// If we don't have a target yet, pick one. Retaliation first:
+    /// whoever last hit us (if anyone) takes priority over a random
+    /// pick — `last_attacker` is consumed via `take()` so the same hit
+    /// only re-acquires once, and the existing `current_target` lock
+    /// keeps us glued to the attacker through subsequent hits. Falls
+    /// back to a uniform-random sample over the seen-position cache.
+    /// Stale `seen` entries are pruned in the same pass.
     pub fn acquire_target_if_needed(&mut self, exclude: Guid) {
         if self.current_target.is_some() {
             return;
@@ -79,6 +89,15 @@ impl PvpState {
         let now = Instant::now();
         self.seen
             .retain(|_, (_, seen)| now.duration_since(*seen) < STALE_AFTER);
+
+        if let Some(attacker) = self.last_attacker.take()
+            && attacker != exclude
+        {
+            self.current_target = Some(attacker);
+            self.damage_dealt_to_target = 0;
+            return;
+        }
+
         let mut rng = rand::rng();
         let pick = self
             .seen
@@ -113,14 +132,34 @@ impl PvpState {
         self.damage_dealt_to_target = 0;
     }
 
-    /// Reader hook for inbound `SMSG_ATTACKERSTATEUPDATE`. Accumulates
-    /// damage against our own guid (for self-death detection) and
-    /// against our current target (for target-death detection). Either
-    /// path crossing `PVP_MAX_HEALTH` triggers the relevant state
-    /// transition.
-    pub fn record_attack_seen(&mut self, target: Guid, damage: u32, own_guid: Guid) {
+    /// Reader hook for inbound `SMSG_ATTACKERSTATEUPDATE`. Three jobs:
+    /// 1. Self-damage (target == own_guid) → drives our death state and
+    ///    flags `last_attacker` for retaliation on the next acquire.
+    /// 2. Damage on `current_target` → drops the lock when their HP
+    ///    bucket crosses `PVP_MAX_HEALTH`.
+    /// 3. Anything else → ignored.
+    pub fn record_attack_seen(
+        &mut self,
+        attacker: Guid,
+        target: Guid,
+        damage: u32,
+        own_guid: Guid,
+    ) {
         if target == own_guid {
+            if self.last_death_at.is_some() {
+                return;
+            }
             self.take_damage(damage);
+            // Skip self-hits and the zero guid (server-internal); only
+            // real bots are worth retaliating against. take_damage may
+            // have just killed us — `take_damage` clears the slot in
+            // that case, so this set is a no-op when dead.
+            if self.last_death_at.is_none()
+                && attacker != Guid::zero()
+                && attacker != own_guid
+            {
+                self.last_attacker = Some(attacker);
+            }
             return;
         }
         if Some(target) == self.current_target {
@@ -141,6 +180,7 @@ impl PvpState {
             self.last_death_at = Some(Instant::now());
             self.current_target = None;
             self.damage_dealt_to_target = 0;
+            self.last_attacker = None;
         }
     }
 }
@@ -149,3 +189,109 @@ impl PvpState {
 /// `src/world/world_opcode_handler/character.rs`. Keep in sync — if the
 /// server lowers it, bots will think they died with HP still on the bar.
 pub const PVP_MAX_HEALTH: u32 = 100;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OWN: Guid = Guid::new(0x1000);
+    const ATTACKER: Guid = Guid::new(0x2000);
+    const BYSTANDER: Guid = Guid::new(0x3000);
+
+    fn pos(x: f32, y: f32) -> Vector3d {
+        Vector3d { x, y, z: 0.0 }
+    }
+
+    #[test]
+    fn record_attack_seen_sets_last_attacker_when_we_are_hit() {
+        let mut s = PvpState::default();
+        s.record_attack_seen(ATTACKER, OWN, 10, OWN);
+        assert_eq!(s.last_attacker, Some(ATTACKER));
+        assert_eq!(s.damage_taken, 10);
+    }
+
+    #[test]
+    fn record_attack_seen_ignores_self_hits() {
+        // Both attacker and target are us — shouldn't populate
+        // last_attacker (we don't retaliate against ourselves).
+        let mut s = PvpState::default();
+        s.record_attack_seen(OWN, OWN, 5, OWN);
+        assert_eq!(s.last_attacker, None);
+    }
+
+    #[test]
+    fn record_attack_seen_ignores_zero_guid_attacker() {
+        let mut s = PvpState::default();
+        s.record_attack_seen(Guid::zero(), OWN, 5, OWN);
+        assert_eq!(s.last_attacker, None);
+    }
+
+    #[test]
+    fn acquire_target_prefers_last_attacker_over_random() {
+        let mut s = PvpState::default();
+        // Seen cache has bystander; attacker may or may not be in it
+        // (here it isn't — covers the retaliation-against-not-yet-seen
+        // path).
+        s.observe(BYSTANDER, pos(10.0, 0.0));
+        s.last_attacker = Some(ATTACKER);
+        s.acquire_target_if_needed(OWN);
+        assert_eq!(s.current_target, Some(ATTACKER));
+        // One-shot: consumed.
+        assert_eq!(s.last_attacker, None);
+    }
+
+    #[test]
+    fn acquire_target_falls_back_to_random_when_no_attacker() {
+        let mut s = PvpState::default();
+        s.observe(BYSTANDER, pos(10.0, 0.0));
+        s.acquire_target_if_needed(OWN);
+        assert_eq!(s.current_target, Some(BYSTANDER));
+    }
+
+    #[test]
+    fn acquire_target_ignores_attacker_equal_to_exclude() {
+        // Defensive: even if last_attacker somehow got set to our own
+        // guid, we shouldn't target ourselves. Falls through to the
+        // random pick.
+        let mut s = PvpState::default();
+        s.observe(BYSTANDER, pos(10.0, 0.0));
+        s.last_attacker = Some(OWN);
+        s.acquire_target_if_needed(OWN);
+        assert_eq!(s.current_target, Some(BYSTANDER));
+    }
+
+    #[test]
+    fn acquire_target_noop_when_already_locked() {
+        let mut s = PvpState {
+            current_target: Some(BYSTANDER),
+            last_attacker: Some(ATTACKER),
+            ..Default::default()
+        };
+        s.acquire_target_if_needed(OWN);
+        // Lock preserved; attacker slot untouched (will be honored
+        // only after the current target is dropped).
+        assert_eq!(s.current_target, Some(BYSTANDER));
+        assert_eq!(s.last_attacker, Some(ATTACKER));
+    }
+
+    #[test]
+    fn lethal_self_hit_clears_last_attacker() {
+        let mut s = PvpState::default();
+        s.record_attack_seen(ATTACKER, OWN, PVP_MAX_HEALTH, OWN);
+        // Death cleared the slot — dead bots don't retaliate.
+        assert!(s.last_death_at.is_some());
+        assert_eq!(s.last_attacker, None);
+    }
+
+    #[test]
+    fn post_death_hits_dont_repopulate_last_attacker() {
+        let mut s = PvpState {
+            last_death_at: Some(Instant::now()),
+            ..Default::default()
+        };
+        s.record_attack_seen(ATTACKER, OWN, 10, OWN);
+        assert_eq!(s.last_attacker, None);
+        // Damage_taken unchanged — take_damage early-returns on dead.
+        assert_eq!(s.damage_taken, 0);
+    }
+}

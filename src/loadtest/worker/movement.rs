@@ -109,10 +109,11 @@ pub enum Mode {
 }
 
 /// Radius inside the arena pit that bots strafe into during the
-/// pre-battle gather phase. Tight cluster — most bots end up within
-/// melee reach of at least one neighbor at battle start, so combat
-/// kicks off without anyone needing to chase across the arena.
-const PVP_GATHER_RADIUS: f32 = 8.0;
+/// pre-battle gather phase. ~30 yd spreads bots across the full pit
+/// rather than crammed near center; combined with retaliation
+/// targeting, bots reliably engage even when initial separation is
+/// 20+ yd.
+const PVP_GATHER_RADIUS: f32 = 30.0;
 
 /// Arrival threshold for the gather strafe. Closer than this we stop
 /// and stand still until the battle latch flips.
@@ -267,7 +268,18 @@ impl MovementDriver {
                 state.acquire_target_if_needed(own_guid);
             }
             let target_guid = state.current_target;
-            let target_pos = target_guid.and_then(|g| state.position_of(g));
+            let mut target_pos = target_guid.and_then(|g| state.position_of(g));
+            // Retaliation bootstrap: if we just acquired an attacker we
+            // haven't seen broadcast a movement opcode yet (e.g. they
+            // engaged from a stationary gather pose), stamp them at
+            // our own position. The server-side melee range check
+            // guarantees they're within ~7.5 yd to have landed a hit,
+            // so own-pos is a safe upper bound. Their next movement
+            // broadcast overwrites this with the real value.
+            if let (Some(g), None) = (target_guid, target_pos) {
+                state.observe(g, self.info.position);
+                target_pos = Some(self.info.position);
+            }
             (is_dead, target_guid, target_pos)
         };
 
@@ -654,14 +666,19 @@ impl MovementDriver {
         let new_y = self.info.position.y + dy;
 
         if matches!(self.mode, Mode::Pvp { .. }) {
-            // Hard arena boundary. Refuse the advance entirely if it
-            // would carry the bot past `PVP_ARENA_RADIUS`. Skipping the
-            // update (rather than clamping to the rim) keeps the math
-            // trivial and means the bot just stops at whatever radius
-            // it's currently at.
-            let drift_sq =
+            // Hard arena boundary, outward-only. A bot that gathered
+            // past the rim (gather radius is wider than the clamp) can
+            // still walk INWARD — we only refuse advances that exit the
+            // boundary AND move further from center than where we
+            // already are. Without the outward-only test, anyone
+            // gathered at radius 25+ would be unable to move at all.
+            let new_drift_sq =
                 (new_x - ANCHOR.x).powi(2) + (new_y - ANCHOR.y).powi(2);
-            if drift_sq > PVP_ARENA_RADIUS * PVP_ARENA_RADIUS {
+            let old_drift_sq = (self.info.position.x - ANCHOR.x).powi(2)
+                + (self.info.position.y - ANCHOR.y).powi(2);
+            if new_drift_sq > PVP_ARENA_RADIUS * PVP_ARENA_RADIUS
+                && new_drift_sq > old_drift_sq
+            {
                 return;
             }
         }
