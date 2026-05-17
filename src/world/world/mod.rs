@@ -1227,16 +1227,47 @@ impl World {
                 }
             }
 
-            for (_, creature) in &self.creatures {
-                if creature.map == new_player_map
-                    && aoi::within_aoi(&creature.info.position, &new_player_pos)
-                {
-                    visible_objects.push(creature.to_create_object());
-                    if creature.info.flags.get_forward() {
-                        movement_starts.push(MSG_MOVE_START_FORWARD_Server {
-                            guid: creature.guid,
-                            info: creature.info.clone(),
-                        });
+            // Spatial-grid creature scan: only check creatures in the
+            // 3×3 cell window around the new player's position. The
+            // grid (`creature_cells`) holds only Alive + Corpse
+            // creatures — Respawning ones are removed on Corpse→Respawn
+            // and re-inserted on Respawn→Alive, so this also fixes a
+            // latent bug where the previous full-slab scan would emit
+            // CreateObject for in-AOI Respawning creatures the client
+            // shouldn't yet see.
+            //
+            // Cell size (250 yd) > AOI radius (200 yd default), so the
+            // 3×3 window is guaranteed to cover every creature within
+            // AOI of the anchor. Same pattern used in
+            // `tick_aoi_transitions`'s creature scan.
+            {
+                let cx = (new_player_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
+                let cy = (new_player_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        let Some(keys) = self
+                            .creature_cells
+                            .get(&(new_player_map, cx + dx, cy + dy))
+                        else {
+                            continue;
+                        };
+                        for &ck in keys {
+                            let creature = &self.creatures[ck];
+                            if !aoi::within_aoi_sq(
+                                &creature.info.position,
+                                &new_player_pos,
+                                aoi_r_sq,
+                            ) {
+                                continue;
+                            }
+                            visible_objects.push(creature.to_create_object());
+                            if creature.info.flags.get_forward() {
+                                movement_starts.push(MSG_MOVE_START_FORWARD_Server {
+                                    guid: creature.guid,
+                                    info: creature.info.clone(),
+                                });
+                            }
+                        }
                     }
                 }
             }
