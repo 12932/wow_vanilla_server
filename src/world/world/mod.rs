@@ -1870,7 +1870,8 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
         .set_unit_level(character.level.as_int() as i32)
         .set_unit_factiontemplate(race.faction_id().as_int() as i32)
         .set_unit_displayid(race.display_id(character.gender))
-        .set_unit_nativedisplayid(race.display_id(character.gender));
+        .set_unit_nativedisplayid(race.display_id(character.gender))
+        .set_player_flags(crate::world::world_opcode_handler::combat::PLAYER_FLAGS_FFA_PVP);
 
     // Visible-item slots only — `set_player_visible_item` carries the item
     // ENTRY + enchants, which is what the client needs to render gear on
@@ -1954,7 +1955,8 @@ fn get_update_simulated_player_mask(p: &SimulatedPlayer) -> UpdateMask {
         .set_unit_level(p.level.as_int() as i32)
         .set_unit_factiontemplate(race.faction_id().as_int() as i32)
         .set_unit_displayid(race.display_id(p.gender))
-        .set_unit_nativedisplayid(race.display_id(p.gender));
+        .set_unit_nativedisplayid(race.display_id(p.gender))
+        .set_player_flags(crate::world::world_opcode_handler::combat::PLAYER_FLAGS_FFA_PVP);
 
     for (i, entry) in p.equipment.iter().enumerate() {
         if let Some(entry) = entry
