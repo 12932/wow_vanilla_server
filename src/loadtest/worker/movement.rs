@@ -57,11 +57,22 @@ const RUN_SPEED: f32 = wow_world_base::movement::DEFAULT_RUNNING_SPEED;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Distance at which a PvP bot stops pursuing and starts swinging. The
-/// server doesn't currently range-check melee swings, so this is purely
-/// the bot's own behavior — picking a value close to vanilla melee reach
-/// keeps the visual sensible without making fights chase forever.
-const PVP_ATTACK_RANGE: f32 = 5.0;
+/// Cached-distance threshold at which a PvP bot stops pursuing and
+/// starts swinging. Matches the server's both-parties-moving melee
+/// range (`ATTACK_DISTANCE 5.0 + MELEE_LEEWAY 8/3 ≈ 7.67 yd`, rounded
+/// down to 7.5 for headroom). Stopping at 5 yd was too strict — by the
+/// time the bot's cached position said 5 yd, real positions were
+/// drifting around 6-8 yd and swings never landed. Stopping at 7.5
+/// gives the server the chance to apply the leeway and resolve a hit.
+const PVP_ATTACK_RANGE: f32 = 7.5;
+
+/// Hard outer boundary for PvP bots. Position advance in `advance_position`
+/// is clamped so a bot can never cross this radius from `ANCHOR` — chasing
+/// an escapee won't carry the chaser out of the arena, which previously
+/// produced runaway pursuit trains that left the pit and never returned.
+/// Slightly smaller than the pit's ~25yd rim so we stay well inside the
+/// playable zone.
+const PVP_ARENA_RADIUS: f32 = 20.0;
 
 /// Minimum gap between consecutive `CMSG_ATTACKSWING` packets from the
 /// bot. The server caps swing damage by `UNARMED_SPEED` already, but
@@ -87,9 +98,9 @@ pub enum Mode {
     /// observer-position cache populated by the bot's read task;
     /// `own_guid` is excluded from target selection. `battle_started`
     /// is a worker-wide latch — while false, bots gather in the pit
-    /// (strafe to a random point within 30yd of the arena center) and
-    /// wait for the worker to flip the latch after the initial spawn
-    /// batch finishes.
+    /// (strafe to a random point within `PVP_GATHER_RADIUS` of the arena
+    /// center) and wait for the worker to flip the latch after the
+    /// initial spawn batch finishes.
     Pvp {
         state: Arc<Mutex<PvpState>>,
         own_guid: Guid,
@@ -98,10 +109,10 @@ pub enum Mode {
 }
 
 /// Radius inside the arena pit that bots strafe into during the
-/// pre-battle gather phase. Kept well inside the pit floor (~25 yd
-/// radius) — at the previous 30 yd bots were strafing onto the ramps
-/// and escaping the arena while gathering.
-const PVP_GATHER_RADIUS: f32 = 15.0;
+/// pre-battle gather phase. Tight cluster — most bots end up within
+/// melee reach of at least one neighbor at battle start, so combat
+/// kicks off without anyone needing to chase across the arena.
+const PVP_GATHER_RADIUS: f32 = 8.0;
 
 /// Arrival threshold for the gather strafe. Closer than this we stop
 /// and stand still until the battle latch flips.
@@ -109,10 +120,11 @@ const PVP_GATHER_ARRIVED_DIST_SQ: f32 = 1.0;
 
 /// Maximum time a bot will chase a single target without reaching melee
 /// before giving up and re-rolling. Two bots running at the same speed
-/// in a chase loop will otherwise sprint outward forever; this kicks
-/// them back into the random-target rotation so they eventually find
-/// someone who's stopped (in melee elsewhere, or freshly dead).
-const PVP_CHASE_TIMEOUT: Duration = Duration::from_secs(5);
+/// in a chase loop will otherwise sprint at each other forever; this
+/// kicks them back into the random-target rotation. Short enough that
+/// a chase-loop doesn't drag bots across the whole arena before the
+/// boundary clamp kicks in.
+const PVP_CHASE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct MovementDriver {
     info: MovementInfo,
@@ -125,9 +137,9 @@ pub struct MovementDriver {
     /// PvP only: monotonic clock at which we'll consider issuing the
     /// next swing — guards against firing faster than `UNARMED_SPEED`.
     next_swing_at: Instant,
-    /// PvP only, pre-battle: random point inside the 30yd gather radius
-    /// the bot strafes toward during the gather phase. `None` until the
-    /// first gather tick rolls it.
+    /// PvP only, pre-battle: random point inside `PVP_GATHER_RADIUS` of
+    /// `ANCHOR` that the bot strafes toward during the gather phase.
+    /// `None` until the first gather tick rolls it.
     gather_destination: Option<Vector3d>,
     /// PvP only: when the current pursuit started. `Some(t)` while
     /// running at a target; `None` while in melee or with no target.
@@ -288,6 +300,35 @@ impl MovementDriver {
             return Ok(());
         };
 
+        // Target has wandered outside the arena — drop the lock and
+        // pick someone else next tick. Without this a chaser would
+        // happily follow an escapee, hit its own arena boundary, and
+        // stall there forever sending heartbeats at the wall.
+        let target_drift_sq =
+            (target_pos.x - ANCHOR.x).powi(2) + (target_pos.y - ANCHOR.y).powi(2);
+        if target_drift_sq > PVP_ARENA_RADIUS * PVP_ARENA_RADIUS {
+            if let Mode::Pvp { state, .. } = &self.mode
+                && let Ok(mut state) = state.lock()
+            {
+                state.drop_target();
+            }
+            self.chase_started_at = None;
+            if !matches!(self.phase, Phase::Idle) {
+                self.info.flags = MovementInfo_MovementFlags::empty();
+                self.phase = Phase::Idle;
+                let msg = MSG_MOVE_STOP_Client {
+                    info: self.info.clone(),
+                };
+                msg.tokio_write_encrypted_client(&mut *writer, encrypter)
+                    .await?;
+                writer.flush().await?;
+                self.metrics
+                    .messages_out
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            return Ok(());
+        }
+
         let dx = target_pos.x - self.info.position.x;
         let dy = target_pos.y - self.info.position.y;
         let dist_sq = dx * dx + dy * dy;
@@ -401,12 +442,12 @@ impl MovementDriver {
         Ok(())
     }
 
-    /// Pre-battle gather phase. Each bot picks a random point in a 30yd
-    /// circle around the arena center (uniform across the disc) and
-    /// strafes to it. Strafing rather than running so the bots look like
-    /// they're shuffling into position — minor cosmetic, but the user
-    /// asked for it. Bots stand still once arrived; the gather phase
-    /// ends when the worker flips `battle_started`.
+    /// Pre-battle gather phase. Each bot picks a random point inside
+    /// `PVP_GATHER_RADIUS` of the arena center and strafes to it.
+    /// Strafing rather than running so the bots look like they're
+    /// shuffling into position — minor cosmetic, but the user asked
+    /// for it. Bots stand still once arrived; the gather phase ends
+    /// when the worker flips `battle_started`.
     async fn tick_gather(
         &mut self,
         writer: &mut OwnedWriteHalf,
@@ -587,12 +628,15 @@ impl MovementDriver {
         Ok(())
     }
 
-    /// Move the puppet along its current orientation. In `Mode::Random`
-    /// we additionally clamp drift from the spawn anchor so bots stay
-    /// clustered for AOI testing; in `Mode::Pvp` the bot needs to be able
-    /// to chase a target across arbitrary distances (the arena rim alone
-    /// is ~25 yd from center, and pursuit can carry well past 60 yd), so
-    /// the cap is skipped.
+    /// Move the puppet along its current orientation. Both modes clamp
+    /// outward drift, but with different geometries:
+    /// - `Mode::Random` bounces off a 60 yd box around the spawn anchor
+    ///   by snapping back to anchor (cheap virtual-wall reflection).
+    /// - `Mode::Pvp` refuses to advance once the proposed position would
+    ///   leave `PVP_ARENA_RADIUS`. The bot effectively sticks at the
+    ///   boundary, sending heartbeats with an unchanged position until
+    ///   its target acquisition picks something inside the arena and
+    ///   the orientation flips inward.
     fn advance_position(&mut self, now: Instant) {
         let dt = now
             .duration_since(self.last_heartbeat_at)
@@ -606,8 +650,24 @@ impl MovementDriver {
             Phase::StrafeRight => (sin * step, -cos * step),
             Phase::Idle => (0.0, 0.0),
         };
-        self.info.position.x += dx;
-        self.info.position.y += dy;
+        let new_x = self.info.position.x + dx;
+        let new_y = self.info.position.y + dy;
+
+        if matches!(self.mode, Mode::Pvp { .. }) {
+            // Hard arena boundary. Refuse the advance entirely if it
+            // would carry the bot past `PVP_ARENA_RADIUS`. Skipping the
+            // update (rather than clamping to the rim) keeps the math
+            // trivial and means the bot just stops at whatever radius
+            // it's currently at.
+            let drift_sq =
+                (new_x - ANCHOR.x).powi(2) + (new_y - ANCHOR.y).powi(2);
+            if drift_sq > PVP_ARENA_RADIUS * PVP_ARENA_RADIUS {
+                return;
+            }
+        }
+
+        self.info.position.x = new_x;
+        self.info.position.y = new_y;
 
         if matches!(self.mode, Mode::Random) {
             let drift = ((self.info.position.x - ANCHOR.x).powi(2)
