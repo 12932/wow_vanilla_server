@@ -65,6 +65,13 @@ struct Cli {
     /// Orchestrator-only: bind address for the worker control plane.
     #[arg(long, default_value = "0.0.0.0:7100")]
     bind: String,
+
+    /// Worker-only: enable PvP behavior. Each bot will pick a random
+    /// nearby player it has seen, pursue them to melee range, and send
+    /// `CMSG_ATTACKSWING` repeatedly. Without this flag bots run the
+    /// random-walk movement driver and never attack.
+    #[arg(long, default_value_t = false)]
+    pvp: bool,
 }
 
 #[tokio::main]
@@ -86,6 +93,7 @@ async fn main() -> std::io::Result<()> {
                 initial_clients: cli.clients,
                 ramp_up_secs: cli.ramp_up,
                 orchestrator: cli.orchestrator,
+                pvp: cli.pvp,
             };
             worker::run(cfg).await
         }

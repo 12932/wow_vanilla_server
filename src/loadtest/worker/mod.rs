@@ -4,6 +4,7 @@ pub mod auth;
 pub mod bot;
 pub mod metrics;
 pub mod movement;
+pub mod pvp;
 pub mod world;
 
 use std::sync::Arc;
@@ -32,6 +33,10 @@ pub struct WorkerConfig {
     pub ramp_up_secs: u32,
     /// Optional orchestrator endpoint. None → standalone mode.
     pub orchestrator: Option<String>,
+    /// PvP mode — bots track other players' positions from inbound packets,
+    /// pursue a random nearby target, and send `CMSG_ATTACKSWING` once in
+    /// melee range. Without this flag bots only run the random-walk driver.
+    pub pvp: bool,
 }
 
 pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
@@ -39,10 +44,19 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     let bots: Arc<Mutex<Slab<BotHandle>>> = Arc::new(Mutex::new(Slab::new()));
     let next_slot = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
+    // Worker-wide latch consulted by PvP-mode bots to decide whether to
+    // gather or fight. Created here so every bot we spawn (initial batch
+    // and any orchestrator-driven follow-ups) shares the same handle.
+    // We flip it to `true` after the initial spawn completes, signalling
+    // "everyone you were going to spawn with is up — start fighting".
+    let battle_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     let bot_cfg = BotConfig {
         auth_addr: cfg.auth_addr.clone(),
         world_addr_override: cfg.world_addr_override.clone(),
         username_prefix: cfg.username_prefix.clone(),
+        pvp: cfg.pvp,
+        battle_started: battle_started.clone(),
     };
 
     if cfg.initial_clients > 0 {
@@ -55,6 +69,13 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
             cfg.ramp_up_secs,
         )
         .await;
+        if cfg.pvp {
+            tracing::info!(
+                "Initial PvP spawn batch complete ({} bots); signalling battle start",
+                cfg.initial_clients
+            );
+            battle_started.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     // Local metrics printer — runs in both standalone and orchestrator modes.

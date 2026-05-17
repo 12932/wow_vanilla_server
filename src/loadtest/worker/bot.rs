@@ -1,7 +1,7 @@
 //! Single bot lifecycle: auth → world handshake → walk → shutdown.
 
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
@@ -15,7 +15,8 @@ use wow_world_messages::vanilla::CMSG_PING;
 
 use crate::worker::auth;
 use crate::worker::metrics::Metrics;
-use crate::worker::movement::MovementDriver;
+use crate::worker::movement::{Mode, MovementDriver};
+use crate::worker::pvp::PvpState;
 use crate::worker::world;
 
 #[derive(Debug, Clone)]
@@ -25,6 +26,16 @@ pub struct BotConfig {
     /// auth server tells us `vpn.gtker.com:8085` but we actually want `127.0.0.1:8085`.
     pub world_addr_override: Option<String>,
     pub username_prefix: String,
+    /// When true, drive the bot in PvP mode — track other players' positions
+    /// from inbound movement opcodes, pursue a random target, send swings in
+    /// melee range. When false, the bot runs the random-walk driver.
+    pub pvp: bool,
+    /// Worker-wide "battle start" latch. Bots in PvP mode block in their
+    /// gather phase until the worker sets this to `true` (typically after
+    /// the initial spawn batch finishes). Unused outside PvP mode but
+    /// always present so we can drop `Option<Arc<_>>` plumbing — the cost
+    /// of an unused Arc clone is trivial.
+    pub battle_started: Arc<AtomicBool>,
 }
 
 pub struct BotHandle {
@@ -98,8 +109,17 @@ async fn run_bot(
         writer,
         encrypter,
         decrypter,
-        character_guid: _,
+        character_guid,
     } = session;
+
+    // Shared cache of (other-player guid → last-known position) populated
+    // by the reader. Only allocated in PvP mode; `None` skips both the
+    // parse-time bookkeeping AND the driver's pursuit branch.
+    let pvp_state: Option<Arc<Mutex<PvpState>>> = if cfg.pvp {
+        Some(Arc::new(Mutex::new(PvpState::default())))
+    } else {
+        None
+    };
 
     // Reader future: drain incoming encrypted messages. Only IO errors
     // exit the loop — parse errors and unknown opcodes get skipped, the
@@ -110,12 +130,17 @@ async fn run_bot(
     // "stale clients". That capped sustained bot counts around ~510 in
     // an 800-bot ramp.
     let read_metrics = metrics.clone();
+    let read_pvp = pvp_state.clone();
+    let own_guid = character_guid;
     let read_fut = async move {
         let mut reader = reader;
         let mut decrypter = decrypter;
         loop {
             match ServerOpcodeMessage::tokio_read_encrypted(&mut reader, &mut decrypter).await {
-                Ok(_) => {
+                Ok(msg) => {
+                    if let Some(state) = read_pvp.as_ref() {
+                        observe_movement(state, own_guid, &msg);
+                    }
                     read_metrics.messages_in.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(ExpectedOpcodeError::Opcode { opcode, size, name }) => {
@@ -146,10 +171,19 @@ async fn run_bot(
 
     // Drive future: ticks movement + periodic ping.
     let drive_metrics = metrics.clone();
+    let drive_pvp = pvp_state.clone();
     let drive_fut = async move {
         let mut writer = writer;
         let mut encrypter = encrypter;
-        let mut driver = MovementDriver::new(drive_metrics.clone());
+        let mode = match drive_pvp {
+            Some(state) => Mode::Pvp {
+                state,
+                own_guid: character_guid,
+                battle_started: cfg.battle_started.clone(),
+            },
+            None => Mode::Random,
+        };
+        let mut driver = MovementDriver::new(drive_metrics.clone(), mode);
         let mut tick = tokio::time::interval(Duration::from_millis(50));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut ping = tokio::time::interval(Duration::from_secs(30));
@@ -192,4 +226,48 @@ async fn run_bot(
     }
 
     metrics.bots_alive.fetch_sub(1, Ordering::Relaxed);
+}
+
+/// Pluck (guid, position) pairs out of incoming movement opcodes and feed
+/// them into the bot's shared `PvpState`. Skips the bot's own guid (we
+/// don't want to chase ourselves). Also accumulates inbound damage
+/// targeted at us so the driver can detect its own death and trigger a
+/// ring-respawn. Only called in PvP mode — keeping the parse out of the
+/// no-PvP hot path is a deliberate ~zero-cost gate.
+fn observe_movement(state: &Mutex<PvpState>, own_guid: wow_world_messages::Guid, msg: &ServerOpcodeMessage) {
+    // Damage-taken accounting first — separate from movement.
+    if let ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(s) = msg
+        && s.target == own_guid
+        && let Ok(mut state) = state.lock()
+    {
+        state.take_damage(s.total_damage);
+    }
+
+    let (guid, pos) = match msg {
+        ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_FORWARD(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_BACKWARD(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_STOP(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_STRAFE_LEFT(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_STRAFE_RIGHT(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_STOP_STRAFE(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_JUMP(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_TURN_LEFT(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_TURN_RIGHT(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_STOP_TURN(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_PITCH_UP(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_START_PITCH_DOWN(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_STOP_PITCH(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_SET_RUN_MODE(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_SET_WALK_MODE(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_SET_FACING(m) => (m.guid, m.info.position),
+        ServerOpcodeMessage::MSG_MOVE_SET_PITCH(m) => (m.guid, m.info.position),
+        _ => return,
+    };
+    if guid == own_guid {
+        return;
+    }
+    if let Ok(mut state) = state.lock() {
+        state.observe(guid, pos);
+    }
 }

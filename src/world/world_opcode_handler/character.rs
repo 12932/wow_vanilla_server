@@ -3,7 +3,7 @@ use crate::world::world_opcode_handler::inventory::Inventory;
 use std::time::Instant;
 use wow_world_base::movement::DEFAULT_RUNNING_SPEED;
 use wow_world_base::stats::BaseStats;
-use wow_world_base::stats::{calculate_health, calculate_mana};
+use wow_world_base::stats::calculate_mana;
 use wow_world_base::vanilla::{Level, Map, PlayerGender, RaceClass, Vector3d};
 use wow_world_messages::vanilla::{Area, CreatureFamily, MovementInfo, Power};
 use wow_world_messages::Guid;
@@ -44,7 +44,36 @@ pub struct Character {
     ///
     /// Not persisted in snapshots — runtime-only state.
     pub root_until: Option<Instant>,
+    /// Current HP. Combat-tracked; not derived from the BaseStats table.
+    /// Vanilla's real formula produces thousands of HP at max level — fine
+    /// for PvE flavor but tedious for PvP testing. We keep PvP bounded by
+    /// initializing to `PVP_MAX_HEALTH = 100` so fights resolve in seconds
+    /// rather than minutes. Damage applied via [`apply_damage`]; reaches
+    /// `0` → [`is_dead`] returns true and the per-tick respawn loop in
+    /// `World::tick` kicks off resurrection after `RESPAWN_DELAY`.
+    pub current_health: u32,
+    /// HP cap. Reset target on respawn. Stored on the character (not
+    /// derived) so a future GM command can buff a target without touching
+    /// race/class stats.
+    pub max_health: u32,
+    /// Set on the tick the character's `current_health` first reaches `0`.
+    /// The respawn loop uses this to decide when to bring the player back.
+    /// Runtime-only (snapshot save resets to alive at full HP — players
+    /// don't get to log back in still dead).
+    pub time_of_death: Option<Instant>,
 }
+
+/// HP every player starts (and respawns) with under our simplified combat
+/// rules. Picked so a ~10-damage swing kills in 7–13 hits at the unarmed
+/// swing speed (2 s) — kill-times of 15–25 s, easy to observe during
+/// loadtest fights.
+pub const PVP_MAX_HEALTH: u32 = 100;
+
+/// How long a player stays dead before the server auto-respawns them at
+/// full HP. Tuned for testing — long enough that you actually see the
+/// dead state in-game, short enough that bots don't pile up dead and stop
+/// the action.
+pub const RESPAWN_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Character {
     fn default_stats(&self) -> BaseStats {
@@ -122,6 +151,9 @@ impl Character {
             auto_attack_timer: 0.0,
             inventory,
             root_until: None,
+            current_health: PVP_MAX_HEALTH,
+            max_health: PVP_MAX_HEALTH,
+            time_of_death: None,
         }
     }
 
@@ -129,6 +161,29 @@ impl Character {
         self.root_until
             .map(|t| t > Instant::now())
             .unwrap_or(false)
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.current_health == 0
+    }
+
+    /// Apply combat damage. Saturating — doesn't underflow when overkilled.
+    /// Returns the new health value so the caller can decide whether this
+    /// hit is the killing blow without re-reading the field.
+    pub fn apply_damage(&mut self, amount: u32) -> u32 {
+        self.current_health = self.current_health.saturating_sub(amount);
+        self.current_health
+    }
+
+    /// Reset to alive at full HP. Called by the per-tick respawn loop in
+    /// `World::tick` after `RESPAWN_DELAY` has elapsed since
+    /// `time_of_death`. Does not move the character — caller decides
+    /// whether to teleport to a graveyard or rez in place.
+    pub fn respawn_full_health(&mut self) {
+        self.current_health = self.max_health;
+        self.time_of_death = None;
+        self.attacking = false;
+        self.auto_attack_timer = 0.0;
     }
 
     pub fn update_auto_attack_timer(&mut self, dt: f32) {
@@ -139,14 +194,6 @@ impl Character {
 
     pub fn strength(&self) -> i32 {
         self.default_stats().strength.into()
-    }
-
-    pub fn base_health(&self) -> i32 {
-        self.default_stats().health.into()
-    }
-
-    pub fn max_health(&self) -> i32 {
-        calculate_health(self.default_stats().health, self.default_stats().stamina).into()
     }
 
     pub fn base_mana(&self) -> i32 {
