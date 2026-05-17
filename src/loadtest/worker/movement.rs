@@ -98,9 +98,10 @@ pub enum Mode {
 }
 
 /// Radius inside the arena pit that bots strafe into during the
-/// pre-battle gather phase. The pit floor is ~25 yd radius, so 30 yd
-/// just kisses the edge — bots are still in the pit but distributed.
-const PVP_GATHER_RADIUS: f32 = 30.0;
+/// pre-battle gather phase. Kept well inside the pit floor (~25 yd
+/// radius) — at the previous 30 yd bots were strafing onto the ramps
+/// and escaping the arena while gathering.
+const PVP_GATHER_RADIUS: f32 = 15.0;
 
 /// Arrival threshold for the gather strafe. Closer than this we stop
 /// and stand still until the battle latch flips.
