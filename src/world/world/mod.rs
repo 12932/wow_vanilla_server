@@ -668,53 +668,12 @@ impl World {
         let mut move_to_character_screen = false;
         let mut commands = crate::world::command::CommandQueue::new();
 
-        // Resurrect dead players whose RESPAWN_DELAY has elapsed. Runs
-        // before the per-client opcode loop so a revived player can issue
-        // a swing on the same tick they come back. Broadcast restores HP
-        // and resets stand-state to standing so the corpse marker clears.
-        {
-            use crate::world::world_opcode_handler::character::RESPAWN_DELAY;
-            let now = Instant::now();
-            let to_respawn: Vec<usize> = self
-                .clients
-                .iter()
-                .filter_map(|(k, c)| {
-                    c.character().time_of_death.and_then(|t| {
-                        if now.duration_since(t) >= RESPAWN_DELAY {
-                            Some(k)
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .collect();
-            for k in to_respawn {
-                let c = &mut self.clients[k];
-                c.character_mut().respawn_full_health();
-                let guid = c.character().guid;
-                let pos = c.character().info.position;
-                let map = c.character().map;
-                let max_hp = c.character().max_health as i32;
-                let rez_update = SMSG_UPDATE_OBJECT {
-                    has_transport: 0,
-                    objects: vec![Object {
-                        update_type: Object_UpdateType::Values {
-                            guid1: guid,
-                            mask1: UpdateMask::Player(
-                                UpdatePlayerBuilder::new()
-                                    .set_unit_health(max_hp)
-                                    .set_unit_bytes_1(0, 0, 0, 0)
-                                    .finalize(),
-                            ),
-                        },
-                    }],
-                };
-                // Broadcast — the resurrected player is in `self.clients`
-                // so they receive their own resurrection update via the
-                // AOI walk; no explicit send needed.
-                aoi::broadcast_within_aoi(rez_update, pos, map, &mut self.clients).await;
-            }
-        }
+        // No server-side respawn pass — under the gurubashi-pvp rules
+        // players stay dead where they fell. `time_of_death` remains set
+        // and `is_dead()` keeps the opcode handler dropping incoming
+        // packets, so a dead client sits inertly as a corpse until the
+        // server restarts (snapshot load resets `current_health` to
+        // `max_health`).
 
         let phase = Instant::now();
         async {

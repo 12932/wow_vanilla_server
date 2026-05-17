@@ -235,12 +235,13 @@ async fn run_bot(
 /// ring-respawn. Only called in PvP mode — keeping the parse out of the
 /// no-PvP hot path is a deliberate ~zero-cost gate.
 fn observe_movement(state: &Mutex<PvpState>, own_guid: wow_world_messages::Guid, msg: &ServerOpcodeMessage) {
-    // Damage-taken accounting first — separate from movement.
+    // Combat-log accounting first — separate from movement. Routes both
+    // self-damage (drives our own death state) and damage-to-target
+    // (drops the target lock when the lock-target dies).
     if let ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(s) = msg
-        && s.target == own_guid
         && let Ok(mut state) = state.lock()
     {
-        state.take_damage(s.total_damage);
+        state.record_attack_seen(s.target, s.total_damage, own_guid);
     }
 
     let (guid, pos) = match msg {

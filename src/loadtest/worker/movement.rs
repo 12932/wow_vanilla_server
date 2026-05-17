@@ -63,24 +63,11 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
 /// keeps the visual sensible without making fights chase forever.
 const PVP_ATTACK_RANGE: f32 = 5.0;
 
-/// How often a bot in PvP mode reconsiders its target. Re-evaluating
-/// every tick would flap targets every time someone closer drifted into
-/// view; once every few seconds is plenty of action.
-const PVP_TARGET_REFRESH: Duration = Duration::from_secs(4);
-
 /// Minimum gap between consecutive `CMSG_ATTACKSWING` packets from the
 /// bot. The server caps swing damage by `UNARMED_SPEED` already, but
 /// sending faster than that just wastes bandwidth.
 const PVP_SWING_INTERVAL: Duration =
     Duration::from_millis((wow_world_base::combat::UNARMED_SPEED * 1000.0) as u64);
-
-/// Match the server's `RESPAWN_DELAY` constant in
-/// `src/world/world_opcode_handler/character.rs`. The loadtest binary
-/// can't import from the server's module tree, so this is a hand-synced
-/// copy. We add 500 ms of pad before the ring-teleport actually fires,
-/// to make sure the server has already gone through its alive-restore
-/// pass.
-const RESPAWN_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 enum Phase {
@@ -127,12 +114,6 @@ pub struct MovementDriver {
     started_at: Instant,
     metrics: Arc<Metrics>,
     mode: Mode,
-    /// PvP only: the guid the bot is currently chasing. `None` falls
-    /// back to random-walk so the bot moves around and discovers others.
-    current_target: Option<Guid>,
-    /// PvP only: monotonic clock at which we'll consider refreshing
-    /// `current_target`.
-    target_refresh_at: Instant,
     /// PvP only: monotonic clock at which we'll consider issuing the
     /// next swing — guards against firing faster than `UNARMED_SPEED`.
     next_swing_at: Instant,
@@ -160,8 +141,6 @@ impl MovementDriver {
             started_at: now,
             metrics,
             mode,
-            current_target: None,
-            target_refresh_at: now,
             next_swing_at: now,
             gather_destination: None,
         }
@@ -210,11 +189,24 @@ impl MovementDriver {
         Ok(())
     }
 
-    /// PvP tick: detect death, schedule a ring-respawn, otherwise pursue a
-    /// random target from the shared `PvpState` and swing once in melee
-    /// range. While no target is visible we fall back to the random-walk
-    /// driver so the bot keeps moving and discovers others through their
-    /// position broadcasts.
+    /// PvP tick (battle phase). Behavior:
+    /// - Dead → fully inert. No movement, no swings, no target switching.
+    ///   The bot's body stays where it fell.
+    /// - Alive without target → ask `PvpState` to acquire one. If the
+    ///   position cache is empty (very early in the battle) we just stand
+    ///   still and wait for another bot's broadcasts to populate it.
+    /// - Alive with target, target's position unknown → release the
+    ///   stale lock (target probably died or wandered out of AOI) and
+    ///   pick again next tick.
+    /// - Alive with target in attack range → stop moving, swing on the
+    ///   `UNARMED_SPEED` cadence.
+    /// - Alive with target out of range → run a straight line toward
+    ///   the target's last known position. Pure 2D euclidean — no
+    ///   pathfinding, no collision. Open arena, no walls in the way.
+    ///
+    /// The target lock is dropped by `PvpState::record_attack_seen` once
+    /// 100+ damage has landed on the target (across all attackers), so
+    /// we never sit on a dead corpse waiting.
     async fn tick_pvp(
         &mut self,
         writer: &mut OwnedWriteHalf,
@@ -234,112 +226,121 @@ impl MovementDriver {
             return self.tick_gather(writer, encrypter, now).await;
         }
 
-        // Snapshot the state we need under the lock — no awaits while
-        // holding it. Stuff we read: are we dead, when did we die, what
-        // does our current target's last-known position look like.
-        let (own_guid, is_dead, died_at, target_pos) = {
+        // One critical section: acquire-target-if-needed + position
+        // lookup + dead/alive snapshot. Releases the mutex before any
+        // .await so the reader task can keep updating the cache.
+        let (is_dead, target_guid, target_pos) = {
             let (state, own_guid) = match &self.mode {
                 Mode::Pvp { state, own_guid, .. } => (state, *own_guid),
                 _ => unreachable!("tick_pvp called outside Mode::Pvp"),
             };
-            let state = state.lock().expect("pvp state mutex poisoned");
+            let mut state = state.lock().expect("pvp state mutex poisoned");
             let is_dead = state.last_death_at.is_some();
-            let died_at = state.last_death_at;
-            let target_pos = self
-                .current_target
-                .and_then(|g| state.position_of(g));
-            (own_guid, is_dead, died_at, target_pos)
+            if !is_dead {
+                state.release_stale_target();
+                state.acquire_target_if_needed(own_guid);
+            }
+            let target_guid = state.current_target;
+            let target_pos = target_guid.and_then(|g| state.position_of(g));
+            (is_dead, target_guid, target_pos)
         };
 
-        // Branch 1: respawn flow. We've been dead for at least
-        // `RESPAWN_DELAY` server-side; pick a ring position around the
-        // arena, teleport the bot client-side, clear death flags.
+        // Dead → corpse. Send nothing; let observers see the body where
+        // it fell. The server has already broadcast the dead stand-state,
+        // so other clients render the death pose.
         if is_dead {
-            if let Some(t) = died_at {
-                // Pad RESPAWN_DELAY by 500 ms so the server has definitely
-                // gone through its own resurrect pass before we start
-                // sending movement again.
-                if now.duration_since(t) >= RESPAWN_DELAY + Duration::from_millis(500) {
-                    self.respawn_to_ring(writer, encrypter, own_guid, now)
-                        .await?;
-                }
-            }
             return Ok(());
         }
 
-        // Branch 2: alive. Refresh target every PVP_TARGET_REFRESH or when
-        // we have none, drop stale ones (the lock takes care of that).
-        if self.current_target.is_none() || now >= self.target_refresh_at {
-            let new_target = match &self.mode {
-                Mode::Pvp { state, own_guid, .. } => {
-                    let mut state = state.lock().expect("pvp state mutex poisoned");
-                    state.pick_random_target(*own_guid)
-                }
-                _ => unreachable!(),
-            };
-            self.current_target = new_target.map(|(g, _)| g);
-            self.target_refresh_at = now + PVP_TARGET_REFRESH;
-        }
-
-        // Branch 2a: no target visible yet — fall back to random-walk so
-        // we generate position broadcasts other bots can latch onto.
-        let Some(target_pos) = target_pos else {
-            return self.tick_random(writer, encrypter, now).await;
+        // No target / target's last-known position unknown → stand still.
+        // The reader is constantly updating the cache from inbound move
+        // packets, so this resolves on its own as soon as something
+        // visible is broadcasting.
+        let (Some(target_guid), Some(target_pos)) = (target_guid, target_pos) else {
+            if !matches!(self.phase, Phase::Idle) {
+                self.info.flags = MovementInfo_MovementFlags::empty();
+                self.phase = Phase::Idle;
+                let msg = MSG_MOVE_STOP_Client {
+                    info: self.info.clone(),
+                };
+                msg.tokio_write_encrypted_client(&mut *writer, encrypter)
+                    .await?;
+                writer.flush().await?;
+                self.metrics
+                    .messages_out
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            return Ok(());
         };
 
-        // Branch 2b: pursue. Aim at target, run forward, swing when close.
         let dx = target_pos.x - self.info.position.x;
         let dy = target_pos.y - self.info.position.y;
         let dist_sq = dx * dx + dy * dy;
+        let in_melee = dist_sq <= PVP_ATTACK_RANGE * PVP_ATTACK_RANGE;
         let new_orientation = dy.atan2(dx);
 
-        // Re-issue START_FORWARD if either we weren't moving or the
-        // heading drifted noticeably. The server reapplies orientation
-        // from every move opcode, so we don't need to spam SET_FACING.
-        let needs_reorient = !matches!(self.phase, Phase::Forward)
-            || (self.info.orientation - new_orientation).abs() > 0.15;
-        if needs_reorient {
-            self.info.orientation = new_orientation;
-            self.info.flags = MovementInfo_MovementFlags::new_forward();
-            self.phase = Phase::Forward;
-            let msg = MSG_MOVE_START_FORWARD_Client {
-                info: self.info.clone(),
-            };
-            msg.tokio_write_encrypted_client(&mut *writer, encrypter)
-                .await?;
-            self.metrics
-                .messages_out
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if in_melee {
+            // Stop pursuing and just stand there swinging. Face the
+            // target so the visual is right (no big deal mechanically —
+            // the server doesn't check facing for melee hits).
+            if !matches!(self.phase, Phase::Idle)
+                || (self.info.orientation - new_orientation).abs() > 0.15
+            {
+                self.info.orientation = new_orientation;
+                self.info.flags = MovementInfo_MovementFlags::empty();
+                self.phase = Phase::Idle;
+                let msg = MSG_MOVE_STOP_Client {
+                    info: self.info.clone(),
+                };
+                msg.tokio_write_encrypted_client(&mut *writer, encrypter)
+                    .await?;
+                self.metrics
+                    .messages_out
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        } else {
+            // Out of range — run forward at the target. Re-issue
+            // START_FORWARD when our heading drifts or we were stopped;
+            // the server resets its movement model on each START_*.
+            let needs_reorient = !matches!(self.phase, Phase::Forward)
+                || (self.info.orientation - new_orientation).abs() > 0.15;
+            if needs_reorient {
+                self.info.orientation = new_orientation;
+                self.info.flags = MovementInfo_MovementFlags::new_forward();
+                self.phase = Phase::Forward;
+                let msg = MSG_MOVE_START_FORWARD_Client {
+                    info: self.info.clone(),
+                };
+                msg.tokio_write_encrypted_client(&mut *writer, encrypter)
+                    .await?;
+                self.metrics
+                    .messages_out
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
+                self.advance_position(now);
+                let msg = MSG_MOVE_HEARTBEAT_Client {
+                    info: self.info.clone(),
+                };
+                msg.tokio_write_encrypted_client(&mut *writer, encrypter)
+                    .await?;
+                self.metrics
+                    .messages_out
+                    .fetch_add(1, Ordering::Relaxed);
+                self.last_heartbeat_at = now;
+            }
         }
 
-        // Advance our local position + emit heartbeat at the same cadence
-        // as random-walk so observers can interpolate smoothly.
-        if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
-            self.advance_position(now);
-            let msg = MSG_MOVE_HEARTBEAT_Client {
-                info: self.info.clone(),
-            };
-            msg.tokio_write_encrypted_client(&mut *writer, encrypter)
-                .await?;
-            self.metrics
-                .messages_out
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.last_heartbeat_at = now;
-        }
-
-        // In melee range? Fire a swing — but never faster than the server
-        // would accept it, hence the per-swing rate cap. Self-targets are
-        // dropped server-side so guarding here isn't strictly needed.
-        if dist_sq <= PVP_ATTACK_RANGE * PVP_ATTACK_RANGE
-            && now >= self.next_swing_at
-            && let Some(target_guid) = self.current_target
-        {
+        // Swing rate-cap: never send `CMSG_ATTACKSWING` faster than the
+        // server would actually resolve it. The server still gates on
+        // its own `UNARMED_SPEED` timer; this just avoids wasted bytes.
+        if in_melee && now >= self.next_swing_at {
             let msg = CMSG_ATTACKSWING { guid: target_guid };
             msg.tokio_write_encrypted_client(&mut *writer, encrypter)
                 .await?;
             self.metrics
                 .messages_out
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, Ordering::Relaxed);
             self.next_swing_at = now + PVP_SWING_INTERVAL;
         }
 
@@ -438,76 +439,6 @@ impl MovementDriver {
         }
 
         writer.flush().await?;
-        Ok(())
-    }
-
-    /// Teleport the bot to a uniformly-random ring position around the
-    /// Gurubashi Arena (radius 70-110yd from `ANCHOR`, z fixed at the
-    /// spectator-ring height of ~120). We "teleport" by overwriting our
-    /// local `info.position` and immediately emitting a
-    /// `MSG_MOVE_START_FORWARD` — the server trusts client-asserted
-    /// positions, so this snaps the bot to the new location for every
-    /// observer on the next tick. Clears death state when done.
-    async fn respawn_to_ring(
-        &mut self,
-        writer: &mut OwnedWriteHalf,
-        encrypter: &mut EncrypterHalf,
-        _own_guid: Guid,
-        now: Instant,
-    ) -> std::io::Result<()> {
-        // Roll the random ring position up-front and drop the rng before
-        // the first `.await` — `ThreadRng` is `!Send` and would
-        // otherwise infect the future across the wire write.
-        let (angle, radius) = {
-            let mut rng = rand::rng();
-            let angle = rng.random_range(0.0_f32..std::f32::consts::TAU);
-            // Inclusive-exclusive — 110 is the outer edge of the spectator
-            // bowl rim before the slope falls away to ground level.
-            let radius = rng.random_range(70.0_f32..110.0_f32);
-            (angle, radius)
-        };
-        let new_x = ANCHOR.x + radius * angle.cos();
-        let new_y = ANCHOR.y + radius * angle.sin();
-        // Face the arena center so respawned bots line the ring as
-        // spectators looking inward. Vector from new position to ANCHOR
-        // is `-(cos(angle), sin(angle))`, whose direction is `angle + PI`.
-        let new_orientation = (angle + std::f32::consts::PI) % std::f32::consts::TAU;
-        // The arena's WMO spectator ring sits at z ≈ 120. Server-side
-        // WMO clipping would let us land exactly on the rim mesh, but
-        // the bot doesn't have namigator linked — so we use the flat
-        // value the user picked as the documented fallback.
-        const SPECTATOR_RING_Z: f32 = 120.0;
-
-        self.info.position = Vector3d {
-            x: new_x,
-            y: new_y,
-            z: SPECTATOR_RING_Z,
-        };
-        self.info.orientation = new_orientation;
-        self.info.flags = MovementInfo_MovementFlags::new_forward();
-        self.phase = Phase::Forward;
-        self.last_heartbeat_at = now;
-        self.next_swing_at = now;
-        self.current_target = None;
-        self.target_refresh_at = now;
-
-        let msg = MSG_MOVE_START_FORWARD_Client {
-            info: self.info.clone(),
-        };
-        msg.tokio_write_encrypted_client(&mut *writer, encrypter)
-            .await?;
-        writer.flush().await?;
-        self.metrics
-            .messages_out
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        // Clear death bookkeeping AFTER the wire write so any unexpected
-        // io error keeps us "dead" for the next tick to retry.
-        if let Mode::Pvp { state, .. } = &self.mode
-            && let Ok(mut state) = state.lock()
-        {
-            state.mark_respawned();
-        }
         Ok(())
     }
 
