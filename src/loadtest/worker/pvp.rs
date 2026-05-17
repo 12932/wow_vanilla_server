@@ -52,7 +52,7 @@ pub struct PvpState {
     /// Locked target. Set by [`acquire_target_if_needed`], cleared by
     /// [`record_attack_seen`] when the target has taken enough cumulative
     /// damage, or by the driver if the target's seen-position entry has
-    /// expired.
+    /// expired / chase-timed-out.
     pub current_target: Option<Guid>,
     /// Total damage we've observed landing on `current_target`, summed
     /// across every attacker. Crossing `PVP_MAX_HEALTH` drops the lock.
@@ -102,6 +102,15 @@ impl PvpState {
             self.current_target = None;
             self.damage_dealt_to_target = 0;
         }
+    }
+
+    /// Force-drop the current target. Driver calls this when its
+    /// chase-timeout fires (we've been running at the target for
+    /// `PVP_CHASE_TIMEOUT` without ever reaching melee — almost
+    /// certainly a same-speed chase loop with no convergence).
+    pub fn drop_target(&mut self) {
+        self.current_target = None;
+        self.damage_dealt_to_target = 0;
     }
 
     /// Reader hook for inbound `SMSG_ATTACKERSTATEUPDATE`. Accumulates

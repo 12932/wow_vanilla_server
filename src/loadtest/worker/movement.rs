@@ -106,6 +106,13 @@ const PVP_GATHER_RADIUS: f32 = 30.0;
 /// and stand still until the battle latch flips.
 const PVP_GATHER_ARRIVED_DIST_SQ: f32 = 1.0;
 
+/// Maximum time a bot will chase a single target without reaching melee
+/// before giving up and re-rolling. Two bots running at the same speed
+/// in a chase loop will otherwise sprint outward forever; this kicks
+/// them back into the random-target rotation so they eventually find
+/// someone who's stopped (in melee elsewhere, or freshly dead).
+const PVP_CHASE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct MovementDriver {
     info: MovementInfo,
     phase: Phase,
@@ -121,6 +128,11 @@ pub struct MovementDriver {
     /// the bot strafes toward during the gather phase. `None` until the
     /// first gather tick rolls it.
     gather_destination: Option<Vector3d>,
+    /// PvP only: when the current pursuit started. `Some(t)` while
+    /// running at a target; `None` while in melee or with no target.
+    /// Used to bail out of equal-speed chase loops by dropping the
+    /// target after `PVP_CHASE_TIMEOUT`.
+    chase_started_at: Option<Instant>,
 }
 
 impl MovementDriver {
@@ -143,6 +155,7 @@ impl MovementDriver {
             mode,
             next_swing_at: now,
             gather_destination: None,
+            chase_started_at: None,
         }
     }
 
@@ -249,6 +262,7 @@ impl MovementDriver {
         // it fell. The server has already broadcast the dead stand-state,
         // so other clients render the death pose.
         if is_dead {
+            self.chase_started_at = None;
             return Ok(());
         }
 
@@ -278,6 +292,44 @@ impl MovementDriver {
         let dist_sq = dx * dx + dy * dy;
         let in_melee = dist_sq <= PVP_ATTACK_RANGE * PVP_ATTACK_RANGE;
         let new_orientation = dy.atan2(dx);
+
+        // Chase-loop bail-out. Two bots at the same run speed will never
+        // converge if both keep moving — the pursuer just stays at a
+        // constant distance behind the target. After
+        // `PVP_CHASE_TIMEOUT` of running at this target without ever
+        // reaching melee, drop the lock and pick a fresh one. Reset the
+        // clock as soon as we enter melee so the timer doesn't fire
+        // mid-fight.
+        if in_melee {
+            self.chase_started_at = None;
+        } else {
+            let started = self.chase_started_at.get_or_insert(now);
+            if now.duration_since(*started) >= PVP_CHASE_TIMEOUT {
+                self.chase_started_at = None;
+                if let Mode::Pvp { state, .. } = &self.mode
+                    && let Ok(mut state) = state.lock()
+                {
+                    state.drop_target();
+                }
+                // No actions this tick — fall out so next tick picks a
+                // new target. Stops the bot from continuing to sprint
+                // in the now-stale direction.
+                if !matches!(self.phase, Phase::Idle) {
+                    self.info.flags = MovementInfo_MovementFlags::empty();
+                    self.phase = Phase::Idle;
+                    let msg = MSG_MOVE_STOP_Client {
+                        info: self.info.clone(),
+                    };
+                    msg.tokio_write_encrypted_client(&mut *writer, encrypter)
+                        .await?;
+                    self.metrics
+                        .messages_out
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                writer.flush().await?;
+                return Ok(());
+            }
+        }
 
         if in_melee {
             // Stop pursuing and just stand there swinging. Face the
@@ -361,15 +413,17 @@ impl MovementDriver {
         now: Instant,
     ) -> std::io::Result<()> {
         if self.gather_destination.is_none() {
-            // Uniform-over-disc: `r = R * sqrt(u)` instead of `r = R * u`,
-            // so density doesn't bunch toward the center.
-            let (angle, radius_norm) = {
+            // Uniform on radius (NOT on disc area). Uniform-on-area
+            // would bias most bots toward the rim — "anywhere in
+            // between" reads more naturally as "every radius equally
+            // likely", which clusters bots near the center where
+            // initial chases stay short.
+            let (angle, r) = {
                 let mut rng = rand::rng();
                 let a = rng.random_range(0.0_f32..std::f32::consts::TAU);
-                let u: f32 = rng.random_range(0.0_f32..1.0_f32);
-                (a, u.sqrt())
+                let r = rng.random_range(0.0_f32..PVP_GATHER_RADIUS);
+                (a, r)
             };
-            let r = radius_norm * PVP_GATHER_RADIUS;
             self.gather_destination = Some(Vector3d {
                 x: ANCHOR.x + r * angle.cos(),
                 y: ANCHOR.y + r * angle.sin(),

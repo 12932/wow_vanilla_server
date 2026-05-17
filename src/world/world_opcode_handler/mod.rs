@@ -16,6 +16,7 @@ use {
 
 pub mod character;
 pub mod chat;
+pub mod combat;
 pub mod creature;
 pub(crate) mod entities;
 pub(crate) mod gm_command;
