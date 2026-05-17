@@ -121,7 +121,7 @@ pub struct CharacterScreenClient {
     pub(super) received_messages: Receiver<ClientOpcodeMessage>,
     pub(super) outbound: OutboundTx,
     pub(super) dropped_packets: Arc<AtomicU64>,
-    pub(super) account_name: String,
+    pub(super) account_name: Arc<str>,
     pub reader_handle: JoinHandle<()>,
     pub writer_handle: JoinHandle<()>,
 }
@@ -140,6 +140,10 @@ impl CharacterScreenClient {
     }
 
     pub fn new(account_name: String, stream: TcpStream, encryption: HeaderCrypto) -> Self {
+        // Promote to Arc<str> once at construction so the broadcast view
+        // (and any future fan-out path) can refcount-bump-clone the name
+        // instead of allocating a fresh String per recipient.
+        let account_name: Arc<str> = Arc::from(account_name.into_boxed_str());
         let (read, write) = stream.into_split();
         let (encrypter, decrypter) = encryption.split();
 

@@ -100,6 +100,14 @@ fn build_clients(n: usize) -> Slab<Client> {
     clients
 }
 
+/// Same shape as the production `World::tick` build-view step — used
+/// here so the bench measures broadcast fan-out cost only, not the
+/// view-construction cost (which the production path amortizes over
+/// every broadcast call in the same tick).
+fn build_broadcast_view(clients: &Slab<Client>) -> Vec<wow_vanilla_server::world::aoi::BroadcastTarget> {
+    clients.iter().map(|(_, c)| c.broadcast_target()).collect()
+}
+
 /// Build `n` characters + `m` creatures for the stateful World benches.
 fn build_characters_and_creatures(
     n_clients: usize,
@@ -204,23 +212,29 @@ fn bench_broadcast_fanout(c: &mut Criterion) {
     group.sample_size(250);
     group.measurement_time(Duration::from_secs(25));
     group.warm_up_time(Duration::from_secs(5));
-    for &n in &[100usize, 500, 1000] {
+    for &n in &[100usize, 500, 1000, 2500, 4000] {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |bench, &n| {
             bench.iter_batched(
                 || {
                     // Setup per iteration: spawn N synthetic clients inside
-                    // the runtime so the writer tasks are valid. iter_batched
-                    // excludes setup from measurement.
-                    rt.block_on(async { build_clients(n) })
+                    // the runtime so the writer tasks are valid, then
+                    // snapshot the broadcast view. iter_batched excludes
+                    // setup from measurement.
+                    let clients = rt.block_on(async { build_clients(n) });
+                    let view = build_broadcast_view(&clients);
+                    // Keep `clients` alive for the iter — dropping it
+                    // would also drop the kanal channels, making the
+                    // view's outbound senders dangling.
+                    (clients, view)
                 },
-                |clients| {
+                |(_clients, view)| {
                     broadcast_opcode_within_aoi(
                         std::hint::black_box(&msg),
                         anchor,
                         BENCH_MAP,
                         None,
-                        &clients,
+                        &view,
                     );
                 },
                 BatchSize::SmallInput,
