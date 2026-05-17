@@ -40,39 +40,14 @@ pub async fn world(users: crate::auth::UserCache) {
     }
 }
 
-/// Configured target tick interval (10 Hz). The world prefers to run at
-/// this cadence and `TickPacer` only departs from it under sustained
-/// overload (see backoff/recovery rules below). Constants downstream that
-/// need a tick-rate fallback (the bootstrap `tick_dt` on the very first
-/// tick) read this rather than the live `TickPacer::current_interval`,
-/// because they're computed before the pacer has any data.
-pub const TARGET_INTERVAL: Duration = Duration::from_millis(100);
-
-/// Floor on the adaptive tickrate (2 Hz). Once the pacer has backed off
-/// this far, further slow-tick streaks are simply absorbed — going below
-/// 2 Hz would make the simulation feel frozen to players.
+/// Test-only defaults for `TickPacer` matching the config defaults in
+/// `[tick]` of `config.toml`. Production reads them from the config file
+/// via `TickPacer::new_from_config`; these are referenced only by the
+/// in-file `pacer_tests` module.
+#[cfg(test)]
+const TARGET_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(test)]
 const MAX_INTERVAL: Duration = Duration::from_millis(500);
-
-const SAVE_INTERVAL: Duration = Duration::from_secs(60);
-
-/// EMA coefficient on the "this tick was slow" indicator. α=0.2 is roughly
-/// a 5-tick smoothing window — long enough that a single slow GC-pause-
-/// looking tick doesn't trigger backoff, short enough that ~5 consecutive
-/// slow ticks cross the threshold.
-const SLOW_EMA_ALPHA: f32 = 0.2;
-
-/// `slow_ema` threshold at which we double the interval. With α=0.2 this
-/// corresponds to "the last ~5 ticks were predominantly slow".
-const BACKOFF_THRESHOLD: f32 = 0.5;
-
-/// We only count a tick as recovery-worthy "healthy" if it finished in
-/// well under the current budget — naked equality at the boundary would
-/// flap. 0.6 = 40 % headroom required.
-const RECOVERY_HYSTERESIS: f32 = 0.6;
-
-/// Consecutive headroom-meeting ticks required before we halve the
-/// interval back toward `TARGET_INTERVAL`.
-const RECOVERY_HEALTHY_STREAK: u32 = 30;
 
 /// Adaptive tickrate controller. Owned by `run_world` and consulted once
 /// per tick. Game logic must use wall-clock `dt`, never the pacer's
@@ -83,6 +58,10 @@ struct TickPacer {
     current_interval: Duration,
     slow_ema: f32,
     healthy_streak: u32,
+    slow_ema_alpha: f32,
+    backoff_threshold: f32,
+    recovery_hysteresis: f32,
+    recovery_healthy_streak: u32,
 }
 
 /// Returned by `TickPacer::observe` when the tick triggered a transition
@@ -97,13 +76,39 @@ pub enum TickRateChange {
 }
 
 impl TickPacer {
+    /// Test-only constructor that fills the pacing thresholds with the
+    /// canonical config defaults. Production should use
+    /// [`Self::new_from_config`].
+    #[cfg(test)]
     fn new(target_interval: Duration, max_interval: Duration) -> Self {
+        let cfg = crate::config::TickConfig::default();
         Self {
             target_interval,
             max_interval,
             current_interval: target_interval,
             slow_ema: 0.0,
             healthy_streak: 0,
+            slow_ema_alpha: cfg.slow_ema_alpha,
+            backoff_threshold: cfg.backoff_threshold,
+            recovery_hysteresis: cfg.recovery_hysteresis,
+            recovery_healthy_streak: cfg.recovery_healthy_streak,
+        }
+    }
+
+    /// Build a pacer from the global config's `[tick]` section. Snapshots
+    /// the thresholds at construction time — no hot reload, see config
+    /// module docs.
+    fn new_from_config(cfg: &crate::config::TickConfig) -> Self {
+        Self {
+            target_interval: cfg.target_interval(),
+            max_interval: cfg.max_interval(),
+            current_interval: cfg.target_interval(),
+            slow_ema: 0.0,
+            healthy_streak: 0,
+            slow_ema_alpha: cfg.slow_ema_alpha,
+            backoff_threshold: cfg.backoff_threshold,
+            recovery_hysteresis: cfg.recovery_hysteresis,
+            recovery_healthy_streak: cfg.recovery_healthy_streak,
         }
     }
 
@@ -119,10 +124,11 @@ impl TickPacer {
         } else {
             0.0
         };
-        self.slow_ema = SLOW_EMA_ALPHA * slow_now + (1.0 - SLOW_EMA_ALPHA) * self.slow_ema;
+        self.slow_ema =
+            self.slow_ema_alpha * slow_now + (1.0 - self.slow_ema_alpha) * self.slow_ema;
 
         let mut change: Option<TickRateChange> = None;
-        if self.slow_ema > BACKOFF_THRESHOLD && self.current_interval < self.max_interval {
+        if self.slow_ema > self.backoff_threshold && self.current_interval < self.max_interval {
             let new_interval = (self.current_interval * 2).min(self.max_interval);
             info!(
                 "tickrate backoff: now {} ms ({:.1} Hz)",
@@ -134,13 +140,13 @@ impl TickPacer {
             self.healthy_streak = 0;
             change = Some(TickRateChange::Backoff { new_interval });
         } else {
-            let headroom = self.current_interval.mul_f32(RECOVERY_HYSTERESIS);
+            let headroom = self.current_interval.mul_f32(self.recovery_hysteresis);
             if tick_duration <= headroom {
                 self.healthy_streak = self.healthy_streak.saturating_add(1);
             } else if slow_now > 0.0 {
                 self.healthy_streak = 0;
             }
-            if self.healthy_streak >= RECOVERY_HEALTHY_STREAK
+            if self.healthy_streak >= self.recovery_healthy_streak
                 && self.current_interval > self.target_interval
             {
                 let new_interval = (self.current_interval / 2).max(self.target_interval);
@@ -212,8 +218,10 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
         });
     }
 
-    let mut next_save = Instant::now() + SAVE_INTERVAL;
-    let mut pacer = TickPacer::new(TARGET_INTERVAL, MAX_INTERVAL);
+    let tick_cfg = &crate::config::config().tick;
+    let save_interval = tick_cfg.save_interval();
+    let mut next_save = Instant::now() + save_interval;
+    let mut pacer = TickPacer::new_from_config(tick_cfg);
 
     loop {
         let before = Instant::now();
@@ -235,7 +243,7 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
             // Return excess slab / hashmap capacity after long-running churn.
             // This is outside the tick hot path so the cost is fine.
             world.shrink_periodic();
-            next_save = after + SAVE_INTERVAL;
+            next_save = after + save_interval;
         }
 
         if final_save {

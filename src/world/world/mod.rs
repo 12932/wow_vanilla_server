@@ -7,10 +7,9 @@ use crate::world::world::pathfinding_maps::PathfindingMaps;
 use crate::world::world_opcode_handler;
 use crate::world::world_opcode_handler::character::Character;
 use crate::world::world_opcode_handler::creature::{
-    Creature, CreatureBehavior, CreatureLifeState, WALK_SPEED,
+    walk_speed, Creature, CreatureBehavior, CreatureLifeState,
 };
 use crate::world::world_opcode_handler::entities::Entities;
-use crate::world::world_opcode_handler::simulated_player::SimulatedPlayer;
 use client::character_screen_client::{CharacterScreenClient, CharacterScreenProgress};
 use slab::Slab;
 use std::time::{Duration, Instant};
@@ -25,8 +24,8 @@ use wow_world_base::vanilla::{HitInfo, Map, SplineFlag};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::UpdateMask;
 use wow_world_messages::vanilla::{
-    DamageInfo, InitialSpell, Language, MSG_MOVE_HEARTBEAT_Server, MSG_MOVE_JUMP_Server,
-    MSG_MOVE_SET_FACING_Server, MSG_MOVE_START_FORWARD_Server, MSG_MOVE_STOP_Server,
+    DamageInfo, InitialSpell, Language, MSG_MOVE_HEARTBEAT_Server,
+    MSG_MOVE_START_FORWARD_Server, MSG_MOVE_STOP_Server,
     MSG_MOVE_TELEPORT_ACK_Server,
     MovementBlock, MovementBlock_MovementFlags, MovementBlock_UpdateFlag,
     MovementBlock_UpdateFlag_Living, MovementInfo, MovementInfo_MovementFlags, Object, ObjectType,
@@ -72,11 +71,6 @@ pub struct World {
     /// `register_creature` / `unregister_creature`.
     creature_wander_count: usize,
     creature_waypoint_count: usize,
-    simulated_players: Slab<SimulatedPlayer>,
-    /// Reverse index from sim guid to slab key. Maintained in lockstep with
-    /// `simulated_players` on every insert/remove (same pattern as
-    /// `creature_by_guid`).
-    simulated_by_guid: ahash::AHashMap<Guid, usize>,
 
     maps: PathfindingMaps,
 
@@ -173,8 +167,6 @@ impl World {
             creature_wake_at: std::collections::BTreeMap::new(),
             creature_wander_count,
             creature_waypoint_count,
-            simulated_players: Slab::new(),
-            simulated_by_guid: ahash::AHashMap::new(),
             maps,
             last_packet_sample: 0,
             last_packet_sample_at: Instant::now(),
@@ -247,9 +239,7 @@ impl World {
         // Long-lived primary collections.
         self.clients.shrink_to_fit();
         self.creatures.shrink_to_fit();
-        self.simulated_players.shrink_to_fit();
         self.creature_by_guid.shrink_to_fit();
-        self.simulated_by_guid.shrink_to_fit();
         self.aggro_creature_keys.shrink_to_fit();
         self.walking_creature_keys.shrink_to_fit();
         self.clients_on_character_screen.shrink_to_fit();
@@ -369,6 +359,97 @@ impl World {
     /// whose timer has elapsed transition back to `Alive` (broadcast a fresh
     /// create-object, restore HP, snap back to spawn position).
     #[tracing::instrument(level = "info", skip_all, name = "tick_corpses_and_respawns")]
+    /// AOI transition tick. For each connected client, recomputes the set
+    /// of players currently within `AOI_RADIUS_YARDS` on the same map and
+    /// diffs against `session.visible_entities`:
+    ///
+    /// - **Departed** guids (in old set, not in new) get bundled into a
+    ///   single `SMSG_UPDATE_OBJECT { OutOfRangeObjects }` despawn packet.
+    /// - **Entered** guids (in new set, not in old) get bundled into a
+    ///   single `SMSG_UPDATE_OBJECT` carrying one `CreateObject2` per
+    ///   newcomer.
+    ///
+    /// Cost is O(N²) over connected clients per tick (N inner-loop AOI
+    /// checks for each of N observers). At 1400 clients that's ~2M
+    /// cheap distance checks per tick — fits in a few ms on a modern CPU,
+    /// and is dwarfed by the actual broadcast IO. Spatial-grid bucketing
+    /// is the next optimization if profiling shows this is hot.
+    ///
+    /// Only **players** are tracked here for now; creatures and simulated
+    /// players use their own static-spawn / kill paths today. Extending
+    /// to those is straightforward but out of scope for the despawn-on-
+    /// AOI-exit fix this addresses.
+    async fn tick_aoi_transitions(&mut self) {
+        async {
+        let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
+
+        for key in client_keys {
+            let mut observer = self.clients.remove(key);
+
+            let observer_map = observer.character().map;
+            let observer_pos = observer.character().info.position;
+
+            // Build the new visible set from currently-connected clients
+            // on the same map within AOI. `observer` is out of the slab
+            // already, so the iteration naturally skips self.
+            let mut new_visible: ahash::AHashSet<Guid> =
+                ahash::AHashSet::with_capacity(observer.session.visible_entities.len());
+            for (_, c) in self.clients.iter() {
+                if c.character().map != observer_map {
+                    continue;
+                }
+                if !aoi::within_aoi(&observer_pos, &c.character().info.position) {
+                    continue;
+                }
+                new_visible.insert(c.character().guid);
+            }
+
+            // Take the old set, install the new one, diff for transitions.
+            let old =
+                std::mem::replace(&mut observer.session.visible_entities, new_visible.clone());
+            let departed: Vec<Guid> = old.difference(&new_visible).copied().collect();
+            let entered: Vec<Guid> = new_visible.difference(&old).copied().collect();
+
+            // Despawn batch — one packet per observer regardless of how
+            // many entities just left their AOI.
+            if !departed.is_empty() {
+                let msg = SMSG_UPDATE_OBJECT {
+                    has_transport: 0,
+                    objects: vec![Object {
+                        update_type: Object_UpdateType::OutOfRangeObjects { guids: departed },
+                    }],
+                };
+                observer.send_message(msg).await;
+            }
+
+            // Spawn batch — build a `CreateObject2` for each newcomer.
+            // Inner lookup is a linear scan over `self.clients`; entered
+            // is usually tiny (0-3 per tick) so we don't bother with a
+            // reverse index. If profiling later shows this is hot, add a
+            // `guid -> slab_key` map alongside `creature_by_guid`.
+            if !entered.is_empty() {
+                let mut objects: Vec<Object> = Vec::with_capacity(entered.len());
+                for g in &entered {
+                    for (_, c) in self.clients.iter() {
+                        if c.character().guid == *g {
+                            objects.push(player_create_object(c.character()));
+                            break;
+                        }
+                    }
+                }
+                if let Some(msg) = UpdateObject::from_objects(objects) {
+                    msg.send(&mut observer).await;
+                }
+            }
+
+            let new_key = self.clients.insert(observer);
+            debug_assert_eq!(new_key, key);
+        }
+        }
+        .instrument(tracing::info_span!("tick_aoi_transitions"))
+        .await;
+    }
+
     async fn tick_corpses_and_respawns(&mut self) {
         let now = Instant::now();
 
@@ -379,7 +460,7 @@ impl World {
             match c.life_state {
                 CreatureLifeState::Corpse { died_at } => {
                     if now.saturating_duration_since(died_at)
-                        >= crate::world::world_opcode_handler::creature::CORPSE_DESPAWN
+                        >= crate::world::world_opcode_handler::creature::corpse_despawn()
                     {
                         to_decay.push(key);
                     }
@@ -468,30 +549,6 @@ impl World {
                     };
                     self.kill_creature(creature_key).await;
                 }
-                WorldCommand::SpawnSimulant(mut sim) => {
-                    let map = sim.map;
-                    if let Some(z) = self.maps.ground_height(
-                        map,
-                        sim.info.position.x,
-                        sim.info.position.y,
-                        sim.info.position.z,
-                    ) {
-                        sim.info.position.z = z;
-                    }
-                    let pos = sim.info.position;
-                    let guid = sim.guid;
-                    let create_object = simulated_create_object(&sim);
-                    let start_msg = MSG_MOVE_START_FORWARD_Server {
-                        guid,
-                        info: sim.info.clone(),
-                    };
-                    let key = self.simulated_players.insert(sim);
-                    self.simulated_by_guid.insert(guid, key);
-                    if let Some(msg) = UpdateObject::from_objects(vec![create_object]) {
-                        msg.broadcast_within_aoi(pos, map, &mut self.clients).await;
-                    }
-                    aoi::broadcast_within_aoi(start_msg, pos, map, &mut self.clients).await;
-                }
             }
         }
     }
@@ -512,7 +569,12 @@ impl World {
                 let d = tick_start.duration_since(t).as_secs_f32();
                 d.min(1.0)
             })
-            .unwrap_or(crate::world::TARGET_INTERVAL.as_secs_f32());
+            .unwrap_or(
+                crate::config::config()
+                    .tick
+                    .target_interval()
+                    .as_secs_f32(),
+            );
         self.last_tick_at = Some(tick_start);
 
         // Per-phase timing accumulators. If the whole tick is slow we dump
@@ -525,7 +587,6 @@ impl World {
         let t_apply_cmds: Duration;
         let t_corpses: Duration;
         let t_creatures: Duration;
-        let t_sims: Duration;
         let t_logouts: Duration;
 
         {
@@ -578,10 +639,26 @@ impl World {
             let new_player_pos = c.character().info.position;
             let new_player_map = c.character().map;
 
+            let new_player_guid = c.character().guid;
             let new_player_object = player_create_object(c.character());
             if let Some(msg) = UpdateObject::from_objects(vec![new_player_object]) {
                 msg.broadcast_within_aoi(new_player_pos, new_player_map, &mut self.clients)
                     .await;
+                // Seed every AOI observer's visible-entity set with the new
+                // player so the upcoming AOI-transition pass doesn't re-emit
+                // a duplicate `CreateObject` for them next tick. Mirrors the
+                // broadcast distance check above — same map + same horizontal
+                // radius.
+                for (_, observer) in self.clients.iter_mut() {
+                    if observer.character().map == new_player_map
+                        && aoi::within_aoi(
+                            &observer.character().info.position,
+                            &new_player_pos,
+                        )
+                    {
+                        observer.session.visible_entities.insert(new_player_guid);
+                    }
+                }
             }
 
             let mut visible_objects: Vec<Object> = Vec::new();
@@ -591,17 +668,23 @@ impl World {
                 if client.character().map == new_player_map
                     && aoi::within_aoi(&client.character().info.position, &new_player_pos)
                 {
+                    let other_guid = client.character().guid;
                     let obj = create_object_cache
-                        .entry(client.character().guid)
+                        .entry(other_guid)
                         .or_insert_with(|| player_create_object(client.character()))
                         .clone();
                     visible_objects.push(obj);
+                    // Same seeding logic for the new client's own visible set
+                    // — they've now been told about this existing observer,
+                    // so the AOI-transition pass shouldn't redundantly send
+                    // it again on the next tick.
+                    c.session.visible_entities.insert(other_guid);
                     // If this player is mid-motion, also queue a movement-start
                     // so the new client animates them instead of seeing a
                     // stationary object that teleports on every heartbeat.
                     if client.character().info.flags.get_forward() {
                         movement_starts.push(MSG_MOVE_START_FORWARD_Server {
-                            guid: client.character().guid,
+                            guid: other_guid,
                             info: client.character().info.clone(),
                         });
                     }
@@ -622,18 +705,6 @@ impl World {
                 }
             }
 
-            for (_, sim) in &self.simulated_players {
-                if sim.map == new_player_map
-                    && aoi::within_aoi(&sim.info.position, &new_player_pos)
-                {
-                    visible_objects.push(simulated_create_object(sim));
-                    movement_starts.push(MSG_MOVE_START_FORWARD_Server {
-                        guid: sim.guid,
-                        info: sim.info.clone(),
-                    });
-                }
-            }
-
             let visible_count = visible_objects.len();
             let starts_count = movement_starts.len();
             if let Some(batch) = UpdateObject::from_objects(visible_objects) {
@@ -643,7 +714,7 @@ impl World {
                 c.send_message(start).await;
             }
             tracing::debug!(
-                "promote: account={} name={} pos=({:.1},{:.1},{:.1}) map={:?} -> sent {} CreateObjects + {} MoveStarts; clients_in_world={} creatures={} sims={}",
+                "promote: account={} name={} pos=({:.1},{:.1},{:.1}) map={:?} -> sent {} CreateObjects + {} MoveStarts; clients_in_world={} creatures={}",
                 c.session.account_name,
                 c.character().name,
                 new_player_pos.x,
@@ -654,7 +725,6 @@ impl World {
                 starts_count,
                 self.clients.len(),
                 self.creatures.len(),
-                self.simulated_players.len(),
             );
 
             self.clients.insert(c);
@@ -684,8 +754,6 @@ impl World {
                 &mut self.clients,
                 &mut self.creatures,
                 &self.creature_by_guid,
-                &mut self.simulated_players,
-                &self.simulated_by_guid,
                 &mut self.pending_movement,
             );
             world_opcode_handler::handle_received_client_opcodes(
@@ -980,6 +1048,14 @@ impl World {
             }
         }
 
+        // AOI transitions: for each connected player, diff their previously
+        // visible set against the players currently within `AOI_RADIUS_YARDS`
+        // on the same map. Anything that left → `OutOfRangeObjects`
+        // (despawn). Anything that entered → `CreateObject2` (spawn).
+        // Without this pass, players who walk past the AOI boundary
+        // linger forever on observers' clients as motionless ghosts.
+        self.tick_aoi_transitions().await;
+
         let phase = Instant::now();
         self.apply_commands(&mut commands).await;
         t_apply_cmds = phase.elapsed();
@@ -993,24 +1069,26 @@ impl World {
         t_creatures = phase.elapsed();
 
         let phase = Instant::now();
-        self.tick_simulated_players().await;
-        t_sims = phase.elapsed();
-
-        let phase = Instant::now();
         async {
         for key in keys_to_move_to_character_screen {
             let c = self.clients.remove(key);
             let logout_pos = c.character().info.position;
             let logout_map = c.character().map;
+            let logout_guid = c.character().guid;
             for (_, a) in &mut self.clients {
                 if a.character().map == logout_map
                     && aoi::within_aoi(&a.character().info.position, &logout_pos)
                 {
-                    a.send_message(SMSG_DESTROY_OBJECT {
-                        guid: c.character().guid,
-                    })
-                    .await;
+                    a.send_message(SMSG_DESTROY_OBJECT { guid: logout_guid })
+                        .await;
                 }
+                // Drop the logged-out guid from every observer's
+                // visible_entities (regardless of AOI distance — they may
+                // have had the guid cached from a recent close pass). This
+                // keeps the next AOI-transition diff from spuriously
+                // re-emitting `OutOfRangeObjects` for an already-handled
+                // logout.
+                a.session.visible_entities.remove(&logout_guid);
             }
 
             let c = c.into_character_screen_client();
@@ -1055,16 +1133,25 @@ impl World {
             // client ignores guids it doesn't know about, so skipping the
             // AOI distance check here is harmless and lets us shortcut a
             // per-recipient distance walk.
+            //
+            // Also clear the stale guids from every observer's
+            // `visible_entities` so the next `tick_aoi_transitions` doesn't
+            // re-detect them as departed and emit a duplicate despawn.
             let total = guids.len();
             let msg = SMSG_UPDATE_OBJECT {
                 has_transport: 0,
                 objects: vec![Object {
-                    update_type: Object_UpdateType::OutOfRangeObjects { guids },
+                    update_type: Object_UpdateType::OutOfRangeObjects {
+                        guids: guids.clone(),
+                    },
                 }],
             };
             let mut delivered = 0_usize;
             for (_, c) in self.clients.iter_mut() {
                 if c.character().map == map {
+                    for g in &guids {
+                        c.session.visible_entities.remove(g);
+                    }
                     c.send_message(msg.clone()).await;
                     delivered += 1;
                 }
@@ -1116,10 +1203,6 @@ impl World {
             );
             client.plot(tracy_client::plot_name!("creatures_aggro"), aggro as f64);
             client.plot(
-                tracy_client::plot_name!("simulated_players"),
-                self.simulated_players.len() as f64,
-            );
-            client.plot(
                 tracy_client::plot_name!("char_screen_clients"),
                 self.clients_on_character_screen.len() as f64,
             );
@@ -1150,7 +1233,7 @@ impl World {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             tracing::warn!(
                 target: "tick_slow",
-                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} apply={:.1} corpses={:.1} creatures={:.1} sims={:.1} logouts={:.1} | clients={} sims_n={} creatures_active={}",
+                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
                 ms(total),
                 ms(t_drain),
                 ms(t_chrscreen),
@@ -1159,10 +1242,8 @@ impl World {
                 ms(t_apply_cmds),
                 ms(t_corpses),
                 ms(t_creatures),
-                ms(t_sims),
                 ms(t_logouts),
                 self.clients.len(),
-                self.simulated_players.len(),
                 self.walking_creature_keys.len(),
             );
         }
@@ -1170,9 +1251,10 @@ impl World {
 
     #[tracing::instrument(level = "info", skip_all, name = "tick_creature_ai")]
     async fn tick_creature_ai(&mut self) {
-        const RE_PATH_THRESHOLD: f32 = 0.5;
-        const STAND_OFF: f32 = 3.0;
-        const MAX_FOLLOW_RANGE: f32 = 60.0;
+        let creature_cfg = &crate::config::config().creature;
+        let re_path_threshold = creature_cfg.re_path_threshold;
+        let stand_off = creature_cfg.stand_off;
+        let max_follow_range = creature_cfg.max_follow_range;
 
         let now = std::time::Instant::now();
         let mut expired: Vec<(Guid, Map, Vector3d, Option<MovementInfo>)> = Vec::new();
@@ -1239,7 +1321,7 @@ impl World {
                     .filter(|(_, c)| c.character().map == map)
                     .filter(|(_, c)| {
                         squared_xy_dist(&c.character().info.position, &from)
-                            <= MAX_FOLLOW_RANGE * MAX_FOLLOW_RANGE
+                            <= max_follow_range * max_follow_range
                     })
                     .min_by(|a, b| {
                         let da = squared_xy_dist(&a.1.character().info.position, &from);
@@ -1277,13 +1359,13 @@ impl World {
                         + (slot as f32 + 0.5) * std::f32::consts::PI / n as f32
                 };
                 let angle = player_orient + slot_offset;
-                let target_x = player_pos.x + STAND_OFF * angle.cos();
-                let target_y = player_pos.y + STAND_OFF * angle.sin();
+                let target_x = player_pos.x + stand_off * angle.cos();
+                let target_y = player_pos.y + stand_off * angle.sin();
 
                 let dx = target_x - from.x;
                 let dy = target_y - from.y;
                 let dist = (dx * dx + dy * dy).sqrt();
-                if dist < RE_PATH_THRESHOLD {
+                if dist < re_path_threshold {
                     continue;
                 }
 
@@ -1328,10 +1410,11 @@ impl World {
 
     #[tracing::instrument(level = "info", skip_all, name = "tick_walking_creatures")]
     async fn tick_walking_creatures(&mut self, now: Instant) {
-        const HEARTBEAT_INTERVAL_MS: u128 = 500;
-        const ARRIVAL_THRESHOLD: f32 = 0.4;
-        const WANDER_IDLE_MIN_MS: u64 = 3000;
-        const WANDER_IDLE_MAX_MS: u64 = 8000;
+        let creature_cfg = &crate::config::config().creature;
+        let heartbeat_interval_ms = creature_cfg.walking_heartbeat_ms;
+        let arrival_threshold = creature_cfg.arrival_threshold;
+        let wander_idle_min_ms = creature_cfg.wander_idle_min_ms;
+        let wander_idle_max_ms = creature_cfg.wander_idle_max_ms;
 
         // Wake up any parked creatures whose idle window has elapsed.
         // BTreeMap is sorted ascending so we can stop at the first non-expired
@@ -1356,6 +1439,7 @@ impl World {
         // creatures and clients clustered at the Gurubashi Arena spawn this
         // prunes ~99% of the per-tick work. Scratch map is reused across ticks.
         self.scratch_client_aabb.clear();
+        let aoi_r = crate::config::config().network.aoi_radius_yards;
         for (_, cl) in self.clients.iter() {
             let p = cl.character().info.position;
             let map = cl.character().map;
@@ -1363,10 +1447,10 @@ impl World {
                 .scratch_client_aabb
                 .entry(map)
                 .or_insert((f32::MAX, f32::MAX, f32::MIN, f32::MIN));
-            entry.0 = entry.0.min(p.x - aoi::AOI_RADIUS_YARDS);
-            entry.1 = entry.1.min(p.y - aoi::AOI_RADIUS_YARDS);
-            entry.2 = entry.2.max(p.x + aoi::AOI_RADIUS_YARDS);
-            entry.3 = entry.3.max(p.y + aoi::AOI_RADIUS_YARDS);
+            entry.0 = entry.0.min(p.x - aoi_r);
+            entry.1 = entry.1.min(p.y - aoi_r);
+            entry.2 = entry.2.max(p.x + aoi_r);
+            entry.3 = entry.3.max(p.y + aoi_r);
         }
 
         // Per-tick scratch lists held on `self` so the underlying allocations
@@ -1404,7 +1488,7 @@ impl World {
             // wow_world_base::DEFAULT_WALKING_SPEED is 1.0 yd/s — that's
             // ~40% of the canonical vanilla walking pace and looks crawly
             // in-client. 2.5 matches what the retail walking animation expects.
-            let step = WALK_SPEED * dt;
+            let step = walk_speed() * dt;
             let map = c.map;
 
             // Phase A: behavior-specific entry transitions (idle -> moving).
@@ -1487,7 +1571,7 @@ impl World {
             let dy = target.y - c.info.position.y;
             let dist = (dx * dx + dy * dy).sqrt();
 
-            if dist <= step || dist <= ARRIVAL_THRESHOLD {
+            if dist <= step || dist <= arrival_threshold {
                 c.info.position = target;
                 c.info.flags = MovementInfo_MovementFlags::default();
                 events.push((key, c.info.position, map, CreatureMoveEvent::Stop));
@@ -1498,8 +1582,8 @@ impl World {
                         ..
                     } => {
                         *target = None;
-                        let span = WANDER_IDLE_MAX_MS - WANDER_IDLE_MIN_MS;
-                        let idle_ms = WANDER_IDLE_MIN_MS
+                        let span = wander_idle_max_ms - wander_idle_min_ms;
+                        let idle_ms = wander_idle_min_ms
                             + crate::world::world_opcode_handler::gm_command::next_rand() % span;
                         *next_decision_at = now + std::time::Duration::from_millis(idle_ms);
                         Some(*next_decision_at)
@@ -1532,7 +1616,7 @@ impl World {
                     && now
                         .saturating_duration_since(c.last_heartbeat_at)
                         .as_millis()
-                        >= HEARTBEAT_INTERVAL_MS
+                        >= heartbeat_interval_ms
                 {
                     events.push((key, c.info.position, map, CreatureMoveEvent::Heartbeat));
                     c.last_heartbeat_at = now;
@@ -1608,193 +1692,6 @@ impl World {
         self.scratch_walk_events = events;
     }
 
-    #[tracing::instrument(level = "info", skip_all, name = "tick_simulated_players")]
-    async fn tick_simulated_players(&mut self) {
-        const HEARTBEAT_INTERVAL_MS: u128 = 250;
-
-        let now = Instant::now();
-
-        // Phase 0: clear expired roots, restore FORWARD flag, broadcast aura-clear + start-forward.
-        let mut expired_roots = std::mem::take(&mut self.scratch_expired_roots);
-        expired_roots.clear();
-        for (_, sim) in self.simulated_players.iter_mut() {
-            if let Some(until) = sim.root_until
-                && until <= now
-            {
-                sim.root_until = None;
-                sim.info.flags = MovementInfo_MovementFlags::new_forward();
-                expired_roots.push((sim.guid, sim.map, sim.info.position, sim.info.clone()));
-            }
-        }
-        for (guid, map, pos, info) in expired_roots.drain(..) {
-            let clear = SMSG_UPDATE_OBJECT {
-                has_transport: 0,
-                objects: vec![Object {
-                    update_type: Object_UpdateType::Values {
-                        guid1: guid,
-                        mask1: UpdateMask::Player(
-                            UpdatePlayerBuilder::new()
-                                .set_unit_aura(0)
-                                .set_unit_auraflags(0, 0, 0, 0)
-                                .set_unit_auralevels(0, 0, 0, 0)
-                                .set_unit_auraapplications(0, 0, 0, 0)
-                                .finalize(),
-                        ),
-                    },
-                }],
-            };
-            aoi::broadcast_within_aoi(clear, pos, map, &mut self.clients).await;
-            let resume = MSG_MOVE_START_FORWARD_Server { guid, info };
-            aoi::broadcast_within_aoi(resume, pos, map, &mut self.clients).await;
-        }
-        // Restore the drained Vec so its capacity survives to the next tick.
-        self.scratch_expired_roots = expired_roots;
-
-        // Phase 1: advance each puppet, decide which messages to emit.
-        let mut events: Vec<(usize, Vector3d, Map, SimEvent)> = Vec::new();
-        for (key, sim) in self.simulated_players.iter_mut() {
-            if sim.current_wp >= sim.waypoints.len() {
-                continue;
-            }
-            if sim.is_rooted() {
-                sim.last_advanced_at = now;
-                continue;
-            }
-            let dt = now
-                .saturating_duration_since(sim.last_advanced_at)
-                .as_secs_f32()
-                .min(0.5);
-            sim.last_advanced_at = now;
-            let step = sim.movement_speed * dt;
-            let target = sim.waypoints[sim.current_wp];
-            let dx = target.x - sim.info.position.x;
-            let dy = target.y - sim.info.position.y;
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            let mut emit_facing = false;
-            if dist <= step {
-                sim.info.position = target;
-                sim.current_wp += 1;
-                emit_facing = true;
-                if sim.current_wp >= sim.waypoints.len() {
-                    events.push((key, sim.info.position, sim.map, SimEvent::Despawn));
-                    continue;
-                }
-                let next = sim.waypoints[sim.current_wp];
-                let ndx = next.x - sim.info.position.x;
-                let ndy = next.y - sim.info.position.y;
-                sim.info.orientation = ndy.atan2(ndx);
-            } else {
-                sim.info.position.x += step * dx / dist;
-                sim.info.position.y += step * dy / dist;
-                sim.info.position.z = target.z;
-            }
-
-            let should_heartbeat = now
-                .saturating_duration_since(sim.last_heartbeat)
-                .as_millis()
-                >= HEARTBEAT_INTERVAL_MS;
-
-            if now >= sim.next_jump_at {
-                events.push((key, sim.info.position, sim.map, SimEvent::Jump));
-                sim.next_jump_at = now
-                    + std::time::Duration::from_millis(
-                        5000 + crate::world::world_opcode_handler::gm_command::next_rand() % 10000,
-                    );
-                sim.last_heartbeat = now;
-            } else if emit_facing {
-                events.push((key, sim.info.position, sim.map, SimEvent::SetFacing));
-                sim.last_heartbeat = now;
-            } else if should_heartbeat {
-                events.push((key, sim.info.position, sim.map, SimEvent::Heartbeat));
-                sim.last_heartbeat = now;
-            }
-        }
-
-        // Phase 1.5: snap to ground only on phase transitions (SetFacing,
-        // Jump), not on every heartbeat. Each `ground_height` call is a
-        // navmesh raycast — at 100 sims × 4 heartbeats/sec the per-tick cost
-        // ran into 800ms-plus. Heartbeats now linearly interpolate Z; the
-        // next phase transition corrects accumulated drift.
-        for (key, _, map, event) in &events {
-            if matches!(event, SimEvent::Heartbeat) {
-                continue;
-            }
-            if let Some(sim) = self.simulated_players.get(*key) {
-                let xy = (sim.info.position.x, sim.info.position.y);
-                let z_hint = sim.info.position.z;
-                if let Some(z) = self.maps.ground_height(*map, xy.0, xy.1, z_hint) {
-                    self.simulated_players[*key].info.position.z = z;
-                }
-            }
-        }
-
-        // Phase 2: dispatch messages + remove despawned. Use `.get` so a
-        // duplicate Despawn or any future remove-during-tick doesn't panic.
-        for (key, _, map, event) in events {
-            match event {
-                SimEvent::Heartbeat => {
-                    let Some(sim) = self.simulated_players.get(key) else {
-                        continue;
-                    };
-                    let msg = MSG_MOVE_HEARTBEAT_Server {
-                        guid: sim.guid,
-                        info: sim.info.clone(),
-                    };
-                    let pos = sim.info.position;
-                    aoi::broadcast_within_aoi(msg, pos, map, &mut self.clients).await;
-                }
-                SimEvent::SetFacing => {
-                    let Some(sim) = self.simulated_players.get(key) else {
-                        continue;
-                    };
-                    let msg = MSG_MOVE_SET_FACING_Server {
-                        guid: sim.guid,
-                        info: sim.info.clone(),
-                    };
-                    let pos = sim.info.position;
-                    aoi::broadcast_within_aoi(msg, pos, map, &mut self.clients).await;
-                }
-                SimEvent::Jump => {
-                    let Some(sim) = self.simulated_players.get(key) else {
-                        continue;
-                    };
-                    let msg = MSG_MOVE_JUMP_Server {
-                        guid: sim.guid,
-                        info: sim.info.clone(),
-                    };
-                    let pos = sim.info.position;
-                    aoi::broadcast_within_aoi(msg, pos, map, &mut self.clients).await;
-                }
-                SimEvent::Despawn => {
-                    if !self.simulated_players.contains(key) {
-                        continue;
-                    }
-                    let sim = self.simulated_players.remove(key);
-                    self.simulated_by_guid.remove(&sim.guid);
-                    let pos = sim.info.position;
-                    let stop_info = MovementInfo {
-                        flags: MovementInfo_MovementFlags::default(),
-                        ..sim.info.clone()
-                    };
-                    let stop = MSG_MOVE_STOP_Server {
-                        guid: sim.guid,
-                        info: stop_info,
-                    };
-                    aoi::broadcast_within_aoi(stop, pos, map, &mut self.clients).await;
-                    let destroy = SMSG_DESTROY_OBJECT { guid: sim.guid };
-                    aoi::broadcast_within_aoi(destroy, pos, map, &mut self.clients).await;
-                }
-            }
-        }
-    }
-}
-
-enum SimEvent {
-    Heartbeat,
-    SetFacing,
-    Jump,
-    Despawn,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1857,7 +1754,7 @@ pub fn player_create_object(character: &Character) -> Object {
                         swimming_speed: 0.0,
                         timestamp: 0,
                         turn_rate: DEFAULT_TURN_SPEED,
-                        walking_speed: WALK_SPEED,
+                        walking_speed: walk_speed(),
                     },
                 ),
             },
@@ -1933,75 +1830,6 @@ pub async fn announce_character_login(client: &mut Client, character: &Character
     if let Some(msg) = UpdateObject::from_objects(vec![player_create_object(character)]) {
         msg.send(client).await;
     }
-}
-
-pub fn simulated_create_object(p: &SimulatedPlayer) -> Object {
-    let flags = if p.info.flags.get_forward() {
-        MovementBlock_MovementFlags::new_forward()
-    } else {
-        MovementBlock_MovementFlags::empty()
-    };
-    Object {
-        update_type: Object_UpdateType::CreateObject2 {
-            guid3: p.guid,
-            mask2: get_update_simulated_player_mask(p),
-            movement2: MovementBlock {
-                update_flag: MovementBlock_UpdateFlag::new_living(
-                    MovementBlock_UpdateFlag_Living::Living {
-                        backwards_running_speed: DEFAULT_RUNNING_BACKWARDS_SPEED,
-                        backwards_swimming_speed: 0.0,
-                        fall_time: 0.0,
-                        flags,
-                        living_orientation: p.info.orientation,
-                        living_position: p.info.position,
-                        running_speed: p.movement_speed,
-                        swimming_speed: 0.0,
-                        timestamp: 0,
-                        turn_rate: DEFAULT_TURN_SPEED,
-                        walking_speed: WALK_SPEED,
-                    },
-                ),
-            },
-            object_type: ObjectType::Player,
-        },
-    }
-}
-
-fn get_update_simulated_player_mask(p: &SimulatedPlayer) -> UpdateMask {
-    let race = p.race_class.race();
-    let class = p.race_class.class();
-    let mut mask = UpdatePlayerBuilder::new()
-        .set_object_guid(p.guid)
-        .set_object_scale_x(race.race_scale(p.gender))
-        .set_unit_bytes_0(race.into(), class, p.gender.into(), class.power_type())
-        .set_player_bytes_2(p.facialhair, 0, 0, 2)
-        .set_player_features(p.skin, p.face, p.hairstyle, p.haircolor)
-        .set_unit_base_health(4000)
-        .set_unit_health(4000)
-        .set_unit_maxhealth(4000)
-        .set_unit_level(p.level.as_int() as i32)
-        .set_unit_factiontemplate(race.faction_id().as_int() as i32)
-        .set_unit_displayid(race.display_id(p.gender))
-        .set_unit_nativedisplayid(race.display_id(p.gender))
-        .set_player_flags(crate::world::world_opcode_handler::combat::PLAYER_FLAGS_FFA_PVP);
-
-    for (i, entry) in p.equipment.iter().enumerate() {
-        if let Some(entry) = entry
-            && let Ok(index) = VisibleItemIndex::try_from(i)
-            && let Some(item) = wow_items::vanilla::lookup_item(*entry)
-        {
-            let visible = VisibleItem::new(
-                Guid::zero(),
-                *entry,
-                [0, 0],
-                item.random_property() as u32,
-                0,
-            );
-            mask = mask.set_player_visible_item(visible, index);
-        }
-    }
-
-    UpdateMask::Player(mask.finalize())
 }
 
 pub fn get_client_login_messages(character: &Character) -> Vec<ServerOpcodeMessage> {

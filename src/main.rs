@@ -1,4 +1,5 @@
 mod auth;
+mod config;
 mod file_utils;
 mod numeric;
 mod snapshot;
@@ -54,6 +55,12 @@ async fn main() {
     if tracy_enabled {
         tracing::info!("Tracy profiler enabled (WOW_TRACY=1); attach a Tracy GUI to collect");
     }
+
+    // Load behavior config (AOI radius, tick rate, combat numbers, etc.)
+    // after tracing init so the load log messages are visible. Missing
+    // file is fine — defaults match the prior hardcoded constants. See
+    // config.toml.example.
+    config::install(config::load_or_default(std::path::Path::new("config.toml")));
 
     let users: auth::UserCache = Arc::new(Mutex::new(auth::UserCacheInner::new()));
 

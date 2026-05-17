@@ -1,6 +1,4 @@
-use crate::world::world::client::{
-    Client, OutboundTx, OUTBOUND_CHANNEL_BYTES, OUTGOING_PACKETS,
-};
+use crate::world::world::client::{Client, OutboundTx, OUTGOING_PACKETS};
 use crate::world::world_opcode_handler::character::Character;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -131,7 +129,9 @@ impl CharacterScreenClient {
         let (unbounded_tx, outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         // Byte budget for the per-client outbound queue. Drained by
         // `run_writer` after each batch via `add_permits(bytes_drained)`.
-        let byte_budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
+        let byte_budget = Arc::new(Semaphore::new(
+            crate::config::config().network.outbound_channel_bytes,
+        ));
         let outbound_tx = OutboundTx::new(unbounded_tx, byte_budget.clone());
         let dropped_packets = Arc::new(AtomicU64::new(0));
 
@@ -315,7 +315,9 @@ mod tests {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
+        let budget = Arc::new(Semaphore::new(
+            crate::config::config().network.outbound_channel_bytes,
+        ));
 
         let packets: Vec<(u16, Vec<u8>)> =
             (100..105u16).map(|op| (op, vec![op as u8; 8])).collect();
@@ -350,7 +352,9 @@ mod tests {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
+        let budget = Arc::new(Semaphore::new(
+            crate::config::config().network.outbound_channel_bytes,
+        ));
 
         let writer = tokio::spawn(run_writer(b, encrypter, rx, budget, &TEST_COUNTER));
 
@@ -384,7 +388,9 @@ mod tests {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let budget = Arc::new(Semaphore::new(OUTBOUND_CHANNEL_BYTES));
+        let budget = Arc::new(Semaphore::new(
+            crate::config::config().network.outbound_channel_bytes,
+        ));
 
         // Two valid packets sandwiching a garbage 3-byte buffer.
         tx.send(make_buf(500, &[1, 2, 3, 4])).unwrap();

@@ -1,5 +1,5 @@
 use crate::world::world_opcode_handler::creature::{
-    Creature, CreatureBehavior, DEFAULT_CREATURE_HEALTH,
+    default_creature_health, initial_respawn_delay, Creature, CreatureBehavior,
 };
 use ahash::AHashMap;
 use rusqlite::{Connection, OpenFlags};
@@ -172,7 +172,7 @@ pub fn load_creatures(sqlite_path: &str) -> rusqlite::Result<Slab<Creature>> {
             spawn_orientation: row.orientation,
             life_state: crate::world::world_opcode_handler::creature::CreatureLifeState::Alive,
             last_alive_at: now,
-            respawn_delay: crate::world::world_opcode_handler::creature::INITIAL_RESPAWN_DELAY,
+            respawn_delay: initial_respawn_delay(),
         });
     }
 
@@ -346,7 +346,7 @@ fn pick_health(max_health: u32, min_health: u32) -> u32 {
     } else if min_health > 0 {
         min_health
     } else {
-        DEFAULT_CREATURE_HEALTH
+        default_creature_health()
     }
 }
 
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn pick_health_falls_back_to_default_when_both_zero() {
-        assert_eq!(pick_health(0, 0), DEFAULT_CREATURE_HEALTH);
+        assert_eq!(pick_health(0, 0), default_creature_health());
     }
 
     #[test]

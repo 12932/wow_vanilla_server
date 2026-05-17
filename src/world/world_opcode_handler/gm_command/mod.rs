@@ -8,7 +8,6 @@ use crate::world::world_opcode_handler::creature::Creature;
 use crate::world::world_opcode_handler::entities::{Entities, Entity};
 use crate::world::world_opcode_handler::gm_command::parser::GmCommand;
 use crate::world::world_opcode_handler::item::{award_item, Item};
-use crate::world::world_opcode_handler::simulated_player;
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -284,20 +283,6 @@ pub(crate) async fn gm_command(
                     creature_hits.push(creature.guid);
                 }
             }
-            let mut sim_stops: Vec<(wow_world_messages::Guid, MovementInfo)> = Vec::new();
-            for (_, sim) in entities.simulated_players().iter_mut() {
-                if sim.map != caster_map {
-                    continue;
-                }
-                let dx = sim.info.position.x - caster_pos.x;
-                let dy = sim.info.position.y - caster_pos.y;
-                let dz = sim.info.position.z - caster_pos.z;
-                if dx * dx + dy * dy + dz * dz <= RADIUS * RADIUS {
-                    sim.root_until = Some(root_until);
-                    sim.info.flags = MovementInfo_MovementFlags::default();
-                    sim_stops.push((sim.guid, sim.info.clone()));
-                }
-            }
             // Collect real-player targets and apply server-enforced root.
             // Setting `root_until` makes the movement opcode handler drop
             // incoming `MSG_MOVE_*` from this client until the timer expires —
@@ -326,7 +311,6 @@ pub(crate) async fn gm_command(
             }
             let hits: Vec<wow_world_messages::Guid> = creature_hits
                 .iter()
-                .chain(sim_stops.iter().map(|(g, _)| g))
                 .chain(client_hits.iter().map(|(g, _)| g))
                 .copied()
                 .collect();
@@ -381,7 +365,7 @@ pub(crate) async fn gm_command(
                 }
             }
 
-            for (target_guid, _) in sim_stops.iter().chain(client_hits.iter()) {
+            for (target_guid, _) in client_hits.iter() {
                 let aura_update = SMSG_UPDATE_OBJECT {
                     has_transport: 0,
                     objects: vec![Object {
@@ -408,9 +392,8 @@ pub(crate) async fn gm_command(
                 }
             }
 
-            for (target_guid, info) in sim_stops
+            for (target_guid, info) in creature_stops
                 .into_iter()
-                .chain(creature_stops)
                 .chain(client_hits.iter().cloned())
             {
                 let stop = MSG_MOVE_STOP_Server {
@@ -443,40 +426,6 @@ pub(crate) async fn gm_command(
                     }
                 }
             }
-        }
-        GmCommand::Simulate(n) => {
-            for _ in 0..n {
-                let guid = db.new_guid().into();
-                commands.push(crate::world::command::WorldCommand::SpawnSimulant(
-                    simulated_player::random_horde_at(guid),
-                ));
-            }
-            client
-                .send_system_message(format!("Spawned {n} horde simulants"))
-                .await;
-        }
-        GmCommand::SimClear => {
-            // Schedule every currently-alive sim for despawn. Recovery hatch
-            // for over-eager .simulate runs. Goes through the same Despawn
-            // event path the natural waypoint-finish flow uses, so clients
-            // get the proper STOP + DESTROY broadcasts.
-            let guids: Vec<wow_world_messages::Guid> = entities
-                .simulated_players()
-                .iter()
-                .map(|(_, s)| s.guid)
-                .collect();
-            let count = guids.len();
-            for (_, sim) in entities.simulated_players().iter_mut() {
-                // Empty waypoints means tick_simulated_players will issue a
-                // Despawn on the next iteration.
-                sim.waypoints.clear();
-                sim.current_wp = 0;
-            }
-            client
-                .send_system_message(format!("Scheduled {count} simulants for despawn"))
-                .await;
-            // Suppress unused warning when guids isn't read by future work.
-            let _ = guids;
         }
         GmCommand::WorldDbInfo => {
             let (mut idle, mut wander, mut waypoint, mut aggro) = (0, 0, 0, 0);
@@ -526,22 +475,6 @@ pub(crate) async fn gm_command(
                         let Position { x, y, z, .. } = c.position();
 
                         format!("Creature '{name}' ({guid})\n{map} x: {x}, y: {y}, z: {z} (Client movement not supported)")
-                    }
-                    Entity::Simulated(s) => {
-                        // Safe: we just found `s` via `entities.find_guid(target)`
-                        // a few lines up, so the guid is live in this tick.
-                        let Position { x, y, z, .. } = entities
-                            .find_position(s.guid)
-                            .expect("simulated player position lookup after find_guid");
-                        format!(
-                            "Simulated '{name}' ({guid})\nLevel {level} {gender} {race}\n{map} x: {x}, y: {y}, z: {z}",
-                            name = s.name,
-                            guid = s.guid,
-                            level = s.level,
-                            gender = s.gender,
-                            race = s.race_class,
-                            map = s.map,
-                        )
                     }
                 }
             } else {

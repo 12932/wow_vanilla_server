@@ -210,8 +210,8 @@ impl CharacterSnapshot {
             // Restore at full HP regardless of how the snapshot was taken.
             // Players don't get to log in still dead, and we don't persist
             // PvP HP state through restarts.
-            current_health: crate::world::world_opcode_handler::character::PVP_MAX_HEALTH,
-            max_health: crate::world::world_opcode_handler::character::PVP_MAX_HEALTH,
+            current_health: crate::config::config().combat.pvp_max_health,
+            max_health: crate::config::config().combat.pvp_max_health,
             time_of_death: None,
         }
     }

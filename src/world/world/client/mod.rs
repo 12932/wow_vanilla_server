@@ -60,14 +60,12 @@ pub fn outgoing_packet_count() -> u64 {
     OUTGOING_PACKETS.load(Ordering::Relaxed)
 }
 
-/// Per-client outbound byte budget. 1 MiB of pending payload per client.
-/// At 10 000 simultaneous clients this caps total in-flight buffer memory
-/// at ~10 GiB — a deliberate ceiling the operator is comfortable with.
-/// Sized by bytes (not messages) so that a single huge `SMSG_UPDATE_OBJECT`
-/// (e.g. mass-disconnect `OutOfRangeObjects` carrying thousands of guids)
-/// always fits as long as there's enough budget left, regardless of how
-/// many small movement-heartbeat frames are queued ahead of it.
-pub(crate) const OUTBOUND_CHANNEL_BYTES: usize = 1024 * 1024;
+// `OUTBOUND_CHANNEL_BYTES` lives in config (`[network] outbound_channel_bytes`).
+// Default 1 MiB per client; at 10 000 clients that's ~10 GiB worst-case
+// buffer memory. Sized by bytes (not messages) so a single huge
+// `SMSG_UPDATE_OBJECT` (e.g. mass-disconnect `OutOfRangeObjects` carrying
+// thousands of guids) always fits as long as there's budget remaining,
+// regardless of how many small heartbeat frames are queued ahead of it.
 
 use wow_world_base::geometry::distance_between;
 use wow_world_base::vanilla::position::Position;
@@ -146,6 +144,14 @@ pub struct PlayerSession {
     /// matching `MSG_MOVE_WORLDPORT_ACK`. The opcode handler uses it to
     /// suppress duplicate ACK processing.
     pub in_process_of_teleport: bool,
+    /// Guids the client has been told about and not yet despawned. Updated
+    /// every tick by the AOI-transitions phase: anything in this set that
+    /// is no longer within `AOI_RADIUS_YARDS` on the same map gets sent as
+    /// `OutOfRangeObjects`; anything newly in range gets sent as a fresh
+    /// `CreateObject2`. Without this tracking a player who walks past the
+    /// edge of AOI lingers on observer clients as a stationary ghost
+    /// because no despawn opcode is ever emitted.
+    pub(crate) visible_entities: ahash::AHashSet<Guid>,
 }
 
 impl PlayerSession {
@@ -319,6 +325,7 @@ impl Client {
                 reader_handle,
                 writer_handle,
                 in_process_of_teleport: false,
+                visible_entities: ahash::AHashSet::default(),
             },
             player: Player { character },
         }

@@ -1,15 +1,13 @@
 use crate::world::database::WorldDatabase;
 use crate::world::world_opcode_handler::character::Character;
-use wow_world_base::vanilla::{Map, PlayerGender, RaceClass, Vector3d};
+use wow_world_base::vanilla::{PlayerGender, RaceClass, Vector3d};
 use wow_world_messages::vanilla::{CMSG_CHAR_CREATE, MovementInfo};
 
-/// Gurubashi Arena on Eastern Kingdoms — chosen as the universal spawn
-/// for every new character regardless of race. Pinned here so creation
-/// stays deterministic and avoids race-specific starter-data edge cases.
-/// Loadtest bots use the same anchor (see
-/// `src/loadtest/worker/movement.rs::ANCHOR`) so server-side AOI clusters
-/// match between real and synthetic clients.
-const SPAWN_POSITION: (f32, f32, f32, f32) = (-13206.0, 272.0, 21.857, 0.0);
+// Universal spawn point lives in `[spawn]` of `config.toml` (default:
+// Gurubashi Arena on Eastern Kingdoms). Loadtest bots use the same
+// anchor (see `src/loadtest/worker/movement.rs::ANCHOR`) so AOI
+// clusters match between real and synthetic clients — change both if
+// you tune the spawn.
 
 pub(crate) fn create_character(c: CMSG_CHAR_CREATE, db: &mut WorldDatabase) -> Option<Character> {
     let race_class = match RaceClass::try_from((c.race, c.class)) {
@@ -43,25 +41,33 @@ pub(crate) fn create_character(c: CMSG_CHAR_CREATE, db: &mut WorldDatabase) -> O
         c.facial_hair,
     );
 
-    // Override spawn to Gurubashi Arena for every new character regardless of
-    // race. Keeps creation deterministic + dodges race-specific starter-data
-    // edge cases until each race's path has been validated end-to-end.
-    let (x, y, z, o) = SPAWN_POSITION;
-    character.map = Map::EasternKingdoms;
+    // Override spawn for every new character regardless of race so creation
+    // stays deterministic and dodges race-specific starter-data edge cases.
+    // Coordinates come from `[spawn]` in `config.toml`.
+    let spawn = &crate::config::config().spawn;
+    character.map = spawn.map;
     character.info = MovementInfo {
         flags: Default::default(),
         timestamp: 0,
-        position: Vector3d { x, y, z },
-        orientation: o,
+        position: Vector3d {
+            x: spawn.x,
+            y: spawn.y,
+            z: spawn.z,
+        },
+        orientation: spawn.orientation,
         fall_time: 0.0,
     };
 
     tracing::info!(
-        "CHAR_CREATE: name={} race_class={:?} gender={:?} guid={:?} -> Gurubashi Arena",
+        "CHAR_CREATE: name={} race_class={:?} gender={:?} guid={:?} -> {:?} ({}, {}, {})",
         c.name,
         race_class,
         gender,
         character.guid,
+        spawn.map,
+        spawn.x,
+        spawn.y,
+        spawn.z,
     );
 
     Some(character)

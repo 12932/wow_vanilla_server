@@ -1,23 +1,26 @@
 //! World-mutating commands queued during opcode/GM handling and applied at the
 //! end of each tick.
 //!
-//! Handlers do not mutate `World.creatures`, `World.simulated_players`, etc.
-//! directly; they push a [`WorldCommand`] onto a [`CommandQueue`]. `World::tick`
-//! drains the queue in `apply_commands`, which is the single place that
-//! performs spawns / kills / sim instantiation and the matching broadcasts.
+//! Handlers do not mutate `World.creatures` directly; they push a
+//! [`WorldCommand`] onto a [`CommandQueue`]. `World::tick` drains the queue
+//! in `apply_commands`, which is the single place that performs spawns /
+//! kills and the matching broadcasts.
 //!
 //! Why a command bus rather than direct mutation?
-//! - Removes the four parallel `pending_*` `Vec` arguments that used to thread
+//! - Removes the parallel `pending_*` `Vec` arguments that used to thread
 //!   through every handler signature.
 //! - Lets future systems (scripting, instance manager, AI) produce commands
 //!   without touching the tick loop.
 //! - One place to add per-command Tracy zones, telemetry, batching, etc.
 
 use crate::world::world_opcode_handler::creature::Creature;
-use crate::world::world_opcode_handler::simulated_player::SimulatedPlayer;
 use wow_world_messages::Guid;
 
 #[derive(Debug)]
+// `SpawnCreature` dwarfs `KillCreature` size-wise; boxing it would add a
+// heap alloc per spawn and the queue is short-lived (drained every tick),
+// so we just eat the variant-size warning.
+#[allow(clippy::large_enum_variant)]
 pub enum WorldCommand {
     /// Spawn a new creature into the world and broadcast its create-object
     /// to viewers in AOI. Used by `.spawn` and the worlddb load path.
@@ -25,9 +28,6 @@ pub enum WorldCommand {
     /// Despawn the creature with the given guid (if alive) and broadcast a
     /// destroy to viewers in AOI.
     KillCreature(Guid),
-    /// Spawn a server-side puppet horde player and broadcast its
-    /// create-object + `MSG_MOVE_START_FORWARD` to viewers in AOI.
-    SpawnSimulant(SimulatedPlayer),
 }
 
 #[derive(Debug, Default)]

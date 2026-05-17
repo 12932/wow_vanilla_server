@@ -6,12 +6,16 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{ServerMessage, Vector3d};
 
-pub const AOI_RADIUS_YARDS: f32 = 400.0;
-
+/// Horizontal radius (yards) at which players are mutually visible.
+/// Z is **deliberately ignored**: a target 200 units above me is still
+/// in AOI as long as the horizontal projection is within range. The
+/// effective value comes from `[network] aoi_radius_yards` in
+/// `config.toml`; this fn reads the global config once per call.
 pub fn within_aoi(observer: &Vector3d, anchor: &Vector3d) -> bool {
     let dx = observer.x - anchor.x;
     let dy = observer.y - anchor.y;
-    dx * dx + dy * dy <= AOI_RADIUS_YARDS * AOI_RADIUS_YARDS
+    let r = crate::config::config().network.aoi_radius_yards;
+    dx * dx + dy * dy <= r * r
 }
 
 /// Broadcast a message to every client within AOI of `anchor` on `anchor_map`.
@@ -108,14 +112,14 @@ mod tests {
 
     #[test]
     fn within_aoi_inside_radius() {
-        // 100 yards apart on x-axis, well inside 400 yd radius.
+        // 100 yards apart on x-axis, well inside 200 yd radius.
         assert!(within_aoi(&v(0.0, 0.0), &v(100.0, 0.0)));
     }
 
     #[test]
     fn within_aoi_just_outside_radius() {
-        // 401 yards on x-axis — outside the 400 yard circle.
-        assert!(!within_aoi(&v(0.0, 0.0), &v(401.0, 0.0)));
+        // 201 yards on x-axis — outside the 200 yard circle.
+        assert!(!within_aoi(&v(0.0, 0.0), &v(201.0, 0.0)));
     }
 
     #[test]
@@ -136,9 +140,9 @@ mod tests {
 
     #[test]
     fn within_aoi_diagonal() {
-        // 300x + 300y = ~424 yards Euclidean — just outside.
-        assert!(!within_aoi(&v(0.0, 0.0), &v(300.0, 300.0)));
-        // 200x + 200y = ~283 yards — inside.
-        assert!(within_aoi(&v(0.0, 0.0), &v(200.0, 200.0)));
+        // 150x + 150y = ~212 yards Euclidean — just outside.
+        assert!(!within_aoi(&v(0.0, 0.0), &v(150.0, 150.0)));
+        // 100x + 100y = ~141 yards — inside.
+        assert!(within_aoi(&v(0.0, 0.0), &v(100.0, 100.0)));
     }
 }

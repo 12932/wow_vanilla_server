@@ -171,18 +171,7 @@ pub(super) async fn handle_opcodes(
         }
 
         ClientOpcodeMessage::CMSG_NAME_QUERY(c) => {
-            if let Some(sim) = entities.find_simulated(c.guid) {
-                client
-                    .send_message(SMSG_NAME_QUERY_RESPONSE {
-                        guid: c.guid,
-                        character_name: sim.name.clone(),
-                        realm_name: "".to_string(),
-                        race: sim.race_class.race().into(),
-                        gender: sim.gender.into(),
-                        class: sim.race_class.class(),
-                    })
-                    .await;
-            } else if let Some(character) = db
+            if let Some(character) = db
                 .all_characters()
                 .iter()
                 .find(|a| a.guid == c.guid)
