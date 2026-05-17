@@ -152,6 +152,15 @@ pub struct PlayerSession {
     /// edge of AOI lingers on observer clients as a stationary ghost
     /// because no despawn opcode is ever emitted.
     pub(crate) visible_entities: ahash::AHashSet<Guid>,
+    /// Per-guid timestamp of this observer's last AOI transition (either
+    /// direction) for that guid. The AOI-transitions phase consults this
+    /// to suppress flapping: while standing on the boundary and strafing,
+    /// a mob within ~AOI_RADIUS_YARDS oscillates in/out of range each
+    /// tick — without this gate that produces 10+ pairs of
+    /// CreateObject/OutOfRangeObjects per second per oscillating entity.
+    /// Once a transition fires, the guid is pinned to its post-transition
+    /// state for `AOI_FLAP_COOLDOWN` regardless of subsequent jitter.
+    pub(crate) aoi_transition_at: ahash::AHashMap<Guid, std::time::Instant>,
 }
 
 impl PlayerSession {
@@ -326,6 +335,7 @@ impl Client {
                 writer_handle,
                 in_process_of_teleport: false,
                 visible_entities: ahash::AHashSet::default(),
+                aoi_transition_at: ahash::AHashMap::default(),
             },
             player: Player { character },
         }

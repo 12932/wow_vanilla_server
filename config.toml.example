@@ -17,6 +17,12 @@
 # clients × 1 MiB this caps worst-case buffer memory at ~10 GiB.
 # outbound_channel_bytes = 1048576
 
+# Minimum interval (seconds) between per-guid AOI transitions for a
+# given observer. Suppresses CreateObject/OutOfRangeObjects spam when
+# a player parks on the AOI boundary and strafes to oscillate a
+# target's range membership. 0 disables.
+# aoi_flap_cooldown_secs = 3
+
 [tick]
 # Target world-tick period in milliseconds. 100 = 10 Hz.
 # target_interval_ms = 100
