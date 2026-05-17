@@ -532,7 +532,12 @@ impl MovementDriver {
         Ok(())
     }
 
-    /// Move the puppet along its current orientation, clamped to the anchor box.
+    /// Move the puppet along its current orientation. In `Mode::Random`
+    /// we additionally clamp drift from the spawn anchor so bots stay
+    /// clustered for AOI testing; in `Mode::Pvp` the bot needs to be able
+    /// to chase a target across arbitrary distances (the arena rim alone
+    /// is ~25 yd from center, and pursuit can carry well past 60 yd), so
+    /// the cap is skipped.
     fn advance_position(&mut self, now: Instant) {
         let dt = now
             .duration_since(self.last_heartbeat_at)
@@ -549,13 +554,15 @@ impl MovementDriver {
         self.info.position.x += dx;
         self.info.position.y += dy;
 
-        let drift = ((self.info.position.x - ANCHOR.x).powi(2)
-            + (self.info.position.y - ANCHOR.y).powi(2))
-        .sqrt();
-        if drift > MAX_DRIFT_YARDS {
-            // Bounce: reset to anchor and pick a new heading; cheaper than
-            // reflecting against a virtual wall.
-            self.info.position = ANCHOR;
+        if matches!(self.mode, Mode::Random) {
+            let drift = ((self.info.position.x - ANCHOR.x).powi(2)
+                + (self.info.position.y - ANCHOR.y).powi(2))
+            .sqrt();
+            if drift > MAX_DRIFT_YARDS {
+                // Bounce: reset to anchor and pick a new heading; cheaper
+                // than reflecting against a virtual wall.
+                self.info.position = ANCHOR;
+            }
         }
     }
 }
