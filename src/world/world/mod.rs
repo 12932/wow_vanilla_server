@@ -109,6 +109,22 @@ pub struct World {
     /// allocations are reused tick over tick.
     pending_movement: ahash::AHashMap<Guid, PendingMovement>,
 
+    /// Monotonic counter incremented at the top of every `tick`. Used by the
+    /// heartbeat-broadcast throttle to decide whether a source's periodic
+    /// `MSG_MOVE_HEARTBEAT_Server` is due to be emitted this tick.
+    tick_counter: u64,
+
+    /// Per-source `tick_counter` value of the most recent heartbeat (or
+    /// transition) broadcast emitted for that player. Entry only present
+    /// for players who have moved at least once. Pruned on logout. Reads
+    /// the adaptive pacer's `current_interval` to compute the throttle
+    /// skip ratio: when the server is keeping up at target Hz, ratio is 1
+    /// and this map is effectively unused; when the pacer has backed off
+    /// to N× target, only 1-in-N heartbeats per source are emitted.
+    /// Transitions (start/stop/strafe/jump) always emit regardless and
+    /// also stamp this map so the next heartbeat is fully delayed.
+    last_heartbeat_broadcast_tick: ahash::AHashMap<Guid, u64>,
+
     // ── Per-tick scratch buffers ──
     // Held on `World` rather than declared as locals inside the tick phases
     // so the underlying Vec/HashMap allocations are reused tick-over-tick.
@@ -227,6 +243,8 @@ impl World {
             last_packet_sample_at: Instant::now(),
             last_tick_at: None,
             pending_movement: ahash::AHashMap::new(),
+            tick_counter: 0,
+            last_heartbeat_broadcast_tick: ahash::AHashMap::new(),
             scratch_client_aabb: ahash::AHashMap::new(),
             scratch_walk_events: Vec::new(),
             scratch_to_park: Vec::new(),
@@ -305,6 +323,8 @@ impl World {
             last_packet_sample_at: Instant::now(),
             last_tick_at: None,
             pending_movement: ahash::AHashMap::new(),
+            tick_counter: 0,
+            last_heartbeat_broadcast_tick: ahash::AHashMap::new(),
             scratch_client_aabb: ahash::AHashMap::new(),
             scratch_walk_events: Vec::new(),
             scratch_to_park: Vec::new(),
@@ -482,6 +502,7 @@ impl World {
         // sized for an earlier peak. Without this, a brief 5000-sim spike
         // pins ~150 KB of `scratch_walk_events` capacity indefinitely.
         self.pending_movement.shrink_to_fit();
+        self.last_heartbeat_broadcast_tick.shrink_to_fit();
         self.scratch_client_aabb.shrink_to_fit();
         self.scratch_walk_events.shrink_to_fit();
         self.scratch_to_park.shrink_to_fit();
@@ -632,20 +653,35 @@ impl World {
 
         let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
 
+        // Pre-M4 this loop did `remove_client(key)` + `insert_client(observer)`
+        // per observer to dodge the borrow conflict between
+        // `&mut observer` and `&self.clients` (for the AOI scan over other
+        // players). At 1400 observers that was 2800 slab ops + 2800
+        // AHashMap touches per tick. The split-borrow version below
+        // keeps the observer in the slab and scopes the mut borrow
+        // narrowly around each mutating section.
         for key in client_keys {
-            let mut observer = self.remove_client(key);
+            // ── Phase 1: read observer pos + map (no mut borrow held
+            // across the AOI scan below). ──
+            let (observer_map, observer_pos, prev_visible_capacity) = {
+                let obs = self.clients.get(key).expect(
+                    "client present at start of AOI tick (no concurrent removal during this phase)",
+                );
+                (
+                    obs.character().map,
+                    obs.character().info.position,
+                    obs.session.visible_entities.len(),
+                )
+            };
 
-            let observer_map = observer.character().map;
-            let observer_pos = observer.character().info.position;
-
-            // Build the new visible set: in-AOI players (other clients,
-            // since `observer` is out of the slab) + in-AOI creatures
-            // (Alive or Corpse). Use the spatial index on the creature
-            // side so we look at ~9 cells of candidates instead of the
-            // full 51k slab.
+            // ── Phase 2: build the new visible set. Skip `key` itself
+            // (observer should not be in its own visible_entities). ──
             let mut new_visible: ahash::AHashSet<Guid> =
-                ahash::AHashSet::with_capacity(observer.session.visible_entities.len());
-            for (_, c) in self.clients.iter() {
+                ahash::AHashSet::with_capacity(prev_visible_capacity);
+            for (other_key, c) in self.clients.iter() {
+                if other_key == key {
+                    continue;
+                }
                 if c.character().map != observer_map {
                     continue;
                 }
@@ -673,76 +709,93 @@ impl World {
                 }
             }
 
-            // Flap-suppression. For every guid whose membership would
+            // ── Fast path: visibility stable. ──
+            // Lengths match + every guid in `new_visible` is also in
+            // `visible_entities` ⇒ sets are equal, skip the
+            // symmetric_difference + diff allocs entirely. At 1400
+            // observers in steady state this is the common case.
+            {
+                let obs = self.clients.get_mut(key).expect("client present");
+                if new_visible.len() == obs.session.visible_entities.len()
+                    && new_visible
+                        .iter()
+                        .all(|g| obs.session.visible_entities.contains(g))
+                {
+                    obs.session.visible_entities = new_visible;
+                    continue;
+                }
+            }
+
+            // ── Slow path: flap-suppression + departed/entered diff. ──
+            // All mutations on the observer (`aoi_transition_at`,
+            // `visible_entities`) happen inside this single scope so the
+            // `&mut obs` borrow doesn't span the spawn-objects build
+            // below (which needs `&self.clients` / `&self.creatures`).
+            //
+            // Flap-suppression: for every guid whose membership would
             // flip this tick, consult `aoi_transition_at`: if it
             // transitioned within the last `AOI_FLAP_COOLDOWN`, force
             // it back to its previous state so we don't emit another
             // packet for it. Otherwise stamp `now` so subsequent
-            // jitter within the window is also suppressed.
-            //
-            // Without this, an observer parked on the AOI boundary and
+            // jitter within the window is also suppressed. Without
+            // this, an observer parked on the AOI boundary and
             // strafing produces ~10 CreateObject/OutOfRangeObjects
-            // pairs per second per oscillating entity. The cooldown is
-            // per-(observer, guid), so unrelated entities crossing the
-            // boundary in the same tick are unaffected.
-            let now = Instant::now();
-            let cooldown = crate::config::config().network.aoi_flap_cooldown();
-            let old = &observer.session.visible_entities;
-            let changed: Vec<Guid> =
-                old.symmetric_difference(&new_visible).copied().collect();
-            for g in changed {
-                let was = old.contains(&g);
-                let cooldown_active = observer
+            // pairs per second per oscillating entity.
+            let (departed, entered) = {
+                let obs = self.clients.get_mut(key).expect("client present");
+                let now = Instant::now();
+                let cooldown = crate::config::config().network.aoi_flap_cooldown();
+                let changed: Vec<Guid> = obs
                     .session
-                    .aoi_transition_at
-                    .get(&g)
-                    .is_some_and(|t| now.saturating_duration_since(*t) < cooldown);
-                if cooldown_active {
-                    stats.suppressed += 1;
-                    if was {
-                        new_visible.insert(g);
+                    .visible_entities
+                    .symmetric_difference(&new_visible)
+                    .copied()
+                    .collect();
+                for g in changed {
+                    let was = obs.session.visible_entities.contains(&g);
+                    let cooldown_active = obs
+                        .session
+                        .aoi_transition_at
+                        .get(&g)
+                        .is_some_and(|t| now.saturating_duration_since(*t) < cooldown);
+                    if cooldown_active {
+                        stats.suppressed += 1;
+                        if was {
+                            new_visible.insert(g);
+                        } else {
+                            new_visible.remove(&g);
+                        }
                     } else {
-                        new_visible.remove(&g);
+                        obs.session.aoi_transition_at.insert(g, now);
                     }
-                } else {
-                    observer.session.aoi_transition_at.insert(g, now);
                 }
-            }
-            // Periodic prune so the cooldown map doesn't grow unbounded
-            // for long-lived sessions. Anything older than the cooldown
-            // is no longer relevant; dropping it shaves memory and keeps
-            // future symmetric_difference scans tight.
-            observer
-                .session
-                .aoi_transition_at
-                .retain(|_, t| now.saturating_duration_since(*t) < cooldown);
+                // Periodic prune so the cooldown map doesn't grow
+                // unbounded for long-lived sessions. Anything older
+                // than the cooldown is no longer relevant.
+                obs.session
+                    .aoi_transition_at
+                    .retain(|_, t| now.saturating_duration_since(*t) < cooldown);
 
-            // Take the old set, install the new one, diff for transitions.
-            let old =
-                std::mem::replace(&mut observer.session.visible_entities, new_visible.clone());
-            let departed: Vec<Guid> = old.difference(&new_visible).copied().collect();
-            let entered: Vec<Guid> = new_visible.difference(&old).copied().collect();
+                let old = std::mem::replace(
+                    &mut obs.session.visible_entities,
+                    new_visible.clone(),
+                );
+                let departed: Vec<Guid> = old.difference(&new_visible).copied().collect();
+                let entered: Vec<Guid> = new_visible.difference(&old).copied().collect();
+                (departed, entered)
+            };
 
             stats.departed += departed.len();
             stats.entered += entered.len();
 
-            // Despawn batch — one packet per observer regardless of how
-            // many entities just left their AOI.
-            if !departed.is_empty() {
-                let msg = SMSG_UPDATE_OBJECT {
-                    has_transport: 0,
-                    objects: vec![Object {
-                        update_type: Object_UpdateType::OutOfRangeObjects { guids: departed },
-                    }],
-                };
-                observer.send_message(msg).await;
-            }
-
-            // Spawn batch — build a `CreateObject2` for each newcomer.
-            // Both player and creature lookups are O(1) via the reverse
-            // guid → slab-key indexes.
-            if !entered.is_empty() {
-                let mut objects: Vec<Object> = Vec::with_capacity(entered.len());
+            // ── Spawn batch — build CreateObject2 entries for newcomers
+            // by reading other clients + creatures. No `&mut obs`
+            // borrow held here. Both lookups are O(1) via reverse
+            // guid → slab-key indexes. ──
+            let entered_objects: Vec<Object> = if entered.is_empty() {
+                Vec::new()
+            } else {
+                let mut objects = Vec::with_capacity(entered.len());
                 for g in &entered {
                     if let Some(&ck) = self.creature_by_guid.get(g)
                         && let Some(cr) = self.creatures.get(ck)
@@ -756,13 +809,26 @@ impl World {
                         objects.push(player_create_object(c.character()));
                     }
                 }
-                if let Some(msg) = UpdateObject::from_objects(objects) {
-                    msg.send(&mut observer).await;
-                }
-            }
+                objects
+            };
 
-            let new_key = self.insert_client(observer);
-            debug_assert_eq!(new_key, key);
+            // ── Apply pass: send departed + entered messages. Brief
+            // `&mut obs` borrow scope. send_message only mutates the
+            // observer's own outbound channel — no aliasing with the
+            // entered-objects construction above. ──
+            let obs = self.clients.get_mut(key).expect("client present");
+            if !departed.is_empty() {
+                let msg = SMSG_UPDATE_OBJECT {
+                    has_transport: 0,
+                    objects: vec![Object {
+                        update_type: Object_UpdateType::OutOfRangeObjects { guids: departed },
+                    }],
+                };
+                obs.send_message(msg).await;
+            }
+            if let Some(msg) = UpdateObject::from_objects(entered_objects) {
+                msg.send(obs).await;
+            }
         }
         // Restore the spatial grid we `mem::take`'d above.
         self.creature_cells = creature_cells;
@@ -933,6 +999,19 @@ impl World {
                     .as_secs_f32(),
             );
         self.last_tick_at = Some(tick_start);
+        self.tick_counter = self.tick_counter.wrapping_add(1);
+
+        // Heartbeat-broadcast skip ratio, derived from how far the adaptive
+        // pacer has backed off. `slow_warn` here is the pacer's
+        // `current_interval`. At target Hz `slow_warn == target_interval`
+        // → ratio 1 (no throttle). When the pacer has doubled to 200 ms
+        // the ratio becomes 2 (emit heartbeats every 2nd tick per source);
+        // floors at 1 to avoid div-by-zero or accidental disable.
+        let heartbeat_skip_ratio: u64 = {
+            let target_ms = crate::config::config().tick.target_interval_ms.max(1);
+            let current_ms = slow_warn.as_millis() as u64;
+            (current_ms / target_ms).max(1)
+        };
 
         // Per-phase timing accumulators. If the whole tick is slow we dump
         // these as a single WARN at the end so the operator can read the
@@ -974,11 +1053,24 @@ impl World {
         // one tick this would regenerate the same create-object N times per
         // already-in-world client. Build once per tick and reuse.
         let mut create_object_cache: ahash::AHashMap<Guid, Object> = ahash::AHashMap::new();
+        // Cap per-tick promotions so a login burst (e.g. ramping 1k bots
+        // in 30 s) doesn't pin a single tick at hundreds of ms while it
+        // scans every observer's in-AOI list for each promotion.
+        // Configured via `[tick] max_promotions_per_tick`; 0 disables.
+        let max_promotions =
+            crate::config::config().tick.max_promotions_per_tick;
+        let mut promoted_this_tick = 0_u32;
         while let Some(i) = self
             .clients_on_character_screen
             .iter()
             .position(|a| matches!(a.status, CharacterScreenProgress::WaitingToLogIn(_)))
         {
+            if max_promotions > 0 && promoted_this_tick >= max_promotions {
+                // Remaining `WaitingToLogIn` clients stay queued — they
+                // get picked up next tick. The position() above will
+                // find them again.
+                break;
+            }
             let c = self.clients_on_character_screen.remove(i);
             let guid = match c.status {
                 CharacterScreenProgress::WaitingToLogIn(g) => g,
@@ -1087,6 +1179,13 @@ impl World {
             );
 
             self.insert_client(c);
+            promoted_this_tick += 1;
+        }
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(
+                tracy_client::plot_name!("promoted_this_tick"),
+                promoted_this_tick as f64,
+            );
         }
         }
         .instrument(tracing::info_span!("promote_logged_in"))
@@ -1381,7 +1480,34 @@ impl World {
             let mut sources = 0_usize;
             let mut recipients = 0_usize;
             let mut bytes = 0_usize;
+            let mut throttled = 0_usize;
+            // Borrow these as raw fields up front — the loop body takes
+            // `&mut self.clients` which conflicts with `&self.tick_counter`
+            // under the standard borrow check.
+            let tick_counter = self.tick_counter;
+            let skip_ratio = heartbeat_skip_ratio;
             for (source_guid, pm) in self.pending_movement.drain() {
+                // Heartbeat-throttle path: under pacer-detected load, emit
+                // a periodic `MSG_MOVE_HEARTBEAT_Server` only every
+                // `skip_ratio` ticks per source. Transition opcodes
+                // (start/stop/strafe/jump/...) always fan out — clients
+                // can't infer those locally and skipping them would
+                // visibly desync remote players.
+                let is_heartbeat = matches!(
+                    pm.msg,
+                    ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(_)
+                );
+                if is_heartbeat && skip_ratio > 1 {
+                    let last = self
+                        .last_heartbeat_broadcast_tick
+                        .get(&source_guid)
+                        .copied()
+                        .unwrap_or(0);
+                    if tick_counter.saturating_sub(last) < skip_ratio {
+                        throttled += 1;
+                        continue;
+                    }
+                }
                 let (r, b) = aoi::broadcast_opcode_within_aoi(
                     &pm.msg,
                     pm.anchor,
@@ -1392,6 +1518,13 @@ impl World {
                 sources += 1;
                 recipients += r;
                 bytes += r * b;
+                // Stamp the throttle map AFTER a successful emit (both
+                // heartbeats and transitions). Stamping on transitions
+                // too means the next periodic heartbeat is delayed by
+                // `skip_ratio` ticks rather than potentially firing one
+                // tick later.
+                self.last_heartbeat_broadcast_tick
+                    .insert(source_guid, tick_counter);
             }
             if let Some(client) = tracy_client::Client::running() {
                 client.plot(
@@ -1405,6 +1538,14 @@ impl World {
                 client.plot(
                     tracy_client::plot_name!("broadcast_bytes"),
                     bytes as f64,
+                );
+                client.plot(
+                    tracy_client::plot_name!("broadcast_throttled"),
+                    throttled as f64,
+                );
+                client.plot(
+                    tracy_client::plot_name!("broadcast_skip_ratio"),
+                    skip_ratio as f64,
                 );
             }
         }
@@ -1453,6 +1594,10 @@ impl World {
             let logout_pos = c.character().info.position;
             let logout_map = c.character().map;
             let logout_guid = c.character().guid;
+            // Drop the heartbeat-throttle bookkeeping for the leaving
+            // player so the map doesn't accumulate stale guids over a
+            // long server lifetime.
+            self.last_heartbeat_broadcast_tick.remove(&logout_guid);
             for (_, a) in &mut self.clients {
                 if a.character().map == logout_map
                     && aoi::within_aoi(&a.character().info.position, &logout_pos)
@@ -1494,6 +1639,7 @@ impl World {
             let c = self.remove_client(key);
             let logout_map = c.character().map;
             let guid = c.character().guid;
+            self.last_heartbeat_broadcast_tick.remove(&guid);
             db.replace_character_data(c.character().clone());
             tracing::info!(
                 "Dropped stale client {} ({}); reader task ended",

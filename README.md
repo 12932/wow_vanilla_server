@@ -44,7 +44,7 @@ For remote deploys set `WOW_REALM_ADDRESS=YOUR.SERVER.IP:8085` in `.env`. On Lin
 
 ### Behavior tuning (`config.toml`)
 
-Gameplay knobs (AOI radius, tick rate, combat numbers, respawn delays, spawn point, etc.) live in `config.toml` next to the binary. Every key is optional — omit the file entirely to get the defaults. See `config.toml.example` for the full list. No hot reload; restart the server to apply changes.
+Gameplay knobs (AOI radius, tick rate, combat numbers, respawn delays, spawn point, etc.) live in `config.toml` next to the binary. Every key is optional — omit the file entirely to get the defaults. The full list of available keys + their defaults lives in `src/config.rs` (search for `impl Default for`). No hot reload; restart the server to apply changes.
 
 ## Load test
 

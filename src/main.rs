@@ -60,8 +60,7 @@ async fn main() {
 
     // Load behavior config (AOI radius, tick rate, combat numbers, etc.)
     // after tracing init so the load log messages are visible. Missing
-    // file is fine — defaults match the prior hardcoded constants. See
-    // config.toml.example.
+    // file is fine — defaults match the prior hardcoded constants.
     config::install(config::load_or_default(std::path::Path::new("config.toml")));
 
     let users: auth::UserCache = Arc::new(Mutex::new(auth::UserCacheInner::new()));
