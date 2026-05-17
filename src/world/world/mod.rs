@@ -668,6 +668,54 @@ impl World {
         let mut move_to_character_screen = false;
         let mut commands = crate::world::command::CommandQueue::new();
 
+        // Resurrect dead players whose RESPAWN_DELAY has elapsed. Runs
+        // before the per-client opcode loop so a revived player can issue
+        // a swing on the same tick they come back. Broadcast restores HP
+        // and resets stand-state to standing so the corpse marker clears.
+        {
+            use crate::world::world_opcode_handler::character::RESPAWN_DELAY;
+            let now = Instant::now();
+            let to_respawn: Vec<usize> = self
+                .clients
+                .iter()
+                .filter_map(|(k, c)| {
+                    c.character().time_of_death.and_then(|t| {
+                        if now.duration_since(t) >= RESPAWN_DELAY {
+                            Some(k)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+            for k in to_respawn {
+                let c = &mut self.clients[k];
+                c.character_mut().respawn_full_health();
+                let guid = c.character().guid;
+                let pos = c.character().info.position;
+                let map = c.character().map;
+                let max_hp = c.character().max_health as i32;
+                let rez_update = SMSG_UPDATE_OBJECT {
+                    has_transport: 0,
+                    objects: vec![Object {
+                        update_type: Object_UpdateType::Values {
+                            guid1: guid,
+                            mask1: UpdateMask::Player(
+                                UpdatePlayerBuilder::new()
+                                    .set_unit_health(max_hp)
+                                    .set_unit_bytes_1(0, 0, 0, 0)
+                                    .finalize(),
+                            ),
+                        },
+                    }],
+                };
+                // Broadcast — the resurrected player is in `self.clients`
+                // so they receive their own resurrection update via the
+                // AOI walk; no explicit send needed.
+                aoi::broadcast_within_aoi(rez_update, pos, map, &mut self.clients).await;
+            }
+        }
+
         let phase = Instant::now();
         async {
         let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
@@ -692,19 +740,27 @@ impl World {
             .await;
             client.character_mut().update_auto_attack_timer(tick_dt);
 
-            if client.character().attacking && client.character().auto_attack_timer <= 0.0 {
+            if client.character().attacking
+                && !client.character().is_dead()
+                && client.character().auto_attack_timer <= 0.0
+            {
                 client.character_mut().auto_attack_timer = UNARMED_SPEED;
-                const SWING_DAMAGE: u32 = 1332;
+                // Random per-swing damage in [10, 20]. Keeps kill-times
+                // (at 100 HP / 2 s unarmed speed) in the 10-20 s ballpark
+                // so loadtest PvP fights resolve fast enough to observe.
+                let swing_damage: u32 =
+                    10 + (crate::world::world_opcode_handler::gm_command::next_rand() % 11)
+                        as u32;
                 let target_guid = client.character().target;
                 let msg = SMSG_ATTACKERSTATEUPDATE {
                     hit_info: HitInfo::CriticalHit,
                     attacker: client.character().guid,
                     target: target_guid,
-                    total_damage: SWING_DAMAGE,
+                    total_damage: swing_damage,
                     damages: vec![DamageInfo {
                         spell_school_mask: 0,
-                        damage_float: SWING_DAMAGE as f32,
-                        damage_uint: SWING_DAMAGE,
+                        damage_float: swing_damage as f32,
+                        damage_uint: swing_damage,
                         absorb: 0,
                         resist: 0,
                     }],
@@ -716,6 +772,7 @@ impl World {
 
                 let attacker_pos = client.character().info.position;
                 let attacker_map = client.character().map;
+                let attacker_guid = client.character().guid;
                 // Source is held outside the slab (removed for processing),
                 // so `broadcast_within_aoi` only reaches other observers —
                 // send to attacker separately. The broadcast helper
@@ -724,10 +781,14 @@ impl World {
                 aoi::broadcast_within_aoi(msg, attacker_pos, attacker_map, &mut self.clients)
                     .await;
 
-                let target_key = self.creature_by_guid.get(&target_guid).copied();
-                if let Some(creature_key) = target_key {
+                // Resolve target: creature first (fast indexed lookup), then
+                // fall back to a linear scan of clients for a player target.
+                // Self-targeting attacks are silently dropped.
+                let target_creature_key =
+                    self.creature_by_guid.get(&target_guid).copied();
+                if let Some(creature_key) = target_creature_key {
                     let creature = &mut self.creatures[creature_key];
-                    creature.health = creature.health.saturating_sub(SWING_DAMAGE);
+                    creature.health = creature.health.saturating_sub(swing_damage);
                     let creature_map = creature.map;
                     let creature_pos = creature.info.position;
                     let creature_guid = creature.guid;
@@ -756,6 +817,65 @@ impl World {
                             hp_update,
                             creature_pos,
                             creature_map,
+                            &mut self.clients,
+                        )
+                        .await;
+                    }
+                } else if target_guid != attacker_guid && target_guid != Guid::zero() {
+                    // Player target — O(N) scan over clients. At 1000 PvP
+                    // bots this is 1M comparisons/tick which is well under
+                    // budget; if it ever bites perf, add a guid → slab key
+                    // reverse index alongside `creature_by_guid`.
+                    let target_player_key = self
+                        .clients
+                        .iter()
+                        .find(|(_, c)| {
+                            c.character().guid == target_guid
+                                && !c.character().is_dead()
+                        })
+                        .map(|(k, _)| k);
+                    if let Some(target_key) = target_player_key {
+                        let target = &mut self.clients[target_key];
+                        let new_hp = target.character_mut().apply_damage(swing_damage);
+                        let target_pos = target.character().info.position;
+                        let target_map = target.character().map;
+                        let killed = new_hp == 0;
+                        if killed {
+                            target.character_mut().time_of_death = Some(Instant::now());
+                            target.character_mut().attacking = false;
+                            target.character_mut().target = Guid::zero();
+                            client.character_mut().attacking = false;
+                            client.character_mut().target = Guid::zero();
+                        }
+
+                        // Build the partial-update mask. On the killing
+                        // blow we additionally flip stand-state to dead
+                        // so the corpse renders correctly client-side
+                        // (skull on minimap, fallen pose).
+                        const STAND_STATE_DEAD: u8 = 7;
+                        let mask_builder = wow_world_messages::vanilla::UpdatePlayerBuilder::new()
+                            .set_unit_health(new_hp as i32);
+                        let mask_builder = if killed {
+                            mask_builder.set_unit_bytes_1(STAND_STATE_DEAD, 0, 0, 0)
+                        } else {
+                            mask_builder
+                        };
+                        let hp_update = SMSG_UPDATE_OBJECT {
+                            has_transport: 0,
+                            objects: vec![Object {
+                                update_type: Object_UpdateType::Values {
+                                    guid1: target_guid,
+                                    mask1: UpdateMask::Player(mask_builder.finalize()),
+                                },
+                            }],
+                        };
+                        // Target is in `self.clients` so they'll receive via
+                        // broadcast; attacker is held outside, send directly.
+                        client.send_message(hp_update.clone()).await;
+                        aoi::broadcast_within_aoi(
+                            hp_update,
+                            target_pos,
+                            target_map,
                             &mut self.clients,
                         )
                         .await;
@@ -1710,9 +1830,9 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
             character.hairstyle,
             character.haircolor,
         )
-        .set_unit_base_health(character.max_health())
-        .set_unit_health(character.max_health())
-        .set_unit_maxhealth(character.max_health())
+        .set_unit_base_health(character.max_health as i32)
+        .set_unit_health(character.current_health as i32)
+        .set_unit_maxhealth(character.max_health as i32)
         .set_unit_level(character.level.as_int() as i32)
         .set_unit_factiontemplate(race.faction_id().as_int() as i32)
         .set_unit_displayid(race.display_id(character.gender))

@@ -81,6 +81,17 @@ pub(super) async fn handle_opcodes(
 ) {
     let guid = client.character().guid;
 
+    // Dead clients only get to ping (so the TCP connection stays alive
+    // and the reader task doesn't time out before the respawn loop revives
+    // them). Movement, attacks, chat, item handling — all dropped while
+    // dead. The corpse-run / ghost flow isn't implemented; players just
+    // wait out `RESPAWN_DELAY` and pop back at full HP.
+    if client.character().is_dead()
+        && !matches!(&opcode, ClientOpcodeMessage::CMSG_PING(_))
+    {
+        return;
+    }
+
     // Server-authoritative root: while `root_until` is in the future, drop
     // every incoming movement opcode. We do NOT update the character's
     // authoritative position from the dropped opcode, and we don't fall into
