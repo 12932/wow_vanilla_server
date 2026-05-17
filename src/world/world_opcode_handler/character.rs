@@ -63,17 +63,12 @@ pub struct Character {
     pub time_of_death: Option<Instant>,
 }
 
-/// HP every player starts (and respawns) with under our simplified combat
-/// rules. Picked so a ~10-damage swing kills in 7–13 hits at the unarmed
-/// swing speed (2 s) — kill-times of 15–25 s, easy to observe during
-/// loadtest fights.
+/// HP every player starts with under our simplified combat rules. Picked
+/// so a ~10-damage swing kills in 7–13 hits at the unarmed swing speed
+/// (2 s) — kill-times of 15–25 s, easy to observe during loadtest fights.
+/// There is no auto-respawn: a player who hits zero stays dead until the
+/// server restarts (snapshot load resets HP to `max_health`).
 pub const PVP_MAX_HEALTH: u32 = 100;
-
-/// How long a player stays dead before the server auto-respawns them at
-/// full HP. Tuned for testing — long enough that you actually see the
-/// dead state in-game, short enough that bots don't pile up dead and stop
-/// the action.
-pub const RESPAWN_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Character {
     fn default_stats(&self) -> BaseStats {
