@@ -45,6 +45,17 @@ pub const PLAYER_COMBAT_REACH: f32 = 1.5;
 /// PvE melee isn't exercised so a flat 1.5 keeps the math symmetric.
 pub const CREATURE_COMBAT_REACH: f32 = 1.5;
 
+/// cmangos `PLAYER_FLAGS_FFA_PVP` — bit on the `PLAYER_FLAGS` update
+/// field (mask offset 190) that marks a character as universally
+/// attackable. Vanilla 1.12 clients refuse to render same-faction
+/// combat (no skull cursor, no attack animation, no HP-bar delta)
+/// unless this bit is set on the target. In real cmangos it's
+/// toggled in `Player::UpdateArea` when entering/leaving an
+/// `AREA_FLAG_ARENA` zone (the Gurubashi pit); our simplified server
+/// only spawns players into Gurubashi, so we set the flag
+/// unconditionally rather than wiring up area-flag detection.
+pub const PLAYER_FLAGS_FFA_PVP: i32 = 0x80;
+
 /// True if any directional flag is set. Walking is treated identically
 /// to running — we don't have a /walk distinction in the loadtest path,
 /// and bots always run. cmangos's "not walking" guard is therefore moot
