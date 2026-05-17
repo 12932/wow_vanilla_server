@@ -1172,8 +1172,8 @@ impl World {
         // skip the body entirely — no AI tick, no broadcast, nothing. When a
         // player walks back into range, the creature picks up wherever it was
         // (paused mid-route is fine because nobody saw it). With 51 k worlddb
-        // creatures and clients clustered at Northshire this prunes ~99% of
-        // the per-tick work. Scratch map is reused across ticks.
+        // creatures and clients clustered at the Gurubashi Arena spawn this
+        // prunes ~99% of the per-tick work. Scratch map is reused across ticks.
         self.scratch_client_aabb.clear();
         for (_, cl) in self.clients.iter() {
             let p = cl.character().info.position;
