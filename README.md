@@ -123,10 +123,11 @@ The orchestrator has a stdin REPL — `spawn 100 all`, `stop 50 all`, `status`, 
 
 ### File-descriptor limit (Linux)
 
-Default `ulimit -n` is 1024. Each bot needs one socket steady-state and briefly two during the auth→world handshake, so you'll cap at ~510 bots on a default Linux box. Raise it before serious testing:
+Default `ulimit -n` is 1024. The server uses one fd per connected client (briefly two during the auth→world handshake), so you'll cap at ~510 connections on a default Linux box. **The server does not raise its own fd limit** — raise it manually before starting both the server and any load-test workers:
 
 ```sh
 ulimit -n 65536    # current shell only
+./target/release/wow_vanilla_server
 ```
 
 Or system-wide in `/etc/security/limits.conf`:
@@ -136,7 +137,7 @@ Or system-wide in `/etc/security/limits.conf`:
 * hard nofile 65536
 ```
 
-The server side also needs the same — once you have thousands of bots, each client socket is an fd on the server. Set `LimitNOFILE=65536` in your systemd unit.
+Under systemd, set `LimitNOFILE=65536` in the unit file. For testing thousands of bots, push it higher (e.g. `1048576`).
 
 ## Profiling
 
