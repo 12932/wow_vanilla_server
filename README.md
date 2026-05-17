@@ -49,6 +49,7 @@ The server reads its config from environment variables. You can set them inline,
 | `WOW_AUTH_AUTO_CREATE` | unset | If set to any value, unknown usernames are auto-created on logon. Required for the `loadtest` binary. |
 | `WOW_VANILLA_WORLDDB` | unset | Path to a mangos worlddb SQLite dump. Without it the server boots with one test wolf only. `.cargo/config.toml` sets this for local development. |
 | `RUST_LOG` | `info` | Standard `tracing-subscriber` env filter. `RUST_LOG=info,wow_vanilla_server=debug` adds per-connection debug spam. |
+| `WOW_TRACY` | unset | Set to `1` to start the Tracy profiler at boot. Leave unset for production — the `TracyLayer` queues trace events in memory when no GUI is connected and is the dominant memory-growth source at high client counts. Build flags don't change; same `--release` binary works either way. |
 | `LOADTEST_NAME_PREFIX` | hostname | Loadtest worker: bot character-name prefix. Defaults to the worker host's hostname (via the `gethostname` crate). |
 
 `WOW_VANILLA_USE_MAPS` is a **compile-time** `option_env!` for the namigator build — if set when you `cargo build`, the resulting binary will use the pointed-at vanilla client data for terrain following. Without it, mobs walk linearly through z.
@@ -141,7 +142,7 @@ Under systemd, set `LimitNOFILE=65536` in the unit file. For testing thousands o
 
 ## Profiling
 
-The server is wired up to [Tracy](https://github.com/wolfpld/tracy) via the `tracing-tracy` and `tracy-client` crates. Start Tracy's profiler GUI, then start the server — the connection auto-attaches. `World::tick` and every phase (`per_client_loop`, `tick_walking_creatures`, `flush_movement_broadcasts`, etc.) are instrumented.
+The server is wired up to [Tracy](https://github.com/wolfpld/tracy) via the `tracing-tracy` and `tracy-client` crates, but the profiler is **off by default**. Set `WOW_TRACY=1` in the environment before starting the server to enable it — `World::tick` and every phase (`per_client_loop`, `tick_walking_creatures`, `flush_movement_broadcasts`, etc.) are instrumented and will show up in the GUI. Same `--release` binary works either way; the gate is purely runtime. Start Tracy's GUI first (or shortly after) so it picks up the connection. Leave `WOW_TRACY` unset for production — when no GUI is attached, the layer queues trace events in memory and is the dominant memory-growth source at high client counts.
 
 If a tick exceeds 100 ms, the server also logs a per-phase breakdown at `WARN`:
 
