@@ -381,6 +381,30 @@ impl World {
     /// AOI-exit fix this addresses.
     async fn tick_aoi_transitions(&mut self) {
         async {
+        // Spatial bucket size for the creature-side query. Larger than
+        // AOI radius so a 3x3 cell scan covers every candidate within
+        // AOI. Rebuilt every tick; with ~51k creatures the rebuild is
+        // a couple ms on modern hardware — well under the per-observer
+        // brute-force alternative (51k × clients).
+        const CELL_YD: f32 = 250.0;
+        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
+            ahash::AHashMap::with_capacity(1024);
+        for (k, cr) in self.creatures.iter() {
+            // Respawning creatures aren't rendered client-side; skip
+            // them so they don't show up in `new_visible`. Alive +
+            // Corpse stay visible (corpses are the dead-pose render
+            // until corpse_despawn fires).
+            if matches!(cr.life_state, CreatureLifeState::Respawning { .. }) {
+                continue;
+            }
+            let cx = (cr.info.position.x / CELL_YD).floor() as i32;
+            let cy = (cr.info.position.y / CELL_YD).floor() as i32;
+            creature_cells
+                .entry((cr.map, cx, cy))
+                .or_default()
+                .push(k);
+        }
+
         let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
 
         for key in client_keys {
@@ -389,9 +413,11 @@ impl World {
             let observer_map = observer.character().map;
             let observer_pos = observer.character().info.position;
 
-            // Build the new visible set from currently-connected clients
-            // on the same map within AOI. `observer` is out of the slab
-            // already, so the iteration naturally skips self.
+            // Build the new visible set: in-AOI players (other clients,
+            // since `observer` is out of the slab) + in-AOI creatures
+            // (Alive or Corpse). Use the spatial index on the creature
+            // side so we look at ~9 cells of candidates instead of the
+            // full 51k slab.
             let mut new_visible: ahash::AHashSet<Guid> =
                 ahash::AHashSet::with_capacity(observer.session.visible_entities.len());
             for (_, c) in self.clients.iter() {
@@ -403,6 +429,67 @@ impl World {
                 }
                 new_visible.insert(c.character().guid);
             }
+
+            let cx = (observer_pos.x / CELL_YD).floor() as i32;
+            let cy = (observer_pos.y / CELL_YD).floor() as i32;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let Some(keys) =
+                        creature_cells.get(&(observer_map, cx + dx, cy + dy))
+                    else {
+                        continue;
+                    };
+                    for &ck in keys {
+                        let cr = &self.creatures[ck];
+                        if aoi::within_aoi(&observer_pos, &cr.info.position) {
+                            new_visible.insert(cr.guid);
+                        }
+                    }
+                }
+            }
+
+            // Flap-suppression. For every guid whose membership would
+            // flip this tick, consult `aoi_transition_at`: if it
+            // transitioned within the last `AOI_FLAP_COOLDOWN`, force
+            // it back to its previous state so we don't emit another
+            // packet for it. Otherwise stamp `now` so subsequent
+            // jitter within the window is also suppressed.
+            //
+            // Without this, an observer parked on the AOI boundary and
+            // strafing produces ~10 CreateObject/OutOfRangeObjects
+            // pairs per second per oscillating entity. The cooldown is
+            // per-(observer, guid), so unrelated entities crossing the
+            // boundary in the same tick are unaffected.
+            let now = Instant::now();
+            let cooldown = crate::config::config().network.aoi_flap_cooldown();
+            let old = &observer.session.visible_entities;
+            let changed: Vec<Guid> =
+                old.symmetric_difference(&new_visible).copied().collect();
+            for g in changed {
+                let was = old.contains(&g);
+                let cooldown_active = observer
+                    .session
+                    .aoi_transition_at
+                    .get(&g)
+                    .is_some_and(|t| now.saturating_duration_since(*t) < cooldown);
+                if cooldown_active {
+                    if was {
+                        new_visible.insert(g);
+                    } else {
+                        new_visible.remove(&g);
+                    }
+                } else {
+                    observer.session.aoi_transition_at.insert(g, now);
+                }
+            }
+            // Periodic prune so the cooldown map doesn't grow unbounded
+            // for long-lived sessions. Anything older than the cooldown
+            // is no longer relevant; dropping it shaves memory and keeps
+            // future symmetric_difference scans tight.
+            observer
+                .session
+                .aoi_transition_at
+                .retain(|_, t| now.saturating_duration_since(*t) < cooldown);
 
             // Take the old set, install the new one, diff for transitions.
             let old =
@@ -423,13 +510,18 @@ impl World {
             }
 
             // Spawn batch — build a `CreateObject2` for each newcomer.
-            // Inner lookup is a linear scan over `self.clients`; entered
-            // is usually tiny (0-3 per tick) so we don't bother with a
-            // reverse index. If profiling later shows this is hot, add a
-            // `guid -> slab_key` map alongside `creature_by_guid`.
+            // Player lookup is a linear scan (no guid → slab index yet);
+            // creatures get the O(1) `creature_by_guid` route. `entered`
+            // is usually small under steady-state movement.
             if !entered.is_empty() {
                 let mut objects: Vec<Object> = Vec::with_capacity(entered.len());
                 for g in &entered {
+                    if let Some(&ck) = self.creature_by_guid.get(g)
+                        && let Some(cr) = self.creatures.get(ck)
+                    {
+                        objects.push(cr.to_create_object());
+                        continue;
+                    }
                     for (_, c) in self.clients.iter() {
                         if c.character().guid == *g {
                             objects.push(player_create_object(c.character()));
@@ -485,6 +577,14 @@ impl World {
             let pos = c.info.position;
             let destroy = SMSG_DESTROY_OBJECT { guid };
             aoi::broadcast_within_aoi(destroy, pos, map, &mut self.clients).await;
+            // Clear the despawned guid from every observer's
+            // `visible_entities` so the next AOI tick doesn't detect
+            // it as departed (it's already filtered out by the
+            // Respawning life-state guard) and emit a duplicate
+            // `OutOfRangeObjects`.
+            for (_, o) in self.clients.iter_mut() {
+                o.session.visible_entities.remove(&guid);
+            }
         }
 
         for key in to_revive {
@@ -500,9 +600,19 @@ impl World {
             let create_object = c.to_create_object();
             let map = c.map;
             let pos = c.info.position;
+            let guid = c.guid;
             self.unmark_creature_dead(key);
             if let Some(msg) = UpdateObject::from_objects(vec![create_object]) {
                 msg.broadcast_within_aoi(pos, map, &mut self.clients).await;
+            }
+            // Seed in-AOI observers so the next AOI tick doesn't think
+            // this guid just entered (we already sent its CreateObject).
+            for (_, o) in self.clients.iter_mut() {
+                if o.character().map == map
+                    && aoi::within_aoi(&o.character().info.position, &pos)
+                {
+                    o.session.visible_entities.insert(guid);
+                }
             }
         }
     }
@@ -535,11 +645,22 @@ impl World {
                         }
                     }
                     let pos = creature.info.position;
+                    let guid = creature.guid;
                     let create_object = creature.to_create_object();
                     let key = self.creatures.insert(creature);
                     self.register_creature(key);
                     if let Some(msg) = UpdateObject::from_objects(vec![create_object]) {
                         msg.broadcast_within_aoi(pos, map, &mut self.clients).await;
+                    }
+                    // Seed in-AOI observers' visible sets so the next
+                    // AOI tick doesn't treat this as a fresh entry and
+                    // duplicate the CreateObject.
+                    for (_, o) in self.clients.iter_mut() {
+                        if o.character().map == map
+                            && aoi::within_aoi(&o.character().info.position, &pos)
+                        {
+                            o.session.visible_entities.insert(guid);
+                        }
                     }
                 }
                 WorldCommand::KillCreature(kill_guid) => {

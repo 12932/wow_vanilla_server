@@ -90,6 +90,11 @@ pub struct NetworkConfig {
     /// frames for that client are dropped instead of being enqueued.
     /// 10 000 clients × 1 MiB ≈ 10 GiB worst-case buffer memory.
     pub outbound_channel_bytes: usize,
+    /// Minimum interval (seconds) between per-guid AOI transitions
+    /// for a given observer. Suppresses CreateObject/OutOfRangeObjects
+    /// spam when a player parks on the AOI boundary and strafes to
+    /// oscillate a target's range membership. 0 disables.
+    pub aoi_flap_cooldown_secs: u64,
 }
 
 impl Default for NetworkConfig {
@@ -97,7 +102,14 @@ impl Default for NetworkConfig {
         Self {
             aoi_radius_yards: 200.0,
             outbound_channel_bytes: 1024 * 1024,
+            aoi_flap_cooldown_secs: 3,
         }
+    }
+}
+
+impl NetworkConfig {
+    pub fn aoi_flap_cooldown(&self) -> Duration {
+        Duration::from_secs(self.aoi_flap_cooldown_secs)
     }
 }
 
