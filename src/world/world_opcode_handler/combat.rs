@@ -19,31 +19,13 @@
 
 use wow_world_messages::vanilla::{MovementInfo, Vector3d};
 
-/// cmangos `ATTACK_DISTANCE`. Floor on combined melee reach — even with
-/// sub-standard reach values the pair can still hit at 5 yd.
-pub const ATTACK_DISTANCE: f32 = 5.0;
-
-/// cmangos `BASE_MELEERANGE_OFFSET`. Static cushion added to the sum of
-/// both parties' `combat_reach`. cmangos's source comment notes the
-/// "measured values in (1.3224, 1.342)" range.
-pub const BASE_MELEERANGE_OFFSET: f32 = 1.333;
-
-/// cmangos `MELEE_LEEWAY` — literally `8.0 / 3.0`. Added when *both*
-/// attacker and target are moving (not walking) — compensates for the
-/// up-to-13yd combined position-staleness from 250-500ms heartbeat gaps
-/// at run speed. cmangos uses the strict "both moving" semantics; we
-/// follow suit for parity.
-pub const MELEE_LEEWAY: f32 = 8.0 / 3.0;
-
-/// Default `combat_reach` for a humanoid player. cmangos sources this
-/// from `CreatureModelInfo` DBC; for our flat 1.5 it matches the vanilla
-/// humanoid model row.
-pub const PLAYER_COMBAT_REACH: f32 = 1.5;
-
-/// Hardcoded creature reach for now. Per-creature `combat_reach` from
-/// mangos `creature_template.CombatReach` is a follow-up — currently
-/// PvE melee isn't exercised so a flat 1.5 keeps the math symmetric.
-pub const CREATURE_COMBAT_REACH: f32 = 1.5;
+// Combat reach + leeway numbers live in `[combat]` of `config.toml`
+// (defaults: ATTACK_DISTANCE=5.0, BASE_MELEERANGE_OFFSET=1.333,
+// MELEE_LEEWAY=8/3, PLAYER_COMBAT_REACH=1.5, CREATURE_COMBAT_REACH=1.5).
+// Faithful to cmangos `Unit::CanReachWithMeleeAttack`; we just store
+// the numbers in config so an operator can tune them without
+// recompiling. PLAYER_FLAGS_FFA_PVP stays a const because it's a
+// protocol bit, not a tunable knob.
 
 /// cmangos `PLAYER_FLAGS_FFA_PVP` — bit on the `PLAYER_FLAGS` update
 /// field (mask offset 190) that marks a character as universally
@@ -66,23 +48,26 @@ pub fn is_moving(info: &MovementInfo) -> bool {
 }
 
 /// Combined melee reach in yards. Mirrors cmangos's
-/// `GetCombinedCombatReach` plus the moving-leeway adjustment.
+/// `GetCombinedCombatReach` plus the moving-leeway adjustment. Reads
+/// the `[combat]` section of the global config on every call — fine
+/// because config is immutable for the process lifetime.
 pub fn melee_range_yards(
     attacker_moving: bool,
     target_moving: bool,
     target_is_creature: bool,
 ) -> f32 {
+    let c = &crate::config::config().combat;
     let target_reach = if target_is_creature {
-        CREATURE_COMBAT_REACH
+        c.creature_combat_reach
     } else {
-        PLAYER_COMBAT_REACH
+        c.player_combat_reach
     };
-    let mut reach = PLAYER_COMBAT_REACH + target_reach + BASE_MELEERANGE_OFFSET;
-    if reach < ATTACK_DISTANCE {
-        reach = ATTACK_DISTANCE;
+    let mut reach = c.player_combat_reach + target_reach + c.base_meleerange_offset;
+    if reach < c.attack_distance {
+        reach = c.attack_distance;
     }
     if attacker_moving && target_moving {
-        reach += MELEE_LEEWAY;
+        reach += c.melee_leeway;
     }
     reach
 }
@@ -112,23 +97,29 @@ mod tests {
         }
     }
 
+    fn cfg_combat() -> crate::config::CombatConfig {
+        crate::config::CombatConfig::default()
+    }
+
     #[test]
     fn melee_range_neither_moving_floors_at_5yd() {
         // 1.5 + 1.5 + 1.333 = 4.333 → floored to 5.0
-        assert_eq!(melee_range_yards(false, false, false), ATTACK_DISTANCE);
+        assert_eq!(melee_range_yards(false, false, false), cfg_combat().attack_distance);
     }
 
     #[test]
     fn melee_range_one_moving_no_leeway() {
         // cmangos's strict "both moving" rule: one-side movement adds nothing.
-        assert_eq!(melee_range_yards(true, false, false), ATTACK_DISTANCE);
-        assert_eq!(melee_range_yards(false, true, false), ATTACK_DISTANCE);
+        let c = cfg_combat();
+        assert_eq!(melee_range_yards(true, false, false), c.attack_distance);
+        assert_eq!(melee_range_yards(false, true, false), c.attack_distance);
     }
 
     #[test]
     fn melee_range_both_moving_adds_leeway() {
+        let c = cfg_combat();
         let r = melee_range_yards(true, true, false);
-        assert!((r - (ATTACK_DISTANCE + MELEE_LEEWAY)).abs() < 1e-5);
+        assert!((r - (c.attack_distance + c.melee_leeway)).abs() < 1e-5);
     }
 
     #[test]

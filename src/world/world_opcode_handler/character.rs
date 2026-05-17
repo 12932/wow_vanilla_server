@@ -63,12 +63,12 @@ pub struct Character {
     pub time_of_death: Option<Instant>,
 }
 
-/// HP every player starts with under our simplified combat rules. Picked
-/// so a ~10-damage swing kills in 7–13 hits at the unarmed swing speed
-/// (2 s) — kill-times of 15–25 s, easy to observe during loadtest fights.
-/// There is no auto-respawn: a player who hits zero stays dead until the
-/// server restarts (snapshot load resets HP to `max_health`).
-pub const PVP_MAX_HEALTH: u32 = 100;
+// HP every player starts with under our simplified combat rules lives in
+// `[combat] pvp_max_health` (default 100). Picked so a ~10-damage swing
+// kills in 7–13 hits at the unarmed swing speed — kill-times of 15–25 s,
+// easy to observe during loadtest fights. There is no auto-respawn: a
+// player who hits zero stays dead until the server restarts (snapshot
+// load resets HP to `max_health`).
 
 impl Character {
     fn default_stats(&self) -> BaseStats {
@@ -146,8 +146,8 @@ impl Character {
             auto_attack_timer: 0.0,
             inventory,
             root_until: None,
-            current_health: PVP_MAX_HEALTH,
-            max_health: PVP_MAX_HEALTH,
+            current_health: crate::config::config().combat.pvp_max_health,
+            max_health: crate::config::config().combat.pvp_max_health,
             time_of_death: None,
         }
     }

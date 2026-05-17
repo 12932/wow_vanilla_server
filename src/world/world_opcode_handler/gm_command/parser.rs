@@ -20,8 +20,6 @@ pub(crate) enum GmCommand {
     },
     Boom,
     Nova,
-    Simulate(u32),
-    SimClear,
     WorldDbInfo,
     Information(Guid),
     ShouldHaveLineOfSight(Guid),
@@ -152,16 +150,6 @@ impl GmCommand {
                     .map(|entity| match entity {
                         Entity::Player(c) => (c.position(), c.character().name.as_str()),
                         Entity::Creature(c) => (c.position(), c.name.as_str()),
-                        Entity::Simulated(s) => (
-                            Position {
-                                map: s.map,
-                                x: s.info.position.x,
-                                y: s.info.position.y,
-                                z: s.info.position.z,
-                                orientation: s.info.orientation,
-                            },
-                            s.name.as_str(),
-                        ),
                     })
                     .ok_or_else(|| {
                         format!("Unable to find range: Unable to find target '{}'", target)
@@ -223,12 +211,6 @@ impl GmCommand {
             }
             "boom" => Ok(Self::Boom),
             "nova" => Ok(Self::Nova),
-            "simulate" => args
-                .trim()
-                .parse::<u32>()
-                .map(Self::Simulate)
-                .map_err(|e| format!("invalid simulate count: {e}")),
-            "simclear" => Ok(Self::SimClear),
             "worlddbinfo" => Ok(Self::WorldDbInfo),
             "los" => Ok(Self::ShouldHaveLineOfSight(client.character().target)),
             "nolos" => Ok(Self::ShouldNotHaveLineOfSight(client.character().target)),

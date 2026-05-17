@@ -10,16 +10,25 @@ use wow_world_messages::vanilla::{
 };
 use wow_world_messages::Guid;
 
-pub const DEFAULT_CREATURE_HEALTH: u32 = 5000;
+// Creature health / corpse / respawn knobs live in `[respawn]` of
+// `config.toml`. Helpers below read them from the global config.
+
+pub fn default_creature_health() -> u32 {
+    crate::config::config().respawn.default_creature_health
+}
 
 /// How long a corpse stays visible after death before it gets despawned.
-pub const CORPSE_DESPAWN: Duration = Duration::from_secs(180);
+pub fn corpse_despawn() -> Duration {
+    crate::config::config().respawn.corpse_despawn()
+}
 
 /// Initial respawn delay applied to every freshly-spawned creature. After
 /// the first death, this halves on every kill where the mob lived for less
 /// than the current respawn delay — a "the faster you kill it, the faster it
 /// comes back" feedback loop with no floor (can reach sub-second).
-pub const INITIAL_RESPAWN_DELAY: Duration = Duration::from_secs(180);
+pub fn initial_respawn_delay() -> Duration {
+    crate::config::config().respawn.initial_respawn_delay()
+}
 
 /// Where a creature is in its life cycle.
 #[derive(Debug, Clone, Copy)]
@@ -32,10 +41,13 @@ pub enum CreatureLifeState {
     Respawning { respawn_at: Instant },
 }
 
-/// `wow_world_base::movement::DEFAULT_WALKING_SPEED` is 1.0 yd/s, which looks
-/// unnaturally slow in-client. Canonical vanilla walking is 2.5, but that
-/// looks like a brisk march for patrolling guards — 2.0 is the sweet spot.
-pub const WALK_SPEED: f32 = 2.0;
+/// Creature walking speed, served from `[creature] walk_speed` in
+/// config (default 2.0 yd/s). `wow_world_base`'s canonical vanilla
+/// walking is 2.5 but that looks like a brisk march for patrolling
+/// guards — 2.0 is the sweet spot.
+pub fn walk_speed() -> f32 {
+    crate::config::config().creature.walk_speed
+}
 
 #[derive(Debug)]
 pub enum CreatureBehavior {
@@ -127,8 +139,8 @@ impl Creature {
             display_id,
             entry,
             faction_template: 16,
-            health: DEFAULT_CREATURE_HEALTH,
-            max_health: DEFAULT_CREATURE_HEALTH,
+            health: default_creature_health(),
+            max_health: default_creature_health(),
             root_until: None,
             behavior: CreatureBehavior::AggroChase,
             last_advanced_at: Instant::now(),
@@ -141,7 +153,7 @@ impl Creature {
             spawn_orientation: position.orientation,
             life_state: CreatureLifeState::Alive,
             last_alive_at: Instant::now(),
-            respawn_delay: INITIAL_RESPAWN_DELAY,
+            respawn_delay: initial_respawn_delay(),
         }
     }
 
@@ -192,7 +204,7 @@ impl Creature {
                             swimming_speed: 0.0,
                             timestamp: 0,
                             turn_rate: DEFAULT_TURN_SPEED,
-                            walking_speed: WALK_SPEED,
+                            walking_speed: walk_speed(),
                         },
                     ),
                 },
