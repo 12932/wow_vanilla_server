@@ -12,11 +12,26 @@ use wow_world_messages::vanilla::{ServerMessage, Vector3d};
 /// in AOI as long as the horizontal projection is within range. The
 /// effective value comes from `[network] aoi_radius_yards` in
 /// `config.toml`; this fn reads the global config once per call.
+///
+/// Inside hot loops that call this hundreds of thousands of times per
+/// tick (broadcast fan-out, `tick_aoi_transitions`), prefer
+/// [`within_aoi_sq`] with a pre-squared radius hoisted out of the
+/// loop — same arithmetic, no per-iter `OnceCell` read.
+#[inline]
 pub fn within_aoi(observer: &Vector3d, anchor: &Vector3d) -> bool {
+    let r = crate::config::config().network.aoi_radius_yards;
+    within_aoi_sq(observer, anchor, r * r)
+}
+
+/// Squared-radius variant for hot loops. Caller hoists
+/// `let r = config().network.aoi_radius_yards; let r_sq = r * r;` out
+/// of the loop and passes `r_sq` in. Halves the work per iter (no
+/// config lookup, no square) and lets LLVM keep `r_sq` in a register.
+#[inline]
+pub fn within_aoi_sq(observer: &Vector3d, anchor: &Vector3d, r_sq: f32) -> bool {
     let dx = observer.x - anchor.x;
     let dy = observer.y - anchor.y;
-    let r = crate::config::config().network.aoi_radius_yards;
-    dx * dx + dy * dy <= r * r
+    dx * dx + dy * dy <= r_sq
 }
 
 /// Broadcast a message to every client within AOI of `anchor` on `anchor_map`.
@@ -80,15 +95,17 @@ pub fn broadcast_opcode_within_aoi(
     anchor: Vector3d,
     anchor_map: Map,
     exclude_guid: Option<Guid>,
-    clients: &mut Slab<Client>,
+    clients: &Slab<Client>,
 ) -> (usize, usize) {
     write_server_test(msg);
 
-    // Serialize once into the wire framing the writer task expects.
-    let mut frame = Vec::new();
-    if let Err(e) = msg.write_unencrypted_server(&mut frame) {
-        tracing::warn!("broadcast_opcode_within_aoi: serialize failed: {e}");
-        return (0, 0);
+    // Pre-allocate for a typical movement opcode (heartbeat ~50 B,
+    // transitions ~60 B). Avoids the 0→8→16→32→64-byte growth ladder
+    // the empty `Vec::new()` would walk while `write_unencrypted_server`
+    // pushes bytes. Trims a handful of reallocs off the serialize phase.
+    let mut frame = Vec::with_capacity(96);
+    if msg.write_unencrypted_server(&mut frame).is_err() {
+        return broadcast_serialize_failed();
     }
     let frame_bytes = frame.len();
     // Convert Vec<u8> to Arc<[u8]> once. The `From<Vec<u8>>` impl goes
@@ -98,17 +115,45 @@ pub fn broadcast_opcode_within_aoi(
     // — instead of a fresh allocation + memcpy of `frame_bytes` bytes.
     let frame: Arc<[u8]> = Arc::from(frame);
 
+    // Hoist the AOI radius out of the per-iter loop: `within_aoi`
+    // otherwise reads `config()` (a `OnceCell`-backed static) on every
+    // call. At 1400-bot density that's ~322k `OnceCell::get`s per tick.
+    // Squared up here so the inner check is one multiply less per iter.
+    let r = crate::config::config().network.aoi_radius_yards;
+    let r_sq = r * r;
+
     let mut recipients = 0_usize;
-    for (_, c) in clients.iter_mut() {
-        if Some(c.character().guid) == exclude_guid {
+    for (_, c) in clients.iter() {
+        // Cache `c.character()` once per iter — the field accessor is
+        // trivially `&self.character` but the compiler can't always
+        // prove it across the three reads below, so spell it once.
+        let ch = c.character();
+        if ch.map != anchor_map {
             continue;
         }
-        if c.character().map == anchor_map && within_aoi(&c.character().info.position, &anchor) {
-            c.try_queue_frame(Arc::clone(&frame));
-            recipients += 1;
+        if !within_aoi_sq(&ch.info.position, &anchor, r_sq) {
+            continue;
         }
+        if Some(ch.guid) == exclude_guid {
+            // Broadcaster themselves — 1-in-N rare; keep this check
+            // last so the common path skips it via the early-continues
+            // above on the cheaper map/AOI rejections.
+            continue;
+        }
+        c.try_queue_frame(Arc::clone(&frame));
+        recipients += 1;
     }
     (recipients, frame_bytes)
+}
+
+/// Cold helper for the serialize-error branch. Pulling the warn out of
+/// the hot fn lets LLVM keep the success path's code straight and
+/// register-clean; `#[cold]` further nudges branch prediction.
+#[cold]
+#[inline(never)]
+fn broadcast_serialize_failed() -> (usize, usize) {
+    tracing::warn!("broadcast_opcode_within_aoi: serialize failed");
+    (0, 0)
 }
 
 #[cfg(test)]
