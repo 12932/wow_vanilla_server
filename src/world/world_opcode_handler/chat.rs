@@ -28,7 +28,7 @@ pub async fn handle_message(
             }
         },
         _ => {
-            dbg!(m);
+            tracing::debug!("unhandled chat message: {m:?}");
             return;
         }
     };

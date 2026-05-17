@@ -18,9 +18,12 @@
 //! dedicated writer task that owns the socket write half + ARC4 encrypter and
 //! drains the channel. World-tick code calls `send_message` / `send_raw` /
 //! `send_opcode` which serialize the message (unencrypted header + body) and
-//! `try_send` the bytes — non-blocking. The writer task encrypts the 4-byte
-//! header and writes header+body to the socket; if a slow client backs up its
-//! TCP buffer, only that client's writer task stalls, not the world tick.
+//! `try_send` the bytes — non-blocking. The writer task drains up to 64
+//! queued buffers per wake via `recv_many`, re-encrypts each 4-byte header
+//! in place, and emits the whole batch with a single `write_all` — one
+//! syscall per burst instead of two per packet. If a slow client backs up
+//! its TCP buffer, only that client's writer task stalls, not the world
+//! tick.
 //!
 //! When the channel fills (i.e., a single client is so far behind that we've
 //! buffered `CHANNEL_CAPACITY` packets for it), `try_send` returns `Full` and

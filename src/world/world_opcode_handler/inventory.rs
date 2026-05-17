@@ -132,3 +132,133 @@ impl Inventory {
         &mut self.slots[item_slot.as_int() as usize]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_items::vanilla::all_items;
+
+    fn empty_inventory() -> Inventory {
+        Inventory {
+            slots: [(); AMOUNT_OF_SLOTS].map(|()| None),
+        }
+    }
+
+    // Pick two distinct real items from the wow_items data, just to have
+    // concrete `Item` instances. The specific entries don't matter — these
+    // tests exercise slot mechanics, not item semantics.
+    fn two_items() -> (Item, Item) {
+        let items = all_items();
+        assert!(items.len() >= 2, "wow_items::vanilla has at least two items");
+        (
+            Item {
+                item: &items[0],
+                guid: Guid::new(1),
+                amount: 1,
+                creator: Guid::zero(),
+            },
+            Item {
+                item: &items[1],
+                guid: Guid::new(2),
+                amount: 1,
+                creator: Guid::zero(),
+            },
+        )
+    }
+
+    #[test]
+    fn swap_exchanges_two_occupied_slots() {
+        let mut inv = empty_inventory();
+        let (a, b) = two_items();
+        inv.set(ItemSlot::Inventory0, a);
+        inv.set(ItemSlot::Inventory5, b);
+
+        inv.swap(ItemSlot::Inventory0, ItemSlot::Inventory5);
+
+        assert_eq!(inv.get(ItemSlot::Inventory0).map(|i| i.guid), Some(b.guid));
+        assert_eq!(inv.get(ItemSlot::Inventory5).map(|i| i.guid), Some(a.guid));
+    }
+
+    #[test]
+    fn swap_with_empty_destination_moves_item() {
+        let mut inv = empty_inventory();
+        let (a, _) = two_items();
+        inv.set(ItemSlot::Inventory0, a);
+
+        inv.swap(ItemSlot::Inventory0, ItemSlot::Inventory7);
+
+        assert!(inv.get(ItemSlot::Inventory0).is_none());
+        assert_eq!(inv.get(ItemSlot::Inventory7).map(|i| i.guid), Some(a.guid));
+    }
+
+    #[test]
+    fn swap_same_slot_is_noop() {
+        let mut inv = empty_inventory();
+        let (a, _) = two_items();
+        inv.set(ItemSlot::Inventory3, a);
+
+        inv.swap(ItemSlot::Inventory3, ItemSlot::Inventory3);
+
+        assert_eq!(inv.get(ItemSlot::Inventory3).map(|i| i.guid), Some(a.guid));
+    }
+
+    #[test]
+    fn insert_into_first_slot_picks_inventory0_when_empty() {
+        let mut inv = empty_inventory();
+        let (a, _) = two_items();
+        let slot = inv.insert_into_first_slot(a);
+        assert_eq!(slot, Some(ItemSlot::Inventory0));
+        assert_eq!(inv.get(ItemSlot::Inventory0).map(|i| i.guid), Some(a.guid));
+    }
+
+    #[test]
+    fn insert_into_first_slot_skips_occupied_slots() {
+        let mut inv = empty_inventory();
+        let (a, b) = two_items();
+        inv.set(ItemSlot::Inventory0, a);
+        inv.set(ItemSlot::Inventory1, a);
+
+        let slot = inv.insert_into_first_slot(b);
+        assert_eq!(slot, Some(ItemSlot::Inventory2));
+        assert_eq!(inv.get(ItemSlot::Inventory2).map(|i| i.guid), Some(b.guid));
+    }
+
+    #[test]
+    fn insert_into_first_slot_returns_none_when_bag_is_full() {
+        let mut inv = empty_inventory();
+        let (a, b) = two_items();
+        // Bag is Inventory0..=Inventory15 — 16 slots.
+        for s in [
+            ItemSlot::Inventory0, ItemSlot::Inventory1, ItemSlot::Inventory2,
+            ItemSlot::Inventory3, ItemSlot::Inventory4, ItemSlot::Inventory5,
+            ItemSlot::Inventory6, ItemSlot::Inventory7, ItemSlot::Inventory8,
+            ItemSlot::Inventory9, ItemSlot::Inventory10, ItemSlot::Inventory11,
+            ItemSlot::Inventory12, ItemSlot::Inventory13, ItemSlot::Inventory14,
+            ItemSlot::Inventory15,
+        ] {
+            inv.set(s, a);
+        }
+        assert_eq!(inv.insert_into_first_slot(b), None);
+    }
+
+    #[test]
+    fn insert_into_first_slot_uses_inventory15_as_last_slot() {
+        // Boundary: with everything occupied except Inventory15, the function
+        // must still place into the inclusive end of the bag range. Catches
+        // an off-by-one if the slice ever became `bag_start..bag_end`
+        // (exclusive) by accident.
+        let mut inv = empty_inventory();
+        let (a, b) = two_items();
+        for s in [
+            ItemSlot::Inventory0, ItemSlot::Inventory1, ItemSlot::Inventory2,
+            ItemSlot::Inventory3, ItemSlot::Inventory4, ItemSlot::Inventory5,
+            ItemSlot::Inventory6, ItemSlot::Inventory7, ItemSlot::Inventory8,
+            ItemSlot::Inventory9, ItemSlot::Inventory10, ItemSlot::Inventory11,
+            ItemSlot::Inventory12, ItemSlot::Inventory13, ItemSlot::Inventory14,
+        ] {
+            inv.set(s, a);
+        }
+        assert_eq!(inv.insert_into_first_slot(b), Some(ItemSlot::Inventory15));
+        assert_eq!(inv.get(ItemSlot::Inventory15).map(|i| i.guid), Some(b.guid));
+    }
+}

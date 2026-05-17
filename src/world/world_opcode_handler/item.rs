@@ -119,3 +119,79 @@ pub(crate) async fn award_item(
         c.send_opcode(&item_push_result.into()).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_items::vanilla::all_items;
+
+    fn first_item_where<F>(pred: F) -> Option<&'static wow_world_base::vanilla::Item>
+    where
+        F: Fn(&wow_world_base::vanilla::Item) -> bool,
+    {
+        all_items().iter().find(|i| pred(i))
+    }
+
+    fn build_item(static_item: &'static wow_world_base::vanilla::Item) -> Item {
+        Item {
+            item: static_item,
+            guid: Guid::new(0x4000_0000_0000_0001),
+            amount: 1,
+            creator: Guid::zero(),
+        }
+    }
+
+    fn assert_create(o: &Object) -> &Object_UpdateType {
+        // CreateObject is the only variant `to_create_item_object` produces;
+        // assert that and yield the inner type for further checks.
+        match &o.update_type {
+            Object_UpdateType::CreateObject { .. } => &o.update_type,
+            _ => panic!("expected Object_UpdateType::CreateObject, got {:?}", o.update_type),
+        }
+    }
+
+    #[test]
+    fn non_bag_item_maps_to_object_type_item() {
+        let static_item = first_item_where(|i| matches!(i.bag_family(), BagFamily::None))
+            .expect("wow_items::vanilla contains a non-bag item");
+        let item = build_item(static_item);
+        let obj = item.to_create_item_object(Guid::new(99));
+        let Object_UpdateType::CreateObject { object_type, .. } = assert_create(&obj) else {
+            unreachable!()
+        };
+        assert_eq!(*object_type, ObjectType::Item);
+    }
+
+    #[test]
+    fn bag_family_item_maps_to_object_type_container() {
+        let Some(static_item) = first_item_where(|i| !matches!(i.bag_family(), BagFamily::None))
+        else {
+            // Vanilla's item DB does include bags. If this ever ships
+            // without one we want to know — fail loudly rather than silently
+            // skipping the test.
+            panic!("wow_items::vanilla has no non-None BagFamily item; data may be incomplete");
+        };
+        let item = build_item(static_item);
+        let obj = item.to_create_item_object(Guid::new(99));
+        let Object_UpdateType::CreateObject { object_type, .. } = assert_create(&obj) else {
+            unreachable!()
+        };
+        assert_eq!(*object_type, ObjectType::Container);
+    }
+
+    #[test]
+    fn create_object_carries_correct_guids_and_amount() {
+        // Constructor-tier sanity: the item's own guid is written as guid3
+        // and into the mask's object_guid field; item_owner flows through.
+        let static_item = first_item_where(|i| matches!(i.bag_family(), BagFamily::None))
+            .expect("wow_items::vanilla contains a non-bag item");
+        let mut item = build_item(static_item);
+        item.amount = 7;
+        let owner = Guid::new(0xABCD);
+        let obj = item.to_create_item_object(owner);
+        let Object_UpdateType::CreateObject { guid3, .. } = assert_create(&obj) else {
+            unreachable!()
+        };
+        assert_eq!(*guid3, item.guid);
+    }
+}
