@@ -18,14 +18,25 @@ async fn main() {
     let _ = dotenvy::dotenv();
 
     // Tracy is gated on `WOW_TRACY=1` so a default `--release` run carries
-    // zero profiler overhead. Setting the var has the `TracyLayer` start the
-    // `tracy-client` profiler; leaving it unset (or `WOW_TRACY=0`) means
-    // `tracy_client::Client::running()` returns `None` everywhere and all
-    // per-tick plot / frame_mark sites are skipped. Important: the layer
-    // attached when no GUI is listening will *queue trace events in memory*,
-    // which at 1000-client fan-out can climb tens of MB per minute — keep
-    // Tracy off unless a profiler is actively attached.
+    // zero profiler overhead AND zero network presence. Both
+    // `tracy-client` and `tracing-tracy` are compiled with
+    // `manual-lifetime`, which keeps the profiler dormant until
+    // `tracy_client::Client::start()` is called. Without that call the
+    // discovery broadcast endpoint never opens, so a Tracy GUI can't
+    // even find the process. We also drop the `broadcast` default
+    // feature so there's no UDP advertisement either.
+    //
+    // When the var IS set: start the client, then add the tracing layer
+    // so spans/events route into Tracy. Important: the layer attached
+    // when no GUI is listening will *queue trace events in memory*,
+    // which at 1000-client fan-out can climb tens of MB per minute —
+    // keep Tracy off unless a profiler is actively attached.
     let tracy_enabled = matches!(std::env::var("WOW_TRACY").as_deref(), Ok("1"));
+    if tracy_enabled {
+        // Idempotent — repeated calls are no-ops. Required under
+        // `manual-lifetime` to bring the profiler up.
+        let _ = tracy_client::Client::start();
+    }
     let tracy_layer = tracy_enabled.then(tracing_tracy::TracyLayer::default);
 
     tracing_subscriber::registry()

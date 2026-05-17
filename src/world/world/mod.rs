@@ -942,13 +942,40 @@ impl World {
         // player's own character.
         {
             let _s = tracing::info_span!("flush_movement_broadcasts").entered();
+            // Per-tick broadcast totals so Tracy can show whether the
+            // movement broadcast leg is a hotspot. `sources` is the
+            // number of distinct players that moved this tick (after
+            // `pending_movement` coalescing), `recipients` is the sum
+            // of per-source observer counts, `bytes` is recipients *
+            // per-frame byte length — total egress this tick on the
+            // movement-broadcast path.
+            let mut sources = 0_usize;
+            let mut recipients = 0_usize;
+            let mut bytes = 0_usize;
             for (source_guid, pm) in self.pending_movement.drain() {
-                aoi::broadcast_opcode_within_aoi(
+                let (r, b) = aoi::broadcast_opcode_within_aoi(
                     &pm.msg,
                     pm.anchor,
                     pm.map,
                     Some(source_guid),
                     &mut self.clients,
+                );
+                sources += 1;
+                recipients += r;
+                bytes += r * b;
+            }
+            if let Some(client) = tracy_client::Client::running() {
+                client.plot(
+                    tracy_client::plot_name!("broadcast_sources"),
+                    sources as f64,
+                );
+                client.plot(
+                    tracy_client::plot_name!("broadcast_recipients"),
+                    recipients as f64,
+                );
+                client.plot(
+                    tracy_client::plot_name!("broadcast_bytes"),
+                    bytes as f64,
                 );
             }
         }
@@ -1980,22 +2007,29 @@ fn get_update_simulated_player_mask(p: &SimulatedPlayer) -> UpdateMask {
 pub fn get_client_login_messages(character: &Character) -> Vec<ServerOpcodeMessage> {
     let mut v = Vec::with_capacity(16);
 
-    let year = 22;
-    let month = 7;
-    let month_day = 12;
-    let week_day = 3;
-    let hour = 8;
-    let minute = 10;
+    // In-game clock seeded from the host's local wall clock so /time and
+    // ambient day/night cycling match real time. `timescale = 1/60`
+    // makes one in-game minute pass per real second, which is the
+    // canonical vanilla rate — the client advances the clock locally
+    // from this seed; we don't push periodic re-sync.
+    use chrono::{Datelike, Local, Timelike};
+    let now = Local::now();
+    let datetime = DateTime::new(
+        // Field is `years_after_2000: u8` — saturate post-2255 just in
+        // case this server is somehow still running in the year 4000.
+        u8::try_from(now.year() - 2000).unwrap_or(u8::MAX),
+        u8::try_from(now.month0()).unwrap().try_into().unwrap(),
+        u8::try_from(now.day0()).unwrap(),
+        u8::try_from(now.weekday().num_days_from_sunday())
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        now.hour() as u8,
+        now.minute() as u8,
+    );
     v.push(ServerOpcodeMessage::SMSG_LOGIN_SETTIMESPEED(
         SMSG_LOGIN_SETTIMESPEED {
-            datetime: DateTime::new(
-                year,
-                month.try_into().unwrap(),
-                month_day,
-                week_day.try_into().unwrap(),
-                hour,
-                minute,
-            ),
+            datetime,
             timescale: 1.0 / 60.0,
         },
     ));
