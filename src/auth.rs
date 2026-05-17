@@ -91,7 +91,7 @@ impl<V> UserCacheInner<V> {
     }
 
     /// Number of cached entries — for tests and observability.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }

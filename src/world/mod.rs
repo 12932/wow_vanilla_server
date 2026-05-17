@@ -5,7 +5,7 @@ pub mod database;
 pub mod update_object;
 pub mod world_db;
 #[allow(clippy::module_inception)]
-mod world;
+pub mod world;
 pub mod world_opcode_handler;
 
 use crate::snapshot::{WorldSnapshot, SNAPSHOT_PATH};
@@ -47,7 +47,7 @@ pub async fn world(users: crate::auth::UserCache) {
 #[cfg(test)]
 const TARGET_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(test)]
-const MAX_INTERVAL: Duration = Duration::from_millis(500);
+const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// Adaptive tickrate controller. Owned by `run_world` and consulted once
 /// per tick. Game logic must use wall-clock `dt`, never the pacer's
@@ -336,12 +336,12 @@ mod pacer_tests {
     #[test]
     fn slow_streak_triggers_backoff() {
         let mut p = pacer();
-        // 100 slow ticks (200 ms each, well over the 100 ms target). EMA must
-        // cross BACKOFF_THRESHOLD, the interval doubles to 200 ms, and
-        // continuing slow ticks at 200 ms then push us to 400 ms, then 500 ms
-        // (capped).
+        // 100 slow ticks (600 ms each, well over the 100 ms target). EMA must
+        // cross BACKOFF_THRESHOLD repeatedly: the interval doubles
+        // 100→200→400→800 and then saturates at MAX_INTERVAL (1000 ms,
+        // 1 Hz floor) on the next attempt.
         for _ in 0..100 {
-            p.observe(Duration::from_millis(600));
+            p.observe(Duration::from_millis(1200));
         }
         assert_eq!(p.current_interval, MAX_INTERVAL);
     }
@@ -351,11 +351,11 @@ mod pacer_tests {
         let mut p = pacer();
         // Force interval up to MAX_INTERVAL.
         for _ in 0..100 {
-            p.observe(Duration::from_millis(600));
+            p.observe(Duration::from_millis(1200));
         }
         assert_eq!(p.current_interval, MAX_INTERVAL);
 
-        // Now feed healthy ticks (well below the 500 ms * 0.6 = 300 ms
+        // Now feed healthy ticks (well below the 1000 ms * 0.6 = 600 ms
         // hysteresis threshold). After enough streaks the interval halves
         // repeatedly back down to TARGET_INTERVAL.
         for _ in 0..1000 {
@@ -377,7 +377,7 @@ mod pacer_tests {
     fn cap_at_max() {
         let mut p = pacer();
         for _ in 0..10_000 {
-            p.observe(Duration::from_secs(5));
+            p.observe(Duration::from_secs(10));
         }
         assert_eq!(p.current_interval, MAX_INTERVAL);
     }
@@ -413,17 +413,17 @@ mod pacer_tests {
     fn observe_reports_backoff_transition_once() {
         let mut p = pacer();
         let mut backoffs = 0;
-        for _ in 0..30 {
+        for _ in 0..40 {
             if let (_, Some(TickRateChange::Backoff { .. })) =
-                p.observe(Duration::from_millis(600))
+                p.observe(Duration::from_millis(1200))
             {
                 backoffs += 1;
             }
         }
-        // Should hit Backoff exactly three times — 100→200→400→500 ms
-        // (capped at MAX_INTERVAL on the third). After saturating, no
-        // further transitions emit.
-        assert_eq!(backoffs, 3);
+        // Should hit Backoff exactly four times —
+        // 100→200→400→800→1000 ms (capped at MAX_INTERVAL on the
+        // fourth). After saturating, no further transitions emit.
+        assert_eq!(backoffs, 4);
         assert_eq!(p.current_interval, MAX_INTERVAL);
     }
 
@@ -432,7 +432,7 @@ mod pacer_tests {
         let mut p = pacer();
         // Force backoff first.
         for _ in 0..100 {
-            p.observe(Duration::from_millis(600));
+            p.observe(Duration::from_millis(1200));
         }
         assert_eq!(p.current_interval, MAX_INTERVAL);
         // Now drip-feed healthy ticks and confirm at least one Recovery

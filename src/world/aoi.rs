@@ -1,6 +1,7 @@
 use crate::world::world::client::Client;
 use crate::world::world_opcode_handler::{write_message_test, write_server_test};
 use slab::Slab;
+use std::sync::Arc;
 use wow_world_base::vanilla::Map;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -58,9 +59,16 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
 /// rubber-band / "laggy movement" symptoms.
 ///
 /// Serializes the message into a complete unencrypted server frame
-/// `[size_BE u16][opcode_LE u16][body]` *once*, then clones that buffer
-/// into each recipient's outbound channel. The writer task re-encrypts the
-/// 4-byte header per recipient (encryption is stateful per stream).
+/// `[size_BE u16][opcode_LE u16][body]` *once*, wraps it in an `Arc<[u8]>`,
+/// and refcount-bumps that Arc into each recipient's outbound channel. The
+/// writer task re-encrypts the 4-byte header per recipient (encryption is
+/// stateful per stream) by writing the encrypted header bytes alongside the
+/// shared body slice — see `run_writer`.
+///
+/// Pre-A2 this did `frame.clone()` per recipient — one `Vec<u8>`
+/// allocation + memcpy per observer. At 1000-bot Gurubashi density that
+/// was ~500k allocs/sec on the broadcast path; the Arc-shared version
+/// replaces those with refcount bumps and pays the one alloc upstream.
 ///
 /// Returns `(recipients, frame_bytes)` so the caller can aggregate
 /// per-tick throughput plots without re-walking the slab. `frame_bytes`
@@ -83,6 +91,12 @@ pub fn broadcast_opcode_within_aoi(
         return (0, 0);
     }
     let frame_bytes = frame.len();
+    // Convert Vec<u8> to Arc<[u8]> once. The `From<Vec<u8>>` impl goes
+    // via `Box<[u8]>` which reuses the Vec's allocation (no body memcpy
+    // here as long as the Vec doesn't need to shrink). After this point
+    // every recipient receives an `Arc::clone` — an atomic refcount bump
+    // — instead of a fresh allocation + memcpy of `frame_bytes` bytes.
+    let frame: Arc<[u8]> = Arc::from(frame);
 
     let mut recipients = 0_usize;
     for (_, c) in clients.iter_mut() {
@@ -90,7 +104,7 @@ pub fn broadcast_opcode_within_aoi(
             continue;
         }
         if c.character().map == anchor_map && within_aoi(&c.character().info.position, &anchor) {
-            c.try_queue_frame(frame.clone());
+            c.try_queue_frame(Arc::clone(&frame));
             recipients += 1;
         }
     }

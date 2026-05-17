@@ -42,26 +42,36 @@ use wow_world_messages::vanilla::{SMSG_PONG, ServerMessage};
 pub(crate) async fn run_writer<W>(
     mut write: W,
     mut encrypter: EncrypterHalf,
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    rx: kanal::AsyncReceiver<Arc<[u8]>>,
     byte_budget: Arc<Semaphore>,
     packets_counter: &'static AtomicU64,
 ) where
     W: AsyncWrite + Unpin,
 {
     const BATCH_LIMIT: usize = 64;
-    let mut staging: Vec<Vec<u8>> = Vec::with_capacity(BATCH_LIMIT);
+    let mut staging: Vec<Arc<[u8]>> = Vec::with_capacity(BATCH_LIMIT);
     let mut scratch: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let rx_sync = rx.as_sync();
     loop {
         staging.clear();
-        let n = rx.recv_many(&mut staging, BATCH_LIMIT).await;
+        match rx.recv().await {
+            Ok(first) => staging.push(first),
+            Err(_) => break,
+        }
+        while staging.len() < BATCH_LIMIT {
+            match rx_sync.try_recv() {
+                Ok(Some(v)) => staging.push(v),
+                Ok(None) | Err(_) => break,
+            }
+        }
+        let n = staging.len();
         if n == 0 {
-            // Channel closed and drained — owner dropped the Sender.
             break;
         }
         scratch.clear();
         let mut written_count: u64 = 0;
         let mut bytes_drained: usize = 0;
-        for buf in staging.iter_mut() {
+        for buf in staging.iter() {
             // Account every popped buffer toward `bytes_drained` so the
             // byte budget is released regardless of whether the buffer
             // ends up on the wire (the short-buf skip below silently
@@ -71,11 +81,18 @@ pub(crate) async fn run_writer<W>(
             if buf.len() < 4 {
                 continue;
             }
+            // Header encryption can't be done in place (the buffer is a
+            // shared `Arc<[u8]>` — the same bytes may be in flight to
+            // dozens of writer tasks). Encrypt into a 4-byte stack
+            // buffer and append header + body to scratch separately.
+            // The scratch memcpy is unchanged in cost; we've moved the
+            // per-recipient alloc+memcpy upstream into a single
+            // `Arc::clone` (refcount bump) at broadcast time.
             let size_be = u16::from_be_bytes([buf[0], buf[1]]);
             let opcode = u16::from_le_bytes([buf[2], buf[3]]);
             let enc_header = encrypter.encrypt_server_header(size_be, opcode);
-            buf[0..4].copy_from_slice(&enc_header);
-            scratch.extend_from_slice(buf);
+            scratch.extend_from_slice(&enc_header);
+            scratch.extend_from_slice(&buf[4..]);
             written_count += 1;
         }
         if bytes_drained > 0 {
@@ -126,7 +143,7 @@ impl CharacterScreenClient {
         let (read, write) = stream.into_split();
         let (encrypter, decrypter) = encryption.split();
 
-        let (unbounded_tx, outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (unbounded_tx, outbound_rx) = kanal::unbounded_async::<Arc<[u8]>>();
         // Byte budget for the per-client outbound queue. Drained by
         // `run_writer` after each batch via `add_permits(bytes_drained)`.
         let byte_budget = Arc::new(Semaphore::new(
@@ -192,7 +209,7 @@ impl CharacterScreenClient {
                     if pong.write_unencrypted_server(&mut buf).is_err() {
                         continue;
                     }
-                    if !reader_outbound.try_send(buf) {
+                    if !reader_outbound.try_send(Arc::<[u8]>::from(buf)) {
                         // Either the byte budget is exhausted or the
                         // channel is closed (writer task ended). Both
                         // count as a drop; for the closed case we exit
@@ -237,7 +254,7 @@ impl CharacterScreenClient {
         if m.write_unencrypted_server(&mut buf).is_err() {
             return;
         }
-        self.queue_buf(buf);
+        self.queue_buf(Arc::<[u8]>::from(buf));
     }
 
     pub async fn send_opcode(&mut self, m: &ServerOpcodeMessage) {
@@ -245,10 +262,10 @@ impl CharacterScreenClient {
         if m.write_unencrypted_server(&mut buf).is_err() {
             return;
         }
-        self.queue_buf(buf);
+        self.queue_buf(Arc::<[u8]>::from(buf));
     }
 
-    fn queue_buf(&self, buf: Vec<u8>) {
+    fn queue_buf(&self, buf: Arc<[u8]>) {
         if !self.outbound.try_send(buf) {
             self.dropped_packets.fetch_add(1, Ordering::Relaxed);
         }
@@ -314,7 +331,7 @@ mod tests {
     async fn batched_writer_preserves_arc4_sequence() {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx, rx) = kanal::unbounded_async::<Arc<[u8]>>();
         let budget = Arc::new(Semaphore::new(
             crate::config::config().network.outbound_channel_bytes,
         ));
@@ -322,7 +339,7 @@ mod tests {
         let packets: Vec<(u16, Vec<u8>)> =
             (100..105u16).map(|op| (op, vec![op as u8; 8])).collect();
         for (op, body) in &packets {
-            tx.send(make_buf(*op, body)).unwrap();
+            tx.try_send(Arc::<[u8]>::from(make_buf(*op, body))).unwrap();
         }
         drop(tx);
 
@@ -351,7 +368,7 @@ mod tests {
     async fn writer_carries_arc4_state_across_drains() {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx, rx) = kanal::unbounded_async::<Arc<[u8]>>();
         let budget = Arc::new(Semaphore::new(
             crate::config::config().network.outbound_channel_bytes,
         ));
@@ -362,7 +379,7 @@ mod tests {
             let batch_count = batch_start / 100; // 1, 2, 3
             for i in 0..batch_count {
                 let op = batch_start + i;
-                tx.send(make_buf(op, &[op as u8; 4])).unwrap();
+                tx.try_send(Arc::<[u8]>::from(make_buf(op, &[op as u8; 4]))).unwrap();
             }
             for i in 0..batch_count {
                 let op = batch_start + i;
@@ -387,15 +404,15 @@ mod tests {
     async fn writer_skips_short_buffers() {
         let (encrypter, mut decrypter) = paired_crypto();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx, rx) = kanal::unbounded_async::<Arc<[u8]>>();
         let budget = Arc::new(Semaphore::new(
             crate::config::config().network.outbound_channel_bytes,
         ));
 
         // Two valid packets sandwiching a garbage 3-byte buffer.
-        tx.send(make_buf(500, &[1, 2, 3, 4])).unwrap();
-        tx.send(vec![0xFF, 0xFF, 0xFF]).unwrap();
-        tx.send(make_buf(501, &[5, 6, 7, 8])).unwrap();
+        tx.try_send(Arc::<[u8]>::from(make_buf(500, &[1, 2, 3, 4]))).unwrap();
+        tx.try_send(Arc::<[u8]>::from(vec![0xFF, 0xFF, 0xFF])).unwrap();
+        tx.try_send(Arc::<[u8]>::from(make_buf(501, &[5, 6, 7, 8]))).unwrap();
         drop(tx);
 
         let writer = tokio::spawn(run_writer(b, encrypter, rx, budget, &TEST_COUNTER));

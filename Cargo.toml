@@ -1,6 +1,6 @@
 [package]
 name = "wow_vanilla_server"
-version = "0.0.9"
+version = "0.1.1"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -60,6 +60,8 @@ dotenvy = "0.15.7"
 gethostname = "1.1.0"
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
 toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
+kanal = "0.1.1"
+mimalloc = { version = "0.1", default-features = false }
 
 [[bin]]
 name = "wow_vanilla_server"
@@ -69,8 +71,21 @@ path = "src/main.rs"
 name = "loadtest"
 path = "src/loadtest/main.rs"
 
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+rand = "0.10.1"
+
+[[bench]]
+name = "hot_loops"
+harness = false
+
 [profile.release]
 debug = 0
-lto = false
-codegen-units = 256
+# Thin LTO + single codegen unit lets the compiler inline across module
+# boundaries — important for hot paths like `within_aoi` called from
+# inside `broadcast_opcode_within_aoi`, and `OutboundTx::try_send`
+# called from the broadcast loop. Builds get noticeably slower (~2–3×)
+# but only for `--release` / bench.
+lto = "thin"
+codegen-units = 1
 panic = "abort"

@@ -1,96 +1,46 @@
-# Copy to `config.toml` next to the binary's working directory and
-# uncomment the keys you want to override. Every section + every field
-# is optional; omitting a section falls back to the code defaults shown
-# below. There is NO hot reload — restart the server to apply changes.
-#
-# Deployment topology (where to listen, what to advertise, auth mode,
-# Tracy on/off) stays in env vars / `.env`. This file is for *behavior*
-# only.
+# Behavior tuning. All keys optional; defaults match the code constants.
+# No hot reload — restart to apply.
 
 [network]
-# Horizontal radius (yards) at which players are mutually visible.
-# Z is ignored — vertical separation doesn't affect AOI.
 # aoi_radius_yards = 200.0
-
-# Per-client outbound payload byte budget. Beyond this, queued frames
-# for that client are dropped instead of being enqueued. At 10 000
-# clients × 1 MiB this caps worst-case buffer memory at ~10 GiB.
 # outbound_channel_bytes = 1048576
-
-# Minimum interval (seconds) between per-guid AOI transitions for a
-# given observer. Suppresses CreateObject/OutOfRangeObjects spam when
-# a player parks on the AOI boundary and strafes to oscillate a
-# target's range membership. 0 disables.
 # aoi_flap_cooldown_secs = 3
 
 [tick]
-# Target world-tick period in milliseconds. 100 = 10 Hz.
 # target_interval_ms = 100
-# Floor on adaptive-pacing back-off. The interval doubles under
-# sustained slow ticks but stops here.
-# max_interval_ms = 500
-# EMA coefficient for the "tick was slow" signal.
+# max_interval_ms = 1000
 # slow_ema_alpha = 0.2
-# Slow-tick EMA threshold above which the pacer doubles the interval.
 # backoff_threshold = 0.5
-# Required headroom (fraction of current interval) for a tick to count
-# as healthy.
 # recovery_hysteresis = 0.6
-# Consecutive healthy ticks needed before halving the interval back
-# toward the target.
 # recovery_healthy_streak = 30
-# How often the world snapshot is persisted to `snapshot.bin`.
 # save_interval_secs = 60
 
 [combat]
-# Player HP cap under the simplified PvP rules.
 # pvp_max_health = 100
-# cmangos `ATTACK_DISTANCE`. Floor on combined melee reach.
 # attack_distance = 5.0
-# Static cushion added to the sum of both parties' combat reach.
 # base_meleerange_offset = 1.333
-# Extra range granted when both parties are moving (compensates for
-# heartbeat staleness, ~8/3 ≈ 2.667).
 # melee_leeway = 2.6666667
-# Combat reach value for player characters.
 # player_combat_reach = 1.5
-# Combat reach value for creatures.
 # creature_combat_reach = 1.5
 
 [respawn]
-# How long a dead creature stays as a corpse before the despawn
-# broadcast.
 # corpse_despawn_secs = 180
-# Base respawn delay; halves on each repeat-kill within the same
-# window (live-stress feedback).
 # initial_respawn_delay_secs = 180
-# Default HP for creatures with no worlddb value.
 # default_creature_health = 5000
 
 [creature]
-# Walking speed in yards/second. cmangos canonical is 2.5; 2.0 looks
-# more natural for patrolling guards.
 # walk_speed = 2.0
-# Distance below which an aggro creature stops re-pathing (yards).
 # re_path_threshold = 0.5
-# Stand-off radius for melee aggro creatures (yards).
 # stand_off = 3.0
-# Max range at which an aggro creature acquires a target (yards).
 # max_follow_range = 60.0
-# Random-wander idle window range, milliseconds.
 # wander_idle_min_ms = 3000
 # wander_idle_max_ms = 8000
-# Heartbeat cadence for waypoint/wander creatures.
 # walking_heartbeat_ms = 500
-# Distance at which a walking creature considers a waypoint reached.
 # arrival_threshold = 0.4
 
 [spawn]
-# Universal new-character spawn point. Default = Gurubashi Arena.
-# Map is a string matching `wow_world_base::vanilla::Map` —
-# "EasternKingdoms", "Kalimdor", etc.
 # x = -13206.0
 # y = 272.0
 # z = 21.857
 # orientation = 0.0
-# map = "EasternKingdoms"
+# map = "EasternKingdoms"  # wow_world_base::vanilla::Map enum name
