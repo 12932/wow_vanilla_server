@@ -85,6 +85,17 @@ struct TickPacer {
     healthy_streak: u32,
 }
 
+/// Returned by `TickPacer::observe` when the tick triggered a transition
+/// between rates. `None` (in the option) means this tick was business as
+/// usual. The caller — `run_world` — uses this to broadcast an in-game
+/// system message so operators watching the world can see adaptive
+/// pacing kick in without tailing the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickRateChange {
+    Backoff { new_interval: Duration },
+    Recovery { new_interval: Duration },
+}
+
 impl TickPacer {
     fn new(target_interval: Duration, max_interval: Duration) -> Self {
         Self {
@@ -98,9 +109,11 @@ impl TickPacer {
 
     /// Feed the most recent tick's measured duration. Updates internal
     /// state, possibly transitions to a new `current_interval`, and
-    /// returns how long the caller should sleep until the next tick
-    /// (`current_interval - tick_duration`, clamped at zero).
-    fn observe(&mut self, tick_duration: Duration) -> Duration {
+    /// returns `(sleep_for, change)` — how long the caller should sleep
+    /// until the next tick (`current_interval - tick_duration`, clamped
+    /// at zero) and an optional rate-change event so the caller can
+    /// surface it (in-game broadcast, metrics, etc.).
+    fn observe(&mut self, tick_duration: Duration) -> (Duration, Option<TickRateChange>) {
         let slow_now = if tick_duration > self.current_interval {
             1.0
         } else {
@@ -108,6 +121,7 @@ impl TickPacer {
         };
         self.slow_ema = SLOW_EMA_ALPHA * slow_now + (1.0 - SLOW_EMA_ALPHA) * self.slow_ema;
 
+        let mut change: Option<TickRateChange> = None;
         if self.slow_ema > BACKOFF_THRESHOLD && self.current_interval < self.max_interval {
             let new_interval = (self.current_interval * 2).min(self.max_interval);
             info!(
@@ -118,6 +132,7 @@ impl TickPacer {
             self.current_interval = new_interval;
             self.slow_ema = 0.0;
             self.healthy_streak = 0;
+            change = Some(TickRateChange::Backoff { new_interval });
         } else {
             let headroom = self.current_interval.mul_f32(RECOVERY_HYSTERESIS);
             if tick_duration <= headroom {
@@ -136,10 +151,14 @@ impl TickPacer {
                 );
                 self.current_interval = new_interval;
                 self.healthy_streak = 0;
+                change = Some(TickRateChange::Recovery { new_interval });
             }
         }
 
-        self.current_interval.saturating_sub(tick_duration)
+        (
+            self.current_interval.saturating_sub(tick_duration),
+            change,
+        )
     }
 }
 
@@ -224,7 +243,10 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
             std::process::exit(0);
         }
 
-        let sleep_for = pacer.observe(tick_duration);
+        let (sleep_for, change) = pacer.observe(tick_duration);
+        if let Some(change) = change {
+            world.broadcast_tick_rate_change(change).await;
+        }
         if !sleep_for.is_zero() {
             sleep(sleep_for).await;
         }
@@ -375,7 +397,47 @@ mod pacer_tests {
         let mut p = pacer();
         // A tick that overran the budget produces zero sleep (not a panic
         // from Duration underflow).
-        let sleep_for = p.observe(Duration::from_millis(250));
+        let (sleep_for, _) = p.observe(Duration::from_millis(250));
         assert_eq!(sleep_for, Duration::ZERO);
+    }
+
+    #[test]
+    fn observe_reports_backoff_transition_once() {
+        let mut p = pacer();
+        let mut backoffs = 0;
+        for _ in 0..30 {
+            if let (_, Some(TickRateChange::Backoff { .. })) =
+                p.observe(Duration::from_millis(600))
+            {
+                backoffs += 1;
+            }
+        }
+        // Should hit Backoff exactly three times — 100→200→400→500 ms
+        // (capped at MAX_INTERVAL on the third). After saturating, no
+        // further transitions emit.
+        assert_eq!(backoffs, 3);
+        assert_eq!(p.current_interval, MAX_INTERVAL);
+    }
+
+    #[test]
+    fn observe_reports_recovery_transition() {
+        let mut p = pacer();
+        // Force backoff first.
+        for _ in 0..100 {
+            p.observe(Duration::from_millis(600));
+        }
+        assert_eq!(p.current_interval, MAX_INTERVAL);
+        // Now drip-feed healthy ticks and confirm at least one Recovery
+        // event surfaces on the way back to target.
+        let mut recoveries = 0;
+        for _ in 0..1000 {
+            if let (_, Some(TickRateChange::Recovery { .. })) =
+                p.observe(Duration::from_millis(50))
+            {
+                recoveries += 1;
+            }
+        }
+        assert!(recoveries >= 1, "expected at least one Recovery event");
+        assert_eq!(p.current_interval, TARGET_INTERVAL);
     }
 }
