@@ -2,8 +2,8 @@
 //!
 //! Two roles share one binary:
 //! * `--role worker` — opens N SRP6/ARC4-encrypted client sessions against
-//!   the running server, creates one character per session at Northshire,
-//!   and walks them randomly.
+//!   the running server, creates one character per session at Gurubashi
+//!   Arena, and walks them randomly.
 //! * `--role orchestrator` — accepts worker connections, broadcasts
 //!   spawn/stop/drain commands from a stdin REPL, prints aggregated metrics.
 

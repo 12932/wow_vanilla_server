@@ -3,11 +3,13 @@ use crate::world::world_opcode_handler::character::Character;
 use wow_world_base::vanilla::{Map, PlayerGender, RaceClass, Vector3d};
 use wow_world_messages::vanilla::{CMSG_CHAR_CREATE, MovementInfo};
 
-/// Northshire Abbey on Eastern Kingdoms — the canonical Human starting
-/// position. Pinned here so every new character lands somewhere we know
-/// works, regardless of race. Avoids exercising race-specific starter data
-/// paths until those are validated.
-const NORTHSHIRE_ABBEY: (f32, f32, f32, f32) = (-8949.95, -132.493, 83.5312, 0.0);
+/// Gurubashi Arena on Eastern Kingdoms — chosen as the universal spawn
+/// for every new character regardless of race. Pinned here so creation
+/// stays deterministic and avoids race-specific starter-data edge cases.
+/// Loadtest bots use the same anchor (see
+/// `src/loadtest/worker/movement.rs::ANCHOR`) so server-side AOI clusters
+/// match between real and synthetic clients.
+const SPAWN_POSITION: (f32, f32, f32, f32) = (-13206.0, 272.0, 21.857, 0.0);
 
 pub(crate) fn create_character(c: CMSG_CHAR_CREATE, db: &mut WorldDatabase) -> Option<Character> {
     let race_class = match RaceClass::try_from((c.race, c.class)) {
@@ -41,10 +43,10 @@ pub(crate) fn create_character(c: CMSG_CHAR_CREATE, db: &mut WorldDatabase) -> O
         c.facial_hair,
     );
 
-    // Override spawn to Northshire Abbey for every new character regardless of
+    // Override spawn to Gurubashi Arena for every new character regardless of
     // race. Keeps creation deterministic + dodges race-specific starter-data
     // edge cases until each race's path has been validated end-to-end.
-    let (x, y, z, o) = NORTHSHIRE_ABBEY;
+    let (x, y, z, o) = SPAWN_POSITION;
     character.map = Map::EasternKingdoms;
     character.info = MovementInfo {
         flags: Default::default(),
@@ -55,7 +57,7 @@ pub(crate) fn create_character(c: CMSG_CHAR_CREATE, db: &mut WorldDatabase) -> O
     };
 
     tracing::info!(
-        "CHAR_CREATE: name={} race_class={:?} gender={:?} guid={:?} -> Northshire Abbey",
+        "CHAR_CREATE: name={} race_class={:?} gender={:?} guid={:?} -> Gurubashi Arena",
         c.name,
         race_class,
         gender,

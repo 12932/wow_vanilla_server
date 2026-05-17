@@ -179,7 +179,7 @@ A `.env.example` template is checked in; copy to `.env` and adjust.
 
 `src/loadtest/` ships an orchestrator + worker for spawning real-protocol bots:
 
-- **Worker** (`--role worker`) opens many SRP6/ARC4-encrypted sessions against the running server, auto-creates a character per session at Northshire, and runs a random-walk movement driver. Two tokio tasks per bot: a reader and a drive task.
+- **Worker** (`--role worker`) opens many SRP6/ARC4-encrypted sessions against the running server, auto-creates a character per session at Gurubashi Arena, and runs a random-walk movement driver. Two tokio tasks per bot: a reader and a drive task.
 - **Orchestrator** (`--role orchestrator`) is a TCP control plane on `:7100`. Workers register, receive `Spawn` / `Stop` / `Drain` commands, push `WorkerMetrics` every second.
 - **Standalone**: `--clients N --ramp-up SECONDS` skips the orchestrator entirely.
 

@@ -20,11 +20,15 @@ use wow_world_messages::vanilla::{
 
 use crate::worker::metrics::Metrics;
 
-/// Anchor for the random-walk: Northshire Abbey spawn point.
+/// Anchor for the random-walk: Gurubashi Arena spawn point. Must match the
+/// server-side override in
+/// `src/world/character_screen_handler/char_create.rs::SPAWN_POSITION` so
+/// the bot's first heartbeat doesn't immediately position-correct the
+/// player away from where the server placed them at character creation.
 const ANCHOR: Vector3d = Vector3d {
-    x: -8949.95,
-    y: -132.493,
-    z: 83.5312,
+    x: -13206.0,
+    y: 272.0,
+    z: 21.857,
 };
 
 /// Maximum distance from the anchor before we snap back. 60 yd matches the

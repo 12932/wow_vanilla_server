@@ -7,7 +7,7 @@ This is a development project, not a production server. It will lose data, chang
 ## What works today
 
 - SRP6 logon + ARC4-encrypted world handshake.
-- Character create / delete / login (Northshire spawn).
+- Character create / delete / login (Gurubashi Arena spawn).
 - Position broadcasts (start/stop/strafe/heartbeat/turn/jump), per-tick movement coalescer, AOI broadcasts.
 - Basic combat: melee auto-attack against creatures, damage and kill.
 - Pathfinding via [namigator](https://github.com/gtker/namigator-rs) when a vanilla client data tree is pointed at via `WOW_VANILLA_USE_MAPS`.
@@ -83,7 +83,7 @@ On the client side, set `realmlist.wtf` to `YOUR.SERVER.IP`. Open ports `3724/tc
 
 ## Load-test harness
 
-The `loadtest` binary opens many real SRP6/ARC4-encrypted client sessions against a running server. Each bot creates a character at Northshire and runs a random-walk movement driver indistinguishable from a real client to the server.
+The `loadtest` binary opens many real SRP6/ARC4-encrypted client sessions against a running server. Each bot creates a character at the Gurubashi Arena spawn and runs a random-walk movement driver indistinguishable from a real client to the server.
 
 ### Standalone worker (single machine)
 
