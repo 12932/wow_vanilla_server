@@ -49,6 +49,49 @@ impl UpdateObject {
         }
     }
 
+    /// Maximum `Object` entries packed into a single `SMSG_UPDATE_OBJECT`
+    /// (or its compressed sibling). The wire protocol's size header is
+    /// `u16` (max 65535 bytes). A worst-case CreateObject2 entry can run
+    /// 400–700 bytes (creature mask is the biggest), so 75 keeps an
+    /// uncompressed body comfortably under 64 KB even before zlib. The
+    /// `as u16` truncation in `ServerMessage::server_size()` is silent;
+    /// hitting it desyncs the per-stream ARC4 cipher and the client is
+    /// dead-but-TCP-open from that point on.
+    const CHUNK_SIZE: usize = 75;
+
+    /// Split `objects` across as many `SMSG_UPDATE_OBJECT` packets as
+    /// needed to stay under the wire-protocol u16 size cap, then send
+    /// each. Used by the high-density spawn paths (`promote_logged_in`,
+    /// `tick_aoi_transitions`' entered batch, `MSG_MOVE_WORLDPORT_ACK`)
+    /// where the visible-object Vec can exceed several hundred entries.
+    ///
+    /// Each chunk is independently `should_compress`-classified so the
+    /// compression decision stays the same as it would for a small batch.
+    pub async fn send_chunked(objects: Vec<Object>, client: &mut Client) {
+        let total = objects.len();
+        if total == 0 {
+            return;
+        }
+        if total <= Self::CHUNK_SIZE {
+            if let Some(msg) = Self::from_objects(objects) {
+                msg.send(client).await;
+            }
+            return;
+        }
+        let mut remaining = objects;
+        while !remaining.is_empty() {
+            let take = remaining.len().min(Self::CHUNK_SIZE);
+            // `split_off(at)` keeps `[0..at]` in `remaining`, returns
+            // `[at..]`. We want the inverse — head goes into the
+            // packet, tail keeps iterating. Use `drain(..take)` so we
+            // don't reallocate the source.
+            let chunk: Vec<Object> = remaining.drain(..take).collect();
+            if let Some(msg) = Self::from_objects(chunk) {
+                msg.send(client).await;
+            }
+        }
+    }
+
     pub async fn broadcast_within_aoi(
         self,
         anchor: Vector3d,
