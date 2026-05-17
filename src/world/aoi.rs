@@ -18,8 +18,8 @@ use wow_world_messages::vanilla::{ServerMessage, Vector3d};
 /// Every field is either `Copy` (Map, Vector3d, Guid) or `Arc`-backed
 /// (`OutboundTx` is `Clone` with internally-Arc'd channel + semaphore,
 /// `dropped_packets` is shared with the source `Client`, `account_name`
-/// is `Arc<str>`). Building one is a handful of refcount bumps — at
-/// 2500 clients × 10 Hz that's ~25 k Arc clones/sec, well-within budget.
+/// is `Arc<str>`). Building one is a handful of refcount bumps —
+/// negligible vs the broadcast loop it feeds.
 #[derive(Debug)]
 pub struct BroadcastTarget {
     pub map: Map,
@@ -42,8 +42,8 @@ impl BroadcastTarget {
     /// (on the first drop) log a warn, then return `false`.
     ///
     /// Marked `#[inline]` because the broadcast loop calls this once
-    /// per recipient — at 2500 clients × 230 sources/tick the call
-    /// site is the inner-most hot loop on the broadcast path.
+    /// per recipient — at high density it's the inner-most hot loop
+    /// on the broadcast path.
     #[inline]
     pub fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
         if self.outbound.try_send(buf) {
@@ -180,8 +180,9 @@ pub fn broadcast_opcode_within_aoi(
 
     // Hoist the AOI radius out of the per-iter loop: `within_aoi`
     // otherwise reads `config()` (a `OnceCell`-backed static) on every
-    // call. At 1400-bot density that's ~322k `OnceCell::get`s per tick.
-    // Squared up here so the inner check is one multiply less per iter.
+    // call. At high density that's hundreds of thousands of
+    // `OnceCell::get`s per tick. Squared up here so the inner check is
+    // one multiply less per iter.
     let r = crate::config::config().network.aoi_radius_yards;
     let r_sq = r * r;
 
@@ -190,9 +191,8 @@ pub fn broadcast_opcode_within_aoi(
     // send touches only the per-target kanal channel (multi-producer)
     // and the per-target dropped-packet counter (Atomic). The only
     // cross-thread contention is the `Arc<[u8]>` frame's refcount
-    // cache line bouncing — at 2500 clients × ~5 ns/atomic that's
-    // ~12 µs of coherency traffic per broadcast call, negligible vs
-    // the multi-core wall-time saving.
+    // cache line bouncing — negligible vs the multi-core wall-time
+    // saving.
     //
     // `filter_map` + `sum` is preferred over `for_each` + atomic
     // counter: rayon's reduce machinery aggregates the per-worker

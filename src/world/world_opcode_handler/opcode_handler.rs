@@ -273,7 +273,7 @@ pub(super) async fn handle_opcodes(
                 }
             }
             // Chunked send — see `UpdateObject::send_chunked`. A teleport
-            // into a 1400-bot cluster would otherwise produce one
+            // into a dense cluster would otherwise produce one
             // SMSG_UPDATE_OBJECT > 64 KB, whose u16 wire size header
             // wraps and desyncs the per-stream ARC4 cipher.
             UpdateObject::send_chunked(visible_objects, client).await;

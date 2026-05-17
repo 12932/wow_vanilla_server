@@ -37,7 +37,7 @@
 //! heartbeats) to ~11 KB (a mass `SMSG_UPDATE_OBJECT` with thousands of
 //! `OutOfRangeObjects` guids); a count-based cap of 512 messages was fine
 //! at typical traffic but couldn't admit the big destroy-broadcast under
-//! a 1400-bot mass-disconnect with the channel already partly full. The
+//! a high-density mass-disconnect with the channel already partly full. The
 //! per-client `dropped_packets` counter is logged on transition from
 //! 0 → nonzero so an operator can tell which clients are flailing.
 
@@ -132,7 +132,7 @@ impl std::fmt::Debug for OutboundTx {
 pub struct PlayerSession {
     /// `Arc<str>` so the broadcast view (`BroadcastTarget`) can clone
     /// this for free — cloning a `String` per recipient per tick would
-    /// be a fresh heap alloc + memcpy at 2500-bot density.
+    /// be a fresh heap alloc + memcpy at high density.
     pub(crate) account_name: Arc<str>,
     pub(crate) outbound: OutboundTx,
     pub(crate) dropped_packets: Arc<AtomicU64>,
@@ -214,8 +214,8 @@ impl PlayerSession {
     /// Cold tail of [`queue_buf`]: bump the dropped-packet counter and
     /// log on the first drop per client. Splitting this out keeps the
     /// success path of `queue_buf` straight-line — important because
-    /// it's called 1400× per broadcast at full density, and the branch
-    /// predictor + i-cache benefit from a tight hot body.
+    /// it's called once per recipient per broadcast at full density,
+    /// and the branch predictor + i-cache benefit from a tight hot body.
     #[cold]
     #[inline(never)]
     fn queue_buf_dropped(&self) {

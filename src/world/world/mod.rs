@@ -11,6 +11,7 @@ use crate::world::world_opcode_handler::creature::{
 };
 use crate::world::world_opcode_handler::entities::Entities;
 use client::character_screen_client::{CharacterScreenClient, CharacterScreenProgress};
+use rayon::prelude::*;
 use slab::Slab;
 use std::time::{Duration, Instant};
 use tracing::Instrument;
@@ -640,10 +641,10 @@ impl World {
     ///   newcomer.
     ///
     /// Cost is O(N²) over connected clients per tick (N inner-loop AOI
-    /// checks for each of N observers). At 1400 clients that's ~2M
-    /// cheap distance checks per tick — fits in a few ms on a modern CPU,
-    /// and is dwarfed by the actual broadcast IO. Spatial-grid bucketing
-    /// is the next optimization if profiling shows this is hot.
+    /// checks for each of N observers). The phase is rayon-parallelized
+    /// across the snapshotted broadcast view — see the body. Spatial-
+    /// grid bucketing is the next optimization if profiling shows this
+    /// is hot beyond what parallelism handles.
     ///
     /// Only **players** are tracked here for now; creatures and simulated
     /// players use their own static-spawn / kill paths today. Extending
@@ -659,82 +660,94 @@ impl World {
         // never touch it. The per-tick cost of consulting the grid is
         // `O(walking_creatures)` instead of the old `O(all_creatures)`
         // rebuild.
-        //
-        // We `mem::take` the field out so the per-client loop below
-        // (which calls `self.remove_client` / `self.insert_client`,
-        // both `&mut self`) doesn't conflict with an immutable borrow
-        // of `self.creature_cells`. The map is restored at the end of
-        // the loop; no mutations happen to creatures during AOI tick,
-        // so the snapshot is authoritative.
-        let creature_cells = std::mem::take(&mut self.creature_cells);
 
-        let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
+        // Hoist the AOI radius once for the whole phase. Reused by every
+        // `within_aoi_sq` in the par_iter closure — saves millions of
+        // `OnceCell::get`s per tick at high density (one per inner
+        // player+creature check).
+        let aoi_r = crate::config::config().network.aoi_radius_yards;
+        let aoi_r_sq = aoi_r * aoi_r;
 
-        // Pre-M4 this loop did `remove_client(key)` + `insert_client(observer)`
-        // per observer to dodge the borrow conflict between
-        // `&mut observer` and `&self.clients` (for the AOI scan over other
-        // players). At 1400 observers that was 2800 slab ops + 2800
-        // AHashMap touches per tick. The split-borrow version below
-        // keeps the observer in the slab and scopes the mut borrow
-        // narrowly around each mutating section.
-        for key in client_keys {
-            // ── Phase 1: read observer pos + map (no mut borrow held
-            // across the AOI scan below). ──
-            let (observer_map, observer_pos, prev_visible_capacity) = {
-                let obs = self.clients.get(key).expect(
-                    "client present at start of AOI tick (no concurrent removal during this phase)",
-                );
-                (
-                    obs.character().map,
-                    obs.character().info.position,
-                    obs.session.visible_entities.len(),
-                )
-            };
+        // ── PARALLEL phase: compute `(observer_guid, new_visible)` for
+        // every observer. All inputs are `Sync` (`broadcast_view`,
+        // `creatures` slab, `creature_cells` map); no mutations happen
+        // inside the closure. Rayon splits the observers across its
+        // thread pool — each thread handles its share of the O(N²)
+        // visibility scan independently, with no cross-thread state.
+        let visible_sets: Vec<(Guid, ahash::AHashSet<Guid>)> = {
+            let _s = tracing::info_span!("aoi_build_visible").entered();
+            let broadcast_view = &self.broadcast_view;
+            let creatures = &self.creatures;
+            let creature_cells = &self.creature_cells;
+            broadcast_view
+                .par_iter()
+                .map(|observer| {
+                    let observer_guid = observer.guid;
+                    let observer_map = observer.map;
+                    let observer_pos = observer.position;
+                    let mut nv: ahash::AHashSet<Guid> = ahash::AHashSet::new();
 
-            // ── Phase 2: build the new visible set. Skip `key` itself
-            // (observer should not be in its own visible_entities). ──
-            let mut new_visible: ahash::AHashSet<Guid> = {
-                let _s = tracing::info_span!("aoi_build_visible").entered();
-                let mut nv: ahash::AHashSet<Guid> =
-                    ahash::AHashSet::with_capacity(prev_visible_capacity);
-                for (other_key, c) in self.clients.iter() {
-                    if other_key == key {
-                        continue;
+                    // Player scan: every other player on the same map
+                    // within AOI. Self is excluded via guid compare —
+                    // we no longer have slab keys here.
+                    for t in broadcast_view {
+                        if t.guid != observer_guid
+                            && t.map == observer_map
+                            && aoi::within_aoi_sq(&t.position, &observer_pos, aoi_r_sq)
+                        {
+                            nv.insert(t.guid);
+                        }
                     }
-                    if c.character().map != observer_map {
-                        continue;
-                    }
-                    if !aoi::within_aoi(&observer_pos, &c.character().info.position) {
-                        continue;
-                    }
-                    nv.insert(c.character().guid);
-                }
 
-                let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
-                let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
-                for dx in -1..=1 {
-                    for dy in -1..=1 {
-                        let Some(keys) =
-                            creature_cells.get(&(observer_map, cx + dx, cy + dy))
-                        else {
-                            continue;
-                        };
-                        for &ck in keys {
-                            let cr = &self.creatures[ck];
-                            if aoi::within_aoi(&observer_pos, &cr.info.position) {
-                                nv.insert(cr.guid);
+                    // Creature scan via 3×3 cell window. Cells outside
+                    // the window are guaranteed to be > AOI distance
+                    // away because `CREATURE_GRID_CELL_YD` (250 yd) is
+                    // larger than the configured AOI radius.
+                    let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
+                    let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
+                    for dx in -1..=1 {
+                        for dy in -1..=1 {
+                            let Some(keys) =
+                                creature_cells.get(&(observer_map, cx + dx, cy + dy))
+                            else {
+                                continue;
+                            };
+                            for &ck in keys {
+                                let cr = &creatures[ck];
+                                if aoi::within_aoi_sq(
+                                    &observer_pos,
+                                    &cr.info.position,
+                                    aoi_r_sq,
+                                ) {
+                                    nv.insert(cr.guid);
+                                }
                             }
                         }
                     }
-                }
-                nv
+                    (observer_guid, nv)
+                })
+                .collect()
+        };
+
+        // ── SEQUENTIAL phase: per-observer fast-path / slow-diff /
+        // build / send. All `&mut self.clients[key]` work happens here,
+        // single-threaded. The parallel phase above already produced
+        // the per-observer `new_visible` sets; this phase only needs
+        // to compare them against existing state and emit packets.
+        for (observer_guid, mut new_visible) in visible_sets {
+            let Some(&key) = self.client_by_guid.get(&observer_guid) else {
+                // Observer logged out between view build and now —
+                // skip. The view-build runs before any in-tick logout
+                // path, but being defensive here keeps a future change
+                // from silently panic'ing.
+                continue;
             };
 
             // ── Fast path: visibility stable. ──
             // Lengths match + every guid in `new_visible` is also in
             // `visible_entities` ⇒ sets are equal, skip the
-            // symmetric_difference + diff allocs entirely. At 1400
-            // observers in steady state this is the common case.
+            // symmetric_difference + diff allocs entirely. In steady
+            // state this is the common case.
             {
                 let _s = tracing::info_span!("aoi_fast_path_check").entered();
                 let obs = self.clients.get_mut(key).expect("client present");
@@ -855,14 +868,12 @@ impl World {
                 };
                 obs.send_message(msg).await;
             }
-            // Use chunked send: at 1400-bot density a freshly-teleported
+            // Use chunked send: at high density a freshly-teleported
             // observer's entered Vec can carry hundreds of CreateObject2s,
             // which overflows the wire-protocol u16 size header if sent
             // in one packet. See `UpdateObject::send_chunked`.
             UpdateObject::send_chunked(entered_objects, obs).await;
         }
-        // Restore the spatial grid we `mem::take`'d above.
-        self.creature_cells = creature_cells;
         }
         .instrument(tracing::info_span!("tick_aoi_transitions"))
         .await;
@@ -1079,6 +1090,21 @@ impl World {
 
         let phase = Instant::now();
         async {
+        // Rebuild the broadcast view from current `self.clients` so the
+        // par_iter filters below see fresh data. We rebuild AGAIN later
+        // (post-`per_client_loop`) for the flush/AOI phases — that rebuild
+        // captures this-tick movement updates. Two builds per tick is
+        // sub-ms even at high density; the promote scan savings dwarf it.
+        {
+            let _s = tracing::info_span!("build_broadcast_view_promote").entered();
+            self.broadcast_view.clear();
+            self.broadcast_view
+                .extend(self.clients.iter().map(|(_, c)| c.broadcast_target()));
+        }
+        // Hoist the AOI radius once for the entire promote phase. Reused
+        // by every `within_aoi_sq` call in the par_iter closures below.
+        let aoi_r = crate::config::config().network.aoi_radius_yards;
+        let aoi_r_sq = aoi_r * aoi_r;
         // Promoting a player builds an `UpdateObject` for every other client
         // visible from the new player's position. With N bots promoting in
         // one tick this would regenerate the same create-object N times per
@@ -1128,17 +1154,27 @@ impl World {
                     .await;
                 // Seed every AOI observer's visible-entity set with the new
                 // player so the upcoming AOI-transition pass doesn't re-emit
-                // a duplicate `CreateObject` for them next tick. Mirrors the
-                // broadcast distance check above — same map + same horizontal
-                // radius.
-                for (_, observer) in self.clients.iter_mut() {
-                    if observer.character().map == new_player_map
-                        && aoi::within_aoi(
-                            &observer.character().info.position,
-                            &new_player_pos,
-                        )
-                    {
-                        observer.session.visible_entities.insert(new_player_guid);
+                // a duplicate `CreateObject` for them next tick. The filter
+                // (map + AOI) is pure-read over `broadcast_view` — par_iter
+                // it, then apply the mutation sequentially via the
+                // `client_by_guid → slab key` reverse index. At high
+                // density the parallel filter is several times faster
+                // than the old sequential `self.clients.iter_mut()` scan.
+                let observer_guids: Vec<Guid> = self
+                    .broadcast_view
+                    .par_iter()
+                    .filter(|t| {
+                        t.map == new_player_map
+                            && aoi::within_aoi_sq(&t.position, &new_player_pos, aoi_r_sq)
+                    })
+                    .map(|t| t.guid)
+                    .collect();
+                for g in observer_guids {
+                    if let Some(&k) = self.client_by_guid.get(&g) {
+                        self.clients[k]
+                            .session
+                            .visible_entities
+                            .insert(new_player_guid);
                     }
                 }
             }
@@ -1146,30 +1182,48 @@ impl World {
             let mut visible_objects: Vec<Object> = Vec::new();
             let mut movement_starts: Vec<MSG_MOVE_START_FORWARD_Server> = Vec::new();
 
-            for (_, client) in &self.clients {
-                if client.character().map == new_player_map
-                    && aoi::within_aoi(&client.character().info.position, &new_player_pos)
-                {
-                    let other_guid = client.character().guid;
-                    let obj = create_object_cache
-                        .entry(other_guid)
-                        .or_insert_with(|| player_create_object(client.character()))
-                        .clone();
-                    visible_objects.push(obj);
-                    // Same seeding logic for the new client's own visible set
-                    // — they've now been told about this existing observer,
-                    // so the AOI-transition pass shouldn't redundantly send
-                    // it again on the next tick.
-                    c.session.visible_entities.insert(other_guid);
-                    // If this player is mid-motion, also queue a movement-start
-                    // so the new client animates them instead of seeing a
-                    // stationary object that teleports on every heartbeat.
-                    if client.character().info.flags.get_forward() {
-                        movement_starts.push(MSG_MOVE_START_FORWARD_Server {
-                            guid: other_guid,
-                            info: client.character().info.clone(),
-                        });
-                    }
+            // Parallel filter: which existing players are in the new
+            // player's AOI? This is the dominant cost of promote at
+            // high density — par_iter across rayon threads brings each
+            // promote from a multi-ms slab walk down to a fraction of
+            // that. `broadcast_view` was rebuilt at the top of the
+            // phase and re-extended after every `insert_client` below,
+            // so it reflects every player already in the world plus
+            // everyone promoted earlier in this same tick.
+            let candidate_guids: Vec<Guid> = self
+                .broadcast_view
+                .par_iter()
+                .filter(|t| {
+                    t.guid != new_player_guid
+                        && t.map == new_player_map
+                        && aoi::within_aoi_sq(&t.position, &new_player_pos, aoi_r_sq)
+                })
+                .map(|t| t.guid)
+                .collect();
+            // Sequential build: per-tick `create_object_cache` and the
+            // new player's own `visible_entities` are mutated here, so
+            // this stays single-threaded. The cache provides cross-
+            // promotion memoization — N promotes in the same tick share
+            // mask construction for overlapping visibility sets.
+            for other_guid in candidate_guids {
+                let Some(&other_key) = self.client_by_guid.get(&other_guid) else {
+                    continue;
+                };
+                let client = &self.clients[other_key];
+                let obj = create_object_cache
+                    .entry(other_guid)
+                    .or_insert_with(|| player_create_object(client.character()))
+                    .clone();
+                visible_objects.push(obj);
+                c.session.visible_entities.insert(other_guid);
+                // If this player is mid-motion, also queue a movement-start
+                // so the new client animates them instead of seeing a
+                // stationary object that teleports on every heartbeat.
+                if client.character().info.flags.get_forward() {
+                    movement_starts.push(MSG_MOVE_START_FORWARD_Server {
+                        guid: other_guid,
+                        info: client.character().info.clone(),
+                    });
                 }
             }
 
@@ -1189,12 +1243,12 @@ impl World {
 
             let visible_count = visible_objects.len();
             let starts_count = movement_starts.len();
-            // Chunked send: at 1400-bot density `visible_objects` holds
-            // 1400+ CreateObject2s. One packet exceeds the wire-protocol
-            // u16 size header → silent truncation → ARC4 desync → client
-            // appears in-world but is dead-on-the-wire. This was the
-            // "log out + log back in at high density = frozen client"
-            // bug. See `UpdateObject::send_chunked`.
+            // Chunked send: at high density `visible_objects` holds
+            // thousands of CreateObject2s. One packet exceeds the
+            // wire-protocol u16 size header → silent truncation →
+            // ARC4 desync → client appears in-world but is dead-on-the-
+            // wire. This was the "log out + log back in at high
+            // density = frozen client" bug. See `UpdateObject::send_chunked`.
             UpdateObject::send_chunked(visible_objects, &mut c).await;
             for start in movement_starts {
                 c.send_message(start).await;
@@ -1213,7 +1267,15 @@ impl World {
                 self.creatures.len(),
             );
 
+            // Snapshot the new player's BroadcastTarget BEFORE
+            // `insert_client` moves `c` into the slab. Appending to
+            // `broadcast_view` here means the NEXT promotion in this
+            // same tick can see this player via its par_iter filter —
+            // matches the pre-change behavior where `self.clients` was
+            // iterated directly and reflected each insert immediately.
+            let new_target = c.broadcast_target();
             self.insert_client(c);
+            self.broadcast_view.push(new_target);
             promoted_this_tick += 1;
         }
         if let Some(client) = tracy_client::Client::running() {
