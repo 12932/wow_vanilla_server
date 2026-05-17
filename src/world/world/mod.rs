@@ -941,6 +941,7 @@ impl World {
         let t_chrscreen: Duration;
         let t_promote: Duration;
         let t_per_client: Duration;
+        let t_flush: Duration;
         let t_aoi: Duration;
         let t_apply_cmds: Duration;
         let t_corpses: Duration;
@@ -1367,6 +1368,7 @@ impl World {
         // echo would be treated by the local client as a server position
         // correction — visible as rubber-band / "laggy movement" on the
         // player's own character.
+        let phase = Instant::now();
         {
             let _s = tracing::info_span!("flush_movement_broadcasts").entered();
             // Per-tick broadcast totals so Tracy can show whether the
@@ -1406,6 +1408,7 @@ impl World {
                 );
             }
         }
+        t_flush = phase.elapsed();
 
         // AOI transitions: for each connected player, diff their previously
         // visible set against the players currently within `AOI_RADIUS_YARDS`
@@ -1586,6 +1589,14 @@ impl World {
                 tick_start.elapsed().as_secs_f64() * 1000.0,
             );
             client.plot(
+                tracy_client::plot_name!("flush_ms"),
+                t_flush.as_secs_f64() * 1000.0,
+            );
+            client.plot(
+                tracy_client::plot_name!("aoi_ms"),
+                t_aoi.as_secs_f64() * 1000.0,
+            );
+            client.plot(
                 tracy_client::plot_name!("packets_per_second"),
                 packets_per_second,
             );
@@ -1608,12 +1619,13 @@ impl World {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             tracing::warn!(
                 target: "tick_slow",
-                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} aoi={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
+                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} flush={:.1} aoi={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
                 ms(total),
                 ms(t_drain),
                 ms(t_chrscreen),
                 ms(t_promote),
                 ms(t_per_client),
+                ms(t_flush),
                 ms(t_aoi),
                 ms(t_apply_cmds),
                 ms(t_corpses),

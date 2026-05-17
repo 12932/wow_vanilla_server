@@ -452,6 +452,73 @@ pub(crate) async fn gm_command(
                 ))
                 .await;
         }
+        GmCommand::Players => {
+            use crate::world::world_opcode_handler::creature::CreatureLifeState;
+            use ahash::AHashMap;
+
+            // Snapshot the caller's map first so the "near you" line is
+            // measured against where the GM actually stands.
+            let caller_map = client.character().map;
+            let caller_pos = client.character().info.position;
+            let aoi_radius = crate::config::config().network.aoi_radius_yards;
+
+            // Player-side: total, per-map distribution, AOI-near-caller.
+            let mut total_players = 0_usize;
+            let mut per_map: AHashMap<wow_world_base::vanilla::Map, usize> =
+                AHashMap::new();
+            let mut near_me = 0_usize;
+            for (_, c) in entities.clients().iter() {
+                total_players += 1;
+                *per_map.entry(c.character().map).or_default() += 1;
+                if c.character().map == caller_map {
+                    let dx = c.character().info.position.x - caller_pos.x;
+                    let dy = c.character().info.position.y - caller_pos.y;
+                    if dx * dx + dy * dy <= aoi_radius * aoi_radius {
+                        near_me += 1;
+                    }
+                }
+            }
+
+            // Creature-side: life-state breakdown so the GM can sanity-
+            // check why `creatures_active` in the slow-tick line moves.
+            let (mut c_alive, mut c_corpse, mut c_respawning) = (0_usize, 0_usize, 0_usize);
+            for (_, cr) in entities.creatures().iter() {
+                match cr.life_state {
+                    CreatureLifeState::Alive => c_alive += 1,
+                    CreatureLifeState::Corpse { .. } => c_corpse += 1,
+                    CreatureLifeState::Respawning { .. } => c_respawning += 1,
+                }
+            }
+            let c_total = c_alive + c_corpse + c_respawning;
+
+            client
+                .send_system_message(format!(
+                    "Players in-world: {total_players} (near you: {near_me} within {aoi_radius:.0}yd on '{map}')",
+                    map = caller_map,
+                ))
+                .await;
+            // Per-map line — sorted by descending count so the heaviest
+            // map shows first. Cap at 6 entries to fit one chat line.
+            let mut maps: Vec<(wow_world_base::vanilla::Map, usize)> =
+                per_map.into_iter().collect();
+            maps.sort_by_key(|b| std::cmp::Reverse(b.1));
+            let map_str = maps
+                .iter()
+                .take(6)
+                .map(|(m, n)| format!("{m}={n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !map_str.is_empty() {
+                client
+                    .send_system_message(format!("Per-map: {map_str}"))
+                    .await;
+            }
+            client
+                .send_system_message(format!(
+                    "Creatures: {c_total} (alive {c_alive}, corpse {c_corpse}, respawning {c_respawning})"
+                ))
+                .await;
+        }
         GmCommand::Information(target) => {
             let info = if let Some(target) = entities.find_guid(target) {
                 match target {
