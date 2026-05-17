@@ -25,6 +25,7 @@ pub(crate) enum GmCommand {
     ShouldHaveLineOfSight(Guid),
     ShouldNotHaveLineOfSight(Guid),
     Swifty,
+    Players,
 }
 
 impl GmCommand {
@@ -215,6 +216,7 @@ impl GmCommand {
             "los" => Ok(Self::ShouldHaveLineOfSight(client.character().target)),
             "nolos" => Ok(Self::ShouldNotHaveLineOfSight(client.character().target)),
             "swifty" => Ok(Self::Swifty),
+            "players" | "playercount" => Ok(Self::Players),
             _ => Err(format!("Invalid GM command: {message}")),
         }
     }
