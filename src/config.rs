@@ -61,7 +61,7 @@ pub fn load_or_default(path: &Path) -> ServerConfig {
         },
         Err(_) => {
             tracing::info!(
-                "no config file at {}; using defaults (see config.toml.example)",
+                "no config file at {}; using defaults",
                 path.display()
             );
             ServerConfig::default()
@@ -135,6 +135,14 @@ pub struct TickConfig {
     pub recovery_healthy_streak: u32,
     /// How often the world snapshot is persisted to `snapshot.bin`.
     pub save_interval_secs: u64,
+    /// Maximum number of `WaitingToLogIn` clients promoted into the world
+    /// per tick. The promotion path scans every other in-AOI client +
+    /// creature to build the joining player's initial visible-object
+    /// bundle, so a login burst (300+ bots ramping at once) can pin
+    /// `promote_logged_in` at hundreds of ms per tick. Capping spreads
+    /// the burst across consecutive ticks at the cost of slightly slower
+    /// ramp completion. Set to `0` to disable the cap (unbounded).
+    pub max_promotions_per_tick: u32,
 }
 
 impl Default for TickConfig {
@@ -147,6 +155,7 @@ impl Default for TickConfig {
             recovery_hysteresis: 0.6,
             recovery_healthy_streak: 30,
             save_interval_secs: 60,
+            max_promotions_per_tick: 20,
         }
     }
 }
