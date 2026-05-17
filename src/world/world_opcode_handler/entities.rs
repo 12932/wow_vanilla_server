@@ -15,6 +15,7 @@ pub(crate) enum Entity<'a> {
 #[derive(Debug)]
 pub(crate) struct Entities<'a> {
     clients: &'a mut Slab<Client>,
+    client_by_guid: &'a AHashMap<Guid, usize>,
     creatures: &'a mut Slab<Creature>,
     creature_by_guid: &'a AHashMap<Guid, usize>,
     pending_movement: &'a mut AHashMap<Guid, PendingMovement>,
@@ -23,12 +24,14 @@ pub(crate) struct Entities<'a> {
 impl<'a> Entities<'a> {
     pub(crate) fn new(
         clients: &'a mut Slab<Client>,
+        client_by_guid: &'a AHashMap<Guid, usize>,
         creatures: &'a mut Slab<Creature>,
         creature_by_guid: &'a AHashMap<Guid, usize>,
         pending_movement: &'a mut AHashMap<Guid, PendingMovement>,
     ) -> Self {
         Self {
             clients,
+            client_by_guid,
             creatures,
             creature_by_guid,
             pending_movement,
@@ -66,9 +69,8 @@ impl<'a> Entities<'a> {
     }
 
     pub(crate) fn find_player(&self, guid: Guid) -> Option<&Client> {
-        self.clients
-            .iter()
-            .find_map(|(_, c)| (c.character().guid == guid).then_some(c))
+        let key = *self.client_by_guid.get(&guid)?;
+        self.clients.get(key)
     }
 
     pub(crate) fn find_creature(&self, guid: Guid) -> Option<&Creature> {

@@ -22,6 +22,12 @@ pub struct PathfindingMaps {
     attempted_adts: AHashSet<(Map, i32, i32)>,
 }
 
+impl Default for PathfindingMaps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PathfindingMaps {
     pub fn new() -> Self {
         let maps = if let Some(data_path) = std::option_env!("WOW_VANILLA_USE_MAPS") {

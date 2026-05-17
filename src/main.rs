@@ -1,14 +1,16 @@
-mod auth;
-mod config;
-mod file_utils;
-mod numeric;
-mod snapshot;
-mod world;
-
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
+use wow_vanilla_server::{auth, config, world};
+
+// mimalloc: faster general-purpose allocator than the Windows default
+// heap or glibc's ptmalloc. Our hot paths allocate frequently — Arc<[u8]>
+// broadcast frames, AHashMap rehashes, transient Vec scratch buffers —
+// and the allocator becomes a non-trivial cost. Swap is one line; we
+// keep secure / encrypted / etc. features off to minimize binary size.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[tokio::main]
 async fn main() {

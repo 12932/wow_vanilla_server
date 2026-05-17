@@ -43,6 +43,10 @@ pub mod pathfinding_maps;
 #[derive(Debug)]
 pub struct World {
     clients: Slab<Client>,
+    /// Reverse index from player guid to slab key. Must be maintained in
+    /// lockstep with `clients` on every insert/remove — use
+    /// [`insert_client`] / [`remove_client`] which do this automatically.
+    client_by_guid: ahash::AHashMap<Guid, usize>,
     clients_on_character_screen: Vec<CharacterScreenClient>,
     clients_waiting_to_join: Receiver<CharacterScreenClient>,
 
@@ -71,6 +75,20 @@ pub struct World {
     /// `register_creature` / `unregister_creature`.
     creature_wander_count: usize,
     creature_waypoint_count: usize,
+
+    /// Spatial index for AOI queries — maps (Map, cell_x, cell_y) to the
+    /// slab keys of creatures currently in that 250-yd cell. Maintained
+    /// incrementally on creature spawn / position change / life-state
+    /// transition. Replaces the per-tick rebuild that scanned all
+    /// creatures: idle mobs (the vast majority at 51 k spawns) never get
+    /// touched. Only Alive + Corpse creatures live here; Respawning ones
+    /// are filtered out at the transition boundary, not on every read.
+    creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>>,
+    /// Reverse index: slab key → current (map, cell_x, cell_y). Used by
+    /// [`Self::grid_move`] to find a creature's old cell so the move
+    /// can swap it without a linear scan. Entry exists iff the creature
+    /// is currently in [`Self::creature_cells`] — i.e. Alive or Corpse.
+    creature_cell_of: ahash::AHashMap<usize, (Map, i32, i32)>,
 
     maps: PathfindingMaps,
 
@@ -109,6 +127,28 @@ pub(crate) struct PendingMovement {
     pub map: Map,
 }
 
+/// Cell size (yards) for the creature spatial grid. Picked larger than the
+/// configured AOI radius so a 3×3 cell scan around an observer covers every
+/// candidate within AOI without needing a wider scan. Used by both the
+/// grid build and the AOI-transition lookup — keep in sync.
+pub const CREATURE_GRID_CELL_YD: f32 = 250.0;
+
+/// Compute the spatial-grid cell key for a creature at `(map, x, y)`. Z is
+/// deliberately ignored — AOI is horizontal-only, same as `within_aoi`.
+#[inline]
+fn grid_cell_for(map: Map, x: f32, y: f32) -> (Map, i32, i32) {
+    let cx = (x / CREATURE_GRID_CELL_YD).floor() as i32;
+    let cy = (y / CREATURE_GRID_CELL_YD).floor() as i32;
+    (map, cx, cy)
+}
+
+#[derive(Default, Debug)]
+pub struct AoiTickStats {
+    pub entered: usize,
+    pub departed: usize,
+    pub suppressed: usize,
+}
+
 impl World {
     pub fn with_creatures(
         clients_waiting_to_join: Receiver<CharacterScreenClient>,
@@ -141,6 +181,10 @@ impl World {
         let mut walking_creature_keys = Vec::with_capacity(creatures.len());
         let mut creature_wander_count = 0;
         let mut creature_waypoint_count = 0;
+        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
+            ahash::AHashMap::with_capacity(1024);
+        let mut creature_cell_of: ahash::AHashMap<usize, (Map, i32, i32)> =
+            ahash::AHashMap::with_capacity(creatures.len());
         for (k, c) in creatures.iter() {
             creature_by_guid.insert(c.guid, k);
             match c.behavior {
@@ -155,9 +199,18 @@ impl World {
                 }
                 CreatureBehavior::Idle => {}
             }
+            // Seed the spatial grid with every non-Respawning creature.
+            // Construction is bulk-fresh so nothing's Respawning yet, but
+            // guard anyway for future hygiene.
+            if !matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
+                let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+                creature_cells.entry(cell).or_default().push(k);
+                creature_cell_of.insert(k, cell);
+            }
         }
         Self {
             clients: Slab::new(),
+            client_by_guid: ahash::AHashMap::new(),
             clients_on_character_screen: vec![],
             clients_waiting_to_join,
             creatures,
@@ -167,6 +220,8 @@ impl World {
             creature_wake_at: std::collections::BTreeMap::new(),
             creature_wander_count,
             creature_waypoint_count,
+            creature_cells,
+            creature_cell_of,
             maps,
             last_packet_sample: 0,
             last_packet_sample_at: Instant::now(),
@@ -178,6 +233,110 @@ impl World {
             scratch_parked_set: ahash::AHashSet::new(),
             scratch_expired_roots: Vec::new(),
         }
+    }
+
+    /// Build a World suitable for tests and benchmarks: skips pathfinding
+    /// map load (so `ground_height` is a noop and there's no filesystem
+    /// dependency) and uses synthetic in-memory clients via
+    /// [`crate::world::world::client::test_support::synthetic_client`].
+    /// Requires an active Tokio runtime — each synthetic client spawns a
+    /// writer task.
+    ///
+    /// `characters` populates the live (in-world) client slab. `creatures`
+    /// is indexed the same way `with_creatures` does, minus the
+    /// terrain-snap step (positions are taken at face value).
+    pub fn for_test(characters: Vec<Character>, creatures: Vec<Creature>) -> Self {
+        let maps = PathfindingMaps::new();
+
+        let mut creature_slab: Slab<Creature> = Slab::with_capacity(creatures.len());
+        for c in creatures {
+            creature_slab.insert(c);
+        }
+        let mut creature_by_guid = ahash::AHashMap::with_capacity(creature_slab.len());
+        let mut aggro_creature_keys = Vec::new();
+        let mut walking_creature_keys = Vec::with_capacity(creature_slab.len());
+        let mut creature_wander_count = 0;
+        let mut creature_waypoint_count = 0;
+        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
+            ahash::AHashMap::with_capacity(1024);
+        let mut creature_cell_of: ahash::AHashMap<usize, (Map, i32, i32)> =
+            ahash::AHashMap::with_capacity(creature_slab.len());
+        for (k, c) in creature_slab.iter() {
+            creature_by_guid.insert(c.guid, k);
+            match c.behavior {
+                CreatureBehavior::AggroChase => aggro_creature_keys.push(k),
+                CreatureBehavior::RandomWander { .. } => {
+                    walking_creature_keys.push(k);
+                    creature_wander_count += 1;
+                }
+                CreatureBehavior::Waypoint { .. } => {
+                    walking_creature_keys.push(k);
+                    creature_waypoint_count += 1;
+                }
+                CreatureBehavior::Idle => {}
+            }
+            if !matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
+                let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+                creature_cells.entry(cell).or_default().push(k);
+                creature_cell_of.insert(k, cell);
+            }
+        }
+
+        // Closed receiver — benches don't push new logins, but the field
+        // is non-optional on World.
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+
+        let mut world = Self {
+            clients: Slab::with_capacity(characters.len()),
+            client_by_guid: ahash::AHashMap::with_capacity(characters.len()),
+            clients_on_character_screen: vec![],
+            clients_waiting_to_join,
+            creatures: creature_slab,
+            creature_by_guid,
+            aggro_creature_keys,
+            walking_creature_keys,
+            creature_wake_at: std::collections::BTreeMap::new(),
+            creature_wander_count,
+            creature_waypoint_count,
+            creature_cells,
+            creature_cell_of,
+            maps,
+            last_packet_sample: 0,
+            last_packet_sample_at: Instant::now(),
+            last_tick_at: None,
+            pending_movement: ahash::AHashMap::new(),
+            scratch_client_aabb: ahash::AHashMap::new(),
+            scratch_walk_events: Vec::new(),
+            scratch_to_park: Vec::new(),
+            scratch_parked_set: ahash::AHashSet::new(),
+            scratch_expired_roots: Vec::new(),
+        };
+        for character in characters {
+            let account = character.account.clone();
+            let client = crate::world::world::client::test_support::synthetic_client(
+                character, account,
+            );
+            world.insert_client(client);
+        }
+        world
+    }
+
+    /// Insert a client into the slab and keep `client_by_guid` in sync.
+    /// Always use this rather than `self.clients.insert(...)` directly
+    /// so the reverse index stays authoritative.
+    fn insert_client(&mut self, c: Client) -> usize {
+        let guid = c.character().guid;
+        let key = self.clients.insert(c);
+        self.client_by_guid.insert(guid, key);
+        key
+    }
+
+    /// Remove a client from the slab and drop the matching
+    /// `client_by_guid` entry. Pairs with [`Self::insert_client`].
+    fn remove_client(&mut self, key: usize) -> Client {
+        let c = self.clients.remove(key);
+        self.client_by_guid.remove(&c.character().guid);
+        c
     }
 
     /// Add a freshly-inserted creature to the behavior key indexes.
@@ -196,6 +355,76 @@ impl World {
             }
             CreatureBehavior::Idle => {}
         }
+        self.grid_insert(key);
+    }
+
+    /// Add `key` to the creature spatial grid. Idempotent on already-present
+    /// keys (no-op). Skips creatures in the Respawning life state —
+    /// `tick_aoi_transitions` filters those out anyway, so keeping them in
+    /// the grid would waste cells.
+    fn grid_insert(&mut self, key: usize) {
+        let Some(c) = self.creatures.get(key) else {
+            return;
+        };
+        if matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
+            return;
+        }
+        if self.creature_cell_of.contains_key(&key) {
+            return; // already in the grid
+        }
+        let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+        self.creature_cells.entry(cell).or_default().push(key);
+        self.creature_cell_of.insert(key, cell);
+    }
+
+    /// Remove `key` from the grid if present. Used on Corpse → Respawning
+    /// transitions and on creature destruction. Cheap when absent.
+    fn grid_remove(&mut self, key: usize) {
+        let Some(cell) = self.creature_cell_of.remove(&key) else {
+            return;
+        };
+        if let Some(bucket) = self.creature_cells.get_mut(&cell) {
+            if let Some(pos) = bucket.iter().position(|&k| k == key) {
+                bucket.swap_remove(pos);
+            }
+            if bucket.is_empty() {
+                self.creature_cells.remove(&cell);
+            }
+        }
+    }
+
+    /// Re-seat `key` into the cell matching its current `(map, position)`.
+    /// No-op if the cell didn't change since the last insertion. Used after
+    /// every position mutation in `tick_creature_ai` /
+    /// `tick_walking_creatures` — only moving creatures pay the cost.
+    fn grid_move(&mut self, key: usize) {
+        let Some(c) = self.creatures.get(key) else {
+            return;
+        };
+        if matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
+            // Defensive: shouldn't move while Respawning, but if it
+            // happens we drop them from the grid to keep the invariant
+            // "grid only holds visible creatures".
+            self.grid_remove(key);
+            return;
+        }
+        let new_cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+        let prev = self.creature_cell_of.get(&key).copied();
+        if prev == Some(new_cell) {
+            return; // same cell — no work
+        }
+        if let Some(old) = prev
+            && let Some(bucket) = self.creature_cells.get_mut(&old)
+        {
+            if let Some(pos) = bucket.iter().position(|&k| k == key) {
+                bucket.swap_remove(pos);
+            }
+            if bucket.is_empty() {
+                self.creature_cells.remove(&old);
+            }
+        }
+        self.creature_cells.entry(new_cell).or_default().push(key);
+        self.creature_cell_of.insert(key, new_cell);
     }
 
     pub fn sync_clients_to_db(&self, db: &mut WorldDatabase) {
@@ -238,8 +467,11 @@ impl World {
     pub fn shrink_periodic(&mut self) {
         // Long-lived primary collections.
         self.clients.shrink_to_fit();
+        self.client_by_guid.shrink_to_fit();
         self.creatures.shrink_to_fit();
         self.creature_by_guid.shrink_to_fit();
+        self.creature_cells.shrink_to_fit();
+        self.creature_cell_of.shrink_to_fit();
         self.aggro_creature_keys.shrink_to_fit();
         self.walking_creature_keys.shrink_to_fit();
         self.clients_on_character_screen.shrink_to_fit();
@@ -379,36 +611,29 @@ impl World {
     /// players use their own static-spawn / kill paths today. Extending
     /// to those is straightforward but out of scope for the despawn-on-
     /// AOI-exit fix this addresses.
-    async fn tick_aoi_transitions(&mut self) {
+    pub async fn tick_aoi_transitions(&mut self) -> AoiTickStats {
+        let mut stats = AoiTickStats::default();
         async {
-        // Spatial bucket size for the creature-side query. Larger than
-        // AOI radius so a 3x3 cell scan covers every candidate within
-        // AOI. Rebuilt every tick; with ~51k creatures the rebuild is
-        // a couple ms on modern hardware — well under the per-observer
-        // brute-force alternative (51k × clients).
-        const CELL_YD: f32 = 250.0;
-        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
-            ahash::AHashMap::with_capacity(1024);
-        for (k, cr) in self.creatures.iter() {
-            // Respawning creatures aren't rendered client-side; skip
-            // them so they don't show up in `new_visible`. Alive +
-            // Corpse stay visible (corpses are the dead-pose render
-            // until corpse_despawn fires).
-            if matches!(cr.life_state, CreatureLifeState::Respawning { .. }) {
-                continue;
-            }
-            let cx = (cr.info.position.x / CELL_YD).floor() as i32;
-            let cy = (cr.info.position.y / CELL_YD).floor() as i32;
-            creature_cells
-                .entry((cr.map, cx, cy))
-                .or_default()
-                .push(k);
-        }
+        // The creature spatial grid is maintained incrementally —
+        // [`Self::grid_insert`] / [`Self::grid_remove`] / [`Self::grid_move`]
+        // keep `self.creature_cells` current as creatures spawn, move,
+        // and respawn. Idle creatures (the vast majority at 51 k spawns)
+        // never touch it. The per-tick cost of consulting the grid is
+        // `O(walking_creatures)` instead of the old `O(all_creatures)`
+        // rebuild.
+        //
+        // We `mem::take` the field out so the per-client loop below
+        // (which calls `self.remove_client` / `self.insert_client`,
+        // both `&mut self`) doesn't conflict with an immutable borrow
+        // of `self.creature_cells`. The map is restored at the end of
+        // the loop; no mutations happen to creatures during AOI tick,
+        // so the snapshot is authoritative.
+        let creature_cells = std::mem::take(&mut self.creature_cells);
 
         let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
 
         for key in client_keys {
-            let mut observer = self.clients.remove(key);
+            let mut observer = self.remove_client(key);
 
             let observer_map = observer.character().map;
             let observer_pos = observer.character().info.position;
@@ -430,8 +655,8 @@ impl World {
                 new_visible.insert(c.character().guid);
             }
 
-            let cx = (observer_pos.x / CELL_YD).floor() as i32;
-            let cy = (observer_pos.y / CELL_YD).floor() as i32;
+            let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
+            let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
             for dx in -1..=1 {
                 for dy in -1..=1 {
                     let Some(keys) =
@@ -473,6 +698,7 @@ impl World {
                     .get(&g)
                     .is_some_and(|t| now.saturating_duration_since(*t) < cooldown);
                 if cooldown_active {
+                    stats.suppressed += 1;
                     if was {
                         new_visible.insert(g);
                     } else {
@@ -497,6 +723,9 @@ impl World {
             let departed: Vec<Guid> = old.difference(&new_visible).copied().collect();
             let entered: Vec<Guid> = new_visible.difference(&old).copied().collect();
 
+            stats.departed += departed.len();
+            stats.entered += entered.len();
+
             // Despawn batch — one packet per observer regardless of how
             // many entities just left their AOI.
             if !departed.is_empty() {
@@ -510,9 +739,8 @@ impl World {
             }
 
             // Spawn batch — build a `CreateObject2` for each newcomer.
-            // Player lookup is a linear scan (no guid → slab index yet);
-            // creatures get the O(1) `creature_by_guid` route. `entered`
-            // is usually small under steady-state movement.
+            // Both player and creature lookups are O(1) via the reverse
+            // guid → slab-key indexes.
             if !entered.is_empty() {
                 let mut objects: Vec<Object> = Vec::with_capacity(entered.len());
                 for g in &entered {
@@ -522,11 +750,10 @@ impl World {
                         objects.push(cr.to_create_object());
                         continue;
                     }
-                    for (_, c) in self.clients.iter() {
-                        if c.character().guid == *g {
-                            objects.push(player_create_object(c.character()));
-                            break;
-                        }
+                    if let Some(&pk) = self.client_by_guid.get(g)
+                        && let Some(c) = self.clients.get(pk)
+                    {
+                        objects.push(player_create_object(c.character()));
                     }
                 }
                 if let Some(msg) = UpdateObject::from_objects(objects) {
@@ -534,12 +761,15 @@ impl World {
                 }
             }
 
-            let new_key = self.clients.insert(observer);
+            let new_key = self.insert_client(observer);
             debug_assert_eq!(new_key, key);
         }
+        // Restore the spatial grid we `mem::take`'d above.
+        self.creature_cells = creature_cells;
         }
         .instrument(tracing::info_span!("tick_aoi_transitions"))
         .await;
+        stats
     }
 
     async fn tick_corpses_and_respawns(&mut self) {
@@ -575,6 +805,9 @@ impl World {
             let guid = c.guid;
             let map = c.map;
             let pos = c.info.position;
+            // Corpse → Respawning: drop from the spatial grid so AOI scans
+            // stop including this creature. Re-inserted on revive below.
+            self.grid_remove(key);
             let destroy = SMSG_DESTROY_OBJECT { guid };
             aoi::broadcast_within_aoi(destroy, pos, map, &mut self.clients).await;
             // Clear the despawned guid from every observer's
@@ -602,6 +835,9 @@ impl World {
             let pos = c.info.position;
             let guid = c.guid;
             self.unmark_creature_dead(key);
+            // Respawning → Alive: re-seat in the spatial grid at the
+            // reset spawn position.
+            self.grid_insert(key);
             if let Some(msg) = UpdateObject::from_objects(vec![create_object]) {
                 msg.broadcast_within_aoi(pos, map, &mut self.clients).await;
             }
@@ -705,6 +941,7 @@ impl World {
         let t_chrscreen: Duration;
         let t_promote: Duration;
         let t_per_client: Duration;
+        let t_aoi: Duration;
         let t_apply_cmds: Duration;
         let t_corpses: Duration;
         let t_creatures: Duration;
@@ -848,7 +1085,7 @@ impl World {
                 self.creatures.len(),
             );
 
-            self.clients.insert(c);
+            self.insert_client(c);
         }
         }
         .instrument(tracing::info_span!("promote_logged_in"))
@@ -870,9 +1107,10 @@ impl World {
         async {
         let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
         for key in client_keys {
-            let mut client = self.clients.remove(key);
+            let mut client = self.remove_client(key);
             let mut entities = Entities::new(
                 &mut self.clients,
+                &self.client_by_guid,
                 &mut self.creatures,
                 &self.creature_by_guid,
                 &mut self.pending_movement,
@@ -958,7 +1196,7 @@ impl World {
                     if move_to_character_screen {
                         keys_to_move_to_character_screen.push(key);
                     }
-                    let new_key = self.clients.insert(client);
+                    let new_key = self.insert_client(client);
                     debug_assert_eq!(new_key, key);
                     continue;
                 };
@@ -1110,7 +1348,7 @@ impl World {
                 keys_to_move_to_character_screen.push(key);
             }
 
-            let new_key = self.clients.insert(client);
+            let new_key = self.insert_client(client);
             debug_assert_eq!(new_key, key);
         }
         }
@@ -1175,7 +1413,23 @@ impl World {
         // (despawn). Anything that entered → `CreateObject2` (spawn).
         // Without this pass, players who walk past the AOI boundary
         // linger forever on observers' clients as motionless ghosts.
-        self.tick_aoi_transitions().await;
+        let phase = Instant::now();
+        let aoi_stats = self.tick_aoi_transitions().await;
+        t_aoi = phase.elapsed();
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(
+                tracy_client::plot_name!("aoi_entered"),
+                aoi_stats.entered as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("aoi_departed"),
+                aoi_stats.departed as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("aoi_suppressed"),
+                aoi_stats.suppressed as f64,
+            );
+        }
 
         let phase = Instant::now();
         self.apply_commands(&mut commands).await;
@@ -1192,7 +1446,7 @@ impl World {
         let phase = Instant::now();
         async {
         for key in keys_to_move_to_character_screen {
-            let c = self.clients.remove(key);
+            let c = self.remove_client(key);
             let logout_pos = c.character().info.position;
             let logout_map = c.character().map;
             let logout_guid = c.character().guid;
@@ -1234,7 +1488,7 @@ impl World {
         // path, leaving stale phantoms in admin's view of the world.
         let mut stale_by_map: ahash::AHashMap<Map, Vec<Guid>> = ahash::AHashMap::new();
         for key in stale_client_keys {
-            let c = self.clients.remove(key);
+            let c = self.remove_client(key);
             let logout_map = c.character().map;
             let guid = c.character().guid;
             db.replace_character_data(c.character().clone());
@@ -1354,12 +1608,13 @@ impl World {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             tracing::warn!(
                 target: "tick_slow",
-                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
+                "slow tick total={:.1}ms drain={:.1} chrscreen={:.1} promote={:.1} per_client={:.1} aoi={:.1} apply={:.1} corpses={:.1} creatures={:.1} logouts={:.1} | clients={} creatures_active={}",
                 ms(total),
                 ms(t_drain),
                 ms(t_chrscreen),
                 ms(t_promote),
                 ms(t_per_client),
+                ms(t_aoi),
                 ms(t_apply_cmds),
                 ms(t_corpses),
                 ms(t_creatures),
@@ -1516,6 +1771,9 @@ impl World {
                 splines: vec![to],
             };
             creature.info.position = to;
+            // Aggro chase moved the creature — re-seat in the grid if
+            // the cell key changed. Cheap when the move stays in-cell.
+            self.grid_move(key);
 
             for (_, c) in &mut self.clients {
                 if c.character().map == map
@@ -1744,6 +2002,15 @@ impl World {
                 }
             }
         }
+        // Update spatial-grid cells for every walking creature whose
+        // position may have shifted this tick. `grid_move` is an O(1)
+        // hash lookup + early-return when the cell key didn't change,
+        // so creatures that early-continued (parked / out-of-AOI /
+        // rooted) pay almost nothing.
+        for &key in &walking_keys {
+            self.grid_move(key);
+        }
+
         // Restore the active list, minus everything we parked this tick.
         if to_park.is_empty() {
             self.walking_creature_keys = walking_keys;
@@ -1829,10 +2096,19 @@ fn squared_xy_dist(a: &Vector3d, b: &Vector3d) -> f32 {
 }
 
 pub fn player_self_update_for_login(character: &Character) -> SMSG_UPDATE_OBJECT {
+    // SELF login carries a *fatter* mask than the observer path. The trimmed
+    // observer mask (see `get_update_object_player`) renders other players
+    // fine, but the client's own UI panes (XP bar, character pane, stats,
+    // click-target reticle) need more fields populated or it divides by zero
+    // or dereferences uninitialized memory on level-1 chars. Symptom: client
+    // crashes immediately after pressing "Enter World" on a fresh character.
     let mut obj = player_create_object(character);
     match &mut obj.update_type {
-        Object_UpdateType::CreateObject2 { movement2, .. } => {
+        Object_UpdateType::CreateObject2 {
+            movement2, mask2, ..
+        } => {
             movement2.update_flag = movement2.update_flag.clone().set_self();
+            *mask2 = get_update_object_player_self(character);
         }
         _ => unreachable!(),
     }
@@ -1885,17 +2161,19 @@ pub fn player_create_object(character: &Character) -> Object {
 }
 
 fn get_update_object_player(character: &Character) -> UpdateMask {
-    // Mirrors the field set used by `get_update_simulated_player_mask`,
-    // which is known to render correctly to observers. The previous,
-    // larger field list (stats, target, skill_info, XP, the unit_bytes
-    // pair, combatreach, boundingradius) plus a `HIGH_GUID` movement
-    // flag broke client-side rendering for OTHER players (admin logs in
-    // near bots → bots invisible). The smaller mask is what works.
-    //
-    // Re-add anything from the larger set deliberately, one piece at a
-    // time, with a real client test after each addition — the protocol
-    // doesn't fail loud when a field is malformed, it just silently
-    // discards or crashes the observer.
+    UpdateMask::Player(build_player_mask_observer(character).finalize())
+}
+
+/// Observer-safe slice of the update mask: just enough for another player to
+/// render this character correctly. The previous, larger field list (stats,
+/// target, skill_info, XP, the unit_bytes pair, combatreach, boundingradius)
+/// plus a `HIGH_GUID` movement flag broke OBSERVER-side rendering (admin logs
+/// in near bots → bots invisible), so additions beyond this set must be
+/// retested with two real clients side by side.
+///
+/// SELF login extends this via [`get_update_object_player_self`] — the
+/// client's own UI panes need fields the observer never reads.
+pub fn build_player_mask_observer(character: &Character) -> UpdatePlayerBuilder {
     let race = character.race_class.race();
     let class = character.race_class.class();
     let mut mask = UpdatePlayerBuilder::new()
@@ -1926,9 +2204,8 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
     // type-less counters that look identical to player GUIDs on the wire.
     // Shipping those over `PLAYER_FIELD_INV_*` to an observer makes the
     // client interpret the slot as referring to a player guid, fails the
-    // item lookup, and crashes on render. The puppet path
-    // (`get_update_simulated_player_mask`) skips this for the same reason
-    // and renders cleanly. Revisit when item guids get proper type bits.
+    // item lookup, and crashes on render. Revisit when item guids get
+    // proper type bits.
     for (i, (item, _slot)) in character.inventory.all_slots().iter().enumerate() {
         if let Some(item) = item
             && let Ok(index) = VisibleItemIndex::try_from(i)
@@ -1942,6 +2219,80 @@ fn get_update_object_player(character: &Character) -> UpdateMask {
             );
             mask = mask.set_player_visible_item(visible_item, index);
         }
+    }
+
+    mask
+}
+
+/// SELF-only mask. Extends the observer mask with fields the client's own
+/// UI panes read on login: combat reach + bounding radius (click-targeting
+/// and melee math), attack times (auto-attack swing timer), stats (character
+/// pane), base mana + maxpower fields (resource bar), and XP / next-level XP
+/// (XP bar — at level 1 the client renders this bar and divides by
+/// `next_level_xp`; leaving it 0 crashes the client immediately after
+/// "Enter World"). Observers never read these for OTHER players, so we keep
+/// them out of the observer path to avoid the prior regression where a
+/// larger observer mask made distant players invisible.
+pub fn get_update_object_player_self(character: &Character) -> UpdateMask {
+    use wow_world_messages::vanilla::Power;
+    let mut mask = build_player_mask_observer(character);
+
+    let stats = character.race_class.base_stats_for(character.level.as_int())
+        .or_else(|| character.race_class.base_stats().first().copied())
+        .unwrap_or_else(|| wow_world_base::stats::BaseStats::new(0, 0, 0, 0, 0, 1, 0));
+
+    mask = mask
+        .set_unit_strength(stats.strength.into())
+        .set_unit_agility(stats.agility.into())
+        .set_unit_stamina(stats.stamina.into())
+        .set_unit_intellect(stats.intellect.into())
+        .set_unit_spirit(stats.spirit.into())
+        .set_unit_base_mana(stats.mana.into())
+        .set_unit_combatreach(crate::config::config().combat.player_combat_reach)
+        .set_unit_boundingradius(0.389)
+        .set_unit_baseattacktime(UNARMED_SPEED as i32)
+        .set_unit_rangedattacktime(UNARMED_SPEED as i32)
+        .set_player_bytes_3(
+            match character.gender {
+                wow_world_base::vanilla::PlayerGender::Male => 0,
+                wow_world_base::vanilla::PlayerGender::Female => 1,
+            },
+            0,
+            0,
+            0,
+        )
+        .set_player_field_coinage(0)
+        .set_player_xp(0)
+        .set_player_next_level_xp(
+            wow_world_base::vanilla::exp::exp_required_to_level_up(
+                character.level.as_int(),
+            )
+            .unwrap_or(400),
+        );
+
+    // Resource bars: power1..5 mirror Mana/Rage/Focus/Energy/Happiness.
+    // Setting the relevant max keeps the resource UI from rendering as
+    // "full of zero" (some classes are fine with a flat zero, but Rogue's
+    // energy bar visibly snaps to 100 only after the first SetPower).
+    let class_power = character.race_class.class().power_type();
+    match class_power {
+        Power::Mana => {
+            let max = character.max_mana().max(0);
+            mask = mask.set_unit_power1(max).set_unit_maxpower1(max);
+        }
+        Power::Rage => {
+            mask = mask.set_unit_power2(0).set_unit_maxpower2(1000);
+        }
+        Power::Focus => {
+            mask = mask.set_unit_power3(100).set_unit_maxpower3(100);
+        }
+        Power::Energy => {
+            mask = mask.set_unit_power4(100).set_unit_maxpower4(100);
+        }
+        Power::Happiness => {
+            mask = mask.set_unit_power5(1_000_000).set_unit_maxpower5(1_000_000);
+        }
+        _ => {}
     }
 
     UpdateMask::Player(mask.finalize())

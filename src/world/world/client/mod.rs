@@ -14,16 +14,20 @@
 //!
 //! ## Outbound channel model
 //!
-//! Each connection has a per-client bounded `mpsc::Sender<Vec<u8>>` and a
+//! Each connection has a per-client `mpsc::UnboundedSender<Arc<[u8]>>` and a
 //! dedicated writer task that owns the socket write half + ARC4 encrypter and
 //! drains the channel. World-tick code calls `send_message` / `send_raw` /
 //! `send_opcode` which serialize the message (unencrypted header + body) and
-//! `try_send` the bytes — non-blocking. The writer task drains up to 64
-//! queued buffers per wake via `recv_many`, re-encrypts each 4-byte header
-//! in place, and emits the whole batch with a single `write_all` — one
-//! syscall per burst instead of two per packet. If a slow client backs up
-//! its TCP buffer, only that client's writer task stalls, not the world
-//! tick.
+//! `try_send` an `Arc<[u8]>` — non-blocking. The broadcast fan-out
+//! (`aoi::broadcast_opcode_within_aoi`) serializes once and refcount-bumps
+//! the same `Arc` into each recipient's channel — no per-recipient alloc.
+//! The writer task drains up to 64 queued buffers per wake via `recv_many`,
+//! encrypts each 4-byte header into a stack scratch buffer (the shared
+//! `Arc<[u8]>` body is read-only), concatenates header + body[4..] into a
+//! reusable batch scratch, and emits the whole batch with a single
+//! `write_all` — one syscall per burst instead of two per packet. If a slow
+//! client backs up its TCP buffer, only that client's writer task stalls,
+//! not the world tick.
 //!
 //! When the **byte budget** fills (i.e., a single client is so far behind
 //! that we've buffered `OUTBOUND_CHANNEL_BYTES` of pending payload for it),
@@ -38,13 +42,13 @@
 //! 0 → nonzero so an operator can tell which clients are flailing.
 
 pub(crate) mod character_screen_client;
+pub mod test_support;
 
 use crate::world::world_opcode_handler::character::Character;
 use crate::world::world_opcode_handler::{write_message_test, write_server_test};
 use character_screen_client::{CharacterScreenClient, CharacterScreenProgress};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -88,33 +92,25 @@ use wow_world_messages::Guid;
 /// `OUTBOUND_CHANNEL_BYTES` of payload is pending per client, regardless
 /// of whether the queue is one 1 MiB packet or 30 000 30-byte heartbeats.
 #[derive(Clone)]
-pub(crate) struct OutboundTx {
-    sender: mpsc::UnboundedSender<Vec<u8>>,
+pub struct OutboundTx {
+    sender: kanal::AsyncSender<Arc<[u8]>>,
     byte_budget: Arc<Semaphore>,
 }
 
 impl OutboundTx {
-    pub(crate) fn new(
-        sender: mpsc::UnboundedSender<Vec<u8>>,
+    pub fn new(
+        sender: kanal::AsyncSender<Arc<[u8]>>,
         byte_budget: Arc<Semaphore>,
     ) -> Self {
         Self { sender, byte_budget }
     }
 
-    /// Try to enqueue `buf`. Returns `true` if the bytes were admitted.
-    /// Returns `false` if the byte budget is exhausted (1 MiB pending) or
-    /// the channel is closed (peer disconnected). Caller treats both as
-    /// "drop and increment the counter".
-    pub(crate) fn try_send(&self, buf: Vec<u8>) -> bool {
+    pub(crate) fn try_send(&self, buf: Arc<[u8]>) -> bool {
         let n = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         match self.byte_budget.try_acquire_many(n) {
             Ok(permit) => {
-                // Forget the permit — it's released by the writer task
-                // via `add_permits(buf.len())` after the buffer is
-                // dequeued. Without `forget` it would auto-release on
-                // drop here, defeating the budget.
                 permit.forget();
-                self.sender.send(buf).is_ok()
+                self.sender.try_send(buf).is_ok()
             }
             Err(_) => false,
         }
@@ -174,7 +170,7 @@ impl PlayerSession {
         if m.write_unencrypted_server(&mut buf).is_err() {
             return;
         }
-        self.queue_buf(buf);
+        self.queue_buf(Arc::<[u8]>::from(buf));
     }
 
     pub async fn send_opcode(&mut self, m: &ServerOpcodeMessage) {
@@ -183,7 +179,7 @@ impl PlayerSession {
         if m.write_unencrypted_server(&mut buf).is_err() {
             return;
         }
-        self.queue_buf(buf);
+        self.queue_buf(Arc::<[u8]>::from(buf));
     }
 
     /// Send a pre-serialized body. Caller supplies the body and opcode; we
@@ -195,15 +191,15 @@ impl PlayerSession {
         buf.extend_from_slice(&size_for_header.to_be_bytes());
         buf.extend_from_slice(&opcode.to_le_bytes());
         buf.extend_from_slice(body);
-        self.queue_buf(buf)
+        self.queue_buf(Arc::<[u8]>::from(buf))
     }
 
     /// Queue a fully-framed `[size_BE u16][opcode_LE u16][body]` buffer
     /// directly onto the outbound channel. The writer task re-encrypts the
     /// 4-byte header before writing to the socket. Used by the opcode-enum
-    /// broadcast path so we serialize once and clone the framed buffer per
-    /// recipient instead of re-framing for each.
-    pub(crate) fn try_queue_frame(&self, buf: Vec<u8>) -> bool {
+    /// broadcast path so we serialize once and refcount-bump the framed
+    /// buffer per recipient instead of allocating + memcpy'ing per recipient.
+    pub(crate) fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
         self.queue_buf(buf)
     }
 
@@ -212,7 +208,7 @@ impl PlayerSession {
     /// counted so we can spot which clients are falling behind. On the
     /// first drop per client we log a warning so the problem surfaces
     /// without an operator having to scrape the counter.
-    fn queue_buf(&self, buf: Vec<u8>) -> bool {
+    fn queue_buf(&self, buf: Arc<[u8]>) -> bool {
         if self.outbound.try_send(buf) {
             return true;
         }
@@ -316,7 +312,7 @@ impl Client {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_parts(
+    pub fn from_parts(
         character: Character,
         received_messages: Receiver<ClientOpcodeMessage>,
         outbound: OutboundTx,
@@ -369,7 +365,7 @@ impl Client {
         self.session.send_raw(opcode, body).await
     }
 
-    pub(crate) fn try_queue_frame(&self, buf: Vec<u8>) -> bool {
+    pub(crate) fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
         self.session.try_queue_frame(buf)
     }
 

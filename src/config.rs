@@ -141,7 +141,7 @@ impl Default for TickConfig {
     fn default() -> Self {
         Self {
             target_interval_ms: 100,
-            max_interval_ms: 500,
+            max_interval_ms: 1000,
             slow_ema_alpha: 0.2,
             backoff_threshold: 0.5,
             recovery_hysteresis: 0.6,
