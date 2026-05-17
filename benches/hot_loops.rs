@@ -214,13 +214,13 @@ fn bench_broadcast_fanout(c: &mut Criterion) {
                     // excludes setup from measurement.
                     rt.block_on(async { build_clients(n) })
                 },
-                |mut clients| {
+                |clients| {
                     broadcast_opcode_within_aoi(
                         std::hint::black_box(&msg),
                         anchor,
                         BENCH_MAP,
                         None,
-                        &mut clients,
+                        &clients,
                     );
                 },
                 BatchSize::SmallInput,

@@ -1542,7 +1542,7 @@ impl World {
                     pm.anchor,
                     pm.map,
                     Some(source_guid),
-                    &mut self.clients,
+                    &self.clients,
                 );
                 sources += 1;
                 recipients += r;

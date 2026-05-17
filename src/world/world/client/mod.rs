@@ -199,6 +199,7 @@ impl PlayerSession {
     /// 4-byte header before writing to the socket. Used by the opcode-enum
     /// broadcast path so we serialize once and refcount-bump the framed
     /// buffer per recipient instead of allocating + memcpy'ing per recipient.
+    #[inline]
     pub(crate) fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
         self.queue_buf(buf)
     }
@@ -208,10 +209,23 @@ impl PlayerSession {
     /// counted so we can spot which clients are falling behind. On the
     /// first drop per client we log a warning so the problem surfaces
     /// without an operator having to scrape the counter.
+    #[inline]
     fn queue_buf(&self, buf: Arc<[u8]>) -> bool {
         if self.outbound.try_send(buf) {
             return true;
         }
+        self.queue_buf_dropped();
+        false
+    }
+
+    /// Cold tail of [`queue_buf`]: bump the dropped-packet counter and
+    /// log on the first drop per client. Splitting this out keeps the
+    /// success path of `queue_buf` straight-line — important because
+    /// it's called 1400× per broadcast at full density, and the branch
+    /// predictor + i-cache benefit from a tight hot body.
+    #[cold]
+    #[inline(never)]
+    fn queue_buf_dropped(&self) {
         let prior = self.dropped_packets.fetch_add(1, Ordering::Relaxed);
         if prior == 0 {
             tracing::warn!(
@@ -221,7 +235,6 @@ impl PlayerSession {
                 std::any::type_name::<Self>(),
             );
         }
-        false
     }
 
     pub async fn send_system_message(&mut self, s: impl Into<String>) {
@@ -249,10 +262,12 @@ pub struct Player {
 }
 
 impl Player {
+    #[inline]
     pub fn character(&self) -> &Character {
         &self.character
     }
 
+    #[inline]
     pub fn character_mut(&mut self) -> &mut Character {
         &mut self.character
     }
@@ -337,10 +352,12 @@ impl Client {
         }
     }
 
+    #[inline]
     pub fn character(&self) -> &Character {
         self.player.character()
     }
 
+    #[inline]
     pub fn character_mut(&mut self) -> &mut Character {
         self.player.character_mut()
     }
@@ -365,6 +382,7 @@ impl Client {
         self.session.send_raw(opcode, body).await
     }
 
+    #[inline]
     pub(crate) fn try_queue_frame(&self, buf: Arc<[u8]>) -> bool {
         self.session.try_queue_frame(buf)
     }
