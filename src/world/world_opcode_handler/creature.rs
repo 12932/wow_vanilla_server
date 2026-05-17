@@ -201,3 +201,28 @@ impl Creature {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_rooted_returns_false_when_root_until_is_none() {
+        let c = Creature::new("test", Guid::new(1));
+        assert!(!c.is_rooted());
+    }
+
+    #[test]
+    fn is_rooted_returns_false_for_past_root_until() {
+        let mut c = Creature::new("test", Guid::new(1));
+        c.root_until = Instant::now().checked_sub(Duration::from_secs(1));
+        assert!(!c.is_rooted());
+    }
+
+    #[test]
+    fn is_rooted_returns_true_for_future_root_until() {
+        let mut c = Creature::new("test", Guid::new(1));
+        c.root_until = Some(Instant::now() + Duration::from_secs(5));
+        assert!(c.is_rooted());
+    }
+}

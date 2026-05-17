@@ -61,3 +61,68 @@ impl UpdateObject {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_world_messages::vanilla::{
+        MovementBlock, MovementBlock_UpdateFlag, ObjectType, UpdateMask, UpdatePlayerBuilder,
+    };
+    use wow_world_messages::Guid;
+
+    fn values_object() -> Object {
+        Object {
+            update_type: Object_UpdateType::Values {
+                guid1: Guid::new(1),
+                mask1: UpdateMask::Player(UpdatePlayerBuilder::new().finalize()),
+            },
+        }
+    }
+
+    fn create_object() -> Object {
+        Object {
+            update_type: Object_UpdateType::CreateObject {
+                guid3: Guid::new(2),
+                mask2: UpdateMask::Player(UpdatePlayerBuilder::new().finalize()),
+                movement2: MovementBlock {
+                    update_flag: MovementBlock_UpdateFlag::empty(),
+                },
+                object_type: ObjectType::Player,
+            },
+        }
+    }
+
+    #[test]
+    fn empty_objects_returns_none() {
+        assert!(UpdateObject::from_objects(Vec::new()).is_none());
+    }
+
+    #[test]
+    fn single_values_stays_plain() {
+        // Single partial update — zlib overhead would inflate it. Don't
+        // compress.
+        let r = UpdateObject::from_objects(vec![values_object()]).unwrap();
+        assert!(matches!(r, UpdateObject::Plain(_)));
+    }
+
+    #[test]
+    fn single_create_object_is_compressed() {
+        // Create masks are large and compress well even alone.
+        let r = UpdateObject::from_objects(vec![create_object()]).unwrap();
+        assert!(matches!(r, UpdateObject::Compressed(_)));
+    }
+
+    #[test]
+    fn two_values_objects_are_compressed() {
+        // Batching multiple updates passes the >=2 threshold regardless of
+        // their update_type.
+        let r = UpdateObject::from_objects(vec![values_object(), values_object()]).unwrap();
+        assert!(matches!(r, UpdateObject::Compressed(_)));
+    }
+
+    #[test]
+    fn mixed_batch_with_create_is_compressed() {
+        let r = UpdateObject::from_objects(vec![values_object(), create_object()]).unwrap();
+        assert!(matches!(r, UpdateObject::Compressed(_)));
+    }
+}

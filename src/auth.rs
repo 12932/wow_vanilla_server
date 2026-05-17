@@ -1,6 +1,7 @@
 use ahash::AHashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, warn};
 use wow_login_messages::all::{
@@ -14,6 +15,105 @@ use wow_login_messages::ServerMessage;
 use wow_srp::normalized_string::NormalizedString;
 use wow_srp::server::{SrpProof, SrpServer, SrpVerifier};
 use wow_srp::{PublicKey, GENERATOR, LARGE_SAFE_PRIME_LITTLE_ENDIAN};
+
+/// Shared SRP session-key cache used by both the auth server (writes
+/// successful logins, reads on reconnect challenge) and the world server
+/// (reads on world handshake). Wrapped in a `Mutex` because both paths
+/// can hit it concurrently.
+///
+/// The cache is **bounded** via TTL-based eviction. Without bounding the
+/// underlying `AHashMap<String, SrpServer>` grows monotonically — every
+/// unique account that has ever logged in keeps a ~200-byte `SrpServer`
+/// entry forever. Eviction runs opportunistically at insert time (no
+/// background task) and drops entries that haven't been read or written
+/// within `IDLE_TTL`.
+pub type UserCache = Arc<Mutex<UserCacheInner<SrpServer>>>;
+
+/// Maximum idle time before an `SrpServer` cache entry is evicted. Tuned
+/// so a typical "log in, play, disconnect, reconnect 10 min later" flow
+/// still uses the cached entry (cheaper than a full re-handshake), while
+/// stale entries from drive-by login attempts don't accumulate.
+const IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Minimum gap between consecutive prune passes — bounds the worst case
+/// where a high-churn auth flood would otherwise walk the whole map on
+/// every insert.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Generic so tests can drive the TTL logic with cheap value types instead
+/// of standing up real SRP state per test case. Production uses
+/// `UserCacheInner<SrpServer>` (see the `UserCache` type alias).
+#[derive(Debug)]
+pub struct UserCacheInner<V> {
+    entries: AHashMap<String, (Instant, V)>,
+    last_pruned: Instant,
+    idle_ttl: Duration,
+    prune_interval: Duration,
+}
+
+impl<V> Default for UserCacheInner<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<V> UserCacheInner<V> {
+    pub fn new() -> Self {
+        Self::with_policy(IDLE_TTL, PRUNE_INTERVAL)
+    }
+
+    /// Used by tests to drive eviction without sleeping 30+ minutes of
+    /// wall-clock time. Production callers should go through `new()`.
+    pub fn with_policy(idle_ttl: Duration, prune_interval: Duration) -> Self {
+        Self {
+            entries: AHashMap::new(),
+            last_pruned: Instant::now(),
+            idle_ttl,
+            prune_interval,
+        }
+    }
+
+    pub fn get(&mut self, name: &str) -> Option<&V> {
+        let (last_seen, v) = self.entries.get_mut(name)?;
+        *last_seen = Instant::now();
+        Some(v)
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut V> {
+        let (last_seen, v) = self.entries.get_mut(name)?;
+        *last_seen = Instant::now();
+        Some(v)
+    }
+
+    pub fn insert(&mut self, name: String, v: V) {
+        self.maybe_prune();
+        self.entries.insert(name, (Instant::now(), v));
+    }
+
+    /// Number of cached entries — for tests and observability.
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn maybe_prune(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_pruned) < self.prune_interval {
+            return;
+        }
+        let before = self.entries.len();
+        let cutoff = now - self.idle_ttl;
+        self.entries.retain(|_, (last_seen, _)| *last_seen > cutoff);
+        let evicted = before - self.entries.len();
+        if evicted > 0 {
+            debug!(
+                "UserCache: evicted {evicted} idle entries ({} remain)",
+                self.entries.len()
+            );
+        }
+        self.last_pruned = now;
+    }
+}
 
 /// World server `host:port` advertised back to the client in the realm
 /// list. Resolved once at first use from `$WOW_REALM_ADDRESS`, falling
@@ -62,7 +162,7 @@ macro_rules! or_return {
     };
 }
 
-pub async fn auth(users: Arc<Mutex<AHashMap<String, SrpServer>>>) {
+pub async fn auth(users: UserCache) {
     // Resolve and log the realm-list world address at startup so operators
     // can see at a glance what value clients are being told to connect to.
     tracing::info!(
@@ -87,7 +187,7 @@ pub async fn auth(users: Arc<Mutex<AHashMap<String, SrpServer>>>) {
     }
 }
 
-async fn handle(mut stream: TcpStream, users: Arc<Mutex<AHashMap<String, SrpServer>>>) {
+async fn handle(mut stream: TcpStream, users: UserCache) {
     let opcode = tokio_read_initial_message(&mut stream).await;
     let opcode = match opcode {
         Ok(o) => o,
@@ -119,14 +219,14 @@ async fn handle(mut stream: TcpStream, users: Arc<Mutex<AHashMap<String, SrpServ
 async fn reconnect_version_8(
     mut stream: TcpStream,
     r: CMD_AUTH_RECONNECT_CHALLENGE_Client,
-    users: Arc<Mutex<AHashMap<String, SrpServer>>>,
+    users: UserCache,
 ) {
     use wow_login_messages::version_8::*;
 
     debug!("Reconnect version: {}", r.protocol_version);
 
     let server_reconnect_challenge_data = {
-        let guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
+        let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
         let srp = or_return!(opt: guard.get(&r.account_name), "unknown account");
         *srp.reconnect_challenge_data()
     };
@@ -179,14 +279,14 @@ async fn reconnect_version_8(
 async fn reconnect_version_2(
     mut stream: TcpStream,
     r: CMD_AUTH_RECONNECT_CHALLENGE_Client,
-    users: Arc<Mutex<AHashMap<String, SrpServer>>>,
+    users: UserCache,
 ) {
     use wow_login_messages::version_2::*;
 
     debug!("Reconnect version: {}", r.protocol_version);
 
     let server_reconnect_challenge_data = {
-        let guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
+        let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
         let srp = or_return!(opt: guard.get(&r.account_name), "unknown account");
         *srp.reconnect_challenge_data()
     };
@@ -239,7 +339,7 @@ async fn reconnect_version_2(
 async fn login_version_2(
     mut stream: TcpStream,
     l: CMD_AUTH_LOGON_CHALLENGE_Client,
-    users: Arc<Mutex<AHashMap<String, SrpServer>>>,
+    users: UserCache,
 ) {
     use wow_login_messages::version_2::*;
 
@@ -302,7 +402,7 @@ fn get_proof(username: &str) -> SrpProof {
 async fn login_version_3(
     mut stream: TcpStream,
     l: CMD_AUTH_LOGON_CHALLENGE_Client,
-    users: Arc<Mutex<AHashMap<String, SrpServer>>>,
+    users: UserCache,
 ) {
     use wow_login_messages::version_3::*;
 
@@ -353,7 +453,7 @@ async fn login_version_3(
 async fn login_version_8(
     mut stream: TcpStream,
     l: CMD_AUTH_LOGON_CHALLENGE_Client,
-    users: Arc<Mutex<AHashMap<String, SrpServer>>>,
+    users: UserCache,
 ) {
     use wow_login_messages::version_8::*;
 
@@ -455,5 +555,88 @@ async fn print_version_8_realm_list(mut stream: TcpStream) {
             return;
         }
         debug!("Sent Version 8 Realm List");
+    }
+}
+
+#[cfg(test)]
+mod user_cache_tests {
+    use super::*;
+    use std::thread::sleep;
+
+    // Use String as the value type so the test doesn't need a real
+    // SrpServer — UserCacheInner is generic exactly so the TTL logic can
+    // be exercised with cheap stand-ins.
+    fn cache(idle_ms: u64, prune_ms: u64) -> UserCacheInner<&'static str> {
+        UserCacheInner::with_policy(
+            Duration::from_millis(idle_ms),
+            Duration::from_millis(prune_ms),
+        )
+    }
+
+    #[test]
+    fn insert_and_get_roundtrips() {
+        let mut c = cache(60_000, 60_000);
+        c.insert("alice".into(), "session-A");
+        assert_eq!(c.get("alice").copied(), Some("session-A"));
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn insert_replaces_existing_entry() {
+        let mut c = cache(60_000, 60_000);
+        c.insert("alice".into(), "old");
+        c.insert("alice".into(), "new");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.get("alice").copied(), Some("new"));
+    }
+
+    #[test]
+    fn prune_evicts_idle_entries() {
+        // Short TTL so the test runs in real time. Setting prune_interval
+        // to zero forces every insert to trigger a prune pass.
+        let mut c = cache(50, 0);
+        c.insert("alice".into(), "A");
+        c.insert("bob".into(), "B");
+        assert_eq!(c.len(), 2);
+
+        // Wait past the TTL, then poke a new insert to trigger a prune.
+        sleep(Duration::from_millis(80));
+        c.insert("carol".into(), "C");
+
+        // alice and bob were idle past the TTL — evicted. carol is fresh.
+        assert_eq!(c.len(), 1);
+        assert!(c.get("alice").is_none());
+        assert!(c.get("bob").is_none());
+        assert_eq!(c.get("carol").copied(), Some("C"));
+    }
+
+    #[test]
+    fn get_refreshes_last_seen() {
+        // get() touches the entry's last_seen, so an entry that's been
+        // read recently survives a prune even if it was inserted long ago.
+        let mut c = cache(50, 0);
+        c.insert("alice".into(), "A");
+        sleep(Duration::from_millis(30));
+        // Refresh — last_seen is bumped to now.
+        let _ = c.get("alice");
+        sleep(Duration::from_millis(30));
+        // Total elapsed since insert is ~60ms (past TTL), but only ~30ms
+        // since the get() refresh — alice should survive.
+        c.insert("bob".into(), "B"); // triggers prune
+        assert_eq!(c.len(), 2);
+        assert!(c.get("alice").is_some(), "recently-read entry must survive prune");
+    }
+
+    #[test]
+    fn prune_interval_throttles_passes() {
+        // With a long prune_interval, eviction only happens at the next
+        // permitted prune even if TTL has elapsed. Confirms we're not
+        // walking the entire map on every insert under flood conditions.
+        let mut c = cache(10, 10_000); // TTL=10ms, prune-throttle=10s
+        c.insert("alice".into(), "A");
+        sleep(Duration::from_millis(30));
+        c.insert("bob".into(), "B"); // first insert post-construction; throttle hasn't elapsed
+        // alice is past TTL but prune was throttled — both still present.
+        assert_eq!(c.len(), 2);
     }
 }

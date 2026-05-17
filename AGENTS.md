@@ -145,7 +145,7 @@ Pattern: take by `mem::take(&mut self.scratch_*)` at phase top, `.clear()`, fill
 
 ### Auto-attack timer is wall-clock-driven
 
-`Character::update_auto_attack_timer(dt: f32)` takes a `dt` argument. `World::tick` passes the measured wall-clock duration since the previous tick (clamped to 1 s). The tick-rate constant `DESIRED_TIMESTEP` (currently 1.0/10.0) is only used as the bootstrap value for the very first tick. **Do not** reintroduce `auto_attack_timer -= DESIRED_TIMESTEP` — changing tick rate would silently change combat pacing.
+`Character::update_auto_attack_timer(dt: f32)` takes a `dt` argument. `World::tick` passes the measured wall-clock duration since the previous tick (clamped to 1 s). The configured target interval `TARGET_INTERVAL` (currently 100 ms) is only used as the bootstrap value for the very first tick. **Do not** read tick-rate constants in game logic — the actual tick interval is adaptive (`TickPacer` in `src/world/mod.rs` may back off from 10 Hz to 2 Hz under sustained overload), and coupling combat pacing to it would mean combat slowed down whenever the server got busy.
 
 ### Visibility / API surface
 

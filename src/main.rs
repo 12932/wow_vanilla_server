@@ -4,7 +4,6 @@ mod numeric;
 mod snapshot;
 mod world;
 
-use ahash::AHashMap;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -43,7 +42,7 @@ async fn main() {
         ),
     }
 
-    let users = Arc::new(Mutex::new(AHashMap::new()));
+    let users: auth::UserCache = Arc::new(Mutex::new(auth::UserCacheInner::new()));
 
     let auth_server = tokio::spawn(auth::auth(users.clone()));
 

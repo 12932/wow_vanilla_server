@@ -85,7 +85,7 @@ pub struct World {
 
     /// Start of the previous tick, used to compute wall-clock `dt` for time-
     /// dependent state like `auto_attack_timer`. `None` on the very first
-    /// tick; falls back to `DESIRED_TIMESTEP` then.
+    /// tick; falls back to `crate::world::TARGET_INTERVAL` then.
     last_tick_at: Option<Instant>,
 
     /// Per-tick movement coalescer: at most one outbound movement broadcast
@@ -212,13 +212,15 @@ impl World {
         }
     }
 
-    /// Return excess capacity in the long-lived slabs and reverse-index maps
-    /// to the allocator. Slab/HashMap don't auto-shrink on remove, so over a
-    /// long run with lots of spawn/despawn churn (`.simulate N` and combat
-    /// kills) the underlying buffers can hold significantly more memory than
-    /// the live entries justify. Called from `run_world` once per snapshot
-    /// save (~15s) which is well outside any hot path.
+    /// Return excess capacity in the long-lived slabs / hash maps / scratch
+    /// buffers to the allocator. Vec / Slab / HashMap don't auto-shrink on
+    /// remove or `.clear()`, so over a long run with peak-load bursts
+    /// (`.simulate 5000`, 1000-bot loadtest, mass invasion) the underlying
+    /// buffers hold significantly more memory than the live entries justify.
+    /// Called from `run_world` once per snapshot save (~60s) which is well
+    /// outside any hot path.
     pub fn shrink_periodic(&mut self) {
+        // Long-lived primary collections.
         self.clients.shrink_to_fit();
         self.creatures.shrink_to_fit();
         self.simulated_players.shrink_to_fit();
@@ -226,6 +228,22 @@ impl World {
         self.simulated_by_guid.shrink_to_fit();
         self.aggro_creature_keys.shrink_to_fit();
         self.walking_creature_keys.shrink_to_fit();
+        self.clients_on_character_screen.shrink_to_fit();
+
+        // Per-tick coalescer and scratch buffers. Each is `.clear()`'d at the
+        // top of its phase, so calling `shrink_to_fit` here is safe — it
+        // doesn't lose any in-flight state, just returns leftover capacity
+        // sized for an earlier peak. Without this, a brief 5000-sim spike
+        // pins ~150 KB of `scratch_walk_events` capacity indefinitely.
+        self.pending_movement.shrink_to_fit();
+        self.scratch_client_aabb.shrink_to_fit();
+        self.scratch_walk_events.shrink_to_fit();
+        self.scratch_to_park.shrink_to_fit();
+        self.scratch_parked_set.shrink_to_fit();
+        self.scratch_expired_roots.shrink_to_fit();
+        // `creature_wake_at` is a BTreeMap — no shrink_to_fit on the node
+        // allocator. Entries naturally drain at their wake time so peak
+        // capacity isn't held indefinitely the way Vec/HashMap capacity is.
     }
 
     /// Transition a live creature to the corpse state: zero health, record
@@ -460,7 +478,7 @@ impl World {
     // top makes the slow-tick log line trivially scannable.
     #[allow(clippy::needless_late_init)]
     #[tracing::instrument(level = "info", skip_all, name = "World::tick")]
-    pub async fn tick(&mut self, db: &mut WorldDatabase) {
+    pub async fn tick(&mut self, db: &mut WorldDatabase, slow_warn: Duration) {
         let tick_start = Instant::now();
         // Wall-clock seconds since the last tick started. Clamped to 1 s so a
         // briefly frozen tick doesn't blow the auto-attack timer negative.
@@ -470,7 +488,7 @@ impl World {
                 let d = tick_start.duration_since(t).as_secs_f32();
                 d.min(1.0)
             })
-            .unwrap_or(crate::world::DESIRED_TIMESTEP);
+            .unwrap_or(crate::world::TARGET_INTERVAL.as_secs_f32());
         self.last_tick_at = Some(tick_start);
 
         // Per-phase timing accumulators. If the whole tick is slow we dump
@@ -915,12 +933,15 @@ impl World {
             client.frame_mark();
         }
 
-        // If the tick blew its 33 ms budget noticeably, print where the time
-        // went. One line, sortable on the longest column. Lets the operator
-        // diagnose without standing up Tracy.
-        const SLOW_TICK_WARN: Duration = Duration::from_millis(100);
+        // If the tick blew its budget, print where the time went. One line,
+        // sortable on the longest column. Lets the operator diagnose without
+        // standing up Tracy. The budget is whatever `TickPacer` has settled
+        // on — at 10 Hz it's 100 ms; under sustained overload the pacer may
+        // halve us to 200 ms or further, and the WARN threshold scales with
+        // it so we don't spam log lines for ticks that are slow only relative
+        // to the original target.
         let total = tick_start.elapsed();
-        if total > SLOW_TICK_WARN {
+        if total > slow_warn {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             tracing::warn!(
                 target: "tick_slow",
