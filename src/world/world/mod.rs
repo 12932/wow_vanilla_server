@@ -1217,7 +1217,6 @@ impl World {
         t_promote = phase.elapsed();
 
         let mut keys_to_move_to_character_screen: Vec<usize> = Vec::new();
-        let mut move_to_character_screen = false;
         let mut commands = crate::world::command::CommandQueue::new();
 
         // No server-side respawn pass — under the gurubashi-pvp rules
@@ -1232,6 +1231,12 @@ impl World {
         let client_keys: Vec<usize> = self.clients.iter().map(|(k, _)| k).collect();
         for key in client_keys {
             let mut client = self.remove_client(key);
+            // Per-iteration: the opcode handler may flip this true for the
+            // CURRENT client (CMSG_LOGOUT_REQUEST). Resetting on every iter
+            // is load-bearing — a single declaration above the loop would
+            // be sticky across clients and one logout would drag every
+            // later client in the slab into character-screen with it.
+            let mut move_to_character_screen = false;
             let mut entities = Entities::new(
                 &mut self.clients,
                 &self.client_by_guid,
