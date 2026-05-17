@@ -163,6 +163,12 @@ pub struct AoiTickStats {
     pub entered: usize,
     pub departed: usize,
     pub suppressed: usize,
+    /// Observers whose `visible_entities` matched `new_visible` exactly
+    /// this tick (the M2 short-circuit fired) — they skipped the slow
+    /// diff path entirely. A high fast-path ratio means steady-state
+    /// membership is stable, which is the expected case post-ramp at
+    /// heavy density.
+    pub fast_path: usize,
 }
 
 impl World {
@@ -676,38 +682,42 @@ impl World {
 
             // ── Phase 2: build the new visible set. Skip `key` itself
             // (observer should not be in its own visible_entities). ──
-            let mut new_visible: ahash::AHashSet<Guid> =
-                ahash::AHashSet::with_capacity(prev_visible_capacity);
-            for (other_key, c) in self.clients.iter() {
-                if other_key == key {
-                    continue;
-                }
-                if c.character().map != observer_map {
-                    continue;
-                }
-                if !aoi::within_aoi(&observer_pos, &c.character().info.position) {
-                    continue;
-                }
-                new_visible.insert(c.character().guid);
-            }
-
-            let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
-            let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    let Some(keys) =
-                        creature_cells.get(&(observer_map, cx + dx, cy + dy))
-                    else {
+            let mut new_visible: ahash::AHashSet<Guid> = {
+                let _s = tracing::info_span!("aoi_build_visible").entered();
+                let mut nv: ahash::AHashSet<Guid> =
+                    ahash::AHashSet::with_capacity(prev_visible_capacity);
+                for (other_key, c) in self.clients.iter() {
+                    if other_key == key {
                         continue;
-                    };
-                    for &ck in keys {
-                        let cr = &self.creatures[ck];
-                        if aoi::within_aoi(&observer_pos, &cr.info.position) {
-                            new_visible.insert(cr.guid);
+                    }
+                    if c.character().map != observer_map {
+                        continue;
+                    }
+                    if !aoi::within_aoi(&observer_pos, &c.character().info.position) {
+                        continue;
+                    }
+                    nv.insert(c.character().guid);
+                }
+
+                let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
+                let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        let Some(keys) =
+                            creature_cells.get(&(observer_map, cx + dx, cy + dy))
+                        else {
+                            continue;
+                        };
+                        for &ck in keys {
+                            let cr = &self.creatures[ck];
+                            if aoi::within_aoi(&observer_pos, &cr.info.position) {
+                                nv.insert(cr.guid);
+                            }
                         }
                     }
                 }
-            }
+                nv
+            };
 
             // ── Fast path: visibility stable. ──
             // Lengths match + every guid in `new_visible` is also in
@@ -715,6 +725,7 @@ impl World {
             // symmetric_difference + diff allocs entirely. At 1400
             // observers in steady state this is the common case.
             {
+                let _s = tracing::info_span!("aoi_fast_path_check").entered();
                 let obs = self.clients.get_mut(key).expect("client present");
                 if new_visible.len() == obs.session.visible_entities.len()
                     && new_visible
@@ -722,6 +733,7 @@ impl World {
                         .all(|g| obs.session.visible_entities.contains(g))
                 {
                     obs.session.visible_entities = new_visible;
+                    stats.fast_path += 1;
                     continue;
                 }
             }
@@ -742,6 +754,7 @@ impl World {
             // strafing produces ~10 CreateObject/OutOfRangeObjects
             // pairs per second per oscillating entity.
             let (departed, entered) = {
+                let _s = tracing::info_span!("aoi_slow_diff").entered();
                 let obs = self.clients.get_mut(key).expect("client present");
                 let now = Instant::now();
                 let cooldown = crate::config::config().network.aoi_flap_cooldown();
@@ -792,30 +805,35 @@ impl World {
             // by reading other clients + creatures. No `&mut obs`
             // borrow held here. Both lookups are O(1) via reverse
             // guid → slab-key indexes. ──
-            let entered_objects: Vec<Object> = if entered.is_empty() {
-                Vec::new()
-            } else {
-                let mut objects = Vec::with_capacity(entered.len());
-                for g in &entered {
-                    if let Some(&ck) = self.creature_by_guid.get(g)
-                        && let Some(cr) = self.creatures.get(ck)
-                    {
-                        objects.push(cr.to_create_object());
-                        continue;
+            let entered_objects: Vec<Object> = {
+                let _s = tracing::info_span!("aoi_build_entered_objects").entered();
+                if entered.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut objects = Vec::with_capacity(entered.len());
+                    for g in &entered {
+                        if let Some(&ck) = self.creature_by_guid.get(g)
+                            && let Some(cr) = self.creatures.get(ck)
+                        {
+                            objects.push(cr.to_create_object());
+                            continue;
+                        }
+                        if let Some(&pk) = self.client_by_guid.get(g)
+                            && let Some(c) = self.clients.get(pk)
+                        {
+                            objects.push(player_create_object(c.character()));
+                        }
                     }
-                    if let Some(&pk) = self.client_by_guid.get(g)
-                        && let Some(c) = self.clients.get(pk)
-                    {
-                        objects.push(player_create_object(c.character()));
-                    }
+                    objects
                 }
-                objects
             };
 
             // ── Apply pass: send departed + entered messages. Brief
             // `&mut obs` borrow scope. send_message only mutates the
             // observer's own outbound channel — no aliasing with the
-            // entered-objects construction above. ──
+            // entered-objects construction above. (No Tracy span here:
+            // `EnteredSpan` is not `Send` and `obs.send_message().await`
+            // would make the enclosing future non-Send.)
             let obs = self.clients.get_mut(key).expect("client present");
             if !departed.is_empty() {
                 let msg = SMSG_UPDATE_OBJECT {
@@ -826,9 +844,11 @@ impl World {
                 };
                 obs.send_message(msg).await;
             }
-            if let Some(msg) = UpdateObject::from_objects(entered_objects) {
-                msg.send(obs).await;
-            }
+            // Use chunked send: at 1400-bot density a freshly-teleported
+            // observer's entered Vec can carry hundreds of CreateObject2s,
+            // which overflows the wire-protocol u16 size header if sent
+            // in one packet. See `UpdateObject::send_chunked`.
+            UpdateObject::send_chunked(entered_objects, obs).await;
         }
         // Restore the spatial grid we `mem::take`'d above.
         self.creature_cells = creature_cells;
@@ -1158,9 +1178,13 @@ impl World {
 
             let visible_count = visible_objects.len();
             let starts_count = movement_starts.len();
-            if let Some(batch) = UpdateObject::from_objects(visible_objects) {
-                batch.send(&mut c).await;
-            }
+            // Chunked send: at 1400-bot density `visible_objects` holds
+            // 1400+ CreateObject2s. One packet exceeds the wire-protocol
+            // u16 size header → silent truncation → ARC4 desync → client
+            // appears in-world but is dead-on-the-wire. This was the
+            // "log out + log back in at high density = frozen client"
+            // bug. See `UpdateObject::send_chunked`.
+            UpdateObject::send_chunked(visible_objects, &mut c).await;
             for start in movement_starts {
                 c.send_message(start).await;
             }
@@ -1572,6 +1596,10 @@ impl World {
             client.plot(
                 tracy_client::plot_name!("aoi_suppressed"),
                 aoi_stats.suppressed as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("aoi_fast_path"),
+                aoi_stats.fast_path as f64,
             );
         }
 
