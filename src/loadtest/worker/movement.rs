@@ -275,14 +275,17 @@ impl MovementDriver {
             return Ok(());
         }
 
-        // First-tick teleport. Override our position to `path[0] +
-        // jitter`, emit a single heartbeat, and bail until next tick.
+        // First-tick teleport. Override our position to the explicit
+        // Booty Bay docks coords (NOT path[0]) — namigator snaps BB
+        // to the underlying ADT mesh, which under the docks is the
+        // rocky seabed at z ≈ -2/-3. Using path[0].z would spawn
+        // bots underwater. The hardcoded `BOOTY_BAY` const sits on
+        // the actual dock planks at z = 7.4.
         if !teleported {
-            let p0 = path[0];
             self.info.position = Vector3d {
-                x: p0.x + jx,
-                y: p0.y + jy,
-                z: p0.z,
+                x: crate::worker::bot::race::BOOTY_BAY.x + jx,
+                y: crate::worker::bot::race::BOOTY_BAY.y + jy,
+                z: crate::worker::bot::race::BOOTY_BAY.z,
             };
             // Mark moving forward so observer clients interpolate
             // correctly between the teleport-heartbeat and the next
