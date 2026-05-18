@@ -271,9 +271,11 @@ fn bench_tick_aoi_transitions(c: &mut Criterion) {
                             World::for_test(chars, creatures)
                         })
                     },
-                    |mut world| {
+                    |world| {
                         rt.block_on(async {
-                            let _ = world.tick_aoi_transitions().await;
+                            let region_arc = world.primary_region();
+                            let mut region = region_arc.lock().await;
+                            let _ = region.tick_aoi_transitions().await;
                         });
                     },
                     BatchSize::PerIteration,
@@ -298,14 +300,12 @@ fn bench_world_tick(c: &mut Criterion) {
             || {
                 rt.block_on(async {
                     let (chars, creatures) = build_characters_and_creatures(100, 500);
-                    let world = World::for_test(chars, creatures);
-                    let db = WorldDatabase::new();
-                    (world, db)
+                    World::for_test(chars, creatures)
                 })
             },
-            |(mut world, mut db)| {
+            |mut world| {
                 rt.block_on(async {
-                    world.tick(&mut db, Duration::from_millis(200)).await;
+                    world.tick(Duration::from_millis(200)).await;
                 });
             },
             BatchSize::PerIteration,
