@@ -209,11 +209,27 @@ pub struct CrossRegionFrame {
     pub frame_bytes: usize,
 }
 
-/// Inbound message to a region. In Stage 2 there's only the broadcast
-/// variant; admit/snapshot/GM-routing variants will follow.
+/// A cross-region state-change request. Generated when a handler in
+/// region A applies an `Effect` to a guid that lives in region B; the
+/// effect is dispatched through the same routing table as broadcast
+/// frames and applied during B's next tick.
+///
+/// Lag: target sees the effect on B's next tick (~33 ms at 30 Hz).
+/// Acceptable for visible mechanics (root, damage); for tighter
+/// timing a synchronous cross-region lock path would be needed.
+#[derive(Debug, Clone)]
+pub struct CrossRegionEffect {
+    pub target_guid: Guid,
+    pub effect: crate::world::command::UnitEffect,
+}
+
+/// Inbound message to a region. `Frame` is broadcast fan-out (movement,
+/// spell visuals, etc.). `Effect` is a state-change request the
+/// receiving region applies to one of its own entities.
 #[derive(Debug, Clone)]
 pub enum CrossRegionMsg {
     Frame(CrossRegionFrame),
+    Effect(CrossRegionEffect),
 }
 
 /// Send half of a region's inbox. Cloned into the routing table and

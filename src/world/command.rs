@@ -14,7 +14,24 @@
 //! - One place to add per-command Tracy zones, telemetry, batching, etc.
 
 use crate::world::world_opcode_handler::creature::Creature;
+use std::time::Instant;
 use wow_world_messages::Guid;
+
+/// Region-agnostic state change applied to a unit by guid. Used by
+/// `Entities::apply_effect` so handlers can mutate cross-region
+/// targets without knowing which region owns them — the dispatcher
+/// either applies locally (mutates the slab directly) or queues a
+/// `CrossRegionEffect` to the target's home region inbox.
+///
+/// Add a variant here for every new effect type; the rest of the
+/// plumbing (cross-region routing + drain) reuses the same path.
+#[derive(Debug, Clone)]
+pub enum UnitEffect {
+    /// Server-side root until `until`. Stops the unit from moving +
+    /// drops incoming `MSG_MOVE_*` opcodes from real-client targets
+    /// until the timer expires.
+    Root { until: Instant },
+}
 
 #[derive(Debug)]
 // `SpawnCreature` dwarfs `KillCreature` size-wise; boxing it would add a

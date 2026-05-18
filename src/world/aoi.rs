@@ -96,6 +96,7 @@ pub struct CreatureView {
 /// Built at the top of `World::tick`, before per-region tasks spawn,
 /// by locking each region briefly and copying out the relevant fields.
 /// Wrapped in `Arc` for cheap distribution to the spawned tasks.
+#[derive(Debug)]
 pub struct GlobalAoiSnapshot {
     /// Every connected client across every region.
     pub broadcast_view: Vec<BroadcastTarget>,
@@ -109,6 +110,11 @@ pub struct GlobalAoiSnapshot {
     /// `entered_objects` without needing live access to neighbor
     /// regions' slabs.
     pub create_object_by_guid: AHashMap<Guid, Object>,
+    /// Guid → owning region. Populated for every entity present in
+    /// the snapshot. Used by `Entities::apply_effect` to route a
+    /// cross-region effect to the correct region's inbox without
+    /// needing the handler to know about region keys.
+    pub home_region_by_guid: AHashMap<Guid, crate::world::region::RegionKey>,
 }
 
 impl GlobalAoiSnapshot {
@@ -117,6 +123,7 @@ impl GlobalAoiSnapshot {
             broadcast_view: Vec::new(),
             creature_cells: AHashMap::new(),
             create_object_by_guid: AHashMap::new(),
+            home_region_by_guid: AHashMap::new(),
         }
     }
 }
