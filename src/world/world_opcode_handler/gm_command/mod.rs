@@ -524,10 +524,9 @@ pub(crate) async fn gm_command(
             use ahash::AHashMap;
 
             // Bin clients and creatures into the spatial regions the
-            // Stage 3 sharding will use. Until clients/creatures are
-            // actually partitioned across `World::regions` this is a
-            // pure preview — the per-bin counts show how much load
-            // each tokio task would carry once the partition lands.
+            // Stage 3 sharding uses. Empty regions (zero players) are
+            // dropped — a GM running `.regions` cares about hot spots,
+            // not the long tail of empty buckets.
             let mut player_counts: AHashMap<RegionKey, usize> = AHashMap::new();
             let mut creature_counts: AHashMap<RegionKey, usize> = AHashMap::new();
             for (_, c) in entities.clients().iter() {
@@ -540,21 +539,19 @@ pub(crate) async fn gm_command(
                 *creature_counts.entry(key).or_default() += 1;
             }
 
-            // Union of all region keys with any content, sorted by
-            // descending player count (then by creature count) so the
-            // hottest region appears first. Cap at 8 lines to fit in
-            // chat.
-            let mut all_keys: Vec<RegionKey> = player_counts.keys()
-                .chain(creature_counts.keys())
-                .copied()
-                .collect::<ahash::AHashSet<_>>()
-                .into_iter()
+            // Filter to regions that have at least one player, then
+            // sort by descending player count (creature count
+            // breaks ties). A region with creatures but no players
+            // is just terrain — not interesting for a `.regions`
+            // peek.
+            let mut ranked: Vec<(RegionKey, usize, usize)> = player_counts
+                .iter()
+                .map(|(k, &p)| {
+                    let c = creature_counts.get(k).copied().unwrap_or(0);
+                    (*k, p, c)
+                })
                 .collect();
-            all_keys.sort_by_key(|k| {
-                let p = player_counts.get(k).copied().unwrap_or(0);
-                let c = creature_counts.get(k).copied().unwrap_or(0);
-                std::cmp::Reverse((p, c))
-            });
+            ranked.sort_by_key(|&(_, p, c)| std::cmp::Reverse((p, c)));
 
             // Snapshot per-region pacer state. The per-region tokio
             // tasks publish their pacer fields into this map at the
@@ -567,16 +564,16 @@ pub(crate) async fn gm_command(
                     .map(|g| g.clone())
                     .unwrap_or_default();
 
+            const TOP_N: usize = 4;
+            let total_populated = ranked.len();
             client
                 .send_system_message(format!(
-                    "Regions ({} non-empty, {:.0}-yd each): players + creatures + pacer",
-                    all_keys.len(),
+                    "Regions: {total_populated} populated ({:.0}-yd each); top {} by player count",
                     crate::world::region::region_size_yd(),
+                    TOP_N.min(total_populated),
                 ))
                 .await;
-            for k in all_keys.iter().take(8) {
-                let p = player_counts.get(k).copied().unwrap_or(0);
-                let c = creature_counts.get(k).copied().unwrap_or(0);
+            for (k, p, c) in ranked.iter().take(TOP_N) {
                 let pacer = pacer_states
                     .get(k)
                     .map(|s| {
@@ -595,9 +592,9 @@ pub(crate) async fn gm_command(
                     ))
                     .await;
             }
-            if all_keys.len() > 8 {
+            if total_populated > TOP_N {
                 client
-                    .send_system_message(format!("  … {} more regions truncated", all_keys.len() - 8))
+                    .send_system_message(format!("  … {} more populated regions truncated", total_populated - TOP_N))
                     .await;
             }
         }
