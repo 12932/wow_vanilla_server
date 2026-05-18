@@ -96,6 +96,13 @@ pub struct World {
     last_packet_sample: u64,
     last_packet_sample_at: Instant,
 
+    /// Previous sample of the kernel's lifetime RX/TX packet counters
+    /// from `/proc/net/dev`. Diffed against the current sample each
+    /// tick to derive `os_rx_pps` / `os_tx_pps` for Tracy. `None` on
+    /// non-Linux hosts or until the first successful sample.
+    last_net_stats: Option<crate::world::net_stats::NetStats>,
+    last_net_stats_at: Instant,
+
     /// Start of the previous tick, used to compute wall-clock `dt` for time-
     /// dependent state like `auto_attack_timer`. `None` on the very first
     /// tick; falls back to `crate::world::TARGET_INTERVAL` then.
@@ -257,6 +264,8 @@ impl World {
             maps,
             last_packet_sample: 0,
             last_packet_sample_at: Instant::now(),
+            last_net_stats: None,
+            last_net_stats_at: Instant::now(),
             last_tick_at: None,
             pending_movement: ahash::AHashMap::new(),
             tick_counter: 0,
@@ -338,6 +347,8 @@ impl World {
             maps,
             last_packet_sample: 0,
             last_packet_sample_at: Instant::now(),
+            last_net_stats: None,
+            last_net_stats_at: Instant::now(),
             last_tick_at: None,
             pending_movement: ahash::AHashMap::new(),
             tick_counter: 0,
@@ -653,56 +664,98 @@ impl World {
     pub async fn tick_aoi_transitions(&mut self) -> AoiTickStats {
         let mut stats = AoiTickStats::default();
         async {
-        // The creature spatial grid is maintained incrementally —
-        // [`Self::grid_insert`] / [`Self::grid_remove`] / [`Self::grid_move`]
-        // keep `self.creature_cells` current as creatures spawn, move,
-        // and respawn. Idle creatures (the vast majority at 51 k spawns)
-        // never touch it. The per-tick cost of consulting the grid is
-        // `O(walking_creatures)` instead of the old `O(all_creatures)`
-        // rebuild.
-
-        // Hoist the AOI radius once for the whole phase. Reused by every
-        // `within_aoi_sq` in the par_iter closure — saves millions of
-        // `OnceCell::get`s per tick at high density (one per inner
-        // player+creature check).
+        // Hoist AOI radius + flap cooldown + `now` once for the whole
+        // phase. Each is captured by every rayon worker; reading them
+        // once here is cheaper than per-observer config lookups.
         let aoi_r = crate::config::config().network.aoi_radius_yards;
         let aoi_r_sq = aoi_r * aoi_r;
+        let cooldown = crate::config::config().network.aoi_flap_cooldown();
+        let now = Instant::now();
 
-        // ── PARALLEL phase: compute `(observer_guid, new_visible)` for
-        // every observer. All inputs are `Sync` (`broadcast_view`,
-        // `creatures` slab, `creature_cells` map); no mutations happen
-        // inside the closure. Rayon splits the observers across its
-        // thread pool — each thread handles its share of the O(N²)
-        // visibility scan independently, with no cross-thread state.
-        let visible_sets: Vec<(Guid, ahash::AHashSet<Guid>)> = {
-            let _s = tracing::info_span!("aoi_build_visible").entered();
+        // ── PHASE 0: extract per-observer mutable state into a work
+        // list. `mem::take` is O(1) — it swaps each `visible_entities`
+        // / `aoi_transition_at` with `Default::default()` (empty
+        // set/map), moving the underlying heap allocation into the
+        // work item. No data is cloned. We restore in Phase 2.
+        //
+        // This is the trick that lets us parallelize `aoi_slow_diff`:
+        // each rayon worker owns its observer's prior state outright,
+        // does the flap-suppression + diff against `new_visible`
+        // entirely in the closure, then hands the updated state back
+        // via `DiffResult`. Without this we'd be passing `&mut
+        // PlayerSession` across threads, which isn't possible because
+        // `PlayerSession` is `!Sync` (the inbound `tokio::sync::mpsc`
+        // `Receiver` is single-consumer).
+        struct DiffInput {
+            key: usize,
+            guid: Guid,
+            map: Map,
+            position: Vector3d,
+            visible: ahash::AHashSet<Guid>,
+            transition: ahash::AHashMap<Guid, Instant>,
+        }
+        let work: Vec<DiffInput> = self
+            .clients
+            .iter_mut()
+            .map(|(key, c)| DiffInput {
+                key,
+                guid: c.character().guid,
+                map: c.character().map,
+                position: c.character().info.position,
+                visible: std::mem::take(&mut c.session.visible_entities),
+                transition: std::mem::take(&mut c.session.aoi_transition_at),
+            })
+            .collect();
+
+        // ── PHASE 1 (parallel): per-observer, compute everything:
+        // new_visible build, fast-path check, slow-diff with
+        // flap suppression, and entered-objects build. All reads
+        // are from `Sync` sources (broadcast_view, creatures slab,
+        // creature_cells map, client_by_guid, clients slab). All
+        // writes are to the moved-in `visible` / `transition` /
+        // returned vecs — no cross-observer state. Rayon spreads the
+        // observers across its thread pool.
+        struct DiffResult {
+            key: usize,
+            visible_entities: ahash::AHashSet<Guid>,
+            aoi_transition_at: ahash::AHashMap<Guid, Instant>,
+            departed: Vec<Guid>,
+            entered: Vec<Guid>,
+            entered_objects: Vec<Object>,
+            fast_path: bool,
+            suppressed: usize,
+        }
+        let results: Vec<DiffResult> = {
+            let _s = tracing::info_span!("aoi_diff_parallel").entered();
             let broadcast_view = &self.broadcast_view;
             let creatures = &self.creatures;
             let creature_cells = &self.creature_cells;
-            broadcast_view
-                .par_iter()
-                .map(|observer| {
-                    let observer_guid = observer.guid;
-                    let observer_map = observer.map;
-                    let observer_pos = observer.position;
-                    let mut nv: ahash::AHashSet<Guid> = ahash::AHashSet::new();
+            let creature_by_guid = &self.creature_by_guid;
+            let client_by_guid = &self.client_by_guid;
+            let clients = &self.clients;
+            work.into_par_iter()
+                .map(|input| {
+                    let DiffInput {
+                        key,
+                        guid: observer_guid,
+                        map: observer_map,
+                        position: observer_pos,
+                        visible,
+                        mut transition,
+                    } = input;
 
-                    // Player scan: every other player on the same map
-                    // within AOI. Self is excluded via guid compare —
-                    // we no longer have slab keys here.
+                    // Build new_visible: scan broadcast_view + creatures
+                    // via the 3×3 cell window.
+                    let mut new_visible: ahash::AHashSet<Guid> =
+                        ahash::AHashSet::with_capacity(visible.len());
                     for t in broadcast_view {
                         if t.guid != observer_guid
                             && t.map == observer_map
                             && aoi::within_aoi_sq(&t.position, &observer_pos, aoi_r_sq)
                         {
-                            nv.insert(t.guid);
+                            new_visible.insert(t.guid);
                         }
                     }
-
-                    // Creature scan via 3×3 cell window. Cells outside
-                    // the window are guaranteed to be > AOI distance
-                    // away because `CREATURE_GRID_CELL_YD` (250 yd) is
-                    // larger than the configured AOI radius.
                     let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
                     let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
                     for dx in -1..=1 {
@@ -719,151 +772,124 @@ impl World {
                                     &cr.info.position,
                                     aoi_r_sq,
                                 ) {
-                                    nv.insert(cr.guid);
+                                    new_visible.insert(cr.guid);
                                 }
                             }
                         }
                     }
-                    (observer_guid, nv)
+
+                    // Fast-path: visible set identical to last tick.
+                    // Common in steady state; skip the diff + alloc.
+                    if new_visible.len() == visible.len()
+                        && new_visible.iter().all(|g| visible.contains(g))
+                    {
+                        return DiffResult {
+                            key,
+                            visible_entities: new_visible,
+                            aoi_transition_at: transition,
+                            departed: Vec::new(),
+                            entered: Vec::new(),
+                            entered_objects: Vec::new(),
+                            fast_path: true,
+                            suppressed: 0,
+                        };
+                    }
+
+                    // Slow path: flap-suppression. For every guid whose
+                    // membership flips, consult `transition`: if it
+                    // moved within `cooldown`, force it back to its
+                    // prior state so we don't re-emit a packet for an
+                    // oscillating entity. Otherwise stamp `now` so
+                    // subsequent jitter inside the window is suppressed.
+                    let mut suppressed_count: usize = 0;
+                    let changed: Vec<Guid> = visible
+                        .symmetric_difference(&new_visible)
+                        .copied()
+                        .collect();
+                    for g in changed {
+                        let was = visible.contains(&g);
+                        let cooldown_active = transition
+                            .get(&g)
+                            .is_some_and(|t| now.saturating_duration_since(*t) < cooldown);
+                        if cooldown_active {
+                            suppressed_count += 1;
+                            if was {
+                                new_visible.insert(g);
+                            } else {
+                                new_visible.remove(&g);
+                            }
+                        } else {
+                            transition.insert(g, now);
+                        }
+                    }
+                    // Periodic prune so the cooldown map doesn't grow
+                    // unbounded for long-lived sessions.
+                    transition
+                        .retain(|_, t| now.saturating_duration_since(*t) < cooldown);
+
+                    // Compute departed/entered against the old `visible`
+                    // and the post-suppression `new_visible`. No clone
+                    // is needed: we own `visible` outright (moved in
+                    // via mem::take), so we can read it before dropping
+                    // it at end of closure.
+                    let departed: Vec<Guid> =
+                        visible.difference(&new_visible).copied().collect();
+                    let entered: Vec<Guid> =
+                        new_visible.difference(&visible).copied().collect();
+
+                    // Build entered_objects (CreateObject2 for each
+                    // newcomer guid). Reads from creatures + clients
+                    // slabs via the reverse-index maps. Reading another
+                    // observer's `c.character()` here is fine — only
+                    // their Character is touched, never their session.
+                    let mut entered_objects = Vec::with_capacity(entered.len());
+                    for g in &entered {
+                        if let Some(&ck) = creature_by_guid.get(g)
+                            && let Some(cr) = creatures.get(ck)
+                        {
+                            entered_objects.push(cr.to_create_object());
+                            continue;
+                        }
+                        if let Some(&pk) = client_by_guid.get(g)
+                            && let Some(c) = clients.get(pk)
+                        {
+                            entered_objects.push(player_create_object(c.character()));
+                        }
+                    }
+
+                    DiffResult {
+                        key,
+                        visible_entities: new_visible,
+                        aoi_transition_at: transition,
+                        departed,
+                        entered,
+                        entered_objects,
+                        fast_path: false,
+                        suppressed: suppressed_count,
+                    }
                 })
                 .collect()
         };
 
-        // ── SEQUENTIAL phase: per-observer fast-path / slow-diff /
-        // build / send. All `&mut self.clients[key]` work happens here,
-        // single-threaded. The parallel phase above already produced
-        // the per-observer `new_visible` sets; this phase only needs
-        // to compare them against existing state and emit packets.
-        for (observer_guid, mut new_visible) in visible_sets {
-            let Some(&key) = self.client_by_guid.get(&observer_guid) else {
-                // Observer logged out between view build and now —
-                // skip. The view-build runs before any in-tick logout
-                // path, but being defensive here keeps a future change
-                // from silently panic'ing.
-                continue;
-            };
+        // ── PHASE 2 (sequential): restore per-observer state, send
+        // packets. Async sends keep this single-threaded.
+        for result in results {
+            stats.fast_path += if result.fast_path { 1 } else { 0 };
+            stats.suppressed += result.suppressed;
+            stats.departed += result.departed.len();
+            stats.entered += result.entered.len();
 
-            // ── Fast path: visibility stable. ──
-            // Lengths match + every guid in `new_visible` is also in
-            // `visible_entities` ⇒ sets are equal, skip the
-            // symmetric_difference + diff allocs entirely. In steady
-            // state this is the common case.
-            {
-                let _s = tracing::info_span!("aoi_fast_path_check").entered();
-                let obs = self.clients.get_mut(key).expect("client present");
-                if new_visible.len() == obs.session.visible_entities.len()
-                    && new_visible
-                        .iter()
-                        .all(|g| obs.session.visible_entities.contains(g))
-                {
-                    obs.session.visible_entities = new_visible;
-                    stats.fast_path += 1;
-                    continue;
-                }
-            }
+            let obs = &mut self.clients[result.key];
+            obs.session.visible_entities = result.visible_entities;
+            obs.session.aoi_transition_at = result.aoi_transition_at;
 
-            // ── Slow path: flap-suppression + departed/entered diff. ──
-            // All mutations on the observer (`aoi_transition_at`,
-            // `visible_entities`) happen inside this single scope so the
-            // `&mut obs` borrow doesn't span the spawn-objects build
-            // below (which needs `&self.clients` / `&self.creatures`).
-            //
-            // Flap-suppression: for every guid whose membership would
-            // flip this tick, consult `aoi_transition_at`: if it
-            // transitioned within the last `AOI_FLAP_COOLDOWN`, force
-            // it back to its previous state so we don't emit another
-            // packet for it. Otherwise stamp `now` so subsequent
-            // jitter within the window is also suppressed. Without
-            // this, an observer parked on the AOI boundary and
-            // strafing produces ~10 CreateObject/OutOfRangeObjects
-            // pairs per second per oscillating entity.
-            let (departed, entered) = {
-                let _s = tracing::info_span!("aoi_slow_diff").entered();
-                let obs = self.clients.get_mut(key).expect("client present");
-                let now = Instant::now();
-                let cooldown = crate::config::config().network.aoi_flap_cooldown();
-                let changed: Vec<Guid> = obs
-                    .session
-                    .visible_entities
-                    .symmetric_difference(&new_visible)
-                    .copied()
-                    .collect();
-                for g in changed {
-                    let was = obs.session.visible_entities.contains(&g);
-                    let cooldown_active = obs
-                        .session
-                        .aoi_transition_at
-                        .get(&g)
-                        .is_some_and(|t| now.saturating_duration_since(*t) < cooldown);
-                    if cooldown_active {
-                        stats.suppressed += 1;
-                        if was {
-                            new_visible.insert(g);
-                        } else {
-                            new_visible.remove(&g);
-                        }
-                    } else {
-                        obs.session.aoi_transition_at.insert(g, now);
-                    }
-                }
-                // Periodic prune so the cooldown map doesn't grow
-                // unbounded for long-lived sessions. Anything older
-                // than the cooldown is no longer relevant.
-                obs.session
-                    .aoi_transition_at
-                    .retain(|_, t| now.saturating_duration_since(*t) < cooldown);
-
-                let old = std::mem::replace(
-                    &mut obs.session.visible_entities,
-                    new_visible.clone(),
-                );
-                let departed: Vec<Guid> = old.difference(&new_visible).copied().collect();
-                let entered: Vec<Guid> = new_visible.difference(&old).copied().collect();
-                (departed, entered)
-            };
-
-            stats.departed += departed.len();
-            stats.entered += entered.len();
-
-            // ── Spawn batch — build CreateObject2 entries for newcomers
-            // by reading other clients + creatures. No `&mut obs`
-            // borrow held here. Both lookups are O(1) via reverse
-            // guid → slab-key indexes. ──
-            let entered_objects: Vec<Object> = {
-                let _s = tracing::info_span!("aoi_build_entered_objects").entered();
-                if entered.is_empty() {
-                    Vec::new()
-                } else {
-                    let mut objects = Vec::with_capacity(entered.len());
-                    for g in &entered {
-                        if let Some(&ck) = self.creature_by_guid.get(g)
-                            && let Some(cr) = self.creatures.get(ck)
-                        {
-                            objects.push(cr.to_create_object());
-                            continue;
-                        }
-                        if let Some(&pk) = self.client_by_guid.get(g)
-                            && let Some(c) = self.clients.get(pk)
-                        {
-                            objects.push(player_create_object(c.character()));
-                        }
-                    }
-                    objects
-                }
-            };
-
-            // ── Apply pass: send departed + entered messages. Brief
-            // `&mut obs` borrow scope. send_message only mutates the
-            // observer's own outbound channel — no aliasing with the
-            // entered-objects construction above. (No Tracy span here:
-            // `EnteredSpan` is not `Send` and `obs.send_message().await`
-            // would make the enclosing future non-Send.)
-            let obs = self.clients.get_mut(key).expect("client present");
-            if !departed.is_empty() {
+            if !result.departed.is_empty() {
                 let msg = SMSG_UPDATE_OBJECT {
                     has_transport: 0,
                     objects: vec![Object {
-                        update_type: Object_UpdateType::OutOfRangeObjects { guids: departed },
+                        update_type: Object_UpdateType::OutOfRangeObjects {
+                            guids: result.departed,
+                        },
                     }],
                 };
                 obs.send_message(msg).await;
@@ -872,7 +898,7 @@ impl World {
             // observer's entered Vec can carry hundreds of CreateObject2s,
             // which overflows the wire-protocol u16 size header if sent
             // in one packet. See `UpdateObject::send_chunked`.
-            UpdateObject::send_chunked(entered_objects, obs).await;
+            UpdateObject::send_chunked(result.entered_objects, obs).await;
         }
         }
         .instrument(tracing::info_span!("tick_aoi_transitions"))
@@ -1865,9 +1891,32 @@ impl World {
             .elapsed()
             .as_secs_f64()
             .max(1e-6);
-        let packets_per_second = packet_delta as f64 / elapsed_secs;
+        let wow_messages_per_second = packet_delta as f64 / elapsed_secs;
         self.last_packet_sample = now_packet_count;
         self.last_packet_sample_at = Instant::now();
+
+        // OS-level pps. Diffs the kernel's lifetime RX/TX packet
+        // counters from /proc/net/dev against the previous sample.
+        // Returns (None, None) on the first sample (no prior) or on
+        // non-Linux hosts (no /proc/net/dev). Roughly equals NIC
+        // packets-per-second; expect 30-50× lower than
+        // `wow_messages_per_second` because the writer task coalesces
+        // up to 64 application packets into a single `write_all` and
+        // most fit in one TCP segment.
+        let net_now = crate::world::net_stats::sample();
+        let (os_rx_pps, os_tx_pps) = match (self.last_net_stats, net_now) {
+            (Some(prev), Some(curr)) => {
+                let dt = self.last_net_stats_at.elapsed().as_secs_f64().max(1e-6);
+                let rx = curr.rx_packets.saturating_sub(prev.rx_packets) as f64 / dt;
+                let tx = curr.tx_packets.saturating_sub(prev.tx_packets) as f64 / dt;
+                (Some(rx), Some(tx))
+            }
+            _ => (None, None),
+        };
+        if net_now.is_some() {
+            self.last_net_stats = net_now;
+            self.last_net_stats_at = Instant::now();
+        }
 
         if let Some(client) = tracy_client::Client::running() {
             let wander = self.creature_wander_count;
@@ -1905,10 +1954,20 @@ impl World {
                 tracy_client::plot_name!("aoi_ms"),
                 t_aoi.as_secs_f64() * 1000.0,
             );
+            // Application-level outbound message rate (per WoW protocol
+            // packet, before TCP coalescing in `run_writer`).
             client.plot(
-                tracy_client::plot_name!("packets_per_second"),
-                packets_per_second,
+                tracy_client::plot_name!("wow_messages_per_second"),
+                wow_messages_per_second,
             );
+            // Kernel-level NIC packet rates (Linux only; None elsewhere
+            // and on the very first sample).
+            if let Some(rx) = os_rx_pps {
+                client.plot(tracy_client::plot_name!("os_rx_pps"), rx);
+            }
+            if let Some(tx) = os_tx_pps {
+                client.plot(tracy_client::plot_name!("os_tx_pps"), tx);
+            }
             client.plot(
                 tracy_client::plot_name!("adt_tiles_loaded"),
                 self.maps.attempted_adt_count() as f64,

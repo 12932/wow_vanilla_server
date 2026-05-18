@@ -2,6 +2,7 @@ pub mod aoi;
 mod character_screen_handler;
 pub mod command;
 pub mod database;
+pub mod net_stats;
 pub mod update_object;
 pub mod world_db;
 #[allow(clippy::module_inception)]
