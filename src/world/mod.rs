@@ -3,6 +3,7 @@ mod character_screen_handler;
 pub mod command;
 pub mod database;
 pub mod net_stats;
+pub mod region;
 pub mod update_object;
 pub mod world_db;
 #[allow(clippy::module_inception)]
@@ -53,12 +54,18 @@ const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 /// Adaptive tickrate controller. Owned by `run_world` and consulted once
 /// per tick. Game logic must use wall-clock `dt`, never the pacer's
 /// interval directly, because the interval changes at runtime.
-struct TickPacer {
-    target_interval: Duration,
-    max_interval: Duration,
-    current_interval: Duration,
-    slow_ema: f32,
-    healthy_streak: u32,
+///
+/// Stage 4: this struct also lives per-region (one `TickPacer` per
+/// `RegionState`) so `.regions` can show the per-region adaptive
+/// state — `current_interval`, `slow_ema` — independent of the global
+/// pacer in `run_world`.
+#[derive(Debug, Clone)]
+pub(crate) struct TickPacer {
+    pub(crate) target_interval: Duration,
+    pub(crate) max_interval: Duration,
+    pub(crate) current_interval: Duration,
+    pub(crate) slow_ema: f32,
+    pub(crate) healthy_streak: u32,
     slow_ema_alpha: f32,
     backoff_threshold: f32,
     recovery_hysteresis: f32,
@@ -99,7 +106,7 @@ impl TickPacer {
     /// Build a pacer from the global config's `[tick]` section. Snapshots
     /// the thresholds at construction time — no hot reload, see config
     /// module docs.
-    fn new_from_config(cfg: &crate::config::TickConfig) -> Self {
+    pub(crate) fn new_from_config(cfg: &crate::config::TickConfig) -> Self {
         Self {
             target_interval: cfg.target_interval(),
             max_interval: cfg.max_interval(),
@@ -119,7 +126,7 @@ impl TickPacer {
     /// until the next tick (`current_interval - tick_duration`, clamped
     /// at zero) and an optional rate-change event so the caller can
     /// surface it (in-game broadcast, metrics, etc.).
-    fn observe(&mut self, tick_duration: Duration) -> (Duration, Option<TickRateChange>) {
+    pub(crate) fn observe(&mut self, tick_duration: Duration) -> (Duration, Option<TickRateChange>) {
         let slow_now = if tick_duration > self.current_interval {
             1.0
         } else {
@@ -206,7 +213,8 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
         }
     };
 
-    let mut world = World::with_creatures(clients_waiting_to_join, creatures);
+    let mut world =
+        World::with_creatures_and_db(clients_waiting_to_join, creatures, db);
 
     let shutdown = Arc::new(AtomicBool::new(false));
     {
@@ -227,23 +235,25 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
     loop {
         let before = Instant::now();
 
-        world.tick(&mut db, pacer.current_interval).await;
+        world.tick(pacer.current_interval).await;
 
         let after = Instant::now();
         let tick_duration = after.duration_since(before);
 
         let final_save = shutdown.load(Ordering::SeqCst);
         if final_save || after >= next_save {
-            world.sync_clients_to_db(&mut db);
+            world.sync_clients_to_db().await;
             // Worlddb is authoritative for creatures — skip them in snapshot.
+            let db = world.db.lock().await;
             let snap = WorldSnapshot::capture(&db, &slab::Slab::new());
+            drop(db);
             match snap.save(SNAPSHOT_PATH) {
                 Ok(()) => tracing::debug!("Snapshot saved to {SNAPSHOT_PATH}"),
                 Err(e) => warn!("Snapshot save failed: {e}"),
             }
             // Return excess slab / hashmap capacity after long-running churn.
             // This is outside the tick hot path so the cost is fine.
-            world.shrink_periodic();
+            world.shrink_periodic().await;
             next_save = after + save_interval;
         }
 

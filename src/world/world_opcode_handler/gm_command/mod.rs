@@ -519,6 +519,88 @@ pub(crate) async fn gm_command(
                 ))
                 .await;
         }
+        GmCommand::Regions => {
+            use crate::world::region::RegionKey;
+            use ahash::AHashMap;
+
+            // Bin clients and creatures into the spatial regions the
+            // Stage 3 sharding will use. Until clients/creatures are
+            // actually partitioned across `World::regions` this is a
+            // pure preview — the per-bin counts show how much load
+            // each tokio task would carry once the partition lands.
+            let mut player_counts: AHashMap<RegionKey, usize> = AHashMap::new();
+            let mut creature_counts: AHashMap<RegionKey, usize> = AHashMap::new();
+            for (_, c) in entities.clients().iter() {
+                let pos = c.character().info.position;
+                let key = RegionKey::from_position(c.character().map, pos.x, pos.y);
+                *player_counts.entry(key).or_default() += 1;
+            }
+            for (_, cr) in entities.creatures().iter() {
+                let key = RegionKey::from_position(cr.map, cr.info.position.x, cr.info.position.y);
+                *creature_counts.entry(key).or_default() += 1;
+            }
+
+            // Union of all region keys with any content, sorted by
+            // descending player count (then by creature count) so the
+            // hottest region appears first. Cap at 8 lines to fit in
+            // chat.
+            let mut all_keys: Vec<RegionKey> = player_counts.keys()
+                .chain(creature_counts.keys())
+                .copied()
+                .collect::<ahash::AHashSet<_>>()
+                .into_iter()
+                .collect();
+            all_keys.sort_by_key(|k| {
+                let p = player_counts.get(k).copied().unwrap_or(0);
+                let c = creature_counts.get(k).copied().unwrap_or(0);
+                std::cmp::Reverse((p, c))
+            });
+
+            // Snapshot per-region pacer state. The per-region tokio
+            // tasks publish their pacer fields into this map at the
+            // end of every tick; we lock briefly here and pull out
+            // what the requested regions are doing.
+            let pacer_states: ahash::AHashMap<RegionKey, crate::world::region::PacerSnapshot> =
+                crate::world::region::PACER_STATES
+                    .lock()
+                    .ok()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+
+            client
+                .send_system_message(format!(
+                    "Regions ({} non-empty, {:.0}-yd each): players + creatures + pacer",
+                    all_keys.len(),
+                    crate::world::region::region_size_yd(),
+                ))
+                .await;
+            for k in all_keys.iter().take(8) {
+                let p = player_counts.get(k).copied().unwrap_or(0);
+                let c = creature_counts.get(k).copied().unwrap_or(0);
+                let pacer = pacer_states
+                    .get(k)
+                    .map(|s| {
+                        format!(
+                            "{}ms last={}ms ema={:.2} streak={}",
+                            s.current_interval_ms,
+                            s.last_tick_ms,
+                            s.slow_ema,
+                            s.healthy_streak,
+                        )
+                    })
+                    .unwrap_or_else(|| "<no pacer state>".to_string());
+                client
+                    .send_system_message(format!(
+                        "  {k}: players={p}, creatures={c}, pacer={pacer}"
+                    ))
+                    .await;
+            }
+            if all_keys.len() > 8 {
+                client
+                    .send_system_message(format!("  … {} more regions truncated", all_keys.len() - 8))
+                    .await;
+            }
+        }
         GmCommand::Information(target) => {
             let info = if let Some(target) = entities.find_guid(target) {
                 match target {

@@ -217,6 +217,57 @@ pub fn broadcast_opcode_within_aoi(
             Some(1_usize)
         })
         .sum();
+
+    // ── Cross-region post-fanout ──
+    //
+    // After the local fanout, look up the neighbor regions whose
+    // interior intersects this broadcast's AOI disc. For each
+    // neighbor (skipping the anchor's own region), Arc::clone the
+    // frame and try_send it to that region's inbox. The receiving
+    // region drains the inbox at the top of its next broadcast phase
+    // and applies the same `try_queue_frame` fan-out to its own
+    // local clients.
+    //
+    // Until Stage 3 partition lands, the routing table is empty and
+    // this is a no-op (zero allocations beyond the iterator setup —
+    // `regions_within_aoi` always returns the anchor's own region as
+    // the first entry, and the routing-table lookup short-circuits
+    // on a missing inbox).
+    let aoi_r = crate::config::config().network.aoi_radius_yards;
+    let anchor_region = crate::world::region::RegionKey::from_position(
+        anchor_map,
+        anchor.x,
+        anchor.y,
+    );
+    let neighbors = crate::world::region::regions_within_aoi(anchor, anchor_map, aoi_r);
+    if neighbors.len() > 1 {
+        let table = crate::world::region::routing().load();
+        for neighbor in neighbors.iter().filter(|n| **n != anchor_region) {
+            if let Some(inbox) = table.inboxes.get(neighbor) {
+                let send = inbox.cross_region_tx.try_send(
+                    crate::world::region::CrossRegionMsg::Frame(
+                        crate::world::region::CrossRegionFrame {
+                            anchor,
+                            anchor_map,
+                            exclude_guid,
+                            frame: Arc::clone(&frame),
+                            frame_bytes,
+                        },
+                    ),
+                );
+                match send {
+                    Ok(true) => {
+                        crate::world::region::CROSS_REGION_EMITTED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Ok(false) | Err(_) => {
+                        crate::world::region::CROSS_REGION_DROPPED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
     (recipients, frame_bytes)
 }
 
