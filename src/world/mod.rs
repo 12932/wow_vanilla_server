@@ -263,8 +263,24 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
         }
 
         let (sleep_for, change) = pacer.observe(tick_duration);
+        // The GLOBAL pacer transition is no longer chat-broadcast to
+        // every player — per-region pacers now emit their own
+        // region-scoped messages (only to players in the affected
+        // region). The orchestrator-level rate is just logged so the
+        // operator can see it via `RUST_LOG=info` / tracing.
         if let Some(change) = change {
-            world.broadcast_tick_rate_change(change).await;
+            match change {
+                TickRateChange::Backoff { new_interval } => info!(
+                    "global tickrate backoff: {} ms ({:.1} Hz)",
+                    new_interval.as_millis(),
+                    1.0 / new_interval.as_secs_f32()
+                ),
+                TickRateChange::Recovery { new_interval } => info!(
+                    "global tickrate recovery: {} ms ({:.1} Hz)",
+                    new_interval.as_millis(),
+                    1.0 / new_interval.as_secs_f32()
+                ),
+            }
         }
         if !sleep_for.is_zero() {
             sleep(sleep_for).await;

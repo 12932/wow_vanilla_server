@@ -1561,33 +1561,6 @@ impl World {
         }
     }
 
-    /// Send a system-channel chat line to every connected in-world client
-    /// announcing an adaptive-tickrate transition. Surfacing this in the
-    /// chat box lets a GM see backoff/recovery happen live without
-    /// tailing the server log. Cheap on the broadcast side — rate
-    /// transitions are rare (seconds-to-minutes apart at worst).
-    pub async fn broadcast_tick_rate_change(
-        &mut self,
-        change: crate::world::TickRateChange,
-    ) {
-        let (label, interval) = match change {
-            crate::world::TickRateChange::Backoff { new_interval } => ("backoff", new_interval),
-            crate::world::TickRateChange::Recovery { new_interval } => ("recovery", new_interval),
-        };
-        let hz = 1.0 / interval.as_secs_f32();
-        let text = format!(
-            "[server] tickrate {label}: {} ms ({:.1} Hz)",
-            interval.as_millis(),
-            hz
-        );
-        for region in self.regions.values() {
-            let mut region = region.lock().await;
-            for (_, c) in region.clients.iter_mut() {
-                c.send_system_message(text.clone()).await;
-            }
-        }
-    }
-
     /// Return excess capacity in the long-lived slabs / hash maps / scratch
     /// buffers to the allocator. Vec / Slab / HashMap don't auto-shrink on
     /// remove or `.clear()`, so over a long run with peak-load bursts
@@ -2572,7 +2545,8 @@ impl World {
                 // sleep happens at the global level in `run_world`;
                 // when long-lived per-region task loops land, each
                 // task will sleep on its own `pacer.current_interval`.
-                let (_sleep_for, _change) = region.pacer.observe(t_region_total);
+                let (_sleep_for, region_pacer_change) =
+                    region.pacer.observe(t_region_total);
                 crate::world::region::publish_pacer_state(
                     region.key,
                     crate::world::region::PacerSnapshot {
@@ -2582,6 +2556,31 @@ impl World {
                         last_tick_ms: t_region_total.as_millis() as u64,
                     },
                 );
+
+                // If this region's pacer transitioned (backoff or
+                // recovery), tell ONLY the players in this region.
+                // Players in other regions whose pacers are happy
+                // shouldn't see "tickrate backoff" chat spam.
+                if let Some(change) = region_pacer_change {
+                    let (label, interval) = match change {
+                        crate::world::TickRateChange::Backoff { new_interval } => {
+                            ("backoff", new_interval)
+                        }
+                        crate::world::TickRateChange::Recovery { new_interval } => {
+                            ("recovery", new_interval)
+                        }
+                    };
+                    let hz = 1.0 / interval.as_secs_f32();
+                    let text = format!(
+                        "[server] region {} tickrate {label}: {} ms ({:.1} Hz)",
+                        region.key,
+                        interval.as_millis(),
+                        hz,
+                    );
+                    for (_, c) in region.clients.iter_mut() {
+                        c.send_system_message(text.clone()).await;
+                    }
+                }
 
                 // Per-region Tracy plot — `region_tick_ms` is the
                 // total per-region cost for this tick. Emitted from
