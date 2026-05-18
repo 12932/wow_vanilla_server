@@ -870,6 +870,7 @@ impl RegionState {
 
         self.scratch_client_aabb.clear();
         let aoi_r = crate::config::config().network.aoi_radius_yards;
+        // Local-region clients first.
         for (_, cl) in self.clients.iter() {
             let p = cl.character().info.position;
             let map = cl.character().map;
@@ -881,6 +882,29 @@ impl RegionState {
             entry.1 = entry.1.min(p.y - aoi_r);
             entry.2 = entry.2.max(p.x + aoi_r);
             entry.3 = entry.3.max(p.y + aoi_r);
+        }
+        // Cross-region clients: a player standing in a neighbor
+        // region can still observe this region's walking creatures
+        // through cross-region AoI broadcasts. Without including
+        // their positions in the AABB, the creature's AI would
+        // pause whenever no local player is nearby, leaving the
+        // neighbor-region observer's client extrapolating a stale
+        // MOVE_START_FORWARD indefinitely. PLAYER_REGISTRY is the
+        // process-wide cross-region client index — read it here so
+        // the AABB covers every observer that might be watching.
+        if let Ok(reg) = crate::world::region::PLAYER_REGISTRY.lock() {
+            for entry_view in reg.values() {
+                let p = entry_view.position;
+                let map = entry_view.map;
+                let entry = self
+                    .scratch_client_aabb
+                    .entry(map)
+                    .or_insert((f32::MAX, f32::MAX, f32::MIN, f32::MIN));
+                entry.0 = entry.0.min(p.x - aoi_r);
+                entry.1 = entry.1.min(p.y - aoi_r);
+                entry.2 = entry.2.max(p.x + aoi_r);
+                entry.3 = entry.3.max(p.y + aoi_r);
+            }
         }
 
         let mut events = std::mem::take(&mut self.scratch_walk_events);
@@ -1623,8 +1647,10 @@ impl World {
         let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<aoi::CreatureView>> =
             ahash::AHashMap::new();
         let mut create_object_by_guid: ahash::AHashMap<Guid, Object> = ahash::AHashMap::new();
+        let mut home_region_by_guid: ahash::AHashMap<Guid, crate::world::region::RegionKey> =
+            ahash::AHashMap::new();
 
-        for region_arc in self.regions.values() {
+        for (region_key, region_arc) in self.regions.iter() {
             let region = region_arc.lock().await;
 
             for (_, client) in region.clients.iter() {
@@ -1633,6 +1659,7 @@ impl World {
                 create_object_by_guid
                     .entry(ch.guid)
                     .or_insert_with(|| player_create_object(ch));
+                home_region_by_guid.insert(ch.guid, *region_key);
             }
 
             for (cell_key, indices) in region.creature_cells.iter() {
@@ -1646,6 +1673,7 @@ impl World {
                     create_object_by_guid
                         .entry(cr.guid)
                         .or_insert_with(|| cr.to_create_object());
+                    home_region_by_guid.insert(cr.guid, *region_key);
                 }
             }
         }
@@ -1654,6 +1682,7 @@ impl World {
             broadcast_view,
             creature_cells,
             create_object_by_guid,
+            home_region_by_guid,
         }
     }
 
@@ -2119,6 +2148,7 @@ impl World {
                 &mut region.creatures,
                 &region.creature_by_guid,
                 &mut region.pending_movement,
+                &global_aoi,
             );
             world_opcode_handler::handle_received_client_opcodes(
                 &mut client,
@@ -2418,6 +2448,29 @@ impl World {
                             exclude_guid,
                             &region.broadcast_view,
                         );
+                        crate::world::region::CROSS_REGION_DRAINED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    crate::world::region::CrossRegionMsg::Effect(eff) => {
+                        let crate::world::region::CrossRegionEffect {
+                            target_guid,
+                            effect,
+                        } = eff;
+                        // Apply to a local creature or client. If the
+                        // target is no longer in this region (logged
+                        // out, transitioned away between the sender's
+                        // tick and ours), the effect is silently
+                        // dropped — same shape as a missed broadcast
+                        // frame.
+                        if let Some(&ck) = region.creature_by_guid.get(&target_guid)
+                            && let Some(cr) = region.creatures.get_mut(ck)
+                        {
+                            crate::world::world_opcode_handler::entities::apply_effect_to_creature(cr, &effect);
+                        } else if let Some(&pk) = region.client_by_guid.get(&target_guid)
+                            && let Some(c) = region.clients.get_mut(pk)
+                        {
+                            crate::world::world_opcode_handler::entities::apply_effect_to_client(c, &effect);
+                        }
                         crate::world::region::CROSS_REGION_DRAINED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -4024,5 +4077,137 @@ mod tests {
                 "routing table missing inbox for region {key}"
             );
         }
+    }
+
+    // ── Cross-region feature regression tests ──
+    //
+    // These guard that features layered on top of the Stage 5 partition
+    // (Frost Nova, wandering mob AI) still work when targets / observers
+    // sit on the OPPOSITE side of a region boundary. Each was a
+    // user-reported regression; the test pins the fix.
+
+    #[tokio::test]
+    async fn wandering_mob_ticks_with_cross_region_observer() {
+        // Reproduces: "wandering mob, walking forwards, then I move to
+        // another region, it will wander forwards indefinitely, until
+        // I return to the original region, it will snap back."
+        //
+        // tick_walking_creatures builds an AABB from local clients
+        // only — with no local player near, walking creatures get
+        // skipped, never emit STOP, observer's client extrapolates
+        // forever. Fix includes PLAYER_REGISTRY entries in the AABB.
+        //
+        // Setup: creature in region A walking forward, client in
+        // region B near the boundary (within AOI of the creature).
+        // After one tick, the creature's position must have advanced
+        // — proving it wasn't skipped.
+        use crate::world::world_opcode_handler::creature::CreatureBehavior;
+        use std::time::Instant as StdInstant;
+
+        let mut db = crate::world::database::WorldDatabase::new();
+        // Observer in region B, 50 yd east of the x=-13000 boundary.
+        let observer = test_character_at(&mut db, "Observer", -12950.0, 272.0);
+
+        // Creature in region A, 50 yd west of the boundary, walking east.
+        let mut mob = test_creature_at(7777, -13050.0, 272.0);
+        mob.behavior = CreatureBehavior::RandomWander {
+            anchor: Vector3d { x: -13050.0, y: 272.0, z: 0.0 },
+            radius: 20.0,
+            // Active target so the creature is mid-stride, not
+            // sitting on its idle timer.
+            target: Some(Vector3d { x: -13030.0, y: 272.0, z: 0.0 }),
+            next_decision_at: StdInstant::now(),
+        };
+        mob.info.flags =
+            wow_world_messages::vanilla::MovementInfo_MovementFlags::new_forward()
+                .set_walk_mode();
+        mob.last_advanced_at = StdInstant::now() - std::time::Duration::from_millis(200);
+
+        let initial_pos = mob.info.position;
+        let mut world = World::for_test(vec![observer], vec![mob]);
+
+        let a = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let b = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&a), "creature region missing");
+        assert!(world.regions.contains_key(&b), "observer region missing");
+
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        // The creature should have advanced — if the AABB filter
+        // skipped it, position would be unchanged.
+        let a_region = world.regions.get(&a).unwrap().clone();
+        let a_region = a_region.lock().await;
+        let creature = a_region
+            .creatures
+            .iter()
+            .map(|(_, c)| c)
+            .next()
+            .expect("creature must still exist in region A");
+        let dx = creature.info.position.x - initial_pos.x;
+        let dy = creature.info.position.y - initial_pos.y;
+        let moved = (dx * dx + dy * dy).sqrt();
+        assert!(
+            moved > 0.01,
+            "creature must advance with a cross-region observer in AABB \
+             (started at x={}, now x={})",
+            initial_pos.x,
+            creature.info.position.x,
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_effect_routes_cross_region_via_inbox() {
+        // Lower-level regression for the cross-region effect path used
+        // by .nova: applying a `UnitEffect::Root` to a creature that
+        // lives in a different region must enqueue a `CrossRegionMsg::
+        // Effect` on the target region's inbox. The target region
+        // drains it next tick and applies `root_until` to its local
+        // creature.
+        let mut db = crate::world::database::WorldDatabase::new();
+        // Caster in region A.
+        let caster = test_character_at(&mut db, "Caster", -13050.0, 272.0);
+        // Target creature 60 yd east of the caster, across the
+        // x=-13000 boundary, so in region B.
+        let target_creature = test_creature_at(8888, -12990.0, 272.0);
+        let target_guid = target_creature.guid;
+        let mut world = World::for_test(vec![caster], vec![target_creature]);
+
+        let a = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let b = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&a));
+        assert!(world.regions.contains_key(&b));
+
+        // Routing table is live as of `World::for_test`. Manually
+        // post a cross-region effect addressed at the target
+        // creature. This is what `Entities::apply_effect` would do
+        // for a cross-region guid.
+        let table = crate::world::region::routing().load();
+        let inbox = table.inboxes.get(&b).expect("region B inbox missing");
+        let root_until = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        let msg = crate::world::region::CrossRegionMsg::Effect(
+            crate::world::region::CrossRegionEffect {
+                target_guid,
+                effect: crate::world::command::UnitEffect::Root { until: root_until },
+            },
+        );
+        inbox.cross_region_tx.try_send(msg).expect("inbox send failed");
+
+        // Tick world so region B drains the effect. First tick after
+        // `for_test` always runs (last_tick_at = None → due).
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        // Target creature should now have root_until populated.
+        let b_region = world.regions.get(&b).unwrap().clone();
+        let b_region = b_region.lock().await;
+        let creature = b_region
+            .creatures
+            .iter()
+            .map(|(_, c)| c)
+            .find(|c| c.guid == target_guid)
+            .expect("target creature must exist in region B");
+        assert!(
+            creature.root_until.is_some(),
+            "cross-region effect should have applied root_until"
+        );
     }
 }

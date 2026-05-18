@@ -14,8 +14,8 @@ use tracing::info;
 use wow_world_base::vanilla::position::Position;
 use wow_world_base::vanilla::{HitInfo, SpellSchool, SplineFlag, Vector3d};
 use wow_world_messages::vanilla::{
-    CompressedMove, CompressedMove_CompressedMoveOpcode, MSG_MOVE_STOP_Server, MonsterMove,
-    MonsterMove_MonsterMoveType, MovementInfo, MovementInfo_MovementFlags, Object,
+    CompressedMove, CompressedMove_CompressedMoveOpcode, MonsterMove,
+    MonsterMove_MonsterMoveType, Object,
     Object_UpdateType, SpellCastTargets, UpdateMask, UpdatePlayerBuilder, UpdateUnitBuilder,
     SMSG_COMPRESSED_MOVES, SMSG_FORCE_MOVE_ROOT, SMSG_FORCE_RUN_SPEED_CHANGE,
     SMSG_SPELLNONMELEEDAMAGELOG, SMSG_SPELL_GO, SMSG_SPELL_GO_CastFlags, SMSG_SPLINE_SET_RUN_SPEED,
@@ -260,61 +260,45 @@ pub(crate) async fn gm_command(
             let caster_map = client.character().map;
             let root_until = Instant::now() + ROOT_DURATION;
 
-            let mut creature_hits: Vec<wow_world_messages::Guid> = Vec::new();
-            let mut creature_stops: Vec<(wow_world_messages::Guid, MovementInfo)> = Vec::new();
-            for (_, creature) in entities.creatures().iter_mut() {
-                if creature.map != caster_map {
-                    continue;
-                }
-                let dx = creature.info.position.x - caster_pos.x;
-                let dy = creature.info.position.y - caster_pos.y;
-                let dz = creature.info.position.z - caster_pos.z;
-                if dx * dx + dy * dy + dz * dz <= RADIUS * RADIUS {
-                    creature.root_until = Some(root_until);
-                    let was_walking = matches!(
-                        creature.behavior,
-                        crate::world::world_opcode_handler::creature::CreatureBehavior::RandomWander { .. }
-                            | crate::world::world_opcode_handler::creature::CreatureBehavior::Waypoint { .. }
-                    ) && creature.info.flags.get_forward();
-                    if was_walking {
-                        creature.info.flags = MovementInfo_MovementFlags::default();
-                        creature_stops.push((creature.guid, creature.info.clone()));
-                    }
-                    creature_hits.push(creature.guid);
-                }
+            // Region-agnostic find: the snapshot spans the whole world,
+            // so creatures + clients in neighbor regions across a
+            // boundary are returned alongside local ones. Snapshot is
+            // one tick stale; at 30 Hz / run speed that's ~0.2 yd of
+            // position drift, well under the 14 yd nova radius.
+            let creature_hits: Vec<wow_world_messages::Guid> = entities
+                .creatures_in_radius(caster_pos, caster_map, RADIUS)
+                .into_iter()
+                .map(|v| v.guid)
+                .collect();
+            let client_hits: Vec<wow_world_messages::Guid> = entities
+                .clients_in_radius(caster_pos, caster_map, RADIUS)
+                .into_iter()
+                .map(|t| t.guid)
+                .filter(|g| *g != caster_guid)
+                .collect();
+
+            // Apply server-side root to every target — local or
+            // cross-region. `apply_effect` routes by guid: local
+            // mutation for same-region targets, queued
+            // `CrossRegionEffect` for neighbor-region targets (drained
+            // on the target region's next tick, ~33 ms lag).
+            for g in creature_hits.iter().chain(client_hits.iter()) {
+                entities.apply_effect(*g, crate::world::command::UnitEffect::Root { until: root_until });
             }
-            // Collect real-player targets and apply server-enforced root.
-            // Setting `root_until` makes the movement opcode handler drop
-            // incoming `MSG_MOVE_*` from this client until the timer expires —
-            // so headless load-test bots (which don't respect
-            // `SMSG_FORCE_MOVE_ROOT`) freeze visually even though they keep
-            // spamming heartbeats. Skip the caster themselves.
-            let mut client_hits: Vec<(wow_world_messages::Guid, MovementInfo)> = Vec::new();
-            for (_, c) in entities.clients().iter_mut() {
-                if c.character().map != caster_map {
-                    continue;
-                }
-                if c.character().guid == caster_guid {
-                    continue;
-                }
-                let dx = c.character().info.position.x - caster_pos.x;
-                let dy = c.character().info.position.y - caster_pos.y;
-                let dz = c.character().info.position.z - caster_pos.z;
-                if dx * dx + dy * dy + dz * dz <= RADIUS * RADIUS {
-                    // Freeze authoritative state at the moment of root so
-                    // post-root broadcasts use the rooted position, not
-                    // whatever heartbeat snuck in next.
-                    c.character_mut().info.flags = MovementInfo_MovementFlags::default();
-                    c.character_mut().root_until = Some(root_until);
-                    client_hits.push((c.character().guid, c.character().info.clone()));
-                }
-            }
+
             let hits: Vec<wow_world_messages::Guid> = creature_hits
                 .iter()
-                .chain(client_hits.iter().map(|(g, _)| g))
+                .chain(client_hits.iter())
                 .copied()
                 .collect();
 
+            // Spell-go visual. `broadcast_within_aoi` already does
+            // cross-region post-fanout (routes the frame through the
+            // routing table to every neighbor inbox), so observers in
+            // neighbor regions also see the nova land. Send to caster
+            // explicitly since `broadcast_within_aoi` excludes the
+            // source from the AOI fan-out for movement opcodes — but
+            // for spell visuals the caster needs to see it too.
             let spell_go = SMSG_SPELL_GO {
                 cast_item: caster_guid,
                 caster: caster_guid,
@@ -325,19 +309,23 @@ pub(crate) async fn gm_command(
                 targets: SpellCastTargets::default(),
             };
             client.send_message(spell_go.clone()).await;
-            for (_, c) in entities.clients().iter_mut() {
-                if c.character().map == caster_map
-                    && crate::world::aoi::within_aoi(&c.character().info.position, &caster_pos)
-                {
-                    c.send_message(spell_go.clone()).await;
-                }
-            }
+            crate::world::aoi::broadcast_within_aoi(
+                spell_go,
+                caster_pos,
+                caster_map,
+                entities.clients(),
+            )
+            .await;
 
             const AFLAG_HARMFUL: u8 = 0x02;
             const AFLAG_VISIBLE: u8 = 0x08;
             const AFLAG_NOT_CANCELABLE: u8 = 0x20;
             const AURA_FLAGS: u8 = AFLAG_HARMFUL | AFLAG_VISIBLE | AFLAG_NOT_CANCELABLE;
 
+            // Aura visual for every hit. One broadcast per target;
+            // both unit (creature) and player builders apply the same
+            // aura mask — they're separate update structs in the wire
+            // protocol but the broadcast path doesn't care.
             for target_guid in &creature_hits {
                 let aura_update = SMSG_UPDATE_OBJECT {
                     has_transport: 0,
@@ -356,16 +344,15 @@ pub(crate) async fn gm_command(
                     }],
                 };
                 client.send_message(aura_update.clone()).await;
-                for (_, c) in entities.clients().iter_mut() {
-                    if c.character().map == caster_map
-                        && crate::world::aoi::within_aoi(&c.character().info.position, &caster_pos)
-                    {
-                        c.send_message(aura_update.clone()).await;
-                    }
-                }
+                crate::world::aoi::broadcast_within_aoi(
+                    aura_update,
+                    caster_pos,
+                    caster_map,
+                    entities.clients(),
+                )
+                .await;
             }
-
-            for (target_guid, _) in client_hits.iter() {
+            for target_guid in &client_hits {
                 let aura_update = SMSG_UPDATE_OBJECT {
                     has_transport: 0,
                     objects: vec![Object {
@@ -383,47 +370,28 @@ pub(crate) async fn gm_command(
                     }],
                 };
                 client.send_message(aura_update.clone()).await;
-                for (_, c) in entities.clients().iter_mut() {
-                    if c.character().map == caster_map
-                        && crate::world::aoi::within_aoi(&c.character().info.position, &caster_pos)
-                    {
-                        c.send_message(aura_update.clone()).await;
-                    }
-                }
+                crate::world::aoi::broadcast_within_aoi(
+                    aura_update,
+                    caster_pos,
+                    caster_map,
+                    entities.clients(),
+                )
+                .await;
             }
 
-            for (target_guid, info) in creature_stops
-                .into_iter()
-                .chain(client_hits.iter().cloned())
-            {
-                let stop = MSG_MOVE_STOP_Server {
-                    guid: target_guid,
-                    info,
-                };
-                client.send_message(stop.clone()).await;
-                for (_, c) in entities.clients().iter_mut() {
-                    if c.character().map == caster_map
-                        && crate::world::aoi::within_aoi(&c.character().info.position, &caster_pos)
-                    {
-                        c.send_message(stop.clone()).await;
-                    }
-                }
-            }
-
-            // Send SMSG_FORCE_MOVE_ROOT directly to each rooted real player.
-            // Cooperative clients (the real WoW client) lock their movement
-            // input on receipt; headless bots ignore it. Either way the
-            // movement-opcode handler enforces the root server-side.
-            for (target_guid, _) in &client_hits {
-                let root_msg = SMSG_FORCE_MOVE_ROOT {
-                    guid: *target_guid,
-                    counter: 0,
-                };
-                for (_, c) in entities.clients().iter_mut() {
-                    if c.character().guid == *target_guid {
-                        c.send_message(root_msg).await;
-                        break;
-                    }
+            // SMSG_FORCE_MOVE_ROOT is only meaningful to real WoW
+            // clients (it locks their movement input). Bots ignore it.
+            // For cross-region rooted clients we can't send it
+            // directly — they're in a neighbor region's slab — so the
+            // server-side root takes over instead via apply_effect.
+            // Local rooted clients get the SMSG path too.
+            for target_guid in &client_hits {
+                if let Some(c) = entities.find_player_mut(*target_guid) {
+                    let root_msg = SMSG_FORCE_MOVE_ROOT {
+                        guid: *target_guid,
+                        counter: 0,
+                    };
+                    c.send_message(root_msg).await;
                 }
             }
         }
@@ -527,13 +495,44 @@ pub(crate) async fn gm_command(
             // Stage 3 sharding uses. Empty regions (zero players) are
             // dropped — a GM running `.regions` cares about hot spots,
             // not the long tail of empty buckets.
+            //
+            // Players come from `PLAYER_REGISTRY` (the process-wide
+            // index also used by `.go PlayerName`) so the count is
+            // cross-region accurate. The requesting GM has been
+            // transiently removed from their region's slab + the
+            // registry for the duration of this opcode handler — so
+            // we explicitly add them back to the count for their own
+            // region. Without this, `.regions` reported `players=0`
+            // for a GM alone in the world.
             let mut player_counts: AHashMap<RegionKey, usize> = AHashMap::new();
             let mut creature_counts: AHashMap<RegionKey, usize> = AHashMap::new();
-            for (_, c) in entities.clients().iter() {
-                let pos = c.character().info.position;
-                let key = RegionKey::from_position(c.character().map, pos.x, pos.y);
-                *player_counts.entry(key).or_default() += 1;
+            if let Ok(reg) = crate::world::region::PLAYER_REGISTRY.lock() {
+                for entry in reg.values() {
+                    let key = RegionKey::from_position(
+                        entry.map,
+                        entry.position.x,
+                        entry.position.y,
+                    );
+                    *player_counts.entry(key).or_default() += 1;
+                }
             }
+            {
+                let ch = client.character();
+                let me_key = RegionKey::from_position(
+                    ch.map,
+                    ch.info.position.x,
+                    ch.info.position.y,
+                );
+                *player_counts.entry(me_key).or_default() += 1;
+            }
+            // Creatures are still counted from the requesting GM's
+            // own region only — partitioning means each region owns
+            // its creatures slab and locking neighbors mid-tick could
+            // stall this region's tick. The visible side-effect:
+            // `.regions` shows accurate creature counts for the
+            // region the GM is in, and zero for the others. Acceptable
+            // for a debug command; a cross-region creature-count
+            // index is a future cleanup.
             for (_, cr) in entities.creatures().iter() {
                 let key = RegionKey::from_position(cr.map, cr.info.position.x, cr.info.position.y);
                 *creature_counts.entry(key).or_default() += 1;
