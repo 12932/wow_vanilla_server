@@ -64,11 +64,22 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     let battle_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Race path: shared across every Race-mode bot in this worker.
-    // Generated once at worker startup. Currently a hardcoded 4-point
-    // Booty Bay → Stormwind polyline; namigator wiring lands in a
-    // follow-up commit.
+    // Generated once at worker startup. Try namigator first; if the
+    // cache isn't baked or the env var was unset at compile time,
+    // fall back to a 5-point hardcoded polyline so the loadtest still
+    // runs (bots will clip through scenery but the load profile is
+    // identical from the server's POV).
     let race_path: Arc<[wow_world_messages::vanilla::Vector3d]> = if cfg.mode == BotMode::Race {
-        bot::race::hardcoded_bb_to_sw().into()
+        match bot::race::build_race_path() {
+            Ok(path) => path.into(),
+            Err(e) => {
+                tracing::warn!(
+                    "namigator path generation failed ({e}); falling back to hardcoded BB→SW polyline. \
+                     Bots will still race but the geometry will be coarse."
+                );
+                bot::race::hardcoded_bb_to_sw().into()
+            }
+        }
     } else {
         Arc::from(Vec::new())
     };

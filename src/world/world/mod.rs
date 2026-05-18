@@ -1494,32 +1494,27 @@ impl World {
     /// in the process-wide routing table.
     pub fn with_creatures_and_db(
         clients_waiting_to_join: Receiver<CharacterScreenClient>,
-        mut creatures: Slab<Creature>,
+        creatures: Slab<Creature>,
         db: WorldDatabase,
     ) -> Self {
-        let mut maps = PathfindingMaps::new();
+        let maps = PathfindingMaps::new();
 
-        // Snap every worlddb creature's z to actual terrain *before*
-        // partition. Mangos rows have stale z for a noticeable
-        // percentage of spawns; idle mobs never emit a movement event
-        // and so are never snapped at runtime — without this they'd
-        // stay floating / underground forever. No-op when pathfinding
-        // maps aren't loaded for the creature's map. Snap is global
-        // because `maps` is global.
-        let total = creatures.len();
-        let mut snapped = 0_usize;
-        for (_, c) in creatures.iter_mut() {
-            let z_hint = c.info.position.z;
-            if let Some(z) =
-                maps.ground_height(c.map, c.info.position.x, c.info.position.y, z_hint)
-            {
-                c.info.position.z = z;
-                snapped += 1;
-            }
-        }
-        tracing::info!(
-            "Snapped z to ground for {snapped}/{total} worlddb creatures at spawn"
-        );
+        // Worlddb creatures keep whatever z mangos stored. ~17% are
+        // stale (idle mobs that never emit a movement event and so
+        // never get snapped at runtime). Previously this constructor
+        // iterated every creature and called `ground_height`, which
+        // lazy-loaded every ADT tile they sat on — adding minutes
+        // to a cold boot. Snap-on-startup is removed in favor of
+        // lazy snapping at the points that *also* load tiles:
+        // - `tick_walking_creatures` snaps z on every walk-step.
+        // - `apply_commands::SpawnCreature` snaps runtime-spawned mobs.
+        // - Movement opcode broadcasts (combat / aggro) update z as
+        //   the creature moves.
+        // The remaining gap is idle mobs that mangos got wrong AND
+        // that no player ever forces to move; they float / clip by a
+        // yard or two. Cosmetic. If it becomes visible enough to fix,
+        // add an on-AOI-entry snap (one ground_height per creature
+        // first time it enters someone's visible set).
 
         // Partition by `RegionKey::from_position(map, x, y)`. Pure
         // function; consumes the slab.
