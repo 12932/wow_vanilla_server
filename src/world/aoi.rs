@@ -1,5 +1,6 @@
 use crate::world::world::client::{Client, OutboundTx};
 use crate::world::world_opcode_handler::{write_message_test, write_server_test};
+use ahash::AHashMap;
 use rayon::prelude::*;
 use slab::Slab;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use wow_world_base::vanilla::Map;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-use wow_world_messages::vanilla::{ServerMessage, Vector3d};
+use wow_world_messages::vanilla::{Object, ServerMessage, Vector3d};
 
 /// `Sync`-safe per-client broadcast handle. Snapshotted from every
 /// `Client` at the top of the broadcast phase so the fan-out loop can
@@ -66,6 +67,56 @@ impl BroadcastTarget {
                  dropping packets — client is falling behind",
                 self.account_name,
             );
+        }
+    }
+}
+
+/// Lightweight position+guid snapshot of a single creature for the
+/// cross-region AoI discovery scan. Has only what the diff scan reads
+/// — position for the radius check, guid to record in `visible_entities`
+/// and to look up in [`GlobalAoiSnapshot::create_object_by_guid`] when
+/// building the entered-objects packet.
+#[derive(Debug, Clone, Copy)]
+pub struct CreatureView {
+    pub guid: Guid,
+    pub position: Vector3d,
+}
+
+/// Cross-region AoI snapshot built once per `World::tick` from
+/// end-of-last-tick state. Each per-region [`tick_aoi_transitions`]
+/// pass reads this instead of its own `broadcast_view` /
+/// `creature_cells` so observers at a region boundary discover the
+/// entities past the boundary.
+///
+/// Tradeoff vs. always-fresh: cross-region entities appear one tick
+/// stale to the diff scan (33 ms at 30 Hz). Local entities are still
+/// included in the snapshot so the local-vs-cross-region treatment is
+/// uniform — every observer reads from the same view.
+///
+/// Built at the top of `World::tick`, before per-region tasks spawn,
+/// by locking each region briefly and copying out the relevant fields.
+/// Wrapped in `Arc` for cheap distribution to the spawned tasks.
+pub struct GlobalAoiSnapshot {
+    /// Every connected client across every region.
+    pub broadcast_view: Vec<BroadcastTarget>,
+    /// 250-yd cell-keyed creature index. Diff scan's 3×3 window
+    /// (1×CREATURE_GRID_CELL_YD) lands cleanly across region
+    /// boundaries because the snapshot is keyed by (Map, cx, cy),
+    /// not by region.
+    pub creature_cells: AHashMap<(Map, i32, i32), Vec<CreatureView>>,
+    /// Pre-built CreateObject2 for every entity (player + creature)
+    /// in the snapshot. Diff scan looks up here to build
+    /// `entered_objects` without needing live access to neighbor
+    /// regions' slabs.
+    pub create_object_by_guid: AHashMap<Guid, Object>,
+}
+
+impl GlobalAoiSnapshot {
+    pub fn empty() -> Self {
+        Self {
+            broadcast_view: Vec::new(),
+            creature_cells: AHashMap::new(),
+            create_object_by_guid: AHashMap::new(),
         }
     }
 }

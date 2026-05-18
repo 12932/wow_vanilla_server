@@ -1120,7 +1120,10 @@ impl RegionState {
     /// players use their own static-spawn / kill paths today. Extending
     /// to those is straightforward but out of scope for the despawn-on-
     /// AOI-exit fix this addresses.
-    pub async fn tick_aoi_transitions(&mut self) -> AoiTickStats {
+    pub async fn tick_aoi_transitions(
+        &mut self,
+        global: &crate::world::aoi::GlobalAoiSnapshot,
+    ) -> AoiTickStats {
         let mut stats = AoiTickStats::default();
         async {
         // Hoist AOI radius + flap cooldown + `now` once for the whole
@@ -1186,12 +1189,14 @@ impl RegionState {
         }
         let results: Vec<DiffResult> = {
             let _s = tracing::info_span!("aoi_diff_parallel").entered();
-            let broadcast_view = &self.broadcast_view;
-            let creatures = &self.creatures;
-            let creature_cells = &self.creature_cells;
-            let creature_by_guid = &self.creature_by_guid;
-            let client_by_guid = &self.client_by_guid;
-            let clients = &self.clients;
+            // Stage 5 cross-region fix: read from the world-wide snapshot
+            // instead of `self.*` so an observer at a region boundary
+            // discovers entities sitting just past the boundary in the
+            // neighbor region. The snapshot is one tick old; see
+            // `aoi::GlobalAoiSnapshot` for the freshness tradeoff.
+            let broadcast_view = &global.broadcast_view;
+            let creature_cells = &global.creature_cells;
+            let create_object_by_guid = &global.create_object_by_guid;
             work.into_par_iter()
                 .map(|input| {
                     let DiffInput {
@@ -1219,19 +1224,18 @@ impl RegionState {
                     let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
                     for dx in -1..=1 {
                         for dy in -1..=1 {
-                            let Some(keys) =
+                            let Some(views) =
                                 creature_cells.get(&(observer_map, cx + dx, cy + dy))
                             else {
                                 continue;
                             };
-                            for &ck in keys {
-                                let cr = &creatures[ck];
+                            for view in views {
                                 if aoi::within_aoi_sq(
                                     &observer_pos,
-                                    &cr.info.position,
+                                    &view.position,
                                     aoi_r_sq,
                                 ) {
-                                    new_visible.insert(cr.guid);
+                                    new_visible.insert(view.guid);
                                 }
                             }
                         }
@@ -1297,22 +1301,14 @@ impl RegionState {
                         new_visible.difference(&visible).copied().collect();
 
                     // Build entered_objects (CreateObject2 for each
-                    // newcomer guid). Reads from creatures + clients
-                    // slabs via the reverse-index maps. Reading another
-                    // observer's `c.character()` here is fine — only
-                    // their Character is touched, never their session.
+                    // newcomer guid). The snapshot pre-baked one
+                    // `Object` per entity guid — including neighbor-
+                    // region entities — so a single lookup serves
+                    // local and cross-region newcomers alike.
                     let mut entered_objects = Vec::with_capacity(entered.len());
                     for g in &entered {
-                        if let Some(&ck) = creature_by_guid.get(g)
-                            && let Some(cr) = creatures.get(ck)
-                        {
-                            entered_objects.push(cr.to_create_object());
-                            continue;
-                        }
-                        if let Some(&pk) = client_by_guid.get(g)
-                            && let Some(c) = clients.get(pk)
-                        {
-                            entered_objects.push(player_create_object(c.character()));
+                        if let Some(obj) = create_object_by_guid.get(g) {
+                            entered_objects.push(obj.clone());
                         }
                     }
 
@@ -1610,6 +1606,57 @@ impl World {
     /// parallel, and the regions are unblocked from each other while
     /// it happens. The orchestrator collects all replies, then locks
     /// the DB once and writes the aggregated Characters atomically.
+    /// Build a cross-region AoI snapshot from end-of-last-tick state.
+    /// Locks each region briefly to copy out the broadcast view +
+    /// creature cell index + pre-baked `CreateObject2` packets for
+    /// every entity. Called once per `World::tick` before per-region
+    /// tasks spawn; the resulting `Arc<GlobalAoiSnapshot>` is cloned
+    /// into each task.
+    ///
+    /// Cost: O(N) per tick where N = total entities. The
+    /// `to_create_object` build per entity is a handful of field
+    /// copies — at typical loads (a few thousand creatures + a few
+    /// hundred clients) the snapshot build is well under a
+    /// millisecond.
+    async fn build_global_aoi_snapshot(&self) -> aoi::GlobalAoiSnapshot {
+        let mut broadcast_view: Vec<aoi::BroadcastTarget> = Vec::new();
+        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<aoi::CreatureView>> =
+            ahash::AHashMap::new();
+        let mut create_object_by_guid: ahash::AHashMap<Guid, Object> = ahash::AHashMap::new();
+
+        for region_arc in self.regions.values() {
+            let region = region_arc.lock().await;
+
+            for (_, client) in region.clients.iter() {
+                broadcast_view.push(client.broadcast_target());
+                let ch = client.character();
+                create_object_by_guid
+                    .entry(ch.guid)
+                    .or_insert_with(|| player_create_object(ch));
+            }
+
+            for (cell_key, indices) in region.creature_cells.iter() {
+                let bucket = creature_cells.entry(*cell_key).or_default();
+                for &idx in indices {
+                    let cr = &region.creatures[idx];
+                    bucket.push(aoi::CreatureView {
+                        guid: cr.guid,
+                        position: cr.info.position,
+                    });
+                    create_object_by_guid
+                        .entry(cr.guid)
+                        .or_insert_with(|| cr.to_create_object());
+                }
+            }
+        }
+
+        aoi::GlobalAoiSnapshot {
+            broadcast_view,
+            creature_cells,
+            create_object_by_guid,
+        }
+    }
+
     pub async fn sync_clients_to_db(&self) {
         // Stage 4 channel-based collection. Each `tokio::spawn` is the
         // sender; the awaited `JoinHandle` is the receiver. With N
@@ -1940,11 +1987,22 @@ impl World {
         // guard at this point — promote does its own per-destination
         // locking and char_screen released its db lock above.
 
+        // Build the cross-region AoI snapshot from end-of-last-tick
+        // state. Distributed by Arc clone into each per-region task so
+        // the AoI discovery scan can see entities past region
+        // boundaries — without this, a player standing 50 yd west of a
+        // boundary couldn't see the raptor 100 yd east of it because
+        // each region's diff only ever read its own `creature_cells` +
+        // `broadcast_view`. See `aoi::GlobalAoiSnapshot` for the
+        // freshness tradeoff.
+        let global_aoi = Arc::new(self.build_global_aoi_snapshot().await);
+
         let mut per_region_handles: Vec<tokio::task::JoinHandle<PerRegionTickResult>> = Vec::new();
         for region_arc in self.regions.values() {
             let region_arc = region_arc.clone();
             let db_arc = self.db.clone();
             let maps_arc = self.maps.clone();
+            let global_aoi = global_aoi.clone();
             per_region_handles.push(tokio::spawn(async move {
                 let mut region_guard = region_arc.lock().await;
                 let region: &mut RegionState = &mut region_guard;
@@ -2469,7 +2527,7 @@ impl World {
         // Without this pass, players who walk past the AOI boundary
         // linger forever on observers' clients as motionless ghosts.
         let phase = Instant::now();
-        let aoi_stats = region.tick_aoi_transitions().await;
+        let aoi_stats = region.tick_aoi_transitions(&global_aoi).await;
         t_aoi = phase.elapsed();
         if let Some(client) = tracy_client::Client::running() {
             client.plot(
