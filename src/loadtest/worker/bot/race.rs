@@ -34,8 +34,11 @@ pub fn hardcoded_bb_to_sw() -> Vec<Vector3d> {
 }
 
 /// Booty Bay docks — race start. Constant so both `build_race_path()`
-/// and `hardcoded_bb_to_sw()` agree on the endpoints.
-pub const BOOTY_BAY: Vector3d = Vector3d { x: -14253.7, y: 290.5, z: 7.4 };
+/// and `hardcoded_bb_to_sw()` agree on the endpoints. Coordinates
+/// hand-picked from in-game (`.whereami` on the docks) so they sit
+/// cleanly on the walkable plank surface rather than the namigator
+/// mesh under it (which is rocky seabed several yards below).
+pub const BOOTY_BAY: Vector3d = Vector3d { x: -14237.9, y: 262.02, z: 24.75 };
 /// Stormwind Trade District — race finish.
 pub const STORMWIND: Vector3d = Vector3d { x: -8949.0, y: -132.0, z: 84.0 };
 
