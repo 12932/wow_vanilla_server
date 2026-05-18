@@ -365,6 +365,20 @@ impl MovementDriver {
 
         if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
             self.advance_position(now);
+            // Lerp Z toward the target waypoint as we close on it.
+            // `advance_position` is a 2D step (XY only); without this
+            // the bot keeps whatever Z it teleported in with and
+            // walks underground / floats once the path leaves the
+            // starting altitude. Fraction = XY-step / XY-remaining.
+            let new_dx = target.x - self.info.position.x;
+            let new_dy = target.y - self.info.position.y;
+            let dist_after = (new_dx * new_dx + new_dy * new_dy).sqrt();
+            let dist_total = dist_sq.sqrt();
+            if dist_total > 0.001 {
+                let fraction = ((dist_total - dist_after) / dist_total).clamp(0.0, 1.0);
+                let dz = target.z - self.info.position.z;
+                self.info.position.z += dz * fraction;
+            }
             let msg = MSG_MOVE_HEARTBEAT_Client {
                 info: self.info.clone(),
             };
