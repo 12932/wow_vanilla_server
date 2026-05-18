@@ -155,6 +155,37 @@ pub fn regions_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> Vec<
     out
 }
 
+/// Bucket a slab of creatures into per-region groups by
+/// [`RegionKey::from_position`]. Used by `World::with_creatures` (and
+/// `for_test`) to partition the worlddb's full creature slab into
+/// per-`RegionState` slabs at startup.
+///
+/// Pure function: drains the input slab into `Vec`s keyed by region.
+/// `creature.map` + `creature.info.position` determine the bucket. The
+/// caller is responsible for re-indexing each bucket into per-region
+/// `Slab<Creature>` + `creature_by_guid` + `creature_cells` data
+/// structures.
+pub fn partition_creatures(
+    slab: slab::Slab<crate::world::world_opcode_handler::creature::Creature>,
+) -> ahash::AHashMap<
+    RegionKey,
+    Vec<crate::world::world_opcode_handler::creature::Creature>,
+> {
+    let mut out: ahash::AHashMap<
+        RegionKey,
+        Vec<crate::world::world_opcode_handler::creature::Creature>,
+    > = ahash::AHashMap::new();
+    for (_, creature) in slab {
+        let key = RegionKey::from_position(
+            creature.map,
+            creature.info.position.x,
+            creature.info.position.y,
+        );
+        out.entry(key).or_default().push(creature);
+    }
+    out
+}
+
 /// A pre-serialized broadcast frame headed to a neighbor region.
 ///
 /// Built by the originating region during its broadcast phase: the
@@ -279,6 +310,84 @@ pub fn publish_pacer_state(key: RegionKey, snap: PacerSnapshot) {
     }
 }
 
+/// Process-wide registry of in-world player positions. Maintained by
+/// every `RegionState::insert_client` / `remove_client` so the GM
+/// command parser can answer ".go PlayerName" cross-region without
+/// having to lock every region's mutex from the GM's region.
+///
+/// Entries are best-effort: a player mid-transition (left region A
+/// but not yet admitted to B) may briefly be absent. The `.go`
+/// command surfaces this as "Unable to find player 'X'", which is the
+/// natural error today as well.
+#[derive(Debug, Clone)]
+pub struct PlayerRegistryEntry {
+    pub guid: Guid,
+    pub name: String,
+    pub map: Map,
+    pub position: Vector3d,
+    pub orientation: f32,
+}
+
+pub static PLAYER_REGISTRY: std::sync::LazyLock<
+    std::sync::Mutex<ahash::AHashMap<Guid, PlayerRegistryEntry>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(ahash::AHashMap::new()));
+
+/// Lowercase-name → guid index. Updated in lockstep with
+/// [`PLAYER_REGISTRY`] so `.go PlayerName` (by name) is O(1).
+pub static PLAYER_NAME_INDEX: std::sync::LazyLock<
+    std::sync::Mutex<ahash::AHashMap<String, Guid>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(ahash::AHashMap::new()));
+
+/// Register or refresh a player's entry in both indexes. Called by
+/// `RegionState::insert_client` after the slab insert succeeds.
+pub fn register_player(entry: PlayerRegistryEntry) {
+    let name_lc = entry.name.to_lowercase();
+    let guid = entry.guid;
+    if let Ok(mut reg) = PLAYER_REGISTRY.lock() {
+        reg.insert(guid, entry);
+    }
+    if let Ok(mut idx) = PLAYER_NAME_INDEX.lock() {
+        idx.insert(name_lc, guid);
+    }
+}
+
+/// Drop a player from both indexes. Called by
+/// `RegionState::remove_client`. No-op if the player isn't registered
+/// (e.g. if the caller forgot to register them on insert — defensive,
+/// not load-bearing).
+pub fn unregister_player(guid: Guid) {
+    let name_lc = {
+        if let Ok(mut reg) = PLAYER_REGISTRY.lock() {
+            reg.remove(&guid).map(|e| e.name.to_lowercase())
+        } else {
+            None
+        }
+    };
+    if let Some(name_lc) = name_lc
+        && let Ok(mut idx) = PLAYER_NAME_INDEX.lock()
+    {
+        idx.remove(&name_lc);
+    }
+}
+
+/// Look up a player's position by guid. Used by `.go` (no args, with
+/// selected target) when the target isn't in the GM's local region.
+pub fn lookup_player_position(guid: Guid) -> Option<(Map, Vector3d, f32)> {
+    let reg = PLAYER_REGISTRY.lock().ok()?;
+    reg.get(&guid).map(|e| (e.map, e.position, e.orientation))
+}
+
+/// Look up a player's position by case-insensitive name. Used by
+/// `.go PlayerName`.
+pub fn lookup_player_position_by_name(name: &str) -> Option<(Map, Vector3d, f32)> {
+    let name_lc = name.to_lowercase();
+    let guid = {
+        let idx = PLAYER_NAME_INDEX.lock().ok()?;
+        idx.get(&name_lc).copied()?
+    };
+    lookup_player_position(guid)
+}
+
 /// Atomic load-and-zero — pattern used by the global tick to publish
 /// the per-tick rate to Tracy. Single relaxed read+store; no fences
 /// are needed because the counter is a coarse-grained sample.
@@ -399,5 +508,102 @@ mod tests {
         assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: 0 }));
         assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 }));
         assert_eq!(out.len(), 4);
+    }
+
+    // ── Tests for partition_creatures (Stage 5 partition TDD) ──
+
+    use crate::world::world_opcode_handler::creature::Creature;
+    use slab::Slab;
+    use wow_world_messages::Guid;
+
+    /// Build a `Creature` at the given map + (x, y) position with a
+    /// unique guid. Used by the partition tests below.
+    fn make_creature_at(guid_int: u64, map: Map, x: f32, y: f32) -> Creature {
+        let mut c = Creature::new(format!("test_{guid_int}"), Guid::new(guid_int));
+        c.map = map;
+        c.info.position = Vector3d { x, y, z: 0.0 };
+        c
+    }
+
+    #[test]
+    fn partition_creatures_buckets_by_position() {
+        // Three creatures in three distinct REGION (1000-yd) buckets on
+        // EasternKingdoms: (0,0), (1,0), (0,1). After partition each
+        // bucket should hold exactly its one creature.
+        let mut slab: Slab<Creature> = Slab::new();
+        slab.insert(make_creature_at(1, Map::EasternKingdoms, 100.0, 100.0));
+        slab.insert(make_creature_at(2, Map::EasternKingdoms, 1500.0, 100.0));
+        slab.insert(make_creature_at(3, Map::EasternKingdoms, 100.0, 1500.0));
+
+        let buckets = partition_creatures(slab);
+
+        assert_eq!(buckets.len(), 3);
+        let r00 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
+        let r10 = RegionKey { map: Map::EasternKingdoms, rx: 1, ry: 0 };
+        let r01 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 1 };
+        assert_eq!(buckets.get(&r00).map(Vec::len), Some(1));
+        assert_eq!(buckets.get(&r10).map(Vec::len), Some(1));
+        assert_eq!(buckets.get(&r01).map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn partition_creatures_handles_negative_coords() {
+        // Gurubashi Arena position lands in (-14, 0), not the (-13, 0)
+        // that truncate-toward-zero would yield. Guards the `floor()`
+        // path in `RegionKey::from_position`.
+        let mut slab: Slab<Creature> = Slab::new();
+        slab.insert(make_creature_at(7, Map::EasternKingdoms, -13206.0, 272.0));
+
+        let buckets = partition_creatures(slab);
+
+        let gurubashi = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets.get(&gurubashi).map(Vec::len), Some(1));
+        let not_truncated = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(
+            !buckets.contains_key(&not_truncated),
+            "creature at -13206 should not land in (-13, 0)"
+        );
+    }
+
+    #[test]
+    fn partition_creatures_preserves_empty_input() {
+        let slab: Slab<Creature> = Slab::new();
+        let buckets = partition_creatures(slab);
+        assert!(buckets.is_empty());
+    }
+
+    #[test]
+    fn partition_creatures_groups_multiple_in_same_region() {
+        // Two creatures in the same 1000-yd region should land in one
+        // bucket of size 2; confirms `entry(...).or_default().push(...)`.
+        let mut slab: Slab<Creature> = Slab::new();
+        slab.insert(make_creature_at(1, Map::EasternKingdoms, 100.0, 100.0));
+        slab.insert(make_creature_at(2, Map::EasternKingdoms, 900.0, 900.0));
+
+        let buckets = partition_creatures(slab);
+
+        let r00 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets.get(&r00).map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn partition_creatures_separates_by_map() {
+        // Same (x, y) on different maps must produce different
+        // RegionKeys.
+        let mut slab: Slab<Creature> = Slab::new();
+        slab.insert(make_creature_at(1, Map::EasternKingdoms, 100.0, 100.0));
+        slab.insert(make_creature_at(2, Map::Kalimdor, 100.0, 100.0));
+
+        let buckets = partition_creatures(slab);
+
+        assert_eq!(buckets.len(), 2);
+        assert!(buckets.contains_key(&RegionKey {
+            map: Map::EasternKingdoms, rx: 0, ry: 0,
+        }));
+        assert!(buckets.contains_key(&RegionKey {
+            map: Map::Kalimdor, rx: 0, ry: 0,
+        }));
     }
 }

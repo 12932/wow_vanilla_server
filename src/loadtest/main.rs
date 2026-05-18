@@ -17,6 +17,8 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::worker::BotMode;
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Role {
     Worker,
@@ -66,10 +68,15 @@ struct Cli {
     #[arg(long, default_value = "0.0.0.0:7100")]
     bind: String,
 
-    /// Worker-only: enable PvP behavior. Each bot will pick a random
-    /// nearby player it has seen, pursue them to melee range, and send
-    /// `CMSG_ATTACKSWING` repeatedly. Without this flag bots run the
-    /// random-walk movement driver and never attack.
+    /// Worker-only: bot behavior. `random` (default) does the legacy
+    /// random-walk inside a 60yd box; `pvp` runs the Gurubashi arena
+    /// fight; `race` makes bots run the Booty Bay → Stormwind path
+    /// (see `worker/bot/race.rs`).
+    #[arg(long, value_enum, default_value_t = BotMode::Random)]
+    mode: BotMode,
+
+    /// Worker-only: deprecated alias for `--mode pvp`. If set, overrides
+    /// `--mode` to PvP. Kept for backwards compat with existing scripts.
     #[arg(long, default_value_t = false)]
     pvp: bool,
 }
@@ -85,6 +92,9 @@ async fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
     match cli.role {
         Role::Worker => {
+            // `--pvp` is the legacy flag; if set, it forces PvP regardless
+            // of what `--mode` says. Newer scripts should use `--mode pvp`.
+            let mode = if cli.pvp { BotMode::Pvp } else { cli.mode };
             let cfg = worker::WorkerConfig {
                 worker_id: cli.worker_id,
                 auth_addr: cli.target,
@@ -93,7 +103,7 @@ async fn main() -> std::io::Result<()> {
                 initial_clients: cli.clients,
                 ramp_up_secs: cli.ramp_up,
                 orchestrator: cli.orchestrator,
-                pvp: cli.pvp,
+                mode,
             };
             worker::run(cfg).await
         }

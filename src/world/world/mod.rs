@@ -56,10 +56,11 @@ pub mod pathfinding_maps;
 /// no behavior change).
 #[derive(Debug)]
 pub struct RegionState {
-    /// Identity of this region. Currently every `World` holds exactly
-    /// one `RegionState` keyed by [`World::WORLD_KEY`] (a sentinel that
-    /// names "the single-region world"); partition into actual
-    /// position-derived keys is a follow-up Stage 3 task.
+    /// Identity of this region: the position-derived `RegionKey`
+    /// that named the `World::regions` entry holding this state.
+    /// Stable across ticks. Used by the slow-tick log and the
+    /// boundary-transition check to compare a client's new computed
+    /// key against the region they're in.
     pub(crate) key: RegionKey,
     pub(crate) clients: Slab<Client>,
     /// Reverse index from player guid to slab key. Must be maintained in
@@ -126,6 +127,16 @@ pub struct RegionState {
     /// region would back off independently once Stage 3 polish wires
     /// long-lived per-region task loops.
     pub(crate) pacer: crate::world::TickPacer,
+
+    /// Inbox for cross-region broadcasts arriving from neighbor
+    /// regions. The matching `cross_region_tx` half lives in the
+    /// global [`crate::world::region::routing()`] table under this
+    /// region's key. Drained at the top of the broadcast phase each
+    /// tick — see Stage 5 partition wiring (step 7).
+    #[allow(dead_code)] // wired in step 7 (inbox draining)
+    pub(crate) cross_region_rx: kanal::AsyncReceiver<
+        crate::world::region::CrossRegionMsg,
+    >,
 }
 
 #[derive(Debug)]
@@ -158,23 +169,50 @@ pub struct World {
 }
 
 impl World {
-    /// Sentinel region key for the single-region build. Once Stage 3
-    /// partitions clients/creatures by position this constant goes
-    /// away — every region will own a true geometric `RegionKey`.
-    pub const WORLD_KEY: RegionKey = RegionKey {
-        map: wow_world_base::vanilla::Map::EasternKingdoms,
-        rx: i32::MIN,
-        ry: i32::MIN,
-    };
+    /// Look up or lazily create a `RegionState` for `key`. Used by
+    /// `promote` (admit new player into their position's region) and
+    /// the end-of-tick boundary transition path (move a client into
+    /// the region whose square now contains them).
+    ///
+    /// On miss: builds an empty `RegionState` + inbox, inserts both,
+    /// then rebuilds the global routing table (clone + add) and
+    /// `ArcSwap` installs the new table. Costs are microseconds and
+    /// the routing-table read path is unaffected.
+    pub fn ensure_region_exists(
+        &mut self,
+        key: RegionKey,
+    ) -> Arc<Mutex<RegionState>> {
+        if let Some(existing) = self.regions.get(&key) {
+            return existing.clone();
+        }
+        let (state, inbox) = RegionState::new_empty(key);
+        let arc = Arc::new(Mutex::new(state));
+        self.regions.insert(key, arc.clone());
 
-    /// `Arc<Mutex<RegionState>>` for the (currently sole) region. Panics
-    /// if the map is empty.
-    #[inline]
-    pub fn primary_region(&self) -> Arc<Mutex<RegionState>> {
-        self.regions
-            .get(&Self::WORLD_KEY)
-            .expect("primary region must exist")
-            .clone()
+        // Copy-on-write swap of the routing table: clone the current
+        // table, insert the new inbox, install. Readers in flight see
+        // the old table to completion; subsequent loads see the new.
+        let current = crate::world::region::routing().load_full();
+        let mut new_table = crate::world::region::RoutingTable::new();
+        for (k, v) in current.inboxes.iter() {
+            new_table.inboxes.insert(*k, v.clone());
+        }
+        new_table.inboxes.insert(key, inbox);
+        crate::world::region::install_routing(new_table);
+
+        arc
+    }
+
+    /// Admit a freshly-built `Client` into the region whose square
+    /// contains the client's position. Spins up a new region if
+    /// necessary.
+    pub async fn admit_client_at_position(&mut self, client: Client) {
+        let pos = client.character().info.position;
+        let map = client.character().map;
+        let key = RegionKey::from_position(map, pos.x, pos.y);
+        let region_arc = self.ensure_region_exists(key);
+        let mut region = region_arc.lock().await;
+        region.insert_client(client);
     }
 }
 
@@ -198,6 +236,68 @@ fn grid_cell_for(map: Map, x: f32, y: f32) -> (Map, i32, i32) {
     let cx = (x / CREATURE_GRID_CELL_YD).floor() as i32;
     let cy = (y / CREATURE_GRID_CELL_YD).floor() as i32;
     (map, cx, cy)
+}
+
+/// Build a `RegionState` from a position-bucketed `Vec<Creature>`,
+/// computing all the per-region indexes (`creature_by_guid`,
+/// `creature_cells`, `walking_creature_keys`, `aggro_creature_keys`,
+/// wander/waypoint counts) and pairing it with a fresh cross-region
+/// inbox channel.
+///
+/// Used by both `World::with_creatures_and_db` and `World::for_test`
+/// after `region::partition_creatures` has bucketed the input.
+fn build_region_state_with_creatures(
+    key: RegionKey,
+    creatures: Vec<Creature>,
+) -> (RegionState, crate::world::region::RegionInbox) {
+    let (state_empty, inbox) = RegionState::new_empty(key);
+    let mut state = state_empty;
+
+    let mut creature_slab: Slab<Creature> = Slab::with_capacity(creatures.len());
+    for c in creatures {
+        creature_slab.insert(c);
+    }
+
+    let mut creature_by_guid = ahash::AHashMap::with_capacity(creature_slab.len());
+    let mut aggro_creature_keys = Vec::new();
+    let mut walking_creature_keys = Vec::with_capacity(creature_slab.len());
+    let mut creature_wander_count = 0;
+    let mut creature_waypoint_count = 0;
+    let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
+        ahash::AHashMap::new();
+    let mut creature_cell_of: ahash::AHashMap<usize, (Map, i32, i32)> =
+        ahash::AHashMap::with_capacity(creature_slab.len());
+    for (k, c) in creature_slab.iter() {
+        creature_by_guid.insert(c.guid, k);
+        match c.behavior {
+            CreatureBehavior::AggroChase => aggro_creature_keys.push(k),
+            CreatureBehavior::RandomWander { .. } => {
+                walking_creature_keys.push(k);
+                creature_wander_count += 1;
+            }
+            CreatureBehavior::Waypoint { .. } => {
+                walking_creature_keys.push(k);
+                creature_waypoint_count += 1;
+            }
+            CreatureBehavior::Idle => {}
+        }
+        if !matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
+            let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+            creature_cells.entry(cell).or_default().push(k);
+            creature_cell_of.insert(k, cell);
+        }
+    }
+
+    state.creatures = creature_slab;
+    state.creature_by_guid = creature_by_guid;
+    state.aggro_creature_keys = aggro_creature_keys;
+    state.walking_creature_keys = walking_creature_keys;
+    state.creature_wander_count = creature_wander_count;
+    state.creature_waypoint_count = creature_waypoint_count;
+    state.creature_cells = creature_cells;
+    state.creature_cell_of = creature_cell_of;
+
+    (state, inbox)
 }
 
 /// Bundle of per-region tick outputs returned by the `tokio::spawn`ed
@@ -229,6 +329,11 @@ pub struct PerRegionTickResult {
     /// orchestration + this region's work).
     pub t_region_total: Duration,
     pub departed: Vec<CharacterScreenClient>,
+    /// Clients whose end-of-tick position no longer falls inside this
+    /// region's [`RegionKey`]. The orchestrator routes each one to the
+    /// destination region (lazily creating it if necessary). One-tick
+    /// orphan window between removal here and admit to destination.
+    pub transitions: Vec<(RegionKey, Client)>,
     pub clients_count: usize,
     pub creatures_count: usize,
     pub creature_idle_count: usize,
@@ -252,21 +357,80 @@ pub struct AoiTickStats {
 }
 
 impl RegionState {
+    /// Build an empty `RegionState` plus its inbox sender half. The
+    /// caller registers the returned `RegionInbox` in the routing
+    /// table; the receiver half is stored on the new state. Pacer is
+    /// initialized from `[tick]` config.
+    ///
+    /// Used by `World::with_creatures` / `for_test` for partition
+    /// construction and by `World::ensure_region_exists` for lazy
+    /// spin-up on first admit / boundary transition.
+    #[allow(dead_code)] // wired in step 3+4
+    pub(crate) fn new_empty(
+        key: RegionKey,
+    ) -> (Self, crate::world::region::RegionInbox) {
+        let (tx, rx) = kanal::unbounded_async();
+        let state = Self {
+            key,
+            clients: Slab::new(),
+            client_by_guid: ahash::AHashMap::new(),
+            creatures: Slab::new(),
+            creature_by_guid: ahash::AHashMap::new(),
+            aggro_creature_keys: Vec::new(),
+            walking_creature_keys: Vec::new(),
+            creature_wake_at: std::collections::BTreeMap::new(),
+            creature_wander_count: 0,
+            creature_waypoint_count: 0,
+            creature_cells: ahash::AHashMap::new(),
+            creature_cell_of: ahash::AHashMap::new(),
+            last_tick_at: None,
+            pending_movement: ahash::AHashMap::new(),
+            tick_counter: 0,
+            last_heartbeat_broadcast_tick: ahash::AHashMap::new(),
+            scratch_client_aabb: ahash::AHashMap::new(),
+            scratch_walk_events: Vec::new(),
+            scratch_to_park: Vec::new(),
+            scratch_parked_set: ahash::AHashSet::new(),
+            scratch_expired_roots: Vec::new(),
+            broadcast_view: Vec::new(),
+            pacer: crate::world::TickPacer::new_from_config(
+                &crate::config::config().tick,
+            ),
+            cross_region_rx: rx,
+        };
+        let inbox = crate::world::region::RegionInbox { cross_region_tx: tx };
+        (state, inbox)
+    }
+
     /// Insert a client into the slab and keep `client_by_guid` in sync.
     /// Always use this rather than `self.clients.insert(...)` directly
-    /// so the reverse index stays authoritative.
+    /// so the reverse index stays authoritative. Also publishes the
+    /// client's identity into the process-wide
+    /// [`crate::world::region::PLAYER_REGISTRY`] so cross-region GM
+    /// lookups (e.g. `.go PlayerName`) can find them.
     pub(crate) fn insert_client(&mut self, c: Client) -> usize {
         let guid = c.character().guid;
+        let entry = crate::world::region::PlayerRegistryEntry {
+            guid,
+            name: c.character().name.clone(),
+            map: c.character().map,
+            position: c.character().info.position,
+            orientation: c.character().info.orientation,
+        };
         let key = self.clients.insert(c);
         self.client_by_guid.insert(guid, key);
+        crate::world::region::register_player(entry);
         key
     }
 
     /// Remove a client from the slab and drop the matching
-    /// `client_by_guid` entry. Pairs with [`Self::insert_client`].
+    /// `client_by_guid` entry plus the global registry entry. Pairs
+    /// with [`Self::insert_client`].
     pub(crate) fn remove_client(&mut self, key: usize) -> Client {
         let c = self.clients.remove(key);
-        self.client_by_guid.remove(&c.character().guid);
+        let guid = c.character().guid;
+        self.client_by_guid.remove(&guid);
+        crate::world::region::unregister_player(guid);
         c
     }
 
@@ -1290,15 +1454,38 @@ impl RegionState {
 impl World {
     pub fn with_creatures(
         clients_waiting_to_join: Receiver<CharacterScreenClient>,
+        creatures: Slab<Creature>,
+    ) -> Self {
+        Self::with_creatures_and_db(
+            clients_waiting_to_join,
+            creatures,
+            WorldDatabase::new(),
+        )
+    }
+
+    /// Variant of [`with_creatures`] that adopts an externally-constructed
+    /// `WorldDatabase` (e.g. one restored from a snapshot). The Stage 3
+    /// production path uses this so the freshly-loaded DB enters the
+    /// `Arc<Mutex<>>` directly rather than being created empty here.
+    ///
+    /// Stage 5 partition: the creature slab is bucketed by
+    /// [`RegionKey::from_position`]; each bucket becomes its own
+    /// `RegionState` under [`World::regions`] and registers its inbox
+    /// in the process-wide routing table.
+    pub fn with_creatures_and_db(
+        clients_waiting_to_join: Receiver<CharacterScreenClient>,
         mut creatures: Slab<Creature>,
+        db: WorldDatabase,
     ) -> Self {
         let mut maps = PathfindingMaps::new();
 
-        // Snap every worlddb creature's z to actual terrain *before* indexing.
-        // Mangos rows have stale z for a noticeable percentage of spawns; idle
-        // mobs never emit a movement event and so are never snapped at
-        // runtime — without this they'd stay floating / underground forever.
-        // No-op when pathfinding maps aren't loaded for the creature's map.
+        // Snap every worlddb creature's z to actual terrain *before*
+        // partition. Mangos rows have stale z for a noticeable
+        // percentage of spawns; idle mobs never emit a movement event
+        // and so are never snapped at runtime — without this they'd
+        // stay floating / underground forever. No-op when pathfinding
+        // maps aren't loaded for the creature's map. Snap is global
+        // because `maps` is global.
         let total = creatures.len();
         let mut snapped = 0_usize;
         for (_, c) in creatures.iter_mut() {
@@ -1314,94 +1501,30 @@ impl World {
             "Snapped z to ground for {snapped}/{total} worlddb creatures at spawn"
         );
 
-        let mut creature_by_guid = ahash::AHashMap::with_capacity(creatures.len());
-        let mut aggro_creature_keys = Vec::new();
-        let mut walking_creature_keys = Vec::with_capacity(creatures.len());
-        let mut creature_wander_count = 0;
-        let mut creature_waypoint_count = 0;
-        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
-            ahash::AHashMap::with_capacity(1024);
-        let mut creature_cell_of: ahash::AHashMap<usize, (Map, i32, i32)> =
-            ahash::AHashMap::with_capacity(creatures.len());
-        for (k, c) in creatures.iter() {
-            creature_by_guid.insert(c.guid, k);
-            match c.behavior {
-                CreatureBehavior::AggroChase => aggro_creature_keys.push(k),
-                CreatureBehavior::RandomWander { .. } => {
-                    walking_creature_keys.push(k);
-                    creature_wander_count += 1;
-                }
-                CreatureBehavior::Waypoint { .. } => {
-                    walking_creature_keys.push(k);
-                    creature_waypoint_count += 1;
-                }
-                CreatureBehavior::Idle => {}
-            }
-            // Seed the spatial grid with every non-Respawning creature.
-            // Construction is bulk-fresh so nothing's Respawning yet, but
-            // guard anyway for future hygiene.
-            if !matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
-                let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
-                creature_cells.entry(cell).or_default().push(k);
-                creature_cell_of.insert(k, cell);
-            }
-        }
+        // Partition by `RegionKey::from_position(map, x, y)`. Pure
+        // function; consumes the slab.
+        let buckets = crate::world::region::partition_creatures(creatures);
+
         let mut regions = ahash::AHashMap::new();
-        regions.insert(
-            Self::WORLD_KEY,
-            Arc::new(Mutex::new(RegionState {
-                key: Self::WORLD_KEY,
-                clients: Slab::new(),
-                client_by_guid: ahash::AHashMap::new(),
-                creatures,
-                creature_by_guid,
-                aggro_creature_keys,
-                walking_creature_keys,
-                creature_wake_at: std::collections::BTreeMap::new(),
-                creature_wander_count,
-                creature_waypoint_count,
-                creature_cells,
-                creature_cell_of,
-                last_tick_at: None,
-                pending_movement: ahash::AHashMap::new(),
-                tick_counter: 0,
-                last_heartbeat_broadcast_tick: ahash::AHashMap::new(),
-                scratch_client_aabb: ahash::AHashMap::new(),
-                scratch_walk_events: Vec::new(),
-                scratch_to_park: Vec::new(),
-                scratch_parked_set: ahash::AHashSet::new(),
-                scratch_expired_roots: Vec::new(),
-                broadcast_view: Vec::new(),
-                pacer: crate::world::TickPacer::new_from_config(
-                    &crate::config::config().tick,
-                ),
-            })),
-        );
+        let mut routing_table = crate::world::region::RoutingTable::new();
+        for (key, bucket) in buckets {
+            let (state, inbox) = build_region_state_with_creatures(key, bucket);
+            routing_table.inboxes.insert(key, inbox);
+            regions.insert(key, Arc::new(Mutex::new(state)));
+        }
+        crate::world::region::install_routing(routing_table);
+
         Self {
             regions,
             clients_on_character_screen: vec![],
             clients_waiting_to_join,
             maps: Arc::new(Mutex::new(maps)),
-            db: Arc::new(Mutex::new(WorldDatabase::new())),
+            db: Arc::new(Mutex::new(db)),
             last_packet_sample: 0,
             last_packet_sample_at: Instant::now(),
             last_net_stats: None,
             last_net_stats_at: Instant::now(),
         }
-    }
-
-    /// Variant of [`with_creatures`] that adopts an externally-constructed
-    /// `WorldDatabase` (e.g. one restored from a snapshot). The Stage 3
-    /// production path uses this so the freshly-loaded DB enters the
-    /// `Arc<Mutex<>>` directly rather than being created empty here.
-    pub fn with_creatures_and_db(
-        clients_waiting_to_join: Receiver<CharacterScreenClient>,
-        creatures: Slab<Creature>,
-        db: WorldDatabase,
-    ) -> Self {
-        let mut world = Self::with_creatures(clients_waiting_to_join, creatures);
-        world.db = Arc::new(Mutex::new(db));
-        world
     }
 
     /// Build a World suitable for tests and benchmarks: skips pathfinding
@@ -1411,96 +1534,58 @@ impl World {
     /// Requires an active Tokio runtime — each synthetic client spawns a
     /// writer task.
     ///
-    /// `characters` populates the live (in-world) client slab. `creatures`
-    /// is indexed the same way `with_creatures` does, minus the
-    /// terrain-snap step (positions are taken at face value).
+    /// Stage 5: both `characters` and `creatures` are partitioned by
+    /// position into per-region states. The routing table is populated
+    /// with one inbox per region.
     pub fn for_test(characters: Vec<Character>, creatures: Vec<Creature>) -> Self {
         let maps = PathfindingMaps::new();
 
+        // Move creatures into a Slab so we can hand them to the
+        // `partition_creatures` helper.
         let mut creature_slab: Slab<Creature> = Slab::with_capacity(creatures.len());
         for c in creatures {
             creature_slab.insert(c);
         }
-        let mut creature_by_guid = ahash::AHashMap::with_capacity(creature_slab.len());
-        let mut aggro_creature_keys = Vec::new();
-        let mut walking_creature_keys = Vec::with_capacity(creature_slab.len());
-        let mut creature_wander_count = 0;
-        let mut creature_waypoint_count = 0;
-        let mut creature_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
-            ahash::AHashMap::with_capacity(1024);
-        let mut creature_cell_of: ahash::AHashMap<usize, (Map, i32, i32)> =
-            ahash::AHashMap::with_capacity(creature_slab.len());
-        for (k, c) in creature_slab.iter() {
-            creature_by_guid.insert(c.guid, k);
-            match c.behavior {
-                CreatureBehavior::AggroChase => aggro_creature_keys.push(k),
-                CreatureBehavior::RandomWander { .. } => {
-                    walking_creature_keys.push(k);
-                    creature_wander_count += 1;
-                }
-                CreatureBehavior::Waypoint { .. } => {
-                    walking_creature_keys.push(k);
-                    creature_waypoint_count += 1;
-                }
-                CreatureBehavior::Idle => {}
-            }
-            if !matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
-                let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
-                creature_cells.entry(cell).or_default().push(k);
-                creature_cell_of.insert(k, cell);
-            }
-        }
+        let creature_buckets = crate::world::region::partition_creatures(creature_slab);
 
         // Closed receiver — benches don't push new logins, but the field
         // is non-optional on World.
         let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
 
         let mut regions = ahash::AHashMap::new();
-        let region_state = RegionState {
-            key: Self::WORLD_KEY,
-            clients: Slab::with_capacity(characters.len()),
-            client_by_guid: ahash::AHashMap::with_capacity(characters.len()),
-            creatures: creature_slab,
-            creature_by_guid,
-            aggro_creature_keys,
-            walking_creature_keys,
-            creature_wake_at: std::collections::BTreeMap::new(),
-            creature_wander_count,
-            creature_waypoint_count,
-            creature_cells,
-            creature_cell_of,
-            last_tick_at: None,
-            pending_movement: ahash::AHashMap::new(),
-            tick_counter: 0,
-            last_heartbeat_broadcast_tick: ahash::AHashMap::new(),
-            scratch_client_aabb: ahash::AHashMap::new(),
-            scratch_walk_events: Vec::new(),
-            scratch_to_park: Vec::new(),
-            scratch_parked_set: ahash::AHashSet::new(),
-            scratch_expired_roots: Vec::new(),
-            broadcast_view: Vec::new(),
-            pacer: crate::world::TickPacer::new_from_config(
-                &crate::config::config().tick,
-            ),
-        };
-        let region_arc = Arc::new(Mutex::new(region_state));
-        // Seed test characters directly so a no-runtime `for_test` build
-        // is ready to tick without going through the login pipeline.
-        {
-            let region_arc = region_arc.clone();
-            // We're synchronous here — `try_lock` won't block because nobody
-            // else has the Arc yet.
+        let mut routing_table = crate::world::region::RoutingTable::new();
+
+        // Build a region per creature bucket.
+        for (key, bucket) in creature_buckets {
+            let (state, inbox) = build_region_state_with_creatures(key, bucket);
+            routing_table.inboxes.insert(key, inbox);
+            regions.insert(key, Arc::new(Mutex::new(state)));
+        }
+
+        // Seed test characters directly: each character is bucketed by
+        // its `(map, info.position)` into a region (created lazily if
+        // not already present from a creature). Sync `try_lock` is fine
+        // because we own all Arcs and no other tokio task touches them.
+        for character in characters {
+            let pos = character.info.position;
+            let map = character.map;
+            let key = crate::world::region::RegionKey::from_position(map, pos.x, pos.y);
+            let region_arc = regions.entry(key).or_insert_with(|| {
+                let (state, inbox) = RegionState::new_empty(key);
+                routing_table.inboxes.insert(key, inbox);
+                Arc::new(Mutex::new(state))
+            }).clone();
+            let account = character.account.clone();
+            let client = crate::world::world::client::test_support::synthetic_client(
+                character, account,
+            );
             let mut region = region_arc.try_lock()
                 .expect("freshly-built region must not be locked");
-            for character in characters {
-                let account = character.account.clone();
-                let client = crate::world::world::client::test_support::synthetic_client(
-                    character, account,
-                );
-                region.insert_client(client);
-            }
+            region.insert_client(client);
         }
-        regions.insert(Self::WORLD_KEY, region_arc);
+
+        crate::world::region::install_routing(routing_table);
+
         Self {
             regions,
             clients_on_character_screen: vec![],
@@ -1599,42 +1684,19 @@ impl World {
         // here is the orchestrator: drain login, character-screen
         // opcodes, promote (all global), then spawn N region tasks for
         // the per-region phases.
-        let primary_region = self.primary_region();
-        let mut region_guard = primary_region.lock().await;
-
-        // Lock the shared `db` and `maps` for the duration of the global
-        // phases (drain login, char_screen, promote). The per-region tokio
-        // tasks spawned afterward re-acquire these locks independently.
-        let mut db_guard = self.db.lock().await;
-        let mut maps_guard = self.maps.lock().await;
-
         // Forward-declare values that flow from the global phases into the
-        // post-spawn slow-tick log + Tracy block. `tick_dt` and
-        // `heartbeat_skip_ratio` moved into the per-region task — they
-        // are now per-region values (each region pacer drives its own).
+        // post-spawn slow-tick log + Tracy block. Per-region `tick_dt` and
+        // `heartbeat_skip_ratio` are computed INSIDE the per-region task
+        // (each pacer drives its own).
         let t_drain: Duration;
         let t_chrscreen: Duration;
         let t_promote: Duration;
 
-        // Global phases run in a scope so the `region`/`db`/`maps`
-        // reborrows of the guards drop before the per-region spawn (which
-        // re-acquires the same Arc<Mutex<>>es).
-        //
-        // Note: per-region `tick_dt`, `last_tick_at`, `tick_counter`,
-        // and `heartbeat_skip_ratio` are computed INSIDE the per-region
-        // task (using each region's own pacer). The global phase here
-        // only handles the truly global work — login drain, character
-        // screen, promote. `tick_dt` is no longer forward-declared here.
-        let _ = slow_warn; // suppresses a "no longer used at top-level" warning
-        {
-        let region: &mut RegionState = &mut region_guard;
-        let db: &mut WorldDatabase = &mut db_guard;
-        // `maps` is currently unused inside the global phases (promote
-        // doesn't snap terrain); the lock is held just to keep ordering
-        // consistent with the spawned task's re-acquisition.
-        let _maps: &mut PathfindingMaps = &mut maps_guard;
-        let _ = region; // global phase doesn't read region — Stage 4 moved tick_dt/counter into the spawn task
-
+        // ── Global phases that need NO region lock ──
+        // drain_login + char_screen run against `self.clients_*` +
+        // `self.db`. Promote (which needs `&mut self` to call
+        // `ensure_region_exists`) is broken out below so we can take
+        // disjoint borrows on regions vs db vs clients_on_character_screen.
         {
             let phase = Instant::now();
             let _s = tracing::info_span!("drain_login_queue").entered();
@@ -1644,53 +1706,53 @@ impl World {
             t_drain = phase.elapsed();
         }
 
-        let phase = Instant::now();
-        async {
-            for client in self.clients_on_character_screen.iter_mut() {
-                handle_character_screen_opcodes(client, db).await;
-            }
-        }
-        .instrument(tracing::info_span!("character_screen_opcodes"))
-        .await;
-        t_chrscreen = phase.elapsed();
-
-        let phase = Instant::now();
-        async {
-        // Rebuild the broadcast view from current `region.clients` so the
-        // par_iter filters below see fresh data. We rebuild AGAIN later
-        // (post-`per_client_loop`) for the flush/AOI phases — that rebuild
-        // captures this-tick movement updates. Two builds per tick is
-        // sub-ms even at high density; the promote scan savings dwarf it.
         {
-            let _s = tracing::info_span!("build_broadcast_view_promote").entered();
-            region.broadcast_view.clear();
-            region.broadcast_view
-                .extend(region.clients.iter().map(|(_, c)| c.broadcast_target()));
+            let phase = Instant::now();
+            let mut db_guard = self.db.lock().await;
+            let db: &mut WorldDatabase = &mut db_guard;
+            async {
+                for client in self.clients_on_character_screen.iter_mut() {
+                    handle_character_screen_opcodes(client, db).await;
+                }
+            }
+            .instrument(tracing::info_span!("character_screen_opcodes"))
+            .await;
+            drop(db_guard);
+            t_chrscreen = phase.elapsed();
         }
-        // Hoist the AOI radius once for the entire promote phase. Reused
-        // by every `within_aoi_sq` call in the par_iter closures below.
+
+        // ── Stage 5 partition: promote with per-destination routing ──
+        //
+        // Each `WaitingToLogIn` client is now routed to the region that
+        // contains their character's position. The destination region
+        // is lazily spun up on first admit. Per-iteration we:
+        //   1. Pop the next ready CharacterScreenClient.
+        //   2. Lock `self.db` briefly to resolve guid → Character.
+        //   3. Build the in-world Client.
+        //   4. Compute `RegionKey::from_position` for the destination.
+        //   5. `ensure_region_exists` (creates + routes the inbox if new).
+        //   6. Lock the destination region exclusively for this admit:
+        //      build the visible-objects bundle from THAT region only,
+        //      seed observers' visible_entities, insert the client.
+        //
+        // The AOI scan is now intra-region — players in neighbor regions
+        // discover the newcomer through the next cross-region broadcast
+        // (step 7's inbox drain). For sparse-density regions this is
+        // identical to before; for boundary-hugging admits the neighbor
+        // visibility lights up one tick later, which the client's
+        // interpolation tolerates.
+        let phase = Instant::now();
         let aoi_r = crate::config::config().network.aoi_radius_yards;
         let aoi_r_sq = aoi_r * aoi_r;
-        // Promoting a player builds an `UpdateObject` for every other client
-        // visible from the new player's position. With N bots promoting in
-        // one tick this would regenerate the same create-object N times per
-        // already-in-world client. Build once per tick and reuse.
-        let mut create_object_cache: ahash::AHashMap<Guid, Object> = ahash::AHashMap::new();
-        // Cap per-tick promotions so a login burst (e.g. ramping 1k bots
-        // in 30 s) doesn't pin a single tick at hundreds of ms while it
-        // scans every observer's in-AOI list for each promotion.
-        // Configured via `[tick] max_promotions_per_tick`; 0 disables.
         let max_promotions =
             crate::config::config().tick.max_promotions_per_tick;
         let mut promoted_this_tick = 0_u32;
+        async {
         while let Some(i) = self.clients_on_character_screen
             .iter()
             .position(|a| matches!(a.status, CharacterScreenProgress::WaitingToLogIn(_)))
         {
             if max_promotions > 0 && promoted_this_tick >= max_promotions {
-                // Remaining `WaitingToLogIn` clients stay queued — they
-                // get picked up next tick. The position() above will
-                // find them again.
                 break;
             }
             let c = self.clients_on_character_screen.remove(i);
@@ -1698,33 +1760,47 @@ impl World {
                 CharacterScreenProgress::WaitingToLogIn(g) => g,
                 _ => unreachable!(),
             };
-            let Some(character) = db.get_character_by_guid(guid) else {
-                tracing::warn!(
-                    "Promotion for {} aborted: guid {:?} not found in DB; dropping connection.",
-                    c.account_name(),
-                    guid
-                );
-                drop(c);
-                continue;
+            let character = {
+                let db = self.db.lock().await;
+                match db.get_character_by_guid(guid) {
+                    Some(ch) => ch,
+                    None => {
+                        tracing::warn!(
+                            "Promotion for {} aborted: guid {:?} not found in DB; dropping connection.",
+                            c.account_name(),
+                            guid
+                        );
+                        drop(c);
+                        continue;
+                    }
+                }
             };
             let mut c = c.into_client(character);
 
             let new_player_pos = c.character().info.position;
             let new_player_map = c.character().map;
-
             let new_player_guid = c.character().guid;
+            let dest_key = RegionKey::from_position(
+                new_player_map, new_player_pos.x, new_player_pos.y,
+            );
+            let region_arc = self.ensure_region_exists(dest_key);
+            let mut region_guard = region_arc.lock().await;
+            let region: &mut RegionState = &mut region_guard;
+
+            // Rebuild the destination's broadcast_view so the par_iter
+            // filters below see this-tick state. Cheap; sub-ms even
+            // at high density.
+            region.broadcast_view.clear();
+            region.broadcast_view
+                .extend(region.clients.iter().map(|(_, c)| c.broadcast_target()));
+
+            // Announce the new player to the destination region.
             let new_player_object = player_create_object(c.character());
             if let Some(msg) = UpdateObject::from_objects(vec![new_player_object]) {
                 msg.broadcast_within_aoi(new_player_pos, new_player_map, &mut region.clients)
                     .await;
-                // Seed every AOI observer's visible-entity set with the new
-                // player so the upcoming AOI-transition pass doesn't re-emit
-                // a duplicate `CreateObject` for them next tick. The filter
-                // (map + AOI) is pure-read over `broadcast_view` — par_iter
-                // it, then apply the mutation sequentially via the
-                // `client_by_guid → slab key` reverse index. At high
-                // density the parallel filter is several times faster
-                // than the old sequential `region.clients.iter_mut()` scan.
+                // Seed in-AOI observers' visible_entities so the next
+                // AOI tick doesn't re-emit CreateObject for them.
                 let observer_guids: Vec<Guid> = region
                     .broadcast_view
                     .par_iter()
@@ -1744,17 +1820,12 @@ impl World {
                 }
             }
 
+            // Build the visible-objects bundle from the destination
+            // region only (intra-region AOI; neighbor coverage arrives
+            // via cross-region broadcasts).
             let mut visible_objects: Vec<Object> = Vec::new();
             let mut movement_starts: Vec<MSG_MOVE_START_FORWARD_Server> = Vec::new();
 
-            // Parallel filter: which existing players are in the new
-            // player's AOI? This is the dominant cost of promote at
-            // high density — par_iter across rayon threads brings each
-            // promote from a multi-ms slab walk down to a fraction of
-            // that. `broadcast_view` was rebuilt at the top of the
-            // phase and re-extended after every `insert_client` below,
-            // so it reflects every player already in the world plus
-            // everyone promoted earlier in this same tick.
             let candidate_guids: Vec<Guid> = region
                 .broadcast_view
                 .par_iter()
@@ -1765,25 +1836,13 @@ impl World {
                 })
                 .map(|t| t.guid)
                 .collect();
-            // Sequential build: per-tick `create_object_cache` and the
-            // new player's own `visible_entities` are mutated here, so
-            // this stays single-threaded. The cache provides cross-
-            // promotion memoization — N promotes in the same tick share
-            // mask construction for overlapping visibility sets.
             for other_guid in candidate_guids {
                 let Some(&other_key) = region.client_by_guid.get(&other_guid) else {
                     continue;
                 };
                 let client = &region.clients[other_key];
-                let obj = create_object_cache
-                    .entry(other_guid)
-                    .or_insert_with(|| player_create_object(client.character()))
-                    .clone();
-                visible_objects.push(obj);
+                visible_objects.push(player_create_object(client.character()));
                 c.session.visible_entities.insert(other_guid);
-                // If this player is mid-motion, also queue a movement-start
-                // so the new client animates them instead of seeing a
-                // stationary object that teleports on every heartbeat.
                 if client.character().info.flags.get_forward() {
                     movement_starts.push(MSG_MOVE_START_FORWARD_Server {
                         guid: other_guid,
@@ -1792,19 +1851,7 @@ impl World {
                 }
             }
 
-            // Spatial-grid creature scan: only check creatures in the
-            // 3×3 cell window around the new player's position. The
-            // grid (`creature_cells`) holds only Alive + Corpse
-            // creatures — Respawning ones are removed on Corpse→Respawn
-            // and re-inserted on Respawn→Alive, so this also fixes a
-            // latent bug where the previous full-slab scan would emit
-            // CreateObject for in-AOI Respawning creatures the client
-            // shouldn't yet see.
-            //
-            // Cell size (250 yd) > AOI radius (200 yd default), so the
-            // 3×3 window is guaranteed to cover every creature within
-            // AOI of the anchor. Same pattern used in
-            // `tick_aoi_transitions`'s creature scan.
+            // Creature scan (3×3 cell window around the new player).
             {
                 let cx = (new_player_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
                 let cy = (new_player_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
@@ -1839,40 +1886,30 @@ impl World {
 
             let visible_count = visible_objects.len();
             let starts_count = movement_starts.len();
-            // Chunked send: at high density `visible_objects` holds
-            // thousands of CreateObject2s. One packet exceeds the
-            // wire-protocol u16 size header → silent truncation →
-            // ARC4 desync → client appears in-world but is dead-on-the-
-            // wire. This was the "log out + log back in at high
-            // density = frozen client" bug. See `UpdateObject::send_chunked`.
             UpdateObject::send_chunked(visible_objects, &mut c).await;
             for start in movement_starts {
                 c.send_message(start).await;
             }
             tracing::debug!(
-                "promote: account={} name={} pos=({:.1},{:.1},{:.1}) map={:?} -> sent {} CreateObjects + {} MoveStarts; clients_in_world={} creatures={}",
+                "promote: account={} name={} pos=({:.1},{:.1},{:.1}) map={:?} region={} -> sent {} CreateObjects + {} MoveStarts; region_clients={} region_creatures={}",
                 c.session.account_name,
                 c.character().name,
                 new_player_pos.x,
                 new_player_pos.y,
                 new_player_pos.z,
                 new_player_map,
+                dest_key,
                 visible_count,
                 starts_count,
                 region.clients.len(),
                 region.creatures.len(),
             );
 
-            // Snapshot the new player's BroadcastTarget BEFORE
-            // `insert_client` moves `c` into the slab. Appending to
-            // `broadcast_view` here means the NEXT promotion in this
-            // same tick can see this player via its par_iter filter —
-            // matches the pre-change behavior where `region.clients` was
-            // iterated directly and reflected each insert immediately.
             let new_target = c.broadcast_target();
             region.insert_client(c);
             region.broadcast_view.push(new_target);
             promoted_this_tick += 1;
+            drop(region_guard);
         }
         if let Some(client) = tracy_client::Client::running() {
             client.plot(
@@ -1884,7 +1921,6 @@ impl World {
         .instrument(tracing::info_span!("promote_logged_in"))
         .await;
         t_promote = phase.elapsed();
-        } // end of global-phase scope: region/db/maps reborrows drop here
 
         // ── Stage 3: per-region tick on its own tokio task ──
         //
@@ -1899,9 +1935,10 @@ impl World {
         // into the task's `__departed` and pushed back into
         // `self.clients_on_character_screen` by the orchestrator after
         // the task completes.
-        drop(region_guard);
-        drop(maps_guard);
-        drop(db_guard);
+        //
+        // Stage 5: the orchestrator no longer holds any region/db/maps
+        // guard at this point — promote does its own per-destination
+        // locking and char_screen released its db lock above.
 
         let mut per_region_handles: Vec<tokio::task::JoinHandle<PerRegionTickResult>> = Vec::new();
         for region_arc in self.regions.values() {
@@ -1945,6 +1982,7 @@ impl World {
                         t_logouts: Duration::ZERO,
                         t_region_total: Duration::ZERO,
                         departed: Vec::new(),
+                        transitions: Vec::new(),
                         clients_count: region.clients.len(),
                         creatures_count: region.creatures.len(),
                         creature_idle_count: 0,
@@ -2291,6 +2329,44 @@ impl World {
             );
         }
 
+        // ── Stage 5 (step 7): drain cross-region inbox ──
+        //
+        // Any neighbor region that emitted a broadcast within AOI of
+        // this region last tick stuffed a `CrossRegionFrame` into our
+        // inbox via `aoi::broadcast_opcode_within_aoi`'s post-fanout.
+        // We drain it here (after broadcast_view is fresh, before
+        // flushing this tick's own movement broadcasts) so the
+        // incoming frames land in observers' kanal channels
+        // immediately. Each drained frame increments
+        // `CROSS_REGION_DRAINED` so the Tracy plot shows received
+        // traffic.
+        {
+            let _s = tracing::info_span!("drain_cross_region_inbox").entered();
+            while let Ok(Some(msg)) = region.cross_region_rx.try_recv() {
+                match msg {
+                    crate::world::region::CrossRegionMsg::Frame(frame) => {
+                        let crate::world::region::CrossRegionFrame {
+                            anchor,
+                            anchor_map,
+                            exclude_guid,
+                            frame,
+                            frame_bytes,
+                        } = frame;
+                        let _ = aoi::fanout_frame(
+                            frame,
+                            frame_bytes,
+                            anchor,
+                            anchor_map,
+                            exclude_guid,
+                            &region.broadcast_view,
+                        );
+                        crate::world::region::CROSS_REGION_DRAINED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
         // Flush coalesced movement broadcasts. Each entry was queued by a
         // movement opcode handler this tick; we issue at most one broadcast
         // per source per tick via the serialize-once `broadcast_opcode_within_aoi`
@@ -2525,6 +2601,44 @@ impl World {
         }
 
                 let _ = (db, maps); // silence unused-binding lints if any branch is no-op
+
+                // ── End-of-tick boundary transition detection ──
+                //
+                // After per_client_loop + creature_ai have potentially
+                // moved client positions, find any client whose new
+                // (map, x, y) maps to a different `RegionKey` than this
+                // region. Pull them out of the slab and stash on the
+                // result; the orchestrator routes each to its
+                // destination region (lazy-creating if needed). Source
+                // region clears them from `client_by_guid` too via
+                // `remove_client` so its indexes stay authoritative.
+                let mut transitions: Vec<(RegionKey, Client)> = Vec::new();
+                let region_key_now = region.key;
+                let crossing_keys: Vec<usize> = region
+                    .clients
+                    .iter()
+                    .filter_map(|(k, c)| {
+                        let pos = c.character().info.position;
+                        let new_key = RegionKey::from_position(
+                            c.character().map, pos.x, pos.y,
+                        );
+                        if new_key != region_key_now {
+                            Some((k, new_key))
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|(k, _)| k)
+                    .collect();
+                for k in crossing_keys {
+                    let client = region.remove_client(k);
+                    let pos = client.character().info.position;
+                    let new_key = RegionKey::from_position(
+                        client.character().map, pos.x, pos.y,
+                    );
+                    transitions.push((new_key, client));
+                }
+
                 let creature_aggro_count = region.aggro_creature_keys.len();
                 let creature_wander_count = region.creature_wander_count;
                 let creature_waypoint_count = region.creature_waypoint_count;
@@ -2606,6 +2720,7 @@ impl World {
                     t_logouts,
                     t_region_total,
                     departed: __departed,
+                    transitions,
                     clients_count: region.clients.len(),
                     creatures_count: region.creatures.len(),
                     creature_idle_count,
@@ -2624,15 +2739,34 @@ impl World {
         // post-spawn metrics. Skipped regions return cheap zero-valued
         // results; we filter them out of Tracy/log emission below.
         let mut all_results: Vec<PerRegionTickResult> = Vec::new();
+        // Aggregate all boundary transitions from all regions before
+        // routing them (so we don't ping-pong a client across two
+        // regions in the same global tick).
+        let mut all_transitions: Vec<(RegionKey, Client)> = Vec::new();
         for handle in per_region_handles {
             match handle.await {
                 Ok(mut r) => {
                     self.clients_on_character_screen
                         .extend(std::mem::take(&mut r.departed));
+                    all_transitions.append(&mut r.transitions);
                     all_results.push(r);
                 }
                 Err(e) => tracing::error!("Per-region tick task panicked: {e}"),
             }
+        }
+
+        // ── Stage 5 boundary transition routing ──
+        //
+        // For each transitioning client, find or create the destination
+        // region, lock it, and admit the client. Source removal already
+        // happened inside the per-region task. One-tick orphan window
+        // covers the time between the source spawn's return and this
+        // orchestrator admit; the destination region's NEXT tick
+        // observes the new client.
+        for (dest_key, client) in all_transitions {
+            let dest_arc = self.ensure_region_exists(dest_key);
+            let mut dest_region = dest_arc.lock().await;
+            dest_region.insert_client(client);
         }
         // Prefer the first non-skipped result for Tracy plots and the
         // slow-tick log; fall back to any result if every region
@@ -3303,5 +3437,534 @@ mod tests {
         // distance 0 in this 2D metric. Z is deliberately dropped — same
         // contract as `aoi::within_aoi`.
         assert_eq!(squared_xy_dist(&v(5.0, 5.0, 0.0), &v(5.0, 5.0, 1000.0)), 0.0);
+    }
+
+    // ── Stage 5 (step 3) partition tests ──
+    //
+    // These verify `World::with_creatures_and_db` and `World::for_test`
+    // bucket creatures and clients into position-derived RegionKeys,
+    // and that the process-wide routing table is populated with one
+    // inbox per region. Use `#[tokio::test]` because the constructors
+    // spawn synthetic writer tasks.
+
+    use crate::world::region::RegionKey;
+    use crate::world::world_opcode_handler::character::Character;
+    use crate::world::world_opcode_handler::creature::Creature;
+    use wow_world_base::vanilla::{PlayerGender, RaceClass};
+
+    fn test_character_at(
+        db: &mut crate::world::database::WorldDatabase,
+        name: &str,
+        x: f32,
+        y: f32,
+    ) -> Character {
+        let mut c = Character::test_character(
+            db,
+            name.to_string(),
+            RaceClass::TrollWarrior,
+            PlayerGender::Male,
+        );
+        c.map = Map::EasternKingdoms;
+        c.info.position = Vector3d { x, y, z: 0.0 };
+        c.account = "TEST".to_string();
+        c
+    }
+
+    fn test_creature_at(guid_int: u64, x: f32, y: f32) -> Creature {
+        let mut c = Creature::new(
+            format!("creature_{guid_int}"),
+            wow_world_messages::Guid::new(guid_int),
+        );
+        c.map = Map::EasternKingdoms;
+        c.info.position = Vector3d { x, y, z: 0.0 };
+        c
+    }
+
+    #[tokio::test]
+    async fn for_test_partitions_characters_into_distinct_regions() {
+        // Three characters at positions in three distinct 1000-yd
+        // regions. After construction `world.regions` must hold three
+        // entries keyed by position, one per character.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let characters = vec![
+            test_character_at(&mut db, "a", 100.0, 100.0),    // (0, 0)
+            test_character_at(&mut db, "b", 1500.0, 100.0),   // (1, 0)
+            test_character_at(&mut db, "c", 100.0, 1500.0),   // (0, 1)
+        ];
+
+        let world = World::for_test(characters, vec![]);
+
+        let r00 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
+        let r10 = RegionKey { map: Map::EasternKingdoms, rx: 1, ry: 0 };
+        let r01 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 1 };
+
+        assert_eq!(
+            world.regions.len(), 3,
+            "expected 3 regions, got {}",
+            world.regions.len(),
+        );
+        assert!(world.regions.contains_key(&r00));
+        assert!(world.regions.contains_key(&r10));
+        assert!(world.regions.contains_key(&r01));
+
+        for (key, region) in &world.regions {
+            let region = region.lock().await;
+            assert_eq!(
+                region.clients.len(), 1,
+                "region {key} should hold exactly 1 client"
+            );
+            assert_eq!(region.key, *key, "region.key field mismatch");
+        }
+    }
+
+    #[tokio::test]
+    async fn with_creatures_partitions_creatures_by_position() {
+        // Three creatures at three distinct region positions — should
+        // produce three regions, each with one creature.
+        let mut creatures = slab::Slab::new();
+        creatures.insert(test_creature_at(1, 100.0, 100.0));    // (0, 0)
+        creatures.insert(test_creature_at(2, 1500.0, 100.0));   // (1, 0)
+        creatures.insert(test_creature_at(3, 100.0, 1500.0));   // (0, 1)
+
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            creatures,
+            crate::world::database::WorldDatabase::new(),
+        );
+
+        let r00 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
+        let r10 = RegionKey { map: Map::EasternKingdoms, rx: 1, ry: 0 };
+        let r01 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 1 };
+
+        assert_eq!(world.regions.len(), 3);
+        assert!(world.regions.contains_key(&r00));
+        assert!(world.regions.contains_key(&r10));
+        assert!(world.regions.contains_key(&r01));
+
+        for (key, region) in &world.regions {
+            let region = region.lock().await;
+            assert_eq!(
+                region.creatures.len(), 1,
+                "region {key} should hold exactly 1 creature"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_region_exists_creates_new_region() {
+        // Build a World with 1 creature at (100, 100) → 1 region.
+        // Calling `ensure_region_exists` on a new key spins up an
+        // empty region, registers its inbox in the routing table, and
+        // returns the Arc.
+        let mut creatures = slab::Slab::new();
+        creatures.insert(test_creature_at(1, 100.0, 100.0));
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let mut world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            creatures,
+            crate::world::database::WorldDatabase::new(),
+        );
+        assert_eq!(world.regions.len(), 1);
+
+        let new_key = RegionKey { map: Map::EasternKingdoms, rx: 5, ry: 5 };
+        let arc = world.ensure_region_exists(new_key);
+        assert_eq!(world.regions.len(), 2);
+        // Returned Arc points at the just-inserted region (key matches).
+        let region = arc.lock().await;
+        assert_eq!(region.key, new_key);
+
+        // Routing table has both inboxes now.
+        let table = crate::world::region::routing().load();
+        assert!(table.inboxes.contains_key(&new_key));
+    }
+
+    #[tokio::test]
+    async fn ensure_region_exists_is_idempotent() {
+        // Calling `ensure_region_exists` twice with the same key
+        // returns the same Arc and doesn't grow `world.regions`.
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let mut world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            slab::Slab::new(),
+            crate::world::database::WorldDatabase::new(),
+        );
+        let key = RegionKey { map: Map::EasternKingdoms, rx: 2, ry: 3 };
+        let arc1 = world.ensure_region_exists(key);
+        let arc2 = world.ensure_region_exists(key);
+        assert_eq!(world.regions.len(), 1);
+        assert!(Arc::ptr_eq(&arc1, &arc2));
+    }
+
+    #[tokio::test]
+    async fn admit_client_at_position_routes_to_correct_region() {
+        // Build a World with 1 character at (100, 100) → 1 region.
+        // Synthesize a Client at (5000, 5000) (region (5, 5)) and
+        // call `admit_client_at_position`. The new region exists and
+        // holds the client.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let chars = vec![test_character_at(&mut db, "anchor", 100.0, 100.0)];
+        let mut world = World::for_test(chars, vec![]);
+        assert_eq!(world.regions.len(), 1);
+
+        let mut new_char = test_character_at(&mut db, "newbie", 5000.0, 5000.0);
+        new_char.account = "TEST".to_string();
+        let account = new_char.account.clone();
+        let client = crate::world::world::client::test_support::synthetic_client(
+            new_char, account,
+        );
+
+        world.admit_client_at_position(client).await;
+
+        let expected_key = RegionKey {
+            map: Map::EasternKingdoms,
+            rx: 5,
+            ry: 5,
+        };
+        assert!(world.regions.contains_key(&expected_key));
+        let region = world.regions.get(&expected_key).unwrap().lock().await;
+        assert_eq!(region.clients.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn boundary_crossing_moves_client_at_end_of_tick() {
+        // Build a world with one client at (-13050, 272) in region
+        // (-14, 0). Mutate the client's position to (-12950, 272) so
+        // it now falls in region (-13, 0). Run a tick. Verify:
+        //  • client removed from (-14, 0)
+        //  • client now in (-13, 0)
+        let mut db = crate::world::database::WorldDatabase::new();
+        let chars = vec![test_character_at(&mut db, "walker", -13050.0, 272.0)];
+        let mut world = World::for_test(chars, vec![]);
+
+        let src = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let dst = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&src), "src region missing");
+        assert_eq!(
+            world.regions.get(&src).unwrap().lock().await.clients.len(), 1
+        );
+
+        // Move the client across the boundary.
+        {
+            let region = world.regions.get(&src).unwrap();
+            let mut region = region.lock().await;
+            let (_, client) = region.clients.iter_mut().next().unwrap();
+            client.character_mut().info.position.x = -12950.0;
+        }
+
+        // Run one tick — boundary detection should fire end-of-tick.
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        let src_count = world.regions.get(&src).unwrap().lock().await.clients.len();
+        assert_eq!(src_count, 0, "client should have left source region");
+        let dst_region = world.regions.get(&dst);
+        assert!(dst_region.is_some(), "dst region should exist post-transition");
+        let dst_count = dst_region.unwrap().lock().await.clients.len();
+        assert_eq!(dst_count, 1, "client should now be in dst region");
+    }
+
+    #[tokio::test]
+    async fn boundary_crossing_lazy_creates_destination_region() {
+        // Like above but the destination region doesn't pre-exist: a
+        // single client moves into a previously-untouched RegionKey.
+        // The boundary handler must create the destination region and
+        // register its inbox in the routing table.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let chars = vec![test_character_at(&mut db, "pioneer", 100.0, 100.0)];
+        let mut world = World::for_test(chars, vec![]);
+
+        let src = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
+        let dst = RegionKey { map: Map::EasternKingdoms, rx: 7, ry: 7 };
+        assert!(world.regions.contains_key(&src));
+        assert!(!world.regions.contains_key(&dst), "dst should NOT pre-exist");
+
+        {
+            let region = world.regions.get(&src).unwrap();
+            let mut region = region.lock().await;
+            let (_, client) = region.clients.iter_mut().next().unwrap();
+            // Region 7 starts at x=7000, y=7000; pick deep inside.
+            client.character_mut().info.position.x = 7500.0;
+            client.character_mut().info.position.y = 7500.0;
+        }
+
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        assert!(
+            world.regions.contains_key(&dst),
+            "destination region must be lazily created"
+        );
+        let dst_count = world.regions.get(&dst).unwrap().lock().await.clients.len();
+        assert_eq!(dst_count, 1);
+
+        // Routing table must have the new inbox too.
+        let table = crate::world::region::routing().load();
+        assert!(
+            table.inboxes.contains_key(&dst),
+            "routing table must hold the lazily-created region's inbox"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_region_ticks_cheaply() {
+        // Spin up several empty regions via `ensure_region_exists` and
+        // tick the world. Each region's spawn task should return in
+        // well under a millisecond — the pacer's due-check exits early
+        // when there are no clients / creatures to advance. Guards
+        // against accidentally growing the no-work path.
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let mut world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            slab::Slab::new(),
+            crate::world::database::WorldDatabase::new(),
+        );
+        // Spin up 10 empty regions in a band.
+        for i in 0..10 {
+            let key = RegionKey { map: Map::EasternKingdoms, rx: i, ry: 0 };
+            world.ensure_region_exists(key);
+        }
+        assert_eq!(world.regions.len(), 10);
+
+        // Warm-up tick (first tick has last_tick_at = None → "due" =>
+        // does some work). Measure the SECOND tick where the pacer
+        // can skip every region.
+        world.tick(std::time::Duration::from_millis(33)).await;
+        let t0 = std::time::Instant::now();
+        world.tick(std::time::Duration::from_millis(33)).await;
+        let elapsed = t0.elapsed();
+        // 10 empty regions × < 1 ms each plus orchestration overhead.
+        // Generous budget to avoid flakiness on slow CI runners.
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "10 empty regions should tick fast; took {elapsed:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_captures_post_transition_state() {
+        // Boundary transitions complete WITHIN `World::tick` (the
+        // orchestrator routes them after awaiting the per-region
+        // spawns). Snapshot runs in `run_world` AFTER `world.tick`
+        // returns, so it observes the post-transition state — there
+        // is no orphan window from snapshot's POV. This test guards
+        // that contract.
+        let mut starting_db = crate::world::database::WorldDatabase::new();
+        let traveller = test_character_at(&mut starting_db, "Traveller", -13050.0, 272.0);
+        // `replace_character_data` is a no-op when the guid isn't already
+        // in the table, so we must insert it via the canonical helper so
+        // the snapshot path can find + overwrite it.
+        starting_db.create_character_in_account("TEST", traveller.clone());
+        let traveller_guid = traveller.guid;
+
+        let mut world = World::for_test(vec![traveller], vec![]);
+        // Override the auto-created db with the one we pre-seeded.
+        world.db = Arc::new(Mutex::new(starting_db));
+
+        let src = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let dst = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&src));
+
+        // Move the traveller across the boundary.
+        {
+            let region = world.regions.get(&src).unwrap();
+            let mut region = region.lock().await;
+            let (_, client) = region.clients.iter_mut().next().unwrap();
+            client.character_mut().info.position.x = -12950.0;
+        }
+
+        // Tick (transition fires) + snapshot.
+        world.tick(std::time::Duration::from_millis(33)).await;
+        world.sync_clients_to_db().await;
+
+        // The traveller's character row in the DB must reflect the
+        // NEW position (post-transition), proving the snapshot saw
+        // them. If the transition had orphaned them, sync would have
+        // missed the new position and the DB would still hold the
+        // pre-move x.
+        let db = world.db.lock().await;
+        let restored = db.get_character_by_guid(traveller_guid).expect(
+            "traveller character must be in DB post-snapshot"
+        );
+        assert_eq!(
+            restored.info.position.x, -12950.0,
+            "snapshot must capture the post-transition position"
+        );
+        // Also: the traveller now lives in the destination region.
+        let dst_region = world.regions.get(&dst).unwrap();
+        let dst_region = dst_region.lock().await;
+        assert_eq!(dst_region.clients.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn player_registry_resolves_cross_region_by_name_and_guid() {
+        // `.go PlayerName` needs to find the target wherever they
+        // are. Two characters in different regions must both register
+        // with the process-wide registry so a GM in region A can
+        // resolve a target in region B.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let alice = test_character_at(&mut db, "Alice", 100.0, 100.0);     // (0, 0)
+        let bob = test_character_at(&mut db, "Bob", 5000.0, 5000.0);       // (5, 5)
+        let alice_guid = alice.guid;
+        let bob_guid = bob.guid;
+
+        let _world = World::for_test(vec![alice, bob], vec![]);
+
+        // Lookup by guid for both players.
+        let alice_pos = crate::world::region::lookup_player_position(alice_guid);
+        let bob_pos = crate::world::region::lookup_player_position(bob_guid);
+        assert!(alice_pos.is_some(), "Alice must be in the registry");
+        assert!(bob_pos.is_some(), "Bob must be in the registry");
+        assert_eq!(alice_pos.unwrap().1.x, 100.0);
+        assert_eq!(bob_pos.unwrap().1.x, 5000.0);
+
+        // Lookup by case-insensitive name.
+        let alice_by_name = crate::world::region::lookup_player_position_by_name("alice");
+        let bob_by_name = crate::world::region::lookup_player_position_by_name("BOB");
+        assert!(alice_by_name.is_some(), "lookup by lowercase name");
+        assert!(bob_by_name.is_some(), "lookup is case-insensitive");
+        assert_eq!(alice_by_name.unwrap().1.x, 100.0);
+        assert_eq!(bob_by_name.unwrap().1.x, 5000.0);
+
+        // Missing player resolves to None.
+        assert!(crate::world::region::lookup_player_position_by_name("nobody").is_none());
+    }
+
+    #[tokio::test]
+    async fn broadcast_within_aoi_emits_cross_region_for_boundary_anchor() {
+        // The async `broadcast_within_aoi` is the path for combat /
+        // HP / spawn / despawn. Stage 5: it must post cross-region
+        // copies just like the sync `broadcast_opcode_within_aoi`.
+        //
+        // Build a world with two adjacent regions A=(-14,0) and B=(-13,0).
+        // Anchor a broadcast within 200 yd of the x=-13000 boundary so
+        // `regions_within_aoi` returns both. The neighbor (B) inbox
+        // should receive one frame.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let chars = vec![
+            test_character_at(&mut db, "a", -13050.0, 272.0),  // in A
+            test_character_at(&mut db, "b", -12950.0, 272.0),  // in B
+        ];
+        let mut world = World::for_test(chars, vec![]);
+
+        let a = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let b = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&a));
+        assert!(world.regions.contains_key(&b));
+
+        let before_emit = crate::world::region::CROSS_REGION_EMITTED
+            .load(std::sync::atomic::Ordering::Relaxed);
+
+        // Call `broadcast_within_aoi` from A with an anchor 50 yd west
+        // of the A-B boundary. AOI radius is 200 yd → B is reached.
+        // Use a real ServerMessage type — the `SMSG_MESSAGECHAT` chat
+        // packet works fine for testing the broadcast routing.
+        let anchor = Vector3d { x: -13050.0, y: 272.0, z: 0.0 };
+        let msg = wow_world_messages::vanilla::SMSG_MESSAGECHAT {
+            chat_type: wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::System {
+                sender2: wow_world_messages::Guid::new(0),
+            },
+            language: wow_world_messages::vanilla::Language::Universal,
+            message: "boundary".to_string(),
+            tag: wow_world_messages::vanilla::PlayerChatTag::None,
+        };
+        {
+            let a_region = world.regions.get(&a).unwrap().clone();
+            let mut a_region = a_region.lock().await;
+            crate::world::aoi::broadcast_within_aoi(
+                msg, anchor, Map::EasternKingdoms, &mut a_region.clients,
+            ).await;
+        }
+
+        let after_emit = crate::world::region::CROSS_REGION_EMITTED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Anchor is within 200 yd of B → at least one cross-region
+        // emission should have fired.
+        assert!(
+            after_emit > before_emit,
+            "broadcast_within_aoi should emit a cross-region frame for boundary anchor"
+        );
+
+        // Tick world so the destination region drains the inbox.
+        let before_drain = crate::world::region::CROSS_REGION_DRAINED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        world.tick(std::time::Duration::from_millis(33)).await;
+        let after_drain = crate::world::region::CROSS_REGION_DRAINED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            after_drain > before_drain,
+            "destination region must drain the cross-region frame"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_region_inbox_drains_at_broadcast_phase() {
+        // Build a world with two regions (one creature in each at
+        // distinct positions). Stuff a CrossRegionFrame into region
+        // (1, 0)'s inbox via the routing table. Tick the world.
+        // Region (1, 0)'s spawn task should drain the inbox at the
+        // top of its broadcast phase, bumping CROSS_REGION_DRAINED.
+        let mut creatures = slab::Slab::new();
+        creatures.insert(test_creature_at(1, 100.0, 100.0));    // region (0,0)
+        creatures.insert(test_creature_at(2, 1500.0, 100.0));   // region (1,0)
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let mut world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            creatures,
+            crate::world::database::WorldDatabase::new(),
+        );
+
+        let dest = RegionKey { map: Map::EasternKingdoms, rx: 1, ry: 0 };
+        assert!(world.regions.contains_key(&dest));
+
+        // Manually post a frame into dest region's inbox via routing.
+        let table = crate::world::region::routing().load();
+        let inbox = table.inboxes.get(&dest).expect("dest inbox missing");
+        let frame_bytes = 4_usize;
+        let frame: Arc<[u8]> = Arc::from(vec![0xAA_u8; frame_bytes]);
+        let msg = crate::world::region::CrossRegionMsg::Frame(
+            crate::world::region::CrossRegionFrame {
+                anchor: Vector3d { x: 1500.0, y: 100.0, z: 0.0 },
+                anchor_map: Map::EasternKingdoms,
+                exclude_guid: None,
+                frame,
+                frame_bytes,
+            },
+        );
+        inbox.cross_region_tx.try_send(msg).expect("inbox send failed");
+
+        let before = crate::world::region::CROSS_REGION_DRAINED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        world.tick(std::time::Duration::from_millis(33)).await;
+        let after = crate::world::region::CROSS_REGION_DRAINED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            after - before, 1,
+            "expected exactly 1 cross-region frame drained, got {}",
+            after - before
+        );
+    }
+
+    #[tokio::test]
+    async fn routing_table_populated_after_world_build() {
+        // After construction, every region in `world.regions` must
+        // have a matching `RegionInbox` entry in the global routing
+        // table. Cross-region broadcast emission scans this table.
+        let mut creatures = slab::Slab::new();
+        creatures.insert(test_creature_at(1, 100.0, 100.0));
+        creatures.insert(test_creature_at(2, 1500.0, 100.0));
+
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            creatures,
+            crate::world::database::WorldDatabase::new(),
+        );
+
+        let table = crate::world::region::routing().load();
+        for key in world.regions.keys() {
+            assert!(
+                table.inboxes.contains_key(key),
+                "routing table missing inbox for region {key}"
+            );
+        }
     }
 }

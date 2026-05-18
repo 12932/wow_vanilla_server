@@ -114,17 +114,76 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
 ) {
     write_message_test(&msg);
 
+    // Serialize the body once.
     let mut body = Vec::with_capacity(msg.size_without_header() as usize);
     if let Err(e) = msg.write_into_vec(&mut body) {
         tracing::warn!("broadcast_within_aoi: serialize failed: {e}");
         return;
     }
     let opcode = M::OPCODE as u16;
-    let body = body.as_slice();
 
+    // Wrap a complete wire frame `[size_BE u16][opcode_LE u16][body]` in
+    // `Arc<[u8]>` ONCE, so the local fan-out + cross-region delivery
+    // both share a single allocation. Per-recipient cost is an atomic
+    // refcount bump.
+    let size_for_header = (body.len() as u16).saturating_add(2);
+    let mut buf = Vec::with_capacity(4 + body.len());
+    buf.extend_from_slice(&size_for_header.to_be_bytes());
+    buf.extend_from_slice(&opcode.to_le_bytes());
+    buf.extend_from_slice(&body);
+    let frame: Arc<[u8]> = Arc::from(buf);
+    let frame_bytes = frame.len();
+
+    // Local fan-out: every client in the source region within AOI gets
+    // a refcount-bump of the shared frame.
     for (_, c) in clients.iter_mut() {
         if c.character().map == anchor_map && within_aoi(&c.character().info.position, &anchor) {
-            c.send_raw(opcode, body).await;
+            c.try_queue_frame(Arc::clone(&frame));
+        }
+    }
+
+    // ── Cross-region post-fanout ──
+    //
+    // Mirror of the post-fanout in `broadcast_opcode_within_aoi`: any
+    // neighbor region whose interior overlaps this anchor's AOI disc
+    // gets the same `Arc<[u8]>` cloned into its inbox. Neighbor's next
+    // broadcast phase drains the inbox and fans out to its own clients
+    // via `aoi::fanout_frame`. Used by combat / HP updates / spawn /
+    // despawn — these all go through `broadcast_within_aoi`.
+    //
+    // No effect when there are no neighbor regions (single-region world
+    // or anchor deep inside its region's interior).
+    let aoi_r = crate::config::config().network.aoi_radius_yards;
+    let anchor_region = crate::world::region::RegionKey::from_position(
+        anchor_map, anchor.x, anchor.y,
+    );
+    let neighbors = crate::world::region::regions_within_aoi(anchor, anchor_map, aoi_r);
+    if neighbors.len() > 1 {
+        let table = crate::world::region::routing().load();
+        for neighbor in neighbors.iter().filter(|n| **n != anchor_region) {
+            if let Some(inbox) = table.inboxes.get(neighbor) {
+                let send = inbox.cross_region_tx.try_send(
+                    crate::world::region::CrossRegionMsg::Frame(
+                        crate::world::region::CrossRegionFrame {
+                            anchor,
+                            anchor_map,
+                            exclude_guid: None,
+                            frame: Arc::clone(&frame),
+                            frame_bytes,
+                        },
+                    ),
+                );
+                match send {
+                    Ok(true) => {
+                        crate::world::region::CROSS_REGION_EMITTED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Ok(false) | Err(_) => {
+                        crate::world::region::CROSS_REGION_DROPPED
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
         }
     }
 }
@@ -178,45 +237,14 @@ pub fn broadcast_opcode_within_aoi(
     // — instead of a fresh allocation + memcpy of `frame_bytes` bytes.
     let frame: Arc<[u8]> = Arc::from(frame);
 
-    // Hoist the AOI radius out of the per-iter loop: `within_aoi`
-    // otherwise reads `config()` (a `OnceCell`-backed static) on every
-    // call. At high density that's hundreds of thousands of
-    // `OnceCell::get`s per tick. Squared up here so the inner check is
-    // one multiply less per iter.
-    let r = crate::config::config().network.aoi_radius_yards;
-    let r_sq = r * r;
-
-    // Rayon par-iter the fan-out. Each iter is independent: the AOI
-    // check is read-only on the target's snapshotted position; the
-    // send touches only the per-target kanal channel (multi-producer)
-    // and the per-target dropped-packet counter (Atomic). The only
-    // cross-thread contention is the `Arc<[u8]>` frame's refcount
-    // cache line bouncing — negligible vs the multi-core wall-time
-    // saving.
-    //
-    // `filter_map` + `sum` is preferred over `for_each` + atomic
-    // counter: rayon's reduce machinery aggregates the per-worker
-    // counts locally and combines once at the end, avoiding the
-    // contention an `AtomicUsize::fetch_add` would create.
-    let recipients: usize = targets
-        .par_iter()
-        .filter_map(|t| {
-            if t.map != anchor_map {
-                return None;
-            }
-            if !within_aoi_sq(&t.position, &anchor, r_sq) {
-                return None;
-            }
-            if Some(t.guid) == exclude_guid {
-                // Broadcaster themselves — 1-in-N rare; keep this
-                // check last so the cheaper map/AOI rejections
-                // short-circuit first.
-                return None;
-            }
-            t.try_queue_frame(Arc::clone(&frame));
-            Some(1_usize)
-        })
-        .sum();
+    let recipients = fanout_frame(
+        Arc::clone(&frame),
+        frame_bytes,
+        anchor,
+        anchor_map,
+        exclude_guid,
+        targets,
+    ).0;
 
     // ── Cross-region post-fanout ──
     //
@@ -279,6 +307,45 @@ pub fn broadcast_opcode_within_aoi(
 fn broadcast_serialize_failed() -> (usize, usize) {
     tracing::warn!("broadcast_opcode_within_aoi: serialize failed");
     (0, 0)
+}
+
+/// Fan-out a *pre-serialized* frame to AOI targets. Factored out of
+/// [`broadcast_opcode_within_aoi`] so the per-region cross-region
+/// inbox drain can reuse the same parallel-filter + try_queue_frame
+/// loop without re-serializing.
+///
+/// The caller has already produced the `Arc<[u8]>` frame (either
+/// freshly via `write_unencrypted_server` or by `Arc::clone`'ing a
+/// [`crate::world::region::CrossRegionFrame`]). `targets` is the
+/// receiving region's `broadcast_view`. Returns `(recipients,
+/// frame_bytes)` so the caller can aggregate Tracy plots.
+pub fn fanout_frame(
+    frame: Arc<[u8]>,
+    frame_bytes: usize,
+    anchor: Vector3d,
+    anchor_map: Map,
+    exclude_guid: Option<Guid>,
+    targets: &[BroadcastTarget],
+) -> (usize, usize) {
+    let r = crate::config::config().network.aoi_radius_yards;
+    let r_sq = r * r;
+    let recipients: usize = targets
+        .par_iter()
+        .filter_map(|t| {
+            if t.map != anchor_map {
+                return None;
+            }
+            if !within_aoi_sq(&t.position, &anchor, r_sq) {
+                return None;
+            }
+            if Some(t.guid) == exclude_guid {
+                return None;
+            }
+            t.try_queue_frame(Arc::clone(&frame));
+            Some(1_usize)
+        })
+        .sum();
+    (recipients, frame_bytes)
 }
 
 #[cfg(test)]

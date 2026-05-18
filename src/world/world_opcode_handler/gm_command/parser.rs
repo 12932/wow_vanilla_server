@@ -73,24 +73,50 @@ impl GmCommand {
                 let coordinates: Vec<&str> = args.split_whitespace().collect();
                 match coordinates.as_slice() {
                     [] => {
-                        if client.character().target.is_zero() {
+                        // `.go` with no args: use the GM's selected
+                        // target. Look in the GM's local region first
+                        // (fast path); fall back to the process-wide
+                        // player registry so a target in a neighbor
+                        // region resolves correctly.
+                        let target = client.character().target;
+                        if target.is_zero() {
                             return Err(
                                 "Must have a target for .go command without arguments".to_string()
                             );
                         }
-                        entities
-                            .find_position(client.character().target)
-                            .map(Self::Teleport)
+                        if let Some(pos) = entities.find_position(target) {
+                            return Ok(Self::Teleport(pos));
+                        }
+                        crate::world::region::lookup_player_position(target)
+                            .map(|(map, p, orientation)| Self::Teleport(Position {
+                                map,
+                                x: p.x,
+                                y: p.y,
+                                z: p.z,
+                                orientation,
+                            }))
                             .ok_or_else(|| {
-                                format!("Unable to find target '{}'", client.character().target)
+                                format!("Unable to find target '{}'", target)
                             })
                     }
                     [name] => {
-                        let name = name.to_lowercase();
-                        entities
-                            .find_position(client.character().target)
-                            .map(Self::Teleport)
-                            .ok_or_else(|| format!("Unable to find '{}'", name))
+                        // `.go <name>`: cross-region lookup by name.
+                        // Pre-Stage-5 the [name] branch silently used
+                        // `client.character().target` (which made
+                        // `.go SomeOnlinePlayer` indistinguishable
+                        // from `.go` with no args). Now it actually
+                        // resolves the name against the global
+                        // player registry.
+                        let name_lc = name.to_lowercase();
+                        crate::world::region::lookup_player_position_by_name(&name_lc)
+                            .map(|(map, p, orientation)| Self::Teleport(Position {
+                                map,
+                                x: p.x,
+                                y: p.y,
+                                z: p.z,
+                                orientation,
+                            }))
+                            .ok_or_else(|| format!("Unable to find player '{}'", name))
                     }
                     [_, _] => Err("Can not teleport with only x and y coordinates".to_string()),
                     [x, y, z] => {
