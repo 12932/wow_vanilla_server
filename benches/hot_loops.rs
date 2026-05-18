@@ -290,8 +290,12 @@ fn bench_tick_aoi_transitions(c: &mut Criterion) {
                                 .get(&key)
                                 .expect("bench cluster region (0,0) should exist")
                                 .clone();
+                            // Empty snapshot is fine for this micro-bench
+                            // — it measures the diff-scan loop, not
+                            // cross-region discovery.
+                            let snap = wow_vanilla_server::world::aoi::GlobalAoiSnapshot::empty();
                             let mut region = region_arc.lock().await;
-                            let _ = region.tick_aoi_transitions().await;
+                            let _ = region.tick_aoi_transitions(&snap).await;
                         });
                     },
                     BatchSize::PerIteration,
