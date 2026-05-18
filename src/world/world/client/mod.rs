@@ -16,7 +16,7 @@
 //!
 //! Each connection has a per-client `mpsc::UnboundedSender<Arc<[u8]>>` and a
 //! dedicated writer task that owns the socket write half + ARC4 encrypter and
-//! drains the channel. World-tick code calls `send_message` / `send_raw` /
+//! drains the channel. World-tick code calls `send_message` / `try_queue_frame` /
 //! `send_opcode` which serialize the message (unencrypted header + body) and
 //! `try_send` an `Arc<[u8]>` — non-blocking. The broadcast fan-out
 //! (`aoi::broadcast_opcode_within_aoi`) serializes once and refcount-bumps
@@ -183,18 +183,6 @@ impl PlayerSession {
             return;
         }
         self.queue_buf(Arc::<[u8]>::from(buf));
-    }
-
-    /// Send a pre-serialized body. Caller supplies the body and opcode; we
-    /// frame the wire header here and push to the channel. Used by the
-    /// serialize-once broadcast path in [`crate::world::aoi`].
-    pub(crate) async fn send_raw(&mut self, opcode: u16, body: &[u8]) -> bool {
-        let size_for_header = (body.len() as u16).saturating_add(2);
-        let mut buf = Vec::with_capacity(4 + body.len());
-        buf.extend_from_slice(&size_for_header.to_be_bytes());
-        buf.extend_from_slice(&opcode.to_le_bytes());
-        buf.extend_from_slice(body);
-        self.queue_buf(Arc::<[u8]>::from(buf))
     }
 
     /// Returns `true` if the buffer was queued, `false` if the byte budget
@@ -390,8 +378,12 @@ impl Client {
         self.session.send_opcode(m).await;
     }
 
-    pub(crate) async fn send_raw(&mut self, opcode: u16, body: &[u8]) -> bool {
-        self.session.send_raw(opcode, body).await
+    /// Push a pre-built wire frame `[size_BE u16][opcode_LE u16][body]`
+    /// into the client's outbound channel as a refcount bump. Used by
+    /// the serialize-once broadcast path so a single `Arc<[u8]>` can
+    /// fan out to many recipients without per-recipient allocation.
+    pub(crate) fn try_queue_frame(&self, frame: Arc<[u8]>) -> bool {
+        self.session.queue_buf(frame)
     }
 
     pub async fn send_system_message(&mut self, s: impl Into<String>) {

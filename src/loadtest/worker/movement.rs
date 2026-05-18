@@ -57,6 +57,13 @@ const RUN_SPEED: f32 = wow_world_base::movement::DEFAULT_RUNNING_SPEED;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Race mode: when the bot is within this distance of the current
+/// waypoint, advance to the next one. 5 yd is comfortably wider than
+/// one heartbeat's worth of `RUN_SPEED × HEARTBEAT_INTERVAL` ≈ 1.75 yd
+/// — so a bot never overshoots a waypoint between heartbeats and ends
+/// up oscillating.
+const RACE_WAYPOINT_RADIUS: f32 = 5.0;
+
 /// Cached-distance threshold at which a PvP bot stops pursuing and
 /// starts swinging. Matches the server's both-parties-moving melee
 /// range (`ATTACK_DISTANCE 5.0 + MELEE_LEEWAY 8/3 ≈ 7.67 yd`, rounded
@@ -105,6 +112,23 @@ pub enum Mode {
         state: Arc<Mutex<PvpState>>,
         own_guid: Guid,
         battle_started: Arc<AtomicBool>,
+    },
+    /// Amazing Race: walk a shared waypoint polyline from Booty Bay to
+    /// Stormwind and back. The bot self-teleports to `path[0] + jitter`
+    /// on its first tick (single heartbeat — server accepts it as a
+    /// giant client-side teleport) and then runs forward along the
+    /// path at `DEFAULT_RUNNING_SPEED`, switching waypoints when within
+    /// `RACE_WAYPOINT_RADIUS`. On reaching the final waypoint the bot
+    /// flips `forward` and runs the reverse direction.
+    Race {
+        path: Arc<[Vector3d]>,
+        index: usize,
+        forward: bool,
+        jitter: (f32, f32),
+        /// False until the first tick fires the initial teleport
+        /// heartbeat. After that we track position client-side and
+        /// only emit heartbeats on the normal `HEARTBEAT_INTERVAL`.
+        teleported: bool,
     },
 }
 
@@ -185,6 +209,7 @@ impl MovementDriver {
         match &self.mode {
             Mode::Random => self.tick_random(writer, encrypter, now).await,
             Mode::Pvp { .. } => self.tick_pvp(writer, encrypter, now).await,
+            Mode::Race { .. } => self.tick_race(writer, encrypter, now).await,
         }
     }
 
@@ -213,6 +238,142 @@ impl MovementDriver {
             self.last_heartbeat_at = now;
         }
 
+        Ok(())
+    }
+
+    /// Race tick. Three sub-phases:
+    /// 1. First tick after world-enter: snap our position to `path[0] +
+    ///    jitter`, flag `teleported`, send a single heartbeat. The
+    ///    server trusts the new position and routes us into the
+    ///    Booty Bay region next tick. Real anticheat would reject
+    ///    this; the loadtest server doesn't run one.
+    /// 2. Steady-state running: orient toward the current waypoint
+    ///    (target = `path[index] + jitter`), advance forward at
+    ///    `RUN_SPEED`, emit `MSG_MOVE_START_FORWARD_Client` on first
+    ///    entry to a new waypoint and `MSG_MOVE_HEARTBEAT_Client`
+    ///    every `HEARTBEAT_INTERVAL` afterward.
+    /// 3. Arrival at the current waypoint: advance `index`. If we
+    ///    reached the endpoint, flip `forward` and reverse the run.
+    async fn tick_race(
+        &mut self,
+        writer: &mut OwnedWriteHalf,
+        encrypter: &mut EncrypterHalf,
+        now: Instant,
+    ) -> std::io::Result<()> {
+        // Snapshot mutable race fields up front so we can do all the
+        // math against locals (no double-borrow of `self.mode`).
+        let (path, mut index, mut forward, jx, jy, mut teleported) = match &self.mode {
+            Mode::Race { path, index, forward, jitter, teleported } => {
+                (path.clone(), *index, *forward, jitter.0, jitter.1, *teleported)
+            }
+            _ => unreachable!("tick_race called outside Mode::Race"),
+        };
+        if path.is_empty() {
+            // No path configured — race mode with `--mode race` but no
+            // waypoints set up (worker bug). Stand still so the bot
+            // doesn't disconnect; operator-visible no-op.
+            return Ok(());
+        }
+
+        // First-tick teleport. Override our position to `path[0] +
+        // jitter`, emit a single heartbeat, and bail until next tick.
+        if !teleported {
+            let p0 = path[0];
+            self.info.position = Vector3d {
+                x: p0.x + jx,
+                y: p0.y + jy,
+                z: p0.z,
+            };
+            // Mark moving forward so observer clients interpolate
+            // correctly between the teleport-heartbeat and the next
+            // one. The actual MSG_MOVE_START_FORWARD goes out on the
+            // following tick once we have an orientation.
+            self.info.flags = MovementInfo_MovementFlags::empty();
+            self.phase = Phase::Idle;
+            let msg = MSG_MOVE_HEARTBEAT_Client {
+                info: self.info.clone(),
+            };
+            msg.tokio_write_encrypted_client(&mut *writer, encrypter).await?;
+            writer.flush().await?;
+            self.metrics.messages_out.fetch_add(1, Ordering::Relaxed);
+            self.last_heartbeat_at = now;
+            teleported = true;
+            if let Mode::Race { teleported: t, .. } = &mut self.mode {
+                *t = teleported;
+            }
+            return Ok(());
+        }
+
+        // Target waypoint with per-bot jitter applied.
+        let target = Vector3d {
+            x: path[index].x + jx,
+            y: path[index].y + jy,
+            z: path[index].z,
+        };
+
+        let dx = target.x - self.info.position.x;
+        let dy = target.y - self.info.position.y;
+        let dist_sq = dx * dx + dy * dy;
+
+        // Arrival → advance index. If we've reached the endpoint in
+        // the current direction, flip and reverse.
+        if dist_sq <= RACE_WAYPOINT_RADIUS * RACE_WAYPOINT_RADIUS {
+            if forward {
+                if index + 1 >= path.len() {
+                    forward = false;
+                    // index stays at len-1; next tick will compute
+                    // target = path[len-1] which we're already on, so
+                    // we'll fall through into the decrement branch.
+                } else {
+                    index += 1;
+                }
+            } else if index == 0 {
+                forward = true;
+            } else {
+                index -= 1;
+            }
+            // Write back so subsequent ticks pick up the advance.
+            if let Mode::Race {
+                index: i, forward: f, ..
+            } = &mut self.mode
+            {
+                *i = index;
+                *f = forward;
+            }
+            // Don't actually move this tick — let the next tick orient
+            // fresh against the new waypoint.
+            return Ok(());
+        }
+
+        let new_orientation = dy.atan2(dx);
+
+        // Emit START_FORWARD when orientation drifts or we were idle.
+        // The server resets its movement model on each START_*, so
+        // observer-side extrapolation snaps to the new heading.
+        let needs_start = !matches!(self.phase, Phase::Forward)
+            || (self.info.orientation - new_orientation).abs() > 0.15;
+        if needs_start {
+            self.info.orientation = new_orientation;
+            self.info.flags = MovementInfo_MovementFlags::new_forward();
+            self.phase = Phase::Forward;
+            let msg = MSG_MOVE_START_FORWARD_Client {
+                info: self.info.clone(),
+            };
+            msg.tokio_write_encrypted_client(&mut *writer, encrypter).await?;
+            self.metrics.messages_out.fetch_add(1, Ordering::Relaxed);
+        }
+
+        if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
+            self.advance_position(now);
+            let msg = MSG_MOVE_HEARTBEAT_Client {
+                info: self.info.clone(),
+            };
+            msg.tokio_write_encrypted_client(&mut *writer, encrypter).await?;
+            self.metrics.messages_out.fetch_add(1, Ordering::Relaxed);
+            self.last_heartbeat_at = now;
+        }
+
+        writer.flush().await?;
         Ok(())
     }
 

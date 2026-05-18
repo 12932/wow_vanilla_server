@@ -273,7 +273,23 @@ fn bench_tick_aoi_transitions(c: &mut Criterion) {
                     },
                     |world| {
                         rt.block_on(async {
-                            let region_arc = world.primary_region();
+                            // Bench uses `make_position`/`make_character`
+                            // which clusters characters near the origin
+                            // (CLUSTER_RADIUS = 50yd), so they all fall
+                            // into region (0, 0) on EasternKingdoms.
+                            // Stage 5 partition: look up that region
+                            // directly instead of the deleted
+                            // `primary_region()` sentinel.
+                            let key = wow_vanilla_server::world::region::RegionKey {
+                                map: BENCH_MAP,
+                                rx: 0,
+                                ry: 0,
+                            };
+                            let region_arc = world
+                                .regions
+                                .get(&key)
+                                .expect("bench cluster region (0,0) should exist")
+                                .clone();
                             let mut region = region_arc.lock().await;
                             let _ = region.tick_aoi_transitions().await;
                         });

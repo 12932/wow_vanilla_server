@@ -19,6 +19,20 @@ use crate::protocol::{ToOrchestrator, ToWorker, read_frame, write_frame};
 use crate::worker::bot::{BotConfig, BotHandle, spawn};
 use crate::worker::metrics::Metrics;
 
+/// Behavioral mode for every bot spawned by a worker. Picked by the
+/// `--mode` CLI flag at startup; can't be mixed within one worker
+/// (orchestrator-driven mid-flight mode swaps are not supported).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum BotMode {
+    /// Random-walk inside a 60 yd box around the spawn anchor.
+    Random,
+    /// PvP arena fight in Gurubashi Pit.
+    Pvp,
+    /// Amazing Race: each bot self-teleports to Booty Bay and runs a
+    /// namigator-generated path to Stormwind (and back, in a loop).
+    Race,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub worker_id: String,
@@ -33,10 +47,8 @@ pub struct WorkerConfig {
     pub ramp_up_secs: u32,
     /// Optional orchestrator endpoint. None → standalone mode.
     pub orchestrator: Option<String>,
-    /// PvP mode — bots track other players' positions from inbound packets,
-    /// pursue a random nearby target, and send `CMSG_ATTACKSWING` once in
-    /// melee range. Without this flag bots only run the random-walk driver.
-    pub pvp: bool,
+    /// Per-bot behavior. See [`BotMode`].
+    pub mode: BotMode,
 }
 
 pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
@@ -51,12 +63,23 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     // "everyone you were going to spawn with is up — start fighting".
     let battle_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    // Race path: shared across every Race-mode bot in this worker.
+    // Generated once at worker startup. Currently a hardcoded 4-point
+    // Booty Bay → Stormwind polyline; namigator wiring lands in a
+    // follow-up commit.
+    let race_path: Arc<[wow_world_messages::vanilla::Vector3d]> = if cfg.mode == BotMode::Race {
+        bot::race::hardcoded_bb_to_sw().into()
+    } else {
+        Arc::from(Vec::new())
+    };
+
     let bot_cfg = BotConfig {
         auth_addr: cfg.auth_addr.clone(),
         world_addr_override: cfg.world_addr_override.clone(),
         username_prefix: cfg.username_prefix.clone(),
-        pvp: cfg.pvp,
+        mode: cfg.mode,
         battle_started: battle_started.clone(),
+        race_path: race_path.clone(),
     };
 
     if cfg.initial_clients > 0 {
@@ -69,7 +92,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
             cfg.ramp_up_secs,
         )
         .await;
-        if cfg.pvp {
+        if cfg.mode == BotMode::Pvp {
             tracing::info!(
                 "Initial PvP spawn batch complete ({} bots); signalling battle start",
                 cfg.initial_clients

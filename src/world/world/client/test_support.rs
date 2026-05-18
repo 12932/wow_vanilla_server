@@ -89,12 +89,15 @@ pub fn synthetic_client(character: Character, account_name: impl Into<String>) -
     let (_client_send, client_recv) =
         mpsc::channel::<wow_world_messages::vanilla::opcodes::ClientOpcodeMessage>(32);
 
-    // No reader task — there's nothing to read from. A finished
-    // JoinHandle is fine; downstream code checks
-    // `reader_handle.is_finished()` and treats that as "this client has
-    // disconnected", but the world tick code in benches doesn't drive
-    // the disconnect path so it never observes this.
-    let reader_handle = tokio::spawn(async {});
+    // No reader task — there's nothing to read from. The reader
+    // never finishes during the fixture's lifetime, so
+    // `reader_is_finished()` returns false and the stale-client
+    // cleanup in `World::tick` doesn't reap the test client. We park
+    // forever via `pending::<()>().await`; the JoinHandle is
+    // implicitly dropped when the test runtime tears down.
+    let reader_handle = tokio::spawn(async {
+        std::future::pending::<()>().await;
+    });
 
     let account_name: Arc<str> = Arc::from(account_name.into().into_boxed_str());
     Client::from_parts(

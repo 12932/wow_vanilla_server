@@ -13,11 +13,14 @@ use wow_world_messages::vanilla::ClientMessage as _;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::CMSG_PING;
 
+use crate::worker::BotMode;
 use crate::worker::auth;
 use crate::worker::metrics::Metrics;
 use crate::worker::movement::{Mode, MovementDriver};
 use crate::worker::pvp::PvpState;
 use crate::worker::world;
+
+pub mod race;
 
 #[derive(Debug, Clone)]
 pub struct BotConfig {
@@ -26,16 +29,16 @@ pub struct BotConfig {
     /// auth server tells us `vpn.gtker.com:8085` but we actually want `127.0.0.1:8085`.
     pub world_addr_override: Option<String>,
     pub username_prefix: String,
-    /// When true, drive the bot in PvP mode — track other players' positions
-    /// from inbound movement opcodes, pursue a random target, send swings in
-    /// melee range. When false, the bot runs the random-walk driver.
-    pub pvp: bool,
+    /// Which behavior the bot runs — random walk, PvP, or the BB→SW race.
+    pub mode: BotMode,
     /// Worker-wide "battle start" latch. Bots in PvP mode block in their
     /// gather phase until the worker sets this to `true` (typically after
     /// the initial spawn batch finishes). Unused outside PvP mode but
     /// always present so we can drop `Option<Arc<_>>` plumbing — the cost
     /// of an unused Arc clone is trivial.
     pub battle_started: Arc<AtomicBool>,
+    /// Shared waypoint list for Race mode. Empty for other modes.
+    pub race_path: Arc<[wow_world_messages::vanilla::Vector3d]>,
 }
 
 pub struct BotHandle {
@@ -115,7 +118,7 @@ async fn run_bot(
     // Shared cache of (other-player guid → last-known position) populated
     // by the reader. Only allocated in PvP mode; `None` skips both the
     // parse-time bookkeeping AND the driver's pursuit branch.
-    let pvp_state: Option<Arc<Mutex<PvpState>>> = if cfg.pvp {
+    let pvp_state: Option<Arc<Mutex<PvpState>>> = if cfg.mode == BotMode::Pvp {
         Some(Arc::new(Mutex::new(PvpState::default())))
     } else {
         None
@@ -175,13 +178,20 @@ async fn run_bot(
     let drive_fut = async move {
         let mut writer = writer;
         let mut encrypter = encrypter;
-        let mode = match drive_pvp {
-            Some(state) => Mode::Pvp {
-                state,
+        let mode = match cfg.mode {
+            BotMode::Pvp => Mode::Pvp {
+                state: drive_pvp.expect("PvP mode allocates pvp_state above"),
                 own_guid: character_guid,
                 battle_started: cfg.battle_started.clone(),
             },
-            None => Mode::Random,
+            BotMode::Race => Mode::Race {
+                path: cfg.race_path.clone(),
+                index: 0,
+                forward: true,
+                jitter: race::jitter_for_slot(slot),
+                teleported: false,
+            },
+            BotMode::Random => Mode::Random,
         };
         let mut driver = MovementDriver::new(drive_metrics.clone(), mode);
         let mut tick = tokio::time::interval(Duration::from_millis(50));
