@@ -192,29 +192,47 @@ pub(super) async fn handle_opcodes(
             }
         }
         ClientOpcodeMessage::CMSG_CREATURE_QUERY(c) => {
-            if let Some(creature) = entities.find_creature(c.guid) {
-                client
-                    .send_message(SMSG_CREATURE_QUERY_RESPONSE {
-                        creature_entry: c.creature,
-                        found: Some(SMSG_CREATURE_QUERY_RESPONSE_found {
-                            name1: creature.name.clone(),
-                            name2: "".to_string(),
-                            name3: "".to_string(),
-                            name4: "".to_string(),
-                            sub_name: "".to_string(),
-                            type_flags: 0,
-                            creature_type: 0,
-                            creature_family: CreatureFamily::None,
-                            creature_rank: 0,
-                            unknown0: 0,
-                            spell_data_id: 0,
-                            display_id: 0,
-                            civilian: 0,
-                            racial_leader: 0,
-                        }),
-                    })
-                    .await;
-            }
+            // Lookup is by ENTRY, not guid. The client caches the
+            // response in `creaturecache.wdb` keyed by entry, so
+            // any one creature with this entry suffices to populate
+            // the name for every spawn that shares it. Querying by
+            // guid (previous behavior) failed cross-region — the
+            // local region's slab might not contain the specific
+            // spawn but a neighbor's does, and the cache layer
+            // doesn't care which one we resolve from.
+            let template = crate::world::world_db::lookup_template(c.creature);
+            let found = template.map(|t| SMSG_CREATURE_QUERY_RESPONSE_found {
+                name1: t.name,
+                name2: String::new(),
+                name3: String::new(),
+                name4: String::new(),
+                sub_name: t.sub_name,
+                type_flags: t.type_flags,
+                creature_type: t.creature_type,
+                // `creature_family` is a u32 in mangos but the
+                // protocol field is the typed `CreatureFamily` enum.
+                // Mangos rows for non-pet creatures typically store
+                // 0; fall back to `None` when the raw value isn't a
+                // known variant.
+                creature_family: CreatureFamily::try_from(t.creature_family)
+                    .unwrap_or(CreatureFamily::None),
+                creature_rank: t.creature_rank,
+                unknown0: 0,
+                spell_data_id: 0,
+                display_id: t.display_id,
+                civilian: t.civilian,
+                racial_leader: t.racial_leader,
+            });
+            // Always respond — even when we have no template the
+            // client expects a reply (it stops retrying once it
+            // gets one). `found: None` is the wire-level "unknown
+            // creature" signal.
+            client
+                .send_message(SMSG_CREATURE_QUERY_RESPONSE {
+                    creature_entry: c.creature,
+                    found,
+                })
+                .await;
         }
         ClientOpcodeMessage::CMSG_WORLD_TELEPORT(c) => {
             let p = Position::new(
