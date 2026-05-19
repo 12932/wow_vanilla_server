@@ -64,14 +64,6 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
 /// up oscillating.
 const RACE_WAYPOINT_RADIUS: f32 = 5.0;
 
-/// Debug Z lift applied to every race-mode position (spawn + waypoint
-/// targets). Namigator's mesh sometimes sits a few yards below the
-/// rendered terrain (especially around WMO/M2 surfaces like docks
-/// or wooden bridges), so bots run slightly underground. Lifting by
-/// a fixed buffer keeps them visible while we figure out a proper
-/// terrain sample.
-const RACE_Z_LIFT: f32 = 10.0;
-
 /// Cached-distance threshold at which a PvP bot stops pursuing and
 /// starts swinging. Matches the server's both-parties-moving melee
 /// range (`ATTACK_DISTANCE 5.0 + MELEE_LEEWAY 8/3 ≈ 7.67 yd`, rounded
@@ -293,7 +285,7 @@ impl MovementDriver {
             self.info.position = Vector3d {
                 x: crate::worker::bot::race::BOOTY_BAY.x + jx,
                 y: crate::worker::bot::race::BOOTY_BAY.y + jy,
-                z: crate::worker::bot::race::BOOTY_BAY.z + RACE_Z_LIFT,
+                z: crate::worker::bot::race::BOOTY_BAY.z,
             };
             // Mark moving forward so observer clients interpolate
             // correctly between the teleport-heartbeat and the next
@@ -315,13 +307,14 @@ impl MovementDriver {
             return Ok(());
         }
 
-        // Target waypoint with per-bot jitter applied. Z is lifted by
-        // `RACE_Z_LIFT` so the bot tracks above the navmesh surface
-        // and stays visible above the rendered terrain.
+        // Target waypoint with per-bot jitter applied. Z is taken
+        // directly from the densified path — `build_race_path`
+        // already snapped each waypoint Z via `find_height`, so
+        // walking toward it tracks the actual terrain.
         let target = Vector3d {
             x: path[index].x + jx,
             y: path[index].y + jy,
-            z: path[index].z + RACE_Z_LIFT,
+            z: path[index].z,
         };
 
         let dx = target.x - self.info.position.x;
