@@ -343,6 +343,43 @@ pub struct PerRegionTickResult {
     pub walking_creature_count: usize,
 }
 
+impl PerRegionTickResult {
+    /// Zero-valued placeholder used by the orchestrator when there
+    /// are no regions at all (e.g. a fresh server boot with a failed
+    /// worlddb load — no creatures, no clients, no regions exist
+    /// yet). Lets the post-spawn metrics block read fields without
+    /// crashing; the empty-world numbers (0 clients, 0 creatures,
+    /// skipped=true) accurately reflect reality.
+    fn empty() -> Self {
+        Self {
+            region_key: RegionKey {
+                map: Map::EasternKingdoms,
+                rx: 0,
+                ry: 0,
+            },
+            skipped: true,
+            t_per_client: Duration::ZERO,
+            t_build_view: Duration::ZERO,
+            t_flush: Duration::ZERO,
+            t_aoi: Duration::ZERO,
+            t_apply_cmds: Duration::ZERO,
+            t_corpses: Duration::ZERO,
+            t_creatures: Duration::ZERO,
+            t_logouts: Duration::ZERO,
+            t_region_total: Duration::ZERO,
+            departed: Vec::new(),
+            transitions: Vec::new(),
+            clients_count: 0,
+            creatures_count: 0,
+            creature_idle_count: 0,
+            creature_wander_count: 0,
+            creature_waypoint_count: 0,
+            creature_aggro_count: 0,
+            walking_creature_count: 0,
+        }
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct AoiTickStats {
     pub entered: usize,
@@ -2877,11 +2914,21 @@ impl World {
         // Prefer the first non-skipped result for Tracy plots and the
         // slow-tick log; fall back to any result if every region
         // skipped (so e.g. `regions_active` plot still emits).
-        let per_region_result_active = all_results.iter().find(|r| !r.skipped);
-        // Reference into all_results; we only need it for reads below.
-        let per_region_result = per_region_result_active
+        // Empty-world (no regions at all — e.g. worlddb load failed)
+        // gets a zeroed placeholder so the metrics block can run
+        // without panicking.
+        let empty_placeholder;
+        let per_region_result = match all_results
+            .iter()
+            .find(|r| !r.skipped)
             .or_else(|| all_results.first())
-            .expect("at least one region must tick per global tick");
+        {
+            Some(r) => r,
+            None => {
+                empty_placeholder = PerRegionTickResult::empty();
+                &empty_placeholder
+            }
+        };
         // Pull out the per-region phase timings + counts so the
         // orchestrator's slow-tick log and Tracy block can use them.
         let t_per_client = per_region_result.t_per_client;

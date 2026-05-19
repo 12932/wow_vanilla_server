@@ -79,18 +79,50 @@ pub fn load_creatures(sqlite_path: &str) -> rusqlite::Result<Slab<Creature>> {
     let mut waypoint_entry_ids: Vec<i64> = Vec::new();
     let mut raw_rows: Vec<RawRow> = Vec::with_capacity(64_000);
 
+    // Mangos forks disagree on column naming for the secondary
+    // creature_template fields (`SubName` vs `subname`, `TypeFlags`
+    // vs `type_flags` vs `flags`, etc.) so we introspect the schema
+    // and substitute a literal `0` / `''` for any column the local
+    // DB doesn't have. Missing template fields surface in-game as
+    // zeros (no elite badge, no creature subtitle) — annoying but
+    // not crashing.
+    let template_cols = columns_lowercased(&conn, "creature_template")?;
+    let pick_text = |col: &str| -> String {
+        if template_cols.contains(&col.to_ascii_lowercase()) {
+            format!("ct.{col}")
+        } else {
+            "''".to_string()
+        }
+    };
+    let pick_int = |col: &str| -> String {
+        if template_cols.contains(&col.to_ascii_lowercase()) {
+            format!("ct.{col}")
+        } else {
+            "0".to_string()
+        }
+    };
+    let sub_name_expr = pick_text("SubName");
+    let type_flags_expr = pick_int("TypeFlags");
+    let creature_type_expr = pick_int("Type");
+    let creature_family_expr = pick_int("Family");
+    let creature_rank_expr = pick_int("Rank");
+    let civilian_expr = pick_int("Civilian");
+    let racial_leader_expr = pick_int("RacialLeader");
+
     {
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation, \
                     c.spawndist, c.MovementType, c.curhealth, c.modelid, \
-                    ct.Name, ct.SubName, ct.ModelId1, ct.ModelId2, ct.ModelId3, ct.ModelId4, \
+                    ct.Name, {sub_name_expr}, ct.ModelId1, ct.ModelId2, ct.ModelId3, ct.ModelId4, \
                     ct.MinLevel, ct.FactionAlliance, \
                     ct.MinLevelHealth, ct.MaxLevelHealth, \
-                    ct.TypeFlags, ct.Type, ct.Family, ct.Rank, ct.Civilian, ct.RacialLeader \
+                    {type_flags_expr}, {creature_type_expr}, {creature_family_expr}, \
+                    {creature_rank_expr}, {civilian_expr}, {racial_leader_expr} \
              FROM creature c \
              JOIN creature_template ct ON c.id = ct.Entry \
-             WHERE c.map IN (0, 1) AND c.DeathState = 0",
-        )?;
+             WHERE c.map IN (0, 1) AND c.DeathState = 0"
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let iter = stmt.query_map([], |row| {
             Ok(RawRow {
@@ -388,6 +420,26 @@ where
         entry.waittimes.push(row.waittime);
     }
     Ok(paths)
+}
+
+/// Returns the column names of `table` in lowercase. Used to decide
+/// which optional `creature_template` columns exist before building
+/// the main SELECT — different mangos forks rename / drop columns,
+/// and `no such column` would otherwise abort the whole worlddb load.
+fn columns_lowercased(
+    conn: &Connection,
+    table: &str,
+) -> rusqlite::Result<ahash::AHashSet<String>> {
+    // PRAGMA cannot be parameterized; the table name is hardcoded at
+    // every call site, so format!-ing it in is safe (no user input).
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut cols = ahash::AHashSet::new();
+    for r in rows {
+        cols.insert(r?.to_ascii_lowercase());
+    }
+    Ok(cols)
 }
 
 fn repeat_placeholders(n: usize) -> String {
