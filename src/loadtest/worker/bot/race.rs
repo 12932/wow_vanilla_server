@@ -152,12 +152,31 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
             let x = prev.x + dx * t;
             let y = prev.y + dy * t;
             let z_hint = prev.z + (next.z - prev.z) * t;
-            let z = match map.find_height(
-                Vector3d { x, y, z: z_hint + 50.0 },
-                namigator::Vector2d { x, y },
-            ) {
-                Ok(z) => z,
-                Err(_) => {
+            // `find_heights` returns every navmesh-Z candidate in the
+            // (x,y) column — for outdoor STV that's typically just
+            // the forest floor, but anywhere with multi-level
+            // structures (a bridge, a building, an arena rim) it can
+            // include rooftops too. Pick the candidate closest to
+            // `z_hint` (the lerp between adjacent waypoint Z values)
+            // so we lock onto the ground rather than landing on a
+            // structure above. `find_height` (singular) is a poor
+            // fit here — it does a tiny 1-yd `findNearestPoly`
+            // search around start.z that misses when start.z is
+            // off-mesh even slightly.
+            let z = match map.find_heights(x, y) {
+                Ok(heights) if !heights.is_empty() => {
+                    heights
+                        .iter()
+                        .copied()
+                        .min_by(|a, b| {
+                            (a - z_hint)
+                                .abs()
+                                .partial_cmp(&(b - z_hint).abs())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .unwrap_or(z_hint)
+                }
+                _ => {
                     fallbacks += 1;
                     z_hint
                 }
