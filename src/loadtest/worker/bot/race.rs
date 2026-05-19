@@ -115,12 +115,59 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
         started.elapsed().as_secs_f32(),
     );
 
-    let path: Vec<Vector3d> = map
+    let raw_path: Vec<Vector3d> = map
         .find_path(BOOTY_BAY, STORMWIND)
         .map_err(|e| format!("find_path(BB, SW) failed: {e:?}"))?
         .to_vec();
 
-    let dist: f32 = path
+    // Densify the Detour string-pulled path so the bot driver's
+    // straight-line XY interpolation between consecutive waypoints
+    // doesn't cut through terrain (the raw path has 10-30+ yd gaps).
+    // For each (prev → next) segment we sample every
+    // `DENSE_SPACING_YD` yards and raycast the actual ground Z via
+    // `find_height` — same convention the server uses in
+    // `pathfinding_maps.rs::ground_height`.
+    //
+    // The first sample is `BOOTY_BAY` (our hand-picked dock coords),
+    // not `raw_path[0]` — namigator snaps the BB input to the rocky
+    // seabed under the docks, and we want bots spawning on the
+    // visible plank surface instead.
+    const DENSE_SPACING_YD: f32 = 10.0;
+    let mut dense: Vec<Vector3d> = Vec::with_capacity(raw_path.len() * 30);
+    dense.push(BOOTY_BAY);
+    let mut prev = BOOTY_BAY;
+    let mut fallbacks = 0_usize;
+    for &next in raw_path.iter().skip(1) {
+        let dx = next.x - prev.x;
+        let dy = next.y - prev.y;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < DENSE_SPACING_YD {
+            dense.push(next);
+            prev = next;
+            continue;
+        }
+        let steps = (len / DENSE_SPACING_YD).ceil() as usize;
+        for k in 1..=steps {
+            let t = k as f32 / steps as f32;
+            let x = prev.x + dx * t;
+            let y = prev.y + dy * t;
+            let z_hint = prev.z + (next.z - prev.z) * t;
+            let z = match map.find_height(
+                Vector3d { x, y, z: z_hint + 50.0 },
+                namigator::Vector2d { x, y },
+            ) {
+                Ok(z) => z,
+                Err(_) => {
+                    fallbacks += 1;
+                    z_hint
+                }
+            };
+            dense.push(Vector3d { x, y, z });
+        }
+        prev = next;
+    }
+
+    let dist: f32 = dense
         .windows(2)
         .map(|w| {
             let dx = w[1].x - w[0].x;
@@ -129,13 +176,16 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
         })
         .sum();
     tracing::info!(
-        "race path: {} waypoints, {:.0} yd total, generated in {:.1}s",
-        path.len(),
+        "race path: {} raw waypoints, densified to {} at {} yd spacing ({} find_height fallbacks), {:.0} yd total, generated in {:.1}s",
+        raw_path.len(),
+        dense.len(),
+        DENSE_SPACING_YD,
+        fallbacks,
         dist,
         started.elapsed().as_secs_f32(),
     );
 
-    Ok(path)
+    Ok(dense)
 }
 
 /// World XY → ADT tile (tx, ty). Mangos convention: tile_x derives
