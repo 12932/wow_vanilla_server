@@ -1,48 +1,48 @@
 //! Amazing Race helpers: shared waypoint list + per-bot jitter sampling.
 //!
-//! Two paths to a BB → SW waypoint list:
+//! Two paths to a BB → Gurubashi waypoint list:
 //! - `build_race_path()` — calls namigator's `find_path` against the
-//!   pre-baked nav-mesh cache. Returns a 30+ waypoint polyline that
-//!   actually hugs walkable terrain (around buildings, over bridges).
-//!   Requires `WOW_VANILLA_USE_MAPS` to have been set at compile time
-//!   AND the cache to be present on disk.
-//! - `hardcoded_bb_to_sw()` — 5-point fallback. Used when namigator
+//!   pre-baked nav-mesh cache. Returns a polyline that actually hugs
+//!   walkable terrain (around buildings, over bridges). Requires
+//!   `WOW_VANILLA_USE_MAPS` to have been set at compile time AND the
+//!   cache to be present on disk.
+//! - `hardcoded_bb_to_arena()` — coarse fallback. Used when namigator
 //!   isn't available (env var unset at build time, cache missing,
 //!   find_path errors). Bots still walk the route, but the geometry
-//!   is coarse and clips through anything between the waypoints.
+//!   clips through anything between waypoints.
+//!
+//! The race endpoint is the entrance to Gurubashi Arena (~1.6 km
+//! north of Booty Bay along the coast). Bots reverse direction on
+//! arrival and run back, looping forever.
 
 use wow_world_messages::vanilla::Vector3d;
 
-/// Hardcoded Booty Bay → Stormwind waypoint list. Coordinates picked by
-/// eye from the standard mangos worldmap; close enough to walkable
-/// terrain that a bot ignoring geometry won't look obviously wrong from
-/// a distance. Will be replaced with `find_path()` output once the
-/// namigator cache is built.
-pub fn hardcoded_bb_to_sw() -> Vec<Vector3d> {
+/// Coarse Booty Bay → Gurubashi Arena waypoint list. Two midpoints
+/// hand-picked from in-game eye-balling so the straight-line
+/// interpolation doesn't cut through any major terrain feature.
+/// Used as a fallback when namigator is unavailable.
+pub fn hardcoded_bb_to_arena() -> Vec<Vector3d> {
     vec![
-        // Booty Bay docks
-        Vector3d { x: -14253.7, y:  290.5, z:   7.4 },
-        // Grom'gol Base Camp (entrance)
-        Vector3d { x: -12382.0, y: -127.0, z:  46.8 },
-        // Duskwood Darkshire crossroads
-        Vector3d { x: -10510.0, y: -1278.0, z:  37.8 },
-        // Goldshire
-        Vector3d { x:  -9461.0, y:    62.0, z:  56.1 },
-        // Stormwind Trade District fountain
-        Vector3d { x:  -8949.0, y:  -132.0, z:  84.0 },
+        BOOTY_BAY,
+        // STV coastal road midpoint (north of BB, south of the arena)
+        Vector3d { x: -13800.0, y: 200.0, z: 30.0 },
+        GURUBASHI_ARENA,
     ]
 }
 
 /// Booty Bay docks — race start. Constant so both `build_race_path()`
-/// and `hardcoded_bb_to_sw()` agree on the endpoints. Coordinates
+/// and `hardcoded_bb_to_arena()` agree on the endpoints. Coordinates
 /// hand-picked from in-game (`.whereami` on the docks) so they sit
 /// cleanly on the walkable plank surface rather than the namigator
 /// mesh under it (which is rocky seabed several yards below).
 pub const BOOTY_BAY: Vector3d = Vector3d { x: -14237.9, y: 262.02, z: 24.75 };
-/// Stormwind Trade District — race finish.
-pub const STORMWIND: Vector3d = Vector3d { x: -8949.0, y: -132.0, z: 84.0 };
+/// Gurubashi Arena entrance — race finish. ~1.6 km north of Booty
+/// Bay along the coast road. Replaces the earlier Stormwind
+/// endpoint, which kept failing `find_path` with `UnknownPath`
+/// (probably a missing-bridge gap on the STV → Westfall corridor).
+pub const GURUBASHI_ARENA: Vector3d = Vector3d { x: -13284.747, y: 116.001, z: 24.36 };
 
-/// Build the BB → SW path from the pre-baked navmesh cache. Reads the
+/// Build the BB → Gurubashi path from the pre-baked navmesh cache. Reads the
 /// same env var + cache directory the server uses
 /// (`pathfinding_maps.rs:33`), so once the server has finished its
 /// first-boot bake the loadtest sees the cached output instantly.
@@ -54,7 +54,7 @@ pub const STORMWIND: Vector3d = Vector3d { x: -8949.0, y: -132.0, z: 84.0 };
 ///   on the mesh — e.g. a bridge that's M2-only and got skipped by
 ///   the bake)
 ///
-/// Caller's responsibility to fall back to `hardcoded_bb_to_sw()` on
+/// Caller's responsibility to fall back to `hardcoded_bb_to_arena()` on
 /// error and log the failure for the operator.
 pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     const DATA_PATH: Option<&str> = std::option_env!("WOW_VANILLA_USE_MAPS");
@@ -95,7 +95,7 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     // bounding box is ~10–12 tiles tall × 1–2 wide on Eastern
     // Kingdoms, so ~20 loads up front.
     let (bb_tx, bb_ty) = world_to_adt(BOOTY_BAY.x, BOOTY_BAY.y);
-    let (sw_tx, sw_ty) = world_to_adt(STORMWIND.x, STORMWIND.y);
+    let (sw_tx, sw_ty) = world_to_adt(GURUBASHI_ARENA.x, GURUBASHI_ARENA.y);
     let (tx_min, tx_max) = (bb_tx.min(sw_tx), bb_tx.max(sw_tx));
     let (ty_min, ty_max) = (bb_ty.min(sw_ty), bb_ty.max(sw_ty));
     let mut loaded = 0;
@@ -116,8 +116,8 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     );
 
     let raw_path: Vec<Vector3d> = map
-        .find_path(BOOTY_BAY, STORMWIND)
-        .map_err(|e| format!("find_path(BB, SW) failed: {e:?}"))?
+        .find_path(BOOTY_BAY, GURUBASHI_ARENA)
+        .map_err(|e| format!("find_path(BB, Gurubashi) failed: {e:?}"))?
         .to_vec();
 
     // Densify the Detour string-pulled path so the bot driver's

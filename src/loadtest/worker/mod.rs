@@ -77,7 +77,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
                     "namigator path generation failed ({e}); falling back to hardcoded BB→SW polyline. \
                      Bots will still race but the geometry will be coarse."
                 );
-                bot::race::hardcoded_bb_to_sw().into()
+                bot::race::hardcoded_bb_to_arena().into()
             }
         }
     } else {

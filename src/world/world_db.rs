@@ -4,11 +4,61 @@ use crate::world::world_opcode_handler::creature::{
 use ahash::AHashMap;
 use rusqlite::{Connection, OpenFlags};
 use slab::Slab;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use wow_world_base::vanilla::Map;
 use wow_world_messages::vanilla::{MovementInfo, Vector3d};
 use wow_world_messages::Guid;
+
+/// Per-entry creature template data needed to answer
+/// `CMSG_CREATURE_QUERY` correctly. The client caches the response
+/// keyed by entry in `creaturecache.wdb`, so populating this once at
+/// worlddb load lets the handler resolve every entry in the game
+/// regardless of which region a specific spawn lives in — fixing the
+/// cross-region "Unknown" placeholder names that show up after a
+/// partition boundary.
+#[derive(Debug, Clone)]
+pub struct CreatureTemplate {
+    pub name: String,
+    pub sub_name: String,
+    pub type_flags: u32,
+    /// Raw mangos `Type` column — 1 = Beast, 2 = Dragonkin, 3 = Demon,
+    /// 4 = Elemental, 5 = Giant, 6 = Undead, 7 = Humanoid, etc.
+    /// The protocol field is `u32` and the client reads it
+    /// directly; passing the raw value through keeps tooltips correct.
+    pub creature_type: u32,
+    /// Raw mangos `Family` column. Converted to the
+    /// `CreatureFamily` enum at response-build time via TryFrom.
+    pub creature_family: u32,
+    /// 0 = normal, 1 = elite, 2 = rare elite, 3 = world boss, 4 = rare.
+    pub creature_rank: u32,
+    pub display_id: u32,
+    pub civilian: u8,
+    pub racial_leader: u8,
+}
+
+/// Process-wide entry → template map. Populated by [`load_creatures`]
+/// at server startup; read by the `CMSG_CREATURE_QUERY` opcode
+/// handler. Locked briefly only — never contended on the hot path.
+pub static CREATURE_TEMPLATES: LazyLock<Mutex<AHashMap<u32, CreatureTemplate>>> =
+    LazyLock::new(|| Mutex::new(AHashMap::new()));
+
+/// Look up a template by entry. Returns `None` if no creature with
+/// this entry was loaded from the worlddb (e.g. a runtime-spawned
+/// custom mob, or an entry we never had data for).
+pub fn lookup_template(entry: u32) -> Option<CreatureTemplate> {
+    CREATURE_TEMPLATES.lock().ok()?.get(&entry).cloned()
+}
+
+/// Insert/overwrite a template. Called by [`load_creatures`] once per
+/// unique entry. Idempotent: re-registering the same entry just
+/// replaces the row.
+pub fn register_template(entry: u32, template: CreatureTemplate) {
+    if let Ok(mut guard) = CREATURE_TEMPLATES.lock() {
+        guard.insert(entry, template);
+    }
+}
 
 /// Offset to keep mangos guids out of the player-guid namespace
 /// (`db.new_guid()` returns small incrementing integers starting at 0).
@@ -33,9 +83,10 @@ pub fn load_creatures(sqlite_path: &str) -> rusqlite::Result<Slab<Creature>> {
         let mut stmt = conn.prepare(
             "SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation, \
                     c.spawndist, c.MovementType, c.curhealth, c.modelid, \
-                    ct.Name, ct.ModelId1, ct.ModelId2, ct.ModelId3, ct.ModelId4, \
+                    ct.Name, ct.SubName, ct.ModelId1, ct.ModelId2, ct.ModelId3, ct.ModelId4, \
                     ct.MinLevel, ct.FactionAlliance, \
-                    ct.MinLevelHealth, ct.MaxLevelHealth \
+                    ct.MinLevelHealth, ct.MaxLevelHealth, \
+                    ct.TypeFlags, ct.Type, ct.Family, ct.Rank, ct.Civilian, ct.RacialLeader \
              FROM creature c \
              JOIN creature_template ct ON c.id = ct.Entry \
              WHERE c.map IN (0, 1) AND c.DeathState = 0",
@@ -55,16 +106,23 @@ pub fn load_creatures(sqlite_path: &str) -> rusqlite::Result<Slab<Creature>> {
                 cur_health: i64_to_u32(row.get::<_, i64>(9)?),
                 spawn_model: i64_to_u32(row.get::<_, i64>(10)?),
                 name: row.get::<_, String>(11)?,
+                sub_name: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
                 template_models: [
-                    i64_to_u32(row.get::<_, i64>(12)?),
                     i64_to_u32(row.get::<_, i64>(13)?),
                     i64_to_u32(row.get::<_, i64>(14)?),
                     i64_to_u32(row.get::<_, i64>(15)?),
+                    i64_to_u32(row.get::<_, i64>(16)?),
                 ],
-                min_level: i64_to_u8(row.get::<_, i64>(16)?),
-                faction_alliance: i64_to_u32(row.get::<_, i64>(17)?),
-                min_health: i64_to_u32(row.get::<_, i64>(18)?),
-                max_health: i64_to_u32(row.get::<_, i64>(19)?),
+                min_level: i64_to_u8(row.get::<_, i64>(17)?),
+                faction_alliance: i64_to_u32(row.get::<_, i64>(18)?),
+                min_health: i64_to_u32(row.get::<_, i64>(19)?),
+                max_health: i64_to_u32(row.get::<_, i64>(20)?),
+                type_flags: i64_to_u32(row.get::<_, i64>(21)?),
+                creature_type: i64_to_u32(row.get::<_, i64>(22)?),
+                creature_family: i64_to_u32(row.get::<_, i64>(23)?),
+                creature_rank: i64_to_u32(row.get::<_, i64>(24)?),
+                civilian: i64_to_u8(row.get::<_, i64>(25)?),
+                racial_leader: i64_to_u8(row.get::<_, i64>(26)?),
             })
         })?;
 
@@ -147,6 +205,25 @@ pub fn load_creatures(sqlite_path: &str) -> rusqlite::Result<Slab<Creature>> {
 
         let runtime_guid = Guid::new(MANGOS_GUID_OFFSET + row.spawn_guid as u64);
 
+        // Register the template once per entry. Subsequent rows
+        // with the same entry overwrite with identical data, which
+        // is a no-op — cheaper than gating on `contains_key` for the
+        // few thousand unique entries we see across ~50k spawns.
+        register_template(
+            row.entry,
+            CreatureTemplate {
+                name: row.name.clone(),
+                sub_name: row.sub_name.clone(),
+                type_flags: row.type_flags,
+                creature_type: row.creature_type,
+                creature_family: row.creature_family,
+                creature_rank: row.creature_rank,
+                display_id,
+                civilian: row.civilian,
+                racial_leader: row.racial_leader,
+            },
+        );
+
         slab.insert(Creature {
             name: row.name,
             guid: runtime_guid,
@@ -207,11 +284,18 @@ struct RawRow {
     cur_health: u32,
     spawn_model: u32,
     name: String,
+    sub_name: String,
     template_models: [u32; 4],
     min_level: u8,
     faction_alliance: u32,
     min_health: u32,
     max_health: u32,
+    type_flags: u32,
+    creature_type: u32,
+    creature_family: u32,
+    creature_rank: u32,
+    civilian: u8,
+    racial_leader: u8,
 }
 
 struct Path {
