@@ -132,7 +132,11 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     // not `raw_path[0]` — namigator snaps the BB input to the rocky
     // seabed under the docks, and we want bots spawning on the
     // visible plank surface instead.
-    const DENSE_SPACING_YD: f32 = 10.0;
+    // 2 yd ≈ one heartbeat's worth of motion at run speed (7 yd/s ×
+    // 250 ms ≈ 1.75 yd). Tighter samples reduce mid-segment Z error
+    // when the terrain is uneven; the linear-XY-to-Z lerp between
+    // consecutive samples picks up almost every hill profile.
+    const DENSE_SPACING_YD: f32 = 2.0;
     let mut dense: Vec<Vector3d> = Vec::with_capacity(raw_path.len() * 30);
     dense.push(BOOTY_BAY);
     let mut prev = BOOTY_BAY;
@@ -194,12 +198,23 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
             (dx * dx + dy * dy).sqrt()
         })
         .sum();
+    let (z_min, z_max) = dense.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
+        (lo.min(p.z), hi.max(p.z))
+    });
+    let (raw_z_min, raw_z_max) = raw_path.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(lo, hi), p| (lo.min(p.z), hi.max(p.z)),
+    );
     tracing::info!(
-        "race path: {} raw waypoints, densified to {} at {} yd spacing ({} find_height fallbacks), {:.0} yd total, generated in {:.1}s",
+        "race path: {} raw waypoints (z {:.1}..{:.1}), densified to {} at {} yd spacing ({} find_heights fallbacks, z {:.1}..{:.1}), {:.0} yd total, generated in {:.1}s",
         raw_path.len(),
+        raw_z_min,
+        raw_z_max,
         dense.len(),
         DENSE_SPACING_YD,
         fallbacks,
+        z_min,
+        z_max,
         dist,
         started.elapsed().as_secs_f32(),
     );
