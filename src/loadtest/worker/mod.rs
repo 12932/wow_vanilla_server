@@ -63,25 +63,33 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     // "everyone you were going to spawn with is up — start fighting".
     let battle_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Race path: shared across every Race-mode bot in this worker.
-    // Generated once at worker startup. Try namigator first; if the
-    // cache isn't baked or the env var was unset at compile time,
-    // fall back to a 5-point hardcoded polyline so the loadtest still
-    // runs (bots will clip through scenery but the load profile is
-    // identical from the server's POV).
-    let race_path: Arc<[wow_world_messages::vanilla::Vector3d]> = if cfg.mode == BotMode::Race {
+    // Race path + shared VanillaMap. Shared across every Race-mode
+    // bot in this worker. Built once at worker startup. The map is
+    // wrapped in Arc<Mutex<>> so bot drivers can snap Z to actual
+    // ground every heartbeat (the path itself is sparse — XY only;
+    // Z comes from per-tick `find_heights` calls in the driver).
+    //
+    // Fallback path: if namigator isn't wired (env var unset at
+    // compile time, cache missing, find_path fails) we use the
+    // hand-picked `hardcoded_bb_to_arena` waypoints and run
+    // without per-tick Z sampling. Bots clip through scenery but
+    // the load profile is identical from the server's POV.
+    let (race_path, race_map): (
+        Arc<[wow_world_messages::vanilla::Vector3d]>,
+        Option<Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>>,
+    ) = if cfg.mode == BotMode::Race {
         match bot::race::build_race_path() {
-            Ok(path) => path.into(),
+            Ok((path, map)) => (path.into(), Some(map)),
             Err(e) => {
                 tracing::warn!(
-                    "namigator path generation failed ({e}); falling back to hardcoded BB→SW polyline. \
-                     Bots will still race but the geometry will be coarse."
+                    "namigator path generation failed ({e}); falling back to hardcoded BB→Arena polyline. \
+                     Bots will still race but the geometry will be coarse and Z will not track terrain."
                 );
-                bot::race::hardcoded_bb_to_arena().into()
+                (bot::race::hardcoded_bb_to_arena().into(), None)
             }
         }
     } else {
-        Arc::from(Vec::new())
+        (Arc::from(Vec::new()), None)
     };
 
     let bot_cfg = BotConfig {
@@ -91,6 +99,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
         mode: cfg.mode,
         battle_started: battle_started.clone(),
         race_path: race_path.clone(),
+        race_map: race_map.clone(),
     };
 
     if cfg.initial_clients > 0 {

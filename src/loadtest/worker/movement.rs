@@ -113,23 +113,73 @@ pub enum Mode {
         own_guid: Guid,
         battle_started: Arc<AtomicBool>,
     },
-    /// Amazing Race: walk a shared waypoint polyline from Booty Bay to
-    /// Stormwind and back. The bot self-teleports to `path[0] + jitter`
-    /// on its first tick (single heartbeat — server accepts it as a
-    /// giant client-side teleport) and then runs forward along the
-    /// path at `DEFAULT_RUNNING_SPEED`, switching waypoints when within
-    /// `RACE_WAYPOINT_RADIUS`. On reaching the final waypoint the bot
-    /// flips `forward` and runs the reverse direction.
+    /// Amazing Race: walk a shared waypoint polyline from Booty Bay
+    /// to Gurubashi Arena and back. The bot self-teleports to
+    /// `path[0] + jitter` on its first tick (single heartbeat —
+    /// server accepts it as a giant client-side teleport) and then
+    /// runs along the path at `DEFAULT_RUNNING_SPEED`, switching
+    /// waypoints within `RACE_WAYPOINT_RADIUS`. On reaching the
+    /// final waypoint the bot flips `forward` and reverses.
+    ///
+    /// Z handling: every heartbeat the driver calls
+    /// `map.find_heights(x, y)` (if a map is wired) and snaps Z to
+    /// the navmesh candidate closest to the bot's previous Z.
+    /// This makes the bot track terrain accurately regardless of
+    /// what the sparse path Z values are — each tick is fresh.
     Race {
         path: Arc<[Vector3d]>,
         index: usize,
         forward: bool,
         jitter: (f32, f32),
-        /// False until the first tick fires the initial teleport
-        /// heartbeat. After that we track position client-side and
-        /// only emit heartbeats on the normal `HEARTBEAT_INTERVAL`.
         teleported: bool,
+        /// Shared navmesh handle. `Some` for namigator-wired race
+        /// bots; `None` when running the hardcoded-fallback path
+        /// (no per-tick Z snap, driver lerps between path Z values).
+        map: Option<Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>>,
+        /// Heartbeats logged so far (bot slot 0 only, capped at
+        /// `RACE_DIAG_LIMIT`). Lets us see what Z the bot is
+        /// actually transmitting after the snap.
+        hb_diag_count: usize,
+        /// Bot slot from spawn; only slot 0 emits the diagnostic
+        /// log to keep the volume manageable at high bot counts.
+        bot_slot: u32,
     },
+}
+
+/// Max heartbeats logged per bot-0 in race mode. Drop once the
+/// terrain following issue is fully diagnosed.
+const RACE_DIAG_LIMIT: usize = 20;
+
+/// Snap a Z coordinate to the navmesh value closest to `z_hint`
+/// at the given XY. Returns `None` if `find_heights` errors or
+/// the column has no candidates. Used by the race driver on
+/// every heartbeat (live Z snap) and on first-tick teleport
+/// (spawn at the actual ground rather than the hand-picked
+/// const). Held lock is microseconds; we copy out of the
+/// borrowed slice before unlocking.
+fn snap_ground_z(
+    map_arc: &Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>,
+    x: f32,
+    y: f32,
+    z_hint: f32,
+) -> Option<f32> {
+    let heights = {
+        let mut map = map_arc.lock().expect("VanillaMap mutex poisoned");
+        map.find_heights(x, y).ok().map(|h| h.to_vec())
+    };
+    let heights = heights?;
+    if heights.is_empty() {
+        return None;
+    }
+    heights
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            (a - z_hint)
+                .abs()
+                .partial_cmp(&(b - z_hint).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 /// Radius inside the arena pit that bots strafe into during the
@@ -262,12 +312,30 @@ impl MovementDriver {
     ) -> std::io::Result<()> {
         // Snapshot mutable race fields up front so we can do all the
         // math against locals (no double-borrow of `self.mode`).
-        let (path, mut index, mut forward, jx, jy, mut teleported) = match &self.mode {
-            Mode::Race { path, index, forward, jitter, teleported } => {
-                (path.clone(), *index, *forward, jitter.0, jitter.1, *teleported)
-            }
-            _ => unreachable!("tick_race called outside Mode::Race"),
-        };
+        let (path, mut index, mut forward, jx, jy, mut teleported, map_arc, bot_slot, mut hb_diag_count) =
+            match &self.mode {
+                Mode::Race {
+                    path,
+                    index,
+                    forward,
+                    jitter,
+                    teleported,
+                    map,
+                    hb_diag_count,
+                    bot_slot,
+                } => (
+                    path.clone(),
+                    *index,
+                    *forward,
+                    jitter.0,
+                    jitter.1,
+                    *teleported,
+                    map.clone(),
+                    *bot_slot,
+                    *hb_diag_count,
+                ),
+                _ => unreachable!("tick_race called outside Mode::Race"),
+            };
         if path.is_empty() {
             // No path configured — race mode with `--mode race` but no
             // waypoints set up (worker bug). Stand still so the bot
@@ -279,18 +347,23 @@ impl MovementDriver {
         // Booty Bay docks coords (NOT path[0]) — namigator snaps BB
         // to the underlying ADT mesh, which under the docks is the
         // rocky seabed at z ≈ -2/-3. Using path[0].z would spawn
-        // bots underwater. The hardcoded `BOOTY_BAY` const sits on
-        // the actual dock planks at z = 7.4.
+        // bots underwater. If we have a live map, immediately snap
+        // Z to the navmesh value closest to the dock-Z hint so the
+        // bot doesn't pop on tick 2.
         if !teleported {
+            let mut spawn_z = crate::worker::bot::race::BOOTY_BAY.z;
+            let bb_x = crate::worker::bot::race::BOOTY_BAY.x + jx;
+            let bb_y = crate::worker::bot::race::BOOTY_BAY.y + jy;
+            if let Some(map_arc) = &map_arc
+                && let Some(z) = snap_ground_z(map_arc, bb_x, bb_y, spawn_z)
+            {
+                spawn_z = z;
+            }
             self.info.position = Vector3d {
-                x: crate::worker::bot::race::BOOTY_BAY.x + jx,
-                y: crate::worker::bot::race::BOOTY_BAY.y + jy,
-                z: crate::worker::bot::race::BOOTY_BAY.z,
+                x: bb_x,
+                y: bb_y,
+                z: spawn_z,
             };
-            // Mark moving forward so observer clients interpolate
-            // correctly between the teleport-heartbeat and the next
-            // one. The actual MSG_MOVE_START_FORWARD goes out on the
-            // following tick once we have an orientation.
             self.info.flags = MovementInfo_MovementFlags::empty();
             self.phase = Phase::Idle;
             let msg = MSG_MOVE_HEARTBEAT_Client {
@@ -371,35 +444,95 @@ impl MovementDriver {
 
         if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
             self.advance_position(now);
-            // Position-based Z snap. `advance_position` is 2D; we
-            // compute the bot's progress along the (prev → target)
-            // segment by projecting current XY onto the segment line,
-            // then set Z = lerp(prev.z, target.z, t). The previous
-            // approach was an exponential-decay step toward target.z
-            // (fraction = step / remaining), which underdamped Z and
-            // made climbing bots clip through terrain / descending
-            // bots float above it. This is the correct linear
-            // interpolation: at any XY on the segment, Z is exactly
-            // the line between the two waypoints' Z values.
-            let prev_index = if forward {
-                index.saturating_sub(1)
+
+            // Z snap. If we have a live VanillaMap, sample the
+            // navmesh at the bot's CURRENT XY and pick the
+            // candidate closest to the previous Z (so a bot on
+            // the ground stays on the ground, vs jumping to a
+            // rooftop polygon that happens to share the column).
+            // Per-tick sampling avoids the drift problem of
+            // pre-baked dense path Z: every heartbeat is fresh.
+            //
+            // If `map_arc` is None (hardcoded fallback path) OR
+            // find_heights errors, fall back to the linear lerp
+            // between adjacent path waypoint Z values. Keeps the
+            // bot moving rather than vanishing.
+            let prev_z = self.info.position.z;
+            let mut picked_z: Option<f32> = None;
+            let mut candidates_for_log: Vec<f32> = Vec::new();
+            if let Some(map_arc) = &map_arc {
+                let pos_x = self.info.position.x;
+                let pos_y = self.info.position.y;
+                let heights = {
+                    let mut map = map_arc.lock().expect("VanillaMap mutex poisoned");
+                    map.find_heights(pos_x, pos_y).ok().map(|h| h.to_vec())
+                };
+                if let Some(h) = heights
+                    && !h.is_empty()
+                {
+                    let z = h
+                        .iter()
+                        .copied()
+                        .min_by(|a, b| {
+                            (a - prev_z)
+                                .abs()
+                                .partial_cmp(&(b - prev_z).abs())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .unwrap_or(prev_z);
+                    picked_z = Some(z);
+                    candidates_for_log = h;
+                }
+            }
+            if let Some(z) = picked_z {
+                self.info.position.z = z;
             } else {
-                (index + 1).min(path.len().saturating_sub(1))
-            };
-            let prev_raw = path[prev_index];
-            let prev_x = prev_raw.x + jx;
-            let prev_y = prev_raw.y + jy;
-            let segment_dx = target.x - prev_x;
-            let segment_dy = target.y - prev_y;
-            let len_sq = segment_dx * segment_dx + segment_dy * segment_dy;
-            let t = if len_sq > 0.0001 {
-                let proj = (self.info.position.x - prev_x) * segment_dx
-                    + (self.info.position.y - prev_y) * segment_dy;
-                (proj / len_sq).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            self.info.position.z = prev_raw.z + (target.z - prev_raw.z) * t;
+                // Fallback: linear lerp between adjacent path Z
+                // values based on XY projection onto the segment.
+                let prev_index = if forward {
+                    index.saturating_sub(1)
+                } else {
+                    (index + 1).min(path.len().saturating_sub(1))
+                };
+                let prev_raw = path[prev_index];
+                let prev_x = prev_raw.x + jx;
+                let prev_y = prev_raw.y + jy;
+                let segment_dx = target.x - prev_x;
+                let segment_dy = target.y - prev_y;
+                let len_sq = segment_dx * segment_dx + segment_dy * segment_dy;
+                let t = if len_sq > 0.0001 {
+                    let proj = (self.info.position.x - prev_x) * segment_dx
+                        + (self.info.position.y - prev_y) * segment_dy;
+                    (proj / len_sq).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                self.info.position.z = prev_raw.z + (target.z - prev_raw.z) * t;
+            }
+
+            // Diagnostic: bot slot 0 logs the first `RACE_DIAG_LIMIT`
+            // heartbeats so we can SEE what's being transmitted.
+            // Drop once the terrain-following issue is verified
+            // fixed.
+            if bot_slot == 0 && hb_diag_count < RACE_DIAG_LIMIT {
+                tracing::info!(
+                    "race bot0 hb {:>2}: xy=({:>9.1},{:>8.1}) prev_z={:>6.2} picked_z={:>6.2} candidates={:?}",
+                    hb_diag_count,
+                    self.info.position.x,
+                    self.info.position.y,
+                    prev_z,
+                    self.info.position.z,
+                    candidates_for_log,
+                );
+                hb_diag_count += 1;
+                if let Mode::Race {
+                    hb_diag_count: c, ..
+                } = &mut self.mode
+                {
+                    *c = hb_diag_count;
+                }
+            }
+
             let msg = MSG_MOVE_HEARTBEAT_Client {
                 info: self.info.clone(),
             };
