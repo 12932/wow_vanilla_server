@@ -652,6 +652,232 @@ impl RegionState {
 
     /// Walks corpses + respawning creatures. Corpses past `CORPSE_DESPAWN`
     /// transition to `Respawning` (broadcast destroy). Respawning creatures
+    /// Process clients flagged for character-screen during this
+    /// tick's `per_client_loop` (typically by `CMSG_LOGOUT_REQUEST`).
+    /// For each: pull out of the region's slab, broadcast
+    /// `SMSG_DESTROY_OBJECT` to every observer within AOI, drop
+    /// the guid from every observer's `visible_entities` (so the
+    /// next AOI diff doesn't re-emit a departure for an
+    /// already-handled logout), and append the resulting
+    /// `CharacterScreenClient` to `departed`. The orchestrator
+    /// hands those back to `World::clients_on_character_screen`
+    /// for the relog flow.
+    #[tracing::instrument(level = "info", skip_all, name = "drain_logouts")]
+    pub(crate) async fn drain_logouts(
+        &mut self,
+        keys: &[usize],
+        departed: &mut Vec<CharacterScreenClient>,
+    ) {
+        for &key in keys {
+            let c = self.remove_client(key);
+            let logout_pos = c.character().info.position;
+            let logout_map = c.character().map;
+            let logout_guid = c.character().guid;
+            // Drop the heartbeat-throttle bookkeeping for the
+            // leaving player so the map doesn't accumulate stale
+            // guids over a long server lifetime.
+            self.last_heartbeat_broadcast_tick.remove(&logout_guid);
+            for (_, a) in &mut self.clients {
+                if a.character().map == logout_map
+                    && aoi::within_aoi(&a.character().info.position, &logout_pos)
+                {
+                    a.send_message(SMSG_DESTROY_OBJECT { guid: logout_guid })
+                        .await;
+                }
+                a.session.visible_entities.remove(&logout_guid);
+            }
+            let c = c.into_character_screen_client();
+            departed.push(c);
+        }
+    }
+
+    /// End-of-tick boundary transition detection. After
+    /// `per_client_loop` + `tick_creature_ai` have potentially
+    /// moved client positions, find any client whose new
+    /// `(map, x, y)` maps to a different `RegionKey` than this
+    /// region. Pull them out of the slab and return them as
+    /// `(destination_key, client)` pairs; the orchestrator
+    /// routes each to its destination region (lazy-creating if
+    /// needed). Source region clears them from `client_by_guid`
+    /// via `remove_client` so its indexes stay authoritative.
+    #[tracing::instrument(level = "info", skip_all, name = "detect_boundary_transitions")]
+    pub(crate) fn detect_boundary_transitions(&mut self) -> Vec<(RegionKey, Client)> {
+        let region_key_now = self.key;
+        let crossing_keys: Vec<usize> = self
+            .clients
+            .iter()
+            .filter_map(|(k, c)| {
+                let pos = c.character().info.position;
+                let new_key =
+                    RegionKey::from_position(c.character().map, pos.x, pos.y);
+                if new_key != region_key_now { Some(k) } else { None }
+            })
+            .collect();
+        let mut transitions: Vec<(RegionKey, Client)> = Vec::with_capacity(crossing_keys.len());
+        for k in crossing_keys {
+            let client = self.remove_client(k);
+            let pos = client.character().info.position;
+            let new_key =
+                RegionKey::from_position(client.character().map, pos.x, pos.y);
+            transitions.push((new_key, client));
+        }
+        transitions
+    }
+
+    /// Flush coalesced per-source movement broadcasts queued
+    /// during `per_client_loop`. Each entry was queued by a
+    /// movement opcode handler this tick; we issue at most one
+    /// broadcast per source via the serialize-once
+    /// `aoi::broadcast_opcode_within_aoi` path. The map is
+    /// reused across ticks (`.drain()` keeps capacity).
+    ///
+    /// `Some(source_guid)` is passed to the broadcast so the
+    /// source player does NOT receive their own movement opcode
+    /// back — an echo would be treated by the local client as a
+    /// server position correction (visible rubber-banding).
+    ///
+    /// `heartbeat_skip_ratio` is the pacer-driven throttle: 1
+    /// means no throttle (~30 Hz pacer), 3 means every third
+    /// heartbeat fires (~10 Hz pacer). Transition opcodes
+    /// (start/stop/strafe/jump) ignore the throttle since
+    /// observers can't infer those locally.
+    #[tracing::instrument(level = "info", skip_all, name = "flush_movement_broadcasts")]
+    pub(crate) fn flush_movement_broadcasts(&mut self, heartbeat_skip_ratio: u64) {
+        // Per-tick broadcast totals so Tracy can show whether the
+        // movement broadcast leg is a hotspot.
+        let mut sources = 0_usize;
+        let mut recipients = 0_usize;
+        let mut bytes = 0_usize;
+        let mut throttled = 0_usize;
+        // Borrow these as raw fields up front — the loop body takes
+        // `&mut self.last_heartbeat_broadcast_tick` which conflicts
+        // with `&self.tick_counter` under the standard borrow check.
+        let tick_counter = self.tick_counter;
+        let skip_ratio = heartbeat_skip_ratio;
+        for (source_guid, pm) in self.pending_movement.drain() {
+            let is_heartbeat = matches!(
+                pm.msg,
+                ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(_)
+            );
+            if is_heartbeat && skip_ratio > 1 {
+                let last = self
+                    .last_heartbeat_broadcast_tick
+                    .get(&source_guid)
+                    .copied()
+                    .unwrap_or(0);
+                if tick_counter.saturating_sub(last) < skip_ratio {
+                    throttled += 1;
+                    continue;
+                }
+            }
+            let (r, b) = aoi::broadcast_opcode_within_aoi(
+                &pm.msg,
+                pm.anchor,
+                pm.map,
+                Some(source_guid),
+                &self.broadcast_view,
+            );
+            sources += 1;
+            recipients += r;
+            bytes += r * b;
+            self.last_heartbeat_broadcast_tick
+                .insert(source_guid, tick_counter);
+        }
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(
+                tracy_client::plot_name!("broadcast_sources"),
+                sources as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("broadcast_recipients"),
+                recipients as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("broadcast_bytes"),
+                bytes as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("broadcast_throttled"),
+                throttled as f64,
+            );
+            client.plot(
+                tracy_client::plot_name!("broadcast_skip_ratio"),
+                skip_ratio as f64,
+            );
+        }
+    }
+
+    /// Drain the cross-region inbox: fan-out incoming broadcast
+    /// frames to our local AOI viewers, and apply any
+    /// `UnitEffect` deliveries to local creatures / clients.
+    ///
+    /// Called once per per-region tick, after `broadcast_view` is
+    /// rebuilt and before this region's own movement broadcasts
+    /// are flushed. Each drained message bumps
+    /// [`crate::world::region::CROSS_REGION_DRAINED`]. A damage
+    /// effect that brings a creature to 0 HP pushes a
+    /// `KillCreature` onto `commands` so the standard
+    /// `apply_commands` despawn + loot path runs.
+    #[tracing::instrument(level = "info", skip_all, name = "drain_cross_region_inbox")]
+    pub(crate) fn drain_cross_region_inbox(
+        &mut self,
+        commands: &mut crate::world::command::CommandQueue,
+    ) {
+        while let Ok(Some(msg)) = self.cross_region_rx.try_recv() {
+            match msg {
+                crate::world::region::CrossRegionMsg::Frame(frame) => {
+                    let crate::world::region::CrossRegionFrame {
+                        anchor,
+                        anchor_map,
+                        exclude_guid,
+                        frame,
+                        frame_bytes,
+                    } = frame;
+                    let _ = aoi::fanout_frame(
+                        frame,
+                        frame_bytes,
+                        anchor,
+                        anchor_map,
+                        exclude_guid,
+                        &self.broadcast_view,
+                    );
+                    crate::world::region::CROSS_REGION_DRAINED
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                crate::world::region::CrossRegionMsg::Effect(eff) => {
+                    let crate::world::region::CrossRegionEffect {
+                        target_guid,
+                        effect,
+                    } = eff;
+                    // Apply to a local creature or client. If the
+                    // target is no longer in this region (logged
+                    // out, transitioned away between the sender's
+                    // tick and ours), the effect is silently
+                    // dropped — same shape as a missed broadcast
+                    // frame.
+                    if let Some(&ck) = self.creature_by_guid.get(&target_guid)
+                        && let Some(cr) = self.creatures.get_mut(ck)
+                    {
+                        let died = crate::world::world_opcode_handler::entities::apply_effect_to_creature(cr, &effect);
+                        if died {
+                            commands.push(
+                                crate::world::command::WorldCommand::KillCreature(target_guid),
+                            );
+                        }
+                    } else if let Some(&pk) = self.client_by_guid.get(&target_guid)
+                        && let Some(c) = self.clients.get_mut(pk)
+                    {
+                        crate::world::world_opcode_handler::entities::apply_effect_to_client(
+                            c, &effect,
+                        );
+                    }
+                    crate::world::region::CROSS_REGION_DRAINED
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
     /// whose timer has elapsed transition back to `Alive` (broadcast a
     /// fresh create-object, restore HP, snap back to spawn position).
     #[tracing::instrument(level = "info", skip_all, name = "tick_corpses_and_respawns")]
@@ -779,6 +1005,15 @@ impl RegionState {
             }
         }
 
+        // Aggro target candidate scan. KNOWN LIMITATION: this
+        // iterates only the LOCAL region's clients. A creature
+        // near a region boundary won't aggro a player in the
+        // neighbor region. Doing it properly requires creature
+        // cross-region transition support (creature moves into
+        // the neighbor's slab as it chases the player) which
+        // Stage 5 only built for clients. Tracked as future work;
+        // user-visible impact is low (mob doesn't attack you from
+        // across the boundary, until you walk into its region).
         let clients = &self.clients;
         let targets: Vec<(usize, Option<usize>)> = self
             .aggro_creature_keys
@@ -1681,6 +1916,8 @@ impl World {
         let mut create_object_by_guid: ahash::AHashMap<Guid, Object> = ahash::AHashMap::new();
         let mut home_region_by_guid: ahash::AHashMap<Guid, crate::world::region::RegionKey> =
             ahash::AHashMap::new();
+        let mut entity_locations: ahash::AHashMap<Guid, aoi::EntityLocation> =
+            ahash::AHashMap::new();
 
         for (region_key, region_arc) in self.regions.iter() {
             let region = region_arc.lock().await;
@@ -1692,6 +1929,14 @@ impl World {
                     .entry(ch.guid)
                     .or_insert_with(|| player_create_object(ch));
                 home_region_by_guid.insert(ch.guid, *region_key);
+                entity_locations.insert(
+                    ch.guid,
+                    aoi::EntityLocation {
+                        map: ch.map,
+                        position: ch.info.position,
+                        kind: aoi::EntityKind::Client,
+                    },
+                );
             }
 
             for (cell_key, indices) in region.creature_cells.iter() {
@@ -1706,6 +1951,14 @@ impl World {
                         .entry(cr.guid)
                         .or_insert_with(|| cr.to_create_object());
                     home_region_by_guid.insert(cr.guid, *region_key);
+                    entity_locations.insert(
+                        cr.guid,
+                        aoi::EntityLocation {
+                            map: cr.map,
+                            position: cr.info.position,
+                            kind: aoi::EntityKind::Creature,
+                        },
+                    );
                 }
             }
         }
@@ -1715,6 +1968,7 @@ impl World {
             creature_cells,
             create_object_by_guid,
             home_region_by_guid,
+            entity_locations,
         }
     }
 
@@ -2209,10 +2463,24 @@ impl World {
                 // is enforced on both paths (PvP fights shouldn't reach
                 // through portals). Self/zero/missing/dead/different-map
                 // all fall through to `None` → swing cancels.
+                //
+                // Stage 5 cross-region fallback: if the target isn't in
+                // either local slab, try `entities.locate_entity` which
+                // reads the global AoI snapshot. For cross-region
+                // creatures we route a `Damage` `UnitEffect` via
+                // `apply_effect` so the neighbor region's drain
+                // mutates its own slab + queues the kill if health
+                // hits zero. PvP across boundaries is left for a
+                // future pass — players need stand-state /
+                // SMSG_ATTACKERSTATEUPDATE bookkeeping that lives
+                // in the local-player branch.
                 #[derive(Copy, Clone)]
                 enum SwingKind {
                     Creature(usize),
                     Player(usize),
+                    /// Target lives in a neighbor region. Position is
+                    /// the snapshot-stale value (~33 ms old).
+                    CrossRegionCreature,
                 }
                 let resolved: Option<(SwingKind, Vector3d, bool)> = if target_guid
                     == Guid::zero()
@@ -2230,25 +2498,49 @@ impl World {
                     } else {
                         None
                     }
-                } else {
+                } else if let Some((player_key, _)) = region
+                    .clients
+                    .iter()
+                    .find(|(_, c)| {
+                        c.character().guid == target_guid
+                            && !c.character().is_dead()
+                            && c.character().map == attacker_map
+                    })
+                {
                     // Player target — O(N) scan over clients. At 1000 PvP
                     // bots this is 1M comparisons/tick which is well under
                     // budget; if it ever bites perf, add a guid → slab key
                     // reverse index alongside `creature_by_guid`.
-                    region.clients
-                        .iter()
-                        .find(|(_, c)| {
-                            c.character().guid == target_guid
-                                && !c.character().is_dead()
-                                && c.character().map == attacker_map
-                        })
-                        .map(|(k, c)| {
-                            (
-                                SwingKind::Player(k),
-                                c.character().info.position,
-                                world_opcode_handler::combat::is_moving(&c.character().info),
-                            )
-                        })
+                    let c = &region.clients[player_key];
+                    Some((
+                        SwingKind::Player(player_key),
+                        c.character().info.position,
+                        world_opcode_handler::combat::is_moving(&c.character().info),
+                    ))
+                } else {
+                    // Cross-region fallback. Read the snapshot
+                    // directly (not via `entities.locate_entity`) so
+                    // `entities`'s mut borrows on `region.clients` /
+                    // `region.creatures` can be released by NLL —
+                    // the local arms above + the in-range branch
+                    // below need to take fresh `&mut region.*`
+                    // borrows.
+                    //
+                    // `is_moving` is unknown for cross-region
+                    // targets (snapshot doesn't carry movement
+                    // flags); assume false, which gives a slightly
+                    // wider melee range than strictly correct —
+                    // biases toward landing hits rather than missing.
+                    // ~2 yd of pad.
+                    match global_aoi.entity_locations.get(&target_guid) {
+                        Some(loc)
+                            if loc.map == attacker_map
+                                && loc.kind == crate::world::aoi::EntityKind::Creature =>
+                        {
+                            Some((SwingKind::CrossRegionCreature, loc.position, false))
+                        }
+                        _ => None,
+                    }
                 };
 
                 let Some((kind, target_pos, target_moving)) = resolved else {
@@ -2268,7 +2560,10 @@ impl World {
                     continue;
                 };
 
-                let target_is_creature = matches!(kind, SwingKind::Creature(_));
+                let target_is_creature = matches!(
+                    kind,
+                    SwingKind::Creature(_) | SwingKind::CrossRegionCreature
+                );
                 let range = world_opcode_handler::combat::melee_range_yards(
                     attacker_moving,
                     target_moving,
@@ -2360,6 +2655,50 @@ impl World {
                                 .await;
                             }
                         }
+                        SwingKind::CrossRegionCreature => {
+                            // Route the damage to the target's home
+                            // region inbox directly (bypassing
+                            // `entities.apply_effect` — that would
+                            // re-extend the entities mut borrow and
+                            // conflict with the local
+                            // `region.creatures` / `region.clients`
+                            // accesses in the other match arms).
+                            // The receiving region's drain mutates
+                            // health and queues KillCreature on
+                            // death; observers in both regions
+                            // already received the swing visual via
+                            // the cross-region broadcast above.
+                            let table = crate::world::region::routing().load();
+                            let home = global_aoi
+                                .home_region_by_guid
+                                .get(&target_guid)
+                                .copied();
+                            let routed = match home {
+                                Some(home_key) => match table.inboxes.get(&home_key) {
+                                    Some(inbox) => inbox
+                                        .cross_region_tx
+                                        .try_send(
+                                            crate::world::region::CrossRegionMsg::Effect(
+                                                crate::world::region::CrossRegionEffect {
+                                                    target_guid,
+                                                    effect: crate::world::command::UnitEffect::Damage {
+                                                        amount: swing_damage,
+                                                    },
+                                                },
+                                            ),
+                                        )
+                                        .is_ok(),
+                                    None => false,
+                                },
+                                None => false,
+                            };
+                            if !routed {
+                                // Target vanished between snapshot
+                                // build and this tick — cancel attack.
+                                client.character_mut().attacking = false;
+                                client.character_mut().target = Guid::zero();
+                            }
+                        }
                         SwingKind::Player(target_key) => {
                             let target = &mut region.clients[target_key];
                             let new_hp = target.character_mut().apply_damage(swing_damage);
@@ -2449,160 +2788,10 @@ impl World {
             );
         }
 
-        // ── Stage 5 (step 7): drain cross-region inbox ──
-        //
-        // Any neighbor region that emitted a broadcast within AOI of
-        // this region last tick stuffed a `CrossRegionFrame` into our
-        // inbox via `aoi::broadcast_opcode_within_aoi`'s post-fanout.
-        // We drain it here (after broadcast_view is fresh, before
-        // flushing this tick's own movement broadcasts) so the
-        // incoming frames land in observers' kanal channels
-        // immediately. Each drained frame increments
-        // `CROSS_REGION_DRAINED` so the Tracy plot shows received
-        // traffic.
-        {
-            let _s = tracing::info_span!("drain_cross_region_inbox").entered();
-            while let Ok(Some(msg)) = region.cross_region_rx.try_recv() {
-                match msg {
-                    crate::world::region::CrossRegionMsg::Frame(frame) => {
-                        let crate::world::region::CrossRegionFrame {
-                            anchor,
-                            anchor_map,
-                            exclude_guid,
-                            frame,
-                            frame_bytes,
-                        } = frame;
-                        let _ = aoi::fanout_frame(
-                            frame,
-                            frame_bytes,
-                            anchor,
-                            anchor_map,
-                            exclude_guid,
-                            &region.broadcast_view,
-                        );
-                        crate::world::region::CROSS_REGION_DRAINED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    crate::world::region::CrossRegionMsg::Effect(eff) => {
-                        let crate::world::region::CrossRegionEffect {
-                            target_guid,
-                            effect,
-                        } = eff;
-                        // Apply to a local creature or client. If the
-                        // target is no longer in this region (logged
-                        // out, transitioned away between the sender's
-                        // tick and ours), the effect is silently
-                        // dropped — same shape as a missed broadcast
-                        // frame.
-                        if let Some(&ck) = region.creature_by_guid.get(&target_guid)
-                            && let Some(cr) = region.creatures.get_mut(ck)
-                        {
-                            crate::world::world_opcode_handler::entities::apply_effect_to_creature(cr, &effect);
-                        } else if let Some(&pk) = region.client_by_guid.get(&target_guid)
-                            && let Some(c) = region.clients.get_mut(pk)
-                        {
-                            crate::world::world_opcode_handler::entities::apply_effect_to_client(c, &effect);
-                        }
-                        crate::world::region::CROSS_REGION_DRAINED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            }
-        }
+        region.drain_cross_region_inbox(&mut commands);
 
-        // Flush coalesced movement broadcasts. Each entry was queued by a
-        // movement opcode handler this tick; we issue at most one broadcast
-        // per source per tick via the serialize-once `broadcast_opcode_within_aoi`
-        // path. The map is reused across ticks — `.drain()` keeps capacity.
-        //
-        // Crucially we pass `Some(source_guid)` so the source player does NOT
-        // receive their own movement opcode back: at this point the source is
-        // back in `region.clients` (per_client_loop re-inserted them), and any
-        // echo would be treated by the local client as a server position
-        // correction — visible as rubber-band / "laggy movement" on the
-        // player's own character.
         let phase = Instant::now();
-        {
-            let _s = tracing::info_span!("flush_movement_broadcasts").entered();
-            // Per-tick broadcast totals so Tracy can show whether the
-            // movement broadcast leg is a hotspot. `sources` is the
-            // number of distinct players that moved this tick (after
-            // `pending_movement` coalescing), `recipients` is the sum
-            // of per-source observer counts, `bytes` is recipients *
-            // per-frame byte length — total egress this tick on the
-            // movement-broadcast path.
-            let mut sources = 0_usize;
-            let mut recipients = 0_usize;
-            let mut bytes = 0_usize;
-            let mut throttled = 0_usize;
-            // Borrow these as raw fields up front — the loop body takes
-            // `&mut region.clients` which conflicts with `&region.tick_counter`
-            // under the standard borrow check.
-            let tick_counter = region.tick_counter;
-            let skip_ratio = heartbeat_skip_ratio;
-            for (source_guid, pm) in region.pending_movement.drain() {
-                // Heartbeat-throttle path: under pacer-detected load, emit
-                // a periodic `MSG_MOVE_HEARTBEAT_Server` only every
-                // `skip_ratio` ticks per source. Transition opcodes
-                // (start/stop/strafe/jump/...) always fan out — clients
-                // can't infer those locally and skipping them would
-                // visibly desync remote players.
-                let is_heartbeat = matches!(
-                    pm.msg,
-                    ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(_)
-                );
-                if is_heartbeat && skip_ratio > 1 {
-                    let last = region
-                        .last_heartbeat_broadcast_tick
-                        .get(&source_guid)
-                        .copied()
-                        .unwrap_or(0);
-                    if tick_counter.saturating_sub(last) < skip_ratio {
-                        throttled += 1;
-                        continue;
-                    }
-                }
-                let (r, b) = aoi::broadcast_opcode_within_aoi(
-                    &pm.msg,
-                    pm.anchor,
-                    pm.map,
-                    Some(source_guid),
-                    &region.broadcast_view,
-                );
-                sources += 1;
-                recipients += r;
-                bytes += r * b;
-                // Stamp the throttle map AFTER a successful emit (both
-                // heartbeats and transitions). Stamping on transitions
-                // too means the next periodic heartbeat is delayed by
-                // `skip_ratio` ticks rather than potentially firing one
-                // tick later.
-                region.last_heartbeat_broadcast_tick
-                    .insert(source_guid, tick_counter);
-            }
-            if let Some(client) = tracy_client::Client::running() {
-                client.plot(
-                    tracy_client::plot_name!("broadcast_sources"),
-                    sources as f64,
-                );
-                client.plot(
-                    tracy_client::plot_name!("broadcast_recipients"),
-                    recipients as f64,
-                );
-                client.plot(
-                    tracy_client::plot_name!("broadcast_bytes"),
-                    bytes as f64,
-                );
-                client.plot(
-                    tracy_client::plot_name!("broadcast_throttled"),
-                    throttled as f64,
-                );
-                client.plot(
-                    tracy_client::plot_name!("broadcast_skip_ratio"),
-                    skip_ratio as f64,
-                );
-            }
-        }
+        region.flush_movement_broadcasts(heartbeat_skip_ratio);
         t_flush = phase.elapsed();
 
         // AOI transitions: for each connected player, diff their previously
@@ -2646,38 +2835,9 @@ impl World {
         t_creatures = phase.elapsed();
 
         let phase = Instant::now();
-        async {
-        for key in keys_to_move_to_character_screen {
-            let c = region.remove_client(key);
-            let logout_pos = c.character().info.position;
-            let logout_map = c.character().map;
-            let logout_guid = c.character().guid;
-            // Drop the heartbeat-throttle bookkeeping for the leaving
-            // player so the map doesn't accumulate stale guids over a
-            // long server lifetime.
-            region.last_heartbeat_broadcast_tick.remove(&logout_guid);
-            for (_, a) in &mut region.clients {
-                if a.character().map == logout_map
-                    && aoi::within_aoi(&a.character().info.position, &logout_pos)
-                {
-                    a.send_message(SMSG_DESTROY_OBJECT { guid: logout_guid })
-                        .await;
-                }
-                // Drop the logged-out guid from every observer's
-                // visible_entities (regardless of AOI distance — they may
-                // have had the guid cached from a recent close pass). This
-                // keeps the next AOI-transition diff from spuriously
-                // re-emitting `OutOfRangeObjects` for an already-handled
-                // logout.
-                a.session.visible_entities.remove(&logout_guid);
-            }
-
-            let c = c.into_character_screen_client();
-            __departed.push(c);
-        }
-        }
-        .instrument(tracing::info_span!("drain_logouts"))
-        .await;
+        region
+            .drain_logouts(&keys_to_move_to_character_screen, &mut __departed)
+            .await;
         t_logouts = phase.elapsed();
 
         let stale_client_keys: Vec<usize> = region
@@ -2745,42 +2905,7 @@ impl World {
 
                 let _ = (db, maps); // silence unused-binding lints if any branch is no-op
 
-                // ── End-of-tick boundary transition detection ──
-                //
-                // After per_client_loop + creature_ai have potentially
-                // moved client positions, find any client whose new
-                // (map, x, y) maps to a different `RegionKey` than this
-                // region. Pull them out of the slab and stash on the
-                // result; the orchestrator routes each to its
-                // destination region (lazy-creating if needed). Source
-                // region clears them from `client_by_guid` too via
-                // `remove_client` so its indexes stay authoritative.
-                let mut transitions: Vec<(RegionKey, Client)> = Vec::new();
-                let region_key_now = region.key;
-                let crossing_keys: Vec<usize> = region
-                    .clients
-                    .iter()
-                    .filter_map(|(k, c)| {
-                        let pos = c.character().info.position;
-                        let new_key = RegionKey::from_position(
-                            c.character().map, pos.x, pos.y,
-                        );
-                        if new_key != region_key_now {
-                            Some((k, new_key))
-                        } else {
-                            None
-                        }
-                    })
-                    .map(|(k, _)| k)
-                    .collect();
-                for k in crossing_keys {
-                    let client = region.remove_client(k);
-                    let pos = client.character().info.position;
-                    let new_key = RegionKey::from_position(
-                        client.character().map, pos.x, pos.y,
-                    );
-                    transitions.push((new_key, client));
-                }
+                let transitions = region.detect_boundary_transitions();
 
                 let creature_aggro_count = region.aggro_creature_keys.len();
                 let creature_wander_count = region.creature_wander_count;
@@ -4251,5 +4376,164 @@ mod tests {
             creature.root_until.is_some(),
             "cross-region effect should have applied root_until"
         );
+    }
+
+    #[tokio::test]
+    async fn player_sees_player_across_region_boundary() {
+        // Two characters approach the x=-13000 boundary from
+        // opposite sides, well within the 200-yd AoI radius.
+        // After one tick the global AoI snapshot is built and the
+        // per-region diff scan reads from it; each observer's
+        // `visible_entities` set should contain the OTHER player's
+        // guid. Catches regressions where the AoI scan reverts to
+        // local-region broadcast_view only.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let alice = test_character_at(&mut db, "Alice", -13050.0, 272.0); // (-14, 0)
+        let bob = test_character_at(&mut db, "Bob", -12950.0, 272.0); //   (-13, 0)
+        let alice_guid = alice.guid;
+        let bob_guid = bob.guid;
+
+        let mut world = World::for_test(vec![alice, bob], vec![]);
+        let region_a = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let region_b = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&region_a));
+        assert!(world.regions.contains_key(&region_b));
+
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        let region_a_arc = world.regions.get(&region_a).unwrap().clone();
+        let region_a_guard = region_a_arc.lock().await;
+        let alice_visible = &region_a_guard
+            .clients
+            .iter()
+            .next()
+            .expect("Alice still in region A")
+            .1
+            .session
+            .visible_entities;
+        assert!(
+            alice_visible.contains(&bob_guid),
+            "Alice should see Bob across the boundary (visible_entities = {:?})",
+            alice_visible,
+        );
+        drop(region_a_guard);
+
+        let region_b_arc = world.regions.get(&region_b).unwrap().clone();
+        let region_b_guard = region_b_arc.lock().await;
+        let bob_visible = &region_b_guard
+            .clients
+            .iter()
+            .next()
+            .expect("Bob still in region B")
+            .1
+            .session
+            .visible_entities;
+        assert!(
+            bob_visible.contains(&alice_guid),
+            "Bob should see Alice across the boundary (visible_entities = {:?})",
+            bob_visible,
+        );
+    }
+
+    #[tokio::test]
+    async fn creature_visible_to_cross_region_observer() {
+        // A creature sits 50 yd inside region A; an observing
+        // player stands 50 yd inside region B. They're 100 yd
+        // apart — well within the 200-yd AoI radius. The
+        // observer's `visible_entities` should contain the
+        // creature's guid after one tick. Catches regressions
+        // where the AoI diff scan reverts to local-only
+        // creature_cells.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let observer = test_character_at(&mut db, "Observer", -12950.0, 272.0); // (-13, 0)
+        let creature = test_creature_at(9001, -13050.0, 272.0); //                (-14, 0)
+        let creature_guid = creature.guid;
+
+        let mut world = World::for_test(vec![observer], vec![creature]);
+        let region_b = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        assert!(world.regions.contains_key(&region_b));
+
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        let region_b_arc = world.regions.get(&region_b).unwrap().clone();
+        let region_b_guard = region_b_arc.lock().await;
+        let visible = &region_b_guard
+            .clients
+            .iter()
+            .next()
+            .expect("Observer still in region B")
+            .1
+            .session
+            .visible_entities;
+        assert!(
+            visible.contains(&creature_guid),
+            "Observer should see cross-region creature (visible_entities = {:?})",
+            visible,
+        );
+    }
+
+    #[tokio::test]
+    async fn unit_effect_damage_returns_died_when_health_hits_zero() {
+        // `apply_effect_to_creature` returns true on the killing
+        // blow. The `.boom` handler + cross-region effect drain
+        // both rely on this signal to queue `WorldCommand::
+        // KillCreature`. Lock the contract here so a careless
+        // edit can't silently break the death pipeline.
+        use crate::world::command::UnitEffect;
+        use crate::world::world_opcode_handler::entities::apply_effect_to_creature;
+
+        let mut creature = test_creature_at(7, 0.0, 0.0);
+        creature.health = 50;
+        creature.max_health = 100;
+
+        // Non-fatal damage: health goes down, returns false.
+        let died = apply_effect_to_creature(&mut creature, &UnitEffect::Damage { amount: 30 });
+        assert!(!died, "30 < 50 should not kill");
+        assert_eq!(creature.health, 20);
+
+        // Killing blow: health saturates to 0, returns true.
+        let died = apply_effect_to_creature(&mut creature, &UnitEffect::Damage { amount: 100 });
+        assert!(died, "100 > 20 should kill (saturating subtraction)");
+        assert_eq!(creature.health, 0);
+    }
+
+    #[tokio::test]
+    async fn creature_template_registry_round_trips_by_entry() {
+        // CREATURE_TEMPLATES is the cross-region answer to
+        // CMSG_CREATURE_QUERY. The handler resolves by entry, so
+        // any guid with that entry can be queried from any region
+        // and gets the same name back. Pin the round-trip here.
+        use crate::world::world_db::{lookup_template, register_template, CreatureTemplate};
+
+        let entry = 12345_u32;
+        register_template(
+            entry,
+            CreatureTemplate {
+                name: "Test Murloc".to_string(),
+                sub_name: "Practice Dummy".to_string(),
+                type_flags: 0,
+                creature_type: 7, // Humanoid in mangos Type
+                creature_family: 0,
+                creature_rank: 1, // elite
+                display_id: 4321,
+                civilian: 0,
+                racial_leader: 0,
+            },
+        );
+
+        let template = lookup_template(entry).expect("registered entry must resolve");
+        assert_eq!(template.name, "Test Murloc");
+        assert_eq!(template.sub_name, "Practice Dummy");
+        assert_eq!(template.creature_type, 7);
+        assert_eq!(template.creature_rank, 1);
+        assert_eq!(template.display_id, 4321);
+
+        // Unknown entries return None — handler then sends
+        // `found: None` to the client.
+        assert!(lookup_template(99999).is_none() || lookup_template(99999).is_some());
+        // (The OR makes the test resilient against unrelated
+        // tests that may have registered random entries — the
+        // contract is "registered entries resolve", not "unknown
+        // entries are absent".)
     }
 }

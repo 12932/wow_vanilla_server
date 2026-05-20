@@ -141,6 +141,16 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     dense.push(BOOTY_BAY);
     let mut prev = BOOTY_BAY;
     let mut fallbacks = 0_usize;
+    // Diagnostic: dump the first 30 dense samples so we can SEE
+    // what find_heights is actually returning along the corridor.
+    // Each row: (sample_idx, x, y, z_hint, picked_z, all_heights).
+    // Race bots keep floating/clipping even after correct linear
+    // lerp — the values printed here tell us whether the issue is
+    // find_heights picking wrong layers vs the navmesh genuinely
+    // disagreeing with the rendered terrain. Remove this once the
+    // root cause is identified.
+    let mut diag_count = 0_usize;
+    const DIAG_LIMIT: usize = 30;
     for &next in raw_path.iter().skip(1) {
         let dx = next.x - prev.x;
         let dy = next.y - prev.y;
@@ -167,9 +177,10 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
             // fit here — it does a tiny 1-yd `findNearestPoly`
             // search around start.z that misses when start.z is
             // off-mesh even slightly.
-            let z = match map.find_heights(x, y) {
+            let (z, heights_owned): (f32, Vec<f32>) = match map.find_heights(x, y) {
                 Ok(heights) if !heights.is_empty() => {
-                    heights
+                    let heights_vec: Vec<f32> = heights.to_vec();
+                    let picked = heights_vec
                         .iter()
                         .copied()
                         .min_by(|a, b| {
@@ -178,13 +189,26 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
                                 .partial_cmp(&(b - z_hint).abs())
                                 .unwrap_or(std::cmp::Ordering::Equal)
                         })
-                        .unwrap_or(z_hint)
+                        .unwrap_or(z_hint);
+                    (picked, heights_vec)
                 }
                 _ => {
                     fallbacks += 1;
-                    z_hint
+                    (z_hint, Vec::new())
                 }
             };
+            if diag_count < DIAG_LIMIT {
+                tracing::info!(
+                    "race-path sample {:>2}: xy=({:>9.1},{:>8.1}) z_hint={:>6.2} picked={:>6.2} candidates={:?}",
+                    diag_count,
+                    x,
+                    y,
+                    z_hint,
+                    z,
+                    heights_owned,
+                );
+                diag_count += 1;
+            }
             dense.push(Vector3d { x, y, z });
         }
         prev = next;

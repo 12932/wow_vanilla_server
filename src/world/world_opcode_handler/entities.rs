@@ -92,6 +92,22 @@ impl<'a> Entities<'a> {
         self.creatures.get(key)
     }
 
+    /// Locate any entity by guid, regardless of which region it
+    /// lives in. Reads from the global AoI snapshot, so the
+    /// position is one tick stale — acceptable for combat range
+    /// checks (~0.2 yd creature drift per tick at run speed).
+    /// Returns `None` for unknown guids or if no snapshot is wired
+    /// (e.g. tests that bypass `build_global_aoi_snapshot`).
+    ///
+    /// Currently unused — combat reads the snapshot directly to
+    /// avoid extending the `entities` mut borrow during the swing
+    /// block. Kept as the documented public API for handlers that
+    /// don't have the borrow-conflict problem.
+    #[allow(dead_code)]
+    pub(crate) fn locate_entity(&self, guid: Guid) -> Option<crate::world::aoi::EntityLocation> {
+        self.aoi_snapshot.entity_locations.get(&guid).copied()
+    }
+
     pub(crate) fn find_position(&self, guid: Guid) -> Option<Position> {
         self.find_guid(guid).map(|c| match c {
             Entity::Player(c) => c.position(),
@@ -171,32 +187,32 @@ impl<'a> Entities<'a> {
     ///   to the target's region inbox. The receiving region drains
     ///   the effect during its next tick (~33 ms lag at 30 Hz).
     ///
-    /// Returns `true` if the effect was applied locally or successfully
-    /// queued cross-region; `false` if the guid is unknown to the
-    /// snapshot (stale lookup, the target logged out between snapshot
-    /// build and this call).
-    pub(crate) fn apply_effect(&mut self, guid: Guid, effect: UnitEffect) -> bool {
+    /// Returns the outcome so callers can react to LOCAL deaths
+    /// (e.g. push `WorldCommand::KillCreature` for the corpse +
+    /// loot pipeline). Cross-region kills are detected by the
+    /// neighbor's drain code and handled there.
+    pub(crate) fn apply_effect(&mut self, guid: Guid, effect: UnitEffect) -> ApplyEffectResult {
         // Local: creatures.
         if let Some(&ck) = self.creature_by_guid.get(&guid)
             && let Some(cr) = self.creatures.get_mut(ck)
         {
-            apply_effect_to_creature(cr, &effect);
-            return true;
+            let died = apply_effect_to_creature(cr, &effect);
+            return ApplyEffectResult::AppliedLocally { creature_died: died };
         }
         // Local: clients.
         if let Some(&pk) = self.client_by_guid.get(&guid)
             && let Some(c) = self.clients.get_mut(pk)
         {
             apply_effect_to_client(c, &effect);
-            return true;
+            return ApplyEffectResult::AppliedLocally { creature_died: false };
         }
         // Cross-region: route to the target's home region inbox.
         let Some(&home) = self.aoi_snapshot.home_region_by_guid.get(&guid) else {
-            return false;
+            return ApplyEffectResult::Unknown;
         };
         let table = crate::world::region::routing().load();
         let Some(inbox) = table.inboxes.get(&home) else {
-            return false;
+            return ApplyEffectResult::Unknown;
         };
         let msg = crate::world::region::CrossRegionMsg::Effect(
             crate::world::region::CrossRegionEffect {
@@ -204,18 +220,42 @@ impl<'a> Entities<'a> {
                 effect,
             },
         );
-        // Best-effort: the inbox is unbounded so try_send only fails
-        // on a closed channel. If it fails we silently drop the
-        // effect — same shape as the broadcast frame path.
-        inbox.cross_region_tx.try_send(msg).is_ok()
+        if inbox.cross_region_tx.try_send(msg).is_ok() {
+            ApplyEffectResult::QueuedCrossRegion
+        } else {
+            ApplyEffectResult::Unknown
+        }
     }
+}
+
+/// Outcome of [`Entities::apply_effect`]. The handler uses
+/// `AppliedLocally { creature_died: true }` to queue a follow-up
+/// `KillCreature` command (corpse / loot / AoI broadcast already
+/// plumbed in `apply_commands`). Cross-region kills are detected
+/// inside the neighbor region's effect-inbox drain.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ApplyEffectResult {
+    /// Effect mutated the local slab. `creature_died` is true if
+    /// the target was a creature whose health hit zero from this
+    /// effect.
+    AppliedLocally { creature_died: bool },
+    /// Effect was sent to the target's home region inbox.
+    QueuedCrossRegion,
+    /// Target guid not found anywhere (stale lookup, target
+    /// logged out / despawned between snapshot build and call).
+    Unknown,
 }
 
 /// Apply a `UnitEffect` to a creature directly. Only called when the
 /// creature is owned by the local region (so we have the mutable
 /// borrow). Used by `Entities::apply_effect` and by the per-region
 /// effect-inbox drain.
-pub(crate) fn apply_effect_to_creature(cr: &mut Creature, effect: &UnitEffect) {
+///
+/// Returns `true` if the creature died from this effect (health
+/// dropped to zero). Caller uses this to push a follow-up
+/// `WorldCommand::KillCreature` for the corpse + loot + AoI
+/// broadcast pipeline.
+pub(crate) fn apply_effect_to_creature(cr: &mut Creature, effect: &UnitEffect) -> bool {
     use wow_world_messages::vanilla::MovementInfo_MovementFlags;
     match effect {
         UnitEffect::Root { until } => {
@@ -225,17 +265,29 @@ pub(crate) fn apply_effect_to_creature(cr: &mut Creature, effect: &UnitEffect) {
             // the MSG_MOVE_STOP_Server and the visual aura, since those
             // need region-context (broadcast_within_aoi).
             cr.info.flags = MovementInfo_MovementFlags::default();
+            false
+        }
+        UnitEffect::Damage { amount } => {
+            cr.health = cr.health.saturating_sub(*amount);
+            cr.health == 0
         }
     }
 }
 
 /// Apply a `UnitEffect` to a client. Mirrors `apply_effect_to_creature`.
+/// Damage on a client is a no-op for now — player-vs-player damage
+/// goes through the dedicated combat path (`SMSG_ATTACKERSTATEUPDATE`)
+/// which already exists; routing player damage through this generic
+/// path would skip melee leeway / parry / dodge resolution.
 pub(crate) fn apply_effect_to_client(c: &mut Client, effect: &UnitEffect) {
     use wow_world_messages::vanilla::MovementInfo_MovementFlags;
     match effect {
         UnitEffect::Root { until } => {
             c.character_mut().info.flags = MovementInfo_MovementFlags::default();
             c.character_mut().root_until = Some(*until);
+        }
+        UnitEffect::Damage { .. } => {
+            // Intentional no-op — see doc.
         }
     }
 }

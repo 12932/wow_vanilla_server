@@ -1,8 +1,6 @@
 use ahash::{AHashMap, AHashSet};
 use namigator::raw::{build_bvh, build_map, bvh_files_exist, map_files_exist};
 use namigator::vanilla::{Map, VanillaMap};
-use namigator::Vector2d as NavVec2d;
-use namigator::Vector3d as NavVec3d;
 use tracing::{info, warn};
 
 /// Maps we build navmeshes for when `WOW_VANILLA_USE_MAPS` is set.
@@ -96,6 +94,16 @@ impl PathfindingMaps {
     /// Snap a world XY to the nearest ground Z. Lazily loads the ADT that
     /// contains the point. Returns None if maps aren't configured for this
     /// continent or the lookup fails (e.g. outside the navmesh).
+    ///
+    /// Uses `find_heights` (plural) and picks the candidate closest
+    /// to `z_hint`. The singular `find_height` looks like a downward
+    /// raycast but is actually a `findNearestPoly` with hardcoded
+    /// 1-yd extents around the input position — passing
+    /// `z = z_hint + 50` to "ray from above" fails because the search
+    /// cube is 50 yd above the ground. `find_heights` returns every
+    /// navmesh-Z value in the column regardless of start altitude,
+    /// and picking closest-to-hint locks onto the floor in
+    /// multi-level structures.
     pub fn ground_height(&mut self, map: Map, x: f32, y: f32, z_hint: f32) -> Option<f32> {
         let vmap = self.maps.get_mut(&map)?;
         let (tx, ty) = world_to_adt(x, y);
@@ -106,14 +114,19 @@ impl PathfindingMaps {
                 return None;
             }
         }
-        // Cast a ray from well above the hint down to find ground.
-        let start = NavVec3d {
-            x,
-            y,
-            z: z_hint + 50.0,
-        };
-        let stop = NavVec2d { x, y };
-        vmap.find_height(start, stop).ok()
+        let heights = vmap.find_heights(x, y).ok()?;
+        if heights.is_empty() {
+            return None;
+        }
+        heights
+            .iter()
+            .copied()
+            .min_by(|a, b| {
+                (a - z_hint)
+                    .abs()
+                    .partial_cmp(&(b - z_hint).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 }
 
