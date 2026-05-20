@@ -15,6 +15,7 @@
 //! north of Booty Bay along the coast). Bots reverse direction on
 //! arrival and run back, looping forever.
 
+use std::sync::{Arc, Mutex};
 use wow_world_messages::vanilla::Vector3d;
 
 /// Coarse Booty Bay → Gurubashi Arena waypoint list. Two midpoints
@@ -42,21 +43,32 @@ pub const BOOTY_BAY: Vector3d = Vector3d { x: -14237.9, y: 262.02, z: 24.75 };
 /// (probably a missing-bridge gap on the STV → Westfall corridor).
 pub const GURUBASHI_ARENA: Vector3d = Vector3d { x: -13284.747, y: 116.001, z: 24.36 };
 
-/// Build the BB → Gurubashi path from the pre-baked navmesh cache. Reads the
-/// same env var + cache directory the server uses
-/// (`pathfinding_maps.rs:33`), so once the server has finished its
-/// first-boot bake the loadtest sees the cached output instantly.
+/// Build the BB → Gurubashi path from the pre-baked navmesh cache.
+/// Returns the SPARSE polyline as namigator's `find_path` produced
+/// it (no densification) PLUS a shared `Arc<Mutex<VanillaMap>>` the
+/// bot driver uses to snap Z to actual ground every heartbeat.
+///
+/// Why no densification: pre-baking Z values at path-build time
+/// means any single bad `find_heights` pick poisons all subsequent
+/// ticks in that segment via the lerp `z_hint` chain. Per-tick
+/// sampling at the bot's live XY (in `movement.rs::tick_race`)
+/// avoids the drift problem — each heartbeat is independent.
 ///
 /// Returns `Err` if:
-/// - `WOW_VANILLA_USE_MAPS` was unset at compile time (no namigator)
-/// - The nav-mesh cache directory doesn't exist or is missing files
-/// - `find_path` returns `UnknownPath` (the corridor isn't connected
-///   on the mesh — e.g. a bridge that's M2-only and got skipped by
-///   the bake)
+/// - `WOW_VANILLA_USE_MAPS` was unset at compile time
+/// - The cache directory doesn't exist
+/// - `find_path` returns `UnknownPath`
 ///
-/// Caller's responsibility to fall back to `hardcoded_bb_to_arena()` on
-/// error and log the failure for the operator.
-pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
+/// Caller's responsibility to fall back to `hardcoded_bb_to_arena()`
+/// on error (in which case bots run without per-tick Z sampling
+/// and use the driver's path-Z lerp).
+pub fn build_race_path() -> Result<
+    (
+        Vec<Vector3d>,
+        Arc<Mutex<namigator::vanilla::VanillaMap>>,
+    ),
+    String,
+> {
     const DATA_PATH: Option<&str> = std::option_env!("WOW_VANILLA_USE_MAPS");
     let data_path = DATA_PATH
         .ok_or_else(|| "WOW_VANILLA_USE_MAPS was unset at compile time".to_string())?;
@@ -71,9 +83,6 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
         ));
     }
 
-    // Threads = available_parallelism - 2, same as the server. Doesn't
-    // matter much here — if the cache is already baked, `build_*`
-    // short-circuit on the `*_files_exist` checks.
     let threads = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(2)
@@ -89,11 +98,11 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     )
     .map_err(|e| format!("VanillaMap::build_gameobjects_and_map failed: {e:?}"))?;
 
-    // Pre-load every ADT tile in the BB→SW bounding box. `find_path`
-    // refuses to cross unloaded tiles (`FailedToLoadAdt`), and lazy-
-    // loading from inside the path search isn't an option. The
-    // bounding box is ~10–12 tiles tall × 1–2 wide on Eastern
-    // Kingdoms, so ~20 loads up front.
+    // Pre-load every ADT tile in the BB → Gurubashi bounding box.
+    // `find_path` refuses to cross unloaded tiles, and the per-tick
+    // `find_heights` runtime calls also need tiles already loaded
+    // — lazy-loading from inside a hot path would block the bot's
+    // heartbeat behind tile I/O.
     let (bb_tx, bb_ty) = world_to_adt(BOOTY_BAY.x, BOOTY_BAY.y);
     let (sw_tx, sw_ty) = world_to_adt(GURUBASHI_ARENA.x, GURUBASHI_ARENA.y);
     let (tx_min, tx_max) = (bb_tx.min(sw_tx), bb_tx.max(sw_tx));
@@ -102,8 +111,6 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
     let mut failed = 0;
     for tx in tx_min..=tx_max {
         for ty in ty_min..=ty_max {
-            // load_adt returns Err for tiles outside the mesh — okay,
-            // a corridor that grazes empty terrain is fine.
             match map.load_adt(tx, ty) {
                 Ok(_) => loaded += 1,
                 Err(_) => failed += 1,
@@ -120,101 +127,7 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
         .map_err(|e| format!("find_path(BB, Gurubashi) failed: {e:?}"))?
         .to_vec();
 
-    // Densify the Detour string-pulled path so the bot driver's
-    // straight-line XY interpolation between consecutive waypoints
-    // doesn't cut through terrain (the raw path has 10-30+ yd gaps).
-    // For each (prev → next) segment we sample every
-    // `DENSE_SPACING_YD` yards and raycast the actual ground Z via
-    // `find_height` — same convention the server uses in
-    // `pathfinding_maps.rs::ground_height`.
-    //
-    // The first sample is `BOOTY_BAY` (our hand-picked dock coords),
-    // not `raw_path[0]` — namigator snaps the BB input to the rocky
-    // seabed under the docks, and we want bots spawning on the
-    // visible plank surface instead.
-    // 2 yd ≈ one heartbeat's worth of motion at run speed (7 yd/s ×
-    // 250 ms ≈ 1.75 yd). Tighter samples reduce mid-segment Z error
-    // when the terrain is uneven; the linear-XY-to-Z lerp between
-    // consecutive samples picks up almost every hill profile.
-    const DENSE_SPACING_YD: f32 = 2.0;
-    let mut dense: Vec<Vector3d> = Vec::with_capacity(raw_path.len() * 30);
-    dense.push(BOOTY_BAY);
-    let mut prev = BOOTY_BAY;
-    let mut fallbacks = 0_usize;
-    // Diagnostic: dump the first 30 dense samples so we can SEE
-    // what find_heights is actually returning along the corridor.
-    // Each row: (sample_idx, x, y, z_hint, picked_z, all_heights).
-    // Race bots keep floating/clipping even after correct linear
-    // lerp — the values printed here tell us whether the issue is
-    // find_heights picking wrong layers vs the navmesh genuinely
-    // disagreeing with the rendered terrain. Remove this once the
-    // root cause is identified.
-    let mut diag_count = 0_usize;
-    const DIAG_LIMIT: usize = 30;
-    for &next in raw_path.iter().skip(1) {
-        let dx = next.x - prev.x;
-        let dy = next.y - prev.y;
-        let len = (dx * dx + dy * dy).sqrt();
-        if len < DENSE_SPACING_YD {
-            dense.push(next);
-            prev = next;
-            continue;
-        }
-        let steps = (len / DENSE_SPACING_YD).ceil() as usize;
-        for k in 1..=steps {
-            let t = k as f32 / steps as f32;
-            let x = prev.x + dx * t;
-            let y = prev.y + dy * t;
-            let z_hint = prev.z + (next.z - prev.z) * t;
-            // `find_heights` returns every navmesh-Z candidate in the
-            // (x,y) column — for outdoor STV that's typically just
-            // the forest floor, but anywhere with multi-level
-            // structures (a bridge, a building, an arena rim) it can
-            // include rooftops too. Pick the candidate closest to
-            // `z_hint` (the lerp between adjacent waypoint Z values)
-            // so we lock onto the ground rather than landing on a
-            // structure above. `find_height` (singular) is a poor
-            // fit here — it does a tiny 1-yd `findNearestPoly`
-            // search around start.z that misses when start.z is
-            // off-mesh even slightly.
-            let (z, heights_owned): (f32, Vec<f32>) = match map.find_heights(x, y) {
-                Ok(heights) if !heights.is_empty() => {
-                    let heights_vec: Vec<f32> = heights.to_vec();
-                    let picked = heights_vec
-                        .iter()
-                        .copied()
-                        .min_by(|a, b| {
-                            (a - z_hint)
-                                .abs()
-                                .partial_cmp(&(b - z_hint).abs())
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .unwrap_or(z_hint);
-                    (picked, heights_vec)
-                }
-                _ => {
-                    fallbacks += 1;
-                    (z_hint, Vec::new())
-                }
-            };
-            if diag_count < DIAG_LIMIT {
-                tracing::info!(
-                    "race-path sample {:>2}: xy=({:>9.1},{:>8.1}) z_hint={:>6.2} picked={:>6.2} candidates={:?}",
-                    diag_count,
-                    x,
-                    y,
-                    z_hint,
-                    z,
-                    heights_owned,
-                );
-                diag_count += 1;
-            }
-            dense.push(Vector3d { x, y, z });
-        }
-        prev = next;
-    }
-
-    let dist: f32 = dense
+    let dist: f32 = raw_path
         .windows(2)
         .map(|w| {
             let dx = w[1].x - w[0].x;
@@ -222,28 +135,16 @@ pub fn build_race_path() -> Result<Vec<Vector3d>, String> {
             (dx * dx + dy * dy).sqrt()
         })
         .sum();
-    let (z_min, z_max) = dense.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
-        (lo.min(p.z), hi.max(p.z))
-    });
-    let (raw_z_min, raw_z_max) = raw_path.iter().fold(
-        (f32::INFINITY, f32::NEG_INFINITY),
-        |(lo, hi), p| (lo.min(p.z), hi.max(p.z)),
-    );
+    let zs: Vec<f32> = raw_path.iter().map(|p| p.z).collect();
     tracing::info!(
-        "race path: {} raw waypoints (z {:.1}..{:.1}), densified to {} at {} yd spacing ({} find_heights fallbacks, z {:.1}..{:.1}), {:.0} yd total, generated in {:.1}s",
+        "race path: {} raw waypoints, {:.0} yd total, generated in {:.1}s — Z list: {:?}",
         raw_path.len(),
-        raw_z_min,
-        raw_z_max,
-        dense.len(),
-        DENSE_SPACING_YD,
-        fallbacks,
-        z_min,
-        z_max,
         dist,
         started.elapsed().as_secs_f32(),
+        zs,
     );
 
-    Ok(dense)
+    Ok((raw_path, Arc::new(Mutex::new(map))))
 }
 
 /// World XY → ADT tile (tx, ty). Mangos convention: tile_x derives

@@ -39,6 +39,10 @@ pub struct BotConfig {
     pub battle_started: Arc<AtomicBool>,
     /// Shared waypoint list for Race mode. Empty for other modes.
     pub race_path: Arc<[wow_world_messages::vanilla::Vector3d]>,
+    /// Shared `VanillaMap` handle for Race mode. `Some` when
+    /// namigator wired up cleanly; `None` when running the
+    /// hardcoded-fallback path (no per-tick ground sampling).
+    pub race_map: Option<Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>>,
 }
 
 pub struct BotHandle {
@@ -190,6 +194,9 @@ async fn run_bot(
                 forward: true,
                 jitter: race::jitter_for_slot(slot),
                 teleported: false,
+                map: cfg.race_map.clone(),
+                hb_diag_count: 0,
+                bot_slot: slot,
             },
             BotMode::Random => Mode::Random,
         };
