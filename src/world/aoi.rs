@@ -115,6 +115,28 @@ pub struct GlobalAoiSnapshot {
     /// cross-region effect to the correct region's inbox without
     /// needing the handler to know about region keys.
     pub home_region_by_guid: AHashMap<Guid, crate::world::region::RegionKey>,
+    /// Guid → (map, position, kind). O(1) lookup for handlers
+    /// that need to locate a target by guid across regions
+    /// (combat range check, spell targeting, GM `.info`, etc.)
+    /// without scanning cells or the broadcast view.
+    pub entity_locations: AHashMap<Guid, EntityLocation>,
+}
+
+/// Lightweight position + kind snapshot for a single entity.
+/// Returned from `Entities::locate_entity` so handlers can decide
+/// "is this guid a creature or client?" + "where is it?" without
+/// touching local slabs.
+#[derive(Debug, Clone, Copy)]
+pub struct EntityLocation {
+    pub map: Map,
+    pub position: Vector3d,
+    pub kind: EntityKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityKind {
+    Creature,
+    Client,
 }
 
 impl GlobalAoiSnapshot {
@@ -124,6 +146,7 @@ impl GlobalAoiSnapshot {
             creature_cells: AHashMap::new(),
             create_object_by_guid: AHashMap::new(),
             home_region_by_guid: AHashMap::new(),
+            entity_locations: AHashMap::new(),
         }
     }
 }

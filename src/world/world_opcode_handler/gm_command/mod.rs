@@ -172,40 +172,58 @@ pub(crate) async fn gm_command(
             let caster_pos = client.character().info.position;
             let caster_map = client.character().map;
 
-            let mut effects: Vec<(Guid, u32)> = Vec::new();
-            for (_, creature) in entities.creatures().iter_mut() {
-                if creature.map != caster_map {
-                    continue;
-                }
-                let dx = creature.info.position.x - caster_pos.x;
-                let dy = creature.info.position.y - caster_pos.y;
-                let dz = creature.info.position.z - caster_pos.z;
-                let dist_sq = dx * dx + dy * dy + dz * dz;
-                if dist_sq <= RADIUS * RADIUS {
-                    creature.health = creature.health.saturating_sub(DAMAGE);
-                    effects.push((creature.guid, creature.health));
+            // Region-agnostic target lookup. `creatures_in_radius`
+            // spans the global AoI snapshot so creatures sitting
+            // just past a region boundary are still in scope.
+            let targets: Vec<Guid> = entities
+                .creatures_in_radius(caster_pos, caster_map, RADIUS)
+                .into_iter()
+                .map(|v| v.guid)
+                .collect();
+
+            // Apply damage to each. `apply_effect` routes locally for
+            // same-region creatures and via `CrossRegionMsg::Effect`
+            // for neighbor-region ones (whose drain pushes the
+            // KillCreature itself).
+            for target_guid in &targets {
+                let outcome = entities.apply_effect(
+                    *target_guid,
+                    crate::world::command::UnitEffect::Damage { amount: DAMAGE },
+                );
+                if let crate::world::world_opcode_handler::entities::ApplyEffectResult::AppliedLocally {
+                    creature_died: true,
+                } = outcome
+                {
+                    commands.push(crate::world::command::WorldCommand::KillCreature(*target_guid));
                 }
             }
 
+            // Visuals go through the cross-region-aware broadcast.
+            // `broadcast_within_aoi` serializes once and posts the
+            // frame into every neighbor region's inbox via the
+            // routing table — observers across the boundary see the
+            // spell + damage log without needing local creature data.
             let spell_go = SMSG_SPELL_GO {
                 cast_item: caster_guid,
                 caster: caster_guid,
                 spell: SPELL_ARCANE_EXPLOSION,
                 flags: SMSG_SPELL_GO_CastFlags::empty(),
-                hits: effects.iter().map(|(g, _)| *g).collect(),
+                hits: targets.clone(),
                 misses: vec![],
                 targets: SpellCastTargets::default(),
             };
             client.send_message(spell_go.clone()).await;
-            for (_, c) in entities.clients().iter_mut() {
-                if c.character().map == caster_map {
-                    c.send_message(spell_go.clone()).await;
-                }
-            }
+            crate::world::aoi::broadcast_within_aoi(
+                spell_go,
+                caster_pos,
+                caster_map,
+                entities.clients(),
+            )
+            .await;
 
-            for (target_guid, new_health) in effects {
+            for target_guid in &targets {
                 let damage_log = SMSG_SPELLNONMELEEDAMAGELOG {
-                    target: target_guid,
+                    target: *target_guid,
                     attacker: caster_guid,
                     spell: SPELL_ARCANE_EXPLOSION,
                     damage: DAMAGE,
@@ -219,35 +237,53 @@ pub(crate) async fn gm_command(
                     extend_flag: 0,
                 };
                 client.send_message(damage_log).await;
-                for (_, c) in entities.clients().iter_mut() {
-                    if c.character().map == caster_map {
-                        c.send_message(damage_log).await;
-                    }
-                }
+                crate::world::aoi::broadcast_within_aoi(
+                    damage_log,
+                    caster_pos,
+                    caster_map,
+                    entities.clients(),
+                )
+                .await;
+            }
 
+            // HP update broadcast — we don't know the post-damage
+            // health for CROSS-REGION targets (snapshot has positions
+            // only, not health). Send a synthetic "took DAMAGE" for
+            // local kills the handler can observe; cross-region
+            // observers will see the HP via the neighbor region's
+            // own broadcast on its next tick. Acceptable lag.
+            for target_guid in &targets {
+                // Resolve local target's new health if we can; skip
+                // otherwise.
+                let new_health =
+                    entities.find_creature(*target_guid).map(|c| c.health);
+                let Some(new_health) = new_health else {
+                    continue;
+                };
                 if new_health == 0 {
-                    commands.push(crate::world::command::WorldCommand::KillCreature(target_guid));
-                } else {
-                    let hp_update = SMSG_UPDATE_OBJECT {
-                        has_transport: 0,
-                        objects: vec![Object {
-                            update_type: Object_UpdateType::Values {
-                                guid1: target_guid,
-                                mask1: UpdateMask::Unit(
-                                    UpdateUnitBuilder::new()
-                                        .set_unit_health(i32::try_from(new_health).unwrap_or(i32::MAX))
-                                        .finalize(),
-                                ),
-                            },
-                        }],
-                    };
-                    client.send_message(hp_update.clone()).await;
-                    for (_, c) in entities.clients().iter_mut() {
-                        if c.character().map == caster_map {
-                            c.send_message(hp_update.clone()).await;
-                        }
-                    }
+                    continue; // already queued KillCreature above
                 }
+                let hp_update = SMSG_UPDATE_OBJECT {
+                    has_transport: 0,
+                    objects: vec![Object {
+                        update_type: Object_UpdateType::Values {
+                            guid1: *target_guid,
+                            mask1: UpdateMask::Unit(
+                                UpdateUnitBuilder::new()
+                                    .set_unit_health(i32::try_from(new_health).unwrap_or(i32::MAX))
+                                    .finalize(),
+                            ),
+                        },
+                    }],
+                };
+                client.send_message(hp_update.clone()).await;
+                crate::world::aoi::broadcast_within_aoi(
+                    hp_update,
+                    caster_pos,
+                    caster_map,
+                    entities.clients(),
+                )
+                .await;
             }
         }
         GmCommand::Nova => {

@@ -31,6 +31,11 @@ pub enum UnitEffect {
     /// drops incoming `MSG_MOVE_*` opcodes from real-client targets
     /// until the timer expires.
     Root { until: Instant },
+    /// Subtract `amount` from the target's health (saturating). The
+    /// receiving side checks `health == 0` after applying and
+    /// queues a `KillCreature` command if so — the AoI broadcast +
+    /// loot / corpse plumbing already exists in `apply_commands`.
+    Damage { amount: u32 },
 }
 
 #[derive(Debug)]
