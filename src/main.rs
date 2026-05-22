@@ -13,24 +13,21 @@ use wow_vanilla_server::{auth, config, world};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
-    // Both tokio and rayon default their worker counts to
-    // `num_cpus::get()`. Letting both pools have everything would
-    // double-subscribe the cores — every rayon worker would compete
-    // with a tokio worker that's already runnable, producing
-    // context-switch storms under load. Split the cores explicitly.
-    //
-    // The world tick monopolizes ONE tokio worker for its whole
-    // duration; during the broadcast phase that worker blocks on
-    // rayon's `par_iter`, so rayon's pool runs concurrently with the
-    // OTHER tokio workers (which are busy serving per-client TCP
-    // read/write tasks). Giving each pool about half the cores keeps
-    // both fully utilized without thrash. Minimum of 1 thread on each
-    // side so single-core machines still boot.
+    // Both tokio and rayon are sized to the full core count. They share
+    // the cores rather than carve them up: rayon's work-stealing parks
+    // idle threads, and tokio workers also park when no tasks are
+    // runnable, so the realized thread count tracks actual work — not
+    // the configured pool size. The earlier static half/half split
+    // assumed "one tokio worker drives the whole tick," but the world
+    // tick now fans out into one tokio task per cell (see
+    // `world/world/mod.rs` Stage 3) and each of those tasks calls
+    // `par_iter` into rayon. A small rayon pool would then serialize
+    // cells that tokio thought were running in parallel.
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
-    let rayon_threads = (cores / 2).max(1);
-    let tokio_workers = cores.saturating_sub(rayon_threads).max(1);
+    let rayon_threads = cores;
+    let tokio_workers = cores;
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(rayon_threads)
