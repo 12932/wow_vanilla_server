@@ -21,12 +21,18 @@
 //! cells actually run on separate tokio tasks.
 
 use arc_swap::ArcSwap;
+use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use wow_world_base::vanilla::Map;
 use wow_world_messages::vanilla::Vector3d;
 use wow_world_messages::Guid;
+
+/// Return type of [`cells_within_aoi`]. Bounded at 9 entries (1 self +
+/// 4 edges + 4 corners), so the inline buffer is always large enough
+/// in practice — no heap allocation.
+pub type CellNeighbors = SmallVec<[CellKey; 9]>;
 
 /// Width (and height) of one creature spatial-grid cell, in yards.
 /// Defined here (mirroring `crate::world::world::CREATURE_GRID_CELL_YD`)
@@ -98,11 +104,10 @@ impl CellKey {
 /// error (would mean every broadcast hits every cell, defeating
 /// the purpose).
 ///
-/// Allocation: a small `Vec` is fine. At hundreds of broadcasts per
-/// tick × ~30 % cross-cell rate, that's a few hundred small allocs
-/// per tick — well within mimalloc's pool sweet spot. If Tracy ever
-/// flags this we can switch to a stack array or smallvec.
-pub fn cells_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> Vec<CellKey> {
+/// Returned in a `SmallVec` with 9 entries of inline capacity — the
+/// upper bound by construction — so the hot broadcast path stays
+/// alloc-free.
+pub fn cells_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> CellNeighbors {
     let self_cell = CellKey::from_position(anchor_map, anchor.x, anchor.y);
     let (x_min, y_min, x_max, y_max) = self_cell.bounds();
 
@@ -119,7 +124,7 @@ pub fn cells_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> Vec<Ce
     let touches_south = to_south < aoi_r;
     let touches_north = to_north < aoi_r;
 
-    let mut out = Vec::with_capacity(4);
+    let mut out: CellNeighbors = SmallVec::new();
     out.push(self_cell);
 
     if touches_west {
@@ -251,6 +256,38 @@ impl RoutingTable {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Return a new table containing every entry of `self` plus
+    /// `(key, inbox)`. Used by `World::ensure_cell_exists` to publish
+    /// the next-generation routing table via `ArcSwap`.
+    pub fn with_added(&self, key: CellKey, inbox: CellInbox) -> Self {
+        let mut next = Self {
+            inboxes: ahash::AHashMap::with_capacity(self.inboxes.len() + 1),
+        };
+        for (k, v) in self.inboxes.iter() {
+            next.inboxes.insert(*k, v.clone());
+        }
+        next.inboxes.insert(key, inbox);
+        next
+    }
+
+    /// Return a new table containing every entry of `self` except those
+    /// in `removed`. Used by `World::gc_empty_cells` to publish the
+    /// next-generation routing table after a cell GC pass.
+    pub fn without_keys(&self, removed: &[CellKey]) -> Self {
+        let removed_set: ahash::AHashSet<CellKey> = removed.iter().copied().collect();
+        let mut next = Self {
+            inboxes: ahash::AHashMap::with_capacity(
+                self.inboxes.len().saturating_sub(removed.len()),
+            ),
+        };
+        for (k, v) in self.inboxes.iter() {
+            if !removed_set.contains(k) {
+                next.inboxes.insert(*k, v.clone());
+            }
+        }
+        next
+    }
 }
 
 /// Process-wide routing table. Hot-path readers (every broadcast hits
@@ -258,9 +295,8 @@ impl RoutingTable {
 /// Writers (cell spin-up / spin-down) build a fresh table and swap.
 ///
 /// Returns a singleton initialized with an empty routing table on first
-/// access — until Stage 3 partition lands there are no inboxes, so the
-/// cross-cell post-fanout step in `aoi::broadcast_opcode_within_aoi`
-/// finds zero neighbors and is a no-op.
+/// access. Inboxes are populated by `World::with_creatures_and_db` at
+/// startup and by `World::ensure_cell_exists` as new cells spin up.
 pub fn routing() -> &'static ArcSwap<RoutingTable> {
     static ROUTING: OnceLock<ArcSwap<RoutingTable>> = OnceLock::new();
     ROUTING.get_or_init(|| ArcSwap::from_pointee(RoutingTable::new()))
@@ -271,6 +307,49 @@ pub fn routing() -> &'static ArcSwap<RoutingTable> {
 /// `arc-swap` handles the grace period.
 pub fn install_routing(table: RoutingTable) {
     routing().store(Arc::new(table));
+}
+
+/// Cross-cell post-fanout: `Arc::clone` `frame` into every neighbor
+/// cell whose interior overlaps the AOI disc around `anchor`. The
+/// receiving cell drains its inbox at the top of its next broadcast
+/// phase and fans out to its own clients via [`crate::world::aoi::fanout_frame`].
+///
+/// No-op when the anchor is deep inside its own cell — then
+/// [`cells_within_aoi`] returns only the anchor's own cell and the
+/// loop has no work. Bumps `CROSS_CELL_EMITTED` / `CROSS_CELL_DROPPED`
+/// per attempted send.
+pub fn dispatch_cross_cell_frame(
+    anchor: Vector3d,
+    anchor_map: Map,
+    exclude_guid: Option<Guid>,
+    frame: Arc<[u8]>,
+    frame_bytes: usize,
+) {
+    let aoi_r = crate::config::config().network.aoi_radius_yards;
+    let anchor_cell = CellKey::from_position(anchor_map, anchor.x, anchor.y);
+    let neighbors = cells_within_aoi(anchor, anchor_map, aoi_r);
+    if neighbors.len() <= 1 {
+        return;
+    }
+    let table = routing().load();
+    for neighbor in neighbors.iter().filter(|n| **n != anchor_cell) {
+        let Some(inbox) = table.inboxes.get(neighbor) else { continue };
+        let send = inbox.cross_cell_tx.try_send(CrossCellMsg::Frame(CrossCellFrame {
+            anchor,
+            anchor_map,
+            exclude_guid,
+            frame: Arc::clone(&frame),
+            frame_bytes,
+        }));
+        match send {
+            Ok(true) => {
+                CROSS_CELL_EMITTED.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(false) | Err(_) => {
+                CROSS_CELL_DROPPED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 // ── Cross-cell broadcast metrics ──

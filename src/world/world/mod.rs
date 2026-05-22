@@ -44,16 +44,10 @@ use wow_world_messages::{DateTime, Guid};
 pub mod client;
 pub mod pathfinding_maps;
 
-/// Per-cell game state. In Stage 1 of the per-cell refactor there's
-/// exactly one `CellState` per `World` — covering every player on every
-/// map — so behavior is unchanged. Subsequent stages partition this state
-/// across many cells, each running its own tick loop independently.
-///
-/// Field accesses from inside `impl World` are spelled `self.cell_mut().X`.
-/// Methods that act purely on per-cell state will eventually move to
-/// `impl CellState`; for now they stay on `World` and pierce through
-/// `self.cell` to keep this commit purely mechanical (no method moves,
-/// no behavior change).
+/// Per-cell game state. One `CellState` per spatial cell in `World::cells`.
+/// Each cell ticks independently on its own tokio task, paced by its own
+/// `TickPacer`, and exchanges cross-boundary broadcasts and effects with
+/// neighbors through the `routing()` table.
 #[derive(Debug)]
 pub struct CellState {
     /// Identity of this cell: the position-derived `CellKey`
@@ -82,13 +76,13 @@ pub struct CellState {
     pub(crate) creature_wander_count: usize,
     pub(crate) creature_waypoint_count: usize,
 
-    /// Spatial index for AOI queries — maps `(Map, grid_cell_x, grid_cell_y)` to the
-    /// slab keys of creatures currently in that 250-yd cell. In Stage 1
-    /// the key still carries `Map` because the single cell spans all
-    /// maps; once cells partition by map+spatial-cell the key drops
-    /// `Map` (each cell's grid is already implicitly map-local).
-    pub(crate) creature_grid_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>>,
-    pub(crate) creature_grid_cell_of: ahash::AHashMap<usize, (Map, i32, i32)>,
+    /// Spatial index for AOI queries — maps `(grid_cell_x, grid_cell_y)`
+    /// to the slab keys of creatures currently in that 250-yd grid cell.
+    /// Map-local: each `CellState` only holds creatures on `self.key.map`,
+    /// so the grid key omits the map. The cross-cell snapshot recomposes
+    /// `(Map, cx, cy)` when merging partials.
+    pub(crate) creature_grid_cells: ahash::AHashMap<(i32, i32), Vec<usize>>,
+    pub(crate) creature_grid_cell_of: ahash::AHashMap<usize, (i32, i32)>,
 
     /// Start of this cell's previous tick. Used to compute wall-clock
     /// `dt` for time-dependent state like `auto_attack_timer`. Per-cell
@@ -119,24 +113,26 @@ pub struct CellState {
     /// broadcast phase from each `Client::broadcast_target()`.
     pub(crate) broadcast_view: Vec<crate::world::aoi::BroadcastTarget>,
 
-    /// Per-cell adaptive pacer. Today the global `run_world` loop
-    /// is the only thing that actually *sleeps* on a pacer's
-    /// `current_interval`; this per-cell pacer observes each tick's
-    /// per-cell duration and publishes its state to the
-    /// `cell::PACER_STATE` snapshot so `.cells` can show how a
-    /// cell would back off independently once Stage 3 polish wires
-    /// long-lived per-cell task loops.
+    /// Per-cell adaptive pacer. Observes each tick's per-cell duration and
+    /// publishes its state to the `cell::PACER_STATES` snapshot so the
+    /// `.cells` GM command can show the per-cell rate. The orchestrator
+    /// `run_world` loop still owns the global sleep cadence.
     pub(crate) pacer: crate::world::TickPacer,
 
     /// Inbox for cross-cell broadcasts arriving from neighbor
     /// cells. The matching `cross_cell_tx` half lives in the
     /// global [`crate::world::cell::routing()`] table under this
     /// cell's key. Drained at the top of the broadcast phase each
-    /// tick — see Stage 5 partition wiring (step 7).
-    #[allow(dead_code)] // wired in step 7 (inbox draining)
+    /// tick by `drain_cross_cell_inbox`.
     pub(crate) cross_cell_rx: kanal::AsyncReceiver<
         crate::world::cell::CrossCellMsg,
     >,
+
+    /// Consecutive ticks for which this cell has had zero clients AND
+    /// zero creatures. Bumped at end of each per-cell tick; reset to 0
+    /// on any tick where the cell is non-empty. The orchestrator GC's
+    /// cells whose streak crosses [`CELL_GC_EMPTY_STREAK_TICKS`].
+    pub(crate) empty_streak: u32,
 }
 
 #[derive(Debug)]
@@ -189,18 +185,52 @@ impl World {
         let arc = Arc::new(Mutex::new(state));
         self.cells.insert(key, arc.clone());
 
-        // Copy-on-write swap of the routing table: clone the current
-        // table, insert the new inbox, install. Readers in flight see
-        // the old table to completion; subsequent loads see the new.
+        // Copy-on-write swap of the routing table. Readers in flight
+        // see the old table to completion; subsequent loads see the new.
         let current = crate::world::cell::routing().load_full();
-        let mut new_table = crate::world::cell::RoutingTable::new();
-        for (k, v) in current.inboxes.iter() {
-            new_table.inboxes.insert(*k, v.clone());
-        }
-        new_table.inboxes.insert(key, inbox);
-        crate::world::cell::install_routing(new_table);
+        crate::world::cell::install_routing(current.with_added(key, inbox));
 
         arc
+    }
+
+    /// Walk `self.cells` and drop any cell that's been continuously
+    /// empty for at least [`CELL_GC_EMPTY_STREAK_TICKS`] consecutive
+    /// ticks. The empty-streak counter is maintained at the end of
+    /// each per-cell tick; this pass acts on it.
+    ///
+    /// Cleanup touches three places per GC'd cell: `World::cells`,
+    /// `cell::routing()` (via a COW swap of `RoutingTable`), and
+    /// `cell::PACER_STATES`. Skipped entirely when no cell meets the
+    /// threshold so the steady-state cost is a single iteration over
+    /// `self.cells` per tick.
+    async fn gc_empty_cells(&mut self) {
+        // Collect candidates first. We hold `&mut self`, so no other
+        // task can mutate `self.cells` between the scan and the drop.
+        // A non-blocking `try_lock` is enough: if a cell is locked
+        // here, something else owns it (shouldn't happen under
+        // `&mut self`, but we defend) — skip it this tick.
+        let mut gc_keys: Vec<CellKey> = Vec::new();
+        for (key, arc) in self.cells.iter() {
+            let Ok(cell) = arc.try_lock() else { continue };
+            if cell.clients.is_empty()
+                && cell.creatures.is_empty()
+                && cell.empty_streak >= CELL_GC_EMPTY_STREAK_TICKS
+            {
+                gc_keys.push(*key);
+            }
+        }
+        if gc_keys.is_empty() {
+            return;
+        }
+        for key in &gc_keys {
+            self.cells.remove(key);
+            if let Ok(mut pacers) = crate::world::cell::PACER_STATES.lock() {
+                pacers.remove(key);
+            }
+        }
+        let current = crate::world::cell::routing().load_full();
+        crate::world::cell::install_routing(current.without_keys(&gc_keys));
+        tracing::debug!("GC'd {} empty cells", gc_keys.len());
     }
 
     /// Admit a freshly-built `Client` into the cell whose square
@@ -229,13 +259,24 @@ pub(crate) struct PendingMovement {
 /// grid build and the AOI-transition lookup — keep in sync.
 pub const CREATURE_GRID_CELL_YD: f32 = 250.0;
 
-/// Compute the spatial-grid cell key for a creature at `(map, x, y)`. Z is
+/// Consecutive empty ticks before the orchestrator GC's a cell. At the
+/// default 100 ms target interval this is ~30 s of emptiness — long
+/// enough that a player walking through a remote cell and back does not
+/// churn the routing table COW swap, short enough that wandering bots
+/// don't bloat `World::cells` over a long session.
+pub const CELL_GC_EMPTY_STREAK_TICKS: u32 = 300;
+
+/// Compute the spatial-grid cell key for an entity at `(x, y)`. Z is
 /// deliberately ignored — AOI is horizontal-only, same as `within_aoi`.
+///
+/// Returns just `(cx, cy)`: a `CellState` is map-local, so its grid
+/// implicitly carries the map. Callers that need a global key (e.g. the
+/// cross-cell snapshot) compose with `cell.key.map` at the call site.
 #[inline]
-fn grid_cell_for(map: Map, x: f32, y: f32) -> (Map, i32, i32) {
+pub(crate) fn grid_cell_for(x: f32, y: f32) -> (i32, i32) {
     let cx = (x / CREATURE_GRID_CELL_YD).floor() as i32;
     let cy = (y / CREATURE_GRID_CELL_YD).floor() as i32;
-    (map, cx, cy)
+    (cx, cy)
 }
 
 /// Build a `CellState` from a position-bucketed `Vec<Creature>`,
@@ -263,9 +304,9 @@ fn build_cell_state_with_creatures(
     let mut walking_creature_keys = Vec::with_capacity(creature_slab.len());
     let mut creature_wander_count = 0;
     let mut creature_waypoint_count = 0;
-    let mut creature_grid_cells: ahash::AHashMap<(Map, i32, i32), Vec<usize>> =
+    let mut creature_grid_cells: ahash::AHashMap<(i32, i32), Vec<usize>> =
         ahash::AHashMap::new();
-    let mut creature_grid_cell_of: ahash::AHashMap<usize, (Map, i32, i32)> =
+    let mut creature_grid_cell_of: ahash::AHashMap<usize, (i32, i32)> =
         ahash::AHashMap::with_capacity(creature_slab.len());
     for (k, c) in creature_slab.iter() {
         creature_by_guid.insert(c.guid, k);
@@ -282,7 +323,7 @@ fn build_cell_state_with_creatures(
             CreatureBehavior::Idle => {}
         }
         if !matches!(c.life_state, CreatureLifeState::Respawning { .. }) {
-            let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+            let cell = grid_cell_for(c.info.position.x, c.info.position.y);
             creature_grid_cells.entry(cell).or_default().push(k);
             creature_grid_cell_of.insert(k, cell);
         }
@@ -298,6 +339,25 @@ fn build_cell_state_with_creatures(
     state.creature_grid_cell_of = creature_grid_cell_of;
 
     (state, inbox)
+}
+
+/// Per-cell contribution to the global AoI snapshot. Each cell's
+/// `build_global_aoi_snapshot` task produces one of these; the
+/// orchestrator merges them into the final `aoi::GlobalAoiSnapshot`.
+///
+/// `cell_key` is carried so the merge step can compose the cell's
+/// map into the global `(Map, cx, cy)` grid keys and populate
+/// `home_cell_by_guid` without re-locking the cell.
+struct PerCellAoiPartial {
+    cell_key: CellKey,
+    broadcast_view: Vec<aoi::BroadcastTarget>,
+    grid: ahash::AHashMap<(i32, i32), Vec<aoi::CreatureView>>,
+    /// `Arc<Object>` so the merge step into the global snapshot is
+    /// a refcount bump; creature entries flow through the per-entity
+    /// `cached_create_object` so idle creatures' wire payloads survive
+    /// across ticks.
+    create_objects: Vec<(Guid, Arc<Object>)>,
+    entity_locations: Vec<(Guid, aoi::EntityLocation)>,
 }
 
 /// Bundle of per-cell tick outputs returned by the `tokio::spawn`ed
@@ -402,7 +462,6 @@ impl CellState {
     /// Used by `World::with_creatures` / `for_test` for partition
     /// construction and by `World::ensure_cell_exists` for lazy
     /// spin-up on first admit / boundary transition.
-    #[allow(dead_code)] // wired in step 3+4
     pub(crate) fn new_empty(
         key: CellKey,
     ) -> (Self, crate::world::cell::CellInbox) {
@@ -434,6 +493,7 @@ impl CellState {
                 &crate::config::config().tick,
             ),
             cross_cell_rx: rx,
+            empty_streak: 0,
         };
         let inbox = crate::world::cell::CellInbox { cross_cell_tx: tx };
         (state, inbox)
@@ -504,7 +564,7 @@ impl CellState {
         if self.creature_grid_cell_of.contains_key(&key) {
             return; // already in the grid
         }
-        let cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+        let cell = grid_cell_for(c.info.position.x, c.info.position.y);
         self.creature_grid_cells.entry(cell).or_default().push(key);
         self.creature_grid_cell_of.insert(key, cell);
     }
@@ -540,7 +600,7 @@ impl CellState {
             self.grid_remove(key);
             return;
         }
-        let new_cell = grid_cell_for(c.map, c.info.position.x, c.info.position.y);
+        let new_cell = grid_cell_for(c.info.position.x, c.info.position.y);
         let prev = self.creature_grid_cell_of.get(&key).copied();
         if prev == Some(new_cell) {
             return; // same cell — no work
@@ -579,6 +639,7 @@ impl CellState {
         }
         creature.health = 0;
         creature.life_state = CreatureLifeState::Corpse { died_at: now };
+        creature.invalidate_object_cache();
         let guid = creature.guid;
         let map = creature.map;
         let pos = creature.info.position;
@@ -654,40 +715,57 @@ impl CellState {
     /// transition to `Respawning` (broadcast destroy). Respawning creatures
     /// Process clients flagged for character-screen during this
     /// tick's `per_client_loop` (typically by `CMSG_LOGOUT_REQUEST`).
-    /// For each: pull out of the cell's slab, broadcast
-    /// `SMSG_DESTROY_OBJECT` to every observer within AOI, drop
-    /// the guid from every observer's `visible_entities` (so the
-    /// next AOI diff doesn't re-emit a departure for an
-    /// already-handled logout), and append the resulting
-    /// `CharacterScreenClient` to `departed`. The orchestrator
-    /// hands those back to `World::clients_on_character_screen`
-    /// for the relog flow.
+    /// For each: pull out of the cell's slab and append the resulting
+    /// `CharacterScreenClient` to `departed`. The orchestrator hands
+    /// those back to `World::clients_on_character_screen` for the
+    /// relog flow.
+    ///
+    /// Despawn fan-out uses the same per-map coalescing as the
+    /// stale-disconnect path: one `SMSG_UPDATE_OBJECT` per map
+    /// carrying `OutOfRangeObjects { guids }` is sent to every
+    /// observer on that map, regardless of AOI distance. The 1.12.2
+    /// client ignores guids it doesn't know about, so skipping the
+    /// per-recipient distance walk is harmless and avoids
+    /// O(K × N) per-recipient packets on mass logout (e.g. a
+    /// `simulate` teardown).
     #[tracing::instrument(level = "info", skip_all, name = "drain_logouts")]
     pub(crate) async fn drain_logouts(
         &mut self,
         keys: &[usize],
         departed: &mut Vec<CharacterScreenClient>,
     ) {
+        if keys.is_empty() {
+            return;
+        }
+        let mut by_map: ahash::AHashMap<Map, Vec<Guid>> = ahash::AHashMap::new();
         for &key in keys {
             let c = self.remove_client(key);
-            let logout_pos = c.character().info.position;
             let logout_map = c.character().map;
             let logout_guid = c.character().guid;
-            // Drop the heartbeat-throttle bookkeeping for the
-            // leaving player so the map doesn't accumulate stale
-            // guids over a long server lifetime.
+            // Drop the heartbeat-throttle bookkeeping for the leaving
+            // player so the map doesn't accumulate stale guids over a
+            // long server lifetime.
             self.last_heartbeat_broadcast_tick.remove(&logout_guid);
-            for (_, a) in &mut self.clients {
-                if a.character().map == logout_map
-                    && aoi::within_aoi(&a.character().info.position, &logout_pos)
-                {
-                    a.send_message(SMSG_DESTROY_OBJECT { guid: logout_guid })
-                        .await;
+            by_map.entry(logout_map).or_default().push(logout_guid);
+            departed.push(c.into_character_screen_client());
+        }
+        for (map, guids) in by_map {
+            let msg = SMSG_UPDATE_OBJECT {
+                has_transport: 0,
+                objects: vec![Object {
+                    update_type: Object_UpdateType::OutOfRangeObjects {
+                        guids: guids.clone(),
+                    },
+                }],
+            };
+            for (_, a) in self.clients.iter_mut() {
+                if a.character().map == map {
+                    for g in &guids {
+                        a.session.visible_entities.remove(g);
+                    }
+                    a.send_message(msg.clone()).await;
                 }
-                a.session.visible_entities.remove(&logout_guid);
             }
-            let c = c.into_character_screen_client();
-            departed.push(c);
         }
     }
 
@@ -703,22 +781,19 @@ impl CellState {
     #[tracing::instrument(level = "info", skip_all, name = "detect_boundary_transitions")]
     pub(crate) fn detect_boundary_transitions(&mut self) -> Vec<(CellKey, Client)> {
         let cell_key_now = self.key;
-        let crossing_keys: Vec<usize> = self
+        let crossings: Vec<(usize, CellKey)> = self
             .clients
             .iter()
             .filter_map(|(k, c)| {
                 let pos = c.character().info.position;
                 let new_key =
                     CellKey::from_position(c.character().map, pos.x, pos.y);
-                if new_key != cell_key_now { Some(k) } else { None }
+                (new_key != cell_key_now).then_some((k, new_key))
             })
             .collect();
-        let mut transitions: Vec<(CellKey, Client)> = Vec::with_capacity(crossing_keys.len());
-        for k in crossing_keys {
+        let mut transitions: Vec<(CellKey, Client)> = Vec::with_capacity(crossings.len());
+        for (k, new_key) in crossings {
             let client = self.remove_client(k);
-            let pos = client.character().info.position;
-            let new_key =
-                CellKey::from_position(client.character().map, pos.x, pos.y);
             transitions.push((new_key, client));
         }
         transitions
@@ -931,6 +1006,7 @@ impl CellState {
             c.info.position = c.spawn_position;
             c.info.orientation = c.spawn_orientation;
             c.info.flags = wow_world_messages::vanilla::MovementInfo_MovementFlags::default();
+            c.invalidate_object_cache();
             let create_object = c.to_create_object();
             let map = c.map;
             let pos = c.info.position;
@@ -969,6 +1045,7 @@ impl CellState {
                     CreatureBehavior::RandomWander { .. } | CreatureBehavior::Waypoint { .. }
                 ) {
                     creature.info.flags = MovementInfo_MovementFlags::new_forward();
+                    creature.invalidate_object_cache();
                     Some(creature.info.clone())
                 } else {
                     None
@@ -1102,6 +1179,7 @@ impl CellState {
                 splines: vec![to],
             };
             creature.info.position = to;
+            creature.invalidate_object_cache();
             self.grid_move(key);
 
             for (_, c) in &mut self.clients {
@@ -1274,6 +1352,7 @@ impl CellState {
                 c.info.orientation = (target.y - c.info.position.y)
                     .atan2(target.x - c.info.position.x);
                 c.info.flags = MovementInfo_MovementFlags::new_forward().set_walk_mode();
+                c.invalidate_object_cache();
                 events.push((key, c.info.position, map, CreatureMoveEvent::StartForward));
             }
 
@@ -1284,6 +1363,7 @@ impl CellState {
             if dist <= step || dist <= arrival_threshold {
                 c.info.position = target;
                 c.info.flags = MovementInfo_MovementFlags::default();
+                c.invalidate_object_cache();
                 events.push((key, c.info.position, map, CreatureMoveEvent::Stop));
                 let park_at = match &mut c.behavior {
                     CreatureBehavior::RandomWander {
@@ -1320,6 +1400,7 @@ impl CellState {
                 c.info.position.x += step * dx / dist;
                 c.info.position.y += step * dy / dist;
                 c.info.position.z = target.z;
+                c.invalidate_object_cache();
                 if !just_started
                     && now
                         .saturating_duration_since(c.last_heartbeat_at)
@@ -1516,8 +1597,7 @@ impl CellState {
                             new_visible.insert(t.guid);
                         }
                     }
-                    let cx = (observer_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
-                    let cy = (observer_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
+                    let (cx, cy) = grid_cell_for(observer_pos.x, observer_pos.y);
                     for dx in -1..=1 {
                         for dy in -1..=1 {
                             let Some(views) =
@@ -1598,13 +1678,18 @@ impl CellState {
 
                     // Build entered_objects (CreateObject2 for each
                     // newcomer guid). The snapshot pre-baked one
-                    // `Object` per entity guid — including neighbor-
-                    // cell entities — so a single lookup serves
-                    // local and cross-cell newcomers alike.
+                    // `Arc<Object>` per entity guid — including
+                    // neighbor-cell entities — so a single lookup
+                    // serves local and cross-cell newcomers alike.
+                    // The wire encoder consumes `Vec<Object>` by
+                    // value, so we deref-clone the Arc here; the
+                    // saving vs. pre-rename is paying that clone
+                    // only for *entered* guids instead of every
+                    // entity in the snapshot.
                     let mut entered_objects = Vec::with_capacity(entered.len());
                     for g in &entered {
-                        if let Some(obj) = create_object_by_guid.get(g) {
-                            entered_objects.push(obj.clone());
+                        if let Some(arc) = create_object_by_guid.get(g) {
+                            entered_objects.push((**arc).clone());
                         }
                     }
 
@@ -1678,6 +1763,9 @@ impl CellState {
                         creature.info.position.z,
                     ) {
                         creature.info.position.z = z;
+                        // No cache to invalidate yet — this creature
+                        // hasn't been inserted, so nothing has called
+                        // `cached_create_object` against it.
                         if let CreatureBehavior::RandomWander { anchor, .. } =
                             &mut creature.behavior
                         {
@@ -1898,68 +1986,115 @@ impl World {
     /// it happens. The orchestrator collects all replies, then locks
     /// the DB once and writes the aggregated Characters atomically.
     /// Build a cross-cell AoI snapshot from end-of-last-tick state.
-    /// Locks each cell briefly to copy out the broadcast view +
-    /// creature cell index + pre-baked `CreateObject2` packets for
-    /// every entity. Called once per `World::tick` before per-cell
-    /// tasks spawn; the resulting `Arc<GlobalAoiSnapshot>` is cloned
-    /// into each task.
+    /// Spawns one tokio task per cell — each locks its own cell,
+    /// copies broadcast view + grid + per-entity `CreateObject2`
+    /// frames into a partial, and the orchestrator merges all partials
+    /// into the final snapshot. Called once per `World::tick` before
+    /// per-cell tasks spawn; the resulting `Arc<GlobalAoiSnapshot>` is
+    /// cloned into each per-cell tick task.
     ///
-    /// Cost: O(N) per tick where N = total entities. The
-    /// `to_create_object` build per entity is a handful of field
-    /// copies — at typical loads (a few thousand creatures + a few
-    /// hundred clients) the snapshot build is well under a
-    /// millisecond.
+    /// Cost: O(N) entities total, but lock acquisitions are parallel
+    /// — wall time is bounded by the busiest cell, not the sum.
     async fn build_global_aoi_snapshot(&self) -> aoi::GlobalAoiSnapshot {
+        // Spawn one task per cell. Each builds its own partial in
+        // isolation; the merge step below happens single-threaded so
+        // the inner maps don't need synchronization.
+        let partials_handles: Vec<tokio::task::JoinHandle<PerCellAoiPartial>> = self
+            .cells
+            .values()
+            .map(|cell_arc| {
+                let cell_arc = cell_arc.clone();
+                tokio::spawn(async move {
+                    let cell = cell_arc.lock().await;
+                    let cell_key = cell.key;
+                    let mut partial = PerCellAoiPartial {
+                        cell_key,
+                        broadcast_view: Vec::with_capacity(cell.clients.len()),
+                        grid: ahash::AHashMap::with_capacity(cell.creature_grid_cells.len()),
+                        create_objects: Vec::with_capacity(
+                            cell.clients.len() + cell.creatures.len(),
+                        ),
+                        entity_locations: Vec::with_capacity(
+                            cell.clients.len() + cell.creatures.len(),
+                        ),
+                    };
+                    for (_, client) in cell.clients.iter() {
+                        partial.broadcast_view.push(client.broadcast_target());
+                        let ch = client.character();
+                        partial
+                            .create_objects
+                            .push((ch.guid, Arc::new(player_create_object(ch))));
+                        partial.entity_locations.push((
+                            ch.guid,
+                            aoi::EntityLocation {
+                                map: ch.map,
+                                position: ch.info.position,
+                                kind: aoi::EntityKind::Client,
+                            },
+                        ));
+                    }
+                    for (&(cx, cy), indices) in cell.creature_grid_cells.iter() {
+                        let bucket = partial.grid.entry((cx, cy)).or_default();
+                        for &idx in indices {
+                            let cr = &cell.creatures[idx];
+                            bucket.push(aoi::CreatureView {
+                                guid: cr.guid,
+                                position: cr.info.position,
+                            });
+                            // Cache hit on idle creatures is the common case
+                            // (most creatures don't move between ticks).
+                            partial.create_objects.push((cr.guid, cr.cached_create_object()));
+                            partial.entity_locations.push((
+                                cr.guid,
+                                aoi::EntityLocation {
+                                    map: cr.map,
+                                    position: cr.info.position,
+                                    kind: aoi::EntityKind::Creature,
+                                },
+                            ));
+                        }
+                    }
+                    partial
+                })
+            })
+            .collect();
+
+        // Merge partials. Single-threaded — the parallelism was in the
+        // per-cell lock + build, not the merge. Sizing the destination
+        // maps from the cells count is a rough lower bound; AHashMap
+        // grows on overflow.
         let mut broadcast_view: Vec<aoi::BroadcastTarget> = Vec::new();
         let mut creature_grid_cells: ahash::AHashMap<(Map, i32, i32), Vec<aoi::CreatureView>> =
             ahash::AHashMap::new();
-        let mut create_object_by_guid: ahash::AHashMap<Guid, Object> = ahash::AHashMap::new();
+        let mut create_object_by_guid: ahash::AHashMap<Guid, Arc<Object>> =
+            ahash::AHashMap::new();
         let mut home_cell_by_guid: ahash::AHashMap<Guid, crate::world::cell::CellKey> =
             ahash::AHashMap::new();
         let mut entity_locations: ahash::AHashMap<Guid, aoi::EntityLocation> =
             ahash::AHashMap::new();
 
-        for (cell_key, cell_arc) in self.cells.iter() {
-            let cell = cell_arc.lock().await;
-
-            for (_, client) in cell.clients.iter() {
-                broadcast_view.push(client.broadcast_target());
-                let ch = client.character();
-                create_object_by_guid
-                    .entry(ch.guid)
-                    .or_insert_with(|| player_create_object(ch));
-                home_cell_by_guid.insert(ch.guid, *cell_key);
-                entity_locations.insert(
-                    ch.guid,
-                    aoi::EntityLocation {
-                        map: ch.map,
-                        position: ch.info.position,
-                        kind: aoi::EntityKind::Client,
-                    },
-                );
-            }
-
-            for (grid_cell_key, indices) in cell.creature_grid_cells.iter() {
-                let bucket = creature_grid_cells.entry(*grid_cell_key).or_default();
-                for &idx in indices {
-                    let cr = &cell.creatures[idx];
-                    bucket.push(aoi::CreatureView {
-                        guid: cr.guid,
-                        position: cr.info.position,
-                    });
-                    create_object_by_guid
-                        .entry(cr.guid)
-                        .or_insert_with(|| cr.to_create_object());
-                    home_cell_by_guid.insert(cr.guid, *cell_key);
-                    entity_locations.insert(
-                        cr.guid,
-                        aoi::EntityLocation {
-                            map: cr.map,
-                            position: cr.info.position,
-                            kind: aoi::EntityKind::Creature,
-                        },
-                    );
+        for handle in partials_handles {
+            let partial = match handle.await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("AoI snapshot partial task panicked: {e}");
+                    continue;
                 }
+            };
+            broadcast_view.extend(partial.broadcast_view);
+            let cell_map = partial.cell_key.map;
+            for ((cx, cy), views) in partial.grid {
+                creature_grid_cells
+                    .entry((cell_map, cx, cy))
+                    .or_default()
+                    .extend(views);
+            }
+            for (guid, obj) in partial.create_objects {
+                create_object_by_guid.insert(guid, obj);
+                home_cell_by_guid.insert(guid, partial.cell_key);
+            }
+            for (guid, loc) in partial.entity_locations {
+                entity_locations.insert(guid, loc);
             }
         }
 
@@ -2033,17 +2168,14 @@ impl World {
     pub async fn tick(&mut self, slow_warn: Duration) {
         let tick_start = Instant::now();
 
-        // ── Stage 3 cell locking ──
+        // ── Per-cell locking ──
         //
         // Each cell lives behind a `tokio::sync::Mutex` inside an
-        // `Arc`. For the single-cell build we clone the Arc here and
-        // hold the lock for the duration of this tick — that's
-        // uncontended in steady state because nothing else touches the
-        // CellState while a tick is in progress. The per-cell
-        // `tokio::spawn` block lower down spawns one task per cell;
-        // with N cells, each task owns its own Arc<Mutex<CellState>>
-        // and they run in parallel on the tokio worker pool. The body
-        // here is the orchestrator: drain login, character-screen
+        // `Arc`. The per-cell `tokio::spawn` block lower down spawns
+        // one task per cell; each task owns its own
+        // `Arc<Mutex<CellState>>` and they run in parallel on the
+        // tokio worker pool. The body here is the orchestrator: drain
+        // login, character-screen
         // opcodes, promote (all global), then spawn N cell tasks for
         // the per-cell phases.
         // Forward-declare values that flow from the global phases into the
@@ -2214,14 +2346,15 @@ impl World {
             }
 
             // Creature scan (3×3 cell window around the new player).
+            // Uses the destination cell's own grid (map-local), not the
+            // global snapshot — `cell.key.map == new_player_map` here.
             {
-                let cx = (new_player_pos.x / CREATURE_GRID_CELL_YD).floor() as i32;
-                let cy = (new_player_pos.y / CREATURE_GRID_CELL_YD).floor() as i32;
+                let (cx, cy) = grid_cell_for(new_player_pos.x, new_player_pos.y);
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         let Some(keys) = cell
                             .creature_grid_cells
-                            .get(&(new_player_map, cx + dx, cy + dy))
+                            .get(&(cx + dx, cy + dy))
                         else {
                             continue;
                         };
@@ -2622,6 +2755,7 @@ impl World {
                         SwingKind::Creature(creature_key) => {
                             let creature = &mut cell.creatures[creature_key];
                             creature.health = creature.health.saturating_sub(swing_damage);
+                            creature.invalidate_object_cache();
                             let creature_map = creature.map;
                             let creature_pos = creature.info.position;
                             let creature_guid = creature.guid;
@@ -2907,6 +3041,16 @@ impl World {
 
                 let transitions = cell.detect_boundary_transitions();
 
+                // Track emptiness for the orchestrator's cell GC sweep.
+                // Transitions already moved any crossing clients out of
+                // `cell.clients`, so this reflects the cell's true
+                // post-tick population.
+                if cell.clients.is_empty() && cell.creatures.is_empty() {
+                    cell.empty_streak = cell.empty_streak.saturating_add(1);
+                } else {
+                    cell.empty_streak = 0;
+                }
+
                 let creature_aggro_count = cell.aggro_creature_keys.len();
                 let creature_wander_count = cell.creature_wander_count;
                 let creature_waypoint_count = cell.creature_waypoint_count;
@@ -3036,6 +3180,24 @@ impl World {
             let mut dest_cell = dest_arc.lock().await;
             dest_cell.insert_client(client);
         }
+
+        // ── Cell GC ──
+        //
+        // Walk cells and drop any whose `empty_streak` has crossed the
+        // threshold AND that are still empty under a final fresh check.
+        // The fresh check guards against the `empty_streak` accounting
+        // having lagged the transition admit above (a freshly-admitted
+        // cell would have an inherited streak from its previous life).
+        //
+        // GC removes the cell from `World::cells`, from the routing
+        // table (COW swap), and from `PACER_STATES`. The cell's
+        // `cross_cell_rx` is dropped with the `CellState`, closing the
+        // channel — neighbor sends to this cell's old `Sender` will
+        // fail-fast against a closed channel and bump
+        // `CROSS_CELL_DROPPED`, which is the right signal (the cell is
+        // gone, the broadcast had nowhere to land anyway).
+        self.gc_empty_cells().await;
+
         // Prefer the first non-skipped result for Tracy plots and the
         // slow-tick log; fall back to any result if every cell
         // skipped (so e.g. `cells_active` plot still emits).
@@ -3169,7 +3331,7 @@ impl World {
             }
             // Briefly re-lock maps to read the ADT counter. The per-cell
             // tasks already released their maps lock by now, so this is
-            // uncontended in the single-cell build.
+            // typically uncontended.
             let adt_count = {
                 let maps = self.maps.lock().await;
                 maps.attempted_adt_count()
@@ -3179,18 +3341,14 @@ impl World {
                 adt_count as f64,
             );
 
-            // ── Stage 4: cell + cross-cell observability ──
+            // ── Cell + cross-cell observability ──
             //
-            // `cells_active` is the count of `World::cells` entries
-            // (today: always 1; once Stage 3 partition lands each spatial
-            // cell becomes its own entry). `cell_max_clients` is the
+            // `cells_active` is the count of `World::cells` entries (one
+            // per populated spatial cell). `cell_max_clients` is the
             // busiest cell's client count — useful for spotting hot
-            // spots once partition is on. The three cross_cell plots
-            // drain process-wide atomic counters once per tick: they
-            // stay at 0 until the routing table holds neighbor inboxes,
-            // i.e. when Stage 3 actually spins up parallel cell tasks.
-            // Adding the plots now means dashboards line up the moment
-            // partition lands.
+            // spots. The three cross_cell plots drain process-wide
+            // atomic counters once per tick to show fan-out traffic to
+            // neighbor cells.
             client.plot(
                 tracy_client::plot_name!("cells_active"),
                 self.cells.len() as f64,
@@ -3646,21 +3804,17 @@ mod tests {
 
     #[test]
     fn grid_cell_for_origin_is_zero_zero() {
-        let (_, cx, cy) = grid_cell_for(Map::EasternKingdoms, 0.0, 0.0);
-        assert_eq!((cx, cy), (0, 0));
+        assert_eq!(grid_cell_for(0.0, 0.0), (0, 0));
     }
 
     #[test]
     fn grid_cell_for_positive_inside_first_cell() {
         // (1, 1) and (CELL-0.01, CELL-0.01) both land in cell (0, 0).
-        let (_, cx, cy) = grid_cell_for(Map::EasternKingdoms, 1.0, 1.0);
-        assert_eq!((cx, cy), (0, 0));
-        let (_, cx, cy) = grid_cell_for(
-            Map::EasternKingdoms,
-            CREATURE_GRID_CELL_YD - 0.01,
-            CREATURE_GRID_CELL_YD - 0.01,
+        assert_eq!(grid_cell_for(1.0, 1.0), (0, 0));
+        assert_eq!(
+            grid_cell_for(CREATURE_GRID_CELL_YD - 0.01, CREATURE_GRID_CELL_YD - 0.01),
+            (0, 0),
         );
-        assert_eq!((cx, cy), (0, 0));
     }
 
     #[test]
@@ -3670,9 +3824,9 @@ mod tests {
         // so a naive `(x / CELL) as i32` would land 249.99 → 0 (correct)
         // and 250.00 → 1 (correct), BUT -0.01 → 0 (wrong — should be -1).
         // The explicit `.floor()` is what makes negatives behave.
-        let (_, cx, _) = grid_cell_for(Map::EasternKingdoms, CREATURE_GRID_CELL_YD, 0.0);
+        let (cx, _) = grid_cell_for(CREATURE_GRID_CELL_YD, 0.0);
         assert_eq!(cx, 1);
-        let (_, _, cy) = grid_cell_for(Map::EasternKingdoms, 0.0, CREATURE_GRID_CELL_YD);
+        let (_, cy) = grid_cell_for(0.0, CREATURE_GRID_CELL_YD);
         assert_eq!(cy, 1);
     }
 
@@ -3681,14 +3835,7 @@ mod tests {
         // Regression guard for the truncate-vs-floor footgun (see comment
         // above). Without `.floor()`, this returned (0, 0) — wrong, and
         // would silently put creatures into the wrong neighbor cell.
-        let (_, cx, cy) = grid_cell_for(Map::EasternKingdoms, -0.01, -0.01);
-        assert_eq!((cx, cy), (-1, -1));
-    }
-
-    #[test]
-    fn grid_cell_for_preserves_map() {
-        let (m, _, _) = grid_cell_for(Map::Kalimdor, 100.0, 200.0);
-        assert_eq!(m, Map::Kalimdor);
+        assert_eq!(grid_cell_for(-0.01, -0.01), (-1, -1));
     }
 
     #[test]
@@ -3855,6 +4002,117 @@ mod tests {
         // Routing table has both inboxes now.
         let table = crate::world::cell::routing().load();
         assert!(table.inboxes.contains_key(&new_key));
+    }
+
+    #[tokio::test]
+    async fn gc_empty_cells_drops_cell_past_threshold() {
+        // Force an empty cell into GC range by directly bumping
+        // `empty_streak` to the configured threshold, then call the
+        // sweep. The cell must be removed from `World::cells`, its
+        // inbox dropped from the routing table, and its PACER_STATES
+        // entry cleared.
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let mut world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            slab::Slab::new(),
+            crate::world::database::WorldDatabase::new(),
+        );
+        let key = CellKey { map: Map::EasternKingdoms, cx: 9, cy: 9 };
+        let arc = world.ensure_cell_exists(key);
+        assert!(world.cells.contains_key(&key));
+        assert!(
+            crate::world::cell::routing().load().inboxes.contains_key(&key),
+            "routing should hold the new cell's inbox pre-GC",
+        );
+
+        // Publish a pacer state so we can verify the cleanup hits it.
+        crate::world::cell::publish_pacer_state(
+            key,
+            crate::world::cell::PacerSnapshot {
+                current_interval_ms: 100,
+                slow_ema: 0.0,
+                healthy_streak: 0,
+                last_tick_ms: 0,
+            },
+        );
+        assert!(
+            crate::world::cell::PACER_STATES.lock().unwrap().contains_key(&key),
+            "PACER_STATES should hold the cell's entry pre-GC",
+        );
+
+        // Cell is empty by construction (no clients, no creatures).
+        // Force the streak to threshold so the sweep picks it up.
+        {
+            let mut cell = arc.lock().await;
+            cell.empty_streak = CELL_GC_EMPTY_STREAK_TICKS;
+        }
+
+        world.gc_empty_cells().await;
+
+        assert!(
+            !world.cells.contains_key(&key),
+            "expected GC to drop empty cell",
+        );
+        assert!(
+            !crate::world::cell::routing().load().inboxes.contains_key(&key),
+            "expected GC to drop the inbox from the routing table",
+        );
+        assert!(
+            !crate::world::cell::PACER_STATES.lock().unwrap().contains_key(&key),
+            "expected GC to drop the PACER_STATES entry",
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_empty_cells_keeps_cell_below_threshold() {
+        // A cell that's empty but hasn't been empty long enough must
+        // survive a GC sweep. Guards the grace period — players
+        // walking through a remote cell and back shouldn't churn the
+        // routing table.
+        let (_tx, clients_waiting_to_join) = tokio::sync::mpsc::channel(1);
+        let mut world = World::with_creatures_and_db(
+            clients_waiting_to_join,
+            slab::Slab::new(),
+            crate::world::database::WorldDatabase::new(),
+        );
+        let key = CellKey { map: Map::EasternKingdoms, cx: 12, cy: 12 };
+        let arc = world.ensure_cell_exists(key);
+        {
+            let mut cell = arc.lock().await;
+            cell.empty_streak = CELL_GC_EMPTY_STREAK_TICKS - 1;
+        }
+
+        world.gc_empty_cells().await;
+
+        assert!(
+            world.cells.contains_key(&key),
+            "cell at streak < threshold must survive GC",
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_empty_cells_skips_nonempty_cell() {
+        // Even if `empty_streak` somehow reached the threshold on a
+        // non-empty cell (e.g. orchestrator admit landed a client
+        // between the bump and the sweep), the GC sweep must re-check
+        // emptiness and skip. Models that race directly.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let chars = vec![test_character_at(&mut db, "stayer", 9100.0, 9100.0)];
+        let mut world = World::for_test(chars, vec![]);
+        let key = CellKey { map: Map::EasternKingdoms, cx: 9, cy: 9 };
+        assert!(world.cells.contains_key(&key));
+        {
+            let arc = world.cells.get(&key).unwrap().clone();
+            let mut cell = arc.lock().await;
+            cell.empty_streak = CELL_GC_EMPTY_STREAK_TICKS;
+        }
+
+        world.gc_empty_cells().await;
+
+        assert!(
+            world.cells.contains_key(&key),
+            "GC must re-check emptiness — non-empty cells survive even at threshold",
+        );
     }
 
     #[tokio::test]
