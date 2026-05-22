@@ -42,7 +42,7 @@ pub struct BotConfig {
     /// Shared `VanillaMap` handle for Race mode. `Some` when
     /// namigator wired up cleanly; `None` when running the
     /// hardcoded-fallback path (no per-tick ground sampling).
-    pub race_map: Option<Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>>,
+    pub race_map: Option<Arc<std::sync::Mutex<rustigator::vanilla::VanillaMap>>>,
 }
 
 pub struct BotHandle {

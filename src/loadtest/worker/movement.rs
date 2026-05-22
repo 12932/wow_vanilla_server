@@ -135,7 +135,7 @@ pub enum Mode {
         /// Shared navmesh handle. `Some` for namigator-wired race
         /// bots; `None` when running the hardcoded-fallback path
         /// (no per-tick Z snap, driver lerps between path Z values).
-        map: Option<Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>>,
+        map: Option<Arc<std::sync::Mutex<rustigator::vanilla::VanillaMap>>>,
         /// Heartbeats logged so far (bot slot 0 only, capped at
         /// `RACE_DIAG_LIMIT`). Lets us see what Z the bot is
         /// actually transmitting after the snap.
@@ -158,7 +158,7 @@ const RACE_DIAG_LIMIT: usize = 20;
 /// const). Held lock is microseconds; we copy out of the
 /// borrowed slice before unlocking.
 fn snap_ground_z(
-    map_arc: &Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>,
+    map_arc: &Arc<std::sync::Mutex<rustigator::vanilla::VanillaMap>>,
     x: f32,
     y: f32,
     z_hint: f32,

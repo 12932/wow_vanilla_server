@@ -1,6 +1,6 @@
 use ahash::{AHashMap, AHashSet};
-use namigator::raw::{build_bvh, build_map, bvh_files_exist, map_files_exist};
-use namigator::vanilla::{Map, VanillaMap};
+use rustigator::raw::{build_bvh, build_map, bvh_files_exist, map_files_exist};
+use rustigator::vanilla::{Map, VanillaMap};
 use tracing::{info, warn};
 
 /// Maps we build navmeshes for when `WOW_VANILLA_USE_MAPS` is set.
@@ -135,7 +135,7 @@ fn build_one(
     data_path: &str,
     output: &std::path::Path,
     threads: u32,
-) -> Result<VanillaMap, namigator::NamigatorError> {
+) -> Result<VanillaMap, rustigator::RustigatorError> {
     if !map_files_exist(output, map.directory_name())? {
         info!("Building map {map} ({})", map.directory_name());
         build_map(data_path, output, map.directory_name(), "", threads)?;
