@@ -4,7 +4,7 @@ Guidance for AI coding assistants (Claude Code, Cursor, Aider, etc.) working in 
 
 ## What this is
 
-A WoW vanilla (1.12.2 client) server in Rust. Two binaries: `wow_vanilla_server` (the game server) and `loadtest` (an orchestrator + worker for spawning real-protocol bots against the server). Tokio async runtime. Single-threaded tick at **10 Hz** with rayon for one parallel phase (`tick_creature_ai`). Roughly 51 k creatures loaded from a mangos SQLite worlddb on boot. Tracy profiler is enabled.
+A WoW vanilla (1.12.2 client) server in Rust. Two binaries: `wow_vanilla_server` (the game server) and `loadtest` (an orchestrator + worker for spawning real-protocol bots against the server). Tokio async runtime. World tick targets **30 Hz** (33 ms), fanned out into one `tokio::spawn`'d task per cell; each cell's tick calls into rayon during the AOI diff (`tick_aoi_transitions`) and the creature aggro scan (`tick_creature_ai`). Roughly 63 k creatures loaded from a mangos SQLite worlddb on boot. Tracy profiler is opt-in via `WOW_TRACY=1`.
 
 ## Quick commands
 
@@ -62,7 +62,7 @@ commands.push(WorldCommand::KillCreature(guid));
 
 ### Entity guid lookups must use the indexes
 
-`World` carries reverse `AHashMap<Guid, usize>` indexes for players, creatures, and simulated_players. `WorldDatabase` also carries `by_guid` and `by_account` indexes for characters. Use them via `Entities::find_player` / `find_creature` / `find_simulated` and `WorldDatabase::get_character_by_guid` / `get_characters_for_account` (all O(1) or O(chars-for-this-account)). **Do not write `slab.iter().find_map(|(_, c)| c.guid == g)` or linear `characters.iter().filter(|c| c.account == name)`** — at 51 k creatures or burst-login that's the dominant cost.
+`World` carries reverse `AHashMap<Guid, usize>` indexes for players, creatures, and simulated_players. `WorldDatabase` also carries `by_guid` and `by_account` indexes for characters. Use them via `Entities::find_player` / `find_creature` / `find_simulated` and `WorldDatabase::get_character_by_guid` / `get_characters_for_account` (all O(1) or O(chars-for-this-account)). **Do not write `slab.iter().find_map(|(_, c)| c.guid == g)` or linear `characters.iter().filter(|c| c.account == name)`** — at ~63 k creatures or burst-login that's the dominant cost.
 
 If you insert/remove from one of those slabs, update the matching reverse index in lockstep. Use `World::register_creature` / `World::unregister_creature` for creatures; `WorldDatabase::create_character_in_account` / `delete_character_by_guid` for characters (the latter handles the `swap_remove` index fixup).
 
@@ -100,7 +100,7 @@ Per-tick / per-packet errors **never panic**. The policy:
 - **Startup**: `.expect("explanatory message")` is fine for unrecoverable conditions.
 - **Per-connection**: log at `debug` or `warn` and drop the connection. See `or_return!` macro in `src/auth.rs` and the pattern in `character_screen_inner`.
 - **Per-packet**: log at `debug` and skip the packet. Client-supplied guids must be looked up fallibly (`db.get_character_by_guid` returns `Option`).
-- **Per-tick**: log at `warn` and continue with the remaining work. `World::tick` has a slow-tick `WARN` that dumps per-phase wall time when the whole tick exceeds 100 ms.
+- **Per-tick**: log at `warn` and continue with the remaining work. `World::tick` has a slow-tick `WARN` (target `tick_slow`) that dumps per-phase wall time when the whole tick exceeds the pacer's `current_interval` (33 ms by default, longer after the adaptive pacer has backed off under sustained overload).
 
 ### Async + locks
 
@@ -145,7 +145,7 @@ Pattern: take by `mem::take(&mut self.scratch_*)` at phase top, `.clear()`, fill
 
 ### Auto-attack timer is wall-clock-driven
 
-`Character::update_auto_attack_timer(dt: f32)` takes a `dt` argument. `World::tick` passes the measured wall-clock duration since the previous tick (clamped to 1 s). The configured target interval `TARGET_INTERVAL` (currently 100 ms) is only used as the bootstrap value for the very first tick. **Do not** read tick-rate constants in game logic — the actual tick interval is adaptive (`TickPacer` in `src/world/mod.rs` may back off from 10 Hz to 2 Hz under sustained overload), and coupling combat pacing to it would mean combat slowed down whenever the server got busy.
+`Character::update_auto_attack_timer(dt: f32)` takes a `dt` argument. `World::tick` passes the measured wall-clock duration since the previous tick (clamped to 1 s). The configured target interval (currently 33 ms / 30 Hz, see `config.toml` → `network.target_interval_ms`) is only used as the bootstrap value for the very first tick. **Do not** read tick-rate constants in game logic — the actual tick interval is adaptive (`TickPacer` in `src/world/mod.rs` may back off from 30 Hz to 1 Hz under sustained overload), and coupling combat pacing to it would mean combat slowed down whenever the server got busy.
 
 ### Visibility / API surface
 
@@ -168,7 +168,6 @@ Set via shell env, `.cargo/config.toml` (cargo-launched only), or `.env` (loaded
 | Var | Purpose |
 |---|---|
 | `WOW_REALM_ADDRESS` | `host:port` advertised in the realm list. Set to your public IP + `8085` when deploying to a server. Defaults to `localhost:8085`. |
-| `WOW_AUTH_AUTO_CREATE` | If set (any value), unknown auth usernames are auto-created with `password = username`. Required for the loadtest binary to work. Off by default — production runs should leave it unset. |
 | `WOW_VANILLA_WORLDDB` | Path to mangos SQLite. Without it the server boots with one test wolf only. Set in `.cargo/config.toml` for local dev. |
 | `WOW_VANILLA_USE_MAPS` | Compile-time `option_env!`: path to vanilla client data for namigator builds. Enables terrain following. Without it, mobs walk in linear z. |
 | `LOADTEST_NAME_PREFIX` | Optional override for the bot character-name prefix in the loadtest binary. Defaults to the worker host's hostname (via `gethostname` crate). |
@@ -179,13 +178,13 @@ A `.env.example` template is checked in; copy to `.env` and adjust.
 
 `src/loadtest/` ships an orchestrator + worker for spawning real-protocol bots:
 
-- **Worker** (`--role worker`) opens many SRP6/ARC4-encrypted sessions against the running server, auto-creates a character per session at Gurubashi Arena, and runs a random-walk movement driver. Two tokio tasks per bot: a reader and a drive task.
+- **Worker** (`--role worker`) opens many SRP6/ARC4-encrypted sessions against the running server, auto-creates a character per session at Gurubashi Arena, and runs a random-walk movement driver. One tokio task per bot that multiplexes a reader future and a drive future via `tokio::select!`.
 - **Orchestrator** (`--role orchestrator`) is a TCP control plane on `:7100`. Workers register, receive `Spawn` / `Stop` / `Drain` commands, push `WorkerMetrics` every second.
 - **Standalone**: `--clients N --ramp-up SECONDS` skips the orchestrator entirely.
 
 Bots use deterministic per-username character profiles (`profile_for(username)` in `worker/world.rs`) so a given bot always logs into the same character. The character name format is `<HostPrefix><5RandomLowercase>` — the host prefix comes from the worker host, sourced via `gethostname` or the `LOADTEST_NAME_PREFIX` env override.
 
-The server's `WOW_AUTH_AUTO_CREATE=1` env must be set for bots to authenticate. The server is otherwise unmodified — bots speak the exact protocol the 1.12.2 client speaks.
+The auth server auto-creates accounts for any unknown username (password = username) — no server-side configuration is needed for bots to authenticate. The server is otherwise unmodified — bots speak the exact protocol the 1.12.2 client speaks.
 
 **Linux fd limit**: `ulimit -n` defaults to 1024 which caps the worker at ~510 bots during the auth-then-world transition. Raise to 65536 for any serious load test.
 

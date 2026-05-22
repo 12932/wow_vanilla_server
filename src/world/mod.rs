@@ -42,10 +42,11 @@ pub async fn world(users: crate::auth::UserCache) {
     }
 }
 
-/// Test-only defaults for `TickPacer` matching the config defaults in
-/// `[tick]` of `config.toml`. Production reads them from the config file
-/// via `TickPacer::new_from_config`; these are referenced only by the
-/// in-file `pacer_tests` module.
+/// Test-only fixtures for `TickPacer`. The production target interval
+/// (33 ms = 30 Hz) lives in `config.toml` → `[tick] target_interval_ms`
+/// and is wired in via `TickPacer::new_from_config`; these constants
+/// exist purely so `pacer_tests` can assert on a round 100→200→400→800→
+/// 1000 ms doubling sequence without floating-point timing noise.
 #[cfg(test)]
 const TARGET_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(test)]

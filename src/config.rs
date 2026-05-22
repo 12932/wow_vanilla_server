@@ -9,8 +9,8 @@
 //! stored in [`CONFIG`] (a `OnceLock`), and accessed everywhere via
 //! [`config()`]. Restart the server to apply changes.
 //!
-//! Operator-host concerns (`WOW_REALM_ADDRESS`, `WOW_AUTH_AUTO_CREATE`,
-//! `WOW_TRACY`, `RUST_LOG`) stay as env vars — they're deployment
+//! Operator-host concerns (`WOW_REALM_ADDRESS`, `WOW_TRACY`, `RUST_LOG`,
+//! `WOW_VANILLA_WORLDDB`) stay as env vars — they're deployment
 //! topology, not gameplay behavior.
 
 use serde::Deserialize;
@@ -125,7 +125,7 @@ impl NetworkConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TickConfig {
-    /// Target world-tick period in milliseconds. 100 = 10 Hz.
+    /// Target world-tick period in milliseconds. 33 = 30 Hz (default).
     pub target_interval_ms: u64,
     /// Floor on the adaptive-pacing back-off. The tick interval will
     /// double under sustained slow ticks but stop at this value.

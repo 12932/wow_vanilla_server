@@ -3381,8 +3381,9 @@ impl World {
         // If the tick blew its budget, print where the time went. One line,
         // sortable on the longest column. Lets the operator diagnose without
         // standing up Tracy. The budget is whatever `TickPacer` has settled
-        // on — at 10 Hz it's 100 ms; under sustained overload the pacer may
-        // halve us to 200 ms or further, and the WARN threshold scales with
+        // on — at the 30 Hz target it's 33 ms; under sustained overload the
+        // pacer doubles us to 66 ms, 132 ms, … up to `max_interval_ms`
+        // (1000 ms = 1 Hz by default), and the WARN threshold scales with
         // it so we don't spam log lines for ticks that are slow only relative
         // to the original target.
         let total = tick_start.elapsed();
