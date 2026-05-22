@@ -65,7 +65,7 @@ pub const GURUBASHI_ARENA: Vector3d = Vector3d { x: -13284.747, y: 116.001, z: 2
 pub fn build_race_path() -> Result<
     (
         Vec<Vector3d>,
-        Arc<Mutex<namigator::vanilla::VanillaMap>>,
+        Arc<Mutex<rustigator::vanilla::VanillaMap>>,
     ),
     String,
 > {
@@ -90,10 +90,10 @@ pub fn build_race_path() -> Result<
         .max(1);
 
     let started = std::time::Instant::now();
-    let mut map = namigator::vanilla::VanillaMap::build_gameobjects_and_map(
+    let mut map = rustigator::vanilla::VanillaMap::build_gameobjects_and_map(
         data_path,
         &output,
-        namigator::vanilla::Map::EasternKingdoms,
+        rustigator::vanilla::Map::EasternKingdoms,
         threads,
     )
     .map_err(|e| format!("VanillaMap::build_gameobjects_and_map failed: {e:?}"))?;

@@ -76,7 +76,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     // the load profile is identical from the server's POV.
     let (race_path, race_map): (
         Arc<[wow_world_messages::vanilla::Vector3d]>,
-        Option<Arc<std::sync::Mutex<namigator::vanilla::VanillaMap>>>,
+        Option<Arc<std::sync::Mutex<rustigator::vanilla::VanillaMap>>>,
     ) = if cfg.mode == BotMode::Race {
         match bot::race::build_race_path() {
             Ok((path, map)) => (path.into(), Some(map)),
