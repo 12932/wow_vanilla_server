@@ -295,7 +295,7 @@ impl MovementDriver {
     /// 1. First tick after world-enter: snap our position to `path[0] +
     ///    jitter`, flag `teleported`, send a single heartbeat. The
     ///    server trusts the new position and routes us into the
-    ///    Booty Bay region next tick. Real anticheat would reject
+    ///    Booty Bay cell next tick. Real anticheat would reject
     ///    this; the loadtest server doesn't run one.
     /// 2. Steady-state running: orient toward the current waypoint
     ///    (target = `path[index] + jitter`), advance forward at

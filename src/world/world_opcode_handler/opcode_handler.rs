@@ -196,8 +196,8 @@ pub(super) async fn handle_opcodes(
             // response in `creaturecache.wdb` keyed by entry, so
             // any one creature with this entry suffices to populate
             // the name for every spawn that shares it. Querying by
-            // guid (previous behavior) failed cross-region — the
-            // local region's slab might not contain the specific
+            // guid (previous behavior) failed cross-cell — the
+            // local cell's slab might not contain the specific
             // spawn but a neighbor's does, and the cache layer
             // doesn't care which one we resolve from.
             let template = crate::world::world_db::lookup_template(c.creature);

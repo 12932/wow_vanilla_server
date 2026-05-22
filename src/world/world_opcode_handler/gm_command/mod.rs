@@ -172,9 +172,9 @@ pub(crate) async fn gm_command(
             let caster_pos = client.character().info.position;
             let caster_map = client.character().map;
 
-            // Region-agnostic target lookup. `creatures_in_radius`
+            // Cell-agnostic target lookup. `creatures_in_radius`
             // spans the global AoI snapshot so creatures sitting
-            // just past a region boundary are still in scope.
+            // just past a cell boundary are still in scope.
             let targets: Vec<Guid> = entities
                 .creatures_in_radius(caster_pos, caster_map, RADIUS)
                 .into_iter()
@@ -182,8 +182,8 @@ pub(crate) async fn gm_command(
                 .collect();
 
             // Apply damage to each. `apply_effect` routes locally for
-            // same-region creatures and via `CrossRegionMsg::Effect`
-            // for neighbor-region ones (whose drain pushes the
+            // same-cell creatures and via `CrossCellMsg::Effect`
+            // for neighbor-cell ones (whose drain pushes the
             // KillCreature itself).
             for target_guid in &targets {
                 let outcome = entities.apply_effect(
@@ -198,9 +198,9 @@ pub(crate) async fn gm_command(
                 }
             }
 
-            // Visuals go through the cross-region-aware broadcast.
+            // Visuals go through the cross-cell-aware broadcast.
             // `broadcast_within_aoi` serializes once and posts the
-            // frame into every neighbor region's inbox via the
+            // frame into every neighbor cell's inbox via the
             // routing table — observers across the boundary see the
             // spell + damage log without needing local creature data.
             let spell_go = SMSG_SPELL_GO {
@@ -247,10 +247,10 @@ pub(crate) async fn gm_command(
             }
 
             // HP update broadcast — we don't know the post-damage
-            // health for CROSS-REGION targets (snapshot has positions
+            // health for CROSS-CELL targets (snapshot has positions
             // only, not health). Send a synthetic "took DAMAGE" for
-            // local kills the handler can observe; cross-region
-            // observers will see the HP via the neighbor region's
+            // local kills the handler can observe; cross-cell
+            // observers will see the HP via the neighbor cell's
             // own broadcast on its next tick. Acceptable lag.
             for target_guid in &targets {
                 // Resolve local target's new health if we can; skip
@@ -296,8 +296,8 @@ pub(crate) async fn gm_command(
             let caster_map = client.character().map;
             let root_until = Instant::now() + ROOT_DURATION;
 
-            // Region-agnostic find: the snapshot spans the whole world,
-            // so creatures + clients in neighbor regions across a
+            // Cell-agnostic find: the snapshot spans the whole world,
+            // so creatures + clients in neighbor cells across a
             // boundary are returned alongside local ones. Snapshot is
             // one tick stale; at 30 Hz / run speed that's ~0.2 yd of
             // position drift, well under the 14 yd nova radius.
@@ -314,10 +314,10 @@ pub(crate) async fn gm_command(
                 .collect();
 
             // Apply server-side root to every target — local or
-            // cross-region. `apply_effect` routes by guid: local
-            // mutation for same-region targets, queued
-            // `CrossRegionEffect` for neighbor-region targets (drained
-            // on the target region's next tick, ~33 ms lag).
+            // cross-cell. `apply_effect` routes by guid: local
+            // mutation for same-cell targets, queued
+            // `CrossCellEffect` for neighbor-cell targets (drained
+            // on the target cell's next tick, ~33 ms lag).
             for g in creature_hits.iter().chain(client_hits.iter()) {
                 entities.apply_effect(*g, crate::world::command::UnitEffect::Root { until: root_until });
             }
@@ -329,9 +329,9 @@ pub(crate) async fn gm_command(
                 .collect();
 
             // Spell-go visual. `broadcast_within_aoi` already does
-            // cross-region post-fanout (routes the frame through the
+            // cross-cell post-fanout (routes the frame through the
             // routing table to every neighbor inbox), so observers in
-            // neighbor regions also see the nova land. Send to caster
+            // neighbor cells also see the nova land. Send to caster
             // explicitly since `broadcast_within_aoi` excludes the
             // source from the AOI fan-out for movement opcodes — but
             // for spell visuals the caster needs to see it too.
@@ -417,8 +417,8 @@ pub(crate) async fn gm_command(
 
             // SMSG_FORCE_MOVE_ROOT is only meaningful to real WoW
             // clients (it locks their movement input). Bots ignore it.
-            // For cross-region rooted clients we can't send it
-            // directly — they're in a neighbor region's slab — so the
+            // For cross-cell rooted clients we can't send it
+            // directly — they're in a neighbor cell's slab — so the
             // server-side root takes over instead via apply_effect.
             // Local rooted clients get the SMSG path too.
             for target_guid in &client_hits {
@@ -523,28 +523,28 @@ pub(crate) async fn gm_command(
                 ))
                 .await;
         }
-        GmCommand::Regions => {
-            use crate::world::region::RegionKey;
+        GmCommand::Cells => {
+            use crate::world::cell::CellKey;
             use ahash::AHashMap;
 
-            // Bin clients and creatures into the spatial regions the
-            // Stage 3 sharding uses. Empty regions (zero players) are
-            // dropped — a GM running `.regions` cares about hot spots,
+            // Bin clients and creatures into the spatial cells the
+            // Stage 3 sharding uses. Empty cells (zero players) are
+            // dropped — a GM running `.cells` cares about hot spots,
             // not the long tail of empty buckets.
             //
             // Players come from `PLAYER_REGISTRY` (the process-wide
             // index also used by `.go PlayerName`) so the count is
-            // cross-region accurate. The requesting GM has been
-            // transiently removed from their region's slab + the
+            // cross-cell accurate. The requesting GM has been
+            // transiently removed from their cell's slab + the
             // registry for the duration of this opcode handler — so
             // we explicitly add them back to the count for their own
-            // region. Without this, `.regions` reported `players=0`
+            // cell. Without this, `.cells` reported `players=0`
             // for a GM alone in the world.
-            let mut player_counts: AHashMap<RegionKey, usize> = AHashMap::new();
-            let mut creature_counts: AHashMap<RegionKey, usize> = AHashMap::new();
-            if let Ok(reg) = crate::world::region::PLAYER_REGISTRY.lock() {
+            let mut player_counts: AHashMap<CellKey, usize> = AHashMap::new();
+            let mut creature_counts: AHashMap<CellKey, usize> = AHashMap::new();
+            if let Ok(reg) = crate::world::cell::PLAYER_REGISTRY.lock() {
                 for entry in reg.values() {
-                    let key = RegionKey::from_position(
+                    let key = CellKey::from_position(
                         entry.map,
                         entry.position.x,
                         entry.position.y,
@@ -554,7 +554,7 @@ pub(crate) async fn gm_command(
             }
             {
                 let ch = client.character();
-                let me_key = RegionKey::from_position(
+                let me_key = CellKey::from_position(
                     ch.map,
                     ch.info.position.x,
                     ch.info.position.y,
@@ -562,24 +562,24 @@ pub(crate) async fn gm_command(
                 *player_counts.entry(me_key).or_default() += 1;
             }
             // Creatures are still counted from the requesting GM's
-            // own region only — partitioning means each region owns
+            // own cell only — partitioning means each cell owns
             // its creatures slab and locking neighbors mid-tick could
-            // stall this region's tick. The visible side-effect:
-            // `.regions` shows accurate creature counts for the
-            // region the GM is in, and zero for the others. Acceptable
-            // for a debug command; a cross-region creature-count
+            // stall this cell's tick. The visible side-effect:
+            // `.cells` shows accurate creature counts for the
+            // cell the GM is in, and zero for the others. Acceptable
+            // for a debug command; a cross-cell creature-count
             // index is a future cleanup.
             for (_, cr) in entities.creatures().iter() {
-                let key = RegionKey::from_position(cr.map, cr.info.position.x, cr.info.position.y);
+                let key = CellKey::from_position(cr.map, cr.info.position.x, cr.info.position.y);
                 *creature_counts.entry(key).or_default() += 1;
             }
 
-            // Filter to regions that have at least one player, then
+            // Filter to cells that have at least one player, then
             // sort by descending player count (creature count
-            // breaks ties). A region with creatures but no players
-            // is just terrain — not interesting for a `.regions`
+            // breaks ties). A cell with creatures but no players
+            // is just terrain — not interesting for a `.cells`
             // peek.
-            let mut ranked: Vec<(RegionKey, usize, usize)> = player_counts
+            let mut ranked: Vec<(CellKey, usize, usize)> = player_counts
                 .iter()
                 .map(|(k, &p)| {
                     let c = creature_counts.get(k).copied().unwrap_or(0);
@@ -588,12 +588,12 @@ pub(crate) async fn gm_command(
                 .collect();
             ranked.sort_by_key(|&(_, p, c)| std::cmp::Reverse((p, c)));
 
-            // Snapshot per-region pacer state. The per-region tokio
+            // Snapshot per-cell pacer state. The per-cell tokio
             // tasks publish their pacer fields into this map at the
             // end of every tick; we lock briefly here and pull out
-            // what the requested regions are doing.
-            let pacer_states: ahash::AHashMap<RegionKey, crate::world::region::PacerSnapshot> =
-                crate::world::region::PACER_STATES
+            // what the requested cells are doing.
+            let pacer_states: ahash::AHashMap<CellKey, crate::world::cell::PacerSnapshot> =
+                crate::world::cell::PACER_STATES
                     .lock()
                     .ok()
                     .map(|g| g.clone())
@@ -603,8 +603,8 @@ pub(crate) async fn gm_command(
             let total_populated = ranked.len();
             client
                 .send_system_message(format!(
-                    "Regions: {total_populated} populated ({:.0}-yd each); top {} by player count",
-                    crate::world::region::region_size_yd(),
+                    "Cells: {total_populated} populated ({:.0}-yd each); top {} by player count",
+                    crate::world::cell::cell_size_yd(),
                     TOP_N.min(total_populated),
                 ))
                 .await;
@@ -629,7 +629,7 @@ pub(crate) async fn gm_command(
             }
             if total_populated > TOP_N {
                 client
-                    .send_system_message(format!("  … {} more populated regions truncated", total_populated - TOP_N))
+                    .send_system_message(format!("  … {} more populated cells truncated", total_populated - TOP_N))
                     .await;
             }
         }

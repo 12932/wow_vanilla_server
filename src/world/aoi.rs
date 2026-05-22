@@ -72,7 +72,7 @@ impl BroadcastTarget {
 }
 
 /// Lightweight position+guid snapshot of a single creature for the
-/// cross-region AoI discovery scan. Has only what the diff scan reads
+/// cross-cell AoI discovery scan. Has only what the diff scan reads
 /// — position for the radius check, guid to record in `visible_entities`
 /// and to look up in [`GlobalAoiSnapshot::create_object_by_guid`] when
 /// building the entered-objects packet.
@@ -82,41 +82,41 @@ pub struct CreatureView {
     pub position: Vector3d,
 }
 
-/// Cross-region AoI snapshot built once per `World::tick` from
-/// end-of-last-tick state. Each per-region [`tick_aoi_transitions`]
+/// Cross-cell AoI snapshot built once per `World::tick` from
+/// end-of-last-tick state. Each per-cell [`tick_aoi_transitions`]
 /// pass reads this instead of its own `broadcast_view` /
-/// `creature_cells` so observers at a region boundary discover the
+/// `creature_grid_cells` so observers at a cell boundary discover the
 /// entities past the boundary.
 ///
-/// Tradeoff vs. always-fresh: cross-region entities appear one tick
+/// Tradeoff vs. always-fresh: cross-cell entities appear one tick
 /// stale to the diff scan (33 ms at 30 Hz). Local entities are still
-/// included in the snapshot so the local-vs-cross-region treatment is
+/// included in the snapshot so the local-vs-cross-cell treatment is
 /// uniform — every observer reads from the same view.
 ///
-/// Built at the top of `World::tick`, before per-region tasks spawn,
-/// by locking each region briefly and copying out the relevant fields.
+/// Built at the top of `World::tick`, before per-cell tasks spawn,
+/// by locking each cell briefly and copying out the relevant fields.
 /// Wrapped in `Arc` for cheap distribution to the spawned tasks.
 #[derive(Debug)]
 pub struct GlobalAoiSnapshot {
-    /// Every connected client across every region.
+    /// Every connected client across every cell.
     pub broadcast_view: Vec<BroadcastTarget>,
     /// 250-yd cell-keyed creature index. Diff scan's 3×3 window
-    /// (1×CREATURE_GRID_CELL_YD) lands cleanly across region
+    /// (1×CREATURE_GRID_CELL_YD) lands cleanly across cell
     /// boundaries because the snapshot is keyed by (Map, cx, cy),
-    /// not by region.
-    pub creature_cells: AHashMap<(Map, i32, i32), Vec<CreatureView>>,
+    /// not by cell.
+    pub creature_grid_cells: AHashMap<(Map, i32, i32), Vec<CreatureView>>,
     /// Pre-built CreateObject2 for every entity (player + creature)
     /// in the snapshot. Diff scan looks up here to build
     /// `entered_objects` without needing live access to neighbor
-    /// regions' slabs.
+    /// cells' slabs.
     pub create_object_by_guid: AHashMap<Guid, Object>,
-    /// Guid → owning region. Populated for every entity present in
+    /// Guid → owning cell. Populated for every entity present in
     /// the snapshot. Used by `Entities::apply_effect` to route a
-    /// cross-region effect to the correct region's inbox without
-    /// needing the handler to know about region keys.
-    pub home_region_by_guid: AHashMap<Guid, crate::world::region::RegionKey>,
+    /// cross-cell effect to the correct cell's inbox without
+    /// needing the handler to know about cell keys.
+    pub home_cell_by_guid: AHashMap<Guid, crate::world::cell::CellKey>,
     /// Guid → (map, position, kind). O(1) lookup for handlers
-    /// that need to locate a target by guid across regions
+    /// that need to locate a target by guid across cells
     /// (combat range check, spell targeting, GM `.info`, etc.)
     /// without scanning cells or the broadcast view.
     pub entity_locations: AHashMap<Guid, EntityLocation>,
@@ -143,9 +143,9 @@ impl GlobalAoiSnapshot {
     pub fn empty() -> Self {
         Self {
             broadcast_view: Vec::new(),
-            creature_cells: AHashMap::new(),
+            creature_grid_cells: AHashMap::new(),
             create_object_by_guid: AHashMap::new(),
-            home_region_by_guid: AHashMap::new(),
+            home_cell_by_guid: AHashMap::new(),
             entity_locations: AHashMap::new(),
         }
     }
@@ -204,7 +204,7 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
     let opcode = M::OPCODE as u16;
 
     // Wrap a complete wire frame `[size_BE u16][opcode_LE u16][body]` in
-    // `Arc<[u8]>` ONCE, so the local fan-out + cross-region delivery
+    // `Arc<[u8]>` ONCE, so the local fan-out + cross-cell delivery
     // both share a single allocation. Per-recipient cost is an atomic
     // refcount bump.
     let size_for_header = (body.len() as u16).saturating_add(2);
@@ -215,7 +215,7 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
     let frame: Arc<[u8]> = Arc::from(buf);
     let frame_bytes = frame.len();
 
-    // Local fan-out: every client in the source region within AOI gets
+    // Local fan-out: every client in the source cell within AOI gets
     // a refcount-bump of the shared frame.
     for (_, c) in clients.iter_mut() {
         if c.character().map == anchor_map && within_aoi(&c.character().info.position, &anchor) {
@@ -223,29 +223,29 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
         }
     }
 
-    // ── Cross-region post-fanout ──
+    // ── Cross-cell post-fanout ──
     //
     // Mirror of the post-fanout in `broadcast_opcode_within_aoi`: any
-    // neighbor region whose interior overlaps this anchor's AOI disc
+    // neighbor cell whose interior overlaps this anchor's AOI disc
     // gets the same `Arc<[u8]>` cloned into its inbox. Neighbor's next
     // broadcast phase drains the inbox and fans out to its own clients
     // via `aoi::fanout_frame`. Used by combat / HP updates / spawn /
     // despawn — these all go through `broadcast_within_aoi`.
     //
-    // No effect when there are no neighbor regions (single-region world
-    // or anchor deep inside its region's interior).
+    // No effect when there are no neighbor cells (single-cell world
+    // or anchor deep inside its cell's interior).
     let aoi_r = crate::config::config().network.aoi_radius_yards;
-    let anchor_region = crate::world::region::RegionKey::from_position(
+    let anchor_cell = crate::world::cell::CellKey::from_position(
         anchor_map, anchor.x, anchor.y,
     );
-    let neighbors = crate::world::region::regions_within_aoi(anchor, anchor_map, aoi_r);
+    let neighbors = crate::world::cell::cells_within_aoi(anchor, anchor_map, aoi_r);
     if neighbors.len() > 1 {
-        let table = crate::world::region::routing().load();
-        for neighbor in neighbors.iter().filter(|n| **n != anchor_region) {
+        let table = crate::world::cell::routing().load();
+        for neighbor in neighbors.iter().filter(|n| **n != anchor_cell) {
             if let Some(inbox) = table.inboxes.get(neighbor) {
-                let send = inbox.cross_region_tx.try_send(
-                    crate::world::region::CrossRegionMsg::Frame(
-                        crate::world::region::CrossRegionFrame {
+                let send = inbox.cross_cell_tx.try_send(
+                    crate::world::cell::CrossCellMsg::Frame(
+                        crate::world::cell::CrossCellFrame {
                             anchor,
                             anchor_map,
                             exclude_guid: None,
@@ -256,11 +256,11 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
                 );
                 match send {
                     Ok(true) => {
-                        crate::world::region::CROSS_REGION_EMITTED
+                        crate::world::cell::CROSS_CELL_EMITTED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     Ok(false) | Err(_) => {
-                        crate::world::region::CROSS_REGION_DROPPED
+                        crate::world::cell::CROSS_CELL_DROPPED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
@@ -327,35 +327,35 @@ pub fn broadcast_opcode_within_aoi(
         targets,
     ).0;
 
-    // ── Cross-region post-fanout ──
+    // ── Cross-cell post-fanout ──
     //
-    // After the local fanout, look up the neighbor regions whose
+    // After the local fanout, look up the neighbor cells whose
     // interior intersects this broadcast's AOI disc. For each
-    // neighbor (skipping the anchor's own region), Arc::clone the
-    // frame and try_send it to that region's inbox. The receiving
-    // region drains the inbox at the top of its next broadcast phase
+    // neighbor (skipping the anchor's own cell), Arc::clone the
+    // frame and try_send it to that cell's inbox. The receiving
+    // cell drains the inbox at the top of its next broadcast phase
     // and applies the same `try_queue_frame` fan-out to its own
     // local clients.
     //
     // Until Stage 3 partition lands, the routing table is empty and
     // this is a no-op (zero allocations beyond the iterator setup —
-    // `regions_within_aoi` always returns the anchor's own region as
+    // `cells_within_aoi` always returns the anchor's own cell as
     // the first entry, and the routing-table lookup short-circuits
     // on a missing inbox).
     let aoi_r = crate::config::config().network.aoi_radius_yards;
-    let anchor_region = crate::world::region::RegionKey::from_position(
+    let anchor_cell = crate::world::cell::CellKey::from_position(
         anchor_map,
         anchor.x,
         anchor.y,
     );
-    let neighbors = crate::world::region::regions_within_aoi(anchor, anchor_map, aoi_r);
+    let neighbors = crate::world::cell::cells_within_aoi(anchor, anchor_map, aoi_r);
     if neighbors.len() > 1 {
-        let table = crate::world::region::routing().load();
-        for neighbor in neighbors.iter().filter(|n| **n != anchor_region) {
+        let table = crate::world::cell::routing().load();
+        for neighbor in neighbors.iter().filter(|n| **n != anchor_cell) {
             if let Some(inbox) = table.inboxes.get(neighbor) {
-                let send = inbox.cross_region_tx.try_send(
-                    crate::world::region::CrossRegionMsg::Frame(
-                        crate::world::region::CrossRegionFrame {
+                let send = inbox.cross_cell_tx.try_send(
+                    crate::world::cell::CrossCellMsg::Frame(
+                        crate::world::cell::CrossCellFrame {
                             anchor,
                             anchor_map,
                             exclude_guid,
@@ -366,11 +366,11 @@ pub fn broadcast_opcode_within_aoi(
                 );
                 match send {
                     Ok(true) => {
-                        crate::world::region::CROSS_REGION_EMITTED
+                        crate::world::cell::CROSS_CELL_EMITTED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     Ok(false) | Err(_) => {
-                        crate::world::region::CROSS_REGION_DROPPED
+                        crate::world::cell::CROSS_CELL_DROPPED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
@@ -391,14 +391,14 @@ fn broadcast_serialize_failed() -> (usize, usize) {
 }
 
 /// Fan-out a *pre-serialized* frame to AOI targets. Factored out of
-/// [`broadcast_opcode_within_aoi`] so the per-region cross-region
+/// [`broadcast_opcode_within_aoi`] so the per-cell cross-cell
 /// inbox drain can reuse the same parallel-filter + try_queue_frame
 /// loop without re-serializing.
 ///
 /// The caller has already produced the `Arc<[u8]>` frame (either
 /// freshly via `write_unencrypted_server` or by `Arc::clone`'ing a
-/// [`crate::world::region::CrossRegionFrame`]). `targets` is the
-/// receiving region's `broadcast_view`. Returns `(recipients,
+/// [`crate::world::cell::CrossCellFrame`]). `targets` is the
+/// receiving cell's `broadcast_view`. Returns `(recipients,
 /// frame_bytes)` so the caller can aggregate Tracy plots.
 pub fn fanout_frame(
     frame: Arc<[u8]>,

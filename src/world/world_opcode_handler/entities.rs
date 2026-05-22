@@ -23,8 +23,8 @@ pub(crate) struct Entities<'a> {
     creatures: &'a mut Slab<Creature>,
     creature_by_guid: &'a AHashMap<Guid, usize>,
     pending_movement: &'a mut AHashMap<Guid, PendingMovement>,
-    /// Cross-region view built once per tick. Lets `creatures_in_radius`
-    /// / `clients_in_radius` / `apply_effect` span regions transparently.
+    /// Cross-cell view built once per tick. Lets `creatures_in_radius`
+    /// / `clients_in_radius` / `apply_effect` span cells transparently.
     aoi_snapshot: &'a GlobalAoiSnapshot,
 }
 
@@ -92,7 +92,7 @@ impl<'a> Entities<'a> {
         self.creatures.get(key)
     }
 
-    /// Locate any entity by guid, regardless of which region it
+    /// Locate any entity by guid, regardless of which cell it
     /// lives in. Reads from the global AoI snapshot, so the
     /// position is one tick stale — acceptable for combat range
     /// checks (~0.2 yd creature drift per tick at run speed).
@@ -116,9 +116,9 @@ impl<'a> Entities<'a> {
     }
 
     /// All creatures within `radius` of `center` on `map`, across the
-    /// whole world (not just the local region). Reads from the global
+    /// whole world (not just the local cell). Reads from the global
     /// AoI snapshot built once at the top of `World::tick`, so this is
-    /// O(grid_cells × creatures_per_cell). For a 14-yd nova radius
+    /// O(grid_cells × creatures_per_grid_cell). For a 14-yd nova radius
     /// that's a single 250-yd cell window — handful of comparisons.
     pub(crate) fn creatures_in_radius(
         &self,
@@ -128,8 +128,8 @@ impl<'a> Entities<'a> {
     ) -> Vec<CreatureView> {
         use crate::world::world::CREATURE_GRID_CELL_YD;
         let r_sq = radius * radius;
-        let cell_x = (center.x / CREATURE_GRID_CELL_YD).floor() as i32;
-        let cell_y = (center.y / CREATURE_GRID_CELL_YD).floor() as i32;
+        let grid_cell_x = (center.x / CREATURE_GRID_CELL_YD).floor() as i32;
+        let grid_cell_y = (center.y / CREATURE_GRID_CELL_YD).floor() as i32;
         // 3×3 cell window — same as the AoI diff scan. Sufficient for
         // any radius up to one cell (250 yd); larger radii would need
         // a wider window. Frost nova / .swifty / any near-melee AoE
@@ -138,7 +138,7 @@ impl<'a> Entities<'a> {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 let Some(views) =
-                    self.aoi_snapshot.creature_cells.get(&(map, cell_x + dx, cell_y + dy))
+                    self.aoi_snapshot.creature_grid_cells.get(&(map, grid_cell_x + dx, grid_cell_y + dy))
                 else {
                     continue;
                 };
@@ -179,17 +179,17 @@ impl<'a> Entities<'a> {
     }
 
     /// Apply a state change to a unit by guid. Routes transparently:
-    /// - If the target lives in the local region (i.e. in this region's
+    /// - If the target lives in the local cell (i.e. in this cell's
     ///   `clients` / `creatures` slab), the effect is applied
     ///   immediately by mutating the slab.
-    /// - If the target lives in a neighbor region, a
-    ///   `CrossRegionEffect` is dispatched through the routing table
-    ///   to the target's region inbox. The receiving region drains
+    /// - If the target lives in a neighbor cell, a
+    ///   `CrossCellEffect` is dispatched through the routing table
+    ///   to the target's cell inbox. The receiving cell drains
     ///   the effect during its next tick (~33 ms lag at 30 Hz).
     ///
     /// Returns the outcome so callers can react to LOCAL deaths
     /// (e.g. push `WorldCommand::KillCreature` for the corpse +
-    /// loot pipeline). Cross-region kills are detected by the
+    /// loot pipeline). Cross-cell kills are detected by the
     /// neighbor's drain code and handled there.
     pub(crate) fn apply_effect(&mut self, guid: Guid, effect: UnitEffect) -> ApplyEffectResult {
         // Local: creatures.
@@ -206,22 +206,22 @@ impl<'a> Entities<'a> {
             apply_effect_to_client(c, &effect);
             return ApplyEffectResult::AppliedLocally { creature_died: false };
         }
-        // Cross-region: route to the target's home region inbox.
-        let Some(&home) = self.aoi_snapshot.home_region_by_guid.get(&guid) else {
+        // Cross-cell: route to the target's home cell inbox.
+        let Some(&home) = self.aoi_snapshot.home_cell_by_guid.get(&guid) else {
             return ApplyEffectResult::Unknown;
         };
-        let table = crate::world::region::routing().load();
+        let table = crate::world::cell::routing().load();
         let Some(inbox) = table.inboxes.get(&home) else {
             return ApplyEffectResult::Unknown;
         };
-        let msg = crate::world::region::CrossRegionMsg::Effect(
-            crate::world::region::CrossRegionEffect {
+        let msg = crate::world::cell::CrossCellMsg::Effect(
+            crate::world::cell::CrossCellEffect {
                 target_guid: guid,
                 effect,
             },
         );
-        if inbox.cross_region_tx.try_send(msg).is_ok() {
-            ApplyEffectResult::QueuedCrossRegion
+        if inbox.cross_cell_tx.try_send(msg).is_ok() {
+            ApplyEffectResult::QueuedCrossCell
         } else {
             ApplyEffectResult::Unknown
         }
@@ -231,24 +231,24 @@ impl<'a> Entities<'a> {
 /// Outcome of [`Entities::apply_effect`]. The handler uses
 /// `AppliedLocally { creature_died: true }` to queue a follow-up
 /// `KillCreature` command (corpse / loot / AoI broadcast already
-/// plumbed in `apply_commands`). Cross-region kills are detected
-/// inside the neighbor region's effect-inbox drain.
+/// plumbed in `apply_commands`). Cross-cell kills are detected
+/// inside the neighbor cell's effect-inbox drain.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ApplyEffectResult {
     /// Effect mutated the local slab. `creature_died` is true if
     /// the target was a creature whose health hit zero from this
     /// effect.
     AppliedLocally { creature_died: bool },
-    /// Effect was sent to the target's home region inbox.
-    QueuedCrossRegion,
+    /// Effect was sent to the target's home cell inbox.
+    QueuedCrossCell,
     /// Target guid not found anywhere (stale lookup, target
     /// logged out / despawned between snapshot build and call).
     Unknown,
 }
 
 /// Apply a `UnitEffect` to a creature directly. Only called when the
-/// creature is owned by the local region (so we have the mutable
-/// borrow). Used by `Entities::apply_effect` and by the per-region
+/// creature is owned by the local cell (so we have the mutable
+/// borrow). Used by `Entities::apply_effect` and by the per-cell
 /// effect-inbox drain.
 ///
 /// Returns `true` if the creature died from this effect (health
@@ -263,7 +263,7 @@ pub(crate) fn apply_effect_to_creature(cr: &mut Creature, effect: &UnitEffect) -
             // Freeze authoritative movement state so the next broadcast
             // emits a stopped unit. Caller is responsible for emitting
             // the MSG_MOVE_STOP_Server and the visual aura, since those
-            // need region-context (broadcast_within_aoi).
+            // need cell-context (broadcast_within_aoi).
             cr.info.flags = MovementInfo_MovementFlags::default();
             false
         }

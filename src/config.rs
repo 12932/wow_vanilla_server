@@ -95,14 +95,14 @@ pub struct NetworkConfig {
     /// spam when a player parks on the AOI boundary and strafes to
     /// oscillate a target's range membership. 0 disables.
     pub aoi_flap_cooldown_secs: u64,
-    /// Region size, in multiples of the creature spatial-grid cell
-    /// (`CREATURE_GRID_CELL_YD`, currently 250 yd). Each region runs
+    /// Cell size, in multiples of the creature spatial-grid cell
+    /// (`CREATURE_GRID_CELL_YD`, currently 250 yd). Each cell runs
     /// its own tick on a dedicated tokio task, paced independently.
-    /// Default = 4 → 1000 yd regions: AOI radius (200 yd) is 20 % of
-    /// the region, so ~36 % of broadcasts straddle a boundary and pay
-    /// the cross-region channel cost. Lower values give more spatial
-    /// isolation but more cross-region traffic. Must be ≥ 1.
-    pub region_size_cells: u32,
+    /// Default = 4 → 1000 yd cells: AOI radius (200 yd) is 20 % of
+    /// the cell, so ~36 % of broadcasts straddle a boundary and pay
+    /// the cross-cell channel cost. Lower values give more spatial
+    /// isolation but more cross-cell traffic. Must be ≥ 1.
+    pub cell_size_in_grid_cells: u32,
 }
 
 impl Default for NetworkConfig {
@@ -111,7 +111,7 @@ impl Default for NetworkConfig {
             aoi_radius_yards: 200.0,
             outbound_channel_bytes: 1024 * 1024,
             aoi_flap_cooldown_secs: 3,
-            region_size_cells: 4,
+            cell_size_in_grid_cells: 4,
         }
     }
 }
@@ -158,11 +158,11 @@ impl Default for TickConfig {
     fn default() -> Self {
         Self {
             // 30 Hz target. The adaptive pacer doubles `current_interval`
-            // under sustained load, so a slow region falls through 33 →
+            // under sustained load, so a slow cell falls through 33 →
             // 66 → 132 → 264 → 528 → 1000 ms (clamped at `max_interval_ms`),
-            // i.e. 30 → 15 → 7.5 → 3.8 → 1.9 → 1 Hz. Per-region pacers
-            // adapt independently — a hot region drops to 1 Hz while
-            // adjacent regions stay at 30 Hz.
+            // i.e. 30 → 15 → 7.5 → 3.8 → 1.9 → 1 Hz. Per-cell pacers
+            // adapt independently — a hot cell drops to 1 Hz while
+            // adjacent cells stay at 30 Hz.
             target_interval_ms: 33,
             max_interval_ms: 1000,
             slow_ema_alpha: 0.2,
