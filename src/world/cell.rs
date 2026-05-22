@@ -1,24 +1,24 @@
-//! Region geometry — the unit of tick-loop sharding.
+//! Cell geometry — the unit of tick-loop sharding.
 //!
-//! Each `RegionKey` identifies a contiguous square of the world: a
-//! `[network] region_size_cells × region_size_cells` block of the
+//! Each `CellKey` identifies a contiguous square of the world: a
+//! `[network] cell_size_in_grid_cells × cell_size_in_grid_cells` block of the
 //! creature spatial grid (`CREATURE_GRID_CELL_YD = 250 yd`), giving
-//! 1000-yd regions at the default `region_size_cells = 4`.
+//! 1000-yd cells at the default `cell_size_in_grid_cells = 4`.
 //!
-//! A player's owning region is the one whose square contains their
-//! current position. As the player walks across a region boundary the
-//! per-tick transition pass hands them off to the new region.
+//! A player's owning cell is the one whose square contains their
+//! current position. As the player walks across a cell boundary the
+//! per-tick transition pass hands them off to the new cell.
 //!
-//! AOI broadcasts can straddle region boundaries — a player anchored
-//! within `AOI_RADIUS` of a region edge needs their broadcast
-//! delivered to the neighboring region(s) too. [`regions_within_aoi`]
-//! returns the full set of regions whose interior overlaps the AOI
-//! disc around an anchor (including the anchor's own region).
+//! AOI broadcasts can straddle cell boundaries — a player anchored
+//! within `AOI_RADIUS` of a cell edge needs their broadcast
+//! delivered to the neighboring cell(s) too. [`cells_within_aoi`]
+//! returns the full set of cells whose interior overlaps the AOI
+//! disc around an anchor (including the anchor's own cell).
 //!
-//! This module also exposes the message types that cross region
-//! boundaries: [`CrossRegionMsg`] (fan-out frames from a neighbor) and
-//! [`RegionInbox`] / [`RoutingTable`] — used by `world::world` when
-//! regions actually run on separate tokio tasks.
+//! This module also exposes the message types that cross cell
+//! boundaries: [`CrossCellMsg`] (fan-out frames from a neighbor) and
+//! [`CellInbox`] / [`RoutingTable`] — used by `world::world` when
+//! cells actually run on separate tokio tasks.
 
 use arc_swap::ArcSwap;
 use std::sync::Arc;
@@ -34,32 +34,32 @@ use wow_world_messages::Guid;
 /// without dragging in `world::world`. Keep in sync.
 pub const GRID_CELL_YD: f32 = 250.0;
 
-/// Returns the region edge length in yards, derived from
-/// `config().network.region_size_cells × GRID_CELL_YD`.
+/// Returns the cell edge length in yards, derived from
+/// `config().network.cell_size_in_grid_cells × GRID_CELL_YD`.
 #[inline]
-pub fn region_size_yd() -> f32 {
-    crate::config::config().network.region_size_cells.max(1) as f32 * GRID_CELL_YD
+pub fn cell_size_yd() -> f32 {
+    crate::config::config().network.cell_size_in_grid_cells.max(1) as f32 * GRID_CELL_YD
 }
 
-/// Identifier for a region. Two regions are equal iff their `(map,
-/// rx, ry)` triple matches. `Hash` so it works as an `AHashMap` key.
+/// Identifier for a cell. Two cells are equal iff their `(map,
+/// cx, cy)` triple matches. `Hash` so it works as an `AHashMap` key.
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
-pub struct RegionKey {
+pub struct CellKey {
     pub map: Map,
-    pub rx: i32,
-    pub ry: i32,
+    pub cx: i32,
+    pub cy: i32,
 }
 
-impl std::fmt::Display for RegionKey {
+impl std::fmt::Display for CellKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Two-letter map prefix keeps the slow-tick log column narrow.
-        // `(0,0)` is the "common" region for default-spawn content.
-        write!(f, "{:?}({},{})", self.map, self.rx, self.ry)
+        // `(0,0)` is the "common" cell for default-spawn content.
+        write!(f, "{:?}({},{})", self.map, self.cx, self.cy)
     }
 }
 
-impl RegionKey {
-    /// Compute the region containing position `(x, y)` on `map`.
+impl CellKey {
+    /// Compute the cell containing position `(x, y)` on `map`.
     ///
     /// Uses `floor`, not `as i32` truncation, so positions on the
     /// negative side of the origin map to the correct cell. (`as i32`
@@ -68,47 +68,47 @@ impl RegionKey {
     /// `world/mod.rs`.)
     #[inline]
     pub fn from_position(map: Map, x: f32, y: f32) -> Self {
-        let size = region_size_yd();
+        let size = cell_size_yd();
         Self {
             map,
-            rx: (x / size).floor() as i32,
-            ry: (y / size).floor() as i32,
+            cx: (x / size).floor() as i32,
+            cy: (y / size).floor() as i32,
         }
     }
 
-    /// Inclusive AABB of this region in world-yard coords:
+    /// Inclusive AABB of this cell in world-yard coords:
     /// returns `(x_min, y_min, x_max, y_max)`.
     #[inline]
     pub fn bounds(&self) -> (f32, f32, f32, f32) {
-        let size = region_size_yd();
-        let x_min = self.rx as f32 * size;
-        let y_min = self.ry as f32 * size;
+        let size = cell_size_yd();
+        let x_min = self.cx as f32 * size;
+        let y_min = self.cy as f32 * size;
         (x_min, y_min, x_min + size, y_min + size)
     }
 }
 
-/// Return every region whose interior intersects the AOI disc of
+/// Return every cell whose interior intersects the AOI disc of
 /// radius `aoi_r` around `anchor`. Always includes the anchor's own
-/// region; appends up to 8 neighbors (4 edges + 4 corners). In
-/// practice an anchor deep in its region returns just self; anchors
+/// cell; appends up to 8 neighbors (4 edges + 4 corners). In
+/// practice an anchor deep in its cell returns just self; anchors
 /// near an edge return 2; anchors near a corner return up to 4.
 ///
 /// Output is unordered. Capped at 9 entries — bigger AOI radii than
-/// region size are nonsensical and caught by the caller as a config
-/// error (would mean every broadcast hits every region, defeating
+/// cell size are nonsensical and caught by the caller as a config
+/// error (would mean every broadcast hits every cell, defeating
 /// the purpose).
 ///
 /// Allocation: a small `Vec` is fine. At hundreds of broadcasts per
-/// tick × ~30 % cross-region rate, that's a few hundred small allocs
+/// tick × ~30 % cross-cell rate, that's a few hundred small allocs
 /// per tick — well within mimalloc's pool sweet spot. If Tracy ever
 /// flags this we can switch to a stack array or smallvec.
-pub fn regions_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> Vec<RegionKey> {
-    let self_region = RegionKey::from_position(anchor_map, anchor.x, anchor.y);
-    let (x_min, y_min, x_max, y_max) = self_region.bounds();
+pub fn cells_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> Vec<CellKey> {
+    let self_cell = CellKey::from_position(anchor_map, anchor.x, anchor.y);
+    let (x_min, y_min, x_max, y_max) = self_cell.bounds();
 
-    // Distance from anchor to each of the four edges of its region.
-    // Negative would mean "outside the region" which shouldn't happen
-    // by construction (self_region was computed FROM anchor).
+    // Distance from anchor to each of the four edges of its cell.
+    // Negative would mean "outside the cell" which shouldn't happen
+    // by construction (self_cell was computed FROM anchor).
     let to_west = anchor.x - x_min;
     let to_east = x_max - anchor.x;
     let to_south = anchor.y - y_min;
@@ -120,63 +120,63 @@ pub fn regions_within_aoi(anchor: Vector3d, anchor_map: Map, aoi_r: f32) -> Vec<
     let touches_north = to_north < aoi_r;
 
     let mut out = Vec::with_capacity(4);
-    out.push(self_region);
+    out.push(self_cell);
 
     if touches_west {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx - 1, ry: self_region.ry });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx - 1, cy: self_cell.cy });
     }
     if touches_east {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx + 1, ry: self_region.ry });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx + 1, cy: self_cell.cy });
     }
     if touches_south {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx, ry: self_region.ry - 1 });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx, cy: self_cell.cy - 1 });
     }
     if touches_north {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx, ry: self_region.ry + 1 });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx, cy: self_cell.cy + 1 });
     }
     // Corner: a corner-neighbor only matters if the AOI disc actually
     // reaches the corner (Euclidean distance), not just both edges.
-    // Without this check we'd over-deliver to a region 1.4× the AOI
+    // Without this check we'd over-deliver to a cell 1.4× the AOI
     // radius away on the diagonal — wasted work but not incorrect.
     let aoi_sq = aoi_r * aoi_r;
     let corner = |dx_yd: f32, dy_yd: f32| dx_yd * dx_yd + dy_yd * dy_yd < aoi_sq;
     if touches_west && touches_south && corner(to_west, to_south) {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx - 1, ry: self_region.ry - 1 });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx - 1, cy: self_cell.cy - 1 });
     }
     if touches_east && touches_south && corner(to_east, to_south) {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx + 1, ry: self_region.ry - 1 });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx + 1, cy: self_cell.cy - 1 });
     }
     if touches_west && touches_north && corner(to_west, to_north) {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx - 1, ry: self_region.ry + 1 });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx - 1, cy: self_cell.cy + 1 });
     }
     if touches_east && touches_north && corner(to_east, to_north) {
-        out.push(RegionKey { map: anchor_map, rx: self_region.rx + 1, ry: self_region.ry + 1 });
+        out.push(CellKey { map: anchor_map, cx: self_cell.cx + 1, cy: self_cell.cy + 1 });
     }
     out
 }
 
-/// Bucket a slab of creatures into per-region groups by
-/// [`RegionKey::from_position`]. Used by `World::with_creatures` (and
+/// Bucket a slab of creatures into per-cell groups by
+/// [`CellKey::from_position`]. Used by `World::with_creatures` (and
 /// `for_test`) to partition the worlddb's full creature slab into
-/// per-`RegionState` slabs at startup.
+/// per-`CellState` slabs at startup.
 ///
-/// Pure function: drains the input slab into `Vec`s keyed by region.
+/// Pure function: drains the input slab into `Vec`s keyed by cell.
 /// `creature.map` + `creature.info.position` determine the bucket. The
-/// caller is responsible for re-indexing each bucket into per-region
-/// `Slab<Creature>` + `creature_by_guid` + `creature_cells` data
+/// caller is responsible for re-indexing each bucket into per-cell
+/// `Slab<Creature>` + `creature_by_guid` + `creature_grid_cells` data
 /// structures.
 pub fn partition_creatures(
     slab: slab::Slab<crate::world::world_opcode_handler::creature::Creature>,
 ) -> ahash::AHashMap<
-    RegionKey,
+    CellKey,
     Vec<crate::world::world_opcode_handler::creature::Creature>,
 > {
     let mut out: ahash::AHashMap<
-        RegionKey,
+        CellKey,
         Vec<crate::world::world_opcode_handler::creature::Creature>,
     > = ahash::AHashMap::new();
     for (_, creature) in slab {
-        let key = RegionKey::from_position(
+        let key = CellKey::from_position(
             creature.map,
             creature.info.position.x,
             creature.info.position.y,
@@ -186,16 +186,16 @@ pub fn partition_creatures(
     out
 }
 
-/// A pre-serialized broadcast frame headed to a neighbor region.
+/// A pre-serialized broadcast frame headed to a neighbor cell.
 ///
-/// Built by the originating region during its broadcast phase: the
+/// Built by the originating cell during its broadcast phase: the
 /// `Arc<[u8]>` is the same one produced by the local serialize step,
-/// so the cross-region delivery is just an `Arc::clone` + an mpsc send.
-/// The receiving region's tick drains its inbox at the top of its
+/// so the cross-cell delivery is just an `Arc::clone` + an mpsc send.
+/// The receiving cell's tick drains its inbox at the top of its
 /// broadcast phase and fans out to local clients within AOI of
 /// `anchor`.
 #[derive(Debug, Clone)]
-pub struct CrossRegionFrame {
+pub struct CrossCellFrame {
     /// Anchor for the AOI filter on the receiving side.
     pub anchor: Vector3d,
     pub anchor_map: Map,
@@ -209,42 +209,42 @@ pub struct CrossRegionFrame {
     pub frame_bytes: usize,
 }
 
-/// A cross-region state-change request. Generated when a handler in
-/// region A applies an `Effect` to a guid that lives in region B; the
+/// A cross-cell state-change request. Generated when a handler in
+/// cell A applies an `Effect` to a guid that lives in cell B; the
 /// effect is dispatched through the same routing table as broadcast
 /// frames and applied during B's next tick.
 ///
 /// Lag: target sees the effect on B's next tick (~33 ms at 30 Hz).
 /// Acceptable for visible mechanics (root, damage); for tighter
-/// timing a synchronous cross-region lock path would be needed.
+/// timing a synchronous cross-cell lock path would be needed.
 #[derive(Debug, Clone)]
-pub struct CrossRegionEffect {
+pub struct CrossCellEffect {
     pub target_guid: Guid,
     pub effect: crate::world::command::UnitEffect,
 }
 
-/// Inbound message to a region. `Frame` is broadcast fan-out (movement,
+/// Inbound message to a cell. `Frame` is broadcast fan-out (movement,
 /// spell visuals, etc.). `Effect` is a state-change request the
-/// receiving region applies to one of its own entities.
+/// receiving cell applies to one of its own entities.
 #[derive(Debug, Clone)]
-pub enum CrossRegionMsg {
-    Frame(CrossRegionFrame),
-    Effect(CrossRegionEffect),
+pub enum CrossCellMsg {
+    Frame(CrossCellFrame),
+    Effect(CrossCellEffect),
 }
 
-/// Send half of a region's inbox. Cloned into the routing table and
+/// Send half of a cell's inbox. Cloned into the routing table and
 /// kept on every neighbor's outbound path.
 #[derive(Clone, Debug)]
-pub struct RegionInbox {
-    pub cross_region_tx: kanal::AsyncSender<CrossRegionMsg>,
+pub struct CellInbox {
+    pub cross_cell_tx: kanal::AsyncSender<CrossCellMsg>,
 }
 
-/// Lookup table from `RegionKey` to its inbox. Wrapped in `ArcSwap`
+/// Lookup table from `CellKey` to its inbox. Wrapped in `ArcSwap`
 /// at the call site so broadcast hot paths get lock-free reads and
-/// the rare region-spinup case is a copy-on-write swap.
+/// the rare cell-spinup case is a copy-on-write swap.
 #[derive(Default, Debug)]
 pub struct RoutingTable {
-    pub inboxes: ahash::AHashMap<RegionKey, RegionInbox>,
+    pub inboxes: ahash::AHashMap<CellKey, CellInbox>,
 }
 
 impl RoutingTable {
@@ -255,11 +255,11 @@ impl RoutingTable {
 
 /// Process-wide routing table. Hot-path readers (every broadcast hits
 /// this) get lock-free `Arc<RoutingTable>` reads via `ArcSwap::load`.
-/// Writers (region spin-up / spin-down) build a fresh table and swap.
+/// Writers (cell spin-up / spin-down) build a fresh table and swap.
 ///
 /// Returns a singleton initialized with an empty routing table on first
 /// access — until Stage 3 partition lands there are no inboxes, so the
-/// cross-region post-fanout step in `aoi::broadcast_opcode_within_aoi`
+/// cross-cell post-fanout step in `aoi::broadcast_opcode_within_aoi`
 /// finds zero neighbors and is a no-op.
 pub fn routing() -> &'static ArcSwap<RoutingTable> {
     static ROUTING: OnceLock<ArcSwap<RoutingTable>> = OnceLock::new();
@@ -273,33 +273,33 @@ pub fn install_routing(table: RoutingTable) {
     routing().store(Arc::new(table));
 }
 
-// ── Cross-region broadcast metrics ──
+// ── Cross-cell broadcast metrics ──
 //
 // Sampled and zeroed once per global tick. Emitted as Tracy plots so
 // the dashboard shows how much of the broadcast traffic is paying the
-// cross-region channel cost. Until partition lands these stay at 0
+// cross-cell channel cost. Until partition lands these stay at 0
 // because the routing table holds no neighbor inboxes.
 
-/// Bumped each time `regions_within_aoi` returns a non-self neighbor
+/// Bumped each time `cells_within_aoi` returns a non-self neighbor
 /// that we successfully `try_send` a frame to. Counts SENDS, not
 /// recipients on the neighbor side.
-pub static CROSS_REGION_EMITTED: AtomicU64 = AtomicU64::new(0);
+pub static CROSS_CELL_EMITTED: AtomicU64 = AtomicU64::new(0);
 
 /// Bumped when a `try_send` to a neighbor's inbox fails — typically
 /// because the receiver is overloaded (full unbounded channel is
 /// impossible, but a bounded version would track this; useful
 /// scaffold).
-pub static CROSS_REGION_DROPPED: AtomicU64 = AtomicU64::new(0);
+pub static CROSS_CELL_DROPPED: AtomicU64 = AtomicU64::new(0);
 
-/// Bumped per `CrossRegionMsg` the receiving region drains from its
+/// Bumped per `CrossCellMsg` the receiving cell drains from its
 /// inbox during its broadcast phase. Populated by the receiver, not
-/// the sender — pairs with `CROSS_REGION_EMITTED` to show transport
+/// the sender — pairs with `CROSS_CELL_EMITTED` to show transport
 /// throughput and any backlog.
-pub static CROSS_REGION_DRAINED: AtomicU64 = AtomicU64::new(0);
+pub static CROSS_CELL_DRAINED: AtomicU64 = AtomicU64::new(0);
 
-/// Per-region pacer state snapshot. Updated by each per-region tokio
-/// task at the end of its tick; read by the `.regions` GM command.
-/// Kept here (rather than reaching into `World::regions` from the GM
+/// Per-cell pacer state snapshot. Updated by each per-cell tokio
+/// task at the end of its tick; read by the `.cells` GM command.
+/// Kept here (rather than reaching into `World::cells` from the GM
 /// handler) so the handler signature doesn't need to grow another
 /// parameter and so reads are O(1) under a brief Mutex lock.
 #[derive(Debug, Clone)]
@@ -310,28 +310,28 @@ pub struct PacerSnapshot {
     pub last_tick_ms: u64,
 }
 
-/// Process-wide map of per-region pacer state. The per-region task
-/// writes its key at the end of every tick; the `.regions` GM command
+/// Process-wide map of per-cell pacer state. The per-cell task
+/// writes its key at the end of every tick; the `.cells` GM command
 /// reads it. Locked briefly only — no contention with the hot tick
 /// path.
 pub static PACER_STATES: std::sync::LazyLock<
-    std::sync::Mutex<ahash::AHashMap<RegionKey, PacerSnapshot>>,
+    std::sync::Mutex<ahash::AHashMap<CellKey, PacerSnapshot>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(ahash::AHashMap::new()));
 
 /// Convenience: publish a fresh snapshot for `key`. Called by the
-/// per-region task; cheap (allocates only on first call per region).
-pub fn publish_pacer_state(key: RegionKey, snap: PacerSnapshot) {
+/// per-cell task; cheap (allocates only on first call per cell).
+pub fn publish_pacer_state(key: CellKey, snap: PacerSnapshot) {
     if let Ok(mut guard) = PACER_STATES.lock() {
         guard.insert(key, snap);
     }
 }
 
 /// Process-wide registry of in-world player positions. Maintained by
-/// every `RegionState::insert_client` / `remove_client` so the GM
-/// command parser can answer ".go PlayerName" cross-region without
-/// having to lock every region's mutex from the GM's region.
+/// every `CellState::insert_client` / `remove_client` so the GM
+/// command parser can answer ".go PlayerName" cross-cell without
+/// having to lock every cell's mutex from the GM's cell.
 ///
-/// Entries are best-effort: a player mid-transition (left region A
+/// Entries are best-effort: a player mid-transition (left cell A
 /// but not yet admitted to B) may briefly be absent. The `.go`
 /// command surfaces this as "Unable to find player 'X'", which is the
 /// natural error today as well.
@@ -355,7 +355,7 @@ pub static PLAYER_NAME_INDEX: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(ahash::AHashMap::new()));
 
 /// Register or refresh a player's entry in both indexes. Called by
-/// `RegionState::insert_client` after the slab insert succeeds.
+/// `CellState::insert_client` after the slab insert succeeds.
 pub fn register_player(entry: PlayerRegistryEntry) {
     let name_lc = entry.name.to_lowercase();
     let guid = entry.guid;
@@ -368,7 +368,7 @@ pub fn register_player(entry: PlayerRegistryEntry) {
 }
 
 /// Drop a player from both indexes. Called by
-/// `RegionState::remove_client`. No-op if the player isn't registered
+/// `CellState::remove_client`. No-op if the player isn't registered
 /// (e.g. if the caller forgot to register them on insert — defensive,
 /// not load-bearing).
 pub fn unregister_player(guid: Guid) {
@@ -387,7 +387,7 @@ pub fn unregister_player(guid: Guid) {
 }
 
 /// Look up a player's position by guid. Used by `.go` (no args, with
-/// selected target) when the target isn't in the GM's local region.
+/// selected target) when the target isn't in the GM's local cell.
 pub fn lookup_player_position(guid: Guid) -> Option<(Map, Vector3d, f32)> {
     let reg = PLAYER_REGISTRY.lock().ok()?;
     reg.get(&guid).map(|e| (e.map, e.position, e.orientation))
@@ -420,70 +420,70 @@ mod tests {
         Vector3d { x, y, z: 0.0 }
     }
 
-    // Tests rely on default `region_size_cells = 4` → 1000-yd region
+    // Tests rely on default `cell_size_in_grid_cells = 4` → 1000-yd cell
     // and `aoi_radius_yards = 200`. If those defaults shift, update
     // these expectations.
-    const REGION: f32 = 1000.0;
+    const CELL: f32 = 1000.0;
     const AOI: f32 = 200.0;
 
     #[test]
-    fn region_of_origin_is_zero() {
-        let r = RegionKey::from_position(Map::EasternKingdoms, 0.0, 0.0);
-        assert_eq!((r.rx, r.ry), (0, 0));
+    fn cell_of_origin_is_zero() {
+        let r = CellKey::from_position(Map::EasternKingdoms, 0.0, 0.0);
+        assert_eq!((r.cx, r.cy), (0, 0));
     }
 
     #[test]
-    fn region_of_positive_inside_first() {
-        let r = RegionKey::from_position(Map::EasternKingdoms, REGION - 0.01, REGION - 0.01);
-        assert_eq!((r.rx, r.ry), (0, 0));
+    fn cell_of_positive_inside_first() {
+        let r = CellKey::from_position(Map::EasternKingdoms, CELL - 0.01, CELL - 0.01);
+        assert_eq!((r.cx, r.cy), (0, 0));
     }
 
     #[test]
-    fn region_of_boundary_promotes_to_next() {
+    fn cell_of_boundary_promotes_to_next() {
         // Exactly on the boundary lands in the higher cell —
         // floor(1000/1000) = 1.
-        let r = RegionKey::from_position(Map::EasternKingdoms, REGION, 0.0);
-        assert_eq!(r.rx, 1);
+        let r = CellKey::from_position(Map::EasternKingdoms, CELL, 0.0);
+        assert_eq!(r.cx, 1);
     }
 
     #[test]
-    fn region_of_small_negative_lands_minus_one() {
+    fn cell_of_small_negative_lands_minus_one() {
         // Regression guard against the floor-vs-truncate trap that
         // `as i32` alone would fall into.
-        let r = RegionKey::from_position(Map::EasternKingdoms, -0.01, -0.01);
-        assert_eq!((r.rx, r.ry), (-1, -1));
+        let r = CellKey::from_position(Map::EasternKingdoms, -0.01, -0.01);
+        assert_eq!((r.cx, r.cy), (-1, -1));
     }
 
     #[test]
-    fn region_of_preserves_map() {
-        let r = RegionKey::from_position(Map::Kalimdor, 100.0, 200.0);
+    fn cell_of_preserves_map() {
+        let r = CellKey::from_position(Map::Kalimdor, 100.0, 200.0);
         assert_eq!(r.map, Map::Kalimdor);
     }
 
     #[test]
     fn bounds_round_trip() {
-        let r = RegionKey { map: Map::EasternKingdoms, rx: 3, ry: -2 };
+        let r = CellKey { map: Map::EasternKingdoms, cx: 3, cy: -2 };
         let (x_min, y_min, x_max, y_max) = r.bounds();
         assert_eq!((x_min, y_min, x_max, y_max), (3000.0, -2000.0, 4000.0, -1000.0));
     }
 
     #[test]
-    fn aoi_anchor_deep_in_region_returns_only_self() {
-        // Anchor at the center of region (0,0). AOI=200, distance to
+    fn aoi_anchor_deep_in_cell_returns_only_self() {
+        // Anchor at the center of cell (0,0). AOI=200, distance to
         // nearest edge is 500 — well outside, no neighbors triggered.
-        let out = regions_within_aoi(v(500.0, 500.0), Map::EasternKingdoms, AOI);
+        let out = cells_within_aoi(v(500.0, 500.0), Map::EasternKingdoms, AOI);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0], RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 });
+        assert_eq!(out[0], CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 });
     }
 
     #[test]
     fn aoi_anchor_near_west_edge_picks_up_west_neighbor() {
-        // 100 yd from west edge of region (0,0). AOI=200 reaches into
+        // 100 yd from west edge of cell (0,0). AOI=200 reaches into
         // (-1,0). No corner neighbors.
-        let out = regions_within_aoi(v(100.0, 500.0), Map::EasternKingdoms, AOI);
+        let out = cells_within_aoi(v(100.0, 500.0), Map::EasternKingdoms, AOI);
         assert_eq!(out.len(), 2);
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: 0 }));
     }
 
     #[test]
@@ -491,12 +491,12 @@ mod tests {
         // 150 yd from south edge AND 150 yd from west edge.
         // Manhattan distance to the SW corner is 300 yd; Euclidean
         // ~212 yd > 200 → corner neighbor is NOT included.
-        let out = regions_within_aoi(v(150.0, 150.0), Map::EasternKingdoms, AOI);
+        let out = cells_within_aoi(v(150.0, 150.0), Map::EasternKingdoms, AOI);
         assert_eq!(out.len(), 3);
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: 0 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: -1 }));
-        assert!(!out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: -1 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: -1 }));
+        assert!(!out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: -1 }));
     }
 
     #[test]
@@ -504,25 +504,25 @@ mod tests {
         // 50 yd from south edge AND 50 yd from west edge.
         // Corner is ~70.7 yd Euclidean → inside AOI → diagonal
         // neighbor is included.
-        let out = regions_within_aoi(v(50.0, 50.0), Map::EasternKingdoms, AOI);
+        let out = cells_within_aoi(v(50.0, 50.0), Map::EasternKingdoms, AOI);
         assert_eq!(out.len(), 4);
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: 0 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: -1 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: -1 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: -1 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: -1 }));
     }
 
     #[test]
     fn aoi_at_negative_coords() {
-        // Anchor at (-50, -50) lives in region (-1, -1). Anchor is
-        // 50 yd from EAST and NORTH edges of that region (since the
-        // region spans -1000..0). NE corner of (-1,-1) is at (0,0);
+        // Anchor at (-50, -50) lives in cell (-1, -1). Anchor is
+        // 50 yd from EAST and NORTH edges of that cell (since the
+        // cell spans -1000..0). NE corner of (-1,-1) is at (0,0);
         // distance ~70.7 < 200 → NE diagonal included.
-        let out = regions_within_aoi(v(-50.0, -50.0), Map::EasternKingdoms, AOI);
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: -1 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: -1 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: -1, ry: 0 }));
-        assert!(out.contains(&RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 }));
+        let out = cells_within_aoi(v(-50.0, -50.0), Map::EasternKingdoms, AOI);
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: -1 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: -1 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: -1, cy: 0 }));
+        assert!(out.contains(&CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 }));
         assert_eq!(out.len(), 4);
     }
 
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn partition_creatures_buckets_by_position() {
-        // Three creatures in three distinct REGION (1000-yd) buckets on
+        // Three creatures in three distinct CELL (1000-yd) buckets on
         // EasternKingdoms: (0,0), (1,0), (0,1). After partition each
         // bucket should hold exactly its one creature.
         let mut slab: Slab<Creature> = Slab::new();
@@ -554,9 +554,9 @@ mod tests {
         let buckets = partition_creatures(slab);
 
         assert_eq!(buckets.len(), 3);
-        let r00 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
-        let r10 = RegionKey { map: Map::EasternKingdoms, rx: 1, ry: 0 };
-        let r01 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 1 };
+        let r00 = CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 };
+        let r10 = CellKey { map: Map::EasternKingdoms, cx: 1, cy: 0 };
+        let r01 = CellKey { map: Map::EasternKingdoms, cx: 0, cy: 1 };
         assert_eq!(buckets.get(&r00).map(Vec::len), Some(1));
         assert_eq!(buckets.get(&r10).map(Vec::len), Some(1));
         assert_eq!(buckets.get(&r01).map(Vec::len), Some(1));
@@ -566,16 +566,16 @@ mod tests {
     fn partition_creatures_handles_negative_coords() {
         // Gurubashi Arena position lands in (-14, 0), not the (-13, 0)
         // that truncate-toward-zero would yield. Guards the `floor()`
-        // path in `RegionKey::from_position`.
+        // path in `CellKey::from_position`.
         let mut slab: Slab<Creature> = Slab::new();
         slab.insert(make_creature_at(7, Map::EasternKingdoms, -13206.0, 272.0));
 
         let buckets = partition_creatures(slab);
 
-        let gurubashi = RegionKey { map: Map::EasternKingdoms, rx: -14, ry: 0 };
+        let gurubashi = CellKey { map: Map::EasternKingdoms, cx: -14, cy: 0 };
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets.get(&gurubashi).map(Vec::len), Some(1));
-        let not_truncated = RegionKey { map: Map::EasternKingdoms, rx: -13, ry: 0 };
+        let not_truncated = CellKey { map: Map::EasternKingdoms, cx: -13, cy: 0 };
         assert!(
             !buckets.contains_key(&not_truncated),
             "creature at -13206 should not land in (-13, 0)"
@@ -590,8 +590,8 @@ mod tests {
     }
 
     #[test]
-    fn partition_creatures_groups_multiple_in_same_region() {
-        // Two creatures in the same 1000-yd region should land in one
+    fn partition_creatures_groups_multiple_in_same_cell() {
+        // Two creatures in the same 1000-yd cell should land in one
         // bucket of size 2; confirms `entry(...).or_default().push(...)`.
         let mut slab: Slab<Creature> = Slab::new();
         slab.insert(make_creature_at(1, Map::EasternKingdoms, 100.0, 100.0));
@@ -599,7 +599,7 @@ mod tests {
 
         let buckets = partition_creatures(slab);
 
-        let r00 = RegionKey { map: Map::EasternKingdoms, rx: 0, ry: 0 };
+        let r00 = CellKey { map: Map::EasternKingdoms, cx: 0, cy: 0 };
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets.get(&r00).map(Vec::len), Some(2));
     }
@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn partition_creatures_separates_by_map() {
         // Same (x, y) on different maps must produce different
-        // RegionKeys.
+        // CellKeys.
         let mut slab: Slab<Creature> = Slab::new();
         slab.insert(make_creature_at(1, Map::EasternKingdoms, 100.0, 100.0));
         slab.insert(make_creature_at(2, Map::Kalimdor, 100.0, 100.0));
@@ -615,11 +615,11 @@ mod tests {
         let buckets = partition_creatures(slab);
 
         assert_eq!(buckets.len(), 2);
-        assert!(buckets.contains_key(&RegionKey {
-            map: Map::EasternKingdoms, rx: 0, ry: 0,
+        assert!(buckets.contains_key(&CellKey {
+            map: Map::EasternKingdoms, cx: 0, cy: 0,
         }));
-        assert!(buckets.contains_key(&RegionKey {
-            map: Map::Kalimdor, rx: 0, ry: 0,
+        assert!(buckets.contains_key(&CellKey {
+            map: Map::Kalimdor, cx: 0, cy: 0,
         }));
     }
 }

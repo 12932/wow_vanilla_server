@@ -3,7 +3,7 @@ mod character_screen_handler;
 pub mod command;
 pub mod database;
 pub mod net_stats;
-pub mod region;
+pub mod cell;
 pub mod update_object;
 pub mod world_db;
 #[allow(clippy::module_inception)]
@@ -55,8 +55,8 @@ const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 /// per tick. Game logic must use wall-clock `dt`, never the pacer's
 /// interval directly, because the interval changes at runtime.
 ///
-/// Stage 4: this struct also lives per-region (one `TickPacer` per
-/// `RegionState`) so `.regions` can show the per-region adaptive
+/// Stage 4: this struct also lives per-cell (one `TickPacer` per
+/// `CellState`) so `.cells` can show the per-cell adaptive
 /// state — `current_interval`, `slow_ema` — independent of the global
 /// pacer in `run_world`.
 #[derive(Debug, Clone)]
@@ -264,9 +264,9 @@ async fn run_world(clients_waiting_to_join: mpsc::Receiver<CharacterScreenClient
 
         let (sleep_for, change) = pacer.observe(tick_duration);
         // The GLOBAL pacer transition is no longer chat-broadcast to
-        // every player — per-region pacers now emit their own
-        // region-scoped messages (only to players in the affected
-        // region). The orchestrator-level rate is just logged so the
+        // every player — per-cell pacers now emit their own
+        // cell-scoped messages (only to players in the affected
+        // cell). The orchestrator-level rate is just logged so the
         // operator can see it via `RUST_LOG=info` / tracing.
         if let Some(change) = change {
             match change {

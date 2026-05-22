@@ -276,26 +276,26 @@ fn bench_tick_aoi_transitions(c: &mut Criterion) {
                             // Bench uses `make_position`/`make_character`
                             // which clusters characters near the origin
                             // (CLUSTER_RADIUS = 50yd), so they all fall
-                            // into region (0, 0) on EasternKingdoms.
-                            // Stage 5 partition: look up that region
+                            // into cell (0, 0) on EasternKingdoms.
+                            // Stage 5 partition: look up that cell
                             // directly instead of the deleted
-                            // `primary_region()` sentinel.
-                            let key = wow_vanilla_server::world::region::RegionKey {
+                            // `primary_cell()` sentinel.
+                            let key = wow_vanilla_server::world::cell::CellKey {
                                 map: BENCH_MAP,
-                                rx: 0,
-                                ry: 0,
+                                cx: 0,
+                                cy: 0,
                             };
-                            let region_arc = world
-                                .regions
+                            let cell_arc = world
+                                .cells
                                 .get(&key)
-                                .expect("bench cluster region (0,0) should exist")
+                                .expect("bench cluster cell (0,0) should exist")
                                 .clone();
                             // Empty snapshot is fine for this micro-bench
                             // — it measures the diff-scan loop, not
-                            // cross-region discovery.
+                            // cross-cell discovery.
                             let snap = wow_vanilla_server::world::aoi::GlobalAoiSnapshot::empty();
-                            let mut region = region_arc.lock().await;
-                            let _ = region.tick_aoi_transitions(&snap).await;
+                            let mut cell = cell_arc.lock().await;
+                            let _ = cell.tick_aoi_transitions(&snap).await;
                         });
                     },
                     BatchSize::PerIteration,

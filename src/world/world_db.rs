@@ -15,8 +15,8 @@ use wow_world_messages::Guid;
 /// `CMSG_CREATURE_QUERY` correctly. The client caches the response
 /// keyed by entry in `creaturecache.wdb`, so populating this once at
 /// worlddb load lets the handler resolve every entry in the game
-/// regardless of which region a specific spawn lives in — fixing the
-/// cross-region "Unknown" placeholder names that show up after a
+/// regardless of which cell a specific spawn lives in — fixing the
+/// cross-cell "Unknown" placeholder names that show up after a
 /// partition boundary.
 #[derive(Debug, Clone)]
 pub struct CreatureTemplate {

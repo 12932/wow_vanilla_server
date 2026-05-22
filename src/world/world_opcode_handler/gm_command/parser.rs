@@ -26,7 +26,7 @@ pub(crate) enum GmCommand {
     ShouldNotHaveLineOfSight(Guid),
     Swifty,
     Players,
-    Regions,
+    Cells,
 }
 
 impl GmCommand {
@@ -74,10 +74,10 @@ impl GmCommand {
                 match coordinates.as_slice() {
                     [] => {
                         // `.go` with no args: use the GM's selected
-                        // target. Look in the GM's local region first
+                        // target. Look in the GM's local cell first
                         // (fast path); fall back to the process-wide
                         // player registry so a target in a neighbor
-                        // region resolves correctly.
+                        // cell resolves correctly.
                         let target = client.character().target;
                         if target.is_zero() {
                             return Err(
@@ -87,7 +87,7 @@ impl GmCommand {
                         if let Some(pos) = entities.find_position(target) {
                             return Ok(Self::Teleport(pos));
                         }
-                        crate::world::region::lookup_player_position(target)
+                        crate::world::cell::lookup_player_position(target)
                             .map(|(map, p, orientation)| Self::Teleport(Position {
                                 map,
                                 x: p.x,
@@ -100,7 +100,7 @@ impl GmCommand {
                             })
                     }
                     [name] => {
-                        // `.go <name>`: cross-region lookup by name.
+                        // `.go <name>`: cross-cell lookup by name.
                         // Pre-Stage-5 the [name] branch silently used
                         // `client.character().target` (which made
                         // `.go SomeOnlinePlayer` indistinguishable
@@ -108,7 +108,7 @@ impl GmCommand {
                         // resolves the name against the global
                         // player registry.
                         let name_lc = name.to_lowercase();
-                        crate::world::region::lookup_player_position_by_name(&name_lc)
+                        crate::world::cell::lookup_player_position_by_name(&name_lc)
                             .map(|(map, p, orientation)| Self::Teleport(Position {
                                 map,
                                 x: p.x,
@@ -244,7 +244,7 @@ impl GmCommand {
             "nolos" => Ok(Self::ShouldNotHaveLineOfSight(client.character().target)),
             "swifty" => Ok(Self::Swifty),
             "players" | "playercount" => Ok(Self::Players),
-            "regions" => Ok(Self::Regions),
+            "cells" => Ok(Self::Cells),
             _ => Err(format!("Invalid GM command: {message}")),
         }
     }
