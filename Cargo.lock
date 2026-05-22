@@ -1279,6 +1279,7 @@ dependencies = [
 [[package]]
 name = "landmark"
 version = "0.1.0"
+source = "git+https://github.com/wowemulation-dev/recast-rs?rev=b90f3730adc69732d37d4cff821a7db87a596fc1#b90f3730adc69732d37d4cff821a7db87a596fc1"
 dependencies = [
  "glam 0.30.10",
  "landmark-common",
@@ -1290,6 +1291,7 @@ dependencies = [
 [[package]]
 name = "landmark-common"
 version = "0.1.0"
+source = "git+https://github.com/wowemulation-dev/recast-rs?rev=b90f3730adc69732d37d4cff821a7db87a596fc1#b90f3730adc69732d37d4cff821a7db87a596fc1"
 dependencies = [
  "glam 0.30.10",
  "log",
@@ -2217,6 +2219,7 @@ dependencies = [
 [[package]]
 name = "rustigator"
 version = "0.1.0"
+source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "glam 0.30.10",
  "rustigator-mapbuild",
@@ -2231,6 +2234,7 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
+source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "ahash",
  "bincode",
@@ -2249,6 +2253,7 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
+source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "ahash",
  "byteorder",
@@ -2267,6 +2272,7 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
+source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "ahash",
  "bincode",
@@ -2283,6 +2289,7 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
+source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "bincode",
  "byteorder",
@@ -2997,6 +3004,7 @@ dependencies = [
 [[package]]
 name = "waymark"
 version = "0.1.0"
+source = "git+https://github.com/wowemulation-dev/recast-rs?rev=b90f3730adc69732d37d4cff821a7db87a596fc1#b90f3730adc69732d37d4cff821a7db87a596fc1"
 dependencies = [
  "bitflags",
  "byteorder",
