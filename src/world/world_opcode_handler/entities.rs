@@ -126,10 +126,9 @@ impl<'a> Entities<'a> {
         map: Map,
         radius: f32,
     ) -> Vec<CreatureView> {
-        use crate::world::world::CREATURE_GRID_CELL_YD;
         let r_sq = radius * radius;
-        let grid_cell_x = (center.x / CREATURE_GRID_CELL_YD).floor() as i32;
-        let grid_cell_y = (center.y / CREATURE_GRID_CELL_YD).floor() as i32;
+        let (grid_cell_x, grid_cell_y) =
+            crate::world::world::grid_cell_for(center.x, center.y);
         // 3×3 cell window — same as the AoI diff scan. Sufficient for
         // any radius up to one cell (250 yd); larger radii would need
         // a wider window. Frost nova / .swifty / any near-melee AoE
@@ -265,10 +264,12 @@ pub(crate) fn apply_effect_to_creature(cr: &mut Creature, effect: &UnitEffect) -
             // the MSG_MOVE_STOP_Server and the visual aura, since those
             // need cell-context (broadcast_within_aoi).
             cr.info.flags = MovementInfo_MovementFlags::default();
+            cr.invalidate_object_cache();
             false
         }
         UnitEffect::Damage { amount } => {
             cr.health = cr.health.saturating_sub(*amount);
+            cr.invalidate_object_cache();
             cr.health == 0
         }
     }

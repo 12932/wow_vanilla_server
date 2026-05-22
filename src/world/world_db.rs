@@ -282,6 +282,7 @@ pub fn load_creatures(sqlite_path: &str) -> rusqlite::Result<Slab<Creature>> {
             life_state: crate::world::world_opcode_handler::creature::CreatureLifeState::Alive,
             last_alive_at: now,
             respawn_delay: initial_respawn_delay(),
+            cached_create_object: arc_swap::ArcSwapOption::from(None),
         });
     }
 

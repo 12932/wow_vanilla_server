@@ -109,7 +109,13 @@ pub struct GlobalAoiSnapshot {
     /// in the snapshot. Diff scan looks up here to build
     /// `entered_objects` without needing live access to neighbor
     /// cells' slabs.
-    pub create_object_by_guid: AHashMap<Guid, Object>,
+    ///
+    /// Stored as `Arc<Object>` so the snapshot build can share
+    /// `Creature::cached_create_object` allocations across ticks
+    /// (idle creatures' wire payloads survive cache hits as Arc
+    /// clones) and so the consumer reading this map pays only an
+    /// atomic refcount bump per lookup, not a deep clone.
+    pub create_object_by_guid: AHashMap<Guid, Arc<Object>>,
     /// Guid → owning cell. Populated for every entity present in
     /// the snapshot. Used by `Entities::apply_effect` to route a
     /// cross-cell effect to the correct cell's inbox without
@@ -223,50 +229,15 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
         }
     }
 
-    // ── Cross-cell post-fanout ──
-    //
-    // Mirror of the post-fanout in `broadcast_opcode_within_aoi`: any
-    // neighbor cell whose interior overlaps this anchor's AOI disc
-    // gets the same `Arc<[u8]>` cloned into its inbox. Neighbor's next
-    // broadcast phase drains the inbox and fans out to its own clients
-    // via `aoi::fanout_frame`. Used by combat / HP updates / spawn /
-    // despawn — these all go through `broadcast_within_aoi`.
-    //
-    // No effect when there are no neighbor cells (single-cell world
-    // or anchor deep inside its cell's interior).
-    let aoi_r = crate::config::config().network.aoi_radius_yards;
-    let anchor_cell = crate::world::cell::CellKey::from_position(
-        anchor_map, anchor.x, anchor.y,
+    // Cross-cell post-fanout: clone the same `Arc<[u8]>` into every
+    // neighbor cell whose interior overlaps this anchor's AOI disc.
+    crate::world::cell::dispatch_cross_cell_frame(
+        anchor,
+        anchor_map,
+        None,
+        frame,
+        frame_bytes,
     );
-    let neighbors = crate::world::cell::cells_within_aoi(anchor, anchor_map, aoi_r);
-    if neighbors.len() > 1 {
-        let table = crate::world::cell::routing().load();
-        for neighbor in neighbors.iter().filter(|n| **n != anchor_cell) {
-            if let Some(inbox) = table.inboxes.get(neighbor) {
-                let send = inbox.cross_cell_tx.try_send(
-                    crate::world::cell::CrossCellMsg::Frame(
-                        crate::world::cell::CrossCellFrame {
-                            anchor,
-                            anchor_map,
-                            exclude_guid: None,
-                            frame: Arc::clone(&frame),
-                            frame_bytes,
-                        },
-                    ),
-                );
-                match send {
-                    Ok(true) => {
-                        crate::world::cell::CROSS_CELL_EMITTED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    Ok(false) | Err(_) => {
-                        crate::world::cell::CROSS_CELL_DROPPED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Broadcast a [`ServerOpcodeMessage`] (the enum) to every client in AOI,
@@ -327,56 +298,15 @@ pub fn broadcast_opcode_within_aoi(
         targets,
     ).0;
 
-    // ── Cross-cell post-fanout ──
-    //
-    // After the local fanout, look up the neighbor cells whose
-    // interior intersects this broadcast's AOI disc. For each
-    // neighbor (skipping the anchor's own cell), Arc::clone the
-    // frame and try_send it to that cell's inbox. The receiving
-    // cell drains the inbox at the top of its next broadcast phase
-    // and applies the same `try_queue_frame` fan-out to its own
-    // local clients.
-    //
-    // Until Stage 3 partition lands, the routing table is empty and
-    // this is a no-op (zero allocations beyond the iterator setup —
-    // `cells_within_aoi` always returns the anchor's own cell as
-    // the first entry, and the routing-table lookup short-circuits
-    // on a missing inbox).
-    let aoi_r = crate::config::config().network.aoi_radius_yards;
-    let anchor_cell = crate::world::cell::CellKey::from_position(
+    // Cross-cell post-fanout: deliver the same `Arc<[u8]>` to neighbor
+    // cells whose interior intersects this anchor's AOI disc.
+    crate::world::cell::dispatch_cross_cell_frame(
+        anchor,
         anchor_map,
-        anchor.x,
-        anchor.y,
+        exclude_guid,
+        frame,
+        frame_bytes,
     );
-    let neighbors = crate::world::cell::cells_within_aoi(anchor, anchor_map, aoi_r);
-    if neighbors.len() > 1 {
-        let table = crate::world::cell::routing().load();
-        for neighbor in neighbors.iter().filter(|n| **n != anchor_cell) {
-            if let Some(inbox) = table.inboxes.get(neighbor) {
-                let send = inbox.cross_cell_tx.try_send(
-                    crate::world::cell::CrossCellMsg::Frame(
-                        crate::world::cell::CrossCellFrame {
-                            anchor,
-                            anchor_map,
-                            exclude_guid,
-                            frame: Arc::clone(&frame),
-                            frame_bytes,
-                        },
-                    ),
-                );
-                match send {
-                    Ok(true) => {
-                        crate::world::cell::CROSS_CELL_EMITTED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    Ok(false) | Err(_) => {
-                        crate::world::cell::CROSS_CELL_DROPPED
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            }
-        }
-    }
     (recipients, frame_bytes)
 }
 

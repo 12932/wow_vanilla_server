@@ -55,10 +55,9 @@ const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 /// per tick. Game logic must use wall-clock `dt`, never the pacer's
 /// interval directly, because the interval changes at runtime.
 ///
-/// Stage 4: this struct also lives per-cell (one `TickPacer` per
-/// `CellState`) so `.cells` can show the per-cell adaptive
-/// state — `current_interval`, `slow_ema` — independent of the global
-/// pacer in `run_world`.
+/// Lives both globally (in `run_world`) and per-cell (one `TickPacer`
+/// per `CellState`) so `.cells` can show the per-cell adaptive state —
+/// `current_interval`, `slow_ema` — independent of the global pacer.
 #[derive(Debug, Clone)]
 pub(crate) struct TickPacer {
     pub(crate) target_interval: Duration,

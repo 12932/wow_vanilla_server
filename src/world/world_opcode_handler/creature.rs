@@ -1,3 +1,5 @@
+use arc_swap::ArcSwapOption;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wow_world_base::movement::{DEFAULT_RUNNING_SPEED, DEFAULT_TURN_SPEED};
 use wow_world_base::vanilla::position::{position, Position, PositionIdentifier};
@@ -94,6 +96,21 @@ pub struct Creature {
     /// Dynamic respawn delay. Starts at `INITIAL_RESPAWN_DELAY`, halves every
     /// time the creature dies within its own respawn delay window.
     pub respawn_delay: Duration,
+
+    /// Cache of the wire-format `CreateObject2` for this creature.
+    /// Built lazily on first observer-AOI entry; cleared by every
+    /// mutator that affects the resulting wire bits (position,
+    /// orientation, flags, health, display_id, level, faction, entry).
+    /// Idle creatures cache forever across ticks; walkers re-bake
+    /// roughly per move tick. The `Arc<Object>` is share-counted into
+    /// the global AoI snapshot so cross-cell observers entering AOI of
+    /// this creature pay an `Arc::clone` instead of a fresh builder
+    /// pass.
+    ///
+    /// `ArcSwapOption` (not `RefCell`) so `Creature: Sync` — the AoI
+    /// diff pass uses rayon `par_iter` and creatures must be sharable
+    /// across worker threads.
+    pub cached_create_object: ArcSwapOption<Object>,
 }
 
 impl Creature {
@@ -154,6 +171,7 @@ impl Creature {
             life_state: CreatureLifeState::Alive,
             last_alive_at: Instant::now(),
             respawn_delay: initial_respawn_delay(),
+            cached_create_object: ArcSwapOption::from(None),
         }
     }
 
@@ -175,7 +193,39 @@ impl Creature {
         }
     }
 
+    /// Return the cached wire-format `CreateObject2`, building (and
+    /// caching) it on the first call since the last invalidation.
+    /// Returns a shared `Arc<Object>` so multiple observers entering
+    /// AOI of this creature in the same tick share one allocation.
+    pub fn cached_create_object(&self) -> Arc<Object> {
+        if let Some(arc) = self.cached_create_object.load_full() {
+            return arc;
+        }
+        let obj = Arc::new(self.build_create_object());
+        self.cached_create_object.store(Some(Arc::clone(&obj)));
+        obj
+    }
+
+    /// Backwards-compat helper that yields an owned `Object` clone for
+    /// callers that need to drop it into a `Vec<Object>` (which the
+    /// wire encoder requires by value). Internally still goes through
+    /// the cache.
     pub fn to_create_object(&self) -> Object {
+        (*self.cached_create_object()).clone()
+    }
+
+    /// Drop the cached `CreateObject2`. Must be called by every
+    /// mutator that touches a field the wire payload depends on
+    /// (position, orientation, flags, health, display_id, level,
+    /// faction_template, entry). Missing an invalidation produces a
+    /// 1-tick visual snap when an observer enters AOI; not a crash,
+    /// but still a bug.
+    #[inline]
+    pub fn invalidate_object_cache(&self) {
+        self.cached_create_object.store(None);
+    }
+
+    fn build_create_object(&self) -> Object {
         Object {
             update_type: Object_UpdateType::CreateObject2 {
                 guid3: self.guid,
@@ -217,6 +267,47 @@ impl Creature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_create_object_returns_same_arc_on_consecutive_calls() {
+        // Cache hit must yield the exact same allocation — not a
+        // semantically-equal new Object. We compare Arc pointers
+        // directly: a fresh build would produce a distinct allocation.
+        let c = Creature::new("test", Guid::new(1));
+        let a = c.cached_create_object();
+        let b = c.cached_create_object();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "second call should hit the cache, not rebuild",
+        );
+    }
+
+    #[test]
+    fn invalidate_object_cache_forces_rebuild() {
+        // After invalidation the next call must produce a fresh
+        // allocation (distinct Arc pointer). Mutation sites rely on
+        // this contract to make new state observable.
+        let c = Creature::new("test", Guid::new(1));
+        let a = c.cached_create_object();
+        c.invalidate_object_cache();
+        let b = c.cached_create_object();
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "invalidation should drop the cached Arc",
+        );
+    }
+
+    #[test]
+    fn fresh_creature_has_no_cached_object() {
+        // A freshly-built Creature must not pre-populate the cache —
+        // first call lazy-builds. Guards against accidental
+        // pre-baking in `Creature::new` / `with_display`.
+        let c = Creature::new("test", Guid::new(1));
+        assert!(
+            c.cached_create_object.load_full().is_none(),
+            "cache must start empty so lazy build path is exercised",
+        );
+    }
 
     #[test]
     fn is_rooted_returns_false_when_root_until_is_none() {
