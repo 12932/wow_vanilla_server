@@ -31,9 +31,7 @@ wow_items = { git="https://github.com/gtker/wow_messages.git", rev = "e8dc643aea
 wow_srp = { git="https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163" }
 walkdir = "2.5.0"
 
-# Temporarily a local path dep while fixing the ADT/WMO collision build.
-# Revert to the git dep (with a new rev) once the rustigator fixes are pushed.
-rustigator = { path = "/root/rustigator/crates/rustigator", features = ["vanilla"] }
+rustigator = { git = "https://github.com/12932/rustigator", rev = "fc4528309f22ab70cd47bebdf4deae2e5b4b1cd5", features = ["vanilla"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
