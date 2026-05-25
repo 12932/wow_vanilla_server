@@ -4,6 +4,7 @@ pub mod command;
 pub mod database;
 pub mod net_stats;
 pub mod cell;
+pub mod spatial;
 pub mod update_object;
 pub mod world_db;
 #[allow(clippy::module_inception)]
@@ -57,7 +58,7 @@ const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 /// interval directly, because the interval changes at runtime.
 ///
 /// Lives both globally (in `run_world`) and per-cell (one `TickPacer`
-/// per `CellState`) so `.cells` can show the per-cell adaptive state —
+/// per `MapState`) so `.cells` can show the per-cell adaptive state —
 /// `current_interval`, `slow_ema` — independent of the global pacer.
 #[derive(Debug, Clone)]
 pub(crate) struct TickPacer {

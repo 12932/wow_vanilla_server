@@ -20,3 +20,10 @@ mangos0.sqlite
 # Local environment (realm address, future secrets). Never commit;
 # `.env.example` is the tracked template.
 .env
+
+# Extracted client game data (DBC/maps) — large binary, pointed at by
+# WOW_VANILLA_USE_MAPS. Everyone extracts their own.
+Data/
+
+# Reference clone of cmangos used for architecture comparison. Its own repo.
+mangos-classic/

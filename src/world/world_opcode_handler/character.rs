@@ -162,6 +162,13 @@ impl Character {
         self.current_health == 0
     }
 
+    /// Creature display id for this character's race + gender — the value
+    /// sent as `UNIT_FIELD_DISPLAYID`. Used to look up the model's collision
+    /// height for line-of-sight.
+    pub fn display_id(&self) -> u32 {
+        self.race_class.race().display_id(self.gender) as u32
+    }
+
     /// Apply combat damage. Saturating — doesn't underflow when overkilled.
     /// Returns the new health value so the caller can decide whether this
     /// hit is the killing blow without re-reading the field.

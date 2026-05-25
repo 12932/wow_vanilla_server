@@ -1,6 +1,7 @@
 use ahash::{AHashMap, AHashSet};
 use rustigator::raw::{build_bvh, build_map, bvh_files_exist, map_files_exist};
 use rustigator::vanilla::{Map, VanillaMap};
+use rustigator::Vector3d;
 use tracing::{info, warn};
 
 /// Maps we build navmeshes for when `WOW_VANILLA_USE_MAPS` is set.
@@ -12,12 +13,20 @@ const BUILD_MAPS: &[Map] = &[
     Map::Kalimdor,
 ];
 
+/// Fallback unit height (yards) when a display id has no `CreatureModelData`
+/// entry. mangos's `DEFAULT_COLLISION_HEIGHT` — "most common value in dbc".
+const DEFAULT_COLLISION_HEIGHT: f32 = 2.03128;
+
 #[derive(Debug)]
 pub struct PathfindingMaps {
     maps: AHashMap<Map, VanillaMap>,
     /// Tracks which `(map, tile_x, tile_y)` ADTs we've already attempted to
     /// load so we don't retry-on-miss on every height query.
     attempted_adts: AHashSet<(Map, i32, i32)>,
+    /// `display_id -> collision height` (pre-scale), from the client DBCs.
+    /// Used to raise LOS rays to per-unit chest height. Empty when maps
+    /// aren't configured (LOS is unavailable then anyway).
+    collision_heights: std::collections::HashMap<u32, f32>,
 }
 
 impl Default for PathfindingMaps {
@@ -28,7 +37,7 @@ impl Default for PathfindingMaps {
 
 impl PathfindingMaps {
     pub fn new() -> Self {
-        let maps = if let Some(data_path) = std::option_env!("WOW_VANILLA_USE_MAPS") {
+        let (maps, collision_heights) = if let Some(data_path) = std::option_env!("WOW_VANILLA_USE_MAPS") {
             let output = std::env::temp_dir().join("wow_vanilla_server");
             info!(
                 "Building maps for pathfind from '{data_path}' into '{}'. This may take a while.",
@@ -67,16 +76,44 @@ impl PathfindingMaps {
                 }
             }
             info!("Finished setting up maps");
-            m
+
+            // Per-unit LOS height data (display_id -> collision height).
+            let collision_heights = match rustigator::raw::load_collision_heights(data_path) {
+                Ok(h) => {
+                    info!("Loaded {} display collision heights for LOS", h.len());
+                    h
+                }
+                Err(e) => {
+                    warn!("collision height load failed: {e}; LOS uses default height ({DEFAULT_COLLISION_HEIGHT} yd)");
+                    std::collections::HashMap::new()
+                }
+            };
+            (m, collision_heights)
         } else {
             info!("Not using maps for pathfind.");
-            AHashMap::new()
+            (AHashMap::new(), std::collections::HashMap::new())
         };
 
         Self {
             maps,
             attempted_adts: AHashSet::new(),
+            collision_heights,
         }
+    }
+
+    /// Per-unit LOS eye/chest height for a `display_id`, scaled by the unit's
+    /// object scale. Mirrors mangos `Unit::GetCollisionHeight()`:
+    /// `scale * CreatureModelData.CollisionHeight`, falling back to
+    /// [`DEFAULT_COLLISION_HEIGHT`] for unknown / zero / implausible values
+    /// (the clamp guards against a DBC layout mismatch yielding garbage).
+    pub fn collision_height(&self, display_id: u32, scale: f32) -> f32 {
+        let base = self
+            .collision_heights
+            .get(&display_id)
+            .copied()
+            .filter(|h| *h > 0.0 && *h < 50.0)
+            .unwrap_or(DEFAULT_COLLISION_HEIGHT);
+        scale * base
     }
 
     pub fn get(&self, map: &Map) -> Option<&VanillaMap> {
@@ -127,6 +164,42 @@ impl PathfindingMaps {
                     .partial_cmp(&(b - z_hint).abs())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
+    }
+
+    /// Line-of-sight between two world points, lazily loading the ADT tiles
+    /// at each endpoint first.
+    ///
+    /// `VanillaMap::line_of_sight` only raycasts tiles already resident and
+    /// otherwise fails OPEN (reports clear LOS). Without this pre-load a
+    /// `.los` check against a tile that no prior `ground_height` happened to
+    /// load would wrongly report line of sight straight through walls — which
+    /// is exactly the Gurubashi symptom.
+    ///
+    /// Raw line-of-sight raycast between two world points, lazily loading the
+    /// endpoint ADT tiles first.
+    ///
+    /// Callers must pass endpoints already raised to eye/chest height (see
+    /// [`Self::collision_height`]) — units stand exactly ON the collision mesh
+    /// (we snap their Z to ground), so a foot-level ray grazes/dips into the
+    /// very floor it starts on and reports "obstructed". Raising each endpoint
+    /// by its own unit's collision height mirrors mangos's `IsWithinLOSInMap`.
+    ///
+    /// Returns `None` when no map is configured for `map`; otherwise the raw
+    /// rustigator raycast result. Only the endpoint tiles are forced resident
+    /// — a very long ray crossing an unloaded intermediate tile isn't covered,
+    /// but LOS checks are effectively always short-range.
+    pub fn line_of_sight(
+        &mut self,
+        map: Map,
+        from: Vector3d,
+        to: Vector3d,
+    ) -> Option<Result<bool, rustigator::RustigatorError>> {
+        let vmap = self.maps.get_mut(&map)?;
+        // Best-effort: a load failure just means the tile has no nav data
+        // (water/edge), and the raycast treats it as empty.
+        let _ = vmap.load_adt_at(from.x, from.y);
+        let _ = vmap.load_adt_at(to.x, to.y);
+        Some(vmap.line_of_sight(from, to))
     }
 }
 

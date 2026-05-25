@@ -2219,7 +2219,6 @@ dependencies = [
 [[package]]
 name = "rustigator"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "glam 0.30.10",
  "rustigator-mapbuild",
@@ -2234,7 +2233,6 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "ahash",
  "bincode",
@@ -2253,7 +2251,6 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "ahash",
  "byteorder",
@@ -2272,7 +2269,6 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "ahash",
  "bincode",
@@ -2289,7 +2285,6 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=16714ea9416cf3ba4d3f835a5196298542a5390b#16714ea9416cf3ba4d3f835a5196298542a5390b"
 dependencies = [
  "bincode",
  "byteorder",
