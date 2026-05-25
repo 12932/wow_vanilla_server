@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use wow_world_base::vanilla::Map;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-use wow_world_messages::vanilla::{Object, ServerMessage, Vector3d};
+use wow_world_messages::vanilla::{ServerMessage, Vector3d};
 
 /// `Sync`-safe per-client broadcast handle. Snapshotted from every
 /// `Client` at the top of the broadcast phase so the fan-out loop can
@@ -72,10 +72,9 @@ impl BroadcastTarget {
 }
 
 /// Lightweight position+guid snapshot of a single creature for the
-/// cross-cell AoI discovery scan. Has only what the diff scan reads
-/// — position for the radius check, guid to record in `visible_entities`
-/// and to look up in [`GlobalAoiSnapshot::create_object_by_guid`] when
-/// building the entered-objects packet.
+/// AoI discovery scan. Has only what the diff scan reads — position for
+/// the radius check, guid to record in `visible_entities` and to build the
+/// entered-objects packet from the live slab.
 #[derive(Debug, Clone, Copy)]
 pub struct CreatureView {
     pub guid: Guid,
@@ -98,51 +97,26 @@ pub struct CreatureView {
 /// Wrapped in `Arc` for cheap distribution to the spawned tasks.
 #[derive(Debug)]
 pub struct GlobalAoiSnapshot {
-    /// Every connected client across every cell.
+    /// Every connected client on the map. Kept for `clients_in_radius`
+    /// (which returns a `BroadcastTarget` sendable handle); the AOI diff
+    /// uses the spatially-bucketed `client_grid_cells` instead so it
+    /// scans O(nearby) rather than O(all clients).
     pub broadcast_view: Vec<BroadcastTarget>,
-    /// 250-yd cell-keyed creature index. Diff scan's 3×3 window
-    /// (1×CREATURE_GRID_CELL_YD) lands cleanly across cell
-    /// boundaries because the snapshot is keyed by (Map, cx, cy),
-    /// not by cell.
+    /// 33.33-yd cell-keyed creature index (cmangos cell size). The AOI
+    /// diff scans a radius-derived cell window (`grid_cell_radius`)
+    /// around each observer.
     pub creature_grid_cells: AHashMap<(Map, i32, i32), Vec<CreatureView>>,
-    /// Pre-built CreateObject2 for every entity (player + creature)
-    /// in the snapshot. Diff scan looks up here to build
-    /// `entered_objects` without needing live access to neighbor
-    /// cells' slabs.
-    ///
-    /// Stored as `Arc<Object>` so the snapshot build can share
-    /// `Creature::cached_create_object` allocations across ticks
-    /// (idle creatures' wire payloads survive cache hits as Arc
-    /// clones) and so the consumer reading this map pays only an
-    /// atomic refcount bump per lookup, not a deep clone.
-    pub create_object_by_guid: AHashMap<Guid, Arc<Object>>,
-    /// Guid → owning cell. Populated for every entity present in
-    /// the snapshot. Used by `Entities::apply_effect` to route a
-    /// cross-cell effect to the correct cell's inbox without
-    /// needing the handler to know about cell keys.
-    pub home_cell_by_guid: AHashMap<Guid, crate::world::cell::CellKey>,
-    /// Guid → (map, position, kind). O(1) lookup for handlers
-    /// that need to locate a target by guid across cells
-    /// (combat range check, spell targeting, GM `.info`, etc.)
-    /// without scanning cells or the broadcast view.
-    pub entity_locations: AHashMap<Guid, EntityLocation>,
-}
-
-/// Lightweight position + kind snapshot for a single entity.
-/// Returned from `Entities::locate_entity` so handlers can decide
-/// "is this guid a creature or client?" + "where is it?" without
-/// touching local slabs.
-#[derive(Debug, Clone, Copy)]
-pub struct EntityLocation {
-    pub map: Map,
-    pub position: Vector3d,
-    pub kind: EntityKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntityKind {
-    Creature,
-    Client,
+    /// 33.33-yd cell-keyed CLIENT index (`CreatureView` is reused as a
+    /// plain guid+position view). Lets the AOI diff find nearby players
+    /// via the same radius-windowed cell visit as creatures — the fix
+    /// for the old O(N²) per-observer scan over `broadcast_view`.
+    pub client_grid_cells: AHashMap<(Map, i32, i32), Vec<CreatureView>>,
+    // NOTE: there is deliberately no pre-built `create_object_by_guid` here.
+    // CreateObject2 frames are the expensive part (full update-mask build per
+    // player), and only entities that NEWLY entered an observer's AOI this tick
+    // need one — a handful, not every entity. `tick_aoi_transitions` builds them
+    // on demand (deduped) from the live slabs after the diff identifies the
+    // entered set. See its Phase 1.5.
 }
 
 impl GlobalAoiSnapshot {
@@ -150,9 +124,7 @@ impl GlobalAoiSnapshot {
         Self {
             broadcast_view: Vec::new(),
             creature_grid_cells: AHashMap::new(),
-            create_object_by_guid: AHashMap::new(),
-            home_cell_by_guid: AHashMap::new(),
-            entity_locations: AHashMap::new(),
+            client_grid_cells: AHashMap::new(),
         }
     }
 }
@@ -221,23 +193,15 @@ pub async fn broadcast_within_aoi<M: ServerMessage + Sync>(
     let frame: Arc<[u8]> = Arc::from(buf);
     let frame_bytes = frame.len();
 
-    // Local fan-out: every client in the source cell within AOI gets
-    // a refcount-bump of the shared frame.
+    // Fan out to every client on this map within AOI — with one MapState
+    // per continent, `clients` already spans the whole map, so this reaches
+    // every in-range observer with no cross-cell hop.
+    let _ = frame_bytes;
     for (_, c) in clients.iter_mut() {
         if c.character().map == anchor_map && within_aoi(&c.character().info.position, &anchor) {
             c.try_queue_frame(Arc::clone(&frame));
         }
     }
-
-    // Cross-cell post-fanout: clone the same `Arc<[u8]>` into every
-    // neighbor cell whose interior overlaps this anchor's AOI disc.
-    crate::world::cell::dispatch_cross_cell_frame(
-        anchor,
-        anchor_map,
-        None,
-        frame,
-        frame_bytes,
-    );
 }
 
 /// Broadcast a [`ServerOpcodeMessage`] (the enum) to every client in AOI,
@@ -289,24 +253,16 @@ pub fn broadcast_opcode_within_aoi(
     // — instead of a fresh allocation + memcpy of `frame_bytes` bytes.
     let frame: Arc<[u8]> = Arc::from(frame);
 
+    // `targets` is the whole map's broadcast view (one MapState per
+    // continent), so a single fan-out reaches every in-range observer.
     let recipients = fanout_frame(
-        Arc::clone(&frame),
+        frame,
         frame_bytes,
         anchor,
         anchor_map,
         exclude_guid,
         targets,
     ).0;
-
-    // Cross-cell post-fanout: deliver the same `Arc<[u8]>` to neighbor
-    // cells whose interior intersects this anchor's AOI disc.
-    crate::world::cell::dispatch_cross_cell_frame(
-        anchor,
-        anchor_map,
-        exclude_guid,
-        frame,
-        frame_bytes,
-    );
     (recipients, frame_bytes)
 }
 

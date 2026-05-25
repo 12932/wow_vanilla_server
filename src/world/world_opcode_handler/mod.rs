@@ -23,6 +23,7 @@ pub(crate) mod gm_command;
 pub mod inventory;
 pub(crate) mod item;
 mod opcode_handler;
+pub(crate) mod spell;
 
 #[tracing::instrument(level = "info", skip_all, name = "handle_received_client_opcodes")]
 pub(crate) async fn handle_received_client_opcodes(

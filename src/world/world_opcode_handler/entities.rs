@@ -92,22 +92,6 @@ impl<'a> Entities<'a> {
         self.creatures.get(key)
     }
 
-    /// Locate any entity by guid, regardless of which cell it
-    /// lives in. Reads from the global AoI snapshot, so the
-    /// position is one tick stale — acceptable for combat range
-    /// checks (~0.2 yd creature drift per tick at run speed).
-    /// Returns `None` for unknown guids or if no snapshot is wired
-    /// (e.g. tests that bypass `build_global_aoi_snapshot`).
-    ///
-    /// Currently unused — combat reads the snapshot directly to
-    /// avoid extending the `entities` mut borrow during the swing
-    /// block. Kept as the documented public API for handlers that
-    /// don't have the borrow-conflict problem.
-    #[allow(dead_code)]
-    pub(crate) fn locate_entity(&self, guid: Guid) -> Option<crate::world::aoi::EntityLocation> {
-        self.aoi_snapshot.entity_locations.get(&guid).copied()
-    }
-
     pub(crate) fn find_position(&self, guid: Guid) -> Option<Position> {
         self.find_guid(guid).map(|c| match c {
             Entity::Player(c) => c.position(),
@@ -115,11 +99,10 @@ impl<'a> Entities<'a> {
         })
     }
 
-    /// All creatures within `radius` of `center` on `map`, across the
-    /// whole world (not just the local cell). Reads from the global
-    /// AoI snapshot built once at the top of `World::tick`, so this is
-    /// O(grid_cells × creatures_per_grid_cell). For a 14-yd nova radius
-    /// that's a single 250-yd cell window — handful of comparisons.
+    /// All creatures within `radius` of `center` on `map` (the whole map —
+    /// one `MapState` per continent). Reads from the per-map AoI snapshot's
+    /// 33.33 yd creature grid, scanning the cmangos-style cell window derived
+    /// from `radius` (`grid_cell_radius`).
     pub(crate) fn creatures_in_radius(
         &self,
         center: Vector3d,
@@ -129,13 +112,10 @@ impl<'a> Entities<'a> {
         let r_sq = radius * radius;
         let (grid_cell_x, grid_cell_y) =
             crate::world::world::grid_cell_for(center.x, center.y);
-        // 3×3 cell window — same as the AoI diff scan. Sufficient for
-        // any radius up to one cell (250 yd); larger radii would need
-        // a wider window. Frost nova / .swifty / any near-melee AoE
-        // is well inside this.
+        let cr = crate::world::world::grid_cell_radius(radius);
         let mut out = Vec::new();
-        for dx in -1..=1 {
-            for dy in -1..=1 {
+        for dx in -cr..=cr {
+            for dy in -cr..=cr {
                 let Some(views) =
                     self.aoi_snapshot.creature_grid_cells.get(&(map, grid_cell_x + dx, grid_cell_y + dy))
                 else {
@@ -205,25 +185,9 @@ impl<'a> Entities<'a> {
             apply_effect_to_client(c, &effect);
             return ApplyEffectResult::AppliedLocally { creature_died: false };
         }
-        // Cross-cell: route to the target's home cell inbox.
-        let Some(&home) = self.aoi_snapshot.home_cell_by_guid.get(&guid) else {
-            return ApplyEffectResult::Unknown;
-        };
-        let table = crate::world::cell::routing().load();
-        let Some(inbox) = table.inboxes.get(&home) else {
-            return ApplyEffectResult::Unknown;
-        };
-        let msg = crate::world::cell::CrossCellMsg::Effect(
-            crate::world::cell::CrossCellEffect {
-                target_guid: guid,
-                effect,
-            },
-        );
-        if inbox.cross_cell_tx.try_send(msg).is_ok() {
-            ApplyEffectResult::QueuedCrossCell
-        } else {
-            ApplyEffectResult::Unknown
-        }
+        // Not on this map: with one MapState per continent there is no
+        // cross-cell routing — an unknown guid simply has no effect applied.
+        ApplyEffectResult::Unknown
     }
 }
 
@@ -238,10 +202,8 @@ pub(crate) enum ApplyEffectResult {
     /// the target was a creature whose health hit zero from this
     /// effect.
     AppliedLocally { creature_died: bool },
-    /// Effect was sent to the target's home cell inbox.
-    QueuedCrossCell,
-    /// Target guid not found anywhere (stale lookup, target
-    /// logged out / despawned between snapshot build and call).
+    /// Target guid not found on this map (logged out / despawned, or
+    /// genuinely not present).
     Unknown,
 }
 

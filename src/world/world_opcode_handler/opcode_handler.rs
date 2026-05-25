@@ -330,6 +330,15 @@ pub(super) async fn handle_opcodes(
         ClientOpcodeMessage::CMSG_SET_SELECTION(c) => {
             client.character_mut().target = c.target;
         }
+        ClientOpcodeMessage::CMSG_CAST_SPELL(c) => {
+            // Only Frost Nova is wired; every other spell silently
+            // no-ops (real WoW would send SMSG_CAST_FAILED, but the
+            // rest of the spell pipeline — mana, cooldowns, GCD,
+            // SpellRange.dbc — isn't built out yet).
+            if c.spell == crate::world::world_opcode_handler::spell::SPELL_FROST_NOVA {
+                crate::world::world_opcode_handler::spell::cast_frost_nova(client, entities).await;
+            }
+        }
         ClientOpcodeMessage::CMSG_QUERY_TIME => {
             // Wall-clock can run backward across NTP. Use `unwrap_or_default`
             // so we never panic on time travel; the wire field is a u32 and

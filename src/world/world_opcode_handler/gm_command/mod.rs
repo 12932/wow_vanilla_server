@@ -9,15 +9,14 @@ use crate::world::world_opcode_handler::entities::{Entities, Entity};
 use crate::world::world_opcode_handler::gm_command::parser::GmCommand;
 use crate::world::world_opcode_handler::item::{award_item, Item};
 use std::cell::Cell;
-use std::time::{Duration, Instant};
 use tracing::info;
 use wow_world_base::vanilla::position::Position;
-use wow_world_base::vanilla::{HitInfo, SpellSchool, SplineFlag, Vector3d};
+use wow_world_base::vanilla::{HitInfo, Map, SpellSchool, SplineFlag, Vector3d};
 use wow_world_messages::vanilla::{
     CompressedMove, CompressedMove_CompressedMoveOpcode, MonsterMove,
     MonsterMove_MonsterMoveType, Object,
-    Object_UpdateType, SpellCastTargets, UpdateMask, UpdatePlayerBuilder, UpdateUnitBuilder,
-    SMSG_COMPRESSED_MOVES, SMSG_FORCE_MOVE_ROOT, SMSG_FORCE_RUN_SPEED_CHANGE,
+    Object_UpdateType, SpellCastTargets, UpdateMask, UpdateUnitBuilder,
+    SMSG_COMPRESSED_MOVES, SMSG_FORCE_RUN_SPEED_CHANGE,
     SMSG_SPELLNONMELEEDAMAGELOG, SMSG_SPELL_GO, SMSG_SPELL_GO_CastFlags, SMSG_SPLINE_SET_RUN_SPEED,
     SMSG_UPDATE_OBJECT,
 };
@@ -287,149 +286,7 @@ pub(crate) async fn gm_command(
             }
         }
         GmCommand::Nova => {
-            const SPELL_FROST_NOVA: u32 = 122;
-            const RADIUS: f32 = 14.0;
-            const ROOT_DURATION: Duration = Duration::from_secs(6);
-
-            let caster_guid = client.character().guid;
-            let caster_pos = client.character().info.position;
-            let caster_map = client.character().map;
-            let root_until = Instant::now() + ROOT_DURATION;
-
-            // Cell-agnostic find: the snapshot spans the whole world,
-            // so creatures + clients in neighbor cells across a
-            // boundary are returned alongside local ones. Snapshot is
-            // one tick stale; at 30 Hz / run speed that's ~0.2 yd of
-            // position drift, well under the 14 yd nova radius.
-            let creature_hits: Vec<wow_world_messages::Guid> = entities
-                .creatures_in_radius(caster_pos, caster_map, RADIUS)
-                .into_iter()
-                .map(|v| v.guid)
-                .collect();
-            let client_hits: Vec<wow_world_messages::Guid> = entities
-                .clients_in_radius(caster_pos, caster_map, RADIUS)
-                .into_iter()
-                .map(|t| t.guid)
-                .filter(|g| *g != caster_guid)
-                .collect();
-
-            // Apply server-side root to every target — local or
-            // cross-cell. `apply_effect` routes by guid: local
-            // mutation for same-cell targets, queued
-            // `CrossCellEffect` for neighbor-cell targets (drained
-            // on the target cell's next tick, ~33 ms lag).
-            for g in creature_hits.iter().chain(client_hits.iter()) {
-                entities.apply_effect(*g, crate::world::command::UnitEffect::Root { until: root_until });
-            }
-
-            let hits: Vec<wow_world_messages::Guid> = creature_hits
-                .iter()
-                .chain(client_hits.iter())
-                .copied()
-                .collect();
-
-            // Spell-go visual. `broadcast_within_aoi` already does
-            // cross-cell post-fanout (routes the frame through the
-            // routing table to every neighbor inbox), so observers in
-            // neighbor cells also see the nova land. Send to caster
-            // explicitly since `broadcast_within_aoi` excludes the
-            // source from the AOI fan-out for movement opcodes — but
-            // for spell visuals the caster needs to see it too.
-            let spell_go = SMSG_SPELL_GO {
-                cast_item: caster_guid,
-                caster: caster_guid,
-                spell: SPELL_FROST_NOVA,
-                flags: SMSG_SPELL_GO_CastFlags::empty(),
-                hits: hits.clone(),
-                misses: vec![],
-                targets: SpellCastTargets::default(),
-            };
-            client.send_message(spell_go.clone()).await;
-            crate::world::aoi::broadcast_within_aoi(
-                spell_go,
-                caster_pos,
-                caster_map,
-                entities.clients(),
-            )
-            .await;
-
-            const AFLAG_HARMFUL: u8 = 0x02;
-            const AFLAG_VISIBLE: u8 = 0x08;
-            const AFLAG_NOT_CANCELABLE: u8 = 0x20;
-            const AURA_FLAGS: u8 = AFLAG_HARMFUL | AFLAG_VISIBLE | AFLAG_NOT_CANCELABLE;
-
-            // Aura visual for every hit. One broadcast per target;
-            // both unit (creature) and player builders apply the same
-            // aura mask — they're separate update structs in the wire
-            // protocol but the broadcast path doesn't care.
-            for target_guid in &creature_hits {
-                let aura_update = SMSG_UPDATE_OBJECT {
-                    has_transport: 0,
-                    objects: vec![Object {
-                        update_type: Object_UpdateType::Values {
-                            guid1: *target_guid,
-                            mask1: UpdateMask::Unit(
-                                UpdateUnitBuilder::new()
-                                    .set_unit_aura(SPELL_FROST_NOVA as i32)
-                                    .set_unit_auraflags(AURA_FLAGS, 0, 0, 0)
-                                    .set_unit_auralevels(1, 0, 0, 0)
-                                    .set_unit_auraapplications(1, 0, 0, 0)
-                                    .finalize(),
-                            ),
-                        },
-                    }],
-                };
-                client.send_message(aura_update.clone()).await;
-                crate::world::aoi::broadcast_within_aoi(
-                    aura_update,
-                    caster_pos,
-                    caster_map,
-                    entities.clients(),
-                )
-                .await;
-            }
-            for target_guid in &client_hits {
-                let aura_update = SMSG_UPDATE_OBJECT {
-                    has_transport: 0,
-                    objects: vec![Object {
-                        update_type: Object_UpdateType::Values {
-                            guid1: *target_guid,
-                            mask1: UpdateMask::Player(
-                                UpdatePlayerBuilder::new()
-                                    .set_unit_aura(SPELL_FROST_NOVA as i32)
-                                    .set_unit_auraflags(AURA_FLAGS, 0, 0, 0)
-                                    .set_unit_auralevels(1, 0, 0, 0)
-                                    .set_unit_auraapplications(1, 0, 0, 0)
-                                    .finalize(),
-                            ),
-                        },
-                    }],
-                };
-                client.send_message(aura_update.clone()).await;
-                crate::world::aoi::broadcast_within_aoi(
-                    aura_update,
-                    caster_pos,
-                    caster_map,
-                    entities.clients(),
-                )
-                .await;
-            }
-
-            // SMSG_FORCE_MOVE_ROOT is only meaningful to real WoW
-            // clients (it locks their movement input). Bots ignore it.
-            // For cross-cell rooted clients we can't send it
-            // directly — they're in a neighbor cell's slab — so the
-            // server-side root takes over instead via apply_effect.
-            // Local rooted clients get the SMSG path too.
-            for target_guid in &client_hits {
-                if let Some(c) = entities.find_player_mut(*target_guid) {
-                    let root_msg = SMSG_FORCE_MOVE_ROOT {
-                        guid: *target_guid,
-                        counter: 0,
-                    };
-                    c.send_message(root_msg).await;
-                }
-            }
+            crate::world::world_opcode_handler::spell::cast_frost_nova(client, entities).await;
         }
         GmCommand::WorldDbInfo => {
             let (mut idle, mut wander, mut waypoint, mut aggro) = (0, 0, 0, 0);
@@ -524,112 +381,57 @@ pub(crate) async fn gm_command(
                 .await;
         }
         GmCommand::Cells => {
-            use crate::world::cell::CellKey;
             use ahash::AHashMap;
 
-            // Bin clients and creatures into the spatial cells the
-            // Stage 3 sharding uses. Empty cells (zero players) are
-            // dropped — a GM running `.cells` cares about hot spots,
-            // not the long tail of empty buckets.
-            //
-            // Players come from `PLAYER_REGISTRY` (the process-wide
-            // index also used by `.go PlayerName`) so the count is
-            // cross-cell accurate. The requesting GM has been
-            // transiently removed from their cell's slab + the
-            // registry for the duration of this opcode handler — so
-            // we explicitly add them back to the count for their own
-            // cell. Without this, `.cells` reported `players=0`
-            // for a GM alone in the world.
-            let mut player_counts: AHashMap<CellKey, usize> = AHashMap::new();
-            let mut creature_counts: AHashMap<CellKey, usize> = AHashMap::new();
+            // Per-MAP summary (concurrency is per continent). Players come
+            // from `PLAYER_REGISTRY` (process-wide, also used by `.go`); the
+            // requesting GM is transiently out of the registry during this
+            // handler, so add them back for their own map. Creature counts
+            // are from the GM's own map only (each MapState owns its creatures;
+            // counting others would need locking their tasks).
+            let mut player_counts: AHashMap<Map, usize> = AHashMap::new();
             if let Ok(reg) = crate::world::cell::PLAYER_REGISTRY.lock() {
                 for entry in reg.values() {
-                    let key = CellKey::from_position(
-                        entry.map,
-                        entry.position.x,
-                        entry.position.y,
-                    );
-                    *player_counts.entry(key).or_default() += 1;
+                    *player_counts.entry(entry.map).or_default() += 1;
                 }
             }
-            {
-                let ch = client.character();
-                let me_key = CellKey::from_position(
-                    ch.map,
-                    ch.info.position.x,
-                    ch.info.position.y,
-                );
-                *player_counts.entry(me_key).or_default() += 1;
-            }
-            // Creatures are still counted from the requesting GM's
-            // own cell only — partitioning means each cell owns
-            // its creatures slab and locking neighbors mid-tick could
-            // stall this cell's tick. The visible side-effect:
-            // `.cells` shows accurate creature counts for the
-            // cell the GM is in, and zero for the others. Acceptable
-            // for a debug command; a cross-cell creature-count
-            // index is a future cleanup.
+            *player_counts.entry(client.character().map).or_default() += 1;
+
+            let mut creature_counts: AHashMap<Map, usize> = AHashMap::new();
             for (_, cr) in entities.creatures().iter() {
-                let key = CellKey::from_position(cr.map, cr.info.position.x, cr.info.position.y);
-                *creature_counts.entry(key).or_default() += 1;
+                *creature_counts.entry(cr.map).or_default() += 1;
             }
 
-            // Filter to cells that have at least one player, then
-            // sort by descending player count (creature count
-            // breaks ties). A cell with creatures but no players
-            // is just terrain — not interesting for a `.cells`
-            // peek.
-            let mut ranked: Vec<(CellKey, usize, usize)> = player_counts
-                .iter()
-                .map(|(k, &p)| {
-                    let c = creature_counts.get(k).copied().unwrap_or(0);
-                    (*k, p, c)
-                })
-                .collect();
-            ranked.sort_by_key(|&(_, p, c)| std::cmp::Reverse((p, c)));
-
-            // Snapshot per-cell pacer state. The per-cell tokio
-            // tasks publish their pacer fields into this map at the
-            // end of every tick; we lock briefly here and pull out
-            // what the requested cells are doing.
-            let pacer_states: ahash::AHashMap<CellKey, crate::world::cell::PacerSnapshot> =
+            let pacer_states: AHashMap<Map, crate::world::cell::PacerSnapshot> =
                 crate::world::cell::PACER_STATES
                     .lock()
                     .ok()
                     .map(|g| g.clone())
                     .unwrap_or_default();
 
-            const TOP_N: usize = 4;
-            let total_populated = ranked.len();
+            let mut ranked: Vec<(Map, usize, usize)> = player_counts
+                .iter()
+                .map(|(m, &p)| (*m, p, creature_counts.get(m).copied().unwrap_or(0)))
+                .collect();
+            ranked.sort_by_key(|&(_, p, c)| std::cmp::Reverse((p, c)));
+
             client
-                .send_system_message(format!(
-                    "Cells: {total_populated} populated ({:.0}-yd each); top {} by player count",
-                    crate::world::cell::cell_size_yd(),
-                    TOP_N.min(total_populated),
-                ))
+                .send_system_message(format!("Maps: {} populated", ranked.len()))
                 .await;
-            for (k, p, c) in ranked.iter().take(TOP_N) {
+            for (m, p, c) in &ranked {
                 let pacer = pacer_states
-                    .get(k)
+                    .get(m)
                     .map(|s| {
                         format!(
                             "{}ms last={}ms ema={:.2} streak={}",
-                            s.current_interval_ms,
-                            s.last_tick_ms,
-                            s.slow_ema,
-                            s.healthy_streak,
+                            s.current_interval_ms, s.last_tick_ms, s.slow_ema, s.healthy_streak,
                         )
                     })
                     .unwrap_or_else(|| "<no pacer state>".to_string());
                 client
                     .send_system_message(format!(
-                        "  {k}: players={p}, creatures={c}, pacer={pacer}"
+                        "  {m:?}: players={p}, creatures={c}, pacer={pacer}"
                     ))
-                    .await;
-            }
-            if total_populated > TOP_N {
-                client
-                    .send_system_message(format!("  … {} more populated cells truncated", total_populated - TOP_N))
                     .await;
             }
         }
@@ -679,28 +481,40 @@ pub(crate) async fn gm_command(
             };
             let other = o.position();
 
-            let f = if let Some(map) = maps.get(&pos.map) {
-                match map.line_of_sight(pos.into(), other.into()) {
-                    Ok(true) => client.send_system_message(format!(
-                        "Has line of sight to {}",
-                        o.character().name
-                    )),
-                    Ok(false) => client.send_system_message(format!(
-                        "Has no line of sight to {}",
-                        o.character().name
-                    )),
-                    // namigator raycasts can fail on degenerate input (e.g.
-                    // point outside the loaded map tile). Surface the error
-                    // to the GM instead of panicking the world task.
-                    Err(e) => client.send_system_message(format!(
-                        "LOS check failed: {e:?}"
-                    )),
-                }
-            } else {
-                client.send_system_message(format!(
+            // Raise each endpoint to its own unit's chest height before the
+            // raycast — units sit exactly on the collision mesh, so a
+            // foot-level ray grazes the floor and reports "obstructed".
+            // Per-unit (model-aware) height mirrors mangos `IsWithinLOSInMap`
+            // (source += source's GetCollisionHeight(), target += target's).
+            // Players have object scale 1.0 (no scale auras modelled yet).
+            let caster_h = maps.collision_height(client.character().display_id(), 1.0);
+            let target_h = maps.collision_height(o.character().display_id(), 1.0);
+            let mut from: Vector3d = pos.into();
+            let mut to: Vector3d = other.into();
+            from.z += caster_h;
+            to.z += target_h;
+
+            // `line_of_sight` lazily loads the endpoint ADT tiles; the raw
+            // `VanillaMap::line_of_sight` fails open against unloaded tiles.
+            let f = match maps.line_of_sight(pos.map, from, to) {
+                Some(Ok(true)) => client.send_system_message(format!(
+                    "Has line of sight to {}",
+                    o.character().name
+                )),
+                Some(Ok(false)) => client.send_system_message(format!(
+                    "Has no line of sight to {}",
+                    o.character().name
+                )),
+                // rustigator raycasts can fail on degenerate input (e.g.
+                // point outside the loaded map tile). Surface the error
+                // to the GM instead of panicking the world task.
+                Some(Err(e)) => client.send_system_message(format!(
+                    "LOS check failed: {e:?}"
+                )),
+                None => client.send_system_message(format!(
                     "Unable to find map '{map}' in pathfinding maps",
                     map = pos.map
-                ))
+                )),
             };
 
             f.await;
