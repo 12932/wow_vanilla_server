@@ -24,6 +24,7 @@ pub mod nav;
 pub mod npc;
 pub mod pets;
 pub mod player;
+pub mod procs;
 pub mod query;
 pub mod quests;
 pub mod skills;
