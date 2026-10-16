@@ -96,7 +96,7 @@ impl GameObject {
     }
 }
 
-/// `SMSG_GAMEOBJECT_QUERY_RESPONSE`, as 1.12 lays it out: the name, three
+/// `SMSG_GAMEOBJECT_QUERY_RESPONSE`, as 1.12 lays it out: the name, four
 /// empty names, then the template's 24 data words.
 pub fn query_response(entry: u32, t: Option<&GameObjectTemplate>) -> Arc<[u8]> {
     let mut b = Body::default();
@@ -106,6 +106,7 @@ pub fn query_response(entry: u32, t: Option<&GameObjectTemplate>) -> Arc<[u8]> {
                 .u32(u32::from(t.kind))
                 .u32(t.display_id)
                 .cstr(&t.name)
+                .u8(0)
                 .u8(0)
                 .u8(0)
                 .u8(0);
