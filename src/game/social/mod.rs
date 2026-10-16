@@ -25,6 +25,11 @@ pub struct Social {
     pub guilds: Mutex<guilds::Guilds>,
     pub mail: Mutex<mail::Mails>,
     pub auctions: Mutex<auction::Auctions>,
+    pub instances: Mutex<crate::game::instances::Instances>,
+    pub battlegrounds: Mutex<crate::game::battlegrounds::Battlegrounds>,
+    /// The seasonal events on.
+    pub events: Mutex<ahash::AHashSet<u32>>,
+    pub weather: Mutex<ahash::AHashMap<u32, crate::game::weather::Weather>>,
 }
 
 impl Social {
@@ -34,6 +39,7 @@ impl Social {
             guilds: Mutex::new(guilds::Guilds::load(records)),
             mail: Mutex::new(mail::Mails::load(records)),
             auctions: Mutex::new(auction::Auctions::load(records)),
+            instances: Mutex::new(crate::game::instances::Instances::load(records)),
             ..Default::default()
         }
     }
@@ -85,4 +91,8 @@ pub fn start_timers(realm: &Arc<Realm>) {
 pub fn sweep(realm: &Realm) {
     auction::sweep(realm);
     mail::sweep(realm);
+    crate::game::instances::sweep(realm);
+    crate::game::battlegrounds::sweep(realm);
+    crate::game::events::sweep(realm);
+    crate::game::weather::sweep(realm);
 }

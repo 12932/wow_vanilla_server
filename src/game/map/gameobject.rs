@@ -50,6 +50,9 @@ impl GameObject {
         f.set_u32(GAMEOBJECT_FACTION, t.faction);
         f.set_u32(GAMEOBJECT_TYPE_ID, u32::from(t.kind));
         f.set_u32(GAMEOBJECT_ANIMPROGRESS, u32::from(s.anim_progress));
+        if t.kind == 11 {
+            f.set_u32(GAMEOBJECT_LEVEL, crate::game::uptime_ms());
+        }
         let position = Vector3d {
             x: s.x,
             y: s.y,
@@ -73,9 +76,18 @@ impl GameObject {
         Create {
             guid: self.guid,
             type_id: TypeId::GameObject,
-            placement: Placement::Position {
-                position: self.position,
-                orientation: self.orientation,
+            // Elevators and boats run on the server's clock.
+            placement: if matches!(self.kind, 11 | 15) {
+                Placement::Transport {
+                    position: self.position,
+                    orientation: self.orientation,
+                    time: crate::game::uptime_ms(),
+                }
+            } else {
+                Placement::Position {
+                    position: self.position,
+                    orientation: self.orientation,
+                }
             },
             fields: &self.fields,
             is_self: false,

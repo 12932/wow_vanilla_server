@@ -619,3 +619,66 @@ item) kept.
 - Item enchantments, random properties and charges in mail, auctions and trade.
 - Auction search's "usable" filter.
 - Mail from creatures and quests.
+
+### Phase 10 (2026-10-16)
+
+**Instances:**
+- Each dungeon and raid copy is a map actor of its own, keyed by the map and an instance id. Any teleport into an
+  instanced map (area triggers, GM commands, death's way back) picks the copy.
+- A group shares its copies; a player alone has theirs.
+- Raids need a raid group (GMs excepted).
+- A copy holds 5 (10 for Blackrock Spire, 20 for Zul'Gurub and the Ruins, 40 for other raids).
+- A dungeon copy unloads after half an hour empty (`instance_unload`), so the next visit is fresh.
+  `CMSG_RESET_INSTANCES` resets the player's (or the leader's group's) empty copies.
+- Raids bind those who enter until the raid's reset (weekly, 5 days for Onyxia, 3 for Zul'Gurub and the Ruins,
+  counted from a Tuesday 04:00 UTC). The binds are kept as records and listed by `CMSG_REQUEST_RAID_INFO`.
+
+**Battlegrounds:**
+- Queues per battleground and level bracket from `battleground_template` (players per side, levels, start
+  locations) and the battlemasters' `battlemaster_entry`. GMs may queue from anywhere.
+- A match when both sides have enough; later ones are topped up from the queue. Invitations last two minutes.
+- `SMSG_BATTLEFIELD_STATUS` is in 1.12's layout through queued, invited and in progress.
+- Warsong Gulch's rules on the match's copy:
+  - The countdown (`bg_start_delay`, two minutes), then the doors open and the flags go up.
+  - Each side takes the other's flag, with its aura, and captures at home while its own flag is there.
+  - A carrier who falls drops it: their own side returns it; the other side picks it up again.
+  - Three captures win, with the template's win and loss spells.
+  - World states for the captures and the flags; announcements; the scoreboard (`MSG_PVP_LOG_DATA`).
+  - The fallen rise at their side's start every 30 seconds, with the spirit healer's timer.
+  - Two minutes after the end, everyone goes home.
+  - Leaving before the end gives Deserter.
+
+**Transports:**
+- The boats and zeppelins of `transports` follow their `TaxiPathNode` paths in their periods, at a steady speed
+  with the paths' stops.
+- They are created with the server's clock (`UPDATEFLAG_TRANSPORT`), and everyone in their map knows them,
+  however far.
+- Where a path crosses to the other continent, the transport goes there, and those aboard (by their movement's
+  transport GUID) go with it at the same place on deck. `SMSG_TRANSFER_PENDING` carries the transport.
+- Elevators (type 11) carry the server's clock too.
+
+**The world around:**
+- Seasonal events from `game_event` (its start, end, occurrence and length). Hard-coded and disabled ones are left
+  out. Creatures and objects tied to an event spawn while it runs (or, with a negative id, while it doesn't), and
+  each map brings them into line as events start and end.
+- Weather from `game_weather`: every ten minutes, a zone keeps its weather three times in ten, or turns to rain,
+  snow, a storm or fair by the season's chances. Those in the zone are told, and so is anyone entering it.
+
+**Done when:** harness tests check that:
+- a group shares a copy and a player alone has another;
+- an empty copy unloads, and a reset starts afresh;
+- a raid needs a raid group and binds;
+- a Warsong Gulch match runs to a win;
+- a boat crossing carries its passenger to the other continent;
+- event spawns come and go;
+- the weather changes and the zone hears.
+
+A test against the real data checks the routes, including the Booty Bay boat's crossing, and the events,
+weather and battleground templates.
+
+**Left for later:**
+- Arathi Basin and Alterac Valley: queues and copies work, but not their rules (bases, resources, captains).
+- Instance boss kills, kept across a restart (and so the raid lockout's content).
+- The transport's turn: offsets on deck are kept, not rotated.
+- Event quests, and the scripted events: Darkmoon Faire, invasions.
+- Zone world states outside battlegrounds.

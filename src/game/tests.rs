@@ -3591,3 +3591,578 @@ mod commerce {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+mod instances {
+    use super::*;
+    use crate::game::data::*;
+    use crate::game::map::MapKey;
+
+    fn data() -> GameData {
+        let mut d = GameData::empty();
+        for (id, name, kind) in [(36, "DeadminesInstance", 1), (409, "MoltenCore", 2)] {
+            d.maps.insert(
+                id,
+                MapInfo {
+                    id,
+                    internal_name: name.into(),
+                    name: name.into(),
+                    instance_type: kind,
+                    player_limit: 0,
+                },
+            );
+        }
+        d
+    }
+
+    /// Send `c` into `map`'s copy and wait for it to land.
+    async fn go(realm: &std::sync::Arc<crate::game::Realm>, c: &mut Client, map: u32) {
+        let g = c.guid;
+        let from = realm.registry.online(g).unwrap().map();
+        from.call(move |m| {
+            m.teleport(
+                g,
+                MapKey::world(map),
+                Vector3d {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                0.0,
+            )
+        });
+        c.wait_for("SMSG_NEW_WORLD", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+        })
+        .await;
+        c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+        c.sees(g).await;
+    }
+
+    fn key_of(realm: &crate::game::Realm, g: Guid) -> MapKey {
+        realm.registry.online(g).unwrap().map().key
+    }
+
+    #[tokio::test]
+    async fn a_group_shares_its_copy_and_a_player_alone_has_their_own() {
+        let realm = harness::realm_with(data());
+        let (_realm, mut a, mut b) = two_near_on(realm.clone()).await;
+        let mut c = Client::connect(&realm, "C");
+        c.enter("Carol", Race::Human, Class::Priest).await;
+        a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+        b.wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+        b.send(CMSG_GROUP_ACCEPT {}).await;
+        a.wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+            _ => None,
+        })
+        .await;
+        go(&realm, &mut a, 36).await;
+        go(&realm, &mut b, 36).await;
+        go(&realm, &mut c, 36).await;
+        let (ka, kb, kc) = (
+            key_of(&realm, a.guid),
+            key_of(&realm, b.guid),
+            key_of(&realm, c.guid),
+        );
+        assert_eq!(ka.map, 36);
+        assert!(ka.instance > 0);
+        assert_eq!(ka, kb, "the group's copy");
+        assert_ne!(ka, kc, "Carol's own");
+        // In it, Alice and Bob see each other, and not Carol.
+        a.sees(b.guid).await;
+        assert!(!a.sees_within(c.guid, NONE_WITHIN).await);
+    }
+
+    #[tokio::test]
+    async fn an_empty_copy_unloads_and_a_reset_starts_afresh() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        a.enter("Alice", Race::Human, Class::Warrior).await;
+        go(&realm, &mut a, 36).await;
+        let first = key_of(&realm, a.guid);
+        go(&realm, &mut a, 0).await;
+        // Empty, it unloads; the next visit is a new copy.
+        let mut gone = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if !realm.maps.all().iter().any(|h| h.key == first) {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "the copy unloads");
+        go(&realm, &mut a, 36).await;
+        let second = key_of(&realm, a.guid);
+        assert_ne!(first, second);
+        go(&realm, &mut a, 0).await;
+        a.send(CMSG_RESET_INSTANCES {}).await;
+        let reset = a
+            .wait_for("SMSG_INSTANCE_RESET", |m| match m {
+                ServerOpcodeMessage::SMSG_INSTANCE_RESET(r) => Some(r.map),
+                _ => None,
+            })
+            .await;
+        assert_eq!(reset.as_int(), 36);
+    }
+
+    #[tokio::test]
+    async fn a_raid_needs_a_raid_group_and_binds_those_in_it() {
+        let mut cfg = harness::test_config();
+        cfg.everyone_gm = false;
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        let realm = crate::game::Realm::new(cfg, store, startup, data(), None);
+        let (_realm, mut a, mut b) = two_near_on(realm.clone()).await;
+        let ga = a.guid;
+        realm.registry.online(ga).unwrap().map().call(move |m| {
+            m.teleport(
+                ga,
+                MapKey::world(409),
+                Vector3d {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                0.0,
+            )
+        });
+        a.wait_for("the raid's refusal", |m| match m {
+            ServerOpcodeMessage::SMSG_AREA_TRIGGER_MESSAGE(t) => {
+                t.message.contains("raid").then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+        b.wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+        b.send(CMSG_GROUP_ACCEPT {}).await;
+        a.send(CMSG_GROUP_RAID_CONVERT {}).await;
+        a.wait_for("a raid roster", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => {
+                (l.group_type == GroupType::Raid).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        go(&realm, &mut a, 409).await;
+        let k = key_of(&realm, ga);
+        a.send(CMSG_REQUEST_RAID_INFO {}).await;
+        let infos = a
+            .wait_for("SMSG_RAID_INSTANCE_INFO", |m| match m {
+                ServerOpcodeMessage::SMSG_RAID_INSTANCE_INFO(r) => Some(
+                    r.raid_infos
+                        .iter()
+                        .map(|i| i.instance_id)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .await;
+        assert_eq!(infos, vec![k.instance]);
+    }
+}
+
+mod warsong {
+    use super::*;
+    use crate::game::data::*;
+    use crate::game::map::MapKey;
+    use crate::game::map::battleground::{CAPTURE_TRIGGERS, Flag};
+
+    fn data() -> GameData {
+        let mut d = GameData::empty();
+        d.maps.insert(
+            489,
+            MapInfo {
+                id: 489,
+                internal_name: "PVPZone03".into(),
+                name: "Warsong Gulch".into(),
+                instance_type: 3,
+                player_limit: 10,
+            },
+        );
+        d.battlegrounds.insert(
+            2,
+            BgTemplate {
+                id: 2,
+                min_players: 5,
+                max_players: 10,
+                min_level: 1,
+                max_level: 60,
+                starts: [769, 770],
+                ..Default::default()
+            },
+        );
+        d.safe_locs.insert(769, (489, 1519.53, 1481.87, 352.02));
+        d.safe_locs.insert(770, (489, 933.33, 1433.72, 345.54));
+        for (id, (x, y, z)) in [
+            (3646, (1540.57, 1481.47, 351.83)),
+            (3647, (916.17, 1434.47, 345.42)),
+        ] {
+            d.area_triggers.insert(
+                id,
+                AreaTrigger {
+                    id,
+                    map: 489,
+                    x,
+                    y,
+                    z,
+                    radius: 5.0,
+                    ..Default::default()
+                },
+            );
+        }
+        d
+    }
+
+    async fn queue(c: &Client) {
+        c.send(CMSG_BATTLEMASTER_JOIN {
+            guid: Guid::zero(),
+            map: Map::WarsongGulch,
+            instance_id: 0,
+            join_as_group: false,
+        })
+        .await;
+    }
+
+    async fn into_the_gulch(realm: &std::sync::Arc<crate::game::Realm>, c: &mut Client) {
+        c.wait_frame(
+            "the invitation",
+            crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+            |f| f.len() >= 17 && f[13] == 2,
+        )
+        .await;
+        c.send(CMSG_BATTLEFIELD_PORT {
+            map: Map::WarsongGulch,
+            action: BattlefieldPortAction::EnterBattle,
+        })
+        .await;
+        c.wait_for("SMSG_NEW_WORLD", |m| match m {
+            ServerOpcodeMessage::SMSG_NEW_WORLD(w) => (w.map == Map::WarsongGulch).then_some(()),
+            _ => None,
+        })
+        .await;
+        c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+        let g = c.guid;
+        c.sees(g).await;
+        let _ = realm;
+    }
+
+    /// Move `g` within the match's map, at once.
+    async fn put(map: &crate::game::map::MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
+        let g = c.guid;
+        map.query(move |m| m.teleport(g, m.key, Vector3d { x, y, z }, 0.0))
+            .await;
+        c.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+            matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+        })
+        .await;
+        c.send(MSG_MOVE_TELEPORT_ACK_Client {
+            guid: g,
+            movement_counter: 0,
+            time: Default::default(),
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_warsong_gulch_match_runs_to_a_win() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        a.enter("Alice", Race::Human, Class::Warrior).await;
+        let mut b = Client::connect(&realm, "B");
+        b.enter("Grom", Race::Orc, Class::Warrior).await;
+        queue(&a).await;
+        queue(&b).await;
+        into_the_gulch(&realm, &mut a).await;
+        into_the_gulch(&realm, &mut b).await;
+        let key = realm.registry.online(a.guid).unwrap().map().key;
+        assert_eq!(key.map, 489);
+        assert_eq!(key, realm.registry.online(b.guid).unwrap().map().key);
+        let map = realm.maps.get(&realm, key);
+        // The flags go up.
+        let mut horde_flag = None;
+        for _ in 0..100 {
+            horde_flag = map
+                .query(|m| match m.battleground.as_ref().and_then(|b| b.flags[1]) {
+                    Some(Flag::AtBase(go)) => Some(go),
+                    _ => None,
+                })
+                .await
+                .flatten();
+            if horde_flag.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(horde_flag.is_some(), "the flags go up");
+        for capture in 1..=3 {
+            let flag = map
+                .query(|m| match m.battleground.as_ref().and_then(|b| b.flags[1]) {
+                    Some(Flag::AtBase(go)) => Some(go),
+                    _ => None,
+                })
+                .await
+                .flatten()
+                .expect("the Horde's flag at its base");
+            put(&map, &mut a, 916.0, 1434.0, 345.5).await;
+            a.send(CMSG_GAMEOBJ_USE { guid: flag }).await;
+            a.wait_for("the flag taken", |m| match m {
+                ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => {
+                    (w.state.state == 2338 && w.state.value == 2).then_some(())
+                }
+                _ => None,
+            })
+            .await;
+            put(&map, &mut a, 1540.5, 1481.5, 351.8).await;
+            a.send(CMSG_AREATRIGGER {
+                trigger_id: CAPTURE_TRIGGERS[0],
+            })
+            .await;
+            let score = a
+                .wait_for("the capture", |m| match m {
+                    ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) if w.state.state == 1581 => {
+                        Some(w.state.value)
+                    }
+                    _ => None,
+                })
+                .await;
+            assert_eq!(score, capture);
+        }
+        for c in [&mut a, &mut b] {
+            let winner = c
+                .wait_for("the end", |m| match m {
+                    ServerOpcodeMessage::MSG_PVP_LOG_DATA(l) => match &l.status {
+                        MSG_PVP_LOG_DATA_Server_BattlegroundEndStatus::Ended { winner } => {
+                            Some(*winner)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .await;
+            assert_eq!(winner, BattlegroundWinner::Alliance);
+        }
+        // Grom leaves; the match is over, so no deserter.
+        b.send(CMSG_LEAVE_BATTLEFIELD {
+            map: Map::WarsongGulch,
+        })
+        .await;
+        b.wait_for("home again", |m| match m {
+            ServerOpcodeMessage::SMSG_NEW_WORLD(w) => (w.map == Map::Kalimdor).then_some(()),
+            _ => None,
+        })
+        .await;
+        let _ = MapKey::world(0);
+    }
+}
+
+mod transports {
+    use super::world::START;
+    use super::*;
+    use crate::game::data::npc::TaxiPathNode;
+    use crate::game::data::*;
+
+    const BOAT: u32 = 9999;
+
+    /// A boat that sails 100 yards from the start on Eastern Kingdoms,
+    /// crosses to Kalimdor, sails 100 more, and back, every 1.6 seconds.
+    fn data() -> GameData {
+        let mut d = GameData::empty();
+        let mut data = [0u32; 24];
+        data[0] = 77;
+        d.gameobject_templates.insert(
+            BOAT,
+            GameObjectTemplate {
+                entry: BOAT,
+                kind: 15,
+                display_id: 3015,
+                name: "The Test Boat".into(),
+                size: 1.0,
+                data,
+                ..Default::default()
+            },
+        );
+        d.transports.push(TransportRoute {
+            entry: BOAT,
+            name: "Here and There".into(),
+            period: 1600,
+        });
+        let node = |map, x: f32, y: f32| TaxiPathNode {
+            map,
+            x,
+            y,
+            z: START.2,
+            flags: 0,
+            delay: 0,
+        };
+        d.npc.taxi_path_nodes.insert(
+            77,
+            vec![
+                node(0, START.0, START.1),
+                node(0, START.0 + 100.0, START.1),
+                node(1, 1000.0, 1000.0),
+                node(1, 1100.0, 1000.0),
+            ],
+        );
+        d
+    }
+
+    #[tokio::test]
+    async fn a_boat_crossing_carries_its_passengers() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let boat = crate::game::guid::make(crate::game::guid::HighGuid::MoTransport, 0, BOAT);
+        // Everyone on its map knows the boat, however far.
+        assert!(
+            a.sees_within(boat, Duration::from_secs(3)).await,
+            "the boat"
+        );
+        // Aboard, a yard off its middle.
+        a.send(MSG_MOVE_HEARTBEAT_Client {
+            info: MovementInfo {
+                flags: MovementInfo_MovementFlags::empty().set_on_transport(
+                    MovementInfo_MovementFlags_OnTransport {
+                        transport: TransportInfo {
+                            guid: boat,
+                            position: Vector3d {
+                                x: 1.0,
+                                y: 0.0,
+                                z: 0.0,
+                            },
+                            orientation: 0.0,
+                            timestamp: 0,
+                        },
+                    },
+                ),
+                timestamp: 0,
+                position: Vector3d {
+                    x: START.0 + 1.0,
+                    y: START.1,
+                    z: START.2,
+                },
+                orientation: 0.0,
+                fall_time: 0.0,
+            },
+        })
+        .await;
+        let by = a
+            .wait_for("SMSG_TRANSFER_PENDING aboard", |m| match m {
+                ServerOpcodeMessage::SMSG_TRANSFER_PENDING(t) => {
+                    t.has_transport.as_ref().map(|h| (t.map, h.transport))
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(by, (Map::Kalimdor, BOAT));
+        let at = a
+            .wait_for("SMSG_NEW_WORLD", |m| match m {
+                ServerOpcodeMessage::SMSG_NEW_WORLD(w) => Some((w.map, w.position)),
+                _ => None,
+            })
+            .await;
+        assert_eq!(at.0, Map::Kalimdor);
+        assert!((at.1.x - 1001.0).abs() < 30.0, "on deck: {:?}", at.1);
+        a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+        a.sees(ga).await;
+        assert_eq!(realm.registry.online(ga).unwrap().map().key.map, 1);
+    }
+}
+
+mod world_around {
+    use super::world::START;
+    use super::*;
+    use crate::game::data::*;
+    use crate::game::map::MapKey;
+
+    fn data() -> GameData {
+        let mut d = super::combat::data();
+        let now = chrono::Utc::now().timestamp();
+        d.events.insert(
+            9,
+            GameEvent {
+                id: 9,
+                name: "Always".into(),
+                start: now - 60,
+                end: now + 86_400,
+                occurence: 1440,
+                length: 1440,
+            },
+        );
+        let spawn = |guid, dx: f32| CreatureSpawn {
+            guid,
+            entries: vec![2001],
+            map: 0,
+            x: START.0 + dx,
+            y: START.1 + 5.0,
+            z: START.2,
+            respawn_min: 1,
+            respawn_max: 1,
+            ..Default::default()
+        };
+        d.creature_spawns
+            .get_mut(&0)
+            .unwrap()
+            .extend([spawn(20, 1.0), spawn(21, 2.0)]);
+        // 20 comes with the event, 21 goes with it.
+        d.event_creatures.insert(20, 9);
+        d.event_creatures.insert(21, -9);
+        d.weather.insert(12, [[100, 0, 0]; 4]);
+        d
+    }
+
+    #[tokio::test]
+    async fn event_spawns_come_and_go_with_their_event() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        a.enter("Alice", Race::Human, Class::Warrior).await;
+        let (with, without) = (guid::unit(2001, 20), guid::unit(2001, 21));
+        a.sees(with).await;
+        assert!(!a.sees_within(without, NONE_WITHIN).await);
+        // The event ends.
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.query(|m| crate::game::events::apply(m, &Default::default()))
+            .await;
+        a.forgets(with).await;
+        a.sees(without).await;
+    }
+
+    #[tokio::test]
+    async fn the_weather_changes_by_its_chances_and_the_zone_hears() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        // Into Elwynn Forest, where it always rains when it changes.
+        a.send(CMSG_ZONEUPDATE {
+            area: Area::ElwynnForest,
+        })
+        .await;
+        a.wait_for("the weather on entering", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_WEATHER(_)).then_some(())
+        })
+        .await;
+        for _ in 0..50 {
+            crate::game::weather::sweep(&realm);
+            if let Some(w) = realm.social.weather.lock().get(&12).copied()
+                && w.kind == 1
+            {
+                break;
+            }
+            realm.social.weather.lock().entry(12).or_default().next = 0;
+        }
+        let rain = a
+            .wait_for("rain", |m| match m {
+                ServerOpcodeMessage::SMSG_WEATHER(w) => {
+                    (w.weather_type == WeatherType::Rain).then_some(())
+                }
+                _ => None,
+            })
+            .await;
+        let _ = (rain, ga);
+    }
+}

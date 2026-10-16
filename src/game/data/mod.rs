@@ -403,6 +403,18 @@ pub struct GameData {
     pub spells: spells::SpellData,
     /// Battlemaster entry → battleground template.
     pub battlemasters: AHashMap<u32, u32>,
+    /// `battleground_template`: 1 Alterac Valley, 2 Warsong Gulch, 3 Arathi Basin.
+    pub battlegrounds: AHashMap<u32, BgTemplate>,
+    /// `transports`: boats and zeppelins, with their cycles in milliseconds.
+    pub transports: Vec<TransportRoute>,
+    /// `game_event`: seasonal events, by id.
+    pub events: AHashMap<u32, GameEvent>,
+    /// Creature and object spawns tied to an event: during it (a positive
+    /// id) or outside it (negative).
+    pub event_creatures: AHashMap<u32, i32>,
+    pub event_objects: AHashMap<u32, i32>,
+    /// `game_weather`: a zone's rain, snow and storm chances, by season.
+    pub weather: AHashMap<u32, [[u32; 3]; 4]>,
     /// `WorldSafeLocs`: id → map, x, y, z.
     pub safe_locs: AHashMap<u32, (u32, f32, f32, f32)>,
     /// Text emote → the animation it plays.
@@ -593,5 +605,49 @@ impl GameData {
             items.extend(more.iter().copied());
         }
         items
+    }
+}
+
+/// A battleground's rules from `battleground_template`.
+#[derive(Debug, Clone, Default)]
+pub struct BgTemplate {
+    pub id: u32,
+    pub min_players: u32,
+    pub max_players: u32,
+    pub min_level: u32,
+    pub max_level: u32,
+    /// Alliance's and Horde's spells on a win and a loss.
+    pub win_spells: [u32; 2],
+    pub lose_spells: [u32; 2],
+    /// `WorldSafeLocs` where each team starts.
+    pub starts: [u32; 2],
+}
+
+/// A boat or zeppelin: its object, and how long its round takes.
+#[derive(Debug, Clone, Default)]
+pub struct TransportRoute {
+    pub entry: u32,
+    pub name: String,
+    pub period: u32,
+}
+
+/// A seasonal event: from `start` to `end` (Unix seconds), `length`
+/// minutes in every `occurence`.
+#[derive(Debug, Clone, Default)]
+pub struct GameEvent {
+    pub id: u32,
+    pub name: String,
+    pub start: i64,
+    pub end: i64,
+    pub occurence: i64,
+    pub length: i64,
+}
+
+impl GameEvent {
+    pub fn active(&self, now: i64) -> bool {
+        if self.occurence <= 0 || now < self.start || now >= self.end {
+            return false;
+        }
+        (now - self.start) % (self.occurence * 60) < self.length * 60
     }
 }

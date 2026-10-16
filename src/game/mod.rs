@@ -1,11 +1,14 @@
 //! The world server: sessions, maps, and what they share.
 
+pub mod battlegrounds;
 pub mod conn;
 pub mod data;
+pub mod events;
 pub mod fields;
 pub mod guid;
 #[cfg(test)]
 pub mod harness;
+pub mod instances;
 pub mod map;
 pub mod registry;
 pub mod session;
@@ -13,7 +16,9 @@ pub mod social;
 pub mod store;
 #[cfg(test)]
 mod tests;
+pub mod transports;
 pub mod update;
+pub mod weather;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -38,6 +43,10 @@ pub struct RealmConfig {
     pub nav_dir: Option<std::path::PathBuf>,
     pub petition_signatures: u32,
     pub mail_delay: Duration,
+    pub instance_unload: Duration,
+    /// Players a side needs for a match, over the template's.
+    pub bg_min_players: Option<u32>,
+    pub bg_start_delay: Duration,
 }
 
 impl RealmConfig {
@@ -51,6 +60,9 @@ impl RealmConfig {
             nav_dir: c.world.nav_dir.clone(),
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
+            instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,
+            bg_min_players: None,
+            bg_start_delay: Duration::from_secs(120),
         }
     }
 }
@@ -106,7 +118,9 @@ impl Realm {
             next_item: AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1),
             users,
         });
+        *realm.social.events.lock() = events::active(&realm.data, chrono::Utc::now().timestamp());
         social::start_timers(&realm);
+        transports::start(&realm);
         realm
     }
 
@@ -207,4 +221,15 @@ async fn shutdown_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+}
+
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Milliseconds since the server started: the clock transports keep time
+/// by.
+pub fn uptime_ms() -> u32 {
+    STARTED
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u32
 }

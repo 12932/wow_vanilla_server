@@ -206,6 +206,8 @@ pub struct Player {
     pub resurrect_offer: Option<(Guid, u32)>,
     pub trade: Option<crate::game::map::trade::Trade>,
     pub duel: Option<crate::game::map::duel::Duel>,
+    /// Where a player in a battleground came from.
+    pub bg_return: Option<(crate::game::map::MapKey, Vector3d, f32)>,
 }
 
 impl Player {
@@ -267,6 +269,7 @@ impl Player {
             resurrect_offer: None,
             trade: None,
             duel: None,
+            bg_return: None,
             row,
         };
         p.init_fields(data);

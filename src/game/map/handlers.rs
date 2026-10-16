@@ -189,6 +189,10 @@ impl Map {
                 crate::game::map::quests::query(self, guid, m.quest_id)
             }
             ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {}
+            ClientOpcodeMessage::CMSG_RESET_INSTANCES => crate::game::instances::reset(self, guid),
+            ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO => {
+                crate::game::instances::raid_info(self, guid)
+            }
             ClientOpcodeMessage::CMSG_CAST_SPELL(m) => {
                 crate::game::map::spells::cast_request(self, guid, m.spell, &m.targets)
             }
@@ -258,6 +262,7 @@ impl Map {
                     p.online
                         .zone
                         .store(p.zone, std::sync::atomic::Ordering::Relaxed);
+                    crate::game::weather::tell(&self.realm, &p.online, p.zone);
                 }
             }
             ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(m) => {
@@ -303,7 +308,6 @@ impl Map {
             | ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET
             | ClientOpcodeMessage::CMSG_GMTICKET_SYSTEMSTATUS
             | ClientOpcodeMessage::CMSG_BATTLEFIELD_STATUS
-            | ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO
             | ClientOpcodeMessage::CMSG_FRIEND_LIST
             | ClientOpcodeMessage::CMSG_CHAR_ENUM => {}
             ClientOpcodeMessage::CMSG_WORLD_TELEPORT(m) => {

@@ -158,6 +158,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
     p.awaiting_worldport = false;
     visibility::send_self(map, guid);
     map.visibility_dirty.insert(guid);
+    crate::game::map::battleground::arrived(map, guid);
 }
 
 /// Handle the packets of the movement family other than movement itself.

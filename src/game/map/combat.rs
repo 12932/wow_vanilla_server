@@ -668,6 +668,7 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
     stop_attack(map, victim);
     if guid::is_player(victim) {
         honor(map, killer, victim);
+        crate::game::map::battleground::died(map, victim, killer);
         death::kill(map, victim);
         // Dying to a creature wears gear down; to a player, it doesn't.
         if guid::is_unit(killer) {
