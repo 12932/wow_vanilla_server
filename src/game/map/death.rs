@@ -178,6 +178,11 @@ pub fn release(map: &mut Map, g: Guid) {
     become_ghost(p, now);
     let (pos, zone, team) = (p.position(), p.zone, p.team);
     map.add_corpse(corpse);
+    // In a battleground, the fallen wait at their side's start.
+    if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
+        map.teleport(g, map.key, at, facing);
+        return;
+    }
     let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
     map.teleport(g, to, at, facing);
 }

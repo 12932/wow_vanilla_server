@@ -100,7 +100,10 @@ pub fn is_corpse(guid: Guid) -> bool {
 }
 
 pub fn is_game_object(guid: Guid) -> bool {
-    matches!(high(guid), Some(HighGuid::GameObject | HighGuid::Transport))
+    matches!(
+        high(guid),
+        Some(HighGuid::GameObject | HighGuid::Transport | HighGuid::MoTransport)
+    )
 }
 
 /// The entry a GUID carries; 0 for kinds without one.

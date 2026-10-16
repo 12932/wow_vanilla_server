@@ -1092,6 +1092,104 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         data.battlemasters.insert(entry, bg);
     }
+    let parse_time = |s: &str| {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|t| t.and_utc().timestamp())
+    };
+    for (e, disabled, hardcoded, patch_min, patch_max) in
+        rows(db, "SELECT * FROM game_event", |c| {
+            (
+                GameEvent {
+                    id: c.u32("entry"),
+                    name: c.string("description"),
+                    start: parse_time(&c.string("start_time")).unwrap_or(i64::MAX),
+                    end: parse_time(&c.string("end_time")).unwrap_or(0),
+                    occurence: c.i64("occurence"),
+                    length: c.i64("length"),
+                },
+                c.u32("disabled"),
+                c.u32("hardcoded"),
+                c.i64("patch_min"),
+                c.i64("patch_max"),
+            )
+        })
+    {
+        // Hard-coded events are run by scripts this server hasn't got.
+        if disabled == 0 && hardcoded == 0 && patch_min <= PATCH && patch_max >= PATCH {
+            data.events.insert(e.id, e);
+        }
+    }
+    for (guid, event) in rows(db, "SELECT * FROM game_event_creature", |c| {
+        (c.u32("guid"), c.i64("event") as i32)
+    }) {
+        data.event_creatures.insert(guid, event);
+    }
+    for (guid, event) in rows(db, "SELECT * FROM game_event_gameobject", |c| {
+        (c.u32("guid"), c.i64("event") as i32)
+    }) {
+        data.event_objects.insert(guid, event);
+    }
+    for (zone, chances) in rows(db, "SELECT * FROM game_weather", |c| {
+        let season = |s: &str| {
+            [
+                c.u32(&format!("{s}_rain_chance")),
+                c.u32(&format!("{s}_snow_chance")),
+                c.u32(&format!("{s}_storm_chance")),
+            ]
+        };
+        (
+            c.u32("zone"),
+            [
+                season("spring"),
+                season("summer"),
+                season("fall"),
+                season("winter"),
+            ],
+        )
+    }) {
+        data.weather.insert(zone, chances);
+    }
+    let routes: AHashMap<u32, (i64, TransportRoute)> = rows(db, "SELECT * FROM transports", |c| {
+        (
+            c.u32("entry"),
+            c.i64("build"),
+            TransportRoute {
+                entry: c.u32("entry"),
+                name: c.string("name"),
+                period: c.u32("period"),
+            },
+        )
+    })
+    .into_iter()
+    .filter(|(_, build, _)| *build <= 5875)
+    .fold(AHashMap::new(), |mut m, (entry, build, r)| {
+        if m.get(&entry).is_none_or(|(b, _)| *b < build) {
+            m.insert(entry, (build, r));
+        }
+        m
+    });
+    data.transports = routes.into_values().map(|(_, r)| r).collect();
+    data.transports.sort_by_key(|r| r.entry);
+    data.battlegrounds = latest_patch(rows(db, "SELECT * FROM battleground_template", |c| {
+        (
+            c.u32("id"),
+            c.i64("patch"),
+            BgTemplate {
+                id: c.u32("id"),
+                min_players: c.u32("min_players_per_team"),
+                max_players: c.u32("max_players_per_team"),
+                min_level: c.u32("min_level"),
+                max_level: c.u32("max_level"),
+                win_spells: [c.u32("alliance_win_spell"), c.u32("horde_win_spell")],
+                lose_spells: [c.u32("alliance_lose_spell"), c.u32("horde_lose_spell")],
+                starts: [
+                    c.u32("alliance_start_location"),
+                    c.u32("horde_start_location"),
+                ],
+            },
+        )
+    }));
     let npc = &mut data.npc;
     for (trigger, quest) in rows(db, "SELECT * FROM areatrigger_involvedrelation", |c| {
         (c.u32("id"), c.u32("quest"))
@@ -1454,6 +1552,39 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// The boats, events and weather of the real data.
+    #[test]
+    fn boats_events_and_weather_load() {
+        let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+        if !dir.join("vmangos.sqlite").exists() {
+            return;
+        }
+        let data = load(dir);
+        let routes: Vec<_> = data
+            .transports
+            .iter()
+            .filter_map(|t| {
+                let nodes = data
+                    .npc
+                    .taxi_path_nodes
+                    .get(&data.gameobject_templates.get(&t.entry)?.data[0])?;
+                crate::game::transports::Route::new(t.entry, t.period, nodes)
+            })
+            .collect();
+        assert!(routes.len() >= 8, "{}", routes.len());
+        // The Booty Bay boat crosses between the continents.
+        let ratchet = routes
+            .iter()
+            .find(|r| r.entry == 20808)
+            .expect("Ratchet to Booty Bay");
+        let maps: std::collections::BTreeSet<u32> = ratchet.legs.iter().map(|l| l.map).collect();
+        assert_eq!(maps.into_iter().collect::<Vec<_>>(), vec![0, 1]);
+        assert!(data.events.len() > 20, "{}", data.events.len());
+        assert!(data.event_creatures.len() > 1000);
+        assert!(data.weather.len() > 20);
+        assert_eq!(data.battlegrounds[&2].max_players, 10);
     }
 
     #[test]

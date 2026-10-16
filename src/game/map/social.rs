@@ -440,6 +440,38 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_CLEAR_TRADE_ITEM(m) => trade::clear_item(map, g, m.trade_slot),
         C::CMSG_SET_TRADE_GOLD(m) => trade::set_money(map, g, m.gold.as_int()),
         C::CMSG_DUEL_ACCEPTED(_) => duel::accept(map, g),
+        C::CMSG_BATTLEMASTER_JOIN(m) => {
+            let bg = crate::game::map::npc::npc_entry(
+                map,
+                g,
+                m.guid,
+                crate::game::map::npc::NPC_FLAG_BATTLEMASTER,
+            )
+            .and_then(|e| realm.data.battlemasters.get(&e).copied())
+            .or_else(|| {
+                me.gm
+                    .then(|| crate::game::battlegrounds::bg_of_map(m.map.as_int()))
+                    .flatten()
+            });
+            if let (Some(bg), Some(p)) = (bg, map.players.get(&g)) {
+                let (team, level) = (p.team, p.level());
+                crate::game::battlegrounds::join(&realm, &me, team, level, bg);
+            }
+        }
+        C::CMSG_BATTLEFIELD_PORT(m) => {
+            crate::game::battlegrounds::port(map, g, m.action == BattlefieldPortAction::EnterBattle)
+        }
+        C::CMSG_LEAVE_BATTLEFIELD(_) => crate::game::battlegrounds::leave(map, g),
+        C::MSG_PVP_LOG_DATA => crate::game::map::battleground::scoreboard(map, g),
+        C::CMSG_AREA_SPIRIT_HEALER_QUERY(m) => {
+            if let Some(b) = map.battleground.as_ref() {
+                let left = b.resurrect_at.saturating_duration_since(map.now);
+                me.outbound.send(&SMSG_AREA_SPIRIT_HEALER_TIME {
+                    guid: m.guid,
+                    next_resurrect_time: left.as_millis() as u32,
+                });
+            }
+        }
         C::CMSG_DUEL_CANCELLED(_) => duel::cancel(map, g),
         C::CMSG_AUCTION_PLACE_BID(m) => auction::bid(map, g, &m),
         C::CMSG_AUCTION_REMOVE_ITEM(m) => auction::cancel(map, g, &m),
@@ -456,6 +488,9 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
 pub fn logged_in(map: &mut Map, g: Guid) {
     friends::logged_in(map, g);
     guilds::logged_in(map, g);
+    if let Some(p) = map.players.get(&g) {
+        crate::game::weather::tell(&map.realm, &p.online, p.zone);
+    }
     groups::logged_in(&map.realm, g);
 }
 
@@ -467,6 +502,7 @@ pub fn logged_out(map: &Map, g: Guid) {
         channels::leave_all(realm, &me);
     }
     friends::logged_out(realm, g);
+    crate::game::battlegrounds::logged_out(realm, g);
     guilds::logged_out(realm, g);
     groups::logged_out(realm, g);
 }

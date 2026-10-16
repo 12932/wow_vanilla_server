@@ -45,6 +45,19 @@ pub fn refresh(map: &mut Map, object: Guid) {
     let Some(pos) = map.position_of(object) else {
         return;
     };
+    // A boat or zeppelin: everyone in the map knows it.
+    if map.globals.contains(&object) {
+        let unaware: Vec<Guid> = map
+            .players
+            .values()
+            .filter(|p| !p.awaiting_worldport && !p.known.contains(&object))
+            .map(|p| p.guid)
+            .collect();
+        for g in unaware {
+            introduce(map, g, object);
+        }
+        return;
+    }
     if guid::is_player(object) {
         if let Some(p) = map.players.get_mut(&object) {
             if p.awaiting_worldport {
@@ -121,6 +134,16 @@ pub fn refresh(map: &mut Map, object: Guid) {
             part(map, object, g);
         }
     }
+    let globals = map.globals.clone();
+    for g in globals {
+        if map
+            .players
+            .get(&object)
+            .is_some_and(|p| !p.known.contains(&g))
+        {
+            introduce(map, object, g);
+        }
+    }
     let gone: Vec<Guid> = map
         .players
         .get(&object)
@@ -129,8 +152,10 @@ pub fn refresh(map: &mut Map, object: Guid) {
                 .iter()
                 .copied()
                 .filter(|k| {
-                    map.position_of(*k)
-                        .is_none_or(|other| dist2(other, pos) > keep2)
+                    !map.globals.contains(k)
+                        && map
+                            .position_of(*k)
+                            .is_none_or(|other| dist2(other, pos) > keep2)
                 })
                 .collect()
         })

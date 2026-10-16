@@ -89,6 +89,8 @@ pub enum MapEvent {
     Call(Box<dyn FnOnce(&mut Map) + Send>),
     /// Save everyone and stop.
     Shutdown(oneshot::Sender<()>),
+    /// Stop: an empty copy that goes.
+    Stop,
 }
 
 /// A player coming into a map.
@@ -164,6 +166,14 @@ impl Maps {
         handle
     }
 
+    /// Stop a copy and forget it: the next visit starts a fresh one.
+    pub fn stop(&self, key: MapKey) {
+        if let Some(h) = self.handles.write().remove(&key) {
+            h.send(MapEvent::Stop);
+            info!("stopped {key}");
+        }
+    }
+
     pub fn all(&self) -> Vec<MapHandle> {
         self.handles.read().values().cloned().collect()
     }
@@ -216,6 +226,14 @@ pub struct Map {
     pub next_spline_id: u32,
     /// When grouped players' stats next go out.
     pub member_stats_at: Instant,
+    /// Since when a copy has had no one in it.
+    pub empty_since: Option<Instant>,
+    /// The actor stops after this update.
+    pub stopping: bool,
+    /// The match, on a battleground's copy.
+    pub battleground: Option<battleground::Match>,
+    /// Objects every player in the map knows: the boats and zeppelins.
+    pub globals: Vec<Guid>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -244,7 +262,12 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     }
                 }
             }
-            _ = ticker.tick() => map.update(),
+            _ = ticker.tick() => {
+                map.update();
+                if map.stopping {
+                    break;
+                }
+            }
         }
     }
 }
@@ -276,6 +299,10 @@ impl Map {
             next_creature_counter: 1,
             next_spline_id: 1,
             member_stats_at: Instant::now(),
+            empty_since: None,
+            stopping: false,
+            battleground: battleground::for_map(key, Instant::now()),
+            globals: Vec::new(),
         }
     }
 
@@ -298,6 +325,7 @@ impl Map {
                 }
             }
             MapEvent::Call(f) => f(self),
+            MapEvent::Stop => return true,
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
                 for g in guids {
@@ -373,6 +401,7 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        battleground::departing(self, guid);
         duel::left(self, guid, true);
         trade::cancel(
             self,
@@ -413,6 +442,24 @@ impl Map {
         }
     }
 
+    /// A copy empty long enough unloads.
+    fn unload_if_empty(&mut self) {
+        if self.key.instance == 0 {
+            return;
+        }
+        if !self.players.is_empty() {
+            self.empty_since = None;
+            return;
+        }
+        let since = *self.empty_since.get_or_insert(self.now);
+        if self.now.duration_since(since) >= self.realm.config.instance_unload {
+            self.realm.maps.stop(self.key);
+            crate::game::instances::unloaded(&self.realm, self.key);
+            crate::game::battlegrounds::closed(&self.realm, self.key);
+            self.stopping = true;
+        }
+    }
+
     /// Send a player to `key` at `position`, within this map or to another.
     pub fn teleport(
         &mut self,
@@ -421,6 +468,30 @@ impl Map {
         position: wow_world_messages::vanilla::Vector3d,
         orientation: f32,
     ) {
+        let mut key = key;
+        if key.instance == 0 && key.map != self.key.map {
+            let gm = self.players.get(&guid).is_some_and(|p| p.gm);
+            match crate::game::instances::key_for(&self.realm, guid, gm, key.map) {
+                Ok(k) => key = k,
+                Err(refused) => {
+                    if let Some(p) = self.players.get(&guid) {
+                        match refused {
+                            crate::game::instances::Refused::Abort(reason) => p.outbound.send(
+                                &wow_world_messages::vanilla::SMSG_TRANSFER_ABORTED {
+                                    map: movement::map_enum(key.map),
+                                    reason,
+                                    argument: 0,
+                                },
+                            ),
+                            crate::game::instances::Refused::Message(message) => p.outbound.send(
+                                &wow_world_messages::vanilla::SMSG_AREA_TRIGGER_MESSAGE { message },
+                            ),
+                        };
+                    }
+                    return;
+                }
+            }
+        }
         if key == self.key {
             movement::teleport_within(self, guid, position, orientation);
             return;
@@ -461,6 +532,8 @@ impl Map {
         auras::update(self);
         social::push_member_stats(self);
         duel::update(self);
+        battleground::update(self);
+        self.unload_if_empty();
         ai::update_creatures(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);

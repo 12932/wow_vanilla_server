@@ -96,6 +96,13 @@ pub enum Placement {
         position: Vector3d,
         orientation: f32,
     },
+    /// A transport (an elevator, a boat): where it is, and the server's
+    /// clock its client times its path by.
+    Transport {
+        position: Vector3d,
+        orientation: f32,
+        time: u32,
+    },
     /// An item: nowhere.
     None,
 }
@@ -154,6 +161,7 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
     match &c.placement {
         Placement::Living { .. } => flags |= UPDATEFLAG_LIVING,
         Placement::Position { .. } => flags |= UPDATEFLAG_HAS_POSITION,
+        Placement::Transport { .. } => flags |= UPDATEFLAG_HAS_POSITION | UPDATEFLAG_TRANSPORT,
         Placement::None => {}
     }
     out.push(flags);
@@ -218,12 +226,23 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
             write_vector(out, *position);
             out.extend_from_slice(&orientation.to_le_bytes());
         }
+        Placement::Transport {
+            position,
+            orientation,
+            ..
+        } => {
+            write_vector(out, *position);
+            out.extend_from_slice(&orientation.to_le_bytes());
+        }
         Placement::None => {}
     }
     // UPDATEFLAG_ALL's word.
     out.extend_from_slice(&1u32.to_le_bytes());
     if let Some(target) = c.melee_target {
         write_packed_guid(out, target);
+    }
+    if let Placement::Transport { time, .. } = &c.placement {
+        out.extend_from_slice(&time.to_le_bytes());
     }
 }
 
