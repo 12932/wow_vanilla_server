@@ -10,6 +10,7 @@ pub mod chat;
 pub mod combat;
 pub mod creature;
 pub mod death;
+pub mod derive;
 pub mod duel;
 pub mod gameobject;
 pub mod gm;
@@ -21,6 +22,7 @@ pub mod loot;
 pub mod movement;
 pub mod nav;
 pub mod npc;
+pub mod pets;
 pub mod player;
 pub mod query;
 pub mod quests;
@@ -589,6 +591,7 @@ impl Map {
         self.stats.updates += 1;
 
         self.update_players();
+        inventory::sync_gear_all(self);
         combat::update_players(self);
         npc::update_flights(self);
         spells::update(self);

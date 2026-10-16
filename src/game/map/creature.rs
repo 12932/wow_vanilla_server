@@ -180,6 +180,12 @@ pub struct Creature {
     /// Its faction is hostile to players: it looks for them.
     pub hostile_to_players: bool,
     pub loot: Option<crate::game::map::loot::Loot>,
+    /// Its values before auras.
+    pub base: crate::game::map::derive::UnitBase,
+    pub derived: crate::game::map::derive::Derived,
+    pub taunted_by: Option<Guid>,
+    /// The unit that summoned or owns it: a pet's master, a totem's shaman.
+    pub owner: Option<Guid>,
 }
 
 /// Alive, or dead and waiting.
@@ -268,7 +274,19 @@ impl Creature {
             aggro_check_at: Instant::now(),
             hostile_to_players: false,
             loot: None,
+            base: Default::default(),
+            derived: Default::default(),
+            taunted_by: None,
+            owner: None,
         }
+        .with_base()
+    }
+
+    /// Its values as they now are become its base.
+    pub fn with_base(mut self) -> Self {
+        self.base = crate::game::map::derive::UnitBase::capture(&self.fields, self.speeds.run);
+        crate::game::map::derive::creature(&mut self);
+        self
     }
 
     /// A creature for a spawn: its entry picked among the spawn's, its
@@ -397,7 +415,11 @@ impl Creature {
                 until: Some(Instant::now() + Duration::from_millis(rng.random_range(0..8_000))),
             };
         }
-        Some(c)
+        for (i, r) in template.resistances.iter().enumerate() {
+            c.fields
+                .set_u32(UNIT_FIELD_RESISTANCES + 1 + i as u16, (*r).max(0) as u32);
+        }
+        Some(c.with_base())
     }
 
     /// The weapons a creature holds.

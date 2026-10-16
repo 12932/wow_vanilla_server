@@ -275,7 +275,7 @@ impl Player {
             item.fields.set_guid(ITEM_FIELD_CONTAINED, own);
         }
         self.apply_stats(data);
-        crate::game::map::combat::player_damage(self, data);
+        self.gear_dirty = true;
     }
 }
 
@@ -742,6 +742,90 @@ pub fn gear_bonuses(p: &Player, data: &GameData) -> ([i32; 5], i32, i32, i32) {
         }
     }
     (stats, health, mana, armor)
+}
+
+/// Item spells' triggers.
+pub const ITEM_SPELL_ON_USE: u32 = 0;
+pub const ITEM_SPELL_ON_EQUIP: u32 = 1;
+pub const ITEM_SPELL_CHANCE_ON_HIT: u32 = 2;
+
+/// The auras a player's gear gives, for those whose gear changed.
+pub fn sync_gear_all(map: &mut Map) {
+    let dirty: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| p.gear_dirty)
+        .map(|p| p.guid)
+        .collect();
+    for g in dirty {
+        sync_gear(map, g);
+    }
+}
+
+/// A player's gear auras in line with what they wear: each equipped,
+/// unbroken item's on-equip spells, and nothing from gear they took off.
+pub fn sync_gear(map: &mut Map, g: Guid) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    p.gear_dirty = false;
+    let mut wanted: Vec<(Guid, u32)> = Vec::new();
+    for item in p
+        .items
+        .iter()
+        .filter(|i| i.bag == BAG_PLAYER && i.slot < EQUIPMENT_END)
+    {
+        if item.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+            && item.fields.get_u32(ITEM_FIELD_DURABILITY) == 0
+        {
+            continue;
+        }
+        let Some(t) = data.item(item.entry) else {
+            continue;
+        };
+        for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_ON_EQUIP) {
+            wanted.push((item.guid, s.id));
+        }
+    }
+    let have: Vec<(Guid, u32)> = p
+        .auras
+        .holders
+        .iter()
+        .filter(|h| h.equipped)
+        .filter_map(|h| h.item.map(|i| (i, h.spell)))
+        .collect();
+    let stale: Vec<(Guid, u32)> = have.iter().filter(|x| !wanted.contains(x)).copied().collect();
+    for (item, spell) in stale {
+        crate::game::map::auras::remove_where(map, g, |h| {
+            h.equipped && h.item == Some(item) && h.spell == spell
+        });
+    }
+    for (item, spell) in wanted.into_iter().filter(|x| !have.contains(x)) {
+        let Some(s) = data.spells.get(spell) else {
+            continue;
+        };
+        let effects: Vec<(usize, i32)> = (0..3)
+            .filter(|i| matches!(s.effects[*i].effect, 6 | 35) && s.effects[*i].aura != 0)
+            .map(|i| (i, crate::game::map::spells::points(s, i, 1)))
+            .collect();
+        if effects.is_empty() {
+            continue;
+        }
+        let _ = crate::game::map::auras::apply_spell(
+            map,
+            g,
+            g,
+            s,
+            &effects,
+            crate::game::map::auras::Context {
+                item: Some(item),
+                equipped: true,
+                duration: Some(None),
+                ..Default::default()
+            },
+        );
+    }
 }
 
 /// Take an item out of a player's hands whole, for the mail, the auction

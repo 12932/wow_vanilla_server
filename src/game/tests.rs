@@ -2103,7 +2103,7 @@ mod spells {
                 .query(move |m| {
                     m.creature(boar).map(|c| {
                         (
-                            c.auras.list.is_empty(),
+                            c.auras.holders.is_empty(),
                             c.fields.get_u32(UNIT_FIELD_AURA + 32),
                         )
                     })
@@ -2169,7 +2169,7 @@ mod spells {
                 (
                     before,
                     p.fields.get_u32(UNIT_FIELD_STAT0 + 2),
-                    p.auras.list.iter().any(|a| a.spell == 104),
+                    p.auras.holders.iter().any(|a| a.spell == 104),
                 )
             })
             .await
@@ -2248,9 +2248,9 @@ mod real {
         let p = &m.players[&g];
         (
             c.map_or(0, |c| c.fields.get_u32(UNIT_FIELD_HEALTH)),
-            c.map_or(0, |c| c.auras.list.len()),
+            c.map_or(0, |c| c.auras.holders.len()),
             p.fields.get_u32(UNIT_FIELD_HEALTH),
-            p.auras.list.len(),
+            p.auras.holders.len(),
             p.caster.combo_points,
         )
     }

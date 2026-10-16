@@ -877,46 +877,6 @@ pub fn leave_combat(map: &mut Map, g: Guid) {
     }
 }
 
-/// A player's melee damage and armor, from their weapon, attack power and
-/// gear.
-pub fn player_damage(p: &mut crate::game::map::player::Player, data: &crate::game::data::GameData) {
-    let level = u32::from(p.level());
-    let stat = |i: u16| p.fields.get_u32(UNIT_FIELD_STAT0 + i);
-    let (strength, agility) = (stat(0), stat(1));
-    let ap = match p.row.class {
-        1 | 2 | 7 => level * 3 + strength * 2,
-        3 | 4 => level * 2 + strength + agility,
-        11 => strength * 2,
-        _ => strength,
-    }
-    .saturating_sub(20);
-    let weapon = p
-        .items
-        .iter()
-        .find(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == 15)
-        .and_then(|i| data.item(i.entry));
-    let (min, max, delay) = match weapon {
-        Some(t) if t.delay > 0 => (t.damages[0].0, t.damages[0].1, t.delay),
-        _ => (1.0, 2.0, 2000),
-    };
-    let bonus = ap as f32 / 14.0 * delay as f32 / 1000.0;
-    p.fields.set_u32(UNIT_FIELD_ATTACK_POWER, ap);
-    p.fields.set_u32(UNIT_FIELD_BASEATTACKTIME, delay);
-    p.fields.set_f32(UNIT_FIELD_MINDAMAGE, min + bonus);
-    p.fields.set_f32(UNIT_FIELD_MAXDAMAGE, max + bonus);
-    let gear: i32 = p
-        .items
-        .iter()
-        .filter(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot < 19)
-        .filter_map(|i| data.item(i.entry))
-        .map(|t| t.armor)
-        .sum();
-    p.fields.set_u32(
-        UNIT_FIELD_RESISTANCES,
-        (agility as i32 * 2 + gear).max(0) as u32,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

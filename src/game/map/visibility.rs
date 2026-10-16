@@ -29,6 +29,12 @@ pub fn moved(map: &mut Map, object: Guid, anchor: Vector3d, position: Vector3d) 
 }
 
 /// Work out the visibility of everything marked since the last update.
+/// A unit's stealth or invisibility changed: who sees it is worked out
+/// again.
+pub fn stealth_changed(map: &mut Map, g: Guid) {
+    refresh(map, g);
+}
+
 pub fn refresh_dirty(map: &mut Map) {
     if map.visibility_dirty.is_empty() {
         return;

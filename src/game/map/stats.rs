@@ -176,7 +176,6 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
     p.apply_stats(data);
     crate::game::map::skills::level_up(p);
     crate::game::map::spells::refresh_talent_points(p, data);
-    crate::game::map::combat::player_damage(p, data);
     p.fields
         .set_u32(PLAYER_NEXT_LEVEL_XP, data.xp_to_level(level).max(1));
     p.row.played_level = 0;

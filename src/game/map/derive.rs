@@ -1,0 +1,758 @@
+//! A unit's derived stats, worked out again whenever its gear, level or
+//! auras change: stats, health and power, armor and resistances, attack
+//! power, weapon damage, attack and cast speed, and the chances to crit,
+//! hit, dodge, parry and block. The formulas are vmangos's, as Thistle Tea's
+//! `Core.Stats` ports them; the update fields show them on the client's
+//! character sheet, and [`Derived`] keeps them for combat.
+
+use wow_world_messages::Guid;
+
+use crate::game::data::GameData;
+use crate::game::fields::*;
+use crate::game::map::Map;
+use crate::game::map::auras::{self, *};
+use crate::game::map::player::Player;
+
+const WARRIOR: u8 = 1;
+const PALADIN: u8 = 2;
+const HUNTER: u8 = 3;
+const ROGUE: u8 = 4;
+const PRIEST: u8 = 5;
+const SHAMAN: u8 = 7;
+const MAGE: u8 = 8;
+const WARLOCK: u8 = 9;
+const DRUID: u8 = 11;
+
+/// The spells that teach parrying and blocking.
+pub const SPELL_PARRY: u32 = 3127;
+pub const SPELL_BLOCK: u32 = 107;
+pub const SPELL_DUAL_WIELD: u32 = 674;
+
+/// What combat reads of a unit's stats.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Derived {
+    /// In percent.
+    pub crit: f32,
+    pub ranged_crit: f32,
+    pub dodge: f32,
+    pub parry: f32,
+    pub block: f32,
+    pub spell_crit: [f32; 7],
+    pub hit: f32,
+    pub ranged_hit: f32,
+    pub spell_hit: f32,
+    pub block_value: u32,
+    pub attack_power: u32,
+    pub ranged_attack_power: u32,
+    /// Spell power by school, and healing power.
+    pub spell_power: [i32; 7],
+    pub healing_power: i32,
+    pub weapon_skill: u32,
+    pub ranged_skill: u32,
+    pub defense: u32,
+    pub dual_wield: bool,
+}
+
+/// A creature's values before its auras.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnitBase {
+    pub max_health: u32,
+    pub max_mana: u32,
+    pub resistances: [i32; 7],
+    pub min_damage: f32,
+    pub max_damage: f32,
+    pub min_ranged: f32,
+    pub max_ranged: f32,
+    pub attack_time: u32,
+    pub ranged_time: u32,
+    pub attack_power: u32,
+    pub ranged_attack_power: u32,
+    pub run_speed: f32,
+}
+
+impl UnitBase {
+    /// A creature's values as spawned.
+    pub fn capture(f: &Fields, run_speed: f32) -> Self {
+        Self {
+            max_health: f.get_u32(UNIT_FIELD_MAXHEALTH),
+            max_mana: f.get_u32(UNIT_FIELD_MAXPOWER1),
+            resistances: std::array::from_fn(|i| f.get_u32(UNIT_FIELD_RESISTANCES + i as u16) as i32),
+            min_damage: f.get_f32(UNIT_FIELD_MINDAMAGE),
+            max_damage: f.get_f32(UNIT_FIELD_MAXDAMAGE),
+            min_ranged: f.get_f32(UNIT_FIELD_MINRANGEDDAMAGE),
+            max_ranged: f.get_f32(UNIT_FIELD_MAXRANGEDDAMAGE),
+            attack_time: f.get_u32(UNIT_FIELD_BASEATTACKTIME),
+            ranged_time: f.get_u32(UNIT_FIELD_RANGEDATTACKTIME),
+            attack_power: f.get_u32(UNIT_FIELD_ATTACK_POWER),
+            ranged_attack_power: f.get_u32(UNIT_FIELD_RANGED_ATTACK_POWER),
+            run_speed,
+        }
+    }
+}
+
+/// What a player's gear gives.
+#[derive(Debug, Clone, Default)]
+pub struct Gear {
+    pub stats: [i32; 5],
+    pub health: i32,
+    pub mana: i32,
+    /// Armor, then holy to arcane.
+    pub resistances: [i32; 7],
+    pub shield: bool,
+    pub shield_block: i32,
+    pub main: Option<Weapon>,
+    pub off: Option<Weapon>,
+    pub ranged: Option<Weapon>,
+}
+
+/// A weapon in a hand.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Weapon {
+    pub entry: u32,
+    pub guid: Guid,
+    pub subclass: u32,
+    pub min: f32,
+    pub max: f32,
+    pub delay: u32,
+    pub ammo_type: u32,
+}
+
+/// The weapon skill a weapon subclass trains.
+pub fn weapon_skill(subclass: u32) -> u32 {
+    match subclass {
+        0 => 44,   // axes
+        1 => 172,  // two-handed axes
+        2 => 45,   // bows
+        3 => 46,   // guns
+        4 => 54,   // maces
+        5 => 160,  // two-handed maces
+        6 => 229,  // polearms
+        7 => 43,   // swords
+        8 => 55,   // two-handed swords
+        10 => 136, // staves
+        13 => 473, // fist weapons
+        15 => 173, // daggers
+        16 => 176, // thrown
+        18 => 226, // crossbows
+        19 => 228, // wands
+        _ => 162,  // unarmed
+    }
+}
+
+pub const SKILL_DEFENSE: u32 = 95;
+
+/// What a player's equipped gear gives, and the weapons in their hands.
+pub fn gear(p: &Player, data: &GameData) -> Gear {
+    use crate::game::store::BAG_PLAYER;
+    let mut g = Gear::default();
+    for item in p.items.iter().filter(|i| i.bag == BAG_PLAYER && i.slot < 19) {
+        let Some(t) = data.item(item.entry) else {
+            continue;
+        };
+        // Broken gear gives nothing.
+        if item.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+            && item.fields.get_u32(ITEM_FIELD_DURABILITY) == 0
+        {
+            continue;
+        }
+        g.resistances[0] += t.armor;
+        for (i, r) in t.resistances.iter().enumerate() {
+            g.resistances[i + 1] += r;
+        }
+        for (kind, value) in t.stats {
+            match kind {
+                0 => g.mana += value,
+                1 => g.health += value,
+                3 => g.stats[1] += value,
+                4 => g.stats[0] += value,
+                5 => g.stats[3] += value,
+                6 => g.stats[4] += value,
+                7 => g.stats[2] += value,
+                _ => {}
+            }
+        }
+        if t.inventory_type == 14 {
+            g.shield = true;
+            g.shield_block += t.block as i32;
+        }
+        let weapon = || Weapon {
+            entry: t.entry,
+            guid: item.guid,
+            subclass: t.subclass,
+            min: t.damages[0].0,
+            max: t.damages[0].1,
+            delay: t.delay,
+            ammo_type: t.ammo_type,
+        };
+        if t.class == 2 && t.delay > 0 {
+            match item.slot {
+                15 => g.main = Some(weapon()),
+                16 => g.off = Some(weapon()),
+                17 => g.ranged = Some(weapon()),
+                _ => {}
+            }
+        }
+    }
+    g
+}
+
+/// Whether an aura with a weapon restriction applies to `w`.
+pub fn fits(h: &Holder, w: Option<&Weapon>) -> bool {
+    if h.item_class < 0 {
+        return true;
+    }
+    let Some(w) = w else {
+        return false;
+    };
+    h.item_class == 2 && (h.item_subclass_mask <= 0 || h.item_subclass_mask & (1 << w.subclass) != 0)
+}
+
+/// The sum of `kind` auras that apply to the weapon `w`.
+fn sum_for(a: &Auras, kind: u32, w: Option<&Weapon>) -> f32 {
+    a.effects()
+        .filter(|(h, x)| x.kind == kind && fits(h, w))
+        .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
+        .sum()
+}
+
+/// A haste or slow as a multiplier on a period: +25 haste is 0.8.
+fn speed_factor(amount: i32) -> f32 {
+    if amount >= 0 {
+        100.0 / (100 + amount) as f32
+    } else {
+        (100 - amount) as f32 / 100.0
+    }
+}
+
+fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
+    a.effects()
+        .filter(|(_, x)| kinds.contains(&x.kind))
+        .fold(1.0, |m, (h, x)| m * speed_factor(x.amount * h.stacks.max(1) as i32))
+}
+
+/// Per-class rates for crit and dodge from agility at levels 1 and 60.
+fn agility_rate(class: u8, level: u32, dodge: bool) -> f32 {
+    let (l1, l60) = match (class, dodge) {
+        (WARRIOR, _) => (3.9, 20.0),
+        (PALADIN, _) => (4.6, 20.0),
+        (HUNTER, false) => (3.5, 53.0),
+        (HUNTER, true) => (1.8, 26.5),
+        (ROGUE, false) => (2.2, 29.0),
+        (ROGUE, true) => (1.1, 14.5),
+        (PRIEST, _) => (11.0, 20.0),
+        (SHAMAN, _) => (4.6, 20.0),
+        (MAGE, _) => (12.9, 20.0),
+        (WARLOCK, _) => (8.4, 20.0),
+        (DRUID, _) => (4.6, 20.0),
+        _ => (20.0, 20.0),
+    };
+    let level = level.clamp(1, 60) as f32;
+    l1 * (60.0 - level) / 59.0 + l60 * (level - 1.0) / 59.0
+}
+
+fn class_base_bonus(class: u8) -> f32 {
+    match class {
+        PALADIN => 0.7,
+        PRIEST => 3.0,
+        SHAMAN => 1.7,
+        MAGE => 3.2,
+        WARLOCK => 2.0,
+        DRUID => 0.9,
+        _ => 0.0,
+    }
+}
+
+/// Spell crit from intellect.
+pub fn spell_crit_chance(class: u8, level: u32, intellect: u32) -> f32 {
+    let (base, r0, r1) = match class {
+        PALADIN => (3.70, 14.77, 0.65),
+        PRIEST => (2.97, 10.03, 0.82),
+        SHAMAN => (3.54, 11.51, 0.80),
+        MAGE => (3.70, 14.77, 0.65),
+        WARLOCK => (3.18, 11.30, 0.82),
+        DRUID => (3.33, 12.41, 0.79),
+        _ => return 0.0,
+    };
+    (base + intellect as f32 / (r0 + r1 * level.max(1) as f32)).max(0.0)
+}
+
+pub fn melee_attack_power(class: u8, level: u32, strength: u32, agility: u32) -> u32 {
+    let (l, s, a) = (level as i32, strength as i32, agility as i32);
+    let v = match class {
+        WARRIOR | PALADIN => l * 3 + s * 2 - 20,
+        ROGUE | HUNTER => l * 2 + s + a - 20,
+        SHAMAN => l * 2 + s * 2 - 20,
+        DRUID => s * 2 - 20,
+        _ => s - 10,
+    };
+    v.max(0) as u32
+}
+
+pub fn ranged_attack_power(class: u8, level: u32, agility: u32) -> u32 {
+    let (l, a) = (level as i32, agility as i32);
+    let v = match class {
+        HUNTER => l * 2 + a * 2 - 10,
+        ROGUE | WARRIOR => l + a - 10,
+        _ => a - 10,
+    };
+    v.max(0) as u32
+}
+
+fn stamina_health(stamina: u32) -> u32 {
+    stamina.min(20) + stamina.saturating_sub(20) * 10
+}
+
+fn intellect_mana(intellect: u32) -> u32 {
+    intellect.min(20) + intellect.saturating_sub(20) * 15
+}
+
+/// Armor (school 0) and resistances, from a base, auras and agility.
+fn resistances(a: &Auras, base: [i32; 7], agility: u32, creature: bool) -> [i32; 7] {
+    std::array::from_fn(|i| {
+        let bit = 1u32 << i;
+        let initial = base[i] + a.sum_mask(AURA_MOD_BASE_RESISTANCE, bit);
+        let scaled = initial as f32 * a.product_mask(AURA_MOD_BASE_RESISTANCE_PCT, bit);
+        let stat = if i == 0 {
+            if creature { agility } else { agility * 2 }
+        } else {
+            0
+        } as f32;
+        let exclusive = {
+            let v: Vec<i32> = a
+                .effects()
+                .filter(|(_, x)| {
+                    x.kind == AURA_MOD_RESISTANCE_EXCLUSIVE && (x.misc as u32) & bit != 0
+                })
+                .map(|(h, x)| x.amount * h.stacks.max(1) as i32)
+                .collect();
+            v.iter().copied().max().unwrap_or(0).max(0) + v.iter().copied().min().unwrap_or(0).min(0)
+        };
+        let total = scaled + stat + a.sum_mask(AURA_MOD_RESISTANCE, bit) as f32 + exclusive as f32;
+        let value = (total * a.product_mask(AURA_MOD_RESISTANCE_PCT, bit)) as i32;
+        if base[i] < 0 { value } else { value.max(0) }
+    })
+}
+
+/// Work a unit's stats out again.
+pub fn unit(map: &mut Map, g: Guid) {
+    let data = map.realm.data.clone();
+    if let Some(p) = map.players.get_mut(&g) {
+        player(p, &data);
+        speed(map, g);
+        return;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        creature(c);
+        speed(map, g);
+    }
+}
+
+/// A player's stats from their level, gear and auras.
+pub fn player(p: &mut Player, data: &GameData) {
+    let level = u32::from(p.level());
+    let class = p.row.class;
+    let Some(base) = data.level_stats(p.row.race, class, p.level()) else {
+        p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 100);
+        return;
+    };
+    let g = gear(p, data);
+    let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
+    let disarmed = p.auras.has(AURA_MOD_DISARM);
+    let skill_of = |w: Option<&Weapon>| {
+        let skill = w.map_or(162, |w| weapon_skill(w.subclass));
+        crate::game::map::skills::value(p, skill).unwrap_or(level * 5)
+            + p.auras.sum_misc(AURA_MOD_SKILL, skill as i32).max(0) as u32
+            + p.auras.sum_misc(AURA_MOD_SKILL_TALENT, skill as i32).max(0) as u32
+    };
+    let main_hand = match (class, form) {
+        (DRUID, auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR) => None,
+        _ => g.main.filter(|_| !disarmed),
+    };
+    let weapon_skill = skill_of(main_hand.as_ref());
+    let ranged_skill = skill_of(g.ranged.as_ref());
+    let defense = crate::game::map::skills::value(p, SKILL_DEFENSE).unwrap_or(level * 5)
+        + p.auras.sum_misc(AURA_MOD_SKILL, SKILL_DEFENSE as i32).max(0) as u32
+        + p.auras.sum_misc(AURA_MOD_SKILL_TALENT, SKILL_DEFENSE as i32).max(0) as u32;
+    let knows_parry = p.spells.contains(&SPELL_PARRY);
+    let knows_block = p.spells.contains(&SPELL_BLOCK);
+    let knows_dual_wield = p.spells.contains(&SPELL_DUAL_WIELD);
+    let a = &p.auras;
+    let f = &mut p.fields;
+    let mut stat = [0u32; 5];
+    for i in 0..5 {
+        let own = (base.stats[i] as i32 + g.stats[i]) as f32;
+        let v = (own * a.product_misc(AURA_MOD_PERCENT_STAT, i as i32)
+            + a.sum_misc(AURA_MOD_STAT, i as i32) as f32)
+            * a.product_misc(AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32);
+        stat[i] = v.max(0.0) as u32;
+        let s = i as u16;
+        f.set_u32(UNIT_FIELD_STAT0 + s, stat[i]);
+        let diff = stat[i] as i32 - base.stats[i] as i32;
+        f.set_u32(PLAYER_FIELD_POSSTAT0 + s, diff.max(0) as u32);
+        f.set_u32(PLAYER_FIELD_NEGSTAT0 + s, (-diff).max(0) as u32);
+    }
+    let [strength, agility, stamina, intellect, spirit] = stat;
+    let _ = spirit;
+    // Health and power.
+    let health = (base.health + stamina_health(stamina)) as f32
+        + g.health as f32
+        + a.sum(AURA_MOD_INCREASE_HEALTH) as f32;
+    let health = (health * a.product(AURA_MOD_INCREASE_HEALTH_PERCENT)).max(1.0) as u32;
+    f.set_u32(UNIT_FIELD_BASE_HEALTH, base.health);
+    f.set_u32(UNIT_FIELD_MAXHEALTH, health);
+    if f.get_u32(UNIT_FIELD_HEALTH) > health {
+        f.set_u32(UNIT_FIELD_HEALTH, health);
+    }
+    f.set_u32(UNIT_FIELD_BASE_MANA, base.mana);
+    if base.mana > 0 {
+        let mana = (base.mana + intellect_mana(intellect)) as f32
+            + g.mana as f32
+            + a.sum_misc(AURA_MOD_INCREASE_ENERGY, 0) as f32;
+        let mana = (mana * a.product_misc(AURA_MOD_INCREASE_ENERGY_PERCENT, 0)).max(0.0) as u32;
+        f.set_u32(UNIT_FIELD_MAXPOWER1, mana);
+        if f.get_u32(UNIT_FIELD_POWER1) > mana {
+            f.set_u32(UNIT_FIELD_POWER1, mana);
+        }
+    }
+    let energy = (100.0 + a.sum_misc(AURA_MOD_INCREASE_ENERGY, 3) as f32)
+        * a.product_misc(AURA_MOD_INCREASE_ENERGY_PERCENT, 3);
+    if class == ROGUE || class == DRUID {
+        f.set_u32(UNIT_FIELD_MAXPOWER1 + 3, energy.max(0.0) as u32);
+    }
+    if class == WARRIOR || class == DRUID {
+        f.set_u32(UNIT_FIELD_MAXPOWER1 + 1, 1000);
+    }
+    // Armor and resistances.
+    let res = resistances(a, g.resistances, agility, false);
+    for (i, v) in res.iter().enumerate() {
+        let s = i as u16;
+        f.set_u32(UNIT_FIELD_RESISTANCES + s, (*v).max(0) as u32);
+        let diff = *v - g.resistances[i];
+        f.set_u32(PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE + s, diff.max(0) as u32);
+        f.set_u32(PLAYER_FIELD_RESISTANCEBUFFMODSNEGATIVE + s, (-diff).max(0) as u32);
+    }
+    // Attack power.
+    let mut ap_base = melee_attack_power(class, level, strength, agility);
+    if class == DRUID {
+        // Cat form adds agility; bear form gets three per level more.
+        match form {
+            auras::FORM_CAT => ap_base += agility + level * 2,
+            auras::FORM_BEAR | auras::FORM_DIREBEAR => ap_base += level * 3,
+            auras::FORM_MOONKIN => ap_base += level * 3 / 2,
+            _ => {}
+        }
+    }
+    let ap_mods = a.sum(AURA_MOD_ATTACK_POWER);
+    let ap_mult = a.product(AURA_MOD_ATTACK_POWER_PCT);
+    f.set_u32(UNIT_FIELD_ATTACK_POWER, ap_base);
+    f.set_u32(UNIT_FIELD_ATTACK_POWER_MODS, ap_mods.max(0) as u32);
+    f.set_f32(UNIT_FIELD_ATTACK_POWER_MULTIPLIER, ap_mult - 1.0);
+    let ap = ((ap_base as i32 + ap_mods) as f32 * ap_mult).max(0.0);
+    let rap_base = ranged_attack_power(class, level, agility);
+    let rap_mods = a.sum(AURA_MOD_RANGED_ATTACK_POWER);
+    let rap_mult = a.product(AURA_MOD_RANGED_ATTACK_POWER_PCT);
+    f.set_u32(UNIT_FIELD_RANGED_ATTACK_POWER, rap_base);
+    f.set_u32(UNIT_FIELD_RANGED_ATTACK_POWER_MODS, rap_mods.max(0) as u32);
+    f.set_f32(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER, rap_mult - 1.0);
+    let rap = ((rap_base as i32 + rap_mods) as f32 * rap_mult).max(0.0);
+    // Weapon damage and speed: a druid in cat or bear form fights with
+    // the form's paws.
+    let physical_pct = a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, 1);
+    let (main, main_delay) = match (class, form) {
+        (DRUID, auras::FORM_CAT) => (None, 1000),
+        (DRUID, auras::FORM_BEAR | auras::FORM_DIREBEAR) => (None, 2500),
+        _ => match g.main.filter(|_| !disarmed) {
+            Some(w) => (Some(w), w.delay),
+            None => (None, 2000),
+        },
+    };
+    let (min, max) = main.map_or((1.0, 2.0), |w| (w.min, w.max));
+    let (min, max) = if main.is_none() && class == DRUID && form != 0 {
+        // A level-scaled paw.
+        let base = level as f32 * 0.85 * main_delay as f32 / 1000.0;
+        (base.max(1.0), (base * 1.25).max(2.0))
+    } else {
+        (min, max)
+    };
+    let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
+    let bonus = ap / 14.0 * main_delay as f32 / 1000.0;
+    f.set_f32(UNIT_FIELD_MINDAMAGE, (min + bonus) * physical_pct);
+    f.set_f32(UNIT_FIELD_MAXDAMAGE, (max + bonus) * physical_pct);
+    f.set_u32(
+        UNIT_FIELD_BASEATTACKTIME,
+        ((main_delay as f32 * haste) as u32).max(100),
+    );
+    let dual_wield = knows_dual_wield && g.off.is_some() && form == 0;
+    match g.off.filter(|_| dual_wield) {
+        Some(w) => {
+            let bonus = ap / 14.0 * w.delay as f32 / 1000.0;
+            let pct = physical_pct * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+            f.set_f32(UNIT_FIELD_MINOFFHANDDAMAGE, (w.min + bonus) * 0.5 * pct);
+            f.set_f32(UNIT_FIELD_MAXOFFHANDDAMAGE, (w.max + bonus) * 0.5 * pct);
+            f.set_u32(
+                UNIT_FIELD_BASEATTACKTIME + 1,
+                ((w.delay as f32 * haste) as u32).max(100),
+            );
+        }
+        None => {
+            f.set_f32(UNIT_FIELD_MINOFFHANDDAMAGE, 0.0);
+            f.set_f32(UNIT_FIELD_MAXOFFHANDDAMAGE, 0.0);
+            f.set_u32(UNIT_FIELD_BASEATTACKTIME + 1, 2000);
+        }
+    }
+    match g.ranged {
+        Some(w) => {
+            let ammo = if w.ammo_type != 0 {
+                let id = f.get_u32(PLAYER_AMMO_ID);
+                data.item(id)
+                    .map(|t| (t.damages[0].0 + t.damages[0].1) / 2.0)
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let bonus = (rap / 14.0 + ammo) * w.delay as f32 / 1000.0;
+            f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, (w.min + bonus) * physical_pct);
+            f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, (w.max + bonus) * physical_pct);
+            let mut kinds = vec![AURA_MOD_RANGED_HASTE, AURA_MOD_ATTACKSPEED];
+            if w.ammo_type != 0 {
+                kinds.push(AURA_MOD_RANGED_AMMO_HASTE);
+            }
+            let ranged_haste = period_multiplier(a, &kinds);
+            f.set_u32(
+                UNIT_FIELD_RANGEDATTACKTIME,
+                ((w.delay as f32 * ranged_haste) as u32).max(100),
+            );
+        }
+        None => {
+            f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, 0.0);
+            f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, 0.0);
+            f.set_u32(UNIT_FIELD_RANGEDATTACKTIME, 2000);
+        }
+    }
+    let cast = period_multiplier(a, &[AURA_MOD_CASTING_SPEED]);
+    f.set_f32(UNIT_MOD_CAST_SPEED, cast);
+    // Damage done, as the client shows it.
+    for i in 0..7u16 {
+        let bit = 1u32 << i;
+        let (pos, neg) = a
+            .effects()
+            .filter(|(h, x)| {
+                x.kind == AURA_MOD_DAMAGE_DONE && (x.misc as u32) & bit != 0 && h.unrestricted()
+            })
+            .fold((0i32, 0i32), |(p, n), (h, x)| {
+                let v = x.amount * h.stacks.max(1) as i32;
+                if v >= 0 { (p + v, n) } else { (p, n - v) }
+            });
+        f.set_u32(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, pos as u32);
+        f.set_u32(PLAYER_FIELD_MOD_DAMAGE_DONE_NEG + i, neg as u32);
+        f.set_f32(
+            PLAYER_FIELD_MOD_DAMAGE_DONE_PCT + i,
+            a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, bit),
+        );
+    }
+    // The chances.
+    let max_skill = level * 5;
+    let base_crit = class_base_bonus(class) + agility as f32 / agility_rate(class, level, false);
+    let crit = (base_crit
+        + sum_for(a, AURA_MOD_CRIT_PERCENT, main.as_ref())
+        + (weapon_skill as f32 - max_skill as f32) * 0.04)
+        .max(0.0);
+    let ranged_crit = (base_crit
+        + sum_for(a, AURA_MOD_CRIT_PERCENT, g.ranged.as_ref())
+        + (ranged_skill as f32 - max_skill as f32) * 0.04)
+        .max(0.0);
+    let defense_bonus = (defense as f32 - max_skill as f32) * 0.04;
+    let dodge = (class_base_bonus(class)
+        + agility as f32 / agility_rate(class, level, true)
+        + a.sum(AURA_MOD_DODGE_PERCENT) as f32
+        + defense_bonus)
+        .max(0.0);
+    let can_parry = knows_parry && !disarmed && form == 0;
+    let parry = if can_parry {
+        (5.0 + a.sum(AURA_MOD_PARRY_PERCENT) as f32 + defense_bonus).max(0.0)
+    } else {
+        0.0
+    };
+    let can_block = knows_block && g.shield;
+    let block = if can_block {
+        (5.0 + a.sum(AURA_MOD_BLOCK_PERCENT) as f32 + defense_bonus).max(0.0)
+    } else {
+        0.0
+    };
+    let block_value = if can_block {
+        let flat = g.shield_block as f32 + a.sum(AURA_MOD_SHIELD_BLOCKVALUE) as f32;
+        ((flat + strength as f32 / 20.0 - 1.0) * a.product(AURA_MOD_SHIELD_BLOCKVALUE_PCT)).max(0.0)
+            as u32
+    } else {
+        0
+    };
+    f.set_f32(PLAYER_CRIT_PERCENTAGE, crit);
+    f.set_f32(PLAYER_RANGED_CRIT_PERCENTAGE, ranged_crit);
+    f.set_f32(PLAYER_DODGE_PERCENTAGE, dodge);
+    f.set_f32(PLAYER_PARRY_PERCENTAGE, parry);
+    f.set_f32(PLAYER_BLOCK_PERCENTAGE, block);
+    let base_spell_crit = spell_crit_chance(class, level, intellect);
+    let spell_crit = std::array::from_fn(|i| {
+        base_spell_crit
+            + a.sum(AURA_MOD_SPELL_CRIT_CHANCE) as f32
+            + a.sum_mask(AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL, 1 << i) as f32
+    });
+    let spirit_power = |school: u32| {
+        let pct = a.sum_mask(AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT, 1 << school);
+        (spirit as i32 * pct / 100).max(0)
+    };
+    let spell_power = std::array::from_fn(|i| {
+        a.effects()
+            .filter(|(h, x)| {
+                x.kind == AURA_MOD_DAMAGE_DONE && (x.misc as u32) & (1 << i) != 0 && h.unrestricted()
+            })
+            .map(|(h, x)| x.amount * h.stacks.max(1) as i32)
+            .sum::<i32>()
+            + spirit_power(i as u32)
+    });
+    let healing_power = a.sum(AURA_MOD_HEALING_DONE)
+        + a.sum(AURA_MOD_HEALING)
+        + (spirit as i32 * a.sum(AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT) / 100).max(0);
+    p.derived = Derived {
+        crit,
+        ranged_crit,
+        dodge,
+        parry,
+        block,
+        spell_crit,
+        hit: sum_for(a, AURA_MOD_HIT_CHANCE, main.as_ref()),
+        ranged_hit: sum_for(a, AURA_MOD_HIT_CHANCE, g.ranged.as_ref()),
+        spell_hit: a.sum(AURA_MOD_SPELL_HIT_CHANCE) as f32,
+        block_value,
+        attack_power: ap as u32,
+        ranged_attack_power: rap as u32,
+        spell_power,
+        healing_power,
+        weapon_skill,
+        ranged_skill,
+        defense,
+        dual_wield,
+    };
+}
+
+/// A creature's stats from its spawn values and auras.
+pub fn creature(c: &mut crate::game::map::creature::Creature) {
+    let b = c.base;
+    let a = &c.auras;
+    let f = &mut c.fields;
+    let health = ((b.max_health as f32 + a.sum(AURA_MOD_INCREASE_HEALTH) as f32)
+        * a.product(AURA_MOD_INCREASE_HEALTH_PERCENT))
+    .max(1.0) as u32;
+    f.set_u32(UNIT_FIELD_MAXHEALTH, health);
+    if f.get_u32(UNIT_FIELD_HEALTH) > health {
+        f.set_u32(UNIT_FIELD_HEALTH, health);
+    }
+    let res = resistances(a, b.resistances, 0, true);
+    for (i, v) in res.iter().enumerate() {
+        f.set_u32(UNIT_FIELD_RESISTANCES + i as u16, (*v).max(0) as u32);
+    }
+    let ap_mods = a.sum(AURA_MOD_ATTACK_POWER);
+    let ap = ((b.attack_power as i32 + ap_mods) as f32 * a.product(AURA_MOD_ATTACK_POWER_PCT)).max(0.0);
+    f.set_u32(UNIT_FIELD_ATTACK_POWER, b.attack_power);
+    f.set_u32(UNIT_FIELD_ATTACK_POWER_MODS, ap_mods.max(0) as u32);
+    // vmangos's creature damage with attack power changed: seven tenths
+    // its own, three tenths the new.
+    let ratio = if b.attack_power > 0 {
+        (7.0 * b.attack_power as f32 + 3.0 * ap) / (10.0 * b.attack_power as f32)
+    } else {
+        1.0 + (ap_mods as f32 / 14.0) / b.max_damage.max(1.0)
+    };
+    let pct = a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, 1);
+    f.set_f32(UNIT_FIELD_MINDAMAGE, (b.min_damage * ratio * pct).max(1.0));
+    f.set_f32(UNIT_FIELD_MAXDAMAGE, (b.max_damage * ratio * pct).max(1.0));
+    let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
+    let attack = if b.attack_time > 0 { b.attack_time } else { 2000 };
+    f.set_u32(UNIT_FIELD_BASEATTACKTIME, ((attack as f32 * haste) as u32).max(100));
+    f.set_u32(UNIT_FIELD_BASEATTACKTIME + 1, ((attack as f32 * haste) as u32).max(100));
+    let cast = period_multiplier(a, &[AURA_MOD_CASTING_SPEED]);
+    f.set_f32(UNIT_MOD_CAST_SPEED, cast);
+    let level = f.get_u32(UNIT_FIELD_LEVEL);
+    c.derived = Derived {
+        crit: (5.0 + a.sum(AURA_MOD_CRIT_PERCENT) as f32).max(0.0),
+        ranged_crit: (5.0 + a.sum(AURA_MOD_CRIT_PERCENT) as f32).max(0.0),
+        dodge: (5.0 + a.sum(AURA_MOD_DODGE_PERCENT) as f32).max(0.0),
+        parry: (5.0 + a.sum(AURA_MOD_PARRY_PERCENT) as f32).max(0.0),
+        block: (5.0 + a.sum(AURA_MOD_BLOCK_PERCENT) as f32).max(0.0),
+        spell_crit: std::array::from_fn(|i| {
+            (a.sum(AURA_MOD_SPELL_CRIT_CHANCE) + a.sum_mask(AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL, 1 << i))
+                .max(0) as f32
+        }),
+        hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
+        ranged_hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
+        spell_hit: a.sum(AURA_MOD_SPELL_HIT_CHANCE) as f32,
+        block_value: level / 2,
+        attack_power: ap as u32,
+        ranged_attack_power: b.ranged_attack_power,
+        spell_power: std::array::from_fn(|i| a.sum_mask(AURA_MOD_DAMAGE_DONE, 1 << i)),
+        healing_power: a.sum(AURA_MOD_HEALING_DONE),
+        weapon_skill: level * 5,
+        ranged_skill: level * 5,
+        defense: level * 5,
+        dual_wield: false,
+    };
+}
+
+/// Run speed with the auras' hastes and slows, sent where it changed.
+fn speed(map: &mut Map, g: Guid) {
+    use wow_world_messages::vanilla::*;
+    let mounted = map
+        .unit_fields(g)
+        .is_some_and(|f| f.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0);
+    if let Some(p) = map.players.get_mut(&g) {
+        let pct = p.auras.speed_percent(mounted);
+        let speed = (7.0 * (1.0 + pct as f32 / 100.0)).max(0.5);
+        let ghost = p.death != crate::game::map::death::Death::Alive;
+        if !ghost && (speed - p.speeds.run).abs() > 0.01 {
+            p.speeds.run = speed;
+            p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
+                guid: g,
+                move_event: 0,
+                speed,
+            });
+        }
+        let swim = 4.722_222 * (1.0 + p.auras.sum(AURA_MOD_INCREASE_SWIM_SPEED) as f32 / 100.0);
+        if !ghost && (swim - p.speeds.swim).abs() > 0.01 {
+            p.speeds.swim = swim;
+            p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
+                guid: g,
+                move_event: 0,
+                speed: swim,
+            });
+        }
+        return;
+    }
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let pct = c.auras.speed_percent(mounted);
+    let base = if c.base.run_speed > 0.0 { c.base.run_speed } else { 7.0 };
+    let speed = (base * (1.0 + pct as f32 / 100.0)).max(0.5);
+    if (speed - c.speeds.run).abs() > 0.01 {
+        c.speeds.run = speed;
+        if let Some(frame) = crate::game::conn::encode(&SMSG_SPLINE_SET_RUN_SPEED { guid: g, speed }) {
+            map.send_to_observers(g, &frame, false);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crit_and_dodge_follow_the_class_rates() {
+        // A level 60 rogue with 300 agility: 300 / 29 crit.
+        assert!((agility_rate(ROGUE, 60, false) - 29.0).abs() < 0.01);
+        assert!((agility_rate(WARRIOR, 1, false) - 3.9).abs() < 0.01);
+        assert!((spell_crit_chance(MAGE, 60, 250) - (3.70 + 250.0 / (14.77 + 39.0))).abs() < 0.01);
+        assert_eq!(melee_attack_power(WARRIOR, 60, 300, 100), 760);
+        assert_eq!(ranged_attack_power(HUNTER, 60, 300), 710);
+        assert!((speed_factor(25) - 0.8).abs() < 0.001);
+        assert!((speed_factor(-50) - 1.5).abs() < 0.001);
+    }
+}
