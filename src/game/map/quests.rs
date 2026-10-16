@@ -336,9 +336,10 @@ pub fn refresh_log(p: &mut Player, data: &GameData) {
             state |= (k & 0x3F) << (i * 6);
         }
         if let Some(q) = data.npc.quests.get(&l.quest)
-            && complete(p, q, &l) {
-                state |= QUEST_STATE_COMPLETE;
-            }
+            && complete(p, q, &l)
+        {
+            state |= QUEST_STATE_COMPLETE;
+        }
         if l.failed {
             state |= QUEST_STATE_FAILED;
         }

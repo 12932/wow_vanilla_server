@@ -445,3 +445,63 @@ spirit healer.
 - Timed quests, repeatable and daily handling beyond the flag, party sharing (Phase 8), reputation rewards.
 - Quest start and end scripts, escort quests.
 - Multi-hop express flights.
+
+### Phase 7 (2026-10-16)
+
+**Spell data:** vmangos's `spell_template` (the latest build up to 5875), with cast times, durations, ranges and
+radii from the DBCs, `spell_target_position`, talents, `SkillLineAbility` and `creature_spells`.
+
+**Casting:**
+- **Checks:** known, a cast already going, the spell's and its category's cooldowns, the global cooldown,
+  reagents, stunned, feared or silenced, power, and a target that is there, alive, on the right side and in range
+  (with a minimum for ranged spells).
+- **Cast times**, pushback (half a second a blow, twice at most), and interrupts by moving, stuns, silences and
+  interrupt effects.
+- **Channels**, which end, or are broken, with their aura.
+- `SMSG_SPELL_START`, `SMSG_SPELL_GO`, and `SMSG_CAST_RESULT` in 1.12's layout. The result goes to the caster on
+  success too, as Thistle Tea does.
+- Items' on-use spells.
+
+**Effects:** instakill, school damage, leech, heal (to full too), apply aura (party and persistent area too),
+energize, power drain, the weapon damages, teleport (to the spell's place, or the hearthstone's home), leap,
+charge, create item, learn spell, trigger spell, dispel by type, interrupt, threat, combo points, resurrect (with
+the request and the answer), and skills. Area targets (around the caster, the target or a place, and the cone in
+front) find the enemies there.
+
+**Auras:** one slot each in the unit's 48 (32 helpful, 16 harmful), shown with their durations, refreshed rather
+than stacked from the same caster. Periodic damage, heals, leech, energize and triggered spells tick. Stat,
+resistance, health and attack-power mods, speed up and down, root, stun, silence, fear and confusion (which hold),
+shapeshifts, mounts, tracking and absorbs work. The rest are kept on the unit with no effect. Passive spells hold
+from login and from learning. Death takes every aura but the passive ones.
+
+**Skills:** spells with a skill effect teach them; weapon and class skills cap at five a level, languages at 300,
+professions at 75 a step.
+
+**Talents:** a point a level from ten. A row opens at five points a row in its tree, and the talent it needs must be
+learned.
+
+**Creatures** cast from their `creature_spells` lists (chance, repeat delay, at the victim or themselves), standing
+still while they cast. An evade takes their auras and casts away.
+
+**Done when:**
+- A test against the real data finds every spell a trainer teaches up to level 20 uses only effects, auras and
+  targets the server knows. "Knows" includes the ones it keeps without an effect, listed in `effect_supported` and
+  `auras::supported`.
+- Another test casts each class's starting spells at a kobold. Every harmful one hurts it; every helpful one does
+  something.
+- Creatures cast (tested).
+
+**Left for later:**
+- Line of sight and facing checks.
+- Auto-repeat. Auto Shot, Shoot and Throw are single casts, using melee weapon damage.
+- Next-swing spells (Heroic Strike, Raptor Strike) strike at once.
+- Procs: seals and proc-trigger auras are kept on the unit but do nothing.
+- Stacks, and spell power coefficients.
+- Spell hits, crits and resists.
+- Finishing moves don't scale with combo points.
+- Dummy-effect class scripts.
+- Summons and pets.
+- Spell focus, tools and skill-ups for crafting.
+- Auras and cooldowns aren't saved across a logout.
+- wow_messages reads `SMSG_CAST_RESULT`'s status the wrong way round, so peon counts it as a parse error. It does
+  the same on Thistle Tea, which sends the same bytes. peon doesn't cast yet.

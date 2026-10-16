@@ -197,6 +197,10 @@ pub struct Player {
     pub gossip_menu: Option<(Guid, u32)>,
     pub flight: Option<crate::game::map::npc::Flight>,
     pub journal: crate::game::map::quests::Journal,
+    pub auras: crate::game::map::auras::Auras,
+    pub caster: crate::game::map::spells::Caster,
+    /// A resurrection offered: by whom, and with what share of health.
+    pub resurrect_offer: Option<(Guid, u32)>,
 }
 
 impl Player {
@@ -253,9 +257,14 @@ impl Player {
             gossip_menu: None,
             flight: None,
             journal: row.state.quests.clone(),
+            auras: Default::default(),
+            caster: Default::default(),
+            resurrect_offer: None,
             row,
         };
         p.init_fields(data);
+        crate::game::map::skills::init(&mut p, data);
+        crate::game::map::spells::refresh_talent_points(&mut p, data);
         p
     }
 

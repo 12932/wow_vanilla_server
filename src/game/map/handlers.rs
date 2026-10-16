@@ -186,6 +186,28 @@ impl Map {
                 crate::game::map::quests::query(self, guid, m.quest_id)
             }
             ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {}
+            ClientOpcodeMessage::CMSG_CAST_SPELL(m) => {
+                crate::game::map::spells::cast_request(self, guid, m.spell, &m.targets)
+            }
+            ClientOpcodeMessage::CMSG_CANCEL_CAST(_)
+            | ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => {
+                crate::game::map::spells::cancel(self, guid)
+            }
+            ClientOpcodeMessage::CMSG_CANCEL_AURA(m) => {
+                crate::game::map::auras::cancel(self, guid, m.id)
+            }
+            ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(m) => {
+                crate::game::map::spells::resurrect_response(self, guid, m.guid, m.status != 0)
+            }
+            ClientOpcodeMessage::CMSG_LEARN_TALENT(m) => crate::game::map::spells::learn_talent(
+                self,
+                guid,
+                m.talent.as_int(),
+                m.requested_rank,
+            ),
+            ClientOpcodeMessage::CMSG_USE_ITEM(m) => {
+                crate::game::map::spells::use_item(self, guid, m.bag_index, m.bag_slot, &m.targets)
+            }
             ClientOpcodeMessage::CMSG_AREATRIGGER(m) => {
                 crate::game::map::world::area_trigger(self, guid, m.trigger_id)
             }

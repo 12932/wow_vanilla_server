@@ -92,9 +92,13 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     let anchor = p.vis_anchor;
     let new_cell = grid::cell_of(info.position.x, info.position.y);
     let old_cell = p.cell;
+    let before = p.movement.position;
     p.cell = new_cell;
     p.movement = info.clone();
     let position = info.position;
+    if crate::game::map::combat::dist(before, position) > 0.1 {
+        crate::game::map::spells::moved(map, guid);
+    }
     map.grid.relocate(guid, old_cell, new_cell);
     visibility::moved(map, guid, anchor, position);
     if let Some(frame) = relay(guid, info) {

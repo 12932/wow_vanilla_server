@@ -134,6 +134,7 @@ fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
 
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
+    crate::game::map::auras::clear_on_death(map, creature);
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
@@ -410,6 +411,14 @@ fn fight_step(map: &mut Map, g: Guid) {
         c.fields.set_guid(UNIT_FIELD_TARGET, victim);
     }
     advance_motion(map, g);
+    // Stunned, or casting: it stands where it is.
+    crate::game::map::spells::creature_cast(map, g, victim);
+    let busy = map.creature(g).is_some_and(|c| c.caster.casting.is_some())
+        || crate::game::map::auras::held(map, g, false);
+    if busy {
+        stop_moving(map, g);
+        return;
+    }
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
@@ -486,12 +495,21 @@ fn evade(map: &mut Map, g: Guid) {
         .map(|c| c.threat.iter().map(|(t, _)| *t).collect())
         .unwrap_or_default();
     combat::stop_attack(map, g);
+    crate::game::map::spells::interrupt(map, g);
+    let held: Vec<u32> = map
+        .creature(g)
+        .map(|c| c.auras.list.iter().map(|a| a.spell).collect())
+        .unwrap_or_default();
+    for spell in held {
+        crate::game::map::auras::remove_spell(map, g, spell, None);
+    }
     let Some(c) = map.creature_mut(g) else {
         return;
     };
     c.evading = true;
     c.threat.clear();
     c.combat = Default::default();
+    c.caster = Default::default();
     c.tapped_by = None;
     c.chase_target_at = None;
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
@@ -579,6 +597,22 @@ pub fn hostile_to_players(
         || f.enemies
             .iter()
             .any(|e| matches!(*e, 469 | 67 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 115 | 116))
+}
+
+/// A creature on the move stops where it is.
+fn stop_moving(map: &mut Map, g: Guid) {
+    let spline_id = map.next_spline_id;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if !matches!(c.motion, Motion::Moving(_)) {
+        return;
+    }
+    c.motion = Motion::Idle { until: None };
+    let at = c.position;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let frame = stop_packet(g, at, spline_id);
+    map.send_to_observers(g, &frame, false);
 }
 
 #[cfg(test)]

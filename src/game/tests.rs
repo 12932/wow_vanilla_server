@@ -819,7 +819,7 @@ mod combat {
 
     /// A wolf (hostile) and a boar (neutral) near the start, and the
     /// players' and monsters' factions.
-    fn data() -> GameData {
+    pub fn data() -> GameData {
         let mut d = GameData::empty();
         d.faction_templates.extend([
             faction(1, 3, 2, 12),
@@ -1849,5 +1849,514 @@ mod npcs {
             })
             .await;
         assert_eq!(map, Map::WarsongGulch);
+    }
+}
+
+mod spells {
+    use super::world::START;
+    use super::*;
+    use crate::game::data::spells::{CreatureSpell, SpellDuration, SpellEffect, SpellTemplate};
+    use crate::game::data::*;
+    use crate::game::map::spells::{Targets, wire_targets};
+    use crate::game::map::{MapHandle, MapKey};
+
+    fn effect(effect: u32, base_points: i32, target_a: u32) -> SpellEffect {
+        SpellEffect {
+            effect,
+            base_points,
+            base_dice: 1,
+            die_sides: 1,
+            target_a,
+            ..Default::default()
+        }
+    }
+
+    /// The fight data, with a few spells: a bolt that takes 200 ms, an
+    /// instant heal, a burn that ticks, a strike with a cooldown, a passive
+    /// toughness, and a spitter that casts at whoever comes near.
+    fn data() -> GameData {
+        let mut d = super::combat::data();
+        let s = &mut d.spells;
+        s.cast_times.insert(2, 200);
+        s.ranges.insert(1, (0.0, 30.0));
+        s.durations.insert(
+            3,
+            SpellDuration {
+                base: 350,
+                ..Default::default()
+            },
+        );
+        let spell = |id, name: &str, effects: [SpellEffect; 3]| SpellTemplate {
+            id,
+            name: name.into(),
+            range_index: 1,
+            effects,
+            ..Default::default()
+        };
+        let none = SpellEffect::default();
+        let mut bolt = spell(100, "Bolt", [effect(2, 9, 6), none, none]);
+        bolt.casting_time_index = 2;
+        bolt.mana_cost = 5;
+        bolt.school = 2;
+        bolt.interrupt_flags = 0x1;
+        let heal = spell(101, "Mend", [effect(10, 19, 21), none, none]);
+        let mut burn_effect = effect(6, 3, 6);
+        burn_effect.aura = 3;
+        burn_effect.amplitude = 100;
+        let mut burn = spell(102, "Burn", [burn_effect, none, none]);
+        burn.duration_index = 3;
+        let mut strike = spell(103, "Strike", [effect(2, 4, 6), none, none]);
+        strike.recovery_time = 10_000;
+        let mut tough_effect = effect(6, 4, 1);
+        tough_effect.aura = 29;
+        tough_effect.misc_value = 2;
+        let mut tough = spell(104, "Toughness", [tough_effect, none, none]);
+        tough.attributes[0] = crate::game::data::spells::ATTR_PASSIVE;
+        let mut spit = spell(105, "Spit", [effect(2, 2, 6), none, none]);
+        spit.casting_time_index = 2;
+        for t in [bolt, heal, burn, strike, tough, spit] {
+            s.spells.insert(t.id, t);
+        }
+        s.talents.insert(
+            1,
+            crate::game::data::spells::TalentInfo {
+                id: 1,
+                tab: 1,
+                ranks: [104, 0, 0, 0, 0],
+                ..Default::default()
+            },
+        );
+        s.creature_spells.insert(
+            7,
+            vec![CreatureSpell {
+                spell: 105,
+                probability: 100,
+                target: 1,
+                delay_repeat: (5000, 5000),
+                ..Default::default()
+            }],
+        );
+        let mut spitter = d.creature_templates[&2000].clone();
+        spitter.entry = 2002;
+        spitter.name = "Spitter".into();
+        spitter.spell_list_id = 7;
+        d.creature_templates.insert(2002, spitter);
+        d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+            guid: 12,
+            entries: vec![2002],
+            map: 0,
+            x: START.0 - 60.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 1,
+            respawn_max: 1,
+            ..Default::default()
+        });
+        d
+    }
+
+    const BOAR: (u32, u32) = (2001, 11);
+
+    /// A mage with mana and the spells, next to the boar.
+    async fn setup() -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Mage).await;
+        a.sees(guid::unit(BOAR.0, BOAR.1)).await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.query(move |m| {
+            if let Some(p) = m.players.get_mut(&ga) {
+                p.fields.set_u32(UNIT_FIELD_MAXPOWER1, 100);
+                p.fields.set_u32(UNIT_FIELD_POWER1, 100);
+                p.spells.extend([100, 101, 102, 103]);
+            }
+        })
+        .await;
+        (realm, a, ga, map)
+    }
+
+    fn at(target: Guid) -> SpellCastTargets {
+        wire_targets(&Targets {
+            unit: Some(target),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn a_bolt_takes_its_cast_time_costs_mana_and_hurts() {
+        let (_realm, mut a, ga, map) = setup().await;
+        let boar = guid::unit(BOAR.0, BOAR.1);
+        let started = Instant::now();
+        a.send(CMSG_CAST_SPELL {
+            spell: 100,
+            targets: at(boar),
+        })
+        .await;
+        let timer = a
+            .wait_for("SMSG_SPELL_START", |m| match m {
+                ServerOpcodeMessage::SMSG_SPELL_START(s) if s.spell == 100 => Some(s.timer),
+                _ => None,
+            })
+            .await;
+        assert_eq!(timer, 200);
+        a.wait_for("SMSG_SPELL_GO", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == 100 => Some(()),
+            _ => None,
+        })
+        .await;
+        assert!(started.elapsed() >= Duration::from_millis(190));
+        let damage = a
+            .wait_for("the damage", |m| match m {
+                ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(d) if d.target == boar => {
+                    Some(d.damage)
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(damage, 10);
+        let (health, mana, max) = map
+            .query(move |m| {
+                let c = m.creature(boar).unwrap();
+                let p = &m.players[&ga];
+                (
+                    c.fields.get_u32(UNIT_FIELD_HEALTH),
+                    p.fields.get_u32(UNIT_FIELD_POWER1),
+                    c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(health, max - 10);
+        assert_eq!(mana, 95);
+        // The boar fights back.
+        a.wait_for("SMSG_ATTACKSTART from the boar", |m| match m {
+            ServerOpcodeMessage::SMSG_ATTACKSTART(s) if s.attacker == boar => Some(()),
+            _ => None,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_heal_lands_and_a_burn_ticks_and_wears_off() {
+        let (_realm, mut a, ga, map) = setup().await;
+        let boar = guid::unit(BOAR.0, BOAR.1);
+        map.query(move |m| {
+            m.players
+                .get_mut(&ga)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_HEALTH, 5)
+        })
+        .await;
+        a.send(CMSG_CAST_SPELL {
+            spell: 101,
+            targets: wire_targets(&Targets::default()),
+        })
+        .await;
+        let healed = a
+            .wait_for("SMSG_SPELLHEALLOG", |m| match m {
+                ServerOpcodeMessage::SMSG_SPELLHEALLOG(h) if h.victim == ga => Some(h.damage),
+                _ => None,
+            })
+            .await;
+        assert_eq!(healed, 20);
+        a.send(CMSG_CAST_SPELL {
+            spell: 102,
+            targets: at(boar),
+        })
+        .await;
+        for _ in 0..2 {
+            a.wait_for("a tick of the burn", |m| match m {
+                ServerOpcodeMessage::SMSG_PERIODICAURALOG(l) if l.target == boar => Some(()),
+                _ => None,
+            })
+            .await;
+        }
+        let on = map
+            .query(move |m| {
+                m.creature(boar)
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_AURA + 32))
+            })
+            .await
+            .flatten();
+        assert_eq!(on, Some(102));
+        let mut gone = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let state = map
+                .query(move |m| {
+                    m.creature(boar).map(|c| {
+                        (
+                            c.auras.list.is_empty(),
+                            c.fields.get_u32(UNIT_FIELD_AURA + 32),
+                        )
+                    })
+                })
+                .await
+                .flatten();
+            if state == Some((true, 0)) {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "the burn wears off");
+    }
+
+    #[tokio::test]
+    async fn a_cooldown_holds_and_moving_breaks_a_cast() {
+        let (_realm, mut a, _ga, _map) = setup().await;
+        let boar = guid::unit(BOAR.0, BOAR.1);
+        for _ in 0..2 {
+            a.send(CMSG_CAST_SPELL {
+                spell: 103,
+                targets: at(boar),
+            })
+            .await;
+        }
+        // wow_messages reads a failure's status but not its reason.
+        a.wait_for("the second strike failing", |m| match m {
+            ServerOpcodeMessage::SMSG_CAST_RESULT(r)
+                if r.spell == 103
+                    && r.result == SMSG_CAST_RESULT_SimpleSpellCastResult::Failure =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_CAST_SPELL {
+            spell: 100,
+            targets: at(boar),
+        })
+        .await;
+        a.wait_for("SMSG_SPELL_START", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_START(s) if s.spell == 100 => Some(()),
+            _ => None,
+        })
+        .await;
+        a.heartbeat(START.0 - 2.0, START.1, START.2).await;
+        a.wait_for("SMSG_SPELL_FAILURE", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_FAILURE(f) if f.spell == 100 => Some(()),
+            _ => None,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_passive_spell_holds_once_learned() {
+        let (_realm, _a, ga, map) = setup().await;
+        let (before, after, held) = map
+            .query(move |m| {
+                let before = m.players[&ga].fields.get_u32(UNIT_FIELD_STAT0 + 2);
+                crate::game::map::spells::learn(m, ga, 104);
+                let p = &m.players[&ga];
+                (
+                    before,
+                    p.fields.get_u32(UNIT_FIELD_STAT0 + 2),
+                    p.auras.list.iter().any(|a| a.spell == 104),
+                )
+            })
+            .await
+            .unwrap();
+        assert!(held);
+        assert_eq!(after, before + 5);
+    }
+
+    #[tokio::test]
+    async fn a_talent_takes_a_point_from_level_ten() {
+        let (_realm, _a, ga, map) = setup().await;
+        let learned = map
+            .query(move |m| {
+                // Level 1: no point yet.
+                crate::game::map::spells::learn_talent(m, ga, 1, 0);
+                let before = m.players[&ga].spells.contains(&104);
+                let data = m.realm.data.clone();
+                let p = m.players.get_mut(&ga).unwrap();
+                crate::game::map::stats::set_level(p, &data, 10);
+                let points = p.fields.get_u32(PLAYER_CHARACTER_POINTS1);
+                crate::game::map::spells::learn_talent(m, ga, 1, 0);
+                let p = &m.players[&ga];
+                (
+                    before,
+                    points,
+                    p.spells.contains(&104),
+                    p.fields.get_u32(PLAYER_CHARACTER_POINTS1),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(learned, (false, 1, true, 0));
+    }
+
+    #[tokio::test]
+    async fn a_creature_casts_from_its_list() {
+        let (_realm, mut a, ga, _map) = setup().await;
+        let spitter = guid::unit(2002, 12);
+        a.sees(spitter).await;
+        a.heartbeat(START.0 - 50.0, START.1, START.2).await;
+        let target = a
+            .wait_for("the spitter's SMSG_SPELL_START", |m| match m {
+                ServerOpcodeMessage::SMSG_SPELL_START(s)
+                    if s.caster == spitter && s.spell == 105 =>
+                {
+                    s.targets.target_flags.get_unit().map(|u| u.unit_target)
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(target, ga);
+        a.wait_for("the spit landing", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(d) if d.attacker == spitter => {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    }
+}
+
+/// Against the real data, when it is here (it isn't in CI).
+mod real {
+    use super::*;
+    use crate::game::map::creature::Creature;
+    use crate::game::map::spells::{self, Targets};
+    use crate::game::map::{Map, MapKey, auras};
+
+    /// Effects a fight shows: damage, heals, auras, power.
+    const FIGHTING: &[u32] = &[2, 6, 9, 10, 17, 30, 31, 35, 58, 80, 121];
+
+    /// What a cast can have changed: the kobold's health and auras, and the
+    /// caster's health, auras and combo points.
+    fn snapshot(m: &Map, g: Guid, kobold: Guid) -> (u32, usize, u32, usize, u8) {
+        let c = m.creature(kobold);
+        let p = &m.players[&g];
+        (
+            c.map_or(0, |c| c.fields.get_u32(UNIT_FIELD_HEALTH)),
+            c.map_or(0, |c| c.auras.list.len()),
+            p.fields.get_u32(UNIT_FIELD_HEALTH),
+            p.auras.list.len(),
+            p.caster.combo_points,
+        )
+    }
+
+    /// Each fighting spell the player starts with, cast at a fresh kobold
+    /// (or, if helpful, at the player): whether it took effect. Grovel (a
+    /// stun on oneself) counts as harmful and hurts nobody, so it is left out.
+    fn try_starting_spells(m: &mut Map, g: Guid) -> Vec<(u32, String, bool, bool)> {
+        let data = m.realm.data.clone();
+        let template = data.creature_template(6).cloned().expect("Kobold Vermin");
+        let p = &m.players[&g];
+        let (pos, o) = (p.position(), p.movement.orientation);
+        let castable: Vec<u32> = p
+            .spells
+            .iter()
+            .copied()
+            .filter(|s| {
+                data.spells.get(*s).is_some_and(|t| {
+                    !t.passive()
+                        && t.effects.iter().any(|e| FIGHTING.contains(&e.effect))
+                        && *s != 7267
+                })
+            })
+            .collect();
+        let mut out = Vec::new();
+        for spell in castable {
+            // What the last spell left (Grovel kneels, and holds) goes.
+            auras::clear_on_death(m, g);
+            let s = data.spells.get(spell).unwrap();
+            let counter = m.next_creature_counter;
+            m.next_creature_counter += 1;
+            // Near, or just past a ranged spell's minimum.
+            let d = (data.spells.range(s).0 + 2.0).max(3.0);
+            let at = Vector3d {
+                x: pos.x + d * o.cos(),
+                y: pos.y + d * o.sin(),
+                z: pos.z,
+            };
+            let kobold = m.add_creature(Creature::new(
+                guid::unit(6, counter | 0x80_0000),
+                &template,
+                1,
+                at,
+                o + std::f32::consts::PI,
+            ));
+            let p = m.players.get_mut(&g).unwrap();
+            p.caster = Default::default();
+            for i in 0..5 {
+                p.fields.set_u32(UNIT_FIELD_MAXPOWER1 + i, 1000);
+                p.fields.set_u32(UNIT_FIELD_POWER1 + i, 1000);
+            }
+            let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            p.fields.set_u32(UNIT_FIELD_HEALTH, max / 2);
+            let helpful = auras::positive(s);
+            let before = snapshot(m, g, kobold);
+            let targets = Targets {
+                unit: (!helpful).then_some(kobold),
+                ..Default::default()
+            };
+            spells::cast(m, g, spell, targets, None);
+            let now = m.now;
+            if let Some(c) = m
+                .players
+                .get_mut(&g)
+                .and_then(|p| p.caster.casting.as_mut())
+            {
+                c.ends = now;
+            }
+            spells::update(m);
+            let after = snapshot(m, g, kobold);
+            // Harmful: did it hurt the kobold. Helpful: did it do anything.
+            let took = if helpful {
+                before != after
+            } else {
+                after.0 < before.0 || after.1 > before.1
+            };
+            out.push((spell, s.name.clone(), !helpful, took));
+            m.remove_creature(kobold);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn every_class_fights_with_its_starting_spells() {
+        let dir = std::path::Path::new("<runs>/tt-data/db");
+        if !dir.join("vmangos.sqlite").exists() {
+            return;
+        }
+        let realm = harness::realm_with(crate::game::data::load::load(dir));
+        let classes = [
+            ("Wara", Race::Human, Class::Warrior),
+            ("Pala", Race::Human, Class::Paladin),
+            ("Hunta", Race::Orc, Class::Hunter),
+            ("Rogua", Race::Human, Class::Rogue),
+            ("Priesta", Race::Human, Class::Priest),
+            ("Shama", Race::Orc, Class::Shaman),
+            ("Maga", Race::Human, Class::Mage),
+            ("Locka", Race::Human, Class::Warlock),
+            ("Druida", Race::NightElf, Class::Druid),
+        ];
+        let mut report = Vec::new();
+        let mut failed = Vec::new();
+        for (i, (name, race, class)) in classes.into_iter().enumerate() {
+            let mut c = Client::connect(&realm, &format!("CLASS{i}"));
+            let g = c.enter(name, race, class).await;
+            let map_id = if matches!(race, Race::Human) { 0 } else { 1 };
+            let map = realm.maps.get(&realm, MapKey::world(map_id));
+            let tried = map.query(move |m| try_starting_spells(m, g)).await.unwrap();
+            let hurts = tried.iter().any(|t| t.2 && t.3);
+            for (spell, spell_name, harmful, took) in &tried {
+                report.push(format!(
+                    "{class:?} {spell} {spell_name}: harmful {harmful}, took effect {took}"
+                ));
+                if !took {
+                    failed.push(format!("{class:?} {spell} {spell_name}"));
+                }
+            }
+            if !hurts && !matches!(class, Class::Paladin) {
+                failed.push(format!("{class:?}: nothing that hurts"));
+            }
+        }
+        println!("{}", report.join("\n"));
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 }
