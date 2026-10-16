@@ -174,21 +174,78 @@ pub async fn auth(users: UserCache) {
         .await
         .expect("failed to bind auth listener on 0.0.0.0:3724");
 
+    // Every auth connection holds a permit while it lasts, so a flood of
+    // idle sockets can't pile up without bound.
+    let pending = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        crate::config::config().network.max_pending_connections,
+    ));
     loop {
-        let (stream, _) = match listener.accept().await {
+        let (stream, peer) = match listener.accept().await {
             Ok(s) => s,
             Err(e) => {
-                warn!("auth accept failed: {e}; continuing");
+                warn!("auth accept failed: {e}; retrying");
+                tokio::time::sleep(crate::world::ACCEPT_BACKOFF).await;
                 continue;
             }
         };
+        let Ok(permit) = pending.clone().try_acquire_owned() else {
+            debug!("auth: too many open auth connections; closing {peer}");
+            continue;
+        };
 
-        tokio::spawn(handle(stream, users.clone()));
+        let users = users.clone();
+        tokio::spawn(async move {
+            handle(stream, users).await;
+            drop(permit);
+        });
     }
 }
 
+/// `tokio_expect_client_message`, or a timeout error if the message doesn't
+/// arrive within `limit`: a connection that goes quiet is closed instead of
+/// being held forever.
+async fn expect_within<M>(
+    limit: std::time::Duration,
+    stream: &mut TcpStream,
+) -> Result<M, ExpectedOpcodeError>
+where
+    M: wow_login_messages::ClientMessage + Send,
+{
+    match tokio::time::timeout(limit, tokio_expect_client_message::<M, _>(stream)).await {
+        Ok(r) => r,
+        Err(_) => Err(ExpectedOpcodeError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "auth: client went quiet",
+        ))),
+    }
+}
+
+/// A login step's message: it must arrive within the handshake timeout.
+async fn expect_step<M>(stream: &mut TcpStream) -> Result<M, ExpectedOpcodeError>
+where
+    M: wow_login_messages::ClientMessage + Send,
+{
+    expect_within(crate::config::config().network.handshake_timeout(), stream).await
+}
+
+/// A realm list request from a client idling at the realm list: it may be
+/// quiet for up to the client idle timeout.
+async fn expect_idle<M>(stream: &mut TcpStream) -> Result<M, ExpectedOpcodeError>
+where
+    M: wow_login_messages::ClientMessage + Send,
+{
+    expect_within(crate::config::config().network.client_idle_timeout(), stream).await
+}
+
 async fn handle(mut stream: TcpStream, users: UserCache) {
-    let opcode = tokio_read_initial_message(&mut stream).await;
+    let limit = crate::config::config().network.handshake_timeout();
+    let opcode = match tokio::time::timeout(limit, tokio_read_initial_message(&mut stream)).await {
+        Ok(r) => r,
+        Err(_) => {
+            debug!("auth: no initial message within {limit:?}; closing");
+            return;
+        }
+    };
     let opcode = match opcode {
         Ok(o) => o,
         Err(e) => {
@@ -243,7 +300,7 @@ async fn reconnect_version_8(
     );
 
     let l = or_return!(
-        tokio_expect_client_message::<CMD_AUTH_RECONNECT_PROOF_Client, _>(&mut stream).await
+        expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await
     );
 
     let success = {
@@ -303,7 +360,7 @@ async fn reconnect_version_2(
     );
 
     let l = or_return!(
-        tokio_expect_client_message::<CMD_AUTH_RECONNECT_PROOF_Client, _>(&mut stream).await
+        expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await
     );
 
     let success = {
@@ -364,7 +421,7 @@ async fn login_version_2(
     debug!("Sent Logon Challenge");
 
     let l = or_return!(
-        tokio_expect_client_message::<CMD_AUTH_LOGON_PROOF_Client, _>(&mut stream).await
+        expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await
     );
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
@@ -427,7 +484,7 @@ async fn login_version_3(
     debug!("Sent Logon Challenge");
 
     let l = or_return!(
-        tokio_expect_client_message::<CMD_AUTH_LOGON_PROOF_Client, _>(&mut stream).await
+        expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await
     );
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
@@ -478,7 +535,7 @@ async fn login_version_8(
     debug!("Sent Logon Challenge");
 
     let l = or_return!(
-        tokio_expect_client_message::<CMD_AUTH_LOGON_PROOF_Client, _>(&mut stream).await
+        expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await
     );
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
@@ -509,7 +566,7 @@ async fn print_version_2_3_realm_list(mut stream: TcpStream) {
 
     let addr = world_server_address().to_string();
 
-    while (tokio_expect_client_message::<CMD_REALM_LIST_Client, _>(&mut stream).await).is_ok() {
+    while (expect_idle::<CMD_REALM_LIST_Client>(&mut stream).await).is_ok() {
         let msg = CMD_REALM_LIST_Server {
             realms: vec![Realm {
                 realm_type: RealmType::PlayerVsEnvironment,
@@ -534,7 +591,7 @@ async fn print_version_8_realm_list(mut stream: TcpStream) {
 
     let addr = world_server_address().to_string();
 
-    while (tokio_expect_client_message::<CMD_REALM_LIST_Client, _>(&mut stream).await).is_ok() {
+    while (expect_idle::<CMD_REALM_LIST_Client>(&mut stream).await).is_ok() {
         let mut realms = Vec::new();
         for i in 0..9 {
             realms.push(Realm {
@@ -555,6 +612,26 @@ async fn print_version_8_realm_list(mut stream: TcpStream) {
             return;
         }
         debug!("Sent Version 8 Realm List");
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client;
+
+    /// A client that goes quiet mid-login is cut off, not waited on forever.
+    #[tokio::test]
+    async fn a_quiet_client_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        let limit = std::time::Duration::from_millis(50);
+        match expect_within::<CMD_AUTH_LOGON_PROOF_Client>(limit, &mut server).await {
+            Err(ExpectedOpcodeError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::TimedOut),
+            Err(other) => panic!("expected a timeout, got {other:?}"),
+            Ok(_) => panic!("expected a timeout, got a message"),
+        }
     }
 }
 

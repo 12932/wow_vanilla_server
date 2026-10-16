@@ -2,7 +2,6 @@ use crate::world::world::client::{Client, OutboundTx, OUTGOING_PACKETS};
 use crate::world::world_opcode_handler::character::Character;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -10,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{debug, warn};
 use wow_srp::vanilla_header::{EncrypterHalf, HeaderCrypto};
 use wow_world_base::shared::Guid;
 use wow_world_messages::Message;
@@ -177,31 +176,35 @@ impl CharacterScreenClient {
         let reader_handle = tokio::spawn(async move {
             let mut read = read;
             let mut decrypter = decrypter;
+            let idle = crate::config::config().network.client_idle_timeout();
+            let mut bad = BadPacketLimit::new();
             loop {
-                let msg =
-                    ClientOpcodeMessage::tokio_read_encrypted(&mut read, &mut decrypter).await;
+                let read_one = ClientOpcodeMessage::tokio_read_encrypted(&mut read, &mut decrypter);
+                let Ok(msg) = tokio::time::timeout(idle, read_one).await else {
+                    debug!("client sent nothing for {idle:?}; disconnecting");
+                    break;
+                };
                 let msg = match msg {
                     Ok(m) => m,
-                    Err(e) => {
-                        match e {
-                            ExpectedOpcodeError::Opcode { opcode, size, name } => {
-                                let mut v = vec![0_u8; size as usize];
-                                if read.read_exact(&mut v).await.is_err() {
-                                    break;
-                                }
-                                warn!(
-                                    "Unhandled opcode {name:?} (0x{opcode:X}, {size} bytes): {v:02X?}"
-                                );
-                            }
-                            ExpectedOpcodeError::Parse(ref p) => {
-                                warn!("{:#?}", p);
-                            }
-                            ExpectedOpcodeError::Io(_) => {
-                                break;
-                            }
+                    // wow_messages reads a packet's whole body before
+                    // dispatching on its opcode, so an unknown or
+                    // unparseable packet is already consumed: skip it.
+                    // Reading its body again would desync the stream.
+                    Err(ExpectedOpcodeError::Opcode { opcode, size, name }) => {
+                        debug!("unhandled opcode {name:?} (0x{opcode:X}, {size} bytes)");
+                        if bad.exceeded() {
+                            break;
                         }
                         continue;
                     }
+                    Err(ExpectedOpcodeError::Parse(p)) => {
+                        debug!("unparseable client packet: {p:?}");
+                        if bad.exceeded() {
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(ExpectedOpcodeError::Io(_)) => break,
                 };
 
                 if let ClientOpcodeMessage::CMSG_PING(ping) = &msg {
@@ -279,6 +282,7 @@ impl CharacterScreenClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
     use tokio::io::duplex;
     use wow_srp::normalized_string::NormalizedString;
     use wow_srp::vanilla_header::{DecrypterHalf, ProofSeed};
@@ -434,5 +438,100 @@ mod tests {
             a.read_exact(&mut body).await.unwrap();
         }
         writer.await.unwrap();
+    }
+}
+
+/// How many unknown or unparseable packets a client may send in a window
+/// before it is disconnected. A real client sends almost none; a flood of
+/// them is garbage, and costs a log line each.
+const BAD_PACKETS_PER_WINDOW: u32 = 32;
+const BAD_PACKET_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Counts a connection's bad packets per [`BAD_PACKET_WINDOW`].
+struct BadPacketLimit {
+    window_start: std::time::Instant,
+    count: u32,
+}
+
+impl BadPacketLimit {
+    fn new() -> Self {
+        Self {
+            window_start: std::time::Instant::now(),
+            count: 0,
+        }
+    }
+
+    /// Count one bad packet; true if the client has now sent too many.
+    fn exceeded(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.window_start) > BAD_PACKET_WINDOW {
+            self.window_start = now;
+            self.count = 0;
+        }
+        self.count += 1;
+        if self.count > BAD_PACKETS_PER_WINDOW {
+            warn!("client sent {} bad packets in {BAD_PACKET_WINDOW:?}; disconnecting", self.count);
+            return true;
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod bad_packet_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use wow_srp::normalized_string::NormalizedString;
+    use wow_srp::vanilla_header::ProofSeed;
+    use wow_world_messages::vanilla::{CMSG_PING, ClientMessage as _};
+
+    /// An unknown opcode is skipped and the stream stays in step: a ping
+    /// sent after it is still answered. The reader used to read the unknown
+    /// packet's body a second time, which ate the ping.
+    #[tokio::test]
+    async fn an_unknown_opcode_is_skipped_without_losing_the_stream() {
+        let session_key = [0u8; 40];
+        let username = NormalizedString::new("test".to_string()).unwrap();
+        let (server_seed, client_seed) = (ProofSeed::new(), ProofSeed::new());
+        let (server_seed_value, client_seed_value) = (server_seed.seed(), client_seed.seed());
+        let (client_proof, client_hc) =
+            client_seed.into_client_header_crypto(&username, session_key, server_seed_value);
+        let server_hc = server_seed
+            .into_server_header_crypto(&username, session_key, client_proof, client_seed_value)
+            .unwrap();
+        let (mut client_enc, mut client_dec) = client_hc.split();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let _screen = CharacterScreenClient::new("TEST".to_string(), server, server_hc);
+
+        // An opcode wow_messages doesn't model, with a 4-byte body, then a
+        // ping.
+        let header = client_enc.encrypt_client_header(4 + 4, 0x7FFE);
+        client.write_all(&header).await.unwrap();
+        client.write_all(&[0xAA; 4]).await.unwrap();
+        CMSG_PING { sequence_id: 7, round_time_in_ms: 0 }
+            .tokio_write_encrypted_client(&mut client, &mut client_enc)
+            .await
+            .unwrap();
+
+        let reply = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            ServerOpcodeMessage::tokio_read_encrypted(&mut client, &mut client_dec),
+        )
+        .await
+        .expect("the ping is answered")
+        .unwrap();
+        assert!(matches!(reply, ServerOpcodeMessage::SMSG_PONG(p) if p.sequence_id == 7));
+    }
+
+    #[test]
+    fn a_burst_of_bad_packets_disconnects_and_a_few_do_not() {
+        let mut limit = BadPacketLimit::new();
+        for _ in 0..BAD_PACKETS_PER_WINDOW {
+            assert!(!limit.exceeded());
+        }
+        assert!(limit.exceeded());
     }
 }

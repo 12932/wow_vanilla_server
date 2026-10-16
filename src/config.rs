@@ -103,6 +103,16 @@ pub struct NetworkConfig {
     /// the cross-cell channel cost. Lower values give more spatial
     /// isolation but more cross-cell traffic. Must be ≥ 1.
     pub cell_size_in_grid_cells: u32,
+    /// Every read during auth and the world handshake must arrive within
+    /// this, so a connection that goes quiet before logging in is closed
+    /// instead of holding a socket forever.
+    pub handshake_timeout_secs: u64,
+    /// A logged-in client, or one idling at the realm list, that sends
+    /// nothing for this long is disconnected. Clients ping every 30 s.
+    pub client_idle_timeout_secs: u64,
+    /// Connections still in auth or the world handshake, at most. Past
+    /// this, new connections are closed at once.
+    pub max_pending_connections: usize,
 }
 
 impl Default for NetworkConfig {
@@ -112,6 +122,9 @@ impl Default for NetworkConfig {
             outbound_channel_bytes: 1024 * 1024,
             aoi_flap_cooldown_secs: 3,
             cell_size_in_grid_cells: 4,
+            handshake_timeout_secs: 10,
+            client_idle_timeout_secs: 120,
+            max_pending_connections: 1024,
         }
     }
 }
@@ -119,6 +132,14 @@ impl Default for NetworkConfig {
 impl NetworkConfig {
     pub fn aoi_flap_cooldown(&self) -> Duration {
         Duration::from_secs(self.aoi_flap_cooldown_secs)
+    }
+
+    pub fn handshake_timeout(&self) -> Duration {
+        Duration::from_secs(self.handshake_timeout_secs)
+    }
+
+    pub fn client_idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.client_idle_timeout_secs)
     }
 }
 

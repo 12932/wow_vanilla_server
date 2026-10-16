@@ -71,6 +71,19 @@ pub struct Character {
 // load resets HP to `max_health`).
 
 impl Character {
+    /// Start attacking `target`, as `CMSG_ATTACKSWING` asks. Returns false
+    /// if already attacking it: a client repeating the packet then changes
+    /// nothing, neither restarting the swing timer nor broadcasting again.
+    pub fn start_attack(&mut self, target: Guid) -> bool {
+        if self.attacking && self.target == target {
+            return false;
+        }
+        self.target = target;
+        self.attacking = true;
+        self.auto_attack_timer = wow_world_base::combat::UNARMED_SPEED;
+        true
+    }
+
     fn default_stats(&self) -> BaseStats {
         if let Some(s) = self.race_class.base_stats_for(self.level.as_int()) {
             return s;

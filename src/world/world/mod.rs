@@ -415,7 +415,11 @@ impl MapState {
     pub(crate) fn remove_client(&mut self, key: usize) -> Client {
         let c = self.clients.remove(key);
         let guid = c.character().guid;
-        self.client_by_guid.remove(&guid);
+        // Only if the index still points here, so removing one session can
+        // never unhook another of the same character.
+        if self.client_by_guid.get(&guid) == Some(&key) {
+            self.client_by_guid.remove(&guid);
+        }
         self.index.remove_client(key);
         crate::world::cell::unregister_player(guid);
         c
@@ -1875,7 +1879,6 @@ impl World {
     /// parallel, and the cells are unblocked from each other while
     /// it happens. The orchestrator collects all replies, then locks
     /// the DB once and writes the aggregated Characters atomically.
-
     pub async fn sync_clients_to_db(&self) {
         // Stage 4 channel-based collection. Each `tokio::spawn` is the
         // sender; the awaited `JoinHandle` is the receiver. With N
@@ -2010,11 +2013,21 @@ impl World {
         let max_promotions =
             crate::config::config().tick.max_promotions_per_tick;
         let mut promoted_this_tick = 0_u32;
+        // A character already in the world can't enter twice: its old
+        // session is kicked (dropped as stale, and saved, by its map's
+        // tick), and this login waits until it is gone.
+        for c in &self.clients_on_character_screen {
+            if let CharacterScreenProgress::WaitingToLogIn(g) = c.status
+                && crate::world::cell::player_in_world(g)
+            {
+                crate::world::cell::request_kick(g);
+            }
+        }
         async {
-        while let Some(i) = self.clients_on_character_screen
-            .iter()
-            .position(|a| matches!(a.status, CharacterScreenProgress::WaitingToLogIn(_)))
-        {
+        while let Some(i) = self.clients_on_character_screen.iter().position(|a| {
+            matches!(a.status, CharacterScreenProgress::WaitingToLogIn(g)
+                if !crate::world::cell::player_in_world(g))
+        }) {
             if max_promotions > 0 && promoted_this_tick >= max_promotions {
                 break;
             }
@@ -2023,6 +2036,9 @@ impl World {
                 CharacterScreenProgress::WaitingToLogIn(g) => g,
                 _ => unreachable!(),
             };
+            // The old session, if there was one, is gone: a pending kick
+            // must not hit this one.
+            crate::world::cell::clear_kick(guid);
             let character = {
                 let db = self.db.lock().await;
                 match db.get_character_by_guid(guid) {
@@ -2687,10 +2703,15 @@ impl World {
             .await;
         t_logouts = phase.elapsed();
 
+        // Stale: the reader ended (the client disconnected or went quiet), or
+        // the same character is logging in on a new session.
         let stale_client_keys: Vec<usize> = cell
             .clients
             .iter()
-            .filter_map(|(k, c)| c.reader_is_finished().then_some(k))
+            .filter_map(|(k, c)| {
+                (c.reader_is_finished() || crate::world::cell::kick_requested(c.character().guid))
+                    .then_some(k)
+            })
             .collect();
         // Group stale-disconnect guids by map so a mass-drop (e.g. 800 bots
         // hitting Ctrl-C simultaneously) becomes ONE `OutOfRangeObjects`
@@ -2706,8 +2727,14 @@ impl World {
             let guid = c.character().guid;
             cell.last_heartbeat_broadcast_tick.remove(&guid);
             db.replace_character_data(c.character().clone());
+            crate::world::cell::clear_kick(guid);
+            let reason = if c.reader_is_finished() {
+                "reader task ended"
+            } else {
+                "the character logged in again"
+            };
             tracing::info!(
-                "Dropped stale client {} ({}); reader task ended",
+                "Dropped stale client {} ({}); {reason}",
                 c.character().name,
                 guid
             );
@@ -3805,6 +3832,37 @@ mod tests {
             1,
             "client should be re-homed into the Kalimdor MapState"
         );
+    }
+
+    #[tokio::test]
+    async fn a_kicked_session_is_dropped_and_saved() {
+        // A second login of a character kicks its session in the world: the
+        // map drops it as stale, which saves it and unregisters it, and the
+        // new session can then enter.
+        let mut db = crate::world::database::WorldDatabase::new();
+        let mut ch = test_character_at(&mut db, "Kicked", 50.0, 50.0);
+        ch.guid = wow_world_messages::Guid::new(0xC0FFEE);
+        let guid = ch.guid;
+        let mut world = World::for_test(vec![ch], vec![]);
+        assert!(crate::world::cell::player_in_world(guid));
+
+        crate::world::cell::request_kick(guid);
+        world.tick(std::time::Duration::from_millis(33)).await;
+
+        assert!(!crate::world::cell::player_in_world(guid));
+        assert!(!crate::world::cell::kick_requested(guid));
+    }
+
+    #[test]
+    fn repeating_an_attack_swing_changes_nothing() {
+        let mut db = crate::world::database::WorldDatabase::new();
+        let mut ch = test_character_at(&mut db, "Swinger", 0.0, 0.0);
+        let (a, b) = (wow_world_messages::Guid::new(1), wow_world_messages::Guid::new(2));
+        assert!(ch.start_attack(a));
+        ch.auto_attack_timer = 0.5; // mid-swing
+        assert!(!ch.start_attack(a), "the same target again");
+        assert_eq!(ch.auto_attack_timer, 0.5, "the swing timer isn't restarted");
+        assert!(ch.start_attack(b), "a new target starts a new attack");
     }
 
     #[tokio::test]

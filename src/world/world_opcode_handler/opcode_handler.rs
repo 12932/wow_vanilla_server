@@ -10,13 +10,12 @@ use crate::world::world_opcode_handler::entities::Entities;
 use crate::world::world_opcode_handler::{gm_command, send_to_all, write_client_test};
 use std::time::SystemTime;
 use tracing::debug;
-use wow_world_base::combat::UNARMED_SPEED;
 use wow_world_base::vanilla::position::{position_from_str, Position};
 use wow_world_base::vanilla::trigger::Trigger;
-use wow_world_base::vanilla::{CreatureFamily, Guid, HitInfo};
+use wow_world_base::vanilla::{CreatureFamily, Guid};
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::{
-    item_to_name_query_response, item_to_query_response, DamageInfo, LogoutResult, LogoutSpeed,
+    item_to_name_query_response, item_to_query_response, LogoutResult, LogoutSpeed,
     MSG_MOVE_FALL_LAND_Server, MSG_MOVE_HEARTBEAT_Server, MSG_MOVE_JUMP_Server,
     MSG_MOVE_SET_FACING_Server, MSG_MOVE_SET_PITCH_Server, MSG_MOVE_SET_RUN_MODE_Server,
     MSG_MOVE_SET_WALK_MODE_Server, MSG_MOVE_START_BACKWARD_Server, MSG_MOVE_START_FORWARD_Server,
@@ -26,7 +25,7 @@ use wow_world_messages::vanilla::{
     MSG_MOVE_STOP_PITCH_Server, MSG_MOVE_STOP_STRAFE_Server, MSG_MOVE_STOP_SWIM_Server,
     MSG_MOVE_STOP_Server, MSG_MOVE_STOP_TURN_Server, Object, Object_UpdateType,
     SMSG_CREATURE_QUERY_RESPONSE_found, UpdateMask, UpdatePlayerBuilder, VisibleItem,
-    VisibleItemIndex, SMSG_ATTACKERSTATEUPDATE, SMSG_ATTACKSTART, SMSG_ATTACKSTOP,
+    VisibleItemIndex, SMSG_ATTACKSTART, SMSG_ATTACKSTOP,
     SMSG_CREATURE_QUERY_RESPONSE, SMSG_EMOTE, SMSG_ITEM_QUERY_SINGLE_RESPONSE,
     SMSG_LOGOUT_COMPLETE, SMSG_LOGOUT_RESPONSE, SMSG_NAME_QUERY_RESPONSE, SMSG_PONG,
     SMSG_QUERY_TIME_RESPONSE, SMSG_TEXT_EMOTE, SMSG_UPDATE_OBJECT,
@@ -519,40 +518,18 @@ pub(super) async fn handle_opcodes(
             // Do not spam console, mangos also ignores
         }
         ClientOpcodeMessage::CMSG_ATTACKSWING(c) => {
-            client.character_mut().target = c.guid;
-            client.character_mut().attacking = true;
-            if client.character().auto_attack_timer > UNARMED_SPEED {
+            // This only starts the attack: the tick's combat stage resolves
+            // the swings and sends their results. A client repeating the
+            // packet for the same target changes nothing, so it neither
+            // restarts the swing timer nor broadcasts again.
+            if !client.character_mut().start_attack(c.guid) {
                 return;
             }
-            client.character_mut().auto_attack_timer = UNARMED_SPEED;
 
             send_to_all(
                 SMSG_ATTACKSTART {
                     attacker: guid,
                     victim: client.character().target,
-                },
-                client,
-                entities.clients(),
-            )
-            .await;
-
-            send_to_all(
-                SMSG_ATTACKERSTATEUPDATE {
-                    hit_info: HitInfo::CriticalHit,
-                    attacker: guid,
-                    target: client.character().target,
-                    total_damage: 1337,
-                    damages: vec![DamageInfo {
-                        spell_school_mask: 0,
-                        damage_float: 1332.0,
-                        damage_uint: 1332,
-                        absorb: 0,
-                        resist: 0,
-                    }],
-                    unknown1: 0,
-                    spell_id: 0,
-                    damage_state: 0,
-                    blocked_amount: 0,
                 },
                 client,
                 entities.clients(),
