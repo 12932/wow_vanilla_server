@@ -66,6 +66,9 @@ pub struct NetworkConfig {
     pub client_idle_timeout_secs: u64,
     /// Connections still in auth or the world handshake, at most.
     pub max_pending_connections: usize,
+    /// Packets a client may send a second, sustained (three seconds' worth at
+    /// once); a client that floods is disconnected.
+    pub max_packets_per_sec: u32,
 }
 
 impl Default for NetworkConfig {
@@ -75,6 +78,7 @@ impl Default for NetworkConfig {
             handshake_timeout_secs: 10,
             client_idle_timeout_secs: 120,
             max_pending_connections: 1024,
+            max_packets_per_sec: 100,
         }
     }
 }
@@ -107,6 +111,10 @@ pub struct WorldConfig {
     /// Shown to every player at login.
     pub motd: String,
     pub max_characters_per_account: usize,
+    /// Names no character may take.
+    pub reserved_names: Vec<String>,
+    /// A PvP realm: an account's characters are all of one side.
+    pub pvp_realm: bool,
     /// Signatures a guild charter needs.
     pub petition_signatures: u32,
     /// How long mail with items or money takes between accounts.
@@ -123,6 +131,8 @@ impl Default for WorldConfig {
             nav_dir: None,
             motd: "Welcome to wow_vanilla_server.".to_owned(),
             max_characters_per_account: 10,
+            reserved_names: Vec::new(),
+            pvp_realm: false,
             petition_signatures: 9,
             mail_delay_secs: 3600,
         }
@@ -132,13 +142,22 @@ impl Default for WorldConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AccountsConfig {
-    /// Every account may use GM commands. For development and load tests.
+    /// Every account is an administrator. For development and load tests.
     pub everyone_gm: bool,
+    /// `auto`: an unknown name gets an account at its first login, with the
+    /// name as its password. `existing`: only accounts already made.
+    pub creation: crate::accounts::Creation,
+    /// GM levels by account: 1 moderator, 2 game master, 3 administrator.
+    pub gm: std::collections::HashMap<String, u8>,
 }
 
 impl Default for AccountsConfig {
     fn default() -> Self {
-        Self { everyone_gm: true }
+        Self {
+            everyone_gm: false,
+            creation: crate::accounts::Creation::Auto,
+            gm: Default::default(),
+        }
     }
 }
 

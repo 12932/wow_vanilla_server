@@ -186,6 +186,7 @@ pub struct Player {
     pub played_at: Instant,
     pub save_at: Instant,
     pub gm: bool,
+    pub gm_level: u8,
     pub death: crate::game::map::death::Death,
     /// When health and power next regenerate.
     pub regen_at: Instant,
@@ -208,6 +209,14 @@ pub struct Player {
     pub duel: Option<crate::game::map::duel::Duel>,
     /// Where a player in a battleground came from.
     pub bg_return: Option<(crate::game::map::MapKey, Vector3d, f32)>,
+    /// The last position movement was checked from, and when.
+    pub move_check: Option<(Vector3d, Instant)>,
+    /// The top of a fall under way.
+    pub fall_from: Option<f32>,
+    /// Chat flood control: lines close together, and a mute.
+    pub chat_last: Option<Instant>,
+    pub chat_burst: u32,
+    pub muted_until: Option<Instant>,
 }
 
 impl Player {
@@ -236,6 +245,7 @@ impl Player {
             account: online.account.clone(),
             name: online.name.clone(),
             gm: online.gm,
+            gm_level: online.gm_level,
             outbound: online.outbound.clone(),
             online,
             fields: Fields::new(TypeId::Player, guid, 0),
@@ -270,6 +280,11 @@ impl Player {
             trade: None,
             duel: None,
             bg_return: None,
+            move_check: None,
+            fall_from: None,
+            chat_last: None,
+            chat_burst: 0,
+            muted_until: None,
             row,
         };
         p.init_fields(data);

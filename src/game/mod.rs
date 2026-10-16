@@ -47,6 +47,9 @@ pub struct RealmConfig {
     /// Players a side needs for a match, over the template's.
     pub bg_min_players: Option<u32>,
     pub bg_start_delay: Duration,
+    pub pvp_realm: bool,
+    /// Packets a client may send a second, sustained.
+    pub max_packets_per_sec: u32,
 }
 
 impl RealmConfig {
@@ -63,6 +66,8 @@ impl RealmConfig {
             instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,
             bg_min_players: None,
             bg_start_delay: Duration::from_secs(120),
+            pvp_realm: c.world.pvp_realm,
+            max_packets_per_sec: c.network.max_packets_per_sec,
         }
     }
 }

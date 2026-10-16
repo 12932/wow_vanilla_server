@@ -682,3 +682,64 @@ weather and battleground templates.
 - The transport's turn: offsets on deck are kept, not rotated.
 - Event quests, and the scripted events: Darkmoon Faire, invasions.
 - Zone world states outside battlegrounds.
+
+### Phase 11 (2026-10-16)
+
+**Accounts** (`accounts.rs`) live in the character store's file (table `accounts`): the name, the SRP salt and
+verifier, a GM level and a ban. The login server and the world share them.
+- `[accounts] creation`:
+  - `auto` makes an account at its first login, with its name as its password (development and peon);
+  - `existing` admits only accounts made with `.account create`.
+- The login server answers an unknown account, a banned one, and a wrong password, instead of going quiet.
+- `everyone_gm` is now off by default; the run's config turns it on for peon.
+
+**GM levels:** 1 moderator, 2 game master, 3 administrator. They come from the store (`.account gm`) or the
+config's `gm` table.
+- Moderators look and talk: `.gps`, `.online`, `.maps`, `.save`, `.announce`, `.kick`, `.gm`.
+- Game masters change the world: teleports, spawns, levels, deaths and revivals, `CMSG_WORLD_TELEPORT`, making
+  guilds, queueing for a battleground from anywhere.
+- Administrators run accounts: `.account create|password|gm`, `.ban <account> <minutes|perm> [reason]` (which
+  kicks them too), `.unban`.
+- A player's `.` line is just chat.
+
+**Characters:**
+- Names are 2 to 12 ASCII letters, capitalised.
+- No three of a letter in a row.
+- None of the config's `reserved_names`.
+- On a `pvp_realm`, an account's characters are all of one side.
+- One session per account was already the rule: a second login kicks the first.
+
+**Movement:**
+- Positions must be finite and on the map.
+- A move faster than the player's speed (a quarter's tolerance, half a second's lag, three yards) pulls them back
+  where they were, as a teleport. GMs and those on transports are exempt.
+- Falls past vmangos's safe 14.57 yards hurt by its formula, with `SMSG_ENVIRONMENTAL_DAMAGE_LOG`.
+
+**Rate limits:**
+- A token bucket per session: `max_packets_per_sec` sustained (100), three seconds' worth at once. A client that
+  floods is disconnected.
+- mangos's chat flood control: ten lines each within a second of the last mute for ten seconds.
+
+**Crashes:** the code review's crashes were in the old core, which is gone. On top of that:
+- A panic in a map's event or update is logged and costs that one event or update; the map goes on (tested).
+- Lookups that could panic on a player who had left now check.
+
+**Metrics:** every minute each busy map logs its players, creatures and objects, its average and slowest update,
+and the events waiting in its queue. `.maps` shows the same on demand.
+
+**Done when:** harness tests check that:
+- a player's `.go` is only chat, and a moderator can look but not teleport;
+- a client moving too fast is pulled back;
+- a packet flood is cut off, and a chat flood muted;
+- names follow the rules;
+- a long fall hurts;
+- a panic on a map costs one event.
+
+Unit tests cover the accounts (auto and existing creation, bans, GM levels) and the rate bucket. peon runs with
+its bots as administrators (`everyone_gm` in the run's config).
+
+**Left for later:**
+- IP bans, and account locks.
+- Fly and climb checks beyond speed, and checks on movement timestamps.
+- Per-opcode limits beyond the overall rate.
+- A metrics endpoint: the numbers are in the log.

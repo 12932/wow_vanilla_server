@@ -179,6 +179,9 @@ impl Maps {
     }
 }
 
+/// How often each map logs its numbers.
+pub const REPORT_EVERY: Duration = Duration::from_secs(60);
+
 /// The map update's period.
 pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a client has to acknowledge a teleport before its movement is
@@ -192,6 +195,10 @@ pub struct MapStats {
     pub events: u64,
     pub last_update: Duration,
     pub max_update: Duration,
+    /// Since the last report: updates, their total time, and the slowest.
+    pub window_updates: u32,
+    pub window_total: Duration,
+    pub window_max: Duration,
 }
 
 pub struct Map {
@@ -237,8 +244,26 @@ pub struct Map {
 }
 
 /// Run a map's actor until it is told to stop.
+/// Run `f` on the map; a panic in it is logged and the map goes on, so a
+/// bad packet or a bug costs one event or one update, not the map.
+fn guarded<T>(map: &mut Map, f: impl FnOnce(&mut Map) -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(map))) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            let what = e
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| e.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            tracing::error!("{} panicked: {what}; going on", map.key);
+            None
+        }
+    }
+}
+
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     world::populate(&mut map);
+    let mut report_at = Instant::now() + REPORT_EVERY;
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -246,15 +271,17 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             event = rx.recv() => {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
-                if map.handle_event(event) {
-                    break;
+                match guarded(&mut map, |m| m.handle_event(event)) {
+                    Some(true) => break,
+                    Some(false) => {}
+                    None => continue,
                 }
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved.
                 for _ in 0..512 {
                     match rx.try_recv() {
                         Ok(event) => {
-                            if map.handle_event(event) {
+                            if guarded(&mut map, |m| m.handle_event(event)) == Some(true) {
                                 return;
                             }
                         }
@@ -263,9 +290,13 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
             }
             _ = ticker.tick() => {
-                map.update();
+                guarded(&mut map, Map::update);
                 if map.stopping {
                     break;
+                }
+                if map.now >= report_at {
+                    report_at = map.now + REPORT_EVERY;
+                    map.report(rx.len());
                 }
             }
         }
@@ -376,6 +407,8 @@ impl Map {
             }
             ArrivalKind::Transfer(mut p) => {
                 p.row.map = self.key.map;
+                p.move_check = None;
+                p.fall_from = None;
                 p.awaiting_worldport = true;
                 p.teleport = None;
                 p.outbound
@@ -440,6 +473,36 @@ impl Map {
             p.save_at = now + self.realm.config.save_interval;
             self.realm.store.save(row);
         }
+    }
+
+    /// The map's numbers for the last while: players, creatures, update
+    /// times and the events waiting.
+    fn report(&mut self, queued: usize) {
+        let s = &mut self.stats;
+        if self.players.is_empty() && s.window_max < UPDATE_INTERVAL {
+            *s = MapStats {
+                updates: s.updates,
+                events: s.events,
+                last_update: s.last_update,
+                max_update: s.max_update,
+                ..Default::default()
+            };
+            return;
+        }
+        let avg = s.window_total.as_secs_f64() * 1000.0 / f64::from(s.window_updates.max(1));
+        info!(
+            "{}: {} players, {} creatures, {} objects; updates {:.2} ms average, {:.1} ms at most; {} events waiting",
+            self.key,
+            self.players.len(),
+            self.creatures.len(),
+            self.gameobjects.len(),
+            avg,
+            s.window_max.as_secs_f64() * 1000.0,
+            queued,
+        );
+        s.window_updates = 0;
+        s.window_total = Duration::ZERO;
+        s.window_max = Duration::ZERO;
     }
 
     /// A copy empty long enough unloads.
@@ -544,6 +607,9 @@ impl Map {
 
         let took = started.elapsed();
         self.stats.last_update = took;
+        self.stats.window_updates += 1;
+        self.stats.window_total += took;
+        self.stats.window_max = self.stats.window_max.max(took);
         self.stats.max_update = self.stats.max_update.max(took);
         if took > UPDATE_INTERVAL {
             warn!(

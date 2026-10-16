@@ -57,6 +57,22 @@ async fn async_main() {
         }
     };
     config::install(cfg);
+    let cfg = config::config();
+    match wow_vanilla_server::accounts::Accounts::open(
+        &cfg.world.characters_db,
+        cfg.accounts.creation,
+        cfg.accounts.everyone_gm,
+        cfg.accounts.gm.clone().into_iter().collect(),
+    ) {
+        Ok(a) => wow_vanilla_server::accounts::install(a),
+        Err(e) => {
+            tracing::error!(
+                "can't open the accounts in {}: {e}",
+                cfg.world.characters_db.display()
+            );
+            std::process::exit(2);
+        }
+    }
 
     let users: auth::UserCache = Arc::new(Mutex::new(auth::UserCacheInner::new()));
     let auth_server = tokio::spawn(auth::auth(users.clone()));

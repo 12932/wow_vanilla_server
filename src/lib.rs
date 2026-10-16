@@ -2,6 +2,7 @@
 //! is a thin entry point; the modules live here so that tests can reach
 //! them.
 
+pub mod accounts;
 pub mod auth;
 pub mod config;
 pub mod game;

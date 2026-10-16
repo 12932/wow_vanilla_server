@@ -89,6 +89,24 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if p.logout_at.is_some() {
         return;
     }
+    // Faster than the player can go: pulled back to where they were.
+    let now = map.now;
+    if let Some((last, at)) = p.move_check
+        && !p.gm
+        && info.flags.get_on_transport().is_none()
+    {
+        let dt = now.duration_since(at).as_secs_f32();
+        let speed = p.speeds.run.max(p.speeds.swim).max(7.0);
+        let allowed = speed * SPEED_TOLERANCE * (dt + LATENCY_ALLOWANCE) + 3.0;
+        if horizontal(last, info.position) > allowed {
+            let o = p.movement.orientation;
+            tracing::debug!("{} moved too fast; pulled back", p.name);
+            teleport_within(map, guid, last, o);
+            return;
+        }
+    }
+    p.move_check = Some((info.position, now));
+    let fall = landing(p, &info);
     let anchor = p.vis_anchor;
     let new_cell = grid::cell_of(info.position.x, info.position.y);
     let old_cell = p.cell;
@@ -104,6 +122,69 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if let Some(frame) = relay(guid, info) {
         map.send_to_observers(guid, &frame, false);
     }
+    if let Some(drop) = fall {
+        fall_damage(map, guid, drop);
+    }
+}
+
+/// How much faster than their speed a player may seem to go, and the
+/// lag a packet may carry.
+const SPEED_TOLERANCE: f32 = 1.25;
+const LATENCY_ALLOWANCE: f32 = 0.5;
+/// vmangos's safe fall: below this many yards a fall doesn't hurt.
+const SAFE_FALL: f32 = 14.57;
+
+fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+/// A fall's start is the highest point since leaving the ground; landing
+/// returns how far it was.
+fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Option<f32> {
+    let falling = info.flags.get_jumping().is_some() || info.flags.get_fallingfar();
+    let z = info.position.z;
+    match (falling, p.fall_from) {
+        (true, Some(top)) => {
+            p.fall_from = Some(top.max(z));
+            None
+        }
+        (true, None) => {
+            p.fall_from = Some(z.max(p.movement.position.z));
+            None
+        }
+        (false, Some(top)) => {
+            p.fall_from = None;
+            let swimming = info.flags.get_swimming().is_some();
+            (!swimming).then_some(top - z)
+        }
+        (false, None) => None,
+    }
+}
+
+/// vmangos's fall damage: 1.8% of maximum health a yard past the safe
+/// fall, less a quarter.
+fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    if drop < SAFE_FALL || p.gm || p.death != crate::game::map::death::Death::Alive {
+        return;
+    }
+    let max = p.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH) as f32;
+    let damage = ((0.018 * drop - 0.2426) * max).max(0.0) as u32;
+    if damage == 0 {
+        return;
+    }
+    if let Some(frame) = encode(&SMSG_ENVIRONMENTAL_DAMAGE_LOG {
+        guid: g,
+        damage_type: EnvironmentalDamageType::Fall,
+        damage,
+        absorb: 0,
+        resist: 0,
+    }) {
+        map.send_to_observers(g, &frame, true);
+    }
+    crate::game::map::combat::deal_damage(map, g, g, damage);
 }
 
 /// Move a player within the map: the client is told, and its movement is
@@ -118,6 +199,8 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.movement.flags = MovementInfo_MovementFlags::empty();
     p.movement.fall_time = 0.0;
     p.teleport = Some(PendingTeleport { since: now });
+    p.move_check = Some((position, now));
+    p.fall_from = None;
     p.outbound.send(&MSG_MOVE_TELEPORT_ACK_Server {
         guid,
         movement_counter: 0,

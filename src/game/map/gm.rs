@@ -9,23 +9,104 @@ use crate::game::map::creature::Creature;
 use crate::game::map::{Map, MapKey, chat};
 
 const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, .die, .revive, .levelup [n], .gm [on|off], .speed <multiplier>, \
-.online, .maps, .save, .announce <text>, .kick <name>, .spawn <entry>, .help";
+.online, .maps, .save, .announce <text>, .kick <name>, .spawn <entry>, .account create|password <name> <password>, \
+.account gm <name> <level>, .ban <account> <minutes|perm> [reason], .unban <account>, .help";
+
+/// The GM level a command needs: moderators look and talk, game masters
+/// change the world, administrators run accounts.
+pub fn needed_level(command: &str) -> u8 {
+    use crate::accounts::{ADMINISTRATOR, GAME_MASTER, MODERATOR};
+    match command {
+        "gps" | "online" | "maps" | "save" | "announce" | "kick" | "gm" | "help" => MODERATOR,
+        "account" | "ban" | "unban" => ADMINISTRATOR,
+        _ => GAME_MASTER,
+    }
+}
+
+/// `.account create|password <name> <password>`, `.account gm <name> <level>`.
+fn account(map: &Map, args: &[&str]) -> String {
+    let Some(accounts) = crate::accounts::get() else {
+        return "There are no accounts here.".into();
+    };
+    match args {
+        ["create" | "password", name, password] => match accounts.set_password(name, password) {
+            Ok(()) => format!("Account {} set.", name.to_uppercase()),
+            Err(e) => e,
+        },
+        ["gm", name, level] => match level.parse::<u8>() {
+            Ok(level) if accounts.set_gm_level(name, level) => {
+                // It takes effect at the next login.
+                let _ = map;
+                format!(
+                    "{} is GM level {level} from their next login.",
+                    name.to_uppercase()
+                )
+            }
+            _ => format!("No account {name}, or no level {level}."),
+        },
+        _ => "Use: .account create|password <name> <password>, .account gm <name> <level>".into(),
+    }
+}
+
+/// `.ban <account> <minutes|perm> [reason]`: they can't log in, and go now.
+fn ban(map: &Map, args: &[&str]) -> String {
+    let Some(accounts) = crate::accounts::get() else {
+        return "There are no accounts here.".into();
+    };
+    let (Some(name), Some(time)) = (args.first(), args.get(1)) else {
+        return "Use: .ban <account> <minutes|perm> [reason]".into();
+    };
+    let until = if time.eq_ignore_ascii_case("perm") {
+        -1
+    } else {
+        match time.parse::<i64>() {
+            Ok(m) if m > 0 => chrono::Utc::now().timestamp() + m * 60,
+            _ => return "Use: .ban <account> <minutes|perm> [reason]".into(),
+        }
+    };
+    let reason = args[2..].join(" ");
+    if !accounts.ban(name, until, &reason) {
+        return format!("No account {name}.");
+    }
+    if let Some(o) = map.realm.registry.online_for_account(&name.to_uppercase()) {
+        let _ = o.session.send(crate::game::session::Control::Kick);
+    }
+    format!("{} is banned.", name.to_uppercase())
+}
+
+fn unban(args: &[&str]) -> String {
+    match (crate::accounts::get(), args.first()) {
+        (Some(a), Some(name)) if a.ban(name, 0, "") => {
+            format!("{} may log in again.", name.to_uppercase())
+        }
+        _ => "Use: .unban <account>".into(),
+    }
+}
 
 /// Run a command (`text` without its `.`).
 pub fn command(map: &mut Map, guid: Guid, text: &str) {
     let Some(p) = map.players.get(&guid) else {
         return;
     };
-    if !p.gm {
-        chat::send_system(&p.outbound, "You can't use commands.");
-        return;
-    }
+    let level = p.gm_level;
     let mut words = text.split_whitespace();
     let Some(name) = words.next() else {
         return;
     };
+    let name = name.to_ascii_lowercase();
+    let needed = needed_level(&name);
+    if level < needed {
+        chat::send_system(
+            &p.outbound,
+            "You don't have permission to use that command.",
+        );
+        return;
+    }
     let args: Vec<&str> = words.collect();
-    let reply = match name.to_ascii_lowercase().as_str() {
+    let reply = match name.as_str() {
+        "account" => Some(account(map, &args)),
+        "ban" => Some(ban(map, &args)),
+        "unban" => Some(unban(&args)),
         "go" => go(map, guid, &args),
         "gps" => gps(map, guid),
         "speed" => speed(map, guid, &args),

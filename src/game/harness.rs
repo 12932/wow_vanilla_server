@@ -30,6 +30,8 @@ pub fn test_config() -> RealmConfig {
         instance_unload: Duration::from_millis(200),
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
+        pvp_realm: false,
+        max_packets_per_sec: 200,
     }
 }
 
@@ -87,6 +89,11 @@ impl Client {
             .send(msg.into())
             .await
             .expect("the session is running");
+    }
+
+    /// Send, or false if the session has gone.
+    pub async fn try_send(&self, msg: impl Into<ClientOpcodeMessage>) -> bool {
+        self.tx.send(msg.into()).await.is_ok()
     }
 
     /// Close the connection, as a client that goes away.
