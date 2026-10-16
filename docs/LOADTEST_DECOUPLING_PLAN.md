@@ -191,47 +191,125 @@ commit, and the server's build if the profile names it.
 
 ## Phases
 
-| # | Deliverable | Done when |
-|---|---|---|
-| 1. Extract | The new repository, history kept; own workspace and release profile; no server dependencies; runtime `--nav-data` / `--nav-cache`; wow_vanilla_server drops `src/loadtest` and its `[[bin]]`, with a README pointer | It builds and runs today's modes against wow_vanilla_server unchanged |
-| 2. A correct client | The framer and selective decode; the state machine with timeouts and cancellation; protocol 3; ready (verify, active mover, cinematic); acks; logout; global slots; orchestrator fixes; `drain_all` concurrency | 1 bot logs in, becomes visible to a second bot and moves, on both servers; 500 bots `wander` on wow_vanilla_server with no desyncs; `stop` and `drain` finish within their deadline |
-| 3. Profiles and placement | Profile schema and validation; the two profiles; placement strategies; combat model from update fields | 200 bots gather in the Gurubashi pit on both servers and fight to the death with correct death detection; plans the profile can't serve fail at startup |
-| 4. Metrics and reports | Histograms, worker health, merged reports, run plans | One plan produces comparable reports for both servers; a deliberately saturated worker marks its run invalid |
-| 5. Scenarios | `idle`, `login_churn`, `wander`, `cluster`, `pvp_arena`, and `race` on rustigator master | Every scenario runs on both servers, or fails at startup with a stated reason |
-| 6. Baselines | The same plan matrix on both servers on the same hardware, results kept in the repository | Baseline tables, and the server findings that limit them, filed |
+The order puts the cheap fixes that decide whether any number means anything first, and the big redesign last.
+Work happens on the `work/loadtest` branch of wow_vanilla_server, committed and pushed per phase; nothing is merged
+until it is asked for.
 
-## Server-side prerequisites
+### Phase 1: a correct client, in place
 
-**wow_vanilla_server.** Fix what would abort or corrupt a run before taking baselines; measure the performance issues
-with the new tool, then fix them:
-- **Before baselines:**
-  - the `accept()` unwrap and the missing timeouts (review row 1);
-  - double login (row 4);
-  - the server's own unknown-opcode desync (row 9);
-  - the fake crit on `CMSG_ATTACKSWING` (row 8).
-- **To measure, then fix:**
-  - maps ticking serially (row 6);
-  - creatures walking while dead, and duplicates (row 7);
-  - creatures sent twice at login;
-  - idle maps doing full work.
-- **The rustigator bump.** The server's own snap-to-ground and line of sight are wrong until it moves past fc45283.
-  That needs a matching `wow_world_base` first (CODE_REVIEW, "Navmesh and the race").
+In `src/loadtest`, without moving it.
 
-**Thistle Tea:**
-- **Maps baked on the server,** for area detection and so the Gurubashi FFA pit. The fork bakes and rustigator bakes
-  already exist locally.
-- **A ceiling of 1,000 bots** from the seeded accounts. Raise it in a local checkout (`lib/application.ex`, one
-  range), or register over HTTP.
-- **Its 5 s internal call timeout** drops connections under overload. Count it as a server result, not a tool error.
-- **It sends 3-byte size headers,** which a real 1.12 client may not accept. Worth raising upstream.
+- [ ] **Auth:** protocol 3 messages, version 1.12.1. Timeouts on connect, every read and every write. The handshake
+  can be cancelled by `stop` and `drain`.
+- [ ] **Reader:** the unknown-opcode skip no longer reads the body twice. A parse error is skipped and counted; the
+  body is already consumed.
+- [ ] **Login:**
+  - Wait for `SMSG_LOGIN_VERIFY_WORLD`, skipping other packets until a deadline, and adopt its map and position.
+  - Send `CMSG_SET_ACTIVE_MOVER`.
+  - Answer `SMSG_TRIGGER_CINEMATIC` with `CMSG_COMPLETE_CINEMATIC`.
+  - Count world ok and alive only at verify.
+- [ ] **Accounts:**
+  - A global slot range for each worker: `--slot-offset`, and a default prefix from `--worker-id`.
+  - `--password` (default: the username).
+  - Freed slots are reused.
+- [ ] **Random mode** walks around the server's spawn, not the hard-coded anchor, and reflects at its radius instead
+  of teleporting back. PvP and race still assume wow_vanilla_server's Gurubashi spawn, until Phase 5.
+- [ ] **Shutdown:**
+  - `drain` notifies every bot at once, with one deadline, then aborts what's left.
+  - `stop` aborts.
+  - Dead bots leave the slab.
+- [ ] **Orchestrator:** registry entries carry a connection generation, so a reconnecting worker isn't evicted.
 
-## Decisions for you
+**Done when:**
+- 50 bots in random mode reach the world on wow_vanilla_server, with no desyncs.
+- 10 bots log in on Thistle Tea, and their movement is seen by another bot.
+- `stop` and `drain` finish within their deadline.
 
-1. **Where the loadtest lives:** its own repository (recommended: no shared pins or release profile), or a workspace
-   crate in wow_vanilla_server. Also its name.
-2. **Which servers to target:** design for cmangos and vmangos too, but validate only wow_vanilla_server and Thistle
-   Tea.
-3. **Thistle Tea above 1,000 bots:** patch its seeding locally, or stay at 1,000.
-4. **wow_vanilla_server's rustigator bump:** re-pin rustigator's `wow_world_base` to e8dc643, or upgrade the server's
-   wow_messages.
-5. **Which server fixes come before the first baselines:** the four above, or more.
+### Phase 2: server fixes that would abort or corrupt a run
+
+In wow_vanilla_server itself (CODE_REVIEW rows 1, 4, 8 and 9).
+
+- [ ] **Listeners:** accept errors are logged with a back-off, not unwrapped. Pre-auth reads time out, the world
+  reader has an idle timeout, and connections are capped.
+- [ ] **Double login:** a character already in the world is refused, and index removal only deletes entries that
+  still point at the client being removed.
+- [ ] **Unknown opcodes:** the world reader no longer reads their bodies twice.
+- [ ] **`CMSG_ATTACKSWING`:** no fake 1,337 crit, and attack start broadcast only when the state or target changes.
+- [ ] **Clippy:** `cargo clippy --all-targets` clean again (the `hot_loops` bench, and one warning).
+
+**Done when:** each fix has a test, and Phase 1's runs pass again.
+
+### Phase 3: rustigator master in wow_vanilla_server
+
+- [ ] rustigator pins `wow_world_base` back to the server's wow_messages commit (e8dc643).
+- [ ] wow_vanilla_server moves to rustigator master. Its bakes are format 12, and rebuild themselves.
+- [ ] **Race:**
+  - Use `PathOptions::reference(false)`.
+  - Fail loudly when maps are configured but no path is found.
+  - Remove the dock special case and the diagnostics.
+  - Small jitter, or a path per bot.
+
+**Done when:** the race walks Booty Bay → Gurubashi on the navmesh, staying on the ground; the server's snap to
+ground and line of sight work in Booty Bay and the arena.
+
+### Phase 4: extract
+
+- [ ] The loadtest moves to its own repository, history kept with `git filter-repo`. It gets its own workspace and
+  release profile (unwinding), and no server dependencies.
+- [ ] Runtime `--nav-data` and `--nav-cache` replace the compile-time variable and the server's bake directory.
+- [ ] wow_vanilla_server drops `src/loadtest` and its `[[bin]]`, and its README points to the new repository.
+
+**Done when:** the new repository builds and runs Phase 1's checks.
+
+**Needs from you:** the new GitHub repository.
+
+### Phase 5: profiles, placement and combat
+
+- [ ] The profile schema and its startup validation, with profiles for wow_vanilla_server and Thistle Tea.
+- [ ] Placement strategies: server spawns, as spawned, heartbeat teleport, chat command.
+- [ ] Teleport, worldport, speed and root acks.
+- [ ] Logout.
+- [ ] Health from update fields; respawn policies; PvP modes (FFA, FFA area, faction split); swinging once per
+  target. `SMSG_ATTACKERSTATEUPDATE` is read leniently, so Thistle Tea's combined `HitInfo` flags parse.
+
+**Done when:**
+- 200 bots gather in the Gurubashi pit on both servers and fight, with correct death detection.
+- Plans a profile can't serve fail at startup.
+
+### Phase 6: metrics, reports, run plans
+
+- [ ] Latency histograms: login funnel, ping round trip, movement propagation, swing to damage.
+- [ ] Bytes and packets at the socket.
+- [ ] Worker health, so a saturated run is marked invalid.
+- [ ] Orchestrator-assigned slot ranges.
+- [ ] Merged reports, and run plans in TOML.
+
+**Done when:** one plan produces comparable reports for both servers, and a deliberately saturated worker marks its
+run invalid.
+
+### Phase 7: scenarios and baselines
+
+- [ ] `idle`, `login_churn`, `wander`, `cluster`, `pvp_arena`, `race`.
+- [ ] Client-realism traffic: name and creature queries, selection.
+- [ ] The same plan matrix on both servers on the same hardware, results kept in the repository, and the server
+  findings that limit them filed.
+
+**Done when:** baseline tables exist for both servers.
+
+## Thistle Tea prerequisites
+
+- **Maps baked on the server,** for area detection and so the Gurubashi FFA pit. Fork and rustigator bakes already
+  exist locally.
+- **A ceiling of 1,000 bots** from its seeded accounts.
+- **Its 5 s internal call timeout** drops connections under overload. Count that as a server result, not a tool error.
+- **It sends 3-byte size headers above 0x7FFF bytes,** which a real 1.12 client may not accept. Worth raising upstream.
+
+## Decisions
+
+Taken as defaults, to revisit at any phase:
+1. **The loadtest gets its own repository** in Phase 4, once you have created it on GitHub. Its name is yours to
+   choose.
+2. **Servers:** designed for cmangos and vmangos too, but validated only on wow_vanilla_server and Thistle Tea.
+3. **Thistle Tea stays at 1,000 bots,** its seeded accounts. Raising it is a one-line change in a local checkout.
+4. **The rustigator bump** is unblocked from rustigator's side, by re-pinning its `wow_world_base`.
+5. **Before the first baselines,** the four server fixes of Phase 2.
