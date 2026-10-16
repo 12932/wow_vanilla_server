@@ -436,7 +436,8 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         }
     }
     p.refresh_inventory(&data);
-    if alert && let Some((bag, slot)) = last {
+    let notify = alert;
+    if notify && let Some((bag, slot)) = last {
         p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
             guid: g,
             source: NewItemSource::Looted,
@@ -450,6 +451,7 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
             item_count: count,
         });
     }
+    crate::game::map::quests::items_changed(map, g, entry);
     Ok(())
 }
 
@@ -470,6 +472,7 @@ pub fn take_item(map: &mut Map, g: Guid, i: usize, count: u32) {
     let item = p.items.remove(i);
     p.outbound.send(&SMSG_DESTROY_OBJECT { guid: item.guid });
     p.refresh_inventory(&data);
+    crate::game::map::quests::items_changed(map, g, item.entry);
 }
 
 /// Whether `(bag, slot)` is a slot of `p`'s, and an item may be put there.
@@ -504,9 +507,10 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
     }
     if bag == BAG_PLAYER
         && ((BAG_START..BAG_END).contains(&slot) || (BANK_BAG_START..BANK_BAG_END).contains(&slot))
-        && t.is_none_or(|t| t.class != 1) {
-            return Err(Fail::DoesntGoToSlot);
-        }
+        && t.is_none_or(|t| t.class != 1)
+    {
+        return Err(Fail::DoesntGoToSlot);
+    }
     if bag != BAG_PLAYER
         && t.is_some_and(|t| t.class == 1)
         && p.items

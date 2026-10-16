@@ -107,12 +107,21 @@ const IN_PATCH: &str = "patch_min <= 10 AND patch_max >= 10";
 pub fn load(dir: &Path) -> GameData {
     let started = Instant::now();
     let mut data = GameData::empty();
-    match open(&dir.join("dbc.sqlite")) {
-        Ok(dbc) => load_dbc(&dbc, &mut data),
-        Err(e) => warn!("game data: {}: {e}", dir.join("dbc.sqlite").display()),
-    }
+    let dbc = match open(&dir.join("dbc.sqlite")) {
+        Ok(dbc) => {
+            load_dbc(&dbc, &mut data);
+            Some(dbc)
+        }
+        Err(e) => {
+            warn!("game data: {}: {e}", dir.join("dbc.sqlite").display());
+            None
+        }
+    };
     match open(&dir.join("vmangos.sqlite")) {
-        Ok(db) => load_vmangos(&db, &mut data),
+        Ok(db) => {
+            load_vmangos(&db, &mut data);
+            load_npcs(&db, dbc.as_ref(), &mut data);
+        }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
     let spawns: usize = data.creature_spawns.values().map(Vec::len).sum();
@@ -795,6 +804,308 @@ fn load_durability(dbc: &Connection, data: &mut GameData) {
         (c.u32("id"), c.f32("data"))
     }) {
         data.durability_quality.insert(id, q);
+    }
+}
+
+fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
+    use super::npc::*;
+    let npc = &mut data.npc;
+    for (menu, text, condition) in rows(db, "SELECT * FROM gossip_menu", |c| {
+        (c.u32("entry"), c.u32("text_id"), c.u32("condition_id"))
+    }) {
+        npc.gossip_menus
+            .entry(menu)
+            .or_default()
+            .texts
+            .push((text, condition));
+    }
+    for (menu, o) in rows(
+        db,
+        "SELECT * FROM gossip_menu_option ORDER BY menu_id, id",
+        |c| {
+            (
+                c.u32("menu_id"),
+                GossipOption {
+                    id: c.u32("id"),
+                    icon: c.u8("option_icon"),
+                    text: c.string("option_text"),
+                    kind: c.u32("option_id"),
+                    npc_flag: c.u32("npc_option_npcflag"),
+                    action_menu: c.i32("action_menu_id"),
+                    action_poi: c.u32("action_poi_id"),
+                    coded: c.i64("box_coded") != 0,
+                    box_money: c.u32("box_money"),
+                    box_text: c.string("box_text"),
+                    condition: c.u32("condition_id"),
+                },
+            )
+        },
+    ) {
+        npc.gossip_menus.entry(menu).or_default().options.push(o);
+    }
+    for (id, choices) in rows(db, "SELECT * FROM npc_text", |c| {
+        let mut choices = [NpcTextChoice::default(); 8];
+        for (i, ch) in choices.iter_mut().enumerate() {
+            *ch = NpcTextChoice {
+                broadcast: c.u32(&format!("BroadcastTextID{i}")),
+                probability: c.f32(&format!("Probability{i}")),
+            };
+        }
+        (c.u32("ID"), choices)
+    }) {
+        npc.npc_texts.insert(id, choices);
+    }
+    for (id, b) in rows(db, "SELECT * FROM broadcast_text", |c| {
+        (
+            c.u32("entry"),
+            BroadcastText {
+                male: c.string("male_text"),
+                female: c.string("female_text"),
+                language: c.u32("language_id"),
+                emotes: [
+                    (c.u32("emote_delay1"), c.u32("emote_id1")),
+                    (c.u32("emote_delay2"), c.u32("emote_id2")),
+                    (c.u32("emote_delay3"), c.u32("emote_id3")),
+                ],
+            },
+        )
+    }) {
+        npc.broadcast_texts.insert(id, b);
+    }
+    let trainer = |c: &Cols| {
+        (
+            c.u32("entry"),
+            TrainerSpell {
+                spell: c.u32("spell"),
+                cost: c.u32("spellcost"),
+                required_skill: c.u32("reqskill"),
+                required_skill_value: c.u32("reqskillvalue"),
+                required_level: c.u8("reqlevel"),
+            },
+        )
+    };
+    let in_build = "WHERE build_min <= 5875 AND build_max >= 5875";
+    for (entry, s) in rows(
+        db,
+        &format!("SELECT * FROM npc_trainer {in_build}"),
+        trainer,
+    ) {
+        npc.trainers.entry(entry).or_default().push(s);
+    }
+    for (entry, s) in rows(
+        db,
+        &format!("SELECT * FROM npc_trainer_template {in_build}"),
+        trainer,
+    ) {
+        npc.trainer_templates.entry(entry).or_default().push(s);
+    }
+    for (entry, text) in rows(db, "SELECT * FROM npc_trainer_greeting", |c| {
+        (c.u32("entry"), c.string("content_default"))
+    }) {
+        npc.trainer_greetings.insert(entry, text);
+    }
+    for (entry, text) in rows(db, "SELECT * FROM quest_greeting", |c| {
+        (c.u32("entry"), c.string("content_default"))
+    }) {
+        npc.quest_greetings.insert(entry, text);
+    }
+    for n in rows(
+        db,
+        "SELECT * FROM taxi_nodes WHERE build <= 5875 ORDER BY build",
+        |c| TaxiNode {
+            id: c.u32("id"),
+            map: c.u32("map_id"),
+            x: c.f32("x"),
+            y: c.f32("y"),
+            z: c.f32("z"),
+            name: c.string("name"),
+            mounts: [c.u32("mount_creature_id1"), c.u32("mount_creature_id2")],
+        },
+    ) {
+        npc.taxi_nodes.insert(n.id, n);
+    }
+    if let Some(dbc) = dbc {
+        for (id, from, to, cost) in rows(dbc, "SELECT * FROM TaxiPath", |c| {
+            (
+                c.u32("id"),
+                c.u32("source_taxi_node"),
+                c.u32("destination_taxi_node"),
+                c.u32("cost"),
+            )
+        }) {
+            npc.taxi_paths.insert((from, to), (id, cost));
+        }
+        for (path, n) in rows(
+            dbc,
+            "SELECT * FROM TaxiPathNode ORDER BY taxi_path, node_index",
+            |c| {
+                (
+                    c.u32("taxi_path"),
+                    TaxiPathNode {
+                        map: c.u32("map"),
+                        x: c.f32("location_x"),
+                        y: c.f32("location_y"),
+                        z: c.f32("location_z"),
+                        flags: c.u32("flags"),
+                        delay: c.u32("delay"),
+                    },
+                )
+            },
+        ) {
+            npc.taxi_path_nodes.entry(path).or_default().push(n);
+        }
+        for (id, cost) in rows(dbc, "SELECT * FROM BankBagSlotPrices", |c| {
+            (c.u32("id"), c.u32("cost"))
+        }) {
+            npc.bank_slot_prices.insert(id, cost);
+        }
+    }
+    let pair = |c: &Cols, a: &str, b: &str| (c.u32(a), c.u32(b));
+    npc.quests = latest_patch(rows(db, "SELECT * FROM quest_template", |c| {
+        let q = Quest {
+            id: c.u32("entry"),
+            method: c.u32("Method"),
+            zone_or_sort: c.i32("ZoneOrSort"),
+            min_level: c.u8("MinLevel"),
+            level: c.i32("QuestLevel"),
+            kind: c.u32("Type"),
+            required_classes: c.u32("RequiredClasses"),
+            required_races: c.u32("RequiredRaces"),
+            required_skill: c.u32("RequiredSkill"),
+            required_skill_value: c.u32("RequiredSkillValue"),
+            prev_quest: c.i32("PrevQuestId"),
+            next_quest: c.i32("NextQuestId"),
+            exclusive_group: c.i32("ExclusiveGroup"),
+            next_in_chain: c.u32("NextQuestInChain"),
+            source_item: c.u32("SrcItemId"),
+            source_item_count: c.u32("SrcItemCount"),
+            limit_time: c.u32("LimitTime"),
+            flags: c.u32("QuestFlags"),
+            special_flags: c.u32("SpecialFlags"),
+            suggested_players: c.u32("SuggestedPlayers"),
+            title: c.string("Title"),
+            details: c.string("Details"),
+            objectives: c.string("Objectives"),
+            offer_reward_text: c.string("OfferRewardText"),
+            request_items_text: c.string("RequestItemsText"),
+            end_text: c.string("EndText"),
+            objective_texts: std::array::from_fn(|i| c.string(&format!("ObjectiveText{}", i + 1))),
+            required_items: std::array::from_fn(|i| {
+                pair(
+                    c,
+                    &format!("ReqItemId{}", i + 1),
+                    &format!("ReqItemCount{}", i + 1),
+                )
+            }),
+            required_kills: std::array::from_fn(|i| {
+                (
+                    c.i32(&format!("ReqCreatureOrGOId{}", i + 1)),
+                    c.u32(&format!("ReqCreatureOrGOCount{}", i + 1)),
+                )
+            }),
+            required_spell_casts: std::array::from_fn(|i| c.u32(&format!("ReqSpellCast{}", i + 1))),
+            source_items: std::array::from_fn(|i| {
+                pair(
+                    c,
+                    &format!("ReqSourceId{}", i + 1),
+                    &format!("ReqSourceCount{}", i + 1),
+                )
+            }),
+            choice_rewards: std::array::from_fn(|i| {
+                pair(
+                    c,
+                    &format!("RewChoiceItemId{}", i + 1),
+                    &format!("RewChoiceItemCount{}", i + 1),
+                )
+            }),
+            rewards: std::array::from_fn(|i| {
+                pair(
+                    c,
+                    &format!("RewItemId{}", i + 1),
+                    &format!("RewItemCount{}", i + 1),
+                )
+            }),
+            reputation_rewards: std::array::from_fn(|i| {
+                (
+                    c.u32(&format!("RewRepFaction{}", i + 1)),
+                    c.i32(&format!("RewRepValue{}", i + 1)),
+                )
+            }),
+            reward_xp: c.u32("RewXP"),
+            reward_money: c.i32("RewOrReqMoney"),
+            reward_money_max_level: c.u32("RewMoneyMaxLevel"),
+            reward_spell: c.u32("RewSpell"),
+            reward_spell_cast: c.u32("RewSpellCast"),
+            point: (
+                c.u32("PointMapId"),
+                c.f32("PointX"),
+                c.f32("PointY"),
+                c.u32("PointOpt"),
+            ),
+            details_emotes: std::array::from_fn(|i| {
+                pair(
+                    c,
+                    &format!("DetailsEmote{}", i + 1),
+                    &format!("DetailsEmoteDelay{}", i + 1),
+                )
+            }),
+            incomplete_emote: c.u32("IncompleteEmote"),
+            complete_emote: c.u32("CompleteEmote"),
+            offer_reward_emotes: std::array::from_fn(|i| {
+                pair(
+                    c,
+                    &format!("OfferRewardEmote{}", i + 1),
+                    &format!("OfferRewardEmoteDelay{}", i + 1),
+                )
+            }),
+        };
+        (q.id, c.i64("patch"), q)
+    }));
+    let relation = |table: &str| {
+        let mut out: AHashMap<u32, Vec<u32>> = AHashMap::new();
+        for (id, quest) in rows(
+            db,
+            &format!("SELECT * FROM {table} WHERE {IN_PATCH}"),
+            |c| (c.u32("id"), c.u32("quest")),
+        ) {
+            out.entry(id).or_default().push(quest);
+        }
+        out
+    };
+    npc.creature_starts = relation("creature_questrelation");
+    npc.creature_ends = relation("creature_involvedrelation");
+    let relation_any = |table: &str| {
+        let mut out: AHashMap<u32, Vec<u32>> = AHashMap::new();
+        for (id, quest) in rows(db, &format!("SELECT * FROM {table}"), |c| {
+            (c.u32("id"), c.u32("quest"))
+        }) {
+            out.entry(id).or_default().push(quest);
+        }
+        out
+    };
+    npc.object_starts = relation_any("gameobject_questrelation");
+    npc.object_ends = relation_any("gameobject_involvedrelation");
+    for (entry, bg) in rows(db, "SELECT * FROM battlemaster_entry", |c| {
+        (c.u32("entry"), c.u32("bg_template"))
+    }) {
+        data.battlemasters.insert(entry, bg);
+    }
+    let npc = &mut data.npc;
+    for (trigger, quest) in rows(db, "SELECT * FROM areatrigger_involvedrelation", |c| {
+        (c.u32("id"), c.u32("quest"))
+    }) {
+        npc.area_trigger_quests.insert(trigger, quest);
+    }
+    for id in rows(db, "SELECT * FROM areatrigger_tavern", |c| c.u32("id")) {
+        npc.taverns.insert(id);
+    }
+    for q in npc.quests.values() {
+        if q.prev_quest > 0 {
+            npc.quests_after
+                .entry(q.prev_quest as u32)
+                .or_default()
+                .push(q.id);
+        }
     }
 }
 

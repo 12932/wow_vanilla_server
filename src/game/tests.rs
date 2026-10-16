@@ -1434,3 +1434,420 @@ mod items {
         assert_eq!(has, Some(1));
     }
 }
+
+mod npcs {
+    use super::world::START;
+    use super::*;
+    use crate::game::data::npc::*;
+    use crate::game::data::*;
+    use crate::game::map::MapKey;
+
+    fn creature(entry: u32, name: &str, npc_flags: u32) -> CreatureTemplate {
+        CreatureTemplate {
+            entry,
+            name: name.into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 5,
+            level_max: 5,
+            faction: 35,
+            npc_flags,
+            unit_class: 1,
+            health_multiplier: 1.0,
+            ..Default::default()
+        }
+    }
+
+    fn data() -> GameData {
+        let mut d = GameData::empty();
+        let mut add = |t: CreatureTemplate, guid, dx: f32| {
+            let entry = t.entry;
+            d.creature_templates.insert(entry, t);
+            d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+                guid,
+                entries: vec![entry],
+                map: 0,
+                x: START.0 + dx,
+                y: START.1 + 1.0,
+                z: START.2,
+                respawn_min: 300,
+                respawn_max: 300,
+                ..Default::default()
+            });
+        };
+        let mut gossip = creature(4000, "Talker", 0x1 | 0x4);
+        gossip.gossip_menu_id = 77;
+        add(gossip, 40, 1.0);
+        let mut trainer = creature(4001, "Trainer", 0x10);
+        trainer.trainer_class = 1;
+        add(trainer, 41, 2.0);
+        add(creature(4002, "Innkeeper", 0x80 | 0x100), 42, 3.0);
+        add(creature(4003, "Gryphon Master", 0x8), 43, 4.0);
+        add(creature(4004, "Quest Giver", 0x2), 44, 5.0);
+        let mut target = creature(4005, "Kobold", 0);
+        target.faction = 14;
+        add(target, 45, 6.0);
+        add(creature(4006, "Battlemaster", 0x800), 46, 0.5);
+        d.items.insert(
+            5000,
+            ItemTemplate {
+                entry: 5000,
+                name: "Reward Sword".into(),
+                class: 2,
+                inventory_type: 13,
+                allowable_class: -1,
+                allowable_race: -1,
+                stackable: 1,
+                ..Default::default()
+            },
+        );
+        d.npc.gossip_menus.insert(
+            77,
+            GossipMenu {
+                texts: vec![(500, 0)],
+                options: vec![GossipOption {
+                    id: 0,
+                    icon: 1,
+                    text: "Let me browse your goods.".into(),
+                    kind: 3,
+                    npc_flag: 0x4,
+                    ..Default::default()
+                }],
+            },
+        );
+        d.npc.npc_texts.insert(
+            500,
+            std::array::from_fn(|i| NpcTextChoice {
+                broadcast: if i == 0 { 900 } else { 0 },
+                probability: if i == 0 { 1.0 } else { 0.0 },
+            }),
+        );
+        d.npc.broadcast_texts.insert(
+            900,
+            BroadcastText {
+                male: "Hello, traveller.".into(),
+                ..Default::default()
+            },
+        );
+        d.npc.trainers.insert(
+            4001,
+            vec![crate::game::data::npc::TrainerSpell {
+                spell: 100,
+                cost: 10,
+                required_level: 4,
+                ..Default::default()
+            }],
+        );
+        d.npc.taxi_nodes.insert(
+            2,
+            TaxiNode {
+                id: 2,
+                map: 0,
+                x: START.0 + 4.0,
+                y: START.1 + 1.0,
+                z: START.2,
+                name: "Here".into(),
+                mounts: [0, 0],
+            },
+        );
+        d.npc.taxi_nodes.insert(
+            3,
+            TaxiNode {
+                id: 3,
+                map: 0,
+                x: START.0 + 64.0,
+                y: START.1,
+                z: START.2,
+                name: "There".into(),
+                mounts: [0, 0],
+            },
+        );
+        d.npc.taxi_paths.insert((2, 3), (9, 5));
+        d.npc.taxi_path_nodes.insert(
+            9,
+            vec![
+                TaxiPathNode {
+                    map: 0,
+                    x: START.0 + 4.0,
+                    y: START.1,
+                    z: START.2 + 10.0,
+                    ..Default::default()
+                },
+                TaxiPathNode {
+                    map: 0,
+                    x: START.0 + 64.0,
+                    y: START.1,
+                    z: START.2,
+                    ..Default::default()
+                },
+            ],
+        );
+        d.npc.bank_slot_prices.insert(1, 1000);
+        let quest = |id, kills: [(i32, u32); 4], next| Quest {
+            id,
+            level: 5,
+            min_level: 1,
+            title: format!("Quest {id}"),
+            details: "Kill a kobold.".into(),
+            objectives: "Kill it.".into(),
+            required_kills: kills,
+            rewards: [(5000, 1), (0, 0), (0, 0), (0, 0)],
+            reward_xp: 250,
+            reward_money: 30,
+            next_in_chain: next,
+            ..Default::default()
+        };
+        d.npc
+            .quests
+            .insert(600, quest(600, [(4005, 1), (0, 0), (0, 0), (0, 0)], 601));
+        let mut second = quest(601, [(0, 0); 4], 0);
+        second.prev_quest = 600;
+        second.rewards = [(0, 0); 4];
+        d.npc.quests.insert(601, second);
+        d.npc.creature_starts.insert(4004, vec![600, 601]);
+        d.npc.creature_ends.insert(4004, vec![600, 601]);
+        d.battlemasters.insert(4006, 2);
+        d
+    }
+
+    async fn setup() -> (std::sync::Arc<crate::game::Realm>, Client, Guid) {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+        for (entry, counter) in [
+            (4000, 40),
+            (4001, 41),
+            (4002, 42),
+            (4003, 43),
+            (4004, 44),
+            (4005, 45),
+            (4006, 46),
+        ] {
+            a.sees(guid::unit(entry, counter)).await;
+        }
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.call(move |m| {
+            if let Some(p) = m.players.get_mut(&g) {
+                p.set_money(10_000);
+            }
+        });
+        (realm, a, g)
+    }
+
+    #[tokio::test]
+    async fn gossip_shows_its_menu_and_text_and_an_option_opens_the_vendor() {
+        let (_realm, mut a, _) = setup().await;
+        let npc = guid::unit(4000, 40);
+        a.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+        let (text, options) = a
+            .wait_for("SMSG_GOSSIP_MESSAGE", |m| match m {
+                ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => {
+                    Some((g.title_text_id, g.gossips.len()))
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!((text, options), (500, 1));
+        a.send(CMSG_NPC_TEXT_QUERY {
+            text_id: 500,
+            guid: npc,
+        })
+        .await;
+        let line = a
+            .wait_for("SMSG_NPC_TEXT_UPDATE", |m| match m {
+                ServerOpcodeMessage::SMSG_NPC_TEXT_UPDATE(t) => Some(t.texts[0].texts[0].clone()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(line, "Hello, traveller.");
+        a.send(CMSG_GOSSIP_SELECT_OPTION {
+            guid: npc,
+            gossip_list_id: 0,
+            unknown: None,
+        })
+        .await;
+        a.wait_for("SMSG_LIST_INVENTORY", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LIST_INVENTORY(_)).then_some(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_trainer_lists_and_teaches_when_the_level_is_there() {
+        let (_realm, mut a, _) = setup().await;
+        let npc = guid::unit(4001, 41);
+        a.send(CMSG_TRAINER_LIST { guid: npc }).await;
+        let state = a
+            .wait_for("SMSG_TRAINER_LIST", |m| match m {
+                ServerOpcodeMessage::SMSG_TRAINER_LIST(t) => t.spells.first().map(|s| s.state),
+                _ => None,
+            })
+            .await;
+        assert_eq!(state, TrainerSpellState::Red);
+        a.say(".levelup 4").await;
+        a.send(CMSG_TRAINER_BUY_SPELL { guid: npc, id: 100 }).await;
+        a.wait_for("SMSG_TRAINER_BUY_SUCCEEDED", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(_)).then_some(())
+        })
+        .await;
+        a.wait_for("SMSG_LEARNED_SPELL", |m| match m {
+            ServerOpcodeMessage::SMSG_LEARNED_SPELL(s) if s.id == 100 => Some(()),
+            _ => None,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_innkeeper_binds_and_the_bank_opens_and_sells_a_slot() {
+        let (_realm, mut a, _) = setup().await;
+        let npc = guid::unit(4002, 42);
+        a.send(CMSG_BINDER_ACTIVATE { guid: npc }).await;
+        a.wait_for("SMSG_PLAYERBOUND", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_PLAYERBOUND(_)).then_some(())
+        })
+        .await;
+        a.send(CMSG_BANKER_ACTIVATE { guid: npc }).await;
+        a.wait_for("SMSG_SHOW_BANK", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_SHOW_BANK(_)).then_some(())
+        })
+        .await;
+        a.send(CMSG_BUY_BANK_SLOT { guid: npc }).await;
+        let result = a
+            .wait_for("SMSG_BUY_BANK_SLOT_RESULT", |m| match m {
+                ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(r) => Some(r.result),
+                _ => None,
+            })
+            .await;
+        assert_eq!(result, BuyBankSlotResult::Ok);
+    }
+
+    #[tokio::test]
+    async fn a_flight_master_learns_its_node_and_flies_to_a_known_one() {
+        let (realm, mut a, g) = setup().await;
+        let npc = guid::unit(4003, 43);
+        a.send(CMSG_TAXIQUERYAVAILABLENODES { guid: npc }).await;
+        a.wait_for("SMSG_SHOWTAXINODES", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_SHOWTAXINODES(_)).then_some(())
+        })
+        .await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        // Node 3 already known.
+        map.call(move |m| {
+            if let Some(p) = m.players.get_mut(&g) {
+                p.row.state.taxi_mask[0] |= 1 << 3;
+            }
+        });
+        a.send(CMSG_ACTIVATETAXI {
+            guid: npc,
+            source_node: 2,
+            destination_node: 3,
+        })
+        .await;
+        let reply = a
+            .wait_for("SMSG_ACTIVATETAXIREPLY", |m| match m {
+                ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(r) => Some(r.reply),
+                _ => None,
+            })
+            .await;
+        assert_eq!(reply, ActivateTaxiReply::Ok);
+        // 60 yards at 32 a second: landed within three.
+        let landed = a
+            .wait_for("the landing", |m| match m {
+                ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.position),
+                _ => None,
+            })
+            .await;
+        assert!((landed.x - (START.0 + 64.0)).abs() < 0.5);
+    }
+
+    #[tokio::test]
+    async fn a_quest_is_taken_done_and_rewarded_and_the_next_offered() {
+        let (realm, mut a, g) = setup().await;
+        let giver = guid::unit(4004, 44);
+        a.send(CMSG_QUESTGIVER_STATUS_QUERY { guid: giver }).await;
+        let s = a
+            .wait_for("SMSG_QUESTGIVER_STATUS", |m| match m {
+                ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(s) => Some(s.status),
+                _ => None,
+            })
+            .await;
+        assert_eq!(s, QuestGiverStatus::Available);
+        a.send(CMSG_QUESTGIVER_HELLO { guid: giver }).await;
+        a.wait_for("the quest's details", |m| match m {
+            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d) if d.quest_id == 600 => Some(()),
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+            guid: giver,
+            quest_id: 600,
+        })
+        .await;
+        a.send(CMSG_QUEST_QUERY { quest_id: 600 }).await;
+        a.wait_for("SMSG_QUEST_QUERY_RESPONSE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_QUEST_QUERY_RESPONSE(_)).then_some(())
+        })
+        .await;
+        // Kill the kobold.
+        let kobold = guid::unit(4005, 45);
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.call(move |m| crate::game::map::combat::kill(m, g, kobold));
+        a.wait_for("SMSG_QUESTUPDATE_ADD_KILL", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(_)).then_some(())
+        })
+        .await;
+        a.wait_for("SMSG_QUESTUPDATE_COMPLETE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_QUESTUPDATE_COMPLETE(_)).then_some(())
+        })
+        .await;
+        a.send(CMSG_QUESTGIVER_COMPLETE_QUEST {
+            guid: giver,
+            quest_id: 600,
+        })
+        .await;
+        a.wait_for("SMSG_QUESTGIVER_OFFER_REWARD", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(_)).then_some(())
+        })
+        .await;
+        a.send(CMSG_QUESTGIVER_CHOOSE_REWARD {
+            guid: giver,
+            quest_id: 600,
+            reward: 0,
+        })
+        .await;
+        let xp = a
+            .wait_for("SMSG_QUESTGIVER_QUEST_COMPLETE", |m| match m {
+                ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(c) => Some(c.experience_reward),
+                _ => None,
+            })
+            .await;
+        assert_eq!(xp, 250);
+        a.wait_for("the reward sword", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) if r.item == 5000 => Some(()),
+            _ => None,
+        })
+        .await;
+        // The chain goes on.
+        a.wait_for("the next quest", |m| match m {
+            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d) if d.quest_id == 601 => Some(()),
+            _ => None,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_battlemaster_and_an_auctioneer_answer() {
+        let (_realm, mut a, _) = setup().await;
+        a.send(CMSG_BATTLEMASTER_HELLO {
+            guid: guid::unit(4006, 46),
+        })
+        .await;
+        let map = a
+            .wait_for("SMSG_BATTLEFIELD_LIST", |m| match m {
+                ServerOpcodeMessage::SMSG_BATTLEFIELD_LIST(l) => Some(l.map),
+                _ => None,
+            })
+            .await;
+        assert_eq!(map, Map::WarsongGulch);
+    }
+}

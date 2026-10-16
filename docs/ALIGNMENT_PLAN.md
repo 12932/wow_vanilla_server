@@ -417,3 +417,31 @@ spirit healer.
 - Random properties and enchantments.
 - peon reads the loot window with wow_messages, whose layout isn't 1.12's (it has six bytes an item where 1.12 has
   twenty-two), so its bots don't take loot.
+
+### Phase 6 (2026-10-16)
+
+**NPC services:**
+- **Gossip** menus from vmangos (options by the NPC's flags) with their NPC texts and broadcast texts, and the
+  options' actions: submenus, quests, vendor, trainer, taxi, bank, innkeeper, battlemaster, auctioneer, armorer.
+  An NPC without a menu opens its one service.
+- **Trainers** list their spells (green, red, gray by level and what is known) and teach them for money.
+- **Innkeepers** bind; **bankers** open the bank and sell bank bag slots at the DBC prices.
+- **Flight masters** learn their node, list the known ones, and fly the player along `TaxiPathNode` on a mount,
+  as a flying spline.
+- **Battlemasters** answer with their battleground; **auctioneers** with their house.
+
+**Quests:**
+- All of vmangos's quests and who starts and ends them; questgiver icons.
+- The dialogs: hello, list, details, accept, request items, offer reward, choose reward.
+- Prerequisites (previous quest, exclusive groups, level, race and class), the log in the update fields, abandon.
+- Kill credit, items counted from the bags, exploration by area trigger, and quest items that drop only for those
+  on the quest.
+- Rewards: items (with a choice), money, XP scaled down as the player outlevels the quest, and spells. The chain's
+  next quest is offered at once.
+- The journal is kept with the character.
+
+**Left for later:**
+- Conditions on gossip options and loot.
+- Timed quests, repeatable and daily handling beyond the flag, party sharing (Phase 8), reputation rewards.
+- Quest start and end scripts, escort quests.
+- Multi-hop express flights.

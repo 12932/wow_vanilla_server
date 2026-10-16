@@ -669,6 +669,7 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
             .unwrap_or(killer);
         if guid::is_player(tapper) {
             kill_reward(map, tapper, victim);
+            crate::game::map::quests::killed(map, tapper, victim);
         }
         crate::game::map::ai::die(map, victim, tapper);
     }

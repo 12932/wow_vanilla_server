@@ -107,6 +107,25 @@ pub struct CharacterState {
     pub dead: bool,
     /// Where the corpse of a released character lies.
     pub corpse: Option<CorpseState>,
+    pub quests: Journal,
+}
+
+/// A quest in a player's log.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Logged {
+    pub quest: u32,
+    pub kills: [u32; 4],
+    pub explored: bool,
+    pub failed: bool,
+}
+
+/// A player's quests: the log, and those rewarded.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Journal {
+    pub log: Vec<Logged>,
+    pub rewarded: std::collections::BTreeSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

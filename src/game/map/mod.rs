@@ -3,6 +3,8 @@
 //! for what time drives.
 
 pub mod ai;
+pub mod auction;
+pub mod battleground;
 pub mod chat;
 pub mod combat;
 pub mod creature;
@@ -16,8 +18,11 @@ pub mod login;
 pub mod loot;
 pub mod movement;
 pub mod nav;
+pub mod npc;
 pub mod player;
 pub mod query;
+pub mod quests;
+pub mod spells;
 pub mod stats;
 pub mod vendor;
 pub mod visibility;
@@ -434,6 +439,7 @@ impl Map {
 
         self.update_players();
         combat::update_players(self);
+        npc::update_flights(self);
         ai::update_creatures(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);

@@ -8,6 +8,7 @@
 
 pub mod items;
 pub mod load;
+pub mod npc;
 
 use ahash::AHashMap;
 use wow_world_base::vanilla::{Class, Gender, PlayerGender, PlayerRace, Race, RaceClass};
@@ -397,6 +398,9 @@ pub struct GameData {
     pub durability_costs: AHashMap<u32, Vec<u32>>,
     /// `DurabilityQuality`: id → multiplier.
     pub durability_quality: AHashMap<u32, f32>,
+    pub npc: npc::NpcData,
+    /// Battlemaster entry → battleground template.
+    pub battlemasters: AHashMap<u32, u32>,
     /// `WorldSafeLocs`: id → map, x, y, z.
     pub safe_locs: AHashMap<u32, (u32, f32, f32, f32)>,
     /// Text emote → the animation it plays.
