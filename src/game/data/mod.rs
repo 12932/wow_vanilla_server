@@ -318,6 +318,42 @@ impl FactionTemplate {
     }
 }
 
+/// A loot table's row.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LootEntry {
+    pub item: u32,
+    /// Percent; negative for a quest item, dropped only for its quest.
+    pub chance: f32,
+    pub group: u8,
+    /// Negative: a reference to another table, rolled `max` times.
+    pub min: i32,
+    pub max: u32,
+    pub condition: u32,
+}
+
+#[derive(Debug, Default)]
+pub struct LootTables {
+    pub creature: AHashMap<u32, Vec<LootEntry>>,
+    pub gameobject: AHashMap<u32, Vec<LootEntry>>,
+    pub reference: AHashMap<u32, Vec<LootEntry>>,
+    pub pickpocket: AHashMap<u32, Vec<LootEntry>>,
+    pub skinning: AHashMap<u32, Vec<LootEntry>>,
+    pub fishing: AHashMap<u32, Vec<LootEntry>>,
+    pub item: AHashMap<u32, Vec<LootEntry>>,
+    pub disenchant: AHashMap<u32, Vec<LootEntry>>,
+}
+
+/// An item a vendor sells.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VendorItem {
+    pub slot: u32,
+    pub item: u32,
+    /// 0 for unlimited.
+    pub max_count: u32,
+    pub restock_secs: u32,
+    pub condition: u32,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RaceInfo {
     pub male_display: u32,
@@ -353,6 +389,14 @@ pub struct GameData {
     pub races: AHashMap<u8, RaceInfo>,
     pub graveyards: Vec<Graveyard>,
     pub faction_templates: AHashMap<u32, FactionTemplate>,
+    pub loot: LootTables,
+    /// By creature entry, and by vendor template.
+    pub vendors: AHashMap<u32, Vec<VendorItem>>,
+    pub vendor_templates: AHashMap<u32, Vec<VendorItem>>,
+    /// `DurabilityCosts`: item level → 21 weapon then 8 armor subclass costs.
+    pub durability_costs: AHashMap<u32, Vec<u32>>,
+    /// `DurabilityQuality`: id → multiplier.
+    pub durability_quality: AHashMap<u32, f32>,
     /// `WorldSafeLocs`: id → map, x, y, z.
     pub safe_locs: AHashMap<u32, (u32, f32, f32, f32)>,
     /// Text emote → the animation it plays.
@@ -530,4 +574,18 @@ pub fn race_faction(race: u8) -> u32 {
 
 pub fn gender(g: u8) -> Gender {
     Gender::try_from(g).unwrap_or(Gender::Male)
+}
+
+impl GameData {
+    /// What a vendor sells: its entry's list, then its template's.
+    pub fn vendor_items(&self, entry: u32) -> Vec<VendorItem> {
+        let mut items = self.vendors.get(&entry).cloned().unwrap_or_default();
+        if let Some(t) = self.creature_template(entry)
+            && t.vendor_id != 0
+            && let Some(more) = self.vendor_templates.get(&t.vendor_id)
+        {
+            items.extend(more.iter().copied());
+        }
+        items
+    }
 }

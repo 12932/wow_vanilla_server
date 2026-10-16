@@ -1058,3 +1058,379 @@ mod combat {
         panic!("Bob never died");
     }
 }
+
+mod items {
+    use super::world::START;
+    use super::*;
+    use crate::game::data::*;
+    use crate::game::map::MapKey;
+
+    fn item(entry: u32, name: &str, class: u32, inventory_type: u32, price: u32) -> ItemTemplate {
+        ItemTemplate {
+            entry,
+            name: name.into(),
+            class,
+            display_id: 1000 + entry,
+            quality: 1,
+            buy_count: 1,
+            buy_price: price,
+            sell_price: price / 4,
+            inventory_type,
+            allowable_class: -1,
+            allowable_race: -1,
+            stackable: if class == 0 { 20 } else { 1 },
+            max_durability: if class == 2 || class == 4 { 25 } else { 0 },
+            delay: if class == 2 { 2000 } else { 0 },
+            damages: [
+                (2.0, 5.0, 0),
+                (0.0, 0.0, 0),
+                (0.0, 0.0, 0),
+                (0.0, 0.0, 0),
+                (0.0, 0.0, 0),
+            ],
+            stats: {
+                let mut s = [(0u32, 0i32); 10];
+                if class == 4 {
+                    s[0] = (7, 3);
+                }
+                s
+            },
+            ..Default::default()
+        }
+    }
+
+    fn data() -> GameData {
+        let mut d = GameData::empty();
+        for t in [
+            item(25, "Worn Shortsword", 2, 21, 100),
+            item(117, "Tough Jerky", 0, 0, 25),
+            item(2961, "Burnished Tunic", 4, 5, 300),
+        ] {
+            d.items.insert(t.entry, t);
+        }
+        d.start.insert(
+            (1, 1),
+            StartInfo {
+                map: 0,
+                zone: 12,
+                x: START.0,
+                y: START.1,
+                z: START.2,
+                orientation: 0.0,
+                items: vec![(25, u8::MAX, 1), (117, u8::MAX, 4)],
+                spells: vec![6603],
+                actions: vec![(0, 6603, 0)],
+            },
+        );
+        d.class_level_stats.insert(
+            (1, 1),
+            ClassLevelStats {
+                health: 10,
+                melee_damage: 1.0,
+                ..Default::default()
+            },
+        );
+        let npc = |entry, name: &str, npc_flags| CreatureTemplate {
+            entry,
+            name: name.into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 1,
+            level_max: 1,
+            faction: 35,
+            npc_flags,
+            unit_class: 1,
+            health_multiplier: 1.0,
+            loot_id: if npc_flags == 0 { entry } else { 0 },
+            gold_min: 7,
+            gold_max: 7,
+            ..Default::default()
+        };
+        d.creature_templates
+            .insert(3000, npc(3000, "Vendor", 0x4 | 0x4000));
+        d.creature_templates.insert(3001, npc(3001, "Rabbit", 0));
+        d.vendors.insert(
+            3000,
+            vec![
+                VendorItem {
+                    slot: 1,
+                    item: 117,
+                    ..Default::default()
+                },
+                VendorItem {
+                    slot: 2,
+                    item: 2961,
+                    max_count: 1,
+                    restock_secs: 600,
+                    ..Default::default()
+                },
+            ],
+        );
+        d.loot.creature.insert(
+            3001,
+            vec![LootEntry {
+                item: 117,
+                chance: 100.0,
+                min: 2,
+                max: 2,
+                ..Default::default()
+            }],
+        );
+        let spawn = |guid, entry, dx: f32| CreatureSpawn {
+            guid,
+            entries: vec![entry],
+            map: 0,
+            x: START.0 + dx,
+            y: START.1,
+            z: START.2,
+            respawn_min: 300,
+            respawn_max: 300,
+            ..Default::default()
+        };
+        d.creature_spawns
+            .insert(0, vec![spawn(20, 3000, 2.0), spawn(21, 3001, 3.0)]);
+        d
+    }
+
+    fn own_fields(m: &ServerOpcodeMessage, of: Guid) -> Option<UpdatePlayer> {
+        values(m).into_iter().find_map(|(g, mask)| match mask {
+            UpdateMask::Player(p) if g == of => Some(p),
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn starting_gear_is_worn_and_the_rest_carried() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        let (main_hand, food) = map
+            .query(move |m| {
+                let p = m.players.get(&ga)?;
+                Some((
+                    p.item_at(crate::game::store::BAG_PLAYER, 15)
+                        .map(|i| p.items[i].entry),
+                    p.item_at(crate::game::store::BAG_PLAYER, 23)
+                        .map(|i| p.items[i].count()),
+                ))
+            })
+            .await
+            .flatten()
+            .unwrap();
+        assert_eq!(main_hand, Some(25));
+        assert_eq!(food, Some(4));
+        // The item query is answered from the template.
+        a.send(CMSG_ITEM_QUERY_SINGLE {
+            item: 2961,
+            guid: Guid::zero(),
+        })
+        .await;
+        let name = a
+            .wait_for("SMSG_ITEM_QUERY_SINGLE_RESPONSE", |m| match m {
+                ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(r) => {
+                    r.found.as_ref().map(|f| f.name1.clone())
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(name, "Burnished Tunic");
+    }
+
+    #[tokio::test]
+    async fn a_kill_can_be_looted_items_and_money() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let rabbit = guid::unit(3001, 21);
+        a.sees(rabbit).await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.call(move |m| crate::game::map::combat::kill(m, ga, rabbit));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        a.send(CMSG_LOOT { guid: rabbit }).await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let parsed = a
+            .gets(NONE_WITHIN, |m| {
+                matches!(m, ServerOpcodeMessage::SMSG_LOOT_RESPONSE(_)).then_some(())
+            })
+            .await
+            .is_some();
+        let raw = a.raw.iter().any(|f| {
+            u16::from_le_bytes([f[2], f[3]]) == crate::game::map::loot::SMSG_LOOT_RESPONSE
+        });
+        assert!(parsed || raw, "a loot window");
+        a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+        a.wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) if r.item == 117 => Some(()),
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_LOOT_MONEY {}).await;
+        a.wait_for("the money", |m| {
+            own_fields(m, ga)
+                .and_then(|p| p.player_field_coinage())
+                .filter(|c| *c == 7)
+        })
+        .await;
+        a.send(CMSG_LOOT_RELEASE { guid: rabbit }).await;
+        a.wait_for("SMSG_LOOT_RELEASE_RESPONSE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(_)).then_some(())
+        })
+        .await;
+        // Six jerky now: four carried, two looted onto the stack.
+        let jerky = map
+            .query(move |m| m.players.get(&ga).map(|p| p.count_of(117)))
+            .await
+            .flatten();
+        assert_eq!(jerky, Some(6));
+    }
+
+    #[tokio::test]
+    async fn a_vendor_lists_sells_buys_and_buys_back() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let vendor = guid::unit(3000, 20);
+        a.sees(vendor).await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.call(move |m| {
+            if let Some(p) = m.players.get_mut(&ga) {
+                p.set_money(1000);
+            }
+        });
+        a.send(CMSG_LIST_INVENTORY { guid: vendor }).await;
+        let n = a
+            .wait_for("SMSG_LIST_INVENTORY", |m| match m {
+                ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) => Some(l.items.len()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(n, 2);
+        a.send(CMSG_BUY_ITEM {
+            vendor,
+            item: 2961,
+            amount: 1,
+            unknown1: 0,
+        })
+        .await;
+        let left = a
+            .wait_for("SMSG_BUY_ITEM", |m| match m {
+                ServerOpcodeMessage::SMSG_BUY_ITEM(b) => Some(b.amount_for_sale),
+                _ => None,
+            })
+            .await;
+        assert_eq!(left, 0);
+        // Sold out.
+        a.send(CMSG_BUY_ITEM {
+            vendor,
+            item: 2961,
+            amount: 1,
+            unknown1: 0,
+        })
+        .await;
+        a.wait_for("SMSG_BUY_FAILED", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_BUY_FAILED(_)).then_some(())
+        })
+        .await;
+        let (money, tunic) = map
+            .query(move |m| {
+                let p = m.players.get(&ga)?;
+                let tunic = p.items.iter().find(|i| i.entry == 2961).map(|i| i.guid)?;
+                Some((p.money(), tunic))
+            })
+            .await
+            .flatten()
+            .unwrap();
+        assert_eq!(money, 700);
+        // Wear it: others see it, and it adds stamina.
+        let stamina_before = map
+            .query(move |m| {
+                m.players
+                    .get(&ga)
+                    .map(|p| p.fields.get_u32(UNIT_FIELD_STAT0 + 2))
+            })
+            .await
+            .flatten()
+            .unwrap();
+        let at = map
+            .query(move |m| {
+                let p = m.players.get(&ga)?;
+                p.item_by_guid(tunic)
+                    .map(|i| (p.items[i].bag, p.items[i].slot))
+            })
+            .await
+            .flatten()
+            .unwrap();
+        a.send(CMSG_AUTOEQUIP_ITEM {
+            source_bag: at.0,
+            source_slot: at.1,
+        })
+        .await;
+        a.wait_for("the tunic worn", |m| {
+            own_fields(m, ga)
+                .and_then(|p| p.unit_stamina())
+                .filter(|s| *s as u32 == stamina_before + 3)
+        })
+        .await;
+        // Sell the jerky; buy it back.
+        let jerky = map
+            .query(move |m| {
+                let p = m.players.get(&ga)?;
+                p.items.iter().find(|i| i.entry == 117).map(|i| i.guid)
+            })
+            .await
+            .flatten()
+            .unwrap();
+        a.send(CMSG_SELL_ITEM {
+            vendor,
+            item: jerky,
+            amount: 0,
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let after_sale = map
+            .query(move |m| m.players.get(&ga).map(|p| (p.money(), p.count_of(117))))
+            .await
+            .flatten()
+            .unwrap();
+        assert_eq!(after_sale, (700 + 4 * 6, 0));
+        a.send(CMSG_BUYBACK_ITEM {
+            guid: vendor,
+            slot: BuybackSlot::Slot1,
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let after = map
+            .query(move |m| m.players.get(&ga).map(|p| (p.money(), p.count_of(117))))
+            .await
+            .flatten()
+            .unwrap();
+        assert_eq!(after, (700, 4));
+    }
+
+    #[tokio::test]
+    async fn items_survive_a_logout() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.call(move |m| {
+            let _ = crate::game::map::inventory::add_item(m, ga, 2961, 1, true);
+        });
+        a.wait_for("SMSG_ITEM_PUSH_RESULT", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(_)).then_some(())
+        })
+        .await;
+        a.send(CMSG_LOGOUT_REQUEST {}).await;
+        a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+        })
+        .await;
+        a.login(ga).await;
+        let has = map
+            .query(move |m| m.players.get(&ga).map(|p| p.count_of(2961)))
+            .await
+            .flatten();
+        assert_eq!(has, Some(1));
+    }
+}

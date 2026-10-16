@@ -11,6 +11,7 @@ pub mod gameobject;
 pub mod gm;
 pub mod grid;
 pub mod handlers;
+pub mod inventory;
 pub mod login;
 pub mod loot;
 pub mod movement;
@@ -18,6 +19,7 @@ pub mod nav;
 pub mod player;
 pub mod query;
 pub mod stats;
+pub mod vendor;
 pub mod visibility;
 pub mod world;
 
@@ -184,6 +186,8 @@ pub struct Map {
     pub corpses: AHashMap<Guid, death::Corpse>,
     /// Creatures dead and waiting to decay or respawn.
     pub dead_creatures: Vec<Guid>,
+    /// Vendors' limited stock: (vendor, item).
+    pub vendor_stock: AHashMap<(Guid, u32), vendor::Stock>,
     pub nav: Option<nav::Nav>,
     pub grid: Grid,
     /// Objects whose visibility must be worked out at the next update.
@@ -247,6 +251,7 @@ impl Map {
             gameobject_by_guid: AHashMap::new(),
             corpses: AHashMap::new(),
             dead_creatures: Vec::new(),
+            vendor_stock: AHashMap::new(),
             nav: None,
             grid: Grid::new(),
             visibility_dirty: ahash::AHashSet::new(),

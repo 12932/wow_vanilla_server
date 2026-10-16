@@ -658,6 +658,10 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
     if guid::is_player(victim) {
         honor(map, killer, victim);
         death::kill(map, victim);
+        // Dying to a creature wears gear down; to a player, it doesn't.
+        if guid::is_unit(killer) {
+            crate::game::map::vendor::wear(map, victim, 0.10);
+        }
     } else {
         let tapper = map
             .creature(victim)

@@ -225,6 +225,7 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
     }) {
         data.faction_templates.insert(f.id, f);
     }
+    load_durability(dbc, data);
     for m in rows(dbc, "SELECT * FROM Map", |c| MapInfo {
         id: c.u32("id"),
         internal_name: c.string("internal_name"),
@@ -241,6 +242,8 @@ fn load_vmangos(db: &Connection, data: &mut GameData) {
     load_gameobjects(db, data);
     load_items(db, data);
     load_players(db, data);
+    load_loot(db, data);
+    load_vendors(db, data);
 
     let teleports = latest_patch(rows(db, "SELECT * FROM areatrigger_teleport", |c| {
         (
@@ -714,6 +717,85 @@ fn load_items(db: &Connection, data: &mut GameData) {
         };
         (t.entry, c.i64("patch"), t)
     }));
+}
+
+fn load_loot(db: &Connection, data: &mut GameData) {
+    let table = |name: &str| {
+        let mut out: AHashMap<u32, Vec<LootEntry>> = AHashMap::new();
+        for (entry, e) in rows(db, &format!("SELECT * FROM {name} WHERE {IN_PATCH}"), |c| {
+            (
+                c.u32("entry"),
+                LootEntry {
+                    item: c.u32("item"),
+                    chance: c.f32("ChanceOrQuestChance"),
+                    group: c.u8("groupid"),
+                    min: c.i32("mincountOrRef"),
+                    max: c.u32("maxcount"),
+                    condition: c.u32("condition_id"),
+                },
+            )
+        }) {
+            out.entry(entry).or_default().push(e);
+        }
+        out
+    };
+    data.loot = LootTables {
+        creature: table("creature_loot_template"),
+        gameobject: table("gameobject_loot_template"),
+        reference: table("reference_loot_template"),
+        pickpocket: table("pickpocketing_loot_template"),
+        skinning: table("skinning_loot_template"),
+        fishing: table("fishing_loot_template"),
+        item: table("item_loot_template"),
+        disenchant: table("disenchant_loot_template"),
+    };
+}
+
+fn load_vendors(db: &Connection, data: &mut GameData) {
+    let list = |name: &str| {
+        let mut out: AHashMap<u32, Vec<VendorItem>> = AHashMap::new();
+        for (entry, v) in rows(
+            db,
+            &format!("SELECT * FROM {name} ORDER BY entry, slot"),
+            |c| {
+                (
+                    c.u32("entry"),
+                    VendorItem {
+                        slot: c.u32("slot"),
+                        item: c.u32("item"),
+                        max_count: c.u32("maxcount"),
+                        restock_secs: c.u32("incrtime"),
+                        condition: c.u32("condition_id"),
+                    },
+                )
+            },
+        ) {
+            out.entry(entry).or_default().push(v);
+        }
+        out
+    };
+    data.vendors = list("npc_vendor");
+    data.vendor_templates = list("npc_vendor_template");
+}
+
+fn load_durability(dbc: &Connection, data: &mut GameData) {
+    for (id, costs) in rows(dbc, "SELECT * FROM DurabilityCosts", |c| {
+        let mut costs = Vec::with_capacity(29);
+        for i in 0..21 {
+            costs.push(c.u32(&format!("weapon_subclass_cost_{i}")));
+        }
+        for i in 0..8 {
+            costs.push(c.u32(&format!("armour_subclass_cost_{i}")));
+        }
+        (c.u32("id"), costs)
+    }) {
+        data.durability_costs.insert(id, costs);
+    }
+    for (id, q) in rows(dbc, "SELECT * FROM DurabilityQuality", |c| {
+        (c.u32("id"), c.f32("data"))
+    }) {
+        data.durability_quality.insert(id, q);
+    }
 }
 
 fn load_players(db: &Connection, data: &mut GameData) {
