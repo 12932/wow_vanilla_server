@@ -347,6 +347,71 @@ profile, and peon's BASELINES.md updated.
 
 **Done when** the reports are committed in peon and the findings are written up.
 
+### Phase 13: spells to level 60
+
+Of the 3,497 spells a player can have (trainers' to 60, talents, racials, and what they trigger), 1,377 run every
+effect they have. The rest lean on talents' spell modifiers (769 spells), procs (260), class scripts, and the
+auras of crit, haste, avoidance and damage taken.
+
+**Adds:**
+- **Spell modifiers** (auras 107 and 108): talents change a spell's points, duration, cost, cast time, cooldown,
+  range, radius, crit chance and damage, threat and resist chance; the client is told.
+- **Outcomes:** spell hit and resist by level, crits for damage and heals, partial resists from resistance, school
+  and mechanic immunities, spell power and healing power with each spell's coefficient, and the misses in
+  `SMSG_SPELL_GO`.
+- **The auras of combat:** crit, hit, dodge, parry and block chance; haste and attack speed; damage done and taken,
+  flat and by percent; stats and resistances by percent; threat; regen while casting; block value; damage and crit
+  against a creature type.
+- **Procs:** proc-trigger auras (spell and damage) with their flags, chance and charges; damage shields; on-hit
+  target and caster triggers.
+- **Melee and ranged:** next-swing spells, auto-repeat (Auto Shot, Shoot, Throw) with the ranged weapon and ammo,
+  finishing moves that scale with and spend combo points, stacking auras, line of sight and facing.
+- **Effects:** the class scripts that need code; enchanting items (permanent and temporary: poisons, imbues,
+  stones); mana burn; totems; traps; portals and rituals; dispelling by mechanic; vanish; skinning; pick pocket;
+  distract; far sight; stuck; weapon proficiencies; languages.
+- **Stealth and invisibility**, and their detection.
+- **Pets:** taming, calling and dismissing; warlock demons; summoned guardians; a pet's AI (follow, attack, stay;
+  aggressive, defensive, passive), its action bar and spells, a hunter pet's XP and happiness; pets kept across a
+  logout.
+- Auras and cooldowns kept across a logout.
+
+**Done when:**
+- at least 90% of the player spells run every effect they have (a test counts them);
+- each class's core at 60 works in a test: a mage's Fireball crits and Ignites, a rogue's finishers scale with
+  combo points, a hunter auto-shoots with a pet;
+- peon's parse errors for the game object query, `/who`, loot and cast results are gone.
+
+### Phase 14: Arathi Basin, Alterac Valley and honor
+
+**Adds:**
+- **Arathi Basin:** five bases to assault and defend, resources by bases held, graveyards at bases, 2,000 to win.
+- **Alterac Valley:** graveyards and towers to take, reinforcements, captains and generals, the win on a general's
+  death.
+- **Honor:** honorable and dishonorable kills, contribution points, the weekly rank by vmangos's formula, rank titles
+  and rewards, battleground honor and marks.
+
+**Done when** a test plays each battleground to its end, and a week's kills give the rank vmangos would.
+
+### Phase 15: group loot and professions
+
+**Adds:**
+- **Group loot:** free for all, round robin, master looter, group loot and need before greed, with the quality
+  threshold and the rolls.
+- **Professions:** crafting with spell focus, tools and reagents; skill-ups by colour; gathering (herbs, mining,
+  skinning) by skill; fishing, with its bobber and zone loot; recipes; disenchanting.
+
+**Done when** a group rolls on an item in a test, and a skill rises by crafting and by gathering.
+
+### Phase 16: instance scripts and saved boss kills
+
+**Adds:**
+- **EventAI** (`creature_ai_scripts`): timers, health and mana thresholds, aggro, death, evade, spell hits, ranges,
+  and their actions (cast, summon, say and yell, phases, flee, despawn).
+- **The database scripts** for gossip, quests, spells and events.
+- **Boss kills** kept with the instance: a copy's dead stay dead across a restart, and a raid's lockout holds them.
+
+**Done when** a dungeon boss's EventAI runs in a test and a copy's kills survive a restart.
+
 ## What is out of reach, and why
 
 Thistle Tea has years of content behind it. Some of it is listed in these phases at a lower depth than its own:
