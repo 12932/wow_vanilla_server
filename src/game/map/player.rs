@@ -66,7 +66,19 @@ impl Item {
         slot: u8,
         count: u32,
     ) -> Self {
-        let mut fields = Fields::new(TypeId::Item, guid, entry);
+        let bag_slots = data
+            .item(entry)
+            .filter(|t| t.class == 1 && t.container_slots > 0)
+            .map(|t| t.container_slots.min(36));
+        let kind = if bag_slots.is_some() {
+            TypeId::Container
+        } else {
+            TypeId::Item
+        };
+        let mut fields = Fields::new(kind, guid, entry);
+        if let Some(n) = bag_slots {
+            fields.set_u32(CONTAINER_FIELD_NUM_SLOTS, n);
+        }
         fields.set_guid(ITEM_FIELD_OWNER, owner);
         fields.set_guid(ITEM_FIELD_CONTAINED, owner);
         fields.set_u32(ITEM_FIELD_STACK_COUNT, count.max(1));
@@ -123,7 +135,7 @@ impl Item {
     pub fn create(&self) -> Create<'_> {
         Create {
             guid: self.guid,
-            type_id: TypeId::Item,
+            type_id: self.fields.type_id(),
             placement: Placement::None,
             fields: &self.fields,
             is_self: false,
@@ -177,6 +189,10 @@ pub struct Player {
     /// When mana was last spent, for the five-second rule.
     pub mana_spent_at: Option<Instant>,
     pub combat: crate::game::map::combat::Combat,
+    /// The corpse or object whose loot window is open.
+    pub looting: Option<Guid>,
+    /// The vendor whose buyback this session has filled.
+    pub buyback_next: u8,
 }
 
 impl Player {
@@ -228,6 +244,8 @@ impl Player {
             regen_at: now + crate::game::map::stats::REGEN_INTERVAL,
             mana_spent_at: None,
             combat: Default::default(),
+            looting: None,
+            buyback_next: 0,
             row,
         };
         p.init_fields(data);
@@ -344,13 +362,21 @@ impl Player {
             self.fields.set_u32(UNIT_FIELD_MAXHEALTH, 100);
             return;
         };
+        let (gear, gear_health, gear_mana, _) =
+            crate::game::map::inventory::gear_bonuses(self, data);
         let f = &mut self.fields;
+        let mut total = [0u32; 5];
         for (i, v) in stats.stats.iter().enumerate() {
-            f.set_u32(UNIT_FIELD_STAT0 + i as u16, *v);
+            total[i] = (*v as i32 + gear[i]).max(0) as u32;
+            f.set_u32(UNIT_FIELD_STAT0 + i as u16, total[i]);
+            f.set_u32(PLAYER_FIELD_POSSTAT0 + i as u16, gear[i].max(0) as u32);
+            f.set_u32(PLAYER_FIELD_NEGSTAT0 + i as u16, (-gear[i]).max(0) as u32);
         }
         // The first 20 stamina give a point of health each, the rest 10.
-        let stamina = stats.stats[2];
-        let health = stats.health + stamina.min(20) + stamina.saturating_sub(20) * 10;
+        let stamina = total[2];
+        let health =
+            (stats.health + stamina.min(20) + stamina.saturating_sub(20) * 10) as i32 + gear_health;
+        let health = health.max(1) as u32;
         f.set_u32(UNIT_FIELD_BASE_HEALTH, stats.health);
         f.set_u32(UNIT_FIELD_MAXHEALTH, health);
         let power = u16::from(match self.row.class {
@@ -360,11 +386,14 @@ impl Player {
         });
         let max_power = match power {
             0 => {
-                let intellect = stats.stats[3];
+                let intellect = total[3];
                 if stats.mana == 0 {
                     0
                 } else {
-                    stats.mana + intellect.min(20) + intellect.saturating_sub(20) * 15
+                    let m = (stats.mana + intellect.min(20) + intellect.saturating_sub(20) * 15)
+                        as i32
+                        + gear_mana;
+                    m.max(0) as u32
                 }
             }
             1 => 1000,

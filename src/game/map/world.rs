@@ -295,3 +295,57 @@ pub fn step_creature_key(map: &mut Map, key: usize) {
     step_creature(map, key, now, nav.as_mut(), &mut rng);
     map.nav = nav;
 }
+
+/// Game object types.
+pub const GO_DOOR: u8 = 0;
+pub const GO_BUTTON: u8 = 1;
+pub const GO_CHEST: u8 = 3;
+pub const GO_CHAIR: u8 = 7;
+
+/// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
+/// sat on.
+pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
+    let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {
+        return;
+    };
+    let Some(o) = map.gameobject(object) else {
+        return;
+    };
+    if crate::game::map::combat::dist(ppos, o.position) > 10.0 {
+        return;
+    }
+    let (kind, position, orientation) = (o.kind, o.position, o.orientation);
+    let lock = map
+        .realm
+        .data
+        .gameobject_templates
+        .get(&o.entry)
+        .map(|t| t.data[0])
+        .unwrap_or(0);
+    match kind {
+        GO_DOOR | GO_BUTTON => {
+            if let Some(o) = map.gameobject_mut(object) {
+                let state = o.fields.get_u32(crate::game::fields::GAMEOBJECT_STATE);
+                o.fields.set_u32(
+                    crate::game::fields::GAMEOBJECT_STATE,
+                    if state == 0 { 1 } else { 0 },
+                );
+            }
+        }
+        GO_CHEST => {
+            // A locked chest needs its key or skill (Phase 7); an open one
+            // just opens.
+            let gm = map.players.get(&player).is_some_and(|p| p.gm);
+            if lock == 0 || gm {
+                crate::game::map::loot::open_object(map, player, object);
+            }
+        }
+        GO_CHAIR => {
+            map.teleport(player, map.key, position, orientation);
+            if let Some(p) = map.players.get_mut(&player) {
+                p.set_stand_state(crate::game::map::player::STAND_STATE_SIT);
+            }
+        }
+        _ => {}
+    }
+}

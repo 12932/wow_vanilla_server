@@ -177,6 +177,7 @@ pub struct Creature {
     pub aggro_check_at: Instant,
     /// Its faction is hostile to players: it looks for them.
     pub hostile_to_players: bool,
+    pub loot: Option<crate::game::map::loot::Loot>,
 }
 
 /// Alive, or dead and waiting.
@@ -262,6 +263,7 @@ impl Creature {
             chase_target_at: None,
             aggro_check_at: Instant::now(),
             hostile_to_players: false,
+            loot: None,
         }
     }
 

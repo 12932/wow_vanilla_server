@@ -26,6 +26,7 @@ pub struct GameObject {
     pub orientation: f32,
     pub observers: AHashSet<Guid>,
     pub cell: CellKey,
+    pub loot: Option<crate::game::map::loot::Loot>,
 }
 
 impl GameObject {
@@ -64,6 +65,7 @@ impl GameObject {
             orientation: s.orientation,
             observers: AHashSet::new(),
             cell: cell_of(s.x, s.y),
+            loot: None,
         }
     }
 

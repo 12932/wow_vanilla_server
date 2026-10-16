@@ -395,3 +395,25 @@ faction as a ghost, which the living don't see, and comes back at their corpse a
 - Honor ranks.
 - peon reads `SMSG_GAMEOBJECT_QUERY_RESPONSE` with wow_messages, whose layout (five names, six data words) isn't
   1.12's (four names, 24 data words); wow_vanilla_server sends 1.12's, so peon counts those as parse errors.
+
+### Phase 5 (2026-10-16)
+
+**Items:** vmangos's item templates, items as objects with typed GUIDs, and bags as containers. Starting gear
+is worn by inventory type and the rest carried. Swap, split, destroy, auto-equip and auto-store, with the equip
+rules (class, race, level, proficiency by class, two-handers, dual wield). Gear's stats and armor feed the
+player's stats, and others see what a player wears.
+
+**Loot:** rolled vmangos's way from every loot table (ungrouped chances, one per group, references), with gold, for
+the creature's tapper. The loot window is in 1.12's layout. Chests without a lock open, doors and buttons flip, and
+chairs are sat on.
+
+**Vendors:** their lists (an entry's and its vendor template's), limited stock that restocks, buy, sell (to twelve
+buyback slots), buy back, and repair at DBC durability costs. Gear wears 10% on a death to a creature and 25% at a
+spirit healer.
+
+**Left for later:**
+- Bank slots and bankers, and gathering (herbs, veins, skinning, fishing need skills and spells): Phases 6 and 7.
+- Quest drops: Phase 6.
+- Random properties and enchantments.
+- peon reads the loot window with wow_messages, whose layout isn't 1.12's (it has six bytes an item where 1.12 has
+  twenty-two), so its bots don't take loot.

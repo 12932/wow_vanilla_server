@@ -34,6 +34,71 @@ impl Map {
                 let t = self.realm.data.gameobject_templates.get(&m.entry_id);
                 out.send_frame(crate::game::map::gameobject::query_response(m.entry_id, t));
             }
+            ClientOpcodeMessage::CMSG_LOOT(m) => crate::game::map::loot::open(self, guid, m.guid),
+            ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(m) => {
+                crate::game::map::loot::take_item(self, guid, m.item_slot)
+            }
+            ClientOpcodeMessage::CMSG_LOOT_MONEY => crate::game::map::loot::take_money(self, guid),
+            ClientOpcodeMessage::CMSG_LOOT_RELEASE(m) => {
+                crate::game::map::loot::release(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(m) => crate::game::map::inventory::move_item(
+                self,
+                guid,
+                (crate::game::store::BAG_PLAYER, m.source_slot.as_int()),
+                (crate::game::store::BAG_PLAYER, m.destination_slot.as_int()),
+            ),
+            ClientOpcodeMessage::CMSG_SWAP_ITEM(m) => crate::game::map::inventory::move_item(
+                self,
+                guid,
+                (m.source_bag, m.source_slot),
+                (m.destination_bag, m.destionation_slot),
+            ),
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(m) => {
+                crate::game::map::inventory::auto_equip(self, guid, (m.source_bag, m.source_slot))
+            }
+            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(m) => {
+                crate::game::map::inventory::auto_store(
+                    self,
+                    guid,
+                    (m.source_bag, m.source_slot),
+                    m.destination_bag,
+                )
+            }
+            ClientOpcodeMessage::CMSG_SPLIT_ITEM(m) => crate::game::map::inventory::split(
+                self,
+                guid,
+                (m.source_bag, m.source_slot),
+                (m.destination_bag, m.destination_slot),
+                u32::from(m.amount),
+            ),
+            ClientOpcodeMessage::CMSG_DESTROYITEM(m) => crate::game::map::inventory::destroy(
+                self,
+                guid,
+                (m.bag, m.slot),
+                u32::from(m.amount),
+            ),
+            ClientOpcodeMessage::CMSG_LIST_INVENTORY(m) => {
+                crate::game::map::vendor::list(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_BUY_ITEM(m) => {
+                crate::game::map::vendor::buy(self, guid, m.vendor, m.item, m.amount)
+            }
+            ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(m) => {
+                crate::game::map::vendor::buy(self, guid, m.vendor, m.item, m.amount)
+            }
+            ClientOpcodeMessage::CMSG_SELL_ITEM(m) => {
+                crate::game::map::vendor::sell(self, guid, m.vendor, m.item, m.amount)
+            }
+            ClientOpcodeMessage::CMSG_BUYBACK_ITEM(m) => {
+                crate::game::map::vendor::buyback(self, guid, m.guid, m.slot)
+            }
+            ClientOpcodeMessage::CMSG_REPAIR_ITEM(m) => {
+                crate::game::map::vendor::repair(self, guid, m.npc, m.item)
+            }
+            ClientOpcodeMessage::CMSG_GAMEOBJ_USE(m) => {
+                crate::game::map::world::use_object(self, guid, m.guid)
+            }
             ClientOpcodeMessage::CMSG_ATTACKSWING(m) => {
                 crate::game::map::combat::start_attack(self, guid, m.guid)
             }
