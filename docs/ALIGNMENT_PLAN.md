@@ -505,3 +505,117 @@ still while they cast. An evade takes their auras and casts away.
 - Auras and cooldowns aren't saved across a logout.
 - wow_messages reads `SMSG_CAST_RESULT`'s status the wrong way round, so peon counts it as a parse error. It does
   the same on Thistle Tea, which sends the same bytes. peon doesn't cast yet.
+
+### Phase 8 (2026-10-16)
+
+Social state that spans maps lives in `game::social`, each part behind its own lock. Players elsewhere are reached
+through the registry.
+
+**Chat:**
+- **Whispers** go to the player of that name on the same side, with the echo to the speaker. Those not found get
+  `SMSG_CHAT_PLAYER_NOT_FOUND`. AFK lets a whisper through and answers with its message; DND holds it back.
+  Someone ignoring the speaker answers with `Ignored`.
+- `/afk` and `/dnd` set the player flag and the message.
+- **Party, raid, raid-leader and raid-warning chat.** Raid chat needs a raid; the leader's lines and warnings need
+  the leader or an assistant. In a raid, party chat goes to the subgroup.
+
+**Channels:** the built-in ones from `ChatChannels.dbc` and custom ones, one set per team. Join (with password and
+bans), leave, the list, the owner (shown and passed on), moderators, mutes, kick, ban and unban, announcements and
+moderation, and invites. Lines skip those who ignore the speaker. LocalDefense and WorldDefense are for GMs, as in
+mangos without ranks. The notices are laid out as mangos-zero's.
+
+**Friends and ignore lists:** 50 friends and 25 ignored, kept with the character. They are sent at login with each
+friend's status, area, level and class. Logins and logouts are told to those with the player as a friend.
+
+**`/who`:** those online on the same side, filtered by level, name, race, class, zones and up to four words
+(names and zone names), 49 at most, in 1.12's layout.
+
+**Inspect:** the target hears of it; what they wear is in their public fields. The honor tab answers with none.
+
+**Groups and raids:**
+- Invite, accept, decline, kick (a member, or an invite back), leave, a new leader, and the loot method.
+- Convert to raid, subgroups, assistants, the ready check and its answers, and target icons.
+- A party of two that loses one is disbanded.
+- Members stay in the group across a logout, shown offline.
+- **Stats:** each map sends its grouped players' changed stats once a second to the members who can't see them.
+  A member just out of sight gets all of them. A request gets the full stats.
+- **Random roll** to the group (or the roller), and **minimap pings** to the rest of the group.
+- **A kill is shared** with the members within 74 yards of the corpse, as vmangos shares it. XP is split by
+  level with the group bonus (1.166, 1.3 and 1.4 for three, four and five), and goes only to those not above the
+  highest member who doesn't find the creature gray. Every member gets the quest credit.
+
+**Done when:** harness tests cover each of these. peon's channel, whisper, party, who and inspect behaviours are on
+in the run's profile.
+
+**Left for later:**
+- The group loot rules: round robin, master looter, need before greed. The tapper loots, as before.
+- Meeting stones and the LFG channel's tools.
+- Groups and channel bans aren't kept across a restart.
+
+### Phase 9 (2026-10-16)
+
+Guilds, charters, mail and auctions are kept in the store's new `records` table (schema version 2), one JSON record
+each, and loaded at start-up. Mail and auctions are swept every 5 seconds for what has come due.
+
+**Guilds:**
+- Five default ranks with mangos's rights, up to ten.
+- Invite (same team), accept, decline, leave, remove, promote and demote (within one's own rank), a new leader,
+  and disband.
+- The MOTD and info, public and officer notes, rank names and rights.
+- The roster (officer notes for those allowed), `SMSG_GUILD_INFO`, and the guild query with ranks and emblem.
+- The emblem, bought for 10 gold at a tabard vendor.
+- Guild and officer chat by rights, and the events: joined, left, removed, promotions, the MOTD, leader changes,
+  disbanding, tabard, signing on and off.
+- The guild fields on every member, in whatever map they are.
+- `/who` shows the guild.
+- Creating a guild outright is for GMs.
+
+**Charters:** bought for 10 silver from a guild master (item 5863). Offered, signed (one signature an account, not
+by those in a guild) or declined, renamed, and turned in once signed enough (9 by default, `petition_signatures`).
+The owner leads, and the signers join at the lowest rank.
+
+**Mail:**
+- Money, one item, and cash on delivery, for 30 copper postage (60 with an item).
+- With money or an item, it takes `mail_delay_secs` (an hour by default) between accounts.
+- Taking the money and the item; cash on delivery is paid to the sender by mail.
+- Reading, returning, deleting, and copying the text onto a letter. The text is kept.
+- `SMSG_RECEIVED_MAIL` when mail arrives (now, or when it comes due), and the next-mail-time query.
+- Mail lasts 30 days (cash on delivery 3), then goes back to a player who sent money or an item, or away.
+- The auction house and its settlement use the same mail.
+
+**The auction house:**
+- Three markets (Alliance, Horde, goblins) by the auctioneer's faction.
+- `AuctionHouse.dbc`'s deposits (mangos's formula, counted in 2-hour periods) and cuts (5%, or 15% at the goblins).
+- 2, 8 and 24 hour auctions.
+- Bids with mangos's 5% increment. The one outbid gets their money back by mail and a notification.
+- Buyouts. Cancelling pays the cut if there is a bid, and the bidder is paid back.
+- Searches by name, level, slot, class, subclass and quality, 50 a page, and the owner's and bidder's lists.
+- When an auction runs out, the winner gets the item and the seller the money (after the mail delay). An unsold
+  item comes home.
+
+**Trade:** with a player within 11 yards on the same side.
+- Six slots, money, and the seventh slot that isn't traded. Soulbound and worn items stay out.
+- Any change takes both acceptances back.
+- When both accept, it goes through at once if each can pay and has room, and not at all otherwise.
+- Death, logout or leaving the map cancels it.
+
+**Duels:**
+- The Duel spell's effect plants a flag between the two.
+- The challenged accepts; three seconds' countdown; then the duel fields, and the two may fight whatever their
+  factions.
+- A blow that would fell one leaves them at 1 health: they kneel (Grovel) and lose.
+- Cancelling yields once the fight is on.
+- Out of bounds (75 yards from the flag) for 10 seconds flees.
+- Logging out or leaving the map flees; dying to something else interrupts.
+- `SMSG_DUEL_WINNER` goes to those near, and the flag goes.
+
+**Done when:** a harness test runs each from start to end: guild, charter, mail with cash on delivery, auction to
+settlement, trade, duel, and expiry sweeps. Another restarts the store and finds the guild and mail (with its
+item) kept.
+
+**Left for later:**
+- Guild bank (not in 1.12) and guild rank permissions over the roster's columns.
+- Deleting a character doesn't yet clean up their guild, mail and auctions.
+- Item enchantments, random properties and charges in mail, auctions and trade.
+- Auction search's "usable" filter.
+- Mail from creatures and quests.

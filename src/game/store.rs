@@ -84,6 +84,15 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account, type)
     );
     "#,
+    // 2: guilds, petitions, mail and auctions, each a JSON record by kind and id.
+    r#"
+    CREATE TABLE records (
+        kind TEXT NOT NULL,
+        id INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (kind, id)
+    );
+    "#,
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -108,6 +117,9 @@ pub struct CharacterState {
     /// Where the corpse of a released character lies.
     pub corpse: Option<CorpseState>,
     pub quests: Journal,
+    /// Friends and ignored characters, by GUID counter.
+    pub friends: Vec<u32>,
+    pub ignored: Vec<u32>,
 }
 
 /// A quest in a player's log.
@@ -146,7 +158,8 @@ pub struct Bind {
     pub z: f32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ItemRow {
     pub guid: u32,
     pub entry: u32,
@@ -208,6 +221,8 @@ pub struct Startup {
     pub names: Vec<NameRow>,
     pub max_character_guid: u32,
     pub max_item_guid: u32,
+    /// Every record: kind, id and JSON.
+    pub records: Vec<(String, u64, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +250,8 @@ enum Request {
     Save(Box<CharacterRow>),
     AccountData(String, oneshot::Sender<Vec<(u8, u32, Vec<u8>)>>),
     SetAccountData(String, u8, u32, Vec<u8>),
+    PutRecord(&'static str, u64, String),
+    DeleteRecord(&'static str, u64),
     Flush(oneshot::Sender<()>),
 }
 
@@ -319,6 +336,21 @@ impl Store {
         ));
     }
 
+    /// Keep a record (a guild, a mail, an auction) as JSON, replacing what
+    /// was kept under its kind and id.
+    pub fn put_record<T: Serialize>(&self, kind: &'static str, id: u64, value: &T) {
+        match serde_json::to_string(value) {
+            Ok(data) => {
+                let _ = self.tx.send(Request::PutRecord(kind, id, data));
+            }
+            Err(e) => warn!("encoding {kind} {id}: {e}"),
+        }
+    }
+
+    pub fn delete_record(&self, kind: &'static str, id: u64) {
+        let _ = self.tx.send(Request::DeleteRecord(kind, id));
+    }
+
     /// Wait until everything sent before is written.
     pub async fn flush(&self) {
         let (tx, rx) = oneshot::channel();
@@ -370,10 +402,17 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
         [],
         |r| r.get(0),
     )?;
+    let mut stmt = conn.prepare("SELECT kind, id, data FROM records")?;
+    let records = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(Startup {
         names,
         max_character_guid,
         max_item_guid,
+        records,
     })
 }
 
@@ -390,7 +429,10 @@ fn run(mut conn: Connection, rx: std_mpsc::Receiver<Request>) {
         let mut saves: Vec<Request> = Vec::new();
         for req in batch {
             match req {
-                Request::Save(_) | Request::SetAccountData(..) => saves.push(req),
+                Request::Save(_)
+                | Request::SetAccountData(..)
+                | Request::PutRecord(..)
+                | Request::DeleteRecord(..) => saves.push(req),
                 other => {
                     // Keep order: what was saved before a read is written
                     // before it.
@@ -417,6 +459,18 @@ fn write_saves(conn: &mut Connection, saves: Vec<Request>) {
                         "INSERT OR REPLACE INTO account_data (account, type, time, data) \
                          VALUES (?1, ?2, ?3, ?4)",
                         params![account, kind, time, data],
+                    )?;
+                }
+                Request::PutRecord(kind, id, data) => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO records (kind, id, data) VALUES (?1, ?2, ?3)",
+                        params![kind, *id as i64, data],
+                    )?;
+                }
+                Request::DeleteRecord(kind, id) => {
+                    tx.execute(
+                        "DELETE FROM records WHERE kind = ?1 AND id = ?2",
+                        params![kind, *id as i64],
                     )?;
                 }
                 _ => {}
@@ -504,7 +558,10 @@ fn serve(conn: &Connection, req: Request) {
         Request::Flush(reply) => {
             let _ = reply.send(());
         }
-        Request::Save(_) | Request::SetAccountData(..) => {}
+        Request::Save(_)
+        | Request::SetAccountData(..)
+        | Request::PutRecord(..)
+        | Request::DeleteRecord(..) => {}
     }
 }
 

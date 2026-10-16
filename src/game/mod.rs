@@ -9,6 +9,7 @@ pub mod harness;
 pub mod map;
 pub mod registry;
 pub mod session;
+pub mod social;
 pub mod store;
 #[cfg(test)]
 mod tests;
@@ -35,6 +36,8 @@ pub struct RealmConfig {
     pub everyone_gm: bool,
     pub max_characters_per_account: usize,
     pub nav_dir: Option<std::path::PathBuf>,
+    pub petition_signatures: u32,
+    pub mail_delay: Duration,
 }
 
 impl RealmConfig {
@@ -46,6 +49,8 @@ impl RealmConfig {
             everyone_gm: c.accounts.everyone_gm,
             max_characters_per_account: c.world.max_characters_per_account,
             nav_dir: c.world.nav_dir.clone(),
+            petition_signatures: c.world.petition_signatures,
+            mail_delay: Duration::from_secs(c.world.mail_delay_secs),
         }
     }
 }
@@ -57,6 +62,7 @@ pub struct Realm {
     pub data: Arc<GameData>,
     pub registry: Registry,
     pub maps: Maps,
+    pub social: social::Social,
     pub next_character: AtomicU32,
     pub next_item: AtomicU32,
     /// The auth server's sessions, for the world handshake.
@@ -72,6 +78,12 @@ impl Realm {
         users: Option<crate::auth::UserCache>,
     ) -> Arc<Self> {
         let registry = Registry::new();
+        let social = social::Social::load(&startup.records);
+        let max_mail_item = social
+            .mail
+            .lock()
+            .max_item()
+            .max(social.auctions.lock().max_item());
         for n in startup.names {
             registry.add_name(NameEntry {
                 guid: guid::player(n.guid),
@@ -83,16 +95,19 @@ impl Realm {
                 level: n.level.into(),
             });
         }
-        Arc::new(Self {
+        let realm = Arc::new(Self {
             config,
             store,
             data: Arc::new(data),
             registry,
             maps: Maps::default(),
+            social,
             next_character: AtomicU32::new(startup.max_character_guid + 1),
-            next_item: AtomicU32::new(startup.max_item_guid + 1),
+            next_item: AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1),
             users,
-        })
+        });
+        social::start_timers(&realm);
+        realm
     }
 
     /// Save everyone in every map, and wait for the store to write it.

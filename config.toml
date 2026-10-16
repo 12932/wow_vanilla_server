@@ -11,6 +11,10 @@ characters_db = "characters.sqlite"
 # The directory with vmangos.sqlite and dbc.sqlite, as Thistle Tea exports them.
 #data_dir = "/path/to/db"
 motd = "Welcome to wow_vanilla_server."
+# Signatures a guild charter needs.
+petition_signatures = 9
+# How long mail with money or an item takes between accounts, in seconds.
+mail_delay_secs = 3600
 
 [accounts]
 everyone_gm = true

@@ -48,6 +48,7 @@ pub const EFFECT_TRIGGER_SPELL: u32 = 64;
 pub const EFFECT_HEAL_MAX_HEALTH: u32 = 67;
 pub const EFFECT_INTERRUPT_CAST: u32 = 68;
 pub const EFFECT_ADD_COMBO_POINTS: u32 = 80;
+pub const EFFECT_DUEL: u32 = 83;
 pub const EFFECT_CHARGE: u32 = 96;
 pub const EFFECT_RESURRECT_NEW: u32 = 113;
 pub const EFFECT_SKILL: u32 = 118;
@@ -91,6 +92,7 @@ pub fn effect_supported(effect: u32) -> bool {
             | EFFECT_HEAL_MAX_HEALTH
             | EFFECT_INTERRUPT_CAST
             | EFFECT_ADD_COMBO_POINTS
+            | EFFECT_DUEL
             | EFFECT_CHARGE
             | EFFECT_RESURRECT_NEW
             | EFFECT_SKILL
@@ -844,6 +846,7 @@ fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
                 }
             }
         }
+        EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
         EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
             let name = map
                 .players

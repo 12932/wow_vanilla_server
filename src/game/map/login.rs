@@ -7,10 +7,9 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
     Area, DateTime, FactionFlag, FactionInitializer, InitialSpell, LogoutResult, LogoutSpeed,
     SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT,
-    SMSG_FORCE_MOVE_UNROOT, SMSG_FRIEND_LIST, SMSG_IGNORE_LIST, SMSG_INIT_WORLD_STATES,
-    SMSG_INITIAL_SPELLS, SMSG_INITIALIZE_FACTIONS, SMSG_LOGIN_SETTIMESPEED,
-    SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK, SMSG_LOGOUT_RESPONSE, SMSG_TUTORIAL_FLAGS,
-    Vector3d,
+    SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES, SMSG_INITIAL_SPELLS, SMSG_INITIALIZE_FACTIONS,
+    SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK, SMSG_LOGOUT_RESPONSE,
+    SMSG_TUTORIAL_FLAGS, Vector3d,
 };
 
 use crate::game::fields::*;
@@ -110,12 +109,6 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
             item.fields.clear_dirty();
         }
     }
-    p.outbound.send(&SMSG_FRIEND_LIST {
-        friends: Vec::new(),
-    });
-    p.outbound.send(&SMSG_IGNORE_LIST {
-        ignored: Vec::new(),
-    });
     if p.row.at_login & crate::game::store::AT_LOGIN_FIRST != 0
         && let Some(c) = map.realm.data.races.get(&p.row.race)
         && let Ok(id) = wow_world_messages::vanilla::CinematicSequenceId::try_from(c.cinematic)
