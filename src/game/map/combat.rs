@@ -667,6 +667,16 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
     }
     stop_attack(map, victim);
     if guid::is_player(victim) {
+        tracing::debug!(
+            "{} killed by {}",
+            map.players
+                .get(&victim)
+                .map_or_else(|| "?".to_owned(), |p| p.name.to_string()),
+            map.creature(killer)
+                .map(|c| format!("creature {} at {:?}", c.entry, c.position))
+                .or_else(|| map.players.get(&killer).map(|p| p.name.to_string()))
+                .unwrap_or_else(|| format!("{killer}")),
+        );
         honor(map, killer, victim);
         crate::game::map::battleground::died(map, victim, killer);
         death::kill(map, victim);

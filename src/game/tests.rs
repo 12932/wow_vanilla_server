@@ -4270,7 +4270,8 @@ mod security {
         let mut a = Client::connect(&realm, "A");
         for (name, result) in [
             ("Aabb", WorldResult::CharCreateSuccess),
-            ("Aaaab", WorldResult::CharNameThreeConsecutive),
+            // mangos-zero allows three of a letter in a row (TBC's cores don't).
+            ("Aaaab", WorldResult::CharCreateSuccess),
             ("Bob1", WorldResult::CharNameOnlyLetters),
             ("B", WorldResult::CharNameTooShort),
             ("Bobbobbobbobb", WorldResult::CharNameTooLong),

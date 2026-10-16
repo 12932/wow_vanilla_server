@@ -423,14 +423,6 @@ fn valid_name(name: &str) -> Result<String, WorldResult> {
     if !name.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err(WorldResult::CharNameOnlyLetters);
     }
-    let lower = name.to_ascii_lowercase();
-    if lower
-        .as_bytes()
-        .windows(3)
-        .any(|w| w[0] == w[1] && w[1] == w[2])
-    {
-        return Err(WorldResult::CharNameThreeConsecutive);
-    }
     if crate::config::config()
         .world
         .reserved_names
