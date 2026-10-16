@@ -1,0 +1,189 @@
+//! Where each in-world packet goes.
+
+use tracing::trace;
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
+use wow_world_messages::vanilla::*;
+
+use crate::game::fields::*;
+use crate::game::map::player::{PLAYER_FLAGS_HIDE_CLOAK, PLAYER_FLAGS_HIDE_HELM};
+use crate::game::map::{Map, chat, login, movement, query};
+
+impl Map {
+    pub fn handle_packet(&mut self, guid: Guid, msg: ClientOpcodeMessage) {
+        let Some(p) = self.players.get(&guid) else {
+            return;
+        };
+        let out = p.outbound.clone();
+        let msg = match movement::movement_of(msg) {
+            Ok((info, relay)) => {
+                movement::on_move(self, guid, info, relay);
+                return;
+            }
+            Err(msg) => msg,
+        };
+        let Some(msg) = movement::handle(self, guid, msg) else {
+            return;
+        };
+        match msg {
+            ClientOpcodeMessage::CMSG_NAME_QUERY(m) => query::name(self, &out, m),
+            ClientOpcodeMessage::CMSG_CREATURE_QUERY(m) => query::creature(self, &out, m),
+            ClientOpcodeMessage::CMSG_ITEM_QUERY_SINGLE(m) => query::item(self, &out, m),
+            ClientOpcodeMessage::CMSG_ITEM_NAME_QUERY(m) => query::item_name(self, &out, m),
+            ClientOpcodeMessage::CMSG_GAMEOBJECT_QUERY(m) => {
+                let t = self.realm.data.gameobject_templates.get(&m.entry_id);
+                out.send_frame(crate::game::map::gameobject::query_response(m.entry_id, t));
+            }
+            ClientOpcodeMessage::CMSG_ATTACKSWING(m) => {
+                crate::game::map::combat::start_attack(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_ATTACKSTOP => {
+                crate::game::map::combat::stop_attack(self, guid)
+            }
+            ClientOpcodeMessage::CMSG_REPOP_REQUEST => crate::game::map::death::release(self, guid),
+            ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(_) => {
+                crate::game::map::death::reclaim(self, guid)
+            }
+            ClientOpcodeMessage::MSG_CORPSE_QUERY => {
+                crate::game::map::death::corpse_query(self, guid)
+            }
+            ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(m) => {
+                crate::game::map::death::spirit_healer_activate(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_GOSSIP_HELLO(m) => {
+                crate::game::map::death::spirit_healer_hello(self, guid, m.guid);
+            }
+            ClientOpcodeMessage::CMSG_AREATRIGGER(m) => {
+                crate::game::map::world::area_trigger(self, guid, m.trigger_id)
+            }
+            ClientOpcodeMessage::CMSG_QUERY_TIME => query::time(&out),
+            ClientOpcodeMessage::CMSG_PLAYED_TIME => query::played(self, guid),
+            ClientOpcodeMessage::CMSG_MESSAGECHAT(m) => {
+                if let Some(m) = chat::message(self, guid, m) {
+                    trace!("chat type {:?} not served yet", m.chat_type);
+                }
+            }
+            ClientOpcodeMessage::CMSG_TEXT_EMOTE(m) => chat::text_emote(self, guid, m),
+            ClientOpcodeMessage::CMSG_EMOTE(m) => chat::emote(self, guid, m),
+            ClientOpcodeMessage::CMSG_SET_SELECTION(m) => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    p.fields.set_guid(UNIT_FIELD_TARGET, m.target);
+                }
+            }
+            ClientOpcodeMessage::CMSG_STANDSTATECHANGE(m) => {
+                if let Some(p) = self.players.get_mut(&guid)
+                    && p.logout_at.is_none()
+                {
+                    let state = m.animation_state.as_int();
+                    p.set_stand_state(state);
+                    p.outbound.send(&SMSG_STANDSTATE_UPDATE {
+                        state: m.animation_state,
+                    });
+                }
+            }
+            ClientOpcodeMessage::CMSG_SETSHEATHED(m) => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    p.fields
+                        .set_byte(UNIT_FIELD_BYTES_2, 0, m.sheathed.as_int());
+                }
+            }
+            ClientOpcodeMessage::CMSG_TOGGLE_HELM => self.toggle_flag(guid, PLAYER_FLAGS_HIDE_HELM),
+            ClientOpcodeMessage::CMSG_TOGGLE_CLOAK => {
+                self.toggle_flag(guid, PLAYER_FLAGS_HIDE_CLOAK)
+            }
+            ClientOpcodeMessage::CMSG_LOGOUT_REQUEST => login::request_logout(self, guid),
+            ClientOpcodeMessage::CMSG_LOGOUT_CANCEL => login::cancel_logout(self, guid),
+            ClientOpcodeMessage::CMSG_PLAYER_LOGOUT => login::complete_logout(self, guid),
+            ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    p.zone = m.area.as_int();
+                    p.online
+                        .zone
+                        .store(p.zone, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(m) => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    p.fields.set_byte(PLAYER_FIELD_BYTES, 2, m.action_bar);
+                }
+            }
+            ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(m) => self.set_action_button(guid, m),
+            ClientOpcodeMessage::CMSG_TUTORIAL_FLAG(m) => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    let word = (m.tutorial_flag / 32) as usize;
+                    if let Some(w) = p.row.state.tutorials.get_mut(word) {
+                        *w |= 1 << (m.tutorial_flag % 32);
+                    }
+                }
+            }
+            ClientOpcodeMessage::CMSG_TUTORIAL_CLEAR => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    p.row.state.tutorials = [u32::MAX; 8];
+                }
+            }
+            ClientOpcodeMessage::CMSG_TUTORIAL_RESET => {
+                if let Some(p) = self.players.get_mut(&guid) {
+                    p.row.state.tutorials = [0; 8];
+                }
+            }
+            ClientOpcodeMessage::CMSG_UPDATE_ACCOUNT_DATA(m) => {
+                let account = self.players.get(&guid).map(|p| p.account.clone());
+                if let Some(account) = account {
+                    let kind = m.data_type.as_int();
+                    let now = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
+                    self.realm
+                        .store
+                        .set_account_data(&account, kind, now, m.compressed_data);
+                }
+            }
+            ClientOpcodeMessage::CMSG_REQUEST_ACCOUNT_DATA(_)
+            | ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC
+            | ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
+            | ClientOpcodeMessage::CMSG_BUG(_)
+            | ClientOpcodeMessage::CMSG_CHAT_IGNORED(_)
+            | ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO
+            | ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET
+            | ClientOpcodeMessage::CMSG_GMTICKET_SYSTEMSTATUS
+            | ClientOpcodeMessage::CMSG_BATTLEFIELD_STATUS
+            | ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO
+            | ClientOpcodeMessage::CMSG_FRIEND_LIST
+            | ClientOpcodeMessage::CMSG_CHAR_ENUM => {}
+            ClientOpcodeMessage::CMSG_WORLD_TELEPORT(m) => {
+                if self.players.get(&guid).is_some_and(|p| p.gm) {
+                    let orientation = m.orientation;
+                    self.teleport(
+                        guid,
+                        super::MapKey::world(m.map.as_int()),
+                        m.position,
+                        orientation,
+                    );
+                }
+            }
+            other => trace!("{} not handled in the world", other),
+        }
+    }
+
+    fn toggle_flag(&mut self, guid: Guid, flag: u32) {
+        if let Some(p) = self.players.get_mut(&guid) {
+            let on = !p.fields.has_flag(PLAYER_FLAGS, flag);
+            p.fields.set_flag(PLAYER_FLAGS, flag, on);
+        }
+    }
+
+    fn set_action_button(&mut self, guid: Guid, m: CMSG_SET_ACTION_BUTTON) {
+        let Some(p) = self.players.get_mut(&guid) else {
+            return;
+        };
+        if m.button >= 120 {
+            return;
+        }
+        p.row.actions.retain(|a| a.button != m.button);
+        if m.action != 0 || m.action_type != 0 {
+            p.row.actions.push(crate::game::store::ActionRow {
+                button: m.button,
+                action: m.action,
+                kind: m.action_type,
+            });
+        }
+    }
+}

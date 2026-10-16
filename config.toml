@@ -1,46 +1,26 @@
 [network]
-aoi_radius_yards = 200.0
-outbound_channel_bytes = 1048576
-#aoi_flap_cooldown_secs = 3
+outbound_channel_bytes = 4194304
 #handshake_timeout_secs = 10
 #client_idle_timeout_secs = 120
 #max_pending_connections = 1024
 
-[tick]
-target_interval_ms = 100
-max_interval_ms = 1000
-slow_ema_alpha = 0.2
-backoff_threshold = 0.5
-recovery_hysteresis = 0.6
-recovery_healthy_streak = 30
-save_interval_secs = 60
+[world]
+visibility_yards = 100.0
+save_interval_secs = 300
+characters_db = "characters.sqlite"
+# The directory with vmangos.sqlite and dbc.sqlite, as Thistle Tea exports them.
+#data_dir = "/path/to/db"
+motd = "Welcome to wow_vanilla_server."
 
-[combat]
-pvp_max_health = 100
-attack_distance = 5.0
-base_meleerange_offset = 1.333
-melee_leeway = 2.6666667
-player_combat_reach = 1.5
-creature_combat_reach = 1.5
+[accounts]
+everyone_gm = true
 
-[respawn]
-corpse_despawn_secs = 180
-initial_respawn_delay_secs = 180
-default_creature_health = 5000
-
-[creature]
-walk_speed = 2.0
-re_path_threshold = 0.5
-stand_off = 3.0
-max_follow_range = 60.0
-wander_idle_min_ms = 3000
-wander_idle_max_ms = 8000
-walking_heartbeat_ms = 500
-arrival_threshold = 0.4
-
+# New characters start in Gurubashi Arena's pit rather than their race's starting zone: peon's
+# heartbeat placement assumes it.
 [spawn]
+enabled = true
+map = 0
 x = -13206.0
 y = 272.0
 z = 21.857
 orientation = 0.0
-map = "EasternKingdoms"

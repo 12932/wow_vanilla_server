@@ -44,6 +44,9 @@ mod tests {
         // implementation distinguishes the high half of u64 from the low half.
         let low = rand_unit_f32(1u64 << 62);
         let high = rand_unit_f32(1u64 << 63);
-        assert!(high > low, "high bit must affect output: low={low} high={high}");
+        assert!(
+            high > low,
+            "high bit must affect output: low={low} high={high}"
+        );
     }
 }

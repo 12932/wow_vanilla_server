@@ -1,0 +1,556 @@
+//! `SMSG_UPDATE_OBJECT` blocks, encoded by hand so that a block is built
+//! once and its bytes shared by every observer that gets it.
+//!
+//! A packet is `[u32 block count][u8 has transport][blocks]`; [`Batch`]
+//! gathers one observer's blocks and frames them, compressing big batches
+//! into `SMSG_COMPRESSED_UPDATE_OBJECT`.
+
+use std::io::Write;
+use std::sync::Arc;
+
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::Vector3d;
+
+use crate::game::fields::{Fields, TypeId, Visibility};
+
+pub const SMSG_UPDATE_OBJECT: u16 = 0x0A9;
+pub const SMSG_COMPRESSED_UPDATE_OBJECT: u16 = 0x1F6;
+
+const UPDATETYPE_VALUES: u8 = 0;
+const UPDATETYPE_MOVEMENT: u8 = 1;
+const UPDATETYPE_CREATE_OBJECT: u8 = 2;
+const UPDATETYPE_CREATE_OBJECT2: u8 = 3;
+const UPDATETYPE_OUT_OF_RANGE_OBJECTS: u8 = 4;
+
+// Movement block update flags.
+pub const UPDATEFLAG_SELF: u8 = 0x01;
+pub const UPDATEFLAG_TRANSPORT: u8 = 0x02;
+pub const UPDATEFLAG_MELEE_ATTACKING: u8 = 0x04;
+pub const UPDATEFLAG_HIGHGUID: u8 = 0x08;
+pub const UPDATEFLAG_ALL: u8 = 0x10;
+pub const UPDATEFLAG_LIVING: u8 = 0x20;
+pub const UPDATEFLAG_HAS_POSITION: u8 = 0x40;
+
+// Movement flags that change what a living block carries.
+pub const MOVEFLAG_FORWARD: u32 = 0x0000_0001;
+pub const MOVEFLAG_WALK_MODE: u32 = 0x0000_0100;
+pub const MOVEFLAG_ON_TRANSPORT: u32 = 0x0000_0200;
+pub const MOVEFLAG_JUMPING: u32 = 0x0000_2000;
+pub const MOVEFLAG_SWIMMING: u32 = 0x0020_0000;
+pub const MOVEFLAG_SPLINE_ENABLED: u32 = 0x0040_0000;
+pub const MOVEFLAG_SPLINE_ELEVATION: u32 = 0x0400_0000;
+
+/// Run, walk, swim and turn speeds, in the order a living block carries
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Speeds {
+    pub walk: f32,
+    pub run: f32,
+    pub run_back: f32,
+    pub swim: f32,
+    pub swim_back: f32,
+    pub turn: f32,
+}
+
+impl Default for Speeds {
+    fn default() -> Self {
+        Self {
+            walk: 2.5,
+            run: 7.0,
+            run_back: 4.5,
+            swim: 4.722_222,
+            swim_back: 2.5,
+            turn: std::f32::consts::PI,
+        }
+    }
+}
+
+/// A spline a unit is moving along, for observers that see it start
+/// partway through.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplineState {
+    pub flags: u32,
+    pub time_passed: u32,
+    pub duration: u32,
+    pub id: u32,
+    pub nodes: Vec<Vector3d>,
+    pub final_node: Vector3d,
+}
+
+/// What a create block says about where an object is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Placement {
+    /// A unit: its movement state and speeds.
+    Living {
+        flags: u32,
+        timestamp: u32,
+        position: Vector3d,
+        orientation: f32,
+        pitch: f32,
+        fall_time: f32,
+        speeds: Speeds,
+        spline: Option<SplineState>,
+    },
+    /// A game object, corpse or dynamic object.
+    Position {
+        position: Vector3d,
+        orientation: f32,
+    },
+    /// An item: nowhere.
+    None,
+}
+
+/// A create block's object: its kind, place and fields.
+pub struct Create<'a> {
+    pub guid: Guid,
+    pub type_id: TypeId,
+    pub placement: Placement,
+    pub fields: &'a Fields,
+    /// The block is for the object's own client.
+    pub is_self: bool,
+    /// The target the unit is swinging at, if it is.
+    pub melee_target: Option<Guid>,
+}
+
+pub fn write_packed_guid(out: &mut Vec<u8>, guid: Guid) {
+    let value = guid.guid();
+    let mask_at = out.len();
+    out.push(0);
+    let mut mask = 0u8;
+    for i in 0..8 {
+        let byte = (value >> (i * 8)) as u8;
+        if byte != 0 {
+            mask |= 1 << i;
+            out.push(byte);
+        }
+    }
+    out[mask_at] = mask;
+}
+
+fn write_vector(out: &mut Vec<u8>, v: Vector3d) {
+    out.extend_from_slice(&v.x.to_le_bytes());
+    out.extend_from_slice(&v.y.to_le_bytes());
+    out.extend_from_slice(&v.z.to_le_bytes());
+}
+
+fn write_fields(out: &mut Vec<u8>, mask: &[u32], values: &[u32]) {
+    out.push(mask.len() as u8);
+    for w in mask {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    for v in values {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+}
+
+fn write_placement(out: &mut Vec<u8>, c: &Create) {
+    let mut flags = UPDATEFLAG_ALL;
+    if c.is_self {
+        flags |= UPDATEFLAG_SELF;
+    }
+    if c.melee_target.is_some() {
+        flags |= UPDATEFLAG_MELEE_ATTACKING;
+    }
+    match &c.placement {
+        Placement::Living { .. } => flags |= UPDATEFLAG_LIVING,
+        Placement::Position { .. } => flags |= UPDATEFLAG_HAS_POSITION,
+        Placement::None => {}
+    }
+    out.push(flags);
+    match &c.placement {
+        Placement::Living {
+            flags,
+            timestamp,
+            position,
+            orientation,
+            pitch,
+            fall_time,
+            speeds,
+            spline,
+        } => {
+            // A create carries a stable state: no transport, jump or spline
+            // elevation (transports come with their own block); a spline
+            // only if there is one to send.
+            let mut move_flags = *flags
+                & !(MOVEFLAG_ON_TRANSPORT
+                    | MOVEFLAG_JUMPING
+                    | MOVEFLAG_SPLINE_ELEVATION
+                    | MOVEFLAG_SPLINE_ENABLED);
+            if spline.is_some() {
+                move_flags |= MOVEFLAG_SPLINE_ENABLED;
+            }
+            out.extend_from_slice(&move_flags.to_le_bytes());
+            out.extend_from_slice(&timestamp.to_le_bytes());
+            write_vector(out, *position);
+            out.extend_from_slice(&orientation.to_le_bytes());
+            if move_flags & MOVEFLAG_SWIMMING != 0 {
+                out.extend_from_slice(&pitch.to_le_bytes());
+            }
+            out.extend_from_slice(&fall_time.to_le_bytes());
+            for s in [
+                speeds.walk,
+                speeds.run,
+                speeds.run_back,
+                speeds.swim,
+                speeds.swim_back,
+                speeds.turn,
+            ] {
+                out.extend_from_slice(&s.to_le_bytes());
+            }
+            if let Some(spline) = spline {
+                // No final angle, target or point.
+                let spline_flags = spline.flags & !(0x0001_0000 | 0x0002_0000 | 0x0004_0000);
+                out.extend_from_slice(&spline_flags.to_le_bytes());
+                out.extend_from_slice(&spline.time_passed.to_le_bytes());
+                out.extend_from_slice(&spline.duration.to_le_bytes());
+                out.extend_from_slice(&spline.id.to_le_bytes());
+                out.extend_from_slice(&(spline.nodes.len() as u32).to_le_bytes());
+                for n in &spline.nodes {
+                    write_vector(out, *n);
+                }
+                write_vector(out, spline.final_node);
+            }
+        }
+        Placement::Position {
+            position,
+            orientation,
+        } => {
+            write_vector(out, *position);
+            out.extend_from_slice(&orientation.to_le_bytes());
+        }
+        Placement::None => {}
+    }
+    // UPDATEFLAG_ALL's word.
+    out.extend_from_slice(&1u32.to_le_bytes());
+    if let Some(target) = c.melee_target {
+        write_packed_guid(out, target);
+    }
+}
+
+/// A create block for `c`, with the fields `visibility` may see.
+pub fn create_block(c: &Create, visibility: Visibility) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256);
+    // Units and players use CREATE_OBJECT2 (a spawn the client animates);
+    // everything else the plain one.
+    let kind = match c.type_id {
+        TypeId::Unit | TypeId::Player => UPDATETYPE_CREATE_OBJECT2,
+        _ => UPDATETYPE_CREATE_OBJECT,
+    };
+    out.push(kind);
+    write_packed_guid(&mut out, c.guid);
+    out.push(c.type_id as u8);
+    write_placement(&mut out, c);
+    let (mask, values) = c.fields.select(visibility, false);
+    write_fields(&mut out, &mask, &values);
+    out
+}
+
+/// A values block with `fields`' dirty fields that `visibility` may see,
+/// or `None` if there are none.
+pub fn values_block(guid: Guid, fields: &Fields, visibility: Visibility) -> Option<Vec<u8>> {
+    let (mask, values) = fields.select(visibility, true);
+    let only_type = values.len() == 1
+        && mask.len() == 1
+        && mask[0] == 1 << crate::game::fields::OBJECT_FIELD_TYPE;
+    if values.is_empty() || only_type {
+        return None;
+    }
+    let mut out = Vec::with_capacity(16 + values.len() * 4);
+    out.push(UPDATETYPE_VALUES);
+    write_packed_guid(&mut out, guid);
+    write_fields(&mut out, &mask, &values);
+    Some(out)
+}
+
+/// A block telling the client these objects are out of range: it forgets
+/// them.
+pub fn out_of_range_block(guids: &[Guid]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5 + guids.len() * 9);
+    out.push(UPDATETYPE_OUT_OF_RANGE_OBJECTS);
+    out.extend_from_slice(&(guids.len() as u32).to_le_bytes());
+    for g in guids {
+        write_packed_guid(&mut out, *g);
+    }
+    out
+}
+
+/// A movement block: where a unit now is, for a teleport the observer
+/// must see as a jump.
+pub fn movement_block(guid: Guid, placement: Placement) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    out.push(UPDATETYPE_MOVEMENT);
+    write_packed_guid(&mut out, guid);
+    let c = Create {
+        guid,
+        type_id: TypeId::Unit,
+        placement,
+        fields: empty_fields(),
+        is_self: false,
+        melee_target: None,
+    };
+    write_placement(&mut out, &c);
+    out
+}
+
+fn empty_fields() -> &'static Fields {
+    static F: std::sync::OnceLock<Fields> = std::sync::OnceLock::new();
+    F.get_or_init(|| Fields::new(TypeId::Item, Guid::zero(), 0))
+}
+
+/// A batch above this many bytes is sent compressed.
+const COMPRESS_ABOVE: usize = 1024;
+/// A batch is cut into packets of at most this many bytes of blocks, so
+/// no packet needs a size the 1.12 client can't read.
+const PACKET_LIMIT: usize = 24 * 1024;
+
+/// One observer's blocks for one update, framed into packets by
+/// [`Batch::finish`].
+#[derive(Debug, Default)]
+pub struct Batch {
+    count: u32,
+    body: Vec<u8>,
+    packets: Vec<Arc<[u8]>>,
+}
+
+impl Batch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0 && self.packets.is_empty()
+    }
+
+    pub fn push(&mut self, block: &[u8]) {
+        if !self.body.is_empty() && self.body.len() + block.len() > PACKET_LIMIT {
+            self.cut();
+        }
+        self.body.extend_from_slice(block);
+        self.count += 1;
+    }
+
+    fn cut(&mut self) {
+        if self.count == 0 {
+            return;
+        }
+        let mut payload = Vec::with_capacity(5 + self.body.len());
+        payload.extend_from_slice(&self.count.to_le_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&self.body);
+        self.packets.push(frame_update(&payload));
+        self.body.clear();
+        self.count = 0;
+    }
+
+    /// The batch's packets, ready to queue.
+    pub fn finish(mut self) -> Vec<Arc<[u8]>> {
+        self.cut();
+        self.packets
+    }
+}
+
+/// `[size BE][opcode LE][body]`, the shape the writer task encrypts.
+pub fn frame(opcode: u16, body: &[u8]) -> Arc<[u8]> {
+    let size = u16::try_from(body.len() + 2).unwrap_or(u16::MAX);
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&size.to_be_bytes());
+    out.extend_from_slice(&opcode.to_le_bytes());
+    out.extend_from_slice(body);
+    Arc::from(out)
+}
+
+fn frame_update(payload: &[u8]) -> Arc<[u8]> {
+    if payload.len() <= COMPRESS_ABOVE {
+        return frame(SMSG_UPDATE_OBJECT, payload);
+    }
+    let mut body = Vec::with_capacity(payload.len() / 2 + 8);
+    body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    let mut z = flate2::write::ZlibEncoder::new(body, flate2::Compression::fast());
+    if z.write_all(payload).is_err() {
+        return frame(SMSG_UPDATE_OBJECT, payload);
+    }
+    match z.finish() {
+        Ok(body) => frame(SMSG_COMPRESSED_UPDATE_OBJECT, &body),
+        Err(_) => frame(SMSG_UPDATE_OBJECT, payload),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::fields::*;
+    use crate::game::guid;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{Object_UpdateType, UpdateMask};
+
+    fn parse(frame: &[u8]) -> ServerOpcodeMessage {
+        ServerOpcodeMessage::read_unencrypted(frame).expect("wow_messages parses the packet")
+    }
+
+    fn unit_fields(g: Guid) -> Fields {
+        let mut f = Fields::new(TypeId::Unit, g, 299);
+        f.set_u32(UNIT_FIELD_HEALTH, 40);
+        f.set_u32(UNIT_FIELD_MAXHEALTH, 40);
+        f.set_u32(UNIT_FIELD_LEVEL, 3);
+        f.set_u32(UNIT_FIELD_DISPLAYID, 903);
+        f
+    }
+
+    #[test]
+    fn a_unit_create_parses_with_its_fields_and_place() {
+        let g = guid::unit(299, 7);
+        let fields = unit_fields(g);
+        let block = create_block(
+            &Create {
+                guid: g,
+                type_id: TypeId::Unit,
+                placement: Placement::Living {
+                    flags: MOVEFLAG_FORWARD,
+                    timestamp: 0,
+                    position: Vector3d {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    },
+                    orientation: 0.5,
+                    pitch: 0.0,
+                    fall_time: 0.0,
+                    speeds: Speeds::default(),
+                    spline: None,
+                },
+                fields: &fields,
+                is_self: false,
+                melee_target: None,
+            },
+            Visibility::Public,
+        );
+        let mut batch = Batch::new();
+        batch.push(&block);
+        let packets = batch.finish();
+        assert_eq!(packets.len(), 1);
+        let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) = parse(&packets[0]) else {
+            panic!("not an update object");
+        };
+        assert_eq!(m.objects.len(), 1);
+        let Object_UpdateType::CreateObject2 { guid3, mask2, .. } = &m.objects[0].update_type
+        else {
+            panic!("not a create");
+        };
+        assert_eq!(*guid3, g);
+        let UpdateMask::Unit(u) = mask2 else {
+            panic!("not a unit mask");
+        };
+        assert_eq!(u.unit_health(), Some(40));
+        assert_eq!(u.unit_displayid(), Some(903));
+        assert_eq!(u.object_entry(), Some(299));
+    }
+
+    #[test]
+    fn a_values_block_carries_only_the_changed_fields() {
+        let g = guid::unit(299, 7);
+        let mut fields = unit_fields(g);
+        fields.clear_dirty();
+        assert!(values_block(g, &fields, Visibility::Public).is_none());
+        fields.set_u32(UNIT_FIELD_HEALTH, 12);
+        let block = values_block(g, &fields, Visibility::Public).unwrap();
+        let mut batch = Batch::new();
+        batch.push(&block);
+        let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) = parse(&batch.finish()[0]) else {
+            panic!("not an update object");
+        };
+        let Object_UpdateType::Values { guid1, mask1 } = &m.objects[0].update_type else {
+            panic!("not values");
+        };
+        assert_eq!(*guid1, g);
+        let UpdateMask::Unit(u) = mask1 else {
+            panic!("not a unit mask");
+        };
+        assert_eq!(u.unit_health(), Some(12));
+        assert_eq!(u.unit_level(), None);
+    }
+
+    #[test]
+    fn a_big_batch_is_compressed_and_still_parses() {
+        let mut batch = Batch::new();
+        let mut guids = Vec::new();
+        for i in 0..100 {
+            let g = guid::unit(299, i);
+            guids.push(g);
+            let fields = unit_fields(g);
+            batch.push(&create_block(
+                &Create {
+                    guid: g,
+                    type_id: TypeId::Unit,
+                    placement: Placement::Position {
+                        position: Vector3d {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        orientation: 0.0,
+                    },
+                    fields: &fields,
+                    is_self: false,
+                    melee_target: None,
+                },
+                Visibility::Public,
+            ));
+        }
+        batch.push(&out_of_range_block(&guids[..3]));
+        let packets = batch.finish();
+        let mut objects = 0;
+        for p in &packets {
+            match parse(p) {
+                ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(m) => objects += m.objects.len(),
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) => objects += m.objects.len(),
+                other => panic!("unexpected {other}"),
+            }
+        }
+        assert_eq!(objects, 101);
+        assert!(packets.iter().all(|p| p.len() < 0x7FFF));
+    }
+
+    #[test]
+    fn a_player_create_for_its_owner_parses() {
+        let g = guid::player(9);
+        let mut fields = Fields::new(TypeId::Player, g, 0);
+        fields.set_u32(UNIT_FIELD_HEALTH, 60);
+        fields.set_u32(PLAYER_FIELD_COINAGE, 5);
+        let block = create_block(
+            &Create {
+                guid: g,
+                type_id: TypeId::Player,
+                placement: Placement::Living {
+                    flags: MOVEFLAG_SWIMMING,
+                    timestamp: 1,
+                    position: Vector3d {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    },
+                    orientation: 0.0,
+                    pitch: 0.25,
+                    fall_time: 0.0,
+                    speeds: Speeds::default(),
+                    spline: None,
+                },
+                fields: &fields,
+                is_self: true,
+                melee_target: Some(guid::unit(1, 1)),
+            },
+            Visibility::Owner,
+        );
+        let mut batch = Batch::new();
+        batch.push(&block);
+        let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) = parse(&batch.finish()[0]) else {
+            panic!("not an update object");
+        };
+        let Object_UpdateType::CreateObject2 { mask2, .. } = &m.objects[0].update_type else {
+            panic!("not a create");
+        };
+        let UpdateMask::Player(p) = mask2 else {
+            panic!("not a player mask");
+        };
+        assert_eq!(p.player_field_coinage(), Some(5));
+    }
+}
