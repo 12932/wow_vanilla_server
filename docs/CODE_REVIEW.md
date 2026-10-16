@@ -3,7 +3,7 @@
 Six read-only reviews (networking and auth; world simulation; persistence, config and GM commands; the loadtest;
 the race's navmesh workarounds; Thistle Tea compatibility), merged and deduplicated here. File and line references
 are at 79b6def, relative to `src/`. The loadtest's own findings, and the plan for it, are in
-[LOADTEST_DECOUPLING_PLAN.md](LOADTEST_DECOUPLING_PLAN.md).
+[peon](https://github.com/12932/peon)'s [docs/PLAN.md](https://github.com/12932/peon/blob/master/docs/PLAN.md): the loadtest became peon.
 
 **Baseline.** `cargo nextest run`: 129 of 129 pass. `cargo clippy --all-targets` fails:
 - the `hot_loops` bench doesn't compile: it uses `World.cells` and `cell::CellKey`, both gone since d9a0131;

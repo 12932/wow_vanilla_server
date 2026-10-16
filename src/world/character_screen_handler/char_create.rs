@@ -4,10 +4,9 @@ use wow_world_base::vanilla::{PlayerGender, RaceClass, Vector3d};
 use wow_world_messages::vanilla::{CMSG_CHAR_CREATE, MovementInfo};
 
 // Universal spawn point lives in `[spawn]` of `config.toml` (default:
-// Gurubashi Arena on Eastern Kingdoms). Loadtest bots use the same
-// anchor (see `src/loadtest/worker/movement.rs::ANCHOR`) so AOI
-// clusters match between real and synthetic clients — change both if
-// you tune the spawn.
+// Gurubashi Arena on Eastern Kingdoms). peon's PvP and race bots assume
+// it (its `worker/movement.rs::ANCHOR`), so change both if you tune the
+// spawn.
 
 pub(crate) fn create_character(c: CMSG_CHAR_CREATE, db: &mut WorldDatabase) -> Option<Character> {
     let race_class = match RaceClass::try_from((c.race, c.class)) {
