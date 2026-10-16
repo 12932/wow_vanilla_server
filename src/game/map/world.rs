@@ -263,6 +263,10 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     if t.map != map.key.map || !inside(t, p.position()) {
         return;
     }
+    crate::game::map::quests::explored(map, guid, id);
+    let Some(p) = map.players.get(&guid) else {
+        return;
+    };
     let Some(tp) = &t.teleport else {
         return;
     };

@@ -116,8 +116,76 @@ impl Map {
                 crate::game::map::death::spirit_healer_activate(self, guid, m.guid)
             }
             ClientOpcodeMessage::CMSG_GOSSIP_HELLO(m) => {
-                crate::game::map::death::spirit_healer_hello(self, guid, m.guid);
+                crate::game::map::npc::hello(self, guid, m.guid)
             }
+            ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(m) => {
+                crate::game::map::npc::select(self, guid, m.guid, m.gossip_list_id)
+            }
+            ClientOpcodeMessage::CMSG_NPC_TEXT_QUERY(m) => {
+                crate::game::map::npc::npc_text(self, guid, m.text_id)
+            }
+            ClientOpcodeMessage::CMSG_TRAINER_LIST(m) => {
+                crate::game::map::npc::trainer_list(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(m) => {
+                crate::game::map::npc::trainer_buy(self, guid, m.guid, m.id)
+            }
+            ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(m) => {
+                crate::game::map::npc::bind(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(m) => {
+                crate::game::map::npc::banker(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(m) => {
+                crate::game::map::npc::buy_bank_slot(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(m) => {
+                crate::game::map::npc::taxi_status(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(m) => {
+                crate::game::map::npc::taxi_nodes(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_ACTIVATETAXI(m) => crate::game::map::npc::activate_taxi(
+                self,
+                guid,
+                m.guid,
+                m.source_node,
+                m.destination_node,
+            ),
+            ClientOpcodeMessage::CMSG_BATTLEMASTER_HELLO(m) => {
+                crate::game::map::npc::battlemaster_hello(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::MSG_AUCTION_HELLO(m) => {
+                crate::game::map::npc::auction_hello(self, guid, m.auctioneer)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(m) => {
+                crate::game::map::quests::status_query(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(m) => {
+                crate::game::map::quests::hello(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(m) => {
+                crate::game::map::quests::details(self, guid, m.guid, m.quest_id)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(m) => {
+                crate::game::map::quests::accept(self, guid, m.guid, m.quest_id)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(m) => {
+                crate::game::map::quests::complete_quest(self, guid, m.guid, m.quest_id)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(m) => {
+                crate::game::map::quests::offer_reward(self, guid, m.guid, m.quest_id)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(m) => {
+                crate::game::map::quests::choose_reward(self, guid, m.guid, m.quest_id, m.reward)
+            }
+            ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(m) => {
+                crate::game::map::quests::abandon(self, guid, m.slot)
+            }
+            ClientOpcodeMessage::CMSG_QUEST_QUERY(m) => {
+                crate::game::map::quests::query(self, guid, m.quest_id)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {}
             ClientOpcodeMessage::CMSG_AREATRIGGER(m) => {
                 crate::game::map::world::area_trigger(self, guid, m.trigger_id)
             }

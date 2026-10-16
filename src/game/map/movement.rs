@@ -83,7 +83,7 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     };
     // Until the client has acknowledged a teleport, it is still sending
     // from where it was.
-    if p.teleport.is_some() || p.awaiting_worldport || !finite(&info) {
+    if p.teleport.is_some() || p.awaiting_worldport || p.flight.is_some() || !finite(&info) {
         return;
     }
     if p.logout_at.is_some() {

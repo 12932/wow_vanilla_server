@@ -74,13 +74,14 @@ fn is_quest_item(e: &LootEntry) -> bool {
 fn reference(
     data: &GameData,
     e: &LootEntry,
+    wanted: &[u32],
     rng: &mut impl rand::Rng,
     out: &mut Vec<LootSlot>,
     depth: u32,
 ) {
     if let Some(r) = data.loot.reference.get(&(e.min.unsigned_abs())) {
         for _ in 0..e.max.max(1) {
-            roll(data, r, rng, out, depth + 1);
+            roll(data, r, wanted, rng, out, depth + 1);
         }
     }
 }
@@ -88,14 +89,16 @@ fn reference(
 /// Roll a table, vmangos's way: each ungrouped entry on its own chance;
 /// one entry per group (the explicitly chanced in order, else one of the
 /// equally chanced); references rolled into as many times as they say.
-/// Quest items, which need their quest, are left out.
+/// Quest items drop only if they are `wanted`.
 pub fn roll(
     data: &GameData,
     entries: &[LootEntry],
+    wanted: &[u32],
     rng: &mut impl rand::Rng,
     out: &mut Vec<LootSlot>,
     depth: u32,
 ) {
+    let skip = |e: &LootEntry| is_quest_item(e) && !wanted.contains(&e.item);
     if depth > MAX_DEPTH {
         return;
     }
@@ -106,12 +109,12 @@ pub fn roll(
         .collect();
     groups.sort_unstable();
     groups.dedup();
-    for e in entries.iter().filter(|e| e.group == 0 && !is_quest_item(e)) {
+    for e in entries.iter().filter(|e| e.group == 0 && !skip(e)) {
         if !chance(rng, e.chance.abs()) {
             continue;
         }
         if e.min < 0 {
-            reference(data, e, rng, out, depth);
+            reference(data, e, wanted, rng, out, depth);
         } else {
             out.push(LootSlot {
                 item: e.item,
@@ -123,7 +126,7 @@ pub fn roll(
     for g in groups {
         let members: Vec<&LootEntry> = entries
             .iter()
-            .filter(|e| e.group == g && !is_quest_item(e))
+            .filter(|e| e.group == g && !skip(e))
             .collect();
         let mut r = rng.random_range(0.0f32..100.0);
         let mut picked = None;
@@ -144,7 +147,7 @@ pub fn roll(
             continue;
         };
         if e.min < 0 {
-            reference(data, &e, rng, out, depth);
+            reference(data, &e, wanted, rng, out, depth);
         } else {
             out.push(LootSlot {
                 item: e.item,
@@ -158,6 +161,11 @@ pub fn roll(
 /// A creature died: its loot is rolled for its tapper.
 pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     let data = map.realm.data.clone();
+    let wanted = map
+        .players
+        .get(&tapper)
+        .map(|p| crate::game::map::quests::wanted_items(p, &data))
+        .unwrap_or_default();
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
@@ -169,7 +177,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     if t.loot_id != 0
         && let Some(table) = data.loot.creature.get(&t.loot_id)
     {
-        roll(&data, table, &mut rng, &mut items, 0);
+        roll(&data, table, &wanted, &mut rng, &mut items, 0);
     }
     let gold = if t.gold_max > t.gold_min {
         rng.random_range(t.gold_min..=t.gold_max)
@@ -360,7 +368,7 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         let loot_id = t.data[1];
         let mut items = Vec::new();
         if let Some(table) = data.loot.gameobject.get(&loot_id) {
-            roll(&data, table, &mut rand::rng(), &mut items, 0);
+            roll(&data, table, &[], &mut rand::rng(), &mut items, 0);
         }
         let gold = if t.gold_max > t.gold_min {
             rand::rng().random_range(t.gold_min..=t.gold_max)
@@ -402,7 +410,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         for _ in 0..100 {
             let mut out = Vec::new();
-            roll(&data, &entries, &mut rng, &mut out, 0);
+            roll(&data, &entries, &[], &mut rng, &mut out, 0);
             assert!(out.iter().any(|s| s.item == 1));
             assert_eq!(out.iter().filter(|s| s.item == 2 || s.item == 3).count(), 1);
             assert!(

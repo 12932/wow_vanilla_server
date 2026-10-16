@@ -191,8 +191,12 @@ pub struct Player {
     pub combat: crate::game::map::combat::Combat,
     /// The corpse or object whose loot window is open.
     pub looting: Option<Guid>,
-    /// The vendor whose buyback this session has filled.
+    /// The next buyback slot to fill.
     pub buyback_next: u8,
+    /// The NPC and gossip menu the player last had open.
+    pub gossip_menu: Option<(Guid, u32)>,
+    pub flight: Option<crate::game::map::npc::Flight>,
+    pub journal: crate::game::map::quests::Journal,
 }
 
 impl Player {
@@ -246,6 +250,9 @@ impl Player {
             combat: Default::default(),
             looting: None,
             buyback_next: 0,
+            gossip_menu: None,
+            flight: None,
+            journal: row.state.quests.clone(),
             row,
         };
         p.init_fields(data);
@@ -353,6 +360,7 @@ impl Player {
         };
         self.fields.set_u32(UNIT_FIELD_POWER1 + p, power);
         self.equip_fields();
+        crate::game::map::quests::refresh_log(self, data);
     }
 
     /// Stats, health and power for the level, from the base tables.
@@ -505,6 +513,7 @@ impl Player {
         }
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
         row.items = self.items.iter().map(Item::to_row).collect();
+        row.state.quests = self.journal.clone();
         row.spells = self.spells.clone();
         row
     }
