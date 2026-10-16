@@ -19,6 +19,10 @@ pub struct OrchestratorConfig {
 }
 
 struct Worker {
+    /// Unique per connection: a worker that reconnects with the same id gets
+    /// a new one, so the old connection's task can't touch the new entry,
+    /// even when the slab reuses its key.
+    generation: u64,
     worker_id: String,
     addr: std::net::SocketAddr,
     writer: Arc<Mutex<OwnedWriteHalf>>,
@@ -30,22 +34,36 @@ struct Worker {
 struct Registry {
     workers: Slab<Worker>,
     by_id: AHashMap<String, usize>,
+    next_generation: u64,
 }
 
 impl Registry {
-    fn insert(&mut self, w: Worker) -> usize {
+    /// Register a connection, replacing an older one with the same id.
+    /// Returns its key and generation.
+    fn insert(&mut self, mut w: Worker) -> (usize, u64) {
+        let generation = self.next_generation;
+        self.next_generation += 1;
+        w.generation = generation;
         let id = w.worker_id.clone();
-        // De-dupe by id — if a worker reconnects with the same id, drop the old.
-        if let Some(&existing) = self.by_id.get(&id) {
+        if let Some(existing) = self.by_id.remove(&id) {
             self.workers.try_remove(existing);
         }
         let key = self.workers.insert(w);
         self.by_id.insert(id, key);
-        key
+        (key, generation)
     }
 
-    fn remove(&mut self, key: usize) {
-        if let Some(w) = self.workers.try_remove(key) {
+    /// The entry at `key`, if it is still this connection's.
+    fn get_mut(&mut self, key: usize, generation: u64) -> Option<&mut Worker> {
+        self.workers
+            .get_mut(key)
+            .filter(|w| w.generation == generation)
+    }
+
+    /// Remove a connection's entry, unless a newer connection has replaced it.
+    fn remove(&mut self, key: usize, generation: u64) {
+        if self.get_mut(key, generation).is_some() {
+            let w = self.workers.remove(key);
             self.by_id.remove(&w.worker_id);
         }
     }
@@ -90,6 +108,9 @@ pub async fn run(cfg: OrchestratorConfig) -> std::io::Result<()> {
                 let mut total_in: u64 = 0;
                 let mut total_out: u64 = 0;
                 let mut total_send_err: u64 = 0;
+                let mut total_skipped: u64 = 0;
+                let mut total_parse_err: u64 = 0;
+                let mut total_login_timeouts: u64 = 0;
                 for (_, w) in guard.workers.iter() {
                     if let Some(m) = &w.last_metrics {
                         total_alive = total_alive.saturating_add(m.bots_alive);
@@ -100,6 +121,10 @@ pub async fn run(cfg: OrchestratorConfig) -> std::io::Result<()> {
                         total_in = total_in.saturating_add(m.messages_in);
                         total_out = total_out.saturating_add(m.messages_out);
                         total_send_err = total_send_err.saturating_add(m.send_errors);
+                        total_skipped = total_skipped.saturating_add(m.skipped_in);
+                        total_parse_err = total_parse_err.saturating_add(m.parse_errors);
+                        total_login_timeouts =
+                            total_login_timeouts.saturating_add(m.login_timeouts);
                     }
                 }
                 info!(
@@ -112,6 +137,9 @@ pub async fn run(cfg: OrchestratorConfig) -> std::io::Result<()> {
                     msg_in = total_in,
                     msg_out = total_out,
                     send_err = total_send_err,
+                    skipped = total_skipped,
+                    parse_err = total_parse_err,
+                    login_timeouts = total_login_timeouts,
                     "orchestrator aggregate",
                 );
             }
@@ -213,13 +241,14 @@ async fn handle_worker(
     };
 
     let worker = Worker {
+        generation: 0,
         worker_id: worker_id.clone(),
         addr,
         writer: writer.clone(),
         last_metrics: None,
         last_seen: Instant::now(),
     };
-    let key = registry.lock().await.insert(worker);
+    let (key, generation) = registry.lock().await.insert(worker);
     info!("orchestrator: worker {worker_id} connected from {addr} (slot {key})");
 
     loop {
@@ -233,7 +262,7 @@ async fn handle_worker(
         match msg {
             ToOrchestrator::Metrics(m) => {
                 let mut guard = registry.lock().await;
-                if let Some(w) = guard.workers.get_mut(key) {
+                if let Some(w) = guard.get_mut(key, generation) {
                     w.last_metrics = Some(m);
                     w.last_seen = Instant::now();
                 }
@@ -248,5 +277,43 @@ async fn handle_worker(
         }
     }
 
-    registry.lock().await.remove(key);
+    registry.lock().await.remove(key, generation);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn worker(id: &str) -> Worker {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let (_, writer) = stream.into_split();
+        Worker {
+            generation: 0,
+            worker_id: id.into(),
+            addr,
+            writer: Arc::new(Mutex::new(writer)),
+            last_metrics: None,
+            last_seen: Instant::now(),
+        }
+    }
+
+    /// A worker that reconnects with its id replaces its old entry, and the
+    /// old connection, ending later, can neither update nor remove the new
+    /// one, even when the slab has reused its key.
+    #[tokio::test]
+    async fn a_reconnected_worker_survives_its_old_connection() {
+        let mut registry = Registry::default();
+        let (old_key, old_gen) = registry.insert(worker("w1").await);
+        let (new_key, new_gen) = registry.insert(worker("w1").await);
+        assert_eq!(old_key, new_key, "the slab reuses the freed key");
+        assert_ne!(old_gen, new_gen);
+        assert!(registry.get_mut(old_key, old_gen).is_none());
+        registry.remove(old_key, old_gen);
+        assert!(registry.get_mut(new_key, new_gen).is_some());
+        assert_eq!(registry.by_id.get("w1"), Some(&new_key));
+        registry.remove(new_key, new_gen);
+        assert!(registry.workers.is_empty() && registry.by_id.is_empty());
+    }
 }

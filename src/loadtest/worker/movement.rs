@@ -31,20 +31,18 @@ use wow_world_messages::vanilla::{
 use crate::worker::metrics::Metrics;
 use crate::worker::pvp::PvpState;
 
-/// Anchor for the random-walk: Gurubashi Arena spawn point. Must match the
-/// server-side override in
-/// `src/world/character_screen_handler/char_create.rs::SPAWN_POSITION` so
-/// the bot's first heartbeat doesn't immediately position-correct the
-/// player away from where the server placed them at character creation.
+/// Gurubashi Arena's pit, where PvP and race bots assume they start: it must
+/// match wow_vanilla_server's `config.toml [spawn]`. Random-walk bots instead
+/// walk around wherever the server put them.
 const ANCHOR: Vector3d = Vector3d {
     x: -13206.0,
     y: 272.0,
     z: 21.857,
 };
 
-/// Maximum distance from the anchor before we snap back. 60 yd matches the
-/// plan's "60 yd box" — large enough that bots feel like they're roaming,
-/// small enough that they cluster within AOI of each other.
+/// How far a random-walk bot strays from where it started before it turns
+/// back. Large enough that bots feel like they're roaming, small enough that
+/// they cluster within AOI of each other.
 const MAX_DRIFT_YARDS: f32 = 60.0;
 
 /// Player running speed in yd/s. **Must match what observer clients use to
@@ -203,6 +201,12 @@ const PVP_CHASE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct MovementDriver {
     info: MovementInfo,
+    /// What the bot moves around: where the server put it for random-walk,
+    /// [`ANCHOR`] for PvP and race.
+    anchor: Vector3d,
+    /// Random-walk: the bot reached [`MAX_DRIFT_YARDS`], so its next phase
+    /// walks back toward the anchor.
+    homing: bool,
     phase: Phase,
     phase_ends_at: Instant,
     last_heartbeat_at: Instant,
@@ -224,17 +228,23 @@ pub struct MovementDriver {
 }
 
 impl MovementDriver {
-    pub fn new(metrics: Arc<Metrics>, mode: Mode) -> Self {
-        let orientation = rand::rng().random_range(0.0_f32..std::f32::consts::TAU);
+    /// A driver for a bot the server put at `position`, facing `orientation`.
+    pub fn new(metrics: Arc<Metrics>, mode: Mode, position: Vector3d, orientation: f32) -> Self {
         let now = Instant::now();
+        let (position, anchor) = match mode {
+            Mode::Random => (position, position),
+            Mode::Pvp { .. } | Mode::Race { .. } => (ANCHOR, ANCHOR),
+        };
         Self {
             info: MovementInfo {
                 flags: MovementInfo_MovementFlags::empty(),
                 timestamp: 0,
-                position: ANCHOR,
+                position,
                 orientation,
                 fall_time: 0.0,
             },
+            anchor,
+            homing: false,
             phase: Phase::Idle,
             phase_ends_at: now,
             last_heartbeat_at: now,
@@ -890,7 +900,9 @@ impl MovementDriver {
         // `!Send`) is dropped before any `.await` point.
         let (next_phase, orientation, duration_ms) = {
             let mut rng = rand::rng();
-            let next_phase = if rng.random_bool(0.2) {
+            let next_phase = if self.homing {
+                Phase::Forward
+            } else if rng.random_bool(0.2) {
                 Phase::Idle
             } else {
                 match rng.random_range(0..3) {
@@ -899,7 +911,14 @@ impl MovementDriver {
                     _ => Phase::StrafeRight,
                 }
             };
-            let orientation = rng.random_range(0.0_f32..std::f32::consts::TAU);
+            let orientation = if self.homing {
+                // Face the anchor.
+                let back = (self.anchor.y - self.info.position.y)
+                    .atan2(self.anchor.x - self.info.position.x);
+                back.rem_euclid(std::f32::consts::TAU)
+            } else {
+                rng.random_range(0.0_f32..std::f32::consts::TAU)
+            };
             let duration_ms = match next_phase {
                 Phase::Idle => rng.random_range(500..2000),
                 _ => rng.random_range(1000..4000),
@@ -921,6 +940,7 @@ impl MovementDriver {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
+        self.homing = false;
         self.phase = next_phase;
         self.info.orientation = orientation;
         self.phase_ends_at = now + Duration::from_millis(duration_ms);
@@ -971,8 +991,9 @@ impl MovementDriver {
 
     /// Move the puppet along its current orientation. Both modes clamp
     /// outward drift, but with different geometries:
-    /// - `Mode::Random` bounces off a 60 yd box around the spawn anchor
-    ///   by snapping back to anchor (cheap virtual-wall reflection).
+    /// - `Mode::Random` stops at [`MAX_DRIFT_YARDS`] from its anchor and
+    ///   ends the phase, so the next one walks back. Bots never teleport,
+    ///   which servers with movement checks would reject.
     /// - `Mode::Pvp` refuses to advance once the proposed position would
     ///   leave `PVP_ARENA_RADIUS`. The bot effectively sticks at the
     ///   boundary, sending heartbeats with an unchanged position until
@@ -994,6 +1015,15 @@ impl MovementDriver {
         let new_x = self.info.position.x + dx;
         let new_y = self.info.position.y + dy;
 
+        if matches!(self.mode, Mode::Random) {
+            let drift_sq = (new_x - self.anchor.x).powi(2) + (new_y - self.anchor.y).powi(2);
+            if drift_sq > MAX_DRIFT_YARDS * MAX_DRIFT_YARDS {
+                self.homing = true;
+                self.phase_ends_at = now;
+                return;
+            }
+        }
+
         if matches!(self.mode, Mode::Pvp { .. }) {
             // Hard arena boundary, outward-only. A bot that gathered
             // past the rim (gather radius is wider than the clamp) can
@@ -1014,16 +1044,5 @@ impl MovementDriver {
 
         self.info.position.x = new_x;
         self.info.position.y = new_y;
-
-        if matches!(self.mode, Mode::Random) {
-            let drift = ((self.info.position.x - ANCHOR.x).powi(2)
-                + (self.info.position.y - ANCHOR.y).powi(2))
-            .sqrt();
-            if drift > MAX_DRIFT_YARDS {
-                // Bounce: reset to anchor and pick a new heading; cheaper
-                // than reflecting against a virtual wall.
-                self.info.position = ANCHOR;
-            }
-        }
     }
 }

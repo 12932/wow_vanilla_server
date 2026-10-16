@@ -7,17 +7,21 @@ pub mod movement;
 pub mod pvp;
 pub mod world;
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use slab::Slab;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::protocol::{ToOrchestrator, ToWorker, read_frame, write_frame};
-use crate::worker::bot::{BotConfig, BotHandle, spawn};
+use crate::worker::bot::{BotConfig, BotExit, BotHandle};
 use crate::worker::metrics::Metrics;
+
+/// How long `stop` and `drain` wait for bots to finish before aborting them.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// Behavioral mode for every bot spawned by a worker. Picked by the
 /// `--mode` CLI flag at startup; can't be mixed within one worker
@@ -49,12 +53,117 @@ pub struct WorkerConfig {
     pub orchestrator: Option<String>,
     /// Per-bot behavior. See [`BotMode`].
     pub mode: BotMode,
+    /// The first account slot this worker uses. Workers sharing a server
+    /// need disjoint slot ranges, or their bots share accounts.
+    pub slot_offset: u32,
+    /// See [`BotConfig::password`].
+    pub password: Option<String>,
+    /// See [`BotConfig::login_timeout`].
+    pub login_timeout: Duration,
+}
+
+/// The worker's bots, and the account slots they use.
+pub struct Fleet {
+    bots: Mutex<Slab<BotHandle>>,
+    slots: Mutex<Slots>,
+    next_id: AtomicU64,
+}
+
+/// Account slots: the next never-used one, and the ones bots have freed,
+/// lowest first, so a stop and respawn reuses accounts instead of walking
+/// past a server's seeded range.
+struct Slots {
+    next: u32,
+    free: BTreeSet<u32>,
+}
+
+impl Fleet {
+    pub fn new(slot_offset: u32) -> Arc<Self> {
+        Arc::new(Self {
+            bots: Mutex::new(Slab::new()),
+            slots: Mutex::new(Slots {
+                next: slot_offset,
+                free: BTreeSet::new(),
+            }),
+            next_id: AtomicU64::new(0),
+        })
+    }
+
+    fn take_slot(&self) -> u32 {
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(slot) = slots.free.pop_first() {
+            return slot;
+        }
+        let slot = slots.next;
+        slots.next = slots.next.saturating_add(1);
+        slot
+    }
+
+    /// Start one bot.
+    fn spawn(self: &Arc<Self>, cfg: &BotConfig, metrics: &Arc<Metrics>) {
+        let slot = self.take_slot();
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        // Hold the slab while spawning, so a bot that ends at once finds its
+        // own entry when it releases it.
+        let mut bots = self.bots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = bots.vacant_entry();
+        let exit = BotExit {
+            fleet: self.clone(),
+            key: entry.key(),
+            id,
+            slot,
+            metrics: metrics.clone(),
+            alive: false,
+        };
+        entry.insert(bot::spawn(slot, cfg.clone(), metrics.clone(), exit));
+    }
+
+    /// A bot has ended: free its slot, and its slab entry if it is still
+    /// there (`stop` and `drain` take entries out themselves).
+    pub fn release(&self, key: usize, id: u64, slot: u32) {
+        {
+            let mut bots = self.bots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if bots.get(key).is_some_and(|h| h.id == id) {
+                bots.remove(key);
+            }
+        }
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .free
+            .insert(slot);
+    }
+
+    /// Take up to `count` bots out of the slab (all with `None`).
+    fn take(&self, count: Option<usize>) -> Vec<BotHandle> {
+        let mut bots = self.bots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let keys: Vec<usize> = bots
+            .iter()
+            .map(|(k, _)| k)
+            .take(count.unwrap_or(usize::MAX))
+            .collect();
+        keys.into_iter().map(|k| bots.remove(k)).collect()
+    }
+}
+
+/// Tell `handles` to stop, give them [`STOP_GRACE`] between them to finish,
+/// then abort the rest. An aborted bot still frees its slot: its exit guard
+/// drops with its future.
+async fn stop_all(handles: Vec<BotHandle>) {
+    for h in &handles {
+        h.shutdown.notify_one();
+    }
+    let deadline = tokio::time::Instant::now() + STOP_GRACE;
+    for mut h in handles {
+        if tokio::time::timeout_at(deadline, &mut h.join).await.is_err() {
+            h.join.abort();
+        }
+    }
 }
 
 pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     let metrics = Arc::new(Metrics::default());
-    let bots: Arc<Mutex<Slab<BotHandle>>> = Arc::new(Mutex::new(Slab::new()));
-    let next_slot = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let fleet = Fleet::new(cfg.slot_offset);
 
     // Worker-wide latch consulted by PvP-mode bots to decide whether to
     // gather or fight. Created here so every bot we spawn (initial batch
@@ -96,6 +205,8 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
         auth_addr: cfg.auth_addr.clone(),
         world_addr_override: cfg.world_addr_override.clone(),
         username_prefix: cfg.username_prefix.clone(),
+        password: cfg.password.clone(),
+        login_timeout: cfg.login_timeout,
         mode: cfg.mode,
         battle_started: battle_started.clone(),
         race_path: race_path.clone(),
@@ -104,8 +215,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
 
     if cfg.initial_clients > 0 {
         spawn_n(
-            &bots,
-            &next_slot,
+            &fleet,
             &bot_cfg,
             &metrics,
             cfg.initial_clients,
@@ -131,6 +241,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut prev_in = 0u64;
         let mut prev_out = 0u64;
+        let mut prev_moves = 0u64;
         let started = std::time::Instant::now();
         loop {
             tick.tick().await;
@@ -140,10 +251,12 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
                 .load(std::sync::atomic::Ordering::Relaxed);
             let in_per_s = s.messages_in.saturating_sub(prev_in);
             let out_per_s = s.messages_out.saturating_sub(prev_out);
+            let moves_per_s = s.movement_in.saturating_sub(prev_moves);
             prev_in = s.messages_in;
             prev_out = s.messages_out;
+            prev_moves = s.movement_in;
             info!(
-                "[{wid}] t={t}s | alive {alive}/{target} | auth {a_ok}ok/{a_fail}fail | world {w_ok}ok/{w_fail}fail | msgs in/s {in_s} out/s {out_s} | send_err {se}",
+                "[{wid}] t={t}s | alive {alive}/{target} | auth {a_ok}ok/{a_fail}fail | world {w_ok}ok/{w_fail}fail | login timeouts {lt} | msgs in/s {in_s} out/s {out_s} | others' moves in/s {mv_s} | skipped {sk} parse_err {pe} | send_err {se}",
                 wid = local_worker_id,
                 t = started.elapsed().as_secs(),
                 alive = s.bots_alive,
@@ -152,6 +265,10 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
                 a_fail = s.auth_fail,
                 w_ok = s.world_ok,
                 w_fail = s.world_fail,
+                lt = s.login_timeouts,
+                sk = s.skipped_in,
+                pe = s.parse_errors,
+                mv_s = moves_per_s,
                 in_s = in_per_s,
                 out_s = out_per_s,
                 se = s.send_errors,
@@ -160,12 +277,12 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     });
 
     if let Some(orch_addr) = cfg.orchestrator.clone() {
-        run_under_orchestrator(orch_addr, cfg, bots, next_slot, bot_cfg, metrics).await
+        run_under_orchestrator(orch_addr, cfg, fleet, bot_cfg, metrics).await
     } else {
         // Standalone: park forever until Ctrl-C.
         tokio::signal::ctrl_c().await.ok();
         info!("Ctrl-C received; draining bots");
-        drain_all(&bots).await;
+        stop_all(fleet.take(None)).await;
         Ok(())
     }
 }
@@ -173,8 +290,7 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
 async fn run_under_orchestrator(
     orch_addr: String,
     cfg: WorkerConfig,
-    bots: Arc<Mutex<Slab<BotHandle>>>,
-    next_slot: Arc<std::sync::atomic::AtomicU32>,
+    fleet: Arc<Fleet>,
     bot_cfg: BotConfig,
     metrics: Arc<Metrics>,
 ) -> std::io::Result<()> {
@@ -228,14 +344,19 @@ async fn run_under_orchestrator(
             };
             match cmd {
                 ToWorker::Spawn { count } => {
-                    spawn_n(&bots, &next_slot, &bot_cfg, &metrics, count, cfg.ramp_up_secs)
-                        .await;
+                    spawn_n(&fleet, &bot_cfg, &metrics, count, cfg.ramp_up_secs).await;
                 }
                 ToWorker::Stop { count } => {
-                    stop_n(&bots, count).await;
+                    let handles = fleet.take(Some(count as usize));
+                    metrics.target_bots.fetch_sub(
+                        u32::try_from(handles.len()).unwrap_or(u32::MAX),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    // Stop in the background, so commands keep flowing.
+                    tokio::spawn(stop_all(handles));
                 }
                 ToWorker::Drain => {
-                    drain_all(&bots).await;
+                    stop_all(fleet.take(None)).await;
                     return Ok(());
                 }
             }
@@ -247,8 +368,7 @@ async fn run_under_orchestrator(
 }
 
 async fn spawn_n(
-    bots: &Arc<Mutex<Slab<BotHandle>>>,
-    next_slot: &Arc<std::sync::atomic::AtomicU32>,
+    fleet: &Arc<Fleet>,
     bot_cfg: &BotConfig,
     metrics: &Arc<Metrics>,
     count: u32,
@@ -279,9 +399,7 @@ async fn spawn_n(
     let start = std::time::Instant::now();
 
     for i in 0..count {
-        let slot = next_slot.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let handle = spawn(slot, bot_cfg.clone(), metrics.clone());
-        bots.lock().await.insert(handle);
+        fleet.spawn(bot_cfg, metrics);
 
         let spawned = i + 1;
         if spawned % progress_step == 0 || spawned == count {
@@ -297,31 +415,5 @@ async fn spawn_n(
         }
 
         tokio::time::sleep(stagger).await;
-    }
-}
-
-async fn stop_n(bots: &Arc<Mutex<Slab<BotHandle>>>, count: u32) {
-    let mut guard = bots.lock().await;
-    let mut keys: Vec<usize> = guard.iter().map(|(k, _)| k).collect();
-    keys.truncate(count as usize);
-    for k in keys {
-        if let Some(h) = guard.try_remove(k) {
-            h.shutdown.notify_one();
-            // Detach the join handle — bot will exit shortly on its own.
-            drop(h.join);
-        }
-    }
-}
-
-async fn drain_all(bots: &Arc<Mutex<Slab<BotHandle>>>) {
-    let handles: Vec<BotHandle> = {
-        let mut guard = bots.lock().await;
-        guard.drain().collect()
-    };
-    for h in &handles {
-        h.shutdown.notify_one();
-    }
-    for h in handles {
-        let _ = tokio::time::timeout(Duration::from_secs(5), h.join).await;
     }
 }
