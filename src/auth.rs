@@ -401,7 +401,21 @@ async fn login_version_2(
     use wow_login_messages::version_2::*;
 
     debug!("Login version: {}", l.protocol_version);
-    let p = get_proof(&l.account_name);
+    let p = match proof_for(&l.account_name) {
+        Ok(p) => p,
+        Err(refused) => {
+            let result = match refused {
+                crate::accounts::Refused::Banned => {
+                    CMD_AUTH_LOGON_CHALLENGE_Server_LoginResult::FailBanned
+                }
+                _ => CMD_AUTH_LOGON_CHALLENGE_Server_LoginResult::FailUnknownAccount,
+            };
+            let _ = CMD_AUTH_LOGON_CHALLENGE_Server { result }
+                .tokio_write(&mut stream)
+                .await;
+            return;
+        }
+    };
 
     let username = l.account_name;
 
@@ -423,7 +437,14 @@ async fn login_version_2(
     let l = or_return!(expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await);
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
-    let (p, proof) = or_return!(p.into_server(client_public, l.client_proof));
+    let Ok((p, proof)) = p.into_server(client_public, l.client_proof) else {
+        let _ = CMD_AUTH_LOGON_PROOF_Server {
+            result: CMD_AUTH_LOGON_PROOF_Server_LoginResult::FailIncorrectPassword,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
+    };
 
     or_return!(
         CMD_AUTH_LOGON_PROOF_Server {
@@ -440,6 +461,15 @@ async fn login_version_2(
     or_return!(users.lock().map_err(|_| "users mutex poisoned")).insert(username, p);
 
     print_version_2_3_realm_list(stream).await;
+}
+
+/// The account's SRP proof: from the accounts, or (with none installed,
+/// as in tests) the name as the password.
+fn proof_for(username: &str) -> Result<SrpProof, crate::accounts::Refused> {
+    match crate::accounts::get() {
+        Some(a) => a.login(&username.to_uppercase()).map(|v| v.into_proof()),
+        None => Ok(get_proof(username)),
+    }
 }
 
 /// Builds an SRP proof for a username/password pair. Both fields are
@@ -462,7 +492,21 @@ async fn login_version_3(
     use wow_login_messages::version_3::*;
 
     debug!("Login version: {}", l.protocol_version);
-    let p = get_proof(&l.account_name);
+    let p = match proof_for(&l.account_name) {
+        Ok(p) => p,
+        Err(refused) => {
+            let result = match refused {
+                crate::accounts::Refused::Banned => {
+                    CMD_AUTH_LOGON_CHALLENGE_Server_LoginResult::FailBanned
+                }
+                _ => CMD_AUTH_LOGON_CHALLENGE_Server_LoginResult::FailUnknownAccount,
+            };
+            let _ = CMD_AUTH_LOGON_CHALLENGE_Server { result }
+                .tokio_write(&mut stream)
+                .await;
+            return;
+        }
+    };
     let username = l.account_name;
 
     or_return!(
@@ -484,7 +528,14 @@ async fn login_version_3(
     let l = or_return!(expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await);
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
-    let (p, proof) = or_return!(p.into_server(client_public, l.client_proof));
+    let Ok((p, proof)) = p.into_server(client_public, l.client_proof) else {
+        let _ = CMD_AUTH_LOGON_PROOF_Server {
+            result: CMD_AUTH_LOGON_PROOF_Server_LoginResult::FailIncorrectPassword,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
+    };
 
     or_return!(
         CMD_AUTH_LOGON_PROOF_Server {
@@ -510,7 +561,21 @@ async fn login_version_8(
     use wow_login_messages::version_8::*;
 
     debug!("Login version: {}", l.protocol_version);
-    let p = get_proof(&l.account_name);
+    let p = match proof_for(&l.account_name) {
+        Ok(p) => p,
+        Err(refused) => {
+            let result = match refused {
+                crate::accounts::Refused::Banned => {
+                    CMD_AUTH_LOGON_CHALLENGE_Server_LoginResult::FailBanned
+                }
+                _ => CMD_AUTH_LOGON_CHALLENGE_Server_LoginResult::FailUnknownAccount,
+            };
+            let _ = CMD_AUTH_LOGON_CHALLENGE_Server { result }
+                .tokio_write(&mut stream)
+                .await;
+            return;
+        }
+    };
     let username = l.account_name;
 
     or_return!(
@@ -532,7 +597,14 @@ async fn login_version_8(
     let l = or_return!(expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await);
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
-    let (p, server_proof) = or_return!(p.into_server(client_public, l.client_proof));
+    let Ok((p, server_proof)) = p.into_server(client_public, l.client_proof) else {
+        let _ = CMD_AUTH_LOGON_PROOF_Server {
+            result: CMD_AUTH_LOGON_PROOF_Server_LoginResult::FailIncorrectPassword,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
+    };
 
     or_return!(
         CMD_AUTH_LOGON_PROOF_Server {

@@ -257,11 +257,7 @@ impl Map {
         let Some(p) = self.players.get(&g) else {
             return;
         };
-        let transport = p
-            .movement
-            .flags
-            .get_on_transport()
-            .map(|t| t.transport);
+        let transport = p.movement.flags.get_on_transport().map(|t| t.transport);
         p.outbound.send(&SMSG_TRANSFER_PENDING {
             map: crate::game::map::movement::map_enum(to.map),
             has_transport: Some(SMSG_TRANSFER_PENDING_has_transport {

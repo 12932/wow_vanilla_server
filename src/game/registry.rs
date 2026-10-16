@@ -45,6 +45,9 @@ pub struct Online {
     /// The AFK or DND message.
     pub away: Mutex<String>,
     pub gm: bool,
+    /// The account's GM level: 0 a player, 1 a moderator, 2 a game master, 3
+    /// an administrator.
+    pub gm_level: u8,
     pub outbound: Outbound,
     pub session: mpsc::UnboundedSender<Control>,
     map: Mutex<MapHandle>,
@@ -53,7 +56,7 @@ pub struct Online {
 impl Online {
     pub fn new(
         name: &NameEntry,
-        gm: bool,
+        gm_level: u8,
         outbound: Outbound,
         session: mpsc::UnboundedSender<Control>,
         map: MapHandle,
@@ -69,7 +72,8 @@ impl Online {
             zone: AtomicU32::new(0),
             flags: AtomicU32::new(0),
             away: Mutex::new(String::new()),
-            gm,
+            gm: gm_level >= crate::accounts::GAME_MASTER,
+            gm_level,
             outbound,
             session,
             map: Mutex::new(map),

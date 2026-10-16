@@ -54,7 +54,9 @@ pub fn message(map: &mut Map, guid: Guid, m: CMSG_MESSAGECHAT) -> Option<CMSG_ME
     if m.message.len() > MAX_MESSAGE {
         return None;
     }
-    if m.message.starts_with('.') && m.message.len() > 1 {
+    // A player's "." line is chat; a GM's, a command.
+    let gm = map.players.get(&guid).is_some_and(|p| p.gm_level > 0);
+    if gm && m.message.starts_with('.') && m.message.len() > 1 {
         gm::command(map, guid, &m.message[1..]);
         return None;
     }
@@ -147,4 +149,37 @@ pub fn target_name(map: &Map, target: Guid) -> String {
         .name(target)
         .map(|n| n.name.to_string())
         .unwrap_or_default()
+}
+
+/// mangos's chat flood control: ten lines each within a second of the last
+/// mute the speaker for ten seconds.
+pub const FLOOD_LINES: u32 = 10;
+pub const FLOOD_GAP: std::time::Duration = std::time::Duration::from_secs(1);
+pub const FLOOD_MUTE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether a player's line is to be dropped: muted, or flooding now.
+pub fn flooded(map: &mut Map, guid: Guid) -> bool {
+    let now = map.now;
+    let Some(p) = map.players.get_mut(&guid) else {
+        return true;
+    };
+    if p.gm {
+        return false;
+    }
+    if p.muted_until.is_some_and(|t| t > now) {
+        send_system(&p.outbound, "You are muted for flooding the chat.");
+        return true;
+    }
+    let close = p
+        .chat_last
+        .is_some_and(|t| now.duration_since(t) < FLOOD_GAP);
+    p.chat_burst = if close { p.chat_burst + 1 } else { 0 };
+    p.chat_last = Some(now);
+    if p.chat_burst >= FLOOD_LINES {
+        p.chat_burst = 0;
+        p.muted_until = Some(now + FLOOD_MUTE);
+        send_system(&p.outbound, "You are muted for flooding the chat.");
+        return true;
+    }
+    false
 }

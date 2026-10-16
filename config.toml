@@ -1,4 +1,6 @@
 [network]
+# Packets a client may send a second, sustained; a client that floods is disconnected.
+#max_packets_per_sec = 100
 outbound_channel_bytes = 4194304
 #handshake_timeout_secs = 10
 #client_idle_timeout_secs = 120
@@ -15,9 +17,19 @@ motd = "Welcome to wow_vanilla_server."
 petition_signatures = 9
 # How long mail with money or an item takes between accounts, in seconds.
 mail_delay_secs = 3600
+# Names no character may take.
+#reserved_names = ["Thrall", "Jaina"]
+# A PvP realm: an account's characters are all of one side.
+pvp_realm = false
 
 [accounts]
-everyone_gm = true
+# `auto`: an unknown name gets an account at its first login, with the name as its password (for
+# development and load tests). `existing`: only accounts made with `.account create`.
+creation = "auto"
+# Every account is an administrator. For development and load tests only.
+everyone_gm = false
+# GM levels by account: 1 moderator, 2 game master, 3 administrator.
+#gm = { ADMIN = 3 }
 
 # New characters start in Gurubashi Arena's pit rather than their race's starting zone: peon's
 # heartbeat placement assumes it.

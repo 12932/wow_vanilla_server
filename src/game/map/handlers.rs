@@ -221,6 +221,9 @@ impl Map {
             ClientOpcodeMessage::CMSG_QUERY_TIME => query::time(&out),
             ClientOpcodeMessage::CMSG_PLAYED_TIME => query::played(self, guid),
             ClientOpcodeMessage::CMSG_MESSAGECHAT(m) => {
+                if chat::flooded(self, guid) {
+                    return;
+                }
                 if let Some(m) = chat::message(self, guid, m) {
                     crate::game::map::social::message(self, guid, m);
                 }

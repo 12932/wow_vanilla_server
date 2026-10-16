@@ -122,6 +122,7 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
         mut inbound,
     } = connection;
     let (control, mut control_rx) = mpsc::unbounded_channel();
+    let mut rate = PacketRate::new(realm.config.max_packets_per_sec);
     let mut s = Session {
         realm,
         account: Arc::from(account),
@@ -132,7 +133,13 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
     loop {
         tokio::select! {
             msg = inbound.recv() => match msg {
-                Some(msg) => s.packet(msg).await,
+                Some(msg) => {
+                    if !rate.allow(std::time::Instant::now()) {
+                        warn!("{} sends packets too fast; disconnecting", s.account);
+                        break;
+                    }
+                    s.packet(msg).await
+                }
                 None => break,
             },
             ctl = control_rx.recv() => match ctl {
@@ -222,6 +229,15 @@ impl Session {
         let existing = self.realm.store.characters(&self.account).await;
         if existing.len() >= self.realm.config.max_characters_per_account {
             return WorldResult::CharCreateAccountLimit;
+        }
+        // On a PvP realm, an account's characters are all of one side.
+        let team = crate::game::registry::Team::of_race(race);
+        if self.realm.config.pvp_realm
+            && existing
+                .iter()
+                .any(|r| crate::game::registry::Team::of_race(r.race) != team)
+        {
+            return WorldResult::CharCreatePvpTeamsViolation;
         }
         let counter = self.realm.next_character.fetch_add(1, Ordering::Relaxed);
         let mut row = CharacterRow {
@@ -329,10 +345,14 @@ impl Session {
         };
         let key = MapKey::world(row.map);
         let map = self.realm.maps.get(&self.realm, key);
-        let gm = self.realm.config.everyone_gm;
+        let gm_level = if self.realm.config.everyone_gm {
+            crate::accounts::ADMINISTRATOR
+        } else {
+            crate::accounts::get().map_or(crate::accounts::PLAYER, |a| a.gm_level(&self.account))
+        };
         let online = Arc::new(Online::new(
             &name,
-            gm,
+            gm_level,
             self.outbound.clone(),
             self.control.clone(),
             map.clone(),
@@ -400,8 +420,24 @@ fn valid_name(name: &str) -> Result<String, WorldResult> {
     if len > 12 {
         return Err(WorldResult::CharNameTooLong);
     }
-    if !name.chars().all(|c| c.is_alphabetic()) {
+    if !name.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err(WorldResult::CharNameOnlyLetters);
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower
+        .as_bytes()
+        .windows(3)
+        .any(|w| w[0] == w[1] && w[1] == w[2])
+    {
+        return Err(WorldResult::CharNameThreeConsecutive);
+    }
+    if crate::config::config()
+        .world
+        .reserved_names
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(name))
+    {
+        return Err(WorldResult::CharNameReserved);
     }
     let mut chars = name.chars();
     let first = chars.next().map(|c| c.to_uppercase().collect::<String>());
@@ -463,5 +499,52 @@ mod tests {
             valid_name("Abcdefghijklm"),
             Err(WorldResult::CharNameTooLong)
         );
+    }
+}
+
+/// A token bucket over a client's packets: `per_sec` sustained, three
+/// seconds' worth at once.
+pub struct PacketRate {
+    per_sec: f32,
+    tokens: f32,
+    at: std::time::Instant,
+}
+
+impl PacketRate {
+    pub fn new(per_sec: u32) -> Self {
+        let per_sec = per_sec.max(1) as f32;
+        Self {
+            per_sec,
+            tokens: per_sec * 3.0,
+            at: std::time::Instant::now(),
+        }
+    }
+
+    /// Whether one more packet at `now` is within the rate.
+    pub fn allow(&mut self, now: std::time::Instant) -> bool {
+        let dt = now.saturating_duration_since(self.at).as_secs_f32();
+        self.at = now;
+        self.tokens = (self.tokens + dt * self.per_sec).min(self.per_sec * 3.0);
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
+}
+
+#[cfg(test)]
+mod rate_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_flood_runs_dry_and_a_steady_client_never_does() {
+        let start = Instant::now();
+        let mut flood = PacketRate::new(10);
+        let allowed = (0..100).filter(|_| flood.allow(start)).count();
+        assert_eq!(allowed, 30);
+        let mut steady = PacketRate::new(10);
+        assert!((0..1000).all(|i| steady.allow(start + Duration::from_millis(i * 100))));
     }
 }

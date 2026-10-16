@@ -285,7 +285,9 @@ pub fn accept(map: &mut Map, g: Guid) {
     }
     let (mine, theirs) = (traded(map, g), traded(map, with));
     for (side, give, get) in [(g, &mine, &theirs), (with, &theirs, &mine)] {
-        let p = &map.players[&side];
+        let Some(p) = map.players.get(&side) else {
+            return;
+        };
         let money = p.trade.as_ref().map_or(0, |t| t.money);
         let free = p
             .carry_slots(&data)
@@ -317,7 +319,12 @@ pub fn accept(map: &mut Map, g: Guid) {
     for row in &to_me {
         let _ = crate::game::map::inventory::attach_item(map, g, row);
     }
-    let money = |map: &Map, s: Guid| map.players[&s].trade.as_ref().map_or(0, |t| t.money);
+    let money = |map: &Map, s: Guid| {
+        map.players
+            .get(&s)
+            .and_then(|p| p.trade.as_ref())
+            .map_or(0, |t| t.money)
+    };
     let (m1, m2) = (money(map, g), money(map, with));
     for (s, out, inn) in [(g, m1, m2), (with, m2, m1)] {
         if let Some(p) = map.players.get_mut(&s) {

@@ -216,9 +216,13 @@ async fn a_logout_waits_twenty_seconds_outside_an_inn_and_can_be_cancelled() {
         matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK).then_some(())
     })
     .await;
-    // A non-GM can't use commands.
+    // A non-GM's "." line is only chat.
     a.say(".gps").await;
-    a.system_message("can't use commands").await;
+    a.wait_for("the line as chat", |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => (c.message == ".gps").then_some(()),
+        _ => None,
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -4164,5 +4168,177 @@ mod world_around {
             })
             .await;
         let _ = (rain, ga);
+    }
+}
+
+mod security {
+    use super::world::START;
+    use super::*;
+
+    /// Players, not GMs.
+    fn players_realm() -> std::sync::Arc<crate::game::Realm> {
+        let mut cfg = harness::test_config();
+        cfg.everyone_gm = false;
+        cfg.max_packets_per_sec = 50;
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        crate::game::Realm::new(cfg, store, startup, Default::default(), None)
+    }
+
+    #[tokio::test]
+    async fn a_player_cant_run_a_gm_command_and_a_moderator_only_some() {
+        let realm = players_realm();
+        let (_realm, mut a, mut b) = two_near_on(realm.clone()).await;
+        a.say(".go -9000 -100 90").await;
+        // It's only chat.
+        let heard = b
+            .wait_for("Alice's line", |m| match m {
+                ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => Some(c.message.clone()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(heard, ".go -9000 -100 90");
+        assert!(
+            a.gets(NONE_WITHIN, |m| {
+                matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+            })
+            .await
+            .is_none()
+        );
+        // A moderator may look, not teleport.
+        let ga = a.guid;
+        let map = realm.registry.online(ga).unwrap().map();
+        map.query(move |m| m.players.get_mut(&ga).unwrap().gm_level = crate::accounts::MODERATOR)
+            .await;
+        a.say(".go -9000 -100 90").await;
+        a.system_message("permission").await;
+        a.say(".gps").await;
+        a.system_message("map 0").await;
+    }
+
+    #[tokio::test]
+    async fn a_client_moving_too_fast_is_pulled_back() {
+        let realm = players_realm();
+        let mut a = Client::connect(&realm, "A");
+        a.enter("Alice", Race::Human, Class::Warrior).await;
+        // A step, then five hundred yards in no time.
+        a.heartbeat(START.0 + 1.0, START.1, START.2).await;
+        a.heartbeat(START.0 + 500.0, START.1, START.2).await;
+        let back = a
+            .wait_for("MSG_MOVE_TELEPORT_ACK", |m| match m {
+                ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.position),
+                _ => None,
+            })
+            .await;
+        assert!((back.x - (START.0 + 1.0)).abs() < 0.01, "{back:?}");
+    }
+
+    #[tokio::test]
+    async fn a_packet_flood_is_cut_off() {
+        let realm = players_realm();
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        for _ in 0..400 {
+            if !a.try_send(CMSG_SET_SELECTION { target: ga }).await {
+                break;
+            }
+        }
+        let mut gone = false;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if realm.registry.online(ga).is_none() {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "the flooder is disconnected");
+    }
+
+    #[tokio::test]
+    async fn chat_floods_are_muted() {
+        let realm = players_realm();
+        let mut a = Client::connect(&realm, "A");
+        a.enter("Alice", Race::Human, Class::Warrior).await;
+        for i in 0..12 {
+            a.say(&format!("spam {i}")).await;
+        }
+        a.system_message("muted").await;
+    }
+
+    #[tokio::test]
+    async fn names_follow_the_rules() {
+        let realm = players_realm();
+        let mut a = Client::connect(&realm, "A");
+        for (name, result) in [
+            ("Aabb", WorldResult::CharCreateSuccess),
+            ("Aaaab", WorldResult::CharNameThreeConsecutive),
+            ("Bob1", WorldResult::CharNameOnlyLetters),
+            ("B", WorldResult::CharNameTooShort),
+            ("Bobbobbobbobb", WorldResult::CharNameTooLong),
+        ] {
+            a.send(CMSG_CHAR_CREATE {
+                name: name.into(),
+                race: Race::Human,
+                class: Class::Warrior,
+                gender: Gender::Female,
+                skin_color: 1,
+                face: 1,
+                hair_style: 1,
+                hair_color: 1,
+                facial_hair: 1,
+            })
+            .await;
+            let got = a
+                .wait_for("SMSG_CHAR_CREATE", |m| match m {
+                    ServerOpcodeMessage::SMSG_CHAR_CREATE(c) => Some(c.result),
+                    _ => None,
+                })
+                .await;
+            assert_eq!(got, result, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_panic_on_a_map_costs_one_event_not_the_map() {
+        let realm = harness::realm();
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let map = realm.registry.online(ga).unwrap().map();
+        map.call(|_| panic!("a bug"));
+        let still = map.query(move |m| m.players.contains_key(&ga)).await;
+        assert_eq!(still, Some(true));
+    }
+
+    #[tokio::test]
+    async fn a_long_fall_hurts() {
+        let realm = players_realm();
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let at = |z: f32, falling: bool| MSG_MOVE_HEARTBEAT_Client {
+            info: MovementInfo {
+                flags: if falling {
+                    MovementInfo_MovementFlags::empty().set_fallingfar()
+                } else {
+                    MovementInfo_MovementFlags::empty()
+                },
+                timestamp: 0,
+                position: Vector3d {
+                    x: START.0,
+                    y: START.1,
+                    z,
+                },
+                orientation: 0.0,
+                fall_time: 0.0,
+            },
+        };
+        a.send(at(START.2 + 30.0, true)).await;
+        a.send(at(START.2, false)).await;
+        let (who, damage) = a
+            .wait_for("SMSG_ENVIRONMENTAL_DAMAGE_LOG", |m| match m {
+                ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(d) => Some((d.guid, d.damage)),
+                _ => None,
+            })
+            .await;
+        assert_eq!(who, ga);
+        assert!(damage > 0);
     }
 }
