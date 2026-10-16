@@ -87,7 +87,7 @@ struct Cli {
 
     /// Worker-only: bot behavior. `random` (default) does the legacy
     /// random-walk inside a 60yd box; `pvp` runs the Gurubashi arena
-    /// fight; `race` makes bots run the Booty Bay → Stormwind path
+    /// fight; `race` makes bots run the Booty Bay → Gurubashi Arena path
     /// (see `worker/bot/race.rs`).
     #[arg(long, value_enum, default_value_t = BotMode::Random)]
     mode: BotMode,

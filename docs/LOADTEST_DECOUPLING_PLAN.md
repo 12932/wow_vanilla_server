@@ -295,9 +295,9 @@ In wow_vanilla_server itself (CODE_REVIEW rows 1, 4, 8 and 9).
 
 ### Phase 3: rustigator master in wow_vanilla_server
 
-- [ ] rustigator pins `wow_world_base` back to the server's wow_messages commit (e8dc643).
-- [ ] wow_vanilla_server moves to rustigator master. Its bakes are format 12, and rebuild themselves.
-- [ ] **Race:**
+- [x] rustigator pins `wow_world_base` back to the server's wow_messages commit (e8dc643).
+- [x] wow_vanilla_server moves to rustigator master. Its bakes are format 12, and rebuild themselves.
+- [x] **Race:**
   - Use `PathOptions::reference(false)`.
   - Fail loudly when maps are configured but no path is found.
   - Remove the dock special case and the diagnostics.
@@ -305,6 +305,25 @@ In wow_vanilla_server itself (CODE_REVIEW rows 1, 4, 8 and 9).
 
 **Done when:** the race walks Booty Bay → Gurubashi on the navmesh, staying on the ground; the server's snap to
 ground and line of sight work in Booty Bay and the arena.
+
+**Result:**
+- **Pin.** wow_vanilla_server pins rustigator 1badba6, on rustigator's `work/wow-messages-pin` branch: master
+  (a07d896) with `wow_world_base` back at e8dc643. rustigator passes 124 of 124 there. Merging that branch into
+  rustigator's master is still to do.
+- **Bake.** The server baked format 12 on startup: Eastern Kingdoms in 61 s, Kalimdor in 88 s.
+- **Race.** 19 waypoints, 1,001 yd, with 3 ADT tiles loaded. 20 of 20 bots raced, and all 3,502 heartbeats took
+  their height from the ground. The mean change was 0.30 yd a heartbeat (about 1.75 yd of travel), the largest
+  2.45 yd.
+- **The server's bake:**
+  - heights: 24.75 on the dock; 21.857 in the pit, the configured spawn; 24.36 and 21.00 at the entrance;
+  - line of sight across the pit: clear at chest height and at foot height (at fc45283, foot level reported
+    "obstructed").
+- **Race changes:**
+  - `PathOptions::reference(false)`, so steep ground costs four times as much rather than counting as flat;
+  - the map shared without a mutex, through `&self` height lookups;
+  - jitter of ±5 yd, down from ±50;
+  - an error, not a silent fallback, when maps are configured and the path fails;
+  - the dock special case, the diagnostics and the stale comments removed.
 
 ### Phase 4: extract
 
