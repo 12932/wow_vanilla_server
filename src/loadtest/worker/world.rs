@@ -1,4 +1,8 @@
 //! World handshake + character bootstrap.
+//!
+//! Every step waits for the packet it needs and skips anything else a server
+//! sends meanwhile: real servers interleave packets, and wow_messages has
+//! already consumed the body of anything it doesn't model or can't parse.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -16,13 +20,18 @@ use wow_world_base::vanilla::RaceClass;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::ClientMessage as _;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::{
-    CMSG_AUTH_SESSION, CMSG_CHAR_CREATE, CMSG_CHAR_ENUM, CMSG_PLAYER_LOGIN, Gender,
-    SMSG_AUTH_RESPONSE_WorldResult, WorldResult,
+    CMSG_AUTH_SESSION, CMSG_CHAR_CREATE, CMSG_CHAR_ENUM, CMSG_PLAYER_LOGIN,
+    CMSG_SET_ACTIVE_MOVER, Gender, Map, SMSG_AUTH_RESPONSE_WorldResult, Vector3d, WorldResult,
 };
 
-/// Vanilla 1.12.2 client build, matches `worker::auth::CLIENT_BUILD`.
+/// The 1.12.1 client's build, as `worker::auth::CLIENT_BUILD`.
 const CLIENT_BUILD: u32 = 5875;
+
+/// How many times character creation retries with a longer name when the
+/// server says the name is taken.
+const NAME_RETRIES: u32 = 3;
 
 /// Per-step timeout. World handshake should be near-instant — anything past a
 /// few seconds means something is wedged and the bot should fail fast so the
@@ -34,16 +43,31 @@ pub struct WorldSession {
     pub writer: OwnedWriteHalf,
     pub encrypter: EncrypterHalf,
     pub decrypter: DecrypterHalf,
-    #[allow(dead_code)] // kept for diagnostics; the bot doesn't need it post-login
     pub character_guid: Guid,
+    /// Where the server put the character, from `SMSG_LOGIN_VERIFY_WORLD`.
+    pub map: Map,
+    pub position: Vector3d,
+    pub orientation: f32,
+    /// Packets the handshake skipped on its way, for the metrics.
+    pub skipped: u64,
+    /// The server started the intro cinematic during the handshake; the
+    /// bot ends it (`CMSG_COMPLETE_CINEMATIC`) once it is in the world.
+    pub cinematic: bool,
 }
 
+/// Connect to the world server and log `username` into its character,
+/// creating one if the account has none. `slot` makes the character's name
+/// unique. Returns once the server confirms the character is in the world
+/// (`SMSG_LOGIN_VERIFY_WORLD`) and the bot has claimed it as its active mover.
 pub async fn establish(
     world_addr: &str,
     username: &str,
+    slot: u32,
     session_key: [u8; 40],
 ) -> std::io::Result<WorldSession> {
-    let stream = TcpStream::connect(world_addr).await?;
+    let stream = timeout(STEP_TIMEOUT, TcpStream::connect(world_addr))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "world: connect timed out"))??;
     stream.set_nodelay(true)?;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -92,36 +116,61 @@ pub async fn establish(
         writer,
         encrypter,
         decrypter,
+        skipped: 0,
+        cinematic: false,
     };
 
-    // Step 4: read SMSG_AUTH_RESPONSE (encrypted from here on).
-    match state.read_server_encrypted().await? {
-        ServerOpcodeMessage::SMSG_AUTH_RESPONSE(c) => match c.result {
-            SMSG_AUTH_RESPONSE_WorldResult::AuthOk { .. } => {}
+    // Step 4: SMSG_AUTH_RESPONSE (encrypted from here on). A login queue is
+    // waiting, not failure; the caller's login deadline bounds it.
+    let mut queued = false;
+    loop {
+        let step = if queued { QUEUE_TIMEOUT } else { STEP_TIMEOUT };
+        let result = state
+            .read_until("SMSG_AUTH_RESPONSE", step, |m| match m {
+                ServerOpcodeMessage::SMSG_AUTH_RESPONSE(c) => Some(c.result),
+                _ => None,
+            })
+            .await?;
+        match result {
+            SMSG_AUTH_RESPONSE_WorldResult::AuthOk { .. } => break,
+            SMSG_AUTH_RESPONSE_WorldResult::AuthWaitQueue { .. } => queued = true,
             other => {
                 return Err(std::io::Error::other(format!(
                     "world: AUTH_RESPONSE not OK: {other:?}"
                 )));
             }
-        },
-        other => {
-            return Err(std::io::Error::other(format!(
-                "world: expected SMSG_AUTH_RESPONSE, got {other:?}"
-            )));
         }
     }
 
     // Step 5: enumerate characters; create one if none exist.
-    let character_guid = ensure_character(&mut state, username).await?;
+    let character_guid = ensure_character(&mut state, username, slot).await?;
 
-    // Step 6: log into the character.
-    let player_login = CMSG_PLAYER_LOGIN {
-        guid: character_guid,
-    };
+    // Step 6: log into the character, and wait until the server has put it
+    // in the world.
     state
-        .write_client_encrypted(&player_login)
+        .write_client_encrypted(&CMSG_PLAYER_LOGIN {
+            guid: character_guid,
+        })
         .await
         .map_err(|e| std::io::Error::other(format!("world: write PLAYER_LOGIN: {e}")))?;
+    let verified = state
+        .read_until("SMSG_LOGIN_VERIFY_WORLD", STEP_TIMEOUT, |m| match m {
+            ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(v) => Some(Ok(v)),
+            ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(f) => Some(Err(f.result)),
+            _ => None,
+        })
+        .await?
+        .map_err(|r| std::io::Error::other(format!("world: character login failed: {r:?}")))?;
+
+    // Step 7: claim the character as the client's active mover, as the real
+    // client does on entering the world. Some servers (Thistle Tea) ignore
+    // movement until then.
+    state
+        .write_client_encrypted(&CMSG_SET_ACTIVE_MOVER {
+            guid: character_guid,
+        })
+        .await
+        .map_err(|e| std::io::Error::other(format!("world: write SET_ACTIVE_MOVER: {e}")))?;
 
     Ok(WorldSession {
         reader: state.reader,
@@ -129,90 +178,84 @@ pub async fn establish(
         encrypter: state.encrypter,
         decrypter: state.decrypter,
         character_guid,
+        map: verified.map,
+        position: verified.position,
+        orientation: verified.orientation,
+        skipped: state.skipped,
+        cinematic: state.cinematic,
     })
+}
+
+async fn enumerate(state: &mut HandshakeState) -> std::io::Result<Option<Guid>> {
+    state
+        .write_client_encrypted(&CMSG_CHAR_ENUM {})
+        .await
+        .map_err(|e| std::io::Error::other(format!("world: write CHAR_ENUM: {e}")))?;
+    state
+        .read_until("SMSG_CHAR_ENUM", STEP_TIMEOUT, |m| match m {
+            ServerOpcodeMessage::SMSG_CHAR_ENUM(e) => Some(e.characters.first().map(|c| c.guid)),
+            _ => None,
+        })
+        .await
 }
 
 async fn ensure_character(
     state: &mut HandshakeState,
     username: &str,
+    slot: u32,
 ) -> std::io::Result<Guid> {
-    state
-        .write_client_encrypted(&CMSG_CHAR_ENUM {})
-        .await
-        .map_err(|e| std::io::Error::other(format!("world: write CHAR_ENUM: {e}")))?;
-
-    match state.read_server_encrypted().await? {
-        ServerOpcodeMessage::SMSG_CHAR_ENUM(enumeration) => {
-            if let Some(c) = enumeration.characters.first() {
-                return Ok(c.guid);
-            }
-        }
-        other => {
-            return Err(std::io::Error::other(format!(
-                "world: expected SMSG_CHAR_ENUM, got {other:?}"
-            )));
-        }
+    if let Some(guid) = enumerate(state).await? {
+        return Ok(guid);
     }
 
-    // No characters — create one. Profile is deterministic per username so
-    // a restarted bot picks up the same character it had before.
-    let profile = profile_for(username);
-    let create = CMSG_CHAR_CREATE {
-        name: profile.name.clone(),
-        race: profile.race_class.race().into(),
-        class: profile.race_class.class(),
-        gender: profile.gender,
-        skin_color: profile.skin_color,
-        face: profile.face,
-        hair_style: profile.hair_style,
-        hair_color: profile.hair_color,
-        facial_hair: profile.facial_hair,
-    };
-    tracing::debug!(
-        "char create: username={} name={} race_class={:?} gender={:?}",
-        username,
-        profile.name,
-        profile.race_class,
-        profile.gender,
-    );
-    state
-        .write_client_encrypted(&create)
-        .await
-        .map_err(|e| std::io::Error::other(format!("world: write CHAR_CREATE: {e}")))?;
-
-    match state.read_server_encrypted().await? {
-        ServerOpcodeMessage::SMSG_CHAR_CREATE(c) => {
-            if c.result != WorldResult::CharCreateSuccess {
+    // No characters: create one. The profile is deterministic per username
+    // and slot, so a restarted bot gets the same character.
+    let profile = profile_for(username, slot);
+    let mut name = profile.name.clone();
+    for attempt in 0..=NAME_RETRIES {
+        let create = CMSG_CHAR_CREATE {
+            name: name.clone(),
+            race: profile.race_class.race().into(),
+            class: profile.race_class.class(),
+            gender: profile.gender,
+            skin_color: profile.skin_color,
+            face: profile.face,
+            hair_style: profile.hair_style,
+            hair_color: profile.hair_color,
+            facial_hair: profile.facial_hair,
+        };
+        tracing::debug!(
+            "char create: username={username} name={name} race_class={:?} gender={:?}",
+            profile.race_class,
+            profile.gender,
+        );
+        state
+            .write_client_encrypted(&create)
+            .await
+            .map_err(|e| std::io::Error::other(format!("world: write CHAR_CREATE: {e}")))?;
+        let result = state
+            .read_until("SMSG_CHAR_CREATE", STEP_TIMEOUT, |m| match m {
+                ServerOpcodeMessage::SMSG_CHAR_CREATE(c) => Some(c.result),
+                _ => None,
+            })
+            .await?;
+        match result {
+            WorldResult::CharCreateSuccess => break,
+            // Another account has the name: lengthen it and try again.
+            WorldResult::CharCreateNameInUse if attempt < NAME_RETRIES => {
+                name.push(letter(u64::from(attempt) + u64::from(slot)));
+            }
+            other => {
                 return Err(std::io::Error::other(format!(
-                    "world: CHAR_CREATE failed: {:?}",
-                    c.result
+                    "world: CHAR_CREATE {name} failed: {other:?}"
                 )));
             }
         }
-        other => {
-            return Err(std::io::Error::other(format!(
-                "world: expected SMSG_CHAR_CREATE, got {other:?}"
-            )));
-        }
     }
 
-    state
-        .write_client_encrypted(&CMSG_CHAR_ENUM {})
-        .await
-        .map_err(|e| std::io::Error::other(format!("world: write CHAR_ENUM (post-create): {e}")))?;
-
-    match state.read_server_encrypted().await? {
-        ServerOpcodeMessage::SMSG_CHAR_ENUM(enumeration) => {
-            if let Some(c) = enumeration.characters.first() {
-                Ok(c.guid)
-            } else {
-                Err(std::io::Error::other("world: char list empty after create"))
-            }
-        }
-        other => Err(std::io::Error::other(format!(
-            "world: expected SMSG_CHAR_ENUM, got {other:?}"
-        ))),
-    }
+    enumerate(state)
+        .await?
+        .ok_or_else(|| std::io::Error::other("world: char list empty after create"))
 }
 
 /// Deterministic-per-username character profile. The same username always
@@ -309,13 +352,16 @@ fn seed_for(username: &str) -> u64 {
     h.finish()
 }
 
-fn profile_for(username: &str) -> CharProfile {
-    let mut rng = StdRng::seed_from_u64(seed_for(username));
+/// The `n % 26`th lower-case letter.
+fn letter(n: u64) -> char {
+    char::from(b'a' + u8::try_from(n % 26).unwrap_or(0))
+}
 
-    // Name: hostname prefix (first cap, rest lower) + 5 random lowercase
-    // letters. 26^5 = ~12M distinct suffixes per host prefix — collisions
-    // within a fleet are vanishingly rare.
-    let prefix = host_prefix();
+/// A character name for `slot`: the host prefix (capitalised), then the slot
+/// in base 26 as five letters. Names are letters only, as servers require,
+/// and two slots never share one, so with each worker on its own slot range
+/// a fleet's names don't collide.
+fn character_name(prefix: &str, slot: u32) -> String {
     let mut name = String::with_capacity(12);
     let mut chars = prefix.chars();
     if let Some(c) = chars.next() {
@@ -324,11 +370,19 @@ fn profile_for(username: &str) -> CharProfile {
     for c in chars {
         name.push(c.to_ascii_lowercase());
     }
-    for _ in 0..5 {
-        let n: u8 = rng.random_range(0..26);
-        name.push((b'a' + n) as char);
+    let mut digits = [0u64; 5];
+    let mut rest = u64::from(slot);
+    for d in digits.iter_mut().rev() {
+        *d = rest % 26;
+        rest /= 26;
     }
-    name.truncate(12);
+    name.extend(digits.iter().map(|&d| letter(d)));
+    name
+}
+
+fn profile_for(username: &str, slot: u32) -> CharProfile {
+    let mut rng = StdRng::seed_from_u64(seed_for(username));
+    let name = character_name(&host_prefix(), slot);
 
     let race_class = ALL_RACE_CLASSES[rng.random_range(0..ALL_RACE_CLASSES.len())];
     let gender = if rng.random_bool(0.5) {
@@ -353,6 +407,9 @@ fn profile_for(username: &str) -> CharProfile {
     }
 }
 
+/// How long a queued login waits between server packets.
+const QUEUE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Helper state passed around during handshake so each step can read/write
 /// encrypted frames without juggling the four halves manually.
 struct HandshakeState {
@@ -360,17 +417,50 @@ struct HandshakeState {
     writer: OwnedWriteHalf,
     encrypter: EncrypterHalf,
     decrypter: DecrypterHalf,
+    skipped: u64,
+    cinematic: bool,
 }
 
 impl HandshakeState {
-    async fn read_server_encrypted(&mut self) -> std::io::Result<ServerOpcodeMessage> {
-        timeout(
-            STEP_TIMEOUT,
-            ServerOpcodeMessage::tokio_read_encrypted(&mut self.reader, &mut self.decrypter),
-        )
-        .await
-        .map_err(|_| std::io::Error::other("world: read timed out"))?
-        .map_err(|e| std::io::Error::other(format!("world: decode server message: {e:?}")))
+    /// Read server packets until `pick` accepts one, skipping the rest. Each
+    /// read must arrive within `step`. A packet wow_messages doesn't model or
+    /// can't parse is skipped too: its body has already been read.
+    async fn read_until<T>(
+        &mut self,
+        what: &str,
+        step: Duration,
+        mut pick: impl FnMut(ServerOpcodeMessage) -> Option<T>,
+    ) -> std::io::Result<T> {
+        loop {
+            let read =
+                ServerOpcodeMessage::tokio_read_encrypted(&mut self.reader, &mut self.decrypter);
+            match timeout(step, read).await {
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("world: waiting for {what}: timed out"),
+                    ));
+                }
+                Ok(Ok(msg)) => {
+                    if matches!(msg, ServerOpcodeMessage::SMSG_TRIGGER_CINEMATIC(_)) {
+                        self.cinematic = true;
+                    }
+                    match pick(msg) {
+                        Some(v) => return Ok(v),
+                        None => self.skipped += 1,
+                    }
+                }
+                Ok(Err(ExpectedOpcodeError::Opcode { .. } | ExpectedOpcodeError::Parse(_))) => {
+                    self.skipped += 1;
+                }
+                Ok(Err(ExpectedOpcodeError::Io(e))) => {
+                    return Err(std::io::Error::new(
+                        e.kind(),
+                        format!("world: waiting for {what}: {e}"),
+                    ));
+                }
+            }
+        }
     }
 
     async fn write_client_encrypted<M>(&mut self, msg: &M) -> std::io::Result<()>
@@ -380,5 +470,22 @@ impl HandshakeState {
         msg.tokio_write_encrypted_client(&mut self.writer, &mut self.encrypter)
             .await?;
         self.writer.flush().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn character_names_are_letters_and_unique_per_slot() {
+        assert_eq!(character_name("bot", 0), "Botaaaaa");
+        assert_eq!(character_name("bot", 1), "Botaaaab");
+        assert_eq!(character_name("bot", 26), "Botaaaba");
+        assert_eq!(character_name("ip", 999), "Ipaabml");
+        let names: std::collections::HashSet<String> =
+            (0..10_000).map(|s| character_name("bot", s)).collect();
+        assert_eq!(names.len(), 10_000);
+        assert!(names.iter().all(|n| n.len() <= 12 && n.chars().all(|c| c.is_ascii_alphabetic())));
     }
 }

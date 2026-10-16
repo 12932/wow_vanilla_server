@@ -2,8 +2,8 @@
 //!
 //! Two roles share one binary:
 //! * `--role worker` — opens N SRP6/ARC4-encrypted client sessions against
-//!   the running server, creates one character per session at Gurubashi
-//!   Arena, and walks them randomly.
+//!   the running server, creates a character per account if it has none,
+//!   and walks them around where the server puts them.
 //! * `--role orchestrator` — accepts worker connections, broadcasts
 //!   spawn/stop/drain commands from a stdin REPL, prints aggregated metrics.
 
@@ -53,6 +53,23 @@ struct Cli {
     /// Worker-only: username prefix, e.g. `BOT` → `BOT0001`, `BOT0002`, ...
     #[arg(long, default_value = "BOT")]
     username_prefix: String,
+
+    /// Worker-only: the first account slot this worker uses, so workers
+    /// sharing a server can take disjoint ranges: `--slot-offset 0` and
+    /// `--slot-offset 500` give `BOT0000..` and `BOT0500..`.
+    #[arg(long, default_value_t = 0)]
+    slot_offset: u32,
+
+    /// Worker-only: the accounts' password. Defaults to the username, as
+    /// wow_vanilla_server's auto-created accounts and Thistle Tea's seeded
+    /// `BOT0000`..`BOT0999` accounts use.
+    #[arg(long)]
+    password: Option<String>,
+
+    /// Worker-only: seconds a bot may take to log in, from connecting to
+    /// auth until the server confirms its character is in the world.
+    #[arg(long, default_value_t = 60)]
+    login_timeout: u64,
 
     /// Worker-only: orchestrator address; if omitted, worker runs standalone.
     #[arg(long)]
@@ -104,6 +121,9 @@ async fn main() -> std::io::Result<()> {
                 ramp_up_secs: cli.ramp_up,
                 orchestrator: cli.orchestrator,
                 mode,
+                slot_offset: cli.slot_offset,
+                password: cli.password,
+                login_timeout: std::time::Duration::from_secs(cli.login_timeout),
             };
             worker::run(cfg).await
         }

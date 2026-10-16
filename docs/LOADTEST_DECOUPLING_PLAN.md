@@ -226,31 +226,41 @@ until it is asked for.
 
 In `src/loadtest`, without moving it.
 
-- [ ] **Auth:** protocol 3 messages, version 1.12.1. Timeouts on connect, every read and every write. The handshake
+- [x] **Auth:** protocol 3 messages, version 1.12.1. Timeouts on connect, every read and every write. The handshake
   can be cancelled by `stop` and `drain`.
-- [ ] **Reader:** the unknown-opcode skip no longer reads the body twice. A parse error is skipped and counted; the
+- [x] **Reader:** the unknown-opcode skip no longer reads the body twice. A parse error is skipped and counted; the
   body is already consumed.
-- [ ] **Login:**
+- [x] **Login:**
   - Wait for `SMSG_LOGIN_VERIFY_WORLD`, skipping other packets until a deadline, and adopt its map and position.
   - Send `CMSG_SET_ACTIVE_MOVER`.
   - Answer `SMSG_TRIGGER_CINEMATIC` with `CMSG_COMPLETE_CINEMATIC`.
   - Count world ok and alive only at verify.
-- [ ] **Accounts:**
+- [x] **Accounts:**
   - A global slot range for each worker: `--slot-offset`, and a default prefix from `--worker-id`.
   - `--password` (default: the username).
   - Freed slots are reused.
-- [ ] **Random mode** walks around the server's spawn, not the hard-coded anchor, and reflects at its radius instead
+- [x] **Random mode** walks around the server's spawn, not the hard-coded anchor, and reflects at its radius instead
   of teleporting back. PvP and race still assume wow_vanilla_server's Gurubashi spawn, until Phase 5.
-- [ ] **Shutdown:**
+- [x] **Shutdown:**
   - `drain` notifies every bot at once, with one deadline, then aborts what's left.
   - `stop` aborts.
   - Dead bots leave the slab.
-- [ ] **Orchestrator:** registry entries carry a connection generation, so a reconnecting worker isn't evicted.
+- [x] **Orchestrator:** registry entries carry a connection generation, so a reconnecting worker isn't evicted.
 
 **Done when:**
 - 50 bots in random mode reach the world on wow_vanilla_server, with no desyncs.
 - 10 bots log in on Thistle Tea, and their movement is seen by another bot.
 - `stop` and `drain` finish within their deadline.
+
+**Result (debug builds, one host):**
+- **wow_vanilla_server:** 50 of 50 bots in the world, 0 parse errors. With 20 bots, every packet received was another
+  bot's movement (1,140 a second, which is 62 sent times 19 observers).
+- **Thistle Tea** (0426f0d6, the fork's NIF): 10 of 10 bots in the world, receiving others' movement. Only bots that
+  share a start zone meet, since Thistle Tea spawns by race; Phase 5's placement gathers them.
+  - Its `SMSG_COMPRESSED_UPDATE_OBJECT` doesn't parse in wow_messages ("Missing object TYPE"). It is skipped and
+    counted, and bots stay connected.
+- **Shutdown:** `drain` took 53 ms for 50 bots.
+- **Orchestrator:** `spawn 5`, `stop 2`, `spawn 2` ended at 5 alive, reusing `BOT0000` and `BOT0001`.
 
 ### Phase 2: server fixes that would abort or corrupt a run
 
@@ -307,6 +317,8 @@ ground and line of sight work in Booty Bay and the arena.
 - [ ] Logout.
 - [ ] Health from update fields; respawn policies; PvP modes (FFA, FFA area, faction split); swinging once per
   target. `SMSG_ATTACKERSTATEUPDATE` is read leniently, so Thistle Tea's combined `HitInfo` flags parse.
+- [ ] A lenient reader for (compressed) update objects. wow_messages rejects Thistle Tea's with "Missing object
+  TYPE", and health comes from them.
 
 **Done when:**
 - 200 bots gather in the Gurubashi pit on both servers and fight, with correct death detection.

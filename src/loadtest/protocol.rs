@@ -34,6 +34,10 @@ pub struct WorkerMetrics {
     pub send_errors: u64,
     pub messages_in: u64,
     pub messages_out: u64,
+    pub skipped_in: u64,
+    pub parse_errors: u64,
+    pub login_timeouts: u64,
+    pub movement_in: u64,
 }
 
 /// Sentinel rejecting absurdly large frames so a desynced socket cannot OOM us.

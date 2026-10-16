@@ -17,6 +17,17 @@ pub struct Metrics {
     pub send_errors: AtomicU64,
     pub messages_in: AtomicU64,
     pub messages_out: AtomicU64,
+    /// Server packets skipped because wow_messages doesn't model their
+    /// opcode, or the bot didn't need them during the handshake.
+    pub skipped_in: AtomicU64,
+    /// Server packets wow_messages couldn't parse. Skipped too: the framing
+    /// is intact, since the body was read before parsing.
+    pub parse_errors: AtomicU64,
+    /// Bots that gave up because their login took longer than the deadline.
+    pub login_timeouts: AtomicU64,
+    /// Other players' movement broadcasts received (`MSG_MOVE_*`): proof the
+    /// server sees the bots and fans their movement out.
+    pub movement_in: AtomicU64,
 }
 
 impl Metrics {
@@ -32,6 +43,10 @@ impl Metrics {
             send_errors: self.send_errors.load(Ordering::Relaxed),
             messages_in: self.messages_in.load(Ordering::Relaxed),
             messages_out: self.messages_out.load(Ordering::Relaxed),
+            skipped_in: self.skipped_in.load(Ordering::Relaxed),
+            parse_errors: self.parse_errors.load(Ordering::Relaxed),
+            login_timeouts: self.login_timeouts.load(Ordering::Relaxed),
+            movement_in: self.movement_in.load(Ordering::Relaxed),
         }
     }
 }
