@@ -14,7 +14,7 @@ Development project — not a production server. Use cmangos / vmangos / Trinity
 - `.command` GM chat commands (spawn, teleport, simulate, etc.)
 - Character + account persistence to `snapshot.bin` (postcard, every 60 s)
 - ~63 k creatures from a mangos worlddb dump
-- Real-protocol load-test harness (`loadtest` binary)
+- Load-tested with [peon](https://github.com/12932/peon), real-protocol bots
 
 ## Quick start
 
@@ -37,7 +37,6 @@ For remote deploys set `WOW_REALM_ADDRESS=YOUR.SERVER.IP:8085` in `.env`. On Lin
 | `WOW_VANILLA_WORLDDB` | unset | path to mangos worlddb SQLite dump |
 | `WOW_TRACY` | unset | set to `1` to enable the Tracy profiler |
 | `RUST_LOG` | `info` | `tracing-subscriber` env filter |
-| `LOADTEST_NAME_PREFIX` | hostname | loadtest worker character-name prefix |
 
 `WOW_VANILLA_USE_MAPS` is a **compile-time** `option_env!` consumed by the namigator build — set it before `cargo build` to enable terrain following.
 
@@ -47,16 +46,11 @@ Gameplay knobs (AOI radius, tick rate, combat numbers, respawn delays, spawn poi
 
 ## Load test
 
+The load tester is its own repository, [peon](https://github.com/12932/peon):
+
 ```sh
-# Standalone single-host worker
-./target/release/loadtest --role worker --target IP:3724 --clients 400 --ramp-up 30
-
-# Multi-host: orchestrator + workers
-./target/release/loadtest --role orchestrator --bind 0.0.0.0:7100
-./target/release/loadtest --role worker --orchestrator HOST:7100 --target IP:3724 --worker-id us-east-1
+peon worker --target IP:3724 --clients 400 --ramp-up 30
 ```
-
-Orchestrator REPL: `spawn <N>`, `stop <N>`, `status`, `quit` (each command fans out to every connected worker). Add `--pvp` to a worker for the Gurubashi free-for-all bot driver.
 
 ## Profiling
 

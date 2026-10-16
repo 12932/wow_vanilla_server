@@ -4,7 +4,7 @@ Guidance for AI coding assistants (the orchestrator, Cursor, Aider, etc.) workin
 
 ## What this is
 
-A WoW vanilla (1.12.2 client) server in Rust. Two binaries: `wow_vanilla_server` (the game server) and `loadtest` (an orchestrator + worker for spawning real-protocol bots against the server). Tokio async runtime. World tick targets **30 Hz** (33 ms), fanned out into one `tokio::spawn`'d task per cell; each cell's tick calls into rayon during the AOI diff (`tick_aoi_transitions`) and the creature aggro scan (`tick_creature_ai`). Roughly 63 k creatures loaded from a mangos SQLite worlddb on boot. Tracy profiler is opt-in via `WOW_TRACY=1`.
+A WoW vanilla (1.12.2 client) server in Rust. One binary, `wow_vanilla_server`; the load tester is its own repository, [peon](https://github.com/12932/peon). Tokio async runtime. World tick targets **30 Hz** (33 ms), fanned out into one `tokio::spawn`'d task per cell; each cell's tick calls into rayon during the AOI diff (`tick_aoi_transitions`) and the creature aggro scan (`tick_creature_ai`). Roughly 63 k creatures loaded from a mangos SQLite worlddb on boot. Tracy profiler is opt-in via `WOW_TRACY=1`.
 
 ## Quick commands
 
@@ -13,7 +13,6 @@ cargo check                              # fast feedback
 cargo clippy --all-targets               # lint — must be clean before commit
 cargo nextest run                        # test runner of choice (faster than `cargo test`)
 cargo build --release --bin wow_vanilla_server
-cargo build --release --bin loadtest
 ```
 
 The `wowm-capture` cargo feature gates a hot-path debug scaffold that walks `../wow_messages` per outgoing packet. **Never enable it for a real run**:
@@ -45,7 +44,6 @@ Where to look when adding things:
 | Compressed update objects | `src/world/update_object.rs` |
 | Pathfinding / terrain queries | `src/world/world/pathfinding_maps.rs` |
 | Numeric helpers | `src/numeric.rs` |
-| Load-test orchestrator + worker | `src/loadtest/` |
 
 ## Conventions
 
@@ -170,21 +168,12 @@ Set via shell env, `.cargo/config.toml` (cargo-launched only), or `.env` (loaded
 | `WOW_REALM_ADDRESS` | `host:port` advertised in the realm list. Set to your public IP + `8085` when deploying to a server. Defaults to `localhost:8085`. |
 | `WOW_VANILLA_WORLDDB` | Path to mangos SQLite. Without it the server boots with one test wolf only. Set in `.cargo/config.toml` for local dev. |
 | `WOW_VANILLA_USE_MAPS` | Compile-time `option_env!`: path to vanilla client data for namigator builds. Enables terrain following. Without it, mobs walk in linear z. |
-| `LOADTEST_NAME_PREFIX` | Optional override for the bot character-name prefix in the loadtest binary. Defaults to the worker host's hostname (via `gethostname` crate). |
 
 A `.env.example` template is checked in; copy to `.env` and adjust.
 
-## Load-test harness
+## Load testing
 
-`src/loadtest/` ships an orchestrator + worker for spawning real-protocol bots:
-
-- **Worker** (`--role worker`) opens many SRP6/ARC4-encrypted sessions against the running server, auto-creates a character per session at Gurubashi Arena, and runs a random-walk movement driver. One tokio task per bot that multiplexes a reader future and a drive future via `tokio::select!`.
-- **Orchestrator** (`--role orchestrator`) is a TCP control plane on `:7100`. Workers register, receive `Spawn` / `Stop` / `Drain` commands, push `WorkerMetrics` every second.
-- **Standalone**: `--clients N --ramp-up SECONDS` skips the orchestrator entirely.
-
-Bots use deterministic per-username character profiles (`profile_for(username)` in `worker/world.rs`) so a given bot always logs into the same character. The character name format is `<HostPrefix><5RandomLowercase>` — the host prefix comes from the worker host, sourced via `gethostname` or the `LOADTEST_NAME_PREFIX` env override.
-
-The auth server auto-creates accounts for any unknown username (password = username) — no server-side configuration is needed for bots to authenticate. The server is otherwise unmodified — bots speak the exact protocol the 1.12.2 client speaks.
+Load tests use [peon](https://github.com/12932/peon), which speaks the real 1.12 protocol, so the server needs nothing special for it. The auth server auto-creates accounts for any unknown username (password = username), so bots need no setup. peon's `pvp` and `race` modes still assume the `[spawn]` in `config.toml` is the Gurubashi pit.
 
 **Linux fd limit**: `ulimit -n` defaults to 1024 which caps the worker at ~510 bots during the auth-then-world transition. Raise to 65536 for any serious load test.
 
