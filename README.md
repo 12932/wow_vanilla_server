@@ -1,20 +1,10 @@
 # wow_vanilla_server
 
-A WoW vanilla (1.12.2) server in Rust. Single-process Tokio runtime, 30 Hz world tick (adaptive pacer backs off under load), mangos worlddb SQLite for creature spawns. Ships a load-test harness in the same workspace that opens thousands of real-protocol bot clients for scale testing.
+A WoW vanilla (1.12.1) server in Rust, on Tokio: an actor per map, packets handled as they arrive, a 20 Hz map
+update, and vmangos's world. Load-tested with [peon](https://github.com/12932/peon).
 
-Development project — not a production server. Use cmangos / vmangos / TrinityCore if you want a public realm.
-
-## What works
-
-- SRP6 logon + ARC4-encrypted world handshake
-- Character create / delete / login, Gurubashi Arena spawn
-- Movement broadcasts (start/stop/strafe/heartbeat/turn/jump) with per-tick coalescing + AOI transitions
-- Basic PvP melee combat (server-side range check with movement leeway, FFA flag)
-- Pathfinding via [namigator](https://github.com/gtker/namigator-rs) when client maps are pointed at via `WOW_VANILLA_USE_MAPS` at build time
-- `.command` GM chat commands (spawn, teleport, simulate, etc.)
-- Character + account persistence to `snapshot.bin` (postcard, every 60 s)
-- ~63 k creatures from a mangos worlddb dump
-- Load-tested with [peon](https://github.com/12932/peon), real-protocol bots
+A development project, not a production server; use vmangos or cmangos for a public realm. Where it stands against
+Thistle Tea, and the plan to close the gap, is in [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md).
 
 ## Quick start
 
@@ -23,69 +13,55 @@ cargo build --release --bin wow_vanilla_server
 ./target/release/wow_vanilla_server
 ```
 
-Listens on `:3724` (auth) and `:8085` (world). Point your 1.12.2 `realmlist.wtf` at the auth host. Any username at the login screen is auto-created on the fly (password = username) — fine for development, do not expose this to the public internet.
+It listens on `:3724` (auth) and `:8085` (world). Point a 1.12.1 client's `realmlist.wtf` at the host. Any username
+is created at login (password = username) and every account may use GM commands: fine for development, not for
+the internet.
 
-For remote deploys set `WOW_REALM_ADDRESS=YOUR.SERVER.IP:8085` in `.env`. On Linux, raise the fd limit (`ulimit -n 65536`) before testing at scale — default 1024 caps you around 510 connections.
+For the world, point `config.toml` at vmangos's database and the client's DBCs as SQLite (Thistle Tea's export:
+`vmangos.sqlite` and `dbc.sqlite` in one directory), and at a rustigator bake for the navmesh:
+
+```toml
+[world]
+data_dir = "/path/to/db"
+nav_dir = "/path/to/bake"
+```
+
+Without them the world is empty and creatures walk straight lines.
 
 ## Configuration
 
-`.env` next to the working dir, or normal env vars / systemd `Environment=`. Template in `.env.example`.
+`config.toml` next to the working directory; every key is optional and the defaults are in `src/config.rs`. An
+unknown key is an error. The environment (or `.env`) sets `WOW_REALM_ADDRESS` (the realm list's `host:port`),
+`WOW_TRACY=1` (the Tracy profiler) and `RUST_LOG`.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `WOW_REALM_ADDRESS` | `localhost:8085` | host:port advertised in the realm list |
-| `WOW_VANILLA_WORLDDB` | unset | path to mangos worlddb SQLite dump |
-| `WOW_TRACY` | unset | set to `1` to enable the Tracy profiler |
-| `RUST_LOG` | `info` | `tracing-subscriber` env filter |
-
-`WOW_VANILLA_USE_MAPS` is a **compile-time** `option_env!` consumed by the namigator build — set it before `cargo build` to enable terrain following.
-
-### Behavior tuning (`config.toml`)
-
-Gameplay knobs (AOI radius, tick rate, combat numbers, respawn delays, spawn point, etc.) live in `config.toml` next to the binary. Every key is optional — omit the file entirely to get the defaults. The full list of available keys + their defaults lives in `src/config.rs` (search for `impl Default for`). No hot reload; restart the server to apply changes.
-
-## Load test
-
-The load tester is its own repository, [peon](https://github.com/12932/peon):
-
-```sh
-peon worker --target IP:3724 --clients 400 --ramp-up 30
-```
-
-## Profiling
-
-`WOW_TRACY=1 ./target/release/wow_vanilla_server` enables the [Tracy](https://github.com/wolfpld/tracy) profiler. Without the env var the profiler is fully off — no listener, no broadcast. Same `--release` binary works either way.
-
-If a tick overruns the pacer's current interval (33 ms at the 30 Hz target, longer if the adaptive pacer has backed off under load), the server logs a phase-by-phase breakdown at `WARN` (target `tick_slow`).
+Characters are kept in `characters.sqlite` (`[world] characters_db`), saved at logout, every five minutes, and for
+everyone on SIGTERM or Ctrl-C.
 
 ## GM commands
 
-In-game chat (`.command` syntax):
+In chat:
 
-| Command | Effect |
+| Command | Does |
 |---|---|
-| `.whereami` | Print map + coordinates |
-| `.tp <name>` / `.go x y z [map]` | Teleport (named / coordinates) |
-| `.north/.south/.east/.west`, `.extend [d]`, `.float [d]` | Step in a direction |
-| `.speed <mul>` | Run-speed multiplier |
-| `.range`, `.info [guid]` | Info about target |
-| `.additem <id-or-name>` | Add item to inventory |
-| `.spawn [display_id] [name]` | Spawn a creature |
-| `.move` | Make targeted NPC start walking |
-| `.boom`, `.nova` | Damage spells |
-| `.mark <name>` | Append current pos to `unadded_locations.txt` |
-| `.los`, `.nolos`, `.worlddbinfo`, `.swifty` | Misc utilities |
-| `.players`, `.cells` | Print connected-player count / per-cell stats |
+| `.go [xyz] <x> <y> <z> [map]` | Teleport |
+| `.tele <place>` | Teleport to a place from vmangos's `game_tele` |
+| `.gps` | Where you are: map, position, zone, area |
+| `.speed <multiplier>` | Run speed |
+| `.spawn <entry>` | Spawn a creature |
+| `.online`, `.maps` | Who is online; a map's counters |
+| `.save`, `.kick <name>`, `.announce <text>` | |
 
 ## Development
 
 ```sh
 cargo clippy --all-targets    # must be clean
-cargo nextest run             # faster than cargo test
+cargo test --lib
 ```
 
-`.gitignore` covers runtime state (snapshot, mangos sqlite, tracy captures, `.env`).
+[AGENTS.md](AGENTS.md) describes the design and the conventions.
 
 ## Credits
 
-Built on [@gtker](https://github.com/gtker)'s suite: [`wow_messages`](https://github.com/gtker/wow_messages), [`wow_srp`](https://github.com/gtker/wow_srp), [`namigator`](https://github.com/gtker/namigator-rs). Worlddb dump from [cmangos](https://github.com/cmangos) `mangos-0.21`.
+Built on [@gtker](https://github.com/gtker)'s [`wow_messages`](https://github.com/gtker/wow_messages) and
+[`wow_srp`](https://github.com/gtker/wow_srp), and [rustigator](https://github.com/12932/rustigator) for the navmesh.
+The world is [vmangos](https://github.com/vmangos/core)'s.

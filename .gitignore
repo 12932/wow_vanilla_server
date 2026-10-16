@@ -7,12 +7,11 @@ target
 *.tracy.zstd
 *.zstd
 
-# Server runtime artifacts.
-snapshot.bin
+# Server runtime state: the character store and its WAL.
+characters.sqlite*
 
-# Mangos worlddb dump. ~30 MB binary; everyone should have their own copy
-# at the path pointed to by WOW_VANILLA_WORLDDB.
-mangos0.sqlite
+# vmangos and DBC exports, pointed at by [world] data_dir.
+*.sqlite
 
 # Per-user the orchestrator state (scheduled tasks, locks, plans, etc.).
 .claude/
@@ -21,8 +20,7 @@ mangos0.sqlite
 # `.env.example` is the tracked template.
 .env
 
-# Extracted client game data (DBC/maps) — large binary, pointed at by
-# WOW_VANILLA_USE_MAPS. Everyone extracts their own.
+# Extracted client game data. Everyone extracts their own.
 Data/
 
 # Reference clone of cmangos used for architecture comparison. Its own repo.

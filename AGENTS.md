@@ -1,200 +1,82 @@
 # AGENTS.md
 
-Guidance for AI coding assistants (the orchestrator, Cursor, Aider, etc.) working in this repo. Pair with the developer's personal `~/.claude/CLAUDE.md` for global preferences (test runner, hashing crate, etc.).
+Guidance for AI coding assistants working in this repo.
 
 ## What this is
 
-A WoW vanilla (1.12.2 client) server in Rust. One binary, `wow_vanilla_server`; the load tester is its own repository, [peon](https://github.com/12932/peon). Tokio async runtime. World tick targets **30 Hz** (33 ms), fanned out into one `tokio::spawn`'d task per cell; each cell's tick calls into rayon during the AOI diff (`tick_aoi_transitions`) and the creature aggro scan (`tick_creature_ai`). Roughly 63 k creatures loaded from a mangos SQLite worlddb on boot. Tracy profiler is opt-in via `WOW_TRACY=1`.
+A WoW vanilla (1.12.1) server in Rust, being brought up to what Thistle Tea does: the plan, its phases and its
+progress are in [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md), and what Thistle Tea does is in
+[docs/THISTLE_TEA_INVENTORY.md](docs/THISTLE_TEA_INVENTORY.md). The load tester is its own repository,
+[peon](https://github.com/12932/peon).
 
 ## Quick commands
 
 ```sh
-cargo check                              # fast feedback
-cargo clippy --all-targets               # lint — must be clean before commit
-cargo nextest run                        # test runner of choice (faster than `cargo test`)
+cargo check
+cargo clippy --all-targets          # must be clean before a commit
+cargo test --lib                    # the harness tests run the real sessions and maps
 cargo build --release --bin wow_vanilla_server
 ```
 
-The `wowm-capture` cargo feature gates a hot-path debug scaffold that walks `../wow_messages` per outgoing packet. **Never enable it for a real run**:
+## The design
 
-```sh
-cargo check --features wowm-capture      # only when expanding the wow_messages test corpus
-```
+There is no world tick.
 
-## Architecture map
-
-Where to look when adding things:
-
-| Concern | File |
-|---|---|
-| Boot, snapshot, save loop, env (`dotenvy`) | `src/main.rs`, `src/world/mod.rs::run_world` |
-| Auth listener, SRP6, realm list | `src/auth.rs` |
-| Tick stages, AOI broadcast, login streaming | `src/world/world/mod.rs::tick` (~1500 lines) |
-| Per-client state, network I/O | `src/world/world/client/mod.rs` (`PlayerSession`, `Player`, `Client`) |
-| Per-client outbound writer task + channel | `src/world/world/client/character_screen_client.rs` |
-| Pre-game (char screen) flow | `src/world/character_screen_handler/mod.rs` |
-| Opcode dispatch | `src/world/world_opcode_handler/opcode_handler.rs` (big `match`, plan to split per-category) |
-| GM commands | `src/world/world_opcode_handler/gm_command/` (parser + handlers) |
-| World mutation queue | `src/world/command.rs` (`WorldCommand` + `CommandQueue`) |
-| Creature data model + AI | `src/world/world_opcode_handler/creature.rs` |
-| Server-side puppet horde | `src/world/world_opcode_handler/simulated_player.rs` |
-| Entity lookups | `src/world/world_opcode_handler/entities.rs` |
-| Worlddb SQLite loader | `src/world/world_db.rs` |
-| AOI broadcast + serialize-once helpers | `src/world/aoi.rs` (`broadcast_within_aoi`, `broadcast_opcode_within_aoi`) |
-| Compressed update objects | `src/world/update_object.rs` |
-| Pathfinding / terrain queries | `src/world/world/pathfinding_maps.rs` |
-| Numeric helpers | `src/numeric.rs` |
+- **Sessions** (`src/game/session.rs`): a task per connection runs the world handshake and the character screen, at
+  once, against the character store. In the world, it routes the client's packets to its map. It switches its route
+  before the client can act on a change: it sends `SMSG_LOGOUT_COMPLETE` itself, and hands a player to their new map
+  before that map sends `SMSG_NEW_WORLD`.
+- **Connections** (`src/game/conn.rs`): a reader task decodes packets (and answers pings); a writer task encrypts and
+  coalesces writes. Everything sends through an `Outbound`. A client over its byte budget is disconnected, not sent
+  a partial world.
+- **Maps** (`src/game/map/`): each map is an actor (a task) that owns its players, creatures, game objects, grid and
+  navmesh, with no locks. Packets are handled as they arrive (`handlers.rs`). A 20 Hz update (`Map::update`) runs
+  what time drives, works out visibility, and flushes changed fields.
+- **Update fields** (`src/game/fields.rs`, `src/game/update.rs`): each object's fields are a flat array with dirty
+  bits. A values block is encoded once and shared by every observer; a player's own client gets its private fields
+  in a second block. Blocks are batched per observer per update; big batches are compressed.
+- **Visibility** (`visibility.rs`): a 50-yard grid, an exact distance test at `[world] visibility_yards` (100), and
+  a 10-yard margin before an object is forgotten. Worked out for an object when it has moved 8 yards, or arrived.
+  A creature no player sees doesn't move.
+- **Shared state**: `Registry` (`src/game/registry.rs`) has every character's name and everyone online, with their
+  outbound queue, session and map. Services that span maps go behind their own short locks.
+- **The store** (`src/game/store.rs`): `characters.sqlite`, behind one thread, so reads see earlier saves. The schema
+  is versioned (`MIGRATIONS`, `PRAGMA user_version`); a character's extra state is JSON whose fields all default.
+  Saves at logout, every `save_interval_secs`, and for everyone on SIGTERM or Ctrl-C.
+- **Game data** (`src/game/data/`): vmangos's `vmangos.sqlite` and the client's `dbc.sqlite`, loaded once from
+  `[world] data_dir` into immutable tables. A template's row is its latest patch up to 10; a spawn is kept if its
+  patch range has 10. Without the databases the server runs on `wow_world_base` and `wow_items`.
+- **Navmesh** (`map/nav.rs`): a rustigator bake from `[world] nav_dir`, a map's tiles loaded as first needed. Zones
+  and areas come from it, and with them the free-for-all flag of an arena.
 
 ## Conventions
 
-### Command bus, not parallel `Vec`s
+- **Packets out are encoded once** and the frame shared: `conn::encode`, `Map::send_to_observers`. No per-viewer
+  re-encoding.
+- **Packets wow_messages types too strictly are encoded by hand** (`data::items::Body`): the item and game object
+  query responses. Everything else uses wow_messages' types, so peon (which reads with wow_messages) reads it.
+- **Values blocks always carry the object type**, and a GUID field's two halves are dirtied together: wow_messages
+  can't read a block without them.
+- **GUIDs are typed** (`src/game/guid.rs`): players by counter, items `0x4000`, creatures `0xF130` with their entry,
+  game objects `0xF110`.
+- **Never panic on client data**: look things up fallibly, log at `debug`, drop the packet.
+- **Never block a map**: no `.await`, no file or database work in a handler; the store is fire-and-forget.
+- **Tests go through the protocol** (`src/game/harness.rs`): connect clients to a realm, send real messages, and
+  read what comes back with wow_messages.
 
-`World` mutation (spawn, kill, despawn) does not happen inline in handlers. Push a `WorldCommand` onto the `CommandQueue` instead:
+## Configuration
 
-```rust
-commands.push(WorldCommand::SpawnCreature(creature));
-commands.push(WorldCommand::KillCreature(guid));
-```
-
-`World::apply_commands` is the single place that mutates the slabs and broadcasts the matching protocol messages. Adding a new deferred action means one enum variant + one match arm — do not reintroduce `pending_*: &mut Vec<…>` arguments through the handler signatures.
-
-### Entity guid lookups must use the indexes
-
-`World` carries reverse `AHashMap<Guid, usize>` indexes for players, creatures, and simulated_players. `WorldDatabase` also carries `by_guid` and `by_account` indexes for characters. Use them via `Entities::find_player` / `find_creature` / `find_simulated` and `WorldDatabase::get_character_by_guid` / `get_characters_for_account` (all O(1) or O(chars-for-this-account)). **Do not write `slab.iter().find_map(|(_, c)| c.guid == g)` or linear `characters.iter().filter(|c| c.account == name)`** — at ~63 k creatures or burst-login that's the dominant cost.
-
-If you insert/remove from one of those slabs, update the matching reverse index in lockstep. Use `World::register_creature` / `World::unregister_creature` for creatures; `WorldDatabase::create_character_in_account` / `delete_character_by_guid` for characters (the latter handles the `swap_remove` index fixup).
-
-### Per-client outbound channel
-
-Each connected client owns:
-- A `mpsc::Sender<Vec<u8>>` on `PlayerSession.outbound`. World-tick code calls `send_message` / `send_opcode` / `send_raw` / `try_queue_frame`, all of which serialize into a `Vec<u8>` and `try_send` non-blocking.
-- A dedicated **writer task** (spawned in `CharacterScreenClient::new`) that owns the socket write half + ARC4 `EncrypterHalf`, drains the channel, and re-encrypts the 4-byte header per item.
-- A `dropped_packets: Arc<AtomicU64>` counter — incremented when the channel is full (slow client). Log via the counter, never panic.
-
-**Never `.await` a socket write from inside `World::tick`.** Always go through the channel. If the channel fills, drop the packet — that's by design.
-
-### Per-tick movement coalescer
-
-Every movement opcode handler in `opcode_handler.rs` queues into `entities.queue_movement(client, msg.into())` rather than broadcasting inline. After `per_client_loop` finishes, the `flush_movement_broadcasts` phase drains `World.pending_movement` (keyed by source `Guid`) and dispatches each entry via `aoi::broadcast_opcode_within_aoi(..., Some(source_guid), ...)`.
-
-Two invariants:
-
-1. **At most one movement broadcast per source per tick.** Same-tick opcodes for one source replace each other in the map. The latest `MovementInfo` is authoritative for observers; HEARTBEAT carries full flags + position.
-2. **Always exclude the source guid.** Self-echo of `MSG_MOVE_*_Server` is read by the local WoW client as a server position correction → rubber-band. The flush phase passes the map key as the `exclude_guid` parameter.
-
-### Numeric policy
-
-Wire types match `wow_world_messages` exactly (`u32`/`u64`/`f32`). At boundaries:
-
-1. **Narrowing casts**: never `as`. Use `i32::try_from(v).unwrap_or(i32::MAX)` or `.clamp()`.
-2. **SQLite `i64` → narrow**: use the local helpers in `world_db.rs` (`i64_to_u32`, `i64_to_u8`, `i64_to_i32`). They clamp into range — a mangos row with `MinLevel = -1` becomes `0`, not `255`.
-3. **`u64` random → `f32` in `[0, 1)`**: use `numeric::rand_unit_f32(r)`. Naive `r as f32 / u64::MAX as f32` collapses the top bit.
-4. **`f32` → integer**: Rust 1.45+ float casts saturate (`NaN as uN == 0`, `+inf as uN == uN::MAX`). `.max(0.0)` guards negative input; explicit `is_finite()` check optional.
-
-### Error handling
-
-Per-tick / per-packet errors **never panic**. The policy:
-
-- **Startup**: `.expect("explanatory message")` is fine for unrecoverable conditions.
-- **Per-connection**: log at `debug` or `warn` and drop the connection. See `or_return!` macro in `src/auth.rs` and the pattern in `character_screen_inner`.
-- **Per-packet**: log at `debug` and skip the packet. Client-supplied guids must be looked up fallibly (`db.get_character_by_guid` returns `Option`).
-- **Per-tick**: log at `warn` and continue with the remaining work. `World::tick` has a slow-tick `WARN` (target `tick_slow`) that dumps per-phase wall time when the whole tick exceeds the pacer's `current_interval` (33 ms by default, longer after the adaptive pacer has backed off under sustained overload).
-
-### Async + locks
-
-- The per-client writer task **owns** the socket write half — no `Arc<Mutex<…>>` indirection any more.
-- `Arc<std::sync::Mutex<AHashMap<String, SrpServer>>>` for the SRP user map. Hold the lock briefly; never across `.await`.
-- **Never hold a sync mutex across `.await`** — review will reject this.
-
-### AOI broadcasts
-
-Two helpers in `src/world/aoi.rs`:
-
-- `broadcast_within_aoi<M: ServerMessage>(msg, anchor, map, clients)` — generic, serializes the concrete message body once and reuses the bytes across viewers. Use this for any code path holding a typed `MSG_MOVE_*_Server` / `SMSG_*` value.
-- `broadcast_opcode_within_aoi(&ServerOpcodeMessage, anchor, map, exclude_guid, clients)` — opcode-enum variant. Used by `flush_movement_broadcasts` because the coalescer stores erased `ServerOpcodeMessage` values. Always pass `Some(source_guid)` to prevent self-echo.
-
-**Do not write a per-viewer loop that calls `c.send_message(msg.clone())`.** It's the pattern these helpers replaced.
-
-For batches of `Object` payloads (login streaming, spawn broadcasts) use `UpdateObject::from_objects(...)` — it picks `SMSG_COMPRESSED_UPDATE_OBJECT` vs plain based on payload shape.
-
-### Per-tick scratch buffers
-
-`tick_walking_creatures` and `tick_simulated_players` previously allocated `Vec`/`HashMap`/`HashSet` per tick. These are now held on `World` as `scratch_*` fields and reused tick-over-tick:
-
-- `scratch_client_aabb: AHashMap<Map, (f32, f32, f32, f32)>` — per-map AOI bounding box.
-- `scratch_walk_events: Vec<(usize, Vector3d, Map, CreatureMoveEvent)>`
-- `scratch_to_park: Vec<(Instant, usize)>`
-- `scratch_parked_set: AHashSet<usize>`
-- `scratch_expired_roots: Vec<(Guid, Map, Vector3d, MovementInfo)>`
-
-Pattern: take by `mem::take(&mut self.scratch_*)` at phase top, `.clear()`, fill, consume, store back at phase bottom so the inner allocations persist for the next tick.
-
-### Snapshot / persistence
-
-- Postcard, single `snapshot.bin` at the workspace root. Saved every **60 s**.
-- Worlddb creatures are **not** persisted (SQLite is authoritative). Player characters + `next_guid` are.
-- `WorldSnapshot::capture` is called with an empty creature slab. Do not pass `world.creatures()` again — you'll bloat the snapshot and shadow worlddb edits.
-- Snapshot save log is at `debug` level. The startup "Restoring from snapshot.bin" log is at `info`.
-- This project does **not** version snapshots. Adding a field to `CharacterSnapshot` will break existing saves. Fine in development; revisit before any external user has a save.
-
-### `Character` field visibility
-
-`Character` fields are `pub` today. Mutating health/max_health/level without an accessor is allowed but discouraged — invariants like `health <= max_health` are not enforced. If you're touching this area, prefer adding `Player::apply_damage(amount)` over direct field writes.
-
-### Auto-attack timer is wall-clock-driven
-
-`Character::update_auto_attack_timer(dt: f32)` takes a `dt` argument. `World::tick` passes the measured wall-clock duration since the previous tick (clamped to 1 s). The configured target interval (currently 33 ms / 30 Hz, see `config.toml` → `network.target_interval_ms`) is only used as the bootstrap value for the very first tick. **Do not** read tick-rate constants in game logic — the actual tick interval is adaptive (`TickPacer` in `src/world/mod.rs` may back off from 30 Hz to 1 Hz under sustained overload), and coupling combat pacing to it would mean combat slowed down whenever the server got busy.
-
-### Visibility / API surface
-
-- `pub` is the public surface; `pub(crate)` is for internal modules.
-- The `OUTGOING_PACKETS` static is `pub(crate)`. External readers call `client::outgoing_packet_count()`.
-
-## Performance posture
-
-- Slab/HashMap capacities don't auto-shrink on remove. `World::shrink_periodic()` runs at every snapshot save; don't call it more often.
-- AOI radius is **400 yards**. Larger than vanilla's 93 yd default by intent — leave it alone unless coordinating with the user.
-- Creature ticks are bucketed by behavior: `walking_creature_keys` and `aggro_creature_keys` are pre-filtered Vecs maintained on `register_creature`/`unregister_creature`. `tick_walking_creatures` and `tick_creature_ai` iterate those, not the full slab.
-- `creature_wake_at: BTreeMap<Instant, Vec<usize>>` parks idle creatures so the active walking iteration stays tiny.
-- Promotions per tick are **unbounded**. There's no `MAX_PROMOTIONS_PER_TICK` cap; bursts of CMSG_PLAYER_LOGIN drain in one tick. The per-promotion `create_object` cache + the account-name reverse index handle the burst load.
-- Tracy plots live in `World::tick` near the end. New plots go there.
-
-## Environment
-
-Set via shell env, `.cargo/config.toml` (cargo-launched only), or `.env` (loaded by `dotenvy` at startup):
+`config.toml` (every key optional; an unknown key is an error), and the environment:
 
 | Var | Purpose |
 |---|---|
-| `WOW_REALM_ADDRESS` | `host:port` advertised in the realm list. Set to your public IP + `8085` when deploying to a server. Defaults to `localhost:8085`. |
-| `WOW_VANILLA_WORLDDB` | Path to mangos SQLite. Without it the server boots with one test wolf only. Set in `.cargo/config.toml` for local dev. |
-| `WOW_VANILLA_USE_MAPS` | Compile-time `option_env!`: path to vanilla client data for namigator builds. Enables terrain following. Without it, mobs walk in linear z. |
-
-A `.env.example` template is checked in; copy to `.env` and adjust.
-
-## Load testing
-
-Load tests use [peon](https://github.com/12932/peon), which speaks the real 1.12 protocol, so the server needs nothing special for it. The auth server auto-creates accounts for any unknown username (password = username), so bots need no setup. peon's `pvp` and `race` modes still assume the `[spawn]` in `config.toml` is the Gurubashi pit.
-
-**Linux fd limit**: `ulimit -n` defaults to 1024 which caps the worker at ~510 bots during the auth-then-world transition. Raise to 65536 for any serious load test.
-
-## Known scope-out items (don't fix unprompted)
-
-- Snapshot versioning — explicitly punted ("this is development").
-- Per-zone weather, world-DB game objects, full faction handling, respawn — listed but deferred.
-- `Client` → `Slab<(PlayerSession, Player)>` proper split — `Client` is currently a composition shim. Don't unwind that without coordinating.
-- Spatial index for AOI — linear scan over clients per broadcast is fine for the current clustered-bots workload. Revisit once spells with smaller AOIs land.
+| `WOW_REALM_ADDRESS` | `host:port` in the realm list. Defaults to `localhost:8085`. |
+| `WOW_TRACY` | `1` starts the Tracy profiler. |
+| `RUST_LOG` | the log filter. |
 
 ## Pull-request checklist
 
-Before opening a PR:
-
-- [ ] `cargo clippy --all-targets` clean (with and without `--features wowm-capture` if you touched those code paths).
-- [ ] `cargo nextest run` clean.
-- [ ] No new `pending_*: &mut Vec<…>` arguments. Use `CommandQueue`.
-- [ ] No new `slab.iter().find_map(…)` guid lookups. Use the indexes.
-- [ ] No new `as` casts at boundaries. Use `try_into` / `clamp`.
-- [ ] No new `.unwrap()` on client-supplied data. Log + drop.
-- [ ] No new `Vec::new()` / `HashMap::new()` allocations inside `World::tick` hot phases. Use the `scratch_*` fields.
-- [ ] No new per-viewer `msg.clone()` broadcast loops. Use `aoi::broadcast_*_within_aoi`.
-- [ ] No new socket writes from inside `World::tick`. Go through the per-client outbound channel.
-- [ ] If you added a Slab or HashMap to `World`, add it to `World::shrink_periodic`.
+- [ ] `cargo clippy --all-targets` clean, `cargo test --lib` passing.
+- [ ] A harness test for each packet a change handles.
+- [ ] A schema change is a new entry in `MIGRATIONS`, never an edit to an old one.
+- [ ] Phase work updates [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md)'s progress.

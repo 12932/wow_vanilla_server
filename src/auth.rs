@@ -1,20 +1,20 @@
 use ahash::AHashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, warn};
+use wow_login_messages::ServerMessage;
 use wow_login_messages::all::{
     CMD_AUTH_LOGON_CHALLENGE_Client, CMD_AUTH_RECONNECT_CHALLENGE_Client, ProtocolVersion,
 };
 use wow_login_messages::errors::ExpectedOpcodeError;
 use wow_login_messages::helper::{
-    tokio_expect_client_message, tokio_read_initial_message, InitialMessage,
+    InitialMessage, tokio_expect_client_message, tokio_read_initial_message,
 };
-use wow_login_messages::ServerMessage;
 use wow_srp::normalized_string::NormalizedString;
 use wow_srp::server::{SrpProof, SrpServer, SrpVerifier};
-use wow_srp::{PublicKey, GENERATOR, LARGE_SAFE_PRIME_LITTLE_ENDIAN};
+use wow_srp::{GENERATOR, LARGE_SAFE_PRIME_LITTLE_ENDIAN, PublicKey};
 
 /// Shared SRP session-key cache used by both the auth server (writes
 /// successful logins, reads on reconnect challenge) and the world server
@@ -184,7 +184,7 @@ pub async fn auth(users: UserCache) {
             Ok(s) => s,
             Err(e) => {
                 warn!("auth accept failed: {e}; retrying");
-                tokio::time::sleep(crate::world::ACCEPT_BACKOFF).await;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -234,7 +234,11 @@ async fn expect_idle<M>(stream: &mut TcpStream) -> Result<M, ExpectedOpcodeError
 where
     M: wow_login_messages::ClientMessage + Send,
 {
-    expect_within(crate::config::config().network.client_idle_timeout(), stream).await
+    expect_within(
+        crate::config::config().network.client_idle_timeout(),
+        stream,
+    )
+    .await
 }
 
 async fn handle(mut stream: TcpStream, users: UserCache) {
@@ -299,9 +303,7 @@ async fn reconnect_version_8(
         .await
     );
 
-    let l = or_return!(
-        expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await
-    );
+    let l = or_return!(expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await);
 
     let success = {
         let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
@@ -359,9 +361,7 @@ async fn reconnect_version_2(
         .await
     );
 
-    let l = or_return!(
-        expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await
-    );
+    let l = or_return!(expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await);
 
     let success = {
         let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
@@ -420,9 +420,7 @@ async fn login_version_2(
     );
     debug!("Sent Logon Challenge");
 
-    let l = or_return!(
-        expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await
-    );
+    let l = or_return!(expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await);
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
     let (p, proof) = or_return!(p.into_server(client_public, l.client_proof));
@@ -449,10 +447,10 @@ async fn login_version_2(
 /// `NormalizedString` we substitute "invalid" to keep the proof flow alive
 /// but make verification deterministically fail on the client side.
 fn get_proof(username: &str) -> SrpProof {
-    let fallback = || NormalizedString::new("invalid".to_string()).expect("'invalid' is normalizable");
+    let fallback =
+        || NormalizedString::new("invalid".to_string()).expect("'invalid' is normalizable");
     let username_norm = NormalizedString::new(username.to_string()).unwrap_or_else(|_| fallback());
-    let password_norm =
-        NormalizedString::new(username.to_string()).unwrap_or_else(|_| fallback());
+    let password_norm = NormalizedString::new(username.to_string()).unwrap_or_else(|_| fallback());
     SrpVerifier::from_username_and_password(username_norm, password_norm).into_proof()
 }
 
@@ -483,9 +481,7 @@ async fn login_version_3(
     );
     debug!("Sent Logon Challenge");
 
-    let l = or_return!(
-        expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await
-    );
+    let l = or_return!(expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await);
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
     let (p, proof) = or_return!(p.into_server(client_public, l.client_proof));
@@ -502,8 +498,7 @@ async fn login_version_3(
     );
     debug!("Sent Logon Proof");
 
-    or_return!(users.lock().map_err(|_| "users mutex poisoned"))
-        .insert(username.to_string(), p);
+    or_return!(users.lock().map_err(|_| "users mutex poisoned")).insert(username.to_string(), p);
 
     print_version_2_3_realm_list(stream).await;
 }
@@ -534,9 +529,7 @@ async fn login_version_8(
     );
     debug!("Sent Logon Challenge");
 
-    let l = or_return!(
-        expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await
-    );
+    let l = or_return!(expect_step::<CMD_AUTH_LOGON_PROOF_Client>(&mut stream).await);
 
     let client_public = or_return!(PublicKey::from_le_bytes(l.client_public_key));
     let (p, server_proof) = or_return!(p.into_server(client_public, l.client_proof));
@@ -555,8 +548,7 @@ async fn login_version_8(
     );
     debug!("Sent Logon Proof");
 
-    or_return!(users.lock().map_err(|_| "users mutex poisoned"))
-        .insert(username.to_string(), p);
+    or_return!(users.lock().map_err(|_| "users mutex poisoned")).insert(username.to_string(), p);
 
     print_version_8_realm_list(stream).await;
 }
@@ -624,7 +616,9 @@ mod timeout_tests {
     #[tokio::test]
     async fn a_quiet_client_times_out() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let _client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
         let (mut server, _) = listener.accept().await.unwrap();
         let limit = std::time::Duration::from_millis(50);
         match expect_within::<CMD_AUTH_LOGON_PROOF_Client>(limit, &mut server).await {
@@ -701,7 +695,10 @@ mod user_cache_tests {
         // since the get() refresh — alice should survive.
         c.insert("bob".into(), "B"); // triggers prune
         assert_eq!(c.len(), 2);
-        assert!(c.get("alice").is_some(), "recently-read entry must survive prune");
+        assert!(
+            c.get("alice").is_some(),
+            "recently-read entry must survive prune"
+        );
     }
 
     #[test]

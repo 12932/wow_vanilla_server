@@ -1,0 +1,724 @@
+//! Maps: each map, or instance of one, is an actor that owns everything in
+//! it, handles its players' packets as they arrive, and runs a 20 Hz update
+//! for what time drives.
+
+pub mod ai;
+pub mod chat;
+pub mod combat;
+pub mod creature;
+pub mod death;
+pub mod gameobject;
+pub mod gm;
+pub mod grid;
+pub mod handlers;
+pub mod login;
+pub mod loot;
+pub mod movement;
+pub mod nav;
+pub mod player;
+pub mod query;
+pub mod stats;
+pub mod visibility;
+pub mod world;
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use ahash::AHashMap;
+use parking_lot::RwLock;
+use slab::Slab;
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, info, warn};
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
+
+use crate::game::Realm;
+use crate::game::fields::Visibility;
+use crate::game::guid;
+use crate::game::map::creature::Creature;
+use crate::game::map::gameobject::GameObject;
+use crate::game::map::grid::Grid;
+use crate::game::map::player::Player;
+use crate::game::registry::Online;
+use crate::game::session::Control;
+use crate::game::store::CharacterRow;
+use crate::game::update::{self, Batch};
+
+/// A map, and which copy of it: 0 for the open world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MapKey {
+    pub map: u32,
+    pub instance: u32,
+}
+
+impl MapKey {
+    pub const fn world(map: u32) -> Self {
+        Self { map, instance: 0 }
+    }
+}
+
+impl std::fmt::Display for MapKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.instance == 0 {
+            write!(f, "map {}", self.map)
+        } else {
+            write!(f, "map {} instance {}", self.map, self.instance)
+        }
+    }
+}
+
+/// What a map is sent.
+#[allow(clippy::large_enum_variant)] // Packets move through the channel once.
+pub enum MapEvent {
+    Arrive(Box<Arrival>),
+    Packet(Guid, ClientOpcodeMessage),
+    Disconnect(Guid),
+    /// Run code on the map: how a service changes something a map owns.
+    Call(Box<dyn FnOnce(&mut Map) + Send>),
+    /// Save everyone and stop.
+    Shutdown(oneshot::Sender<()>),
+}
+
+/// A player coming into a map.
+pub struct Arrival {
+    pub kind: ArrivalKind,
+    pub online: Arc<Online>,
+}
+
+pub enum ArrivalKind {
+    /// Logging in, from a stored character.
+    Login(Box<CharacterRow>),
+    /// From another map.
+    Transfer(Box<Player>),
+}
+
+/// A handle to a map's actor.
+#[derive(Clone)]
+pub struct MapHandle {
+    pub key: MapKey,
+    tx: mpsc::UnboundedSender<MapEvent>,
+}
+
+impl std::fmt::Debug for MapHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MapHandle({})", self.key)
+    }
+}
+
+impl MapHandle {
+    pub fn send(&self, event: MapEvent) -> bool {
+        self.tx.send(event).is_ok()
+    }
+
+    pub fn call(&self, f: impl FnOnce(&mut Map) + Send + 'static) -> bool {
+        self.send(MapEvent::Call(Box::new(f)))
+    }
+
+    /// Run `f` on the map and wait for what it returns.
+    pub async fn query<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut Map) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (tx, rx) = oneshot::channel();
+        self.call(move |m| {
+            let _ = tx.send(f(m));
+        });
+        rx.await.ok()
+    }
+}
+
+/// Every map that is running.
+#[derive(Default)]
+pub struct Maps {
+    handles: RwLock<AHashMap<MapKey, MapHandle>>,
+}
+
+impl Maps {
+    /// The map's handle, starting its actor if it isn't running.
+    pub fn get(&self, realm: &Arc<Realm>, key: MapKey) -> MapHandle {
+        if let Some(h) = self.handles.read().get(&key) {
+            return h.clone();
+        }
+        let mut handles = self.handles.write();
+        if let Some(h) = handles.get(&key) {
+            return h.clone();
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = MapHandle { key, tx };
+        let map = Map::new(key, realm.clone(), handle.clone());
+        tokio::spawn(run(map, rx));
+        handles.insert(key, handle.clone());
+        info!("started {key}");
+        handle
+    }
+
+    pub fn all(&self) -> Vec<MapHandle> {
+        self.handles.read().values().cloned().collect()
+    }
+}
+
+/// The map update's period.
+pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
+/// How long a client has to acknowledge a teleport before its movement is
+/// heeded again.
+const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Per-map counters, for `.maps` and the logs.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MapStats {
+    pub updates: u64,
+    pub events: u64,
+    pub last_update: Duration,
+    pub max_update: Duration,
+}
+
+pub struct Map {
+    pub key: MapKey,
+    pub realm: Arc<Realm>,
+    pub handle: MapHandle,
+    pub players: AHashMap<Guid, Player>,
+    pub creatures: Slab<Creature>,
+    pub creature_by_guid: AHashMap<Guid, usize>,
+    pub gameobjects: Slab<GameObject>,
+    pub gameobject_by_guid: AHashMap<Guid, usize>,
+    pub corpses: AHashMap<Guid, death::Corpse>,
+    /// Creatures dead and waiting to decay or respawn.
+    pub dead_creatures: Vec<Guid>,
+    pub nav: Option<nav::Nav>,
+    pub grid: Grid,
+    /// Objects whose visibility must be worked out at the next update.
+    pub visibility_dirty: ahash::AHashSet<Guid>,
+    /// Objects each observer must be told to forget at the next update.
+    pub forget: AHashMap<Guid, Vec<Guid>>,
+    /// Each observer's blocks for the coming update.
+    pub batches: AHashMap<Guid, Batch>,
+    /// Create blocks built this update, by object, for every observer that
+    /// needs one.
+    create_cache: AHashMap<Guid, Arc<[u8]>>,
+    pub stats: MapStats,
+    pub started: Instant,
+    pub now: Instant,
+    pub next_creature_counter: u32,
+    pub next_spline_id: u32,
+}
+
+/// Run a map's actor until it is told to stop.
+async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
+    world::populate(&mut map);
+    let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            event = rx.recv() => {
+                let Some(event) = event else { break };
+                map.now = Instant::now();
+                if map.handle_event(event) {
+                    break;
+                }
+                // Drain what else has arrived, a bounded amount, so the
+                // update isn't starved.
+                for _ in 0..512 {
+                    match rx.try_recv() {
+                        Ok(event) => {
+                            if map.handle_event(event) {
+                                return;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            _ = ticker.tick() => map.update(),
+        }
+    }
+}
+
+impl Map {
+    pub fn new(key: MapKey, realm: Arc<Realm>, handle: MapHandle) -> Self {
+        let now = Instant::now();
+        Self {
+            key,
+            realm,
+            handle,
+            players: AHashMap::new(),
+            creatures: Slab::new(),
+            creature_by_guid: AHashMap::new(),
+            gameobjects: Slab::new(),
+            gameobject_by_guid: AHashMap::new(),
+            corpses: AHashMap::new(),
+            dead_creatures: Vec::new(),
+            nav: None,
+            grid: Grid::new(),
+            visibility_dirty: ahash::AHashSet::new(),
+            forget: AHashMap::new(),
+            batches: AHashMap::new(),
+            create_cache: AHashMap::new(),
+            stats: MapStats::default(),
+            started: now,
+            now,
+            next_creature_counter: 1,
+            next_spline_id: 1,
+        }
+    }
+
+    /// Milliseconds since the map started: the server's clock in movement
+    /// packets.
+    pub fn server_ms(&self) -> u32 {
+        self.now.duration_since(self.started).as_millis() as u32
+    }
+
+    /// Handle one event; true to stop the actor.
+    fn handle_event(&mut self, event: MapEvent) -> bool {
+        self.stats.events += 1;
+        match event {
+            MapEvent::Arrive(a) => self.arrive(*a),
+            MapEvent::Packet(guid, msg) => self.handle_packet(guid, msg),
+            MapEvent::Disconnect(guid) => {
+                if let Some(p) = self.take_player(guid) {
+                    debug!("{} disconnected from {}", p.name, self.key);
+                    self.save_and_go_offline(p);
+                }
+            }
+            MapEvent::Call(f) => f(self),
+            MapEvent::Shutdown(reply) => {
+                let guids: Vec<Guid> = self.players.keys().copied().collect();
+                for g in guids {
+                    if let Some(p) = self.take_player(g) {
+                        self.save_and_go_offline(p);
+                    }
+                }
+                let _ = reply.send(());
+                return true;
+            }
+        }
+        false
+    }
+
+    fn arrive(&mut self, arrival: Arrival) {
+        let Arrival { kind, online } = arrival;
+        online.set_map(self.handle.clone());
+        match kind {
+            ArrivalKind::Login(row) => {
+                let mut p = Player::from_row(&self.realm.data.clone(), *row, online, self.now);
+                p.row.map = self.key.map;
+                let guid = p.guid;
+                login::send_login(self, &mut p);
+                let corpse = p.row.state.corpse;
+                if p.row.state.dead {
+                    match corpse {
+                        Some(c) => {
+                            death::become_ghost(&mut p, self.now);
+                            let cg = guid::corpse(guid::counter(guid));
+                            if c.map == self.key.map && !self.corpses.contains_key(&cg) {
+                                let at = wow_world_messages::vanilla::Vector3d {
+                                    x: c.x,
+                                    y: c.y,
+                                    z: c.z,
+                                };
+                                let corpse = death::Corpse::new(&p, at, c.orientation);
+                                self.add_corpse(corpse);
+                            }
+                        }
+                        // Died and logged out before releasing: up again.
+                        None => p.row.state.dead = false,
+                    }
+                }
+                self.insert_player(p);
+                self.visibility_dirty.insert(guid);
+            }
+            ArrivalKind::Transfer(mut p) => {
+                p.row.map = self.key.map;
+                p.awaiting_worldport = true;
+                p.teleport = None;
+                p.outbound
+                    .send(&wow_world_messages::vanilla::SMSG_NEW_WORLD {
+                        map: crate::game::map::movement::map_enum(self.key.map),
+                        position: p.position(),
+                        orientation: p.movement.orientation,
+                    });
+                self.insert_player(*p);
+            }
+        }
+    }
+
+    fn insert_player(&mut self, mut p: Player) {
+        p.known.clear();
+        p.observers.clear();
+        p.cell = grid::cell_of(p.position().x, p.position().y);
+        p.vis_anchor = p.position();
+        self.grid.insert(p.guid, p.cell);
+        self.players.insert(p.guid, p);
+    }
+
+    /// Take a player out of the map: every client that knows them forgets
+    /// them, and they forget everything.
+    pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        let mut p = self.players.remove(&guid)?;
+        self.grid.remove(guid, p.cell);
+        self.visibility_dirty.remove(&guid);
+        self.batches.remove(&guid);
+        self.forget.remove(&guid);
+        for observer in p.observers.drain() {
+            if let Some(o) = self.players.get_mut(&observer) {
+                o.known.remove(&guid);
+                self.forget.entry(observer).or_default().push(guid);
+            }
+        }
+        for known in p.known.drain() {
+            self.remove_observer(known, guid);
+        }
+        Some(p)
+    }
+
+    /// Store a player's character and take them off the online list.
+    pub fn save_and_go_offline(&mut self, mut p: Player) {
+        let row = p.to_row(self.now);
+        self.realm.store.save(row);
+        self.realm.registry.go_offline(p.guid);
+    }
+
+    pub fn save_player(&mut self, guid: Guid) {
+        let now = self.now;
+        if let Some(p) = self.players.get_mut(&guid) {
+            let row = p.to_row(now);
+            p.save_at = now + self.realm.config.save_interval;
+            self.realm.store.save(row);
+        }
+    }
+
+    /// Send a player to `key` at `position`, within this map or to another.
+    pub fn teleport(
+        &mut self,
+        guid: Guid,
+        key: MapKey,
+        position: wow_world_messages::vanilla::Vector3d,
+        orientation: f32,
+    ) {
+        if key == self.key {
+            movement::teleport_within(self, guid, position, orientation);
+            return;
+        }
+        let Some(p) = self.players.get(&guid) else {
+            return;
+        };
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_TRANSFER_PENDING {
+                map: movement::map_enum(key.map),
+                has_transport: None,
+            });
+        let Some(mut p) = self.take_player(guid) else {
+            return;
+        };
+        p.movement.position = position;
+        p.movement.orientation = orientation;
+        p.movement.flags = wow_world_messages::vanilla::MovementInfo_MovementFlags::empty();
+        p.logout_at = None;
+        let session = p.online.session.clone();
+        let _ = session.send(Control::Transfer {
+            player: Box::new(p),
+            to: key,
+        });
+    }
+
+    /// The update: timers, visibility, and the changed fields of
+    /// everything, to every client that should hear of them.
+    pub fn update(&mut self) {
+        let started = Instant::now();
+        self.now = started;
+        self.stats.updates += 1;
+
+        self.update_players();
+        combat::update_players(self);
+        ai::update_creatures(self);
+        ai::update_dead(self);
+        visibility::refresh_dirty(self);
+        self.flush_forgets();
+        self.flush_values();
+        self.flush_batches();
+        self.create_cache.clear();
+
+        let took = started.elapsed();
+        self.stats.last_update = took;
+        self.stats.max_update = self.stats.max_update.max(took);
+        if took > UPDATE_INTERVAL {
+            warn!(
+                "{} update took {} ms ({} players, {} creatures)",
+                self.key,
+                took.as_millis(),
+                self.players.len(),
+                self.creatures.len()
+            );
+        }
+    }
+
+    fn update_players(&mut self) {
+        let now = self.now;
+        let mut logouts = Vec::new();
+        let mut saves = Vec::new();
+        for p in self.players.values_mut() {
+            if p.logout_at.is_some_and(|t| t <= now) {
+                logouts.push(p.guid);
+                continue;
+            }
+            if p.teleport
+                .is_some_and(|t| now.duration_since(t.since) > TELEPORT_TIMEOUT)
+            {
+                p.teleport = None;
+            }
+            if p.save_at <= now {
+                saves.push(p.guid);
+            }
+        }
+        for g in logouts {
+            login::complete_logout(self, g);
+        }
+        for g in saves {
+            self.save_player(g);
+        }
+        stats::regen(self);
+    }
+
+    fn flush_forgets(&mut self) {
+        for (observer, guids) in self.forget.drain() {
+            if guids.is_empty() || !self.players.contains_key(&observer) {
+                continue;
+            }
+            let block = update::out_of_range_block(&guids);
+            self.batches.entry(observer).or_default().push(&block);
+        }
+    }
+
+    fn flush_values(&mut self) {
+        let batches = &mut self.batches;
+        for p in self.players.values_mut() {
+            if p.awaiting_worldport {
+                continue;
+            }
+            for item in &mut p.items {
+                if let Some(block) =
+                    update::values_block(item.guid, &item.fields, Visibility::Owner)
+                {
+                    batches.entry(p.guid).or_default().push(&block);
+                }
+                item.fields.clear_dirty();
+            }
+            if !p.fields.is_dirty() {
+                continue;
+            }
+            if let Some(block) = update::values_block(p.guid, &p.fields, Visibility::Owner) {
+                batches.entry(p.guid).or_default().push(&block);
+            }
+            if !p.observers.is_empty()
+                && let Some(block) = update::values_block(p.guid, &p.fields, Visibility::Public)
+            {
+                for o in &p.observers {
+                    batches.entry(*o).or_default().push(&block);
+                }
+            }
+            p.fields.clear_dirty();
+        }
+        for (_, c) in self.creatures.iter_mut() {
+            if !c.fields.is_dirty() {
+                continue;
+            }
+            if !c.observers.is_empty()
+                && let Some(block) = update::values_block(c.guid, &c.fields, Visibility::Public)
+            {
+                for o in &c.observers {
+                    batches.entry(*o).or_default().push(&block);
+                }
+            }
+            c.fields.clear_dirty();
+        }
+    }
+
+    fn flush_batches(&mut self) {
+        for (guid, batch) in self.batches.drain() {
+            let Some(p) = self.players.get(&guid) else {
+                continue;
+            };
+            for frame in batch.finish() {
+                p.outbound.send_frame(frame);
+            }
+        }
+    }
+
+    /// The create block for `object` as a stranger sees it, built once per
+    /// update.
+    pub fn public_create(&mut self, object: Guid) -> Option<Arc<[u8]>> {
+        if let Some(b) = self.create_cache.get(&object) {
+            return Some(b.clone());
+        }
+        let now = self.now;
+        let block: Arc<[u8]> = if guid::is_player(object) {
+            let p = self.players.get(&object)?;
+            Arc::from(update::create_block(&p.create(false), Visibility::Public))
+        } else if guid::is_unit(object) {
+            let c = self.creature(object)?;
+            Arc::from(update::create_block(&c.create(now), Visibility::Public))
+        } else if guid::is_game_object(object) {
+            let g = self.gameobject(object)?;
+            Arc::from(update::create_block(&g.create(), Visibility::Public))
+        } else if guid::is_corpse(object) {
+            let c = self.corpses.get(&object)?;
+            Arc::from(update::create_block(&c.create(), Visibility::Public))
+        } else {
+            return None;
+        };
+        self.create_cache.insert(object, block.clone());
+        Some(block)
+    }
+
+    pub fn creature(&self, guid: Guid) -> Option<&Creature> {
+        self.creature_by_guid
+            .get(&guid)
+            .and_then(|k| self.creatures.get(*k))
+    }
+
+    pub fn creature_mut(&mut self, guid: Guid) -> Option<&mut Creature> {
+        let k = *self.creature_by_guid.get(&guid)?;
+        self.creatures.get_mut(k)
+    }
+
+    pub fn gameobject(&self, guid: Guid) -> Option<&GameObject> {
+        self.gameobject_by_guid
+            .get(&guid)
+            .and_then(|k| self.gameobjects.get(*k))
+    }
+
+    pub fn gameobject_mut(&mut self, guid: Guid) -> Option<&mut GameObject> {
+        let k = *self.gameobject_by_guid.get(&guid)?;
+        self.gameobjects.get_mut(k)
+    }
+
+    pub fn add_creature(&mut self, c: Creature) -> Guid {
+        let guid = c.guid;
+        let cell = c.cell;
+        let key = self.creatures.insert(c);
+        self.creature_by_guid.insert(guid, key);
+        self.grid.insert(guid, cell);
+        self.visibility_dirty.insert(guid);
+        guid
+    }
+
+    pub fn add_gameobject(&mut self, g: GameObject) -> Guid {
+        let guid = g.guid;
+        let cell = g.cell;
+        let key = self.gameobjects.insert(g);
+        self.gameobject_by_guid.insert(guid, key);
+        self.grid.insert(guid, cell);
+        self.visibility_dirty.insert(guid);
+        guid
+    }
+
+    pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {
+        let key = self.creature_by_guid.remove(&guid)?;
+        let mut c = self.creatures.try_remove(key)?;
+        self.grid.remove(guid, c.cell);
+        for o in c.observers.drain() {
+            if let Some(p) = self.players.get_mut(&o) {
+                p.known.remove(&guid);
+                self.forget.entry(o).or_default().push(guid);
+            }
+        }
+        Some(c)
+    }
+
+    /// The position of any object in the map.
+    pub fn position_of(&self, object: Guid) -> Option<wow_world_messages::vanilla::Vector3d> {
+        if guid::is_player(object) {
+            self.players.get(&object).map(|p| p.position())
+        } else if guid::is_unit(object) {
+            self.creature(object).map(|c| c.position)
+        } else if guid::is_game_object(object) {
+            self.gameobject(object).map(|g| g.position)
+        } else if guid::is_corpse(object) {
+            self.corpses.get(&object).map(|c| c.position)
+        } else {
+            None
+        }
+    }
+
+    /// The players whose clients know `object`.
+    pub fn observers(&self, object: Guid) -> Option<&ahash::AHashSet<Guid>> {
+        if guid::is_player(object) {
+            self.players.get(&object).map(|p| &p.observers)
+        } else if guid::is_unit(object) {
+            self.creature(object).map(|c| &c.observers)
+        } else if guid::is_game_object(object) {
+            self.gameobject(object).map(|g| &g.observers)
+        } else if guid::is_corpse(object) {
+            self.corpses.get(&object).map(|c| &c.observers)
+        } else {
+            None
+        }
+    }
+
+    pub fn observers_mut(&mut self, object: Guid) -> Option<&mut ahash::AHashSet<Guid>> {
+        if guid::is_player(object) {
+            self.players.get_mut(&object).map(|p| &mut p.observers)
+        } else if guid::is_unit(object) {
+            self.creature_mut(object).map(|c| &mut c.observers)
+        } else if guid::is_game_object(object) {
+            self.gameobject_mut(object).map(|g| &mut g.observers)
+        } else if guid::is_corpse(object) {
+            self.corpses.get_mut(&object).map(|c| &mut c.observers)
+        } else {
+            None
+        }
+    }
+
+    /// `observer` no longer knows `object`.
+    pub fn remove_observer(&mut self, object: Guid, observer: Guid) {
+        if let Some(o) = self.observers_mut(object) {
+            o.remove(&observer);
+        }
+    }
+
+    /// Send `frame` to every client that knows `object`, and to the object
+    /// itself if it is a player and `to_self` is set.
+    pub fn send_to_observers(&self, object: Guid, frame: &Arc<[u8]>, to_self: bool) {
+        if to_self && let Some(p) = self.players.get(&object) {
+            p.outbound.send_frame(frame.clone());
+        }
+        let Some(observers) = self.observers(object) else {
+            return;
+        };
+        for o in observers {
+            if let Some(p) = self.players.get(o) {
+                p.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+
+    /// Players within `radius` yards of `object`, the object included if it
+    /// is one.
+    pub fn players_near(&self, x: f32, y: f32, radius: f32) -> Vec<Guid> {
+        let r2 = radius * radius;
+        self.grid
+            .around(x, y, radius)
+            .filter(|g| guid::is_player(*g))
+            .filter(|g| {
+                self.players.get(g).is_some_and(|p| {
+                    let d = p.position();
+                    (d.x - x).powi(2) + (d.y - y).powi(2) <= r2
+                })
+            })
+            .collect()
+    }
+
+    pub fn player(&self, guid: Guid) -> Option<&Player> {
+        self.players.get(&guid)
+    }
+
+    pub fn player_mut(&mut self, guid: Guid) -> Option<&mut Player> {
+        self.players.get_mut(&guid)
+    }
+
+    /// A system message to one player.
+    pub fn system_message(&self, guid: Guid, text: &str) {
+        if let Some(p) = self.players.get(&guid) {
+            chat::send_system(&p.outbound, text);
+        }
+    }
+}

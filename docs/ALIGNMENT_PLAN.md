@@ -346,3 +346,52 @@ What each phase leaves for later is written into this plan as the phase is done.
 ## Progress
 
 Each phase's commit, and what it measured, as it lands.
+
+### Phases 1 to 4 (2026-10-16)
+
+The new core, the world, units and combat landed together: the world module they replaced was deleted in one go,
+and the later phases build on the core's types.
+
+**Phase 1, the core.** Sessions, map actors, the registry, update fields with dirty bits, the visibility grid, the
+SQLite store (migrated, saved at logout, every five minutes and on SIGTERM), and the harness. peon's baselines at
+100 bots, before (the old tick) and after, p50 / p99 ms:
+
+| Scenario | Login | Movement | Chat | Name query |
+|---|---|---|---|---|
+| idle | 356 / 406 → 3.3 / 18.2 | 42 / 99 → 0.0 / 1.0 | 54 / 95 → 0.0 / 1.0 | 101 / 101 → 0.1 / 0.3 |
+| wander | 356 / 406 → 3.2 / 17.2 | 53 / 137 → 0.0 / 1.0 | 42 / 97 → 0.0 / 1.0 | 101 / 103 → 0.1 / 0.2 |
+| cluster | 356 / 406 → 3.2 / 18.7 | 59 / 141 → 0.0 / 1.0 | 42 / 101 → 0.0 / 1.0 | 3 / 307 → 0.4 / 0.8 |
+| race | 356 / 406 → 3.2 / 19.2 | 59 / 141 → 0.0 / 1.0 | 51 / 93 → 0.0 / 1.0 | 97 / 203 → 0.1 / 0.5 |
+| login-storm | 356 / 406 → 3.1 / 15.0 | 51 / 112 → 0.0 / 1.0 | 41 / 97 → 0.0 / 1.0 | 2 / 110 → 0.1 / 0.3 |
+| login-churn | 195 / 406 → 1.7 / 16.3 | 51 / 126 → 0.0 / 1.0 | 42 / 93 → 0.0 / 1.0 | 1 / 101 → 0.1 / 0.2 |
+
+These ran without world data, as the old baselines did. The reports are in peon's `results/2026-10-16/wvs-phase1/`.
+
+**Phase 2, the world.** vmangos's patch-10 world loads in 2.3 s: 66,001 creatures and 56,611 game objects (Thistle
+Tea's counts), 10,381 creature templates, 17,707 items. Eastern Kingdoms and Kalimdor populate in 25 ms each, at
+boot. Creatures wander near home and walk their waypoints on the navmesh, but only when a player sees them. Zones and
+areas come from rustigator, and with them Gurubashi Arena's free-for-all: in a 30-bot `pvp-arena` smoke test,
+same-faction bots killed each other 28 times. peon's NPC errands and hunts find their targets.
+
+**Phase 3, units and death.** Characters start with vmangos's position, stats, spells, action bars and gear (placed by
+inventory type). Health, mana, rage and energy regenerate by vanilla's class formulas; levels and XP follow
+`player_xp_for_level`, with `SMSG_LEVELUP_INFO`. A dead player releases to the nearest graveyard of their zone and
+faction as a ghost, which the living don't see, and comes back at their corpse after 30 s, or at a spirit healer.
+
+**Phase 4, combat and creature AI.**
+- **Melee:** vmangos's single-roll hit table, weapon damage from attack power, armor, rage, and the attack errors.
+  A swing starts at once: `pvp-arena`'s first-result p50 fell from 1.8 s to 0.25 s.
+- **Hostility:** faction templates.
+- **Creatures:** they notice hostile players at vmangos's aggro radius (with line of sight), call for help, chase on
+  the navmesh, leash and evade, die, decay and respawn on their spawn's timer.
+- **Rewards:** kills give vmangos's XP; enemy players give honorable kills.
+
+**Left for later:**
+- Rested XP, ghost speed by race, resurrection sickness and durability loss (they need auras and items: Phases 5
+  and 7).
+- Parry and dodge chances by class and level.
+- Ranged attacks.
+- Contested areas.
+- Honor ranks.
+- peon reads `SMSG_GAMEOBJECT_QUERY_RESPONSE` with wow_messages, whose layout (five names, six data words) isn't
+  1.12's (four names, 24 data words); wow_vanilla_server sends 1.12's, so peon counts those as parse errors.

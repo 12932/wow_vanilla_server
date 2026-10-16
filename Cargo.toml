@@ -62,26 +62,18 @@ kanal = "0.1.1"
 arc-swap = "1.7.1"
 mimalloc = { version = "0.1", default-features = false }
 smallvec = "1.13"
+parking_lot = "0.12"
+flate2 = "1"
+serde_json = "1"
 
 [[bin]]
 name = "wow_vanilla_server"
 path = "src/main.rs"
 
-[dev-dependencies]
-criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
-rand = "0.10.1"
-
-[[bench]]
-name = "hot_loops"
-harness = false
-
 [profile.release]
 debug = 0
-# Thin LTO + single codegen unit lets the compiler inline across module
-# boundaries — important for hot paths like `within_aoi` called from
-# inside `broadcast_opcode_within_aoi`, and `OutboundTx::try_send`
-# called from the broadcast loop. Builds get noticeably slower (~2–3×)
-# but only for `--release` / bench.
+# Thin LTO and one codegen unit let the compiler inline across modules.
+# A panic unwinds: a map whose actor panics is lost, the rest of the
+# server goes on.
 lto = "thin"
 codegen-units = 1
-panic = "abort"
