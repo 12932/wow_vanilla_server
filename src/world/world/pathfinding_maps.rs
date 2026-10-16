@@ -133,14 +133,11 @@ impl PathfindingMaps {
     /// continent or the lookup fails (e.g. outside the navmesh).
     ///
     /// Uses `find_heights` (plural) and picks the candidate closest
-    /// to `z_hint`. The singular `find_height` looks like a downward
-    /// raycast but is actually a `findNearestPoly` with hardcoded
-    /// 1-yd extents around the input position — passing
-    /// `z = z_hint + 50` to "ray from above" fails because the search
-    /// cube is 50 yd above the ground. `find_heights` returns every
-    /// navmesh-Z value in the column regardless of start altitude,
-    /// and picking closest-to-hint locks onto the floor in
-    /// multi-level structures.
+    /// to `z_hint`. The singular `find_height` walks the navmesh from
+    /// its start point, which must already be on the mesh, so it can't
+    /// probe down from above. `find_heights` returns every surface in
+    /// the column regardless of start altitude, and picking
+    /// closest-to-hint locks onto the floor in multi-level structures.
     pub fn ground_height(&mut self, map: Map, x: f32, y: f32, z_hint: f32) -> Option<f32> {
         let vmap = self.maps.get_mut(&map)?;
         let (tx, ty) = world_to_adt(x, y);
@@ -179,10 +176,9 @@ impl PathfindingMaps {
     /// endpoint ADT tiles first.
     ///
     /// Callers must pass endpoints already raised to eye/chest height (see
-    /// [`Self::collision_height`]) — units stand exactly ON the collision mesh
-    /// (we snap their Z to ground), so a foot-level ray grazes/dips into the
-    /// very floor it starts on and reports "obstructed". Raising each endpoint
-    /// by its own unit's collision height mirrors mangos's `IsWithinLOSInMap`.
+    /// [`Self::collision_height`]), as mangos's `IsWithinLOSInMap` does: a
+    /// unit sees from its chest, not its feet, so a low wall between two
+    /// units needn't block them.
     ///
     /// Returns `None` when no map is configured for `map`; otherwise the raw
     /// rustigator raycast result. Only the endpoint tiles are forced resident

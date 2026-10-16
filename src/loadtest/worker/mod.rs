@@ -32,8 +32,8 @@ pub enum BotMode {
     Random,
     /// PvP arena fight in Gurubashi Pit.
     Pvp,
-    /// Amazing Race: each bot self-teleports to Booty Bay and runs a
-    /// namigator-generated path to Stormwind (and back, in a loop).
+    /// Amazing Race: each bot self-teleports to Booty Bay and runs the
+    /// navmesh path to Gurubashi Arena (and back, in a loop).
     Race,
 }
 
@@ -173,28 +173,31 @@ pub async fn run(cfg: WorkerConfig) -> std::io::Result<()> {
     let battle_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Race path + shared VanillaMap. Shared across every Race-mode
-    // bot in this worker. Built once at worker startup. The map is
-    // wrapped in Arc<Mutex<>> so bot drivers can snap Z to actual
-    // ground every heartbeat (the path itself is sparse — XY only;
-    // Z comes from per-tick `find_heights` calls in the driver).
+    // bot in this worker. Built once at worker startup. The drivers read
+    // heights from the map through a shared reference, to snap Z to the
+    // ground every heartbeat (the path is sparse; Z comes from per-tick
+    // height lookups).
     //
-    // Fallback path: if namigator isn't wired (env var unset at
-    // compile time, cache missing, find_path fails) we use the
-    // hand-picked `hardcoded_bb_to_arena` waypoints and run
-    // without per-tick Z sampling. Bots clip through scenery but
-    // the load profile is identical from the server's POV.
+    // Without maps configured, bots run the hand-picked
+    // `hardcoded_bb_to_arena` waypoints with no Z sampling: they clip
+    // through scenery, but the load is the same from the server's side.
+    // With maps configured, a path that can't be built is an error: the
+    // race would otherwise run on a made-up route without saying so.
     let (race_path, race_map): (
         Arc<[wow_world_messages::vanilla::Vector3d]>,
-        Option<Arc<std::sync::Mutex<rustigator::vanilla::VanillaMap>>>,
+        Option<Arc<rustigator::vanilla::VanillaMap>>,
     ) = if cfg.mode == BotMode::Race {
         match bot::race::build_race_path() {
-            Ok((path, map)) => (path.into(), Some(map)),
-            Err(e) => {
+            Ok(bot::race::RacePath::Navmesh(path, map)) => (path.into(), Some(map)),
+            Ok(bot::race::RacePath::NoMaps) => {
                 tracing::warn!(
-                    "namigator path generation failed ({e}); falling back to hardcoded BB→Arena polyline. \
-                     Bots will still race but the geometry will be coarse and Z will not track terrain."
+                    "built without WOW_VANILLA_USE_MAPS: racing the hard-coded BB→Arena polyline. \
+                     The geometry is coarse and Z won't track the ground."
                 );
                 (bot::race::hardcoded_bb_to_arena().into(), None)
+            }
+            Err(e) => {
+                return Err(std::io::Error::other(format!("race path: {e}")));
             }
         }
     } else {

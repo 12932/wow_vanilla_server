@@ -1,80 +1,69 @@
 //! Amazing Race helpers: shared waypoint list + per-bot jitter sampling.
 //!
 //! Two paths to a BB → Gurubashi waypoint list:
-//! - `build_race_path()` — calls namigator's `find_path` against the
-//!   pre-baked nav-mesh cache. Returns a polyline that actually hugs
-//!   walkable terrain (around buildings, over bridges). Requires
-//!   `WOW_VANILLA_USE_MAPS` to have been set at compile time AND the
-//!   cache to be present on disk.
-//! - `hardcoded_bb_to_arena()` — coarse fallback. Used when namigator
-//!   isn't available (env var unset at build time, cache missing,
-//!   find_path errors). Bots still walk the route, but the geometry
-//!   clips through anything between waypoints.
+//! - `build_race_path()`: rustigator's path search over the bake in the
+//!   server's cache directory. A polyline that follows walkable ground,
+//!   around buildings and over bridges. Needs `WOW_VANILLA_USE_MAPS` at
+//!   compile time, and the bake on disk.
+//! - `hardcoded_bb_to_arena()`: the coarse fallback when no maps are
+//!   configured. Bots still walk the route, but clip through anything
+//!   between waypoints.
 //!
-//! The race endpoint is the entrance to Gurubashi Arena (~1.6 km
-//! north of Booty Bay along the coast). Bots reverse direction on
-//! arrival and run back, looping forever.
+//! The race ends at the entrance to Gurubashi Arena, about 1 km north of
+//! Booty Bay along the coast. Bots turn back on arrival and run back,
+//! looping forever.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use wow_world_messages::vanilla::Vector3d;
 
-/// Coarse Booty Bay → Gurubashi Arena waypoint list. Two midpoints
-/// hand-picked from in-game eye-balling so the straight-line
-/// interpolation doesn't cut through any major terrain feature.
-/// Used as a fallback when namigator is unavailable.
+/// Coarse Booty Bay → Gurubashi Arena waypoint list, with one midpoint on
+/// the coast road. The fallback when no maps are configured.
 pub fn hardcoded_bb_to_arena() -> Vec<Vector3d> {
     vec![
         BOOTY_BAY,
         // STV coastal road midpoint (north of BB, south of the arena)
-        Vector3d { x: -13800.0, y: 200.0, z: 30.0 },
+        Vector3d { x: -13800.0, y: 200.0, z: 19.2 },
         GURUBASHI_ARENA,
     ]
 }
 
-/// Booty Bay docks — race start. Constant so both `build_race_path()`
-/// and `hardcoded_bb_to_arena()` agree on the endpoints. Coordinates
-/// hand-picked from in-game (`.whereami` on the docks) so they sit
-/// cleanly on the walkable plank surface rather than the namigator
-/// mesh under it (which is rocky seabed several yards below).
+/// Booty Bay's docks, the race start (from `.whereami` on the planks).
 pub const BOOTY_BAY: Vector3d = Vector3d { x: -14237.9, y: 262.02, z: 24.75 };
-/// Gurubashi Arena entrance — race finish. ~1.6 km north of Booty
-/// Bay along the coast road. Replaces the earlier Stormwind
-/// endpoint, which kept failing `find_path` with `UnknownPath`
-/// (probably a missing-bridge gap on the STV → Westfall corridor).
+/// Gurubashi Arena's entrance, the race finish.
 pub const GURUBASHI_ARENA: Vector3d = Vector3d { x: -13284.747, y: 116.001, z: 24.36 };
 
-/// Build the BB → Gurubashi path from the pre-baked navmesh cache.
-/// Returns the SPARSE polyline as namigator's `find_path` produced
-/// it (no densification) PLUS a shared `Arc<Mutex<VanillaMap>>` the
-/// bot driver uses to snap Z to actual ground every heartbeat.
-///
-/// Why no densification: pre-baking Z values at path-build time
-/// means any single bad `find_heights` pick poisons all subsequent
-/// ticks in that segment via the lerp `z_hint` chain. Per-tick
-/// sampling at the bot's live XY (in `movement.rs::tick_race`)
-/// avoids the drift problem — each heartbeat is independent.
-///
-/// Returns `Err` if:
-/// - `WOW_VANILLA_USE_MAPS` was unset at compile time
-/// - The cache directory doesn't exist
-/// - `find_path` returns `UnknownPath`
-///
-/// Caller's responsibility to fall back to `hardcoded_bb_to_arena()`
-/// on error (in which case bots run without per-tick Z sampling
-/// and use the driver's path-Z lerp).
-pub fn build_race_path() -> Result<
-    (
-        Vec<Vector3d>,
-        Arc<Mutex<rustigator::vanilla::VanillaMap>>,
-    ),
-    String,
-> {
-    const DATA_PATH: Option<&str> = std::option_env!("WOW_VANILLA_USE_MAPS");
-    let data_path = DATA_PATH
-        .ok_or_else(|| "WOW_VANILLA_USE_MAPS was unset at compile time".to_string())?;
+/// How far each bot's route is offset from the shared path, at most, on each
+/// axis. Small, so bots stay on the path's ground rather than in the bay or
+/// the cliffs beside it; enough that they don't run in single file.
+const RACE_JITTER_YARDS: f32 = 5.0;
 
-    // Match the server's cache directory convention so the loadtest
-    // and server share one bake artifact.
+/// What `build_race_path` found.
+pub enum RacePath {
+    /// A path over the navmesh, and the map the bots read heights from.
+    Navmesh(Vec<Vector3d>, Arc<rustigator::vanilla::VanillaMap>),
+    /// The loadtest was built without `WOW_VANILLA_USE_MAPS`.
+    NoMaps,
+}
+
+/// Build the BB → Gurubashi path from the bake in the server's cache
+/// directory. Returns the sparse polyline the path search produced, and the
+/// map, which the bot drivers share to snap Z to the ground every heartbeat.
+///
+/// Why no densification: pre-baking Z values at path-build time means one
+/// bad height pick poisons the rest of its segment through the lerp's
+/// `z_hint` chain. Sampling at the bot's live XY (in
+/// `movement.rs::tick_race`) keeps each heartbeat independent.
+///
+/// An error means maps were configured but the path couldn't be built: the
+/// caller should stop rather than race on a made-up route.
+pub fn build_race_path() -> Result<RacePath, String> {
+    const DATA_PATH: Option<&str> = std::option_env!("WOW_VANILLA_USE_MAPS");
+    let Some(data_path) = DATA_PATH else {
+        return Ok(RacePath::NoMaps);
+    };
+
+    // The server's cache directory, so the loadtest and the server share one
+    // bake.
     let output = std::env::temp_dir().join("wow_vanilla_server");
     if !output.exists() {
         return Err(format!(
@@ -98,11 +87,9 @@ pub fn build_race_path() -> Result<
     )
     .map_err(|e| format!("VanillaMap::build_gameobjects_and_map failed: {e:?}"))?;
 
-    // Pre-load every ADT tile in the BB → Gurubashi bounding box.
-    // `find_path` refuses to cross unloaded tiles, and the per-tick
-    // `find_heights` runtime calls also need tiles already loaded
-    // — lazy-loading from inside a hot path would block the bot's
-    // heartbeat behind tile I/O.
+    // Pre-load every ADT tile in the BB → Gurubashi bounding box: the path
+    // search only crosses loaded tiles, and loading from inside a bot's
+    // heartbeat would stall it behind tile I/O.
     let (bb_tx, bb_ty) = world_to_adt(BOOTY_BAY.x, BOOTY_BAY.y);
     let (sw_tx, sw_ty) = world_to_adt(GURUBASHI_ARENA.x, GURUBASHI_ARENA.y);
     let (tx_min, tx_max) = (bb_tx.min(sw_tx), bb_tx.max(sw_tx));
@@ -122,10 +109,17 @@ pub fn build_race_path() -> Result<
         started.elapsed().as_secs_f32(),
     );
 
-    let raw_path: Vec<Vector3d> = map
-        .find_path(BOOTY_BAY, GURUBASHI_ARENA)
-        .map_err(|e| format!("find_path(BB, Gurubashi) failed: {e:?}"))?
-        .to_vec();
+    // The pinned fork's search: steep ground costs four times as much,
+    // rather than counting as flat.
+    let mut raw_path = Vec::new();
+    map.find_path_with(
+        BOOTY_BAY,
+        GURUBASHI_ARENA,
+        &rustigator::raw::PathOptions::reference(false),
+        &mut raw_path,
+        None,
+    )
+    .map_err(|e| format!("find_path(BB, Gurubashi) failed: {e:?}"))?;
 
     let dist: f32 = raw_path
         .windows(2)
@@ -144,7 +138,7 @@ pub fn build_race_path() -> Result<
         zs,
     );
 
-    Ok((raw_path, Arc::new(Mutex::new(map))))
+    Ok(RacePath::Navmesh(raw_path, Arc::new(map)))
 }
 
 /// World XY → ADT tile (tx, ty). Mangos convention: tile_x derives
@@ -160,12 +154,11 @@ fn world_to_adt(x: f32, y: f32) -> (i32, i32) {
 
 /// Per-bot lateral offset applied to every waypoint. Deterministic in
 /// the slot index so re-runs are reproducible. Both axes sampled in
-/// `[-50, 50] yd`; the bot will travel through the corridor offset by
-/// a constant `(jx, jy)` for its entire lifetime. Keeps each bot
-/// inside a tube around the base path rather than crowding everyone
-/// onto a single waypoint string.
+/// `[-RACE_JITTER_YARDS, RACE_JITTER_YARDS]`; the bot travels the path
+/// offset by a constant `(jx, jy)` for its entire lifetime, so bots
+/// spread around the path rather than run in single file.
 pub fn jitter_for_slot(slot: u32) -> (f32, f32) {
-    // Cheap hash → two floats in [-50, 50]. Splitmix-style, no rand
+    // Cheap hash → two floats in [-1, 1], scaled. Splitmix-style, no rand
     // dependency needed (rand is already pulled in by movement.rs but
     // keeping this deterministic-by-slot is more useful for debugging
     // than fresh randomness).
@@ -181,5 +174,5 @@ pub fn jitter_for_slot(slot: u32) -> (f32, f32) {
         // Map to [-1.0, 1.0).
         (h as f32 / u32::MAX as f32) * 2.0 - 1.0
     };
-    (next() * 50.0, next() * 50.0)
+    (next() * RACE_JITTER_YARDS, next() * RACE_JITTER_YARDS)
 }
