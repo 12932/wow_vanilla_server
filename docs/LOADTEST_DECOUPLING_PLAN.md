@@ -266,15 +266,32 @@ In `src/loadtest`, without moving it.
 
 In wow_vanilla_server itself (CODE_REVIEW rows 1, 4, 8 and 9).
 
-- [ ] **Listeners:** accept errors are logged with a back-off, not unwrapped. Pre-auth reads time out, the world
+- [x] **Listeners:** accept errors are logged with a back-off, not unwrapped. Pre-auth reads time out, the world
   reader has an idle timeout, and connections are capped.
-- [ ] **Double login:** a character already in the world is refused, and index removal only deletes entries that
+- [x] **Double login:** a character already in the world is refused, and index removal only deletes entries that
   still point at the client being removed.
-- [ ] **Unknown opcodes:** the world reader no longer reads their bodies twice.
-- [ ] **`CMSG_ATTACKSWING`:** no fake 1,337 crit, and attack start broadcast only when the state or target changes.
-- [ ] **Clippy:** `cargo clippy --all-targets` clean again (the `hot_loops` bench, and one warning).
+- [x] **Unknown opcodes:** the world reader no longer reads their bodies twice.
+- [x] **`CMSG_ATTACKSWING`:** no fake 1,337 crit, and attack start broadcast only when the state or target changes.
+- [x] **Clippy:** `cargo clippy --all-targets` clean again (the `hot_loops` bench, and one warning).
 
 **Done when:** each fix has a test, and Phase 1's runs pass again.
+
+**Result:**
+- **Tests:** `cargo clippy --all-targets` is clean, and 136 of 136 tests pass. Each fix has a test:
+  - a quiet auth client times out;
+  - an unknown opcode is skipped and a ping after it is still answered;
+  - a burst of bad packets disconnects;
+  - a kicked session is dropped and saved;
+  - repeating an attack swing changes nothing.
+- **Live:** 50 bots in the world with no parse errors. A second worker logging the same five accounts in kicked
+  the first worker's five sessions (45 and 5 alive, and five "logged in again" drops). An idle world socket is closed
+  after the 10 s handshake timeout.
+- **Double login:** the newest login wins, as on most servers. The old session is dropped as stale (saved, and
+  unregistered) by its map's next tick, and the new one then enters.
+- **New `[network]` settings:** `handshake_timeout_secs` (10), `client_idle_timeout_secs` (120),
+  `max_pending_connections` (1024).
+- **Side effect:** with the swing timer no longer reset by every `CMSG_ATTACKSWING`, repeated swings land at their
+  real rate.
 
 ### Phase 3: rustigator master in wow_vanilla_server
 

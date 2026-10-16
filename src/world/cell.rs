@@ -118,6 +118,43 @@ pub fn unregister_player(guid: Guid) {
     }
 }
 
+/// Whether `guid`'s character is in the world, on any map.
+pub fn player_in_world(guid: Guid) -> bool {
+    PLAYER_REGISTRY
+        .lock()
+        .map(|reg| reg.contains_key(&guid))
+        .unwrap_or(false)
+}
+
+/// Characters whose session is to be dropped, because the same character is
+/// logging in again (a client that crashed and reconnected before its old
+/// session was noticed, say). The newest login wins: the map holding the old
+/// session drops it as stale, saving it, and the new one then enters.
+pub static KICK_REQUESTS: std::sync::LazyLock<std::sync::Mutex<ahash::AHashSet<Guid>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(ahash::AHashSet::new()));
+
+/// Ask for `guid`'s session in the world to be dropped.
+pub fn request_kick(guid: Guid) {
+    if let Ok(mut kicks) = KICK_REQUESTS.lock() {
+        kicks.insert(guid);
+    }
+}
+
+/// Whether a kick of `guid` is pending.
+pub fn kick_requested(guid: Guid) -> bool {
+    KICK_REQUESTS
+        .lock()
+        .map(|kicks| kicks.contains(&guid))
+        .unwrap_or(false)
+}
+
+/// Forget a pending kick of `guid`: done, or no longer needed.
+pub fn clear_kick(guid: Guid) {
+    if let Ok(mut kicks) = KICK_REQUESTS.lock() {
+        kicks.remove(&guid);
+    }
+}
+
 /// Look up a player's position by guid. Used by `.go` (no args, with
 /// selected target) when the target isn't in the GM's local cell.
 pub fn lookup_player_position(guid: Guid) -> Option<(Map, Vector3d, f32)> {

@@ -273,22 +273,13 @@ fn bench_tick_aoi_transitions(c: &mut Criterion) {
                     },
                     |world| {
                         rt.block_on(async {
-                            // Bench uses `make_position`/`make_character`
-                            // which clusters characters near the origin
-                            // (CLUSTER_RADIUS = 50yd), so they all fall
-                            // into cell (0, 0) on EasternKingdoms.
-                            // Stage 5 partition: look up that cell
-                            // directly instead of the deleted
-                            // `primary_cell()` sentinel.
-                            let key = wow_vanilla_server::world::cell::CellKey {
-                                map: BENCH_MAP,
-                                cx: 0,
-                                cy: 0,
-                            };
+                            // Bench uses `make_position`/`make_character`,
+                            // which put every character on BENCH_MAP;
+                            // each map has one `MapState`.
                             let cell_arc = world
-                                .cells
-                                .get(&key)
-                                .expect("bench cluster cell (0,0) should exist")
+                                .maps_state
+                                .get(&BENCH_MAP)
+                                .expect("bench map should exist")
                                 .clone();
                             // Empty snapshot is fine for this micro-bench
                             // — it measures the diff-scan loop, not

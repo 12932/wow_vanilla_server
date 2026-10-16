@@ -28,18 +28,45 @@ use wow_srp::vanilla_header::ProofSeed;
 use wow_world_messages::vanilla::tokio_expect_client_message;
 use wow_world_messages::vanilla::*;
 
+/// How long a listener waits after a failed `accept` before trying again.
+/// Accept fails when the process runs out of file descriptors; retrying at
+/// once would spin.
+pub(crate) const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
 pub async fn world(users: crate::auth::UserCache) {
-    let listener = TcpListener::bind("0.0.0.0:8085").await.unwrap();
+    let listener = TcpListener::bind("0.0.0.0:8085")
+        .await
+        .expect("failed to bind world listener on 0.0.0.0:8085");
     info!("world: listening on 0.0.0.0:8085");
     let (world, clients_waiting_to_join) = mpsc::channel(32);
 
     tokio::spawn(run_world(clients_waiting_to_join));
 
+    // Connections still in the handshake hold a permit, so a flood of idle
+    // sockets can't pile up without bound.
+    let pending = Arc::new(tokio::sync::Semaphore::new(
+        crate::config::config().network.max_pending_connections,
+    ));
     loop {
-        let (stream, peer) = listener.accept().await.unwrap();
+        let (stream, peer) = match listener.accept().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("world: accept failed: {e}; retrying");
+                sleep(ACCEPT_BACKOFF).await;
+                continue;
+            }
+        };
+        let Ok(permit) = pending.clone().try_acquire_owned() else {
+            debug!("world: too many connections in the handshake; closing {peer}");
+            continue;
+        };
         debug!("world: accepted connection from {peer}");
 
-        tokio::spawn(character_screen(stream, users.clone(), world.clone()));
+        let (users, world) = (users.clone(), world.clone());
+        tokio::spawn(async move {
+            character_screen(stream, users, world).await;
+            drop(permit);
+        });
     }
 }
 
@@ -294,10 +321,13 @@ async fn character_screen(
     users: crate::auth::UserCache,
     world: Sender<CharacterScreenClient>,
 ) {
-    if let Err(e) = character_screen_inner(stream, users, world).await {
+    let deadline = crate::config::config().network.handshake_timeout();
+    match tokio::time::timeout(deadline, character_screen_inner(stream, users, world)).await {
+        Ok(Ok(())) => {}
         // Per-connection errors are routine: clients disconnect mid-handshake,
         // send garbage, race the auth registration. Log and drop the socket.
-        tracing::debug!("character_screen handshake aborted: {e}");
+        Ok(Err(e)) => tracing::debug!("character_screen handshake aborted: {e}"),
+        Err(_) => tracing::debug!("character_screen handshake timed out"),
     }
 }
 

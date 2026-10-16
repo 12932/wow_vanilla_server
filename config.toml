@@ -2,6 +2,9 @@
 aoi_radius_yards = 200.0
 outbound_channel_bytes = 1048576
 #aoi_flap_cooldown_secs = 3
+#handshake_timeout_secs = 10
+#client_idle_timeout_secs = 120
+#max_pending_connections = 1024
 
 [tick]
 target_interval_ms = 100
