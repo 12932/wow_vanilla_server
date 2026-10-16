@@ -39,7 +39,18 @@ There is no world tick.
   a 10-yard margin before an object is forgotten. Worked out for an object when it has moved 8 yards, or arrived.
   A creature no player sees doesn't move.
 - **Shared state**: `Registry` (`src/game/registry.rs`) has every character's name and everyone online, with their
-  outbound queue, session and map. Services that span maps go behind their own short locks.
+  outbound queue, session and map. Services that span maps go behind their own short locks, in `Realm::social`
+  (`src/game/social/`): channels, groups, friend and ignore lists, guilds and charters, mail, auctions, instances,
+  battleground queues, events and weather. They reach a player elsewhere through the registry, and change what a
+  map owns with `MapHandle::call`. Mail, auctions, instances, battleground invitations, events and weather are swept
+  every five seconds (`social::sweep`).
+- **Copies** (`src/game/instances.rs`): a dungeon, raid or battleground copy is a map actor keyed by its map and an
+  instance id; `Map::teleport` picks the copy. Battleground queues are in `src/game/battlegrounds.rs`, a match's
+  rules in `map/battleground.rs`.
+- **Transports** (`src/game/transports.rs`): boats and zeppelins on their paths, moved between maps by a clock of
+  their own; every player in a map knows them (`Map::globals`).
+- **Accounts** (`src/accounts.rs`): SRP verifiers, GM levels and bans in the store's file, on a connection of their
+  own, shared by the login server and the world. GM commands are gated by level (`gm::needed_level`).
 - **The store** (`src/game/store.rs`): `characters.sqlite`, behind one thread, so reads see earlier saves. The schema
   is versioned (`MIGRATIONS`, `PRAGMA user_version`); a character's extra state is JSON whose fields all default.
   Saves at logout, every `save_interval_secs`, and for everyone on SIGTERM or Ctrl-C.
@@ -53,13 +64,16 @@ There is no world tick.
 
 - **Packets out are encoded once** and the frame shared: `conn::encode`, `Map::send_to_observers`. No per-viewer
   re-encoding.
-- **Packets wow_messages types too strictly are encoded by hand** (`data::items::Body`): the item and game object
-  query responses. Everything else uses wow_messages' types, so peon (which reads with wow_messages) reads it.
+- **Packets wow_messages lays out unlike 1.12 are encoded by hand** (`data::items::Body`), as mangos-zero lays
+  them out: the item and game object queries, the loot window, `SMSG_CAST_RESULT`, channel notices, friend status,
+  `/who`, party member stats, raid icons and the battlefield status. Everything else uses wow_messages' types, so
+  peon (which reads with wow_messages) reads it. mangos-zero's source is the reference for 1.12's layouts.
 - **Values blocks always carry the object type**, and a GUID field's two halves are dirtied together: wow_messages
   can't read a block without them.
 - **GUIDs are typed** (`src/game/guid.rs`): players by counter, items `0x4000`, creatures `0xF130` with their entry,
   game objects `0xF110`.
-- **Never panic on client data**: look things up fallibly, log at `debug`, drop the packet.
+- **Never panic on client data**: look things up fallibly, log at `debug`, drop the packet. (A panic that slips
+  through costs one map event: the actor catches it.)
 - **Never block a map**: no `.await`, no file or database work in a handler; the store is fire-and-forget.
 - **Tests go through the protocol** (`src/game/harness.rs`): connect clients to a realm, send real messages, and
   read what comes back with wow_messages.

@@ -26,6 +26,21 @@ deflate set up per packet, proximity announcements fanned out to every unit ever
 projection rebuilt after every packet. Doing what it does without those costs is the point of the
 design below.
 
+## Where they stand after the plan (2026-10-16)
+
+| | wow_vanilla_server | Thistle Tea |
+|---|---|---|
+| Code | 32k lines of Rust, 132 tests through the protocol (and the real data's checks) | 180k lines of Elixir, 8,800 tests |
+| Client opcodes handled | 240, 39 of them movement and acknowledgements | 269, plus 22 movement opcodes |
+| World | vmangos, from Thistle Tea's export: the same creatures, objects, loot, quests and events | vmangos |
+| Model | an actor per map and per copy; packets handled as they arrive; a 20 Hz update | a process per player and per creature |
+| Units and combat | vmangos stats, XP, regen, the hit table, threat, AI with paths, leashes and spell lists | the same, with more class scripts |
+| Spells | the casting pipeline, the effects and auras trainers' spells use to level 20, talents, skills | 98 effects, 172 aura types, procs, pets |
+| Content | loot, items, vendors, trainers, gossip, quests, taxis, banks; whispers, channels, friends, `/who`, groups and raids, guilds, mail, auctions, trade, duels; dungeon and raid copies, Warsong Gulch, boats and zeppelins, events, weather | the same, with Arathi Basin, Alterac Valley, pets, professions' skill-ups and honor |
+| Persistence | SQLite: characters, and guilds, charters, mail, auctions and raid binds as records; versioned, saved at logout, on a timer and on SIGTERM | none: a restart loses every character |
+| Security | accounts with SRP verifiers, GM levels and bans; movement checks; packet and chat rate limits | every session is a GM; positions trusted |
+| Under load (peon, 100 bots) | 0.33 cores for a crowd, 0.10 for the pit's fight; login 8 ms; ping, movement, chat and name query under 2 ms at p99 | 6.1 and 6.0 cores; login 45 to 110 ms; ping p99 220 to 420 ms, name query p99 to 1.3 s |
+
 ## Goal
 
 **Capability:** a client can do on wow_vanilla_server what it can do on Thistle Tea, phase by phase in the order
@@ -703,8 +718,8 @@ config's `gm` table.
 - A player's `.` line is just chat.
 
 **Characters:**
-- Names are 2 to 12 ASCII letters, capitalised.
-- No three of a letter in a row.
+- Names are 2 to 12 ASCII letters, capitalised. Three of a letter in a row are allowed, as in mangos-zero:
+  the re-baseline found a peon name ("Devdachhh") that a stricter rule turned away.
 - None of the config's `reserved_names`.
 - On a `pvp_realm`, an account's characters are all of one side.
 - One session per account was already the rule: a second login kicks the first.
@@ -743,3 +758,42 @@ its bots as administrators (`everyone_gm` in the run's config).
 - Fly and climb checks beyond speed, and checks on movement timestamps.
 - Per-opcode limits beyond the overall rate.
 - A metrics endpoint: the numbers are in the log.
+
+### Phase 12 (2026-10-16)
+
+peon's seven baseline scenarios ran on both servers, on the same vmangos world, each on a fresh server, with every
+behaviour switched on in wow_vanilla_server's profile (which now places bots with `.go xyz` and revives them with
+`.revive`, as Thistle Tea's does). A second `cluster` and `pvp-arena` on each sampled the server's CPU. The reports
+and the write-up are in peon: `results/2026-10-16/aligned/`, `results/2026-10-16/aligned-cpu/` and
+[BASELINES.md](https://github.com/12932/peon/blob/master/docs/BASELINES.md).
+
+**What it found:**
+- **Replies:** login p50 under 8 ms (Thistle Tea's 45 to 110). Ping, movement, chat and name query are under 2 ms
+  at p99 in every scenario, where Thistle Tea's tails run to 220 to 420 ms for ping and 1.3 s for name queries.
+- **CPU:** 0.33 cores for 100 wanderers in one crowd and 0.10 for the pit's fight, against Thistle Tea's 6.1 and
+  6.0: a twentieth, or less. Map updates average 0.9 to 1.4 ms with 100 players among 23,000 to 27,000 creatures.
+- **Sent:** Thistle Tea sends more in a fight (28,288 packets a second against 7,919) and to idle bots, and about
+  the same in a crowd.
+- **Creatures:** wow_vanilla_server's kill bots placed among them, as vmangos's would (one level-1 bot at the
+  Westfall hotspot died every ten seconds). Thistle Tea's never killed a bot outside the pit.
+- **Two fixes came of it:**
+  - The new name rules refused three of a letter in a row, and peon's `Devdachhh` was turned away. The server now
+    allows it, as mangos-zero does.
+  - peon handed the refused slot to every later bot, which starved `idle`'s fleet. It now retires the slot, and
+    `idle` was rerun.
+- **Parse errors:** peon can't read wow_vanilla_server's `SMSG_GAMEOBJECT_QUERY_RESPONSE` and `SMSG_WHO` with
+  wow_messages: both are sent as 1.12 (and mangos-zero, and Thistle Tea) lay them out.
+
+**Done when:** the reports are committed in peon and the findings written up there, and the comparison above
+(Where they stand after the plan) records the result.
+
+## Where the plan leaves the gap
+
+Each phase's "Left for later" lists what remains. The largest:
+- Arathi Basin's and Alterac Valley's rules.
+- Pets, procs and auto-repeat spells.
+- Group loot rules.
+- Professions' skill-ups.
+- Honor ranks.
+- Instance and boss scripts.
+- Instance progress kept across a restart.

@@ -13,9 +13,11 @@ cargo build --release --bin wow_vanilla_server
 ./target/release/wow_vanilla_server
 ```
 
-It listens on `:3724` (auth) and `:8085` (world). Point a 1.12.1 client's `realmlist.wtf` at the host. Any username
-is created at login (password = username) and every account may use GM commands: fine for development, not for
-the internet.
+It listens on `:3724` (auth) and `:8085` (world). Point a 1.12.1 client's `realmlist.wtf` at the host. By default
+an unknown username gets an account at its first login, with the username as its password (`[accounts] creation =
+"auto"`): fine for development, not for the internet. With `creation = "existing"`, only accounts an administrator
+made with `.account create` may log in. GM levels come from `.account gm` or the config's `[accounts] gm` table;
+`everyone_gm = true` makes every account an administrator, as peon's runs need.
 
 For the world, point `config.toml` at vmangos's database and the client's DBCs as SQLite (Thistle Tea's export:
 `vmangos.sqlite` and `dbc.sqlite` in one directory), and at a rustigator bake for the navmesh:
@@ -39,17 +41,28 @@ everyone on SIGTERM or Ctrl-C.
 
 ## GM commands
 
-In chat:
+In chat, by GM level (1 moderator, 2 game master, 3 administrator). A player's `.` line is just chat.
 
-| Command | Does |
-|---|---|
-| `.go [xyz] <x> <y> <z> [map]` | Teleport |
-| `.tele <place>` | Teleport to a place from vmangos's `game_tele` |
-| `.gps` | Where you are: map, position, zone, area |
-| `.speed <multiplier>` | Run speed |
-| `.spawn <entry>` | Spawn a creature |
-| `.online`, `.maps` | Who is online; a map's counters |
-| `.save`, `.kick <name>`, `.announce <text>` | |
+| Command | Level | Does |
+|---|---|---|
+| `.gps` | 1 | Where you are: map, position, zone, area |
+| `.online`, `.maps` | 1 | Who is online; each map's counters |
+| `.save`, `.kick <name>`, `.announce <text>`, `.gm [on\|off]` | 1 | |
+| `.go [xyz] <x> <y> <z> [map]` | 2 | Teleport |
+| `.tele <place>` | 2 | Teleport to a place from vmangos's `game_tele` |
+| `.speed <multiplier>` | 2 | Run speed |
+| `.spawn <entry>` | 2 | Spawn a creature |
+| `.die`, `.revive`, `.levelup [n]` | 2 | On the target, or oneself |
+| `.account create\|password <name> <password>`, `.account gm <name> <level>` | 3 | Accounts |
+| `.ban <account> <minutes\|perm> [reason]`, `.unban <account>` | 3 | Bans (and kicks) |
+
+## What it runs
+
+The world of vmangos at patch 1.12: creatures with their AI, paths and spell lists; combat by vmangos's hit table;
+spells and auras; items, loot, vendors, trainers, flight masters and quests; death and graveyards. Socially:
+whispers, channels, friends and ignores, `/who`, groups and raids, guilds and charters, mail, the auction houses,
+trade and duels. Dungeon and raid copies, Warsong Gulch, boats and zeppelins, seasonal events and weather. What
+is done and what is left, phase by phase, is in the plan's progress section.
 
 ## Development
 
