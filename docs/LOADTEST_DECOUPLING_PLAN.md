@@ -189,6 +189,33 @@ commit, and the server's build if the profile names it.
 - **Run plans** for reproducible runs: `[[stage]] scenario="cluster" bots=500 ramp="60s" hold="300s"`, run in order.
   The REPL stays for ad hoc use.
 
+### Running on ECS and Fargate
+
+The worker ships as a minimal container image, so a fleet of small Fargate tasks can each run about 20 bots and
+reach thousands together. That's closer to real players than a few big hosts, since each task has its own network
+interface.
+
+- **The image.** A multi-stage build: the Rust builder compiles `loadtest` in release, and copies it into
+  `debian:trixie-slim`, which adds glibc and nothing else. It runs as a non-root user, with
+  `ENTRYPOINT ["loadtest", "worker"]`.
+  - The `nav` feature is left out: race bakes are gigabytes. A race fleet mounts them from EFS instead, with
+    `--nav-cache`.
+  - The image is tagged with the loadtest's commit, which the reports record.
+- **Configuration by environment.** Every flag also reads an environment variable (`LOADTEST_TARGET`,
+  `LOADTEST_CLIENTS`, `LOADTEST_ORCHESTRATOR`, `LOADTEST_PROFILE`, ...), so a task definition needs no command line.
+- **Accounts across tasks.** Tasks are identical, so none can pick its own slot range. Each one connects to the
+  orchestrator, which hands out disjoint ranges in its reply to `Hello`, and takes a range back when a task goes away.
+- **The orchestrator runs a plan, not a REPL.** ECS has no stdin. It runs a TOML run plan (stages, bot counts, ramps,
+  holds), and waits until the expected number of workers have joined.
+  - It runs as its own task or service, reachable only inside the VPC.
+  - Workers authenticate with the shared token in `Hello`.
+- **Stopping.** ECS sends SIGTERM, then SIGKILL 30 s later. The worker treats SIGTERM like `drain`: it logs its bots
+  out, sends its final metrics, and exits within the grace period.
+- **Logs and metrics.** Logs go to stdout for the `awslogs` driver, in JSON with `--log-format json`. Metrics go to
+  the orchestrator as usual; the report is written where the orchestrator runs (an EFS path or S3 later).
+- **Not in this repository:** the AWS resources themselves (cluster, task definitions, VPC, security groups). A
+  sample task definition and the run steps go in its README.
+
 ## Phases
 
 The order puts the cheap fixes that decide whether any number means anything first, and the big redesign last.
@@ -257,9 +284,18 @@ ground and line of sight work in Booty Bay and the arena.
 - [ ] The loadtest moves to its own repository, history kept with `git filter-repo`. It gets its own workspace and
   release profile (unwinding), and no server dependencies.
 - [ ] Runtime `--nav-data` and `--nav-cache` replace the compile-time variable and the server's bake directory.
+- [ ] **The container image:**
+  - a `Dockerfile`, multi-stage onto `debian:trixie-slim`, non-root, without `nav`;
+  - every flag also readable from a `LOADTEST_*` environment variable;
+  - SIGTERM drains like `drain`;
+  - `--log-format json`.
 - [ ] wow_vanilla_server drops `src/loadtest` and its `[[bin]]`, and its README points to the new repository.
 
-**Done when:** the new repository builds and runs Phase 1's checks.
+**Done when:**
+- The new repository builds and runs Phase 1's checks.
+- The image is under 100 MB.
+- `docker run` with only environment variables runs 20 bots against wow_vanilla_server.
+- `docker stop` drains them within its grace period.
 
 **Needs from you:** the new GitHub repository.
 
@@ -281,11 +317,16 @@ ground and line of sight work in Booty Bay and the arena.
 - [ ] Latency histograms: login funnel, ping round trip, movement propagation, swing to damage.
 - [ ] Bytes and packets at the socket.
 - [ ] Worker health, so a saturated run is marked invalid.
-- [ ] Orchestrator-assigned slot ranges.
-- [ ] Merged reports, and run plans in TOML.
+- [ ] Orchestrator-assigned slot ranges, handed out in reply to `Hello` and taken back when a worker goes away.
+- [ ] Merged reports, and run plans in TOML. The orchestrator runs a plan without stdin, for ECS, once enough
+  workers have joined.
+- [ ] A versioned `Hello` with a shared token. The orchestrator binds 127.0.0.1 unless told otherwise.
+- [ ] A sample ECS task definition and the run steps for a Fargate fleet, of about 20 bots a task, in the README.
 
-**Done when:** one plan produces comparable reports for both servers, and a deliberately saturated worker marks its
-run invalid.
+**Done when:**
+- One plan produces comparable reports for both servers.
+- A deliberately saturated worker marks its run invalid.
+- Ten containers of 20 bots each, under one orchestrator, run a plan with no account collisions.
 
 ### Phase 7: scenarios and baselines
 
