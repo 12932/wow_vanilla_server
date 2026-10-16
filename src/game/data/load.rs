@@ -121,6 +121,7 @@ pub fn load(dir: &Path) -> GameData {
         Ok(db) => {
             load_vmangos(&db, &mut data);
             load_npcs(&db, dbc.as_ref(), &mut data);
+            load_spells(&db, dbc.as_ref(), &mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -128,11 +129,12 @@ pub fn load(dir: &Path) -> GameData {
     let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();
     info!(
         "game data from {}: {} creature templates, {spawns} creatures, {} game object templates, \
-         {objects} game objects, {} items, {} areas, in {:.1} s",
+         {objects} game objects, {} items, {} spells, {} areas, in {:.1} s",
         dir.display(),
         data.creature_templates.len(),
         data.gameobject_templates.len(),
         data.items.len(),
+        data.spells.spells.len(),
         data.areas.len(),
         started.elapsed().as_secs_f32()
     );
@@ -1109,6 +1111,193 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
 }
 
+fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
+    use super::spells::*;
+    let s = &mut data.spells;
+    let mut best: AHashMap<u32, (i64, SpellTemplate)> = AHashMap::new();
+    for (build, t) in rows(
+        db,
+        "SELECT * FROM spell_template WHERE build <= 5875",
+        |c| {
+            let effect = |i: usize| {
+                let n = i + 1;
+                SpellEffect {
+                    effect: c.u32(&format!("effect{n}")),
+                    die_sides: c.i32(&format!("effectDieSides{n}")),
+                    base_dice: c.i32(&format!("effectBaseDice{n}")),
+                    dice_per_level: c.f32(&format!("effectDicePerLevel{n}")),
+                    real_points_per_level: c.f32(&format!("effectRealPointsPerLevel{n}")),
+                    base_points: c.i32(&format!("effectBasePoints{n}")),
+                    bonus_coefficient: c.f32(&format!("effectBonusCoefficient{n}")),
+                    mechanic: c.u32(&format!("effectMechanic{n}")),
+                    target_a: c.u32(&format!("effectImplicitTargetA{n}")),
+                    target_b: c.u32(&format!("effectImplicitTargetB{n}")),
+                    radius_index: c.u32(&format!("effectRadiusIndex{n}")),
+                    aura: c.u32(&format!("effectApplyAuraName{n}")),
+                    amplitude: c.u32(&format!("effectAmplitude{n}")),
+                    multiple_value: c.f32(&format!("effectMultipleValue{n}")),
+                    chain_target: c.u32(&format!("effectChainTarget{n}")),
+                    item_type: c.u32(&format!("effectItemType{n}")),
+                    misc_value: c.i32(&format!("effectMiscValue{n}")),
+                    trigger_spell: c.u32(&format!("effectTriggerSpell{n}")),
+                    points_per_combo_point: c.f32(&format!("effectPointsPerComboPoint{n}")),
+                }
+            };
+            let t = SpellTemplate {
+                id: c.u32("entry"),
+                school: c.u32("school"),
+                category: c.u32("category"),
+                dispel: c.u32("dispel"),
+                mechanic: c.u32("mechanic"),
+                attributes: [
+                    c.u32("attributes"),
+                    c.u32("attributesEx"),
+                    c.u32("attributesEx2"),
+                    c.u32("attributesEx3"),
+                    c.u32("attributesEx4"),
+                ],
+                stances: c.u32("stances"),
+                targets: c.u32("targets"),
+                casting_time_index: c.u32("castingTimeIndex"),
+                recovery_time: c.u32("recoveryTime"),
+                category_recovery_time: c.u32("categoryRecoveryTime"),
+                interrupt_flags: c.u32("interruptFlags"),
+                aura_interrupt_flags: c.u32("auraInterruptFlags"),
+                channel_interrupt_flags: c.u32("channelInterruptFlags"),
+                proc_flags: c.u32("procFlags"),
+                proc_chance: c.u32("procChance"),
+                proc_charges: c.u32("procCharges"),
+                max_level: c.u32("maxLevel"),
+                base_level: c.u32("baseLevel"),
+                spell_level: c.u32("spellLevel"),
+                duration_index: c.u32("durationIndex"),
+                power_type: c.u32("powerType"),
+                mana_cost: c.u32("manaCost"),
+                mana_cost_per_level: c.u32("manCostPerLevel"),
+                mana_per_second: c.u32("manaPerSecond"),
+                mana_cost_percentage: c.u32("manaCostPercentage"),
+                range_index: c.u32("rangeIndex"),
+                speed: c.f32("speed"),
+                stack_amount: c.u32("stackAmount"),
+                reagents: std::array::from_fn(|i| {
+                    (
+                        c.u32(&format!("reagent{}", i + 1)),
+                        c.u32(&format!("reagentCount{}", i + 1)),
+                    )
+                }),
+                equipped_item_class: c.i32("equippedItemClass"),
+                effects: [effect(0), effect(1), effect(2)],
+                spell_visual: c.u32("spellVisual1"),
+                name: c.string("name"),
+                rank: c.string("nameSubtext"),
+                start_recovery_category: c.u32("startRecoveryCategory"),
+                start_recovery_time: c.u32("startRecoveryTime"),
+                family_name: c.u32("spellFamilyName"),
+                family_flags: c.i64("spellFamilyFlags") as u64,
+                dmg_class: c.u32("dmgClass"),
+                prevention_type: c.u32("preventionType"),
+                dmg_multiplier: [
+                    c.f32("dmgMultiplier1"),
+                    c.f32("dmgMultiplier2"),
+                    c.f32("dmgMultiplier3"),
+                ],
+            };
+            (c.i64("build"), t)
+        },
+    ) {
+        match best.get(&t.id) {
+            Some((b, _)) if *b >= build => {}
+            _ => {
+                best.insert(t.id, (build, t));
+            }
+        }
+    }
+    s.spells = best.into_iter().map(|(k, (_, t))| (k, t)).collect();
+    for (id, map, x, y, z, o) in rows(
+        db,
+        "SELECT * FROM spell_target_position WHERE build_min <= 5875 AND build_max >= 5875",
+        |c| {
+            (
+                c.u32("id"),
+                c.u32("target_map"),
+                c.f32("target_position_x"),
+                c.f32("target_position_y"),
+                c.f32("target_position_z"),
+                c.f32("target_orientation"),
+            )
+        },
+    ) {
+        s.target_positions.insert(id, (map, x, y, z, o));
+    }
+    for (list, spells) in rows(db, "SELECT * FROM creature_spells", |c| {
+        let spells: Vec<CreatureSpell> = (1..=8)
+            .map(|n| CreatureSpell {
+                spell: c.u32(&format!("spellId_{n}")),
+                probability: c.u32(&format!("probability_{n}")),
+                target: c.u32(&format!("castTarget_{n}")),
+                delay_initial: (
+                    c.u32(&format!("delayInitialMin_{n}")),
+                    c.u32(&format!("delayInitialMax_{n}")),
+                ),
+                delay_repeat: (
+                    c.u32(&format!("delayRepeatMin_{n}")),
+                    c.u32(&format!("delayRepeatMax_{n}")),
+                ),
+            })
+            .filter(|s| s.spell != 0)
+            .collect();
+        (c.u32("entry"), spells)
+    }) {
+        s.creature_spells.insert(list, spells);
+    }
+    let Some(dbc) = dbc else {
+        return;
+    };
+    for (id, base) in rows(dbc, "SELECT * FROM SpellCastTimes", |c| {
+        (c.u32("id"), c.i32("base"))
+    }) {
+        s.cast_times.insert(id, base);
+    }
+    for (id, d) in rows(dbc, "SELECT * FROM SpellDuration", |c| {
+        (
+            c.u32("id"),
+            SpellDuration {
+                base: c.i32("duration"),
+                per_level: c.i32("duration_per_level"),
+                max: c.i32("max_duration"),
+            },
+        )
+    }) {
+        s.durations.insert(id, d);
+    }
+    for (id, r) in rows(dbc, "SELECT * FROM SpellRange", |c| {
+        (c.u32("id"), (c.f32("range_min"), c.f32("range_max")))
+    }) {
+        s.ranges.insert(id, r);
+    }
+    for (id, r) in rows(dbc, "SELECT * FROM SpellRadius", |c| {
+        (c.u32("id"), c.f32("radius"))
+    }) {
+        s.radii.insert(id, r);
+    }
+    for t in rows(dbc, "SELECT * FROM Talent", |c| TalentInfo {
+        id: c.u32("id"),
+        tab: c.u32("tab"),
+        row: c.u32("tier"),
+        column: c.u32("column_index"),
+        ranks: std::array::from_fn(|i| c.u32(&format!("spell_rank_{i}"))),
+        depends_on: c.u32("prereq_talents_0"),
+        depends_rank: c.u32("prereq_ranks_0"),
+    }) {
+        s.talents.insert(t.id, t);
+    }
+    for (spell, skill) in rows(dbc, "SELECT * FROM SkillLineAbility", |c| {
+        (c.u32("spell"), c.u32("skill_line"))
+    }) {
+        s.spell_skills.insert(spell, skill);
+    }
+}
+
 fn load_players(db: &Connection, data: &mut GameData) {
     for (key, s) in rows(db, "SELECT * FROM playercreateinfo", |c| {
         (
@@ -1215,6 +1404,56 @@ mod tests {
                 .get(&2177)
                 .is_some_and(|a| a.flags & AREA_FLAG_ARENA != 0)
         );
+    }
+
+    /// Every spell a trainer teaches up to level 20 has only effects,
+    /// auras and targets the server knows.
+    #[test]
+    fn trainers_teach_only_what_the_server_can_cast_to_twenty() {
+        use crate::game::map::{auras, spells};
+        let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+        if !dir.join("vmangos.sqlite").exists() {
+            return;
+        }
+        let data = load(dir);
+        assert!(
+            data.spells.spells.len() > 20_000,
+            "{}",
+            data.spells.spells.len()
+        );
+        let mut taught: Vec<u32> = data
+            .npc
+            .trainers
+            .values()
+            .chain(data.npc.trainer_templates.values())
+            .flatten()
+            .filter(|t| t.required_level <= 20)
+            .map(|t| spells::learns(&data, t.spell))
+            .collect();
+        taught.sort_unstable();
+        taught.dedup();
+        assert!(taught.len() > 300, "{}", taught.len());
+        let mut missing = Vec::new();
+        for id in taught {
+            let Some(s) = data.spells.get(id) else {
+                missing.push(format!("{id}: no template"));
+                continue;
+            };
+            for e in s.effects.iter().filter(|e| e.effect != 0) {
+                if !spells::effect_supported(e.effect) {
+                    missing.push(format!("{id} {}: effect {}", s.name, e.effect));
+                }
+                if matches!(e.effect, 6 | 27 | 35) && !auras::supported(e.aura) {
+                    missing.push(format!("{id} {}: aura {}", s.name, e.aura));
+                }
+                for t in [e.target_a, e.target_b] {
+                    if !spells::target_supported(t) {
+                        missing.push(format!("{id} {}: target {t}", s.name));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
     }
 
     #[test]

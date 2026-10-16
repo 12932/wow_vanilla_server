@@ -9,6 +9,7 @@
 pub mod items;
 pub mod load;
 pub mod npc;
+pub mod spells;
 
 use ahash::AHashMap;
 use wow_world_base::vanilla::{Class, Gender, PlayerGender, PlayerRace, Race, RaceClass};
@@ -399,6 +400,7 @@ pub struct GameData {
     /// `DurabilityQuality`: id → multiplier.
     pub durability_quality: AHashMap<u32, f32>,
     pub npc: npc::NpcData,
+    pub spells: spells::SpellData,
     /// Battlemaster entry → battleground template.
     pub battlemasters: AHashMap<u32, u32>,
     /// `WorldSafeLocs`: id → map, x, y, z.

@@ -4,6 +4,7 @@
 
 pub mod ai;
 pub mod auction;
+pub mod auras;
 pub mod battleground;
 pub mod chat;
 pub mod combat;
@@ -22,6 +23,7 @@ pub mod npc;
 pub mod player;
 pub mod query;
 pub mod quests;
+pub mod skills;
 pub mod spells;
 pub mod stats;
 pub mod vendor;
@@ -334,6 +336,7 @@ impl Map {
                     }
                 }
                 self.insert_player(p);
+                spells::apply_passives(self, guid);
                 self.visibility_dirty.insert(guid);
             }
             ArrivalKind::Transfer(mut p) => {
@@ -440,6 +443,8 @@ impl Map {
         self.update_players();
         combat::update_players(self);
         npc::update_flights(self);
+        spells::update(self);
+        auras::update(self);
         ai::update_creatures(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);

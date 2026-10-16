@@ -149,6 +149,7 @@ pub fn kill(map: &mut Map, g: Guid) {
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     p.logout_at = None;
     crate::game::map::combat::leave_combat(map, g);
+    crate::game::map::auras::clear_on_death(map, g);
 }
 
 /// `CMSG_REPOP_REQUEST`: release the spirit to the nearest graveyard.

@@ -167,6 +167,8 @@ pub struct Creature {
     pub despawned: bool,
     pub combat: crate::game::map::combat::Combat,
     pub combat_start: Option<Instant>,
+    pub auras: crate::game::map::auras::Auras,
+    pub caster: crate::game::map::spells::Caster,
     /// Threat, by unit.
     pub threat: Vec<(Guid, f32)>,
     /// The player whose kill this is.
@@ -256,6 +258,8 @@ impl Creature {
             life: Life::Alive,
             despawned: false,
             combat: Default::default(),
+            auras: Default::default(),
+            caster: Default::default(),
             combat_start: None,
             threat: Vec::new(),
             tapped_by: None,
