@@ -744,6 +744,59 @@ pub fn gear_bonuses(p: &Player, data: &GameData) -> ([i32; 5], i32, i32, i32) {
     (stats, health, mana, armor)
 }
 
+/// Take an item out of a player's hands whole, for the mail, the auction
+/// house or a trade: it keeps its GUID, wear and flags.
+pub fn detach_item(map: &mut Map, g: Guid, i: usize) -> Option<crate::game::store::ItemRow> {
+    let data = map.realm.data.clone();
+    let p = map.players.get_mut(&g)?;
+    if i >= p.items.len() {
+        return None;
+    }
+    let item = p.items.remove(i);
+    p.outbound.send(&SMSG_DESTROY_OBJECT { guid: item.guid });
+    p.refresh_inventory(&data);
+    let entry = item.entry;
+    let row = item.to_row();
+    crate::game::map::quests::items_changed(map, g, entry);
+    Some(row)
+}
+
+/// Put an item that was detached into a free slot of a player's bags.
+pub fn attach_item(map: &mut Map, g: Guid, row: &crate::game::store::ItemRow) -> Result<(), Fail> {
+    let data = map.realm.data.clone();
+    let p = map.players.get_mut(&g).ok_or(Fail::NotFound)?;
+    let (bag, slot) = p.free_carry_slot(&data).ok_or(Fail::InventoryFull)?;
+    let mut row = row.clone();
+    row.bag = bag;
+    row.slot = slot;
+    let item = Item::from_row(&data, &row, g);
+    let mut batch = update::Batch::new();
+    batch.push(&update::create_block(&item.create(), Visibility::Owner));
+    for frame in batch.finish() {
+        p.outbound.send_frame(frame);
+    }
+    let entry = item.entry;
+    p.items.push(item);
+    if let Some(it) = p.items.last_mut() {
+        it.fields.clear_dirty();
+    }
+    p.refresh_inventory(&data);
+    p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
+        guid: g,
+        source: NewItemSource::Looted,
+        creation_type: NewItemCreationType::Received,
+        alert_chat: NewItemChatAlert::Show,
+        bag_slot: bag,
+        item_slot: u32::from(slot),
+        item: entry,
+        item_suffix_factor: 0,
+        item_random_property_id: 0,
+        item_count: row.count,
+    });
+    crate::game::map::quests::items_changed(map, g, entry);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

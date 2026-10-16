@@ -107,6 +107,10 @@ pub struct WorldConfig {
     /// Shown to every player at login.
     pub motd: String,
     pub max_characters_per_account: usize,
+    /// Signatures a guild charter needs.
+    pub petition_signatures: u32,
+    /// How long mail with items or money takes between accounts.
+    pub mail_delay_secs: u64,
 }
 
 impl Default for WorldConfig {
@@ -119,6 +123,8 @@ impl Default for WorldConfig {
             nav_dir: None,
             motd: "Welcome to wow_vanilla_server.".to_owned(),
             max_characters_per_account: 10,
+            petition_signatures: 9,
+            mail_delay_secs: 3600,
         }
     }
 }

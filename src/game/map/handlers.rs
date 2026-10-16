@@ -25,6 +25,9 @@ impl Map {
         let Some(msg) = movement::handle(self, guid, msg) else {
             return;
         };
+        let Some(msg) = crate::game::map::social::handle(self, guid, msg) else {
+            return;
+        };
         match msg {
             ClientOpcodeMessage::CMSG_NAME_QUERY(m) => query::name(self, &out, m),
             ClientOpcodeMessage::CMSG_CREATURE_QUERY(m) => query::creature(self, &out, m),
@@ -215,7 +218,7 @@ impl Map {
             ClientOpcodeMessage::CMSG_PLAYED_TIME => query::played(self, guid),
             ClientOpcodeMessage::CMSG_MESSAGECHAT(m) => {
                 if let Some(m) = chat::message(self, guid, m) {
-                    trace!("chat type {:?} not served yet", m.chat_type);
+                    crate::game::map::social::message(self, guid, m);
                 }
             }
             ClientOpcodeMessage::CMSG_TEXT_EMOTE(m) => chat::text_emote(self, guid, m),

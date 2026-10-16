@@ -42,6 +42,8 @@ pub struct Online {
     pub zone: AtomicU32,
     /// Chat flags: AFK, DND, GM.
     pub flags: AtomicU32,
+    /// The AFK or DND message.
+    pub away: Mutex<String>,
     pub gm: bool,
     pub outbound: Outbound,
     pub session: mpsc::UnboundedSender<Control>,
@@ -66,6 +68,7 @@ impl Online {
             level: AtomicU8::new(name.level.load(Ordering::Relaxed)),
             zone: AtomicU32::new(0),
             flags: AtomicU32::new(0),
+            away: Mutex::new(String::new()),
             gm,
             outbound,
             session,

@@ -13,7 +13,13 @@ use crate::game::harness::{self, Client, values};
 const NONE_WITHIN: Duration = Duration::from_millis(300);
 
 async fn two_near() -> (std::sync::Arc<crate::game::Realm>, Client, Client) {
-    let realm = harness::realm();
+    two_near_on(harness::realm()).await
+}
+
+/// Alice and Bob, side by side, on `realm`.
+async fn two_near_on(
+    realm: std::sync::Arc<crate::game::Realm>,
+) -> (std::sync::Arc<crate::game::Realm>, Client, Client) {
     let mut a = Client::connect(&realm, "A");
     a.enter("Alice", Race::Human, Class::Warrior).await;
     let mut b = Client::connect(&realm, "B");
@@ -1065,7 +1071,13 @@ mod items {
     use crate::game::data::*;
     use crate::game::map::MapKey;
 
-    fn item(entry: u32, name: &str, class: u32, inventory_type: u32, price: u32) -> ItemTemplate {
+    pub fn item(
+        entry: u32,
+        name: &str,
+        class: u32,
+        inventory_type: u32,
+        price: u32,
+    ) -> ItemTemplate {
         ItemTemplate {
             entry,
             name: name.into(),
@@ -1099,7 +1111,7 @@ mod items {
         }
     }
 
-    fn data() -> GameData {
+    pub fn data() -> GameData {
         let mut d = GameData::empty();
         for t in [
             item(25, "Worn Shortsword", 2, 21, 100),
@@ -2358,5 +2370,1224 @@ mod real {
         }
         println!("{}", report.join("\n"));
         assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+}
+
+mod social {
+    use super::*;
+    use crate::game::social::channels;
+    use crate::game::social::groups;
+
+    fn chat(text: &str, chat_type: CMSG_MESSAGECHAT_ChatType) -> CMSG_MESSAGECHAT {
+        CMSG_MESSAGECHAT {
+            chat_type,
+            language: Language::Common,
+            message: text.to_owned(),
+        }
+    }
+
+    fn u64_at(b: &[u8], at: usize) -> u64 {
+        u64::from_le_bytes(b[at..at + 8].try_into().unwrap())
+    }
+
+    /// The bytes after a notify's kind and channel name.
+    fn notify_rest<'a>(b: &'a [u8], kind: u8, channel: &str) -> Option<&'a [u8]> {
+        let name = channel.as_bytes();
+        (b.first() == Some(&kind)
+            && b.get(1..1 + name.len()) == Some(name)
+            && b.get(1 + name.len()) == Some(&0))
+        .then(|| &b[2 + name.len()..])
+    }
+
+    #[tokio::test]
+    async fn a_whisper_reaches_its_player_with_an_echo_and_an_away_message() {
+        let (_realm, mut a, mut b) = two_near().await;
+        let (ga, gb) = (a.guid, b.guid);
+        b.send(chat("gone fishing", CMSG_MESSAGECHAT_ChatType::Afk))
+            .await;
+        a.send(chat(
+            "psst",
+            CMSG_MESSAGECHAT_ChatType::Whisper {
+                target_player: "bob".into(),
+            },
+        ))
+        .await;
+        b.wait_for("the whisper", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match c.chat_type {
+                SMSG_MESSAGECHAT_ChatType::Whisper { sender2 } if sender2 == ga => {
+                    (c.message == "psst").then_some(())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+        a.wait_for("the echo", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match c.chat_type {
+                SMSG_MESSAGECHAT_ChatType::WhisperInform { sender2 } if sender2 == gb => Some(()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+        let away = a
+            .wait_for("Bob's AFK message", |m| match m {
+                ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match c.chat_type {
+                    SMSG_MESSAGECHAT_ChatType::Afk { sender2 } if sender2 == gb => {
+                        Some(c.message.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .await;
+        assert_eq!(away, "gone fishing");
+        a.send(chat(
+            "hello?",
+            CMSG_MESSAGECHAT_ChatType::Whisper {
+                target_player: "Nobody".into(),
+            },
+        ))
+        .await;
+        a.wait_for("SMSG_CHAT_PLAYER_NOT_FOUND", |m| match m {
+            ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(n) => {
+                (n.name == "Nobody").then_some(())
+            }
+            _ => None,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_channel_is_joined_spoken_in_listed_and_moderated() {
+        // Players, not GMs, who may do anything.
+        let mut cfg = harness::test_config();
+        cfg.everyone_gm = false;
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        let realm = crate::game::Realm::new(cfg, store, startup, Default::default(), None);
+        let (_realm, mut a, mut b) = two_near_on(realm).await;
+        let (ga, gb) = (a.guid, b.guid);
+        let join = || CMSG_JOIN_CHANNEL {
+            channel_name: "peon".into(),
+            channel_password: String::new(),
+        };
+        a.send(join()).await;
+        a.wait_frame("YOU_JOINED", channels::SMSG_CHANNEL_NOTIFY, |f| {
+            notify_rest(f, channels::YOU_JOINED, "peon").is_some()
+        })
+        .await;
+        b.send(join()).await;
+        // Alice, the first in, owns it, and hears Bob come.
+        let joined = a
+            .wait_frame("Bob joining", channels::SMSG_CHANNEL_NOTIFY, |f| {
+                notify_rest(f, channels::JOINED, "peon").is_some()
+            })
+            .await;
+        assert_eq!(u64_at(&joined, 6), gb.guid());
+        b.send(chat(
+            "hi all",
+            CMSG_MESSAGECHAT_ChatType::Channel {
+                channel: "peon".into(),
+            },
+        ))
+        .await;
+        for c in [&mut a, &mut b] {
+            c.wait_for("the channel line", |m| match m {
+                ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match &c.chat_type {
+                    SMSG_MESSAGECHAT_ChatType::Channel {
+                        channel_name,
+                        player,
+                        ..
+                    } if channel_name == "peon" && *player == gb => Some(()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .await;
+        }
+        a.send(CMSG_CHANNEL_LIST {
+            channel_name: "peon".into(),
+        })
+        .await;
+        let members = a
+            .wait_for("SMSG_CHANNEL_LIST", |m| match m {
+                ServerOpcodeMessage::SMSG_CHANNEL_LIST(l) => Some(l.members.clone()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(members.len(), 2);
+        // Bob can't kick; Alice can.
+        b.send(CMSG_CHANNEL_KICK {
+            channel_name: "peon".into(),
+            player_name: "Alice".into(),
+        })
+        .await;
+        b.wait_frame("NOT_MODERATOR", channels::SMSG_CHANNEL_NOTIFY, |f| {
+            notify_rest(f, channels::NOT_MODERATOR, "peon").is_some()
+        })
+        .await;
+        a.send(CMSG_CHANNEL_KICK {
+            channel_name: "peon".into(),
+            player_name: "Bob".into(),
+        })
+        .await;
+        let kicked = b
+            .wait_frame("being kicked", channels::SMSG_CHANNEL_NOTIFY, |f| {
+                notify_rest(f, channels::PLAYER_KICKED, "peon").is_some()
+            })
+            .await;
+        assert_eq!(
+            (u64_at(&kicked, 6), u64_at(&kicked, 14)),
+            (gb.guid(), ga.guid())
+        );
+        b.send(chat(
+            "still here?",
+            CMSG_MESSAGECHAT_ChatType::Channel {
+                channel: "peon".into(),
+            },
+        ))
+        .await;
+        b.wait_frame("NOT_MEMBER", channels::SMSG_CHANNEL_NOTIFY, |f| {
+            notify_rest(f, channels::NOT_MEMBER, "peon").is_some()
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn friends_hear_of_logins_and_logouts_and_the_ignored_are_not_heard() {
+        let (realm, mut a, mut b) = two_near().await;
+        let gb = b.guid;
+        a.send(CMSG_ADD_FRIEND { name: "Bob".into() }).await;
+        let added = a
+            .wait_frame(
+                "ADDED_ONLINE",
+                crate::game::social::friends::SMSG_FRIEND_STATUS,
+                |f| f[0] == 0x06,
+            )
+            .await;
+        assert_eq!(u64_at(&added, 1), gb.guid());
+        b.send(CMSG_LOGOUT_REQUEST {}).await;
+        a.wait_frame(
+            "Bob going offline",
+            crate::game::social::friends::SMSG_FRIEND_STATUS,
+            |f| f[0] == 0x03 && u64_at(f, 1) == gb.guid(),
+        )
+        .await;
+        b.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+        })
+        .await;
+        b.login(gb).await;
+        a.wait_frame(
+            "Bob coming back",
+            crate::game::social::friends::SMSG_FRIEND_STATUS,
+            |f| f[0] == 0x02 && u64_at(f, 1) == gb.guid(),
+        )
+        .await;
+        // Bob ignores Alice: her whispers don't reach him.
+        b.send(CMSG_ADD_IGNORE {
+            name: "Alice".into(),
+        })
+        .await;
+        b.wait_frame(
+            "IGNORE_ADDED",
+            crate::game::social::friends::SMSG_FRIEND_STATUS,
+            |f| f[0] == 0x0F,
+        )
+        .await;
+        a.send(chat(
+            "hey",
+            CMSG_MESSAGECHAT_ChatType::Whisper {
+                target_player: "Bob".into(),
+            },
+        ))
+        .await;
+        a.wait_for("SMSG_MESSAGECHAT ignored", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => {
+                matches!(c.chat_type, SMSG_MESSAGECHAT_ChatType::Ignored { .. }).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        // The lists are kept with the character.
+        let ga = a.guid;
+        let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+        let kept = map
+            .query(move |m| m.players.get(&ga).map(|p| p.row.state.friends.clone()))
+            .await
+            .flatten();
+        assert_eq!(kept, Some(vec![guid::counter(gb)]));
+    }
+
+    #[tokio::test]
+    async fn who_lists_those_online_and_inspect_is_heard() {
+        let (_realm, mut a, mut b) = two_near().await;
+        let ga = a.guid;
+        a.send(CMSG_WHO {
+            minimum_level: Level::new(1),
+            maximum_level: Level::new(60),
+            player_name: String::new(),
+            guild_name: String::new(),
+            race_mask: u32::MAX,
+            class_mask: u32::MAX,
+            zones: Vec::new(),
+            search_strings: Vec::new(),
+        })
+        .await;
+        let who = a
+            .wait_frame("SMSG_WHO", crate::game::map::social::SMSG_WHO, |_| true)
+            .await;
+        assert_eq!(&who[..8], &[2, 0, 0, 0, 2, 0, 0, 0]);
+        a.send(CMSG_WHO {
+            minimum_level: Level::new(1),
+            maximum_level: Level::new(60),
+            player_name: "bo".into(),
+            guild_name: String::new(),
+            race_mask: u32::MAX,
+            class_mask: u32::MAX,
+            zones: Vec::new(),
+            search_strings: Vec::new(),
+        })
+        .await;
+        let who = a
+            .wait_frame(
+                "SMSG_WHO for bo",
+                crate::game::map::social::SMSG_WHO,
+                |_| true,
+            )
+            .await;
+        assert_eq!(&who[..12], b"\x01\0\0\0\x01\0\0\0Bob\0");
+        a.send(CMSG_INSPECT { guid: b.guid }).await;
+        let by = b
+            .wait_for("SMSG_INSPECT", |m| match m {
+                ServerOpcodeMessage::SMSG_INSPECT(i) => Some(i.guid),
+                _ => None,
+            })
+            .await;
+        assert_eq!(by, ga);
+    }
+
+    #[tokio::test]
+    async fn a_party_forms_talks_rolls_and_disbands() {
+        let (_realm, mut a, mut b) = two_near().await;
+        let (ga, gb) = (a.guid, b.guid);
+        a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+        let from = b
+            .wait_for("SMSG_GROUP_INVITE", |m| match m {
+                ServerOpcodeMessage::SMSG_GROUP_INVITE(i) => Some(i.name.clone()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(from, "Alice");
+        b.send(CMSG_GROUP_ACCEPT {}).await;
+        for (c, other) in [(&mut a, gb), (&mut b, ga)] {
+            let (members, leader) = c
+                .wait_for("SMSG_GROUP_LIST", |m| match m {
+                    ServerOpcodeMessage::SMSG_GROUP_LIST(l) if !l.members.is_empty() => Some((
+                        l.members.iter().map(|m| m.guid).collect::<Vec<_>>(),
+                        l.leader,
+                    )),
+                    _ => None,
+                })
+                .await;
+            assert_eq!((members, leader), (vec![other], ga));
+        }
+        b.send(chat("inc", CMSG_MESSAGECHAT_ChatType::Party)).await;
+        a.wait_for("party chat", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match c.chat_type {
+                SMSG_MESSAGECHAT_ChatType::Party { chat_credit, .. } if chat_credit == gb => {
+                    Some(())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+        a.send(MSG_RANDOM_ROLL_Client {
+            minimum: 1,
+            maximum: 100,
+        })
+        .await;
+        let roll = b
+            .wait_for("MSG_RANDOM_ROLL", |m| match m {
+                ServerOpcodeMessage::MSG_RANDOM_ROLL(r) if r.guid == ga => Some(r.actual_roll),
+                _ => None,
+            })
+            .await;
+        assert!((1..=100).contains(&roll));
+        a.send(CMSG_GROUP_SET_LEADER { guid: gb }).await;
+        a.wait_for("SMSG_GROUP_SET_LEADER", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_SET_LEADER(l) => (l.name == "Bob").then_some(()),
+            _ => None,
+        })
+        .await;
+        // Two make a party: one leaving ends it.
+        a.send(CMSG_GROUP_DISBAND {}).await;
+        for c in [&mut a, &mut b] {
+            c.wait_for("SMSG_GROUP_DESTROYED", |m| {
+                matches!(m, ServerOpcodeMessage::SMSG_GROUP_DESTROYED).then_some(())
+            })
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn members_apart_get_each_others_stats() {
+        let (_realm, mut a, mut b) = two_near().await;
+        let gb = b.guid;
+        a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+        b.wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+        b.send(CMSG_GROUP_ACCEPT {}).await;
+        // Bob walks out of Alice's sight.
+        let (x, y, z) = super::world::START;
+        b.heartbeat(x + 300.0, y, z).await;
+        a.forgets(gb).await;
+        let stats = a
+            .wait_frame_of(
+                "Bob's stats",
+                &[
+                    groups::SMSG_PARTY_MEMBER_STATS,
+                    groups::SMSG_PARTY_MEMBER_STATS_FULL,
+                ],
+                |_| true,
+            )
+            .await;
+        // Bob's packed GUID.
+        assert_eq!(&stats[..2], &[1, guid::counter(gb) as u8]);
+        a.send(CMSG_REQUEST_PARTY_MEMBER_STATS { guid: gb }).await;
+        let full = a
+            .wait_frame(
+                "Bob's full stats",
+                crate::game::social::groups::SMSG_PARTY_MEMBER_STATS_FULL,
+                |_| true,
+            )
+            .await;
+        // A packed GUID, then every player field.
+        let mask_at = 1 + (full[0].count_ones() as usize);
+        assert_eq!(
+            u32::from_le_bytes(full[mask_at..mask_at + 4].try_into().unwrap()),
+            crate::game::social::groups::STAT_PLAYER
+        );
+    }
+
+    #[tokio::test]
+    async fn a_raid_has_icons_and_a_ready_check() {
+        let (_realm, mut a, mut b) = two_near().await;
+        let (ga, gb) = (a.guid, b.guid);
+        a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+        b.wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+        b.send(CMSG_GROUP_ACCEPT {}).await;
+        a.send(CMSG_GROUP_RAID_CONVERT {}).await;
+        b.wait_for("a raid roster", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => {
+                (l.group_type == GroupType::Raid).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        a.send(MSG_RAID_TARGET_UPDATE_Client {
+            target_index: MSG_RAID_TARGET_UPDATE_Client_RaidTargetIndex::Unknown7 { target: gb },
+        })
+        .await;
+        let icon = b
+            .wait_frame(
+                "the skull",
+                crate::game::social::groups::MSG_RAID_TARGET_UPDATE,
+                |f| f[0] == 0,
+            )
+            .await;
+        assert_eq!((icon[1], u64_at(&icon, 2)), (7, gb.guid()));
+        a.send(MSG_RAID_READY_CHECK_Client { answer: None }).await;
+        b.wait_for("the ready check", |m| match m {
+            ServerOpcodeMessage::MSG_RAID_READY_CHECK(r) => r.state_check.is_none().then_some(()),
+            _ => None,
+        })
+        .await;
+        b.send(MSG_RAID_READY_CHECK_Client {
+            answer: Some(MSG_RAID_READY_CHECK_Client_answer { state: 1 }),
+        })
+        .await;
+        let answer = a
+            .wait_for("Bob's answer", |m| match m {
+                ServerOpcodeMessage::MSG_RAID_READY_CHECK(r) => {
+                    r.state_check.as_ref().map(|s| (s.guid, s.state))
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(answer, (gb, 1));
+        let _ = ga;
+    }
+}
+
+mod group_kills {
+    use super::*;
+    use crate::game::map::MapKey;
+
+    #[tokio::test]
+    async fn a_group_near_the_kill_shares_its_xp() {
+        let realm = harness::realm_with(super::combat::data());
+        let (_realm, mut a, mut b) = two_near_on(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+        b.wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+        b.send(CMSG_GROUP_ACCEPT {}).await;
+        a.wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+            _ => None,
+        })
+        .await;
+        let boar = guid::unit(2001, 11);
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        map.query(move |m| {
+            if let Some(c) = m.creature_mut(boar) {
+                c.fields.set_u32(UNIT_FIELD_HEALTH, 1);
+            }
+            crate::game::map::combat::deal_damage(m, ga, boar, 5);
+        })
+        .await;
+        let mut xp = Vec::new();
+        for c in [&mut a, &mut b] {
+            xp.push(
+                c.wait_for("SMSG_LOG_XPGAIN", |m| match m {
+                    ServerOpcodeMessage::SMSG_LOG_XPGAIN(x) if x.target == boar => {
+                        Some(x.total_exp)
+                    }
+                    _ => None,
+                })
+                .await,
+            );
+        }
+        // Two of a level: half each.
+        let alone = crate::game::map::combat::kill_xp(1, 2, false, 1.0);
+        assert_eq!(xp, vec![alone / 2, alone / 2]);
+        let _ = gb;
+    }
+}
+
+mod commerce {
+    use super::world::START;
+    use super::*;
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    use crate::game::data::*;
+    use crate::game::map::MapKey;
+
+    /// The items' data, with a charter, an auctioneer next to the start
+    /// and the Duel spell.
+    fn data() -> GameData {
+        let mut d = super::items::data();
+        let charter = super::items::item(5863, "Guild Charter", 12, 0, 0);
+        d.items.insert(5863, charter);
+        let mut auctioneer = d.creature_templates[&3000].clone();
+        auctioneer.entry = 3002;
+        auctioneer.name = "Auctioneer".into();
+        auctioneer.npc_flags = crate::game::map::npc::NPC_FLAG_AUCTIONEER;
+        d.creature_templates.insert(3002, auctioneer);
+        d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+            guid: 40,
+            entries: vec![3002],
+            map: 0,
+            x: START.0 + 2.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 1,
+            respawn_max: 1,
+            ..Default::default()
+        });
+        d.spells.spells.insert(
+            7266,
+            SpellTemplate {
+                id: 7266,
+                name: "Duel".into(),
+                effects: [
+                    SpellEffect {
+                        effect: 83,
+                        target_a: 25,
+                        ..Default::default()
+                    },
+                    SpellEffect::default(),
+                    SpellEffect::default(),
+                ],
+                ..Default::default()
+            },
+        );
+        d
+    }
+
+    async fn two_warriors(realm: std::sync::Arc<crate::game::Realm>) -> (Client, Client) {
+        let mut a = Client::connect(&realm, "A");
+        a.enter("Alice", Race::Human, Class::Warrior).await;
+        let mut b = Client::connect(&realm, "B");
+        b.enter("Bob", Race::Human, Class::Warrior).await;
+        a.sees(b.guid).await;
+        b.sees(a.guid).await;
+        (a, b)
+    }
+
+    fn map0(realm: &std::sync::Arc<crate::game::Realm>) -> crate::game::map::MapHandle {
+        realm.maps.get(realm, MapKey::world(0))
+    }
+
+    async fn item_of(
+        realm: &std::sync::Arc<crate::game::Realm>,
+        g: Guid,
+        entry: u32,
+    ) -> Option<Guid> {
+        map0(realm)
+            .query(move |m| {
+                m.players
+                    .get(&g)
+                    .and_then(|p| p.items.iter().find(|i| i.entry == entry).map(|i| i.guid))
+            })
+            .await
+            .flatten()
+    }
+
+    async fn holds(realm: &std::sync::Arc<crate::game::Realm>, g: Guid, item: Guid) -> bool {
+        map0(realm)
+            .query(move |m| {
+                m.players
+                    .get(&g)
+                    .is_some_and(|p| p.item_by_guid(item).is_some())
+            })
+            .await
+            .unwrap_or(false)
+    }
+
+    async fn money_of(realm: &std::sync::Arc<crate::game::Realm>, g: Guid) -> u32 {
+        map0(realm)
+            .query(move |m| m.players.get(&g).map_or(0, |p| p.money()))
+            .await
+            .unwrap_or(0)
+    }
+
+    async fn set_money(realm: &std::sync::Arc<crate::game::Realm>, g: Guid, money: u32) {
+        map0(realm)
+            .query(move |m| {
+                if let Some(p) = m.players.get_mut(&g) {
+                    p.set_money(money);
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_guild_is_made_joined_ranked_spoken_in_and_left() {
+        let realm = harness::realm_with(data());
+        let (mut a, mut b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        a.send(CMSG_GUILD_CREATE {
+            guild_name: "Peons".into(),
+        })
+        .await;
+        a.send(CMSG_GUILD_INVITE {
+            invited_player: "Bob".into(),
+        })
+        .await;
+        let (from, guild) = b
+            .wait_for("SMSG_GUILD_INVITE", |m| match m {
+                ServerOpcodeMessage::SMSG_GUILD_INVITE(i) => {
+                    Some((i.player_name.clone(), i.guild_name.clone()))
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!((from.as_str(), guild.as_str()), ("Alice", "Peons"));
+        b.send(CMSG_GUILD_ACCEPT {}).await;
+        a.wait_for("Bob joining", |m| match m {
+            ServerOpcodeMessage::SMSG_GUILD_EVENT(e) if e.event == GuildEvent::Joined => Some(()),
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_GUILD_ROSTER {}).await;
+        let members = a
+            .wait_for("SMSG_GUILD_ROSTER", |m| match m {
+                ServerOpcodeMessage::SMSG_GUILD_ROSTER(r) => Some(r.members.len()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(members, 2);
+        a.send(CMSG_GUILD_PROMOTE {
+            player_name: "Bob".into(),
+        })
+        .await;
+        b.wait_for("the promotion", |m| match m {
+            ServerOpcodeMessage::SMSG_GUILD_EVENT(e) if e.event == GuildEvent::Promotion => {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+        b.send(CMSG_MESSAGECHAT {
+            chat_type: CMSG_MESSAGECHAT_ChatType::Guild,
+            language: Language::Common,
+            message: "for the guild".into(),
+        })
+        .await;
+        a.wait_for("guild chat", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match c.chat_type {
+                SMSG_MESSAGECHAT_ChatType::Guild { sender2 } if sender2 == gb => Some(()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+        let id = map0(&realm)
+            .query(move |m| m.players[&gb].fields.get_u32(PLAYER_GUILDID))
+            .await
+            .unwrap();
+        assert!(id > 0);
+        a.send(CMSG_GUILD_QUERY { guild_id: id }).await;
+        let name = a
+            .wait_for("SMSG_GUILD_QUERY_RESPONSE", |m| match m {
+                ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(q) => Some(q.name.clone()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(name, "Peons");
+        b.send(CMSG_GUILD_LEAVE {}).await;
+        a.wait_for("Bob leaving", |m| match m {
+            ServerOpcodeMessage::SMSG_GUILD_EVENT(e) if e.event == GuildEvent::Left => Some(()),
+            _ => None,
+        })
+        .await;
+        let left = map0(&realm)
+            .query(move |m| m.players[&gb].fields.get_u32(PLAYER_GUILDID))
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
+        let _ = ga;
+    }
+
+    #[tokio::test]
+    async fn a_charter_signed_enough_founds_a_guild() {
+        let realm = harness::realm_with(data());
+        let (mut a, mut b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        set_money(&realm, ga, 5000).await;
+        a.send(CMSG_PETITION_BUY {
+            npc: Guid::zero(),
+            name: "Grunts".into(),
+            index: 1,
+            ..Default::default()
+        })
+        .await;
+        let mut charter = None;
+        for _ in 0..100 {
+            charter = item_of(&realm, ga, 5863).await;
+            if charter.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let charter = charter.expect("the charter");
+        assert_eq!(money_of(&realm, ga).await, 4000);
+        a.send(CMSG_OFFER_PETITION {
+            petition: charter,
+            target: gb,
+        })
+        .await;
+        b.wait_for("the charter shown", |m| match m {
+            ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(s) => {
+                (s.item == charter).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        b.send(CMSG_PETITION_SIGN {
+            petition: charter,
+            unknown1: 0,
+        })
+        .await;
+        a.wait_for("Bob's signature", |m| match m {
+            ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(r) => {
+                (r.result == PetitionResult::Ok && r.owner == gb).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_TURN_IN_PETITION { petition: charter }).await;
+        a.wait_for("the guild founded", |m| match m {
+            ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(r) => {
+                (r.result == PetitionResult::Ok).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        let (ia, ib, has) = map0(&realm)
+            .query(move |m| {
+                (
+                    m.players[&ga].fields.get_u32(PLAYER_GUILDID),
+                    m.players[&gb].fields.get_u32(PLAYER_GUILDID),
+                    m.players[&ga].items.iter().any(|i| i.entry == 5863),
+                )
+            })
+            .await
+            .unwrap();
+        assert!(ia > 0 && ia == ib, "{ia} {ib}");
+        assert!(!has, "the charter is taken");
+    }
+
+    #[tokio::test]
+    async fn mail_carries_money_an_item_and_cash_on_delivery() {
+        let realm = harness::realm_with(data());
+        let (mut a, mut b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        set_money(&realm, ga, 1000).await;
+        set_money(&realm, gb, 1000).await;
+        let sword = item_of(&realm, ga, 25).await.expect("Alice's sword");
+        // Alice wears the sword; the jerky she carries can go.
+        let jerky = item_of(&realm, ga, 117).await.expect("Alice's jerky");
+        let _ = sword;
+        a.send(CMSG_SEND_MAIL {
+            mailbox: Guid::zero(),
+            receiver: "Bob".into(),
+            subject: "lunch".into(),
+            body: "enjoy".into(),
+            unknown1: 0,
+            unknown2: 0,
+            item: jerky,
+            money: Gold::new(100),
+            cash_on_delivery_amount: 50,
+            unknown3: 0,
+            unknown4: 0,
+        })
+        .await;
+        a.wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => matches!(
+                r.action,
+                SMSG_SEND_MAIL_RESULT_MailAction::Send {
+                    result2: SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+                }
+            )
+            .then_some(()),
+            _ => None,
+        })
+        .await;
+        // 100 sent, 60 postage.
+        assert_eq!(money_of(&realm, ga).await, 840);
+        b.wait_for("SMSG_RECEIVED_MAIL", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_RECEIVED_MAIL(_)).then_some(())
+        })
+        .await;
+        b.send(CMSG_GET_MAIL_LIST {
+            mailbox: Guid::zero(),
+        })
+        .await;
+        let (id, item, cod, body) = b
+            .wait_for("SMSG_MAIL_LIST_RESULT", |m| match m {
+                ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(l) => l.mails.first().map(|m| {
+                    (
+                        m.message_id,
+                        m.item,
+                        m.cash_on_delivery_amount,
+                        m.item_text_id,
+                    )
+                }),
+                _ => None,
+            })
+            .await;
+        assert_eq!((item, cod), (117, 50));
+        b.send(CMSG_ITEM_TEXT_QUERY {
+            item_text_id: body,
+            mail_id: id,
+            unknown1: 0,
+        })
+        .await;
+        let text = b
+            .wait_for("the mail's text", |m| match m {
+                ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .await;
+        assert_eq!(text, "enjoy");
+        b.send(CMSG_MAIL_TAKE_MONEY {
+            mailbox: Guid::zero(),
+            mail_id: id,
+        })
+        .await;
+        b.send(CMSG_MAIL_TAKE_ITEM {
+            mailbox: Guid::zero(),
+            mail_id: id,
+        })
+        .await;
+        b.wait_for("the item taken", |m| match m {
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => matches!(
+                r.action,
+                SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken {
+                    result: SMSG_SEND_MAIL_RESULT_MailResult::Ok { .. }
+                }
+            )
+            .then_some(()),
+            _ => None,
+        })
+        .await;
+        assert!(holds(&realm, gb, jerky).await);
+        assert!(!holds(&realm, ga, jerky).await);
+        // Bob paid 50 and took 100.
+        assert_eq!(money_of(&realm, gb).await, 1050);
+        // Alice gets the 50.
+        a.wait_for("the payment's mail", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_RECEIVED_MAIL(_)).then_some(())
+        })
+        .await;
+        let paid = realm
+            .social
+            .mail
+            .lock()
+            .mails
+            .values()
+            .find(|m| m.receiver == guid::counter(ga))
+            .map(|m| (m.money, m.flags));
+        assert_eq!(paid, Some((50, crate::game::social::mail::COD_PAYMENT)));
+    }
+
+    #[tokio::test]
+    async fn an_auction_is_bought_out_and_settled_by_mail() {
+        let realm = harness::realm_with(data());
+        let (mut a, mut b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        let auctioneer = guid::unit(3002, 40);
+        a.sees(auctioneer).await;
+        set_money(&realm, ga, 1000).await;
+        set_money(&realm, gb, 1000).await;
+        let jerky = item_of(&realm, ga, 117).await.unwrap();
+        a.send(CMSG_AUCTION_SELL_ITEM {
+            auctioneer,
+            item: jerky,
+            starting_bid: 100,
+            buyout: 200,
+            auction_duration_in_minutes: 120,
+        })
+        .await;
+        let id = a
+            .wait_for("the auction started", |m| match m {
+                ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => Some(r.auction_id),
+                _ => None,
+            })
+            .await;
+        assert!(id > 0);
+        b.send(CMSG_AUCTION_LIST_ITEMS {
+            auctioneer,
+            list_start_item: 0,
+            searched_name: "jerky".into(),
+            minimum_level: 0,
+            maximum_level: 0,
+            auction_slot_id: u32::MAX,
+            auction_main_category: u32::MAX,
+            auction_sub_category: u32::MAX,
+            auction_quality: ItemQuality::Poor,
+            usable: 0,
+        })
+        .await;
+        let found = b
+            .wait_for("SMSG_AUCTION_LIST_RESULT", |m| match m {
+                ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(l) => Some(
+                    l.auctions
+                        .iter()
+                        .map(|a| (a.id, a.buyout_amount))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .await;
+        assert_eq!(found, vec![(id, 200)]);
+        b.send(CMSG_AUCTION_PLACE_BID {
+            auctioneer,
+            auction_id: id,
+            price: Gold::new(200),
+        })
+        .await;
+        b.wait_for("the buyout", |m| match m {
+            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) if r.auction_id == id => Some(()),
+            _ => None,
+        })
+        .await;
+        assert_eq!(money_of(&realm, gb).await, 800);
+        b.wait_for("the item's mail", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_RECEIVED_MAIL(_)).then_some(())
+        })
+        .await;
+        let (won, sold) = {
+            let mails = realm.social.mail.lock();
+            let of = |g: Guid| {
+                mails
+                    .mails
+                    .values()
+                    .find(|m| m.receiver == guid::counter(g))
+                    .cloned()
+            };
+            (of(gb), of(ga))
+        };
+        assert_eq!(
+            won.and_then(|m| m.item).map(|i| i.guid),
+            Some(guid::counter(jerky))
+        );
+        // The goblins: 15% of 200 cut, the deposit back.
+        let sold = sold.expect("the seller's mail");
+        let deposit = crate::game::social::auction::deposit(25 / 4, 4, 7200, 7);
+        assert_eq!(sold.money, 200 - 30 + deposit);
+    }
+
+    #[tokio::test]
+    async fn a_trade_swaps_items_and_money_when_both_accept() {
+        let realm = harness::realm_with(data());
+        let (mut a, mut b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        set_money(&realm, ga, 1000).await;
+        let jerky = item_of(&realm, ga, 117).await.unwrap();
+        let (bag, slot) = map0(&realm)
+            .query(move |m| {
+                let p = &m.players[&ga];
+                let i = p.item_by_guid(jerky).unwrap();
+                (p.items[i].bag, p.items[i].slot)
+            })
+            .await
+            .unwrap();
+        a.send(CMSG_INITIATE_TRADE { guid: gb }).await;
+        b.wait_for("the trade asked", |m| match m {
+            ServerOpcodeMessage::SMSG_TRADE_STATUS(s) => {
+                matches!(s.status, SMSG_TRADE_STATUS_TradeStatus::BeginTrade { .. }).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        b.send(CMSG_BEGIN_TRADE {}).await;
+        a.send(CMSG_SET_TRADE_ITEM {
+            trade_slot: 0,
+            bag,
+            slot,
+        })
+        .await;
+        a.send(CMSG_SET_TRADE_GOLD {
+            gold: Gold::new(300),
+        })
+        .await;
+        b.wait_for("Alice's offer", |m| match m {
+            ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(t) => {
+                (t.money_in_trade.as_int() == 300 && t.trade_slots[0].item == 117).then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        a.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
+        b.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
+        for c in [&mut a, &mut b] {
+            c.wait_for("TRADE_COMPLETE", |m| match m {
+                ServerOpcodeMessage::SMSG_TRADE_STATUS(s) => {
+                    matches!(s.status, SMSG_TRADE_STATUS_TradeStatus::TradeComplete).then_some(())
+                }
+                _ => None,
+            })
+            .await;
+        }
+        assert!(holds(&realm, gb, jerky).await);
+        assert!(!holds(&realm, ga, jerky).await);
+        assert_eq!(money_of(&realm, ga).await, 700);
+        assert_eq!(money_of(&realm, gb).await, 300);
+    }
+
+    #[tokio::test]
+    async fn a_duel_ends_when_one_would_fall() {
+        let realm = harness::realm_with(data());
+        let (mut a, mut b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        map0(&realm)
+            .query(move |m| m.players.get_mut(&ga).unwrap().spells.push(7266))
+            .await;
+        a.send(CMSG_CAST_SPELL {
+            spell: 7266,
+            targets: crate::game::map::spells::wire_targets(&crate::game::map::spells::Targets {
+                unit: Some(gb),
+                ..Default::default()
+            }),
+        })
+        .await;
+        let flag = b
+            .wait_for("SMSG_DUEL_REQUESTED", |m| match m {
+                ServerOpcodeMessage::SMSG_DUEL_REQUESTED(r) if r.target == ga => Some(r.initiator),
+                _ => None,
+            })
+            .await;
+        b.send(CMSG_DUEL_ACCEPTED { guid: flag }).await;
+        a.wait_for("SMSG_DUEL_COUNTDOWN", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(_)).then_some(())
+        })
+        .await;
+        // Skip the countdown.
+        map0(&realm)
+            .query(move |m| {
+                for g in [ga, gb] {
+                    if let Some(d) = m.players.get_mut(&g).and_then(|p| p.duel.as_mut()) {
+                        d.phase = crate::game::map::duel::Phase::Countdown {
+                            until: std::time::Instant::now(),
+                        };
+                    }
+                }
+            })
+            .await;
+        let mut fighting = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if map0(&realm)
+                .query(move |m| crate::game::map::duel::dueling(m, ga, gb))
+                .await
+                == Some(true)
+            {
+                fighting = true;
+                break;
+            }
+        }
+        assert!(fighting);
+        let health = map0(&realm)
+            .query(move |m| {
+                crate::game::map::combat::deal_damage(m, ga, gb, 100_000);
+                m.players[&gb].fields.get_u32(UNIT_FIELD_HEALTH)
+            })
+            .await
+            .unwrap();
+        assert_eq!(health, 1);
+        let (winner, loser) = a
+            .wait_for("SMSG_DUEL_WINNER", |m| match m {
+                ServerOpcodeMessage::SMSG_DUEL_WINNER(w) => {
+                    Some((w.initiator_name.clone(), w.opponent_name.clone()))
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!((winner.as_str(), loser.as_str()), ("Alice", "Bob"));
+        b.wait_for("SMSG_DUEL_COMPLETE", |m| match m {
+            ServerOpcodeMessage::SMSG_DUEL_COMPLETE(c) => {
+                c.ended_without_interruption.then_some(())
+            }
+            _ => None,
+        })
+        .await;
+        a.forgets(flag).await;
+    }
+
+    #[tokio::test]
+    async fn expired_mail_goes_back_and_an_unsold_auction_comes_home() {
+        use crate::game::social::{auction, mail};
+        let realm = harness::realm_with(data());
+        let (a, b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (guid::counter(a.guid), guid::counter(b.guid));
+        let past = mail::now() - 1;
+        let item = crate::game::store::ItemRow {
+            guid: 9_000,
+            entry: 117,
+            count: 1,
+            ..Default::default()
+        };
+        let sent = mail::post(
+            &realm,
+            mail::Mail {
+                kind: mail::NORMAL,
+                sender: ga,
+                receiver: gb,
+                item: Some(item.clone()),
+                deliver_at: past,
+                expires_at: past,
+                ..Default::default()
+            },
+        );
+        realm.social.auctions.lock().auctions.insert(
+            77,
+            auction::Auction {
+                id: 77,
+                market: 7,
+                house: 7,
+                item: crate::game::store::ItemRow {
+                    guid: 9_001,
+                    ..item.clone()
+                },
+                owner: gb,
+                start_bid: 10,
+                expires_at: past,
+                ..Default::default()
+            },
+        );
+        crate::game::social::sweep(&realm);
+        let mails = realm.social.mail.lock();
+        let back = &mails.mails[&sent];
+        assert_eq!((back.receiver, back.flags), (ga, mail::RETURNED));
+        let home = mails
+            .mails
+            .values()
+            .find(|m| m.auction == 77)
+            .expect("the auction's mail");
+        assert_eq!(
+            (home.receiver, home.item.as_ref().map(|i| i.guid)),
+            (gb, Some(9_001))
+        );
+        assert!(realm.social.auctions.lock().auctions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn guilds_mail_and_auctions_survive_a_restart() {
+        let dir = std::env::temp_dir().join(format!("wvs-restart-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("characters.sqlite");
+        let (store, startup) = crate::game::store::Store::open(&db).unwrap();
+        let realm = crate::game::Realm::new(harness::test_config(), store, startup, data(), None);
+        let (mut a, b) = two_warriors(realm.clone()).await;
+        let (ga, gb) = (a.guid, b.guid);
+        a.send(CMSG_GUILD_CREATE {
+            guild_name: "Keepers".into(),
+        })
+        .await;
+        set_money(&realm, ga, 1000).await;
+        let jerky = item_of(&realm, ga, 117).await.unwrap();
+        a.send(CMSG_SEND_MAIL {
+            mailbox: Guid::zero(),
+            receiver: "Bob".into(),
+            subject: "kept".into(),
+            body: String::new(),
+            unknown1: 0,
+            unknown2: 0,
+            item: jerky,
+            money: Gold::new(0),
+            cash_on_delivery_amount: 0,
+            unknown3: 0,
+            unknown4: 0,
+        })
+        .await;
+        a.wait_for("SMSG_SEND_MAIL_RESULT", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(_)).then_some(())
+        })
+        .await;
+        realm.shutdown().await;
+        drop((a, b));
+        let (_store, startup) = crate::game::store::Store::open(&db).unwrap();
+        let social = crate::game::social::Social::load(&startup.records);
+        assert_eq!(
+            social
+                .guilds
+                .lock()
+                .guilds
+                .values()
+                .map(|g| g.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Keepers".to_owned()]
+        );
+        let mails = social.mail.lock();
+        let kept = mails.mails.values().next().expect("the mail");
+        assert_eq!(kept.receiver, guid::counter(gb));
+        assert_eq!(
+            kept.item.as_ref().map(|i| i.guid),
+            Some(guid::counter(jerky))
+        );
+        drop(mails);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

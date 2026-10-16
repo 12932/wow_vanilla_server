@@ -103,7 +103,7 @@ impl Item {
         }
     }
 
-    fn from_row(data: &GameData, row: &ItemRow, owner: Guid) -> Self {
+    pub fn from_row(data: &GameData, row: &ItemRow, owner: Guid) -> Self {
         let mut item = Self::new(
             data,
             guid::item(row.guid),
@@ -116,10 +116,13 @@ impl Item {
         item.fields.set_u32(ITEM_FIELD_DURABILITY, row.durability);
         item.fields.set_u32(ITEM_FIELD_FLAGS, row.flags);
         item.data = row.data.clone();
+        if let Some(text) = row.data.strip_prefix("text:").and_then(|t| t.parse().ok()) {
+            item.fields.set_u32(ITEM_FIELD_ITEM_TEXT_ID, text);
+        }
         item
     }
 
-    fn to_row(&self) -> ItemRow {
+    pub fn to_row(&self) -> ItemRow {
         ItemRow {
             guid: guid::counter(self.guid),
             entry: self.entry,
@@ -201,6 +204,8 @@ pub struct Player {
     pub caster: crate::game::map::spells::Caster,
     /// A resurrection offered: by whom, and with what share of health.
     pub resurrect_offer: Option<(Guid, u32)>,
+    pub trade: Option<crate::game::map::trade::Trade>,
+    pub duel: Option<crate::game::map::duel::Duel>,
 }
 
 impl Player {
@@ -260,6 +265,8 @@ impl Player {
             auras: Default::default(),
             caster: Default::default(),
             resurrect_offer: None,
+            trade: None,
+            duel: None,
             row,
         };
         p.init_fields(data);

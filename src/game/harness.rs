@@ -25,6 +25,8 @@ pub fn test_config() -> RealmConfig {
         everyone_gm: true,
         max_characters_per_account: 10,
         nav_dir: None,
+        petition_signatures: 1,
+        mail_delay: Duration::ZERO,
     }
 }
 
@@ -47,6 +49,8 @@ pub struct Client {
     pub backlog: Vec<ServerOpcodeMessage>,
     /// Packets that didn't parse, as they came.
     pub raw: Vec<Arc<[u8]>>,
+    /// Every frame, parsed or not, for [`Client::wait_frame`].
+    frames: Vec<Arc<[u8]>>,
     /// Creates and forgets received and not yet waited for, by object:
     /// one packet can carry many.
     created: ahash::AHashMap<Guid, u32>,
@@ -69,6 +73,7 @@ impl Client {
             guid: Guid::zero(),
             backlog: Vec::new(),
             raw: Vec::new(),
+            frames: Vec::new(),
             created: ahash::AHashMap::new(),
             forgot: ahash::AHashMap::new(),
         }
@@ -86,6 +91,7 @@ impl Client {
 
     fn drain(&mut self) {
         while let Ok(Some(frame)) = self.rx.try_recv() {
+            self.frames.push(frame.clone());
             match ServerOpcodeMessage::read_unencrypted(&frame[..]) {
                 Ok(m) => {
                     for g in creates(&m) {
@@ -131,6 +137,41 @@ impl Client {
         }
     }
 
+    /// The body of the first frame with `opcode` that `pick` takes, parsed
+    /// or not (for the packets laid out by hand), waiting up to [`WAIT`].
+    pub async fn wait_frame(
+        &mut self,
+        what: &str,
+        opcode: u16,
+        pick: impl FnMut(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        self.wait_frame_of(what, &[opcode], pick).await
+    }
+
+    /// [`Client::wait_frame`], for any of `opcodes`.
+    pub async fn wait_frame_of(
+        &mut self,
+        what: &str,
+        opcodes: &[u16],
+        mut pick: impl FnMut(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            self.drain();
+            let found = self
+                .frames
+                .iter()
+                .position(|f| opcodes.contains(&u16::from_le_bytes([f[2], f[3]])) && pick(&f[4..]));
+            if let Some(i) = found {
+                return self.frames.remove(i)[4..].to_vec();
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("{}: no {what} within {WAIT:?}", self.account);
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
     /// Whether a message `pick` takes arrives within `within`.
     pub async fn gets<T>(
         &mut self,
@@ -154,6 +195,7 @@ impl Client {
     pub fn clear(&mut self) {
         self.drain();
         self.backlog.clear();
+        self.frames.clear();
     }
 
     /// Create a character and log it in, waiting for the world.

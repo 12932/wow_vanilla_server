@@ -10,6 +10,7 @@ pub mod chat;
 pub mod combat;
 pub mod creature;
 pub mod death;
+pub mod duel;
 pub mod gameobject;
 pub mod gm;
 pub mod grid;
@@ -24,8 +25,10 @@ pub mod player;
 pub mod query;
 pub mod quests;
 pub mod skills;
+pub mod social;
 pub mod spells;
 pub mod stats;
+pub mod trade;
 pub mod vendor;
 pub mod visibility;
 pub mod world;
@@ -211,6 +214,8 @@ pub struct Map {
     pub now: Instant,
     pub next_creature_counter: u32,
     pub next_spline_id: u32,
+    /// When grouped players' stats next go out.
+    pub member_stats_at: Instant,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -270,6 +275,7 @@ impl Map {
             now,
             next_creature_counter: 1,
             next_spline_id: 1,
+            member_stats_at: Instant::now(),
         }
     }
 
@@ -337,6 +343,7 @@ impl Map {
                 }
                 self.insert_player(p);
                 spells::apply_passives(self, guid);
+                social::logged_in(self, guid);
                 self.visibility_dirty.insert(guid);
             }
             ArrivalKind::Transfer(mut p) => {
@@ -366,6 +373,12 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        duel::left(self, guid, true);
+        trade::cancel(
+            self,
+            guid,
+            wow_world_messages::vanilla::SMSG_TRADE_STATUS_TradeStatus::TargetLogout,
+        );
         let mut p = self.players.remove(&guid)?;
         self.grid.remove(guid, p.cell);
         self.visibility_dirty.remove(&guid);
@@ -387,6 +400,7 @@ impl Map {
     pub fn save_and_go_offline(&mut self, mut p: Player) {
         let row = p.to_row(self.now);
         self.realm.store.save(row);
+        social::logged_out(self, p.guid);
         self.realm.registry.go_offline(p.guid);
     }
 
@@ -445,6 +459,8 @@ impl Map {
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);
+        social::push_member_stats(self);
+        duel::update(self);
         ai::update_creatures(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);
@@ -625,6 +641,19 @@ impl Map {
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
         guid
+    }
+
+    pub fn remove_gameobject(&mut self, guid: Guid) -> Option<GameObject> {
+        let key = self.gameobject_by_guid.remove(&guid)?;
+        let mut g = self.gameobjects.try_remove(key)?;
+        self.grid.remove(guid, g.cell);
+        for o in g.observers.drain() {
+            if let Some(p) = self.players.get_mut(&o) {
+                p.known.remove(&guid);
+                self.forget.entry(o).or_default().push(guid);
+            }
+        }
+        Some(g)
     }
 
     pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {

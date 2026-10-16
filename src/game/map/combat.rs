@@ -305,6 +305,9 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
         return false;
     }
     if ua.is_player && ub.is_player {
+        if crate::game::map::duel::dueling(map, a, b) {
+            return true;
+        }
         let (pa, pb) = (&map.players[&a], &map.players[&b]);
         let ffa = |p: &crate::game::map::player::Player| {
             p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP)
@@ -614,6 +617,14 @@ fn damage_range(map: &Map, g: Guid) -> (u32, u32) {
 
 /// Damage a unit: rage, threat, health, death.
 pub fn deal_damage(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
+    let damage = if guid::is_player(victim) && guid::is_player(attacker) {
+        crate::game::map::duel::soften(map, attacker, victim, damage)
+    } else {
+        damage
+    };
+    if damage == 0 {
+        return;
+    }
     for (g, taken) in [(attacker, false), (victim, true)] {
         if let Some(p) = map.players.get_mut(&g)
             && p.power_type() == 1
@@ -668,10 +679,93 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
             .and_then(|c| c.tapped_by)
             .unwrap_or(killer);
         if guid::is_player(tapper) {
-            kill_reward(map, tapper, victim);
-            crate::game::map::quests::killed(map, tapper, victim);
+            reward(map, tapper, victim);
         }
         crate::game::map::ai::die(map, victim, tapper);
+    }
+}
+
+/// How near a corpse a member must be for a share of the kill.
+pub const GROUP_REWARD_YARDS: f32 = 74.0;
+
+/// vmangos's group XP bonus: three, four and five share more.
+pub fn group_xp_rate(count: usize, raid: bool) -> f32 {
+    if raid {
+        return 1.0;
+    }
+    match count {
+        0..=2 => 1.0,
+        3 => 1.166,
+        4 => 1.3,
+        _ => 1.4,
+    }
+}
+
+/// XP and kill credit for a creature's death: the tapper's, or shared with
+/// their group near the corpse, as vmangos shares them.
+fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
+    let Some(at) = map.creature(victim).map(|c| c.position) else {
+        return;
+    };
+    let (members, raid) = {
+        let groups = map.realm.social.groups.lock();
+        match groups.group_of(tapper) {
+            Some(g) => (g.members.iter().map(|m| m.guid).collect::<Vec<_>>(), g.raid),
+            None => (vec![tapper], false),
+        }
+    };
+    let near: Vec<(Guid, u32, bool)> = members
+        .into_iter()
+        .filter_map(|g| {
+            let p = map.players.get(&g)?;
+            (dist(p.position(), at) <= GROUP_REWARD_YARDS || g == tapper)
+                .then(|| (g, u32::from(p.level()), p.death == Death::Alive))
+        })
+        .collect();
+    if near.len() <= 1 {
+        kill_reward(map, tapper, victim);
+        crate::game::map::quests::killed(map, tapper, victim);
+        return;
+    }
+    let template = map
+        .creature(victim)
+        .and_then(|c| map.realm.data.creature_template(c.entry));
+    let no_xp = template.is_some_and(|t| t.static_flags1 & 0x2 != 0);
+    let elite = template.is_some_and(|t| t.rank == 1 || t.rank == 2);
+    let mult = template.map(|t| t.xp_multiplier).unwrap_or(1.0);
+    let mob_level = map
+        .creature(victim)
+        .map(|c| c.fields.get_u32(UNIT_FIELD_LEVEL))
+        .unwrap_or(1);
+    let alive: Vec<&(Guid, u32, bool)> = near.iter().filter(|m| m.2).collect();
+    let sum_level: u32 = alive.iter().map(|m| m.1).sum();
+    let top = alive.iter().map(|m| m.1).max().unwrap_or(0);
+    let top_not_gray = alive
+        .iter()
+        .map(|m| m.1)
+        .filter(|l| mob_level > gray_level(*l))
+        .max();
+    if let Some(level) = top_not_gray.filter(|_| !no_xp && sum_level > 0) {
+        let xp = kill_xp(level, mob_level, elite, mult) as f32;
+        let rate = group_xp_rate(near.len(), raid);
+        for m in alive.iter().filter(|m| m.1 <= level) {
+            let share = if top == level {
+                xp * rate * m.1 as f32 / sum_level as f32
+            } else {
+                xp * rate / 2.0 + 1.0
+            };
+            crate::game::map::stats::give_xp(map, m.0, share as u32, Some(victim));
+        }
+    }
+    // Quest credit for the living, and the dead not yet released.
+    for (g, _, _) in near {
+        if map
+            .players
+            .get(&g)
+            .is_some_and(|p| matches!(p.death, Death::Alive | Death::Dead { .. }))
+        {
+            crate::game::map::quests::killed(map, g, victim);
+        }
     }
 }
 

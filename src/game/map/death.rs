@@ -150,6 +150,12 @@ pub fn kill(map: &mut Map, g: Guid) {
     p.logout_at = None;
     crate::game::map::combat::leave_combat(map, g);
     crate::game::map::auras::clear_on_death(map, g);
+    crate::game::map::duel::left(map, g, false);
+    crate::game::map::trade::cancel(
+        map,
+        g,
+        wow_world_messages::vanilla::SMSG_TRADE_STATUS_TradeStatus::TargetDead,
+    );
 }
 
 /// `CMSG_REPOP_REQUEST`: release the spirit to the nearest graveyard.
