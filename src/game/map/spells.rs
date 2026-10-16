@@ -812,22 +812,13 @@ fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
             cast_triggered(map, caster, e.trigger_spell, Some(target));
         }
         EFFECT_DISPEL => {
-            let dispel = e.misc_value as u32;
-            let data = map.realm.data.clone();
             let friendly = !combat::can_attack(map, caster, target);
-            let gone: Vec<u32> = auras::auras(map, target)
-                .map(|a| {
-                    a.list
-                        .iter()
-                        .filter(|x| x.positive != friendly)
-                        .filter(|x| data.spells.get(x.spell).is_some_and(|s| s.dispel == dispel))
-                        .map(|x| x.spell)
-                        .take(amount.max(1) as usize)
-                        .collect()
-                })
-                .unwrap_or_default();
-            for spell in gone {
-                auras::remove_spell(map, target, spell, None);
+            let gone: Vec<(u32, Guid)> = auras::dispellable(map, target, e.misc_value as u32, friendly)
+                .into_iter()
+                .take(amount.max(1) as usize)
+                .collect();
+            for (spell, by) in gone {
+                auras::remove_spell(map, target, spell, Some(by));
             }
         }
         EFFECT_INTERRUPT_CAST => interrupt(map, target),
@@ -877,8 +868,7 @@ fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
 
 /// Spell damage from `caster` to `target`: logged, absorbed, dealt.
 pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: u32) {
-    let left = auras::absorb(map, target, damage);
-    let absorbed = damage - left;
+    let (left, absorbed) = auras::absorb(map, target, damage, s.school_mask());
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLNONMELEEDAMAGELOG {
         target,
         attacker: caster,
@@ -904,6 +894,40 @@ pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
     pushback(map, target);
     if left > 0 {
         combat::deal_damage(map, caster, target, left);
+    }
+}
+
+/// A periodic aura's tick of damage: logged, absorbed, dealt; a leech
+/// heals its caster by what it took.
+pub fn periodic_damage(
+    map: &mut Map,
+    h: &auras::Holder,
+    target: Guid,
+    amount: u32,
+    leech: bool,
+) {
+    let (left, absorbed) = auras::absorb(map, target, amount, h.school);
+    if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
+        target,
+        caster: h.caster,
+        spell: h.spell,
+        auras: vec![AuraLog {
+            aura_type: AuraLog_AuraType::PeriodicDamage {
+                damage1: left,
+                school: SpellSchool::try_from(h.school.trailing_zeros() as u8)
+                    .unwrap_or(SpellSchool::Normal),
+                absorbed,
+                resisted: 0,
+            },
+        }],
+    }) {
+        map.send_to_observers(target, &frame, true);
+    }
+    if left > 0 {
+        combat::deal_damage(map, h.caster, target, left);
+    }
+    if leech {
+        heal(map, h.caster, h.caster, h.spell, left, true);
     }
 }
 

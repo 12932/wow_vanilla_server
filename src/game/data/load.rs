@@ -1284,6 +1284,19 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     )
                 }),
                 equipped_item_class: c.i32("equippedItemClass"),
+                equipped_item_subclass_mask: c.i32("equippedItemSubClassMask"),
+                equipped_item_inventory_type_mask: c.i32("equippedItemInventoryTypeMask"),
+                stances_not: c.u32("stancesNot"),
+                target_creature_type: c.u32("targetCreatureType"),
+                requires_spell_focus: c.u32("requiresSpellFocus"),
+                caster_aura_state: c.u32("casterAuraState"),
+                target_aura_state: c.u32("targetAuraState"),
+                mana_per_second_per_level: c.u32("manaPerSecondPerLevel"),
+                totems: [c.u32("totem1"), c.u32("totem2")],
+                max_affected_targets: c.u32("maxAffectedTargets"),
+                max_target_level: c.u32("maxTargetLevel"),
+                spell_icon: c.u32("spellIconId"),
+                custom_flags: c.u32("customFlags"),
                 effects: [effect(0), effect(1), effect(2)],
                 spell_visual: c.u32("spellVisual1"),
                 name: c.string("name"),
@@ -1311,6 +1324,8 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         }
     }
     s.spells = best.into_iter().map(|(k, (_, t))| (k, t)).collect();
+    apply_spell_mods(db, &mut s.spells);
+    load_spell_tables(db, s);
     for (id, map, x, y, z, o) in rows(
         db,
         "SELECT * FROM spell_target_position WHERE build_min <= 5875 AND build_max >= 5875",
@@ -1389,10 +1404,268 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         s.talents.insert(t.id, t);
     }
-    for (spell, skill) in rows(dbc, "SELECT * FROM SkillLineAbility", |c| {
-        (c.u32("spell"), c.u32("skill_line"))
+    for a in rows(dbc, "SELECT * FROM SkillLineAbility", |c| SkillAbility {
+        skill: c.u32("skill_line"),
+        spell: c.u32("spell"),
+        race_mask: c.u32("race_mask"),
+        class_mask: c.u32("class_mask"),
+        min_rank: c.u32("min_skill_line_rank"),
+        superseded_by: c.u32("superseded_by"),
+        acquire: c.u32("acquire_method"),
+        trivial_high: c.u32("trivial_skill_line_rank_high"),
+        trivial_low: c.u32("trivial_skill_line_rank_low"),
     }) {
-        s.spell_skills.insert(spell, skill);
+        s.spell_skills.insert(a.spell, a.skill);
+        s.skill_abilities.entry(a.spell).or_default().push(a);
+    }
+    for e in rows(dbc, "SELECT * FROM SpellItemEnchantment", |c| Enchantment {
+        id: c.u32("id"),
+        effects: std::array::from_fn(|i| {
+            (
+                c.u32(&format!("enchantment_type_{i}")),
+                c.i32(&format!("effect_points_min_{i}")),
+                c.i32(&format!("effect_points_max_{i}")),
+                c.u32(&format!("effect_arg_{i}")),
+            )
+        }),
+        name: c.string("name_en_gb"),
+    }) {
+        s.enchantments.insert(e.id, e);
+    }
+}
+
+/// vmangos's corrections to `spell_template` (`spell_mod` and
+/// `spell_effect_mod`): -1 leaves a value as it is.
+fn apply_spell_mods(db: &Connection, spells: &mut AHashMap<u32, super::spells::SpellTemplate>) {
+    let mods = rows(db, "SELECT * FROM spell_mod", |c| {
+        let v = |n: &str| c.i64(n);
+        (
+            c.u32("Id"),
+            [
+                v("procChance"),
+                v("procFlags"),
+                v("procCharges"),
+                v("DurationIndex"),
+                v("Category"),
+                v("CastingTimeIndex"),
+                v("StackAmount"),
+                v("manaCost"),
+                v("Attributes"),
+                v("AttributesEx"),
+                v("AttributesEx2"),
+                v("AttributesEx3"),
+                v("AttributesEx4"),
+                v("InterruptFlags"),
+                v("AuraInterruptFlags"),
+                v("ChannelInterruptFlags"),
+                v("Dispel"),
+                v("Stances"),
+                v("StancesNot"),
+                v("ManaCostPercentage"),
+                v("StartRecoveryCategory"),
+                v("StartRecoveryTime"),
+                v("MaxAffectedTargets"),
+                v("MaxTargetLevel"),
+                v("DmgClass"),
+                v("rangeIndex"),
+                v("RecoveryTime"),
+                v("CategoryRecoveryTime"),
+                v("SpellFamilyName"),
+                v("SpellFamilyFlags"),
+                v("Mechanic"),
+                v("EquippedItemClass"),
+            ],
+        )
+    });
+    for (id, m) in mods {
+        let Some(t) = spells.get_mut(&id) else {
+            continue;
+        };
+        let set = |dst: &mut u32, v: i64| {
+            if v != -1 {
+                *dst = v.max(0) as u32;
+            }
+        };
+        set(&mut t.proc_chance, m[0]);
+        set(&mut t.proc_flags, m[1]);
+        set(&mut t.proc_charges, m[2]);
+        set(&mut t.duration_index, m[3]);
+        set(&mut t.category, m[4]);
+        set(&mut t.casting_time_index, m[5]);
+        set(&mut t.stack_amount, m[6]);
+        set(&mut t.mana_cost, m[7]);
+        for w in 0..5 {
+            if m[8 + w] != -1 {
+                t.attributes[w] = m[8 + w] as u32;
+            }
+        }
+        set(&mut t.interrupt_flags, m[13]);
+        set(&mut t.aura_interrupt_flags, m[14]);
+        set(&mut t.channel_interrupt_flags, m[15]);
+        set(&mut t.dispel, m[16]);
+        set(&mut t.stances, m[17]);
+        set(&mut t.stances_not, m[18]);
+        set(&mut t.mana_cost_percentage, m[19]);
+        set(&mut t.start_recovery_category, m[20]);
+        set(&mut t.start_recovery_time, m[21]);
+        set(&mut t.max_affected_targets, m[22]);
+        set(&mut t.max_target_level, m[23]);
+        set(&mut t.dmg_class, m[24]);
+        set(&mut t.range_index, m[25]);
+        set(&mut t.recovery_time, m[26]);
+        set(&mut t.category_recovery_time, m[27]);
+        set(&mut t.family_name, m[28]);
+        // Family flags of 0 mean no change, as most rows have.
+        if m[29] != -1 && m[29] != 0 {
+            t.family_flags = m[29] as u64;
+        }
+        set(&mut t.mechanic, m[30]);
+        if m[31] != -1 {
+            t.equipped_item_class = m[31] as i32;
+        }
+    }
+    let effect_mods = rows(db, "SELECT * FROM spell_effect_mod", |c| {
+        (
+            c.u32("Id"),
+            c.u32("EffectIndex") as usize,
+            [
+                c.i64("Effect"),
+                c.i64("EffectDieSides"),
+                c.i64("EffectBaseDice"),
+                c.i64("EffectBasePoints"),
+                c.i64("EffectAmplitude"),
+                c.i64("EffectChainTarget"),
+                c.i64("EffectMechanic"),
+                c.i64("EffectImplicitTargetA"),
+                c.i64("EffectImplicitTargetB"),
+                c.i64("EffectRadiusIndex"),
+                c.i64("EffectApplyAuraName"),
+                c.i64("EffectItemType"),
+                c.i64("EffectMiscValue"),
+                c.i64("EffectTriggerSpell"),
+            ],
+            [
+                c.f32("EffectDicePerLevel"),
+                c.f32("EffectRealPointsPerLevel"),
+                c.f32("EffectPointsPerComboPoint"),
+                c.f32("EffectMultipleValue"),
+            ],
+        )
+    });
+    for (id, i, v, f) in effect_mods {
+        let Some(e) = spells.get_mut(&id).and_then(|t| t.effects.get_mut(i)) else {
+            continue;
+        };
+        let set = |dst: &mut u32, v: i64| {
+            if v != -1 {
+                *dst = v.max(0) as u32;
+            }
+        };
+        set(&mut e.effect, v[0]);
+        if v[1] != -1 {
+            e.die_sides = v[1] as i32;
+        }
+        if v[2] != -1 {
+            e.base_dice = v[2] as i32;
+        }
+        if v[3] != -1 {
+            e.base_points = v[3] as i32;
+        }
+        set(&mut e.amplitude, v[4]);
+        set(&mut e.chain_target, v[5]);
+        set(&mut e.mechanic, v[6]);
+        set(&mut e.target_a, v[7]);
+        set(&mut e.target_b, v[8]);
+        set(&mut e.radius_index, v[9]);
+        set(&mut e.aura, v[10]);
+        set(&mut e.item_type, v[11]);
+        if v[12] != -1 {
+            e.misc_value = v[12] as i32;
+        }
+        set(&mut e.trigger_spell, v[13]);
+        if f[0] != -1.0 {
+            e.dice_per_level = f[0];
+        }
+        if f[1] != -1.0 {
+            e.real_points_per_level = f[1];
+        }
+        if f[2] != -1.0 {
+            e.points_per_combo_point = f[2];
+        }
+        if f[3] != -1.0 {
+            e.multiple_value = f[3];
+        }
+    }
+}
+
+/// The `spell_*` tables beside the templates.
+fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
+    use super::spells::*;
+    let in_build = "WHERE build_min <= 5875 AND build_max >= 5875";
+    for (id, p) in rows(db, &format!("SELECT * FROM spell_proc_event {in_build}"), |c| {
+        (
+            c.u32("entry"),
+            ProcEvent {
+                school_mask: c.u32("SchoolMask"),
+                family: c.u32("SpellFamilyName"),
+                family_mask: [
+                    c.i64("SpellFamilyMask0") as u64,
+                    c.i64("SpellFamilyMask1") as u64,
+                    c.i64("SpellFamilyMask2") as u64,
+                ],
+                flags: c.u32("procFlags"),
+                ex: c.u32("procEx"),
+                ppm: c.f32("ppmRate"),
+                chance: c.f32("CustomChance"),
+                cooldown: c.u32("Cooldown"),
+            },
+        )
+    }) {
+        s.proc_events.insert(id, p);
+    }
+    for (id, r) in rows(db, &format!("SELECT * FROM spell_chain {in_build}"), |c| {
+        (
+            c.u32("spell_id"),
+            SpellRank {
+                prev: c.u32("prev_spell"),
+                first: c.u32("first_spell"),
+                rank: c.u32("rank"),
+            },
+        )
+    }) {
+        s.ranks.insert(id, r);
+    }
+    for (id, t) in rows(db, &format!("SELECT * FROM spell_threat {in_build}"), |c| {
+        (c.u32("entry"), (c.i32("threat"), c.f32("multiplier")))
+    }) {
+        s.threat.insert(id, t);
+    }
+    for (group, spell) in rows(db, &format!("SELECT * FROM spell_group {in_build}"), |c| {
+        (c.u32("group_id"), c.u32("spell_id"))
+    }) {
+        if spell != 0 {
+            s.groups.entry(spell).or_default().push(group);
+        }
+    }
+    for (group, rule) in rows(db, "SELECT * FROM spell_group_stack_rules", |c| {
+        (c.u32("group_id"), c.u32("stack_rule"))
+    }) {
+        s.group_rules.insert(group, rule);
+    }
+    for (id, mask) in rows(db, &format!("SELECT * FROM spell_elixir {in_build}"), |c| {
+        (c.u32("entry"), c.u32("mask"))
+    }) {
+        s.elixirs.insert(id, mask);
+    }
+    for (id, ppm) in rows(db, "SELECT * FROM spell_proc_item_enchant", |c| {
+        (c.u32("entry"), c.f32("ppmRate"))
+    }) {
+        s.enchant_ppm.insert(id, ppm);
+    }
+    for (spell, learns) in rows(db, "SELECT * FROM spell_learn_spell", |c| {
+        (c.u32("entry"), c.u32("SpellID"))
+    }) {
+        s.learn_with.entry(spell).or_default().push(learns);
     }
 }
 

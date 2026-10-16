@@ -217,6 +217,9 @@ pub struct Player {
     pub chat_last: Option<Instant>,
     pub chat_burst: u32,
     pub muted_until: Option<Instant>,
+    pub derived: crate::game::map::derive::Derived,
+    /// The gear changed: its auras want bringing in line.
+    pub gear_dirty: bool,
 }
 
 impl Player {
@@ -285,6 +288,8 @@ impl Player {
             chat_last: None,
             chat_burst: 0,
             muted_until: None,
+            derived: Default::default(),
+            gear_dirty: true,
             row,
         };
         p.init_fields(data);
@@ -368,7 +373,6 @@ impl Player {
             f.set_f32(PLAYER_FIELD_MOD_DAMAGE_DONE_PCT + i, 1.0);
         }
         self.apply_stats(data);
-        crate::game::map::combat::player_damage(self, data);
         let health = if self.row.state.health == 0 && !self.row.state.dead {
             self.fields.get_u32(UNIT_FIELD_MAXHEALTH)
         } else {
@@ -397,53 +401,9 @@ impl Player {
         crate::game::map::quests::refresh_log(self, data);
     }
 
-    /// Stats, health and power for the level, from the base tables.
+    /// Stats, health and power for the level, gear and auras.
     pub fn apply_stats(&mut self, data: &GameData) {
-        let level = self.level();
-        let Some(stats) = data.level_stats(self.row.race, self.row.class, level) else {
-            self.fields.set_u32(UNIT_FIELD_MAXHEALTH, 100);
-            return;
-        };
-        let (gear, gear_health, gear_mana, _) =
-            crate::game::map::inventory::gear_bonuses(self, data);
-        let f = &mut self.fields;
-        let mut total = [0u32; 5];
-        for (i, v) in stats.stats.iter().enumerate() {
-            total[i] = (*v as i32 + gear[i]).max(0) as u32;
-            f.set_u32(UNIT_FIELD_STAT0 + i as u16, total[i]);
-            f.set_u32(PLAYER_FIELD_POSSTAT0 + i as u16, gear[i].max(0) as u32);
-            f.set_u32(PLAYER_FIELD_NEGSTAT0 + i as u16, (-gear[i]).max(0) as u32);
-        }
-        // The first 20 stamina give a point of health each, the rest 10.
-        let stamina = total[2];
-        let health =
-            (stats.health + stamina.min(20) + stamina.saturating_sub(20) * 10) as i32 + gear_health;
-        let health = health.max(1) as u32;
-        f.set_u32(UNIT_FIELD_BASE_HEALTH, stats.health);
-        f.set_u32(UNIT_FIELD_MAXHEALTH, health);
-        let power = u16::from(match self.row.class {
-            1 => 1u8,
-            4 => 3,
-            _ => 0,
-        });
-        let max_power = match power {
-            0 => {
-                let intellect = total[3];
-                if stats.mana == 0 {
-                    0
-                } else {
-                    let m = (stats.mana + intellect.min(20) + intellect.saturating_sub(20) * 15)
-                        as i32
-                        + gear_mana;
-                    m.max(0) as u32
-                }
-            }
-            1 => 1000,
-            3 => 100,
-            _ => 0,
-        };
-        f.set_u32(UNIT_FIELD_BASE_MANA, stats.mana);
-        f.set_u32(UNIT_FIELD_MAXPOWER1 + power, max_power);
+        crate::game::map::derive::player(self, data);
     }
 
     /// The inventory slot fields and visible items, from `items`.

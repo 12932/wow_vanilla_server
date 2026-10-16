@@ -100,6 +100,73 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
     }
 }
 
+/// Creatures forget `g` (feigning death, vanishing): its threat goes, and
+/// one fighting it turns to the next on its list.
+pub fn forget(map: &mut Map, g: Guid) {
+    let fighting: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.threat.iter().any(|(t, _)| *t == g))
+        .map(|(_, c)| c.guid)
+        .collect();
+    for c in fighting {
+        let next = {
+            let Some(cr) = map.creature_mut(c) else {
+                continue;
+            };
+            cr.threat.retain(|(t, _)| *t != g);
+            cr.tapped_by = cr.tapped_by.filter(|t| *t != g);
+            if cr.combat.victim != g {
+                continue;
+            }
+            cr.threat
+                .iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(t, _)| *t)
+        };
+        combat::stop_attack(map, c);
+        match next {
+            Some(t) => {
+                if let Some(cr) = map.creature_mut(c) {
+                    cr.combat.attacking = false;
+                }
+                attacked(map, c, t);
+                if let Some(cr) = map.creature_mut(c) {
+                    cr.combat.victim = t;
+                    cr.combat.attacking = true;
+                    cr.fields.set_guid(UNIT_FIELD_TARGET, t);
+                }
+            }
+            None => evade(map, c),
+        }
+    }
+}
+
+/// A taunt: `by` goes to the top of `creature`'s threat, and is its victim
+/// while the taunt lasts.
+pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
+    let top = c.threat.iter().map(|(_, t)| *t).fold(0.0f32, f32::max);
+    match c.threat.iter_mut().find(|(g, _)| *g == by) {
+        Some((_, t)) => *t = t.max(top),
+        None => c.threat.push((by, top)),
+    }
+    c.taunted_by = Some(by);
+    c.combat.victim = by;
+    c.fields.set_guid(UNIT_FIELD_TARGET, by);
+    attacked(map, creature, by);
+}
+
+pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
+    if let Some(c) = map.creature_mut(creature)
+        && c.taunted_by == Some(by)
+    {
+        c.taunted_by = None;
+    }
+}
+
 /// Creatures of the same faction near `creature` join its fight.
 fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
     let Some(c) = map.creature(creature) else {
@@ -498,7 +565,7 @@ fn evade(map: &mut Map, g: Guid) {
     crate::game::map::spells::interrupt(map, g);
     let held: Vec<u32> = map
         .creature(g)
-        .map(|c| c.auras.list.iter().map(|a| a.spell).collect())
+        .map(|c| c.auras.holders.iter().map(|a| a.spell).collect())
         .unwrap_or_default();
     for spell in held {
         crate::game::map::auras::remove_spell(map, g, spell, None);

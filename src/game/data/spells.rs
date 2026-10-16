@@ -60,6 +60,19 @@ pub struct SpellTemplate {
     pub stack_amount: u32,
     pub reagents: [(u32, u32); 8],
     pub equipped_item_class: i32,
+    pub equipped_item_subclass_mask: i32,
+    pub equipped_item_inventory_type_mask: i32,
+    pub stances_not: u32,
+    pub target_creature_type: u32,
+    pub requires_spell_focus: u32,
+    pub caster_aura_state: u32,
+    pub target_aura_state: u32,
+    pub mana_per_second_per_level: u32,
+    pub totems: [u32; 2],
+    pub max_affected_targets: u32,
+    pub max_target_level: u32,
+    pub spell_icon: u32,
+    pub custom_flags: u32,
     pub effects: [SpellEffect; 3],
     pub spell_visual: u32,
     pub name: String,
@@ -79,6 +92,49 @@ pub const ATTR_PASSIVE: u32 = 0x40;
 pub const ATTR_ON_NEXT_SWING: u32 = 0x4;
 /// `AttributesEx`: it is channeled.
 pub const ATTR_EX_CHANNELED: u32 = 0x4 | 0x40;
+/// `Attributes` (word 0).
+pub const ATTR_RANGED: u32 = 0x2;
+pub const ATTR_ON_NEXT_SWING_2: u32 = 0x400;
+pub const ATTR_ABILITY: u32 = 0x10;
+pub const ATTR_TRADESKILL: u32 = 0x20;
+pub const ATTR_HIDDEN: u32 = 0x80;
+pub const ATTR_ONLY_INDOORS: u32 = 0x4000;
+pub const ATTR_ONLY_OUTDOORS: u32 = 0x8000;
+pub const ATTR_NOT_SHAPESHIFTED: u32 = 0x1_0000;
+pub const ATTR_ONLY_STEALTHED: u32 = 0x2_0000;
+pub const ATTR_CANCELS_AUTO_ATTACK: u32 = 0x10_0000;
+pub const ATTR_CASTABLE_WHILE_DEAD: u32 = 0x80_0000;
+pub const ATTR_ALLOW_WHILE_MOUNTED: u32 = 0x100_0000;
+pub const ATTR_DEBUFF: u32 = 0x400_0000;
+pub const ATTR_ALLOW_WHILE_SITTING: u32 = 0x800_0000;
+pub const ATTR_NOT_IN_COMBAT: u32 = 0x1000_0000;
+pub const ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
+pub const ATTR_CANT_CANCEL: u32 = 0x8000_0000;
+/// `AttributesEx` (word 1).
+pub const ATTR_EX_USE_ALL_MANA: u32 = 0x2;
+pub const ATTR_EX_ALLOW_WHILE_STEALTHED: u32 = 0x20;
+pub const ATTR_EX_NO_REFLECTION: u32 = 0x80;
+pub const ATTR_EX_FROM_BEHIND: u32 = 0x200;
+pub const ATTR_EX_NO_THREAT: u32 = 0x400;
+pub const ATTR_EX_DISCOUNT_POWER_ON_MISS: u32 = 0x800_0000;
+pub const ATTR_EX_REQ_COMBO_POINTS: u32 = 0x10_0000 | 0x40_0000;
+/// `AttributesEx2` (word 2).
+pub const ATTR_EX2_ALLOW_DEAD_TARGET: u32 = 0x1;
+pub const ATTR_EX2_IGNORE_LOS: u32 = 0x4;
+pub const ATTR_EX2_AUTO_REPEAT: u32 = 0x20;
+pub const ATTR_EX2_BEHIND_TARGET: u32 = 0x10_0000;
+pub const ATTR_EX2_NO_SCHOOL_IMMUNITIES: u32 = 0x400_0000;
+pub const ATTR_EX2_CANT_CRIT: u32 = 0x2000_0000;
+/// `AttributesEx3` (word 3).
+pub const ATTR_EX3_DOT_STACKING: u32 = 0x80;
+pub const ATTR_EX3_NOT_A_PROC: u32 = 0x200;
+pub const ATTR_EX3_SUPPRESS_CASTER_PROCS: u32 = 0x1_0000;
+pub const ATTR_EX3_SUPPRESS_TARGET_PROCS: u32 = 0x2_0000;
+pub const ATTR_EX3_ALWAYS_HIT: u32 = 0x4_0000;
+pub const ATTR_EX3_DEATH_PERSISTENT: u32 = 0x10_0000;
+pub const ATTR_EX3_REQ_OFFHAND: u32 = 0x100_0000;
+pub const ATTR_EX3_CAN_PROC_FROM_PROCS: u32 = 0x400_0000;
+pub const ATTR_EX3_IGNORE_CASTER_MODIFIERS: u32 = 0x2000_0000;
 
 impl SpellTemplate {
     pub fn passive(&self) -> bool {
@@ -92,6 +148,80 @@ impl SpellTemplate {
     pub fn has_effect(&self, effect: u32) -> bool {
         self.effects.iter().any(|e| e.effect == effect)
     }
+
+    pub fn has_aura(&self, aura: u32) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e.effect, 6 | 27 | 35) && e.aura == aura)
+    }
+
+    pub fn attr(&self, word: usize, bit: u32) -> bool {
+        self.attributes[word] & bit != 0
+    }
+
+    /// A physical ability: melee or ranged, with a weapon.
+    pub fn ability(&self) -> bool {
+        self.attr(0, ATTR_ABILITY)
+    }
+
+    pub fn auto_repeat(&self) -> bool {
+        self.attr(0, ATTR_RANGED) && self.attr(2, ATTR_EX2_AUTO_REPEAT)
+    }
+
+    /// From behind the target only (Backstab, Ambush).
+    pub fn from_behind(&self) -> bool {
+        self.attributes[2] == ATTR_EX2_BEHIND_TARGET && self.attr(1, ATTR_EX_FROM_BEHIND)
+    }
+
+    pub fn on_next_swing(&self) -> bool {
+        self.attr(0, ATTR_ON_NEXT_SWING | ATTR_ON_NEXT_SWING_2)
+    }
+
+    /// The school as a mask: physical 1, holy 2, and so on.
+    pub fn school_mask(&self) -> u32 {
+        1 << self.school.min(6)
+    }
+
+    /// A finishing move: it spends combo points.
+    pub fn finisher(&self) -> bool {
+        self.attr(1, ATTR_EX_REQ_COMBO_POINTS)
+            || self.effects.iter().any(|e| e.points_per_combo_point != 0.0)
+    }
+
+    /// Damage class: 0 none, 1 magic, 2 melee, 3 ranged.
+    pub fn melee_or_ranged(&self) -> bool {
+        matches!(self.dmg_class, 2 | 3)
+    }
+}
+
+/// `spell_proc_event`: when a proc aura goes off, over the spell's own.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcEvent {
+    pub school_mask: u32,
+    pub family: u32,
+    /// For each of the aura's effects.
+    pub family_mask: [u64; 3],
+    pub flags: u32,
+    pub ex: u32,
+    pub ppm: f32,
+    pub chance: f32,
+    pub cooldown: u32,
+}
+
+/// `spell_chain`: a spell's rank among its kind.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpellRank {
+    pub prev: u32,
+    pub first: u32,
+    pub rank: u32,
+}
+
+/// `SpellItemEnchantment`: up to three effects an enchantment gives.
+#[derive(Debug, Clone, Default)]
+pub struct Enchantment {
+    pub id: u32,
+    pub effects: [(u32, i32, i32, u32); 3],
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -119,6 +249,35 @@ pub struct SpellData {
     pub creature_spells: AHashMap<u32, Vec<CreatureSpell>>,
     /// Spells by the skill line they teach (`SkillLineAbility`): spell → skill.
     pub spell_skills: AHashMap<u32, u32>,
+    pub skill_abilities: AHashMap<u32, Vec<SkillAbility>>,
+    pub proc_events: AHashMap<u32, ProcEvent>,
+    pub ranks: AHashMap<u32, SpellRank>,
+    /// `spell_threat`: flat threat and a multiplier.
+    pub threat: AHashMap<u32, (i32, f32)>,
+    /// `spell_group`: groups a spell is in, and each group's stacking rule.
+    pub groups: AHashMap<u32, Vec<u32>>,
+    pub group_rules: AHashMap<u32, u32>,
+    pub enchantments: AHashMap<u32, Enchantment>,
+    /// `spell_elixir`: battle (1) or guardian (2) elixirs, and flasks (3).
+    pub elixirs: AHashMap<u32, u32>,
+    /// `spell_proc_item_enchant`: procs a minute.
+    pub enchant_ppm: AHashMap<u32, f32>,
+    /// `spell_learn_spell`: spells another brings.
+    pub learn_with: AHashMap<u32, Vec<u32>>,
+}
+
+/// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SkillAbility {
+    pub skill: u32,
+    pub spell: u32,
+    pub race_mask: u32,
+    pub class_mask: u32,
+    pub min_rank: u32,
+    pub superseded_by: u32,
+    pub acquire: u32,
+    pub trivial_high: u32,
+    pub trivial_low: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -145,6 +304,20 @@ pub struct CreatureSpell {
 impl SpellData {
     pub fn get(&self, id: u32) -> Option<&SpellTemplate> {
         self.spells.get(&id)
+    }
+
+    /// The first rank of the spell's kind.
+    pub fn first_rank(&self, id: u32) -> u32 {
+        self.ranks
+            .get(&id)
+            .map(|r| r.first)
+            .filter(|f| *f != 0)
+            .unwrap_or(id)
+    }
+
+    /// Whether `a` and `b` are ranks of one spell.
+    pub fn same_kind(&self, a: u32, b: u32) -> bool {
+        a == b || self.first_rank(a) == self.first_rank(b)
     }
 
     pub fn cast_time(&self, s: &SpellTemplate) -> u32 {
