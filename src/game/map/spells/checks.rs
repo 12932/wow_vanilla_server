@@ -52,6 +52,7 @@ pub mod fail {
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_POWER: u8 = 0x4d;
     pub const NOTHING_TO_DISPEL: u8 = 0x4e;
+    pub const ONLY_BATTLEGROUNDS: u8 = 0x87;
     pub const ONLY_SHAPESHIFT: u8 = 0x56;
     pub const ONLY_STEALTHED: u8 = 0x57;
     pub const OUT_OF_RANGE: u8 = 0x59;
@@ -360,6 +361,13 @@ pub fn check(
         }
         if !super::area::allows(map, caster, s.id) {
             return Some(fail::REQUIRES_AREA);
+        }
+        // A battleground's own spells (Thistle Tea's `Spell.Battleground`).
+        if s.attr(3, sd::ATTR_EX3_BATTLEGROUND)
+            && map.players.contains_key(&caster)
+            && map.battleground.is_none()
+        {
+            return Some(fail::ONLY_BATTLEGROUNDS);
         }
         // A spirit of redemption only heals.
         if !super::redemption::allows(map, caster, s) {

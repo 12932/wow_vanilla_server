@@ -824,7 +824,9 @@ fn effect(
             }
         }
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT => {
-            super::scripts::dummy(map, caster, target, s, index, amount, l, item);
+            if !super::holiday::effect(map, caster, target, s) {
+                super::scripts::dummy(map, caster, target, s, index, amount, l, item);
+            }
         }
         _ => {}
     }

@@ -10,6 +10,7 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 pub mod environment;
+mod holiday;
 pub mod mods;
 pub mod outcome;
 pub mod redemption;
