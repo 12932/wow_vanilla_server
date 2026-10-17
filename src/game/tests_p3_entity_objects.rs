@@ -634,3 +634,104 @@ async fn a_trap_springs_on_a_foe_as_its_charges_and_cooldown_allow() {
     assert_eq!(out.0[1], out.1[1], "the farther didn't");
     assert_eq!(out.2, 1, "on Alice");
 }
+
+/// Spells that raise an object (effect 50) and whose cooldown waits for
+/// it: a post, and an altar of two.
+const RAISE_POST: u32 = 97_030;
+const RAISE_ALTAR: u32 = 97_031;
+const DOOM_ALTAR: u32 = 97_032;
+const SMSG_COOLDOWN_EVENT: u16 = 0x135;
+const SMSG_CLEAR_COOLDOWN: u16 = 0x1DE;
+
+fn deferred_world() -> GameData {
+    let mut d = objects_world();
+    d.gameobject_templates
+        .insert(DOOM_ALTAR, altar(DOOM_ALTAR, 2, false, false));
+    for (id, entry) in [(RAISE_POST, POST), (RAISE_ALTAR, DOOM_ALTAR)] {
+        let mut s = spell(
+            id,
+            &[crate::game::data::spells::SpellEffect {
+                effect: objects::EFFECT_TRANS_DOOR,
+                misc_value: entry as i32,
+                target_a: 1,
+                ..Default::default()
+            }],
+        );
+        s.recovery_time = 60_000;
+        s.attributes[0] = 0x0200_0000;
+        d.spells.spells.insert(id, s);
+    }
+    d
+}
+
+/// Thistle Tea's deferred cooldowns: an object's spell whose cooldown
+/// waits for the object starts it as the object goes, told once; a ritual
+/// done starts it; and one taken away undone lets it go, the button
+/// cleared, with no cooldown at all.
+#[tokio::test]
+async fn a_cooldown_that_waits_for_its_object_starts_as_it_goes() {
+    let realm = harness::realm_with(deferred_world());
+    let mut cs = grouped(&realm, &["Alice", "Bob"], false).await;
+    let (ga, gb) = (cs[0].guid, cs[1].guid);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let raised = move |m: &Map, spell: u32| {
+        m.objects
+            .summoned
+            .iter()
+            .find(|s| s.owner == Some(ga) && s.spell == spell)
+            .map(|s| s.guid)
+    };
+    let state = move |m: &Map, spell: u32| {
+        let c = m.caster(ga).unwrap();
+        (
+            c.pending_cooldowns.contains(&spell),
+            c.cooldowns.get(&spell).is_some_and(|t| *t > m.now),
+        )
+    };
+    // The post: waiting while it stands; started, and told once, as it goes.
+    let out = on(&map, move |m| {
+        crate::game::map::spells::cast(m, ga, RAISE_POST, Default::default(), None);
+        let post = raised(m, RAISE_POST).unwrap();
+        let waiting = state(m, RAISE_POST);
+        objects::despawn(m, post);
+        let gone = state(m, RAISE_POST);
+        crate::game::map::spells::cooldowns::release(m, ga, RAISE_POST, true);
+        (waiting, gone)
+    })
+    .await;
+    assert_eq!(out, ((true, false), (false, true)), "waiting, then started");
+    let events = {
+        let a = &mut cs[0];
+        a.wait_frame("SMSG_COOLDOWN_EVENT", SMSG_COOLDOWN_EVENT, |f| {
+            f[..4] == RAISE_POST.to_le_bytes()
+        })
+        .await;
+        crate::game::tests_p3_entity::gets_frame(a, SMSG_COOLDOWN_EVENT, |_| true).await
+    };
+    assert!(!events, "told once");
+    // The altar taken away undone: no cooldown, the button let go.
+    cs[0].clear();
+    let undone = on(&map, move |m| {
+        crate::game::map::spells::cast(m, ga, RAISE_ALTAR, Default::default(), None);
+        let altar = raised(m, RAISE_ALTAR).unwrap();
+        objects::despawn(m, altar);
+        state(m, RAISE_ALTAR)
+    })
+    .await;
+    assert_eq!(undone, (false, false), "no cooldown for a ritual undone");
+    let cleared = cs[0]
+        .wait_frame("SMSG_CLEAR_COOLDOWN", SMSG_CLEAR_COOLDOWN, |f| {
+            f[..4] == RAISE_ALTAR.to_le_bytes()
+        })
+        .await;
+    assert_eq!(cleared[4..12], ga.guid().to_le_bytes());
+    // Raised again and done with Bob's help: started.
+    let done = on(&map, move |m| {
+        crate::game::map::spells::cast(m, ga, RAISE_ALTAR, Default::default(), None);
+        let altar = raised(m, RAISE_ALTAR).unwrap();
+        objects::use_object(m, gb, altar);
+        (m.gameobject(altar).is_none(), state(m, RAISE_ALTAR))
+    })
+    .await;
+    assert_eq!(done, (true, (false, true)), "done, gone and started");
+}
