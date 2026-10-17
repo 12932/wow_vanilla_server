@@ -97,6 +97,12 @@ path = "src/main.rs"
 name = "wvs-setup"
 path = "src/bin/wvs-setup.rs"
 
+# Debug builds and the tests with their dependencies optimized (SQLite, tokio,
+# wow_messages, the navmesh, compression): the suite takes a third less time,
+# and the crate itself builds as quickly as before. See docs/PERFORMANCE.md.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 debug = 0
 # Thin LTO and one codegen unit let the compiler inline across modules.
