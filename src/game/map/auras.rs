@@ -637,6 +637,13 @@ impl Auras {
 
 /// Whether a spell is helpful: no harmful effects, aimed at a friend.
 pub fn positive(s: &SpellTemplate) -> bool {
+    // vmangos's own word on it first.
+    if s.custom(sd::CUSTOM_NEGATIVE) {
+        return false;
+    }
+    if s.custom(sd::CUSTOM_POSITIVE) {
+        return true;
+    }
     if s.attr(0, sd::ATTR_DEBUFF) {
         return false;
     }
@@ -889,7 +896,11 @@ pub fn apply_spell(
         if let Some(i) = a
             .holders
             .iter()
-            .position(|h| h.spell == spell.id && h.caster == caster && h.item == ctx.item)
+            .position(|h| {
+                h.spell == spell.id
+                    && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
+                    && h.item == ctx.item
+            })
         {
             let old = &mut a.holders[i];
             let stacks = if spell.stack_amount > 1 {
@@ -1019,6 +1030,8 @@ pub fn apply_spell(
         }
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
         crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
+        crate::game::map::spells::single_target::applied(map, caster, target, spell);
+        crate::game::map::spells::immunity::applied(map, target, &h);
     }
     recalc(map, target);
     // Helping a flagged player flags the helper.
@@ -1058,7 +1071,10 @@ fn cross_caster_coexist(s: &SpellTemplate, h: &Holder, effects: &[(usize, i32)])
         AURA_PERIODIC_MANA_LEECH,
         AURA_CHANNEL_DEATH_ITEM,
     ];
-    if s.channeled() || s.attr(3, sd::ATTR_EX3_DOT_STACKING) {
+    if s.channeled()
+        || s.attr(3, sd::ATTR_EX3_DOT_STACKING)
+        || s.custom(sd::CUSTOM_SEPARATE_AURA_PER_CASTER)
+    {
         return true;
     }
     effects.iter().all(|(i, _)| {
@@ -1139,8 +1155,10 @@ fn replaces(
         return true;
     }
     if old.spell == new.spell {
-        // Another caster's: replaced unless the effects stand together.
-        return !cross_caster_coexist(spell, old, effects);
+        // Another caster's: replaced unless the effects stand together (or
+        // its stacks are anyone's).
+        return !spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS)
+            && !cross_caster_coexist(spell, old, effects);
     }
     if data.spells.same_kind(old.spell, new.spell) {
         return old.caster == new.caster || !cross_caster_coexist(spell, old, effects);
@@ -1868,7 +1886,11 @@ pub fn form(map: &Map, g: Guid) -> u8 {
 
 /// Recompute a unit's stats and speed with its auras.
 pub fn recalc(map: &mut Map, target: Guid) {
+    let before = crate::game::map::spells::health_sync::state(map, target);
     crate::game::map::derive::unit(map, target);
+    if let Some(before) = before {
+        crate::game::map::spells::health_sync::sync(map, target, before);
+    }
 }
 
 /// Expire auras, and tick the periodic ones.
@@ -2155,6 +2177,8 @@ pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
 /// On death every aura but the passive and death-persistent ones goes, and
 /// so does the cast.
 pub fn clear_on_death(map: &mut Map, g: Guid) {
+    // What it held one of on another goes with it.
+    crate::game::map::spells::single_target::caster_gone(map, g);
     crate::game::map::spells::interrupt(map, g);
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);

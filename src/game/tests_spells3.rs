@@ -547,9 +547,11 @@ async fn the_combat_log_packets() {
             let before = health(m, g);
             spells::cast_triggered(m, g, 19505, Some(kobold));
             let devoured = (!has(m, kobold, 990_301), health(m, g) > before);
-            // A tick on one immune to its school.
+            // A tick on one immune to its school (an immunity that doesn't
+            // purge: Divine Shield's would take the Corruption).
             spells::cast_triggered(m, kobold, 172, Some(g));
-            spells::cast_triggered(m, g, 642, None);
+            let ward = plain_aura(990_302, auras::AURA_SCHOOL_IMMUNITY, 0x7f);
+            let _ = auras::apply_spell(m, g, g, &ward, &[(0, 1)], auras::Context::default());
             let now = m.now;
             if let Some(p) = m.players.get_mut(&g) {
                 for h in p.auras.holders.iter_mut().filter(|h| h.spell == 172) {
