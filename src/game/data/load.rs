@@ -384,6 +384,7 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
                 attack_power: c.u32("attack_power"),
                 ranged_attack_power: c.u32("ranged_attack_power"),
                 armor: c.u32("armor"),
+                strength: c.u32("strength"),
                 intellect: c.u32("intellect"),
                 spirit: c.u32("spirit"),
             },
@@ -669,7 +670,7 @@ pub fn creature_health(base: u32, multiplier: f32) -> u32 {
 
 /// The unit flags a template's static flags give (as Thistle Tea maps
 /// them, after vmangos).
-fn unit_flags(static1: u32) -> u32 {
+pub(crate) fn unit_flags(static1: u32) -> u32 {
     let mut flags = 0;
     for (stat, unit) in [
         (0x0000_0020, 0x0000_0100),
@@ -687,7 +688,7 @@ fn unit_flags(static1: u32) -> u32 {
 
 /// The type flags the client reads from a creature query (vmangos's
 /// `CreatureInfo::GetTypeFlags`).
-fn type_flags(static1: u32, static2: u32) -> u32 {
+pub(crate) fn type_flags(static1: u32, static2: u32) -> u32 {
     let mut flags = 0;
     for (stat, ty) in [
         (0x0000_0010, 0x01),

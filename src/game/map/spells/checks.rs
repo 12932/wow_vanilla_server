@@ -625,6 +625,9 @@ fn check_target(
         if requires_friend && combat::can_attack(map, caster, target) {
             return Some(fail::TARGET_ENEMY);
         }
+        if requires_friend && !combat::can_assist(map, caster, target) {
+            return Some(fail::BAD_TARGETS);
+        }
     }
     if let Some(c) = map.creature(target) {
         let creature_type = map

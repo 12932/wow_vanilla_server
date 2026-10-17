@@ -206,13 +206,21 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     crate::game::map::creature_combat::call_guards(map, creature, attacker);
 }
 
-/// Damage from `from` raises its threat on `creature`.
+/// Damage from `from` raises its threat on `creature`; a cut (Feint)
+/// lowers it, never below none, and puts no one on the list. A creature
+/// holds none on itself (mangos's `ThreatManager::addThreat` and
+/// `HostileReference::addThreat`, Thistle Tea's `Threat.add` and
+/// `Threat.change`).
 pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
+    if from == creature || from.is_zero() {
+        return;
+    }
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
     match c.threat.iter_mut().find(|(g, _)| *g == from) {
-        Some((_, t)) => *t += amount,
+        Some((_, t)) => *t = (*t + amount).max(0.0),
+        None if amount < 0.0 => {}
         None => {
             c.threat.push((from, amount));
             if guid::is_player(from) {
