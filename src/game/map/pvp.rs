@@ -534,21 +534,28 @@ pub fn contest(map: &mut Map, g: Guid) {
     }
 }
 
-/// A player hurt another: the damage counts toward sharing the kill, and
+/// A player was hurt: the damage counts toward sharing the kill, a
+/// creature's (or the world's) under no one, so it dilutes the players'
+/// shares and goes to none (Thistle Tea's `Contribution.record`); and
 /// attacking a player contests the attacker.
 pub fn damaged(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
     let now = map.now;
-    if !guid::is_player(attacker) || attacker == victim || damage == 0 {
+    if attacker == victim || damage == 0 {
         return;
     }
-    let duel = crate::game::map::duel::dueling(map, attacker, victim);
-    let ffa = map.players.get(&attacker).is_some_and(|p| {
-        p.fields
-            .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_FFA_PVP)
-    });
-    if !duel && !ffa {
-        contest(map, attacker);
-    }
+    let attacker = if guid::is_player(attacker) {
+        let duel = crate::game::map::duel::dueling(map, attacker, victim);
+        let ffa = map.players.get(&attacker).is_some_and(|p| {
+            p.fields
+                .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_FFA_PVP)
+        });
+        if !duel && !ffa {
+            contest(map, attacker);
+        }
+        attacker
+    } else {
+        Guid::zero()
+    };
     let Some(p) = map.players.get_mut(&victim) else {
         return;
     };
@@ -570,29 +577,41 @@ pub fn damaged(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
 /// takes it all.
 pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
     let now = map.now;
-    let (Some(v), Some(k)) = (map.players.get(&victim), map.players.get(&killer)) else {
+    let Some(v) = map.players.get(&victim) else {
         return;
     };
-    if k.team == v.team || v.auras.has(crate::game::map::auras::AURA_NO_PVP_CREDIT) {
+    // Killed by an enemy; or by themselves or the world, when those who
+    // hurt them lately share it (Thistle Tea's self-inflicted deaths).
+    let by_enemy = map.players.get(&killer).is_some_and(|k| k.team != v.team);
+    let own = killer == victim || !guid::is_player(killer);
+    if (!by_enemy && !own) || v.auras.has(crate::game::map::auras::AURA_NO_PVP_CREDIT) {
         return;
     }
+    let killer = if by_enemy { killer } else { Guid::zero() };
     let victim_team = v.team;
     let at = v.position();
     let history: Vec<(Guid, u32)> = v.honor_damage.current(now).to_vec();
     for g in [killer, victim] {
-        register(map, g);
+        if map.players.contains_key(&g) {
+            register(map, g);
+        }
     }
     let total: u32 = history.iter().map(|(_, d)| *d).sum();
     let mut shares: Vec<(Guid, f32)> = Vec::new();
+    // The living of the other side near the victim (the killer however
+    // far): the dead, and those away, earn nothing, and their share isn't
+    // given to others.
     let eligible = |map: &Map, g: Guid| {
         map.players.get(&g).is_some_and(|p| {
             p.death == Death::Alive
                 && p.team != victim_team
-                && crate::game::map::combat::dist(p.position(), at) <= SHARE_YARDS
-        }) || g == killer
+                && (g == killer || crate::game::map::combat::dist(p.position(), at) <= SHARE_YARDS)
+        })
     };
     if total == 0 {
-        shares.push((killer, 1.0));
+        if by_enemy {
+            shares.push((killer, 1.0));
+        }
     } else {
         // Damage by group (or alone), each group's share split among its
         // members near.

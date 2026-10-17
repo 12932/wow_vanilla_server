@@ -74,6 +74,8 @@ mod tests_p3_player_chat;
 #[cfg(test)]
 mod tests_p3_player_death;
 #[cfg(test)]
+mod tests_p3_player_honor;
+#[cfg(test)]
 mod tests_p3_player_stats;
 #[cfg(test)]
 mod tests_parity_combat;
