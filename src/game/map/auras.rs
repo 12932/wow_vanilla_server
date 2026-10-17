@@ -591,21 +591,33 @@ impl Auras {
             .unwrap_or(0)
     }
 
-    /// The speed multiplier the auras give, as a percentage change: the
-    /// best haste, and the worst slow.
-    pub fn speed_percent(&self, mounted: bool) -> i32 {
-        let mut up = self
-            .max(AURA_MOD_INCREASE_SPEED)
-            .max(self.max(AURA_MOD_SPEED_ALWAYS))
-            .max(self.max(AURA_MOD_SPEED_NOT_STACK));
-        if mounted {
-            up += self
-                .max(AURA_MOD_INCREASE_MOUNTED_SPEED)
-                .max(self.max(AURA_MOD_MOUNTED_SPEED_ALWAYS))
-                .max(self.max(AURA_MOD_MOUNTED_SPEED_NOT_STACK));
+    /// The run speed multiplier the auras give, as mangos's `UpdateSpeed`
+    /// works it out: the best bonus of its kind (a mount's when mounted,
+    /// the foot ones then not counting), times the better of the bonuses
+    /// that stack and the best that doesn't; the strongest slow
+    /// multiplies.
+    pub fn speed_multiplier(&self, mounted: bool) -> f32 {
+        let (main, always, not_stack) = if mounted {
+            (
+                AURA_MOD_INCREASE_MOUNTED_SPEED,
+                AURA_MOD_MOUNTED_SPEED_ALWAYS,
+                AURA_MOD_MOUNTED_SPEED_NOT_STACK,
+            )
+        } else {
+            (
+                AURA_MOD_INCREASE_SPEED,
+                AURA_MOD_SPEED_ALWAYS,
+                AURA_MOD_SPEED_NOT_STACK,
+            )
+        };
+        let stack = self.product(always);
+        let non_stack = (100 + self.max(not_stack).max(0)) as f32 / 100.0;
+        let mut speed = stack.max(non_stack) * (100 + self.max(main).max(0)) as f32 / 100.0;
+        let slow = self.min(AURA_MOD_DECREASE_SPEED);
+        if slow < 0 {
+            speed *= (100 + slow).max(0) as f32 / 100.0;
         }
-        let down = self.min(AURA_MOD_DECREASE_SPEED);
-        up + down
+        speed
     }
 
     /// Whether `spell`, a school `mask`, is stopped by an immunity.
