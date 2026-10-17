@@ -348,3 +348,212 @@ async fn a_fall_hurts_only_when_long_and_never_a_god() {
     fall(&mut a, 30.0, 2000).await;
     assert!(a.gets(NONE_WITHIN, hurt).await.is_none());
 }
+
+async fn who(a: &mut Client, guild: &str, words: &[&str]) -> (u32, u32, Vec<String>) {
+    a.send(CMSG_WHO {
+        minimum_level: Level::new(0),
+        maximum_level: Level::new(100),
+        player_name: String::new(),
+        guild_name: guild.into(),
+        race_mask: u32::MAX,
+        class_mask: u32::MAX,
+        zones: Vec::new(),
+        search_strings: words.iter().map(|w| (*w).into()).collect(),
+    })
+    .await;
+    let b = a.wait_frame("SMSG_WHO", 0x063, |_| true).await;
+    let listed = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let online = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+    let mut names = Vec::new();
+    let mut at = 8;
+    for _ in 0..listed {
+        let end = at + b[at..].iter().position(|c| *c == 0).unwrap();
+        names.push(String::from_utf8_lossy(&b[at..end]).into_owned());
+        at = end + 1;
+        let guild_end = at + b[at..].iter().position(|c| *c == 0).unwrap();
+        at = guild_end + 1 + 16;
+    }
+    (listed, online, names)
+}
+
+#[tokio::test]
+async fn who_filters_by_guild_and_any_word() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GUILD_CREATE {
+        guild_name: "Knights".into(),
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (listed, online, names) = who(&mut a, "knig", &[]).await;
+    assert_eq!((listed, online, names), (1, 1, vec!["Alice".to_owned()]));
+    // Any word, of the name or the guild.
+    let (_, _, mut names) = who(&mut a, "", &["bob", "knights"]).await;
+    names.sort();
+    assert_eq!(names, ["Alice", "Bob"]);
+}
+
+#[tokio::test]
+async fn a_ready_check_hears_offline_members_are_not_ready() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+    b.wait_for("the invite", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Alice marks Bob with a skull, then Bob goes.
+    a.send(MSG_RAID_TARGET_UPDATE_Client {
+        target_index: MSG_RAID_TARGET_UPDATE_Client_RaidTargetIndex::Unknown7 { target: gb },
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    b.send(CMSG_LOGOUT_REQUEST {}).await;
+    b.wait_for("logged out", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    a.clear();
+    a.send(MSG_RAID_READY_CHECK_Client { answer: None }).await;
+    a.wait_for("Bob not ready", |m| match m {
+        ServerOpcodeMessage::MSG_RAID_READY_CHECK(r) => r
+            .state_check
+            .as_ref()
+            .filter(|s| s.guid == gb && s.state == 0)
+            .map(|_| ()),
+        _ => None,
+    })
+    .await;
+    // Back, Bob gets the markers with the roster.
+    b.clear();
+    b.login(gb).await;
+    let marks = b.wait_frame("the markers", 0x321, |f| f[0] == 1).await;
+    assert_eq!(marks[1], 7, "the skull");
+    assert_eq!(&marks[2..10], &gb.guid().to_le_bytes());
+    let _ = ga;
+}
+
+async fn logged_out(c: &mut Client) {
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_character_list_shows_the_guild_a_hidden_helm_and_a_ghost() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GUILD_CREATE {
+        guild_name: "Knights".into(),
+    })
+    .await;
+    a.send(CMSG_TOGGLE_HELM {}).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    logged_out(&mut a).await;
+    a.send(CMSG_CHAR_ENUM {}).await;
+    let (guild, flags) = a
+        .wait_for("SMSG_CHAR_ENUM", |m| match m {
+            ServerOpcodeMessage::SMSG_CHAR_ENUM(e) => {
+                e.characters.first().map(|c| (c.guild_id, c.flags))
+            }
+            _ => None,
+        })
+        .await;
+    assert_ne!(guild, 0);
+    assert!(flags.is_hide_helm() && !flags.is_hide_cloak() && !flags.is_ghost());
+    // Back in, the helm is still hidden.
+    a.login(g).await;
+    let hidden = on_map(&realm, move |m| {
+        m.players[&g].fields.has_flag(
+            PLAYER_FLAGS,
+            crate::game::map::player::PLAYER_FLAGS_HIDE_HELM,
+        )
+    })
+    .await;
+    assert!(hidden);
+    // Released, a ghost.
+    a.say(".die").await;
+    a.send(CMSG_REPOP_REQUEST {}).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    logged_out(&mut a).await;
+    a.clear();
+    a.send(CMSG_CHAR_ENUM {}).await;
+    let flags = a
+        .wait_for("SMSG_CHAR_ENUM", |m| match m {
+            ServerOpcodeMessage::SMSG_CHAR_ENUM(e) => e.characters.first().map(|c| c.flags),
+            _ => None,
+        })
+        .await;
+    assert!(flags.is_ghost());
+}
+
+#[tokio::test]
+async fn a_deleted_character_leaves_its_group_and_cod_comes_back() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
+    for (who, name) in [(&mut b, "Bob"), (&mut c, "Carol")] {
+        a.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+        who.wait_for("the invite", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+        who.send(CMSG_GROUP_ACCEPT {}).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    // Alice sends Bob an item cash on delivery.
+    let mail = crate::game::social::mail::Mail {
+        kind: 0,
+        sender: crate::game::guid::counter(ga),
+        receiver: crate::game::guid::counter(gb),
+        subject: "Pay up".into(),
+        item: Some(crate::game::store::ItemRow {
+            guid: 999_999,
+            entry: 25,
+            count: 1,
+            ..Default::default()
+        }),
+        cod: 100,
+        ..Default::default()
+    };
+    let id = crate::game::social::mail::post(&realm, mail);
+    logged_out(&mut b).await;
+    b.send(CMSG_CHAR_DELETE { guid: gb }).await;
+    b.wait_for("SMSG_CHAR_DELETE", |m| match m {
+        ServerOpcodeMessage::SMSG_CHAR_DELETE(d) => {
+            (d.result == WorldResult::CharDeleteSuccess).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    let in_group = realm.social.groups.lock().group_of(gb).is_some();
+    assert!(!in_group, "Bob is out of the group");
+    assert!(
+        realm.social.groups.lock().group_of(gc).is_some(),
+        "the others go on"
+    );
+    let back = realm
+        .social
+        .mail
+        .lock()
+        .mails
+        .get(&id)
+        .map(|m| (m.receiver, m.cod, m.item.is_some()));
+    assert_eq!(back, Some((crate::game::guid::counter(ga), 0, true)));
+}

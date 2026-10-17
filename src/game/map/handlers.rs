@@ -344,6 +344,12 @@ impl Map {
         if let Some(p) = self.players.get_mut(&guid) {
             let on = !p.fields.has_flag(PLAYER_FLAGS, flag);
             p.fields.set_flag(PLAYER_FLAGS, flag, on);
+            // Kept with the character: the helm and cloak stay hidden.
+            if on {
+                p.row.state.flags |= flag;
+            } else {
+                p.row.state.flags &= !flag;
+            }
         }
     }
 

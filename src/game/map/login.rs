@@ -24,6 +24,12 @@ pub const LOGOUT_DELAY: Duration = Duration::from_secs(20);
 /// The packets a client gets on entering the world, up to its own create
 /// block. Everything around it follows at the next update.
 pub fn send_login(map: &mut Map, p: &mut Player) {
+    // The helm and cloak as they were left.
+    use crate::game::map::player::{PLAYER_FLAGS_HIDE_CLOAK, PLAYER_FLAGS_HIDE_HELM};
+    for flag in [PLAYER_FLAGS_HIDE_HELM, PLAYER_FLAGS_HIDE_CLOAK] {
+        let on = p.row.state.flags & flag != 0;
+        p.fields.set_flag(PLAYER_FLAGS, flag, on);
+    }
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_VERIFY_WORLD {
         map: map_enum(map.key.map),
@@ -117,6 +123,20 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
             });
         let sequence = c.cinematic;
         crate::game::map::cinematic::begin(map, p, sequence);
+    }
+    // Temporary enchantments' time left (Thistle Tea's
+    // `send_active_timers`).
+    for item in &p.items {
+        let e = crate::game::map::enchant::get(item, crate::game::map::enchant::TEMP_SLOT);
+        if e.id != 0 && e.duration_ms > 0 {
+            p.outbound
+                .send(&wow_world_messages::vanilla::SMSG_ITEM_ENCHANT_TIME_UPDATE {
+                    item: item.guid,
+                    slot: crate::game::map::enchant::TEMP_SLOT as u32,
+                    duration: e.duration_ms / 1000,
+                    player: guid,
+                });
+        }
     }
     let motd = &map.realm.config.motd;
     if !motd.is_empty() {
