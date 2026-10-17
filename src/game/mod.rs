@@ -78,6 +78,8 @@ mod tests_p3_player_death;
 #[cfg(test)]
 mod tests_p3_player_honor;
 #[cfg(test)]
+mod tests_p3_player_pet;
+#[cfg(test)]
 mod tests_p3_player_social;
 #[cfg(test)]
 mod tests_p3_player_stats;
