@@ -239,6 +239,11 @@ pub fn forget(map: &mut Map, g: Guid) {
         .filter(|(_, c)| c.threat.iter().any(|(t, _)| *t == g))
         .map(|(_, c)| c.guid)
         .collect();
+    forget_by(map, g, fighting);
+}
+
+/// [`forget`], by the creatures `fighting` alone.
+pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
     for c in fighting {
         crate::game::map::spells::threat_sync::removed(map, c, g);
         let next = {
