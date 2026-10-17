@@ -260,7 +260,10 @@ fn step_creature(
                     })
                 }
                 (_, MOVEMENT_RANDOM) => {
-                    let (home, radius) = (c.home, c.wander_distance);
+                    let (home, radius) = (
+                        crate::game::map::event_ai::wander_center(c),
+                        c.wander_distance,
+                    );
                     match nav.as_mut() {
                         Some(n) => wander_point(n, home, radius, rng),
                         None => Some(random_point(home, radius, rng)),

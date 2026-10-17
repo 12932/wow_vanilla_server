@@ -1545,35 +1545,7 @@ fn evade(map: &mut Map, g: Guid) {
         .unwrap_or_default();
     combat::stop_attack(map, g);
     crate::game::map::spells::interrupt(map, g);
-    // What an evade takes, as Thistle Tea's `remove_on_evade` has it: all
-    // but what vmangos marks to stay, a player's timed buffs, and (for a
-    // creature whose template says so) its buffs.
-    let data = map.realm.data.clone();
-    let keeps_buffs = map
-        .creature(g)
-        .and_then(|c| data.creature_template(c.entry))
-        .is_some_and(|t| t.flags_extra & 0x1000 != 0);
-    let held: Vec<(u32, Guid)> = map
-        .creature(g)
-        .map(|c| {
-            c.auras
-                .holders
-                .iter()
-                .filter(|h| {
-                    let stays =
-                        data.spells.get(h.spell).is_some_and(|s| {
-                            s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
-                        }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
-                            || (keeps_buffs && h.positive);
-                    !stays
-                })
-                .map(|h| (h.spell, h.caster))
-                .collect()
-        })
-        .unwrap_or_default();
-    for (spell, caster) in held {
-        crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
-    }
+    shed_on_evade(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -1621,6 +1593,38 @@ fn evade(map: &mut Map, g: Guid) {
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
+    }
+}
+
+/// What an evade takes from a creature, as Thistle Tea's `remove_on_evade`
+/// has it: all its auras but what vmangos marks to stay, a player's timed
+/// buffs, and (for a creature whose template says so) its buffs.
+pub fn shed_on_evade(map: &mut Map, g: Guid) {
+    let data = map.realm.data.clone();
+    let keeps_buffs = map
+        .creature(g)
+        .and_then(|c| data.creature_template(c.entry))
+        .is_some_and(|t| t.flags_extra & 0x1000 != 0);
+    let shed: Vec<(u32, Guid)> = map
+        .creature(g)
+        .map(|c| {
+            c.auras
+                .holders
+                .iter()
+                .filter(|h| {
+                    let stays =
+                        data.spells.get(h.spell).is_some_and(|s| {
+                            s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
+                        }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
+                            || (keeps_buffs && h.positive);
+                    !stays
+                })
+                .map(|h| (h.spell, h.caster))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (spell, caster) in shed {
+        crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
     }
 }
 

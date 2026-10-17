@@ -101,6 +101,10 @@ pub struct Scripted {
     pub feign: Option<Feign>,
     /// A path a script set it walking, over its spawn's.
     pub route: Option<Route>,
+    /// Where a script set it wandering about (movement 1 with datalong2),
+    /// over its home, which stays its spawn's (Thistle Tea's runtime
+    /// random anchor).
+    pub wander_anchor: Option<Vector3d>,
     /// A faction a script set (`SCRIPT_COMMAND_SET_FACTION`): the one it
     /// had, the one set, and when the old one comes back (datalong2).
     pub temp_faction: Option<TempFaction>,
@@ -750,12 +754,56 @@ pub fn scripted_move_ended(map: &mut Map, g: Guid) {
 }
 
 /// A script's walk home done, as Thistle Tea's `wait_for_scripted_home`:
-/// a faction set until then gives way, its spawn's auras are back, and
-/// its reached-home events fire.
+/// it moves as its spawn does again (a script's path, wander or stillness
+/// over), a faction set until then gives way, its spawn's auras are back,
+/// and its reached-home events fire.
 pub fn home_reached(map: &mut Map, g: Guid) {
+    if let Some((kind, distance)) = spawn_movement(map, g) {
+        let now = map.now;
+        if let Some(c) = map.creature_mut(g) {
+            c.movement_type = kind;
+            c.wander_distance = distance;
+            c.motion = crate::game::map::creature::Motion::Idle { until: Some(now) };
+            if let Some(s) = c.scripted.as_deref_mut() {
+                s.route = None;
+                s.wander_anchor = None;
+            }
+        }
+    }
     scripts::restore_faction(map, g, FACTION_RESTORE_REACH_HOME);
     crate::game::map::spawn_auras::restore(map, g);
     reached_home(map, g);
+}
+
+/// How a creature's spawn moves: its movement type (a path of its own
+/// walked, a wander of no distance none) and its wander distance, as it
+/// came into the world.
+fn spawn_movement(map: &Map, g: Guid) -> Option<(u8, f32)> {
+    use crate::game::map::creature::{MOVEMENT_IDLE, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT};
+    let data = &map.realm.data;
+    let spawn = map.creature(g)?.spawn_guid?;
+    let s = data
+        .creature_spawns
+        .get(&map.key.map)?
+        .iter()
+        .find(|s| s.guid == spawn)?;
+    let path = data.waypoints.get(&spawn).is_some_and(|p| !p.is_empty());
+    let kind = match s.movement_type {
+        k if path && k != crate::game::map::creature_motion::MOVEMENT_CYCLIC => MOVEMENT_WAYPOINT,
+        MOVEMENT_WAYPOINT if !path => MOVEMENT_IDLE,
+        MOVEMENT_RANDOM if s.wander_distance <= 0.0 => MOVEMENT_IDLE,
+        k => k,
+    };
+    Some((kind, s.wander_distance))
+}
+
+/// Where a wandering creature wanders about: a script's anchor, else its
+/// home.
+pub fn wander_center(c: &crate::game::map::creature::Creature) -> Vector3d {
+    c.scripted
+        .as_deref()
+        .and_then(|s| s.wander_anchor)
+        .unwrap_or(c.home)
 }
 
 /// The timed events of an active creature, about twice a second.

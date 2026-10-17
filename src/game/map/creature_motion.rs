@@ -384,7 +384,11 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
 /// next waypoint.
 fn plan(map: &mut Map, key: usize, g: Guid, kind: u8, hab: Habitat) -> Option<Vec<Vector3d>> {
     let c = map.creatures.get(key)?;
-    let (home, radius, pos) = (c.home, c.wander_distance, c.position);
+    let (home, radius, pos) = (
+        crate::game::map::event_ai::wander_center(c),
+        c.wander_distance,
+        c.position,
+    );
     match kind {
         MOVEMENT_RANDOM if hab.fly => Some(circle(home, radius.max(5.0), pos)),
         MOVEMENT_RANDOM => {
