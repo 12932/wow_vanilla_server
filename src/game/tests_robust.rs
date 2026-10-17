@@ -617,3 +617,64 @@ fn the_panic_hook_logs_where_once_with_a_backtrace() {
     );
     assert!(log.contains("ERROR"), "{log}");
 }
+
+/// A panic while the login server's session keys were held no longer
+/// locks everyone out: before, the poisoned lock refused every login and
+/// world handshake until a restart.
+#[test]
+fn a_panic_holding_the_session_keys_locks_no_one_out() {
+    let users: crate::auth::UserCache = Default::default();
+    let held = users.clone();
+    let poisoned = std::thread::spawn(move || {
+        let _keys = held.lock();
+        panic!("a panic while the session keys are held");
+    })
+    .join();
+    assert!(poisoned.is_err() && users.is_poisoned());
+    let mut keys = crate::auth::users_lock(&users);
+    assert!(keys.get("NOBODY").is_none());
+}
+
+/// A supervised task that panics is started again (at once, then after a
+/// rest), until it returns.
+#[tokio::test]
+async fn a_supervised_task_that_panics_is_started_again() {
+    let starts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counted = starts.clone();
+    let supervised = crate::game::supervisor::supervise("a test's task", move || {
+        let n = counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        async move {
+            if n < 3 {
+                panic!("start {n} panics");
+            }
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), supervised)
+        .await
+        .expect("it ends once the task returns");
+    assert_eq!(starts.load(std::sync::atomic::Ordering::Relaxed), 3);
+}
+
+/// A shutdown waits only so long for a map that has hung: the other maps'
+/// players are still saved and written. Before, it waited on the hung map
+/// for good, and nothing it waited to write reached the disk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutdown_does_not_wait_for_a_hung_map() {
+    let realm = harness::realm();
+    let mut c = Client::connect(&realm, "THRALL");
+    let g = c.enter("Thrall", Race::Orc, Class::Warrior).await;
+    let kalimdor = realm.registry.online(g).unwrap().map();
+    assert_eq!(kalimdor.key, MapKey::world(1));
+    let hung = realm.maps.get(&realm, MapKey::world(0));
+    hung.query(|_| ()).await.unwrap();
+    hung.call(|_| std::thread::sleep(Duration::from_secs(4)));
+    let started = std::time::Instant::now();
+    realm.shutdown_within(Duration::from_millis(500)).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    let row = realm.store.load(guid::counter(g)).await.unwrap();
+    assert!(row.logout_time > 0, "Thrall was saved");
+}

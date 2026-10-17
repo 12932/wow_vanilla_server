@@ -110,7 +110,13 @@ async fn async_main(start: Start) -> u8 {
     }
 
     let users: crate::auth::UserCache = Arc::new(Mutex::new(crate::auth::UserCacheInner::new()));
-    let auth_server = tokio::spawn(crate::auth::auth(users.clone()));
+    let auth_server = {
+        let users = users.clone();
+        tokio::spawn(crate::game::supervisor::supervise(
+            "the login server",
+            move || crate::auth::auth(users.clone()),
+        ))
+    };
     // The world returns once it has saved everyone after a shutdown signal.
     crate::game::run(users).await;
     auth_server.abort();

@@ -113,7 +113,7 @@ async fn handshake(
     let account = c.username;
     let session_key = {
         let users = realm.users.as_ref().ok_or("no auth server")?;
-        let mut users = users.lock().map_err(|_| "users mutex poisoned")?;
+        let mut users = crate::auth::users_lock(users);
         let srp = users
             .get_mut(&account)
             .ok_or_else(|| format!("unknown account {account}"))?;
