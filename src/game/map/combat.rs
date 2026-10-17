@@ -2480,6 +2480,18 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         }
     }
     stop_attack(map, victim);
+    // Combo points on the dead go with them, and the dead's own (mangos's
+    // `ClearComboPointHolders`, Thistle Tea's `clear_combo_target`).
+    let holders: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| p.caster.combo_target == victim)
+        .map(|p| p.guid)
+        .chain(guid::is_player(victim).then_some(victim))
+        .collect();
+    for h in holders {
+        crate::game::map::spells::clear_combo_points(map, h);
+    }
     // A kill a player's on-kill procs count (Thistle Tea's
     // `KillFeedback.eligible?`): not grey, and no pet, totem or creature
     // worth no XP; a creature's kills all count.
