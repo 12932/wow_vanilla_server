@@ -8,6 +8,7 @@ pub mod auction;
 pub mod arena;
 pub mod auras;
 pub mod battleground;
+pub mod boss_mechanics;
 pub mod chat;
 pub mod cinematic;
 pub mod combat;
@@ -70,6 +71,7 @@ pub mod rest;
 pub mod scripts;
 pub mod skills;
 pub mod social;
+pub mod spawn_auras;
 pub mod spell_areas;
 pub mod spells;
 pub mod stats;
@@ -301,6 +303,8 @@ pub struct Map {
     pub outdoor: Option<outdoor_pvp::Outdoor>,
     /// The DB scripts running.
     pub scripts: scripts::Runner,
+    /// The encounters' spell mechanics' own state.
+    pub bosses: boss_mechanics::State,
     /// A copy's instance script and its data.
     pub instance: instance_script::State,
     /// Creatures whose spawned events run at the next update.
@@ -427,6 +431,7 @@ impl Map {
             loot_state: Default::default(),
             outdoor: outdoor_pvp::for_map(key),
             scripts: Default::default(),
+            bosses: Default::default(),
             instance,
             ai_spawned: Vec::new(),
             by_spawn: AHashMap::new(),
@@ -729,6 +734,7 @@ impl Map {
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);
+        boss_mechanics::update(self);
         loot::update(self);
         quests::update_timers(self);
         items::update(self);
@@ -948,6 +954,7 @@ impl Map {
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
+        spawn_auras::apply(self, guid);
         guid
     }
 
