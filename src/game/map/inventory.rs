@@ -411,25 +411,23 @@ pub fn add_item_with_property(
     alert: bool,
     property: u32,
 ) -> Result<(), Fail> {
-    let before = map.players.get(&g).map_or(0, |p| p.items.len());
-    add_item(map, g, entry, count, alert)?;
-    if property != 0 {
-        let data = map.realm.data.clone();
-        if let Some(p) = map.players.get_mut(&g)
-            && let Some(item) = p
-                .items
-                .get_mut(before..)
-                .and_then(|n| n.iter_mut().find(|i| i.entry == entry))
-        {
-            crate::game::map::enchant::set_random_property(&data, item, property);
-        }
-    }
-    Ok(())
+    add(map, g, entry, count, alert, property)
 }
 
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
+    add(map, g, entry, count, alert, 0)
+}
+
+fn add(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    alert: bool,
+    property: u32,
+) -> Result<(), Fail> {
     let data = map.realm.data.clone();
     let Some(t) = data.item(entry).cloned() else {
         return Err(Fail::NotFound);
@@ -487,7 +485,10 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         let counter = realm
             .next_item
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
+        let mut item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
+        if property != 0 {
+            crate::game::map::enchant::set_random_property(&data, &mut item, property);
+        }
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
         p.items.push(item);
         last = Some((bag, slot));
@@ -503,19 +504,11 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
     }
     p.refresh_inventory(&data);
     let notify = alert;
-    if notify && let Some((bag, slot)) = last {
-        p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
-            guid: g,
-            source: NewItemSource::Looted,
-            creation_type: NewItemCreationType::Received,
-            alert_chat: NewItemChatAlert::Show,
-            bag_slot: bag,
-            item_slot: u32::from(slot),
-            item: entry,
-            item_suffix_factor: 0,
-            item_random_property_id: 0,
-            item_count: count,
-        });
+    if notify
+        && let Some((bag, slot)) = last
+        && let Some(i) = p.item_at(bag, slot)
+    {
+        p.outbound.send(&push_result(g, &p.items[i], count));
     }
     crate::game::map::quests::items_changed(map, g, entry);
     Ok(())
@@ -1007,20 +1000,29 @@ pub fn attach_item(map: &mut Map, g: Guid, row: &crate::game::store::ItemRow) ->
         it.fields.clear_dirty();
     }
     p.refresh_inventory(&data);
-    p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
+    if let Some(item) = p.items.last() {
+        p.outbound.send(&push_result(g, item, row.count));
+    }
+    crate::game::map::quests::items_changed(map, g, entry);
+    Ok(())
+}
+
+/// `SMSG_ITEM_PUSH_RESULT` for `count` of `item`, now in its slot: with its
+/// suffix factor and random property, so the client names it with its
+/// suffix (mangos-zero's `SendNewItem`).
+fn push_result(g: Guid, item: &Item, count: u32) -> SMSG_ITEM_PUSH_RESULT {
+    SMSG_ITEM_PUSH_RESULT {
         guid: g,
         source: NewItemSource::Looted,
         creation_type: NewItemCreationType::Received,
         alert_chat: NewItemChatAlert::Show,
-        bag_slot: bag,
-        item_slot: u32::from(slot),
-        item: entry,
-        item_suffix_factor: 0,
-        item_random_property_id: 0,
-        item_count: row.count,
-    });
-    crate::game::map::quests::items_changed(map, g, entry);
-    Ok(())
+        bag_slot: item.bag,
+        item_slot: u32::from(item.slot),
+        item: item.entry,
+        item_suffix_factor: item.fields.get_u32(ITEM_FIELD_PROPERTY_SEED),
+        item_random_property_id: item.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID),
+        item_count: count,
+    }
 }
 
 #[cfg(test)]
