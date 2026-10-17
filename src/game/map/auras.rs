@@ -1869,13 +1869,16 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if expired && h.has(AURA_RETAIN_COMBO_POINTS) {
         crate::game::map::spells::retained_combo_points_expired(map, target, h);
     }
-    // A channel's aura gone ends the channel.
-    if let Some(c) = map.caster(h.caster)
+    // A channel's aura taken off the unit it is channelled at (not run
+    // out) ends the channel, the caster's own included (Evocation, a
+    // bandage), as mangos's `RemoveSpellAuraHolder` and Thistle Tea's
+    // channel have it.
+    if !expired
+        && let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting
         && casting.spell == h.spell
         && casting.channel_until.is_some()
-        && h.caster != target
-        && !h.positive
+        && casting.targets.unit.unwrap_or(h.caster) == target
     {
         let caster = h.caster;
         crate::game::map::spells::interrupt(map, caster);
