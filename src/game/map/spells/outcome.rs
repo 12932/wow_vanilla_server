@@ -762,13 +762,41 @@ pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate)
     m
 }
 
-/// Damage `target` takes of `s`: its flat and percent modifiers.
+/// Damage `target` takes of `s`: its flat and percent modifiers, the flat
+/// whole.
 pub fn taken(map: &Map, target: Guid, s: &SpellTemplate, damage: f32) -> f32 {
+    taken_with(map, target, s, damage, None)
+}
+
+/// Damage `target` takes of effect `index` of `s`, a direct hit's or a
+/// tick's (`kind`) of `stacks`: a spell's flat modifiers (Dampen Magic,
+/// Judgement of the Crusader) by its coefficient and taking at most half,
+/// as Thistle Tea's `DamageReceived` and mangos's `SpellDamageBonusTaken`
+/// have them; an ability's whole; then the percent modifiers.
+pub fn taken_of(
+    map: &Map,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    kind: Kind,
+    stacks: u32,
+    damage: f32,
+) -> f32 {
+    let scale = (!matches!(s.dmg_class, 2 | 3))
+        .then(|| coefficient(map, s, index.min(2), kind) * stacks.max(1) as f32);
+    taken_with(map, target, s, damage, scale)
+}
+
+fn taken_with(map: &Map, target: Guid, s: &SpellTemplate, damage: f32, scale: Option<f32>) -> f32 {
     let Some(a) = auras::auras(map, target) else {
         return damage;
     };
     let mask = s.school_mask();
-    let mut d = damage + a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
+    let flat = a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
+    let mut d = match scale {
+        Some(c) => damage + (flat * c).max(-damage.max(0.0) / 2.0),
+        None => damage + flat,
+    };
     d *= a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, mask);
     // A melee or ranged ability takes the melee or ranged damage taken
     // auras, whatever their school (theirs is 0: Stoneskin, Windwall), as
@@ -823,7 +851,7 @@ pub fn damage(
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
     if !fixed {
-        d = taken(map, target, s, d);
+        d = taken_of(map, target, s, index, Kind::Direct, 1, d);
     }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
