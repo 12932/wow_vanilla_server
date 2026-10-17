@@ -582,9 +582,11 @@ pub fn update_creatures(map: &mut Map) {
             // Passive in a fight: it waits it out until no one it could
             // fight is left.
             passive_fight(map, g);
+            // A distraction holds it where it stands.
             if !map
                 .creature(g)
                 .is_some_and(|c| c.combat.attacking || c.evading)
+                && !crate::game::map::creature_motion::distracted(map, g)
             {
                 crate::game::map::world::step_creature_key(map, key);
             }
@@ -603,7 +605,7 @@ pub fn update_creatures(map: &mut Map) {
         if moving {
             crate::game::map::event_ai::scripted_move_ended(map, g);
         }
-        if follows && !fighting {
+        if follows && !fighting && !crate::game::map::creature_motion::held_by_distraction(map, g) {
             crate::game::map::event_ai::follow_step(map, g);
         }
     }

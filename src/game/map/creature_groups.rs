@@ -274,7 +274,8 @@ pub fn leader_walked(map: &mut Map, leader: Guid, to: Vector3d, facing: f32, run
     for (c, distance, angle) in scripted {
         let ok = map
             .creature(c)
-            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading);
+            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading)
+            && !crate::game::map::creature_motion::held_by_distraction(map, c);
         if ok {
             let angle = facing + angle;
             let place = Vector3d {
@@ -301,7 +302,8 @@ pub fn leader_walked(map: &mut Map, leader: Guid, to: Vector3d, facing: f32, run
         };
         let ok = map
             .creature(c)
-            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading);
+            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading)
+            && !crate::game::map::creature_motion::held_by_distraction(map, c);
         if !ok {
             continue;
         }
