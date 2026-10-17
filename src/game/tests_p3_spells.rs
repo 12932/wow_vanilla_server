@@ -672,3 +672,263 @@ async fn health_funnel_takes_its_health_a_second_and_ends_without_it() {
     assert_eq!(after, None, "without five to pay, it ends");
     assert_eq!(left, 5, "taking none");
 }
+
+const BLINK: u32 = 1953;
+const PSYCHIC_SCREAM: u32 = 8122;
+const POLYMORPH: u32 = 118;
+const CHARGE: u32 = 100;
+const CLAW: u32 = 1082;
+const RENEW: u32 = 139;
+const SHADOWFORM: u32 = 15473;
+const EXORCISM: u32 = 879;
+const TURN_UNDEAD: u32 = 2878;
+const SLOW_FALL: u32 = 130;
+const LESSER_HEAL: u32 = 2050;
+const MIND_VISION: u32 = 10909;
+const HAMMER_OF_JUSTICE: u32 = 853;
+const SKELETAL_WARRIOR: u32 = 48;
+const IMP: u32 = 416;
+
+#[tokio::test]
+async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_reach() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, me, map) = player(&realm, "P3P10", "Checkone", Race::Human, Class::Mage).await;
+    let (_d, friend, _) = player(&realm, "P3P11", "Checktwo", Race::Human, Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            ready(m, me, 60, &[]);
+            if let Some(p) = m.players.get_mut(&me) {
+                p.gm = false;
+            }
+            let kobold = dummy(m, me, 60, 10.0);
+            let undead = spawn(m, me, SKELETAL_WARRIOR, 60, 10.0);
+            let demon = spawn(m, me, IMP, 60, 10.0);
+            let data = m.realm.data.clone();
+            let mods = spells::mods::Mods::default();
+            let check = |m: &mut Map, id: u32, t: spells::Targets| {
+                let s = data.spells.get(id).cloned().unwrap();
+                if let Some(p) = m.players.get_mut(&me)
+                    && !p.spells.contains(&id)
+                {
+                    p.spells.push(id);
+                }
+                fresh(m, me);
+                spells::checks::check(m, me, &s, &t, None, false, &mods)
+            };
+            let mut seen = Vec::new();
+            // Stunned, feared, confused: held; Blink frees.
+            for (aura, label) in [
+                (HAMMER_OF_JUSTICE, "stun"),
+                (PSYCHIC_SCREAM, "fear"),
+                (POLYMORPH, "confuse"),
+            ] {
+                apply(m, kobold, me, aura);
+                seen.push((
+                    label,
+                    check(m, FROSTBOLT, at(kobold)),
+                    check(m, BLINK, spells::Targets::default()),
+                ));
+                clear_all(m, me);
+            }
+            // Fire locked out: no Fireball, a Frostbolt yes.
+            spells::cooldowns::lock_school(m, me, FIREBALL, 5_000);
+            let locked = (
+                check(m, FIREBALL, at(kobold)),
+                check(m, FROSTBOLT, at(kobold)),
+            );
+            m.now += Duration::from_millis(5_001);
+            let unlocked = check(m, FIREBALL, at(kobold));
+            // Charge's least range, in Battle Stance.
+            spells::cast_triggered(m, me, 2457, None);
+            place(m, me, kobold, 3.0);
+            let close = check(m, CHARGE, at(kobold));
+            place(m, me, kobold, 10.0);
+            let charge = check(m, CHARGE, at(kobold));
+            clear_all(m, me);
+            // Forms: Claw is a cat's; Fireball no shape's; Renew no shadow's.
+            let form = |m: &mut Map, f: u32| {
+                clear_all(m, me);
+                if f != 0 {
+                    spells::cast_triggered(m, me, f, None);
+                }
+            };
+            let mut forms = Vec::new();
+            place(m, me, kobold, 2.0);
+            for (f, spell) in [
+                (0, CLAW),
+                (BEAR_FORM, CLAW),
+                (CAT_FORM, CLAW),
+                (CAT_FORM, FIREBALL),
+                (SHADOWFORM, RENEW),
+            ] {
+                form(m, f);
+                let t = if spell == RENEW { at(me) } else { at(kobold) };
+                forms.push(check(m, spell, t));
+            }
+            form(m, 0);
+            place(m, me, kobold, 10.0);
+            // Creature types: Exorcism and Turn Undead.
+            let types = (
+                check(m, EXORCISM, at(undead)),
+                check(m, EXORCISM, at(kobold)),
+                check(m, TURN_UNDEAD, at(undead)),
+                check(m, TURN_UNDEAD, at(demon)),
+            );
+            // Too little mana; no reagent.
+            set_power(m, me, 0, 10);
+            let mana = check(m, FIREBALL, at(kobold));
+            set_power(m, me, 0, 100_000);
+            let feather = check(m, SLOW_FALL, at(me));
+            // Friend and foe; the dead.
+            place(m, me, friend, 5.0);
+            let friendly = check(m, FIREBALL, at(friend));
+            let heal_foe = check(m, LESSER_HEAL, at(kobold));
+            crate::game::map::combat::deal_damage(m, me, undead, 2_000_000);
+            let dead = check(m, FIREBALL, at(undead));
+            // A wall: Fireball doesn't see past it, Mind Vision does.
+            let p = m.position_of(me).unwrap();
+            let k = m.position_of(kobold).unwrap();
+            let mid = Vector3d {
+                x: (p.x + k.x) / 2.0,
+                y: (p.y + k.y) / 2.0,
+                z: p.z,
+            };
+            let side = Vector3d {
+                x: -(k.y - p.y),
+                y: k.x - p.x,
+                z: 0.0,
+            };
+            m.spells.walls.push((
+                Vector3d {
+                    x: mid.x + side.x,
+                    y: mid.y + side.y,
+                    z: mid.z,
+                },
+                Vector3d {
+                    x: mid.x - side.x,
+                    y: mid.y - side.y,
+                    z: mid.z,
+                },
+            ));
+            let walled = (
+                check(m, FIREBALL, at(kobold)),
+                check(m, MIND_VISION, at(kobold)),
+            );
+            m.spells.walls.clear();
+            // Out of reach, unless the target is large.
+            place(m, me, kobold, 40.0);
+            let far = check(m, FIREBALL, at(kobold));
+            if let Some(c) = m.creature_mut(kobold) {
+                c.fields
+                    .set_f32(crate::game::fields::UNIT_FIELD_COMBATREACH, 4.0);
+            }
+            let large = check(m, FIREBALL, at(kobold));
+            // The dead don't cast.
+            crate::game::map::death::kill(m, me);
+            let me_dead = check(m, FIREBALL, at(kobold));
+            (
+                seen, locked, unlocked, close, charge, forms, types, mana, feather, friendly,
+                heal_foe, dead, walled, far, large, me_dead,
+            )
+        })
+        .await
+        .unwrap();
+    use spells::fail::*;
+    let (
+        seen,
+        locked,
+        unlocked,
+        close,
+        charge,
+        forms,
+        types,
+        mana,
+        feather,
+        friendly,
+        heal_foe,
+        dead,
+        walled,
+        far,
+        large,
+        me_dead,
+    ) = out;
+    assert_eq!(
+        seen,
+        vec![
+            ("stun", Some(STUNNED), None),
+            ("fear", Some(FLEEING), None),
+            ("confuse", Some(CONFUSED), None)
+        ]
+    );
+    assert_eq!(locked, (Some(SILENCED), None), "fire locked out, frost not");
+    assert_eq!(unlocked, None, "until the lock is up");
+    assert_eq!(
+        (close, charge),
+        (Some(TOO_CLOSE), None),
+        "Charge's least range"
+    );
+    assert_eq!(
+        forms,
+        vec![
+            Some(ONLY_SHAPESHIFT),
+            Some(ONLY_SHAPESHIFT),
+            None,
+            Some(NOT_SHAPESHIFT),
+            Some(NOT_SHAPESHIFT)
+        ]
+    );
+    assert_eq!(
+        types,
+        (None, Some(BAD_TARGETS), None, Some(BAD_TARGETS)),
+        "the creature types"
+    );
+    assert_eq!(mana, Some(NO_POWER));
+    assert_eq!(feather, Some(REAGENTS));
+    assert_eq!(friendly, Some(TARGET_FRIENDLY));
+    assert_eq!(heal_foe, Some(TARGET_ENEMY));
+    assert_eq!(dead, Some(TARGETS_DEAD));
+    assert_eq!(
+        walled,
+        (Some(LINE_OF_SIGHT), None),
+        "Mind Vision sees past a wall"
+    );
+    assert_eq!(
+        (far, large),
+        (Some(OUT_OF_RANGE), None),
+        "a large target's reach counts"
+    );
+    assert_eq!(me_dead, Some(CASTER_DEAD));
+}
+
+fn clear_all(m: &mut Map, g: wow_world_messages::Guid) {
+    auras::remove_where(m, g, |h| !h.passive);
+}
+
+/// `target` `yards` before `viewer`.
+fn place(
+    m: &mut Map,
+    viewer: wow_world_messages::Guid,
+    target: wow_world_messages::Guid,
+    yards: f32,
+) {
+    let (p, o) = {
+        let v = m.unit_view(viewer).unwrap();
+        (v.position, v.orientation)
+    };
+    let to = Vector3d {
+        x: p.x + yards * o.cos(),
+        y: p.y + yards * o.sin(),
+        z: p.z,
+    };
+    if let Some(x) = m.players.get_mut(&target) {
+        x.movement.position = to;
+    } else if let Some(c) = m.creature_mut(target) {
+        c.position = to;
+    }
+}
+
+const BEAR_FORM: u32 = 5487;
+const CAT_FORM: u32 = 768;
