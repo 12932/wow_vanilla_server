@@ -893,3 +893,290 @@ async fn a_script_emote_that_lasts_is_an_emote_state() {
     })
     .await;
 }
+
+fn faction_of(m: &crate::game::map::Map, g: Guid) -> u32 {
+    m.unit_fields(g)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+}
+
+/// `set_faction`'s datalong2 says when the old faction comes back: when a
+/// fight stops (0x2), home again (0x4), at a respawn (0x1, and without it
+/// the faction stays over one); datalong 0 brings it back (S14).
+#[tokio::test]
+async fn a_scripts_faction_comes_back_as_its_flags_say() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let (host, buddy) = (host(), buddy());
+    a.sees(buddy).await;
+    let out = map
+        .query(move |m| {
+            let set = |flags| step(22, [14, flags, 0, 0]);
+            // Until the fight stops.
+            crate::game::map::scripts::execute(m, &set(0x2), host, host);
+            let set_it = faction_of(m, host);
+            crate::game::map::scripts::execute(m, &step(73, [0; 4]), host, host);
+            let stopped = faction_of(m, host);
+            // Not over a respawn, then over one.
+            crate::game::map::scripts::execute(m, &set(0), host, host);
+            crate::game::map::scripts::execute(m, &set(0), buddy, buddy);
+            crate::game::map::scripts::execute(m, &set(0x1), buddy, buddy);
+            for g in [host, buddy] {
+                crate::game::map::combat::deal_damage(m, me, g, 10_000);
+                crate::game::map::ai::respawn_now(m, g);
+            }
+            let respawned = (faction_of(m, host), faction_of(m, buddy));
+            // Datalong 0: back to the one before.
+            crate::game::map::scripts::execute(m, &step(22, [0; 4]), host, host);
+            (set_it, stopped, respawned, faction_of(m, host))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (14, 35, (14, 35), 35));
+}
+
+/// Home again from an evade, a faction set until then comes back (S14).
+#[tokio::test]
+async fn a_scripts_faction_until_home_comes_back_there() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let host = host();
+    a.sees(host).await;
+    map.query(move |m| {
+        crate::game::map::scripts::execute(m, &step(22, [14, 0x4, 0, 0]), host, host);
+        if let Some(c) = m.creature_mut(host) {
+            c.position.x += 6.0;
+        }
+        crate::game::map::ai::enter_evade(m, host);
+    })
+    .await;
+    let mut back = 0;
+    for _ in 0..100 {
+        back = map.query(move |m| faction_of(m, host)).await.unwrap();
+        if back == 35 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(back, 35, "home, it is friendly again");
+}
+
+/// `despawn`'s datalong2 is the respawn's delay; with none, the spawn's
+/// own time; datalong puts it off (S18).
+#[tokio::test]
+async fn despawn_respawns_after_its_delay_or_the_spawns_time() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let (host, buddy, third) = (host(), buddy(), third());
+    a.sees(third).await;
+    let respawn_in = |m: &crate::game::map::Map, g| match m.creature(g).map(|c| c.life) {
+        Some(crate::game::map::creature::Life::Dead { respawn_at, .. }) => {
+            Some(respawn_at.duration_since(m.now).as_secs())
+        }
+        _ => None,
+    };
+    let out = map
+        .query(move |m| {
+            crate::game::map::scripts::execute(m, &step(18, [0, 40, 0, 0]), host, host);
+            crate::game::map::scripts::execute(m, &step(18, [0, 0, 0, 0]), buddy, buddy);
+            crate::game::map::scripts::execute(m, &step(18, [300, 0, 0, 0]), third, third);
+            (
+                respawn_in(m, host),
+                respawn_in(m, buddy),
+                respawn_in(m, third),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (Some(40), Some(60), None),
+        "its own delay; its spawn's; not yet"
+    );
+    a.forgets(third).await;
+}
+
+/// `C_SET_REGENERATION` says what it regenerates: nothing, or health
+/// alone (S20).
+#[tokio::test]
+async fn set_regeneration_says_what_comes_back() {
+    let mut d = world();
+    d.creature_templates.get_mut(&HOST).unwrap().unit_class = 8;
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let host = host();
+    a.sees(host).await;
+    let out = map
+        .query(move |m| {
+            let tick = |m: &mut crate::game::map::Map| {
+                let past = m.now - Duration::from_secs(1);
+                if let Some(c) = m.creature_mut(host) {
+                    c.fields.set_u32(UNIT_FIELD_HEALTH, 100);
+                    c.fields.set_u32(UNIT_FIELD_MAXPOWER1, 300);
+                    c.fields.set_u32(UNIT_FIELD_POWER1, 0);
+                    c.engagement.regen_at = Some(past);
+                }
+                crate::game::map::creature_combat::regenerate(m);
+                m.unit_fields(host).map(|f| {
+                    (
+                        f.get_u32(UNIT_FIELD_HEALTH) > 100,
+                        f.get_u32(UNIT_FIELD_POWER1) > 0,
+                    )
+                })
+            };
+            let regen = |stats| ScriptStep {
+                command: crate::game::map::scripts::C_SET_REGENERATION,
+                datalong: [stats, 0, 0, 0],
+                ..Default::default()
+            };
+            crate::game::map::scripts::execute(m, &regen(0), host, host);
+            let none = tick(m);
+            crate::game::map::scripts::execute(m, &regen(1), host, host);
+            (none, tick(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (Some((false, false)), Some((true, false))));
+}
+
+/// `set_equipment`: a slot below zero is left, at zero emptied, else the
+/// item; with datalong, what it spawned with (S21).
+#[tokio::test]
+async fn set_equipment_leaves_empties_and_resets_slots() {
+    let mut d = world();
+    for entry in [5000, 5001, 5002, 5003] {
+        d.items.insert(
+            entry,
+            ItemTemplate {
+                entry,
+                name: format!("Weapon {entry}"),
+                display_id: entry + 10,
+                ..Default::default()
+            },
+        );
+    }
+    d.creature_equipment.insert(77, [5000, 5001, 5002]);
+    d.creature_templates.get_mut(&HOST).unwrap().equipment_id = 77;
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let host = host();
+    a.sees(host).await;
+    let out = map
+        .query(move |m| {
+            let displays = |m: &crate::game::map::Map| {
+                [0u16, 1, 2].map(|s| {
+                    m.unit_fields(host)
+                        .map_or(0, |f| f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + s))
+                })
+            };
+            let spawned = displays(m);
+            let change = ScriptStep {
+                dataint: [-1, 0, 5003, 0],
+                ..step(19, [0; 4])
+            };
+            crate::game::map::scripts::execute(m, &change, host, host);
+            let changed = displays(m);
+            crate::game::map::scripts::execute(m, &step(19, [1, 0, 0, 0]), host, host);
+            (spawned, changed, displays(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, [5010, 5011, 5012]);
+    assert_eq!(out.1, [5010, 0, 5013], "left, emptied, the new one");
+    assert_eq!(out.2, [5010, 5011, 5012], "back as it spawned");
+}
+
+const DUNGEON: u32 = 33;
+
+/// `zone_combat_pulse` draws a dungeon into the fight, every three seconds
+/// while it lasts; outside a dungeon it does nothing (S15).
+#[tokio::test]
+async fn the_zone_pulse_is_a_dungeons_and_goes_on() {
+    let mut d = world();
+    d.maps.insert(
+        DUNGEON,
+        MapInfo {
+            id: DUNGEON,
+            internal_name: "Dungeon".into(),
+            name: "Dungeon".into(),
+            instance_type: 1,
+            player_limit: 5,
+        },
+    );
+    d.creature_templates
+        .insert(4100, creature(4100, "Warden", 14));
+    d.creature_spawns.insert(
+        DUNGEON,
+        vec![CreatureSpawn {
+            guid: 70,
+            entries: vec![4100],
+            map: DUNGEON,
+            x: 40.0,
+            ..Default::default()
+        }],
+    );
+    d.creature_templates
+        .insert(4101, creature(4101, "Brute", 14));
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: 71,
+        entries: vec![4101],
+        map: 0,
+        x: START.0 + 40.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = Realm::new(cfg, store, startup, d, None);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    // In the open world, nothing.
+    let brute = guid::unit(4101, 71);
+    let open = map
+        .query(move |m| {
+            crate::game::map::scripts::execute(m, &step(49, [1, 0, 0, 0]), brute, brute);
+            m.creature(brute).map(|c| c.combat.victim)
+        })
+        .await
+        .flatten();
+    assert_eq!(open, Some(Guid::zero()), "the open world isn't drawn in");
+    map.call(move |m| {
+        m.teleport(
+            me,
+            crate::game::map::MapKey::world(DUNGEON),
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    });
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(me).await;
+    let inside = realm.registry.online(me).unwrap().map();
+    let warden = guid::unit(4100, 70);
+    let pulsed = inside
+        .query(move |m| {
+            crate::game::map::scripts::execute(m, &step(49, [1, 0, 0, 0]), warden, warden);
+            m.creature(warden).map(|c| {
+                (
+                    c.combat.victim,
+                    c.engagement.zone_pulse_at.map(|t| t.duration_since(m.now)),
+                )
+            })
+        })
+        .await
+        .flatten();
+    assert_eq!(
+        pulsed,
+        Some((me, Some(Duration::from_secs(3)))),
+        "the nearest, 40 yards off, first; again in three seconds"
+    );
+}

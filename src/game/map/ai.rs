@@ -280,6 +280,29 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
     crate::game::map::spells::threat_sync::taunt_ended(map, creature, by);
 }
 
+/// How long spawn `spawn` waits to come back: its time, rolled in its
+/// range (five minutes for none), at least five seconds.
+pub fn respawn_delay(data: &crate::game::data::GameData, spawn: Option<u32>) -> Duration {
+    spawn
+        .and_then(|g| {
+            data.creature_spawns
+                .values()
+                .flatten()
+                .find(|s| s.guid == g)
+        })
+        .map(|s| {
+            let (lo, hi) = (s.respawn_min, s.respawn_max.max(s.respawn_min));
+            let secs = if hi > lo {
+                rand::rng().random_range(lo..=hi)
+            } else {
+                lo
+            };
+            Duration::from_secs(u64::from(secs))
+        })
+        .unwrap_or(Duration::from_secs(300))
+        .max(MIN_RESPAWN)
+}
+
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     die_by(map, creature, tapper, tapper);
@@ -296,6 +319,7 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::auras::clear_on_death(map, creature);
     crate::game::map::event_ai::death(map, creature, killer);
+    crate::game::map::event_ai::combat_stopped(map, creature, true);
     crate::game::map::instance_script::creature_event(
         map,
         creature,
@@ -315,25 +339,10 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     };
     let template = data.creature_template(c.entry);
     let elite = template.is_some_and(|t| matches!(t.rank, 1..=3));
-    let respawn = c
-        .spawn_guid
-        .and_then(|g| {
-            data.creature_spawns
-                .values()
-                .flatten()
-                .find(|s| s.guid == g)
-        })
-        .map(|s| {
-            let (lo, hi) = (s.respawn_min, s.respawn_max.max(s.respawn_min));
-            let secs = if hi > lo {
-                rand::rng().random_range(lo..=hi)
-            } else {
-                lo
-            };
-            Duration::from_secs(u64::from(secs))
-        })
-        .unwrap_or(Duration::from_secs(300))
-        .max(MIN_RESPAWN);
+    let respawn = respawn_delay(&data, c.spawn_guid);
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
     let decay = if elite {
         ELITE_CORPSE_DECAY
     } else {
@@ -437,6 +446,13 @@ fn respawn(map: &mut Map, g: Guid) {
     };
     let spawn_guid = old.spawn_guid;
     let despawned = old.despawned;
+    // A faction a script set stays over the respawn, unless its flags
+    // say the respawn ends it.
+    let faction = old
+        .scripted
+        .as_deref()
+        .and_then(|s| s.temp_faction)
+        .filter(|t| t.flags & crate::game::map::event_ai::FACTION_RESTORE_RESPAWN == 0);
     let data = map.realm.data.clone();
     let spawn = spawn_guid.and_then(|sg| {
         data.creature_spawns
@@ -463,6 +479,7 @@ fn respawn(map: &mut Map, g: Guid) {
     }
     // A pooled spawn may give way to another of its pool.
     let chosen = crate::game::map::creature_groups::respawn_choice(map, spawn.guid);
+    let faction = faction.filter(|_| chosen == spawn.guid);
     let spawn = if chosen == spawn.guid {
         spawn
     } else {
@@ -478,6 +495,12 @@ fn respawn(map: &mut Map, g: Guid) {
     let on = crate::game::events::current(&map.realm);
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
+        if let Some(t) = faction {
+            if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
+                s.temp_faction = Some(t);
+            }
+            crate::game::map::scripts::set_faction(map, g, t.value);
+        }
         crate::game::map::creature_groups::respawned(map, g);
     }
 }
@@ -505,20 +528,38 @@ pub fn respawn_forced(map: &mut Map, g: Guid, even_alive: bool) {
 }
 
 /// A creature goes as though it died, with no loot or credit, and comes
-/// back on its spawn's timer.
+/// back in five minutes.
 pub fn quiet_death(map: &mut Map, g: Guid) {
+    quiet_death_for(map, g, Duration::from_secs(300));
+}
+
+/// A creature goes as though it died, with no loot or credit, and comes
+/// back after `respawn`; a corpse goes from view, to come back then too
+/// (Thistle Tea's `Respawn.despawn`).
+pub fn quiet_death_for(map: &mut Map, g: Guid, respawn: Duration) {
     let now = map.now;
+    if let Some(c) = map.creature_mut(g)
+        && !c.alive()
+    {
+        if c.despawned {
+            return;
+        }
+        c.life = Life::Dead {
+            corpse_until: now,
+            respawn_at: now + respawn,
+        };
+        c.despawned = true;
+        despawn_from_view(map, g);
+        return;
+    }
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::spells::threat_sync::wiped(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    if !c.alive() {
-        return;
-    }
     c.life = Life::Dead {
         corpse_until: now,
-        respawn_at: now + Duration::from_secs(300),
+        respawn_at: now + respawn,
     };
     c.threat.clear();
     c.combat = Default::default();
@@ -1049,6 +1090,7 @@ pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, _for: Option<Duration>) {
 /// Give up the fight and run home.
 fn evade(map: &mut Map, g: Guid) {
     crate::game::map::creature_combat::disengaged(map, g);
+    crate::game::map::event_ai::combat_stopped(map, g, false);
     crate::game::map::spells::threat_sync::wiped(map, g);
     let now = map.now;
     let spline_id = map.next_spline_id;
@@ -1160,6 +1202,11 @@ fn evade_step(map: &mut Map, g: Guid) {
         }
         combat::sync_aura_state(map, g);
         crate::game::map::spawn_auras::restore(map, g);
+        crate::game::map::scripts::restore_faction(
+            map,
+            g,
+            crate::game::map::event_ai::FACTION_RESTORE_REACH_HOME,
+        );
         crate::game::map::event_ai::reached_home(map, g);
     }
 }
