@@ -350,3 +350,83 @@ async fn a_blizzard_cut_to_nothing_ends_and_takes_its_area() {
     })
     .await;
 }
+
+const FIREBALL: u32 = 133;
+const KICK: u32 = 1766;
+const RESTORATION: u32 = 11359;
+const FIRE_BLAST: u32 = 2136;
+
+#[tokio::test]
+async fn a_cast_given_up_gives_back_its_global_cooldown_and_kick_stops_what_silence_could() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, mage, map) = player(&realm, "P3P5", "Gcdone", Race::Human, Class::Mage).await;
+    let (_d, rogue, _) = player(&realm, "P3P6", "Gcdtwo", Race::Human, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[FIREBALL, FIRE_BLAST, RESTORATION]);
+            ready(m, rogue, 60, &[KICK]);
+            let kobold = dummy(m, mage, 60, 5.0);
+            let data = m.realm.data.clone();
+            // Cast and given up: the global cooldown goes with it.
+            cast_fresh(m, mage, FIREBALL, at(kobold));
+            let on = m.caster(mage).unwrap().gcd_until.is_some_and(|t| t > m.now);
+            spells::cancel(m, mage);
+            let off = m.caster(mage).unwrap().gcd_until.is_some_and(|t| t > m.now);
+            let again = spells::cast(m, mage, FIREBALL, at(kobold), None);
+            spells::interrupt(m, mage);
+            // Another category's spell isn't held by the spells' cooldown.
+            cast_fresh(m, mage, FIRE_BLAST, at(kobold));
+            let restoration = data.spells.get(RESTORATION).cloned().unwrap();
+            let fireball = data.spells.get(FIREBALL).cloned().unwrap();
+            let mods = spells::mods::Mods::default();
+            let none = spells::Targets::default();
+            let other = (
+                spells::checks::check(m, mage, &fireball, &at(kobold), None, false, &mods),
+                spells::checks::check(m, mage, &restoration, &none, None, false, &mods),
+            );
+            // Kick stops a creature's Fireball, and locks its fire out.
+            spells::cast(m, kobold, FIREBALL, at(mage), None);
+            spells::cast_triggered(m, rogue, KICK, Some(kobold));
+            let kicked = (
+                casting(m, kobold),
+                m.caster(kobold).map(|c| !c.school_lockout.is_empty()),
+            );
+            // Not the Hearthstone, which no silence stops.
+            spells::cast(m, kobold, HEARTHSTONE, spells::Targets::default(), None);
+            let hearth = casting(m, kobold);
+            spells::cast_triggered(m, rogue, KICK, Some(kobold));
+            let kept = casting(m, kobold);
+            spells::interrupt(m, kobold);
+            (on, off, again, other, kicked, hearth, kept)
+        })
+        .await
+        .unwrap();
+    let (on, off, again, other, kicked, hearth, kept) = out;
+    assert!(on && !off, "the global cooldown given back");
+    assert!(again, "and the Fireball begun again at once");
+    assert_eq!(
+        other,
+        (Some(spells::fail::NOT_READY), None),
+        "Fire Blast's cooldown holds Fireball, not Restoration's category"
+    );
+    assert_eq!(
+        kicked,
+        (None, Some(true)),
+        "Kick stops the Fireball and locks fire"
+    );
+    assert_eq!(hearth, Some(HEARTHSTONE));
+    assert_eq!(kept, Some(HEARTHSTONE), "but not the Hearthstone");
+    let b = c
+        .wait_frame("SMSG_CAST_RESULT", spells::SMSG_CAST_RESULT, |b| {
+            b[..4] == FIREBALL.to_le_bytes() && b[4] != 0
+        })
+        .await;
+    assert_eq!(
+        b[5],
+        spells::fail::INTERRUPTED,
+        "the client told it was interrupted"
+    );
+}

@@ -652,6 +652,7 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             p.caster.cooldowns.clear();
             p.caster.category_cooldowns.clear();
             p.caster.gcd_until = None;
+            p.caster.other_gcds.clear();
             for id in &spells {
                 p.outbound.send(&SMSG_CLEAR_COOLDOWN {
                     id: *id,

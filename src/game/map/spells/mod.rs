@@ -170,7 +170,10 @@ pub struct Caster {
     pub casting: Option<Casting>,
     pub cooldowns: AHashMap<u32, Instant>,
     pub category_cooldowns: AHashMap<u32, Instant>,
+    /// The global cooldown of the spells' category (133).
     pub gcd_until: Option<Instant>,
+    /// Global cooldowns of other categories: (category, until).
+    pub other_gcds: Vec<(u32, Instant)>,
     /// For a creature: its spell list's timers in the fight it is in.
     pub spell_list: Option<Box<lists::ListState>>,
     pub combo_target: Guid,
@@ -753,7 +756,14 @@ pub fn cast(
         && gcd > 0
         && let Some(c) = map.caster_mut(caster)
     {
-        c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
+        let until = now + Duration::from_millis(u64::from(gcd));
+        if s.start_recovery_category == GCD_SPELLS {
+            c.gcd_until = Some(until);
+        } else {
+            c.other_gcds
+                .retain(|(cat, t)| *cat != s.start_recovery_category && *t > now);
+            c.other_gcds.push((s.start_recovery_category, until));
+        }
     }
     if time == 0 {
         execute(map, caster, s, targets, item, false);
@@ -1637,7 +1647,25 @@ pub fn heal_crit(
     combat::heal_threat(map, caster, target, spell, gained);
 }
 
-/// A unit's cast is interrupted.
+/// The category most spells' global cooldown is of.
+pub const GCD_SPELLS: u32 = 133;
+
+/// Whether `c` is within the global cooldown of `category`.
+pub fn on_gcd(c: &Caster, category: u32, now: Instant) -> bool {
+    if category == 0 {
+        return false;
+    }
+    if category == GCD_SPELLS {
+        return c.gcd_until.is_some_and(|t| t > now);
+    }
+    c.other_gcds
+        .iter()
+        .any(|(cat, t)| *cat == category && *t > now)
+}
+
+/// A unit's cast is interrupted. One still being cast gives back its
+/// global cooldown and tells its caster it was interrupted (mangos's
+/// `Spell::cancel`: `ResetGCD`, `SendCastResult`).
 pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(c) = map.caster_mut(g) else {
         return;
@@ -1646,6 +1674,22 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(casting) = c.casting.take() else {
         return;
     };
+    if casting.channel_until.is_none() {
+        let category = map
+            .realm
+            .data
+            .spells
+            .get(casting.spell)
+            .map_or(0, |s| s.start_recovery_category);
+        if let Some(c) = map.caster_mut(g) {
+            if category == GCD_SPELLS {
+                c.gcd_until = None;
+            } else {
+                c.other_gcds.retain(|(cat, _)| *cat != category);
+            }
+        }
+        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
+    }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
             guid: g,
