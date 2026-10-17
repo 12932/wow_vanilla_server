@@ -929,3 +929,101 @@ async fn a_knockback_leaves_a_creature_in_place_and_stops_its_cast() {
     assert!(warded, "nothing a teleport ends");
     assert!(!casting, "its cast interrupted");
 }
+
+const QUARTERMASTER: u32 = 900_380;
+const TABARD: u32 = 900_381;
+const ARGENT_DAWN: u32 = 529;
+
+/// An item that wants a reputation is refused to one short of it with
+/// `BUY_ERR_REPUTATION_REQUIRE`, as mangos's `BuyItemFromVendor` and
+/// Thistle Tea's vendor refuse it, and sold once they have it.
+#[tokio::test]
+async fn a_vendor_wont_sell_what_wants_more_reputation() {
+    use crate::game::data::misc::FactionDef;
+    let mut d = GameData::empty();
+    d.misc.factions.insert(
+        ARGENT_DAWN,
+        FactionDef {
+            id: ARGENT_DAWN,
+            index: 7,
+            name: "Argent Dawn".into(),
+            ..Default::default()
+        },
+    );
+    let mut qm = plain_creature(QUARTERMASTER, "Quartermaster", 35);
+    qm.npc_flags = crate::game::map::npc::NPC_FLAG_VENDOR;
+    d.creature_templates.insert(QUARTERMASTER, qm);
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 46,
+        entries: vec![QUARTERMASTER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    d.vendors.insert(
+        QUARTERMASTER,
+        vec![VendorItem {
+            slot: 1,
+            item: TABARD,
+            ..Default::default()
+        }],
+    );
+    d.items.insert(
+        TABARD,
+        ItemTemplate {
+            entry: TABARD,
+            name: "Argent Tabard".into(),
+            class: 4,
+            display_id: 1000,
+            quality: 1,
+            buy_count: 1,
+            buy_price: 10,
+            inventory_type: 19,
+            allowable_class: -1,
+            allowable_race: -1,
+            stackable: 1,
+            required_reputation_faction: ARGENT_DAWN,
+            required_reputation_rank: crate::game::data::misc::RANK_HONORED,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, g, map) = enter(&realm, "A", "Buyer", Race::Human, Class::Warrior).await;
+    let vendor = on(&map, |m| {
+        m.creatures
+            .iter()
+            .find(|(_, c)| c.entry == QUARTERMASTER)
+            .map(|(_, c)| c.guid)
+    })
+    .await
+    .expect("the quartermaster");
+    on(&map, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1000)
+    })
+    .await;
+    let buy = CMSG_BUY_ITEM {
+        vendor,
+        item: TABARD,
+        amount: 1,
+        unknown1: 0,
+    };
+    a.send(buy.clone()).await;
+    let refused = a
+        .wait_for("SMSG_BUY_FAILED", |m| match m {
+            ServerOpcodeMessage::SMSG_BUY_FAILED(f) => Some(f.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(refused, BuyResult::ReputationRequire);
+    on(&map, move |m| {
+        crate::game::map::reputation::modify(m, g, ARGENT_DAWN, 9000, false);
+    })
+    .await;
+    a.send(buy).await;
+    a.wait_for("SMSG_BUY_ITEM", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_BUY_ITEM(_)).then_some(())
+    })
+    .await;
+}
