@@ -624,18 +624,26 @@ pub fn start(realm: &Arc<Realm>) {
     let weak = Arc::downgrade(realm);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
+        // Each route under its own watch: one that panics rests while the
+        // rest sail on. Before, a panic stopped them all.
+        let mut watch: Vec<crate::game::supervisor::Backoff> =
+            routes.iter().map(|_| Default::default()).collect();
         loop {
             tick.tick().await;
             let Some(realm) = weak.upgrade() else {
                 return;
             };
-            let now = crate::game::uptime_ms();
-            for r in &mut routes {
-                let pose = r.pose_at(now);
-                if pose.map != r.map {
-                    cross(&realm, r, pose);
-                    r.map = pose.map;
-                }
+            let (now, at) = (crate::game::uptime_ms(), std::time::Instant::now());
+            for (r, b) in routes.iter_mut().zip(&mut watch) {
+                b.run("a transport's clock", at, || {
+                    #[cfg(test)]
+                    realm.social.faults.check("transport");
+                    let pose = r.pose_at(now);
+                    if pose.map != r.map {
+                        cross(&realm, r, pose);
+                        r.map = pose.map;
+                    }
+                });
             }
         }
     });

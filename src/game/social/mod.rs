@@ -44,6 +44,9 @@ pub struct Social {
     pub omen: Mutex<crate::game::omen::Watch>,
     /// Gurubashi Arena's champions.
     pub arena: Mutex<crate::game::map::arena::History>,
+    /// Panics a test arms in the sweeps and the transports' clock.
+    #[cfg(test)]
+    pub faults: crate::game::supervisor::Faults,
 }
 
 impl Social {
@@ -90,7 +93,7 @@ pub fn same_side(a: &Online, b: &Online) -> bool {
 /// How often mail and auctions are swept for what has come due.
 pub const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The sweeps of mail and auctions, while the realm lasts.
+/// The sweeps, while the realm lasts.
 pub fn start_timers(realm: &Arc<Realm>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
@@ -98,26 +101,61 @@ pub fn start_timers(realm: &Arc<Realm>) {
     let weak = Arc::downgrade(realm);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_EVERY);
+        let mut watch = Watch::default();
         loop {
             tick.tick().await;
             let Some(realm) = weak.upgrade() else {
                 return;
             };
-            sweep(&realm);
+            sweep_watched(&realm, &mut watch, std::time::Instant::now());
         }
     });
 }
 
+/// A sweep: its name for the log, and what it does.
+type Sweep = (&'static str, fn(&Realm));
+
+/// Everything time drives outside the maps.
+const SWEEPS: [Sweep; 10] = [
+    ("the auction sweep", auction::sweep),
+    ("the mail sweep", mail::sweep),
+    ("the instance sweep", crate::game::instances::sweep),
+    ("the battleground sweep", crate::game::battlegrounds::sweep),
+    ("the event sweep", crate::game::events::sweep),
+    ("the invasion sweep", crate::game::invasion::sweep),
+    (
+        "the elemental invasion sweep",
+        crate::game::elemental::sweep,
+    ),
+    ("the weather sweep", crate::game::weather::sweep),
+    (
+        "the meeting stone sweep",
+        crate::game::map::meeting_stones::sweep,
+    ),
+    ("the pvp sweep", crate::game::map::pvp::sweep),
+];
+
 /// Everything time drives outside the maps.
 pub fn sweep(realm: &Realm) {
-    auction::sweep(realm);
-    mail::sweep(realm);
-    crate::game::instances::sweep(realm);
-    crate::game::battlegrounds::sweep(realm);
-    crate::game::events::sweep(realm);
-    crate::game::invasion::sweep(realm);
-    crate::game::elemental::sweep(realm);
-    crate::game::weather::sweep(realm);
-    crate::game::map::meeting_stones::sweep(realm);
-    crate::game::map::pvp::sweep(realm);
+    for (_, f) in SWEEPS {
+        f(realm);
+    }
+}
+
+/// Each sweep's watch.
+#[derive(Debug, Default)]
+pub struct Watch([crate::game::supervisor::Backoff; SWEEPS.len()]);
+
+/// [`sweep`], each part under its own watch: one that panics rests (twice
+/// as long each time it panics again) while the rest go on. Before, a
+/// panic ended the task, and with it mail, auctions, instances' resets and
+/// the rest, silently.
+pub fn sweep_watched(realm: &Realm, watch: &mut Watch, now: std::time::Instant) {
+    for ((what, f), b) in SWEEPS.iter().zip(&mut watch.0) {
+        b.run(what, now, || {
+            #[cfg(test)]
+            realm.social.faults.check(what);
+            f(realm)
+        });
+    }
 }
