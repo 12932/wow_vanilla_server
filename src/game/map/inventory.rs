@@ -636,6 +636,21 @@ pub fn room_for(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<(
     plan(p, data, t, count).map(|_| ())
 }
 
+/// The most of `count` of item `entry` that fits in `p`'s bags, its
+/// unique allowance and room both (mangos's `CanStoreNewItem`'s
+/// `no_space`), or why none does.
+pub fn fitting(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<u32, Fail> {
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    let mut why = Fail::InventoryFull;
+    for n in (1..=count).rev() {
+        match plan(p, data, t, n) {
+            Ok(_) => return Ok(n),
+            Err(f) => why = f,
+        }
+    }
+    Err(why)
+}
+
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
@@ -688,6 +703,14 @@ fn store(
             .next_item
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
+        // Each new item its random property: the loot's, else one rolled
+        // for it, a quest's reward or a purchase too (mangos's
+        // `GenerateItemRandomPropertyId` at `StoreNewItem`).
+        let property = if property != 0 {
+            property
+        } else {
+            crate::game::map::enchant::roll_random_property(&data, entry, &mut rand::rng())
+        };
         if property != 0 {
             crate::game::map::enchant::set_random_property(&data, &mut item, property);
         }
@@ -710,7 +733,7 @@ fn store(
         p.outbound
             .send(&push_result(g, &p.items[i], slot, count, creation));
     }
-    crate::game::map::quests::items_changed(map, g, entry);
+    crate::game::map::quests::items_added(map, g, entry, count);
     Ok(())
 }
 
@@ -726,6 +749,9 @@ pub fn take_item(map: &mut Map, g: Guid, i: usize, count: u32) {
     };
     if count < item.count() {
         item.set_count(item.count() - count);
+        // Part of a stack gone undoes a quest that needed all of it.
+        let entry = item.entry;
+        crate::game::map::quests::items_changed(map, g, entry);
         return;
     }
     let item = p.items.remove(i);
@@ -1216,7 +1242,7 @@ pub fn attach_item(map: &mut Map, g: Guid, row: &crate::game::store::ItemRow) ->
             NewItemCreationType::Received,
         ));
     }
-    crate::game::map::quests::items_changed(map, g, entry);
+    crate::game::map::quests::items_added(map, g, entry, row.count.max(1));
     Ok(())
 }
 

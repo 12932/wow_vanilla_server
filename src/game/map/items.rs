@@ -334,19 +334,67 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// An item ceases to be.
+/// An item ceases to be (its time up): a bag's contents first (Thistle
+/// Tea's `ItemLifetime.plan`, mangos's bag destruction); a cast from any of
+/// them stops, a loot window on one closes, and worn, the stats are
+/// worked out again.
 pub fn destroy(map: &mut Map, player: Guid, item: Guid) {
     let data = map.realm.data.clone();
-    let Some(p) = map.players.get_mut(&player) else {
+    let Some(p) = map.players.get(&player) else {
         return;
     };
     let Some(i) = p.items.iter().position(|x| x.guid == item) else {
         return;
     };
-    let gone = p.items.remove(i);
-    p.outbound.send(&SMSG_DESTROY_OBJECT { guid: gone.guid });
-    p.refresh_inventory(&data);
-    crate::game::map::quests::items_changed(map, player, gone.entry);
+    let it = &p.items[i];
+    let bag_slot = it.bag == BAG_PLAYER
+        && ((crate::game::map::inventory::BAG_START..crate::game::map::inventory::BAG_END)
+            .contains(&it.slot)
+            || (crate::game::map::inventory::BANK_BAG_START
+                ..crate::game::map::inventory::BANK_BAG_END)
+                .contains(&it.slot));
+    let mut gone: Vec<Guid> = if bag_slot {
+        p.items
+            .iter()
+            .filter(|x| x.bag == it.slot)
+            .map(|x| x.guid)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    gone.push(item);
+    let casting = p
+        .caster
+        .casting
+        .as_ref()
+        .and_then(|c| c.item)
+        .is_some_and(|i| gone.contains(&i));
+    if casting {
+        crate::game::map::spells::cancel(map, player);
+    }
+    for g in gone {
+        let Some(p) = map.players.get_mut(&player) else {
+            return;
+        };
+        let Some(i) = p.items.iter().position(|x| x.guid == g) else {
+            continue;
+        };
+        let it = p.items.remove(i);
+        p.outbound.send(&SMSG_DESTROY_OBJECT { guid: it.guid });
+        if p.misc.item_loot.as_ref().is_some_and(|(l, _)| *l == g) {
+            p.misc.item_loot = None;
+            if p.looting == Some(g) {
+                p.looting = None;
+                p.outbound
+                    .send(&wow_world_messages::vanilla::SMSG_LOOT_RELEASE_RESPONSE {
+                        guid: g,
+                        unknown1: 1,
+                    });
+            }
+        }
+        p.refresh_inventory(&data);
+        crate::game::map::quests::items_changed(map, player, it.entry);
+    }
 }
 
 #[cfg(test)]

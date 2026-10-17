@@ -20,13 +20,67 @@ const QUEST_STATE_FAILED: u32 = 1 << 25;
 
 pub use crate::game::store::{Journal, Logged};
 
+/// A cleared slot of the log is a `Logged` for quest 0: the quests after it
+/// keep their slots, and the next quest taken goes in the lowest free one
+/// (mangos's `FindQuestSlot(0)`, Thistle Tea's tombstones).
 impl Journal {
     pub fn slot_of(&self, quest: u32) -> Option<usize> {
+        if quest == 0 {
+            return None;
+        }
         self.log.iter().position(|l| l.quest == quest)
     }
 
     pub fn has(&self, quest: u32) -> bool {
         self.slot_of(quest).is_some()
+    }
+
+    /// The quests in the log.
+    pub fn count(&self) -> usize {
+        self.log.iter().filter(|l| l.quest != 0).count()
+    }
+
+    pub fn full(&self) -> bool {
+        self.count() >= QUEST_LOG_SIZE
+    }
+
+    /// Into the lowest free slot: which, or none for a full log.
+    pub fn add(&mut self, logged: Logged) -> Option<usize> {
+        if let Some(slot) = self.log.iter().position(|l| l.quest == 0) {
+            self.log[slot] = logged;
+            return Some(slot);
+        }
+        if self.log.len() >= QUEST_LOG_SIZE {
+            return None;
+        }
+        self.log.push(logged);
+        Some(self.log.len() - 1)
+    }
+
+    /// Clear a slot, leaving the others where they are.
+    pub fn clear(&mut self, slot: usize) {
+        if let Some(l) = self.log.get_mut(slot) {
+            *l = Logged::default();
+        }
+        self.trim();
+    }
+
+    /// Two slots of the log trade places, an empty one too; slots past the
+    /// log's twenty are ignored (mangos's `HandleQuestLogSwapQuest`).
+    pub fn swap(&mut self, a: usize, b: usize) {
+        if a >= QUEST_LOG_SIZE || b >= QUEST_LOG_SIZE || a == b {
+            return;
+        }
+        let len = self.log.len().max(a + 1).max(b + 1);
+        self.log.resize(len, Logged::default());
+        self.log.swap(a, b);
+        self.trim();
+    }
+
+    fn trim(&mut self) {
+        while self.log.last().is_some_and(|l| l.quest == 0) {
+            self.log.pop();
+        }
     }
 }
 
@@ -59,6 +113,11 @@ pub fn complete(p: &Player, q: &Quest, l: &Logged) -> bool {
 /// quest, the race, class, skill and standings, what it depends on, and
 /// the level.
 pub fn can_take(p: &Player, q: &Quest, data: &GameData) -> bool {
+    can_take_but_level(p, q, data) && p.level() >= q.min_level
+}
+
+/// [`can_take`] but for the level, which Thistle Tea checks last.
+fn can_take_but_level(p: &Player, q: &Quest, data: &GameData) -> bool {
     let j = &p.journal;
     if j.has(q.id) || rewarded(p, data, q.id) {
         return false;
@@ -87,10 +146,7 @@ pub fn can_take(p: &Player, q: &Quest, data: &GameData) -> bool {
     if max_f != 0 && crate::game::map::reputation::standing(p, data, max_f) >= max_v {
         return false;
     }
-    if !dependencies_met(p, q, data) {
-        return false;
-    }
-    p.level() >= q.min_level
+    dependencies_met(p, q, data)
 }
 
 /// Rewarded, and not to be done again.
@@ -101,6 +157,22 @@ fn rewarded(p: &Player, data: &GameData, quest: u32) -> bool {
             .quests
             .get(&quest)
             .is_none_or(|q| q.special_flags & QUEST_SPECIAL_REPEATABLE == 0)
+}
+
+/// A quest under way: in the log, not failed, and not done and rewarded
+/// before (mangos's `IsCurrentQuest`, Thistle Tea's `current?`).
+fn current_quest(p: &Player, data: &GameData, quest: u32) -> bool {
+    let Some(slot) = p.journal.slot_of(quest) else {
+        return false;
+    };
+    let l = &p.journal.log[slot];
+    !l.failed
+        && !(p.journal.rewarded.contains(&quest)
+            && data
+                .npc
+                .quests
+                .get(&quest)
+                .is_some_and(|q| complete(p, q, l)))
 }
 
 /// On it, or done with it for good.
@@ -120,7 +192,7 @@ fn dependencies_met(p: &Player, q: &Quest, data: &GameData) -> bool {
     if let Some(pre) = g.prerequisites.get(&q.id) {
         let state = |quest: u32, current: bool| {
             if current {
-                j.has(quest)
+                current_quest(p, data, quest)
             } else {
                 j.rewarded.contains(&quest)
             }
@@ -157,17 +229,21 @@ fn dependencies_met(p: &Player, q: &Quest, data: &GameData) -> bool {
     })
 }
 
-/// Whether `p` is a few levels short of `q`: shown as unavailable.
-fn soon(p: &Player, q: &Quest) -> bool {
-    p.level() < q.min_level && p.level() + 4 >= q.min_level
+/// Whether `p` could take `q` but for being a few levels short: shown as
+/// unavailable (Thistle Tea's `low_level`, its last check; mangos's
+/// `CanSeeStartQuest`, within its `HighLevelHideDiff`).
+fn soon(p: &Player, q: &Quest, data: &GameData) -> bool {
+    p.level() < q.min_level && p.level() + 4 >= q.min_level && can_take_but_level(p, q, data)
 }
 
 /// The quests `giver` (a creature or object) starts and ends; an event's
-/// quests are started only while it runs.
+/// quests are started and ended only while it runs, though they stay in
+/// the log (mangos's `SetQuestActiveState`, Thistle Tea's
+/// `event_active?`).
 fn relations(map: &Map, giver: Guid) -> (Vec<u32>, Vec<u32>) {
     let npc = &map.realm.data.npc;
     let entry = guid::entry(giver);
-    let (mut starts, ends) = if guid::is_unit(giver) {
+    let (mut starts, mut ends) = if guid::is_unit(giver) {
         (
             npc.creature_starts.get(&entry).cloned().unwrap_or_default(),
             npc.creature_ends.get(&entry).cloned().unwrap_or_default(),
@@ -179,19 +255,69 @@ fn relations(map: &Map, giver: Guid) -> (Vec<u32>, Vec<u32>) {
         )
     };
     starts.retain(|q| crate::game::events::quest_offered(&map.realm, *q));
+    ends.retain(|q| crate::game::events::quest_offered(&map.realm, *q));
     (starts, ends)
 }
 
-/// The icon a quest giver shows `player`.
 /// Whether `player` meets a quest's `RequiredCondition`, with `giver` as
-/// the source.
+/// the source; a breadcrumb, its targets' too (Thistle Tea's
+/// `breadcrumb_conditions_met?`).
 pub fn condition_ok(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
-    match map.realm.data.scripts.quest_condition.get(&quest) {
+    let data = &map.realm.data;
+    let own = |quest: u32| match data.scripts.quest_condition.get(&quest) {
         Some(c) => crate::game::map::conditions::met(map, *c, Some(giver), Some(player)),
         None => true,
-    }
+    };
+    own(quest)
+        && data
+            .npc
+            .quest_graph()
+            .breadcrumb_targets
+            .get(&quest)
+            .is_none_or(|targets| targets.iter().all(|t| own(*t)))
 }
 
+/// Where `p` is with a quest an ender takes back: done, under way, or
+/// neither (not in the log, or failed, which an ender doesn't show).
+fn turn_in_state(p: &Player, q: &Quest) -> Option<bool> {
+    let l = &p.journal.log[p.journal.slot_of(q.id)?];
+    (!l.failed).then(|| complete(p, q, l))
+}
+
+/// Whether an auto-complete quest is to be had from `giver`: one `player`
+/// could take, with nothing to accept.
+fn auto_offered(map: &Map, player: Guid, giver: Guid, q: &Quest) -> bool {
+    q.auto_complete
+        && map.players.get(&player).is_some_and(|p| {
+            can_take(p, q, &map.realm.data) && condition_ok(map, player, giver, q.id)
+        })
+}
+
+/// Whether `player` has `q` to turn in at `giver`, and whether it is
+/// done: in the log, or an auto-complete quest they could take, done when
+/// they carry what it asks for (mangos's `CanCompleteQuest`).
+fn turn_in(map: &Map, player: Guid, giver: Guid, q: &Quest) -> Option<bool> {
+    let p = map.players.get(&player)?;
+    if let Some(slot) = p.journal.slot_of(q.id) {
+        return Some(complete(p, q, &p.journal.log[slot]));
+    }
+    auto_offered(map, player, giver, q).then(|| delivered(p, q))
+}
+
+/// Whether `p` has what `q` asks for at its turn-in: its items, and the
+/// money it costs (Thistle Tea's `QuestRequirements.delivered?`).
+fn delivered(p: &Player, q: &Quest) -> bool {
+    q.required_items
+        .iter()
+        .all(|(i, n)| *i == 0 || p.count_of(*i) >= *n)
+        && p.money() >= q.reward_money.min(0).unsigned_abs()
+}
+
+/// The icon a quest giver shows `player`: the best of a quest done (a
+/// yellow ?), one to take (a yellow !), one under way (a grey ?), one a
+/// few levels off (a grey !), as mangos's `GetDialogStatus` and Thistle
+/// Tea's `QuestDialogStatus.for_npc` rank them. An auto-complete quest
+/// shows as done to anyone who could take it, blue when it repeats.
 pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
     let Some(p) = map.players.get(&player) else {
         return QuestGiverStatus::None;
@@ -199,32 +325,31 @@ pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
     let data = &map.realm.data;
     let (starts, ends) = relations(map, giver);
     let mut best = QuestGiverStatus::None;
-    let rank = |s: QuestGiverStatus| match s {
-        QuestGiverStatus::None => 0,
-        QuestGiverStatus::Unavailable => 1,
-        QuestGiverStatus::Incomplete => 3,
-        QuestGiverStatus::Available => 5,
-        QuestGiverStatus::Reward2 => 7,
-        _ => 2,
-    };
     let mut consider = |s: QuestGiverStatus| {
-        if rank(s) > rank(best) {
+        if s.as_int() > best.as_int() {
             best = s;
         }
     };
     for q in ends.iter().filter_map(|id| data.npc.quests.get(id)) {
-        if let Some(slot) = p.journal.slot_of(q.id) {
-            consider(if complete(p, q, &p.journal.log[slot]) {
-                QuestGiverStatus::Reward2
-            } else {
-                QuestGiverStatus::Incomplete
-            });
+        match turn_in_state(p, q) {
+            Some(true) => consider(QuestGiverStatus::Reward2),
+            Some(false) => consider(QuestGiverStatus::Incomplete),
+            None => {}
         }
     }
     for q in starts.iter().filter_map(|id| data.npc.quests.get(id)) {
-        if can_take(p, q, data) && condition_ok(map, player, giver, q.id) {
-            consider(QuestGiverStatus::Available);
-        } else if soon(p, q) {
+        if !condition_ok(map, player, giver, q.id) {
+            continue;
+        }
+        if can_take(p, q, data) {
+            consider(if !q.auto_complete {
+                QuestGiverStatus::Available
+            } else if q.special_flags & QUEST_SPECIAL_REPEATABLE != 0 {
+                QuestGiverStatus::RewardRep
+            } else {
+                QuestGiverStatus::Reward2
+            });
+        } else if soon(p, q, data) {
             consider(QuestGiverStatus::Unavailable);
         }
     }
@@ -232,23 +357,35 @@ pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
 }
 
 /// The quests a giver lists for `player`, for a gossip menu or a quest
-/// list.
+/// list, with the icons mangos's `PrepareQuestMenu` gives them: its quests
+/// done (4) and under way (3) first, then those to take (5), and those
+/// with nothing to accept as ready to turn in (4). The client sends for a
+/// quest's request or its details by them.
 pub fn giver_quests(map: &Map, player: Guid, giver: Guid) -> Vec<QuestItem> {
     let Some(p) = map.players.get(&player) else {
         return Vec::new();
     };
     let data = &map.realm.data;
+    // A creature lists quests only while it is a quest giver (mangos's
+    // `PrepareGossipMenu`): an escort under way isn't.
+    if guid::is_unit(giver)
+        && map.creature(giver).is_some_and(|c| {
+            c.fields.get_u32(UNIT_NPC_FLAGS) & crate::game::map::npc::NPC_FLAG_QUESTGIVER == 0
+        })
+    {
+        return Vec::new();
+    }
     let (starts, ends) = relations(map, giver);
+    let item = |q: &Quest, icon: u32| QuestItem {
+        quest_id: q.id,
+        quest_icon: icon,
+        level: Level::new(q.level.max(0) as u8),
+        title: q.title.clone(),
+    };
     let mut out = Vec::new();
     for q in ends.iter().filter_map(|id| data.npc.quests.get(id)) {
-        if let Some(slot) = p.journal.slot_of(q.id) {
-            let done = complete(p, q, &p.journal.log[slot]);
-            out.push(QuestItem {
-                quest_id: q.id,
-                quest_icon: if done { 4 } else { 2 },
-                level: Level::new(q.level.max(0) as u8),
-                title: q.title.clone(),
-            });
+        if let Some(done) = turn_in_state(p, q) {
+            out.push(item(q, if done { 4 } else { 3 }));
         }
     }
     for q in starts.iter().filter_map(|id| data.npc.quests.get(id)) {
@@ -256,23 +393,34 @@ pub fn giver_quests(map: &Map, player: Guid, giver: Guid) -> Vec<QuestItem> {
             && condition_ok(map, player, giver, q.id)
             && !out.iter().any(|o| o.quest_id == q.id)
         {
-            out.push(QuestItem {
-                quest_id: q.id,
-                quest_icon: 2,
-                level: Level::new(q.level.max(0) as u8),
-                title: q.title.clone(),
-            });
+            out.push(item(q, if q.auto_complete { 4 } else { 5 }));
         }
     }
     out
 }
 
+/// Whether `player` may deal with `giver` over a quest: a living player
+/// within reach of a living quest giver, not hostile, not in flight nor
+/// held (mangos's `CanInteractWithQuestGiver`, Thistle Tea's checks on
+/// accepting and turning in); an object, within reach of its model
+/// (Thistle Tea's `QuestGiver`).
 fn near_giver(map: &Map, player: Guid, giver: Guid) -> bool {
-    // An object: within reach of its model (Thistle Tea's `QuestGiver`).
     if guid::is_game_object(giver) {
-        return crate::game::map::objects::within_reach(map, player, giver);
+        return alive(map, player) && crate::game::map::objects::within_reach(map, player, giver);
     }
-    crate::game::map::npc::within_reach(map, player, giver)
+    crate::game::map::npc::npc_entry(
+        map,
+        player,
+        giver,
+        crate::game::map::npc::NPC_FLAG_QUESTGIVER,
+    )
+    .is_some()
+}
+
+fn alive(map: &Map, player: Guid) -> bool {
+    map.players
+        .get(&player)
+        .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
 }
 
 /// Whether `giver`, beside `player`, takes `quest` back (mangos'
@@ -382,29 +530,61 @@ pub fn hello(map: &mut Map, player: Guid, giver: Guid) {
     crate::game::map::creature_motion::talk_pause(map, giver);
     let quests = giver_quests(map, player, giver);
     if quests.len() == 1 {
+        // One to turn in, or to take (mangos's `SendPreparedQuest`).
         let q = quests[0].quest_id;
-        if map.players.get(&player).is_some_and(|p| p.journal.has(q)) {
+        if quests[0].quest_icon != 5 {
             return complete_quest(map, player, giver, q);
         }
         return details(map, player, giver, q);
     }
-    let greeting = map
-        .realm
-        .data
-        .npc
-        .quest_greetings
-        .get(&guid::entry(giver))
-        .cloned()
-        .unwrap_or_default();
+    let (title, emote_delay, emote) = greeting(map, player, giver);
     if let Some(p) = map.players.get(&player) {
         p.outbound.send(&SMSG_QUESTGIVER_QUEST_LIST {
             npc: giver,
-            title: greeting,
-            emote_delay: 0,
-            emote: 0,
+            title,
+            emote_delay,
+            emote,
             quest_items: quests,
         });
     }
+}
+
+/// A quest list's greeting, its emote's delay and the emote: the giver's
+/// quest greeting, else its gossip menu's text but the default one (mangos's
+/// `SendPreparedQuest`, Thistle Tea's `greeting`), else nothing.
+fn greeting(map: &Map, player: Guid, giver: Guid) -> (String, u32, u32) {
+    let npc = &map.realm.data.npc;
+    if let Some(text) = npc.quest_greetings.get(&guid::entry(giver)) {
+        return (text.clone(), 0, 0);
+    }
+    let Some(c) = map.creature(giver) else {
+        return Default::default();
+    };
+    let menu = crate::game::map::event_ai::scripted(map, giver)
+        .and_then(|s| s.gossip_menu)
+        .or_else(|| {
+            map.realm
+                .data
+                .creature_template(c.entry)
+                .map(|t| t.gossip_menu_id)
+        })
+        .unwrap_or(0);
+    let text = crate::game::map::npc::greeting(map, menu, giver, player);
+    if text == crate::game::map::npc::DEFAULT_TEXT {
+        return Default::default();
+    }
+    npc.npc_texts
+        .get(&text)
+        .and_then(|choices| npc.broadcast_texts.get(&choices[0].broadcast))
+        .map(|b| {
+            let said = if b.male.is_empty() {
+                &b.female
+            } else {
+                &b.male
+            };
+            (said.clone(), b.emotes[0].0, b.emotes[0].1)
+        })
+        .unwrap_or_default()
 }
 
 /// `CMSG_GAMEOBJ_USE` on a quest giver (a present under the tree, a wanted
@@ -469,7 +649,36 @@ pub fn details_frame(data: &GameData, giver: Guid, q: &Quest) -> std::sync::Arc<
     b.frame(SMSG_QUESTGIVER_QUEST_DETAILS_OPCODE)
 }
 
-/// `CMSG_QUESTGIVER_QUERY_QUEST`, or a hello with one quest: its details.
+/// `CMSG_QUESTGIVER_QUERY_QUEST`: a quest's details, from an item of the
+/// player's that starts it, or a giver that starts or ends it (mangos's
+/// `HasQuest` or `HasInvolvedQuest`); else the dialog closes.
+pub fn query_quest(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
+    let data = map.realm.data.clone();
+    let known = if guid::high(giver) == Some(guid::HighGuid::Item) {
+        map.players.get(&player).is_some_and(|p| {
+            p.item_by_guid(giver)
+                .and_then(|i| data.item(p.items[i].entry))
+                .is_some_and(|t| t.start_quest == quest)
+        })
+    } else {
+        let (starts, ends) = relations(map, giver);
+        (starts.contains(&quest) || ends.contains(&quest)) && map.position_of(giver).is_some()
+    };
+    if !known {
+        return cancel(map, player);
+    }
+    details(map, player, giver, quest);
+}
+
+/// `CMSG_QUESTGIVER_CANCEL`, or a dialog with nothing for the player: it
+/// closes (mangos's `CloseGossip`).
+pub fn cancel(map: &Map, player: Guid) {
+    if let Some(p) = map.players.get(&player) {
+        p.outbound.send(&SMSG_GOSSIP_COMPLETE {});
+    }
+}
+
+/// A hello with one quest, a chain's next, a shared quest: its details.
 pub fn details(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     let data = map.realm.data.clone();
     let Some(q) = data.npc.quests.get(&quest) else {
@@ -480,13 +689,28 @@ pub fn details(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     }
 }
 
+/// Why `p` can't take `q`, as mangos's `SendCanTakeQuestResponse` tells
+/// it: the race, a second timed quest, else what it asks for.
+fn refusal(p: &Player, q: &Quest) -> QuestFailedReason {
+    if q.required_races != 0 && q.required_races & (1 << (p.row.race - 1)) == 0 {
+        QuestFailedReason::QuestFailedWrongRace
+    } else if q.limit_time > 0 && p.journal.log.iter().any(|l| l.expires != 0 && !l.failed) {
+        QuestFailedReason::QuestOnlyOneTimed
+    } else {
+        QuestFailedReason::DontHaveReq
+    }
+}
+
 fn invalid(p: &Player, msg: QuestFailedReason) {
     p.outbound.send(&SMSG_QUESTGIVER_QUEST_INVALID { msg });
 }
 
-/// `CMSG_QUESTGIVER_ACCEPT_QUEST`: into the log.
+/// `CMSG_QUESTGIVER_ACCEPT_QUEST`: into the log; taken or not, the dialog
+/// closes after (mangos's `HandleQuestgiverAcceptQuestOpcode`, Thistle
+/// Tea's).
 pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     accept_with(map, player, giver, quest, true);
+    cancel(map, player);
 }
 
 /// A quest every member must accept, taken by one asked to (mangos's
@@ -504,6 +728,12 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     // From an item: one the player has, that starts the quest (mangos's
     // `Item::HasQuest`, Thistle Tea's `QuestItems.starter`).
     let from_item = guid::high(giver) == Some(guid::HighGuid::Item);
+    // From an item or a player, the player must be alive (mangos's
+    // `CanInteractWithQuestGiver`); a giver's own checks are
+    // `near_giver`'s.
+    if !alive(map, player) {
+        return;
+    }
     let starter = map.players.get(&player).and_then(|p| {
         let i = p.item_by_guid(giver)?;
         (data.item(p.items[i].entry)?.start_quest == quest).then_some(p.items[i].entry)
@@ -516,6 +746,15 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     if !from_item && !shared && (!starts.contains(&quest) || !near_giver(map, player, giver)) {
         return;
     }
+    // A shared quest: still near its sharer, and the sharer's time left.
+    let shared_expiry = if shared {
+        let Some(expires) = crate::game::map::questshare::admit(map, player, giver, quest) else {
+            return;
+        };
+        Some(expires)
+    } else {
+        None
+    };
     let condition = condition_ok(map, player, giver, quest);
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -523,28 +762,44 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     if p.journal.has(quest) {
         return invalid(p, QuestFailedReason::QuestAlreadyOn);
     }
+    if !can_take_but_level(p, q, &data) || !condition {
+        return invalid(p, refusal(p, q));
+    }
     if p.level() < q.min_level {
         return invalid(p, QuestFailedReason::QuestFailedLowLevel);
     }
-    if !can_take(p, q, &data) || !condition {
-        return invalid(p, QuestFailedReason::QuestFailedReqs);
-    }
-    if p.journal.log.len() >= QUEST_LOG_SIZE {
+    if p.journal.full() {
         p.outbound.send(&SMSG_QUESTLOG_FULL {});
         return;
     }
-    p.journal.log.push(Logged {
+    // The items the quest gives, but those already carried or banked
+    // (Thistle Tea's `missing_source_count`): with no room for them the
+    // quest isn't taken; one that can't be carried again is had already
+    // (mangos's `CanAddQuest`).
+    let source = if q.source_item != 0 {
+        q.source_item_count
+            .max(1)
+            .saturating_sub(p.count_of(q.source_item))
+    } else {
+        0
+    };
+    let source = match (source > 0).then(|| inventory::room_for(p, &data, q.source_item, source)) {
+        Some(Err(inventory::Fail::CantCarryMore)) | None => 0,
+        Some(Ok(())) => source,
+        Some(Err(fail)) => return inventory::send_fail(p, fail, Guid::zero()),
+    };
+    p.journal.add(Logged {
         quest,
-        expires: if q.limit_time > 0 {
-            crate::game::social::mail::now() + i64::from(q.limit_time)
-        } else {
-            0
+        expires: match shared_expiry {
+            Some(expires) if q.limit_time > 0 && expires != 0 => expires,
+            _ if q.limit_time > 0 => crate::game::social::mail::now() + i64::from(q.limit_time),
+            _ => 0,
         },
         ..Default::default()
     });
     refresh_log(p, &data);
-    if q.source_item != 0 {
-        let _ = inventory::add_item(map, player, q.source_item, q.source_item_count.max(1), true);
+    if source > 0 {
+        let _ = inventory::add_item(map, player, q.source_item, source, true);
     }
     check(map, player, quest);
     crate::game::map::questshare::accepted(map, player, giver, quest);
@@ -589,9 +844,11 @@ pub fn refresh_log(p: &mut Player, data: &GameData) {
             p.fields.set_u32(base + 2, 0);
             continue;
         };
+        // Six bits a counter, a count past them shown as 63 (Thistle Tea's
+        // `slot_binary`).
         let mut state = 0u32;
         for (i, k) in l.kills.iter().enumerate() {
-            state |= (k & 0x3F) << (i * 6);
+            state |= (*k).min(0x3F) << (i * 6);
         }
         if let Some(q) = data.npc.quests.get(&l.quest)
             && complete(p, q, &l)
@@ -603,7 +860,9 @@ pub fn refresh_log(p: &mut Player, data: &GameData) {
         }
         p.fields.set_u32(base, l.quest);
         p.fields.set_u32(base + 1, state);
-        p.fields.set_u32(base + 2, l.expires.max(0) as u32);
+        // A failed quest's timer is 1, as mangos's `FailQuest` sets it.
+        let timer = if l.failed { 1 } else { l.expires.max(0) as u32 };
+        p.fields.set_u32(base + 2, timer);
     }
 }
 
@@ -631,6 +890,38 @@ pub fn update_timers(map: &mut Map) {
         }
         refresh_log(p, &data);
     }
+}
+
+/// A quest under way fails (an escort lost, a script's say): not one
+/// that isn't in the log, has failed already, or is done, as mangos's
+/// `FailQuestForGroup` and Thistle Tea's `QuestLog.fail` have it. A timed
+/// quest says so with its timer. Whether it failed.
+pub fn fail(map: &mut Map, player: Guid, quest: u32) -> bool {
+    let data = map.realm.data.clone();
+    let Some(q) = data.npc.quests.get(&quest) else {
+        return false;
+    };
+    let Some(p) = map.players.get_mut(&player) else {
+        return false;
+    };
+    let Some(slot) = p.journal.slot_of(quest) else {
+        return false;
+    };
+    if p.journal.log[slot].failed || complete(p, q, &p.journal.log[slot]) {
+        return false;
+    }
+    let l = &mut p.journal.log[slot];
+    l.failed = true;
+    let timed = l.expires != 0;
+    refresh_log(p, &data);
+    if timed {
+        p.outbound
+            .send(&SMSG_QUESTUPDATE_FAILEDTIMER { quest_id: quest });
+    } else {
+        p.outbound
+            .send(&SMSG_QUESTUPDATE_FAILED { quest_id: quest });
+    }
+    true
 }
 
 /// See whether a quest is now done, and say so.
@@ -666,11 +957,8 @@ pub fn check(map: &mut Map, player: Guid, quest: u32) {
 /// credited to, for the objectives that ask for no spell (Thistle Tea's
 /// `increment_kill`); in a raid, only for raid quests.
 pub fn killed(map: &mut Map, player: Guid, creature: Guid) {
-    let raid = {
-        let groups = map.realm.social.groups.lock();
-        groups.group_of(player).is_some_and(|g| g.raid)
-    };
-    let allowed = |q: &Quest| !raid || q.kind == QUEST_TYPE_RAID || q.flags & QUEST_FLAGS_RAID != 0;
+    let raid = in_raid(map, player);
+    let allowed = |q: &Quest| !raid || raid_quest(q);
     credit(map, player, creature, 0, &allowed);
 }
 
@@ -681,6 +969,12 @@ pub fn talked(map: &mut Map, player: Guid, creature: Guid) {
     if guid::is_unit(creature) {
         credit(map, player, creature, 0, &|q: &Quest| !q.needs_event());
     }
+}
+
+/// A raid quest, by its type or its flags: its kills and drops count in a
+/// raid.
+fn raid_quest(q: &Quest) -> bool {
+    q.kind == QUEST_TYPE_RAID || q.flags & QUEST_FLAGS_RAID != 0
 }
 
 /// The entry a creature or object is now (a script may have changed
@@ -815,8 +1109,16 @@ fn credit(
     }
 }
 
-/// Items came or went: the quests that need them.
+/// Items went (or changed): the quests that need them, done or not now.
 pub fn items_changed(map: &mut Map, player: Guid, item: u32) {
+    items_added(map, player, item, 0);
+}
+
+/// `added` of `item` came: each quest under way that needs it is told how
+/// many count, no more than it still wanted (mangos's
+/// `ItemAddedQuestCheck`, Thistle Tea's delta), and done or not now.
+/// Nothing is told of a loss.
+pub fn items_added(map: &mut Map, player: Guid, item: u32, added: u32) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&player) else {
         return;
@@ -825,6 +1127,7 @@ pub fn items_changed(map: &mut Map, player: Guid, item: u32) {
         .journal
         .log
         .iter()
+        .filter(|l| !l.failed)
         .filter_map(|l| data.npc.quests.get(&l.quest))
         .filter_map(|q| {
             q.required_items
@@ -833,12 +1136,15 @@ pub fn items_changed(map: &mut Map, player: Guid, item: u32) {
                 .map(|(_, n)| (q.id, *n))
         })
         .collect();
-    let have = p.count_of(item);
+    let before = p.count_of(item).saturating_sub(added);
     for (q, needed) in quests {
-        if let Some(p) = map.players.get(&player) {
+        let counted = needed.saturating_sub(before).min(added);
+        if counted > 0
+            && let Some(p) = map.players.get(&player)
+        {
             p.outbound.send(&SMSG_QUESTUPDATE_ADD_ITEM {
                 required_item_id: item,
-                items_required: needed.saturating_sub(have),
+                items_required: counted,
             });
         }
         check(map, player, q);
@@ -860,13 +1166,32 @@ pub fn explored(map: &mut Map, player: Guid, trigger: u32) {
     check(map, player, quest);
 }
 
-/// The quest items a looter's quests still need: they drop for them.
-pub fn wanted_items(p: &Player, data: &GameData) -> Vec<u32> {
+/// Whether `player` is in a raid group: only raid quests count there.
+pub fn in_raid(map: &Map, player: Guid) -> bool {
+    let groups = map.realm.social.groups.lock();
+    groups.group_of(player).is_some_and(|g| g.raid)
+}
+
+/// The quest items `player`'s quests still need: they drop for them; in a
+/// raid, only raid quests' (mangos's `HasQuestForItem`).
+pub fn wanted(map: &Map, player: Guid) -> Vec<u32> {
+    let raid = in_raid(map, player);
+    map.players
+        .get(&player)
+        .map(|p| wanted_items(p, &map.realm.data, raid))
+        .unwrap_or_default()
+}
+
+/// The quest items `p`'s quests under way still need.
+pub fn wanted_items(p: &Player, data: &GameData, raid: bool) -> Vec<u32> {
     let mut out = Vec::new();
-    for l in &p.journal.log {
+    for l in p.journal.log.iter().filter(|l| !l.failed) {
         let Some(q) = data.npc.quests.get(&l.quest) else {
             continue;
         };
+        if raid && !raid_quest(q) {
+            continue;
+        }
         for (item, count) in q.required_items.iter().chain(q.source_items.iter()) {
             if *item != 0 && p.count_of(*item) < *count {
                 out.push(*item);
@@ -886,13 +1211,12 @@ pub fn complete_quest(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     if !ends_here(map, player, giver, quest) {
         return;
     }
+    let Some(done) = turn_in(map, player, giver, q) else {
+        return;
+    };
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let Some(slot) = p.journal.slot_of(quest) else {
-        return;
-    };
-    let done = complete(p, q, &p.journal.log[slot]);
     let needs_items = q.required_items.iter().any(|(i, _)| *i != 0) || q.reward_money < 0;
     if needs_items || !done {
         let required_items = q
@@ -943,16 +1267,12 @@ pub fn offer_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     if !ends_here(map, player, giver, quest) {
         return;
     }
+    if turn_in(map, player, giver, q) != Some(true) {
+        return;
+    }
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    if !p
-        .journal
-        .slot_of(quest)
-        .is_some_and(|s| complete(p, q, &p.journal.log[s]))
-    {
-        return;
-    }
     let req = |v: &[(u32, u32)]| {
         v.iter()
             .filter(|(i, _)| *i != 0)
@@ -1011,15 +1331,12 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     if !ends_here(map, player, giver, quest) {
         return;
     }
+    if turn_in(map, player, giver, &q) != Some(true) {
+        return;
+    }
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let Some(slot) = p.journal.slot_of(quest) else {
-        return;
-    };
-    if !complete(p, &q, &p.journal.log[slot]) {
-        return;
-    }
     if q.reward_money < 0 && p.money() < q.reward_money.unsigned_abs() {
         return;
     }
@@ -1070,7 +1387,7 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     let after = p.money().saturating_add(money).saturating_sub(cost);
     p.set_money(after);
     if let Some(slot) = p.journal.slot_of(quest) {
-        p.journal.log.remove(slot);
+        p.journal.clear(slot);
     }
     p.journal.rewarded.insert(quest);
     refresh_log(p, &data);
@@ -1113,8 +1430,11 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
             player,
         );
     }
-    // The chain's next quest, offered at once.
+    // The chain's next quest, offered at once if this giver gives it and
+    // it may be taken, its condition too (mangos's `GetNextQuest`).
     if q.next_in_chain != 0
+        && relations(map, giver).0.contains(&q.next_in_chain)
+        && condition_ok(map, player, giver, q.next_in_chain)
         && map
             .players
             .get(&player)
@@ -1148,13 +1468,51 @@ fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32) {
 /// `CMSG_QUESTLOG_REMOVE_QUEST`: abandoned.
 pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
     let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    let Some(quest) = p
+        .journal
+        .log
+        .get(usize::from(slot))
+        .map(|l| l.quest)
+        .filter(|q| *q != 0)
+    else {
+        return;
+    };
+    // The items the quest gave go with it, from the bags and the bank
+    // (mangos's `TakeQuestSourceItem`), unless they start it again
+    // (Thistle Tea's `QuestItems.abandon`); a bag with something in it
+    // can't go, and the quest stays.
+    if let Some(q) = data.npc.quests.get(&quest)
+        && q.source_item != 0
+        && data
+            .item(q.source_item)
+            .is_none_or(|t| t.start_quest != quest)
+    {
+        if let Some(bag) = p
+            .items
+            .iter()
+            .find(|i| i.entry == q.source_item && holds_items(p, i))
+        {
+            return inventory::send_fail(p, inventory::Fail::OnlyEmptyBags, bag.guid);
+        }
+        take_items(map, player, q.source_item, q.source_item_count.max(1));
+    }
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    if usize::from(slot) < p.journal.log.len() {
-        p.journal.log.remove(usize::from(slot));
-        refresh_log(p, &data);
-    }
+    p.journal.clear(usize::from(slot));
+    refresh_log(p, &data);
+}
+
+/// Whether `item` is a bag, worn or in the bank's bag slots, with
+/// something in it.
+fn holds_items(p: &Player, item: &crate::game::map::player::Item) -> bool {
+    let bag_slot = item.bag == crate::game::store::BAG_PLAYER
+        && ((inventory::BAG_START..inventory::BAG_END).contains(&item.slot)
+            || (inventory::BANK_BAG_START..inventory::BANK_BAG_END).contains(&item.slot));
+    bag_slot && p.items.iter().any(|i| i.bag == item.slot)
 }
 
 /// `SMSG_QUEST_QUERY_RESPONSE`'s opcode.

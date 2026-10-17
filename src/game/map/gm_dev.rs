@@ -185,13 +185,15 @@ fn addquest(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     if p.journal.has(quest) {
         return Some("Already in the log.".into());
     }
-    if p.journal.log.len() >= crate::game::map::quests::QUEST_LOG_SIZE {
+    if p.journal
+        .add(crate::game::store::Logged {
+            quest,
+            ..Default::default()
+        })
+        .is_none()
+    {
         return Some("The quest log is full.".into());
     }
-    p.journal.log.push(crate::game::store::Logged {
-        quest,
-        ..Default::default()
-    });
     crate::game::map::quests::refresh_log(p, &data);
     let title = q.title.clone();
     if q.source_item != 0 {

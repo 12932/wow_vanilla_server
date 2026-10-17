@@ -189,7 +189,7 @@ impl Map {
                 crate::game::map::quests::hello(self, guid, m.guid)
             }
             ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(m) => {
-                crate::game::map::quests::details(self, guid, m.guid, m.quest_id)
+                crate::game::map::quests::query_quest(self, guid, m.guid, m.quest_id)
             }
             ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(m) => {
                 crate::game::map::quests::accept(self, guid, m.guid, m.quest_id)
@@ -209,7 +209,9 @@ impl Map {
             ClientOpcodeMessage::CMSG_QUEST_QUERY(m) => {
                 crate::game::map::quests::query(self, guid, m.quest_id)
             }
-            ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {}
+            ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {
+                crate::game::map::quests::cancel(self, guid)
+            }
             ClientOpcodeMessage::CMSG_RESET_INSTANCES => crate::game::instances::reset(self, guid),
             ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO => {
                 crate::game::instances::raid_info(self, guid)

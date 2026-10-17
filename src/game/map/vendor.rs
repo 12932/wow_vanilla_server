@@ -104,15 +104,22 @@ pub fn stock_left(map: &mut Map, npc: Guid, v: &VendorItem, buy_count: u32) -> u
 /// item's own, varied by 80 to 120% if it says so, shortened past 2,500
 /// players online if it says so.
 fn restock_delay(map: &Map, v: &VendorItem) -> Duration {
+    let percent = rand::rng().random_range(80..=120);
+    let population = map.realm.registry.online_count() as u32;
+    Duration::from_secs(u64::from(restock_secs(v, percent, population)))
+}
+
+/// [`restock_delay`]'s seconds for a `percent` drawn and `population`
+/// online, each stage truncated to a whole second, at least one.
+pub fn restock_secs(v: &VendorItem, percent: u32, population: u32) -> u32 {
     let mut secs = v.restock_secs.max(1);
     if v.flags & 1 != 0 {
-        secs = secs * rand::rng().random_range(80..=120) / 100;
+        secs = secs * percent / 100;
     }
-    let population = map.realm.registry.online_count() as u32;
     if v.flags & 2 != 0 && population > 2_500 {
         secs = secs * 2_500 / population;
     }
-    Duration::from_secs(u64::from(secs.max(1)))
+    secs.max(1)
 }
 
 /// `CMSG_LIST_INVENTORY`.
@@ -531,14 +538,34 @@ pub fn buyback(map: &mut Map, player: Guid, npc: Guid, slot: BuybackSlot) {
         buy_failed(map, player, npc, entry, BuyResult::NotEnoughtMoney);
         return;
     }
-    let Some(to) = p.free_carry_slot(&data) else {
+    // Onto a stack of it with room, as mangos's `StoreItem` and Thistle
+    // Tea's merge put it, the bought back item gone; else a free slot.
+    let (entry, count) = (p.items[i].entry, p.items[i].count());
+    let stack = data.item(entry).map_or(1, |t| t.stackable.max(1));
+    let onto = p.items.iter().position(|x| {
+        x.entry == entry
+            && x.guid != p.items[i].guid
+            && x.carried()
+            && !(x.bag == BAG_PLAYER && x.slot < EQUIPMENT_END)
+            && x.count() + count <= stack
+    });
+    let to = p.free_carry_slot(&data);
+    if onto.is_none() && to.is_none() {
         inventory::send_fail(p, Fail::InventoryFull, Guid::zero());
         return;
-    };
+    }
     let money = p.money() - cost;
     p.set_money(money);
-    p.items[i].bag = to.0;
-    p.items[i].slot = to.1;
+    if let Some(o) = onto {
+        let merged = p.items[o].count() + count;
+        p.items[o].set_count(merged);
+        let gone = p.items.remove(i);
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_DESTROY_OBJECT { guid: gone.guid });
+    } else if let Some(to) = to {
+        p.items[i].bag = to.0;
+        p.items[i].slot = to.1;
+    }
     p.fields.set_u32(PLAYER_FIELD_BUYBACK_PRICE_1 + n, 0);
     p.fields.set_u32(PLAYER_FIELD_BUYBACK_TIMESTAMP_1 + n, 0);
     // The next sale fills the slot freed, if the next one is taken.
@@ -547,6 +574,7 @@ pub fn buyback(map: &mut Map, player: Guid, npc: Guid, slot: BuybackSlot) {
         p.buyback_next = slot - BUYBACK_START;
     }
     p.refresh_inventory(&data);
+    crate::game::map::quests::items_added(map, player, entry, count);
 }
 
 /// Whether an item is in a buyback slot (gone at logout).
@@ -603,7 +631,9 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
     };
     let mut costs = Vec::new();
     for (i, it) in p.items.iter().enumerate() {
-        if !(item.is_zero() && mendable(it) || it.guid == item) {
+        // Worn or carried, never the bank's (Thistle Tea's
+        // `Durability.repair`), one by one as all at once.
+        if !mendable(it) || !(item.is_zero() || it.guid == item) {
             continue;
         }
         let (max, now) = (
@@ -661,6 +691,25 @@ fn wear_where(map: &mut Map, player: Guid, fraction: f32, pick: impl Fn(&Item) -
             .set_u32(ITEM_FIELD_DURABILITY, now.saturating_sub(loss));
     }
     p.gear_dirty = true;
+}
+
+/// An item's durability after a spell's wear of `amount` (Thistle Tea's
+/// `Durability.lose`, mangos's `DurabilityPointsLoss`): points off, a
+/// negative number mending up to the most; or a percentage of the most,
+/// rounded down but a point at least, a negative one doing nothing. An
+/// item that doesn't wear is as it was.
+pub fn worn(max: u32, now: u32, amount: i32, pct: bool) -> u32 {
+    if max == 0 {
+        return now;
+    }
+    if pct {
+        if amount <= 0 {
+            return now;
+        }
+        let loss = (u64::from(max) * amount as u64 / 100).max(1) as u32;
+        return now.saturating_sub(loss);
+    }
+    (i64::from(now) - i64::from(amount)).clamp(0, i64::from(max)) as u32
 }
 
 /// A blow between `attacker` and `victim` (Thistle Tea's `hit_loss`): each

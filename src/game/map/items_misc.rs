@@ -190,6 +190,7 @@ pub fn open(map: &mut Map, g: Guid, bag: u8, slot: u8) {
 /// as one opened (Thistle Tea's `open_guid(guid, 2)`).
 pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
     let data = map.realm.data.clone();
+    let wanted = crate::game::map::quests::wanted(map, g);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -208,7 +209,10 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
         fail(p, InventoryResult::YouAreDead, item_guid);
         return;
     }
-    if p.flight.is_some() {
+    // Not in flight, feared nor confused (Thistle Tea's
+    // `ItemOpening.validate`).
+    use crate::game::map::auras::{AURA_MOD_CONFUSE, AURA_MOD_FEAR};
+    if p.flight.is_some() || p.auras.has(AURA_MOD_FEAR) || p.auras.has(AURA_MOD_CONFUSE) {
         fail(p, InventoryResult::CantDoRightNow, item_guid);
         return;
     }
@@ -226,19 +230,22 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
         item.fields.set_u32(OBJECT_FIELD_ENTRY, w.entry);
         item.fields.set_u32(ITEM_FIELD_FLAGS, w.flags);
         item.fields.set_guid(ITEM_FIELD_GIFTCREATOR, Guid::zero());
+        let count = item.count();
         p.refresh_inventory(&data);
-        crate::game::map::quests::items_changed(map, g, w.entry);
+        crate::game::map::quests::items_added(map, g, w.entry, count);
         return;
     }
     if t.lock_id != 0 && flags & ITEM_DYNFLAG_UNLOCKED == 0 {
         fail(p, InventoryResult::ItemLocked, item_guid);
         return;
     }
-    if t.flags & ITEM_FLAG_LOOTABLE == 0 && !data.loot.item.contains_key(&t.entry) {
+    // A bag isn't opened for loot, whatever its flags.
+    if t.container_slots > 0
+        || (t.flags & ITEM_FLAG_LOOTABLE == 0 && !data.loot.item.contains_key(&t.entry))
+    {
         fail(p, InventoryResult::CantDoRightNow, item_guid);
         return;
     }
-    let wanted = crate::game::map::quests::wanted_items(p, &data);
     // Opened before: what was left in it, not a fresh roll.
     let (gold, items) = match kept_loot(&item.data) {
         Some((gold, mut items)) => {
@@ -280,11 +287,23 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
     p.outbound.send_frame(frame);
 }
 
+/// The open item window's loot, while its item is still the player's
+/// (Thistle Tea's claims rechecking the source); gone with it, the window
+/// is.
+fn window(p: &mut crate::game::map::player::Player) -> Option<&mut Loot> {
+    let item = p.misc.item_loot.as_ref()?.0;
+    if p.item_by_guid(item).is_none() {
+        p.misc.item_loot = None;
+        return None;
+    }
+    p.misc.item_loot.as_mut().map(|(_, l)| l)
+}
+
 fn take(map: &mut Map, g: Guid, slot: u8) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let Some((_, l)) = p.misc.item_loot.as_mut() else {
+    let Some(l) = window(p) else {
         return;
     };
     let Some(s) = l.items.get(usize::from(slot)).filter(|s| !s.taken).cloned() else {
@@ -314,7 +333,7 @@ fn take_money(map: &mut Map, g: Guid) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let Some((_, l)) = p.misc.item_loot.as_mut() else {
+    let Some(l) = window(p) else {
         return;
     };
     let gold = std::mem::take(&mut l.gold);
