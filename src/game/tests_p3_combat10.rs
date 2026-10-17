@@ -21,6 +21,8 @@ const ANY: u32 = 700;
 const EXCEPT_SELF: u32 = 701;
 const NEAR_AND_HURT: u32 = 702;
 const BAD_THRESHOLD: u32 = 703;
+/// The most injured, at a one-percent chance and an eight-second repeat.
+const UNLIKELY: u32 = 704;
 
 fn data() -> GameData {
     let mut d = base::data();
@@ -41,6 +43,16 @@ fn data() -> GameData {
         ..Default::default()
     };
     d.spells.spells.insert(MENDER, heal);
+    d.spells.creature_spells.insert(
+        UNLIKELY,
+        vec![CreatureSpell {
+            spell: MENDER,
+            probability: 1,
+            target: 17,
+            delay_repeat: (8_000, 8_000),
+            ..Default::default()
+        }],
+    );
     for (list, target, radius, threshold) in [
         (ANY, 17, 0, 0),
         (EXCEPT_SELF, 18, 0, 0),
@@ -162,4 +174,65 @@ async fn a_creatures_heal_looks_within_its_entrys_radius_for_one_past_its_thresh
         .await
         .unwrap();
     assert_eq!(r, (None, true));
+}
+
+#[tokio::test]
+async fn a_lists_cast_flags_skip_an_aura_already_there_and_a_melee_only_spell_at_itself() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let healer = hurt(m, ga, HEALER, 5.0, 100, true);
+            let other = hurt(m, ga, BRUTE, 6.0, 100, true);
+            let allow = |m: &Map, flags: u32, target: Guid| {
+                lists::flags_allow(m, healer, flags, MENDER, target)
+            };
+            let bare = allow(m, lists::CF_AURA_NOT_PRESENT, other);
+            aura_of(m, other, MENDER, crate::game::map::auras::AURA_DUMMY, 0, 1);
+            let present = allow(m, lists::CF_AURA_NOT_PRESENT, other);
+            // Melee-only, at itself: never in its own melee.
+            let own = allow(
+                m,
+                lists::CF_AURA_NOT_PRESENT | lists::CF_ONLY_IN_MELEE,
+                healer,
+            );
+            (bare, present, own)
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (true, false, false));
+}
+
+#[tokio::test]
+async fn a_list_entrys_failed_chance_starts_its_repeat_timer_and_casts_nothing() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let healer = hurt(m, ga, HEALER, 5.0, 10, true);
+            let now = m.now;
+            // A one-percent chance: of ten tries, those that fail heal
+            // nothing and wait the eight seconds.
+            let mut failed = Vec::new();
+            for _ in 0..10 {
+                m.unit_fields_mut(healer)
+                    .unwrap()
+                    .set_u32(UNIT_FIELD_HEALTH, 100);
+                let cast = healed(m, healer, UNLIKELY, &[healer]).is_some();
+                let ready = m
+                    .creature(healer)
+                    .unwrap()
+                    .caster
+                    .spell_list
+                    .as_ref()
+                    .unwrap()
+                    .ready_at[0];
+                if !cast {
+                    failed.push(ready == now + std::time::Duration::from_secs(8));
+                }
+            }
+            failed
+        })
+        .await
+        .unwrap();
+    assert!(!r.is_empty());
+    assert!(r.iter().all(|x| *x), "{r:?}");
 }
