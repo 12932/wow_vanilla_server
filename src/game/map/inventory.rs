@@ -559,7 +559,7 @@ fn store(
         p.outbound
             .send(&push_result(g, &p.items[i], slot, count, creation));
     }
-    crate::game::map::quests::items_changed(map, g, entry);
+    crate::game::map::quests::items_added(map, g, entry, count);
     Ok(())
 }
 
@@ -575,6 +575,9 @@ pub fn take_item(map: &mut Map, g: Guid, i: usize, count: u32) {
     };
     if count < item.count() {
         item.set_count(item.count() - count);
+        // Part of a stack gone undoes a quest that needed all of it.
+        let entry = item.entry;
+        crate::game::map::quests::items_changed(map, g, entry);
         return;
     }
     let item = p.items.remove(i);
@@ -1058,7 +1061,7 @@ pub fn attach_item(map: &mut Map, g: Guid, row: &crate::game::store::ItemRow) ->
             NewItemCreationType::Received,
         ));
     }
-    crate::game::map::quests::items_changed(map, g, entry);
+    crate::game::map::quests::items_added(map, g, entry, row.count.max(1));
     Ok(())
 }
 

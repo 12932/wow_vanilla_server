@@ -2859,14 +2859,9 @@ fn choose_script(step: &ScriptStep) -> Option<u32> {
     None
 }
 
-/// A quest of a player's failed.
+/// A quest of a player's failed, and they are told.
 fn fail_quest(map: &mut Map, player: Guid, quest: u32) {
-    if let Some(p) = map.players.get_mut(&player)
-        && let Some(slot) = p.journal.slot_of(quest)
-    {
-        p.journal.log[slot].failed = true;
-    }
-    crate::game::map::quests::check(map, player, quest);
+    crate::game::map::quests::fail(map, player, quest);
 }
 
 /// A creature put at `at` at once, as vmangos's `NearTeleportTo`.

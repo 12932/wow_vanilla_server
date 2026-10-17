@@ -167,5 +167,5 @@ pub fn change_item(map: &mut Map, g: Guid, item: Guid, entry: u32) {
     p.gear_dirty = true;
     let old_entry = old.entry;
     crate::game::map::quests::items_changed(map, g, old_entry);
-    crate::game::map::quests::items_changed(map, g, entry);
+    crate::game::map::quests::items_added(map, g, entry, 1);
 }

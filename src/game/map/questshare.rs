@@ -7,7 +7,7 @@ use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::map::Map;
-use crate::game::map::quests::{self, QUEST_LOG_SIZE};
+use crate::game::map::quests;
 
 /// How near the sharer a member must be.
 pub const SHARE_YARDS: f32 = 10.0;
@@ -80,7 +80,7 @@ pub fn push(map: &mut Map, g: Guid, quest: u32) {
             && q.special_flags & crate::game::data::npc::QUEST_SPECIAL_REPEATABLE == 0
         {
             Some(QuestPartyMessage::FinishQuest)
-        } else if p.journal.log.len() >= QUEST_LOG_SIZE {
+        } else if p.journal.full() {
             Some(QuestPartyMessage::LogFull)
         } else if p.misc.quest_shared.is_some() {
             Some(QuestPartyMessage::Busy)
@@ -187,10 +187,6 @@ fn swap(map: &mut Map, g: Guid, a: u8, b: u8) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let (a, b) = (usize::from(a), usize::from(b));
-    if a >= p.journal.log.len() || b >= p.journal.log.len() || a == b {
-        return;
-    }
-    p.journal.log.swap(a, b);
+    p.journal.swap(usize::from(a), usize::from(b));
     quests::refresh_log(p, &data);
 }

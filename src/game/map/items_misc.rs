@@ -190,6 +190,7 @@ pub fn open(map: &mut Map, g: Guid, bag: u8, slot: u8) {
 /// as one opened (Thistle Tea's `open_guid(guid, 2)`).
 pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
     let data = map.realm.data.clone();
+    let wanted = crate::game::map::quests::wanted(map, g);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -226,8 +227,9 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
         item.fields.set_u32(OBJECT_FIELD_ENTRY, w.entry);
         item.fields.set_u32(ITEM_FIELD_FLAGS, w.flags);
         item.fields.set_guid(ITEM_FIELD_GIFTCREATOR, Guid::zero());
+        let count = item.count();
         p.refresh_inventory(&data);
-        crate::game::map::quests::items_changed(map, g, w.entry);
+        crate::game::map::quests::items_added(map, g, w.entry, count);
         return;
     }
     if t.lock_id != 0 && flags & ITEM_DYNFLAG_UNLOCKED == 0 {
@@ -238,7 +240,6 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
         fail(p, InventoryResult::CantDoRightNow, item_guid);
         return;
     }
-    let wanted = crate::game::map::quests::wanted_items(p, &data);
     // Opened before: what was left in it, not a fresh roll.
     let (gold, items) = match kept_loot(&item.data) {
         Some((gold, mut items)) => {

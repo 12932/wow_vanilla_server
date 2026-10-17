@@ -15,8 +15,7 @@ use std::time::{Duration, Instant};
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
-    Language, PlayerChatTag, SMSG_MESSAGECHAT, SMSG_MESSAGECHAT_ChatType, SMSG_QUESTUPDATE_FAILED,
-    Vector3d,
+    Language, PlayerChatTag, SMSG_MESSAGECHAT, SMSG_MESSAGECHAT_ChatType, Vector3d,
 };
 
 use crate::game::data::CreatureSpawn;
@@ -595,15 +594,7 @@ fn credit(map: &mut Map, player: Guid, quest: u32, reach: f32, near: Vector3d) {
 }
 
 fn fail(map: &mut Map, player: Guid, quest: u32) {
-    let data = map.realm.data.clone();
-    if let Some(p) = map.players.get_mut(&player)
-        && let Some(slot) = p.journal.slot_of(quest)
-    {
-        p.journal.log[slot].failed = true;
-        crate::game::map::quests::refresh_log(p, &data);
-        p.outbound
-            .send(&SMSG_QUESTUPDATE_FAILED { quest_id: quest });
-    }
+    crate::game::map::quests::fail(map, player, quest);
 }
 
 /// The escortee goes back where it stood, as it was, at once.
