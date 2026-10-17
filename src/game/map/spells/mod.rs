@@ -262,6 +262,7 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     if spell == 0 || p.spells.contains(&spell) {
         return;
     }
+    let skills_before = crate::game::map::skills::ids(p);
     // A higher rank takes the lower's place on the bars; a talent's rank
     // takes it in the spellbook too.
     let (old, talent) = supersedes(&map.realm.data, &p.spells, spell);
@@ -283,6 +284,19 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     let data = map.realm.data.clone();
     if let Some(p) = map.players.get_mut(&player) {
         crate::game::map::skills::learn_from_spell(p, &data, spell);
+        crate::game::map::skills::learn_from_line(p, &data, spell);
+    }
+    // The spells a skill it brought comes with (Mining's Find Minerals and
+    // Smelt Copper, Bows' Shoot Bow).
+    let rewards: Vec<u32> = map.players.get(&player).map_or_else(Vec::new, |p| {
+        crate::game::map::skills::ids(p)
+            .into_iter()
+            .filter(|s| !skills_before.contains(s))
+            .flat_map(|s| crate::game::map::skills::rewards(&data, s, p.row.race, p.row.class))
+            .collect()
+    });
+    for r in rewards {
+        learn(map, player, r);
     }
     let with = map
         .realm
