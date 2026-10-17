@@ -272,10 +272,7 @@ fn near_giver(map: &Map, player: Guid, giver: Guid) -> bool {
     if guid::is_game_object(giver) {
         return crate::game::map::objects::within_reach(map, player, giver);
     }
-    let (Some(p), Some(pos)) = (map.players.get(&player), map.position_of(giver)) else {
-        return false;
-    };
-    crate::game::map::combat::dist(p.position(), pos) <= crate::game::map::vendor::NPC_YARDS + 2.0
+    crate::game::map::npc::within_reach(map, player, giver)
 }
 
 /// Whether `giver`, beside `player`, takes `quest` back (mangos'

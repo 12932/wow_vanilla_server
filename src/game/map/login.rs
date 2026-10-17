@@ -172,9 +172,9 @@ const SPELL_GM_FREEZE: u32 = 9454;
 const FIELD_BYTES_LOGGING_OUT: u8 = 0x04;
 
 /// `CMSG_LOGOUT_REQUEST`, as Thistle Tea's `Logout`: refused in combat,
-/// in the air or frozen by a GM; at once resting, on a flight or for a GM;
-/// else after [`LOGOUT_DELAY`], sat down and rooted if free to move. A
-/// trade and a loot window close first.
+/// in the air or frozen by a GM; at once resting or on a flight; else
+/// after [`LOGOUT_DELAY`] (a GM's too), sat down and rooted if free to
+/// move. A trade and a loot window close first.
 pub fn request_logout(map: &mut Map, guid: Guid) {
     let now = map.now;
     let Some(p) = map.players.get(&guid) else {
@@ -214,8 +214,11 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         });
         return;
     }
-    let instant = p.gm
-        || p.flight.is_some()
+    let delay = map.realm.config.logout_delay;
+    let Some(p) = map.players.get_mut(&guid) else {
+        return;
+    };
+    let instant = p.flight.is_some()
         || p.fields
             .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_RESTING);
     p.outbound.send(&SMSG_LOGOUT_RESPONSE {
@@ -230,7 +233,7 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         p.logout_at = Some(now);
         return;
     }
-    p.logout_at = Some(now + LOGOUT_DELAY);
+    p.logout_at = Some(now + delay);
     use crate::game::map::auras::{AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_ROOT, AURA_MOD_STUN};
     let held = [AURA_MOD_ROOT, AURA_MOD_STUN, AURA_MOD_FEAR, AURA_MOD_CONFUSE]
         .iter()

@@ -42,6 +42,22 @@ pub struct Flight {
     pub mount: u32,
 }
 
+/// vmangos's `INTERACTION_DISTANCE`, past both bodies.
+pub const INTERACTION_YARDS: f32 = 5.0;
+
+/// Whether `player` is near enough `npc` to use it (Thistle Tea's
+/// `NpcReach`): five yards past both their bounding radii.
+pub fn within_reach(map: &Map, player: Guid, npc: Guid) -> bool {
+    let radius = |g: Guid| {
+        map.unit_fields(g)
+            .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+    };
+    let (Some(p), Some(at)) = (map.players.get(&player), map.position_of(npc)) else {
+        return false;
+    };
+    dist(p.position(), at) <= INTERACTION_YARDS + radius(player) + radius(npc)
+}
+
 /// The creature `npc`, if `player` may talk to it and it has `flag`: its
 /// entry.
 pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
@@ -67,7 +83,7 @@ pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
     if p.flight.is_some() || held || crate::game::map::combat::hostile(map, npc, player) {
         return None;
     }
-    if dist(p.position(), c.position) > vendor::NPC_YARDS {
+    if !within_reach(map, player, npc) {
         return None;
     }
     Some(c.entry)

@@ -860,9 +860,8 @@ pub fn ready_check(realm: &Realm, me: &Online, answer: Option<u8>) {
             }) else {
                 return;
             };
-            for m in gr.members.iter().filter(|m| gr.can_lead(m.guid)) {
-                send_frame(realm, m.guid, &frame);
-            }
+            // To the leader alone, as Thistle Tea answers.
+            send_frame(realm, gr.leader, &frame);
         }
     }
 }

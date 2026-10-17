@@ -57,6 +57,7 @@ fn data() -> GameData {
 fn players_realm(d: GameData) -> Arc<Realm> {
     let mut cfg = harness::test_config();
     cfg.everyone_gm = false;
+    cfg.logout_delay = crate::game::map::login::LOGOUT_DELAY;
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     Realm::new(cfg, store, startup, d, None)
 }
@@ -1036,4 +1037,262 @@ async fn swimming_takes_the_strongest_bonus_and_slows() {
         (slowed - 4.722_222).abs() < 0.01,
         "a slow halves it: {slowed}"
     );
+}
+
+const FREEZE: u32 = 9454;
+const ARCANE_CHANNEL: u32 = 9710;
+const WATER_AURA: u32 = 9711;
+const SPRINT: u32 = 9712;
+const AUCTIONEER: u32 = 4104;
+const SWORD: u32 = 9713;
+
+fn more_data() -> GameData {
+    let mut d = services();
+    d.spells.spells.insert(FREEZE, aura(FREEZE, 29, 1));
+    let mut channel = aura(ARCANE_CHANNEL, 29, 1);
+    channel.attributes[1] = 0x4;
+    channel.channel_interrupt_flags = 0x20;
+    channel.duration_index = 0;
+    d.spells.spells.insert(ARCANE_CHANNEL, channel);
+    let mut water = aura(WATER_AURA, 29, 1);
+    water.aura_interrupt_flags = 0x80;
+    d.spells.spells.insert(WATER_AURA, water);
+    d.spells.spells.insert(SPRINT, aura(SPRINT, 31, 50));
+    d.creature_templates
+        .insert(AUCTIONEER, npc(AUCTIONEER, 0x1000));
+    d.items.insert(
+        SWORD,
+        ItemTemplate {
+            entry: SWORD,
+            name: "Sword".into(),
+            class: 2,
+            inventory_type: 13,
+            allowable_class: -1,
+            allowable_race: -1,
+            stackable: 1,
+            ..Default::default()
+        },
+    );
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: 54,
+        entries: vec![AUCTIONEER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1 - 1.0,
+        z: START.2,
+        respawn_min: 600,
+        respawn_max: 600,
+        ..Default::default()
+    });
+    d
+}
+
+#[tokio::test]
+async fn a_gm_frozen_player_cant_log_out() {
+    let realm = players_realm(more_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, FREEZE, Some(g))
+    })
+    .await;
+    assert!(on_map(&realm, move |m| m.players[&g].auras.has_spell(FREEZE)).await);
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    assert_eq!(
+        logout_result(&mut a).await.0,
+        LogoutResult::FailureFrozenByGm
+    );
+}
+
+#[tokio::test]
+async fn a_dance_ends_a_channel_and_a_swim_ends_what_water_does() {
+    let realm = harness::realm_with(more_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let channelling = on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().spells.push(ARCANE_CHANNEL);
+        crate::game::map::spells::cast(m, g, ARCANE_CHANNEL, Default::default(), None);
+        m.players[&g]
+            .caster
+            .casting
+            .as_ref()
+            .is_some_and(|c| c.channel_until.is_some())
+    })
+    .await;
+    assert!(channelling);
+    a.send(CMSG_TEXT_EMOTE {
+        text_emote: TextEmote::Dance,
+        emote: 0,
+        target: Guid::zero(),
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        on_map(&realm, move |m| m.players[&g].caster.casting.is_none()).await,
+        "the dance ends it"
+    );
+    // Into the water.
+    on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, WATER_AURA, Some(g))
+    })
+    .await;
+    a.send(MSG_MOVE_START_SWIM_Client {
+        info: movement(
+            MovementInfo_MovementFlags::empty()
+                .set_swimming(MovementInfo_MovementFlags_Swimming { pitch: 0.0 }),
+            START.2,
+            0,
+        ),
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!on_map(&realm, move |m| m.players[&g].auras.has_spell(WATER_AURA)).await);
+}
+
+#[tokio::test]
+async fn a_speed_change_reaches_those_who_see_the_player() {
+    let realm = harness::realm_with(more_data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(ga).await;
+    b.clear();
+    on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, ga, SPRINT, Some(ga));
+        crate::game::map::auras::recalc(m, ga);
+    })
+    .await;
+    let frame = b
+        .wait_frame(
+            "MSG_MOVE_SET_RUN_SPEED",
+            crate::game::map::misc::MSG_MOVE_SET_RUN_SPEED,
+            |_| true,
+        )
+        .await;
+    let speed = f32::from_le_bytes(frame[frame.len() - 4..].try_into().unwrap());
+    assert!((speed - 10.5).abs() < 0.01, "{speed}");
+}
+
+#[tokio::test]
+async fn the_dead_list_no_auctions() {
+    let realm = harness::realm_with(more_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let auctioneer = crate::game::guid::unit(AUCTIONEER, 54);
+    a.sees(auctioneer).await;
+    let list = || CMSG_AUCTION_LIST_ITEMS {
+        auctioneer,
+        list_start_item: 0,
+        searched_name: String::new(),
+        minimum_level: 0,
+        maximum_level: 0,
+        auction_slot_id: u32::MAX,
+        auction_main_category: u32::MAX,
+        auction_sub_category: u32::MAX,
+        auction_quality: ItemQuality::Poor,
+        usable: 0,
+    };
+    a.send(list()).await;
+    a.wait_frame("SMSG_AUCTION_LIST_RESULT", 0x25C, |_| true)
+        .await;
+    on_map(&realm, move |m| crate::game::map::death::kill(m, g)).await;
+    a.clear();
+    a.send(list()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    a.clear();
+    assert!(
+        a.gets(NONE_WITHIN, |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(_)).then_some(())
+        })
+        .await
+        .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_login_tells_temporary_enchantments_time() {
+    let realm = harness::realm_with(more_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let item = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, SWORD, 1, false).unwrap();
+        let item = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == SWORD)
+            .unwrap()
+            .guid;
+        crate::game::map::enchant::enchant_item(m, g, item, 7, Some((600_000, 0)));
+        item
+    })
+    .await;
+    logged_out(&mut a).await;
+    a.clear();
+    a.login(g).await;
+    let left = a
+        .wait_for("SMSG_ITEM_ENCHANT_TIME_UPDATE", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(t) if t.item == item => {
+                Some(t.duration)
+            }
+            _ => None,
+        })
+        .await;
+    assert!((590..=600).contains(&left), "{left}");
+}
+
+#[tokio::test]
+async fn a_copy_holds_as_many_as_its_map_template_says() {
+    let mut d = more_data();
+    d.maps.insert(
+        36,
+        MapInfo {
+            id: 36,
+            internal_name: "DeadminesInstance".into(),
+            name: "Deadmines".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    d.scripts.map_templates.insert(
+        36,
+        crate::game::data::scripts::MapTemplate {
+            map: 36,
+            map_type: 1,
+            player_limit: 1,
+            ..Default::default()
+        },
+    );
+    let realm = players_realm(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+    b.wait_for("the invite", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let inside = Vector3d {
+        x: -16.4,
+        y: -383.07,
+        z: 61.78,
+    };
+    for g in [ga, gb] {
+        map0(&realm).call(move |m| m.teleport(g, MapKey::world(36), inside, 0.0));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    let reason = b
+        .wait_for("SMSG_TRANSFER_ABORTED", |m| match m {
+            ServerOpcodeMessage::SMSG_TRANSFER_ABORTED(t) => Some(t.reason),
+            _ => None,
+        })
+        .await;
+    assert_eq!(reason, TransferAbortReason::IsFull, "one to the copy");
 }
