@@ -27,6 +27,11 @@ pub const MOVEMENT_WAYPOINT: u8 = 2;
 /// How long a wandering creature pauses between walks.
 const WANDER_PAUSE_MS: (u64, u64) = (4_000, 10_000);
 
+/// Spline flags: falling, run mode, flying (a Catmull-Rom spline).
+pub const SPLINE_FALLING: u32 = 0x2;
+pub const SPLINE_RUN_MODE: u32 = 0x100;
+pub const SPLINE_FLYING: u32 = 0x200;
+
 /// Where a creature is going.
 #[derive(Debug, Clone)]
 pub enum Motion {
@@ -130,29 +135,63 @@ impl Walk {
     /// Run mode (0x100) and flying (0x200); a fall's only falling (0x2).
     pub fn spline_flags(&self) -> u32 {
         if self.falling {
-            return 0x2;
+            return SPLINE_FALLING;
         }
-        (if self.run { 0x100 } else { 0 }) | (if self.fly { 0x200 } else { 0 })
+        (if self.run { SPLINE_RUN_MODE } else { 0 }) | (if self.fly { SPLINE_FLYING } else { 0 })
     }
 
-    /// The walk as `SMSG_MONSTER_MOVE` puts it: the destination, then the
-    /// points between as offsets from the path's middle.
+    /// The flags `SMSG_MONSTER_MOVE` carries: its own, and run mode always,
+    /// as mangos-classic's `PacketBuilder` and Thistle Tea send them (the
+    /// client misbehaves without it; it walks or runs by the duration).
+    pub fn monster_move_flags(&self) -> u32 {
+        self.spline_flags() | SPLINE_RUN_MODE
+    }
+
+    /// The walk's `SMSG_MONSTER_MOVE`, as mangos-classic writes it for the
+    /// 1.12 client: a flyer's Catmull-Rom spline in whole points; else
+    /// [`Self::packet`].
+    pub fn frame(&self, guid: Guid, from: Vector3d) -> Option<Arc<[u8]>> {
+        if self.monster_move_flags() & SPLINE_FLYING == 0 {
+            return encode(&self.packet(guid, from));
+        }
+        // wow_messages packs every point after the first, so this one is
+        // written by hand (`WriteCatmullRomPath`): each point after the
+        // start, whole.
+        let mut b = crate::game::data::items::Body::default();
+        crate::game::update::write_packed_guid(&mut b.0, guid);
+        b.f32(from.x)
+            .f32(from.y)
+            .f32(from.z)
+            .u32(self.spline_id)
+            .u8(0);
+        b.u32(self.monster_move_flags())
+            .u32(self.duration.as_millis() as u32);
+        let points = &self.points[1..];
+        b.u32(points.len() as u32);
+        for p in points {
+            b.f32(p.x).f32(p.y).f32(p.z);
+        }
+        Some(b.frame(crate::game::map::ai::SMSG_MONSTER_MOVE))
+    }
+
+    /// A walk on the ground as `SMSG_MONSTER_MOVE` puts it
+    /// (`WriteLinearPath`): the destination whole, then the points between
+    /// as packed offsets from it; one too near it to pack (it would
+    /// freeze the client), or too far, is left out.
     pub fn packet(&self, guid: Guid, from: Vector3d) -> SMSG_MONSTER_MOVE {
         let dest = self.destination();
         let mut splines = vec![dest];
-        let between = &self.points[1..self.points.len() - 1];
-        if !between.is_empty() {
-            let middle = Vector3d {
-                x: (self.points[0].x + dest.x) / 2.0,
-                y: (self.points[0].y + dest.y) / 2.0,
-                z: (self.points[0].z + dest.z) / 2.0,
+        for p in &self.points[1..self.points.len() - 1] {
+            let offset = Vector3d {
+                x: dest.x - p.x,
+                y: dest.y - p.y,
+                z: dest.z - p.z,
             };
-            for p in between {
-                splines.push(Vector3d {
-                    x: middle.x - p.x,
-                    y: middle.y - p.y,
-                    z: middle.z - p.z,
-                });
+            let near = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z < 0.5;
+            // 11, 11 and 10 bits of quarter yards.
+            let packs = offset.x.abs() < 255.0 && offset.y.abs() < 255.0 && offset.z.abs() < 127.0;
+            if !near && packs {
+                splines.push(offset);
             }
         }
         SMSG_MONSTER_MOVE {
@@ -160,7 +199,7 @@ impl Walk {
             spline_point: from,
             spline_id: self.spline_id,
             move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
-            spline_flags: SplineFlag::new(self.spline_flags()),
+            spline_flags: SplineFlag::new(self.monster_move_flags()),
             duration: self.duration.as_millis() as u32,
             splines,
         }
@@ -590,7 +629,7 @@ impl Creature {
         }
         let mut walk = Walk::new(points, speed, now, spline_id, run);
         walk.fly = fly;
-        let frame = encode(&walk.packet(self.guid, self.position));
+        let frame = walk.frame(self.guid, self.position);
         self.motion = Motion::Moving(walk);
         frame
     }

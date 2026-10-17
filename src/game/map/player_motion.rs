@@ -211,7 +211,7 @@ fn walk(map: &mut Map, g: Guid, points: Vec<Vector3d>, run: bool, pause: Duratio
     };
     let speed = if run { p.speeds.run } else { p.speeds.walk };
     let w = Walk::new(points, speed, now, spline_id, run);
-    let frame = crate::game::conn::encode(&w.packet(g, p.position()));
+    let frame = w.frame(g, p.position());
     if let Some(d) = p.driven.as_mut() {
         // The pause comes after the run.
         d.next_move_at = now + w.duration + pause;

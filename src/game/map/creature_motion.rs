@@ -522,7 +522,7 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
         false,
     );
     walk.falling = true;
-    let frame = crate::game::conn::encode(&walk.packet(g, at));
+    let frame = walk.frame(g, at);
     c.position = to;
     c.motion = Motion::Idle { until: None };
     let (anchor, old) = (c.vis_anchor, c.cell);
