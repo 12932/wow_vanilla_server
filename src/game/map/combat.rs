@@ -701,7 +701,23 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
     if ma == mb {
         return false;
     }
-    if map.players.contains_key(&ma) && map.players.contains_key(&mb) {
+    let (player_a, player_b) = (map.players.contains_key(&ma), map.players.contains_key(&mb));
+    // A unit immune to players' side (0x100) or to creatures' (0x200)
+    // neither attacks it nor is attacked by it (Thistle Tea's
+    // `attack_flags_allow?`, mangos's `Unit::CanAttack`).
+    let immune = |g: Guid, to_player: bool| {
+        let flag = if to_player {
+            UNIT_FLAG_IMMUNE_TO_PLAYER
+        } else {
+            UNIT_FLAG_IMMUNE_TO_NPC
+        };
+        map.unit_fields(g)
+            .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & flag != 0)
+    };
+    if immune(b, player_a) || immune(a, player_b) {
+        return false;
+    }
+    if player_a && player_b {
         let (a, b) = (ma, mb);
         if crate::game::map::duel::dueling(map, a, b) {
             return true;
@@ -713,28 +729,40 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
         if ffa(pa) && ffa(pb) {
             return true;
         }
-        return pa.team != pb.team
-            && (pb.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP)
-                || pa.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP));
+        // The one attacked must be flagged (contested is flagged too), as
+        // mangos's `Unit::CanAttack` and Thistle Tea's
+        // `pvp_attack_allowed?` have it: a flag doesn't let one attack.
+        return pa.team != pb.team && pb.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP);
     }
     let data = &map.realm.data;
-    // A player may attack a faction they are at war with, or hostile with.
-    if ua.is_player
-        && let Some(faction) = crate::game::map::reputation::faction_of(map, b)
-        && data.misc.faction(faction).is_some()
-        && crate::game::map::reputation::at_war(&map.players[&a], data, faction)
+    // Without faction data, anything may be attacked.
+    if data.faction_templates.get(&ua.faction).is_none()
+        || data.faction_templates.get(&ub.faction).is_none()
     {
         return true;
     }
-    match (
-        data.faction_templates.get(&ua.faction),
-        data.faction_templates.get(&ub.faction),
-    ) {
-        (Some(fa), Some(fb)) => !fa.friendly_to(fb),
-        // Without faction data, a player may attack any creature.
-        _ => true,
+    // Hostile either way, or for a player's side a neutral creature whose
+    // faction keeps no standing (or one an aura forces): a faction with
+    // standings is friendly but at war (Thistle Tea's
+    // `attack_reaction_allows?`, mangos's `GetReactionTo`). Two creatures
+    // must be enemies.
+    match (regard(map, a, b), regard(map, b, a)) {
+        (Regard::Hostile, _) | (_, Regard::Hostile) => true,
+        (Regard::Friendly, _) | (_, Regard::Friendly) => false,
+        _ if player_a != player_b => {
+            let (creature, player) = if player_a { (b, ma) } else { (a, mb) };
+            crate::game::map::reputation::faction_of(map, creature).is_none_or(|f| {
+                data.misc.faction(f).is_none() || forced_rank(&map.players[&player], f).is_some()
+            })
+        }
+        _ => false,
     }
 }
+
+/// The unit flags that make a unit immune to players' side and to
+/// creatures'.
+pub const UNIT_FLAG_IMMUNE_TO_PLAYER: u32 = 0x0000_0100;
+pub const UNIT_FLAG_IMMUNE_TO_NPC: u32 = 0x0000_0200;
 
 /// How one unit regards another, as Thistle Tea ranks it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
