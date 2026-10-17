@@ -143,12 +143,16 @@ pub fn decode(data: &GameData, item: &mut Item) {
 }
 
 /// The item's `data` for the store: its text, what it wraps if a gift,
-/// random property and enchantments.
+/// what is left in it if opened, random property and enchantments.
 pub fn encode(item: &Item) -> String {
     let mut out: Vec<String> = item
         .data
         .split(';')
-        .filter(|t| t.starts_with("text:") || t.starts_with("gift:"))
+        .filter(|t| {
+            t.starts_with("text:")
+                || t.starts_with("gift:")
+                || t.starts_with(crate::game::map::items_misc::LOOT_PREFIX)
+        })
         .map(str::to_owned)
         .collect();
     let rp = item.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID);
