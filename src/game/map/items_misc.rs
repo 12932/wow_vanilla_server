@@ -187,7 +187,11 @@ pub fn open(map: &mut Map, g: Guid, bag: u8, slot: u8) {
         looters: AHashSet::from([g]),
         ..Default::default()
     };
-    let frame = loot::response(&data, item_guid, &l, g, &wanted);
+    let met = loot::conditions_met(map, &l, item_guid, g);
+    let frame = loot::response(&data, item_guid, &l, g, &wanted, &met);
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
     p.misc.item_loot = Some((item_guid, l));
     p.looting = Some(item_guid);
     p.outbound.send_frame(frame);

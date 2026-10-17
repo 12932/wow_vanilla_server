@@ -52,6 +52,8 @@ mod tests_world;
 mod tests_arena;
 #[cfg(test)]
 mod tests_terrain;
+#[cfg(test)]
+mod tests_scripts2;
 pub mod transports;
 pub mod update;
 pub mod weather;

@@ -57,6 +57,7 @@ pub mod fail {
     pub const PACIFIED: u8 = 0x5a;
     pub const REAGENTS: u8 = 0x5c;
     pub const REQUIRES_SPELL_FOCUS: u8 = 0x5e;
+    pub const REQUIRES_AREA: u8 = 0x5d;
     pub const SILENCED: u8 = 0x60;
     pub const SPELL_IN_PROGRESS: u8 = 0x61;
     pub const STUNNED: u8 = 0x64;
@@ -232,6 +233,10 @@ pub fn check(
     let Some(me) = map.unit_view(caster) else {
         return Some(fail::ERROR);
     };
+    // `spell_area`: some spells are only for some places.
+    if !crate::game::map::spell_areas::allowed(map, caster, s.id) {
+        return Some(fail::REQUIRES_AREA);
+    }
     if !me.alive && !s.attr(0, sd::ATTR_CASTABLE_WHILE_DEAD) {
         return Some(fail::CASTER_DEAD);
     }

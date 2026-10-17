@@ -1002,6 +1002,9 @@ pub fn respawn_nodes(map: &mut Map) {
     map.loot_state.respawns.retain(|(t, _)| *t > now);
     let data = map.realm.data.clone();
     for spawn in due {
+        // A pooled node may come back as another of its pool.
+        let waiting: Vec<u32> = map.loot_state.respawns.iter().map(|(_, s)| *s).collect();
+        let spawn = crate::game::map::creature_groups::object_respawn_choice(map, spawn, &waiting);
         let Some(s) = data
             .gameobject_spawns
             .get(&map.key.map)

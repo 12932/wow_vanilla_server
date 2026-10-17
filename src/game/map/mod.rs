@@ -14,9 +14,8 @@ pub mod combat;
 pub mod conditions;
 pub mod creature;
 pub mod creature_groups;
-pub mod creature_scripts;
-mod creature_scripts_ported;
 pub mod creature_combat;
+
 pub mod death;
 pub mod derive;
 pub mod duel;
@@ -31,6 +30,7 @@ pub mod gm_dev;
 pub mod grid;
 pub mod guard_posts;
 pub mod handlers;
+mod instance_adapters;
 pub mod instance_script;
 pub mod inventory;
 pub mod items_misc;
@@ -60,6 +60,7 @@ pub mod rest;
 pub mod scripts;
 pub mod skills;
 pub mod social;
+pub mod spell_areas;
 pub mod spells;
 pub mod stats;
 pub mod terrain;
@@ -298,8 +299,8 @@ pub struct Map {
     /// Objects a script changed that go back: (when, object, state; MAX
     /// to go).
     pub object_resets: Vec<(Instant, Guid, u32)>,
-    /// Groups scripts made: member → (leader, distance, angle).
-    pub script_groups: AHashMap<Guid, (Guid, f32, f32)>,
+    /// Groups scripts made: member → (leader, distance, angle, flags).
+    pub script_groups: AHashMap<Guid, (Guid, f32, f32, u32)>,
     /// Scripted map events under way.
     pub map_events: map_events::Events,
     pub spells: spells::MapSpells,
@@ -490,6 +491,7 @@ impl Map {
                 }
                 self.insert_player(p);
                 spells::apply_passives(self, guid);
+                spell_areas::reconcile(self, guid);
                 pets::owner_arrived(self, guid);
                 npc::resume_flight(self, guid);
                 social::logged_in(self, guid);

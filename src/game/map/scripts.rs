@@ -19,6 +19,26 @@ use crate::game::map::creature::{Creature, Motion};
 use crate::game::map::event_ai;
 use crate::game::map::{Map, MapKey};
 
+/// Thistle Tea's commands, which vmangos has no number for.
+pub const C_STOP_SCRIPTS: u32 = 200;
+pub const C_HOLD_WAYPOINTS: u32 = 201;
+pub const C_RELEASE_WAYPOINTS: u32 = 202;
+pub const C_SET_REGENERATION: u32 = 203;
+pub const C_SET_CASTER_CHASE_DISTANCE: u32 = 204;
+pub const C_SET_HEALTH_PCT: u32 = 205;
+pub const C_LOSE_HEALTH: u32 = 206;
+pub const C_SET_CONCEALED: u32 = 207;
+pub const C_CAST_CREDIT: u32 = 208;
+pub const C_CLEAR_AURAS: u32 = 209;
+pub const C_LINKED_FEIGN_DEATH: u32 = 210;
+pub const C_SET_MELEE_SPELL: u32 = 211;
+pub const C_SET_CALL_FOR_HELP_RANGE: u32 = 212;
+pub const C_BATTLEGROUND_EVENT: u32 = 213;
+pub const C_TELEPORT_SELF: u32 = 214;
+
+/// A flying creature's movement flags, as Thistle Tea sets them.
+const FLIGHT_FLAGS: u32 = 0x0180_0000;
+
 /// The commands that do something here (the rest are skipped, as
 /// Thistle Tea skips them).
 pub fn command_supported(command: u32) -> bool {
@@ -36,7 +56,19 @@ pub fn command_supported(command: u32) -> bool {
             | 76..=85
             | 87
             | 89..=92
-    ) && !matches!(command, 21 | 36 | 38 | 53 | 57 | 58 | 72 | 75 | 86 | 88)
+            | 21
+            | 30
+            | 36
+            | 38
+            | 53
+            | 57
+            | 58
+            | 72
+            | 75
+            | 86
+            | 88
+            | C_STOP_SCRIPTS..=C_TELEPORT_SELF
+    )
 }
 
 /// A script under way.
@@ -48,6 +80,9 @@ pub struct Run {
     pub started: Instant,
     pub source: Guid,
     pub target: Guid,
+    /// The EventAI event (its creature and index) that checks this run's
+    /// result: if it fails, the event may fire again at once.
+    pub checked: Option<(Guid, usize)>,
 }
 
 /// The scripts running on a map.
@@ -59,6 +94,18 @@ pub struct Runner {
 /// Start script `id` of `table` from `source` on `target`; its first
 /// steps with no delay run at once.
 pub fn start(map: &mut Map, table: ScriptTable, id: u32, source: Guid, target: Guid) {
+    start_checked(map, table, id, source, target, None);
+}
+
+/// [`start`], for an EventAI event that checks the result.
+pub fn start_checked(
+    map: &mut Map,
+    table: ScriptTable,
+    id: u32,
+    source: Guid,
+    target: Guid,
+    checked: Option<(Guid, usize)>,
+) {
     if id == 0 || !map.realm.data.scripts.table(table).contains_key(&id) {
         return;
     }
@@ -70,6 +117,7 @@ pub fn start(map: &mut Map, table: ScriptTable, id: u32, source: Guid, target: G
         started: now,
         source,
         target,
+        checked,
     });
     let i = map.scripts.runs.len() - 1;
     advance(map, i);
@@ -112,10 +160,20 @@ fn advance(map: &mut Map, i: usize) {
             return;
         }
         map.scripts.runs[i].next += 1;
+        if step.command == C_STOP_SCRIPTS {
+            for (j, r) in map.scripts.runs.iter_mut().enumerate() {
+                if j != i && r.source == run.source {
+                    r.next = usize::MAX;
+                }
+            }
+        }
         if !execute(map, step, run.source, run.target)
             && let Some(r) = map.scripts.runs.get_mut(i)
         {
             r.next = usize::MAX;
+            if let Some((g, event)) = r.checked {
+                event_ai::retry(map, g, event);
+            }
             return;
         }
         if map.scripts.runs.get(i).is_none_or(|r| r.next == usize::MAX) {
@@ -159,8 +217,28 @@ pub fn execute(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
     {
         return step.data_flags & SF_ABORT_ON_FAILURE == 0;
     }
+    if let Some(min) = step.ext.as_ref().and_then(|e| e.min_target_distance_2d)
+        && !surface_distance_2d(map, source, target).is_some_and(|d| d > min)
+    {
+        return step.data_flags & SF_ABORT_ON_FAILURE == 0;
+    }
     let ok = command(map, step, source, target);
+    // The terminating commands end the script whatever its flags.
+    if matches!(step.command, 31 | 32) {
+        return ok;
+    }
     ok || step.data_flags & SF_ABORT_ON_FAILURE == 0
+}
+
+/// The flat distance between two units' edges.
+fn surface_distance_2d(map: &Map, a: Guid, b: Guid) -> Option<f32> {
+    let (pa, pb) = (map.position_of(a)?, map.position_of(b)?);
+    let radius = |g| {
+        map.unit_fields(g)
+            .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+    };
+    let (dx, dy) = (pa.x - pb.x, pa.y - pb.y);
+    Some(((dx * dx + dy * dy).sqrt() - radius(a) - radius(b)).max(0.0))
 }
 
 /// The threat list of a creature, highest first.
@@ -247,6 +325,49 @@ fn players_near(map: &Map, at: Vector3d, radius: f32) -> Vec<Guid> {
     out.into_iter().map(|(_, g)| g).collect()
 }
 
+/// Thistle Tea's target type for one its owner fights.
+pub const T_OWNER_HOSTILE_RANDOM: u32 = 200;
+
+/// Whether a hostile target type may pick `g`: `target_param1`'s flags
+/// (0x1 in sight, 0x2 or 0x200 a player, 0x4 a mana user), and for a
+/// cast, the spell's range.
+fn hostile_allowed(map: &Map, step: &ScriptStep, source: Guid, g: Guid) -> bool {
+    let flags = step.target_param1;
+    if flags & 0x1 != 0
+        && let (Some(a), Some(b)) = (map.position_of(source), map.position_of(g))
+        && !map.nav.as_ref().is_none_or(|n| {
+            n.sight(
+                Vector3d { z: a.z + 1.5, ..a },
+                Vector3d { z: b.z + 1.5, ..b },
+            )
+        })
+    {
+        return false;
+    }
+    if flags & 0x202 != 0 && !guid::is_player(g) {
+        return false;
+    }
+    if flags & 0x4 != 0
+        && !map
+            .unit_fields(g)
+            .is_some_and(|f| f.get_byte(UNIT_FIELD_BYTES_0, 3) == 0)
+    {
+        return false;
+    }
+    if step.command == 15
+        && let Some(s) = map.realm.data.spells.spells.get(&step.datalong[0])
+    {
+        let (_, max) = map.realm.data.spells.range(s);
+        if max > 0.0
+            && let (Some(a), Some(b)) = (map.position_of(source), map.position_of(g))
+            && dist(a, b) > max + 5.0
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// The target a step's `target_type` names, from `source`.
 fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Option<Guid> {
     let at = map.position_of(source)?;
@@ -261,32 +382,46 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
             .creature(source)
             .map(|c| c.combat.victim)
             .filter(|v| !v.is_zero() && alive(map, *v)),
-        2 => threat_list(map, source).get(1).copied(),
-        3 => threat_list(map, source).last().copied(),
-        4 => pick(threat_list(map, source), &mut rng),
-        5 => {
-            let t = threat_list(map, source);
-            if t.len() > 1 {
-                pick(t[1..].to_vec(), &mut rng)
-            } else {
-                t.first().copied()
+        2..=7 => {
+            let mut t = threat_list(map, source);
+            if matches!(step.target_type, 2 | 5) && !t.is_empty() {
+                t.remove(0);
+            }
+            t.retain(|g| hostile_allowed(map, step, source, *g));
+            match step.target_type {
+                2 => t.first().copied(),
+                3 => t.last().copied(),
+                4 | 5 => pick(t, &mut rng),
+                6 => t.into_iter().min_by(|a, b| {
+                    let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, at));
+                    let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, at));
+                    da.total_cmp(&db)
+                }),
+                _ => t.into_iter().max_by(|a, b| {
+                    let da = map.position_of(*a).map_or(0.0, |p| dist(p, at));
+                    let db = map.position_of(*b).map_or(0.0, |p| dist(p, at));
+                    da.total_cmp(&db)
+                }),
             }
         }
-        6 => {
-            let t = threat_list(map, source);
-            t.into_iter().min_by(|a, b| {
-                let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, at));
-                let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, at));
-                da.total_cmp(&db)
-            })
-        }
-        7 => {
-            let t = threat_list(map, source);
-            t.into_iter().max_by(|a, b| {
-                let da = map.position_of(*a).map_or(0.0, |p| dist(p, at));
-                let db = map.position_of(*b).map_or(0.0, |p| dist(p, at));
-                da.total_cmp(&db)
-            })
+        // Thistle Tea's: one at random its owner fights, not its own
+        // victim.
+        T_OWNER_HOSTILE_RANDOM => {
+            let owner = map
+                .creature(source)
+                .and_then(|c| c.owner.or(c.scripted.as_deref().and_then(|s| s.summoner)))?;
+            let victim = map.combat(source).map(|c| c.victim).unwrap_or_default();
+            let mut t = map
+                .combat(owner)
+                .map(|c| c.attackers.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default();
+            if let Some(c) = map.creature(owner) {
+                t.extend(c.threat.iter().map(|(g, _)| *g));
+            }
+            t.sort();
+            t.dedup();
+            t.retain(|g| *g != victim && alive(map, *g) && hostile_allowed(map, step, source, *g));
+            pick(t, &mut rng)
         }
         8 => Some(
             map.creature(source)
@@ -628,23 +763,86 @@ fn creature_mut(map: &mut Map, g: Guid) -> Option<&mut Creature> {
 
 /// Move a creature to `to`, on the navmesh if there is one.
 pub fn move_to(map: &mut Map, g: Guid, to: Vector3d, run: bool) {
+    move_with(
+        map,
+        g,
+        to,
+        Move {
+            run,
+            pathfind: true,
+            ..Default::default()
+        },
+    );
+}
+
+/// How a script moves a creature.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Move {
+    pub run: bool,
+    pub fly: bool,
+    /// Along the navmesh, not straight.
+    pub pathfind: bool,
+    /// Taking this long, whatever its speed.
+    pub time: Option<Duration>,
+    /// Facing this way when it gets there.
+    pub face: Option<f32>,
+    /// The point its arrival tells of.
+    pub point: Option<u32>,
+}
+
+/// Move a creature as `how` says, remembering the move so its arrival
+/// can be told.
+pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
     let now = map.now;
     let spline_id = map.next_spline_id;
     let Some(from) = map.creature(g).map(|c| c.position) else {
-        return;
+        return false;
     };
     let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
-        None => vec![from, to],
+        Some(nav) if how.pathfind && !how.fly => {
+            nav.path(from, to).unwrap_or_else(|| vec![from, to])
+        }
+        _ => vec![from, to],
     };
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(c) = map.creature_mut(g) else {
-        return;
+        return false;
     };
-    if let Some(frame) = c.walk(path, run, now, spline_id) {
+    let frame = c.walk_at(path, how.run, how.fly, how.time, now, spline_id);
+    let moved = matches!(&c.motion, Motion::Moving(w) if w.spline_id == spline_id);
+    if let Some(s) = c.scripted.as_deref_mut() {
+        s.scripted_move = None;
+    }
+    if moved {
+        let s = c.scripted.get_or_insert_with(Default::default);
+        s.scripted_move = Some(event_ai::ScriptedMove {
+            spline_id,
+            to,
+            point: how.point,
+            face: how.face,
+        });
+    } else {
+        // Already there.
+        if let Some(o) = how.face {
+            c.orientation = o;
+            map.visibility_dirty.insert(g);
+        }
+        if let Some(point) = how.point {
+            event_ai::movement_inform(map, g, event_ai::POINT_MOTION, point);
+        }
+    }
+    if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
     }
+    if moved {
+        let facing = (to.y - from.y).atan2(to.x - from.x);
+        crate::game::map::creature_groups::leader_walked(map, g, to, facing, how.run);
+    }
+    true
 }
+
+/// The bounding radius Thistle Tea takes for a unit with none.
+const DEFAULT_BOUNDING_RADIUS: f32 = 0.389;
 
 /// Set a game object's state (0 open, 1 closed, 2 active), with a reset
 /// after `reset` if it has one.
@@ -667,6 +865,31 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
     match step.command {
         // Talk: one of up to four broadcast texts.
         0 => {
+            if let Some(lines) = step
+                .ext
+                .as_ref()
+                .map(|e| &e.texts)
+                .filter(|t| !t.is_empty())
+            {
+                let line = &lines[rand::rng().random_range(0..lines.len())];
+                if matches!(line.chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER)
+                    && !guid::is_player(target)
+                {
+                    return true;
+                }
+                let text = fill(map, &line.text, target);
+                say(map, source, &text, line.chat_type, line.language, target);
+                if line.emote != 0
+                    && let Ok(emote) = Emote::try_from(line.emote)
+                    && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
+                        emote,
+                        guid: source,
+                    })
+                {
+                    map.send_to_observers(source, &frame, false);
+                }
+                return true;
+            }
             let texts: Vec<u32> = step
                 .dataint
                 .iter()
@@ -697,73 +920,169 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Move to a point (or, with datalong4 & 1, the target).
+        // Move: to a point (datalong 0), offset from the target (1), at a
+        // distance from it (2), or to a random point around one (3).
+        // datalong2 is the travel time, datalong3 the options (1
+        // pathfind, 2 walk, 4 run, 8 fly), datalong4 & 1 moves even a
+        // held creature and & 2 tells of point dataint on arrival.
         3 => {
-            let to = if d3 & 0x2 != 0 || (step.x == 0.0 && step.y == 0.0 && step.z == 0.0) {
-                map.position_of(target).unwrap_or(pos)
-            } else {
-                pos
-            };
-            let run = event_ai::scripted(map, source).is_some_and(|s| s.run) || d4 & 0x1 != 0;
-            move_to(map, source, to, run);
-            if step.o != 0.0
-                && let Some(c) = creature_mut(map, source)
+            if !guid::is_unit(source)
+                || !alive(map, source)
+                || (d4 & 0x1 == 0 && crate::game::map::auras::held(map, source, false))
             {
-                c.home_orientation = step.o;
+                return false;
             }
-            true
+            let Some(here) = map.position_of(source) else {
+                return false;
+            };
+            let (to, face) = match d1 {
+                1 => {
+                    let Some(t) = map.position_of(target) else {
+                        return false;
+                    };
+                    (
+                        Vector3d {
+                            x: t.x + step.x,
+                            y: t.y + step.y,
+                            z: t.z + step.z,
+                        },
+                        step.o,
+                    )
+                }
+                2 => {
+                    let Some(t) = map.position_of(target) else {
+                        return false;
+                    };
+                    let angle = if step.o < 0.0 {
+                        (here.y - t.y).atan2(here.x - t.x)
+                    } else {
+                        rand::rng().random_range(0.0..std::f32::consts::TAU)
+                    };
+                    let radius = map
+                        .unit_fields(target)
+                        .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+                        .filter(|r| *r > 0.0)
+                        .unwrap_or(DEFAULT_BOUNDING_RADIUS);
+                    let d = step.x + radius;
+                    (
+                        Vector3d {
+                            x: t.x + d * angle.cos(),
+                            y: t.y + d * angle.sin(),
+                            z: t.z,
+                        },
+                        step.o,
+                    )
+                }
+                3 => {
+                    let to = map
+                        .nav
+                        .as_mut()
+                        .and_then(|n| n.random_point(pos, step.o))
+                        .unwrap_or(pos);
+                    (to, -10.0)
+                }
+                _ => (pos, step.o),
+            };
+            let run = if d3 & 0x4 != 0 {
+                true
+            } else if d3 & 0x2 != 0 {
+                false
+            } else {
+                event_ai::scripted(map, source).is_some_and(|s| s.run)
+            };
+            let fly = d3 & 0x8 != 0 || event_ai::scripted(map, source).is_some_and(|s| s.fly);
+            move_with(
+                map,
+                source,
+                to,
+                Move {
+                    run,
+                    fly,
+                    pathfind: d3 & 0x1 != 0,
+                    time: (d2 > 0).then(|| Duration::from_millis(u64::from(d2))),
+                    face: (face > 0.0).then_some(face),
+                    point: (d4 & 0x2 != 0).then_some(step.dataint[0].max(0) as u32),
+                },
+            )
         }
-        // Modify a field's flags: toggle, set or clear.
+        // Modify a field's flags: set, clear, or toggle (set if none of
+        // them is, else clear).
         4 => {
             let field = d1 as u16;
-            let Some(f) = map.unit_fields_mut(target) else {
+            let f = if guid::is_game_object(source) {
+                map.gameobject_mut(source).map(|o| &mut o.fields)
+            } else {
+                map.unit_fields_mut(source)
+            };
+            let Some(f) = f else {
                 return false;
             };
             let old = f.get_u32(field);
             let new = match d3 {
                 1 => old | d2,
                 2 => old & !d2,
-                _ => old ^ d2,
+                _ if old & d2 == 0 => old | d2,
+                _ => old & !d2,
             };
             f.set_u32(field, new);
             true
         }
         5 => {
-            crate::game::map::spells::interrupt(map, target);
+            let casting = map
+                .caster(source)
+                .and_then(|c| c.casting.as_ref())
+                .map(|c| c.spell);
+            if casting.is_some_and(|s| d2 == 0 || s == d2) {
+                crate::game::map::spells::interrupt(map, source);
+            }
             true
         }
-        // Teleport a player.
+        // Teleport the player of the two, or the creature.
         6 => {
-            if !guid::is_player(target) {
-                if let Some(c) = creature_mut(map, target) {
-                    c.position = pos;
-                    c.orientation = step.o;
-                }
+            if let Some(p) = script_player(source, target) {
+                map.teleport(p, MapKey::world(d1), pos, step.o);
                 return true;
             }
-            map.teleport(target, MapKey::world(d1), pos, step.o);
+            if !guid::is_unit(source) {
+                return false;
+            }
+            place(map, source, pos, step.o);
             true
         }
         // A quest explored by a player near enough.
         7 => {
+            let Some(player) = script_player(source, target) else {
+                return false;
+            };
+            let other = if player == target { source } else { target };
             let quest = d1;
             let near = d2 == 0
                 || map
-                    .position_of(source)
-                    .zip(map.position_of(target))
+                    .position_of(other)
+                    .zip(map.position_of(player))
                     .is_some_and(|(a, b)| dist(a, b) <= d2 as f32);
             if near {
-                quest_explored(map, target, quest);
+                let players = if d3 != 0 {
+                    group_here(map, player)
+                } else {
+                    vec![player]
+                };
+                for p in players {
+                    quest_explored(map, p, quest);
+                }
             }
             near
         }
         // Kill credit, to the player or their group.
         8 => {
+            let Some(player) = script_player(source, target) else {
+                return false;
+            };
             let credit = guid::unit(d1, 0);
             let players: Vec<Guid> = if d2 != 0 {
-                group_here(map, target)
+                group_here(map, player)
             } else {
-                vec![target]
+                vec![player]
             };
             for p in players {
                 crate::game::map::quests::killed(map, p, credit);
@@ -779,56 +1098,28 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             o.is_some()
         }
-        // Summon a creature.
+        // Summon a creature: datalong the entry, datalong2 the despawn
+        // delay, datalong3 and datalong4 how many may be near and how
+        // near (with dataint's unique flags 0x4 or 0x8), dataint 0x1 to
+        // run, dataint2 a script for it, dataint3 a target type to attack
+        // (-1 none), dataint4 the despawn type.
         10 => {
-            let at = if step.x == 0.0 && step.y == 0.0 && step.z == 0.0 {
-                map.position_of(source).unwrap_or(pos)
-            } else {
-                pos
-            };
-            let flags = step.dataint[0] as u32;
-            // Unique: not if one is already near.
-            if flags & 0xC != 0
-                && !creatures_near(map, at, d1, if d4 > 0 { d4 as f32 } else { 100.0 }, true)
-                    .is_empty()
-            {
-                return false;
-            }
-            let despawn = (d2 > 0).then(|| {
-                (
-                    Duration::from_millis(u64::from(d2)),
-                    if step.dataint[3] > 0 {
-                        step.dataint[3]
-                    } else {
-                        1
-                    },
-                )
-            });
-            let Some(g) = summon(map, source, d1, at, step.o, despawn) else {
-                return false;
-            };
-            if flags & 0x1 != 0
-                && let Some(s) = event_ai::scripted_mut(map, g)
-            {
-                s.run = true;
-            }
-            if step.dataint[1] > 0 {
-                start(map, ScriptTable::Generic, step.dataint[1] as u32, g, target);
-            }
-            // An attack target by target type; -1 for none.
-            if step.dataint[2] >= 0 {
-                let attack = ScriptStep {
-                    target_type: step.dataint[2] as u32,
-                    ..Default::default()
-                };
-                if let Some(t) = find_target(map, &attack, source, target)
-                    && (guid::is_player(t) || guid::is_unit(t))
-                    && crate::game::map::combat::can_attack(map, g, t)
-                {
-                    crate::game::map::ai::attacked(map, g, t);
+            let count = match step.ext.as_ref().map(|e| e.count) {
+                Some(SummonCount::Fixed(n)) => n,
+                Some(SummonCount::ThreatPlayers(ratio, least, most)) => {
+                    let players = threat_list(map, source)
+                        .into_iter()
+                        .filter(|g| guid::is_player(*g))
+                        .count();
+                    ((players as f32 * ratio) as u32).max(least).min(most)
                 }
+                None => 1,
+            };
+            let mut any = false;
+            for _ in 0..count {
+                any |= summon_step(map, step, source, target);
             }
-            true
+            any
         }
         // Open or close a door.
         11 | 12 => {
@@ -860,7 +1151,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
         }
         14 => {
-            crate::game::map::auras::remove_spell(map, target, d1, None);
+            crate::game::map::auras::remove_spell(map, source, d1, None);
             true
         }
         // Cast.
@@ -886,13 +1177,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        17 => crate::game::map::inventory::add_item(map, target, d1, d2.max(1), true).is_ok(),
+        17 => script_player(source, target).is_some_and(|p| {
+            crate::game::map::inventory::add_item(map, p, d1, d2.max(1), true).is_ok()
+        }),
+        // Despawn, after datalong ms.
         18 => {
-            let g = if guid::is_unit(target) && d2 != 0 {
-                target
-            } else {
-                source
-            };
+            let g = source;
+            if !guid::is_unit(g) {
+                return false;
+            }
             if d1 > 0 {
                 if let Some(s) = event_ai::scripted_mut(map, g) {
                     s.despawn_at = Some(now + Duration::from_millis(u64::from(d1)));
@@ -919,21 +1212,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Movement type: 0 idle, 1 random, 2 waypoint.
-        20 => {
-            if let Some(c) = creature_mut(map, source) {
-                c.movement_type = d1 as u8;
-                if d1 == 1 && d2 > 0 {
-                    c.wander_distance = d2 as f32;
-                }
-                if d1 == 0 {
-                    c.motion = Motion::Idle { until: None };
-                } else {
-                    c.motion = Motion::Idle { until: Some(now) };
-                }
-            }
-            true
-        }
+        // Movement: 0 idle, 1 wander x yards (around its spawn, or with
+        // datalong2 where it is), 2 waypoints, 7 home, 10 flee, 15 follow
+        // the target at x yards and angle o, 19 keep x yards from it.
+        20 => movement(map, step, source, target),
         // Faction: set, or (0) the template's.
         22 => {
             let faction = if d1 == 0 {
@@ -1021,58 +1303,111 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Threat: by a percentage, on the target or everyone.
+        // Threat, by x percent: on everyone (datalong 8) or the unit
+        // datalong names as a target type.
         29 => {
-            let pct = step.dataint[0];
+            let pct = step.x;
+            let only = if d1 == 8 {
+                None
+            } else {
+                let pick = ScriptStep {
+                    target_type: d1,
+                    ..Default::default()
+                };
+                let Some(t) = (if d1 == 0 {
+                    Some(target)
+                } else {
+                    find_target(map, &pick, source, target)
+                }) else {
+                    return false;
+                };
+                Some(t)
+            };
             if let Some(c) = creature_mut(map, source) {
                 for (t, v) in c.threat.iter_mut() {
-                    if d1 != 0 || *t == target {
-                        *v = (*v * (100 + pct) as f32 / 100.0).max(0.0);
+                    if only.is_none_or(|o| o == *t) {
+                        *v = (*v * (100.0 + pct) / 100.0).max(0.0);
                     }
                 }
             }
             true
         }
-        // End the script, if a creature is (or, with dataint, isn't) near.
+        // End the script: at once, or if creature datalong isn't (or,
+        // with datalong3, is) alive within datalong2 yards.
         31 => {
             if d1 == 0 {
                 return false;
             }
             let at = map.position_of(source).unwrap_or(pos);
-            let found = !creatures_near(map, at, d1, d2 as f32, true).is_empty();
-            let end = if step.dataint[0] != 0 { !found } else { found };
+            let radius = if d2 > 0 { d2 as f32 } else { 30.0 };
+            let found = !creatures_near(map, at, d1, radius, true).is_empty();
+            let end = if d3 != 0 { found } else { !found };
             !end
         }
-        // End the script if a condition holds.
-        32 => !crate::game::map::conditions::met(map, d1, Some(source), Some(target)),
+        // End the script if a condition holds (or, with datalong3 & 1,
+        // doesn't), failing quest datalong2 for the player.
+        32 => {
+            let met = crate::game::map::conditions::met(map, d1, Some(source), Some(target));
+            let end = met != (d3 & 0x1 != 0);
+            if end
+                && d2 > 0
+                && let Some(p) = script_player(source, target)
+            {
+                for p in group_here(map, p) {
+                    fail_quest(map, p, d2);
+                }
+            }
+            !end
+        }
         33 => {
             crate::game::map::ai::enter_evade(map, source);
             true
         }
+        // Home: the step's place (0), where it stands (1), or its spawn's
+        // (2).
         34 => {
-            let here = map.creature(source).map(|c| (c.position, c.orientation));
+            let Some(c) = map.creature(source) else {
+                return false;
+            };
+            let home = match d1 {
+                0 => Some((pos, step.o)),
+                1 => Some((c.position, c.orientation)),
+                _ => c
+                    .spawn_guid
+                    .and_then(|g| {
+                        data.creature_spawns
+                            .get(&map.key.map)
+                            .and_then(|v| v.iter().find(|s| s.guid == g))
+                    })
+                    .map(|s| {
+                        (
+                            Vector3d {
+                                x: s.x,
+                                y: s.y,
+                                z: s.z,
+                            },
+                            s.orientation,
+                        )
+                    }),
+            };
+            let Some((p, o)) = home else {
+                return false;
+            };
             if let Some(c) = creature_mut(map, source) {
-                if d1 != 0 || (step.x == 0.0 && step.y == 0.0) {
-                    if let Some((p, o)) = here {
-                        c.home = p;
-                        c.home_orientation = o;
-                    }
-                } else {
-                    c.home = pos;
-                    c.home_orientation = step.o;
-                }
+                c.home = p;
+                c.home_orientation = o;
             }
             true
         }
-        // Turn to the target, or to the step's orientation.
+        // Turn to the target (datalong 0), or to the step's orientation.
         35 => {
             let o = if d1 == 0 {
-                step.o
-            } else {
                 match (map.position_of(source), map.position_of(target)) {
-                    (Some(a), Some(b)) => (b.y - a.y).atan2(b.x - a.x),
-                    _ => step.o,
+                    (Some(a), Some(b)) if target != source => (b.y - a.y).atan2(b.x - a.x),
+                    _ => return false,
                 }
+            } else {
+                step.o
             };
             if let Some(c) = creature_mut(map, source) {
                 c.orientation = o;
@@ -1087,35 +1422,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         }
         // Start one of up to four generic scripts, by chance.
         39 => {
-            let options: Vec<(u32, i32)> = (0..4)
-                .map(|i| (step.datalong[i], step.dataint[i]))
-                .filter(|(s, _)| *s > 0)
-                .collect();
-            if options.is_empty() {
-                return false;
+            if let Some(script) = choose_script(step) {
+                start(map, ScriptTable::Generic, script, source, target);
             }
-            let total: i32 = options.iter().map(|(_, c)| (*c).max(0)).sum();
-            let script = if total <= 0 {
-                options[rand::rng().random_range(0..options.len())].0
-            } else {
-                let mut r = rand::rng().random_range(0..total.max(1).max(100));
-                let mut chosen = None;
-                for (s, c) in &options {
-                    if r < *c {
-                        chosen = Some(*s);
-                        break;
-                    }
-                    r -= c;
-                }
-                match chosen {
-                    Some(s) => s,
-                    None => return true,
-                }
-            };
-            start(map, ScriptTable::Generic, script, source, target);
             true
         }
         40 => {
+            let Some(target) = script_player(source, target) else {
+                return false;
+            };
             let mut left = d2.max(1);
             while left > 0 {
                 let Some(i) = map
@@ -1139,12 +1454,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             };
             map.remove_gameobject(o).is_some()
         }
+        // Melee on or off: off, it stays in the fight, but doesn't swing.
         42 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_melee = d1 == 0;
-            }
-            if d1 == 0 {
-                crate::game::map::combat::stop_attack(map, source);
             }
             true
         }
@@ -1154,8 +1467,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // Phase: set, or (datalong2 1) raised or (2) lowered by datalong.
         44 => {
-            event_ai::set_phase(map, source, d1);
+            let phase = event_ai::phase(map, source);
+            let to = match d2 {
+                1 => phase.saturating_add(d1),
+                2 => phase.saturating_sub(d1),
+                _ => d1,
+            };
+            event_ai::set_phase(map, source, to);
             true
         }
         45 => {
@@ -1195,8 +1515,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // Call for help within x yards.
         50 => {
-            let radius = d1 as f32;
+            let radius = if step.x > 0.0 { step.x } else { d1 as f32 };
+            if radius <= 0.0 {
+                return false;
+            }
             crate::game::map::ai::call_for_help_radius(map, source, radius);
             true
         }
@@ -1269,12 +1593,54 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Waypoints, again.
+        // Waypoints: from the spawn's or the entry's path (datalong 0),
+        // the spawn's (1), the entry's (2), the entry's special one (3),
+        // or a script's (5, variant dataint3); from point datalong2, after
+        // datalong3 ms, round again with datalong4. dataint and dataint2
+        // stand in for the spawn and entry.
         60 => {
+            let Some(c) = map.creature(source).filter(|c| c.alive()) else {
+                return false;
+            };
+            let spawn = if step.dataint[0] > 0 {
+                Some(step.dataint[0] as u32)
+            } else {
+                c.spawn_guid
+            };
+            let entry = if step.dataint[1] > 0 {
+                step.dataint[1] as u32
+            } else {
+                c.entry
+            };
+            let by_spawn = || spawn.and_then(|g| data.waypoints.get(&g));
+            let points = match d1 {
+                0 => by_spawn().or_else(|| data.waypoints_by_entry.get(&entry)),
+                1 => by_spawn(),
+                2 => data.waypoints_by_entry.get(&entry),
+                3 => data.waypoints_special.get(&entry),
+                5 => data
+                    .scripts
+                    .routes
+                    .get(&(entry, step.dataint[2].max(0) as u32)),
+                _ => None,
+            };
+            let Some(points) = points.filter(|p| !p.is_empty()).cloned() else {
+                return false;
+            };
+            let start = (d2 as usize).min(points.len() - 1);
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.route = Some(event_ai::Route {
+                    points: std::sync::Arc::new(points),
+                    repeat: d4 != 0,
+                });
+                s.follow = None;
+            }
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
-                c.waypoint = d2 as usize;
-                c.motion = Motion::Idle { until: Some(now) };
+                c.waypoint = start.wrapping_sub(1);
+                c.motion = Motion::Idle {
+                    until: Some(now + Duration::from_millis(u64::from(d3))),
+                };
             }
             true
         }
@@ -1286,21 +1652,59 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // A script for every player here.
+        // Script datalong for everything near of a kind (datalong2: 0
+        // objects, 1 units, 2 creatures, 3 players) and entry
+        // (datalong3, 0 any) within datalong4 yards.
         68 => {
-            let players: Vec<Guid> = map.players.keys().copied().collect();
-            for p in players {
-                start(map, ScriptTable::Generic, d1, source, p);
+            let Some(at) = map.position_of(source) else {
+                return false;
+            };
+            let radius = d4 as f32;
+            let mut found: Vec<Guid> = Vec::new();
+            if matches!(d2, 1 | 2) {
+                found.extend(
+                    map.grid
+                        .around(at.x, at.y, radius)
+                        .filter(|g| guid::is_unit(*g))
+                        .filter(|g| {
+                            map.creature(*g).is_some_and(|c| {
+                                (d3 == 0 || c.entry == d3) && dist(c.position, at) <= radius
+                            })
+                        }),
+                );
+            }
+            if matches!(d2, 1 | 3) {
+                found.extend(
+                    map.players
+                        .values()
+                        .filter(|p| dist(p.position(), at) <= radius)
+                        .map(|p| p.guid),
+                );
+            }
+            if d2 == 0 {
+                found.extend(
+                    map.gameobjects
+                        .iter()
+                        .filter(|(_, o)| {
+                            (d3 == 0 || o.entry == d3) && dist(o.position, at) <= radius
+                        })
+                        .map(|(_, o)| o.guid),
+                );
+            }
+            found.sort();
+            found.dedup();
+            for g in found {
+                start(map, ScriptTable::Generic, d1, g, target);
             }
             true
         }
         70 => {
-            if let Some(p) = map.players.get_mut(&target)
-                && let Some(slot) = p.journal.slot_of(d1)
-            {
-                p.journal.log[slot].failed = true;
+            let Some(p) = script_player(source, target) else {
+                return false;
+            };
+            for p in group_here(map, p) {
+                fail_quest(map, p, d1);
             }
-            crate::game::map::quests::check(map, target, d1);
             true
         }
         71 => {
@@ -1320,7 +1724,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         74 => {
-            crate::game::map::spells::cast_triggered(map, target, d1, Some(target));
+            crate::game::map::spells::cast_triggered(map, source, d1, Some(source));
             true
         }
         // Summon an object.
@@ -1354,8 +1758,26 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // Join the target's group at x yards and angle o (or, Thistle
+        // Tea's, where it stands from it), with flags datalong.
         78 => {
-            crate::game::map::creature_groups::join(map, source, target, d1 as f32, d2 as f32);
+            if !guid::is_unit(target) || target == source {
+                return false;
+            }
+            let (distance, angle) = if step.ext.as_ref().is_some_and(|e| e.formation_from_position)
+            {
+                let (Some(me), Some(them)) = (map.creature(source), map.creature(target)) else {
+                    return false;
+                };
+                (
+                    dist(me.position, them.position),
+                    (me.position.y - them.position.y).atan2(me.position.x - them.position.x)
+                        - them.orientation,
+                )
+            } else {
+                (step.x.max(0.0), step.o)
+            };
+            crate::game::map::creature_groups::join_with(map, source, target, distance, angle, d1);
             true
         }
         79 => {
@@ -1373,6 +1795,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         }
         // Quest credit: kill credit or exploration.
         83 => {
+            let Some(target) = script_player(source, target) else {
+                return false;
+            };
             if d2 != 0 {
                 quest_explored(map, target, d1);
             } else {
@@ -1387,13 +1812,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // A script event for the source, from the target.
         85 => {
-            let g = if guid::is_unit(target) {
-                target
-            } else {
-                source
-            };
-            event_ai::script_event(map, g, d1, d2, Some(source));
+            if !guid::is_unit(source) {
+                return false;
+            }
+            event_ai::script_event(map, source, d1, d2, Some(target).filter(|t| !t.is_zero()));
             true
         }
         87 => {
@@ -1412,18 +1836,28 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // A script for each of a creature group, or everyone in the zone.
+        // One of up to four scripts, by chance, for each of a creature
+        // group.
         90 => {
+            let Some(script) = choose_script(step) else {
+                return false;
+            };
             let members = crate::game::map::creature_groups::members_of(map, source);
             for m in members {
-                start(map, ScriptTable::Generic, d1, m, target);
+                start(map, ScriptTable::Generic, script, m, target);
             }
             true
         }
+        // Script datalong for everyone in zone datalong2.
         92 => {
-            let players: Vec<Guid> = map.players.keys().copied().collect();
+            let players: Vec<Guid> = map
+                .players
+                .values()
+                .filter(|p| d2 == 0 || p.zone == d2)
+                .map(|p| p.guid)
+                .collect();
             for p in players {
-                start(map, ScriptTable::Generic, d1, source, p);
+                start(map, ScriptTable::Generic, d1, p, target);
             }
             true
         }
@@ -1479,10 +1913,658 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 None => false,
             }
         }
-        // Flying, meeting stones, pet command states, taxis and the like have
-        // nothing to do here.
+        // Kept updating with no one near: every map here updates anyway.
+        21 => true,
+        30 => {
+            if guid::is_player(target) {
+                crate::game::map::npc::fly_path(map, target, d1);
+                true
+            } else {
+                false
+            }
+        }
+        36 => {
+            let player = if guid::is_player(target) {
+                target
+            } else {
+                source
+            };
+            if !guid::is_player(player) {
+                return false;
+            }
+            crate::game::map::meeting_stones::queue(map, player, d1);
+            true
+        }
+        // A guid the instance script keeps: the target's (0) or the source's.
+        38 => {
+            let g = if d2 == 0 { target } else { source };
+            map.instance.guids.insert(d1, g);
+            true
+        }
+        // Start (1) or stop (0) a game event.
+        53 => {
+            let realm = map.realm.clone();
+            crate::game::events::force(&realm, d1, d2 != 0);
+            true
+        }
+        // A cooldown on (57) or off (58) the source's spell.
+        57 => {
+            let until = now + Duration::from_secs(u64::from(d2));
+            if let Some(c) = map.caster_mut(source) {
+                c.cooldowns.insert(d1, until);
+            }
+            true
+        }
+        58 => {
+            if let Some(c) = map.caster_mut(source) {
+                c.cooldowns.remove(&d1);
+            }
+            if let Some(p) = map.players.get(&source) {
+                p.outbound.send(&SMSG_CLEAR_COOLDOWN {
+                    id: d1,
+                    target: source,
+                });
+            }
+            true
+        }
+        // Help the target with its fight.
+        72 => {
+            let foe = map
+                .combat(target)
+                .map(|c| c.victim)
+                .filter(|v| !v.is_zero() && alive(map, *v));
+            match foe {
+                Some(f) if guid::is_unit(source) => {
+                    crate::game::map::ai::attacked(map, source, f);
+                    true
+                }
+                _ => false,
+            }
+        }
+        75 => {
+            if guid::is_unit(source) && alive(map, target) {
+                crate::game::map::ai::add_threat(map, source, target, d1 as f32);
+                crate::game::map::ai::attacked(map, source, target);
+                true
+            } else {
+                false
+            }
+        }
+        // A player's PvP flag on (1) or off.
+        86 => {
+            let Some(p) = script_player(target, source).and_then(|g| map.players.get_mut(&g))
+            else {
+                return false;
+            };
+            p.fields.set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_PVP,
+                d1 != 0,
+            );
+            true
+        }
+        // A pet's command: stay, follow, attack the target, dismiss.
+        88 => {
+            if crate::game::map::pets::state(map, source).is_none() {
+                return false;
+            }
+            match d1 as u8 {
+                crate::game::map::pets::COMMAND_STAY => {
+                    let at = map.position_of(source);
+                    crate::game::map::combat::stop_attack(map, source);
+                    crate::game::map::pets::stop_where(map, source);
+                    if let Some(s) = crate::game::map::pets::state_mut(map, source) {
+                        s.command = crate::game::map::pets::COMMAND_STAY;
+                        s.stay_at = at;
+                    }
+                }
+                crate::game::map::pets::COMMAND_FOLLOW => {
+                    crate::game::map::combat::stop_attack(map, source);
+                    if let Some(s) = crate::game::map::pets::state_mut(map, source) {
+                        s.command = crate::game::map::pets::COMMAND_FOLLOW;
+                        s.stay_at = None;
+                    }
+                }
+                crate::game::map::pets::COMMAND_ATTACK => {
+                    if !crate::game::map::combat::can_attack(map, source, target) {
+                        return false;
+                    }
+                    crate::game::map::pets::attack_target(map, source, target);
+                }
+                crate::game::map::pets::COMMAND_DISMISS => {
+                    crate::game::map::pets::dismiss(map, source)
+                }
+                _ => return false,
+            }
+            true
+        }
+        // Fly, or come down.
+        77 => {
+            let on = d1 != 0;
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.fly = on;
+            }
+            if let Some(c) = creature_mut(map, source) {
+                if on {
+                    c.move_flags |= FLIGHT_FLAGS;
+                } else {
+                    c.move_flags &= !FLIGHT_FLAGS;
+                }
+            }
+            true
+        }
+        // Thistle Tea's: the rest of the source's scripts end (in
+        // `advance`).
+        C_STOP_SCRIPTS => true,
+        // Hold its path for datalong ms: until its summons since are gone,
+        // or (datalong2 1) until released. dataint is the release's
+        // script, dataint2 the one when it runs out unreleased.
+        C_HOLD_WAYPOINTS => {
+            let earlier: Vec<Guid> = event_ai::scripted(map, source)
+                .map(|s| {
+                    s.summoned
+                        .iter()
+                        .copied()
+                        .filter(|g| map.creature(*g).is_some_and(|c| c.alive()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let Some(s) = event_ai::scripted_mut(map, source) else {
+                return false;
+            };
+            s.hold = Some(event_ai::Hold {
+                until: now + Duration::from_millis(u64::from(d1)),
+                ready_at: now + Duration::from_millis(1),
+                signal: d2 == 1,
+                signaled: false,
+                earlier,
+                release_script: step.dataint[0].max(0) as u32,
+                expired_script: step.dataint[1].max(0) as u32,
+            });
+            true
+        }
+        C_RELEASE_WAYPOINTS => {
+            if let Some(h) = event_ai::scripted_mut(map, source).and_then(|s| s.hold.as_mut()) {
+                h.signaled |= now < h.until;
+                h.until = h.until.min(now);
+            }
+            true
+        }
+        C_SET_REGENERATION => {
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.regenerate = Some(d1);
+            }
+            true
+        }
+        C_SET_CASTER_CHASE_DISTANCE => {
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.caster_chase_distance = (d1 > 0).then_some(d1 as f32);
+            }
+            true
+        }
+        C_SET_HEALTH_PCT => {
+            if !(1..=100).contains(&d1) || !alive(map, source) {
+                return false;
+            }
+            let Some(f) = map.unit_fields_mut(source) else {
+                return false;
+            };
+            let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+            f.set_u32(UNIT_FIELD_HEALTH, (max * d1 / 100).max(1));
+            true
+        }
+        // Lose datalong health: dying of it if it is all there is.
+        C_LOSE_HEALTH => {
+            if d1 == 0 || !alive(map, source) {
+                return false;
+            }
+            let health = map
+                .unit_fields(source)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
+            if health > d1 + 1 {
+                if let Some(f) = map.unit_fields_mut(source) {
+                    f.set_u32(UNIT_FIELD_HEALTH, health - d1);
+                }
+            } else {
+                crate::game::map::combat::deal_damage(map, source, source, health);
+            }
+            true
+        }
+        C_SET_CONCEALED => {
+            let Some(s) = event_ai::scripted_mut(map, source) else {
+                return false;
+            };
+            s.concealed = d1 != 0;
+            crate::game::map::visibility::stealth_changed(map, source);
+            true
+        }
+        // The player has cast spell datalong on the source, for their
+        // quests.
+        C_CAST_CREDIT => {
+            let Some(player) = script_player(source, target).filter(|p| *p != source) else {
+                return false;
+            };
+            cast_credit(map, player, d1, source);
+            true
+        }
+        // The auras an evade would shed.
+        C_CLEAR_AURAS => {
+            let held: Vec<u32> = map
+                .creature(source)
+                .map(|c| c.auras.holders.iter().map(|a| a.spell).collect())
+                .unwrap_or_default();
+            for spell in held {
+                crate::game::map::auras::remove_spell(map, source, spell, None);
+            }
+            true
+        }
+        // Linked feign death: get up after datalong ms unless every
+        // creature datalong2 within datalong3 yards is down too, under
+        // aura datalong4; scripts dataint (on falling) and dataint2 (on
+        // getting up).
+        C_LINKED_FEIGN_DEATH => {
+            let Some(s) = event_ai::scripted_mut(map, source) else {
+                return false;
+            };
+            s.feign = Some(event_ai::Feign {
+                delay: Duration::from_millis(u64::from(d1)),
+                entry: d2,
+                radius: d3 as f32,
+                pacify: d4,
+                fall_script: step.dataint[0].max(0) as u32,
+                revive_script: step.dataint[1].max(0) as u32,
+                down_at: None,
+            });
+            true
+        }
+        C_SET_MELEE_SPELL => {
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.melee_spell = (d1 > 0).then_some(d1);
+            }
+            true
+        }
+        C_SET_CALL_FOR_HELP_RANGE => {
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.call_for_help_range = Some(d1 as f32);
+            }
+            true
+        }
+        // A battleground's creature event.
+        C_BATTLEGROUND_EVENT => {
+            if !guid::is_unit(source) {
+                return false;
+            }
+            crate::game::map::battleground::creature_event(map, source, d1);
+            true
+        }
+        // The source to the step's place, or to its target.
+        C_TELEPORT_SELF => {
+            if !guid::is_unit(source) || !alive(map, source) {
+                return false;
+            }
+            let (at, o) = if step.ext.as_ref().is_some_and(|e| e.at_target) {
+                let Some(at) = map.position_of(target) else {
+                    return false;
+                };
+                (at, map.creature(source).map_or(0.0, |c| c.orientation))
+            } else {
+                (pos, step.o)
+            };
+            place(map, source, at, o);
+            true
+        }
         _ => true,
     }
+}
+
+/// One creature of a summon step.
+fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool {
+    let [d1, d2, d3, d4] = step.datalong;
+    let mut at = Vector3d {
+        x: step.x,
+        y: step.y,
+        z: step.z,
+    };
+    let mut o = step.o;
+    let ext = step.ext.as_deref();
+    if let Some(e) = ext {
+        if e.at_target {
+            let Some(p) = map.position_of(target) else {
+                return false;
+            };
+            at = p;
+            o = map.creature(source).map_or(o, |c| c.orientation);
+        } else if !e.positions.is_empty() {
+            let vacant: Vec<[f32; 4]> = e
+                .positions
+                .iter()
+                .copied()
+                .filter(|p| {
+                    let here = Vector3d {
+                        x: p[0],
+                        y: p[1],
+                        z: p[2],
+                    };
+                    !map.grid
+                        .around(here.x, here.y, 40.0)
+                        .filter(|g| guid::is_unit(*g))
+                        .any(|g| {
+                            map.creature(g)
+                                .is_some_and(|c| c.alive() && dist(c.position, here) < 1.0)
+                        })
+                })
+                .collect();
+            if vacant.is_empty() {
+                return false;
+            }
+            let p = vacant[rand::rng().random_range(0..vacant.len())];
+            at = Vector3d {
+                x: p[0],
+                y: p[1],
+                z: p[2],
+            };
+            o = p[3];
+        }
+    }
+    if at.x == 0.0 && at.y == 0.0 && at.z == 0.0 {
+        let Some(here) = map.position_of(source) else {
+            return false;
+        };
+        at = here;
+    }
+    if let Some(e) = ext
+        && e.scatter > 0.0
+    {
+        at = map
+            .nav
+            .as_mut()
+            .and_then(|n| n.random_point(at, e.scatter))
+            .unwrap_or(at);
+    }
+    let flags = step.dataint[0] as u32;
+    // Unique: not if as many as allowed are near already.
+    if flags & 0xC != 0
+        && creatures_near(map, at, d1, if d4 > 0 { d4 as f32 } else { 100.0 }, true).len()
+            >= d3.max(1) as usize
+    {
+        return false;
+    }
+    let despawn = (d2 > 0).then(|| {
+        (
+            Duration::from_millis(u64::from(d2)),
+            if step.dataint[3] > 0 {
+                step.dataint[3]
+            } else {
+                1
+            },
+        )
+    });
+    let Some(g) = summon(map, source, d1, at, o, despawn) else {
+        return false;
+    };
+    if let Some(s) = event_ai::scripted_mut(map, g) {
+        if flags & 0x1 != 0 {
+            s.run = true;
+        }
+        if despawn.is_none() && step.dataint[3] > 0 {
+            s.despawn_type = step.dataint[3];
+        }
+        if ext.is_some_and(|e| e.concealed) {
+            s.concealed = true;
+        }
+    }
+    if step.dataint[1] > 0 {
+        start(map, ScriptTable::Generic, step.dataint[1] as u32, g, target);
+    }
+    // An attack target by target type; -1 for none.
+    if step.dataint[2] >= 0 {
+        let attack = ScriptStep {
+            target_type: step.dataint[2] as u32,
+            ..Default::default()
+        };
+        if let Some(t) = find_target(map, &attack, source, target)
+            && (guid::is_player(t) || guid::is_unit(t))
+            && crate::game::map::combat::can_attack(map, g, t)
+        {
+            crate::game::map::ai::attacked(map, g, t);
+        }
+    }
+    true
+}
+
+/// A player cast `spell` on `creature`: the quests that ask for it.
+fn cast_credit(map: &mut Map, player: Guid, spell: u32, creature: Guid) {
+    let entry = guid::entry(creature);
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let mut touched = Vec::new();
+    for l in p.journal.log.iter_mut() {
+        let Some(q) = data.npc.quests.get(&l.quest) else {
+            continue;
+        };
+        for (i, (id, count)) in q.required_kills.iter().enumerate() {
+            if q.required_spell_casts[i] == spell
+                && *id > 0
+                && *id as u32 == entry
+                && l.kills[i] < *count
+            {
+                l.kills[i] += 1;
+                p.outbound.send(&SMSG_QUESTUPDATE_ADD_KILL {
+                    quest_id: q.id,
+                    creature_id: entry,
+                    kill_count: l.kills[i],
+                    required_kill_count: *count,
+                    guid: creature,
+                });
+                touched.push(q.id);
+            }
+        }
+    }
+    for q in touched {
+        crate::game::map::quests::check(map, player, q);
+    }
+}
+
+/// The player of a step's two: the target if it is one, else the source.
+fn script_player(source: Guid, target: Guid) -> Option<Guid> {
+    if guid::is_player(target) {
+        Some(target)
+    } else {
+        guid::is_player(source).then_some(source)
+    }
+}
+
+/// One of a step's up to four scripts (datalong) by their chances
+/// (dataint): a roll of 1 to 100 falls in one's share, or in none.
+fn choose_script(step: &ScriptStep) -> Option<u32> {
+    let options: Vec<(u32, i32)> = (0..4)
+        .map(|i| (step.datalong[i], step.dataint[i]))
+        .filter(|(s, _)| *s > 0)
+        .collect();
+    if options.is_empty() {
+        return None;
+    }
+    if options.iter().all(|(_, c)| *c <= 0) {
+        return Some(options[rand::rng().random_range(0..options.len())].0);
+    }
+    let roll = rand::rng().random_range(1..=100);
+    let mut sum = 0;
+    for (s, c) in options {
+        if roll > sum && roll <= sum + c {
+            return Some(s);
+        }
+        sum += c;
+    }
+    None
+}
+
+/// A quest of a player's failed.
+fn fail_quest(map: &mut Map, player: Guid, quest: u32) {
+    if let Some(p) = map.players.get_mut(&player)
+        && let Some(slot) = p.journal.slot_of(quest)
+    {
+        p.journal.log[slot].failed = true;
+    }
+    crate::game::map::quests::check(map, player, quest);
+}
+
+/// A creature put at `at` at once, as vmangos's `NearTeleportTo`.
+pub fn place(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
+    let now = map.now;
+    let spline_id = map.next_spline_id;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.motion = Motion::Idle {
+        until: (c.movement_type != crate::game::map::creature::MOVEMENT_IDLE).then_some(now),
+    };
+    c.position = at;
+    c.orientation = orientation;
+    if let Some(s) = c.scripted.as_deref_mut() {
+        s.scripted_move = None;
+    }
+    let (anchor, old_cell) = (c.vis_anchor, c.cell);
+    let new_cell = crate::game::map::grid::cell_of(at.x, at.y);
+    c.cell = new_cell;
+    map.grid.relocate(g, old_cell, new_cell);
+    crate::game::map::visibility::moved(map, g, anchor, at);
+    let frame = crate::game::map::ai::stop_packet(g, at, spline_id);
+    map.send_to_observers(g, &frame, false);
+}
+
+/// `SCRIPT_COMMAND_MOVEMENT`.
+fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool {
+    let now = map.now;
+    let [d1, d2, d3, _] = step.datalong;
+    if !map.creature(source).is_some_and(|c| c.alive()) {
+        return false;
+    }
+    if let Some(s) = event_ai::scripted_mut(map, source) {
+        s.follow = None;
+    }
+    match d1 {
+        0 => {
+            let at = map.position_of(source);
+            if let Some(c) = creature_mut(map, source) {
+                c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+                if matches!(c.motion, Motion::Moving(_)) {
+                    c.motion = Motion::Idle { until: None };
+                    if let Some(at) = at {
+                        let spline_id = map.next_spline_id;
+                        map.next_spline_id = map.next_spline_id.wrapping_add(1);
+                        let frame = crate::game::map::ai::stop_packet(source, at, spline_id);
+                        map.send_to_observers(source, &frame, false);
+                    }
+                } else {
+                    c.motion = Motion::Idle { until: None };
+                }
+            }
+        }
+        1 => {
+            let here = map.position_of(source);
+            if let Some(c) = creature_mut(map, source) {
+                c.movement_type = crate::game::map::creature::MOVEMENT_RANDOM;
+                c.wander_distance = step.x.max(0.0);
+                if d2 != 0
+                    && let Some(h) = here
+                {
+                    c.home = h;
+                }
+                c.motion = Motion::Idle { until: Some(now) };
+            }
+        }
+        2 => {
+            if let Some(c) = creature_mut(map, source) {
+                c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
+                c.waypoint = usize::MAX;
+                c.motion = Motion::Idle { until: Some(now) };
+            }
+        }
+        7 => {
+            let Some((home, o)) = map.creature(source).map(|c| (c.home, c.home_orientation)) else {
+                return false;
+            };
+            move_with(
+                map,
+                source,
+                home,
+                Move {
+                    pathfind: true,
+                    face: Some(o),
+                    ..Default::default()
+                },
+            );
+        }
+        10 => {
+            let from = if d2 == 0 {
+                target
+            } else {
+                map.combat(source).map(|c| c.victim).unwrap_or_default()
+            };
+            if from.is_zero() || from == source {
+                return false;
+            }
+            crate::game::map::ai::flee_from(
+                map,
+                source,
+                from,
+                (d3 > 0).then(|| Duration::from_millis(u64::from(d3))),
+            );
+        }
+        15 => {
+            if !guid::is_unit(target) && !guid::is_player(target) || target == source {
+                return false;
+            }
+            let angle = if step.o < 0.0 {
+                rand::rng().random_range(0.0..std::f32::consts::TAU)
+            } else {
+                step.o
+            };
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.follow = Some((target, step.x.max(0.0), angle));
+            }
+            if let Some(c) = creature_mut(map, source) {
+                c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+            }
+            event_ai::follow_step(map, source);
+        }
+        19 => {
+            let mana_ok = d3 == 0
+                || map.unit_fields(source).is_some_and(|f| {
+                    let max = f.get_u32(UNIT_FIELD_MAXPOWER1);
+                    max == 0 || f.get_u32(UNIT_FIELD_POWER1) * 100 >= d3 * max
+                });
+            let victim = map.combat(source).map(|c| c.victim).unwrap_or_default();
+            let from = if victim.is_zero() { target } else { victim };
+            if !mana_ok || from.is_zero() || from == source {
+                return true;
+            }
+            let (Some(here), Some(them)) = (map.position_of(source), map.position_of(from)) else {
+                return false;
+            };
+            let angle = (here.y - them.y).atan2(here.x - them.x);
+            let to = Vector3d {
+                x: them.x + step.x * angle.cos(),
+                y: them.y + step.x * angle.sin(),
+                z: them.z,
+            };
+            move_with(
+                map,
+                source,
+                to,
+                Move {
+                    run: true,
+                    pathfind: true,
+                    ..Default::default()
+                },
+            );
+        }
+        _ => {}
+    }
+    true
 }
 
 static SERVER_VARIABLES: std::sync::LazyLock<parking_lot::Mutex<ahash::AHashMap<u32, u32>>> =
@@ -1590,6 +2672,15 @@ pub fn object_used(map: &mut Map, player: Guid, object: Guid) {
     let (spawn, entry, kind) = (o.spawn_guid, o.entry, o.kind);
     if let Some(s) = spawn {
         start(map, ScriptTable::GameObject, s, object, player);
+    }
+    // A code-built script: on the player, at the object.
+    let scripts = &map.realm.data.scripts;
+    let hello = spawn
+        .and_then(|s| scripts.object_hello.get(&s))
+        .or_else(|| scripts.object_hello_entry.get(&entry))
+        .copied();
+    if let Some(id) = hello {
+        start(map, ScriptTable::Generic, id, player, object);
     }
     let event = map
         .realm

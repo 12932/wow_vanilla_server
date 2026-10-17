@@ -769,6 +769,11 @@ pub fn gossip_select(map: &mut Map, g: Guid, npc: Guid, option: u32) -> bool {
 }
 
 /// A creature fell in the match.
+/// A battleground creature's script reports `event` (Thistle Tea's
+/// `battleground_event`), as Alterac Valley's air, cavalry and ground
+/// assaults count them: the hook their rules fill in.
+pub fn creature_event(_map: &mut Map, _creature: Guid, _event: u32) {}
+
 pub fn creature_died(map: &mut Map, creature: Guid, killer: Guid) {
     if map.battleground.as_ref().is_some_and(|m| m.bg == BG_AV) {
         av::creature_died(map, creature, killer);

@@ -3,7 +3,8 @@
 //! dead with it, Majordomo's arrival when Molten Core's runes are out. The
 //! data is vmangos's (`map_template.script_name` names the script; boss
 //! states 0 not started, 1 in progress, 2 failed, 3 done) and is saved with
-//! the copy, so it outlives a restart. The adapters port Thistle Tea's.
+//! the copy, so it outlives a restart. The adapters port Thistle Tea's;
+//! the dungeons past the first five are in [`super::instance_adapters`].
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -54,6 +55,7 @@ pub enum Script {
     OnyxiasLair,
     ZulGurub,
     BlackwingLair,
+    RuinsOfAhnQiraj,
     /// A script with no port: its data is kept, and does nothing.
     Unported,
 }
@@ -83,6 +85,7 @@ impl Script {
             "instance_onyxia_lair" => Script::OnyxiasLair,
             "instance_zulgurub" => Script::ZulGurub,
             "instance_blackwing_lair" => Script::BlackwingLair,
+            "instance_ruins_of_ahnqiraj" => Script::RuinsOfAhnQiraj,
             _ => Script::Unported,
         })
     }
@@ -90,11 +93,13 @@ impl Script {
 
 /// When a door stands open.
 #[derive(Debug, Clone, Copy)]
-enum Open {
+pub enum Open {
     /// Field done.
     Done(u32),
     /// Field at least this.
     AtLeast(u32, u32),
+    /// As the rule says of the data.
+    Rule(fn(&BTreeMap<u32, u32>) -> bool),
 }
 
 impl Open {
@@ -103,6 +108,7 @@ impl Open {
         match self {
             Open::Done(f) => v(f) == DONE,
             Open::AtLeast(f, n) => v(f) >= n,
+            Open::Rule(rule) => rule(data),
         }
     }
 }
@@ -114,6 +120,13 @@ pub struct State {
     pub data: BTreeMap<u32, u32>,
     /// Timed steps: (when, what).
     pub timers: Vec<(Instant, u32)>,
+    /// Guids scripts stored (`SCRIPT_COMMAND_SET_INST_DATA64`).
+    pub guids: ahash::AHashMap<u32, Guid>,
+    /// What an adapter keeps for the copy's life, unsaved: counters and
+    /// flags, the creatures it follows, and the spawns it has seen, by key.
+    pub scratch: BTreeMap<u32, u32>,
+    pub lists: ahash::AHashMap<u32, Vec<Guid>>,
+    pub seen: ahash::AHashMap<u32, Vec<u32>>,
 }
 
 impl State {
@@ -169,7 +182,7 @@ fn doors(s: Script) -> &'static [(u32, Open)] {
         ],
         Script::RazorfenKraul => &[(21099, Open::Done(1))],
         Script::ScarletMonastery => &[(104600, Open::AtLeast(1, 2)), (101854, Open::Done(10))],
-        _ => &[],
+        _ => super::instance_adapters::doors(s),
     }
 }
 
@@ -230,6 +243,7 @@ pub fn settle_spawns(map: &mut Map) {
         return;
     };
     apply_doors(map, s);
+    super::instance_adapters::settle_spawns(map, s);
     if s == Script::MoltenCore {
         for (_, _, rune, circle) in MC_RUNES {
             if get_data(map, *rune) == DONE
@@ -272,6 +286,9 @@ pub fn set_data(map: &mut Map, field: u32, value: u32, mode: u32) {
         2 => old.saturating_sub(value),
         _ => value,
     };
+    if super::instance_adapters::set_data(map, s, field, new) {
+        return;
+    }
     // Shadowfang's voidwalkers count up.
     if s == Script::ShadowfangKeep && field == 6 && mode == 0 {
         if value != DONE {
@@ -298,6 +315,26 @@ pub fn set_data(map: &mut Map, field: u32, value: u32, mode: u32) {
     changed(map, s, field, old, new);
     apply_doors(map, s);
     crate::game::instances::data_changed(&map.realm, map.key, &map.instance.data);
+}
+
+/// A field set as it is, its doors with it, and the copy saved.
+pub fn store(map: &mut Map, field: u32, value: u32) {
+    map.instance.data.insert(field, value);
+    if let Some(s) = map.instance.script {
+        apply_doors(map, s);
+    }
+    crate::game::instances::data_changed(&map.realm, map.key, &map.instance.data);
+}
+
+/// A timed step `key` of the copy's script, after `after`.
+pub fn schedule(map: &mut Map, key: u32, after: Duration) {
+    let at = map.now + after;
+    map.instance.timers.push((at, key));
+}
+
+/// The timed steps `key` called off.
+pub fn cancel(map: &mut Map, key: u32) {
+    map.instance.timers.retain(|(_, k)| *k != key);
 }
 
 fn is_encounter(s: Script, field: u32) -> bool {
@@ -391,6 +428,17 @@ pub fn creature_event(map: &mut Map, g: Guid, event: Event) {
                 .timers
                 .push((map.now + Duration::from_secs(7), T_RAGNAROS_ROARS));
         }
+        // Golemagg's fight resets with both his ragers back.
+        (Script::MoltenCore, 11988, Event::Spawned | Event::Evade) if get_data(map, 3) != DONE => {
+            for spawn in [56685, 56699] {
+                if let Some(r) = crate::game::map::scripts::creature_of_spawn(map, spawn) {
+                    if event == Event::Evade && map.creature(r).is_some_and(|c| c.alive()) {
+                        crate::game::map::ai::quiet_death(map, r);
+                    }
+                    crate::game::map::ai::respawn_now(map, r);
+                }
+            }
+        }
         // Golemagg's ragers go with him.
         (Script::MoltenCore, 11988, Event::Death) => {
             for r in creatures_of(map, 11672) {
@@ -399,7 +447,7 @@ pub fn creature_event(map: &mut Map, g: Guid, event: Event) {
         }
         _ => {}
     }
-    let _ = spawn;
+    super::instance_adapters::creature_event(map, s, g, entry, spawn, event);
 }
 
 /// A game object used in the copy.
@@ -464,7 +512,7 @@ pub fn object_used(map: &mut Map, entry: u32) {
                 .timers
                 .push((map.now + Duration::from_secs(3), T_DEADMINES_ALARM));
         }
-        _ => {}
+        _ => super::instance_adapters::object_used(map, s, entry),
     }
 }
 
@@ -488,6 +536,12 @@ pub fn update(map: &mut Map) {
 }
 
 fn timer(map: &mut Map, key: u32) {
+    if key >= super::instance_adapters::TIMERS
+        && let Some(s) = map.instance.script
+    {
+        super::instance_adapters::timer(map, s, key);
+        return;
+    }
     match key {
         T_DEADMINES_ALARM if get_data(map, 1) == 1 => {
             set_data(map, 1, 2, 0);
@@ -532,6 +586,9 @@ fn timer(map: &mut Map, key: u32) {
 /// `target_type` 12: a creature an instance script knows. Here, the
 /// index names an entry.
 pub fn guid_data(map: &Map, index: u32) -> Option<Guid> {
+    if let Some(g) = map.instance.guids.get(&index) {
+        return Some(*g);
+    }
     let entry = match (map.instance.script, index) {
         (Some(Script::ScarletMonastery), 2) => 3976,
         (Some(Script::ScarletMonastery), 3) => 3977,

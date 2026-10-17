@@ -1081,6 +1081,18 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
             c.in_extra_attack = false;
         }
     }
+    // A script's melee spell stands in for the blow.
+    if main_due && let Some(spell) = crate::game::map::event_ai::melee_spell(map, attacker) {
+        let period = map
+            .unit_fields(attacker)
+            .map_or(2000, |f| f.get_u32(UNIT_FIELD_BASEATTACKTIME))
+            .max(100);
+        if let Some(c) = map.combat_mut(attacker) {
+            c.next_swing = Some(now + Duration::from_millis(u64::from(period)));
+        }
+        crate::game::map::spells::cast_triggered(map, attacker, spell, Some(victim));
+        return;
+    }
     if main_due && map.unit_view(victim).is_some_and(|u| u.alive) {
         swing(map, attacker, victim, Hand::Main, false);
     }
@@ -1729,7 +1741,7 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
         crate::game::map::pvp::damaged(map, by, victim, damage);
         crate::game::map::arena::damaged(map, by, victim, damage);
     }
-    if damage == 0 {
+    if damage == 0 || crate::game::map::event_ai::feigning(map, victim) {
         return;
     }
     gain_rage(map, victim, damage, true);
@@ -1758,6 +1770,13 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
         left.max(floor.min(f.get_u32(UNIT_FIELD_HEALTH)))
     } else {
         left
+    };
+    // A linked feign death keeps it down, not dead.
+    if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
+        return;
+    }
+    let Some(f) = map.unit_fields_mut(victim) else {
+        return;
     };
     f.set_u32(UNIT_FIELD_HEALTH, left);
     sync_aura_state(map, victim);
