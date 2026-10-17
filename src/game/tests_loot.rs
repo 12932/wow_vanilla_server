@@ -101,6 +101,7 @@ fn data() -> GameData {
             id: 1,
             items: vec![SET_HELM, SET_CHEST],
             spells: vec![(SET_BONUS, 2)],
+            ..Default::default()
         },
     );
     // A creature that drops the green blade, and two of them near.

@@ -87,6 +87,10 @@ and its state: **fixed**, or **left** with why.
     equipping an item with an on-use spell puts that spell on a 30-second
     cooldown, which wvs never started.
 
+19b. `equipment_sets.ex`: a set whose `ItemSet` row asks a skill
+    (`required_skill`, `required_skill_rank`) gives its bonuses only to one
+    with that much of it. wvs gave them to anyone.
+
 ## core/profession
 
 20. `skinning.ex`, `world/entity/mob/corpse.ex`: a skinning attempt rolls
