@@ -804,8 +804,19 @@ fn finish_rolls(map: &mut Map, object: Guid) {
 }
 
 fn refresh_lootable(map: &mut Map, object: Guid) {
+    // A quest drop is still there while one it fell to hasn't taken theirs
+    // (mangos's `IsLootedFor`).
+    let open = |l: &Loot, s: &LootSlot| {
+        s.quest
+            && !s.taken
+            && if !l.allowed.is_empty() {
+                l.allowed.iter().any(|g| !s.taken_by.contains(g))
+            } else {
+                l.owner.is_none_or(|o| !s.taken_by.contains(&o))
+            }
+    };
     let lootable = loot_ref(map, object)
-        .is_some_and(|l| !l.is_empty() || l.items.iter().any(|s| s.quest && !s.taken));
+        .is_some_and(|l| !l.is_empty() || l.items.iter().any(|s| open(l, s)));
     if let Some(c) = map.creature_mut(object) {
         c.fields
             .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);
