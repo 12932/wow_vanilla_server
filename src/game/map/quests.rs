@@ -705,9 +705,12 @@ fn invalid(p: &Player, msg: QuestFailedReason) {
     p.outbound.send(&SMSG_QUESTGIVER_QUEST_INVALID { msg });
 }
 
-/// `CMSG_QUESTGIVER_ACCEPT_QUEST`: into the log.
+/// `CMSG_QUESTGIVER_ACCEPT_QUEST`: into the log; taken or not, the dialog
+/// closes after (mangos's `HandleQuestgiverAcceptQuestOpcode`, Thistle
+/// Tea's).
 pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     accept_with(map, player, giver, quest, true);
+    cancel(map, player);
 }
 
 /// A quest every member must accept, taken by one asked to (mangos's
@@ -1418,8 +1421,11 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
             player,
         );
     }
-    // The chain's next quest, offered at once.
+    // The chain's next quest, offered at once if this giver gives it and
+    // it may be taken, its condition too (mangos's `GetNextQuest`).
     if q.next_in_chain != 0
+        && relations(map, giver).0.contains(&q.next_in_chain)
+        && condition_ok(map, player, giver, q.next_in_chain)
         && map
             .players
             .get(&player)
