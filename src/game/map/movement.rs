@@ -141,7 +141,8 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     }
     body_moved(map, guid, moved, turned);
     // Into the water or out of it: the auras that ends (Thistle Tea's
-    // `interrupt_water_auras`).
+    // `interrupt_water_auras`). The terrain's liquid ends them too, for a
+    // client that doesn't say (`environment::update`).
     if was_swimming != swimming {
         use crate::game::map::auras::{INTERRUPT_ABOVE_WATER, INTERRUPT_UNDER_WATER};
         let mask = if swimming {

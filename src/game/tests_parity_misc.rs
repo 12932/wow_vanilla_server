@@ -32,6 +32,15 @@ const GIFT_UNTARGETED: u32 = 900_102;
 const CONJURE: u32 = 900_103;
 const TOKEN: u32 = 900_300;
 const INNKEEPER_COUNTER: u32 = 70;
+/// Auras water breaks (a mount's), and leaving it (Aquatic Form's).
+const MOUNTED: u32 = 900_104;
+const AQUATIC: u32 = 900_105;
+
+static TERRAIN: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| harness::real_data("terrain"));
+/// Out at sea west of Stranglethorn, and Goldshire's dry road.
+const HIGH_SEA: (f32, f32, f32) = (-15000.0, 1024.0, -5.0);
+const GOLDSHIRE: (f32, f32, f32) = (-9460.0, 62.0, 56.0);
 
 fn aura(id: u32, aura: u32, points: i32) -> SpellTemplate {
     let mut effects = [SpellEffect::default(); 3];
@@ -91,6 +100,11 @@ fn data() -> GameData {
     d.spells
         .spells
         .insert(CONJURE, create_item(CONJURE, 1, TOKEN));
+    for (id, flags) in [(MOUNTED, 0x80), (AQUATIC, 0x100)] {
+        let mut s = aura(id, 4, 1);
+        s.aura_interrupt_flags = flags;
+        d.spells.spells.insert(id, s);
+    }
     for (entry, name, max_count) in [(HEARTHSTONE, "Hearthstone", 1), (TOKEN, "Token", 0)] {
         d.items.insert(
             entry,
@@ -396,4 +410,71 @@ async fn a_creatures_create_item_effect_gives_its_target_the_item() {
     })
     .await;
     assert_eq!(carried_and_bound(&realm, g, TOKEN).await.0, 3);
+}
+
+/// A realm with the real terrain tiles; `None` without them.
+fn terrain_realm() -> Option<Arc<Realm>> {
+    crate::game::map::terrain::Terrain::open(TERRAIN.as_path(), 0)?;
+    let mut cfg = harness::test_config();
+    cfg.terrain_dir = Some(TERRAIN.clone());
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Some(Realm::new(cfg, store, startup, data(), None))
+}
+
+/// Put `g` at `at` and look at their environment, as the update does.
+fn place_and_check(m: &mut Map, g: Guid, at: Vector3d) {
+    let p = m.players.get_mut(&g).unwrap();
+    p.movement.position = at;
+    p.misc.env_checked_at = None;
+    crate::game::map::environment::update(m);
+}
+
+#[tokio::test]
+async fn the_terrains_water_ends_what_water_breaks_without_the_swimming_flag() {
+    let Some(realm) = terrain_realm() else {
+        return;
+    };
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let (on_land, in_sea, out_again) = on_map(&realm, move |m| {
+        let has = |m: &Map, spell| m.players[&g].auras.has_spell(spell);
+        let sea = m
+            .terrain
+            .as_mut()
+            .unwrap()
+            .liquid(Vector3d {
+                x: HIGH_SEA.0,
+                y: HIGH_SEA.1,
+                z: HIGH_SEA.2,
+            })
+            .expect("the open sea");
+        let dry = Vector3d {
+            x: GOLDSHIRE.0,
+            y: GOLDSHIRE.1,
+            z: GOLDSHIRE.2,
+        };
+        // Mounted on dry land: it stays.
+        place_and_check(m, g, dry);
+        crate::game::map::spells::cast_triggered(m, g, MOUNTED, Some(g));
+        place_and_check(m, g, dry);
+        let on_land = has(m, MOUNTED);
+        // Into the sea, a yard under, the client saying nothing of swimming.
+        let under = Vector3d {
+            x: HIGH_SEA.0,
+            y: HIGH_SEA.1,
+            z: sea.surface - 1.0,
+        };
+        place_and_check(m, g, under);
+        let in_sea = has(m, MOUNTED);
+        // In the water's form, back on land.
+        crate::game::map::spells::cast_triggered(m, g, AQUATIC, Some(g));
+        place_and_check(m, g, under);
+        assert!(has(m, AQUATIC), "it stays in the water");
+        place_and_check(m, g, dry);
+        (on_land, in_sea, has(m, AQUATIC))
+    })
+    .await;
+    assert!(on_land, "dry land breaks nothing");
+    assert!(!in_sea, "the sea dismounts");
+    assert!(!out_again, "leaving the water ends the water's form");
 }

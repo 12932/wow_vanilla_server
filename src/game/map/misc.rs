@@ -52,6 +52,8 @@ pub struct PlayerMisc {
     pub lava: Option<crate::game::map::environment::Mirror>,
     /// The spell the liquid the player is in put on (Naxxramas's slime).
     pub liquid_spell: Option<u32>,
+    /// In water deep enough to swim, by the terrain's liquid.
+    pub in_water: bool,
     pub env_checked_at: Option<Instant>,
     /// A summons waiting: by whom, to where, until when.
     pub summon: Option<Summon>,
