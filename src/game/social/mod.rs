@@ -36,6 +36,7 @@ pub struct Social {
     pub driven_events: Mutex<ahash::AHashMap<u32, bool>>,
     pub invasion: Mutex<crate::game::invasion::State>,
     pub elemental: Mutex<crate::game::elemental::State>,
+    pub omen: Mutex<crate::game::omen::Watch>,
 }
 
 impl Social {

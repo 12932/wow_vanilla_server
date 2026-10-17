@@ -784,3 +784,58 @@ async fn an_elemental_rift_calls_out_its_invaders() {
     map.query(move |m| crate::game::map::combat::kill(m, g, first)).await;
     assert_eq!(realm.social.elemental.lock().kills[0], 1);
 }
+
+#[tokio::test]
+async fn twenty_fireworks_wake_omen() {
+    let mut d = data();
+    d.gameobject_templates.insert(
+        crate::game::omen::LAUNCHER,
+        GameObjectTemplate {
+            entry: crate::game::omen::LAUNCHER,
+            kind: 22,
+            display_id: 1,
+            name: "Cluster Launcher".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 70,
+            entry: crate::game::omen::LAUNCHER,
+            map: 0,
+            x: START.0 + 2.0,
+            y: START.1 + 2.0,
+            z: START.2,
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    let mut omen = d.creature_templates[&GIVER].clone();
+    omen.entry = crate::game::omen::OMEN;
+    omen.name = "Omen".into();
+    d.creature_templates.insert(omen.entry, omen);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let launcher = guid::game_object(crate::game::omen::LAUNCHER, 70);
+    let out = map
+        .query(move |m| {
+            let mut seen = Vec::new();
+            for _ in 0..20 {
+                crate::game::map::world::use_object(m, g, launcher);
+                seen.push(m.realm.social.omen.lock().omen.is_some());
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert!(!out[18] && out[19], "Omen rises at the twentieth");
+    assert!(realm.social.omen.lock().minions);
+    assert_eq!(
+        realm.social.driven_events.lock().get(&crate::game::omen::MINIONS_OF_OMEN),
+        Some(&true)
+    );
+}

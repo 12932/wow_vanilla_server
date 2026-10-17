@@ -12,6 +12,7 @@ pub mod harness;
 pub mod instances;
 pub mod invasion;
 pub mod map;
+pub mod omen;
 pub mod registry;
 pub mod session;
 pub mod social;
