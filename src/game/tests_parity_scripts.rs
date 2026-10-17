@@ -1477,3 +1477,229 @@ async fn a_scripts_walk_home_fires_reached_home() {
     }
     assert_eq!(phase, 1, "home, its event fired");
 }
+
+/// Generic script 950: its source sits.
+fn with_sit(d: &mut GameData) {
+    d.scripts.generic.insert(950, vec![step(28, [1, 0, 0, 0])]);
+}
+
+/// The smaller commands of S23: zone scripts by zone only (92); an entry
+/// leaves players out (68); the wander radius (67); a permanent aura (74);
+/// the source teleports (6); a group script runs on an ungrouped source
+/// (90); the newest extra target is the one found (63).
+#[tokio::test]
+async fn the_smaller_commands_are_thistle_teas() {
+    let mut d = world();
+    with_sit(&mut d);
+    let mut aura = SpellTemplate {
+        id: 6200,
+        name: "Warded".into(),
+        equipped_item_class: -1,
+        duration_index: 77,
+        ..Default::default()
+    };
+    aura.effects[0] = SpellEffect {
+        effect: 6,
+        aura: 4,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(6200, aura);
+    d.spells.durations.insert(
+        77,
+        crate::game::data::spells::SpellDuration {
+            base: 10_000,
+            per_level: 0,
+            max: 10_000,
+        },
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let (host, buddy, third) = (host(), buddy(), third());
+    a.sees(third).await;
+    let out = map
+        .query(move |m| {
+            let reset = |m: &mut crate::game::map::Map| {
+                for g in [me, host, buddy, third] {
+                    if let Some(f) = m.unit_fields_mut(g) {
+                        f.set_byte(UNIT_FIELD_BYTES_1, 0, 0);
+                    }
+                }
+            };
+            let sitting = |m: &crate::game::map::Map| {
+                [me, host, buddy, third].map(|g| stand_state(m, g) == 1)
+            };
+            if let Some(p) = m.players.get_mut(&me) {
+                p.zone = 12;
+            }
+            // 92: zone 0 is no one's zone; zone 12 is Alice's.
+            crate::game::map::scripts::execute(m, &step(92, [950, 0, 0, 0]), host, host);
+            let zone_none = sitting(m);
+            crate::game::map::scripts::execute(m, &step(92, [950, 12, 0, 0]), host, host);
+            let zone_twelve = sitting(m);
+            reset(m);
+            // 68: units of Buddy's entry within 30 yards: not Alice.
+            crate::game::map::scripts::execute(m, &step(68, [950, 1, BUDDY, 30]), host, host);
+            let for_all = sitting(m);
+            reset(m);
+            // 67: wandering 7 yards about.
+            crate::game::map::scripts::execute(m, &step(67, [1, 0, 7, 0]), host, host);
+            let wander = m.creature(host).map(|c| c.wander_distance);
+            // 74 with 0x8: for good.
+            crate::game::map::scripts::execute(m, &step(74, [6200, 0x8, 0, 0]), host, host);
+            let lasting = crate::game::map::auras::auras(m, host).and_then(|a| {
+                a.holders
+                    .iter()
+                    .find(|h| h.spell == 6200)
+                    .map(|h| h.expires)
+            });
+            // 6: the host, the source, teleports; Alice, its target, stays.
+            let alice_at = m.position_of(me).unwrap();
+            let teleport = ScriptStep {
+                x: START.0 + 20.0,
+                y: START.1,
+                z: START.2,
+                ..step(6, [0; 4])
+            };
+            crate::game::map::scripts::execute(m, &teleport, host, me);
+            let moved = (
+                m.position_of(host).map(|p| p.x - START.0),
+                m.position_of(me) == Some(alice_at),
+            );
+            // 90: ungrouped, the host runs it itself.
+            let group = ScriptStep {
+                dataint: [100, 0, 0, 0],
+                ..step(90, [950, 0, 0, 0])
+            };
+            crate::game::map::scripts::execute(m, &group, host, Guid::zero());
+            let grouped = sitting(m);
+            reset(m);
+            // 63: Buddy, then Third, extra targets: the newest is found.
+            crate::game::map::scripts::execute(m, &step(61, [8, 600, 0, 0]), host, host);
+            crate::game::map::scripts::execute(m, &step(63, [8, 0, 0, 0]), buddy, host);
+            crate::game::map::scripts::execute(m, &step(63, [8, 0, 0, 0]), third, host);
+            let newest = crate::game::map::map_events::target_of(m, 24, 8, 0);
+            (
+                zone_none,
+                zone_twelve,
+                for_all,
+                wander,
+                lasting,
+                moved,
+                grouped,
+                newest,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, [false; 4], "92: zone 0 is no one's");
+    assert_eq!(out.1, [true, false, false, false], "92: Alice's zone");
+    assert_eq!(out.2, [false, false, true, false], "68: Buddy, not Alice");
+    assert_eq!(out.3, Some(7.0), "67's wander radius");
+    assert_eq!(out.4, Some(None), "74: for good");
+    assert_eq!(out.5, (Some(20.0), true), "6: the host goes, Alice stays");
+    assert_eq!(out.6, [false, true, false, false], "90: the host itself");
+    assert_eq!(out.7, Some(third), "63: the newest");
+}
+
+/// A unique summon counts its kind within 50 yards of its place (not 100),
+/// the dead too for a type whose corpse keeps its time (S23).
+#[tokio::test]
+async fn a_unique_summon_looks_fifty_yards_and_counts_lasting_corpses() {
+    let mut d = world();
+    with_son(&mut d);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    a.sees(host()).await;
+    let out = map
+        .query(move |m| {
+            let host = host();
+            let unique = |kind: i32, dx: f32| ScriptStep {
+                dataint: [0x4, 0, -1, kind],
+                x: START.0 + dx,
+                y: START.1 + 4.0,
+                z: START.2,
+                ..step(10, [SON, 60_000, 1, 0])
+            };
+            let sons = |m: &crate::game::map::Map| {
+                m.creatures.iter().filter(|(_, c)| c.entry == SON).count()
+            };
+            // One 70 yards from the next one's place: beyond 50.
+            crate::game::map::scripts::execute(m, &unique(1, 73.0), host, Guid::zero());
+            crate::game::map::scripts::execute(m, &unique(1, 3.0), host, Guid::zero());
+            let far = sons(m);
+            // The near one dead: type 1 doesn't count it, type 3 does.
+            let near = m
+                .creatures
+                .iter()
+                .filter(|(_, c)| c.entry == SON)
+                .min_by(|x, y| x.1.position.x.total_cmp(&y.1.position.x))
+                .map(|(_, c)| c.guid)
+                .unwrap();
+            crate::game::map::combat::deal_damage(m, me, near, 100_000);
+            crate::game::map::scripts::execute(m, &unique(3, 3.0), host, Guid::zero());
+            let counted = sons(m);
+            crate::game::map::scripts::execute(m, &unique(1, 3.0), host, Guid::zero());
+            (far, counted, sons(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (2, 2, 3),
+        "beyond 50; a lasting corpse counts; a plain one doesn't"
+    );
+}
+
+/// A step's script start runs at once, and the steps of the scripts under
+/// way that are due with it still run that tick (S23, nested starts).
+#[tokio::test]
+async fn a_nested_start_slips_no_one_a_tick() {
+    let mut d = world();
+    with_sit(&mut d);
+    // 960: the host kneels. 961: start 950 (Buddy sits), then phase 2.
+    d.scripts.generic.insert(
+        960,
+        vec![ScriptStep {
+            delay_ms: 100,
+            ..step(28, [8, 0, 0, 0])
+        }],
+    );
+    d.scripts.generic.insert(
+        961,
+        vec![
+            ScriptStep {
+                delay_ms: 100,
+                ..step(39, [950, 0, 0, 0])
+            },
+            ScriptStep {
+                delay_ms: 100,
+                ..step(44, [2, 0, 0, 0])
+            },
+        ],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let (host, buddy) = (host(), buddy());
+    a.sees(buddy).await;
+    let out = map
+        .query(move |m| {
+            crate::game::map::scripts::start(m, ScriptTable::Generic, 960, host, host);
+            crate::game::map::scripts::start(m, ScriptTable::Generic, 961, buddy, buddy);
+            let past = m.now - Duration::from_millis(200);
+            for r in m.scripts.runs.iter_mut() {
+                r.started = past;
+            }
+            crate::game::map::scripts::update(m);
+            (
+                stand_state(m, host),
+                stand_state(m, buddy),
+                crate::game::map::event_ai::phase(m, buddy),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (8, 1, 2), "all three due steps ran in the one update");
+}

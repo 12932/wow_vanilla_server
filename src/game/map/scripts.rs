@@ -89,6 +89,19 @@ pub struct Run {
 #[derive(Debug, Default)]
 pub struct Runner {
     pub runs: Vec<Run>,
+    /// How deep in running steps the map is: finished runs are swept out
+    /// only at the top, so a script a step starts doesn't move the runs
+    /// under way from under their indices (and slip their next steps a
+    /// tick).
+    depth: u32,
+}
+
+impl Runner {
+    fn sweep(&mut self) {
+        if self.depth == 0 {
+            self.runs.retain(|r| r.next != usize::MAX);
+        }
+    }
 }
 
 /// Start script `id` of `table` from `source` on `target`; its first
@@ -120,8 +133,10 @@ pub fn start_checked(
         checked,
     });
     let i = map.scripts.runs.len() - 1;
+    map.scripts.depth += 1;
     advance(map, i);
-    map.scripts.runs.retain(|r| r.next != usize::MAX);
+    map.scripts.depth -= 1;
+    map.scripts.sweep();
 }
 
 /// Run what is due of every script.
@@ -129,12 +144,16 @@ pub fn update(map: &mut Map) {
     if map.scripts.runs.is_empty() {
         return;
     }
+    // The top of the map's update: no step is under way (one a panic cut
+    // short is over).
+    map.scripts.depth = 1;
     let mut i = 0;
     while i < map.scripts.runs.len() {
         advance(map, i);
         i += 1;
     }
-    map.scripts.runs.retain(|r| r.next != usize::MAX);
+    map.scripts.depth = 0;
+    map.scripts.sweep();
 }
 
 /// Run the due steps of run `i`; a finished run's `next` becomes
@@ -1144,6 +1163,9 @@ pub struct Move {
     pub point: Option<u32>,
     /// A walk home: its arrival is as an evade's (`reached_home`).
     pub home: bool,
+    /// Distancing from its target (movement 19): while it runs, only a
+    /// spell cast with 0x04 (force) goes.
+    pub distancing: bool,
 }
 
 /// Move a creature as `how` says, remembering the move so its arrival
@@ -1177,6 +1199,7 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
             point: how.point,
             face: how.face,
             home: how.home,
+            distancing: how.distancing,
         });
     } else {
         // Already there.
@@ -1350,7 +1373,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     time: (d2 > 0).then(|| Duration::from_millis(u64::from(d2))),
                     face: (face > 0.0).then_some(face),
                     point: (d4 & 0x2 != 0).then_some(step.dataint[0].max(0) as u32),
-                    home: false,
+                    ..Default::default()
                 },
             )
         }
@@ -1386,13 +1409,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Teleport the player of the two, or the creature.
+        // The source teleports: a player to map datalong, a creature where
+        // it is (a creature's script that wants its player sent swaps).
         6 => {
-            if let Some(p) = script_player(source, target) {
-                map.teleport(p, MapKey::world(d1), pos, step.o);
+            if guid::is_player(source) && map.players.contains_key(&source) {
+                map.teleport(source, MapKey::world(d1), pos, step.o);
                 return true;
             }
-            if !guid::is_unit(source) {
+            if map.creature(source).is_none() {
                 return false;
             }
             place(map, source, pos, step.o);
@@ -2043,10 +2067,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Default movement.
+        // Default movement: wandering (1) datalong3 yards about.
         67 => {
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = d1 as u8;
+                if d1 == 1 {
+                    c.wander_distance = d3 as f32;
+                }
                 c.motion = Motion::Idle { until: Some(now) };
             }
             true
@@ -2072,7 +2099,8 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                         }),
                 );
             }
-            if matches!(d2, 1 | 3) {
+            // A player has no entry: an entry asked for leaves them out.
+            if matches!(d2, 1 | 3) && d3 == 0 {
                 found.extend(
                     map.players
                         .values()
@@ -2124,8 +2152,17 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // An aura on the source; with datalong2's 0x8, for good.
         74 => {
             crate::game::map::spells::cast_triggered(map, source, d1, Some(source));
+            if d2 & 0x8 != 0
+                && let Some(a) = crate::game::map::auras::auras_mut(map, source)
+            {
+                for h in a.holders.iter_mut().filter(|h| h.spell == d1) {
+                    h.expires = None;
+                    h.duration = None;
+                }
+            }
             true
         }
         // Summon an object.
@@ -2251,27 +2288,38 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // One of up to four scripts, by chance, for each of a creature
-        // group.
+        // One of up to four scripts, by chance, for the source and each of
+        // its group (grouped or not; a player's group is its party).
         90 => {
             let Some(script) = choose_script(step) else {
                 return false;
             };
-            let members = crate::game::map::creature_groups::members_of(map, source);
-            for m in members {
+            let members = if guid::is_player(source) {
+                group_here(map, source)
+            } else {
+                crate::game::map::creature_groups::members_of(map, source)
+            };
+            start(map, ScriptTable::Generic, script, source, target);
+            for m in members.into_iter().filter(|m| *m != source) {
                 start(map, ScriptTable::Generic, script, m, target);
             }
             true
         }
-        // Script datalong for everyone in zone datalong2.
+        // Script datalong for everyone in zone datalong2 here, and with
+        // datalong3 1 their pets.
         92 => {
-            let players: Vec<Guid> = map
+            let players: Vec<(Guid, Option<Guid>)> = map
                 .players
                 .values()
-                .filter(|p| d2 == 0 || p.zone == d2)
-                .map(|p| p.guid)
+                .filter(|p| p.zone == d2)
+                .map(|p| (p.guid, p.owned.pet))
                 .collect();
-            for p in players {
+            for (p, pet) in players {
+                if d3 == 1
+                    && let Some(pet) = pet.filter(|pet| map.creature(*pet).is_some())
+                {
+                    start(map, ScriptTable::Generic, d1, pet, target);
+                }
                 start(map, ScriptTable::Generic, d1, p, target);
             }
             true
@@ -2687,6 +2735,18 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
         };
         at = here;
     }
+    let flags = step.dataint[0] as u32;
+    // Unique: not if as many as allowed are within datalong4 yards (50
+    // with none) of its place, before its scatter, as Thistle Tea's
+    // `summon_allowed?`; the dead count for a type whose corpse keeps
+    // its time (3, 4, 8).
+    if flags & 0xC != 0 {
+        let radius = if d4 > 0 { d4 as f32 } else { 50.0 };
+        let living = !matches!(step.dataint[3], 3 | 4 | 8);
+        if creatures_near(map, at, d1, radius, living).len() >= d3.max(1) as usize {
+            return false;
+        }
+    }
     if let Some(e) = ext
         && e.scatter > 0.0
     {
@@ -2695,14 +2755,6 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             .as_mut()
             .and_then(|n| n.random_point(at, e.scatter))
             .unwrap_or(at);
-    }
-    let flags = step.dataint[0] as u32;
-    // Unique: not if as many as allowed are near already.
-    if flags & 0xC != 0
-        && creatures_near(map, at, d1, if d4 > 0 { d4 as f32 } else { 100.0 }, true).len()
-            >= d3.max(1) as usize
-    {
-        return false;
     }
     let despawn = (d2 > 0).then(|| {
         (
@@ -2956,26 +3008,44 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
             }
             event_ai::follow_step(map, source);
         }
+        // Distancing, as Thistle Tea's `Distancing.start`: from the step's
+        // target, to x yards past its edge, running, the cast under way
+        // given up (with datalong3, only at that share of mana or more; a
+        // unit with none has none). Held or feigning, it stays.
         19 => {
             let mana_ok = d3 == 0
                 || map.unit_fields(source).is_some_and(|f| {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1);
-                    max == 0 || f.get_u32(UNIT_FIELD_POWER1) * 100 >= d3 * max
+                    max > 0 && f.get_u32(UNIT_FIELD_POWER1) * 100 >= d3 * max
                 });
-            let victim = map.combat(source).map(|c| c.victim).unwrap_or_default();
-            let from = if victim.is_zero() { target } else { victim };
-            if !mana_ok || from.is_zero() || from == source {
+            let from = target;
+            if !mana_ok
+                || step.x <= 0.0
+                || from.is_zero()
+                || from == source
+                || !alive(map, from)
+                || crate::game::map::auras::held(map, source, false)
+                || crate::game::map::auras::auras(map, source)
+                    .is_some_and(|a| a.has(crate::game::map::auras::AURA_FEIGN_DEATH))
+            {
                 return true;
             }
             let (Some(here), Some(them)) = (map.position_of(source), map.position_of(from)) else {
                 return false;
             };
+            let radius = step.x
+                + map
+                    .unit_fields(from)
+                    .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+                    .filter(|r| *r > 0.0)
+                    .unwrap_or(DEFAULT_BOUNDING_RADIUS);
             let angle = (here.y - them.y).atan2(here.x - them.x);
             let to = Vector3d {
-                x: them.x + step.x * angle.cos(),
-                y: them.y + step.x * angle.sin(),
+                x: them.x + radius * angle.cos(),
+                y: them.y + radius * angle.sin(),
                 z: them.z,
             };
+            crate::game::map::spells::interrupt(map, source);
             move_with(
                 map,
                 source,
@@ -2983,6 +3053,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 Move {
                     run: true,
                     pathfind: true,
+                    distancing: true,
                     ..Default::default()
                 },
             );
