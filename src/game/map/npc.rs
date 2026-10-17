@@ -167,7 +167,16 @@ fn menu_options(
         .map(|m| {
             m.options
                 .iter()
-                .filter(|o| o.npc_flag == 0 || o.npc_flag & npc_flags != 0)
+                // An object's menu shows its gossip options alone, whatever
+                // their NPC flag (mangos's `PrepareGossipMenu`, Thistle
+                // Tea's `npc_flag_allowed?`).
+                .filter(|o| {
+                    if crate::game::guid::is_game_object(npc) {
+                        o.kind == 1
+                    } else {
+                        o.npc_flag == 0 || o.npc_flag & npc_flags != 0
+                    }
+                })
                 .filter(|o| {
                     o.condition == 0
                         || !map.realm.data.scripts.conditions.contains_key(&o.condition)
@@ -245,11 +254,28 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
     if crate::game::map::battleground::gossip_select(map, player, npc, option) {
         return;
     }
-    let Some(entry) = npc_entry(map, player, npc, 0) else {
-        return;
-    };
-    crate::game::map::creature_motion::talk_pause(map, npc);
     let data = map.realm.data.clone();
+    // An object's menu, as Thistle Tea's `source_allowed?` lets it be
+    // chosen from: the living player within reach of it.
+    let default_menu = if crate::game::guid::is_game_object(npc) {
+        let alive = map
+            .players
+            .get(&player)
+            .is_some_and(|p| p.death == crate::game::map::death::Death::Alive);
+        if !alive || !crate::game::map::objects::within_reach(map, player, npc) {
+            return;
+        }
+        map.gameobject(npc)
+            .and_then(|o| data.gameobject_templates.get(&o.entry))
+            .map_or(0, |t| if t.kind == 10 { t.data[19] } else { t.data[3] })
+    } else {
+        let Some(entry) = npc_entry(map, player, npc, 0) else {
+            return;
+        };
+        crate::game::map::creature_motion::talk_pause(map, npc);
+        data.creature_template(entry)
+            .map_or(0, |t| t.gossip_menu_id)
+    };
     let flags = map
         .creature(npc)
         .map(|c| c.fields.get_u32(UNIT_NPC_FLAGS))
@@ -260,8 +286,7 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         .and_then(|p| p.gossip_menu)
         .filter(|(g, _)| *g == npc)
         .map(|(_, m)| m)
-        .or_else(|| data.creature_template(entry).map(|t| t.gossip_menu_id))
-        .unwrap_or(0);
+        .unwrap_or(default_menu);
     let Some(o) = menu_options(map, menu_id, flags, player, npc)
         .into_iter()
         .find(|o| o.id == option)

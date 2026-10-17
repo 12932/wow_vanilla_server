@@ -479,3 +479,87 @@ async fn a_pet_autocasts_its_positive_spells() {
     assert_eq!(out.0, (true, false), "Paranoia out of a fight, no shield");
     assert!(out.1, "Fire Shield on its master under attack");
 }
+
+const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+
+#[tokio::test]
+async fn an_objects_gossip_options_show_and_are_chosen() {
+    use crate::game::data::npc::{GossipMenu, GossipOption};
+    const STATUE: u32 = 9200;
+    const MENU: u32 = 7000;
+    const DEEPER: u32 = 7001;
+    let mut d = crate::game::data::GameData::empty();
+    let mut statue = crate::game::data::GameObjectTemplate {
+        entry: STATUE,
+        kind: 2,
+        display_id: 1,
+        name: "Old Statue".into(),
+        size: 1.0,
+        ..Default::default()
+    };
+    statue.data[3] = MENU;
+    d.gameobject_templates.insert(STATUE, statue);
+    d.gameobject_spawns.insert(
+        0,
+        vec![crate::game::data::GameObjectSpawn {
+            guid: 600,
+            entry: STATUE,
+            map: 0,
+            x: START.0 + 1.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    // A gossip option flagged for a gossip NPC, as the real menus' are.
+    d.npc.gossip_menus.insert(
+        MENU,
+        GossipMenu {
+            texts: vec![(100, 0)],
+            options: vec![GossipOption {
+                id: 0,
+                text: "Read the inscription.".into(),
+                kind: 1,
+                npc_flag: 1,
+                action_menu: DEEPER as i32,
+                ..Default::default()
+            }],
+        },
+    );
+    d.npc.gossip_menus.insert(
+        DEEPER,
+        GossipMenu {
+            texts: vec![(101, 0)],
+            options: Vec::new(),
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGGOSSIP");
+    a.enter("Buggossip", Race::Human, Class::Warrior).await;
+    let statue = guid::game_object(STATUE, 600);
+    a.sees(statue).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: statue }).await;
+    let shown = a
+        .wait_for("SMSG_GOSSIP_MESSAGE", |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => {
+                Some(g.gossips.iter().map(|o| o.id).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(shown, vec![0], "the object's gossip option");
+    a.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: statue,
+        gossip_list_id: 0,
+        unknown: None,
+    })
+    .await;
+    let next = a
+        .wait_for("the menu it leads to", |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => Some(g.title_text_id),
+            _ => None,
+        })
+        .await;
+    assert_eq!(next, 101);
+}
