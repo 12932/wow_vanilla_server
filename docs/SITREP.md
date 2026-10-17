@@ -36,8 +36,15 @@ the questions waiting for you.
    Elixir layering rules. The rest are being mapped by area.
 5. **wow_messages misreads 1.12's stop packets.** A STOP `SMSG_MONSTER_MOVE` ends after its move type in 1.12
    (mangos-classic's `WriteStopMovement`), but the fork read on into spline flags. So wvs's test client and peon
-   dropped every creature stop as unparsed; the real client was never affected. It is being fixed in the fork, then
-   repinned in rustigator, wvs and peon together.
+   dropped every creature stop as unparsed; the real client was never affected.
+   - **The fix:** fork `e904e8e`, repinned together in rustigator `a1c3a82`, wvs `2bed07d` and peon `ca35164`, so
+     they share one `wow_world_base`.
+   - **Tests that changed with it:** three wvs tests waited for "a move" and had been passing because stops never
+     reached them. They now skip stops.
+   - **Left as it was:** `SMSG_MONSTER_MOVE_TRANSPORT` has the same problem and is still read the old way. Nothing in
+     wvs sends one yet.
+   - **Failures it didn't cause:** six `cmsg_update_account_data` tests in the fork fail with "incomplete deflate
+     stream". Their code is unchanged by this fix.
 
 ## Progress
 
@@ -50,6 +57,6 @@ the questions waiting for you.
 | 2b: creature movement | running | |
 | 2c: creature combat | running | |
 | Robustness | running | |
-| wow_messages stop layout | running | |
+| wow_messages stop layout | done | 2bed07d |
 
 ## Left for later, and why
