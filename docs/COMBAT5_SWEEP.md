@@ -26,9 +26,9 @@ unless it says **left**; the tests are in `src/game/tests_combat5.rs`.
 7. `healing_received.ex`: of percentage healing modifiers only the
    strongest reduction and the strongest increase apply; flat healing taken
    is by school and can't take more than half. wvs multiplied every
-   percentage together and ignored the school. **Left:** the flat bonus's
-   spell coefficient, and a HoT's healing taken counted at each tick (the
-   spells module snapshots it).
+   percentage together and ignored the school. The flat bonus's spell
+   coefficient, and a HoT's healing taken at each tick: done in Phase 2a
+   (`tests_parity_spells`).
 8. `player/experience.ex`, `group_reward.ex`, `kill_credit.ex`,
    `world/entity/player/pet_experience.ex`:
    - elites are ranks 1, 2 and 3, and give 2.5 times in a five-man dungeon
@@ -66,9 +66,9 @@ unless it says **left**; the tests are in `src/game/tests_combat5.rs`.
     anyone; one at range between the two doesn't stop one in melee further
     down. A taunt raises the taunter to the victim's threat, not the top's.
     wvs looked at the top alone, and taunted to the top.
-13. **Left** (`combo_points.ex`): `retain_combo_points` (aura 148) points
-    that come back off on the aura's expiry; no vanilla spell a player
-    learns carries it.
+13. `combo_points.ex`: `retain_combo_points` (aura 148) points come back
+    off on the aura's expiry. Premeditation carries it. Done in Phase 2a
+    (`tests_parity_spells`).
 
 ## core/loot
 
@@ -97,8 +97,8 @@ unless it says **left**; the tests are in `src/game/tests_combat5.rs`.
     point off a random equipped item of each player involved, one time in
     two hundred. wvs wore down on death to a creature only (pets too), could
     wear nothing, and wore nothing per blow; worn-out gear kept its stats
-    until something else recalculated them. **Left:** the killing spell's
-    `no_durability_loss` attribute (the kill doesn't know its spell).
+    until something else recalculated them. The killing spell's
+    `no_durability_loss` attribute: done in Phase 2a (`tests_parity_spells`).
 19. `durability.ex`: repairing all is all or nothing, priced
     `round(lost * cost * quality)` times the reputation discount, rounded
     half to even, at least 1 copper, over worn and carried items only. wvs

@@ -11,7 +11,12 @@ the questions waiting for you.
 
 ## Questions for you
 
-(None yet.)
+1. **Death's wear, three small differences** (from 2a). Should they be aligned with Thistle Tea? Until you say so,
+   they stay documented and unchanged.
+   - Spirit of Redemption: wvs wears gear down when the spirit ends. Thistle Tea does at the fatal blow, and only if
+     a player didn't strike it.
+   - A death by one's own hand: wvs wears gear down, Thistle Tea doesn't.
+   - The killing blow: in wvs it can also cost the one-in-200 wear of any blow. In Thistle Tea it can't.
 
 ## Decisions made (override any)
 
@@ -46,16 +51,28 @@ the questions waiting for you.
    - **Failures it didn't cause:** six `cmsg_update_account_data` tests in the fork fail with "incomplete deflate
      stream". Their code is unchanged by this fix.
 
+6. **2a's choices, as Thistle Tea has them:**
+   - Lay on Hands takes only the percentage healing modifiers; it used to take the flat bonus too.
+   - Healing Way's gain multiplies the heal with its flat bonus, in Thistle Tea's order.
+   - A dispelled passive from gear (a set bonus) comes back at the next gear sync.
+   - A dispel now takes passive auras of its type. vmangos's own `EffectDispel` has no passive check either, so the
+     old note that "vmangos skips them" was wrong.
+
 ## Progress
 
 | Stage | State | Commit |
 |---|---|---|
 | The kobold's reach | done | dd2d397 |
 | 1a: the test matrix, listed | done | b50233b |
-| 1a: the matrix, mapped (entity, ai, spell, combat) | running | |
-| 2a+2h: spells, auras, PvP | running | |
+| 1a: the matrix, mapped (entity, ai, spell, combat) | done: 573 of 4,481 applicable covered (13%); findings in docs/parity/FINDINGS.md | efcd9d3 |
+| 1a: the matrix, mapped (core rest, world, network) | running | |
+| Bugs from the mapping, batch 1 (23) | running | |
+| 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement | running | |
 | 2c: creature combat | running | |
+| 2d: scripts, encounters | running | |
+| 2e+2f: instances, quests, events | running | |
+| 2g+2i: world, social, second pass | running | |
 | Robustness | running | |
 | wow_messages stop layout | done | 2bed07d |
 

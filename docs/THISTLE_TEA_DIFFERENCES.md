@@ -36,14 +36,16 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 
 ### Spells and auras
 
-- A dispel skips passive auras, as vmangos does; Thistle Tea dispels them too.
-- Equipped items' spells that name a form (feral attack power on weapons) aren't held to that form.
-- The flat healing-taken bonus doesn't take the spell's coefficient, and a heal over time takes healing-taken
-  modifiers when it lands rather than at each tick.
-- A killing spell's `no_durability_loss` attribute doesn't reach the death's wear: the kill doesn't know its spell.
-- Net-o-Matic's instant backfire aura (13139) isn't ported; 13119's trigger catches the thrower to the same end.
-- Combo points kept by aura 148 (`retain_combo_points`) aren't taken back when it ends. No spell a player learns
-  carries it.
+- A dispel by mechanic (effect 108) skips passive auras and matches effects' mechanics. Thistle Tea matches only the
+  spell's own mechanic, passive or not.
+- Gear's spells aren't held to the outdoors, as Thistle Tea's `EquipmentSpells.eligible?` also holds them.
+- Blessing of Light's bonus goes into Holy Light's and Flash of Light's base points. Thistle Tea adds it to the flat
+  healing taken, so it goes by the coefficient.
+- **Death's wear:**
+  - Spirit of Redemption wears gear down when the spirit ends; Thistle Tea does at the fatal blow, and only if a
+    player didn't strike it.
+  - A death by one's own hand wears gear down; in Thistle Tea it doesn't.
+  - The killing blow can cost the one-in-200 wear of any blow; in Thistle Tea it doesn't.
 
 ### Combat, creatures and loot
 
@@ -130,10 +132,6 @@ Thistle Tea, with these exceptions:
 - Going into or out of water ends what it breaks only by the client's swimming flag, not by the terrain's liquid.
 - An innkeeper's Hearthstone is given directly rather than by Bind's spell: in wvs a creature's create-item effect
   gives the item to the caster.
-
-### PvP
-
-- Spell 30176, which Thistle Tea has refresh a silithyst carrier's PvP flag, isn't handled; nothing casts it.
 
 ## Tests and tooling
 
