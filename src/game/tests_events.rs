@@ -117,6 +117,21 @@ async fn until(map: &MapHandle, what: impl Fn(&Map) -> bool + Send + Clone + 'st
     false
 }
 
+/// [`until`], free to change the map as it looks.
+async fn until_mut(
+    map: &MapHandle,
+    what: impl Fn(&mut Map) -> bool + Send + Clone + 'static,
+) -> bool {
+    for _ in 0..500 {
+        let w = what.clone();
+        if map.query(move |m| w(m)).await.unwrap_or(false) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
 fn logged(m: &Map, g: Guid, quest: u32) -> bool {
     m.players[&g].journal.has(quest)
 }
@@ -784,6 +799,137 @@ async fn childrens_week(realm: &Arc<Realm>) {
     }
 }
 
+/// The map's scripts and creature timers `by` on: what waits on them
+/// comes sooner.
+fn skip(m: &mut Map, by: Duration) {
+    for r in m.scripts.runs.iter_mut() {
+        if let Some(t) = r.started.checked_sub(by) {
+            r.started = t;
+        }
+    }
+    let all: Vec<Guid> = m.creatures.iter().map(|(_, c)| c.guid).collect();
+    for g in all {
+        if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
+            for t in s.timers.iter_mut().flatten() {
+                if let Some(sooner) = t.checked_sub(by) {
+                    *t = sooner;
+                }
+            }
+        }
+    }
+}
+
+/// `g` holds out with `defended` against what comes for it, killing the
+/// `attackers` as they come, until `quest` is done.
+async fn hold_out(
+    map: &MapHandle,
+    g: Guid,
+    defended: Guid,
+    attackers: &'static [u32],
+    quest: u32,
+) -> bool {
+    for _ in 0..400 {
+        let over = map
+            .query(move |m| {
+                skip(m, Duration::from_secs(5));
+                let foes: Vec<Guid> = m
+                    .creatures
+                    .iter()
+                    .filter(|(_, c)| attackers.contains(&c.entry) && c.alive())
+                    .map(|(_, c)| c.guid)
+                    .collect();
+                let n = foes.len();
+                for f in foes {
+                    let hp = health(m, f).0;
+                    crate::game::map::combat::deal_damage(m, g, f, hp);
+                }
+                if std::env::var("EVENTS_DEBUG").is_ok() {
+                    let phase =
+                        crate::game::map::event_ai::scripted_mut(m, defended).map(|s| s.phase);
+                    let active = crate::game::map::map_events::active(m, quest);
+                    let runs = m.scripts.runs.len();
+                    eprintln!(
+                        "hold_out {quest}: {n} foes, phase {phase:?}, event {active}, {runs} runs"
+                    );
+                }
+                // Those it fights don't wear it down meanwhile.
+                if let Some(c) = m.creature_mut(defended) {
+                    let max = c.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH);
+                    c.fields
+                        .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
+                }
+                done(m, g, quest)
+            })
+            .await
+            .unwrap_or(false);
+        if over {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// Defenses: Shakes O'Breen against the naga (Death From Below), Piznik
+/// against the Windshear goblins (Gerenzo's Orders).
+async fn defenses(realm: &Arc<Realm>) {
+    for (account, level, giver, quest, before, attackers) in [
+        ("SAILOR", 40, 2610, 667, &[670u32][..], &[2595u32, 2596][..]),
+        ("MINER", 20, 4276, 1090, &[][..], &[3998, 4001, 4003][..]),
+    ] {
+        let before: &'static [u32] = Box::leak(before.to_vec().into_boxed_slice());
+        let attackers: &'static [u32] = Box::leak(attackers.to_vec().into_boxed_slice());
+        let (mut c, g, _) = hero(realm, account, Race::Human, Class::Warrior, level).await;
+        let map = take(realm, &mut c, giver, quest, before).await;
+        let defended = map.query(move |m| npc(m, giver)).await.flatten().unwrap().0;
+        map.query(move |m| {
+            let p = m.players.get_mut(&g).unwrap();
+            p.fields
+                .set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+            p.fields
+                .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+        })
+        .await;
+        assert!(
+            hold_out(&map, g, defended, attackers, quest).await,
+            "{quest} done"
+        );
+        turn_in(realm, &mut c, giver, quest).await;
+    }
+}
+
+/// The Missing Diplomat's brawl: Dashel Stonefist and his thugs, until he
+/// gives up at a fifth of his health.
+async fn dashels_brawl(realm: &Arc<Realm>) {
+    const QUEST: u32 = 1447;
+    const DASHEL: u32 = 4961;
+    let (mut c, g, _) = hero(realm, "BRUISER", Race::Human, Class::Warrior, 30).await;
+    let map = take(realm, &mut c, DASHEL, QUEST, &[1246]).await;
+    let dashel = map.query(|m| npc(m, DASHEL)).await.flatten().unwrap().0;
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.fields
+            .set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+        p.fields
+            .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+    })
+    .await;
+    assert!(
+        until(&map, move |m| hostile(m, dashel, g)).await,
+        "Dashel turns on the player"
+    );
+    beat(&map, g, dashel, move |m| done(m, g, QUEST)).await;
+    assert!(
+        until_mut(&map, move |m| {
+            skip(m, Duration::from_secs(2));
+            done(m, g, QUEST)
+        })
+        .await,
+        "{QUEST} done"
+    );
+    turn_in(realm, &mut c, DASHEL, QUEST).await;
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -845,5 +991,11 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("children") {
         childrens_week(&realm).await;
+    }
+    if wanted("defenses") {
+        defenses(&realm).await;
+    }
+    if wanted("dashel") {
+        dashels_brawl(&realm).await;
     }
 }
