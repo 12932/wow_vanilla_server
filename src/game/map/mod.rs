@@ -35,6 +35,7 @@ pub mod instance_script;
 pub mod inventory;
 pub mod items_misc;
 pub mod items;
+pub mod local_defense;
 pub mod login;
 pub mod loot;
 pub mod meeting_stones;

@@ -1852,6 +1852,7 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
             reward(map, tapper, victim);
             crate::game::map::pets::owner_killed(map, tapper, victim);
         }
+        crate::game::map::local_defense::fallen(map, victim, killer);
         crate::game::map::ai::die(map, victim, tapper);
     }
     if killer != victim {
