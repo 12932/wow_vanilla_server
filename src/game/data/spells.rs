@@ -155,6 +155,9 @@ pub const ATTR_EX3_DEATH_PERSISTENT: u32 = 0x10_0000;
 pub const ATTR_EX3_REQ_OFFHAND: u32 = 0x100_0000;
 pub const ATTR_EX3_CAN_PROC_FROM_PROCS: u32 = 0x400_0000;
 pub const ATTR_EX3_IGNORE_CASTER_MODIFIERS: u32 = 0x2000_0000;
+/// `AttributesEx4` (word 4): the target's damage taken modifiers don't
+/// count (Decimate).
+pub const ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS: u32 = 0x100;
 
 impl SpellTemplate {
     pub fn passive(&self) -> bool {

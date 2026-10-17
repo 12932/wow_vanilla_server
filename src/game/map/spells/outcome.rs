@@ -769,11 +769,52 @@ pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate)
 
 /// Damage `target` takes of `s`: its flat and percent modifiers.
 pub fn taken(map: &Map, target: Guid, s: &SpellTemplate, damage: f32) -> f32 {
+    taken_scaled(map, target, s, damage, 1.0)
+}
+
+/// The share of a target's flat damage taken (Dampen and Amplify Magic) a
+/// magic effect gets, as mangos's `SpellBonusWithCoeffs` on the taken part
+/// and Thistle Tea's `DamageReceived` have it: its bonus coefficient for a
+/// player's (or a player's pet's) spell, a creature's whole unless its
+/// table says otherwise; a melee or ranged ability's whole.
+pub fn taken_coefficient(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    kind: Kind,
+) -> f32 {
+    if physical(s) || s.custom(sd::CUSTOM_FIXED_DAMAGE) {
+        return 1.0;
+    }
+    let creature =
+        map.creature(caster).is_some() && crate::game::map::pets::master(map, caster) == caster;
+    let table = s.effects[index.min(2)].bonus_coefficient;
+    if creature {
+        if table > 0.0 { table } else { 1.0 }
+    } else {
+        coefficient(map, s, index.min(2), kind)
+    }
+}
+
+/// [`taken`], the target's flat damage taken by `s`'s school scaled by
+/// `coefficient`; nothing for a spell whose attributes ignore the target's
+/// modifiers (Decimate's, mangos's `IGNORE_DAMAGE_TAKEN_MODIFIERS`).
+pub fn taken_scaled(
+    map: &Map,
+    target: Guid,
+    s: &SpellTemplate,
+    damage: f32,
+    coefficient: f32,
+) -> f32 {
+    if s.attr(4, sd::ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS) {
+        return damage.max(0.0);
+    }
     let Some(a) = auras::auras(map, target) else {
         return damage;
     };
     let mask = s.school_mask();
-    let mut d = damage + a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
+    let mut d = damage + a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32 * coefficient;
     d *= a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, mask);
     // A melee or ranged ability takes the melee or ranged damage taken
     // auras, whatever their school (theirs is 0: Stoneskin, Windwall), as
@@ -828,7 +869,8 @@ pub fn damage(
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
     if !fixed {
-        d = taken(map, target, s, d);
+        let c = taken_coefficient(map, caster, s, index, Kind::Direct);
+        d = taken_scaled(map, target, s, d, c);
     }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;

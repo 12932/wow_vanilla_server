@@ -1535,7 +1535,18 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             school: h.school.trailing_zeros(),
             ..Default::default()
         });
-    let amount = outcome::taken(map, target, &s, amount as f32) as u32;
+    let index = s
+        .effects
+        .iter()
+        .position(|e| {
+            matches!(
+                e.aura,
+                auras::AURA_PERIODIC_DAMAGE | auras::AURA_PERIODIC_LEECH
+            )
+        })
+        .unwrap_or(0);
+    let c = outcome::taken_coefficient(map, h.caster, &s, index, outcome::Kind::Dot);
+    let amount = outcome::taken_scaled(map, target, &s, amount as f32, c) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
     let (left, absorbed) = auras::absorb(map, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
