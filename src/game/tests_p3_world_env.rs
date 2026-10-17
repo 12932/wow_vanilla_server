@@ -340,8 +340,11 @@ fn check(m: &mut Map, g: Guid, after: Duration) {
     environment::update(m);
 }
 
+/// A change to a player, on the map.
+type Change = fn(&mut Map, Guid);
+
 /// The ways a player is spared, and their undoing.
-const SPARED: [(&str, fn(&mut Map, Guid), fn(&mut Map, Guid)); 5] = [
+const SPARED: [(&str, Change, Change); 5] = [
     (
         "dead",
         |m, g| crate::game::map::death::kill(m, g),
