@@ -642,6 +642,34 @@ async fn a_pool_spawns_its_limit_and_a_condition_gates_a_step() {
     assert_eq!(pooled, 1, "one of the pool's three");
     assert!(!low, "a level 1 isn't level 5");
     assert!(high, "reversed");
+    // A step with a condition runs only if it holds: here, on the player
+    // it targets, a field's flag set or not.
+    let (gated, ran) = map
+        .query(move |m| {
+            let brute = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == BRUTE)
+                .map(|(_, c)| c.guid)
+                .unwrap();
+            let flag = |condition| ScriptStep {
+                datalong: [u32::from(UNIT_NPC_EMOTESTATE), 0x10 * condition, 1, 0],
+                condition,
+                ..step(1, 4)
+            };
+            let emote = |m: &crate::game::map::Map| {
+                m.creature(brute)
+                    .map_or(0, |c| c.fields.get_u32(UNIT_NPC_EMOTESTATE))
+            };
+            crate::game::map::scripts::execute(m, &flag(1), brute, me);
+            let gated = emote(m);
+            crate::game::map::scripts::execute(m, &flag(2), brute, me);
+            (gated, emote(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(gated, 0, "a level 1 isn't level 5: the step doesn't run");
+    assert_eq!(ran, 0x20, "reversed, it runs");
 }
 
 /// The real data: every EventAI event type in the world database is one

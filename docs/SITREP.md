@@ -66,6 +66,20 @@ the questions waiting for you.
 17. **Quest 2078** (from 2e). Thistle Tea starts its follower from a gossip option ("[PH] Insert key"); wvs starts
     it on accept. It isn't an event quest, so I left it. Port it?
 
+18. **Gear that existing characters can no longer use** (from bugs4). Equipping now needs the right skill:
+    - proficiency comes from learned spells, not from level;
+    - Dual Wield must be trained;
+    - an item's required skill, rank and spell are checked.
+
+    At login, worn gear a character can't use goes to their bags, or by mail if the bags are full, as mangos does.
+    Nothing is destroyed, and a character can put it back on once they train the skill. Keep this, or leave such
+    gear worn until it is taken off?
+19. **A pet's Stay from the action bar** (from bugs4). It still stops the pet's attack, as mangos-classic and
+    mangos-zero do; vmangos and Thistle Tea keep the fight (script command 88 now keeps it). Follow them?
+20. **The player combat timer** (from 3b). wvs keeps a player in combat 6 s after their last action. Thistle Tea
+    uses 5 s for PvP and for being hit, and 0 for hitting a creature. Move to Thistle Tea's model? It changes how
+    soon players leave combat after a kill.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -229,6 +243,15 @@ the questions waiting for you.
         vmangos's `EffectOpenLock` does, so a key cast at a door opens the door.
       - **Keys in the bags:** a key carried but not cast doesn't open a lock (2g's rule, as Thistle Tea has it).
 
+17. **bugs4's choices:**
+    - **No class starts with Dual Wield:** vmangos's trainers teach it, to rogues at 10 and to warriors and hunters at
+      20.
+    - **A test world without the Cloth spell** (9078) in its data treats everyone as proficient, as Thistle Tea's
+      `Proficiency.all` does.
+    - **Weather sounds** use vmangos's and Thistle Tea's thresholds (0.3, 0.6, 0.9).
+    - **A dead master's guardian** is kept while it fights, and as a corpse.
+    - **Extra attacks** swing during a cast, as vmangos and Thistle Tea do; mangos-classic holds them.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -241,7 +264,7 @@ the questions waiting for you.
 | Bugs from the mapping, batch 1 (23) | merged | 25ecb91 |
 | Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | d2dd886 |
 | Bugs from the mapping, batch 3 (22 of 24; 2 kept) | merged | 65b7d7b |
-| Bugs from the mapping, batch 4 (equipment, weather, leftovers) | running | |
+| Bugs from the mapping, batch 4 (12: equipment, weather, leftovers) | merged | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
 | 2c: creature combat (all 15 items) | merged | e557cf0 |

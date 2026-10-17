@@ -45,6 +45,13 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **The tapped flag** follows the tapper's current group; Thistle Tea keeps the group as it was at the tap.
 - **Update packets are compressed above 1,024 bytes** (Thistle Tea above 128, mangos above 100). The client reads
   either form at any size, so this only trades bandwidth against CPU.
+- **A pet's Stay from its master's bar** stops its attack, as mangos-classic's does; Thistle Tea and vmangos keep the
+  fight. Script command 88 keeps it, as they do.
+- **An event's looks wait for a creature's fight to end,** and it is respawned in them; Thistle Tea changes the living
+  creature in place.
+- **Gear a character can't use comes off at login,** to the bags or else by mail, as mangos's `_LoadInventory` has
+  it. Thistle Tea checks only at a talent reset.
+- **The weather's season** follows the server's local date, as mangos does; Thistle Tea uses UTC.
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
@@ -58,6 +65,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - Gear's spells aren't held to the outdoors, as Thistle Tea's `EquipmentSpells.eligible?` also holds them.
 - Blessing of Light's bonus goes into Holy Light's and Flash of Light's base points. Thistle Tea adds it to the flat
   healing taken, so it goes by the coefficient.
+- Extra attacks leave the swing timer alone; Thistle Tea and vmangos restart the main hand's after them.
+- A dead master's guardian isn't removed for distance (Thistle Tea: beyond 120 yards).
 - A channel's cost per second (Health Funnel's health, others' mana) isn't charged; Thistle Tea charges it each tick.
 - The melee and ranged damage-taken auras' flat amount isn't scaled by an ability's coefficient, as Thistle Tea's
   `AttackDamageTaken.spell_amount` scales it.
@@ -92,6 +101,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   - **Corpses.** A corpse in a dungeon copy is checked by map, not copy. Death doesn't root, nor set the stand flag
     at release.
 - **Where Thistle Tea is wrong for 1.12, wvs keeps mangos's behaviour:**
+  - an off-hand weapon (inventory type 22) needs Dual Wield too;
+  - short of an item's skill rank is `CANT_EQUIP_SKILL`;
   - a missing tool is 0x78 (`TOTEMS`; Thistle Tea sends 0x26);
   - fishing skill counts the poles' and hat's skill auras;
   - quest items in node loot don't keep a node from despawning.

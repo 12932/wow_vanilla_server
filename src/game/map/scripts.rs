@@ -2454,7 +2454,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             );
             true
         }
-        // A pet's command: stay, follow, attack the target, dismiss.
+        // A pet's command: stay (its fight goes on, as vmangos's
+        // HandlePetCommand and Thistle Tea's have it), follow, attack the
+        // target, dismiss.
         88 => {
             if crate::game::map::pets::state(map, source).is_none() {
                 return false;
@@ -2462,7 +2464,6 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             match d1 as u8 {
                 crate::game::map::pets::COMMAND_STAY => {
                     let at = map.position_of(source);
-                    crate::game::map::combat::stop_attack(map, source);
                     crate::game::map::pets::stop_where(map, source);
                     if let Some(s) = crate::game::map::pets::state_mut(map, source) {
                         s.command = crate::game::map::pets::COMMAND_STAY;

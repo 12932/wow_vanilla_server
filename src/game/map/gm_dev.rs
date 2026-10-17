@@ -893,6 +893,7 @@ fn random_equipment(map: &mut Map, g: Guid) -> Option<String> {
     let level = u32::from(p.level());
     let mut rng = rand::rng();
     let mut picks = Vec::new();
+    let prof = inventory::Proficiency::of(p, &data);
     for slot in 0..19u8 {
         if p.item_at(BAG_PLAYER, slot).is_some() || matches!(slot, 3 | 18) {
             continue;
@@ -902,7 +903,7 @@ fn random_equipment(map: &mut Map, g: Guid) -> Option<String> {
             .values()
             .filter(|t| t.required_level <= level && t.quality <= 4 && t.quality >= 1)
             .filter(|t| slots_for(t.inventory_type).first() == Some(&slot))
-            .filter(|t| inventory::can_equip(p, t, slot).is_ok())
+            .filter(|t| inventory::can_equip(p, &prof, t, slot).is_ok())
             .map(|t| t.entry)
             .collect();
         if !fits.is_empty() {

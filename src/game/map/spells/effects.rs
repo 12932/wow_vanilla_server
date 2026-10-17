@@ -1299,24 +1299,18 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
 }
 
 /// `SMSG_SET_PROFICIENCY`: the weapon or armor kinds a learned skill
-/// allows.
+/// allows, as equipping has them (`inventory::Proficiency`, Thistle Tea's
+/// `send_proficiencies`).
 pub fn proficiency(map: &Map, player: Guid, s: &SpellTemplate) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    if s.equipped_item_class <= 0 {
-        return;
-    }
-    let data = &map.realm.data;
-    let class = s.equipped_item_class;
-    let mask = p
-        .spells
-        .iter()
-        .filter_map(|id| data.spells.get(*id))
-        .filter(|t| {
-            t.equipped_item_class == class && t.effects.iter().any(|e| matches!(e.effect, 25 | 60))
-        })
-        .fold(0u32, |m, t| m | t.equipped_item_subclass_mask.max(0) as u32);
+    let prof = crate::game::map::inventory::Proficiency::of(p, &map.realm.data);
+    let (class, mask) = match s.equipped_item_class {
+        2 => (2, prof.weapons),
+        4 => (4, prof.armor),
+        _ => return,
+    };
     let mut b = crate::game::data::items::Body::default();
     b.u8(class as u8).u32(mask);
     p.outbound.send_frame(b.frame(0x127));
