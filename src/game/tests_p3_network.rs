@@ -209,3 +209,217 @@ async fn world_packets_from_the_character_screen_do_nothing() {
     assert_ne!(zone, Area::Durotar.as_int());
     assert_eq!(gold, 0);
 }
+
+fn u64_at(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().unwrap())
+}
+
+fn u32_at(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+/// The bytes after a channel notice's kind and channel name.
+fn notice<'a>(b: &'a [u8], kind: u8, channel: &str) -> Option<&'a [u8]> {
+    let name = channel.as_bytes();
+    (b.first() == Some(&kind)
+        && b.get(1..1 + name.len()) == Some(name)
+        && b.get(1 + name.len()) == Some(&0))
+    .then(|| &b[2 + name.len()..])
+}
+
+/// The rest of the next `kind` notice for `channel`.
+async fn notified(c: &mut Client, kind: u8, channel: &str) -> Vec<u8> {
+    use crate::game::social::channels::SMSG_CHANNEL_NOTIFY;
+    let f = c
+        .wait_frame(&format!("notice 0x{kind:02X}"), SMSG_CHANNEL_NOTIFY, |f| {
+            notice(f, kind, channel).is_some()
+        })
+        .await;
+    notice(&f, kind, channel).unwrap().to_vec()
+}
+
+/// A realm whose players aren't GMs, to be refused what a GM may do.
+fn players_realm() -> Arc<Realm> {
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Realm::new(cfg, store, startup, Default::default(), None)
+}
+
+/// Thistle Tea's smsg_channel_notify_test and dispatch_test's every channel
+/// command: joining tells a channel's flags and index; its owner names
+/// itself, makes and unmakes a moderator, mutes, turns announcements and
+/// moderation, sets a password, bans and unbans, hands the channel on; an
+/// invitation reaches its player. Each notice as mangos lays it out.
+#[tokio::test]
+async fn every_channel_command_does_what_it_says() {
+    use crate::game::social::channels::*;
+    let realm = players_realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Carol", Race::Human, Class::Warrior).await;
+    let join = |name: &str, password: &str| CMSG_JOIN_CHANNEL {
+        channel_name: name.into(),
+        channel_password: password.into(),
+    };
+    // A zone's General: its flags (general, not LFG) and index 0.
+    a.send(join("General - Elwynn Forest", "")).await;
+    let joined = notified(&mut a, YOU_JOINED, "General - Elwynn Forest").await;
+    assert_eq!((u32_at(&joined, 0), u32_at(&joined, 4)), (0x18, 0));
+    // A custom channel: custom's flag and index 0.
+    a.send(join("Custom", "")).await;
+    let joined = notified(&mut a, YOU_JOINED, "Custom").await;
+    assert_eq!((u32_at(&joined, 0), u32_at(&joined, 4)), (0x01, 0));
+    b.send(join("Custom", "")).await;
+    notified(&mut b, YOU_JOINED, "Custom").await;
+    notified(&mut a, JOINED, "Custom").await;
+    a.clear();
+    b.clear();
+    let custom = |channel_name: &str| channel_name.to_owned();
+    // Who owns it.
+    a.send(CMSG_CHANNEL_OWNER {
+        channel_name: custom("Custom"),
+    })
+    .await;
+    assert_eq!(notified(&mut a, CHANNEL_OWNER, "Custom").await, b"Alice\0");
+    // Bob made a moderator and unmade: each a mode change to all.
+    let both = |p: &str| (custom("Custom"), p.to_owned());
+    let (ch, p) = both("Bob");
+    a.send(CMSG_CHANNEL_MODERATOR {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    for cl in [&mut a, &mut b] {
+        let m = notified(cl, MODE_CHANGE, "Custom").await;
+        assert_eq!(
+            (u64_at(&m, 0), m[8], m[9]),
+            (gb.guid(), 0, MEMBER_MODERATOR)
+        );
+    }
+    let (ch, p) = both("Bob");
+    a.send(CMSG_CHANNEL_UNMODERATOR {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    let m = notified(&mut b, MODE_CHANGE, "Custom").await;
+    assert_eq!((m[8], m[9]), (MEMBER_MODERATOR, 0));
+    // Muted, Bob can't speak; unmuted, he can.
+    let (ch, p) = both("Bob");
+    a.send(CMSG_CHANNEL_MUTE {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    let m = notified(&mut b, MODE_CHANGE, "Custom").await;
+    assert_eq!((m[8], m[9]), (0, MEMBER_MUTED));
+    let speak = || CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Channel {
+            channel: "Custom".into(),
+        },
+        language: Language::Common,
+        message: "hello".into(),
+    };
+    b.send(speak()).await;
+    notified(&mut b, MUTED, "Custom").await;
+    let (ch, p) = both("Bob");
+    a.send(CMSG_CHANNEL_UNMUTE {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    let m = notified(&mut b, MODE_CHANGE, "Custom").await;
+    assert_eq!((m[8], m[9]), (MEMBER_MUTED, 0));
+    // Announcements off (a custom channel's are on), moderation on: by
+    // whom.
+    a.send(CMSG_CHANNEL_ANNOUNCEMENTS {
+        channel_name: custom("Custom"),
+    })
+    .await;
+    assert_eq!(
+        u64_at(&notified(&mut b, ANNOUNCEMENTS_OFF, "Custom").await, 0),
+        ga.guid()
+    );
+    a.send(CMSG_CHANNEL_MODERATE {
+        channel_name: custom("Custom"),
+    })
+    .await;
+    assert_eq!(
+        u64_at(&notified(&mut b, MODERATION_ON, "Custom").await, 0),
+        ga.guid()
+    );
+    // Moderated, Bob isn't heard.
+    b.send(speak()).await;
+    notified(&mut b, NOT_MODERATOR, "Custom").await;
+    // A password; Bob banned (who, by whom), and kept out.
+    a.send(CMSG_CHANNEL_PASSWORD {
+        channel_name: custom("Custom"),
+        channel_password: "secret".into(),
+    })
+    .await;
+    assert_eq!(
+        u64_at(&notified(&mut b, PASSWORD_CHANGED, "Custom").await, 0),
+        ga.guid()
+    );
+    let (ch, p) = both("Bob");
+    a.send(CMSG_CHANNEL_BAN {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    let banned = notified(&mut b, PLAYER_BANNED, "Custom").await;
+    assert_eq!(
+        (u64_at(&banned, 0), u64_at(&banned, 8)),
+        (gb.guid(), ga.guid())
+    );
+    b.send(join("Custom", "secret")).await;
+    notified(&mut b, BANNED, "Custom").await;
+    let (ch, p) = both("Bob");
+    a.send(CMSG_CHANNEL_UNBAN {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    let unbanned = notified(&mut a, PLAYER_UNBANNED, "Custom").await;
+    assert_eq!(
+        (u64_at(&unbanned, 0), u64_at(&unbanned, 8)),
+        (gb.guid(), ga.guid())
+    );
+    // The wrong password, then the right one.
+    b.send(join("Custom", "guess")).await;
+    notified(&mut b, WRONG_PASSWORD, "Custom").await;
+    b.send(join("Custom", "secret")).await;
+    notified(&mut b, YOU_JOINED, "Custom").await;
+    // Alice hands it to Bob: his owner's flags, and the new owner.
+    a.clear();
+    a.send(CMSG_CHANNEL_SET_OWNER {
+        channel_name: custom("Custom"),
+        new_owner: "Bob".into(),
+    })
+    .await;
+    let m = notified(&mut a, MODE_CHANGE, "Custom").await;
+    assert_eq!(
+        (u64_at(&m, 0), m[9]),
+        (gb.guid(), MEMBER_OWNER | MEMBER_MODERATOR)
+    );
+    assert_eq!(
+        u64_at(&notified(&mut a, OWNER_CHANGED, "Custom").await, 0),
+        gb.guid()
+    );
+    // Bob invites Carol: she hears from whom, he hears she was asked.
+    let (ch, p) = both("Carol");
+    b.send(CMSG_CHANNEL_INVITE {
+        channel_name: ch,
+        player_name: p,
+    })
+    .await;
+    assert_eq!(
+        u64_at(&notified(&mut c, INVITE, "Custom").await, 0),
+        gb.guid()
+    );
+    assert_eq!(notified(&mut b, PLAYER_INVITED, "Custom").await, b"Carol\0");
+}
