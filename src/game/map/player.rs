@@ -577,6 +577,7 @@ impl Player {
     /// The character as it now is, to store.
     pub fn to_row(&mut self, now: Instant) -> CharacterRow {
         self.count_played(now);
+        crate::game::map::rest::accrue(self, now);
         let pos = self.position();
         let f = &self.fields;
         let mut row = self.row.clone();
