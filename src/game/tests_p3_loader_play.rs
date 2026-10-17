@@ -10,8 +10,9 @@ use crate::game::Realm;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::harness::{self, Client};
+use crate::game::map::combat::{self, Hand};
 use crate::game::map::creature::Creature;
-use crate::game::map::spells;
+use crate::game::map::spells::{self, outcome};
 use crate::game::map::{Map, MapHandle, MapKey, auras, objects};
 
 static DB: std::sync::LazyLock<std::path::PathBuf> =
@@ -518,4 +519,221 @@ async fn debug_spells_teach_trainers_and_class_quests_but_no_talents() {
             assert!(!known.contains(s), "{class:?} learns no talent's {s}");
         }
     }
+}
+
+/// `caster` puts real spell `id`'s auras, at their sixtieth-level points,
+/// on `target`.
+fn apply_real(m: &mut Map, caster: Guid, target: Guid, id: u32) {
+    let data = m.realm.data.clone();
+    let s = data
+        .spells
+        .get(id)
+        .unwrap_or_else(|| panic!("spell {id}"))
+        .clone();
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].aura != 0)
+        .map(|i| (i, spells::points(&s, i, 60)))
+        .collect();
+    let _ = auras::apply_spell(m, caster, target, &s, &effects, auras::Context::default());
+}
+
+/// `g` hits for exactly `damage` with each hand, of `school`.
+fn hits_for(m: &mut Map, g: Guid, damage: f32) {
+    let f = m.unit_fields_mut(g).unwrap();
+    for (lo, hi) in [
+        (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_MAXDAMAGE),
+        (UNIT_FIELD_MINRANGEDDAMAGE, UNIT_FIELD_MAXRANGEDDAMAGE),
+    ] {
+        f.set_f32(lo, damage);
+        f.set_f32(hi, damage);
+    }
+}
+
+const STONESKIN: [(u32, u32); 6] = [
+    (8072, 4),
+    (8156, 7),
+    (8157, 11),
+    (10_403, 16),
+    (10_404, 22),
+    (10_405, 30),
+];
+const CREATURE_SHADOWFORM: [(u32, u32); 2] = [(16_592, 20), (22_917, 40)];
+const DAMPEN_MAGIC: [u32; 5] = [604, 8450, 8451, 10_173, 10_174];
+const AMPLIFY_MAGIC: [u32; 4] = [1008, 8455, 10_169, 10_170];
+const SMITE_1: u32 = 585;
+const SMITE_8: u32 = 10_934;
+const DECIMATE: u32 = 28_375;
+const FIRE_WARD: u32 = 543;
+const SACRIFICE: [(u32, u32); 2] = [(6940, 45), (20_729, 55)];
+const SOUL_LINK_SPLIT: u32 = 25_228;
+const FIRE_ELEMENTAL: u32 = 575;
+
+/// Thistle Tea's damage taken auras on the real spells
+/// (`attack_damage_taken_dbc_test.exs`, `damage_received_dbc_test.exs`,
+/// `damage_sharing_dbc_test.exs`, `elemental_combat_dbc_test.exs`): every
+/// Stoneskin rank takes its points off a melee blow and none off a ranged
+/// one, a creature's Shadowform its share of a melee blow; Dampen and
+/// Amplify Magic move a Smite by their points times its coefficient (more
+/// for a later rank's), and a fire elemental's swing by their whole
+/// points, until they go; Decimate takes no notice of them; Fire Ward
+/// soaks a fire swing; Blessing of Sacrifice and Soul Link send their
+/// share to their caster once.
+#[tokio::test]
+async fn real_damage_taken_auras_shares_and_wards() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_p, priest, map) = enter(&realm, "P3JTAKE1", "Takea", Race::Human, Class::Priest).await;
+    let (_w, warrior, _) = enter(&realm, "P3JTAKE2", "Takeb", Race::Human, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        ready(m, priest, 60, &[]);
+        ready(m, warrior, 60, &[]);
+        let brute = dummy(m, warrior, KOBOLD_VERMIN, 60, 2.0);
+        hits_for(m, brute, 100.0);
+        let blow =
+            |m: &Map, hand| combat::weapon_damage(m, brute, warrior, hand, &mut rand::rng()).0;
+        let mut melee = Vec::new();
+        for (id, cut) in STONESKIN {
+            apply_real(m, warrior, warrior, id);
+            melee.push((
+                id,
+                100 - blow(m, Hand::Main),
+                100 - blow(m, Hand::Ranged),
+                cut,
+            ));
+            auras::remove_spell(m, warrior, id, None);
+        }
+        for (id, cut) in CREATURE_SHADOWFORM {
+            apply_real(m, warrior, warrior, id);
+            melee.push((
+                id,
+                100 - blow(m, Hand::Main),
+                100 - blow(m, Hand::Ranged),
+                cut,
+            ));
+            auras::remove_spell(m, warrior, id, None);
+        }
+        // Smite into the warrior, at a thousand before any modifier.
+        let data = m.realm.data.clone();
+        let smite = |m: &Map, id: u32| {
+            let s = data.spells.get(id).unwrap();
+            outcome::damage(
+                m,
+                priest,
+                warrior,
+                s,
+                0,
+                1000.0,
+                &outcome::Landing::default(),
+            )
+            .amount
+        };
+        let decimate_alone = smite(m, DECIMATE);
+        let mut magic = Vec::new();
+        for id in DAMPEN_MAGIC.iter().chain(AMPLIFY_MAGIC.iter()).copied() {
+            apply_real(m, priest, warrior, id);
+            let flat =
+                auras::auras(m, warrior).map_or(0, |a| a.sum_mask(auras::AURA_MOD_DAMAGE_TAKEN, 2));
+            let coefficient = |id| {
+                outcome::taken_coefficient(
+                    m,
+                    priest,
+                    data.spells.get(id).unwrap(),
+                    0,
+                    outcome::Kind::Direct,
+                )
+            };
+            let (low, high) = (coefficient(SMITE_1), coefficient(SMITE_8));
+            magic.push((
+                id,
+                flat,
+                smite(m, SMITE_1) as f32 - 1000.0,
+                low,
+                smite(m, SMITE_8) as f32 - 1000.0,
+                high,
+                smite(m, DECIMATE),
+            ));
+            auras::remove_spell(m, warrior, id, None);
+        }
+        let after = (smite(m, SMITE_8), smite(m, DECIMATE));
+        // A fire elemental's swing: Dampen and Amplify Magic's whole
+        // points; Fire Ward soaks it.
+        let elemental = dummy(m, warrior, FIRE_ELEMENTAL, 60, 2.0);
+        hits_for(m, elemental, 100.0);
+        let fire =
+            |m: &Map| combat::weapon_damage(m, elemental, warrior, Hand::Main, &mut rand::rng());
+        let mut swings = vec![fire(m)];
+        for id in [604, 1008] {
+            apply_real(m, priest, warrior, id);
+            swings.push(fire(m));
+            auras::remove_spell(m, warrior, id, None);
+        }
+        let mage_level = |m: &mut Map, level| {
+            let data = m.realm.data.clone();
+            crate::game::map::stats::set_level(m.players.get_mut(&warrior).unwrap(), &data, level);
+        };
+        mage_level(m, 50);
+        apply_real(m, warrior, warrior, FIRE_WARD);
+        let ward = auras::auras(m, warrior).and_then(|a| {
+            a.effects()
+                .find(|(h, _)| h.spell == FIRE_WARD)
+                .map(|(_, x)| x.left)
+        });
+        let soaked = auras::absorb(m, warrior, fire(m).0, 4);
+        let ward_left = auras::auras(m, warrior).and_then(|a| {
+            a.effects()
+                .find(|(h, _)| h.spell == FIRE_WARD)
+                .map(|(_, x)| x.left)
+        });
+        // Blessing of Sacrifice and Soul Link: the share to their caster.
+        let mut shared = Vec::new();
+        for (id, share) in SACRIFICE.into_iter().chain([(SOUL_LINK_SPLIT, 30)]) {
+            apply_real(m, priest, warrior, id);
+            let before = health(m, priest);
+            let s = data.spells.get(SMITE_8).unwrap();
+            let left = outcome::split(m, brute, warrior, s, 100);
+            shared.push((id, left, before - health(m, priest), share));
+            auras::remove_spell(m, warrior, id, None);
+        }
+        (
+            melee,
+            (magic, decimate_alone),
+            after,
+            swings,
+            (ward, soaked, ward_left),
+            shared,
+        )
+    })
+    .await;
+    let (melee, (magic, decimate_alone), after, swings, ward, shared) = out;
+    assert_eq!(
+        swings,
+        vec![(100, 4), (90, 4), (115, 4)],
+        "a fire swing, Dampened and Amplified"
+    );
+    assert_eq!(ward, (Some(165), (0, 100), Some(65)), "Fire Ward soaks it");
+    for (id, left, taken, share) in shared {
+        assert_eq!((left, taken), (100 - share, share), "{id}: its share, once");
+    }
+    for (id, main, ranged, cut) in melee {
+        assert_eq!((main, ranged), (cut, 0), "{id}: off a melee blow only");
+    }
+    for (id, flat, low, c_low, high, c_high, decimate) in magic {
+        assert!(flat != 0, "{id}");
+        assert!(
+            0.0 < c_low && c_low < c_high && c_high < 1.0,
+            "{id}: {c_low} {c_high}"
+        );
+        assert!(
+            (low - flat as f32 * c_low).abs() <= 1.0,
+            "{id}: {low} {flat} {c_low}"
+        );
+        assert!(
+            (high - flat as f32 * c_high).abs() <= 1.0,
+            "{id}: {high} {flat} {c_high}"
+        );
+        assert_eq!(decimate, decimate_alone, "{id}: Decimate ignores it");
+    }
+    assert_eq!(after, (1000, decimate_alone), "gone, Smite is itself again");
 }
