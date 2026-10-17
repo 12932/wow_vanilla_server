@@ -120,6 +120,42 @@ pub fn engaged(map: &mut Map, g: Guid) {
     }
 }
 
+/// A creature entering a fight stands up and stops its idle emote
+/// (Thistle Tea's `Emote.reset`, as vmangos's `OnEnterCombat` does).
+pub fn stand_up(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if c.fields.get_byte(UNIT_FIELD_BYTES_1, 0) != 0 {
+        c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, 0);
+    }
+    if c.fields.get_u32(UNIT_NPC_EMOTESTATE) != 0 {
+        c.fields.set_u32(UNIT_NPC_EMOTESTATE, 0);
+    }
+}
+
+/// Home from a fight, a creature takes back its resting posture: how it
+/// stood, its sheath, its idle emote and its mount (Thistle Tea's
+/// `Posture.restore`, as vmangos reloads the addon).
+pub fn rest(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let (now, r) = (crate::game::map::creature::Rest::of(&c.fields), c.rest);
+    if now.stand != r.stand {
+        c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, r.stand);
+    }
+    if now.sheath != r.sheath {
+        c.fields.set_byte(UNIT_FIELD_BYTES_2, 0, r.sheath);
+    }
+    if now.emote != r.emote {
+        c.fields.set_u32(UNIT_NPC_EMOTESTATE, r.emote);
+    }
+    if now.mount != r.mount {
+        c.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, r.mount);
+    }
+}
+
 /// A blow on or by the creature extends its leash.
 pub fn hostile_act(map: &mut Map, g: Guid) {
     let now = map.now;

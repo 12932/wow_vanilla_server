@@ -251,6 +251,30 @@ pub struct Creature {
     /// The zone and area it stands in, once worked out: as it comes into
     /// view and as it moves.
     pub zone_area: Option<(u32, u32)>,
+    /// How it rests, as it came into the world.
+    pub rest: Rest,
+}
+
+/// A creature's resting posture as it came into the world (its spawn's
+/// addon, Thistle Tea's `Posture`): a fight stands it up and stops its
+/// emote, and it takes them back home.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rest {
+    pub stand: u8,
+    pub sheath: u8,
+    pub emote: u32,
+    pub mount: u32,
+}
+
+impl Rest {
+    pub fn of(f: &Fields) -> Self {
+        Rest {
+            stand: f.get_byte(UNIT_FIELD_BYTES_1, 0),
+            sheath: f.get_byte(UNIT_FIELD_BYTES_2, 0),
+            emote: f.get_u32(UNIT_NPC_EMOTESTATE),
+            mount: f.get_u32(UNIT_FIELD_MOUNTDISPLAYID),
+        }
+    }
 }
 
 /// Alive, or dead and waiting.
@@ -351,13 +375,16 @@ impl Creature {
             engagement: Default::default(),
             wounded: 1.0,
             zone_area: None,
+            rest: Rest::default(),
         }
         .with_base()
     }
 
-    /// Its values as they now are become its base.
+    /// Its values as they now are become its base, and its posture its
+    /// rest.
     pub fn with_base(mut self) -> Self {
         self.base = crate::game::map::derive::UnitBase::capture(&self.fields, self.speeds.run);
+        self.rest = Rest::of(&self.fields);
         crate::game::map::derive::creature(&mut self);
         self
     }
