@@ -107,7 +107,14 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
             }
         }
         C::MSG_BATTLEGROUND_PLAYER_POSITIONS => crate::game::map::battleground::positions(map, g),
-        C::CMSG_BATTLEMASTER_JOIN(m) => battlemaster_join(map, g, m.guid, m.map.as_int()),
+        C::CMSG_BATTLEMASTER_JOIN(m) => battlemaster_join(
+            map,
+            g,
+            m.guid,
+            m.map.as_int(),
+            m.join_as_group,
+            m.instance_id,
+        ),
         C::CMSG_BATTLEFIELD_PORT(m) => {
             crate::game::battlegrounds::port(map, g, m.action == BattlefieldPortAction::EnterBattle)
         }
@@ -124,8 +131,17 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
 }
 
 /// `CMSG_BATTLEMASTER_JOIN`: into the queue of the battlemaster's
-/// battleground (a GM may join any from anywhere).
-fn battlemaster_join(map: &mut Map, g: Guid, npc: Guid, map_id: u32) {
+/// battleground (a GM may join any from anywhere), alone or, for its
+/// leader, with the whole group; into the match picked from the list, if
+/// one was.
+fn battlemaster_join(
+    map: &mut Map,
+    g: Guid,
+    npc: Guid,
+    map_id: u32,
+    as_group: bool,
+    instance: u32,
+) {
     let realm = map.realm.clone();
     let gm = map.players.get(&g).is_some_and(|p| p.gm);
     let bg =
@@ -135,29 +151,86 @@ fn battlemaster_join(map: &mut Map, g: Guid, npc: Guid, map_id: u32) {
                 gm.then(|| crate::game::battlegrounds::bg_of_map(map_id))
                     .flatten()
             });
-    let (Some(bg), Some(me)) = (bg, realm.registry.online(g)) else {
-        return;
-    };
-    if let Some(p) = map.players.get(&g) {
-        let (team, level) = (p.team, p.level());
-        crate::game::battlegrounds::join(&realm, &me, team, level, bg);
+    if let Some(bg) = bg {
+        join_as(map, g, bg, as_group, instance);
     }
 }
 
 /// `CMSG_BATTLEFIELD_JOIN`: into the queue of the battleground on
 /// `map_id`, from its list.
 fn join(map: &mut Map, g: Guid, map_id: u32) {
-    let realm = map.realm.clone();
-    let (Some(bg), Some(me)) = (
-        crate::game::battlegrounds::bg_of_map(map_id),
-        realm.registry.online(g),
-    ) else {
-        return;
-    };
-    if let Some(p) = map.players.get(&g) {
-        let (team, level) = (p.team, p.level());
-        crate::game::battlegrounds::join(&realm, &me, team, level, bg);
+    if let Some(bg) = crate::game::battlegrounds::bg_of_map(map_id) {
+        join_as(map, g, bg, false, 0);
     }
+}
+
+/// Into `bg`'s queue: a deserter is told so; the rest of what keeps one
+/// out says nothing.
+fn join_as(map: &mut Map, g: Guid, bg: u32, as_group: bool, instance: u32) {
+    use crate::game::battlegrounds::{self as bgs, Refused};
+    let result = entrants(map, g, as_group)
+        .and_then(|who| bgs::join_all(&map.realm, &who, bg, instance));
+    if result == Err(Refused::Deserter)
+        && let (Some(p), Some(frame)) = (map.players.get(&g), bgs::joined_frame(None))
+    {
+        p.outbound.send_frame(frame);
+    }
+}
+
+/// Who joins: `g` alone, or (`as_group`, for its leader) their group, each
+/// as they stand: on this map as they are, elsewhere as the registry and
+/// their group's last stats have them.
+fn entrants(
+    map: &Map,
+    g: Guid,
+    as_group: bool,
+) -> Result<Vec<crate::game::battlegrounds::Entrant>, crate::game::battlegrounds::Refused> {
+    use crate::game::battlegrounds::{Entrant, Refused, bg_of_map};
+    let here = |m: Guid| {
+        map.players.get(&m).map(|p| Entrant {
+            guid: m,
+            team: p.team,
+            level: p.level(),
+            deserter: crate::game::battlegrounds::deserter(map, m),
+            inside: map.battleground.is_some(),
+        })
+    };
+    let me = here(g).ok_or(Refused::MemberOffline)?;
+    if !as_group {
+        return Ok(vec![me]);
+    }
+    let members: Vec<(Guid, Option<crate::game::social::groups::MemberStats>)> = {
+        let groups = map.realm.social.groups.lock();
+        match groups.group_of(g) {
+            None => return Ok(vec![me]),
+            Some(gr) if gr.leader != g => return Err(Refused::NotLeader),
+            Some(gr) => gr
+                .members
+                .iter()
+                .map(|m| (m.guid, groups.stats.get(&m.guid).copied()))
+                .collect(),
+        }
+    };
+    members
+        .into_iter()
+        .map(|(m, stats)| {
+            if let Some(e) = here(m) {
+                return Ok(e);
+            }
+            let o = map.realm.registry.online(m).ok_or(Refused::MemberOffline)?;
+            let key = o.map().key;
+            Ok(Entrant {
+                guid: m,
+                team: Team::of_race(o.race),
+                level: o.level.load(std::sync::atomic::Ordering::Relaxed),
+                deserter: stats.is_some_and(|s| {
+                    s.auras
+                        .contains(&crate::game::map::battleground::SPELL_DESERTER)
+                }),
+                inside: key.instance != 0 && bg_of_map(key.map).is_some(),
+            })
+        })
+        .collect()
 }
 
 /// `SMSG_BATTLEFIELD_LIST`: a battleground's matches in the player's
