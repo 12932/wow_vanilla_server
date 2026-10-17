@@ -412,14 +412,21 @@ auras of crit, haste, avoidance and damage taken.
 
 **Done when** a dungeon boss's EventAI runs in a test and a copy's kills survive a restart.
 
-## What is out of reach, and why
+## What was out of reach, and how it was reached
 
-Thistle Tea has years of content behind it. Some of it is listed in these phases at a lower depth than its own:
+When the plan was written, three parts of Thistle Tea looked out of reach:
+- its 61 hand-ported boss scripts and 19 instance scripts;
+- its EventAI and script coverage (6,220 of 6,256 event rows);
+- class scripts beyond what the starting spells need.
 
-- **Its 61 hand-ported boss scripts and 19 instance scripts.** Phase 10 brings instances and their doors and
-  bosses, as the database scripts drive them. Thistle Tea itself has none for BWL, ZG or AQ.
-- **Its EventAI and script coverage** (6,220 of 6,256 event rows).
-- **Class scripts beyond what the starting spells need.**
+Phases 13 and 16 reached all three:
+- **Boss and instance scripts:** Thistle Tea's own script definitions were dumped from its code
+  (`tools/dump_tt_scripts.exs`) and are imported at load: 1,052 events for 219 creatures, all 61 script modules. The
+  19 instance scripts are ported as adapters.
+- **EventAI:** 6,252 of the 6,256 event rows run.
+- **Class scripts:** those Thistle Tea has are in `map/spells/scripts.rs` and `map/proc_scripts.rs`.
+
+Thistle Tea has none for BWL, ZG or AQ, and neither does wvs.
 
 What each phase leaves for later is written into this plan as the phase is done.
 
@@ -1050,6 +1057,30 @@ The battlegrounds share one layer, `map/battleground/{mod,wsg,ab,av}.rs`:
   - a reset makes a dungeon new.
 - **A panic count:** maps count the panics `guarded()` catches. A real-data test fights EventAI creatures in Northshire
   and the Deadmines and finds none.
+
+### Phase 16: the second round (2026-10-17)
+
+- **Thistle Tea's creature scripts, imported** (`data/tt_scripts.rs`, from `tt_scripts.json.gz`). The dump has
+  1,052 events for 219 creatures, 41 paths, code-built gossip menus, quest script additions, 35 area triggers, 7
+  event scripts and per-spawn object scripts. They replace those creatures' database EventAI, and the import leaves
+  nothing out.
+  - Onyxia lifts off at 65%, circles and lands at 40%.
+  - Majordomo's guard falls in its phases and he yields.
+- **The script interpreter** acts as vmangos and Thistle Tea define their commands:
+  - movement modes, waypoints' sources and repeats;
+  - hostile targets by their flags and range;
+  - summons by lists, scatter and counts;
+  - flying;
+  - events tried again when their actions fail;
+  - Thistle Tea's own 15 commands, given numbers 200 to 214.
+- **The rest of the instance scripts:** Blackfathom Deeps, Gnomeregan, Razorfen Downs, Zul'Farrak, Uldaman, the
+  Sunken Temple, Scholomance, Stratholme, Blackrock Depths and Spire, Dire Maul, the Wailing Caverns and the Ruins
+  of Ahn'Qiraj.
+- **Conditions wired:** loot, vendors, quests, `spell_area`; reputation, line of sight and holidays read for real.
+- **Behaviour changes:**
+  - in a dungeon or raid, only a template's own leash range holds a creature;
+  - turning off melee doesn't end a creature's fight;
+  - a script-set spell list stands over the template's.
 
 ### Phase 13: spells (2026-10-17)
 
