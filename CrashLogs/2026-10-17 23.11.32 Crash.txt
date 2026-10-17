@@ -1,0 +1,264 @@
+==============================================================================
+World of WarCraft (build 5875)
+
+Exe:      C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+Time:     Oct 17, 2026 11:11:32.246 PM
+User:     007
+Computer: DESKTOP-RK7U77I
+------------------------------------------------------------------------------
+
+This application has encountered a critical error:
+
+ERROR #132 (0x85100084) Fatal Exception
+Program:	C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+Exception:	0xC0000005 (ACCESS_VIOLATION) at 0023:00613889
+
+The instruction at "0x00613889" referenced memory at "0x00000014".
+The memory could not be "written".
+
+
+WoWBuild: 5875
+------------------------------------------------------------------------------
+
+----------------------------------------
+    x86 Registers
+----------------------------------------
+
+EAX=000000C1  EBX=0019E770  ECX=00000000  EDX=0019FD7C  ESI=00000000
+EDI=0019FD7C  EBP=0019E620  ESP=0019E620  EIP=00613889  FLG=00010212
+CS =0023      DS =002B      ES =002B      SS =002B      FS =0053      GS =002B
+
+
+----------------------------------------
+    Stack Trace (Manual)
+----------------------------------------
+
+Address  Frame    Logical addr  Module
+
+00613889 0019E620 0001:00212889 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00466332 0019E634 0001:00065332 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00466293 0019E768 0001:00065293 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00466055 0019E78C 0001:00065055 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00465227 0019E7B4 0001:00064227 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+004673BB 0019FDAC 0001:000663BB C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00537AE7 0019FDC8 0001:00136AE7 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00537CA5 0019FDF4 0001:00136CA5 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00538541 0019FE1C 0001:00137541 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+005B3DE3 0019FE5C 0001:001B2DE3 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00421022 0019FECC 0001:00020022 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+00420BF1 0019FEE4 0001:0001FBF1 C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+0040411E 0019FF74 0001:0000311E C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+75A85D49 0019FF84 0001:00005D49 C:\WINDOWS\System32\KERNEL32.DLL
+7743D6DB 0019FFDC 0001:0006C6DB C:\WINDOWS\SYSTEM32\ntdll.dll
+7743D661 0019FFEC 0001:0006C661 C:\WINDOWS\SYSTEM32\ntdll.dll
+
+----------------------------------------
+    Stack Trace (Using DBGHELP.DLL)
+----------------------------------------
+
+00613889 WoW.exe      <unknown symbol>+0 (0x000000C1,0x00000000,0x0019FD7C,0x0019E768)
+
+
+----------------------------------------
+    Loaded Modules
+----------------------------------------
+
+0x00400000 - 0x00D06000  C:\Users\007\Everything\World of Warcraft 1.12.1\WoW.exe
+0x02EA0000 - 0x02F09000  C:\Users\007\Everything\World of Warcraft 1.12.1\DivxDecoder.dll
+0x10000000 - 0x10096000  C:\Users\007\Everything\World of Warcraft 1.12.1\fmod.dll
+0x32BB0000 - 0x32CC8000  C:\Users\007\Everything\World of Warcraft 1.12.1\dbghelp.dll
+0x61F10000 - 0x61F5E000  C:\WINDOWS\SYSTEM32\WINSTA.dll
+0x61F70000 - 0x620B1000  C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_da865124972e1f80\nvppe.dll
+0x620C0000 - 0x62131000  C:\Windows\System32\DispBroker.dll
+0x62140000 - 0x62650000  C:\WINDOWS\system32\DriverStore\FileRepository\nv_dispi.inf_amd64_da865124972e1f80\nvapi_impl.dll
+0x62650000 - 0x626B8000  C:\WINDOWS\SYSTEM32\nvapi.dll
+0x626C0000 - 0x626C9000  C:\WINDOWS\SYSTEM32\avrt.dll
+0x626D0000 - 0x627D9000  C:\Windows\System32\Windows.UI.dll
+0x627E0000 - 0x627E8000  C:\WINDOWS\SYSTEM32\midimap.dll
+0x627F0000 - 0x627FB000  C:\WINDOWS\SYSTEM32\msacm32.drv
+0x62800000 - 0x6283D000  C:\WINDOWS\SYSTEM32\wdmaud.drv
+0x62840000 - 0x62850000  C:\WINDOWS\SYSTEM32\resourcepolicyclient.dll
+0x62860000 - 0x629D5000  C:\WINDOWS\SYSTEM32\AUDIOSES.DLL
+0x629E0000 - 0x62A5E000  C:\WINDOWS\System32\MMDevApi.dll
+0x62A70000 - 0x62B0A000  C:\WINDOWS\SYSTEM32\ResampleDmo.DLL
+0x62B10000 - 0x62B2F000  C:\WINDOWS\SYSTEM32\winmmbase.dll
+0x62B40000 - 0x62BB6000  C:\WINDOWS\SYSTEM32\dsound.dll
+0x62BC0000 - 0x62CF9000  C:\WINDOWS\system32\nvspcap.dll
+0x62D00000 - 0x62D2A000  C:\WINDOWS\System32\DriverStore\FileRepository\u0405277.inf_amd64_00f6bd87014da3b2\B404941\amdihk32.dll
+0x62D30000 - 0x62D6E000  C:\ProgramData\obs-studio-hook\graphics-hook32.dll
+0x62D70000 - 0x62D9D000  C:\WINDOWS\SYSTEM32\rometadata.dll
+0x62DA0000 - 0x682E4000  C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_da865124972e1f80\nvgpucomp32.dll
+0x682F0000 - 0x68415000  C:\WINDOWS\SYSTEM32\drvstore.dll
+0x68420000 - 0x68476000  C:\WINDOWS\SYSTEM32\wldp.dll
+0x68480000 - 0x69E57000  C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_da865124972e1f80\nvoglv32.dll
+0x69E60000 - 0x6F162000  C:\WINDOWS\System32\DriverStore\FileRepository\u0405277.inf_amd64_00f6bd87014da3b2\B404941\amdvlk32.dll
+0x6F170000 - 0x6F1C1000  C:\WINDOWS\SYSTEM32\directxdatabasehelper.dll
+0x6F1D0000 - 0x6F34B000  C:\WINDOWS\SYSTEM32\vulkan-1.dll
+0x6F350000 - 0x6F791000  C:\Users\007\Everything\World of Warcraft 1.12.1\d3d9.dll
+0x6F7A0000 - 0x6F7E2000  C:\WINDOWS\SYSTEM32\GLU32.dll
+0x6F7F0000 - 0x6F8D4000  C:\WINDOWS\SYSTEM32\OPENGL32.dll
+0x6F8E0000 - 0x6FB9F000  C:\WINDOWS\SYSTEM32\msi.dll
+0x6FBB0000 - 0x6FC2E000  C:\WINDOWS\SYSTEM32\AcSpecfc.DLL
+0x6FC40000 - 0x6FCEE000  C:\WINDOWS\SYSTEM32\apphelp.dll
+0x70F10000 - 0x71016000  C:\WINDOWS\system32\dxgi.dll
+0x715E0000 - 0x715E9000  C:\WINDOWS\SYSTEM32\msdmo.dll
+0x715F0000 - 0x71605000  C:\WINDOWS\SYSTEM32\windows.staterepositorycore.dll
+0x71610000 - 0x7162A000  C:\WINDOWS\SYSTEM32\MSACM32.dll
+0x718D0000 - 0x718FB000  C:\WINDOWS\SYSTEM32\cryptnet.dll
+0x71900000 - 0x71933000  C:\WINDOWS\system32\rsaenh.dll
+0x71940000 - 0x71954000  C:\WINDOWS\SYSTEM32\CRYPTSP.dll
+0x71AA0000 - 0x71AAB000  C:\WINDOWS\SYSTEM32\WINNSI.DLL
+0x71AB0000 - 0x71AC4000  C:\WINDOWS\SYSTEM32\ondemandconnroutehelper.dll
+0x71B30000 - 0x71BBB000  C:\WINDOWS\SYSTEM32\WINSPOOL.DRV
+0x71BC0000 - 0x71C03000  C:\WINDOWS\SYSTEM32\cfgmgr32.dll
+0x71C10000 - 0x71C34000  C:\WINDOWS\SYSTEM32\devobj.dll
+0x71C40000 - 0x71C4A000  C:\WINDOWS\SYSTEM32\cryptbase.dll
+0x71EF0000 - 0x71FCB000  C:\WINDOWS\SYSTEM32\CoreMessaging.dll
+0x71FD0000 - 0x720D4000  C:\WINDOWS\SYSTEM32\textinputframework.dll
+0x721F0000 - 0x721FE000  C:\WINDOWS\SYSTEM32\UMPDC.dll
+0x72210000 - 0x72265000  C:\WINDOWS\SYSTEM32\powrprof.dll
+0x722F0000 - 0x7236F000  C:\WINDOWS\system32\uxtheme.dll
+0x72380000 - 0x723B7000  C:\WINDOWS\SYSTEM32\dxcore.dll
+0x726D0000 - 0x726F0000  C:\WINDOWS\SYSTEM32\WTSAPI32.dll
+0x72750000 - 0x72774000  C:\WINDOWS\SYSTEM32\dwmapi.dll
+0x72780000 - 0x7278E000  C:\WINDOWS\SYSTEM32\msasn1.dll
+0x727A0000 - 0x727BE000  C:\WINDOWS\SYSTEM32\srvcli.dll
+0x72810000 - 0x7281B000  C:\WINDOWS\SYSTEM32\netutils.dll
+0x72840000 - 0x72A81000  C:\WINDOWS\SYSTEM32\iertutil.dll
+0x72EB0000 - 0x7305A000  C:\WINDOWS\SYSTEM32\urlmon.dll
+0x73060000 - 0x73102000  C:\WINDOWS\SYSTEM32\mscms.dll
+0x73130000 - 0x7315B000  C:\WINDOWS\SYSTEM32\SspiCli.dll
+0x73160000 - 0x73189000  C:\WINDOWS\SYSTEM32\ntmarta.dll
+0x73190000 - 0x731AD000  C:\WINDOWS\SYSTEM32\profapi.dll
+0x731B0000 - 0x731B8000  C:\Windows\System32\rasadhlp.dll
+0x731C0000 - 0x73222000  C:\WINDOWS\System32\fwpuclnt.dll
+0x73230000 - 0x73242000  C:\WINDOWS\system32\wshbth.dll
+0x73250000 - 0x7326E000  C:\WINDOWS\system32\nlansp_c.dll
+0x73280000 - 0x7328E000  C:\WINDOWS\System32\winrnr.dll
+0x732A0000 - 0x7337D000  C:\WINDOWS\SYSTEM32\DNSAPI.dll
+0x73380000 - 0x73A5C000  C:\WINDOWS\SYSTEM32\windows.storage.dll
+0x73A60000 - 0x73AB4000  C:\WINDOWS\SYSTEM32\mswsock.dll
+0x73AC0000 - 0x73AD2000  C:\WINDOWS\system32\napinsp.dll
+0x73AE0000 - 0x73AF5000  C:\WINDOWS\SYSTEM32\kernel.appcore.dll
+0x73B90000 - 0x73C6C000  C:\WINDOWS\SYSTEM32\WINHTTP.dll
+0x73C70000 - 0x73C8A000  C:\WINDOWS\SYSTEM32\bcrypt.dll
+0x73C90000 - 0x73CA9000  C:\WINDOWS\SYSTEM32\MPR.dll
+0x73CB0000 - 0x73ED5000  C:\WINDOWS\SYSTEM32\WININET.dll
+0x73EE0000 - 0x73F13000  C:\WINDOWS\SYSTEM32\WINMM.dll
+0x73FC0000 - 0x73FE7000  C:\WINDOWS\SYSTEM32\IPHLPAPI.DLL
+0x74650000 - 0x74658000  C:\WINDOWS\SYSTEM32\WSOCK32.dll
+0x74660000 - 0x746F1000  C:\WINDOWS\WinSxS\x86_microsoft.windows.common-controls_6595b64144ccf1df_5.82.26100.5074_none_cf989b7a8eac3574\COMCTL32.dll
+0x74700000 - 0x74708000  C:\WINDOWS\SYSTEM32\VERSION.dll
+0x74E00000 - 0x74E1F000  C:\WINDOWS\SYSTEM32\USERENV.dll
+0x74E50000 - 0x74EB5000  C:\WINDOWS\System32\WINTRUST.dll
+0x74EC0000 - 0x74EE5000  C:\WINDOWS\System32\IMM32.dll
+0x75080000 - 0x75087000  C:\WINDOWS\System32\NSI.dll
+0x75090000 - 0x751A0000  C:\WINDOWS\System32\ucrtbase.dll
+0x751B0000 - 0x752C8000  C:\WINDOWS\System32\MSCTF.dll
+0x752D0000 - 0x75387000  C:\WINDOWS\System32\COMDLG32.dll
+0x75470000 - 0x754D1000  C:\WINDOWS\System32\WS2_32.dll
+0x754E0000 - 0x7556A000  C:\WINDOWS\System32\clbcatq.dll
+0x75570000 - 0x759C1000  C:\WINDOWS\System32\SETUPAPI.dll
+0x75A70000 - 0x75B60000  C:\WINDOWS\System32\KERNEL32.DLL
+0x75B70000 - 0x75C5C000  C:\WINDOWS\System32\gdi32full.dll
+0x75C60000 - 0x75CDF000  C:\WINDOWS\System32\ADVAPI32.dll
+0x75CF0000 - 0x75E44000  C:\WINDOWS\System32\ole32.dll
+0x75E50000 - 0x75F1F000  C:\WINDOWS\System32\shcore.dll
+0x75F30000 - 0x75F53000  C:\WINDOWS\System32\GDI32.dll
+0x75F60000 - 0x7622B000  C:\WINDOWS\System32\KERNELBASE.dll
+0x76230000 - 0x7632B000  C:\WINDOWS\System32\wintypes.dll
+0x76330000 - 0x7634B000  C:\WINDOWS\System32\imagehlp.dll
+0x76350000 - 0x763D5000  C:\WINDOWS\System32\msvcp_win.dll
+0x763E0000 - 0x763FA000  C:\WINDOWS\System32\win32u.dll
+0x76400000 - 0x76507000  C:\WINDOWS\System32\CRYPT32.dll
+0x76510000 - 0x76593000  C:\WINDOWS\System32\sechost.dll
+0x765A0000 - 0x765EF000  C:\WINDOWS\System32\SHLWAPI.dll
+0x76600000 - 0x767CA000  C:\WINDOWS\System32\USER32.dll
+0x767D0000 - 0x7688C000  C:\WINDOWS\System32\RPCRT4.dll
+0x76890000 - 0x768F9000  C:\WINDOWS\System32\bcryptPrimitives.dll
+0x76900000 - 0x76B85000  C:\WINDOWS\System32\combase.dll
+0x76C00000 - 0x77227000  C:\WINDOWS\System32\SHELL32.dll
+0x77240000 - 0x772DE000  C:\WINDOWS\System32\OLEAUT32.dll
+0x772F0000 - 0x773B7000  C:\WINDOWS\System32\msvcrt.dll
+0x773D0000 - 0x7758F000  C:\WINDOWS\SYSTEM32\ntdll.dll
+
+
+----------------------------------------
+    Memory Dump
+----------------------------------------
+
+Code: 16 bytes starting at (EIP = 00613889)
+
+00613889: 89 41 14 77  73 FF 24 85  08 39 61 00  8B 41 08 C7  .A.ws.$..9a..A..
+
+
+Stack: 1024 bytes starting at (ESP = 0019E620)
+
+* = addr  **                                                  *               
+0019E620: 34 E6 19 00  32 63 46 00  C1 00 00 00  00 00 00 00  4...2cF.........
+0019E630: 7C FD 19 00  68 E7 19 00  93 62 46 00  F1 00 00 00  |...h....bF.....
+0019E640: 00 00 00 00  C1 00 00 00  33 25 12 00  7C FD 19 00  ........3%..|...
+0019E650: 00 00 00 00  6C E6 19 00  00 00 00 00  00 00 00 00  ....l...........
+0019E660: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E670: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E680: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E690: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E6A0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E6B0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E6C0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E6D0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E6E0: 00 00 00 00  84 FD 7F 00  00 00 00 00  00 00 00 00  ................
+0019E6F0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E700: 00 00 00 00  00 00 00 00  00 00 00 00  01 00 00 00  ................
+0019E710: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E720: 00 00 00 00  00 00 00 00  04 00 00 00  00 00 00 00  ................
+0019E730: 00 00 00 00  00 00 00 00  F1 00 00 00  00 00 00 00  ................
+0019E740: 7C FD 19 00  E7 71 46 00  68 E7 19 00  00 00 00 00  |....qF.h.......
+0019E750: 33 25 12 00  C1 00 00 00  F1 00 00 00  00 00 00 00  3%..............
+0019E760: 00 00 00 00  00 00 00 C1  8C E7 19 00  55 60 46 00  ............U`F.
+0019E770: 00 00 00 00  55 60 46 00  00 00 00 00  7C FD 19 00  ....U`F.....|...
+0019E780: 00 00 00 00  33 25 12 00  13 00 00 00  B4 E7 19 00  ....3%..........
+0019E790: 27 52 46 00  00 00 00 03  7C FD 19 00  00 00 00 00  'RF.....|.......
+0019E7A0: 00 00 00 00  C4 E7 19 00  A9 15 00 00  05 00 00 00  ................
+0019E7B0: 2A 00 00 00  AC FD 19 00  BB 73 46 00  33 25 12 00  *........sF.3%..
+0019E7C0: 7C FD 19 03  2A 00 00 00  00 03 01 0F  04 30 00 00  |...*........0..
+0019E7D0: 00 00 93 45  01 00 A2 D5  4E C6 A4 EB  A2 43 40 0A  ...E....N....C@.
+0019E7E0: 1B 42 CE 41  75 BF 00 00  00 00 00 00  20 40 00 00  .B.Au....... @..
+0019E7F0: E0 40 00 00  90 40 71 1C  97 40 00 00  20 40 DB 0F  .@...@q..@.. @..
+0019E800: 49 40 01 00  00 00 0E 15  00 C0 30 1C  40 00 00 00  I@........0.@...
+0019E810: 00 00 00 00  00 00 C0 1E  00 02 00 00  00 00 00 0E  ................
+0019E820: 00 00 00 00  00 00 00 00  00 00 00 00  01 10 00 00  ................
+0019E830: 10 00 01 00  00 00 00 00  00 00 00 00  00 00 01 0F  ................
+0019E840: 00 00 00 19  00 00 00 00  00 80 3F 2B  00 00 00 C8  ..........?+....
+0019E850: 00 00 00 2B  00 00 00 C8  00 00 00 01  00 00 00 73  ...+...........s
+0019E860: 00 00 00 07  09 01 00 08  00 00 00 40  06 00 00 D0  ...........@....
+0019E870: 07 00 00 02  2B C7 3E 00  00 C0 3F 1C  06 00 00 1C  ....+.>...?.....
+0019E880: 06 00 00 00  00 80 3F 02  03 04 04 05  00 00 02 01  ......?.........
+0019E890: 00 00 00 D1  17 00 00 39  00 00 00 74  05 00 00 3B  .......9...t...;
+0019E8A0: 00 00 00 2C  08 00 00 03  01 07 04 30  00 00 00 00  ...,.......0....
+0019E8B0: 93 45 01 00  EF 37 4F C6  30 27 85 43  C0 88 08 42  .E...7O.0'.C...B
+0019E8C0: 5A 46 33 3E  00 00 00 00  00 00 20 40  00 00 E0 40  ZF3>...... @...@
+0019E8D0: 00 00 90 40  71 1C 97 40  00 00 20 40  DB 0F 49 40  ...@q..@.. @..I@
+0019E8E0: 01 00 00 00  0E 15 00 C0  30 1C 40 00  00 00 00 00  ........0.@.....
+0019E8F0: 00 00 00 00  C0 1E 00 02  00 00 00 00  00 06 00 00  ................
+0019E900: 00 00 00 00  00 00 00 00  00 00 01 00  00 00 10 00  ................
+0019E910: 01 00 00 00  00 00 00 00  00 00 00 00  01 07 00 00  ................
+0019E920: 00 19 00 00  00 00 00 80  3F 3A 00 00  00 50 00 00  ........?:...P..
+0019E930: 00 3A 00 00  00 50 00 00  00 01 00 00  00 01 00 00  .:...P..........
+0019E940: 00 01 02 00  00 08 00 00  00 54 0B 00  00 D0 07 00  .........T......
+0019E950: 00 02 2B C7  3E 00 00 C0  3F 31 00 00  00 31 00 00  ..+.>...?1...1..
+0019E960: 00 00 00 80  3F 05 02 01  05 02 00 00  02 2D 00 00  ....?........-..
+0019E970: 00 2C 00 00  00 2B 00 00  00 39 09 00  00 03 01 0C  .,...+...9......
+0019E980: 04 30 00 00  00 00 83 45  01 00 16 94  4D C6 38 B6  .0.....E....M.8.
+0019E990: 9D 43 80 CF  1E 42 2F 3E  1C C0 00 00  00 00 00 00  .C...B/>........
+0019E9A0: 20 40 00 00  E0 40 00 00  90 40 71 1C  97 40 00 00   @...@...@q..@..
+0019E9B0: 20 40 DB 0F  49 40 01 00  00 00 0E 15  00 C1 30 1C   @..I@........0.
+0019E9C0: 40 00 00 00  00 00 00 00  00 00 C0 1E  00 02 00 00  @...............
+0019E9D0: 00 00 00 06  00 00 00 00  00 00 00 00  00 00 00 00  ................
+0019E9E0: 01 00 00 00  10 00 01 00  00 00 00 00  00 00 00 00  ................
+0019E9F0: 00 00 01 0C  00 00 00 19  00 00 00 00  00 80 3F 0B  ..............?.
+0019EA00: 00 00 00 58  00 00 00 4F  00 00 00 58  00 00 00 4F  ...X...O...X...O
+0019EA10: 00 00 00 01  00 00 00 03  00 00 00 03  02 00 00 08  ................
+
+
+------------------------------------------------------------------------------
