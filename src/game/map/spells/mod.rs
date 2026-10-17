@@ -800,10 +800,18 @@ fn execute(
     if !triggered {
         let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
         paid = cost;
+        if let Some(r) = checks::at_launch(map, caster, s, cost) {
+            return launch_failed(map, caster, s.id, r);
+        }
         // A ranged ability (Arcane Shot, Multi-Shot, Aimed Shot) spends a
-        // round of ammunition.
+        // round of ammunition; a player's doesn't go off without it.
         if s.attr(0, sd::ATTR_RANGED) && s.dmg_class == 3 && !s.auto_repeat() {
-            let _ = crate::game::map::ranged::pay_ammunition(map, caster);
+            let ammunition = crate::game::map::ranged::pay_ammunition(map, caster);
+            if let Err(r) = ammunition
+                && map.players.contains_key(&caster)
+            {
+                return launch_failed(map, caster, s.id, r);
+            }
         }
         if cost > 0 {
             let index = power_index(s);
@@ -1037,6 +1045,23 @@ pub struct InFlight {
 /// once).
 fn travels(map: &Map) -> bool {
     map.spells.travel.unwrap_or(map.realm.config.spell_travel)
+}
+
+/// A cast that can't go off as it ends (its power, ammunition, reagents
+/// or room gone): why, and its bar stops for everyone (mangos's
+/// `SendCastResult` and `SendInterrupted`).
+fn launch_failed(map: &Map, caster: Guid, spell: u32, code: u8) {
+    send_cast_result(map, caster, spell, Some(code));
+    if let Some(p) = map.players.get(&caster) {
+        p.outbound.send(&SMSG_SPELL_FAILURE {
+            guid: caster,
+            spell,
+            result: SpellCastResult::try_from(code).unwrap_or(SpellCastResult::Interrupted),
+        });
+    }
+    if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_FAILED_OTHER { caster, id: spell }) {
+        map.send_to_observers(caster, &frame, false);
+    }
 }
 
 /// How long something at `speed` yards a second takes from `caster` to

@@ -427,22 +427,21 @@ pub fn add_item_with_property(
     Ok(())
 }
 
-/// Give `p` `count` of item `entry`: onto stacks first, then new items in
-/// free slots. Nothing changes unless all of it fits.
-pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
-    let data = map.realm.data.clone();
-    let Some(t) = data.item(entry).cloned() else {
-        return Err(Fail::NotFound);
-    };
-    let realm = map.realm.clone();
-    let Some(p) = map.players.get_mut(&g) else {
-        return Err(Fail::NotFound);
-    };
+/// Where `count` of `t` would go in `p`'s bags: onto its stacks first
+/// (an index and how many), then into free slots (a bag, slot and how
+/// many); or why it won't all fit.
+#[allow(clippy::type_complexity)]
+fn plan(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+) -> Result<(Vec<(usize, u32)>, Vec<(u8, u8, u32)>), Fail> {
+    let entry = t.entry;
     let stack = t.stackable.max(1);
     if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
         return Err(Fail::CantCarryMore);
     }
-    // Plan: room on stacks, then free slots.
     let mut left = count;
     let mut onto: Vec<(usize, u32)> = Vec::new();
     for (i, item) in p.items.iter().enumerate() {
@@ -461,7 +460,7 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
     }
     let mut new_slots = Vec::new();
     if left > 0 {
-        for (bag, slot) in crate::game::map::items::carry_slots(&data, p, Some(&t)) {
+        for (bag, slot) in crate::game::map::items::carry_slots(data, p, Some(t)) {
             if left == 0 {
                 break;
             }
@@ -476,6 +475,28 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
     if left > 0 {
         return Err(Fail::InventoryFull);
     }
+    Ok((onto, new_slots))
+}
+
+/// Whether `count` of item `entry` fits in `p`'s bags, as [`add_item`]
+/// would put it.
+pub fn room_for(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<(), Fail> {
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    plan(p, data, t, count).map(|_| ())
+}
+
+/// Give `p` `count` of item `entry`: onto stacks first, then new items in
+/// free slots. Nothing changes unless all of it fits.
+pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
+    let data = map.realm.data.clone();
+    let Some(t) = data.item(entry).cloned() else {
+        return Err(Fail::NotFound);
+    };
+    let realm = map.realm.clone();
+    let Some(p) = map.players.get_mut(&g) else {
+        return Err(Fail::NotFound);
+    };
+    let (onto, new_slots) = plan(p, &data, &t, count)?;
     let mut last = None;
     for (i, add) in onto {
         let item = &mut p.items[i];
