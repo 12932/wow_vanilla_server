@@ -146,14 +146,18 @@ fn data() -> GameData {
     boar.type_flags = 0x1;
     boar.family = 5;
     d.creature_templates.insert(BOAR, boar);
-    d.creature_templates.insert(WOLF, template(WOLF, "Wolf", 14, 1));
+    d.creature_templates
+        .insert(WOLF, template(WOLF, "Wolf", 14, 1));
     let mut imp = template(IMP, "Imp", 14, 8);
     imp.family = 23;
     d.creature_templates.insert(IMP, imp);
     let mut felhunter = template(FELHUNTER, "Felhunter", 14, 2);
     felhunter.creature_type = 3;
     d.creature_templates.insert(FELHUNTER, felhunter);
-    for (entry, name) in [(STRENGTH_TOTEM, "Strength of Earth Totem"), (STONESKIN_TOTEM, "Stoneskin Totem")] {
+    for (entry, name) in [
+        (STRENGTH_TOTEM, "Strength of Earth Totem"),
+        (STONESKIN_TOTEM, "Stoneskin Totem"),
+    ] {
         let mut t = template(entry, name, 35, 1);
         t.creature_type = 11;
         d.creature_templates.insert(entry, t);
@@ -172,7 +176,9 @@ fn data() -> GameData {
         },
     );
     d.pets.create_spells.insert(IMP, vec![FIREBOLT]);
-    d.pets.totem_spells.insert(STRENGTH_TOTEM, STRENGTH_OF_EARTH);
+    d.pets
+        .totem_spells
+        .insert(STRENGTH_TOTEM, STRENGTH_OF_EARTH);
     d.pets.totem_spells.insert(STONESKIN_TOTEM, STONESKIN);
     d.pets.stable_prices = vec![500, 50_000];
     // Gore: a boar's ability, taught for a training point.
@@ -220,8 +226,16 @@ fn data() -> GameData {
     let mut tame = spell(TAME_BEAST, "Tame Beast", [effect(63, 9, 6), tick, none]);
     tame.attributes[1] = 0x4;
     tame.duration_index = 3;
-    let tame_tick = spell(pets::SPELL_TAME_BEAST_TICK, "Tame Beast", [effect(3, 0, 6), none, none]);
-    let tame_lands = spell(pets::SPELL_TAME_BEAST_TAME, "Tame Beast", [effect(55, 9, 6), none, none]);
+    let tame_tick = spell(
+        pets::SPELL_TAME_BEAST_TICK,
+        "Tame Beast",
+        [effect(3, 0, 6), none, none],
+    );
+    let tame_lands = spell(
+        pets::SPELL_TAME_BEAST_TAME,
+        "Tame Beast",
+        [effect(55, 9, 6), none, none],
+    );
     let call = spell(CALL_PET, "Call Pet", [effect(56, 0, 32), none, none]);
     let dismiss = spell(DISMISS_PET, "Dismiss Pet", [effect(102, 0, 5), none, none]);
     let mut summon_imp = effect(56, -1, 32);
@@ -259,7 +273,11 @@ fn data() -> GameData {
         dismiss,
         summon,
         firebolt,
-        totem(STRENGTH_OF_EARTH_TOTEM, STRENGTH_TOTEM, "Strength of Earth Totem"),
+        totem(
+            STRENGTH_OF_EARTH_TOTEM,
+            STRENGTH_TOTEM,
+            "Strength of Earth Totem",
+        ),
         area(STRENGTH_OF_EARTH, "Strength of Earth", 29, 0),
         totem(STONESKIN_TOTEM_SPELL, STONESKIN_TOTEM, "Stoneskin Totem"),
         area(STONESKIN, "Stoneskin", 22, 1),
@@ -303,7 +321,13 @@ async fn place(map: &MapHandle, g: Guid, entry: u32, counter: u32, d: f32) -> Gu
             y: pos.y + d * o.sin(),
             z: pos.z,
         };
-        let c = Creature::new(guid::unit(entry, counter), &t, 1, at, o + std::f32::consts::PI);
+        let c = Creature::new(
+            guid::unit(entry, counter),
+            &t,
+            1,
+            at,
+            o + std::f32::consts::PI,
+        );
         m.add_creature(c)
     })
     .await
@@ -357,7 +381,14 @@ fn pet_kind(m: &Map, g: Guid) -> Option<Kind> {
 
 /// A hunter with a tamed boar near a wolf: their client, GUID, map, the
 /// pet and the wolf.
-async fn tamed() -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle, Guid, Guid) {
+async fn tamed() -> (
+    std::sync::Arc<crate::game::Realm>,
+    Client,
+    Guid,
+    MapHandle,
+    Guid,
+    Guid,
+) {
     let realm = harness::realm_with(data());
     let (mut h, gh, map) = enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
     learn(&map, gh, &[TAME_BEAST, CALL_PET, DISMISS_PET]);
@@ -408,7 +439,9 @@ async fn a_hunter_tames_a_beast_and_it_attacks_on_command() {
     })
     .await;
     h.wait_for("the pet's SMSG_ATTACKSTART", |m| match m {
-        ServerOpcodeMessage::SMSG_ATTACKSTART(a) if a.attacker == pet && a.victim == wolf => Some(()),
+        ServerOpcodeMessage::SMSG_ATTACKSTART(a) if a.attacker == pet && a.victim == wolf => {
+            Some(())
+        }
         _ => None,
     })
     .await;
@@ -416,11 +449,17 @@ async fn a_hunter_tames_a_beast_and_it_attacks_on_command() {
     let mut hurt = false;
     for _ in 0..200 {
         let health = map
-            .query(move |m| m.creature(wolf).map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH)))
+            .query(move |m| {
+                m.creature(wolf)
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH))
+            })
             .await
             .flatten();
         let max = map
-            .query(move |m| m.creature(wolf).map(|c| c.fields.get_u32(UNIT_FIELD_MAXHEALTH)))
+            .query(move |m| {
+                m.creature(wolf)
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_MAXHEALTH))
+            })
             .await
             .flatten();
         if health < max || health.is_none() {
@@ -460,18 +499,22 @@ async fn a_pet_comes_back_after_a_logout_and_with_call_pet() {
     // Dismissed, it goes; called, it comes.
     cast(&h, DISMISS_PET, None).await;
     assert_eq!(pet_bar(&mut h).await, Guid::zero(), "dismissed");
-    let out = map
-        .query(move |m| m.players[&gh].owned.pet)
-        .await
-        .unwrap();
+    let out = map.query(move |m| m.players[&gh].owned.pet).await.unwrap();
     assert_eq!(out, None);
     cast(&h, CALL_PET, None).await;
     let called = pet_bar(&mut h).await;
     assert!(!called.is_zero(), "called back");
     let number_kept = map
         .query(move |m| {
-            m.creature(called).map(|c| c.fields.get_u32(UNIT_FIELD_PETNUMBER))
-                == m.players[&gh].row.state.pets.current.as_ref().map(|r| r.number)
+            m.creature(called)
+                .map(|c| c.fields.get_u32(UNIT_FIELD_PETNUMBER))
+                == m.players[&gh]
+                    .row
+                    .state
+                    .pets
+                    .current
+                    .as_ref()
+                    .map(|r| r.number)
         })
         .await
         .unwrap();
@@ -507,12 +550,16 @@ async fn a_warlocks_imp_casts_firebolt() {
     })
     .await;
     w.wait_for("the imp's Firebolt", |m| match m {
-        ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == imp && s.spell == FIREBOLT => Some(()),
+        ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == imp && s.spell == FIREBOLT => {
+            Some(())
+        }
         _ => None,
     })
     .await;
     w.wait_for("the Firebolt landing", |m| match m {
-        ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(d) if d.attacker == imp && d.target == wolf => {
+        ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(d)
+            if d.attacker == imp && d.target == wolf =>
+        {
             Some(())
         }
         _ => None,
@@ -538,7 +585,10 @@ async fn a_totem_holds_its_aura_over_the_party_and_gives_way_to_another_of_its_e
     let (mut b, gb, _) = enter(&realm, "B", "Brute", Race::Orc, Class::Warrior).await;
     learn(&map, gs, &[STRENGTH_OF_EARTH_TOTEM, STONESKIN_TOTEM_SPELL]);
     s.sees(gb).await;
-    s.send(CMSG_GROUP_INVITE { name: "Brute".into() }).await;
+    s.send(CMSG_GROUP_INVITE {
+        name: "Brute".into(),
+    })
+    .await;
     b.wait_for("SMSG_GROUP_INVITE", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
     })
@@ -556,7 +606,8 @@ async fn a_totem_holds_its_aura_over_the_party_and_gives_way_to_another_of_its_e
             for _ in 0..100 {
                 let got = map
                     .query(move |m| {
-                        [gs, gb].map(|g| m.players.get(&g).is_some_and(|p| p.auras.has_spell(spell)))
+                        [gs, gb]
+                            .map(|g| m.players.get(&g).is_some_and(|p| p.auras.has_spell(spell)))
                     })
                     .await
                     .unwrap();
@@ -574,14 +625,19 @@ async fn a_totem_holds_its_aura_over_the_party_and_gives_way_to_another_of_its_e
         .await
         .flatten()
         .expect("an earth totem");
-    assert_eq!(map.query(move |m| pet_kind(m, first)).await.unwrap(), Some(Kind::Totem));
+    assert_eq!(
+        map.query(move |m| pet_kind(m, first)).await.unwrap(),
+        Some(Kind::Totem)
+    );
     cast(&s, STONESKIN_TOTEM_SPELL, None).await;
     assert!(has(STONESKIN).await, "the new totem's aura");
     let (old_gone, old_aura) = map
         .query(move |m| {
             (
                 m.creature(first).is_none(),
-                [gs, gb].iter().any(|g| m.players[g].auras.has_spell(STRENGTH_OF_EARTH)),
+                [gs, gb]
+                    .iter()
+                    .any(|g| m.players[g].auras.has_spell(STRENGTH_OF_EARTH)),
             )
         })
         .await
@@ -608,12 +664,26 @@ async fn a_pet_is_stabled_and_taken_out_again() {
             p.set_money(10_000);
         }
     });
-    h.send(CMSG_STABLE_PET { stable_master: master }).await;
-    assert_eq!(stable_result(&mut h).await, StableResult::ErrStable, "no stall yet");
+    h.send(CMSG_STABLE_PET {
+        stable_master: master,
+    })
+    .await;
+    assert_eq!(
+        stable_result(&mut h).await,
+        StableResult::ErrStable,
+        "no stall yet"
+    );
     h.send(CMSG_BUY_STABLE_SLOT { npc: master }).await;
     assert_eq!(stable_result(&mut h).await, StableResult::SuccessBuySlot);
-    h.send(CMSG_STABLE_PET { stable_master: master }).await;
-    assert_eq!(pet_bar(&mut h).await, Guid::zero(), "the bar goes with the pet");
+    h.send(CMSG_STABLE_PET {
+        stable_master: master,
+    })
+    .await;
+    assert_eq!(
+        pet_bar(&mut h).await,
+        Guid::zero(),
+        "the bar goes with the pet"
+    );
     assert_eq!(stable_result(&mut h).await, StableResult::SuccessStable);
     let (out, stabled, money) = map
         .query(move |m| {
@@ -676,7 +746,8 @@ async fn an_enslaved_demon_serves_until_the_aura_ends() {
         .query(move |m| {
             (
                 pet_kind(m, demon),
-                m.creature(demon).map(|c| c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE)),
+                m.creature(demon)
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE)),
             )
         })
         .await
@@ -699,9 +770,15 @@ fn the_real_pets_know_their_spells() {
         imp.contains(&7800) && !imp.contains(&3110) && !imp.contains(&7801),
         "Firebolt rank 3 at 20: {imp:?}"
     );
-    assert!(imp.contains(&7804), "Blood Pact rank 2, from the Grimoire: {imp:?}");
+    assert!(
+        imp.contains(&7804),
+        "Blood Pact rank 2, from the Grimoire: {imp:?}"
+    );
     let wolf = pets::spellbook(&data, 118, 9, true, 1);
-    assert!(wolf.contains(&17255) && wolf.contains(&2649), "Bite 2 and Growl: {wolf:?}");
+    assert!(
+        wolf.contains(&17255) && wolf.contains(&2649),
+        "Bite 2 and Growl: {wolf:?}"
+    );
     let f = &data.pets.families[&1];
     assert_eq!((f.skills, f.food_mask), ([208, 270], 1));
     assert!(data.pets.level(1, 60).is_some_and(|l| l.health > 1000));
@@ -728,7 +805,9 @@ async fn a_hunter_trains_their_pet_and_learns_what_it_uses() {
     let mut learned = None;
     for _ in 0..100 {
         learned = map
-            .query(move |m| pets::state(m, pet).map(|s| (s.spells.contains(&GORE), s.training_points)))
+            .query(move |m| {
+                pets::state(m, pet).map(|s| (s.spells.contains(&GORE), s.training_points))
+            })
             .await
             .flatten();
         if learned.is_some_and(|l| l.0) {
@@ -763,4 +842,43 @@ async fn a_hunter_trains_their_pet_and_learns_what_it_uses() {
         _ => None,
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_pet_goes_while_its_master_rides_and_comes_back() {
+    let (_realm, mut h, gh, map, pet, _wolf) = tamed().await;
+    h.sees(pet).await;
+    map.call(move |m| {
+        if let Some(p) = m.players.get_mut(&gh) {
+            p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 2402);
+        }
+    });
+    assert_eq!(pet_bar(&mut h).await, Guid::zero(), "away while mounted");
+    let away = map
+        .query(move |m| (m.creature(pet).is_none(), m.players[&gh].owned.unsummoned))
+        .await
+        .unwrap();
+    assert_eq!(away, (true, true));
+    map.call(move |m| {
+        if let Some(p) = m.players.get_mut(&gh) {
+            p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 0);
+        }
+    });
+    let back = pet_bar(&mut h).await;
+    assert!(!back.is_zero(), "back on dismounting");
+    let same = map
+        .query(move |m| {
+            m.creature(back)
+                .map(|c| c.fields.get_u32(UNIT_FIELD_PETNUMBER))
+                == m.players[&gh]
+                    .row
+                    .state
+                    .pets
+                    .current
+                    .as_ref()
+                    .map(|r| r.number)
+        })
+        .await
+        .unwrap();
+    assert!(same);
 }
