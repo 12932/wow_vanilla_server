@@ -314,6 +314,11 @@ impl Groups {
         self.groups.get_mut(&id).filter(|gr| gr.formed)
     }
 
+    /// Whether group `id` is still together.
+    pub fn formed(&self, id: u32) -> bool {
+        self.groups.get(&id).is_some_and(|gr| gr.formed)
+    }
+
     /// The other members of `g`'s group.
     pub fn others(&self, g: Guid) -> Vec<Guid> {
         self.group_of(g)

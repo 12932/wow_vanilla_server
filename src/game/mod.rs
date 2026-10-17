@@ -51,6 +51,8 @@ mod tests_pvp2;
 #[cfg(test)]
 mod tests_pvp3;
 #[cfg(test)]
+mod tests_pvp4;
+#[cfg(test)]
 mod tests_world;
 #[cfg(test)]
 mod tests_arena;

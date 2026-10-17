@@ -21,6 +21,7 @@ pub mod derive;
 pub mod duel;
 pub mod enchant;
 pub mod environment;
+pub mod eviction;
 pub mod exploration;
 pub mod event_ai;
 pub mod escorts;
@@ -469,6 +470,7 @@ impl Map {
                 items::on_login(&mut p, &self.realm.data.clone());
                 crate::game::transports::place_aboard(&self.realm, &mut p);
                 login::send_login(self, &mut p);
+                crate::game::instances::send_saved(&self.realm, p.guid, &p.outbound);
                 let corpse = p.row.state.corpse;
                 if p.row.state.dead {
                     match corpse {
@@ -490,6 +492,7 @@ impl Map {
                     }
                 }
                 self.insert_player(p);
+                eviction::logged_in(self, guid);
                 spells::apply_passives(self, guid);
                 spell_areas::reconcile(self, guid);
                 pets::owner_arrived(self, guid);
@@ -498,6 +501,7 @@ impl Map {
                 self.visibility_dirty.insert(guid);
             }
             ArrivalKind::Transfer(mut p) => {
+                eviction::transferred(&self.realm, &mut p, self.key);
                 p.row.map = self.key.map;
                 p.move_check = None;
                 p.fall_from = None;
@@ -509,6 +513,7 @@ impl Map {
                         position: p.position(),
                         orientation: p.movement.orientation,
                     });
+                crate::game::instances::send_saved(&self.realm, p.guid, &p.outbound);
                 let guid = p.guid;
                 self.insert_player(*p);
                 pets::owner_arrived(self, guid);
@@ -646,6 +651,12 @@ impl Map {
                             crate::game::instances::Refused::Message(message) => p.outbound.send(
                                 &wow_world_messages::vanilla::SMSG_AREA_TRIGGER_MESSAGE { message },
                             ),
+                            crate::game::instances::Refused::RaidGroupOnly => p.outbound.send(
+                                &wow_world_messages::vanilla::SMSG_RAID_GROUP_ONLY {
+                                    homebind_timer: 0,
+                                    error: wow_world_messages::vanilla::RaidGroupError::Required,
+                                },
+                            ),
                         };
                     }
                     return;
@@ -708,6 +719,7 @@ impl Map {
         social::push_member_stats(self);
         duel::update(self);
         battleground::update(self);
+        eviction::update(self);
         self.unload_if_empty();
         pets::update(self);
         ai::update_creatures(self);

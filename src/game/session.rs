@@ -384,15 +384,24 @@ impl Session {
             return fail(&self.outbound, WorldResult::CharLoginDuplicateCharacter);
         }
         // Logged out in a dungeon or raid: back into their copy, or, if it
-        // won't have them, home.
+        // won't have them, home. In a battleground: back into the match
+        // that kept their place, or home.
         let mut map = map;
-        if matches!(
-            crate::game::instances::instance_type(&self.realm, row.map),
-            1 | 2
-        ) {
-            match crate::game::instances::key_for(&self.realm, g, online.gm, row.map) {
+        let battleground = crate::game::battlegrounds::bg_of_map(row.map).is_some();
+        if battleground
+            || matches!(
+                crate::game::instances::instance_type(&self.realm, row.map),
+                1 | 2
+            )
+        {
+            let back = if battleground {
+                crate::game::battlegrounds::rejoin(&self.realm, g, row.map).ok_or(())
+            } else {
+                crate::game::instances::key_for(&self.realm, g, online.gm, row.map).map_err(|_| ())
+            };
+            match back {
                 Ok(k) => map = self.realm.maps.get(&self.realm, k),
-                Err(_) => {
+                Err(()) => {
                     if let Some(b) = row.state.bind {
                         row.map = b.map;
                         row.x = b.x;
