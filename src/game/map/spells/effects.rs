@@ -907,36 +907,39 @@ fn effect(
         EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
             let pct = e.effect == EFFECT_DURABILITY_DAMAGE_PCT;
             let slot = e.misc_value;
+            // -1 is what is worn, -2 that and what is carried in the bags
+            // (not the bank), a slot up to the last bag's one item
+            // (mangos's `DurabilityPointsLossAll`, Thistle Tea's
+            // `spell_scope`).
+            let scoped = |i: &crate::game::map::player::Item| match slot {
+                -1 => i.bag == crate::game::store::BAG_PLAYER && i.slot < 19,
+                -2 => {
+                    i.carried()
+                        && !(i.bag == crate::game::store::BAG_PLAYER && (19..23).contains(&i.slot))
+                }
+                s if (0..23).contains(&s) => {
+                    i.bag == crate::game::store::BAG_PLAYER && i32::from(i.slot) == s
+                }
+                _ => false,
+            };
             // The combat log names the item a set loss is from.
             let logged = map.players.get(&target).and_then(|p| {
                 p.items
                     .iter()
-                    .find(|i| {
-                        i.bag == crate::game::store::BAG_PLAYER
-                            && i.slot < 19
-                            && (slot < 0 || i.slot as i32 == slot)
-                            && i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
-                    })
+                    .find(|i| scoped(i) && i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0)
                     .map(|i| i.entry)
             });
             if !pct && let Some(entry) = logged {
                 super::log::durability(map, caster, s.id, target, entry);
             }
             if let Some(p) = map.players.get_mut(&target) {
-                for it in p.items.iter_mut().filter(|i| {
-                    i.bag == crate::game::store::BAG_PLAYER
-                        && i.slot < 19
-                        && (slot < 0 || i.slot as i32 == slot)
-                }) {
+                for it in p.items.iter_mut().filter(|i| scoped(i)) {
                     let max = it.fields.get_u32(ITEM_FIELD_MAXDURABILITY);
                     let now = it.fields.get_u32(ITEM_FIELD_DURABILITY);
-                    let loss = if pct {
-                        max * amount.max(0) as u32 / 100
-                    } else {
-                        amount.max(0) as u32
-                    };
-                    it.fields
-                        .set_u32(ITEM_FIELD_DURABILITY, now.saturating_sub(loss));
+                    it.fields.set_u32(
+                        ITEM_FIELD_DURABILITY,
+                        crate::game::map::vendor::worn(max, now, amount, pct),
+                    );
                 }
                 p.gear_dirty = true;
             }
