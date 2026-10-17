@@ -173,7 +173,15 @@ pub(crate) fn data() -> GameData {
 pub(crate) async fn setup(
     class: Class,
 ) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
-    let realm = harness::realm_with(data());
+    setup_with(data(), class).await
+}
+
+/// [`setup`], in a world of `data`.
+pub(crate) async fn setup_with(
+    data: GameData,
+    class: Class,
+) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
+    let realm = harness::realm_with(data);
     let mut a = Client::connect(&realm, "A");
     let ga = a.enter("Alice", Race::Human, class).await;
     a.heartbeat(START.0, START.1, START.2).await;

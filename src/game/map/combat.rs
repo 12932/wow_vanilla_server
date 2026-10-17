@@ -687,8 +687,13 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
     if !ua.alive || !ub.alive {
         return false;
     }
-    if let Some(c) = map.creature(b)
-        && (c.evading || c.fields.get_u32(UNIT_FIELD_FLAGS) & 0x0200_0000 != 0)
+    // One no one may attack: not attackable, made so by an aura, not
+    // selectable, or on a flight (mangos's `Unit::CanAttack`, Thistle
+    // Tea's `targetable?`); and a creature on its way home.
+    if map
+        .unit_fields(b)
+        .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAGS_NOT_ATTACKABLE != 0)
+        || map.creature(b).is_some_and(|c| c.evading)
     {
         return false;
     }
@@ -730,8 +735,14 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
         let ffa = |p: &crate::game::map::player::Player| {
             p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP)
         };
+        // Free for all, but not for one's own group (mangos's
+        // `GetReactionTo`: a group is friendly first).
         if ffa(pa) && ffa(pb) {
-            return true;
+            let groups = map.realm.social.groups.lock();
+            return !matches!(
+                (groups.group_of(a), groups.group_of(b)),
+                (Some(x), Some(y)) if x.id == y.id
+            );
         }
         // The one attacked must be flagged (contested is flagged too), as
         // mangos's `Unit::CanAttack` and Thistle Tea's
@@ -762,6 +773,57 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
         _ => false,
     }
 }
+
+/// Whether an area spell of `a`'s may hit `b`: as [`can_attack`], but a
+/// player's area spares players unless the caster is flagged too, they
+/// duel, or both fight free for all; so no one is flagged by an area they
+/// didn't mean (mangos's `CanAttackSpell` for an area, Thistle Tea's
+/// `can_attack_without_flagging?`).
+pub fn can_attack_in_area(map: &Map, a: Guid, b: Guid) -> bool {
+    if !can_attack(map, a, b) {
+        return false;
+    }
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    let (Some(pa), Some(pb)) = (map.players.get(&ma), map.players.get(&mb)) else {
+        return true;
+    };
+    let ffa = |p: &crate::game::map::player::Player| {
+        p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP)
+    };
+    crate::game::map::duel::dueling(map, ma, mb)
+        || (ffa(pa) && ffa(pb))
+        || pa.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP)
+}
+
+/// Whether `a` may help `b` (a heal, a buff): no one outside a duel helps
+/// its fighters, nor they anyone outside it, as mangos's `Unit::CanAssist`
+/// has it by the duel's arbiter (Thistle Tea's `can_assist?`).
+pub fn can_assist(map: &Map, a: Guid, b: Guid) -> bool {
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    if ma == mb {
+        return true;
+    }
+    let arbiter = |g: Guid| {
+        map.players
+            .get(&g)
+            .and_then(|p| p.duel)
+            .and_then(|d| (d.phase == crate::game::map::duel::Phase::Fighting).then_some(d.flag))
+    };
+    match (map.players.contains_key(&ma), map.players.contains_key(&mb)) {
+        (true, true) => arbiter(ma) == arbiter(mb),
+        _ => true,
+    }
+}
+
+/// The unit flags no one attacks through: not attackable, not attackable
+/// by an aura, not selectable, on a flight.
+pub const UNIT_FLAGS_NOT_ATTACKABLE: u32 = 0x2 | 0x1_0000 | 0x0200_0000 | 0x0010_0000;
 
 /// The unit flags that make a unit immune to players' side and to
 /// creatures'.
