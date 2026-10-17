@@ -49,6 +49,16 @@ pub fn drink(map: &mut Map, g: Guid, amount: i32) {
     put(p, value as u32, deadline);
 }
 
+/// At login: as drunk as at logout, sobering from the first tick (Thistle
+/// Tea keeps `drunk_value` with the character, mangos its `drunk` column).
+pub fn restore(p: &mut Player) {
+    p.drunk = Drunk {
+        value: p.row.state.drunk.min(MAXIMUM),
+        sober_at: None,
+    };
+    write(p);
+}
+
 /// Sober at once (death).
 pub fn clear(map: &mut Map, g: Guid) {
     if let Some(p) = map.players.get_mut(&g)

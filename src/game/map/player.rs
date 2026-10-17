@@ -595,6 +595,7 @@ impl Player {
             row.state.powers[i] = f.get_u32(UNIT_FIELD_POWER1 + i as u16);
         }
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
+        row.state.drunk = self.drunk.value;
         // What's sold stays to be bought back this session only (Thistle
         // Tea's `Buyback.logout`).
         row.items = self

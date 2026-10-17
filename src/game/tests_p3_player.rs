@@ -992,3 +992,194 @@ async fn a_talent_reset_wants_a_class_trainer_and_level_ten_and_a_failed_payment
     assert_eq!(wipe_reply(&mut a), Some((Guid::zero(), 0)));
     assert_eq!(history(&realm).await, (10_000, false, 5_000));
 }
+
+#[tokio::test]
+async fn drink_is_clamped_sobers_once_a_late_tick_and_is_kept_over_a_logout_but_not_by_the_dead() {
+    use crate::game::map::intoxication::{self, SOBER_EVERY};
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let elite = guid::unit(ELITE, ELITE_A);
+    let got = on_map(&realm, move |m| {
+        let now = m.now;
+        let value = |m: &Map| m.players[&ga].drunk.value;
+        let mut out = Vec::new();
+        intoxication::drink(m, ga, 1000);
+        out.push(value(m));
+        intoxication::drink(m, ga, -1000);
+        out.push(value(m));
+        let deadline = m.players[&ga].drunk.sober_at;
+        // Five points, and a tick thirty seconds late: one step off, the
+        // next ten seconds on; again at once, nothing.
+        intoxication::drink(m, ga, 5);
+        out.push(value(m));
+        m.now = now + Duration::from_secs(30);
+        intoxication::update(m);
+        out.push(value(m));
+        let next = m.players[&ga].drunk.sober_at;
+        intoxication::update(m);
+        out.push(value(m));
+        m.now = now;
+        // A creature drinks nothing.
+        intoxication::drink(m, elite, 5);
+        (
+            out,
+            deadline,
+            next.map(|t| t - (now + Duration::from_secs(30))),
+        )
+    })
+    .await;
+    let (values, deadline, next) = got;
+    assert_eq!(values, vec![65_535, 0, 1_280, 1_024, 1_024]);
+    assert_eq!(deadline, None);
+    assert_eq!(next, Some(SOBER_EVERY));
+    // Logged out drunk, back drunk, sobering from the first tick.
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    a.login(ga).await;
+    let back = on_map(&realm, move |m| {
+        intoxication::update(m);
+        let p = &m.players[&ga];
+        (
+            p.drunk.value,
+            p.drunk.sober_at.is_some(),
+            p.fields.get_byte(PLAYER_BYTES_3, 1),
+        )
+    })
+    .await;
+    assert_eq!(back, (1_024, true, 4));
+    // The dead don't drink.
+    let dead = on_map(&realm, move |m| {
+        crate::game::map::death::kill(m, ga);
+        intoxication::drink(m, ga, 5);
+        m.players[&ga].drunk.value
+    })
+    .await;
+    assert_eq!(dead, 0);
+}
+
+#[tokio::test]
+async fn exploring_sets_the_first_and_last_bits_and_gives_nothing_at_the_top_or_for_a_levelless_area()
+ {
+    use crate::game::data::AreaInfo;
+    let mut d = data();
+    for (id, explore_bit, level) in [
+        (9_701, 0, 10),
+        (9_702, 2047, 10),
+        (9_703, 5, 0),
+        (9_704, 6, 60),
+    ] {
+        d.areas.insert(
+            id,
+            AreaInfo {
+                id,
+                explore_bit,
+                level,
+                name: format!("Area {id}"),
+                ..Default::default()
+            },
+        );
+    }
+    // Level one exploring level ten: the XP of level six (one plus five).
+    for level in [6, 10, 60] {
+        d.misc.exploration_xp.insert(level, 100);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let got = on_map(&realm, move |m| {
+        use crate::game::map::exploration::entered;
+        entered(m, ga, 9_701);
+        entered(m, ga, 9_702);
+        let xp = m.players[&ga].fields.get_u32(PLAYER_XP);
+        entered(m, ga, 9_703);
+        let level_less = m.players[&ga].fields.get_u32(PLAYER_XP) - xp;
+        let data = m.realm.data.clone();
+        stats::set_level(m.players.get_mut(&ga).unwrap(), &data, 60);
+        entered(m, ga, 9_704);
+        let p = &m.players[&ga];
+        (
+            p.fields.get_u32(PLAYER_EXPLORED_ZONES_1),
+            p.fields.get_u32(PLAYER_EXPLORED_ZONES_1 + 63),
+            xp,
+            level_less,
+            p.fields.get_u32(PLAYER_XP),
+        )
+    })
+    .await;
+    assert_eq!(got, (1 | 1 << 5 | 1 << 6, 0x8000_0000, 200, 0, 0));
+}
+
+#[test]
+fn a_cameras_path_without_a_first_waypoint_keeps_the_players_view_until_it_starts() {
+    use crate::game::map::cinematic::Camera;
+    let t0 = std::time::Instant::now();
+    let c = Camera {
+        started: t0,
+        start: Vector3d {
+            x: -8949.95,
+            y: -132.49,
+            z: 83.53,
+        },
+        waypoints: vec![(
+            1_000,
+            Vector3d {
+                x: 100.0,
+                y: 100.0,
+                z: 0.0,
+            },
+        )],
+    };
+    assert_eq!(c.view(t0 + Duration::from_millis(500)), Some(None));
+    assert_eq!(
+        c.view(t0 + Duration::from_millis(1_001)),
+        Some(Some(Vector3d {
+            x: 100.0,
+            y: 100.0,
+            z: 0.0
+        }))
+    );
+}
+
+#[tokio::test]
+async fn a_cinematic_under_way_keeps_its_clock_and_the_eight_caches_are_the_clients_kinds() {
+    let mut d = data();
+    d.misc.cinematic_waypoints.insert(
+        81,
+        vec![
+            (0, START.0, START.1 + 500.0, START.2),
+            (30_000, START.0, START.1 + 600.0, START.2),
+        ],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let kept = on_map(&realm, move |m| {
+        let started = m.now - Duration::from_secs(20);
+        let mut p = m.players.remove(&ga).unwrap();
+        crate::game::map::cinematic::begin(m, &mut p, 81);
+        p.misc.camera.as_mut().unwrap().started = started;
+        crate::game::map::cinematic::begin(m, &mut p, 81);
+        let kept = p.misc.camera.as_ref().map(|c| c.started) == Some(started);
+        m.players.insert(ga, p);
+        kept
+    })
+    .await;
+    assert!(kept);
+    // Kinds 0 to 7 are answered; an eighth isn't one.
+    for (kind, answered) in [(7, true), (8, false)] {
+        a.clear();
+        a.raw.clear();
+        a.send(CMSG_REQUEST_ACCOUNT_DATA { data_type: kind }).await;
+        synced(&mut a).await;
+        // wow_messages doesn't read the cache it carries: it comes raw.
+        let told = a.raw.iter().any(|f| {
+            u16::from_le_bytes([f[2], f[3]])
+                == crate::game::map::account_data::SMSG_UPDATE_ACCOUNT_DATA
+        });
+        assert_eq!(told, answered, "kind {kind}");
+    }
+}
