@@ -668,8 +668,9 @@ pub fn evade(map: &mut Map, g: Guid) {
         .map(<[AiEvent]>::to_vec)
         .unwrap_or_default();
     if let Some(s) = scripted_mut(map, g) {
+        // The phase stays: vmangos keeps it through an evade, and scripts
+        // that want it reset do so on their evade event.
         s.in_combat = false;
-        s.phase = 0;
         if s.timers.len() == events.len() {
             reset_ooc(s, &events, now);
         }
