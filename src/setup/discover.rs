@@ -347,7 +347,12 @@ pub fn usual_places() -> Vec<(PathBuf, usize)> {
             ("Games", 4),
             ("", 1),
         ] {
-            places.push((home.join(dir), depth));
+            let place = if dir.is_empty() {
+                home.clone()
+            } else {
+                home.join(dir)
+            };
+            places.push((place, depth));
         }
         if !cfg!(windows) {
             // Wine, Lutris (whose prefixes are under ~/Games), Bottles,

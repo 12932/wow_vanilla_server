@@ -20,9 +20,9 @@ cargo run --release
 ```
 
 The first start finds your WoW client, asks, and builds the navmesh and the terrain from it with a progress bar:
-answer Y, and the server starts when they are done. All 36 maps take about 9 GB; the Eastern Kingdoms alone
-(Gurubashi Arena, Stormwind, the Undercity) about 3 GB. To build without starting the server, or again later (more
-maps, another client):
+answer Y, and the server starts when they are done. All 36 maps take about 9 GB and, on 16 threads, three minutes;
+the Eastern Kingdoms alone (Gurubashi Arena, Stormwind, the Undercity) about 3 GB and one minute. The terrain takes
+seconds. To build without starting the server, or again later (more maps, another client):
 
 ```sh
 cargo run --release --bin wvs-setup
