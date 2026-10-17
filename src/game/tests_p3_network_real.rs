@@ -332,3 +332,122 @@ async fn ragefire_chasm_turns_the_young_away_and_its_exit_leads_out() {
     let out = realm.registry.online(g).expect("online").map();
     assert_eq!(out.query(|m| m.key).await.unwrap(), MapKey::world(1));
 }
+
+/// A duel from `a` to `b`, accepted and past its countdown.
+async fn duel(realm: &Arc<Realm>, a: &mut Client, b: &mut Client) {
+    let (ga, gb) = (a.guid, b.guid);
+    let map = realm.maps.get(realm, MapKey::world(0));
+    on(&map, move |m| {
+        let p = m.players.get_mut(&ga).unwrap();
+        if !p.spells.contains(&7266) {
+            p.spells.push(7266);
+        }
+    })
+    .await;
+    a.send(CMSG_CAST_SPELL {
+        spell: 7266,
+        targets: wire_targets(&Targets {
+            unit: Some(gb),
+            ..Default::default()
+        }),
+    })
+    .await;
+    let flag = b
+        .wait_for("SMSG_DUEL_REQUESTED", |m| match m {
+            ServerOpcodeMessage::SMSG_DUEL_REQUESTED(r) if r.target == ga => Some(r.initiator),
+            _ => None,
+        })
+        .await;
+    b.send(CMSG_DUEL_ACCEPTED { guid: flag }).await;
+    a.wait_for("SMSG_DUEL_COUNTDOWN", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(_)).then_some(())
+    })
+    .await;
+    on(&map, move |m| {
+        for g in [ga, gb] {
+            if let Some(d) = m.players.get_mut(&g).and_then(|p| p.duel.as_mut()) {
+                d.phase = crate::game::map::duel::Phase::Countdown {
+                    until: std::time::Instant::now(),
+                };
+            }
+        }
+    })
+    .await;
+    for _ in 0..200 {
+        if map
+            .query(move |m| crate::game::map::duel::dueling(m, ga, gb))
+            .await
+            == Some(true)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the duel never began");
+}
+
+/// Thistle Tea's duel_messages_test: out of the flag's bounds a duellist
+/// is told, back in told so, both with nothing more; out too long they
+/// flee and lose, the duel complete; one interrupted by a death from
+/// elsewhere completes as not finished.
+#[tokio::test]
+async fn a_duel_has_its_bounds_and_its_ends() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Challenger", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Runner", Race::Human, Class::Warrior).await;
+    duel(&realm, &mut a, &mut b).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let home = map.query(move |m| m.players[&gb].position()).await.unwrap();
+    let far = Vector3d {
+        x: home.x + 80.0,
+        ..home
+    };
+    b.clear();
+    go(&realm, &mut b, 0, far).await;
+    let out = b.wait_frame("SMSG_DUEL_OUTOFBOUNDS", 0x168, |_| true).await;
+    assert!(out.is_empty());
+    go(&realm, &mut b, 0, home).await;
+    let back = b.wait_frame("SMSG_DUEL_INBOUNDS", 0x169, |_| true).await;
+    assert!(back.is_empty());
+    // Out again, and for too long: fled.
+    go(&realm, &mut b, 0, far).await;
+    b.wait_frame("SMSG_DUEL_OUTOFBOUNDS", 0x168, |_| true).await;
+    a.clear();
+    on(&map, move |m| {
+        if let Some(d) = m.players.get_mut(&gb).and_then(|p| p.duel.as_mut()) {
+            d.out_of_bounds_since = Some(std::time::Instant::now() - Duration::from_secs(11));
+        }
+    })
+    .await;
+    let won = a
+        .wait_for("SMSG_DUEL_WINNER", |m| match m {
+            ServerOpcodeMessage::SMSG_DUEL_WINNER(w) => {
+                Some((w.reason, w.opponent_name.clone(), w.initiator_name.clone()))
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(
+        won,
+        (DuelWinnerReason::Fled, "Runner".into(), "Challenger".into())
+    );
+    let complete = a.wait_frame("SMSG_DUEL_COMPLETE", 0x16A, |_| true).await;
+    assert_eq!(complete, vec![1], "finished");
+    // Another, ended by a death from elsewhere: not finished.
+    go(&realm, &mut b, 0, home).await;
+    a.clear();
+    duel(&realm, &mut a, &mut b).await;
+    on(&map, move |m| {
+        let h = m.players[&gb].fields.get_u32(UNIT_FIELD_HEALTH);
+        crate::game::map::combat::deal_damage(m, gb, gb, h);
+    })
+    .await;
+    let complete = a.wait_frame("SMSG_DUEL_COMPLETE", 0x16A, |_| true).await;
+    assert_eq!(complete, vec![0], "interrupted");
+    let _ = ga;
+}
