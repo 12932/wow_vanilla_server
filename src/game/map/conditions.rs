@@ -32,7 +32,7 @@ impl Truth {
     }
 
     /// Met for unmet and the other way about; unknown stays unknown.
-    pub fn not(self) -> Self {
+    pub fn negate(self) -> Self {
         match self {
             Truth::Met => Truth::Unmet,
             Truth::Unmet => Truth::Met,
@@ -100,7 +100,7 @@ fn eval(map: &Map, id: u32, source: Option<Guid>, target: Option<Guid>, depth: u
     };
     let result = leaf(map, &c, source, target, depth);
     if c.flags & CF_REVERSE_RESULT != 0 {
-        result.not()
+        result.negate()
     } else {
         result
     }
@@ -198,7 +198,7 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
     let player = |f: &dyn Fn(&Player) -> bool| -> Truth {
         target
             .and_then(|t| map.players.get(&t))
-            .map(|p| f(p))
+            .map(f)
             .into()
     };
     let unit_fields = |g: Option<Guid>| g.and_then(|g| map.unit_fields(g));
@@ -213,7 +213,7 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
     let children = || c.values.iter().copied().filter(|v| *v > 0);
     match c.kind {
         // Not, or, and.
-        -3 => child(v1, source, target).not(),
+        -3 => child(v1, source, target).negate(),
         -2 if children().next().is_some() => {
             Truth::any(children().map(|v| child(v, source, target)))
         }
