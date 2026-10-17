@@ -1703,3 +1703,222 @@ async fn a_nested_start_slips_no_one_a_tick() {
         .unwrap();
     assert_eq!(out, (8, 1, 2), "all three due steps ran in the one update");
 }
+
+fn spell(id: u32, effect: u32, misc: i32) -> SpellTemplate {
+    let mut s = SpellTemplate {
+        id,
+        name: format!("Spell {id}"),
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    s.effects[0] = SpellEffect {
+        effect,
+        misc_value: misc,
+        target_a: 1,
+        ..Default::default()
+    };
+    s
+}
+
+/// Distancing (movement 19) runs from the step's target to x yards past
+/// its edge; while it runs only a spell forced (0x04) is cast (S23, the
+/// spell lists' force-cast flag).
+#[tokio::test]
+async fn distancing_runs_from_its_target_and_holds_unforced_casts() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let (host, buddy, third) = (host(), buddy(), third());
+    a.sees(third).await;
+    let out = map
+        .query(move |m| {
+            // Fighting Buddy, it keeps 10 yards from Third, its target.
+            if let Some(c) = m.creature_mut(host) {
+                c.combat.victim = buddy;
+            }
+            let away = ScriptStep {
+                x: 10.0,
+                ..step(20, [19, 0, 0, 0])
+            };
+            crate::game::map::scripts::execute(m, &away, host, third);
+            let to = crate::game::map::event_ai::scripted(m, host)
+                .and_then(|s| s.scripted_move)
+                .map(|mv| mv.to);
+            let (here, them) = (m.position_of(host).unwrap(), m.position_of(third).unwrap());
+            let radius = m
+                .unit_fields(third)
+                .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+                .unwrap();
+            let lists = crate::game::map::spells::lists::CF_FORCE_CAST;
+            (
+                to.map(|t| crate::game::map::combat::dist(t, them)),
+                radius,
+                here,
+                crate::game::map::spells::lists::flags_allow(m, host, 0, 133, buddy),
+                crate::game::map::spells::lists::flags_allow(m, host, lists, 133, buddy),
+            )
+        })
+        .await
+        .unwrap();
+    let (gap, radius, _, unforced, forced) = out;
+    assert!(
+        gap.is_some_and(|g| (g - (10.0 + radius)).abs() < 0.5),
+        "10 yards past Third's edge: {gap:?}"
+    );
+    assert!(!unforced, "no cast while it runs");
+    assert!(forced, "but a forced one");
+}
+
+/// A spell list's script runs as its cast begins: before an instant spell
+/// lands (its line is said before the spell goes).
+#[tokio::test]
+async fn a_spell_lists_script_runs_before_its_instant_spell_lands() {
+    let mut d = world();
+    with_texts(&mut d);
+    d.creature_templates.get_mut(&HOST).unwrap().spell_list_id = 70;
+    d.creature_templates.get_mut(&HOST).unwrap().faction = 14;
+    d.spells.spells.insert(6300, spell(6300, 3, 0));
+    d.spells.creature_spells.insert(
+        70,
+        vec![crate::game::data::spells::CreatureSpell {
+            spell: 6300,
+            probability: 100,
+            target: 1,
+            delay_repeat: (10_000, 10_000),
+            script: 980,
+            ..Default::default()
+        }],
+    );
+    d.scripts.creature_spells.insert(
+        980,
+        vec![ScriptStep {
+            dataint: [100, 0, 0, 0],
+            ..step(0, [0; 4])
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    a.clear();
+    map.call(move |m| {
+        if let Some(c) = m.creature_mut(host) {
+            c.combat.victim = me;
+            c.combat.attacking = true;
+        }
+        crate::game::map::spells::lists::tick(m, host, me);
+    });
+    // Both in, in the order they came.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    a.gets(Duration::from_millis(1), |_| None::<()>).await;
+    let at = |pick: &dyn Fn(&ServerOpcodeMessage) -> bool| a.backlog.iter().position(pick);
+    let said = at(&|m| heard(m, "Line 100.").is_some());
+    let went = at(&|m| matches!(m, ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == 6300));
+    assert!(said.is_some() && went.is_some(), "{said:?} {went:?}");
+    assert!(said < went, "the line came before the spell went");
+}
+
+const SUMMON_WILD: u32 = 6400;
+const SUMMON_GUARD: u32 = 6401;
+const IMP: u32 = 4500;
+
+/// A creature's wild summon dies at its time, its corpse left; a
+/// creature's guardian follows its summoner, drops no loot, and goes with
+/// it (the spell lists' summons).
+#[tokio::test]
+async fn a_creatures_summons_die_follow_and_go_with_it() {
+    let mut d = world();
+    let mut imp = creature(IMP, "Imp", 14);
+    imp.loot_id = 88;
+    imp.gold_min = 50;
+    imp.gold_max = 50;
+    d.creature_templates.insert(IMP, imp);
+    d.loot.creature.insert(
+        88,
+        vec![LootEntry {
+            item: 100,
+            chance: 100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }],
+    );
+    d.items.insert(
+        100,
+        ItemTemplate {
+            entry: 100,
+            name: "Imp Horn".into(),
+            stackable: 1,
+            ..Default::default()
+        },
+    );
+    for (id, effect) in [(SUMMON_WILD, 41), (SUMMON_GUARD, 42)] {
+        let mut s = spell(id, effect, IMP as i32);
+        s.duration_index = 78;
+        d.spells.spells.insert(id, s);
+    }
+    d.spells.durations.insert(
+        78,
+        crate::game::data::spells::SpellDuration {
+            base: 60_000,
+            per_level: 0,
+            max: 60_000,
+        },
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    let out = map
+        .query(move |m| {
+            let imps = |m: &crate::game::map::Map| -> Vec<Guid> {
+                m.creatures
+                    .iter()
+                    .filter(|(_, c)| c.entry == IMP)
+                    .map(|(_, c)| c.guid)
+                    .collect()
+            };
+            crate::game::map::spells::cast_triggered(m, host, SUMMON_WILD, Some(host));
+            let wild = imps(m)[0];
+            let past = m.now - Duration::from_millis(1);
+            if let Some(s) = crate::game::map::event_ai::scripted_mut(m, wild) {
+                s.despawn_at = Some(past);
+            }
+            crate::game::map::event_ai::update_despawns(m);
+            let died = m.creature(wild).map(|c| c.alive());
+            crate::game::map::spells::cast_triggered(m, host, SUMMON_GUARD, Some(host));
+            let guard = imps(m).into_iter().find(|g| *g != wild).unwrap();
+            let follows = crate::game::map::event_ai::scripted(m, guard)
+                .and_then(|s| s.follow)
+                .map(|(whom, yards, _)| (whom, yards));
+            crate::game::map::combat::deal_damage(m, me, guard, 100_000);
+            let loot = m
+                .creature(guard)
+                .and_then(|c| c.loot.as_ref())
+                .map(|l| (l.items.len(), l.gold));
+            crate::game::map::spells::cast_triggered(m, host, SUMMON_GUARD, Some(host));
+            let second = imps(m)
+                .into_iter()
+                .find(|g| *g != wild && *g != guard)
+                .unwrap();
+            crate::game::map::scripts::remove_for_good(m, host);
+            crate::game::map::event_ai::update_despawns(m);
+            (died, follows, loot, m.creature(second).is_none())
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, Some(false), "the wild summon died, its corpse left");
+    assert_eq!(
+        out.1,
+        Some((host, 2.0)),
+        "the guardian follows its summoner"
+    );
+    assert!(
+        out.2.is_none_or(|(items, gold)| items == 0 && gold == 0),
+        "no loot: {:?}",
+        out.2
+    );
+    assert!(out.3, "gone with its summoner");
+}

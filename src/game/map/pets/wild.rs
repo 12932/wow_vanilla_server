@@ -1,10 +1,12 @@
 //! What a creature's spell summons (effects 41 and 42): creatures of their
 //! own, as Thistle Tea's wild summons and a creature's guardians are, with
-//! their own EventAI and spell lists, their summoner told of them (and of
-//! their death and going), and gone at the spell's duration once out of a
-//! fight. A wild summon is of its template's faction and level; a guardian
-//! of its summoner's, at its level less the effect's offset. Script
-//! command 56 takes a unit's guardians away.
+//! their own EventAI and spell lists, and their summoner told of them (and
+//! of their death and going). A wild summon is of its template's faction
+//! and level, and dies at the spell's duration once out of a fight; a
+//! guardian is of its summoner's, at its level less the effect's offset,
+//! follows it, goes at the spell's duration once out of a fight or with
+//! its summoner, and drops no loot. Script command 56 takes a unit's
+//! guardians away.
 
 use std::time::Duration;
 
@@ -30,8 +32,13 @@ const SPOTS: [(u32, f32); 9] = [
     (50, -0.5),
 ];
 
-/// A creature's despawn type for a summon whose time waits out a fight.
-const TIMED_OUT_OF_COMBAT: i32 = 2;
+/// The despawn types of a creature's summons: a guardian's time waits out
+/// its fights (vmangos's timed-or-dead); a wild summon with no time lies
+/// as a corpse when it dies (dead despawn).
+const GUARDIAN_DESPAWN: i32 = 1;
+const DEAD_DESPAWN: i32 = 7;
+/// How far behind its summoner a guardian follows.
+const GUARDIAN_FOLLOW: f32 = 2.0;
 
 /// A guardian's cap: so many of one entry for one summoner.
 const MOST_GUARDIANS: usize = 16;
@@ -145,7 +152,24 @@ pub fn summon(
         let scripted = c.scripted.get_or_insert_with(Default::default);
         scripted.summoner = Some(caster);
         scripted.despawn_at = despawn;
-        scripted.despawn_type = TIMED_OUT_OF_COMBAT;
+        if guardian {
+            // It follows its summoner, as Thistle Tea's guardians do: two
+            // yards off, each a twelfth of a turn on from the one before.
+            let others = guardians_of(map, caster, 0).len() + i;
+            let angle = (std::f32::consts::FRAC_PI_2 + std::f32::consts::FRAC_PI_6 * others as f32)
+                % std::f32::consts::TAU;
+            scripted.guardian = true;
+            scripted.despawn_type = GUARDIAN_DESPAWN;
+            scripted.follow = Some((caster, GUARDIAN_FOLLOW, angle));
+        } else {
+            // A wild summon's time ends in its death, as Thistle Tea's
+            // `WildSummon` has it.
+            scripted.despawn_type = if despawn.is_some() {
+                event_ai::TIMED_DEATH
+            } else {
+                DEAD_DESPAWN
+            };
+        }
         let g = map.add_creature(c);
         if let Some(s) = event_ai::scripted_mut(map, caster) {
             s.summoned.push(g);

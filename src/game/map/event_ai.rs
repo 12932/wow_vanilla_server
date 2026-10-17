@@ -55,6 +55,9 @@ pub struct Scripted {
     /// The spell list it keeps over its template's, from an entry it was
     /// before that had one where its new one has none.
     pub base_spell_list: Option<u32>,
+    /// A guardian a creature's spell summoned (effect 42): it follows
+    /// its summoner, goes when it goes, and drops no loot.
+    pub guardian: bool,
     pub summoned: Vec<Guid>,
     /// Script moves run rather than walk.
     pub run: bool,
@@ -805,16 +808,29 @@ const GONE_AT_DEATH: [i32; 3] = [2, 5, 10];
 const TIMER_FROM_DEATH: [i32; 2] = [4, 6];
 /// A summon whose time came in a fight looks again this much later.
 const DESPAWN_RECHECK: Duration = Duration::from_secs(10);
+/// Thistle Tea's own type for a creature's wild summon (spell effect 41)
+/// with a duration: at its time, out of a fight, it dies (`TemporarySummon`),
+/// its corpse left as any's.
+pub const TIMED_DEATH: i32 = 11;
 
 /// What a summon whose time has come does.
 enum Due {
     Despawn,
+    Die,
     Wait,
     Ignore,
 }
 
 fn when_due(kind: i32, alive: bool, fighting: bool) -> Due {
-    if kind <= 0 {
+    if kind == TIMED_DEATH {
+        if !alive {
+            Due::Ignore
+        } else if fighting {
+            Due::Wait
+        } else {
+            Due::Die
+        }
+    } else if kind <= 0 {
         Due::Despawn
     } else if !alive {
         if TIMED_WHILE_DEAD.contains(&kind) {
@@ -877,6 +893,18 @@ pub fn update_despawns(map: &mut Map) {
         }
         scripts::despawn_with(map, g, respawn);
     }
+    // A creature's guardians go with it, as Thistle Tea's `owner_stopped`.
+    let orphans: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter_map(|(_, c)| {
+            let s = c.scripted.as_deref()?;
+            (s.guardian && s.summoner.is_some_and(|o| map.creature(o).is_none())).then_some(c.guid)
+        })
+        .collect();
+    for g in orphans {
+        scripts::despawn(map, g);
+    }
     let due: Vec<Guid> = map
         .creatures
         .iter()
@@ -895,6 +923,13 @@ pub fn update_despawns(map: &mut Map) {
             Due::Despawn => {
                 scripts::despawn(map, g);
                 continue;
+            }
+            Due::Die => {
+                if let Some(c) = map.creature_mut(g) {
+                    c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+                }
+                crate::game::map::ai::die(map, g, g);
+                None
             }
             // Fighting, it waits; the fight's end starts its time again.
             Due::Wait => Some(now + DESPAWN_RECHECK),

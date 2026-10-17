@@ -205,7 +205,14 @@ fn attempt(map: &mut Map, g: Guid, victim: Guid, i: usize, e: &CreatureSpell) ->
     if e.flags & CF_MAIN_RANGED != 0 {
         hold(map, g, victim);
     }
-    if super::cast(map, g, e.spell, targets, None) && e.script != 0 {
+    // Its script runs as the cast begins, as Thistle Tea's
+    // `run_cast_script`: before an instant spell lands, as a spell with a
+    // cast time starts.
+    let instant = data.spells.cast_time(s) == 0 && !s.channeled();
+    if instant && e.script != 0 {
+        crate::game::map::scripts::start(map, ScriptTable::CreatureSpells, e.script, g, target);
+    }
+    if super::cast(map, g, e.spell, targets, None) && !instant && e.script != 0 {
         crate::game::map::scripts::start(map, ScriptTable::CreatureSpells, e.script, g, target);
     }
     true
@@ -372,11 +379,15 @@ fn injured_friend(
     best.map(|(u, _)| u)
 }
 
-/// Whether `caster`'s cast flags let `spell` go at `target`: never one
-/// that wants its target out of reach (0x10) or casting (0x100); not an
-/// aura already there (0x20); only in melee (0x40), or only out of it
-/// (0x80).
+/// Whether `caster`'s cast flags let `spell` go at `target`: none while it
+/// runs to keep its distance (movement 19) but one forced (0x04), as
+/// Thistle Tea's `movement_allows_cast?`; never one that wants its target
+/// out of reach (0x10) or casting (0x100); not an aura already there
+/// (0x20); only in melee (0x40), or only out of it (0x80).
 pub fn flags_allow(map: &Map, caster: Guid, flags: u32, spell: u32, target: Guid) -> bool {
+    if flags & CF_FORCE_CAST == 0 && distancing(map, caster) {
+        return false;
+    }
     if flags & (CF_TARGET_UNREACHABLE | CF_TARGET_CASTING) != 0 {
         return false;
     }
@@ -392,6 +403,17 @@ pub fn flags_allow(map: &Map, caster: Guid, flags: u32, spell: u32, target: Guid
         return !in_melee(map, caster, target);
     }
     true
+}
+
+/// Whether a creature is running to keep its distance (movement 19).
+pub fn distancing(map: &Map, g: Guid) -> bool {
+    map.creature(g).is_some_and(|c| {
+        matches!(c.motion, crate::game::map::creature::Motion::Moving(_))
+            && c.scripted
+                .as_deref()
+                .and_then(|s| s.scripted_move)
+                .is_some_and(|m| m.distancing)
+    })
 }
 
 fn in_melee(map: &Map, a: Guid, b: Guid) -> bool {
