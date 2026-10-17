@@ -1434,7 +1434,8 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     let items = outcome::death_items(map, target, left);
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
-        combat::deal_damage_by(map, h.caster, target, left, 1, Some(h.spell));
+        // Its threat is of its school (Thistle Tea's periodic damage's).
+        combat::deal_damage_by(map, h.caster, target, left, h.school, Some(h.spell));
     }
     outcome::give_death_items(map, target, items);
     if leech {
