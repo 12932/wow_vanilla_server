@@ -92,6 +92,14 @@ mod tests_p3_combat8;
 #[cfg(test)]
 mod tests_p3_combat9;
 #[cfg(test)]
+mod tests_p3_items;
+#[cfg(test)]
+mod tests_p3_items_loot;
+#[cfg(test)]
+mod tests_p3_items_professions;
+#[cfg(test)]
+mod tests_p3_items_quests;
+#[cfg(test)]
 mod tests_p3_network;
 #[cfg(test)]
 mod tests_p3_network_auth;

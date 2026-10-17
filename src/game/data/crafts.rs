@@ -39,6 +39,8 @@ pub struct CraftData {
     pub item_sets: AHashMap<u32, ItemSet>,
     /// `ItemRandomProperties`: a property's enchantments.
     pub random_properties: AHashMap<u32, [u32; 5]>,
+    /// A random property's suffix: "of the Bear".
+    pub random_property_names: AHashMap<u32, String>,
     /// `item_enchantment_template`: an item's possible random properties
     /// and their chances.
     pub random_pools: AHashMap<u32, Vec<(u32, f32)>>,
@@ -127,12 +129,16 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut CraftData) {
     }) {
         d.item_sets.insert(s.id, s);
     }
-    for (id, enchants) in rows(dbc, "SELECT * FROM ItemRandomProperties", |c| {
+    for (id, enchants, suffix) in rows(dbc, "SELECT * FROM ItemRandomProperties", |c| {
         (
             c.u32("id"),
             std::array::from_fn(|i| c.u32(&format!("spell_item_enchantment_{i}"))),
+            c.string("suffix_en_gb"),
         )
     }) {
         d.random_properties.insert(id, enchants);
+        if !suffix.is_empty() {
+            d.random_property_names.insert(id, suffix);
+        }
     }
 }

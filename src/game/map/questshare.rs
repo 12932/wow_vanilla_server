@@ -7,7 +7,7 @@ use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::map::Map;
-use crate::game::map::quests::{self, QUEST_LOG_SIZE};
+use crate::game::map::quests;
 
 /// How near the sharer a member must be.
 pub const SHARE_YARDS: f32 = 10.0;
@@ -52,8 +52,12 @@ fn others(map: &Map, g: Guid) -> Vec<Guid> {
         .unwrap_or_default()
 }
 
-/// `CMSG_PUSHQUESTTOPARTY`: a quest in the sharer's log offered to each
-/// member near who could take it.
+/// `CMSG_PUSHQUESTTOPARTY`: a shareable quest under way in the sharer's
+/// log (mangos's `CanShareQuest`, Thistle Tea's `shareable?`) offered to
+/// each member, the sharer told of each first (mangos's
+/// `HandlePushQuestToParty`) and why one isn't offered it: too far, on it
+/// or done with it, finished, unable to take it, with a full log, or with
+/// an offer already.
 pub fn push(map: &mut Map, g: Guid, quest: u32) {
     let data = map.realm.data.clone();
     let Some(q) = data.npc.quests.get(&quest) else {
@@ -62,30 +66,40 @@ pub fn push(map: &mut Map, g: Guid, quest: u32) {
     let Some(me) = map.players.get(&g) else {
         return;
     };
-    if !me.journal.has(quest) {
+    let current = me
+        .journal
+        .slot_of(quest)
+        .is_some_and(|s| !me.journal.log[s].failed);
+    if q.flags & QUEST_FLAGS_SHARABLE == 0 || !current {
         return;
     }
     let at = me.position();
     for m in others(map, g) {
+        result(map, g, m, QuestPartyMessage::SharingQuest);
         let Some(p) = map.players.get(&m) else {
             // On another map: too far.
             result(map, g, m, QuestPartyMessage::TooFar);
             continue;
         };
+        let done = p
+            .journal
+            .slot_of(quest)
+            .is_some_and(|s| quests::complete(p, q, &p.journal.log[s]));
         let why = if crate::game::map::combat::dist(p.position(), at) > SHARE_YARDS {
             Some(QuestPartyMessage::TooFar)
-        } else if p.journal.has(quest) {
-            Some(QuestPartyMessage::HaveQuest)
-        } else if p.journal.rewarded.contains(&quest)
-            && q.special_flags & crate::game::data::npc::QUEST_SPECIAL_REPEATABLE == 0
-        {
+        } else if done {
             Some(QuestPartyMessage::FinishQuest)
-        } else if p.journal.log.len() >= QUEST_LOG_SIZE {
+        } else if p.journal.has(quest)
+            || (p.journal.rewarded.contains(&quest)
+                && q.special_flags & crate::game::data::npc::QUEST_SPECIAL_REPEATABLE == 0)
+        {
+            Some(QuestPartyMessage::HaveQuest)
+        } else if !quests::can_take(p, q, &data) || !quests::condition_ok(map, m, g, quest) {
+            Some(QuestPartyMessage::CantTakeQuest)
+        } else if p.journal.full() {
             Some(QuestPartyMessage::LogFull)
         } else if p.misc.quest_shared.is_some() {
             Some(QuestPartyMessage::Busy)
-        } else if !quests::can_take(p, q, &data) {
-            Some(QuestPartyMessage::CantTakeQuest)
         } else {
             None
         };
@@ -97,8 +111,47 @@ pub fn push(map: &mut Map, g: Guid, quest: u32) {
             p.misc.quest_shared = Some((g, quest));
         }
         quests::details(map, m, g, quest);
-        result(map, g, m, QuestPartyMessage::SharingQuest);
     }
+}
+
+/// A shared quest taken: still near the sharer and able to take it, or
+/// the sharer hears why not and the offer goes (Thistle Tea's
+/// `QuestSharing.accept`). The sharer's time left, for a timed quest
+/// (mangos's `AddQuest`); none, refused.
+pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Option<i64> {
+    let data = map.realm.data.clone();
+    let q = data.npc.quests.get(&quest)?;
+    let near = match (map.players.get(&g), map.players.get(&sharer)) {
+        (Some(p), Some(s)) => {
+            crate::game::map::combat::dist(p.position(), s.position()) <= SHARE_YARDS
+        }
+        _ => false,
+    };
+    let why = if !near {
+        Some(QuestPartyMessage::TooFar)
+    } else if !map
+        .players
+        .get(&g)
+        .is_some_and(|p| quests::can_take(p, q, &data))
+        || !quests::condition_ok(map, g, sharer, quest)
+    {
+        Some(QuestPartyMessage::CantTakeQuest)
+    } else {
+        None
+    };
+    if let Some(why) = why {
+        if let Some(p) = map.players.get_mut(&g) {
+            p.misc.quest_shared = None;
+        }
+        result(map, sharer, g, why);
+        return None;
+    }
+    let expires = map
+        .players
+        .get(&sharer)
+        .and_then(|s| s.journal.slot_of(quest).map(|i| s.journal.log[i].expires))
+        .unwrap_or(0);
+    Some(expires)
 }
 
 /// `MSG_QUEST_PUSH_RESULT` from a member: told to the one sharing with
@@ -187,10 +240,6 @@ fn swap(map: &mut Map, g: Guid, a: u8, b: u8) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let (a, b) = (usize::from(a), usize::from(b));
-    if a >= p.journal.log.len() || b >= p.journal.log.len() || a == b {
-        return;
-    }
-    p.journal.log.swap(a, b);
+    p.journal.swap(usize::from(a), usize::from(b));
     quests::refresh_log(p, &data);
 }

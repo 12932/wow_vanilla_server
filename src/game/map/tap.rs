@@ -30,6 +30,11 @@ fn holders(map: &Map, tapper: Guid) -> Vec<Guid> {
     out
 }
 
+/// Whether `g` holds `tapper`'s tap: the tapper, or one of their group.
+pub fn holds(map: &Map, tapper: Guid, g: Guid) -> bool {
+    holders(map, tapper).contains(&g)
+}
+
 /// A values block with only `object`'s dynamic flags, at `value`.
 fn flags_block(object: Guid, value: u32) -> Option<Vec<u8>> {
     let mut f = Fields::new(TypeId::Unit, object, crate::game::guid::entry(object));

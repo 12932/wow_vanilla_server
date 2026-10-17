@@ -816,11 +816,7 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
         send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
     }
-    let wanted = map
-        .players
-        .get(&caster)
-        .map(|p| crate::game::map::quests::wanted_items(p, &data))
-        .unwrap_or_default();
+    let wanted = crate::game::map::quests::wanted(map, caster);
     let loot = loot::personal(&data, table, caster, &wanted, LootKind::Skinning);
     let elite = matches!(t.rank, 1..=3);
     // Skinning the Beast frees the hunter it swallowed.
@@ -857,17 +853,21 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     else {
         return;
     };
+    // What they left in them before, as it was.
+    if let Some(left) = map.loot_state.pockets.remove(&(creature, caster)) {
+        if let Some(c) = map.creature_mut(creature) {
+            c.loot = Some(left);
+        }
+        loot::show(map, caster, creature);
+        return;
+    }
     // Picked already this life, a pocket holds only the rogue's own quest
     // drops (Thistle Tea's `Pickpocket.session`).
     let picked_before = !map.loot_state.picked.insert(creature);
     let Some(t) = data.creature_template(entry) else {
         return;
     };
-    let wanted = map
-        .players
-        .get(&caster)
-        .map(|p| crate::game::map::quests::wanted_items(p, &data))
-        .unwrap_or_default();
+    let wanted = crate::game::map::quests::wanted(map, caster);
     let player_level = map.players.get(&caster).map_or(1, |p| u32::from(p.level()));
     let mut loot = match data.loot.pickpocket.get(&t.pickpocket_loot_id) {
         Some(table) => loot::personal(&data, table, caster, &wanted, LootKind::Pickpocket),
@@ -1150,11 +1150,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         SKILL_FISHING,
         f64::from(fishing_gain_chance(learned)),
     );
-    let wanted = map
-        .players
-        .get(&player)
-        .map(|p| crate::game::map::quests::wanted_items(p, &data))
-        .unwrap_or_default();
+    let wanted = crate::game::map::quests::wanted(map, player);
     let loot = match hole_near(map, object) {
         Some((hole, table)) => {
             let mut l = loot::personal(&data, &table, player, &wanted, LootKind::Fishing);
