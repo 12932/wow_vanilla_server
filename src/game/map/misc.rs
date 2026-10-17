@@ -233,7 +233,10 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
                 map.send_to_observers(g, &frame, true);
             }
         }
-        C::CMSG_CANCEL_GROWTH_AURA => cancel_growth(map, g),
+        // Nothing to do, as mangos's HandleCancelGrowthAuraOpcode and
+        // Thistle Tea's CmsgCancelGrowthAura have it: the player's scale
+        // stays.
+        C::CMSG_CANCEL_GROWTH_AURA => {}
         C::MSG_LOOKING_FOR_GROUP => {
             if let Some(p) = map.players.get(&g) {
                 p.outbound
@@ -272,17 +275,6 @@ fn far_sight(map: &mut Map, g: Guid, add: bool) {
     {
         p.fields.set_guid(PLAYER_FARSIGHT, Guid::zero());
     }
-}
-
-/// `CMSG_CANCEL_GROWTH_AURA`: auras that make the player bigger come off.
-fn cancel_growth(map: &mut Map, g: Guid) {
-    use crate::game::map::auras::{self, AURA_MOD_SCALE};
-    auras::remove_where(map, g, |h| {
-        h.positive
-            && h.effects
-                .iter()
-                .any(|a| a.kind == AURA_MOD_SCALE && a.amount > 0)
-    });
 }
 
 /// At death: the self-resurrection a soulstone or Reincarnation offers,
