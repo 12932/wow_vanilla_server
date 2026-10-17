@@ -11,7 +11,9 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::data::{GameObjectSpawn, GameObjectTemplate};
+use crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID;
 use crate::game::map::Map;
+use crate::game::map::auras;
 use crate::game::map::battleground::{self as bg, Due, Phase};
 use crate::game::map::death::Death;
 use crate::game::map::gameobject::GameObject;
@@ -215,6 +217,36 @@ fn carry(map: &mut Map, g: Guid, s: usize) {
     bg::send_world_states(map);
 }
 
+/// Whether `g` may take up or return a flag, as Thistle Tea's
+/// `battleground_allowed?` has it: not immune to every school (Divine
+/// Shield, Ice Block: mangos's `CanUseBattleGroundObject`), mounted,
+/// stunned, feared or confused, feigning death, possessed, or a Spirit of
+/// Redemption. One only partly immune (Blessing of Protection) may.
+fn may_use_flag(map: &Map, g: Guid) -> bool {
+    let mounted = map
+        .unit_fields(g)
+        .is_some_and(|f| f.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0);
+    let Some(a) = auras::auras(map, g) else {
+        return false;
+    };
+    let immune = a
+        .effects()
+        .filter(|(_, x)| x.kind == auras::AURA_SCHOOL_IMMUNITY)
+        .fold(0u32, |mask, (_, x)| mask | x.misc as u32)
+        & 0x7F
+        == 0x7F;
+    let held = [
+        auras::AURA_MOD_STUN,
+        auras::AURA_MOD_FEAR,
+        auras::AURA_MOD_CONFUSE,
+        auras::AURA_FEIGN_DEATH,
+        auras::AURA_MOD_POSSESS,
+    ]
+    .iter()
+    .any(|k| a.has(*k));
+    !mounted && !immune && !held && !crate::game::map::spells::redemption::spirit(map, g)
+}
+
 /// `CMSG_GAMEOBJ_USE` on a flag. Returns whether it was one.
 pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     let Some(m) = map.battleground.as_ref() else {
@@ -236,6 +268,16 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     };
     if !near || map.players.get(&g).is_none_or(|p| p.death != Death::Alive) {
         return flag_object;
+    }
+    if flag_object {
+        if !may_use_flag(map, g) {
+            return true;
+        }
+        // Using it ends stealth and invisibility (mangos's pickup is no
+        // triggered cast).
+        auras::remove_where(map, g, |h| {
+            h.has(auras::AURA_MOD_STEALTH) || h.has(auras::AURA_MOD_INVISIBILITY)
+        });
     }
     for (s, flag) in flags.iter().enumerate() {
         match *flag {

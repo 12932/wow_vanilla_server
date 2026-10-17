@@ -5,14 +5,22 @@
 //! cooldowns and charges spent on procs that came to nothing, and Nightfall
 //! on a killing tick.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use super::tests_p3_spells_kit::*;
+use crate::game::Realm;
+use crate::game::data::GameData;
+use crate::game::data::spells::{SpellEffect, SpellTemplate};
 use crate::game::fields::*;
-use crate::game::map::{Map, auras, procs, spells};
+use crate::game::harness::{self, Client};
+use crate::game::map::battleground::{Flag, wsg};
+use crate::game::map::{Map, MapHandle, auras, procs, spells};
+use crate::game::tests_pvp;
 
 const HOLY_SHIELD: u32 = 20925;
 const OBSIDIAN_ARMOR: u32 = 27539;
@@ -339,4 +347,184 @@ async fn a_percent_mana_tick_threatens_by_half_what_it_gave() {
         "the tick's amount"
     );
     assert_eq!(period, Some(Duration::from_secs(1)), "each second");
+}
+
+const WSG: u32 = 489;
+/// Made up: Divine Shield's immunity to every school, Blessing of
+/// Protection's to the physical, a stealth, a mount and its steed, a stun,
+/// a fear and the Spirit of Redemption.
+const BUBBLE: u32 = 995_101;
+const PROTECTION: u32 = 995_102;
+const VEIL: u32 = 995_103;
+const STEED: u32 = 995_104;
+const STEED_NPC: u32 = 995_105;
+const STUN: u32 = 995_106;
+const FEAR: u32 = 995_107;
+const SPIRIT_OF_REDEMPTION: u32 = 27827;
+
+fn aura_spell(id: u32, effects: &[(u32, i32)]) -> SpellTemplate {
+    let mut s = SpellTemplate {
+        id,
+        name: format!("Test {id}"),
+        equipped_item_class: -1,
+        duration_index: 21,
+        ..Default::default()
+    };
+    for (i, (aura, misc)) in effects.iter().enumerate() {
+        s.effects[i] = SpellEffect {
+            effect: 6,
+            aura: *aura,
+            misc_value: *misc,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        };
+    }
+    s
+}
+
+/// Warsong Gulch with its flags' auras, and the auras a carrier might be
+/// under.
+fn gulch() -> GameData {
+    let mut d = GameData::empty();
+    tests_pvp::battleground(&mut d, WSG, 2, "PVPZone03", [769, 770]);
+    tests_pvp::marker(&mut d, wsg::SPELL_FLAG_CARRIED[0]);
+    tests_pvp::marker(&mut d, wsg::SPELL_FLAG_CARRIED[1]);
+    use crate::game::map::auras::*;
+    for (id, effects) in [
+        (
+            BUBBLE,
+            &[(AURA_SCHOOL_IMMUNITY, 1), (AURA_SCHOOL_IMMUNITY, 126)][..],
+        ),
+        (PROTECTION, &[(AURA_SCHOOL_IMMUNITY, 1)]),
+        (VEIL, &[(AURA_MOD_STEALTH, 0)]),
+        (STEED, &[(AURA_MOUNTED, STEED_NPC as i32)]),
+        (STUN, &[(AURA_MOD_STUN, 0)]),
+        (FEAR, &[(AURA_MOD_FEAR, 0)]),
+        (SPIRIT_OF_REDEMPTION, &[(AURA_DUMMY, 0)]),
+    ] {
+        d.spells.spells.insert(id, aura_spell(id, effects));
+    }
+    d.creature_templates.insert(
+        STEED_NPC,
+        crate::game::data::CreatureTemplate {
+            entry: STEED_NPC,
+            name: "Steed".into(),
+            display_ids: [2404, 0, 0, 0],
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Move `c` within the match's map, at once, to a height.
+async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
+    let g = c.guid;
+    map.query(move |m| m.teleport(g, m.key, Vector3d { x, y, z }, 0.0))
+        .await;
+    c.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: g,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+}
+
+fn flags(m: &Map) -> [Option<Flag>; 2] {
+    m.battleground.as_ref().map_or([None, None], |b| b.flags)
+}
+
+/// Until `f` holds on the map, or panic.
+async fn until(map: &MapHandle, what: &str, f: impl Fn(&Map) -> bool + Send + Clone + 'static) {
+    for _ in 0..300 {
+        let f = f.clone();
+        if map.query(move |m| f(m)).await.unwrap_or(false) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("never: {what}");
+}
+
+fn on(m: &mut Map, g: Guid, spell: u32) {
+    let s = m.realm.data.spells.get(spell).cloned().unwrap();
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].aura != 0)
+        .map(|i| (i, 0))
+        .collect();
+    let _ = auras::apply_spell(m, g, g, &s, &effects, auras::Context::default());
+}
+
+async fn in_the_gulch(realm: &Arc<Realm>) -> (Client, Client, MapHandle) {
+    let mut a = Client::connect(realm, "B5W1");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(realm, "B5W2");
+    b.enter("Grom", Race::Orc, Class::Warrior).await;
+    let map = tests_pvp::both_into(
+        realm,
+        &mut a,
+        &mut b,
+        wow_world_messages::vanilla::Map::WarsongGulch,
+    )
+    .await;
+    (a, b, map)
+}
+
+/// The Warsong flag isn't taken up by one immune to every school (Divine
+/// Shield: mangos's `CanUseBattleGroundObject`), mounted, stunned, feared
+/// or a Spirit of Redemption, as Thistle Tea's `battleground_allowed?` has
+/// it; one only partly immune is let take it, and a stealthed one comes out
+/// of stealth to (mangos's pickup isn't a triggered cast, so it ends
+/// stealth).
+#[tokio::test]
+async fn the_warsong_flag_wont_go_to_the_immune_the_mounted_or_the_stunned_and_ends_stealth() {
+    let realm = harness::realm_with(gulch());
+    let (_a, mut b, map) = in_the_gulch(&realm).await;
+    let grom = b.guid;
+    until(&map, "the flag up", |m| {
+        matches!(flags(m)[0], Some(Flag::AtBase(_)))
+    })
+    .await;
+    let stand = match map.query(|m| flags(m)[0]).await.flatten() {
+        Some(Flag::AtBase(go)) => go,
+        f => panic!("{f:?}"),
+    };
+    let (x, y, z, _) = wsg::FLAG_AT[0];
+    put(&map, &mut b, x, y, z).await;
+    let refused = map
+        .query(move |m| {
+            let mut taken = Vec::new();
+            for spell in [BUBBLE, STEED, STUN, FEAR, SPIRIT_OF_REDEMPTION] {
+                on(m, grom, spell);
+                crate::game::map::world::use_object(m, grom, stand);
+                taken.push((spell, flags(m)[0] != Some(Flag::AtBase(stand))));
+                auras::remove_spell(m, grom, spell, None);
+            }
+            let mounted = m.players[&grom].fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID);
+            on(m, grom, PROTECTION);
+            on(m, grom, VEIL);
+            (taken, mounted)
+        })
+        .await
+        .unwrap();
+    let (taken, mounted) = refused;
+    for (spell, taken) in taken {
+        assert!(!taken, "taken up under {spell}");
+    }
+    assert_eq!(mounted, 0, "the steed went with its aura");
+    b.send(CMSG_GAMEOBJ_USE { guid: stand }).await;
+    until(&map, "the flag carried", move |m| {
+        flags(m)[0] == Some(Flag::Carried(grom))
+    })
+    .await;
+    let (stealthed, protected) = map
+        .query(move |m| (has(m, grom, VEIL), has(m, grom, PROTECTION)))
+        .await
+        .unwrap();
+    assert!(!stealthed, "stealth ends as the flag is taken");
+    assert!(protected, "a physical immunity stays");
 }
