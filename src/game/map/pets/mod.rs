@@ -26,7 +26,7 @@ mod totems;
 
 pub use control::{button, handle, send_spells};
 pub use hunter::{NPC_FLAG_STABLEMASTER, list_stable, pet_xp_to_level, untrain_offer};
-pub use summon::{dismiss, unsummon};
+pub use summon::{dismiss, spellbook, unsummon};
 
 // Spell effects that make or touch pets.
 pub const EFFECT_SUMMON: u32 = 28;
@@ -34,6 +34,7 @@ pub const EFFECT_SUMMON_WILD: u32 = 41;
 pub const EFFECT_SUMMON_GUARDIAN: u32 = 42;
 pub const EFFECT_TAME_CREATURE: u32 = 55;
 pub const EFFECT_SUMMON_PET: u32 = 56;
+pub const EFFECT_LEARN_SPELL: u32 = 36;
 pub const EFFECT_LEARN_PET_SPELL: u32 = 57;
 pub const EFFECT_SUMMON_POSSESSED: u32 = 73;
 pub const EFFECT_SUMMON_TOTEM: u32 = 74;
@@ -256,6 +257,22 @@ pub fn handles(s: &SpellTemplate, index: usize) -> bool {
             | EFFECT_SUMMON_DEMON
             | EFFECT_APPLY_AREA_AURA_PET
     ) || (s.id == SPELL_TAME_BEAST_TICK && e == 3)
+        || teaches_pet(s, index)
+}
+
+/// Whether effect `index` of `s` teaches the caster's pet a spell: a
+/// Grimoire's `LEARN_PET_SPELL`, or a hunter's `LEARN_SPELL` at the pet.
+pub fn teaches_pet(s: &SpellTemplate, index: usize) -> bool {
+    let e = s.effects[index];
+    e.trigger_spell != 0
+        && (e.effect == EFFECT_LEARN_PET_SPELL || (e.effect == EFFECT_LEARN_SPELL && e.target_a == 5))
+}
+
+/// The spell `s` teaches a pet, if it teaches one.
+pub fn taught(s: &SpellTemplate) -> Option<u32> {
+    (0..3)
+        .find(|i| teaches_pet(s, *i))
+        .map(|i| s.effects[i].trigger_spell)
 }
 
 /// Effect `index` of `s`, cast by `caster` on `target`.
@@ -268,6 +285,18 @@ pub fn effect(
     amount: i32,
 ) {
     let e = s.effects[index];
+    if teaches_pet(s, index) {
+        let hunter_pet = pet_of(map, caster)
+            .and_then(|g| state(map, g))
+            .is_some_and(|s| s.kind == Kind::Hunter);
+        if hunter_pet {
+            hunter::train(map, caster, s);
+        } else if let Some(pet) = pet_of(map, caster) {
+            // A demon's Grimoire.
+            control::learn(map, pet, e.trigger_spell);
+        }
+        return;
+    }
     match e.effect {
         3 if s.id == SPELL_TAME_BEAST_TICK => {
             crate::game::map::spells::cast_triggered(map, caster, SPELL_TAME_BEAST_TAME, Some(target));
@@ -289,11 +318,6 @@ pub fn effect(
         EFFECT_SUMMON_DEAD_PET => hunter::revive(map, caster, amount),
         // Feeding takes the cast's item: see `before_effects`.
         EFFECT_FEED_PET => {}
-        EFFECT_LEARN_PET_SPELL => {
-            if let Some(pet) = pet_of(map, caster) {
-                control::learn(map, pet, e.trigger_spell);
-            }
-        }
         EFFECT_SUMMON_TOTEM | EFFECT_SUMMON_TOTEM_SLOT1..=EFFECT_SUMMON_TOTEM_SLOT4 => {
             let slot = match e.effect {
                 EFFECT_SUMMON_TOTEM => None,
@@ -330,6 +354,10 @@ pub fn effect(
 /// Before a spell's effects go off: what needs the cast's targets (Feed
 /// Pet's food).
 pub fn before_effects(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) {
+    // A hunter's pet's ability, used, teaches its master to teach it.
+    if state(map, caster).is_some_and(|p| p.kind == Kind::Hunter) {
+        hunter::used(map, caster, s.id);
+    }
     if let Some(index) = s.effects.iter().position(|e| e.effect == EFFECT_FEED_PET) {
         hunter::feed(map, caster, s, index, t.item);
     }
@@ -340,7 +368,10 @@ pub fn before_effects(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Target
 pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<u8> {
     use wow_world_messages::vanilla::SpellCastResult as R;
     let effects: Vec<u32> = s.effects.iter().map(|e| e.effect).collect();
-    if effects.iter().all(|e| *e == 0 || !relevant(*e)) && !s.effects.iter().any(|e| e.target_a == 5 && e.effect != 0) && s.id != SPELL_TAME_BEAST {
+    if effects.iter().all(|e| *e == 0 || !relevant(*e))
+        && !s.effects.iter().any(|e| e.target_a == 5 && e.effect != 0)
+        && s.id != SPELL_TAME_BEAST
+    {
         return None;
     }
     let has_pet = pet_of(map, caster).is_some();
@@ -388,6 +419,13 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
     if effects.contains(&EFFECT_FEED_PET) {
         return hunter::feed_check(map, caster, t.item);
     }
+    if taught(s).is_some()
+        && pet_of(map, caster)
+            .and_then(|g| state(map, g))
+            .is_none_or(|s| s.kind == Kind::Hunter)
+    {
+        return hunter::train_check(map, caster, s);
+    }
     // A spell aimed at the pet (Mend Pet) needs one, alive.
     if s.effects.iter().any(|e| e.effect != 0 && e.target_a == 5)
         && !effects.contains(&EFFECT_DISMISS_PET)
@@ -411,6 +449,7 @@ fn relevant(effect: u32) -> bool {
             | EFFECT_SUMMON_DEAD_PET
             | EFFECT_DISMISS_PET
             | EFFECT_FEED_PET
+            | EFFECT_LEARN_PET_SPELL
     )
 }
 
