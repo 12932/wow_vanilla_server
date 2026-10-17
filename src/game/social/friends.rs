@@ -21,7 +21,6 @@ pub const MAX_FRIENDS: usize = 50;
 pub const MAX_IGNORED: usize = 25;
 
 // `FriendResult`.
-const DB_ERROR: u8 = 0x00;
 const LIST_FULL: u8 = 0x01;
 const ONLINE: u8 = 0x02;
 const OFFLINE: u8 = 0x03;
@@ -271,13 +270,10 @@ pub fn del_friend(map: &mut Map, g: Guid, f: Guid) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    // Taken off, or not there: removed either way (mangos's
+    // `HandleDelFriendOpcode`, Thistle Tea's idempotent `remove/3`).
     let counter = guid::counter(f);
-    let before = p.row.state.friends.len();
     p.row.state.friends.retain(|c| *c != counter);
-    if p.row.state.friends.len() == before {
-        status(&realm, g, DB_ERROR, f);
-        return;
-    }
     if let Some(s) = realm.social.lists.lock().friends.get_mut(&g) {
         s.remove(&f);
     }
