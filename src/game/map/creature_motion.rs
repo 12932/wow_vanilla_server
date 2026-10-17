@@ -367,6 +367,8 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
     }
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
+        // It leads its formation, as one on foot does.
+        crate::game::map::creature_groups::leader_walked(map, g);
     }
     true
 }

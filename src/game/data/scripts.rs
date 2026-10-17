@@ -171,6 +171,10 @@ pub const GROUP_FORMATION: u32 = 0x1;
 pub const GROUP_AGGRO_TOGETHER: u32 = 0x2;
 pub const GROUP_EVADE_TOGETHER: u32 = 0x4;
 pub const GROUP_RESPAWN_TOGETHER: u32 = 0x8;
+/// Its dead respawn when its leader evades (or one does while the leader
+/// lives and they evade together); when any of it evades.
+pub const GROUP_RESPAWN_ON_LEADER_EVADE: u32 = 0x10;
+pub const GROUP_RESPAWN_ON_EVADE: u32 = 0x20;
 
 /// `creature_linking` flags.
 pub const LINK_AGGRO_ON_AGGRO: u32 = 0x0001;

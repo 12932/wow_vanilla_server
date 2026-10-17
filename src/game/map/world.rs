@@ -149,7 +149,7 @@ fn step_creature(
         let Some(c) = map.creatures.get(key) else {
             return;
         };
-        if crate::game::map::creature_groups::follows(&map.realm.data, c.spawn_guid)
+        if crate::game::map::creature_groups::following(map, c.guid)
             && !matches!(c.motion, Motion::Moving(_))
         {
             return;
@@ -309,11 +309,7 @@ fn step_creature(
     let (pos, anchor, old_cell) = (c.position, c.vis_anchor, c.cell);
     let new_cell = cell_of(pos.x, pos.y);
     c.cell = new_cell;
-    let walked = match (&frame, &c.motion) {
-        (Some(_), Motion::Moving(w)) => Some((w.destination(), w.run)),
-        _ => None,
-    };
-    let facing = c.orientation;
+    let walked = frame.is_some() && matches!(c.motion, Motion::Moving(_));
     if frame.is_some() {
         map.next_spline_id = map.next_spline_id.wrapping_add(1);
     }
@@ -322,8 +318,8 @@ fn step_creature(
     if let Some(frame) = frame {
         map.send_to_observers(guid, &frame, false);
     }
-    if let Some((to, run)) = walked {
-        crate::game::map::creature_groups::leader_walked(map, guid, to, facing, run);
+    if walked {
+        crate::game::map::creature_groups::leader_walked(map, guid);
     }
     if let Some((point, script)) = arrived {
         crate::game::map::event_ai::movement_inform(map, guid, 2, point);

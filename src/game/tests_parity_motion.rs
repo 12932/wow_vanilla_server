@@ -1030,3 +1030,291 @@ async fn a_scripted_follower_runs_to_where_its_leader_will_be() {
         .unwrap();
     assert_eq!(still.map(|f| f.0), Some(ghost), "still following");
 }
+
+const WALKER: u32 = 5003;
+
+/// A leader (spawn 90) and its follower (91) a pace behind, in formation
+/// with `flags`; a friend of theirs (92) by the follower; the walker
+/// neutral, the friend of the pack.
+fn group_world(flags: u32) -> GameData {
+    use crate::game::data::scripts::{GROUP_FORMATION, GroupMember};
+    let mut d = wolf_world();
+    let mut walker = template(WALKER, "Walker", PACK);
+    walker.call_for_help_range = 5.0;
+    d.creature_templates.insert(WALKER, walker);
+    let spawns = d.creature_spawns.get_mut(&0).unwrap();
+    spawns.push(spawn(90, WALKER, at(20.0, -40.0)));
+    spawns.push(spawn(91, WALKER, at(17.0, -40.0)));
+    spawns.push(spawn(92, WALKER, at(14.0, -46.0)));
+    let member = |guid, distance, angle| GroupMember {
+        guid,
+        distance,
+        angle,
+        flags: GROUP_FORMATION | flags,
+    };
+    d.scripts.groups.insert(
+        90,
+        vec![member(90, 0.0, 0.0), member(91, 3.0, std::f32::consts::PI)],
+    );
+    d.scripts.group_of.insert(90, 90);
+    d.scripts.group_of.insert(91, 90);
+    d
+}
+
+fn leader() -> Guid {
+    guid::unit(WALKER, 90)
+}
+
+fn follower() -> Guid {
+    guid::unit(WALKER, 91)
+}
+
+/// A formation keeps its place off where its leader's walk ends, faced
+/// along the walk's last leg (not the leader's old facing), timed to
+/// arrive with it and facing that way when there; one a hundred yards
+/// behind is brought up to its leader (Thistle Tea's `BT.Formation`).
+#[tokio::test]
+async fn a_formation_follows_the_last_leg_and_arrives_with_its_leader() {
+    let (_realm, mut a, _ga, map) = enter(group_world(0)).await;
+    let (l, f) = (leader(), follower());
+    a.sees(f).await;
+    let north = at(20.0, -30.0);
+    let (dest, leader_ends, follower_ends) = map
+        .query(move |m| {
+            let now = m.now;
+            m.creature_mut(l).unwrap().orientation = 0.0;
+            m.creature_mut(f).unwrap().position = at(20.0, -45.0);
+            let c = m.creature_mut(l).unwrap();
+            let from = c.position;
+            c.walk(vec![from, north], false, now, 1);
+            crate::game::map::creature_groups::leader_walked(m, l);
+            let ends = |m: &crate::game::map::Map, g: Guid| match &m.creature(g).unwrap().motion {
+                Motion::Moving(w) => Some((w.destination(), w.started + w.duration)),
+                Motion::Idle { .. } => None,
+            };
+            let (dest, follower_ends) = ends(m, f).expect("it follows");
+            (dest, ends(m, l).unwrap().1, follower_ends)
+        })
+        .await
+        .unwrap();
+    assert!(
+        dist(dest, at(20.0, -33.0)) < 0.1,
+        "behind it along its way north: {dest:?}"
+    );
+    let apart = if leader_ends > follower_ends {
+        leader_ends - follower_ends
+    } else {
+        follower_ends - leader_ends
+    };
+    assert!(
+        apart < Duration::from_millis(50),
+        "arriving together: {apart:?}"
+    );
+    let walk = next_move(&mut a, f, |m| m.kind != 1).await;
+    assert_eq!(walk.kind, 4, "facing along the way: {walk:?}");
+    assert!(
+        walk.angle
+            .is_some_and(|o| (o - std::f32::consts::FRAC_PI_2).abs() < 0.01)
+    );
+    // Far behind, it is brought up at once.
+    let (near, moving) = map
+        .query(move |m| {
+            let now = m.now;
+            let c = m.creature_mut(f).unwrap();
+            c.motion = Motion::Idle { until: None };
+            c.position = at(20.0, -160.0);
+            let c = m.creature_mut(l).unwrap();
+            c.motion = Motion::Idle { until: None };
+            let from = c.position;
+            c.walk(vec![from, at(20.0, -20.0)], false, now, 2);
+            crate::game::map::creature_groups::leader_walked(m, l);
+            let leader_at = m.creature(l).unwrap().position;
+            (
+                dist(m.creature(f).unwrap().position, leader_at),
+                walking(m, f).is_some(),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(near < 0.1 && !moving, "brought up to its leader: {near}");
+}
+
+/// A leader that flies leads its formation as one on foot does.
+#[tokio::test]
+async fn a_flying_leader_leads_its_formation() {
+    let mut d = group_world(0);
+    let mut bat = template(FLYER, "Bat", NEUTRAL);
+    bat.inhabit_type = 4;
+    d.creature_templates.insert(FLYER, bat);
+    let spawns = d.creature_spawns.get_mut(&0).unwrap();
+    let mut s = spawn(93, FLYER, v(START.0 + 20.0, START.1 - 40.0, START.2 + 10.0));
+    s.movement_type = 1;
+    s.wander_distance = 5.0;
+    spawns.push(s);
+    d.scripts.groups.get_mut(&90).unwrap()[0].guid = 93;
+    let groups = d.scripts.groups.remove(&90).unwrap();
+    d.scripts.groups.insert(93, groups);
+    d.scripts.group_of.insert(93, 93);
+    d.scripts.group_of.insert(91, 93);
+    let (_realm, _a, _ga, map) = enter(d).await;
+    let bat = guid::unit(FLYER, 93);
+    let follows = map
+        .query(move |m| {
+            let key = m.creature_by_guid[&bat];
+            let now = m.now;
+            m.creature_mut(bat).unwrap().motion = Motion::Idle { until: Some(now) };
+            crate::game::map::creature_motion::idle_step(m, key);
+            walking(m, bat).is_some() && walking(m, follower()).is_some()
+        })
+        .await
+        .unwrap();
+    assert!(follows, "its follower keeps its place");
+}
+
+/// A group's flags as Thistle Tea's `CreatureGroup` reads them: any
+/// member's respawn brings back its dead (0x08), an evade does (0x20, or
+/// 0x10 for the leader's), and members pulled in with the group call no
+/// one themselves.
+#[tokio::test]
+async fn a_group_respawns_and_pulls_as_its_flags_say() {
+    use crate::game::data::scripts::{GROUP_AGGRO_TOGETHER, GROUP_RESPAWN_TOGETHER};
+    let (l, f) = (leader(), follower());
+    let kill = |m: &mut crate::game::map::Map, g: Guid| {
+        crate::game::map::ai::die(m, g, Guid::zero());
+    };
+    let alive = |m: &crate::game::map::Map, g: Guid| m.creature(g).is_some_and(|c| c.alive());
+    // Respawning together, from the follower's respawn.
+    let (_realm, _a, _ga, map) = enter(group_world(GROUP_RESPAWN_TOGETHER)).await;
+    let back = map
+        .query(move |m| {
+            kill(m, l);
+            kill(m, f);
+            crate::game::map::ai::respawn_now(m, f);
+            alive(m, l)
+        })
+        .await
+        .unwrap();
+    assert!(back, "the leader comes back with its follower");
+    for (flag, leader_evades) in [(0x20, false), (0x10, true)] {
+        let (_realm, _a, ga, map) = enter(group_world(flag)).await;
+        let back = map
+            .query(move |m| {
+                let (evader, dead) = if leader_evades { (l, f) } else { (f, l) };
+                kill(m, dead);
+                crate::game::map::ai::attacked(m, evader, ga);
+                crate::game::map::ai::enter_evade(m, evader);
+                alive(m, dead)
+            })
+            .await
+            .unwrap();
+        assert!(back, "{flag:#x}: its dead come back with the evade");
+    }
+    // Pulled with the group, the follower calls no friend of its own.
+    let (_realm, _a, ga, map) = enter(group_world(GROUP_AGGRO_TOGETHER)).await;
+    let (joined, calling) = map
+        .query(move |m| {
+            crate::game::map::ai::attacked(m, l, ga);
+            let c = m.creature(f).unwrap();
+            (c.combat.attacking, !c.engagement.assist.is_empty())
+        })
+        .await
+        .unwrap();
+    assert!(joined, "it joins its leader's fight");
+    assert!(!calling, "calling no one");
+}
+
+/// A follower goes home from a fight to its place by its leader, not to
+/// its own spawn (Thistle Tea's `Formation.home_position`).
+#[tokio::test]
+async fn a_follower_goes_home_to_its_place_by_its_leader() {
+    let (_realm, _a, ga, map) = enter(group_world(0)).await;
+    let (l, f) = (leader(), follower());
+    let home = map
+        .query(move |m| {
+            let c = m.creature_mut(l).unwrap();
+            c.position = at(30.0, -40.0);
+            c.orientation = std::f32::consts::FRAC_PI_2;
+            crate::game::map::ai::attacked(m, f, ga);
+            let c = m.creature_mut(f).unwrap();
+            c.motion = Motion::Idle { until: None };
+            c.position = at(17.0, -60.0);
+            crate::game::map::ai::enter_evade(m, f);
+            match &m.creature(f).unwrap().motion {
+                Motion::Moving(w) => Some(w.destination()),
+                Motion::Idle { .. } => None,
+            }
+        })
+        .await
+        .unwrap()
+        .expect("on its way");
+    // Three yards behind a leader facing north.
+    assert!(dist(home, at(30.0, -43.0)) < 0.1, "{home:?}");
+}
+
+/// A formation's leader dies on its patrol: its first member alive leads
+/// on along the patrol from the point the leader was bound for, and falls
+/// back in behind it when it is back (Thistle Tea's
+/// `CreatureGroup.on_death`, `on_respawn`).
+#[tokio::test]
+async fn a_patrol_whose_leader_dies_is_led_on_by_a_member() {
+    let mut d = group_world(0);
+    let point = |point, p: Vector3d| Waypoint {
+        point,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        ..Default::default()
+    };
+    d.waypoints.insert(
+        90,
+        vec![
+            point(1, at(20.0, -40.0)),
+            point(2, at(30.0, -40.0)),
+            point(3, at(30.0, -30.0)),
+        ],
+    );
+    let (_realm, _a, _ga, map) = enter(d).await;
+    let (l, f) = (leader(), follower());
+    let (acting, kind, bound, walks_to) = map
+        .query(move |m| {
+            let c = m.creature_mut(l).unwrap();
+            c.motion = Motion::Idle { until: None };
+            c.waypoint = 1;
+            crate::game::map::ai::die(m, l, Guid::zero());
+            let acting = m.acting_leaders.get(&90).copied();
+            let c = m.creature(f).unwrap();
+            let (kind, bound) = (c.movement_type, c.waypoint);
+            let now = m.now;
+            m.creature_mut(f).unwrap().motion = Motion::Idle { until: Some(now) };
+            let key = m.creature_by_guid[&f];
+            crate::game::map::world::step_creature_key(m, key);
+            let walks_to = match &m.creature(f).unwrap().motion {
+                Motion::Moving(w) => Some(w.destination()),
+                Motion::Idle { .. } => None,
+            };
+            (acting, kind, bound, walks_to)
+        })
+        .await
+        .unwrap();
+    assert_eq!(acting, Some(f), "its member leads on");
+    assert_eq!(kind, crate::game::map::creature::MOVEMENT_WAYPOINT);
+    assert_eq!(bound, 1, "from the point the leader was bound for");
+    let to = walks_to.expect("along the patrol");
+    assert!(dist(to, at(30.0, -40.0)) < 0.1, "{to:?}");
+    let (acting, kind) = map
+        .query(move |m| {
+            crate::game::map::ai::respawn_now(m, l);
+            (
+                m.acting_leaders.get(&90).copied(),
+                m.creature(f).unwrap().movement_type,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(acting, None, "the leader back leads again");
+    assert_eq!(
+        kind,
+        crate::game::map::creature::MOVEMENT_IDLE,
+        "and its member follows"
+    );
+}
