@@ -1,17 +1,19 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
 //! batch: the weather's seasons, sounds and changes; a scripted stay, a
 //! dead master's guardian, extra attacks in a cast, pets and civilians, an
-//! event's looks in a fight; a profession's skill as it is
-//! learned.
+//! event's looks in a fight; and equipment: Dual Wield, proficiency from
+//! the spells learned, the skill and spell an item asks for; a profession's
+//! skill as it is learned.
 
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::scripts::ScriptStep;
 use crate::game::fields::*;
-use crate::game::harness;
+use crate::game::harness::{self, Client};
 use crate::game::map::pets;
 use crate::game::map::{Map, MapHandle};
 use crate::game::tests_pets;
@@ -442,8 +444,23 @@ fn real_realm() -> std::sync::Arc<crate::game::Realm> {
     harness::realm_with(crate::game::data::load::load(DB.as_path()))
 }
 
+const BAG_PLAYER: u8 = crate::game::store::BAG_PLAYER;
+const SLOT_MAIN_HAND: u8 = 15;
+const SLOT_OFF_HAND: u8 = 16;
+const SLOT_CHEST: u8 = 4;
+const SHORTSWORD: u32 = 2131;
+const WORN_SHORTSWORD: u32 = 25;
+const PEARL_SPEAR: u32 = 1406;
+const LIGHT_MAIL: u32 = 2392;
+const FISHING_POLE: u32 = 6256;
+const TIGER_GOGGLES: u32 = 4368;
+const DIMENSIONAL_RIPPER: u32 = 18984;
+const DUAL_WIELD: u32 = 674;
+const POLEARMS: u32 = 200;
+const MAIL: u32 = 8737;
 const FISHING: u32 = 7620;
 const ENGINEERING: u32 = 4036;
+const GOBLIN_ENGINEER: u32 = 20222;
 
 /// `g` at `level`, knowing `learn` too.
 fn level(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
@@ -454,6 +471,214 @@ fn level(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
     for s in learn {
         crate::game::map::spells::learn(m, g, *s);
     }
+}
+
+/// Where `g`'s first `entry` not worn is.
+fn carried(m: &Map, g: Guid, entry: u32) -> Option<(u8, u8)> {
+    m.players[&g]
+        .items
+        .iter()
+        .find(|i| i.entry == entry && !(i.bag == BAG_PLAYER && i.slot < 19))
+        .map(|i| (i.bag, i.slot))
+}
+
+/// The entry worn in equipment `slot`.
+fn worn(m: &Map, g: Guid, slot: u8) -> Option<u32> {
+    let p = &m.players[&g];
+    p.item_at(BAG_PLAYER, slot).map(|i| p.items[i].entry)
+}
+
+/// Give `g` an `entry` and try to wear it in `slot`: what the client is
+/// told of a failure, if any, and what is worn there after.
+async fn wear(
+    c: &mut Client,
+    map: &MapHandle,
+    g: Guid,
+    entry: u32,
+    slot: u8,
+) -> (Option<String>, Option<u32>) {
+    let from = map
+        .query(move |m| {
+            if carried(m, g, entry).is_none() {
+                crate::game::map::inventory::add_item(m, g, entry, 1, false).unwrap();
+            }
+            carried(m, g, entry).unwrap()
+        })
+        .await
+        .unwrap();
+    c.clear();
+    c.send(CMSG_SWAP_ITEM {
+        destination_bag: BAG_PLAYER,
+        destionation_slot: slot,
+        source_bag: from.0,
+        source_slot: from.1,
+    })
+    .await;
+    let failed = c
+        .gets(Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(f) => {
+                Some(format!("{:?}", f.result))
+            }
+            _ => None,
+        })
+        .await;
+    let now = map.query(move |m| worn(m, g, slot)).await.unwrap();
+    (failed, now)
+}
+
+fn refused(r: &(Option<String>, Option<u32>), why: &str) -> bool {
+    r.0.as_deref().is_some_and(|f| f.starts_with(why))
+}
+
+/// A one-hander goes in the off hand only with Dual Wield learned, as
+/// vmangos and Thistle Tea have it, not at level 20; without it, equipped
+/// as it comes, it goes to the main hand.
+#[tokio::test]
+async fn a_weapon_in_the_off_hand_takes_dual_wield() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (mut a, g, map) =
+        tests_pets::enter(&realm, "A", "Warrior", Race::Human, Class::Warrior).await;
+    map.query(move |m| level(m, g, 20, &[])).await.unwrap();
+    let r = wear(&mut a, &map, g, SHORTSWORD, SLOT_OFF_HAND).await;
+    assert!(refused(&r, "CantDualWield"), "{r:?}");
+    // The shield off, and the sword equipped as it comes: the main hand.
+    let at = map
+        .query(move |m| {
+            let p = m.players.get_mut(&g).unwrap();
+            let free = p.free_carry_slot(&m.realm.data.clone()).unwrap();
+            crate::game::map::inventory::move_item(m, g, (BAG_PLAYER, SLOT_OFF_HAND), free);
+            carried(m, g, SHORTSWORD).unwrap()
+        })
+        .await
+        .unwrap();
+    a.send(CMSG_AUTOEQUIP_ITEM {
+        source_bag: at.0,
+        source_slot: at.1,
+    })
+    .await;
+    until(&map, "the sword in the main hand", move |m| {
+        worn(m, g, SLOT_MAIN_HAND) == Some(SHORTSWORD)
+    })
+    .await;
+    assert_eq!(
+        map.query(move |m| worn(m, g, SLOT_OFF_HAND)).await.unwrap(),
+        None
+    );
+    // Dual Wield learned, the old sword goes in the off hand.
+    map.query(move |m| crate::game::map::spells::learn(m, g, DUAL_WIELD))
+        .await
+        .unwrap();
+    let r = wear(&mut a, &map, g, WORN_SHORTSWORD, SLOT_OFF_HAND).await;
+    assert!(
+        refused(&r, "ItemDoesntGoToSlot"),
+        "a main-hand weapon doesn't go there: {r:?}"
+    );
+    let r = wear(&mut a, &map, g, SHORTSWORD, SLOT_OFF_HAND).await;
+    assert_eq!(r, (None, Some(SHORTSWORD)));
+}
+
+/// Weapon and armor proficiency comes from the spells learned, as Thistle
+/// Tea's and mangos's have it, not by class and level: a warrior learns
+/// Polearms, a hunter of 40 Mail, and anyone Fishing for a fishing pole.
+#[tokio::test]
+async fn proficiency_is_learned_not_had_by_level() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (mut a, g, map) =
+        tests_pets::enter(&realm, "A", "Warrior", Race::Human, Class::Warrior).await;
+    map.query(move |m| level(m, g, 20, &[])).await.unwrap();
+    let r = wear(&mut a, &map, g, PEARL_SPEAR, SLOT_MAIN_HAND).await;
+    assert!(refused(&r, "NoRequiredProficiency"), "{r:?}");
+    let r = wear(&mut a, &map, g, FISHING_POLE, SLOT_MAIN_HAND).await;
+    assert!(refused(&r, "NoRequiredProficiency"), "{r:?}");
+    map.query(move |m| level(m, g, 20, &[POLEARMS, FISHING]))
+        .await
+        .unwrap();
+    let r = wear(&mut a, &map, g, PEARL_SPEAR, SLOT_MAIN_HAND).await;
+    assert_eq!(r, (None, Some(PEARL_SPEAR)));
+    let r = wear(&mut a, &map, g, FISHING_POLE, SLOT_MAIN_HAND).await;
+    assert_eq!(r, (None, Some(FISHING_POLE)));
+    let (mut h, gh, map) =
+        tests_pets::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    map.query(move |m| level(m, gh, 40, &[])).await.unwrap();
+    let r = wear(&mut h, &map, gh, LIGHT_MAIL, SLOT_CHEST).await;
+    assert!(refused(&r, "NoRequiredProficiency"), "{r:?}");
+    map.query(move |m| level(m, gh, 40, &[MAIL])).await.unwrap();
+    let r = wear(&mut h, &map, gh, LIGHT_MAIL, SLOT_CHEST).await;
+    assert_eq!(r, (None, Some(LIGHT_MAIL)));
+}
+
+/// Gear that asks for a skill at a rank, or a spell, is worn only with
+/// them, as mangos's `CanUseItem` and Thistle Tea's `Proficiency` have it:
+/// engineer's goggles want Engineering at 100 (short of it, mangos's "not
+/// skilled enough"), a goblin engineer's ripper the Goblin Engineer too.
+#[tokio::test]
+async fn gear_asks_for_its_skill_and_spell() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (mut a, g, map) =
+        tests_pets::enter(&realm, "A", "Warrior", Race::Human, Class::Warrior).await;
+    let r = wear(&mut a, &map, g, TIGER_GOGGLES, 0).await;
+    assert!(refused(&r, "NoRequiredProficiency"), "{r:?}");
+    map.query(move |m| level(m, g, 1, &[ENGINEERING]))
+        .await
+        .unwrap();
+    let r = wear(&mut a, &map, g, TIGER_GOGGLES, 0).await;
+    assert!(refused(&r, "CantEquipSkill"), "{r:?}");
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::skills::learn_skill(p, 202, 4);
+        crate::game::map::skills::set_value(p, 202, 300);
+    })
+    .await
+    .unwrap();
+    let r = wear(&mut a, &map, g, TIGER_GOGGLES, 0).await;
+    assert_eq!(r, (None, Some(TIGER_GOGGLES)));
+    let r = wear(&mut a, &map, g, DIMENSIONAL_RIPPER, 12).await;
+    assert!(refused(&r, "NoRequiredProficiency"), "{r:?}");
+    map.query(move |m| level(m, g, 1, &[GOBLIN_ENGINEER]))
+        .await
+        .unwrap();
+    let r = wear(&mut a, &map, g, DIMENSIONAL_RIPPER, 12).await;
+    assert_eq!(r, (None, Some(DIMENSIONAL_RIPPER)));
+}
+
+/// What every race and class starts with, it can wear with the spells it
+/// starts with (the dwarven mage, who has no start, aside).
+#[test]
+fn every_start_wears_its_gear() {
+    if !have_data() {
+        return;
+    }
+    let data = crate::game::data::load::load(DB.as_path());
+    let mut checked = 0;
+    for ((race, class), start) in &data.start {
+        if start.spells.is_empty() {
+            continue;
+        }
+        let prof = crate::game::map::inventory::Proficiency::from_spells(&data, &start.spells);
+        for (entry, _, _) in &start.items {
+            let Some(t) = data.item(*entry) else {
+                continue;
+            };
+            assert!(
+                prof.covers(t),
+                "race {race} class {class}: {} ({entry})",
+                t.name
+            );
+            checked += 1;
+        }
+        // None starts dual wielding.
+        assert!(!prof.dual_wield, "race {race} class {class}");
+    }
+    assert!(checked > 100, "{checked}");
 }
 
 /// A profession's rank learned gives its skill at once, at the step its

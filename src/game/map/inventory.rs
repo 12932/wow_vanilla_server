@@ -46,6 +46,8 @@ pub enum Fail {
     DoesntGoToSlot,
     BagFull,
     NoProficiency,
+    /// Not the rank of the skill the item asks for.
+    Skill,
     NeverUse,
     TwoHanded,
     CantDualWield,
@@ -88,6 +90,11 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::NoProficiency => R::NoRequiredProficiency {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::Skill => R::CantEquipSkill {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -330,44 +337,132 @@ impl Item {
     }
 }
 
-pub fn proficient(class: u8, level: u8, t: &ItemTemplate) -> bool {
-    const WEAPON: u32 = 2;
-    const ARMOR: u32 = 4;
-    match t.class {
-        WEAPON => {
-            // Weapon subclasses: axe 0, 2h axe 1, bow 2, gun 3, mace 4,
-            // 2h mace 5, polearm 6, sword 7, 2h sword 8, staff 10, fist 13,
-            // misc 14, dagger 15, thrown 16, spear 17, crossbow 18,
-            // wand 19, fishing pole 20.
-            let allowed: &[u32] = match class {
-                1 => &[0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 15, 16, 18],
-                2 => &[0, 1, 4, 5, 6, 7, 8],
-                3 => &[0, 1, 2, 3, 6, 7, 8, 10, 13, 15, 16, 18],
-                4 => &[2, 3, 4, 7, 13, 15, 16, 18],
-                5 => &[4, 10, 15, 19],
-                7 => &[0, 1, 4, 5, 10, 13, 15],
-                8 | 9 => &[7, 10, 15, 19],
-                11 => &[4, 5, 6, 10, 13, 15],
-                _ => &[],
-            };
-            allowed.contains(&t.subclass) || matches!(t.subclass, 14 | 20)
+/// Fishing: it lets its player hold a fishing pole.
+const SKILL_FISHING: u32 = 356;
+/// Cloth, a proficiency every class starts with.
+const SPELL_CLOTH: u32 = 9078;
+/// The weapon subclass of a fishing pole.
+const FISHING_POLE: u32 = 20;
+const WEAPON: u32 = 2;
+const ARMOR: u32 = 4;
+
+/// What a player's spells let them wear and wield, as Thistle Tea's
+/// `Proficiency` has it (mangos asks for the weapon and armor skills the
+/// same spells teach): the weapon and armor subclasses their proficiency
+/// spells give, a fishing pole with Fishing, and Dual Wield.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Proficiency {
+    pub weapons: u32,
+    pub armor: u32,
+    pub dual_wield: bool,
+    /// Everything, and every skill and spell an item asks for: in a test
+    /// world without the proficiency spells.
+    pub all: bool,
+}
+
+impl Proficiency {
+    pub const ALL: Self = Self {
+        weapons: u32::MAX,
+        armor: u32::MAX,
+        dual_wield: true,
+        all: true,
+    };
+
+    /// A player's, from the spells they know and their Fishing; in a
+    /// world without the proficiency spells (a bare test world, or one of
+    /// a test's own spells) everything.
+    pub fn of(p: &Player, data: &GameData) -> Self {
+        if data.spells.get(SPELL_CLOTH).is_none() {
+            return Self::ALL;
         }
-        ARMOR => match t.subclass {
-            0 => true,                                   // misc: rings, trinkets, held
-            1 => true,                                   // cloth
-            2 => class != 5 && class != 8 && class != 9, // leather
-            3 => matches!(class, 1 | 2) || (matches!(class, 3 | 7) && level >= 40), // mail
-            4 => matches!(class, 1 | 2) && level >= 40,  // plate
-            6 => matches!(class, 1 | 2 | 7),             // shield
-            7..=9 => true,                               // librams, idols, totems
-            _ => false,
-        },
-        _ => true,
+        let mut prof = Self::from_spells(data, &p.spells);
+        if crate::game::map::skills::value(p, SKILL_FISHING).is_some() {
+            prof.weapons |= 1 << FISHING_POLE;
+        }
+        prof
+    }
+
+    /// What `spells` give: a proficiency effect's subclasses of its item
+    /// class, and Dual Wield's effect.
+    pub fn from_spells(data: &GameData, spells: &[u32]) -> Self {
+        use crate::game::map::spells::EFFECT_PROFICIENCY;
+        /// Dual Wield's effect.
+        const EFFECT_DUAL_WIELD: u32 = 40;
+        let mut prof = Self {
+            weapons: 0,
+            armor: 0,
+            dual_wield: false,
+            all: false,
+        };
+        for s in spells.iter().filter_map(|id| data.spells.get(*id)) {
+            for e in &s.effects {
+                match e.effect {
+                    EFFECT_PROFICIENCY => {
+                        let mask = s.equipped_item_subclass_mask as u32;
+                        match s.equipped_item_class as u32 {
+                            WEAPON => prof.weapons |= mask,
+                            ARMOR => prof.armor |= mask,
+                            _ => {}
+                        }
+                    }
+                    EFFECT_DUAL_WIELD => prof.dual_wield = true,
+                    _ => {}
+                }
+            }
+        }
+        prof
+    }
+
+    /// Whether it covers an item's class and subclass. Weapons (but the
+    /// obsolete, exotic and miscellaneous) and armor (but miscellaneous,
+    /// bucklers, librams, idols and totems) need theirs; nothing else does
+    /// (Thistle Tea's unskilled subclasses, mangos's `Item::GetSkill`).
+    pub fn covers(&self, t: &ItemTemplate) -> bool {
+        let (mask, unskilled): (u32, &[u32]) = match t.class {
+            WEAPON => (self.weapons, &[9, 11, 12, 14]),
+            ARMOR => (self.armor, &[0, 5, 7, 8, 9]),
+            _ => return true,
+        };
+        unskilled.contains(&t.subclass)
+            || 1u32
+                .checked_shl(t.subclass)
+                .is_some_and(|bit| mask & bit != 0)
     }
 }
 
-/// Whether `p` may put an item of template `t` in equipment `slot`.
-pub fn can_equip(p: &Player, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
+/// Whether `p` is skilled for an item, as Thistle Tea's
+/// `Proficiency.can_equip?` and mangos's `CanUseItem` have it: the skill it
+/// asks for at its rank (short of the rank, mangos's "not skilled
+/// enough"), the spell it asks for, and its weapon or armor proficiency.
+pub fn proficient(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<(), Fail> {
+    if prof.all {
+        return Ok(());
+    }
+    if t.required_skill != 0 {
+        match crate::game::map::skills::value(p, t.required_skill) {
+            None | Some(0) => return Err(Fail::NoProficiency),
+            Some(v) if v < t.required_skill_rank => return Err(Fail::Skill),
+            Some(_) => {}
+        }
+    }
+    if t.required_spell != 0 && !p.spells.contains(&t.required_spell) {
+        return Err(Fail::NoProficiency);
+    }
+    if !prof.covers(t) {
+        return Err(Fail::NoProficiency);
+    }
+    Ok(())
+}
+
+/// Whether an item in the off hand is a weapon, so wants Dual Wield: a
+/// one-hander or an off-hand weapon (mangos's `CanEquipItem`).
+fn wants_dual_wield(t: &ItemTemplate) -> bool {
+    matches!(t.inventory_type, 13 | 22)
+}
+
+/// Whether `p`, of proficiency `prof`, may put an item of template `t` in
+/// equipment `slot`.
+pub fn can_equip(p: &Player, prof: &Proficiency, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
     if !slots_for(t.inventory_type).contains(&slot) {
         return Err(Fail::DoesntGoToSlot);
     }
@@ -389,18 +484,11 @@ pub fn can_equip(p: &Player, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
     if !crate::game::map::pvp::rank_allows_use(p, t) {
         return Err(Fail::Rank);
     }
-    if !proficient(p.row.class, p.level(), t) {
-        return Err(Fail::NoProficiency);
-    }
-    if slot == SLOT_OFF_HAND && t.inventory_type == 13 {
-        let dual = match p.row.class {
-            4 => true,
-            1 | 3 => p.level() >= 20,
-            _ => false,
-        };
-        if !dual {
-            return Err(Fail::CantDualWield);
-        }
+    proficient(p, prof, t)?;
+    // A weapon in the off hand takes Dual Wield, learned (Thistle Tea's
+    // and vmangos's `dual_wield?`), not a level.
+    if slot == SLOT_OFF_HAND && wants_dual_wield(t) && !prof.dual_wield {
+        return Err(Fail::CantDualWield);
     }
     Ok(())
 }
@@ -606,7 +694,7 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
         let Some(t) = t else {
             return Err(Fail::DoesntGoToSlot);
         };
-        can_equip(p, t, slot)?;
+        can_equip(p, &Proficiency::of(p, data), t, slot)?;
         // A standing, and an honor rank (the highest reached), the item
         // asks for.
         if t.required_reputation_faction != 0
@@ -769,7 +857,14 @@ pub fn auto_equip(map: &mut Map, g: Guid, from: (u8, u8)) {
         send_fail(p, Fail::DoesntGoToSlot, p.items[i].guid);
         return;
     };
-    let slots = slots_for(t.inventory_type);
+    // A one-hander goes in the off hand only with Dual Wield (mangos's
+    // `FindEquipSlot`, Thistle Tea's `candidate_slots`).
+    let dual_wield = Proficiency::of(p, &data).dual_wield;
+    let slots: Vec<u8> = slots_for(t.inventory_type)
+        .iter()
+        .copied()
+        .filter(|s| *s != SLOT_OFF_HAND || t.inventory_type != 13 || dual_wield)
+        .collect();
     let Some(&slot) = slots
         .iter()
         .find(|s| p.item_at(BAG_PLAYER, **s).is_none())
@@ -1077,17 +1172,5 @@ mod tests {
         assert_eq!(slots_for(17), &[15]);
         assert_eq!(slots_for(11), &[10, 11]);
         assert_eq!(slots_for(18), &[19, 20, 21, 22]);
-    }
-
-    #[test]
-    fn plate_waits_for_level_forty() {
-        let plate = ItemTemplate {
-            class: 4,
-            subclass: 4,
-            ..Default::default()
-        };
-        assert!(!proficient(1, 39, &plate));
-        assert!(proficient(1, 40, &plate));
-        assert!(!proficient(8, 60, &plate));
     }
 }
