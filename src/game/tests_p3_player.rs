@@ -1436,3 +1436,159 @@ async fn a_logout_in_a_rest_area_is_at_once_but_never_in_a_fight() {
     })
     .await;
 }
+
+const GUILD: u32 = 96_301;
+const HIDDEN_GUILD: u32 = 96_302;
+const GUILD_TEMPLATE: u32 = 9_631;
+const MERCHANT: u32 = 960_020;
+const MERCHANT_A: u32 = 96_020;
+const FORCE: u32 = 960_210;
+
+fn with_factions(mut d: GameData) -> GameData {
+    use crate::game::data::FactionTemplate;
+    use crate::game::data::items::ItemTemplate;
+    use crate::game::data::misc::FactionDef;
+    for (id, index, flags) in [(GUILD, 5, 0x0), (HIDDEN_GUILD, 6, 0x4)] {
+        d.misc.factions.insert(
+            id,
+            FactionDef {
+                id,
+                index,
+                name: format!("Faction {id}"),
+                variants: [(0x1, 0, 0, flags), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)],
+                ..Default::default()
+            },
+        );
+        d.misc.faction_by_index.insert(index, id);
+    }
+    d.faction_templates.insert(
+        GUILD_TEMPLATE,
+        FactionTemplate {
+            id: GUILD_TEMPLATE,
+            faction: GUILD,
+            ours: 2,
+            friend_mask: 2,
+            ..Default::default()
+        },
+    );
+    let mut t = creature(MERCHANT, 0);
+    t.faction = GUILD_TEMPLATE;
+    t.npc_flags = 0x4;
+    d.creature_templates.insert(MERCHANT, t);
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: MERCHANT_A,
+        entries: vec![MERCHANT],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1,
+        z: START.2,
+        respawn_min: 600,
+        respawn_max: 600,
+        ..Default::default()
+    });
+    d.items.insert(
+        960_400,
+        ItemTemplate {
+            entry: 960_400,
+            name: "Trinket".into(),
+            buy_price: 25,
+            stackable: 1,
+            ..Default::default()
+        },
+    );
+    d.vendors.insert(
+        MERCHANT,
+        vec![crate::game::data::VendorItem {
+            slot: 1,
+            item: 960_400,
+            ..Default::default()
+        }],
+    );
+    let mut force = held(FORCE, crate::game::map::auras::AURA_FORCE_REACTION);
+    force.effects[0].misc_value = GUILD as i32;
+    force.effects[0].base_points = 0;
+    d.spells.spells.insert(FORCE, force);
+    d
+}
+
+#[tokio::test]
+async fn a_gain_shows_its_faction_honored_prices_round_to_the_copper_and_a_forced_reaction_is_told_both_ways()
+ {
+    use crate::game::map::reputation::{
+        SMSG_SET_FACTION_STANDING, SMSG_SET_FACTION_VISIBLE, SMSG_SET_FORCED_REACTIONS,
+    };
+    let realm = harness::realm_with(with_factions(data()));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(guid::unit(MERCHANT, MERCHANT_A)).await;
+    a.clear();
+    // Unseen till now, the faction is shown, then its standing told.
+    on_map(&realm, move |m| {
+        crate::game::map::reputation::modify(m, ga, GUILD, 100, false);
+        crate::game::map::reputation::modify(m, ga, HIDDEN_GUILD, 100, false);
+    })
+    .await;
+    let shown = a
+        .wait_frame("SMSG_SET_FACTION_VISIBLE", SMSG_SET_FACTION_VISIBLE, |_| {
+            true
+        })
+        .await;
+    assert_eq!(shown, 5u32.to_le_bytes());
+    a.wait_frame(
+        "SMSG_SET_FACTION_STANDING",
+        SMSG_SET_FACTION_STANDING,
+        |_| true,
+    )
+    .await;
+    // Shown once; a hidden faction never.
+    a.clear();
+    a.raw.clear();
+    on_map(&realm, move |m| {
+        crate::game::map::reputation::modify(m, ga, GUILD, 9_000, false)
+    })
+    .await;
+    synced(&mut a).await;
+    assert!(
+        !a.raw
+            .iter()
+            .any(|f| u16::from_le_bytes([f[2], f[3]]) == SMSG_SET_FACTION_VISIBLE)
+    );
+    // Honored: 25 copper is 22.5, to the copper 23.
+    a.send(CMSG_LIST_INVENTORY {
+        guid: guid::unit(MERCHANT, MERCHANT_A),
+    })
+    .await;
+    let price = a
+        .wait_for("SMSG_LIST_INVENTORY", |m| match m {
+            ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) => {
+                l.items.first().map(|i| i.price.as_int())
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(price, 23);
+    // A forced reaction: told as it comes, and as it goes.
+    let reactions = |b: &[u8]| u32::from_le_bytes(b[..4].try_into().unwrap());
+    a.clear();
+    on_map(&realm, move |m| hold(m, ga, FORCE)).await;
+    let on = a
+        .wait_frame(
+            "SMSG_SET_FORCED_REACTIONS",
+            SMSG_SET_FORCED_REACTIONS,
+            |_| true,
+        )
+        .await;
+    assert_eq!((reactions(&on), &on[4..8]), (1, &GUILD.to_le_bytes()[..]));
+    on_map(&realm, move |m| {
+        crate::game::map::auras::remove_spell(m, ga, FORCE, None)
+    })
+    .await;
+    let off = a
+        .wait_frame(
+            "SMSG_SET_FORCED_REACTIONS",
+            SMSG_SET_FORCED_REACTIONS,
+            |_| true,
+        )
+        .await;
+    assert_eq!(reactions(&off), 0);
+}
