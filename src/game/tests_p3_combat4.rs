@@ -336,12 +336,11 @@ async fn a_creatures_reach_for_a_pet_is_its_masters_level_and_auras_move_it_but_
             let wild = spawn_at(m, PREY, 60, east(31.0), 0.0);
             m.creature_mut(pet).unwrap().owner = Some(ga);
             // A level-1 player's pet of 60 is reached as the player is.
-            let reach = (
+            (
                 ai::attack_distance(m, watcher, pet),
                 ai::attack_distance(m, watcher, ga),
                 ai::attack_distance(m, watcher, wild),
-            );
-            reach
+            )
         })
         .await
         .unwrap();
