@@ -264,6 +264,16 @@ pub fn load(db: &Connection, data: &mut GameData) {
             player_limit: c.u32("player_limit"),
             reset_delay: c.u32("reset_delay"),
             script_name: c.string("script_name"),
+            name: c.string("map_name"),
+            parent: c.u32("parent"),
+            linked_zone: c.u32("linked_zone"),
+            ghost_entrance: (c.i32("ghost_entrance_map") >= 0).then(|| {
+                (
+                    c.u32("ghost_entrance_map"),
+                    c.f32("ghost_entrance_x"),
+                    c.f32("ghost_entrance_y"),
+                )
+            }),
         }
     }) {
         s.map_templates.insert(t.map, t);
