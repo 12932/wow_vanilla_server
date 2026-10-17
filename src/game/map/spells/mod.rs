@@ -5,12 +5,14 @@
 
 pub mod area;
 pub mod aura_rank;
+pub mod capacity;
 pub mod checks;
 pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 pub mod environment;
+pub mod heartbeat;
 mod holiday;
 pub mod log;
 pub mod mods;
