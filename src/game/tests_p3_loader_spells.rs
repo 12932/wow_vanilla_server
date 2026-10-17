@@ -355,3 +355,115 @@ fn the_real_spells_load_as_thistle_tea_reads_them() {
     );
     assert_eq!(greeting(2870), None);
 }
+
+/// The first effect of `s` with aura `aura`, its points at the spell's own
+/// level (Thistle Tea's `Effect.roll(effect, 0)`), and its `misc`.
+fn aura_points(s: &SpellTemplate, aura: u32) -> Option<(usize, i32, i32)> {
+    (0..3)
+        .find(|i| s.effects[*i].aura == aura)
+        .map(|i| (i, spells::points(s, i, 0), s.effects[i].misc_value))
+}
+
+/// Thistle Tea's loader facts for aura amounts (`spell_attack_power`,
+/// `spell_percent_stat`, `spell_percent_damage`, `spell_power_burn` and
+/// `spell_mana_shield`'s `*_dbc_test.exs`): signed attack power and its shares; stat shares and
+/// their stat (-1 all), and resurrection sickness through death where a
+/// world buff isn't; damage a share of health, and its cadence; mana
+/// burns, and every Mana Shield's two mana a point.
+#[test]
+fn the_real_aura_amounts_load_as_thistle_tea_reads_them() {
+    let Some(d) = real() else {
+        return;
+    };
+    for (id, aura, amount) in [
+        (1160, AURA_MOD_ATTACK_POWER, -35),
+        (11_556, AURA_MOD_ATTACK_POWER, -140),
+        (11_717, AURA_MOD_ATTACK_POWER, 90),
+        (25_289, AURA_MOD_ATTACK_POWER, 232),
+        (9199, AURA_MOD_ATTACK_POWER_PCT, 50),
+    ] {
+        assert_eq!(
+            aura_points(spell(d, id), aura).map(|p| p.1),
+            Some(amount),
+            "{id}"
+        );
+    }
+    assert!(spell(d, 15_007).attr(3, sd::ATTR_EX3_DEATH_PERSISTENT));
+    assert!(!spell(d, 23_735).attr(3, sd::ATTR_EX3_DEATH_PERSISTENT));
+    for (id, amount, stat) in [
+        (2146, -75, -1),
+        (11_630, -50, -1),
+        (11_631, -25, -1),
+        (15_007, -75, -1),
+        (16_734, 2, 3),
+        (16_735, 2, 3),
+        (16_736, 2, 3),
+        (16_737, 2, 3),
+        (16_738, 2, 3),
+        (23_735, 10, 0),
+        (23_736, 10, 1),
+        (23_737, 10, 2),
+        (23_738, 10, 4),
+        (23_766, 10, 3),
+        (24_705, 25, 2),
+        (26_035, 10, -1),
+        (26_393, 10, -1),
+        (26_462, 10, -1),
+    ] {
+        let p = aura_points(spell(d, id), AURA_MOD_PERCENT_STAT).unwrap();
+        assert_eq!((p.1, p.2), (amount, stat), "{id}");
+    }
+    for (id, index, percent, ms) in [
+        (23_072, 1, 20, 4000),
+        (23_127, 0, 5, 3000),
+        (23_449, 0, 10, 2000),
+        (24_910, 0, 20, 2000),
+        (25_838, 1, 90, 20_000),
+    ] {
+        let s = spell(d, id);
+        let p = aura_points(s, AURA_PERIODIC_DAMAGE_PERCENT).unwrap();
+        assert_eq!(
+            (p.0, p.1, s.effects[p.0].amplitude),
+            (index, percent, ms),
+            "{id}"
+        );
+    }
+    for (id, points, ms, multiple) in [
+        (19_659, 399, 3000, 1.0),
+        (23_153, 49, 1000, 0.0),
+        (24_619, 499, 2000, 1.0),
+    ] {
+        let s = spell(d, id);
+        let e = s
+            .effects
+            .iter()
+            .find(|e| e.aura == AURA_POWER_BURN_MANA)
+            .unwrap();
+        assert_eq!(
+            (e.base_points, e.amplitude, e.multiple_value, e.misc_value),
+            (points, ms, multiple, 0),
+            "{id}"
+        );
+    }
+    // Blood Siphon and Blood Funnel are vmangos's spell_effect_mod's: a
+    // periodic heal and damage, no funnel.
+    for id in [24_322, 24_617] {
+        let s = spell(d, id);
+        assert!(!s.has_aura(AURA_PERIODIC_HEALTH_FUNNEL), "{id}");
+        assert!(
+            s.has_aura(AURA_PERIODIC_HEAL) && s.has_aura(AURA_PERIODIC_DAMAGE),
+            "{id}"
+        );
+    }
+    for id in [1463, 8494, 8495, 10_191, 10_192, 10_193] {
+        let s = spell(d, id);
+        let shields: Vec<(i32, f32)> = s
+            .effects
+            .iter()
+            .filter(|e| e.effect != 0)
+            .map(|e| (e.misc_value, e.multiple_value))
+            .collect();
+        assert!(s.has_aura(AURA_MANA_SHIELD), "{id}");
+        assert_eq!(shields, vec![(1, 2.0)], "{id}");
+    }
+}
