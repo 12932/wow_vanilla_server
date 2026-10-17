@@ -287,6 +287,7 @@ pub struct Map {
     pub script_groups: AHashMap<Guid, (Guid, f32, f32)>,
     /// Scripted map events under way.
     pub map_events: map_events::Events,
+    pub spells: spells::MapSpells,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -391,6 +392,7 @@ impl Map {
             object_resets: Vec::new(),
             script_groups: AHashMap::new(),
             map_events: Default::default(),
+            spells: Default::default(),
         }
     }
 

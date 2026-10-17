@@ -486,7 +486,7 @@ impl Holder {
 
     /// Whether the holder applies whatever the unit wields.
     pub fn unrestricted(&self) -> bool {
-        self.item_class < 0 && self.item_inventory_mask <= 0
+        self.item_class <= 0 && self.item_inventory_mask <= 0
     }
 }
 
@@ -1387,6 +1387,21 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::charmed(map, h.caster, target, kind == AURA_MOD_POSSESS);
         }
+        AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
+            crate::game::map::spells::mods::changed(
+                map,
+                target,
+                a.mask,
+                a.misc.max(0) as usize,
+                kind == AURA_ADD_PCT_MODIFIER,
+            );
+        }
+        AURA_MOD_TOTAL_THREAT => total_threat(map, target, a.amount * h.stacks.max(1) as i32),
+        AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(kind), true);
+            }
+        }
         AURA_GHOST => {}
         _ => {}
     }
@@ -1523,12 +1538,48 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::uncharmed(map, h.caster, target);
         }
+        AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
+            crate::game::map::spells::mods::changed(
+                map,
+                target,
+                a.mask,
+                a.misc.max(0) as usize,
+                a.kind == AURA_ADD_PCT_MODIFIER,
+            );
+        }
+        AURA_MOD_TOTAL_THREAT => total_threat(map, target, -(a.amount * h.stacks.max(1) as i32)),
+        AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE if !still(map, a.kind) => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(a.kind), false);
+            }
+        }
         _ => {}
+    }
+}
+
+/// A unit's threat on every creature fighting it changes by `amount`, for
+/// as long as the aura holds (Fade).
+fn total_threat(map: &mut Map, target: Guid, amount: i32) {
+    for (_, c) in map.creatures.iter_mut() {
+        if let Some((_, t)) = c.threat.iter_mut().find(|(g, _)| *g == target) {
+            *t = (*t + amount as f32).max(0.0);
+        }
+    }
+}
+
+/// The unit flag an aura sets, as Thistle Tea's unit sync does.
+fn unit_flag_of(kind: u32) -> u32 {
+    match kind {
+        AURA_MOD_UNATTACKABLE => 0x0001_0000,
+        _ => 0x0800_0000,
     }
 }
 
 /// A holder came off: what its going does.
 fn removed(map: &mut Map, target: Guid, h: &Holder) {
+    if h.caster == target {
+        crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
+    }
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting
@@ -1619,6 +1670,9 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
             p.fields.set_u32(UNIT_FIELD_POWER1 + 3, 0);
         }
     }
+    if form != before {
+        crate::game::map::spells::scripts::shapeshifted(map, target, before, form);
+    }
     if form != 0 && form != before {
         // Entering a form breaks what shapeshifting cancels, but the form.
         remove_where(map, target, |h| {
@@ -1692,6 +1746,25 @@ pub fn update(map: &mut Map) {
         if expired {
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
+    }
+}
+
+/// Run the ticks of `spell` from `caster` on `target` that are due now: a
+/// channel's last tick, as the channel ends.
+pub fn tick_due(map: &mut Map, target: Guid, spell: u32, caster: Guid) {
+    let now = map.now;
+    let due: Vec<(Holder, Aura)> = auras(map, target)
+        .map(|a| {
+            a.effects()
+                .filter(|(h, x)| {
+                    h.spell == spell && h.caster == caster && x.next_tick.is_some_and(|t| t <= now)
+                })
+                .map(|(h, x)| (h.clone(), x.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (h, x) in due {
+        tick(map, target, &h, &x);
     }
 }
 

@@ -71,30 +71,64 @@ pub fn regen(map: &mut Map) {
 }
 
 fn regen_player(p: &mut Player, now: Instant) {
+    use crate::game::map::auras::*;
     let in_combat = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
     let class = p.row.class;
     let spirit = p.fields.get_u32(UNIT_FIELD_STAT0 + 4) as f32;
     let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     let health = p.fields.get_u32(UNIT_FIELD_HEALTH);
-    if !in_combat && health < max {
-        let mut add = health_regen(class, spirit);
+    let a = &p.auras;
+    let stopped = a.has(AURA_INTERRUPT_REGEN);
+    // In combat, health comes back only as far as auras allow.
+    let combat_share = if in_combat {
+        (a.sum(AURA_MOD_REGEN_DURING_COMBAT) + a.sum(AURA_MOD_HEALTH_REGEN_IN_COMBAT)) as f32 / 100.0
+    } else {
+        1.0
+    };
+    if health < max && !stopped && combat_share > 0.0 {
+        let mut add = health_regen(class, spirit) * combat_share;
         if p.stand_state() != 0 {
             // Sitting regenerates faster.
             add *= 1.5;
         }
+        add *= a.product(AURA_MOD_HEALTH_REGEN_PERCENT);
         p.fields
             .set_u32(UNIT_FIELD_HEALTH, (health + add as u32).min(max));
+    }
+    // Health and mana an aura gives every five seconds, with no tick of
+    // its own (gear's).
+    let per_five = |kind: u32, misc: Option<i32>| -> f32 {
+        a.effects()
+            .filter(|(_, x)| x.kind == kind && x.period.is_none() && misc.is_none_or(|m| x.misc == m))
+            .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
+            .sum::<f32>()
+            * REGEN_INTERVAL.as_secs_f32()
+            / 5.0
+    };
+    let gear_health = per_five(AURA_MOD_REGEN, None);
+    if gear_health > 0.0 {
+        let health = p.fields.get_u32(UNIT_FIELD_HEALTH);
+        p.fields
+            .set_u32(UNIT_FIELD_HEALTH, (health + gear_health as u32).min(max));
     }
     match p.power_type() {
         0 => {
             let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
             let mana = p.fields.get_u32(UNIT_FIELD_POWER1);
-            if mana < max
-                && p.mana_spent_at
-                    .is_none_or(|t| now.duration_since(t) >= FIVE_SECOND_RULE)
-            {
-                let add = mana_regen(class, spirit) as u32;
-                p.fields.set_u32(UNIT_FIELD_POWER1, (mana + add).min(max));
+            let casting = p
+                .mana_spent_at
+                .is_some_and(|t| now.duration_since(t) < FIVE_SECOND_RULE);
+            // Within the five-second rule, only what auras let through.
+            let share = if casting {
+                a.sum(AURA_MOD_MANA_REGEN_INTERRUPT) as f32 / 100.0
+            } else {
+                1.0
+            };
+            let mut add = if stopped { 0.0 } else { mana_regen(class, spirit) * share };
+            add *= a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 0);
+            add += per_five(AURA_MOD_POWER_REGEN, Some(0));
+            if mana < max && add > 0.0 {
+                p.fields.set_u32(UNIT_FIELD_POWER1, (mana + add as u32).min(max));
             }
         }
         1 => {
@@ -108,8 +142,9 @@ fn regen_player(p: &mut Player, now: Instant) {
         3 => {
             let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 3);
             let energy = p.fields.get_u32(UNIT_FIELD_POWER1 + 3);
+            let add = 20.0 * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 3);
             p.fields
-                .set_u32(UNIT_FIELD_POWER1 + 3, (energy + 20).min(max));
+                .set_u32(UNIT_FIELD_POWER1 + 3, (energy + add as u32).min(max));
         }
         _ => {}
     }

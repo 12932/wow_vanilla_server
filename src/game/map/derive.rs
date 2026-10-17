@@ -199,7 +199,7 @@ pub fn gear(p: &Player, data: &GameData) -> Gear {
 
 /// Whether an aura with a weapon restriction applies to `w`.
 pub fn fits(h: &Holder, w: Option<&Weapon>) -> bool {
-    if h.item_class < 0 {
+    if h.item_class <= 0 {
         return true;
     }
     let Some(w) = w else {
@@ -442,6 +442,17 @@ pub fn player(p: &mut Player, data: &GameData) {
             auras::FORM_MOONKIN => ap_base += level * 3 / 2,
             _ => {}
         }
+        // Predatory Strikes: half, once or one and a half times the level
+        // more in cat and bear form.
+        if matches!(form, auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR) {
+            let pct = a
+                .effects()
+                .filter(|(h, x)| matches!(h.spell, 16972 | 16974 | 16975) && x.kind == AURA_DUMMY)
+                .map(|(_, x)| x.amount)
+                .max()
+                .unwrap_or(0);
+            ap_base += level * pct.max(0) as u32 / 100;
+        }
     }
     let ap_mods = a.sum(AURA_MOD_ATTACK_POWER);
     let ap_mult = a.product(AURA_MOD_ATTACK_POWER_PCT);
@@ -612,7 +623,6 @@ pub fn player(p: &mut Player, data: &GameData) {
             + spirit_power(i as u32)
     });
     let healing_power = a.sum(AURA_MOD_HEALING_DONE)
-        + a.sum(AURA_MOD_HEALING)
         + (spirit as i32 * a.sum(AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT) / 100).max(0);
     p.derived = Derived {
         crit,

@@ -1349,6 +1349,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                 max_target_level: c.u32("maxTargetLevel"),
                 spell_icon: c.u32("spellIconId"),
                 custom_flags: c.u32("customFlags"),
+                script_name: c.string("script_name"),
                 effects: [effect(0), effect(1), effect(2)],
                 spell_visual: c.u32("spellVisual1"),
                 name: c.string("name"),
@@ -1713,6 +1714,16 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
         (c.u32("entry"), c.f32("ppmRate"))
     }) {
         s.enchant_ppm.insert(id, ppm);
+    }
+    for (id, degrees) in rows(db, "SELECT * FROM spell_cone", |c| {
+        (c.u32("entry"), c.i32("cone_degrees"))
+    }) {
+        s.cones.insert(id, degrees);
+    }
+    for (id, kind, entry) in rows(db, &format!("SELECT * FROM spell_script_target {in_build}"), |c| {
+        (c.u32("entry"), c.u32("type"), c.u32("targetEntry"))
+    }) {
+        s.script_targets.entry(id).or_default().push((kind, entry));
     }
     for (spell, learns) in rows(db, "SELECT * FROM spell_learn_spell", |c| {
         (c.u32("entry"), c.u32("SpellID"))
