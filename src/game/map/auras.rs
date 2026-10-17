@@ -1684,7 +1684,13 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
         AURA_LINKED => remove_spell(map, target, a.trigger, Some(h.caster)),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
-            let stunned = still(map, AURA_MOD_STUN);
+            // A logout's countdown holds the player as a stun does (Thistle
+            // Tea's `MovementSync` keeps the logout's restriction).
+            let logging_out = map
+                .players
+                .get(&target)
+                .is_some_and(|p| p.misc.logout_rooted);
+            let stunned = still(map, AURA_MOD_STUN) || logging_out;
             let rooted = stunned || still(map, AURA_MOD_ROOT);
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(

@@ -1230,3 +1230,209 @@ async fn a_capital_rests_its_own_side_only_and_the_rest_ends_outside_it() {
         ]
     );
 }
+
+const STUN: u32 = 960_201;
+const ROOT: u32 = 960_202;
+
+fn held(id: u32, kind: u32) -> crate::game::data::spells::SpellTemplate {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut s = SpellTemplate {
+        id,
+        name: format!("Hold {id}"),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0] = SpellEffect {
+        effect: 6,
+        aura: kind,
+        target_a: 1,
+        ..Default::default()
+    };
+    s
+}
+
+/// A realm of players who aren't GMs, with the real twenty seconds.
+fn logout_realm() -> Arc<Realm> {
+    use crate::game::map::auras::{AURA_MOD_ROOT, AURA_MOD_STUN};
+    let mut d = data();
+    d.spells.spells.insert(STUN, held(STUN, AURA_MOD_STUN));
+    d.spells.spells.insert(ROOT, held(ROOT, AURA_MOD_ROOT));
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    cfg.logout_delay = crate::game::map::login::LOGOUT_DELAY;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Realm::new(cfg, store, startup, d, None)
+}
+
+async fn logout_response(a: &mut Client) -> (LogoutResult, LogoutSpeed) {
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_RESPONSE", |m| match m {
+        ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(r) => Some((r.result, r.speed)),
+        _ => None,
+    })
+    .await
+}
+
+/// Stand state, stunned, logging out, and when.
+fn logout_state(m: &Map, g: Guid) -> (u8, bool, bool, Option<Duration>) {
+    let p = &m.players[&g];
+    (
+        p.stand_state(),
+        p.fields.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_STUNNED,
+        ),
+        p.fields.get_byte(PLAYER_FIELD_BYTES, 0) & 0x04 != 0,
+        p.logout_at.map(|t| t.saturating_duration_since(m.now)),
+    )
+}
+
+fn hold(m: &mut Map, g: Guid, spell: u32) {
+    let s = m.realm.data.spells.get(spell).unwrap().clone();
+    crate::game::map::auras::apply_spell(m, g, g, &s, &[(0, 0)], Default::default()).unwrap();
+}
+
+#[tokio::test]
+async fn a_logout_sits_and_holds_the_player_starts_again_on_asking_ends_on_refusal_and_lets_go_on_cancel()
+ {
+    use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
+    let realm = logout_realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    assert_eq!(
+        logout_response(&mut a).await,
+        (LogoutResult::Success, LogoutSpeed::Delayed)
+    );
+    let (stand, stunned, logging_out, _) = on_map(&realm, move |m| logout_state(m, ga)).await;
+    assert_eq!((stand, stunned, logging_out), (1, true, true));
+    let first = on_map(&realm, move |m| m.players[&ga].logout_at)
+        .await
+        .unwrap();
+    // A stun come and gone keeps the logout's hold.
+    let kept = on_map(&realm, move |m| {
+        hold(m, ga, STUN);
+        crate::game::map::auras::remove_spell(m, ga, STUN, None);
+        logout_state(m, ga).1
+    })
+    .await;
+    assert!(kept);
+    // Asked again later, the twenty seconds start again.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert_eq!(
+        logout_response(&mut a).await,
+        (LogoutResult::Success, LogoutSpeed::Delayed)
+    );
+    let again = on_map(&realm, move |m| m.players[&ga].logout_at)
+        .await
+        .unwrap();
+    assert!(
+        again >= first + Duration::from_secs(1),
+        "{again:?} after {first:?}"
+    );
+    // Refused (in a fight), the countdown ends and the player is let go.
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            UNIT_FLAG_IN_COMBAT,
+            true,
+        );
+    })
+    .await;
+    assert_eq!(
+        logout_response(&mut a).await,
+        (LogoutResult::FailureInCombat, LogoutSpeed::Delayed)
+    );
+    assert_eq!(
+        on_map(&realm, move |m| logout_state(m, ga)).await,
+        (0, false, false, None)
+    );
+    // Rooted during a countdown, a cancel leaves the root; stunned, the
+    // stun.
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            UNIT_FLAG_IN_COMBAT,
+            false,
+        );
+    })
+    .await;
+    for (spell, still_stunned) in [(ROOT, false), (STUN, true)] {
+        logout_response(&mut a).await;
+        on_map(&realm, move |m| hold(m, ga, spell)).await;
+        a.clear();
+        a.send(CMSG_LOGOUT_CANCEL {}).await;
+        a.wait_for("SMSG_LOGOUT_CANCEL_ACK", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK).then_some(())
+        })
+        .await;
+        let unrooted = a
+            .gets(Duration::from_millis(200), |m| {
+                matches!(m, ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(_)).then_some(())
+            })
+            .await
+            .is_some();
+        let state = on_map(&realm, move |m| logout_state(m, ga)).await;
+        assert!(!unrooted, "held by {spell}");
+        assert_eq!((state.1, state.2), (still_stunned, false));
+        on_map(&realm, move |m| {
+            crate::game::map::auras::remove_spell(m, ga, spell, None)
+        })
+        .await;
+    }
+    // Nothing held, a cancel stands the player up and lets them go.
+    logout_response(&mut a).await;
+    a.clear();
+    a.send(CMSG_LOGOUT_CANCEL {}).await;
+    a.wait_for("SMSG_FORCE_MOVE_UNROOT", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(_)).then_some(())
+    })
+    .await;
+    assert_eq!(
+        on_map(&realm, move |m| logout_state(m, ga)).await,
+        (0, false, false, None)
+    );
+    // Swimming, no one is sat down.
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&ga).unwrap();
+        p.movement.flags = MovementInfo_MovementFlags::empty()
+            .set_swimming(MovementInfo_MovementFlags_Swimming { pitch: 0.0 });
+    })
+    .await;
+    logout_response(&mut a).await;
+    assert_eq!(on_map(&realm, move |m| logout_state(m, ga).0).await, 0);
+}
+
+#[tokio::test]
+async fn a_logout_in_a_rest_area_is_at_once_but_never_in_a_fight() {
+    use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
+    let realm = logout_realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&ga).unwrap();
+        p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING, true);
+        p.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+    })
+    .await;
+    assert_eq!(
+        logout_response(&mut a).await,
+        (LogoutResult::FailureInCombat, LogoutSpeed::Delayed)
+    );
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            UNIT_FLAG_IN_COMBAT,
+            false,
+        );
+    })
+    .await;
+    assert_eq!(
+        logout_response(&mut a).await,
+        (LogoutResult::Success, LogoutSpeed::Instant)
+    );
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+}
