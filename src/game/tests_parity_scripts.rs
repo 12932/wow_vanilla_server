@@ -24,14 +24,6 @@ use crate::game::map::MapHandle;
 /// Northshire, where humans start.
 const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
-fn at(dx: f32, dy: f32) -> Vector3d {
-    Vector3d {
-        x: START.0 + dx,
-        y: START.1 + dy,
-        z: START.2,
-    }
-}
-
 async fn player(realm: &Arc<Realm>, name: &str) -> (Client, MapHandle) {
     let mut c = Client::connect(realm, name);
     let me = c.enter(name, Race::Human, Class::Warrior).await;
