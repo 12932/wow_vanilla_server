@@ -390,8 +390,10 @@ impl Player {
         f.set_f32(UNIT_FIELD_MAXDAMAGE, 2.0);
         f.set_f32(UNIT_FIELD_ATTACK_POWER_MULTIPLIER, 0.0);
         f.set_f32(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER, 0.0);
+        // Nothing off or on by school until auras say (Thistle Tea's
+        // `PowerCostSync`: a share, not a factor).
         for i in 0..7 {
-            f.set_f32(UNIT_FIELD_POWER_COST_MULTIPLIER + i, 1.0);
+            f.set_f32(UNIT_FIELD_POWER_COST_MULTIPLIER + i, 0.0);
         }
         f.set_bytes(UNIT_FIELD_BYTES_2, 0, 0, 0, 0);
         f.set_bytes(
