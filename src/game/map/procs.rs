@@ -185,9 +185,11 @@ fn weapon_speed(map: &Map, g: Guid, hand: Hand) -> u32 {
         })
 }
 
-/// A chance from procs a minute and a weapon's speed.
+/// A chance from procs a minute and a weapon's speed: past 100 when the
+/// weapon is slow enough, so a chance modifier takes from all of it before
+/// a roll counts 100 or more as sure (Thistle Tea's `Proc.chance`).
 pub fn ppm_chance(ppm: f32, speed_ms: u32) -> f32 {
-    (ppm * speed_ms as f32 / 600.0).min(100.0)
+    ppm * speed_ms as f32 / 600.0
 }
 
 /// The `procFlags` a holder procs on. A seal of righteousness strikes on
@@ -571,7 +573,7 @@ mod tests {
     fn procs_a_minute_scale_with_weapon_speed() {
         // Seal of Command's 7 a minute on a 3.6-second weapon: 42%.
         assert!((ppm_chance(7.0, 3600) - 42.0).abs() < 0.01);
-        assert_eq!(ppm_chance(60.0, 4000), 100.0);
+        assert_eq!(ppm_chance(60.0, 4000), 400.0);
     }
 
     #[test]

@@ -121,7 +121,6 @@ async fn group(leader: &mut Client, member: &mut Client, name: &str) {
 }
 
 const BLOODRAGE: u32 = 2687;
-
 const HEALTH_FUNNEL: u32 = 755;
 
 #[tokio::test]
@@ -363,7 +362,6 @@ async fn a_teleport_within_a_copy_stays_in_it() {
 }
 
 const RELENTLESS_STRIKES: u32 = 14179;
-
 const EVISCERATE: u32 = 2098;
 
 #[tokio::test]
@@ -885,4 +883,15 @@ async fn a_dots_threat_is_of_its_school() {
         (threat - damage as f32 * 0.8).abs() < 0.5,
         "{threat} threat of {damage} damage"
     );
+}
+
+#[test]
+fn procs_a_minute_go_past_a_sure_chance_before_their_modifiers() {
+    // Sixty a minute on a four-second weapon is four procs a swing's worth:
+    // a modifier taking from it still leaves a sure one.
+    let chance = crate::game::map::procs::ppm_chance(60.0, 4000);
+    assert_eq!(chance, 400.0);
+    let mut m = spells::mods::Mods::default();
+    m.flat[spells::mods::OP_CHANCE_OF_SUCCESS] = -50;
+    assert!(m.apply(spells::mods::OP_CHANCE_OF_SUCCESS, chance) >= 100.0);
 }
