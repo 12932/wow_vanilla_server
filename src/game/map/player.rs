@@ -235,6 +235,8 @@ pub struct Player {
     pub derived: crate::game::map::derive::Derived,
     /// Moved by the server: feared, confused or charmed.
     pub driven: Option<crate::game::map::player_motion::Driven>,
+    pub drunk: crate::game::map::intoxication::Drunk,
+    pub gadgets: crate::game::map::item_scripts::Gadgets,
     /// The pet, totems, guardians and charmed unit the player controls.
     pub owned: crate::game::map::pets::Owned,
     pub misc: crate::game::map::misc::PlayerMisc,
@@ -314,6 +316,8 @@ impl Player {
             muted_until: None,
             derived: Default::default(),
             driven: None,
+            drunk: Default::default(),
+            gadgets: Default::default(),
             owned: Default::default(),
             misc: Default::default(),
             pvp: Default::default(),

@@ -165,6 +165,9 @@ fn aura_amount(
     l: &Landing,
 ) -> i32 {
     let e = &s.effects[index];
+    if let Some(amount) = crate::game::map::item_scripts::aura_amount(s) {
+        return amount;
+    }
     match e.aura {
         AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
             let mut d =
@@ -227,7 +230,9 @@ pub fn run(
             continue;
         }
         // A totem shrugs off most of what others cast on it.
-        if crate::game::map::pets::immune(map, caster, target, s, index) {
+        if crate::game::map::pets::immune(map, caster, target, s, index)
+            || crate::game::map::extra_effects::effect_immune(map, target, s, index)
+        {
             continue;
         }
         let e = s.effects[index];
@@ -363,13 +368,29 @@ fn weapon_damage(
         })
         .unwrap_or((1.0, 2.0));
     let mut base = roll_between(map, min, max);
-    // Hunter's Mark: ranged attack power against its target.
-    if ranged {
-        let bonus =
-            auras::auras(map, target).map_or(0, |a| a.sum(AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
+    // Hunter's Mark: ranged attack power against its target; and melee
+    // attack power against one so marked.
+    {
+        let (kind, period) = if ranged {
+            (
+                AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS,
+                UNIT_FIELD_RANGEDATTACKTIME,
+            )
+        } else if offhand {
+            (
+                AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS,
+                UNIT_FIELD_BASEATTACKTIME + 1,
+            )
+        } else {
+            (
+                AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS,
+                UNIT_FIELD_BASEATTACKTIME,
+            )
+        };
+        let bonus = auras::auras(map, target).map_or(0, |a| a.sum(kind));
         let speed = map
             .unit_fields(caster)
-            .map(|f| f.get_u32(UNIT_FIELD_RANGEDATTACKTIME))
+            .map(|f| f.get_u32(period))
             .unwrap_or(2000);
         base += bonus.max(0) as f32 / 14.0 * speed as f32 / 1000.0;
     }
@@ -451,6 +472,9 @@ fn effect(
         _ if crate::game::map::pets::handles(s, index) => {
             crate::game::map::pets::effect(map, caster, target, s, index, amount)
         }
+        _ if crate::game::map::extra_effects::effect(
+            map, caster, target, s, index, amount, item,
+        ) => {}
         19 => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
         }
