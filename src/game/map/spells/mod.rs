@@ -829,11 +829,11 @@ fn execute(
         for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
             let mut left = *count;
             while left > 0 {
-                let Some(i) = map
-                    .players
-                    .get(&caster)
-                    .and_then(|p| p.items.iter().position(|it| it.entry == *reagent))
-                else {
+                let Some(i) = map.players.get(&caster).and_then(|p| {
+                    p.items
+                        .iter()
+                        .position(|it| it.entry == *reagent && it.carried())
+                }) else {
                     break;
                 };
                 let n = map.players[&caster].items[i].count().min(left);
@@ -914,7 +914,7 @@ fn execute(
     // A pet's feeding and abilities, and the professions' effects (which
     // run on their own and are skipped below).
     crate::game::map::pets::before_effects(map, caster, s, &targets);
-    let professions = crate::game::map::professions::execute(map, caster, s, &targets);
+    let professions = crate::game::map::professions::execute(map, caster, s, &targets, item);
     // The objects the cast is at, for the quests asking for it there.
     let at_objects = if triggered || crate::game::map::objects::opens_lock(s) {
         Vec::new()

@@ -452,8 +452,10 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         if left == 0 {
             break;
         }
+        // Onto what is carried, never the bank (Thistle Tea's and mangos's
+        // stores).
         if item.entry == entry
-            && item.slot < BUYBACK_START
+            && item.carried()
             && item.count() < stack
             && !(item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END)
         {
