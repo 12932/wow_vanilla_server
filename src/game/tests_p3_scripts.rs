@@ -144,6 +144,30 @@ pub(super) async fn joins(
     (c, g)
 }
 
+/// `c` at `to` in the map they are in, by a teleport they acknowledge.
+pub(super) async fn relocate(map: &MapHandle, c: &mut Client, to: Vector3d) {
+    let g = c.guid;
+    map.query(move |m| m.teleport(g, m.key, to, 0.0)).await;
+    c.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: g,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    assert!(
+        until(map, 3000, move |m| m
+            .players
+            .get(&g)
+            .is_some_and(|p| p.teleport.is_none()))
+        .await,
+        "teleported"
+    );
+}
+
 /// Every creature within `radius` of `at` gone, but those of `keep`'s
 /// entries.
 pub(super) fn clear_around(m: &mut Map, at: Vector3d, radius: f32, keep: &[u32]) {
@@ -395,6 +419,109 @@ pub(super) fn dummy(m: &mut Map, to: Vector3d) -> Guid {
     }
     tough(m, g);
     g
+}
+
+/// The scripts `g` runs (every script, for none) `by` on: what waits on
+/// them comes sooner. They run what is due at once.
+pub(super) fn hurry_runs(m: &mut Map, g: Option<Guid>, by: Duration) {
+    for r in m.scripts.runs.iter_mut() {
+        if g.is_none_or(|g| r.source == g)
+            && let Some(t) = r.started.checked_sub(by)
+        {
+            r.started = t;
+        }
+    }
+    scripts::update(m);
+}
+
+/// [`hurry_runs`] from a handle.
+pub(super) async fn hurry(map: &MapHandle, g: Guid, secs: f32) {
+    let by = Duration::from_secs_f32(secs);
+    map.query(move |m| hurry_runs(m, Some(g), by)).await;
+}
+
+/// The copy's own timers `by` on, and what is due run.
+pub(super) fn hurry_copy(m: &mut Map, by: Duration) {
+    for (t, _) in m.instance.timers.iter_mut() {
+        if let Some(sooner) = t.checked_sub(by) {
+            *t = sooner;
+        }
+    }
+    for (t, _, _) in m.instance.creature_timers.iter_mut() {
+        if let Some(sooner) = t.checked_sub(by) {
+            *t = sooner;
+        }
+    }
+    crate::game::map::instance_script::update(m);
+}
+
+/// The living creatures of `entry` here.
+pub(super) fn living(m: &Map, entry: u32) -> Vec<Guid> {
+    let mut all: Vec<Guid> = m
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.entry == entry && c.alive())
+        .map(|(_, c)| c.guid)
+        .collect();
+    all.sort_by_key(|g| g.guid());
+    all
+}
+
+/// The first living creature of `entry` here.
+pub(super) fn first(m: &Map, entry: u32) -> Option<Guid> {
+    living(m, entry).into_iter().next()
+}
+
+pub(super) fn stand_state(m: &Map, g: Guid) -> u8 {
+    m.unit_fields(g)
+        .map_or(0, |f| f.get_byte(UNIT_FIELD_BYTES_1, 0))
+}
+
+pub(super) fn unit_flags(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_FLAGS))
+}
+
+pub(super) fn npc_flags(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_NPC_FLAGS))
+}
+
+pub(super) fn faction(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+}
+
+/// Kill `g`, as `by`.
+pub(super) fn kill(m: &mut Map, by: Guid, g: Guid) {
+    if m.creature(g).is_some_and(|c| c.alive()) {
+        crate::game::map::combat::deal_damage(m, by, g, 50_000_000);
+    }
+}
+
+/// The option of `npc`'s menu, shown to `c` at its hello or after
+/// `chosen`, that reads `text`: its id.
+pub(super) async fn option(c: &mut Client, npc: Guid, text: &'static str) -> u32 {
+    c.wait_for("the menu", |m| match m {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) if g.guid == npc => g
+            .gossips
+            .iter()
+            .find(|o| o.message.contains(text))
+            .map(|o| o.id),
+        _ => None,
+    })
+    .await
+}
+
+pub(super) async fn hello(c: &Client, npc: Guid) {
+    c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+}
+
+pub(super) async fn choose(c: &Client, npc: Guid, option: u32) {
+    c.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: npc,
+        gossip_list_id: option,
+        unknown: None,
+    })
+    .await;
 }
 
 /// Wait for `g` to stand still (a charge or a walk over): where it stands.

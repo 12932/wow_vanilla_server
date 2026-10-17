@@ -1741,8 +1741,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             !end
         }
+        // An evade: of a living creature only, as Thistle Tea's (Golemagg's
+        // corpse sent home by his ragers' leash would reset them).
         33 => {
-            crate::game::map::ai::enter_evade(map, source);
+            if map.creature(source).is_some_and(|c| c.alive()) {
+                crate::game::map::ai::enter_evade(map, source);
+            }
             true
         }
         // Home: the step's place (0), where it stands (1), or its spawn's
