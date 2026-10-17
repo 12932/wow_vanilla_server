@@ -31,7 +31,9 @@ wow_items = { git="https://github.com/gtker/wow_messages.git", rev = "e8dc643aea
 wow_srp = { git="https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163" }
 walkdir = "2.5.0"
 
-rustigator = { git = "https://github.com/12932/rustigator", rev = "6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9", features = ["vanilla"] }
+rustigator = { git = "https://github.com/12932/rustigator", rev = "3bc7a2c14cb7dc4324ac501a8070e8a7543dba73", features = ["vanilla"] }
+# The navmesh and terrain builds, for the data setup.
+rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "3bc7a2c14cb7dc4324ac501a8070e8a7543dba73" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
