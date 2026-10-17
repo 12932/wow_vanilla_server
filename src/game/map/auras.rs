@@ -189,6 +189,8 @@ pub const AURA_MOD_MOUNTED_SPEED_NOT_STACK: u32 = 172;
 pub const AURA_ALLOW_CHAMPION_SPELLS: u32 = 173;
 pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
+/// Spell damage against creature types (`misc` their mask).
+pub const AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS: u32 = 180;
 /// Changes to the hit and crit chance of those who attack the unit.
 pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
 pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
@@ -230,7 +232,9 @@ pub const POSITIVE_SLOTS: usize = 32;
 /// Every aura type the server knows: those with an effect here or in the
 /// stats, and those it keeps on the unit with no effect of their own.
 pub fn supported(aura: u32) -> bool {
-    (aura <= 175 && !matches!(aura, 46 | 48 | 63 | 119 | 164)) || aura == AURA_LINKED
+    (aura <= 175 && !matches!(aura, 46 | 48 | 63 | 119 | 164))
+        || aura == AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
+        || aura == AURA_LINKED
 }
 
 /// One aura effect of a holder.

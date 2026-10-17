@@ -709,11 +709,15 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
     if creature_type > 0
         && let Some(a) = auras::auras(map, caster)
     {
+        // Gear's and potions' spell damage against a creature type (aura
+        // 180, "up to", as spell power: Thistle Tea's `TargetSpellPower`).
         p += a
             .effects()
             .filter(|(_, x)| {
-                x.kind == AURA_MOD_DAMAGE_DONE_CREATURE
-                    && (x.misc as u32) & (1 << (creature_type - 1).min(31)) != 0
+                matches!(
+                    x.kind,
+                    AURA_MOD_DAMAGE_DONE_CREATURE | AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
+                ) && (x.misc as u32) & (1 << (creature_type - 1).min(31)) != 0
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
             .sum::<f32>();
