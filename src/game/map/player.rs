@@ -124,7 +124,7 @@ impl Item {
         {
             item.fields.set_u32(ITEM_FIELD_ITEM_TEXT_ID, text);
         }
-        crate::game::map::enchant::decode(&mut item);
+        crate::game::map::enchant::decode(data, &mut item);
         item
     }
 

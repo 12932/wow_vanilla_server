@@ -366,6 +366,14 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     c.loot = Some(loot);
     c.fields
         .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);
+    // Nothing on it: it can be skinned at once.
+    if !lootable && t.skinning_loot_id != 0 {
+        c.fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::professions::UNIT_FLAG_SKINNABLE,
+            true,
+        );
+    }
     if !rolls.is_empty() {
         map.loot_state.rolling.push(creature);
         for slot in rolls {

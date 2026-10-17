@@ -112,11 +112,11 @@ pub fn set_random_property(data: &GameData, item: &mut Item, property: u32) {
 
 /// The item's enchantments and random property, from its stored `data`:
 /// `text:N`, `rp:N` and `eS:ID/MS/CHARGES` tokens, `;` apart.
-pub fn decode(item: &mut Item) {
-    let data = item.data.clone();
-    for token in data.split(';') {
+pub fn decode(data: &GameData, item: &mut Item) {
+    let stored = item.data.clone();
+    for token in stored.split(';') {
         if let Some(rp) = token.strip_prefix("rp:").and_then(|v| v.parse().ok()) {
-            item.fields.set_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID, rp);
+            set_random_property(data, item, rp);
         } else if let Some(rest) = token.strip_prefix('e')
             && let Some((slot, values)) = rest.split_once(':')
             && let Ok(slot) = slot.parse::<usize>()
