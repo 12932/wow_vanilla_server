@@ -62,7 +62,8 @@ pub struct CreatureTemplate {
     pub base_attack_time: u32,
     pub ranged_attack_time: u32,
     pub resistances: [i32; 6],
-    pub xp_multiplier: f32,
+    /// `xp_multiplier`: `None` unset (as one); a 0 means no XP.
+    pub xp_multiplier: Option<f32>,
     pub loot_id: u32,
     pub pickpocket_loot_id: u32,
     pub skinning_loot_id: u32,
@@ -93,6 +94,19 @@ pub struct CreatureTemplate {
     /// level stats and the multiplier; 0 if there are no stats.
     pub health_min: u32,
     pub health_max: u32,
+}
+
+impl CreatureTemplate {
+    /// What its kill's XP is multiplied by (Thistle Tea's
+    /// `experience_multiplier`): its template's, one if unset, nothing for
+    /// a creature whose type flags say 0x2.
+    pub fn xp_rate(&self) -> f32 {
+        if self.type_flags & 0x2 != 0 {
+            0.0
+        } else {
+            self.xp_multiplier.unwrap_or(1.0)
+        }
+    }
 }
 
 /// A creature spawn.

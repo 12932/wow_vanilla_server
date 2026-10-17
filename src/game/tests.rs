@@ -858,7 +858,7 @@ mod combat {
             health_multiplier: 1.0,
             damage_multiplier: 1.0,
             base_attack_time: 2000,
-            xp_multiplier: 1.0,
+            xp_multiplier: Some(1.0),
             ..Default::default()
         };
         d.creature_templates

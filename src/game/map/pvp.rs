@@ -643,7 +643,7 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
         return;
     };
     let (civilian, leader, at, entry) = (t.civilian, t.racial_leader, c.position, t.entry);
-    let xp_free = t.xp_multiplier == 0.0;
+    let xp_free = t.xp_rate() == 0.0;
     let mob_level = c.fields.get_u32(UNIT_FIELD_LEVEL);
     let recipients: Vec<(Guid, u8)> = crate::game::map::loot::tap_group(map, killer, at)
         .into_iter()
