@@ -860,3 +860,72 @@ async fn single_target_auras_outlive_their_casters_death_but_not_its_going() {
         "its caster gone"
     );
 }
+
+const SHOVE: u32 = 900_370;
+const WARD: u32 = 900_371;
+const BOLT: u32 = 900_372;
+const OGRE: u32 = 900_373;
+
+/// A knockback moves no creature a server runs, as in mangos (only a
+/// client-controlled unit is launched) and Thistle Tea, whose launch
+/// interrupts the creature's cast and leaves it where it stands; nor does
+/// it end what a teleport would.
+#[tokio::test]
+async fn a_knockback_leaves_a_creature_in_place_and_stops_its_cast() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    d.spells.cast_times.insert(5, 3000);
+    let mut shove = unit_spell(SHOVE, 98);
+    shove.effects[0].misc_value = 150;
+    d.spells.spells.insert(SHOVE, shove);
+    let mut ward = unit_spell(WARD, 6);
+    ward.effects[0].target_a = 1;
+    ward.effects[0].aura = crate::game::map::auras::AURA_MOD_RESISTANCE;
+    ward.aura_interrupt_flags = crate::game::map::auras::INTERRUPT_TELEPORTED;
+    ward.duration_index = 0;
+    d.spells.spells.insert(WARD, ward);
+    let mut bolt = unit_spell(BOLT, 2);
+    bolt.casting_time_index = 5;
+    d.spells.spells.insert(BOLT, bolt);
+    d.creature_templates
+        .insert(OGRE, plain_creature(OGRE, "Ogre", 7));
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 45,
+        entries: vec![OGRE],
+        map: 0,
+        x: START.0 + 5.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let (_a, g, map) = enter(&realm, "A", "Shover", Race::Human, Class::Warrior).await;
+    let (before, after, warded, casting) = on(&map, move |m| {
+        let ogre = m
+            .creatures
+            .iter()
+            .find(|(_, c)| c.entry == OGRE)
+            .map(|(_, c)| c.guid)
+            .unwrap();
+        crate::game::map::spells::cast_triggered(m, ogre, WARD, None);
+        let targets = crate::game::map::spells::Targets {
+            unit: Some(g),
+            ..Default::default()
+        };
+        assert!(crate::game::map::spells::cast(m, ogre, BOLT, targets, None));
+        assert!(
+            m.caster(ogre).is_some_and(|c| c.casting.is_some()),
+            "casting"
+        );
+        let before = m.creature(ogre).unwrap().position;
+        crate::game::map::spells::cast_triggered(m, g, SHOVE, Some(ogre));
+        let warded = crate::game::map::auras::auras(m, ogre)
+            .is_some_and(|a| a.holders.iter().any(|h| h.spell == WARD));
+        let casting = m.caster(ogre).is_some_and(|c| c.casting.is_some());
+        (before, m.creature(ogre).unwrap().position, warded, casting)
+    })
+    .await;
+    assert_eq!((before.x, before.y), (after.x, after.y), "in place");
+    assert!(warded, "nothing a teleport ends");
+    assert!(!casting, "its cast interrupted");
+}
