@@ -18,6 +18,16 @@ the questions waiting for you.
    - A death by one's own hand: wvs wears gear down, Thistle Tea doesn't.
    - The killing blow: in wvs it can also cost the one-in-200 wear of any blow. In Thistle Tea it can't.
 
+2. **Robustness: what a restarted map does with its players.** Its players are saved and sent to the character
+   screen. Should they go straight back into the fresh map instead?
+3. **Robustness: should a hung map abort the server,** so systemd or Docker restarts the whole process (OTP's
+   top-level "let it crash")? Today the watchdog only logs it, since a hung task can't be killed from inside.
+4. **wow_messages' crash bugs.** The robustness work found that wow_messages reserves memory from counts in the
+   packet before reading them: a `/who` claiming 4 billion strings asks for 96 GB and aborts the process. It also
+   `unwrap`s zlib and underflows sizes in `CMSG_WARDEN_DATA` and `CMSG_BUG`. wvs now guards against all of these
+   itself. Should they also be fixed in your fork, or reported to gtker upstream? That would be a public issue,
+   which is why I'm asking first.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -69,6 +79,21 @@ the questions waiting for you.
      display's size, 1.15, instead of 1. The kobold's reach didn't change; your kobold report was the yard of slack
      in decision 1.
 
+8. **Robustness's thresholds**, all in `docs/RELIABILITY.md`:
+   - **A creature** is restarted from its spawn at its 2nd panic within 5 minutes, and quarantined at its 4th.
+     Quarantine means it lies dead for 10 years; a summon is simply removed.
+   - **A player** whose packets panic 10 times in a minute is saved and sent to the character screen.
+   - **A map** restarts at 200 update-step panics in a minute. A restart loses what only the map held:
+     - the open world's dead respawn;
+     - vendor stock refills;
+     - battlegrounds, world PvP, the arena and escorts start over.
+
+     Dungeon copies keep their dead.
+   - **The packet guards:**
+     - an auth session is at most 8 KiB;
+     - a declared decompressed size is at most 0xFFFFF;
+     - a GM command's coordinates must be finite and within ±100,000.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -85,7 +110,7 @@ the questions waiting for you.
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
 | 2g+2i: world, social, second pass | running | |
-| Robustness | running | |
+| Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
 
 ## Left for later, and why

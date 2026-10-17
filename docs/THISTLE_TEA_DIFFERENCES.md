@@ -21,12 +21,15 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 | Systems | all of Thistle Tea's: spells and auras to 60, pets, procs, professions, group loot, quests and events, the three battlegrounds, honor, outdoor PvP, instances and their scripts, raid bosses' mechanics, transports, social | the same |
 | Persistence | SQLite, versioned, saved at logout, on a timer and on SIGTERM | none: a restart loses every character |
 | Security | SRP accounts, GM levels, bans, movement checks, rate limits | every session is a GM; positions trusted |
+| Reliability | a panic costs its update step, creature turn or packet; a creature restarts from its spawn, and is quarantined if it keeps panicking; a map that keeps panicking restarts from the data; background loops back off and retry; a watchdog logs hung maps ([RELIABILITY.md](RELIABILITY.md)) | OTP supervisors: a process per player and creature, restarted when it crashes |
 | Under load (peon, 100 bots; wvs at 3425257) | 0.16 cores idle, 0.43 in a crowd, 0.22 in the arena pit, 0.15 for the Gurubashi last man standing; every run valid | 6 cores in a crowd and in the pit |
 
 ## Different on purpose
 
 - **The design.** An actor per map and per instance copy with a 20 Hz update, where Thistle Tea runs a process per
-  player and per creature. The same behaviour, measured at a fraction of the CPU.
+  player and per creature. The same behaviour, measured at a fraction of the CPU. A panic costs the step or creature
+  turn it happened in, and a map that keeps panicking is restarted, as a supervisor restarts a child
+  ([RELIABILITY.md](RELIABILITY.md)).
 - **What wvs adds.** Persistence, accounts and GM levels, movement and rate checks (above); Gurubashi Arena's last
   man standing.
 - **The battleground scoreboard** shows each player's real honor rank; Thistle Tea always shows 4.
