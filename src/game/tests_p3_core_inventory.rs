@@ -1392,8 +1392,15 @@ async fn a_change_is_planned_whole() {
         Err(inventory::Fail::InventoryFull),
         "each fits alone"
     );
-    assert_eq!(plan(vec![(CHEST, 1)], vec![(RING, 1), (SWORD, 1)]).await, Ok(()));
-    assert_eq!(plan(vec![], vec![(PELT, 4), (PELT, 3)]).await, Ok(()), "one stack");
+    assert_eq!(
+        plan(vec![(CHEST, 1)], vec![(RING, 1), (SWORD, 1)]).await,
+        Ok(())
+    );
+    assert_eq!(
+        plan(vec![], vec![(PELT, 4), (PELT, 3)]).await,
+        Ok(()),
+        "one stack"
+    );
     assert_eq!(
         plan(vec![], vec![(PELT, 4), (PELT, 7)]).await,
         Err(inventory::Fail::InventoryFull)
@@ -1452,12 +1459,18 @@ async fn a_turn_in_rewards_in_the_room_its_items_leave() {
     let (realm, mut a, g) = setup().await;
     a.sees(giver()).await;
     accept(&mut a, &realm, g, PELT_QUEST).await;
-    on_map(&realm, move |m| inventory::add_item(m, g, PELT, 1, false).unwrap()).await;
+    on_map(&realm, move |m| {
+        inventory::add_item(m, g, PELT, 1, false).unwrap()
+    })
+    .await;
     fill_pack(&realm, g).await;
     assert!(turn_in(&mut a, PELT_QUEST).await, "a full pack");
     let chest = on_map(&realm, move |m| {
         let p = &m.players[&g];
-        (p.count_of(PELT), p.item_at(BAG_PLAYER, PACK_START).map(|i| p.items[i].entry))
+        (
+            p.count_of(PELT),
+            p.item_at(BAG_PLAYER, PACK_START).map(|i| p.items[i].entry),
+        )
     })
     .await;
     assert_eq!(chest, (0, Some(CHEST)));
