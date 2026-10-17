@@ -64,7 +64,7 @@ pub struct Engagement {
     /// Since when its victim has been out of reach.
     pub unreachable_since: Option<Instant>,
     /// Set it only with `Map::rare.flee` noted (see [`RareStates`]); so
-    /// with `zone_pulse_at`, `charge` and `assist`.
+    /// with `charge` and `assist`.
     pub flee: Option<Flee>,
     pub regen_at: Option<Instant>,
     /// When fear or confusion next moves it.
@@ -97,21 +97,18 @@ pub struct Engagement {
 }
 
 /// Which of the rarer states some creature of the map may be in: a
-/// charge, a flight, a dungeon-wide pulse, a call for help on its way, a
-/// cast, a despawn timer, being a pet. The update looks at every creature
-/// for one only while one may be in it, and the look clears it when it
-/// finds none. So whatever puts a creature in one notes it here first
-/// (`Map::add_creature` notes what a creature arrives with, and
-/// `Map::caster_mut` notes a cast); debug builds check that a look skipped
-/// would have found nothing.
+/// charge, a flight, a call for help on its way, a cast, being a pet. The
+/// update looks at every creature for one only while one may be in it,
+/// and the look clears it when it finds none. So whatever puts a creature
+/// in one notes it here first (`Map::add_creature` notes what a creature
+/// arrives with, and `Map::caster_mut` notes a cast); debug builds check
+/// that a look skipped would have found nothing.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RareStates {
     pub charge: bool,
     pub flee: bool,
-    pub zone_pulse: bool,
     pub assist: bool,
     pub casting: bool,
-    pub despawn: bool,
     pub pet: bool,
 }
 
@@ -121,13 +118,8 @@ impl RareStates {
         let e = &c.engagement;
         self.charge |= e.charge.is_some();
         self.flee |= e.flee.is_some();
-        self.zone_pulse |= e.zone_pulse_at.is_some();
         self.assist |= !e.assist.is_empty();
         self.casting |= c.caster.casting.is_some();
-        self.despawn |= c
-            .scripted
-            .as_deref()
-            .is_some_and(|s| s.despawn_at.is_some());
         self.pet |= c.pet.is_some();
     }
 }
@@ -261,7 +253,6 @@ pub fn entered(map: &mut Map, g: Guid, source: Guid) {
         return;
     }
     let now = map.now;
-    map.rare.zone_pulse = true;
     if let Some(c) = map.creature_mut(g) {
         c.engagement.zone_pulse_at = Some(now + ZONE_PULSE);
     }
@@ -1040,30 +1031,30 @@ pub fn update(map: &mut Map) {
     watch_for_enemies(map);
     crate::game::map::assistance::update(map);
     let now = map.now;
-    let mut pulses: Vec<(Guid, Guid)> = Vec::new();
-    if map.rare.zone_pulse {
-        let mut any = false;
-        pulses = map
-            .creatures
+    // Only in a dungeon or a raid does a creature pulse its map (as
+    // `zone_fighter` has it), so only there is every creature looked at.
+    let dungeon = matches!(
+        crate::game::instances::instance_type(&map.realm, map.key.map),
+        1 | 2
+    );
+    let pulses: Vec<(Guid, Guid)> = if dungeon {
+        map.creatures
             .iter()
-            .filter(|(_, c)| {
-                any |= c.engagement.zone_pulse_at.is_some();
-                c.engagement.zone_pulse_at.is_some_and(|t| t <= now)
-            })
+            .filter(|(_, c)| c.engagement.zone_pulse_at.is_some_and(|t| t <= now))
             .map(|(_, c)| (c.guid, c.combat.victim))
-            .collect();
-        map.rare.zone_pulse = any;
+            .collect()
     } else {
         debug_assert!(
             map.creatures
                 .iter()
                 .all(|(_, c)| c.engagement.zone_pulse_at.is_none()),
-            "a creature pulses its dungeon unnoted (RareStates)"
+            "{}: a creature pulses a map that is no dungeon",
+            map.key
         );
-    }
+        Vec::new()
+    };
     for (g, victim) in pulses {
         let fighting = map.creature(g).is_some_and(|c| c.combat.attacking);
-        map.rare.zone_pulse |= fighting;
         if let Some(c) = map.creature_mut(g) {
             c.engagement.zone_pulse_at = fighting.then_some(now + ZONE_PULSE);
         }
