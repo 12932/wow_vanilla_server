@@ -623,12 +623,6 @@ pub fn leave(map: &mut Map, g: Guid) {
     {
         crate::game::map::death::resurrect(map, g, 1.0);
     }
-    crate::game::map::auras::remove_spell(
-        map,
-        g,
-        crate::game::map::battleground::SPELL_WAITING_TO_RESURRECT,
-        None,
-    );
     let back = map.players.get_mut(&g).and_then(|p| p.bg_return.take());
     if let Some((key, pos, o)) = back {
         map.teleport(g, key, pos, o);
