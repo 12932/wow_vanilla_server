@@ -833,10 +833,14 @@ pub fn apply_spell(
                     .is_some_and(|(a, b)| a.rank > b.rank)
                 && (h.caster == caster || !cross_caster_coexist(spell, h, effects))
         });
-        let group_blocked = group_relation(&data, existing, spell) == Some(GroupRelation::Blocked);
-        if blocked || group_blocked {
+        if blocked {
             return Err(Refused::Bounced);
         }
+    }
+    // A weaker spell of a group that keeps its highest (rule 3), helpful
+    // or harmful: a lesser Demoralizing Shout under a Demoralizing Roar.
+    if !passive && group_relation(&data, existing, spell) == Some(GroupRelation::Blocked) {
+        return Err(Refused::Bounced);
     }
     let mut aura_effects = Vec::new();
     for &(index, amount) in effects {
@@ -1123,7 +1127,8 @@ enum GroupRelation {
 }
 
 /// How `spell` stands to the spells of its groups already on the unit:
-/// rule 1 replaces, rule 3 keeps the higher of the group's order.
+/// rule 1 replaces, rule 3 keeps the higher in the group's order
+/// (`group_spell_id`).
 fn group_relation(
     data: &crate::game::data::GameData,
     a: &Auras,
@@ -1141,7 +1146,8 @@ fn group_relation(
             match data.spells.group_rules.get(g).copied().unwrap_or(0) {
                 1 => return Some(GroupRelation::Replaces),
                 3 => {
-                    return Some(if h.spell > spell.id {
+                    let order = |id| data.spells.group_order(*g, id);
+                    return Some(if order(h.spell) > order(spell.id) {
                         GroupRelation::Blocked
                     } else {
                         GroupRelation::Replaces
@@ -1203,7 +1209,10 @@ fn replaces(
             for g in mine.iter().filter(|g| theirs.contains(g)) {
                 match data.spells.group_rules.get(g).copied().unwrap_or(0) {
                     1 => return true,
-                    3 => return old.spell <= new.spell,
+                    3 => {
+                        return data.spells.group_order(*g, old.spell)
+                            <= data.spells.group_order(*g, new.spell);
+                    }
                     _ => {}
                 }
             }

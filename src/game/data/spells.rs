@@ -289,6 +289,9 @@ pub struct SpellData {
     /// `spell_group`: groups a spell is in, and each group's stacking rule.
     pub groups: AHashMap<u32, Vec<u32>>,
     pub group_rules: AHashMap<u32, u32>,
+    /// A spell's place in a group (`group_spell_id`), (group, spell) to it:
+    /// the order a group's rule 3 keeps the highest of.
+    pub group_orders: AHashMap<(u32, u32), u32>,
     pub enchantments: AHashMap<u32, Enchantment>,
     /// `spell_elixir`: battle (1) or guardian (2) elixirs, and flasks (3).
     pub elixirs: AHashMap<u32, u32>,
@@ -352,6 +355,15 @@ impl SpellData {
         self.spells.get(&id)
     }
 
+    /// `spell`'s place in `group`, for its rule 3 (the highest kept): its
+    /// `group_spell_id`, else its id.
+    pub fn group_order(&self, group: u32, spell: u32) -> u32 {
+        self.group_orders
+            .get(&(group, spell))
+            .copied()
+            .unwrap_or(spell)
+    }
+
     /// The first rank of the spell's kind.
     pub fn first_rank(&self, id: u32) -> u32 {
         self.ranks
@@ -387,6 +399,32 @@ impl SpellData {
             {
                 self.proc_events.insert(id, p);
             }
+        }
+    }
+
+    /// A later rank with no `spell_group` row of its own is in its first
+    /// rank's groups, at its place (vmangos's and Thistle Tea's rank-root
+    /// membership): Blessing of Might's ranks beside Greater Blessing of
+    /// Might's.
+    pub fn inherit_groups(&mut self) {
+        let firsts: Vec<(u32, u32)> = self
+            .ranks
+            .iter()
+            .filter(|(id, r)| r.first != 0 && r.first != **id)
+            .map(|(id, r)| (*id, r.first))
+            .collect();
+        for (id, first) in firsts {
+            if self.groups.contains_key(&id) {
+                continue;
+            }
+            let Some(groups) = self.groups.get(&first).cloned() else {
+                continue;
+            };
+            for g in &groups {
+                let order = self.group_order(*g, first);
+                self.group_orders.insert((*g, id), order);
+            }
+            self.groups.insert(id, groups);
         }
     }
 
