@@ -1,7 +1,7 @@
 //! Stage 2a's spells and auras, against the real data when it is here: a
 //! dispel taking a passive aura, weapons' feral attack power held to the
-//! forms, healing taken by the spell's coefficient and at each tick, and a
-//! killing spell that spares the gear.
+//! forms, healing taken by the spell's coefficient and at each tick, a
+//! killing spell that spares the gear, and the Net-o-Matic's backfire.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -340,4 +340,37 @@ async fn a_killing_spell_without_durability_loss_spares_the_gear() {
     let worn_down = lost(&touched, &sacrificed);
     assert_eq!(dead_again, 0, "touched");
     assert!(worn_down.iter().all(|l| *l >= 2), "and worn: {worn_down:?}");
+}
+
+const NET_O_MATIC_BACKFIRE: u32 = 13119;
+const NET_BACKFIRE_MARKER: u32 = 13139;
+const NET_ON_THROWER: u32 = 13138;
+
+#[tokio::test]
+async fn the_net_o_matics_backfire_nets_its_thrower_and_leaves_no_marker() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A5");
+    let gnome = c.enter("Parfive", Race::Gnome, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, gnome, 60);
+            let kobold = dummy(m, gnome, 60, 8.0);
+            spells::cast_triggered(m, gnome, NET_O_MATIC_BACKFIRE, Some(kobold));
+            (
+                has(m, kobold, NET_O_MATIC_BACKFIRE),
+                has(m, gnome, NET_ON_THROWER),
+                has(m, gnome, NET_BACKFIRE_MARKER),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, true, false),
+        "(the target netted, the thrower netted, the marker left)"
+    );
 }
