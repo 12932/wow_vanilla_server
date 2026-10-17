@@ -127,7 +127,7 @@ The game data comes from vmangos's database and the client's DBCs, exported to S
 
 ## Phases
 
-Each phase ends in a commit on `work/loadtest`, pushed. Each lists what it adds and when it is done.
+Each phase ends in a commit on `master`, pushed. Each lists what it adds and when it is done.
 
 ### Phase 1: the new core
 
