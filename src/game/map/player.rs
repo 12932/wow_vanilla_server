@@ -210,6 +210,8 @@ pub struct Player {
     pub looting: Option<Guid>,
     /// The next buyback slot to fill.
     pub buyback_next: u8,
+    /// When buyback's timestamps count from: the login.
+    pub buyback_started: Instant,
     /// The NPC and gossip menu the player last had open.
     pub gossip_menu: Option<(Guid, u32)>,
     /// The quest objects this client knows shown as usable for a quest.
@@ -305,6 +307,7 @@ impl Player {
             combat: Default::default(),
             looting: None,
             buyback_next: 0,
+            buyback_started: now,
             gossip_menu: None,
             quest_objects: AHashSet::new(),
             temporary_war: Vec::new(),
@@ -550,7 +553,14 @@ impl Player {
             row.state.powers[i] = f.get_u32(UNIT_FIELD_POWER1 + i as u16);
         }
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
-        row.items = self.items.iter().map(Item::to_row).collect();
+        // What's sold stays to be bought back this session only (Thistle
+        // Tea's `Buyback.logout`).
+        row.items = self
+            .items
+            .iter()
+            .filter(|i| !crate::game::map::vendor::in_buyback(i.bag, i.slot))
+            .map(Item::to_row)
+            .collect();
         row.state.transport = self.movement.flags.get_on_transport().map(|t| {
             let deck = t.transport.position;
             (

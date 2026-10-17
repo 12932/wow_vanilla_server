@@ -677,13 +677,15 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     }
     p.items[a].bag = to.0;
     p.items[a].slot = to.1;
-    let equipped = (to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END).then_some(p.items[a].entry);
+    let equipped =
+        (to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END).then_some((p.items[a].entry, p.items[a].guid));
     if to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END {
         crate::game::map::items::on_equip(&data, &mut p.items[a]);
     }
     p.refresh_inventory(&data);
-    if let Some(entry) = equipped {
+    if let Some((entry, item)) = equipped {
         crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
+        crate::game::map::items::equipped(map, g, item);
     }
 }
 

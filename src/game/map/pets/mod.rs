@@ -636,9 +636,18 @@ pub fn died(map: &mut Map, killer: Guid, victim: Guid) -> bool {
     }
 }
 
+/// How a hunter's pet shares its master's kill (Thistle Tea's
+/// `PetExperience`): alone, from its master's base and its own level; in a
+/// group, its master's share, while no higher than the kill's best level.
+#[derive(Debug, Clone, Copy)]
+pub enum KillShare {
+    Solo,
+    Group { xp: u32, max_level: u32 },
+}
+
 /// The master's kill: their hunter's pet shares the experience.
-pub fn owner_killed(map: &mut Map, owner: Guid, victim: Guid) {
-    hunter::kill_xp(map, owner, victim);
+pub fn owner_killed(map: &mut Map, owner: Guid, victim: Guid, share: KillShare) {
+    hunter::kill_xp(map, owner, victim, share);
 }
 
 /// `master` takes control of `unit` (charm or possession).

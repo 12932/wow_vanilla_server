@@ -181,7 +181,8 @@ fn aura_amount(
             if let Some(a) = auras::auras(map, caster) {
                 h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
             }
-            outcome::healing_taken(map, target, l.mods.apply(mods::OP_DOT, h)) as i32
+            outcome::healing_taken(map, target, l.mods.apply(mods::OP_DOT, h), s.school_mask())
+                as i32
         }
         AURA_SCHOOL_ABSORB => base + absorb_bonus(map, caster, target, s, index),
         _ => base,
@@ -570,7 +571,7 @@ fn effect(
                 .unit_fields(caster)
                 .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
                 .unwrap_or(0);
-            let h = outcome::healing_taken(map, target, max as f32) as u32;
+            let h = outcome::healing_taken(map, target, max as f32, s.school_mask()) as u32;
             heal(map, caster, target, s.id, h, false);
         }
         EFFECT_ENERGIZE => {
