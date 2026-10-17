@@ -303,7 +303,21 @@ impl Outdoor {
     }
 }
 
-/// World PvP for the continents.
+/// The dungeons that share the continents' buffs: Stratholme and
+/// Scholomance the towers', the Ruins and Temple of Ahn'Qiraj the Cenarion
+/// Favor (Thistle Tea's `buff_zone?`, mangos's `GetScriptOfAffectedZone`).
+const BUFF_DUNGEONS: [u32; 4] = [329, 289, 509, 531];
+
+/// What the continents' world PvP holds, for the dungeons that share its
+/// buffs: the towers each side holds, and the side with the Cenarion Favor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Shared {
+    pub towers: [usize; 2],
+    pub favor: Option<usize>,
+}
+
+/// World PvP for the continents, and its buffs in the dungeons that share
+/// them.
 pub fn for_map(key: MapKey) -> Option<Outdoor> {
     match key {
         MapKey {
@@ -317,6 +331,7 @@ pub fn for_map(key: MapKey) -> Option<Outdoor> {
             silithus: Some(Silithus::default()),
             ..Default::default()
         }),
+        MapKey { map, .. } if BUFF_DUNGEONS.contains(&map) => Some(Outdoor::default()),
         _ => None,
     }
 }
@@ -386,27 +401,40 @@ fn reconcile_buffs(map: &mut Map) {
     let Some(o) = map.outdoor.as_ref() else {
         return;
     };
-    let counts = o.counts();
-    let controller = o.silithus.as_ref().and_then(|si| si.controller);
-    let on = map.key.map;
+    // The continents keep the realm's tally; a dungeon reads it.
+    let (counts, controller) = match map.key.map {
+        0 => {
+            let counts = o.counts();
+            if !o.towers.is_empty() {
+                map.realm.social.outdoor.lock().towers = counts;
+            }
+            (counts, None)
+        }
+        1 => {
+            let controller = o.silithus.as_ref().and_then(|si| si.controller);
+            map.realm.social.outdoor.lock().favor = controller;
+            ([0, 0], controller)
+        }
+        _ => {
+            let shared = *map.realm.social.outdoor.lock();
+            (shared.towers, shared.favor)
+        }
+    };
     let wanted: Vec<(Guid, [Option<u32>; 2])> = map
         .players
         .values()
         .map(|p| {
             let s = side(p.team);
             let alive = p.death == Death::Alive;
-            let tower = (alive && on == 0 && PLAGUELANDS_BUFF_ZONES.contains(&p.zone))
+            let tower = (alive && PLAGUELANDS_BUFF_ZONES.contains(&p.zone))
                 .then(|| {
                     (1..=4)
                         .contains(&counts[s])
                         .then(|| TOWER_BUFFS[s][counts[s] - 1])
                 })
                 .flatten();
-            let favor = (alive
-                && on == 1
-                && SILITHUS_BUFF_ZONES.contains(&p.zone)
-                && controller == Some(s))
-            .then_some(SPELL_FAVOR);
+            let favor = (alive && SILITHUS_BUFF_ZONES.contains(&p.zone) && controller == Some(s))
+                .then_some(SPELL_FAVOR);
             (p.guid, [tower, favor])
         })
         .collect();

@@ -44,6 +44,9 @@ pub struct Social {
     pub omen: Mutex<crate::game::omen::Watch>,
     /// Gurubashi Arena's champions.
     pub arena: Mutex<crate::game::map::arena::History>,
+    /// What the continents' world PvP holds, for the dungeons that share
+    /// its buffs.
+    pub outdoor: Mutex<crate::game::map::outdoor_pvp::Shared>,
 }
 
 impl Social {
