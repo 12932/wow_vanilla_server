@@ -4,6 +4,8 @@ What wow_vanilla_server needs to do what Thistle Tea does, and the order to buil
 [peon](https://github.com/12932/peon) on both servers, as in peon's
 [BASELINES.md](https://github.com/12932/peon/blob/master/docs/BASELINES.md).
 
+Where it stands now, and where it still differs: [THISTLE_TEA_DIFFERENCES.md](THISTLE_TEA_DIFFERENCES.md).
+
 ## Where the two stand (2026-10-16)
 
 | | wow_vanilla_server | Thistle Tea |
@@ -1390,13 +1392,58 @@ Six agents took these on, each on its own branch.
 - **Interrupts and observers:** an emote ends a channel an animation breaks; going into or out of the water ends what
   that breaks; speed changes reach those who see the player (`MSG_MOVE_SET_*_SPEED`).
 
+### A second audit, and the sweeps (2026-10-17)
+
+A second fresh agent compared the two again and found wvs close, with what was left in spell and aura behaviour that
+Thistle Tea writes in code rather than data. Closed since:
+
+- **The audit:**
+  - the hunter's Taming the Beast rods, and the level-10 chain they belong to;
+  - quest credit for spells cast on creatures and objects, and kills no longer crediting those objectives;
+  - 32 buffs and 16 debuffs, with Thistle Tea's replacement priority;
+  - the rage a stance change costs, and Tactical Mastery;
+  - crowd control breaking early;
+  - the override class scripts, Holy and Totemic Power, reactive armor;
+  - Curse of Agony's and Starshards' ramps;
+  - Feign Death resisted;
+  - Ritual of Summoning's checks;
+  - raid bosses' aura mechanics (Golemagg, Garr's and Majordomo's adds, Geddon, Kazzak, the dream dragons, the
+    threat wipes), and creatures' spawn and template auras, which they never had;
+  - the server messages and tables wvs didn't send or read;
+  - the smaller spell scripts.
+- **The sweeps,** module by module through Thistle Tea's `lib/game`, each gap written down before it was fixed:
+  - **spells and auras:**
+    - vmangos's custom spell flags;
+    - facing;
+    - pushback;
+    - single-target auras;
+    - dispels by the stack;
+    - diminishing returns' recovery;
+    - per-effect mechanics;
+    - taunt and Fade threat;
+    - auras ending on mount, stealth, teleport and flight;
+    - form-bound passives;
+    - immunity that purges;
+  - **combat, items, loot, professions and death** ([COMBAT5_SWEEP.md](COMBAT5_SWEEP.md));
+  - **outdoor PvP, honor and duels:**
+    - silithyst and the Eastern Plaguelands towers id by id;
+    - dishonorable kills, which were the wrong way round;
+  - **battlegrounds:** the status and brackets, Warsong's flags, leaving dead, resurrection waves;
+  - **the world and social rules:** the last rules sweep above;
+  - **creature AI, scripts and instances** ([AI5_GAPS.md](AI5_GAPS.md)):
+    - waypoints;
+    - calls for help;
+    - reactions;
+    - EventAI;
+    - spell lists;
+    - conditions;
+    - escorts;
+    - instance resets and binds;
+  - **event quests:** every quest waiting on an event has a source (a credit by the creature's current entry, a
+    summon's death heard after it dies, two escorts and a C++ script the import missed), and quest details are sent in
+    1.12's layout.
+
 ## Where the plan leaves the gap
 
-Each phase's "Left for later" lists what remains. The largest:
-- Arathi Basin's and Alterac Valley's rules.
-- Pets, procs and auto-repeat spells.
-- Group loot rules.
-- Professions' skill-ups.
-- Honor ranks.
-- Instance and boss scripts.
-- Instance progress kept across a restart.
+[THISTLE_TEA_DIFFERENCES.md](THISTLE_TEA_DIFFERENCES.md): what wvs does differently on purpose, and what it doesn't do
+yet.

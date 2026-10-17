@@ -26,8 +26,8 @@ mail_delay_secs = 3600
 #reserved_names = ["Thrall", "Jaina"]
 # A PvP realm: an account's characters are all of one side.
 pvp_realm = false
-# The weekday honor is ranked on, each week: 1 Monday to 7 Sunday.
-honor_reset_weekday = 3
+# The weekday honor is ranked on, each week: 1 Monday to 7 Sunday (Tuesday, as Thistle Tea).
+honor_reset_weekday = 2
 
 [accounts]
 # `auto`: an unknown name gets an account at its first login, with the name as its password (for
