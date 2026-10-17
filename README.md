@@ -4,7 +4,8 @@ A WoW vanilla (1.12.1) server in Rust, on Tokio: an actor per map, packets handl
 update, and vmangos's world. Load-tested with [peon](https://github.com/12932/peon).
 
 A development project, not a production server; use vmangos or cmangos for a public realm. Where it stands against
-Thistle Tea, and the plan to close the gap, is in [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md).
+Thistle Tea, and the plan to close the gap, is in [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md); where it still
+differs, in [docs/THISTLE_TEA_DIFFERENCES.md](docs/THISTLE_TEA_DIFFERENCES.md).
 
 ## Quick start
 
