@@ -273,6 +273,12 @@ pub fn inspect(map: &mut Map, g: Guid, target: Guid) {
     }
 }
 
+/// Whether `npc` is a guild master `g` may deal with now.
+fn petitioner(map: &Map, g: Guid, npc: Guid) -> bool {
+    crate::game::map::npc::npc_entry(map, g, npc, crate::game::map::npc::NPC_FLAG_PETITIONER)
+        .is_some()
+}
+
 /// The opcodes that go to the social services. Returns the message if it
 /// is none of theirs.
 pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
@@ -413,8 +419,19 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
             me.outbound
                 .send(&MSG_TABARDVENDOR_ACTIVATE { guid: m.guid });
         }
-        C::CMSG_PETITION_SHOWLIST(m) => guilds::petition_showlist(map, g, m.guid),
-        C::CMSG_PETITION_BUY(m) => guilds::petition_buy(map, g, &m.name),
+        // A charter's list and sale, from a guild master within reach
+        // (mangos's `GetNPCIfCanInteractWith`, Thistle Tea's
+        // `petitioner?`).
+        C::CMSG_PETITION_SHOWLIST(m) => {
+            if petitioner(map, g, m.guid) {
+                guilds::petition_showlist(map, g, m.guid);
+            }
+        }
+        C::CMSG_PETITION_BUY(m) => {
+            if petitioner(map, g, m.npc) {
+                guilds::petition_buy(map, g, &m.name);
+            }
+        }
         C::CMSG_PETITION_SHOW_SIGNATURES(m) => guilds::petition_signatures(&realm, &me, m.item),
         C::CMSG_PETITION_QUERY(m) => guilds::petition_query(&realm, &me, m.petition),
         C::CMSG_OFFER_PETITION(m) => guilds::petition_offer(&realm, &me, m.petition, m.target),

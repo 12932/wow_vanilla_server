@@ -24,6 +24,7 @@ pub const NPC_FLAG_SPIRITHEALER: u32 = 0x20;
 pub const NPC_FLAG_SPIRITGUIDE: u32 = 0x40;
 pub const NPC_FLAG_INNKEEPER: u32 = 0x80;
 pub const NPC_FLAG_BANKER: u32 = 0x100;
+pub const NPC_FLAG_PETITIONER: u32 = 0x200;
 pub const NPC_FLAG_BATTLEMASTER: u32 = 0x800;
 pub const NPC_FLAG_AUCTIONEER: u32 = 0x1000;
 

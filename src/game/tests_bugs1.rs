@@ -1128,3 +1128,81 @@ async fn the_ready_check_reaches_its_asker() {
         .await;
     }
 }
+
+#[tokio::test]
+async fn a_charter_is_bought_only_from_a_guild_master_near() {
+    use crate::game::data::{CreatureSpawn, CreatureTemplate};
+    const CHARTER: u32 = 5863;
+    let mut d = crate::game::data::GameData::empty();
+    d.items.insert(CHARTER, item(CHARTER, "Guild Charter"));
+    for (entry, flags, guid, dx) in [
+        (3100, 0x200, 50, 2.0),
+        (3101, 0x1, 51, -2.0),
+        (3102, 0x200, 52, 60.0),
+    ] {
+        d.creature_templates.insert(
+            entry,
+            CreatureTemplate {
+                entry,
+                name: format!("Npc {entry}"),
+                display_ids: [903, 0, 0, 0],
+                display_probabilities: [1, 0, 0, 0],
+                level_min: 30,
+                level_max: 30,
+                faction: 12,
+                npc_flags: flags,
+                unit_class: 1,
+                health_multiplier: 1.0,
+                health_max: 500,
+                ..Default::default()
+            },
+        );
+        d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+            guid,
+            entries: vec![entry],
+            map: 0,
+            x: START.0 + dx,
+            y: START.1,
+            z: START.2,
+            respawn_min: 60,
+            respawn_max: 60,
+            ..Default::default()
+        });
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGCHARTER");
+    let g = a.enter("Bugcharter", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    map.query(move |m| m.players.get_mut(&g).unwrap().set_money(10_000))
+        .await
+        .unwrap();
+    let (master, plain, far) = (
+        guid::unit(3100, 50),
+        guid::unit(3101, 51),
+        guid::unit(3102, 52),
+    );
+    for n in [master, plain, far] {
+        a.sees(n).await;
+    }
+    let bought = async |a: &mut Client, npc: Guid| {
+        a.send(CMSG_PETITION_BUY {
+            npc,
+            name: "Bugs".into(),
+            index: 1,
+            ..Default::default()
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        map.query(move |m| m.players[&g].count_of(CHARTER))
+            .await
+            .unwrap()
+    };
+    for npc in [Guid::zero(), plain, far] {
+        assert_eq!(bought(&mut a, npc).await, 0, "not from {npc}");
+    }
+    assert_eq!(
+        bought(&mut a, master).await,
+        1,
+        "from the guild master beside them"
+    );
+}
