@@ -41,10 +41,6 @@ const STONE: u32 = 178824;
 const TALENT_SPELL: u32 = 20000;
 const QUEST: u32 = 600;
 
-fn start(dx: f32) -> (f32, f32, f32) {
-    (START.0 + dx, START.1, START.2)
-}
-
 fn spawn(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     CreatureSpawn {
         guid,
@@ -1350,4 +1346,116 @@ async fn a_deleted_character_leaves_their_guild_mail_and_auctions() {
             .values()
             .any(|m| m.receiver == counter)
     );
+}
+
+#[tokio::test]
+async fn an_escort_asks_the_party_to_join_and_one_who_confirms_has_it() {
+    let mut d = data();
+    d.npc.quests.get_mut(&QUEST).unwrap().flags = crate::game::map::questshare::QUEST_FLAGS_PARTY_ACCEPT;
+    let realm = harness::realm_with(d);
+    let (mut a, mut b) = party(&realm).await;
+    let (ga, gb) = (a.guid, b.guid);
+    let giver = guid::unit(QUEST_GIVER, 14);
+    a.sees(giver).await;
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: giver,
+        quest_id: QUEST,
+    })
+    .await;
+    let (quest, by) = b
+        .wait_for("SMSG_QUEST_CONFIRM_ACCEPT", |m| match m {
+            ServerOpcodeMessage::SMSG_QUEST_CONFIRM_ACCEPT(c) => Some((c.quest_id, c.guid)),
+            _ => None,
+        })
+        .await;
+    assert_eq!((quest, by), (QUEST, ga));
+    b.send(CMSG_QUEST_CONFIRM_ACCEPT { quest_id: QUEST }).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(on_map(&realm, move |m| m.players[&gb].journal.has(QUEST)).await);
+}
+
+#[tokio::test]
+async fn the_deep_sea_tires_a_swimmer_out() {
+    let (realm, mut a) = setup().await;
+    let g = a.guid;
+    a.clear();
+    let (before, after) = on_map(&realm, move |m| {
+        let now = m.now;
+        crate::game::map::environment::fatigue(m, g, true, now);
+        let before = m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH);
+        crate::game::map::environment::fatigue(m, g, true, now + Duration::from_secs(61));
+        (before, m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH))
+    })
+    .await;
+    assert!(after < before);
+    a.wait_for("the fatigue timer", |m| match m {
+        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(t) => (t.timer == TimerType::Fatigue).then_some(()),
+        _ => None,
+    })
+    .await;
+    a.wait_for("exhaustion", |m| match m {
+        ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(d) => {
+            (d.damage_type == EnvironmentalDamageType::Exhausted).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn far_sight_ends_and_growth_auras_are_cancelled() {
+    let (realm, a) = setup().await;
+    let g = a.guid;
+    let mut grow = aura_spell(30000, &[(crate::game::map::auras::AURA_MOD_SCALE, 20, 0)]);
+    grow.duration_index = 0;
+    on_map(&realm, move |m| {
+        crate::game::map::auras::apply(m, g, g, &grow, 0, 20);
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .fields
+            .set_guid(PLAYER_FARSIGHT, Guid::new(5));
+    })
+    .await;
+    a.send(CMSG_CANCEL_GROWTH_AURA {}).await;
+    a.send(CMSG_FAR_SIGHT {
+        operation: FarSightOperation::Remove,
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (grown, sight) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (p.auras.has_spell(30000), p.fields.get_guid(PLAYER_FARSIGHT))
+    })
+    .await;
+    assert!(!grown);
+    assert!(sight.is_zero());
+}
+
+#[tokio::test]
+async fn targeting_a_friendly_faction_shows_it() {
+    let mut d = data();
+    // Ironforge hidden at first for this test's humans.
+    d.misc.factions.get_mut(&IRONFORGE).unwrap().variants[0].3 = 0;
+    d.faction_templates.insert(
+        55,
+        FactionTemplate {
+            id: 55,
+            faction: IRONFORGE,
+            ours: 2,
+            friend_mask: 2,
+            ..Default::default()
+        },
+    );
+    d.creature_templates.get_mut(&VENDOR).unwrap().faction = 55;
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let vendor = guid::unit(VENDOR, 11);
+    a.sees(vendor).await;
+    a.send(CMSG_SET_SELECTION { target: vendor }).await;
+    let shown = a
+        .wait_frame("SMSG_SET_FACTION_VISIBLE", 0x123, |_| true)
+        .await;
+    assert_eq!(u32_at(&shown, 0), 1);
 }
