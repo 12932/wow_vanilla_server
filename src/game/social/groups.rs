@@ -131,6 +131,7 @@ impl Group {
             if realm.registry.online(me.guid).is_none() {
                 continue;
             }
+            set_leader_flag(realm, me.guid, me.guid == self.leader);
             send_to(realm, me.guid, &self.list_for(realm, me));
         }
     }
@@ -169,6 +170,29 @@ impl Group {
             group_not_empty,
         }
     }
+}
+
+/// `PLAYER_FLAGS_GROUP_LEADER` on `g`, in whatever map they are: on for
+/// the group's leader, off for everyone else, as each is sent the roster
+/// (mangos's `UpdateGroupLeaderFlag`, Thistle Tea's `set_group_leader`).
+fn set_leader_flag(realm: &Realm, g: Guid, leader: bool) {
+    use crate::game::fields::PLAYER_FLAGS;
+    use crate::game::map::player::PLAYER_FLAGS_GROUP_LEADER;
+    let Some(o) = realm.registry.online(g) else {
+        return;
+    };
+    o.map().call(move |m| {
+        if let Some(p) = m.players.get_mut(&g) {
+            p.fields
+                .set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GROUP_LEADER, leader);
+        }
+    });
+}
+
+/// A player out of their group: no one on their roster, and no lead.
+fn leave_roster(realm: &Realm, g: Guid) {
+    set_leader_flag(realm, g, false);
+    send_to(realm, g, &empty_list());
 }
 
 /// The roster a player out of a group gets: no one.
@@ -373,7 +397,7 @@ impl Groups {
         if kicked {
             send_to(realm, g, &SMSG_GROUP_UNINVITE {});
         }
-        send_to(realm, g, &empty_list());
+        leave_roster(realm, g);
         let gr = &mut self.groups.get_mut(&id).unwrap();
         if gr.leader == g {
             gr.leader = gr.members[0].guid;
@@ -398,7 +422,7 @@ impl Groups {
             self.stats.remove(&m.guid);
             self.seen_by.remove(&m.guid);
             send_to(realm, m.guid, &SMSG_GROUP_DESTROYED {});
-            send_to(realm, m.guid, &empty_list());
+            leave_roster(realm, m.guid);
         }
         for i in gr.invited {
             self.invites.remove(&i);
