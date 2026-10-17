@@ -235,7 +235,17 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
             .zone
             .store(zone, std::sync::atomic::Ordering::Relaxed);
     }
+    let new_area = p.area != area;
     p.area = area;
+    if new_area {
+        crate::game::map::exploration::entered(map, guid, area);
+        if zone != 0 && zone != area {
+            crate::game::map::exploration::entered(map, guid, zone);
+        }
+    }
+    let Some(p) = map.players.get_mut(&guid) else {
+        return;
+    };
     let ffa = data
         .area(area)
         .is_some_and(|a| a.flags & AREA_FLAG_ARENA != 0);
@@ -244,7 +254,7 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
 
 /// Whether a player at `p` is inside a trigger, with some slack for the
 /// client having sent it from its edge.
-fn inside(t: &AreaTrigger, p: Vector3d) -> bool {
+pub fn inside(t: &AreaTrigger, p: Vector3d) -> bool {
     const SLACK: f32 = 5.0;
     let (dx, dy, dz) = (p.x - t.x, p.y - t.y, p.z - t.z);
     if t.radius > 0.0 {
@@ -271,6 +281,7 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
         return;
     }
     crate::game::map::quests::explored(map, guid, id);
+    crate::game::map::rest::area_trigger(map, guid, id);
     crate::game::map::battleground::area_trigger(map, guid, id);
     let Some(p) = map.players.get(&guid) else {
         return;

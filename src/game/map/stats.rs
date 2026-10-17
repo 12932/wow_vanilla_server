@@ -128,6 +128,12 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
     if p.level() >= MAX_LEVEL {
         return;
     }
+    let now = map.now;
+    // A kill draws as much again from the rested pool.
+    let amount = match victim {
+        Some(_) => amount + crate::game::map::rest::spend(p, amount, now),
+        None => amount,
+    };
     p.outbound.send(&SMSG_LOG_XPGAIN {
         target: victim.unwrap_or_default(),
         total_exp: amount,

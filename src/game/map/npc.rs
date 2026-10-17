@@ -199,6 +199,7 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         14 => crate::game::map::pets::list_stable(map, player, npc),
         17 => crate::game::map::pets::untrain_offer(map, player),
         15 => vendor::list(map, player, npc),
+        16 => crate::game::map::misc::talent_wipe_offer(map, player, npc),
         _ => send(map, player, &SMSG_GOSSIP_COMPLETE {}),
     }
 }
@@ -541,30 +542,51 @@ fn flight_packet(g: Guid, from: Vector3d, walk: &Walk, spline_id: u32) -> Arc<[u
 
 /// `CMSG_ACTIVATETAXI`: pay, mount and fly.
 pub fn activate_taxi(map: &mut Map, player: Guid, npc: Guid, from: u32, to: u32) {
+    activate_route(map, player, npc, &[from, to]);
+}
+
+/// `CMSG_ACTIVATETAXIEXPRESS`: a route of several hops, flown as one, as
+/// Thistle Tea stitches it.
+pub fn activate_express(map: &mut Map, player: Guid, npc: Guid, nodes: &[u32]) {
+    activate_route(map, player, npc, nodes);
+}
+
+/// Pay for each hop between `route`'s nodes, mount and fly them all.
+pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     let reply = |map: &Map, r| send(map, player, &SMSG_ACTIVATETAXIREPLY { reply: r });
     if npc_entry(map, player, npc, NPC_FLAG_FLIGHTMASTER).is_none() {
         return reply(map, ActivateTaxiReply::NoVendorNearby);
     }
-    let data = map.realm.data.clone();
-    let Some(&(path, cost)) = data.npc.taxi_paths.get(&(from, to)) else {
-        return reply(map, ActivateTaxiReply::NoSuchPath);
-    };
-    let nodes: Vec<TaxiPathNode> = data
-        .npc
-        .taxi_path_nodes
-        .get(&path)
-        .map(|n| n.iter().filter(|n| n.map == map.key.map).copied().collect())
-        .unwrap_or_default();
-    if nodes.len() < 2 {
+    if route.len() < 2 {
         return reply(map, ActivateTaxiReply::NoSuchPath);
     }
+    let data = map.realm.data.clone();
+    let mut cost = 0u32;
+    let mut nodes: Vec<TaxiPathNode> = Vec::new();
+    for hop in route.windows(2) {
+        let Some(&(path, hop_cost)) = data.npc.taxi_paths.get(&(hop[0], hop[1])) else {
+            return reply(map, ActivateTaxiReply::NoSuchPath);
+        };
+        cost = cost.saturating_add(hop_cost);
+        let hop_nodes = data
+            .npc
+            .taxi_path_nodes
+            .get(&path)
+            .map(|n| n.iter().filter(|n| n.map == map.key.map).copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if hop_nodes.len() < 2 {
+            return reply(map, ActivateTaxiReply::NoSuchPath);
+        }
+        nodes.extend(hop_nodes);
+    }
+    let (from, to) = (route[0], route[route.len() - 1]);
     let now = map.now;
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    if !knows_node(&p.row.state.taxi_mask, to) {
+    if route[1..].iter().any(|n| !knows_node(&p.row.state.taxi_mask, *n)) {
         p.outbound.send(&SMSG_ACTIVATETAXIREPLY {
             reply: ActivateTaxiReply::NoSuchPath,
         });

@@ -9,6 +9,7 @@
 pub mod crafts;
 pub mod items;
 pub mod load;
+pub mod misc;
 pub mod npc;
 pub mod pets;
 pub mod spells;
@@ -424,6 +425,7 @@ pub struct GameData {
     /// Locks, item sets, random properties and the like.
     pub crafts: crafts::CraftData,
     pub pets: pets::PetData,
+    pub misc: misc::MiscData,
 }
 
 impl GameData {

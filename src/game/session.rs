@@ -152,7 +152,17 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
 }
 
 impl Session {
-    async fn packet(&mut self, msg: ClientOpcodeMessage) {
+    async fn packet(&mut self, msg: crate::game::conn::Inbound) {
+        let msg = match msg {
+            crate::game::conn::Inbound::Msg(m) => m,
+            crate::game::conn::Inbound::Raw(opcode, body) => {
+                if let State::InWorld { guid, map } = &self.state {
+                    let g = *guid;
+                    map.call(move |m| m.handle_raw(g, opcode, &body));
+                }
+                return;
+            }
+        };
         if let State::InWorld { guid, map } = &self.state {
             if !map.send(MapEvent::Packet(*guid, msg)) {
                 warn!("{}'s map is gone; disconnecting", self.account);
@@ -311,15 +321,18 @@ impl Session {
     }
 
     async fn delete(&mut self, g: Guid) {
+        let counter = guid::counter(g);
         let result = if !guid::is_player(g) || self.realm.registry.online(g).is_some() {
             WorldResult::CharDeleteFailed
-        } else if self
-            .realm
-            .store
-            .delete(&self.account, guid::counter(g))
-            .await
-        {
+        } else if crate::game::social::guilds::leads_others(&self.realm, counter) {
+            // A guild's leader passes it on first.
+            WorldResult::CharDeleteFailed
+        } else if self.realm.store.delete(&self.account, counter).await {
             self.realm.registry.remove_name(g);
+            crate::game::social::guilds::character_deleted(&self.realm, counter);
+            crate::game::social::mail::character_deleted(&self.realm, counter);
+            crate::game::social::auction::character_deleted(&self.realm, counter);
+            crate::game::social::friends::character_deleted(&self.realm, g);
             WorldResult::CharDeleteSuccess
         } else {
             WorldResult::CharDeleteFailed
