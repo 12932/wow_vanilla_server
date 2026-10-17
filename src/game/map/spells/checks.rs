@@ -510,24 +510,23 @@ pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Optio
     room_for_made(map, caster, s)
 }
 
-/// Whether what `s` makes fits in its caster's bags (mangos's
-/// `CheckItems`): if not, they are told why, and the cast fails before it
-/// costs anything.
+/// Whether one of what `s` makes fits in its caster's bags (mangos's
+/// `CheckItems`, which asks for one): if not, they are told why, and the
+/// cast fails before it costs anything. What doesn't fit of more isn't
+/// made.
 fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
     let p = map.players.get(&caster)?;
     let data = &map.realm.data;
-    let level = u32::from(p.level());
-    for (i, e) in s.effects.iter().enumerate() {
+    for e in &s.effects {
         if e.effect != super::EFFECT_CREATE_ITEM || e.item_type == 0 {
             continue;
         }
         let item =
             super::scripts::created_item(map, caster, s, u32::try_from(e.item_type).unwrap_or(0));
-        let Some(t) = data.item(item) else {
+        if data.item(item).is_none() {
             continue;
-        };
-        let count = (super::points(s, i, level).max(1) as u32).min(t.stackable.max(1));
-        if let Err(why) = crate::game::map::inventory::room_for(p, data, item, count) {
+        }
+        if let Err(why) = crate::game::map::inventory::room_for(p, data, item, 1) {
             crate::game::map::inventory::send_fail(p, why, Guid::zero());
             return Some(fail::DONT_REPORT);
         }

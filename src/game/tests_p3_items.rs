@@ -32,7 +32,15 @@ const FREEBIE: u32 = 9305;
 const LIMITED: u32 = 9306;
 const PLENTY: u32 = 9307;
 const FILLER: u32 = 9308;
+/// One a player, and three a player in stacks.
+const RING: u32 = 9309;
+const TOKEN: u32 = 9310;
+/// A helm with stamina and a passive, and a shield.
+const VISOR: u32 = 9311;
+const SHIELD: u32 = 9312;
+const GUARD: u32 = 900_603;
 const WEAR: u32 = 900_600;
+const MAKE: u32 = 900_602;
 const WEAR_PCT: u32 = 900_601;
 
 fn item(entry: u32) -> ItemTemplate {
@@ -116,6 +124,13 @@ fn data() -> GameData {
     limited.stackable = 20;
     d.items.insert(LIMITED, limited);
     d.items.insert(PLENTY, item(PLENTY));
+    let mut ring = item(RING);
+    ring.max_count = 1;
+    d.items.insert(RING, ring);
+    let mut token = item(TOKEN);
+    token.max_count = 3;
+    token.stackable = 20;
+    d.items.insert(TOKEN, token);
     d.vendors.insert(
         VENDOR,
         vec![
@@ -133,12 +148,15 @@ fn data() -> GameData {
             },
         ],
     );
-    // Level 10's repair costs: 45 a point for a sword, 49 for cloth; a
+    // Repair costs: 45 a point for a sword, 49 for cloth; a
     // green's factor 1.25, a white's 1.
     let mut costs = vec![0; 29];
     costs[0] = 45;
     costs[22] = 49;
-    d.durability_costs.insert(10, costs);
+    // The same at every level, for the starting gear's sake.
+    for level in 0..=70 {
+        d.durability_costs.insert(level, costs.clone());
+    }
     d.durability_quality.insert(4, 1.0);
     d.durability_quality.insert(6, 1.25);
     // Wear by points on what is carried (-2), and by a share on the main
@@ -162,6 +180,63 @@ fn data() -> GameData {
         };
         d.spells.spells.insert(id, s);
     }
+    let mut visor = item(VISOR);
+    visor.class = 4;
+    visor.subclass = 1;
+    visor.item_level = 10;
+    visor.max_durability = 50;
+    visor.inventory_type = 1;
+    visor.armor = 30;
+    visor.stats[0] = (7, 5);
+    visor.spells[0] = crate::game::data::items::ItemSpell {
+        id: GUARD,
+        trigger: crate::game::map::inventory::ITEM_SPELL_ON_EQUIP,
+        ..Default::default()
+    };
+    d.items.insert(VISOR, visor);
+    let mut shield = item(SHIELD);
+    shield.class = 4;
+    shield.subclass = 6;
+    shield.item_level = 10;
+    shield.max_durability = 50;
+    shield.inventory_type = 14;
+    shield.armor = 50;
+    shield.block = 10;
+    d.items.insert(SHIELD, shield);
+    let mut guard = crate::game::data::spells::SpellTemplate {
+        id: GUARD,
+        name: "Guard".into(),
+        equipped_item_class: -1,
+        attributes: [0x40, 0, 0, 0, 0],
+        ..Default::default()
+    };
+    guard.effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 6,
+        aura: 30,
+        misc_value: 95,
+        target_a: 1,
+        base_points: 4,
+        base_dice: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(GUARD, guard);
+    // Five tokens made.
+    let mut make = crate::game::data::spells::SpellTemplate {
+        id: MAKE,
+        name: "Make Tokens".into(),
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    make.effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 24,
+        target_a: 1,
+        item_type: u64::from(TOKEN),
+        base_points: 4,
+        base_dice: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(MAKE, make);
     d
 }
 
@@ -692,4 +767,165 @@ async fn wear_reaches_what_its_scope_says() {
     })
     .await;
     assert_eq!(healer, [38, 38, 50]);
+}
+
+fn stacks(m: &Map, g: Guid, entry: u32) -> Vec<u32> {
+    let mut out: Vec<u32> = m.players[&g]
+        .items
+        .iter()
+        .filter(|i| i.entry == entry)
+        .map(|i| i.count())
+        .collect();
+    out.sort_unstable_by(|a, b| b.cmp(a));
+    out
+}
+
+/// Thistle Tea's `Items.store/3` and `create/3`: one of an item a slot that
+/// doesn't stack, a large grant in legal stacks, all or nothing; a unique
+/// item had in the bank refused, and given once when it isn't had; a spell
+/// making more than the allowance makes up to it.
+#[tokio::test]
+async fn a_grant_fits_whole_or_not_at_all() {
+    use crate::game::map::inventory::{Fail, add_item};
+    let (realm, _a, g) = setup().await;
+    let first = on_map(&realm, move |m| {
+        let swords = add_item(m, g, SWORD, 2, false);
+        let widgets = add_item(m, g, WIDGET, 45, false);
+        (swords, stacks(m, g, SWORD), widgets, stacks(m, g, WIDGET))
+    })
+    .await;
+    assert_eq!(first, (Ok(()), vec![1, 1], Ok(()), vec![20, 20, 5]));
+    // One slot left: 45 more don't go, and nothing of them does.
+    let free = on_map(&realm, move |m| {
+        let d = m.realm.data.clone();
+        let p = &m.players[&g];
+        p.carry_slots(&d)
+            .iter()
+            .filter(|(b, s)| p.item_at(*b, *s).is_none())
+            .count() as u32
+    })
+    .await;
+    let full = on_map(&realm, move |m| {
+        add_item(m, g, FILLER, free - 1, false).unwrap();
+        let more = add_item(m, g, WIDGET, 45, false);
+        (more, stacks(m, g, WIDGET))
+    })
+    .await;
+    assert_eq!(full, (Err(Fail::InventoryFull), vec![20, 20, 5]));
+    // A ring in the bank: no second.
+    let ring = on_map(&realm, move |m| {
+        add_item(m, g, RING, 1, false).unwrap();
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.items.iter().position(|i| i.entry == RING).unwrap();
+        p.items[i].slot = BANK_START;
+        let banked = add_item(m, g, RING, 1, false);
+        let p = &m.players[&g];
+        let i = p.items.iter().position(|i| i.entry == RING).unwrap();
+        crate::game::map::inventory::take_item(m, g, i, 1);
+        let again = add_item(m, g, RING, 1, false);
+        let twice = add_item(m, g, RING, 1, false);
+        (banked, again, twice, stacks(m, g, RING))
+    })
+    .await;
+    assert_eq!(
+        ring,
+        (
+            Err(Fail::CantCarryMore),
+            Ok(()),
+            Err(Fail::CantCarryMore),
+            vec![1]
+        )
+    );
+    // A token had, of three: five made are two.
+    let made = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        let i = p.items.iter().position(|i| i.entry == FILLER).unwrap();
+        crate::game::map::inventory::take_item(m, g, i, 1);
+        add_item(m, g, TOKEN, 1, false).unwrap();
+        crate::game::map::spells::cast_triggered(m, g, MAKE, Some(g));
+        m.players[&g].count_of(TOKEN)
+    })
+    .await;
+    assert_eq!(made, 3);
+}
+
+/// What a player shows of their gear: stamina, armor, block, the helm's
+/// passive, the helm's look.
+fn showing(m: &Map, g: Guid) -> (u32, u32, f32, bool, u32) {
+    let p = &m.players[&g];
+    (
+        p.fields.get_u32(UNIT_FIELD_STAT0 + 2),
+        p.fields.get_u32(UNIT_FIELD_RESISTANCES),
+        p.fields.get_f32(PLAYER_BLOCK_PERCENTAGE),
+        p.auras.has_spell(GUARD),
+        p.fields.get_u32(PLAYER_VISIBLE_ITEM_1_0),
+    )
+}
+
+/// Thistle Tea's broken equipment: a broken helm and shield give no
+/// stamina, armor, block or passive, though the helm still shows; mended,
+/// they give them again.
+#[tokio::test]
+async fn broken_gear_gives_nothing_but_its_look() {
+    let (realm, a, g) = setup().await;
+    // The starting gear has no template here, nor a repair price.
+    let bare = on_map(&realm, move |m| {
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        p.items.retain(|i| d.item(i.entry).is_some());
+        p.refresh_inventory(&d);
+        showing(m, g)
+    })
+    .await;
+    let visor = give(&realm, g, VISOR, 1).await;
+    put(&realm, g, visor, (BAG_PLAYER, 0)).await;
+    let shield = give(&realm, g, SHIELD, 1).await;
+    put(&realm, g, shield, (BAG_PLAYER, 16)).await;
+    let wanted = move |m: &mut Map| {
+        let s = showing(m, g);
+        s.3.then_some(s)
+    };
+    let worn = until(&realm, "the guard on", wanted).await;
+    assert_eq!(worn.0, bare.0 + 5, "the stamina");
+    assert_eq!(worn.1, bare.1 + 80, "the armor");
+    assert!(worn.2 > 0.0, "a block");
+    assert_eq!(worn.4, VISOR);
+    on_map(&realm, move |m| vendor::wear(m, g, 1.0)).await;
+    let broken = until(&realm, "the guard off", move |m| {
+        let s = showing(m, g);
+        (!s.3).then_some(s)
+    })
+    .await;
+    assert_eq!(
+        (broken.0, broken.1, broken.2, broken.4),
+        (bare.0, bare.1, 0.0, VISOR),
+        "nothing but the look"
+    );
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(10_000)
+    })
+    .await;
+    a.send(CMSG_REPAIR_ITEM {
+        npc: vendor_guid(),
+        item: Guid::zero(),
+    })
+    .await;
+    let mended = until(&realm, "the guard back", wanted).await;
+    assert_eq!(mended, worn);
+}
+
+/// Wait until `f` says so, as the map has it.
+async fn until<T: Send + 'static>(
+    realm: &Arc<Realm>,
+    what: &str,
+    f: impl Fn(&mut Map) -> Option<T> + Send + Sync + Clone + 'static,
+) -> T {
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    loop {
+        if let Some(t) = on_map(realm, f.clone()).await {
+            return t;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "never {what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }

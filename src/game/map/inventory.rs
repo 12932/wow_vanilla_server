@@ -485,6 +485,21 @@ pub fn room_for(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<(
     plan(p, data, t, count).map(|_| ())
 }
 
+/// The most of `count` of item `entry` that fits in `p`'s bags, its
+/// unique allowance and room both (mangos's `CanStoreNewItem`'s
+/// `no_space`), or why none does.
+pub fn fitting(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<u32, Fail> {
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    let mut why = Fail::InventoryFull;
+    for n in (1..=count).rev() {
+        match plan(p, data, t, n) {
+            Ok(_) => return Ok(n),
+            Err(f) => why = f,
+        }
+    }
+    Err(why)
+}
+
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
