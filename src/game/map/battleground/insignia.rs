@@ -101,12 +101,13 @@ pub fn remove(map: &mut Map, looter: Guid, target: Option<Guid>) {
     if flags & CORPSE_INSIGNIA == 0 || flags & CORPSE_BONES != 0 || dist(pos, at) > RANGE {
         return;
     }
+    let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&victim) else {
         return;
     };
     let level = u32::from(p.level());
     // Bones, where the corpse was: theirs no more.
-    let mut bones = death::Corpse::new(p, pos, o);
+    let mut bones = death::Corpse::new(&data, p, pos, o);
     p.row.state.corpse = None;
     p.outbound.send(&SMSG_PLAYER_SKINNED {
         spirit_released: true,

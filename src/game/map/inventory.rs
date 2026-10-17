@@ -251,14 +251,7 @@ impl Player {
     pub fn carried_count_of(&self, entry: u32) -> u32 {
         self.items
             .iter()
-            .filter(|i| i.entry == entry)
-            .filter(|i| {
-                if i.bag == BAG_PLAYER {
-                    !(BANK_START..BUYBACK_END).contains(&i.slot)
-                } else {
-                    !(BANK_BAG_START..BANK_BAG_END).contains(&i.bag)
-                }
-            })
+            .filter(|i| i.entry == entry && i.carried())
             .map(|i| i.count())
             .sum()
     }
@@ -324,6 +317,16 @@ impl Item {
 
     pub fn set_count(&mut self, n: u32) {
         self.fields.set_u32(ITEM_FIELD_STACK_COUNT, n);
+    }
+
+    /// Whether it is carried: worn, in the pack and its bags, on the
+    /// keyring; not in the bank nor bought back.
+    pub fn carried(&self) -> bool {
+        if self.bag == BAG_PLAYER {
+            !(BANK_START..BUYBACK_END).contains(&self.slot)
+        } else {
+            !(BANK_BAG_START..BANK_BAG_END).contains(&self.bag)
+        }
     }
 }
 
