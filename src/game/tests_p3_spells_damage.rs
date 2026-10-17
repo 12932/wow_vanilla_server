@@ -9,7 +9,7 @@ use wow_world_messages::vanilla::*;
 
 use super::tests_p3_spells_kit::*;
 use crate::game::map::spells::outcome::{self, Kind, Landing};
-use crate::game::map::{Map, auras};
+use crate::game::map::{Map, auras, spells};
 
 const FIRE_BLAST: u32 = 2136;
 const DAMPEN_MAGIC: u32 = 604;
@@ -517,4 +517,80 @@ async fn spells_do_what_their_effects_say() {
         Some(vec![(4, Duration::from_secs(10))]),
         "fire locked out ten seconds"
     );
+}
+
+const DEATHS_DOOR: u32 = 23127;
+const DIVINE_SHIELD: u32 = 642;
+const CURE_DISEASE: u32 = 528;
+
+#[tokio::test]
+async fn a_percent_damage_tick_takes_its_share_of_the_health_there_is_room_for() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, priest, map) = player(&realm, "P3D10", "Doorone", Race::Human, Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            let kobold = dummy(m, priest, 60, 5.0);
+            // Its base too, which its auras' changes derive from.
+            let set_max = |m: &mut Map, g: Guid, max: u32| {
+                if let Some(c) = m.creature_mut(g) {
+                    c.base.max_health = max;
+                    c.fields
+                        .set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, max);
+                    c.fields
+                        .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
+                }
+            };
+            let tick = |m: &mut Map, g: Guid| {
+                let max = m
+                    .unit_fields(g)
+                    .map_or(0, |f| f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH));
+                set_health(m, g, max);
+                let before = health(m, g);
+                tick_now(m, g, DEATHS_DOOR);
+                before - health(m, g)
+            };
+            set_max(m, kobold, 1000);
+            apply(m, priest, kobold, DEATHS_DOOR);
+            let first = tick(m, kobold);
+            // Of the health it has at the tick.
+            set_max(m, kobold, 2007);
+            let grown = tick(m, kobold);
+            // Two casters', each its own.
+            let other = dummy(m, priest, 60, 6.0);
+            apply(m, other, kobold, DEATHS_DOOR);
+            set_max(m, kobold, 1000);
+            let both = tick(m, kobold);
+            auras::remove_spell(m, kobold, DEATHS_DOOR, Some(other));
+            // A Divine Shield takes it, and keeps it off.
+            apply(m, kobold, kobold, DIVINE_SHIELD);
+            let purged = !has(m, kobold, DEATHS_DOOR);
+            apply(m, priest, kobold, DEATHS_DOOR);
+            let shielded = (has(m, kobold, DEATHS_DOOR), tick(m, kobold));
+            auras::remove_spell(m, kobold, DIVINE_SHIELD, None);
+            apply(m, priest, kobold, DEATHS_DOOR);
+            // Half taken: half.
+            let mut half = made_up(990_997, 6, auras::AURA_MOD_DAMAGE_PERCENT_TAKEN, 127, -50);
+            half.duration_index = 21;
+            apply_template(m, kobold, kobold, &half);
+            let halved = tick(m, kobold);
+            auras::remove_spell(m, kobold, 990_997, None);
+            // Cured, it ticks no more.
+            spells::cast_triggered(m, kobold, CURE_DISEASE, Some(kobold));
+            let cured = (has(m, kobold, DEATHS_DOOR), tick(m, kobold));
+            (first, grown, both, purged, shielded, halved, cured)
+        })
+        .await
+        .unwrap();
+    let (first, grown, both, purged, shielded, halved, cured) = out;
+    assert!(purged, "Divine Shield takes it");
+    assert_eq!(first, 50, "five in a hundred of 1000");
+    assert_eq!(grown, 100, "of the 2007 there is then, truncated");
+    assert_eq!(both, 100, "two casters', each its own");
+    assert_eq!(shielded, (false, 0), "and keeps it off");
+    assert_eq!(halved, 25, "half of it taken");
+    assert_eq!(cured, (false, 0), "cured, no more");
 }
