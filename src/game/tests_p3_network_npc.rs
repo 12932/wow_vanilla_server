@@ -33,6 +33,8 @@ const QUIET_TRAINER: u32 = 2020;
 const TRAINER: u32 = 2021;
 const TAUGHT: u32 = 900_401;
 const NEEDED: u32 = 900_402;
+/// A quest the gossiper offers from level 10.
+const QUEST_HIGH: u32 = 9_101;
 
 fn spawn(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     CreatureSpawn {
@@ -118,6 +120,17 @@ fn data() -> GameData {
         .unwrap()
         .extend([spawn(13, QUIET_TRAINER, 1.0), spawn(14, TRAINER, 1.5)]);
     d.npc.trainer_greetings.insert(QUIET_TRAINER, "Hi".into());
+    d.npc.quests.insert(
+        QUEST_HIGH,
+        crate::game::data::npc::Quest {
+            id: QUEST_HIGH,
+            title: "Not Yet".into(),
+            min_level: 10,
+            level: 10,
+            ..Default::default()
+        },
+    );
+    d.npc.creature_starts.insert(GOSSIPER, vec![QUEST_HIGH]);
     d.npc.trainers.insert(
         TRAINER,
         vec![crate::game::data::npc::TrainerSpell {
@@ -536,4 +549,42 @@ async fn a_flight_masters_node_and_map_are_laid_out_as_1_12_has_them() {
     a.send(CMSG_TAXINODE_STATUS_QUERY { guid: npc }).await;
     let status = a.wait_frame("SMSG_TAXINODE_STATUS", 0x1AB, |_| true).await;
     assert_eq!(status[8], 1, "known now");
+}
+
+/// Thistle Tea's smsg_questgiver_quest_invalid_test and
+/// smsg_quest_query_response_test: a quest taken too young is refused
+/// with its reason as a 32-bit word; a quest that hides its rewards shows
+/// no money and no reward items.
+#[tokio::test]
+async fn a_quest_too_high_is_refused_and_hidden_rewards_are_not_shown() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let npc = guid::unit(GOSSIPER, 12);
+    a.sees(npc).await;
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: npc,
+        quest_id: QUEST_HIGH,
+    })
+    .await;
+    let invalid = a
+        .wait_frame("SMSG_QUESTGIVER_QUEST_INVALID", 0x18F, |_| true)
+        .await;
+    assert_eq!(
+        invalid,
+        (QuestFailedReason::QuestFailedLowLevel.as_int() as u32)
+            .to_le_bytes()
+            .to_vec()
+    );
+    let hidden = crate::game::data::npc::Quest {
+        id: 1,
+        flags: 0x200,
+        reward_money: 999,
+        rewards: [(80, 1), (0, 0), (0, 0), (0, 0)],
+        ..Default::default()
+    };
+    let frame = crate::game::map::quests::query_response(&hidden);
+    let body = &frame[4..];
+    assert_eq!(&body[40..44], &0i32.to_le_bytes(), "no money");
+    assert_eq!(&body[60..140], &[0u8; 80][..], "no reward items");
 }
