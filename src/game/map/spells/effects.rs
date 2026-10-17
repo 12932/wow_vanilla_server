@@ -209,7 +209,9 @@ fn aura_amount(
         AURA_PERIODIC_HEAL => {
             let mut h =
                 base as f32 + outcome::bonus(map, caster, target, s, index, Kind::Dot, &l.mods);
-            if let Some(a) = auras::auras(map, caster) {
+            if let Some(a) = auras::auras(map, caster)
+                && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+            {
                 h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
             }
             l.mods.apply(mods::OP_DOT, h).max(0.0) as i32

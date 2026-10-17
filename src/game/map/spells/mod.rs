@@ -1244,7 +1244,12 @@ fn land(
         .effects
         .iter()
         .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
+    // Damage that ignores its caster's modifiers ignores their crit too
+    // (mangos's `CalculateCritAmount`); a heal's may still crit.
+    let unmodified = s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+        && !s.effects.iter().any(|e| matches!(e.effect, 10 | 67 | 75));
     let crit = deals
+        && !unmodified
         && if outcome::physical(s) {
             outcome::melee_roll(map, caster, aim, s, &l.m).1
         } else {

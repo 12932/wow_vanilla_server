@@ -103,3 +103,73 @@ async fn a_spells_flat_damage_taken_goes_by_its_coefficient_and_takes_at_most_ha
         "a tick by its coefficient"
     );
 }
+
+/// Made-up spells that ignore their caster's modifiers: a nature bolt, a
+/// heal and a nature damage over time, each of 100.
+fn unmodified_spells(d: &mut crate::game::data::GameData) {
+    const IGNORE: u32 = crate::game::data::spells::ATTR_EX3_IGNORE_CASTER_MODIFIERS;
+    let mut bolt = made_up(990_810, 2, 0, 0, 100);
+    bolt.school = 3;
+    bolt.dmg_class = 1;
+    bolt.range_index = 4;
+    bolt.effects[0].target_a = 6;
+    bolt.attributes[3] = IGNORE;
+    let mut heal = made_up(990_811, 10, 0, 0, 100);
+    heal.school = 1;
+    heal.dmg_class = 1;
+    heal.range_index = 4;
+    heal.effects[0].target_a = 21;
+    heal.attributes[3] = IGNORE;
+    let mut dot = made_up(990_812, 6, auras::AURA_PERIODIC_DAMAGE, 0, 100);
+    dot.school = 3;
+    dot.dmg_class = 1;
+    dot.range_index = 4;
+    dot.duration_index = 28;
+    dot.effects[0].target_a = 6;
+    dot.effects[0].amplitude = 1000;
+    dot.attributes[3] = IGNORE;
+    for s in [bolt, heal, dot] {
+        d.spells.spells.insert(s.id, s);
+    }
+}
+
+#[tokio::test]
+async fn a_spell_that_ignores_its_casters_modifiers_takes_no_power_percent_or_damage_crit() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(unmodified_spells);
+    let (_c, mage, map) = player(&realm, "P3D2", "Plainone", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            let kobold = dummy(m, mage, 60, 5.0);
+            // Nature power and twice the damage, healing and twice it, and
+            // every spell a crit.
+            let lasting = |m: &mut Map, id: u32, kind: u32, misc: i32, amount: i32| {
+                let mut s = made_up(id, 6, kind, misc, amount);
+                s.duration_index = 21;
+                apply_template(m, mage, mage, &s);
+            };
+            lasting(m, 990_820, auras::AURA_MOD_DAMAGE_DONE, 8, 500);
+            lasting(m, 990_821, auras::AURA_MOD_DAMAGE_PERCENT_DONE, 8, 100);
+            lasting(m, 990_822, auras::AURA_MOD_HEALING_DONE, 0, 1000);
+            lasting(m, 990_823, auras::AURA_MOD_HEALING_DONE_PERCENT, 0, 100);
+            lasting(m, 990_824, auras::AURA_MOD_SPELL_CRIT_CHANCE, 0, 100);
+            let before = health(m, kobold);
+            crate::game::map::spells::cast_triggered(m, mage, 990_810, Some(kobold));
+            let bolt = before - health(m, kobold);
+            set_health(m, mage, 100);
+            crate::game::map::spells::cast_triggered(m, mage, 990_811, Some(mage));
+            let healed = health(m, mage) - 100;
+            crate::game::map::spells::cast_triggered(m, mage, 990_812, Some(kobold));
+            let tick = holder(m, kobold, 990_812).and_then(|h| h.effects.first().map(|x| x.amount));
+            (bolt, healed, tick)
+        })
+        .await
+        .unwrap();
+    let (bolt, healed, tick) = out;
+    assert_eq!(bolt, 100, "no power, no percent, no crit");
+    assert_eq!(healed, 150, "a heal's crit stays, without power or percent");
+    assert_eq!(tick, Some(100), "a tick held without them");
+}
