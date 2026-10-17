@@ -77,6 +77,8 @@ const SWEEPING_STRIKES: &[u32] = &[12292, 18765];
 const SWEEPING_STRIKES_DAMAGE: u32 = 12723;
 const SWEEPING_STRIKES_LOOP: &[u32] = &[12723, 26654];
 const WHIRLWIND: u32 = 1680;
+const BLADE_FLURRY: u32 = 13877;
+const BLADE_FLURRY_DAMAGE: u32 = 22482;
 const RETALIATION: u32 = 20230;
 const RETALIATION_STRIKE: u32 = 22858;
 const EYE_FOR_AN_EYE: &[u32] = &[9799, 25988];
@@ -258,10 +260,17 @@ pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> O
     if SWEEPING_STRIKES.contains(&id) {
         if e.damage > 1 && !e.spell.is_some_and(|s| SWEEPING_STRIKES_LOOP.contains(&s)) {
             let radius = if e.spell == Some(WHIRLWIND) { 8.0 } else { 5.0 };
-            sweep(map, owner, other, e.damage, radius);
+            sweep(map, owner, other, e.damage, radius, SWEEPING_STRIKES_DAMAGE);
             return Outcome::Done;
         }
         return Outcome::DoneOwnCharges;
+    }
+    // Blade Flurry: the blow's damage on another enemy close by.
+    if id == BLADE_FLURRY {
+        if e.damage > 1 && e.spell != Some(BLADE_FLURRY_DAMAGE) {
+            sweep(map, owner, other, e.damage, 5.0, BLADE_FLURRY_DAMAGE);
+        }
+        return Outcome::Done;
     }
     if id == RETALIATION {
         let in_front = match (map.unit_view(owner), map.unit_view(other)) {
@@ -408,8 +417,9 @@ fn vampiric_embrace(map: &mut Map, priest: Guid, heal: u32) {
     }
 }
 
-/// Sweeping Strikes: the blow's damage on another enemy near the victim.
-fn sweep(map: &mut Map, owner: Guid, victim: Guid, damage: u32, radius: f32) {
+/// Sweeping Strikes and Blade Flurry: the blow's damage, as `spell`, on
+/// another enemy near the victim.
+fn sweep(map: &mut Map, owner: Guid, victim: Guid, damage: u32, radius: f32, spell: u32) {
     let Some(at) = map.position_of(victim) else {
         return;
     };
@@ -420,13 +430,6 @@ fn sweep(map: &mut Map, owner: Guid, victim: Guid, damage: u32, radius: f32) {
         .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= radius))
         .find(|g| combat::can_attack(map, owner, *g));
     if let Some(next) = next {
-        procs::spell_damage(
-            map,
-            owner,
-            next,
-            SWEEPING_STRIKES_DAMAGE,
-            damage,
-            SCHOOL_PHYSICAL,
-        );
+        procs::spell_damage(map, owner, next, spell, damage, SCHOOL_PHYSICAL);
     }
 }

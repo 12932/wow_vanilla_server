@@ -13,6 +13,7 @@
 //!   Demonic Sacrifice (a buff for the demon given);
 //! - dummies: druid Enrage, Judgement of Command's seal, Readiness and
 //!   Refocus, Flametongue Weapon's attack, Touch of Weakness by rank;
+//! - Vanish: free of snares and roots, and stealthed;
 //! - auras: Wyvern Sting's poison when the sleep ends, Bestial Wrath's
 //!   immunities on the pet, Stoneform's disease immunity and Shadowmeld's
 //!   stealth (both as extra effects of the spell);
@@ -51,6 +52,8 @@ const INFERNAL_LANDING: u32 = 22703;
 const DISPEL_DISEASE: i32 = 3;
 
 const FAMILY_DRUID: u32 = 7;
+const FAMILY_ROGUE: u32 = 8;
+const ROGUE_STEALTH: u64 = 0x0040_0000;
 const FAMILY_HUNTER: u32 = 9;
 const DRUID_REJUVENATION: u64 = 0x10;
 const DRUID_REGROWTH: u64 = 0x40;
@@ -367,9 +370,14 @@ pub fn dispelled(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     }
 }
 
-/// After `s`'s effects: Inferno's infernal is enslaved, rooted a moment,
+/// After `s`'s effects: Vanish frees the rogue and stealths them with
+/// their best Stealth; Inferno's infernal is enslaved, rooted a moment,
 /// and lands among its foes.
 pub fn after_effects(map: &mut Map, caster: Guid, s: &SpellTemplate) {
+    if script(s, "spell_rogue_vanish") {
+        vanish(map, caster);
+        return;
+    }
     if !script(s, "spell_warlock_inferno") {
         return;
     }
@@ -385,6 +393,30 @@ pub fn after_effects(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     cast_triggered(map, caster, ENSLAVE_INFERNAL, Some(infernal));
     cast_triggered(map, infernal, INFERNAL_ROOT, Some(infernal));
     cast_triggered(map, infernal, INFERNAL_LANDING, None);
+}
+
+fn vanish(map: &mut Map, rogue: Guid) {
+    auras::remove_where(map, rogue, |h| {
+        !h.positive
+            && (h.has(auras::AURA_MOD_STALKED)
+                || h.has(auras::AURA_MOD_ROOT)
+                || h.has(auras::AURA_MOD_DECREASE_SPEED))
+    });
+    let data = map.realm.data.clone();
+    let stealth = map.players.get(&rogue).and_then(|p| {
+        p.spells
+            .iter()
+            .filter_map(|id| data.spells.get(*id))
+            .filter(|t| family_flag(t, FAMILY_ROGUE, ROGUE_STEALTH))
+            .max_by_key(|t| data.spells.ranks.get(&t.id).map_or(0, |r| r.rank))
+            .map(|t| t.id)
+    });
+    if let Some(stealth) = stealth {
+        if let Some(c) = map.caster_mut(rogue) {
+            c.cooldowns.remove(&stealth);
+        }
+        cast_triggered(map, rogue, stealth, Some(rogue));
+    }
 }
 
 /// An aura went on: Stoneform's disease immunity beside its poison one

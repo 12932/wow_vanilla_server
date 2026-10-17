@@ -589,3 +589,54 @@ async fn the_combat_log_packets() {
         .await;
     assert_eq!(immune, (g, 172));
 }
+
+#[tokio::test]
+async fn vanish_and_blade_flurry() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "ROGUE3");
+    let r = c.enter("Roguea", Race::Human, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, r, 60, &[1784, 1856, 13877]);
+            // Vanish: the root goes, and the rogue is stealthed.
+            let root = plain_aura(990_302, auras::AURA_MOD_ROOT, 0);
+            let kobold = dummy(m, r, 60, 3.0);
+            let _ = auras::apply_spell(m, kobold, r, &root, &[(0, 1)], auras::Context::default());
+            let rooted = has(m, r, 990_302);
+            spells::cast_triggered(m, r, 1856, None);
+            let vanished = (!has(m, r, 990_302), has(m, r, 1784));
+            // Blade Flurry: a blow's damage on another close by.
+            auras::remove_spell(m, r, 1784, None);
+            apply(m, r, r, 13877);
+            let other = dummy(m, r, 60, 4.0);
+            let before = health(m, other);
+            crate::game::map::procs::trigger(
+                m,
+                crate::game::map::procs::Event {
+                    actor: r,
+                    target: kobold,
+                    actor_flags: crate::game::map::procs::PROC_DONE_MELEE,
+                    target_flags: crate::game::map::procs::PROC_TAKEN_MELEE,
+                    ex: crate::game::map::procs::EX_NORMAL_HIT,
+                    spell: None,
+                    damage: 100,
+                    school: 1,
+                    offhand: false,
+                    ranged: false,
+                    extra_attack: false,
+                },
+            );
+            let flurried = before - health(m, other);
+            (rooted, vanished, flurried)
+        })
+        .await
+        .unwrap();
+    let (rooted, vanished, flurried) = out;
+    assert!(rooted);
+    assert_eq!(vanished, (true, true), "free, and stealthed");
+    assert_eq!(flurried, 100, "Blade Flurry's second blow");
+}
