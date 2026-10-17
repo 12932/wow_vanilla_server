@@ -2345,7 +2345,7 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
 
 /// A player cast `spell` on `creature`: the quests that ask for it.
 fn cast_credit(map: &mut Map, player: Guid, spell: u32, creature: Guid) {
-    let entry = guid::entry(creature);
+    let entry = crate::game::map::quests::entry_of(map, creature);
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
         return;
