@@ -277,6 +277,9 @@ pub fn run(
         let mut here = l.clone();
         here.chain = chain[index];
         match e.effect {
+            // Premeditation's hold on its points goes on with them (see
+            // `retain_combo_points`).
+            EFFECT_APPLY_AURA if e.aura == AURA_RETAIN_COMBO_POINTS && awards_combo_points(s) => {}
             EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY if e.aura != 0 => {
                 let amount = aura_amount(map, caster, target, s, index, points, &here);
                 aura_effects.push((index, amount));
@@ -843,7 +846,10 @@ fn effect(
                 c.motion = crate::game::map::creature::Motion::Idle { until: Some(until) };
             }
         }
-        EFFECT_ADD_COMBO_POINTS => add_combo_points(map, caster, target, amount.max(1) as u8),
+        EFFECT_ADD_COMBO_POINTS => {
+            add_combo_points(map, caster, target, amount.max(1) as u8);
+            retain_combo_points(map, caster, s, l);
+        }
         EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
         EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
             let name = map
@@ -1019,8 +1025,10 @@ fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
     })
 }
 
-/// Combo points on `target`: a new target starts them over.
+/// Combo points on `target`: a new target starts them over. Points held
+/// only for a while (`retain_combo_points`) are kept for good.
 pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
+    release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         if c.combo_target != target {
             c.combo_target = target;
@@ -1032,6 +1040,74 @@ pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
             p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, target);
             p.fields.set_byte(PLAYER_FIELD_BYTES, 1, points);
         }
+    }
+}
+
+/// Whether `s` gives combo points.
+fn awards_combo_points(s: &SpellTemplate) -> bool {
+    s.effects
+        .iter()
+        .any(|e| e.effect == EFFECT_ADD_COMBO_POINTS)
+}
+
+/// A builder whose points are held for a while (Premeditation's
+/// `retain_combo_points`, aura 148): the hold goes on its player with the
+/// points, as Thistle Tea's `ComboPoints.award` puts it; when it runs out
+/// its points come off again (`retained_combo_points_expired`).
+fn retain_combo_points(map: &mut Map, caster: Guid, s: &SpellTemplate, l: &Landing) {
+    if !map.players.contains_key(&caster) {
+        return;
+    }
+    let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    let held: Vec<(usize, i32)> = (0..3)
+        .filter(|i| {
+            s.effects[*i].effect == EFFECT_APPLY_AURA
+                && s.effects[*i].aura == AURA_RETAIN_COMBO_POINTS
+        })
+        .map(|i| (i, l.mods.points(i, points(s, i, level))))
+        .collect();
+    if held.is_empty() {
+        return;
+    }
+    let ctx = auras::Context {
+        duration: Some(aura_duration(map, caster, s, &l.mods, 0)),
+        ..Default::default()
+    };
+    let _ = auras::apply_spell(map, caster, caster, s, &held, ctx);
+}
+
+/// A builder or a finisher makes points held for a while the player's for
+/// good, or spends them: the holds come off, taking nothing back.
+pub fn release_retained_combo_points(map: &mut Map, caster: Guid) {
+    let held = auras::auras(map, caster)
+        .is_some_and(|a| a.holders.iter().any(|h| h.has(AURA_RETAIN_COMBO_POINTS)));
+    if held {
+        auras::remove_where(map, caster, |h| h.has(AURA_RETAIN_COMBO_POINTS));
+    }
+}
+
+/// A hold on combo points ran out (Thistle Tea's `ComboPoints.expire`):
+/// its points come off those on the target, if there still is one.
+pub fn retained_combo_points_expired(map: &mut Map, g: Guid, h: &auras::Holder) {
+    let amount: i32 = h
+        .effects
+        .iter()
+        .filter(|x| x.kind == AURA_RETAIN_COMBO_POINTS)
+        .map(|x| x.amount.max(0))
+        .sum();
+    if amount == 0 || !map.players.contains_key(&g) {
+        return;
+    }
+    let Some(c) = map.caster_mut(g) else {
+        return;
+    };
+    if c.combo_target.is_zero() {
+        return;
+    }
+    c.combo_points = c.combo_points.saturating_sub(amount.min(5) as u8);
+    let points = c.combo_points;
+    if let Some(p) = map.players.get_mut(&g) {
+        p.fields.set_byte(PLAYER_FIELD_BYTES, 1, points);
     }
 }
 

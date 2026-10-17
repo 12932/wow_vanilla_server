@@ -11,7 +11,7 @@ pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
-pub use effects::dr_aura_gone;
+pub use effects::{dr_aura_gone, release_retained_combo_points, retained_combo_points_expired};
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
@@ -1269,8 +1269,9 @@ fn magnet(map: &mut Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Tar
     t
 }
 
-/// A rogue's or druid's combo points go.
+/// A rogue's or druid's combo points go, and any hold on them.
 pub fn clear_combo_points(map: &mut Map, caster: Guid) {
+    release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         c.combo_points = 0;
         c.combo_target = Guid::zero();
