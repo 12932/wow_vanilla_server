@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::fields::*;
@@ -72,6 +73,10 @@ fn level(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
     }
 }
 
+fn health(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
+}
+
 fn has(m: &Map, g: Guid, spell: u32) -> bool {
     auras::auras(m, g).is_some_and(|a| a.has_spell(spell))
 }
@@ -99,8 +104,23 @@ async fn cast_result(c: &mut Client, spell: u32) -> Option<u8> {
     (b[4] != 0).then(|| b[5])
 }
 
-const BLOODRAGE: u32 = 2687;
+async fn group(leader: &mut Client, member: &mut Client, name: &str) {
+    leader.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+    member
+        .wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+    member.send(CMSG_GROUP_ACCEPT {}).await;
+    leader
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+            _ => None,
+        })
+        .await;
+}
 
+const BLOODRAGE: u32 = 2687;
 const HEALTH_FUNNEL: u32 = 755;
 
 #[tokio::test]
@@ -226,4 +246,72 @@ async fn dazed_is_no_exclusive_snare() {
         .await
         .unwrap();
     assert_eq!(both, (true, true), "the daze and the snare stand together");
+}
+
+#[tokio::test]
+async fn hellfire_burns_about_the_warlock() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "HELLFIRE");
+    let w = c.enter("Hellw", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let hurt = map
+        .query(move |m| {
+            level(m, w, 60, &[]);
+            let near = spawn(m, w, 6, 60, 4.0);
+            let far = spawn(m, w, 6, 60, 30.0);
+            // The warlock has the far one selected.
+            m.players
+                .get_mut(&w)
+                .unwrap()
+                .fields
+                .set_guid(UNIT_FIELD_TARGET, far);
+            apply(m, w, w, 1949);
+            m.now += Duration::from_millis(1100);
+            auras::update(m);
+            (health(m, near) < 1_000_000, health(m, far) < 1_000_000)
+        })
+        .await
+        .unwrap();
+    assert_eq!(hurt, (true, false), "the one beside the warlock burns");
+}
+
+#[tokio::test]
+async fn plague_spreads_through_the_raid_it_is_on() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "PLAGUEA");
+    let ga = a.enter("Plaguea", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "PLAGUEB");
+    let gb = b.enter("Plagueb", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Plagueb").await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let hurt = map
+        .query(move |m| {
+            level(m, ga, 60, &[]);
+            level(m, gb, 60, &[]);
+            let at = m.players[&ga].position();
+            m.players.get_mut(&gb).unwrap().movement.position = Vector3d {
+                x: at.x + 2.0,
+                ..at
+            };
+            // An Anubisath Defender, well away, plagues the first.
+            let anubisath = spawn(m, ga, 15277, 60, 25.0);
+            apply(m, anubisath, ga, 26556);
+            let full = (health(m, ga), health(m, gb));
+            m.now += Duration::from_millis(3100);
+            auras::update(m);
+            (
+                health(m, ga) < full.0,
+                health(m, gb) < full.1,
+                health(m, anubisath) == 1_000_000,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(hurt, (true, true, true), "the plagued and the one beside");
 }

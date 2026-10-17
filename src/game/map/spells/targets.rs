@@ -149,13 +149,16 @@ fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
     a <= degrees as f32 * std::f32::consts::PI / 360.0
 }
 
-/// The point an effect's area is at.
+/// The point an effect's area is at: about the caster (or the unit it is
+/// about), or at the destination.
 fn center(map: &Map, caster: Guid, t: &Targets, at_dest: bool) -> Vector3d {
-    let caster_at = map.position_of(caster).unwrap_or(Vector3d {
-        x: 0.0,
-        y: 0.0,
-        z: 0.0,
-    });
+    let caster_at = map
+        .position_of(t.origin.unwrap_or(caster))
+        .unwrap_or(Vector3d {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        });
     if !at_dest {
         return caster_at;
     }
@@ -177,24 +180,28 @@ pub fn effect_targets(
     let e = &s.effects[index];
     let (a, b) = (implicit(e.target_a), implicit(e.target_b));
     let r = radius(map, s, index, m).max(if e.radius_index == 0 { 0.0 } else { 1.0 });
-    let enemy = |g: Guid| alive(map, g) && combat::can_attack(map, caster, g);
+    // Areas and groups about the caster are about the unit a triggering
+    // aura is on, and their friends and foes are that unit's (mangos's
+    // `PickTargetsForSpellTrigger`, Thistle Tea's trigger resolution).
+    let about = t.origin.unwrap_or(caster);
+    let enemy = |g: Guid| alive(map, g) && combat::can_attack(map, about, g);
     let ally = |g: Guid| {
         alive(map, g)
-            && (g == caster
-                || (!combat::can_attack(map, caster, g) && !combat::hostile(map, caster, g)))
+            && (g == about
+                || (!combat::can_attack(map, about, g) && !combat::hostile(map, about, g)))
     };
     let mut out = match (a, b) {
         // An area named by the second target.
         (_, AoeEnemyAtCaster) | (AoeEnemyAtCaster, _) => {
             units_around(map, center(map, caster, t, false), r, |g| {
-                g != caster && enemy(g)
+                g != about && enemy(g)
             })
         }
         (_, AoeEnemyAtDest)
         | (AoeEnemyAtDest, _)
         | (_, AoeEnemyAtChannel)
         | (AoeEnemyAtChannel, _) => units_around(map, center(map, caster, t, true), r, |g| {
-            g != caster && enemy(g)
+            g != about && enemy(g)
         }),
         (_, AoeEnemyInCone) | (AoeEnemyInCone, _) => {
             let degrees = map
@@ -206,7 +213,7 @@ pub fn effect_targets(
                 .copied()
                 .unwrap_or(60);
             units_around(map, center(map, caster, t, false), r, |g| {
-                g != caster && enemy(g) && in_cone(map, caster, g, degrees)
+                g != about && enemy(g) && in_cone(map, caster, g, degrees)
             })
         }
         (_, AoeAllyAtSource) | (AoeAllyAtSource, _) => {
@@ -217,7 +224,7 @@ pub fn effect_targets(
         }
         (PartyAroundCaster, _) | (_, PartyAroundCaster) => {
             let at = center(map, caster, t, e.target_a == 34);
-            let party = members(map, caster, false);
+            let party = members(map, about, false);
             party
                 .into_iter()
                 .filter(|g| alive(map, *g))
@@ -229,15 +236,19 @@ pub fn effect_targets(
                 })
                 .collect()
         }
+        // Within the effect's radius, or the spell's range without one
+        // (Thistle Tea's raid area).
         (RaidAroundCaster, _) => {
             let at = center(map, caster, t, false);
-            members(map, caster, true)
+            let reach = if r > 0.0 {
+                r
+            } else {
+                map.realm.data.spells.range(s).1
+            };
+            members(map, about, true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
-                .filter(|g| {
-                    map.position_of(*g)
-                        .is_some_and(|p| dist(p, at) <= r.max(30.0))
-                })
+                .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= reach))
                 .collect()
         }
         (PartyAroundTarget, _) => {

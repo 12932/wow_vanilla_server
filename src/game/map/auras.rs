@@ -2255,7 +2255,29 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
             crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
-            // A channel's trigger aims at the channel's target.
+            // A spell aimed at a unit the client picks goes at the unit the
+            // aura is on, or a channel's at the channel's target. Anything
+            // else (an area, a group, a place, the caster) is about the unit
+            // the aura is on, as mangos's `PickTargetsForSpellTrigger` has
+            // it: Hellfire's flames are about the warlock, not the warlock's
+            // target, and Plague's about the one it is on.
+            use crate::game::map::spells::targets::{Implicit, implicit};
+            let picked = map.realm.data.spells.get(a.trigger).is_some_and(|t| {
+                matches!(
+                    implicit(t.effects[0].target_a),
+                    Implicit::Enemy | Implicit::AnyUnit
+                )
+            });
+            if !picked {
+                let targets = crate::game::map::spells::Targets {
+                    unit: Some(target),
+                    dest: map.position_of(target),
+                    origin: Some(target),
+                    ..Default::default()
+                };
+                crate::game::map::spells::cast_triggered_with(map, h.caster, a.trigger, targets);
+                return;
+            }
             let aim = if h.caster == target {
                 map.caster(h.caster)
                     .and_then(|c| c.casting.as_ref())
