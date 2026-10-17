@@ -62,6 +62,8 @@ pub struct PetData {
     pub abilities: AHashMap<u32, Vec<PetAbility>>,
     /// The cost of each stable slot, from the first.
     pub stable_prices: Vec<u32>,
+    /// The spell that teaches a pet each ability (`LEARN_PET_SPELL`).
+    pub teaching: AHashMap<u32, u32>,
     /// What the Grimoires teach demons.
     pub grimoire_spells: Vec<u32>,
 }

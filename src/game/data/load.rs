@@ -1839,6 +1839,16 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     grimoires.sort_unstable();
     grimoires.dedup();
     pets.grimoire_spells = grimoires;
+    for t in data.spells.spells.values() {
+        // Grimoires' `LEARN_PET_SPELL`, and hunters' `LEARN_SPELL` at the
+        // pet.
+        let teaches = |e: &&super::spells::SpellEffect| {
+            e.trigger_spell != 0 && (e.effect == 57 || (e.effect == 36 && e.target_a == 5))
+        };
+        for e in t.effects.iter().filter(teaches) {
+            pets.teaching.insert(e.trigger_spell, t.id);
+        }
+    }
     let Some(dbc) = dbc else {
         return;
     };

@@ -570,6 +570,179 @@ pub fn untrain(map: &mut Map, hunter: Guid, pet: Guid) {
     sync_record(map, hunter);
 }
 
+/// A pet ability's skill-line entries.
+fn ability_entries(data: &GameData, spell: u32) -> Vec<crate::game::data::pets::PetAbility> {
+    data.pets
+        .abilities
+        .values()
+        .flatten()
+        .filter(|a| a.spell == spell)
+        .copied()
+        .collect()
+}
+
+/// Whether `a` and `b` are ranks of one pet ability.
+fn same_ability(data: &GameData, a: u32, b: u32) -> bool {
+    data.spells.same_kind(a, b)
+        || matches!((data.spells.get(a), data.spells.get(b)), (Some(x), Some(y)) if x.name == y.name)
+}
+
+/// A hunter's pet used `spell`: its master learns to teach it to a pet.
+pub fn used(map: &mut Map, pet: Guid, spell: u32) {
+    let Some(s) = state(map, pet).filter(|s| s.kind == Kind::Hunter) else {
+        return;
+    };
+    let owner = s.owner;
+    let Some(teaching) = map.realm.data.pets.teaching.get(&spell).copied() else {
+        return;
+    };
+    if map.players.get(&owner).is_some_and(|p| !p.spells.contains(&teaching)) {
+        crate::game::map::spells::learn(map, owner, teaching);
+    }
+}
+
+/// What training a pet in an ability costs: its points, less those spent
+/// on the rank it knows.
+fn training_cost(data: &GameData, s: &PetState, spell: u32) -> i32 {
+    let total = ability_entries(data, spell).first().map_or(0, |a| a.cost) as i32;
+    let spent = s
+        .spells
+        .iter()
+        .filter(|k| same_ability(data, **k, spell))
+        .filter_map(|k| ability_entries(data, *k).first().map(|a| a.cost as i32))
+        .max()
+        .unwrap_or(0);
+    total - spent
+}
+
+/// Why a teaching spell can't train the hunter's pet, if it can't
+/// (Thistle Tea's `PetTraining.validate`).
+pub fn train_check(map: &Map, hunter: Guid, teaching: &SpellTemplate) -> Option<u8> {
+    use wow_world_messages::vanilla::SpellCastResult as R;
+    let data = &map.realm.data;
+    let spell = taught(teaching)?;
+    let Some(pet) = map.players.get(&hunter).and_then(|p| p.owned.pet) else {
+        return Some(R::NoPet.as_int());
+    };
+    let Some((c, s)) = map
+        .creature(pet)
+        .and_then(|c| c.pet.as_deref().map(|s| (c, s)))
+        .filter(|(_, s)| s.kind == Kind::Hunter)
+    else {
+        return Some(R::NoPet.as_int());
+    };
+    if !c.alive() {
+        return Some(R::TargetsDead.as_int());
+    }
+    let Some(t) = data.spells.get(spell) else {
+        return Some(R::NotKnown.as_int());
+    };
+    let skills: Vec<u32> = ability_entries(data, spell).iter().map(|a| a.skill).collect();
+    let family_skill = data.pets.families.get(&s.family).map_or(0, |f| f.skills[0]);
+    if !skills.contains(&270) && !skills.contains(&family_skill) {
+        return Some(R::BadTargets.as_int());
+    }
+    let known = s
+        .spells
+        .iter()
+        .filter(|k| same_ability(data, **k, spell))
+        .filter_map(|k| data.spells.get(*k))
+        .any(|k| k.base_level >= t.base_level);
+    if known {
+        return Some(R::SpellLearned.as_int());
+    }
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    if teaching.spell_level.max(t.spell_level) > level {
+        return Some(R::Lowlevel.as_int());
+    }
+    if !t.passive() {
+        let mut active: Vec<&str> = s
+            .spells
+            .iter()
+            .filter_map(|k| data.spells.get(*k))
+            .filter(|k| !k.passive())
+            .map(|k| k.name.as_str())
+            .collect();
+        active.push(t.name.as_str());
+        active.sort_unstable();
+        active.dedup();
+        if active.len() > 4 {
+            return Some(R::TooManySkills.as_int());
+        }
+    }
+    let cost = training_cost(data, s, spell);
+    if cost > 0 && s.training_points < cost {
+        return Some(R::TrainingPoints.as_int());
+    }
+    None
+}
+
+/// The teaching spell lands: the pet learns the ability, for its points.
+pub fn train(map: &mut Map, hunter: Guid, teaching: &SpellTemplate) {
+    if train_check(map, hunter, teaching).is_some() {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let Some(spell) = taught(teaching) else {
+        return;
+    };
+    let Some(pet) = map.players.get(&hunter).and_then(|p| p.owned.pet) else {
+        return;
+    };
+    let cost = state(map, pet).map_or(0, |s| training_cost(&data, s, spell));
+    // The lower rank it knew goes for the new one.
+    let lower: Vec<u32> = state(map, pet)
+        .map(|s| {
+            s.spells
+                .iter()
+                .copied()
+                .filter(|k| *k != spell && same_ability(&data, *k, spell))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(s) = state_mut(map, pet) {
+        s.spells.retain(|k| !lower.contains(k));
+        for b in s.bar.iter_mut() {
+            let (action, kind) = control::unpack(*b);
+            if lower.contains(&action) {
+                *b = control::button(spell, kind);
+            }
+        }
+        for a in s.autocast.iter_mut() {
+            if lower.contains(a) {
+                *a = spell;
+            }
+        }
+        s.training_points -= cost.max(0);
+    }
+    for l in &lower {
+        crate::game::map::auras::remove_spell(map, pet, *l, None);
+    }
+    control::learn(map, pet, spell);
+    // A passive takes hold at once.
+    if let Some(t) = data.spells.get(spell).filter(|t| t.passive()) {
+        let effects: Vec<(usize, i32)> = (0..3)
+            .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
+            .map(|i| (i, crate::game::map::spells::points(t, i, 1)))
+            .collect();
+        let _ = crate::game::map::auras::apply_spell(
+            map,
+            pet,
+            pet,
+            t,
+            &effects,
+            crate::game::map::auras::Context {
+                duration: Some(None),
+                ..Default::default()
+            },
+        );
+    }
+    if let Some(c) = map.creature_mut(pet) {
+        show_training_points(c);
+    }
+    sync_record(map, hunter);
+}
+
 fn stable_master(map: &Map, player: Guid, npc: Guid) -> bool {
     crate::game::map::npc::npc_entry(map, player, npc, NPC_FLAG_STABLEMASTER).is_some()
 }

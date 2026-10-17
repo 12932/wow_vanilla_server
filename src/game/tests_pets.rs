@@ -36,6 +36,8 @@ const STRENGTH_OF_EARTH: u32 = 8076;
 const STONESKIN_TOTEM_SPELL: u32 = 8071;
 const STONESKIN: u32 = 8072;
 const ENSLAVE_DEMON: u32 = 1098;
+const GORE: u32 = 9101;
+const TRAIN_GORE: u32 = 9001;
 
 fn faction(id: u32, ours: u32, friend_mask: u32, enemy_mask: u32) -> (u32, FactionTemplate) {
     (
@@ -173,6 +175,17 @@ fn data() -> GameData {
     d.pets.totem_spells.insert(STRENGTH_TOTEM, STRENGTH_OF_EARTH);
     d.pets.totem_spells.insert(STONESKIN_TOTEM, STONESKIN);
     d.pets.stable_prices = vec![500, 50_000];
+    // Gore: a boar's ability, taught for a training point.
+    d.pets.abilities.insert(
+        211,
+        vec![crate::game::data::pets::PetAbility {
+            spell: GORE,
+            skill: 211,
+            cost: 1,
+            ..Default::default()
+        }],
+    );
+    d.pets.teaching.insert(GORE, TRAIN_GORE);
     let s = &mut d.spells;
     s.cast_times.insert(2, 200);
     s.ranges.insert(1, (0.0, 30.0));
@@ -251,6 +264,12 @@ fn data() -> GameData {
         totem(STONESKIN_TOTEM_SPELL, STONESKIN_TOTEM, "Stoneskin Totem"),
         area(STONESKIN, "Stoneskin", 22, 1),
         enslave,
+        spell(GORE, "Gore", [effect(2, 3, 6), none, none]),
+        {
+            let mut e = effect(36, 0, 5);
+            e.trigger_spell = GORE;
+            spell(TRAIN_GORE, "Gore", [e, none, none])
+        },
     ] {
         s.spells.insert(t.id, t);
     }
@@ -663,4 +682,85 @@ async fn an_enslaved_demon_serves_until_the_aura_ends() {
         .await
         .unwrap();
     assert_eq!((kind, faction), (None, Some(14)));
+}
+
+/// Against the real data, when it is here (it isn't in CI): a level 20 imp
+/// knows each of its spells at its highest rank by then, a tamed level 9
+/// wolf its Bite and Growl, and the families, levels and totems load.
+#[test]
+fn the_real_pets_know_their_spells() {
+    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let data = crate::game::data::load::load(dir);
+    let imp = pets::spellbook(&data, IMP, 20, false, 23);
+    assert!(
+        imp.contains(&7800) && !imp.contains(&3110) && !imp.contains(&7801),
+        "Firebolt rank 3 at 20: {imp:?}"
+    );
+    assert!(imp.contains(&7804), "Blood Pact rank 2, from the Grimoire: {imp:?}");
+    let wolf = pets::spellbook(&data, 118, 9, true, 1);
+    assert!(wolf.contains(&17255) && wolf.contains(&2649), "Bite 2 and Growl: {wolf:?}");
+    let f = &data.pets.families[&1];
+    assert_eq!((f.skills, f.food_mask), ([208, 270], 1));
+    assert!(data.pets.level(1, 60).is_some_and(|l| l.health > 1000));
+    assert!(data.pets.level(IMP, 20).is_some_and(|l| l.mana > 0));
+    assert_eq!(data.pets.totem_spells.get(&2523), Some(&22048));
+    assert_eq!(data.pets.create_spells.get(&IMP), Some(&vec![FIREBOLT]));
+    assert_eq!(data.pets.stable_prices.len(), 2);
+}
+
+#[tokio::test]
+async fn a_hunter_trains_their_pet_and_learns_what_it_uses() {
+    let (_realm, mut h, gh, map, pet, wolf) = tamed().await;
+    h.sees(pet).await;
+    map.query(move |m| {
+        if let Some(s) = pets::state_mut(m, pet) {
+            s.training_points = 5;
+        }
+        if let Some(p) = m.players.get_mut(&gh) {
+            p.spells.push(TRAIN_GORE);
+        }
+    })
+    .await;
+    cast(&h, TRAIN_GORE, None).await;
+    let mut learned = None;
+    for _ in 0..100 {
+        learned = map
+            .query(move |m| pets::state(m, pet).map(|s| (s.spells.contains(&GORE), s.training_points)))
+            .await
+            .flatten();
+        if learned.is_some_and(|l| l.0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(learned, Some((true, 4)), "Gore, for a point");
+    // Trained again: it knows it already.
+    cast(&h, TRAIN_GORE, None).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let points = map
+        .query(move |m| pets::state(m, pet).map(|s| s.training_points))
+        .await
+        .flatten();
+    assert_eq!(points, Some(4), "nothing spent on what it knows");
+    // Forgotten by the hunter, and taught again when the pet uses it.
+    map.query(move |m| {
+        if let Some(p) = m.players.get_mut(&gh) {
+            p.spells.retain(|s| *s != TRAIN_GORE);
+        }
+    })
+    .await;
+    h.send(CMSG_PET_ACTION {
+        pet,
+        data: pets::button(GORE, pets::ACT_ENABLED),
+        target: wolf,
+    })
+    .await;
+    h.wait_for("SMSG_LEARNED_SPELL", |m| match m {
+        ServerOpcodeMessage::SMSG_LEARNED_SPELL(l) if l.id == TRAIN_GORE => Some(()),
+        _ => None,
+    })
+    .await;
 }
