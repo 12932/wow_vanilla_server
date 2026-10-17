@@ -873,6 +873,33 @@ and the write-up are in peon: `results/2026-10-16/aligned/`, `results/2026-10-16
   fifth name, which the client needs.
 - The rest of phases 13 to 16 was fanned out to seven agents, each on its own branch, merged as each finishes.
 
+### Phase 13: melee, ranged and procs (2026-10-17)
+
+**The hit table** reads the derived stats, as Thistle Tea's `attack_table.ex`:
+- Weapon skill against defense, the dual wielder's 19% more misses on white swings, avoidance from behind, sitting
+  players always crit, and creatures below level 10 avoid less.
+- Glancing and crushing blows. Blocks take the block value off. Creatures' no-parry, no-block and always-crush flags.
+- Ranged attacks only miss or crit.
+- Damage done and taken by school, flat and by percent, and against creature types; armor less penetration; the
+  crit damage bonus. `SMSG_ATTACKERSTATEUPDATE` is now mangos-zero's full layout, absorbs included.
+
+**Fighting:**
+- Two hands with their own swing timers, and parry haste.
+- Extra attacks (Windfury, Sword Specialization; Reckoning banks up to four), creatures' daze from behind, disarm.
+- The reactive states for 4 seconds, as Thistle Tea has them: Revenge, Riposte, Counterattack, Execute, and a
+  warrior's Overpower.
+- Rage only from white blows and damage taken. Weapon and defense skills rise by Thistle Tea's chances.
+- Threat: its auras, Fade, taunts, vmangos's 110% and 130% overtake, and healing's threat.
+- Damage breaks the auras damage breaks.
+- Next-swing spells (Heroic Strike, Cleave, Maul, Raptor Strike) take the main hand's swing.
+- Auto Shot and Shoot (`ranged.rs`): ammo, wands' schools and crits, and moving's delays and cancels.
+
+**Procs** (`procs.rs`):
+- Proc-trigger and proc-damage auras, by `procFlags` or `spell_proc_event`, with charges and procs-from-procs rules.
+- Items' chance-on-hit spells and weapon enchantments' procs (Crusader, Fiery, poisons, Windfury).
+- Lightning Shield, damage shields, target triggers, kill procs, and the scripted procs (Seal of Righteousness,
+  Nightfall, Eye for an Eye).
+
 ### Phase 15 (2026-10-17)
 
 **Group loot** (`loot.rs`), as Thistle Tea's:
