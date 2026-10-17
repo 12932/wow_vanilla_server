@@ -1441,3 +1441,108 @@ async fn a_container_keeps_what_is_left_in_it() {
         2
     );
 }
+
+/// Run the items' clocks on: `secs` of their time pass.
+fn pass(m: &mut Map, secs: u64) {
+    crate::game::map::items::update(m);
+    m.now += Duration::from_secs(secs);
+    crate::game::map::items::update(m);
+}
+
+fn set_duration(m: &mut Map, g: Guid, item: Guid, secs: u32) {
+    let p = m.players.get_mut(&g).unwrap();
+    let i = p.item_by_guid(item).unwrap();
+    p.items[i].fields.set_u32(ITEM_FIELD_DURATION, secs);
+}
+
+/// Thistle Tea's `ItemLifetime` and item durations: a timed bag goes with
+/// what is in it; a timed helm goes off its wearer's stamina; a timed quest
+/// item gone is needed again; a timed clam's open window closes with it.
+#[tokio::test]
+async fn timed_items_go_with_all_they_hold() {
+    let mut d = container_data();
+    d.npc.quests.insert(
+        70,
+        crate::game::data::npc::Quest {
+            id: 70,
+            title: "Meat".into(),
+            min_level: 1,
+            level: 1,
+            required_items: [(MEAT, 1), (0, 0), (0, 0), (0, 0)],
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let satchel = give(&realm, g, SATCHEL, 1).await;
+    put(&realm, g, satchel, (BAG_PLAYER, BAG_START)).await;
+    let widget = give(&realm, g, WIDGET, 1).await;
+    put(&realm, g, widget, (BAG_START, 0)).await;
+    let visor = give(&realm, g, VISOR, 1).await;
+    let bare = on_map(&realm, move |m| {
+        m.players[&g].fields.get_u32(UNIT_FIELD_STAT0 + 2)
+    })
+    .await;
+    put(&realm, g, visor, (BAG_PLAYER, 0)).await;
+    let meat = give(&realm, g, MEAT, 1).await;
+    let gone = on_map(&realm, move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .journal
+            .add(crate::game::store::Logged {
+                quest: 70,
+                ..Default::default()
+            });
+        quests_check(m, g, 70);
+        let done = complete_bit(m, g);
+        for item in [satchel, visor, meat] {
+            set_duration(m, g, item, 1);
+        }
+        let worn = m.players[&g].fields.get_u32(UNIT_FIELD_STAT0 + 2);
+        pass(m, 2);
+        let p = &m.players[&g];
+        (
+            done,
+            worn,
+            [satchel, widget, visor, meat].map(|i| p.item_by_guid(i).is_some()),
+            p.fields.get_u32(UNIT_FIELD_STAT0 + 2),
+            complete_bit(m, g),
+        )
+    })
+    .await;
+    assert!(gone.0, "the meat had");
+    assert_eq!(gone.1, bare + 5);
+    assert_eq!(
+        gone.2,
+        [false, false, false, false],
+        "the bag with its widget"
+    );
+    assert_eq!(gone.3, bare, "the helm's stamina gone");
+    assert!(!gone.4, "the meat needed again");
+    // A clam open as its time runs out: its window closes.
+    let clam = give(&realm, g, CLAM, 1).await;
+    assert!(open(&mut a, &realm, clam).await.is_ok());
+    on_map(&realm, move |m| {
+        set_duration(m, g, clam, 1);
+        pass(m, 2);
+    })
+    .await;
+    a.wait_for("SMSG_LOOT_RELEASE_RESPONSE", |m| match m {
+        ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(r) => (r.guid == clam).then_some(()),
+        _ => None,
+    })
+    .await;
+    let looting = on_map(&realm, move |m| m.players[&g].looting).await;
+    assert_eq!(looting, None);
+}
+
+fn quests_check(m: &mut Map, g: Guid, quest: u32) {
+    crate::game::map::quests::check(m, g, quest);
+}
+
+/// Whether the first quest in the log is done, by its log field.
+fn complete_bit(m: &Map, g: Guid) -> bool {
+    m.players[&g].fields.get_u32(PLAYER_QUEST_LOG_1_1 + 1) & (1 << 24) != 0
+}
