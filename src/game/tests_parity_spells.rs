@@ -1,6 +1,7 @@
 //! Stage 2a's spells and auras, against the real data when it is here: a
 //! dispel taking a passive aura, weapons' feral attack power held to the
-//! forms, and healing taken by the spell's coefficient and at each tick.
+//! forms, healing taken by the spell's coefficient and at each tick, and a
+//! killing spell that spares the gear.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -278,4 +279,65 @@ async fn a_heal_over_time_takes_healing_taken_at_each_tick() {
         .await
         .unwrap();
     assert_eq!(ticks, [80, 40, 80]);
+}
+
+const RITUAL_OF_DOOM_SACRIFICE: u32 = 20625;
+const DEATH_TOUCH: u32 = 5;
+
+#[tokio::test]
+async fn a_killing_spell_without_durability_loss_spares_the_gear() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A4");
+    let warrior = c.enter("Parfour", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, warrior, 60);
+            let kobold = dummy(m, warrior, 60, 5.0);
+            let worn = |m: &Map| -> Vec<u32> {
+                m.players[&warrior]
+                    .items
+                    .iter()
+                    .filter(|i| {
+                        i.bag == BAG_PLAYER
+                            && i.slot < 19
+                            && i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+                    })
+                    .map(|i| i.fields.get_u32(ITEM_FIELD_DURABILITY))
+                    .collect()
+            };
+            let fresh = worn(m);
+            // A Ritual of Doom's sacrifice spares it.
+            spells::cast_triggered(m, kobold, RITUAL_OF_DOOM_SACRIFICE, Some(warrior));
+            let sacrificed = (health(m, warrior), worn(m));
+            crate::game::map::death::resurrect(m, warrior, 1.0);
+            // Death Touch, an instant kill with no such word, wears it.
+            spells::cast_triggered(m, kobold, DEATH_TOUCH, Some(warrior));
+            let touched = (health(m, warrior), worn(m));
+            (fresh, sacrificed, touched)
+        })
+        .await
+        .unwrap();
+    let (fresh, (dead, sacrificed), (dead_again, touched)) = out;
+    // The starting sword, shield and trousers: 20 and 25 points, so dying
+    // costs each two; a blow, one point of one, one time in two hundred.
+    assert!(
+        fresh.len() >= 2 && fresh.iter().all(|d| *d >= 20),
+        "{fresh:?}"
+    );
+    let lost = |after: &[u32], before: &[u32]| -> Vec<u32> {
+        after.iter().zip(before).map(|(a, b)| b - a).collect()
+    };
+    let spared = lost(&sacrificed, &fresh);
+    assert_eq!(dead, 0, "sacrificed");
+    assert!(
+        spared.iter().sum::<u32>() <= 1,
+        "the gear spared: {spared:?}"
+    );
+    let worn_down = lost(&touched, &sacrificed);
+    assert_eq!(dead_again, 0, "touched");
+    assert!(worn_down.iter().all(|l| *l >= 2), "and worn: {worn_down:?}");
 }

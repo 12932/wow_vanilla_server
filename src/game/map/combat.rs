@@ -2035,6 +2035,19 @@ pub fn threat_multiplier(map: &Map, g: Guid, school: u32) -> f32 {
 /// Damage of `school` (a mask) on a unit: the rage it gives, threat, the
 /// auras damage breaks, health, death.
 pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u32, school: u32) {
+    deal_damage_by(map, attacker, victim, damage, school, None);
+}
+
+/// Damage of `school` on a unit, by `spell` if a spell's: a death it causes
+/// is laid to the spell (see [`kill_by`]).
+pub fn deal_damage_by(
+    map: &mut Map,
+    attacker: Guid,
+    victim: Guid,
+    damage: u32,
+    school: u32,
+    spell: Option<u32>,
+) {
     // A GM in god mode takes nothing.
     if crate::game::map::gm_dev::invulnerable(map, victim) {
         return;
@@ -2096,12 +2109,20 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     f.set_u32(UNIT_FIELD_HEALTH, left);
     sync_aura_state(map, victim);
     if left == 0 {
-        kill(map, attacker, victim);
+        kill_by(map, attacker, victim, spell);
     }
 }
 
 /// `victim` dies at `killer`'s hand.
 pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
+    kill_by(map, killer, victim, None);
+}
+
+/// `victim` dies at `killer`'s hand, by `spell` if a spell killed them: one
+/// with `no_durability_loss` (ex3 0x20: a Ritual of Doom's sacrifice), or
+/// Suicide (27965), wears nothing down (Thistle Tea's
+/// `Durability.death_loss?`).
+pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     let attackers: Vec<Guid> = map
         .combat(victim)
         .map(|c| c.attackers.iter().copied().collect())
@@ -2164,7 +2185,13 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         // their pet, or in a battleground, it doesn't (Thistle Tea's
         // `Durability.resolve`).
         let battleground = crate::game::instances::instance_type(&map.realm, map.key.map) == 3;
-        if !battleground && (killer == victim || !guid::is_player(by)) {
+        let spared = spell.is_some_and(|id| {
+            id == crate::game::map::spells::redemption::SUICIDE
+                || map.realm.data.spells.get(id).is_some_and(|s| {
+                    s.attr(3, crate::game::data::spells::ATTR_EX3_NO_DURABILITY_LOSS)
+                })
+        });
+        if !battleground && !spared && (killer == victim || !guid::is_player(by)) {
             crate::game::map::vendor::wear(map, victim, 0.10);
             if let Some(p) = map.players.get(&victim) {
                 p.outbound

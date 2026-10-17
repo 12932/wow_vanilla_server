@@ -534,7 +534,7 @@ fn effect(
                 .unit_fields(target)
                 .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
                 .unwrap_or(0);
-            combat::deal_damage(map, caster, target, health);
+            combat::deal_damage_by(map, caster, target, health, 1, Some(s.id));
         }
         EFFECT_SCHOOL_DAMAGE | EFFECT_ENVIRONMENTAL_DAMAGE => {
             if super::scripts::school_damage(map, caster, target, s, index, amount, l) {
