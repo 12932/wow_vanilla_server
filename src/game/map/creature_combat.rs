@@ -962,15 +962,14 @@ pub fn regenerates_health(map: &Map, g: Guid) -> bool {
 /// intellect outside the five-second rule.
 pub fn regenerate(map: &mut Map) {
     let now = map.now;
+    // Health or mana short first: few are, and it is answered from the
+    // creature itself, not its fields' values.
     let due: Vec<Guid> = map
         .creatures
         .iter()
+        .filter(|(_, c)| c.fields.below_max())
         .filter(|(_, c)| c.alive() && !c.evading && c.owner.is_none_or(|o| !guid::is_player(o)))
         .filter(|(_, c)| c.engagement.regen_at.is_none_or(|t| t <= now))
-        .filter(|(_, c)| {
-            c.fields.get_u32(UNIT_FIELD_HEALTH) < c.fields.get_u32(UNIT_FIELD_MAXHEALTH)
-                || c.fields.get_u32(UNIT_FIELD_POWER1) < c.fields.get_u32(UNIT_FIELD_MAXPOWER1)
-        })
         .map(|(_, c)| c.guid)
         .collect();
     for &g in &due {
