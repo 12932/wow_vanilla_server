@@ -38,6 +38,11 @@ pub struct Scripted {
     pub disabled: Vec<bool>,
     pub started: bool,
     pub next_tick: Option<Instant>,
+    /// When its timers were last brought up to date (Thistle Tea's
+    /// `last_timer_update_at`): a stun's pause adds what passed since. A
+    /// fight's start and an evade set it again, so the time between
+    /// fights isn't counted as stunned.
+    pub clock: Option<Instant>,
     pub no_melee: bool,
     pub no_combat_movement: bool,
     /// Health it can't be brought below, as a script set it (None: its
@@ -265,6 +270,7 @@ fn ensure_started(map: &mut Map, g: Guid) {
 }
 
 fn reset_ooc(s: &mut Scripted, events: &[AiEvent], now: Instant) {
+    s.clock = Some(now);
     for (i, e) in events.iter().enumerate() {
         if e.kind == EVENT_TIMER_OOC {
             s.timers[i] = Some(now + Duration::from_millis(roll(e.params[0], e.params[1])));
@@ -274,6 +280,7 @@ fn reset_ooc(s: &mut Scripted, events: &[AiEvent], now: Instant) {
 }
 
 fn reset_for_combat(s: &mut Scripted, events: &[AiEvent], now: Instant) {
+    s.clock = Some(now);
     s.timers = vec![None; events.len()];
     s.disabled = vec![false; events.len()];
     for (i, e) in events.iter().enumerate() {
@@ -669,7 +676,15 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
 }
 
 fn run_actions(map: &mut Map, g: Guid, i: usize, e: &AiEvent, target: Option<Guid>) {
-    let actions: Vec<u32> = e.actions.iter().copied().filter(|a| *a != 0).collect();
+    // An action whose script is missing is none (Thistle Tea drops it as
+    // it loads), so a random pick never falls on it.
+    let scripts = &map.realm.data.scripts.ai_scripts;
+    let actions: Vec<u32> = e
+        .actions
+        .iter()
+        .copied()
+        .filter(|a| *a != 0 && scripts.contains_key(a))
+        .collect();
     let chosen: Vec<u32> = if e.flags & EF_RANDOM_ACTION != 0 && !actions.is_empty() {
         vec![actions[rand::rng().random_range(0..actions.len())]]
     } else {
@@ -756,11 +771,12 @@ pub fn tick(map: &mut Map, g: Guid) {
     if s.next_tick.is_some_and(|t| t > now) {
         return;
     }
-    // The time since the last look, which a stun's pause adds back.
+    // The time since its timers were last brought up to date, which a
+    // stun's pause adds back.
     let since = s
-        .next_tick
-        .and_then(|t| t.checked_sub(TICK))
-        .map_or(TICK, |last| now.saturating_duration_since(last));
+        .clock
+        .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
+    s.clock = Some(now);
     s.next_tick = Some(now + TICK);
     // A stunned creature's paused timers wait out the stun.
     let paused: Vec<usize> = map
