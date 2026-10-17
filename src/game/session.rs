@@ -59,8 +59,9 @@ pub struct Session {
 /// in the world, holding the account's place.
 impl Drop for Session {
     fn drop(&mut self) {
-        // At shutdown the maps have saved everyone.
-        if self.realm.maps.is_closed() {
+        // At shutdown the maps have saved everyone; and with the runtime
+        // gone (a test's end) there is no map to go to.
+        if self.realm.maps.is_closed() || tokio::runtime::Handle::try_current().is_err() {
             return;
         }
         // A player handed over and not yet passed on goes on to their
@@ -109,7 +110,7 @@ async fn handshake(
     }
     .tokio_write_unencrypted_server(&mut *stream)
     .await?;
-    let c = tokio_expect_client_message::<CMSG_AUTH_SESSION, _>(&mut *stream).await?;
+    let c = read_auth_session(stream).await?;
     let account = c.username;
     let session_key = {
         let users = realm.users.as_ref().ok_or("no auth server")?;
@@ -137,6 +138,35 @@ async fn handshake(
     .tokio_write_encrypted_server(&mut *stream, crypto.encrypter())
     .await?;
     Ok((account, crypto))
+}
+
+/// Read the client's `CMSG_AUTH_SESSION`, refusing one too big, or whose
+/// addon data claims a size that would have wow_messages reserve
+/// gigabytes (an allocation that fails aborts the process), and catching a
+/// panic in wow_messages (on addon data that isn't zlib).
+async fn read_auth_session(
+    stream: &mut TcpStream,
+) -> Result<CMSG_AUTH_SESSION, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncReadExt;
+    let mut header = [0u8; 6];
+    stream.read_exact(&mut header).await?;
+    let size = usize::from(u16::from_be_bytes([header[0], header[1]]));
+    let opcode = u32::from_le_bytes([header[2], header[3], header[4], header[5]]);
+    if opcode != 0x1ED || !(4..=conn::MAX_AUTH_SESSION + 4).contains(&size) {
+        return Err(format!("expected an auth session, got 0x{opcode:X} of {size} bytes").into());
+    }
+    let mut plain = vec![0u8; 2 + size];
+    plain[..6].copy_from_slice(&header);
+    stream.read_exact(&mut plain[6..]).await?;
+    if !conn::fits(opcode, &plain[6..]) {
+        return Err("an auth session that asks for more than it holds".into());
+    }
+    match crate::game::supervisor::catch(|| ClientOpcodeMessage::read_unencrypted(&plain[..])) {
+        Ok(Ok(ClientOpcodeMessage::CMSG_AUTH_SESSION(c))) => Ok(c),
+        Ok(Ok(other)) => Err(format!("expected an auth session, got {other}").into()),
+        Ok(Err(e)) => Err(e.into()),
+        Err(e) => Err(format!("an auth session wow_messages panicked on: {e}").into()),
+    }
 }
 
 /// Run an authenticated session until the client goes.

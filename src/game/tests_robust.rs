@@ -678,3 +678,285 @@ async fn a_shutdown_does_not_wait_for_a_hung_map() {
     let row = realm.store.load(guid::counter(g)).await.unwrap();
     assert!(row.logout_time > 0, "Thrall was saved");
 }
+
+/// A client packet's body, as wow_messages reads it: little-endian
+/// values and C strings.
+#[derive(Default)]
+struct Body(Vec<u8>);
+
+impl Body {
+    fn u8(mut self, v: u8) -> Self {
+        self.0.push(v);
+        self
+    }
+    fn u32(mut self, v: u32) -> Self {
+        self.0.extend(v.to_le_bytes());
+        self
+    }
+    fn bytes(mut self, b: &[u8]) -> Self {
+        self.0.extend(b);
+        self
+    }
+    fn string(self, s: &str) -> Self {
+        self.bytes(s.as_bytes()).u8(0)
+    }
+}
+
+/// A `/who` whose count of search strings is `strings`.
+fn who(strings: u32) -> Vec<u8> {
+    Body::default()
+        .u32(1)
+        .u32(60)
+        .string("")
+        .string("")
+        .u32(0)
+        .u32(0)
+        .u32(1)
+        .u32(12)
+        .u32(strings)
+        .string("hello")
+        .0
+}
+
+/// Packets wow_messages would reserve gigabytes for, from a count in the
+/// packet, are refused before it reads them; those it reads in reason
+/// pass.
+#[test]
+fn packets_that_would_have_wow_messages_reserve_gigabytes_are_refused() {
+    use crate::game::conn::fits;
+    assert!(fits(0x062, &who(1)));
+    assert!(!fits(0x062, &who(u32::MAX)), "a /who's strings");
+    let express = |n: u32| Body::default().bytes(&[0; 12]).u32(n).u32(1).u32(2).0;
+    assert!(fits(0x312, &express(2)));
+    assert!(
+        !fits(0x312, &express(u32::MAX)),
+        "an express flight's nodes"
+    );
+    assert!(!fits(0x264, &express(1 << 30)), "a bidder's items");
+    let bug = |n: u32| {
+        Body::default()
+            .u32(0)
+            .u32(n)
+            .string("x")
+            .u32(2)
+            .string("y")
+            .0
+    };
+    assert!(fits(0x1CA, &bug(2)));
+    assert!(!fits(0x1CA, &bug(0)), "a bug report's length, less one");
+    assert!(!fits(0x1CA, &bug(u32::MAX)));
+    let auth = |size: u32| {
+        Body::default()
+            .u32(5875)
+            .u32(0)
+            .string("ALICE")
+            .u32(7)
+            .bytes(&[0; 20])
+            .u32(size)
+            .bytes(&[0x78, 0x9C, 3, 0, 0, 0, 0, 1])
+            .0
+    };
+    assert!(fits(0x1ED, &auth(300)));
+    assert!(
+        !fits(0x1ED, &auth(u32::MAX)),
+        "an auth session's addon data"
+    );
+    let ticket = |category: u8, size: u32| {
+        Body::default()
+            .u8(category)
+            .u32(0)
+            .bytes(&[0; 12])
+            .string("help")
+            .string("")
+            .u32(3)
+            .u32(size)
+            .0
+    };
+    assert!(fits(0x205, &ticket(2, 100)));
+    assert!(
+        fits(0x205, &ticket(1, u32::MAX)),
+        "only harassment has chat"
+    );
+    assert!(!fits(0x205, &ticket(2, u32::MAX)), "a ticket's chat");
+    assert!(!fits(0x2E7, &[1, 2]), "warden data shorter than its size");
+    assert!(fits(0x4B, &[]));
+}
+
+/// A connection is handed paired crypto, as an authenticated client's is.
+fn paired_crypto() -> (
+    wow_srp::vanilla_header::HeaderCrypto,
+    wow_srp::vanilla_header::HeaderCrypto,
+) {
+    use wow_srp::normalized_string::NormalizedString;
+    use wow_srp::vanilla_header::ProofSeed;
+    let username = NormalizedString::new("test".to_string()).unwrap();
+    let (server_seed, client_seed) = (ProofSeed::new(), ProofSeed::new());
+    let (server_value, client_value) = (server_seed.seed(), client_seed.seed());
+    let (proof, client) = client_seed.into_client_header_crypto(&username, [0; 40], server_value);
+    let server = server_seed
+        .into_server_header_crypto(&username, [0; 40], proof, client_value)
+        .unwrap();
+    (server, client)
+}
+
+/// A connection's reader drops a packet that would have aborted the
+/// process (a `/who` that asks for 96 GB), and one wow_messages panics on
+/// (a ticket's chat that isn't zlib), and goes on reading. Before, the
+/// first aborted the server (`memory allocation of 103079215080 bytes
+/// failed`), and the second ended the connection.
+#[tokio::test]
+async fn a_packet_that_would_abort_the_server_is_dropped() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (stream, _) = listener.accept().await.unwrap();
+    let (server, crypto) = paired_crypto();
+    let mut connection = crate::game::conn::start(stream, server);
+    let (mut encrypter, _) = crypto.split();
+    let mut send = async |opcode: u32, body: &[u8]| {
+        let header = encrypter.encrypt_client_header(4 + body.len() as u16, opcode);
+        client.write_all(&header).await.unwrap();
+        client.write_all(body).await.unwrap();
+    };
+    send(0x062, &who(u32::MAX)).await;
+    let not_zlib = Body::default()
+        .u8(2)
+        .u32(0)
+        .bytes(&[0; 12])
+        .string("help")
+        .string("")
+        .u32(3)
+        .u32(100)
+        .bytes(b"not zlib at all")
+        .0;
+    send(0x205, &not_zlib).await;
+    send(0x4B, &[]).await;
+    let next = tokio::time::timeout(WAIT, connection.inbound.recv()).await;
+    assert!(
+        matches!(
+            next,
+            Ok(Some(crate::game::conn::Inbound::Msg(
+                wow_world_messages::vanilla::opcodes::ClientOpcodeMessage::CMSG_LOGOUT_REQUEST
+            )))
+        ),
+        "{next:?}"
+    );
+}
+
+/// The world handshake over a socket: the login server's session key for
+/// the account, a client's `CMSG_AUTH_SESSION`, and the encrypted answer.
+/// One whose addon data claims gigabytes is refused, and the server goes
+/// on.
+#[tokio::test]
+async fn the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use wow_srp::client::SrpClientUser;
+    use wow_srp::normalized_string::NormalizedString;
+    use wow_srp::server::SrpVerifier;
+    use wow_srp::vanilla_header::ProofSeed;
+    use wow_srp::{GENERATOR, LARGE_SAFE_PRIME_LITTLE_ENDIAN, PublicKey};
+
+    let name = || NormalizedString::new("ALICE".to_string()).unwrap();
+    // The login, as the login server and the client run it.
+    let proof = SrpVerifier::from_username_and_password(name(), name()).into_proof();
+    let challenge = SrpClientUser::new(name(), name()).into_challenge(
+        GENERATOR,
+        LARGE_SAFE_PRIME_LITTLE_ENDIAN,
+        PublicKey::from_le_bytes(*proof.server_public_key()).unwrap(),
+        *proof.salt(),
+    );
+    let (server, server_proof) = proof
+        .into_server(
+            PublicKey::from_le_bytes(*challenge.client_public_key()).unwrap(),
+            *challenge.client_proof(),
+        )
+        .unwrap();
+    let session_key = challenge
+        .verify_server_proof(server_proof)
+        .unwrap()
+        .session_key();
+    let users: crate::auth::UserCache = Default::default();
+    crate::auth::users_lock(&users).insert("ALICE".to_string(), server);
+    let realm = {
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        Realm::new(
+            harness::test_config(),
+            store,
+            startup,
+            crate::game::data::GameData::empty(),
+            Some(users),
+        )
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = listener.local_addr().unwrap();
+    let serving = {
+        let realm = realm.clone();
+        tokio::spawn(async move {
+            let pending = Arc::new(tokio::sync::Semaphore::new(8));
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let permit = pending.clone().try_acquire_owned().unwrap();
+                tokio::spawn(crate::game::session::serve(stream, realm.clone(), permit));
+            }
+        })
+    };
+
+    // One whose addon data claims 4 GB: the connection closes.
+    let mut bad = tokio::net::TcpStream::connect(at).await.unwrap();
+    let seed = tokio_expect_server_message::<SMSG_AUTH_CHALLENGE, _>(&mut bad)
+        .await
+        .unwrap()
+        .server_seed;
+    let (client_proof, _) = ProofSeed::new().into_client_header_crypto(&name(), session_key, seed);
+    let mut body = Body::default()
+        .u32(5875)
+        .u32(0)
+        .string("ALICE")
+        .u32(1)
+        .bytes(&client_proof)
+        .u32(u32::MAX)
+        .bytes(&[0x78, 0x9C, 3, 0, 0, 0, 0, 1])
+        .0;
+    let mut packet = ((body.len() + 4) as u16).to_be_bytes().to_vec();
+    packet.extend(0x1EDu32.to_le_bytes());
+    packet.append(&mut body);
+    bad.write_all(&packet).await.unwrap();
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(WAIT, bad.read_to_end(&mut rest)).await;
+    assert!(matches!(closed, Ok(Ok(0))), "{closed:?}");
+
+    // A real one: the world answers, encrypted.
+    let mut good = tokio::net::TcpStream::connect(at).await.unwrap();
+    let seed = tokio_expect_server_message::<SMSG_AUTH_CHALLENGE, _>(&mut good)
+        .await
+        .unwrap()
+        .server_seed;
+    let client_seed = ProofSeed::new();
+    let client_seed_value = client_seed.seed();
+    let (client_proof, mut crypto) =
+        client_seed.into_client_header_crypto(&name(), session_key, seed);
+    CMSG_AUTH_SESSION {
+        build: 5875,
+        server_id: 0,
+        username: "ALICE".into(),
+        client_seed: client_seed_value,
+        client_proof,
+        addon_info: Vec::new(),
+    }
+    .tokio_write_unencrypted_client(&mut good)
+    .await
+    .unwrap();
+    let answer = tokio_expect_server_message_encryption::<SMSG_AUTH_RESPONSE, _>(
+        &mut good,
+        crypto.decrypter(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(answer.result, SMSG_AUTH_RESPONSE_WorldResult::AuthOk { .. }),
+        "{answer:?}"
+    );
+    serving.abort();
+}
