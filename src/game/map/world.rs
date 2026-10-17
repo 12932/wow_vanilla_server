@@ -181,7 +181,7 @@ fn step_creature(
             && c.scripted
                 .as_deref()
                 .and_then(|s| s.route.as_ref())
-                .is_some_and(|r| !r.repeat && c.waypoint.wrapping_add(1) >= r.points.len())
+                .is_some_and(|r| !r.repeat && c.waypoint >= r.points.len())
     });
     if route_ends {
         if let Some(c) = map.creatures.get_mut(key) {
@@ -219,11 +219,27 @@ fn step_creature(
             if done {
                 let pause = match &waypoints {
                     Some(wps) if !wps.is_empty() && !scripted => {
-                        let wp = wps[c.waypoint % wps.len()];
-                        if wp.orientation != 0.0 {
-                            c.orientation = wp.orientation;
+                        // Reached: it is the point to come back to, and the
+                        // next is the one it is bound for.
+                        let i = c.waypoint % wps.len();
+                        let wp = wps[i];
+                        if let Some(o) = wp.orientation {
+                            c.orientation = o;
                         }
-                        arrived = Some((c.waypoint % wps.len(), wp.script_id));
+                        arrived = Some((wp.point, wp.script_id));
+                        let repeat = c
+                            .scripted
+                            .as_deref()
+                            .and_then(|s| s.route.as_ref())
+                            .is_none_or(|r| r.repeat);
+                        c.last_waypoint = Some(i);
+                        c.waypoint = if i + 1 < wps.len() {
+                            i + 1
+                        } else if repeat {
+                            0
+                        } else {
+                            wps.len()
+                        };
                         Duration::from_millis(u64::from(wp.wait_ms))
                     }
                     _ => wander_pause(rng),
@@ -236,8 +252,7 @@ fn step_creature(
         Motion::Idle { until: Some(t) } if *t <= now => {
             let target = match (&waypoints, c.movement_type) {
                 (Some(wps), _) if !wps.is_empty() => {
-                    c.waypoint = c.waypoint.wrapping_add(1) % wps.len();
-                    let wp = wps[c.waypoint];
+                    let wp = wps[c.waypoint % wps.len()];
                     Some(Vector3d {
                         x: wp.x,
                         y: wp.y,
@@ -298,7 +313,7 @@ fn step_creature(
         crate::game::map::creature_groups::leader_walked(map, guid, to, facing, run);
     }
     if let Some((point, script)) = arrived {
-        crate::game::map::event_ai::movement_inform(map, guid, 2, point as u32);
+        crate::game::map::event_ai::movement_inform(map, guid, 2, point);
         if script != 0 {
             crate::game::map::scripts::start(
                 map,

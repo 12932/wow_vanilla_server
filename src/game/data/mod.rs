@@ -128,13 +128,22 @@ pub struct CreatureAddon {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Waypoint {
+    /// Its number on the path (`point`, `pointid`; from 0 along a path a
+    /// script gives): what movement informs and script steps name it by.
+    pub point: u32,
     pub x: f32,
     pub y: f32,
     pub z: f32,
-    pub orientation: f32,
+    /// The facing taken on arrival; the tables' 100 is none.
+    pub orientation: Option<f32>,
     pub wait_ms: u32,
     /// A `creature_movement_scripts` script run on arrival.
     pub script_id: u32,
+}
+
+/// A waypoint table's facing: 100 is none.
+pub fn waypoint_facing(o: f32) -> Option<f32> {
+    (o != 100.0).then_some(o)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
