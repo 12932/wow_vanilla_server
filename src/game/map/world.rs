@@ -11,7 +11,7 @@ use wow_world_messages::vanilla::Vector3d;
 use crate::game::data::{AREA_FLAG_ARENA, AreaTrigger};
 use crate::game::fields::PLAYER_FLAGS;
 use crate::game::map::creature::{
-    Creature, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause,
+    MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause,
 };
 use crate::game::map::gameobject::GameObject;
 use crate::game::map::grid::cell_of;
@@ -45,7 +45,7 @@ pub fn populate(map: &mut Map) {
             if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on) {
                 continue;
             }
-            if let Some(c) = Creature::from_spawn(&data, s, &mut rng) {
+            if let Some(c) = crate::game::events::spawn_creature(&data, s, &on, &mut rng) {
                 map.add_creature(c);
             }
         }
@@ -229,7 +229,8 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
         return;
     };
     let zone = if zone != 0 { zone } else { data.zone_of(area) };
-    if zone != 0 && zone != p.zone {
+    let new_zone = zone != 0 && zone != p.zone;
+    if new_zone {
         p.zone = zone;
         p.online
             .zone
@@ -240,6 +241,9 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
         .area(area)
         .is_some_and(|a| a.flags & AREA_FLAG_ARENA != 0);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP, ffa);
+    if new_zone {
+        crate::game::map::world_states::send_init(map, guid);
+    }
 }
 
 /// Whether a player at `p` is inside a trigger, with some slack for the

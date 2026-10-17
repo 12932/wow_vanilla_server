@@ -18,6 +18,7 @@ pub mod gm;
 pub mod grid;
 pub mod handlers;
 pub mod inventory;
+pub mod items;
 pub mod login;
 pub mod loot;
 pub mod movement;
@@ -37,6 +38,7 @@ pub mod trade;
 pub mod vendor;
 pub mod visibility;
 pub mod world;
+pub mod world_states;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -387,6 +389,7 @@ impl Map {
                 let mut p = Player::from_row(&self.realm.data.clone(), *row, online, self.now);
                 p.row.map = self.key.map;
                 let guid = p.guid;
+                items::on_login(&mut p, &self.realm.data.clone());
                 login::send_login(self, &mut p);
                 let corpse = p.row.state.corpse;
                 if p.row.state.dead {
@@ -410,6 +413,7 @@ impl Map {
                 }
                 self.insert_player(p);
                 spells::apply_passives(self, guid);
+                npc::resume_flight(self, guid);
                 social::logged_in(self, guid);
                 self.visibility_dirty.insert(guid);
             }
@@ -603,6 +607,8 @@ impl Map {
         spells::update(self);
         auras::update(self);
         loot::update(self);
+        quests::update_timers(self);
+        items::update(self);
         enchant::update(self);
         social::push_member_stats(self);
         duel::update(self);

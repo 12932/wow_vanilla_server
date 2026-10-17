@@ -263,12 +263,17 @@ impl Map {
             ClientOpcodeMessage::CMSG_LOGOUT_CANCEL => login::cancel_logout(self, guid),
             ClientOpcodeMessage::CMSG_PLAYER_LOGOUT => login::complete_logout(self, guid),
             ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
+                let mut changed = false;
                 if let Some(p) = self.players.get_mut(&guid) {
+                    changed = p.zone != m.area.as_int();
                     p.zone = m.area.as_int();
                     p.online
                         .zone
                         .store(p.zone, std::sync::atomic::Ordering::Relaxed);
                     crate::game::weather::tell(&self.realm, &p.online, p.zone);
+                }
+                if changed {
+                    crate::game::map::world_states::send_init(self, guid);
                 }
             }
             ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(m) => {

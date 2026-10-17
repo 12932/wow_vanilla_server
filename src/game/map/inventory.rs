@@ -201,13 +201,7 @@ impl Player {
 
     /// Every slot an item can be carried in, backpack first: `(bag, slot)`.
     pub fn carry_slots(&self, data: &GameData) -> Vec<(u8, u8)> {
-        let mut out: Vec<(u8, u8)> = (PACK_START..PACK_END).map(|s| (BAG_PLAYER, s)).collect();
-        for bag in BAG_START..BAG_END {
-            for s in 0..self.bag_size(data, bag) {
-                out.push((bag, s));
-            }
-        }
-        out
+        crate::game::map::items::carry_slots(data, self, None)
     }
 
     pub fn free_carry_slot(&self, data: &GameData) -> Option<(u8, u8)> {
@@ -417,7 +411,7 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
     }
     let mut new_slots = Vec::new();
     if left > 0 {
-        for (bag, slot) in p.carry_slots(&data) {
+        for (bag, slot) in crate::game::map::items::carry_slots(&data, p, Some(&t)) {
             if left == 0 {
                 break;
             }
@@ -500,7 +494,7 @@ pub fn take_item(map: &mut Map, g: Guid, i: usize, count: u32) {
 /// Whether `(bag, slot)` is a slot of `p`'s, and an item may be put there.
 fn slot_exists(p: &Player, data: &GameData, bag: u8, slot: u8) -> bool {
     if bag == BAG_PLAYER {
-        return slot < BUYBACK_START;
+        return slot < BUYBACK_START || crate::game::map::items::keyring_slot(p, slot);
     }
     ((BAG_START..BAG_END).contains(&bag) || (BANK_BAG_START..BANK_BAG_END).contains(&bag))
         && slot < p.bag_size(data, bag)
@@ -542,6 +536,16 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
         return Err(Fail::OnlyEmptyBags);
     }
     if item.bag == BAG_PLAYER && item.slot == bag {
+        return Err(Fail::DoesntGoIntoBag);
+    }
+    // The keyring holds keys alone; a special bag what it is made for.
+    if bag == BAG_PLAYER
+        && crate::game::map::items::keyring_slot(p, slot)
+        && !t.is_some_and(crate::game::map::items::is_key)
+    {
+        return Err(Fail::DoesntGoIntoBag);
+    }
+    if bag != BAG_PLAYER && !crate::game::map::items::fits_bag(data, p, bag, t) {
         return Err(Fail::DoesntGoIntoBag);
     }
     Ok(())
@@ -613,6 +617,9 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     }
     p.items[a].bag = to.0;
     p.items[a].slot = to.1;
+    if to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END {
+        crate::game::map::items::on_equip(&data, &mut p.items[a]);
+    }
     p.refresh_inventory(&data);
 }
 

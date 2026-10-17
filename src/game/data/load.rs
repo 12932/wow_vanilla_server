@@ -123,6 +123,7 @@ pub fn load(dir: &Path) -> GameData {
             load_npcs(&db, dbc.as_ref(), &mut data);
             load_spells(&db, dbc.as_ref(), &mut data);
             super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
+            super::world::load(&db, dbc.as_ref(), &mut data.world);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -1108,6 +1109,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     end: parse_time(&c.string("end_time")).unwrap_or(0),
                     occurence: c.i64("occurence"),
                     length: c.i64("length"),
+                    hardcoded: c.u32("hardcoded") != 0,
                 },
                 c.u32("disabled"),
                 c.u32("hardcoded"),
@@ -1116,8 +1118,9 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             )
         })
     {
-        // Hard-coded events are run by scripts this server hasn't got.
-        if disabled == 0 && hardcoded == 0 && patch_min <= PATCH && patch_max >= PATCH {
+        // Hard-coded events follow their own rules (`events::rules`).
+        let _ = hardcoded;
+        if disabled == 0 && patch_min <= PATCH && patch_max >= PATCH {
             data.events.insert(e.id, e);
         }
     }

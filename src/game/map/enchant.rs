@@ -117,6 +117,8 @@ pub fn decode(data: &GameData, item: &mut Item) {
     for token in stored.split(';') {
         if let Some(rp) = token.strip_prefix("rp:").and_then(|v| v.parse().ok()) {
             set_random_property(data, item, rp);
+        } else if let Some(left) = token.strip_prefix("d:").and_then(|v| v.parse().ok()) {
+            item.fields.set_u32(ITEM_FIELD_DURATION, left);
         } else if let Some(rest) = token.strip_prefix('e')
             && let Some((slot, values)) = rest.split_once(':')
             && let Ok(slot) = slot.parse::<usize>()
@@ -150,6 +152,11 @@ pub fn encode(item: &Item) -> String {
     let rp = item.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID);
     if rp != 0 {
         out.push(format!("rp:{rp}"));
+    }
+    // A timed item's time left.
+    let left = item.fields.get_u32(ITEM_FIELD_DURATION);
+    if left != 0 {
+        out.push(format!("d:{left}"));
     }
     for (slot, e) in active(item) {
         // A random property's enchantments come with it.
