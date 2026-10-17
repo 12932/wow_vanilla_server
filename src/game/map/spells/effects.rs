@@ -936,7 +936,8 @@ fn effect(
 /// it: each try takes one stack of one of the auras it may take (picked at
 /// random), unless that aura's caster's talents hold it on; magic and
 /// poison only of the side the target is on to the dispeller, curses and
-/// diseases either way.
+/// diseases either way. A passive aura goes like any other, as in Thistle
+/// Tea and mangos (a creature's Fire Shield): its dispel type decides.
 fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i32, count: u32) {
     // An enemy's buffs, a friend's afflictions.
     let positive = combat::can_attack(map, caster, target);
@@ -952,7 +953,7 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
         .map(|a| {
             a.holders
                 .iter()
-                .filter(|h| !h.passive && h.dispel != 0 && matches(h.dispel, h.positive))
+                .filter(|h| h.dispel != 0 && matches(h.dispel, h.positive))
                 .map(|h| (h.spell, h.caster, h.stacks.max(1)))
                 .collect()
         })
