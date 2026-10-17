@@ -105,9 +105,6 @@ const RIGHTEOUSNESS: &[(u32, u32)] = &[
 /// Nightfall's ranks give Shadow Trance.
 const NIGHTFALL: &[u32] = &[18094, 18095];
 const SHADOW_TRANCE: u32 = 17941;
-/// Eye for an Eye's ranks strike back with a share of a crit taken.
-const EYE_FOR_AN_EYE: &[u32] = &[9799, 25988];
-const EYE_FOR_AN_EYE_DAMAGE: u32 = 25997;
 const SCHOOL_HOLY: u32 = 2;
 
 /// What happened between two units, for their procs.
@@ -330,8 +327,11 @@ fn run(
         {
             x.proc_ready_at = Some(now + std::time::Duration::from_millis(u64::from(p.cooldown)));
         }
-        fire(map, owner, other, &h, e);
-        if h.charges > 0 {
+        let script = crate::game::map::proc_scripts::fire(map, owner, other, &h, e);
+        if script == crate::game::map::proc_scripts::Outcome::Unhandled {
+            fire(map, owner, other, &h);
+        }
+        if h.charges > 0 && script != crate::game::map::proc_scripts::Outcome::DoneOwnCharges {
             auras::spend_charge(map, owner, h.spell, h.caster);
         }
     }
@@ -349,7 +349,7 @@ fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool 
 
 /// A holder went off: its trigger spells cast, its damage dealt, and the
 /// class scripts the data can't say (Thistle Tea's `Core.Class`).
-fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) {
+fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
     for x in &h.effects {
         match x.kind {
             auras::AURA_DUMMY => {
@@ -369,17 +369,6 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) {
                         SCHOOL_HOLY,
                     );
                 }
-                if EYE_FOR_AN_EYE.contains(&h.spell) && e.ex & EX_CRITICAL_HIT != 0 {
-                    let damage = e.damage as i64 * i64::from(x.amount) / 100;
-                    spell_damage(
-                        map,
-                        owner,
-                        other,
-                        EYE_FOR_AN_EYE_DAMAGE,
-                        damage.max(0) as u32,
-                        SCHOOL_HOLY,
-                    );
-                }
             }
             auras::AURA_OVERRIDE_CLASS_SCRIPTS if NIGHTFALL.contains(&h.spell) => {
                 crate::game::map::spells::cast_triggered(map, owner, SHADOW_TRANCE, Some(owner));
@@ -389,7 +378,9 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) {
                     .iter()
                     .find(|(s, _)| *s == h.spell)
                     .map_or(x.trigger, |(_, t)| *t);
-                if trigger != 0 {
+                if trigger != 0
+                    && !crate::game::map::proc_scripts::deep_wounds(map, owner, other, trigger)
+                {
                     crate::game::map::spells::cast_triggered(map, owner, trigger, Some(other));
                 }
             }

@@ -77,6 +77,9 @@ pub struct CreatureTemplate {
     pub static_flags1: u32,
     pub static_flags2: u32,
     pub flags_extra: u32,
+    /// Mechanics (bit `mechanic - 1`) and schools it can't be touched by.
+    pub mechanic_immune_mask: u32,
+    pub school_immune_mask: u32,
     pub auras: Vec<u32>,
     pub ai_name: String,
     pub script_name: String,

@@ -421,6 +421,8 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             static_flags1: static1,
             static_flags2: static2,
             flags_extra: c.u32("flags_extra"),
+            mechanic_immune_mask: c.u32("mechanic_immune_mask"),
+            school_immune_mask: c.u32("school_immune_mask"),
             auras: parse_ids(&c.string("auras")),
             ai_name: c.string("ai_name"),
             script_name: c.string("script_name"),
