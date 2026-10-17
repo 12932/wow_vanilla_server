@@ -892,7 +892,8 @@ mod tests {
 #[cfg(test)]
 pub mod testing {
     pub use super::hunter::{
-        HAPPINESS_TICK, change_happiness, change_loyalty, on_death, show_training_points, tick,
+        HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,
+        show_training_points, tick,
     };
     pub use super::summon::spawn;
 }
