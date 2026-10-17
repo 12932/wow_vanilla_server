@@ -31,8 +31,17 @@ fn realm() -> std::sync::Arc<crate::game::Realm> {
 /// A Kobold Vermin at `level`, `yards` in front of `g`, hardy and without
 /// armor.
 fn dummy(m: &mut Map, g: Guid, level: u8, yards: f32) -> Guid {
+    spawn(m, g, 6, level, yards)
+}
+
+/// A creature of `entry` at `level`, `yards` in front of `g`, hardy and
+/// without armor.
+fn spawn(m: &mut Map, g: Guid, entry: u32, level: u8, yards: f32) -> Guid {
     let data = m.realm.data.clone();
-    let template = data.creature_template(6).cloned().expect("Kobold Vermin");
+    let template = data
+        .creature_template(entry)
+        .cloned()
+        .expect("the creature");
     let p = &m.players[&g];
     let (pos, o) = (p.position(), p.movement.orientation);
     let at = Vector3d {
@@ -43,7 +52,7 @@ fn dummy(m: &mut Map, g: Guid, level: u8, yards: f32) -> Guid {
     let counter = m.next_creature_counter;
     m.next_creature_counter += 1;
     let mut c = Creature::new(
-        guid::unit(6, counter | 0x80_0000),
+        guid::unit(entry, counter | 0x80_0000),
         &template,
         level,
         at,
@@ -67,17 +76,6 @@ fn ready(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
     for i in 0..5 {
         p.fields.set_u32(UNIT_FIELD_MAXPOWER1 + i, 100_000);
         p.fields.set_u32(UNIT_FIELD_POWER1 + i, 100_000);
-    }
-}
-
-fn health(m: &Map, g: Guid) -> u32 {
-    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
-}
-
-fn hurt(m: &mut Map, g: Guid, by: u32) {
-    if let Some(f) = m.unit_fields_mut(g) {
-        let h = f.get_u32(UNIT_FIELD_HEALTH);
-        f.set_u32(UNIT_FIELD_HEALTH, h.saturating_sub(by).max(1));
     }
 }
 
@@ -329,4 +327,126 @@ async fn feign_death_and_breaking_crowd_control() {
             _ => None,
         })
         .await;
+}
+
+#[tokio::test]
+async fn the_smaller_spell_scripts() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "ROGUE5");
+    let r = c.enter("Rogueb", Race::Human, Class::Rogue).await;
+    let mut d = Client::connect(&realm, "HUNTER6");
+    let h = d.enter("Hunterc", Race::Dwarf, Class::Hunter).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, r, 60, &[1784, 6770]);
+            ready(m, h, 60, &[19388]);
+            let data = m.realm.data.clone();
+            let kobold = dummy(m, r, 60, 3.0);
+            // Curse of Idiocy never pulses on its caster.
+            apply(m, h, kobold, 1010);
+            let idiocy = auras::auras(m, kobold)
+                .and_then(|a| a.holders.iter().find(|x| x.spell == 1010).cloned());
+            let pulses = idiocy.as_ref().map(|x| {
+                (
+                    class_scripts::periodic_trigger_allowed(m, kobold, x),
+                    class_scripts::periodic_trigger_allowed(m, h, x),
+                )
+            });
+            // General's Warcry: one of them at a time.
+            apply(m, r, r, 28418);
+            apply(m, r, r, 28419);
+            let warcry = (has(m, r, 28418), has(m, r, 28419));
+            // Sap doesn't keep stealth without Improved Sap; a lucky one
+            // with it does.
+            let sap = data.spells.get(6770).unwrap().clone();
+            let plain = class_scripts::keeps_stealth(m, r, &sap);
+            spells::learn(m, r, 14095);
+            m.spells.rolls = Some(true);
+            let kept = (0..40)
+                .filter(|_| class_scripts::keeps_stealth(m, r, &sap))
+                .count();
+            // Frost Trap's aura goes off as a trap: Entrapment roots.
+            apply(m, h, kobold, 13810);
+            let trap = auras::auras(m, kobold)
+                .and_then(|a| a.holders.iter().find(|x| x.spell == 13810).cloned())
+                .unwrap();
+            for _ in 0..60 {
+                if has(m, kobold, 19185) {
+                    break;
+                }
+                class_scripts::periodic_triggered(m, kobold, &trap);
+            }
+            let entrapped = has(m, kobold, 19185);
+            m.spells.rolls = None;
+            // Collecting Fallout keeps one of its two effects.
+            let fallout = data.spells.get(12709).unwrap().clone();
+            let one = class_scripts::one_of(m, &fallout);
+            // Cannibalize's emote.
+            let cannibalize = data.spells.get(20578).unwrap().clone();
+            let _ = auras::apply_spell(m, r, r, &cannibalize, &[(0, 1)], auras::Context::default());
+            let emote = m.players[&r].fields.get_u32(UNIT_NPC_EMOTESTATE);
+            auras::remove_spell(m, r, 20578, None);
+            let after = m.players[&r].fields.get_u32(UNIT_NPC_EMOTESTATE);
+            // The druid's cleanse shakes off a root.
+            let mut root = plain_aura(990_600, auras::AURA_MOD_ROOT, 0);
+            root.mechanic = 7;
+            let _ = auras::apply_spell(m, kobold, r, &root, &[(0, 1)], auras::Context::default());
+            spells::cast_triggered(m, r, 9033, Some(r));
+            let cleansed = !has(m, r, 990_600);
+            // Capturing a creature takes it; two oozes make one.
+            let pup = spawn(m, r, 10221, 10, 6.0);
+            spells::cast_triggered(m, r, 15998, Some(pup));
+            let captured = m.creature(pup).is_none();
+            let (a, b) = (spawn(m, r, 6557, 30, 7.0), spawn(m, r, 6557, 30, 8.0));
+            spells::cast_triggered(m, a, 16032, Some(b));
+            let merged = (
+                m.creature(b).is_none(),
+                m.creatures.iter().any(|(_, c)| c.entry == 9621),
+            );
+            // Symbol of Life brings a dead creature back.
+            let corpse = spawn(m, r, 6172, 10, 9.0);
+            crate::game::map::combat::deal_damage(m, r, corpse, 2_000_000);
+            let died = !m.creature(corpse).unwrap().alive();
+            spells::cast_triggered(m, r, 8593, Some(corpse));
+            let restored = died && m.creature(corpse).unwrap().alive();
+            (
+                pulses, warcry, plain, kept, entrapped, one, emote, after, cleansed, captured,
+                merged, restored,
+            )
+        })
+        .await
+        .unwrap();
+    let (
+        pulses,
+        warcry,
+        plain,
+        kept,
+        entrapped,
+        one,
+        emote,
+        after,
+        cleansed,
+        captured,
+        merged,
+        restored,
+    ) = out;
+    assert_eq!(
+        pulses,
+        Some((true, false)),
+        "Curse of Idiocy, never on its caster"
+    );
+    assert_eq!(warcry, (false, true), "one General's Warcry");
+    assert!(!plain, "Sap breaks stealth");
+    assert!(kept > 20, "Improved Sap keeps it nine times in ten: {kept}");
+    assert!(entrapped, "Entrapment on Frost Trap's pulse");
+    assert_eq!(one, Some(0), "one of Collecting Fallout's effects");
+    assert_eq!((emote, after), (398, 0), "Cannibalize's emote");
+    assert!(cleansed, "the cleanse");
+    assert!(captured, "a captured creature");
+    assert_eq!(merged, (true, true), "merged oozes");
+    assert!(restored, "Symbol of Life");
 }

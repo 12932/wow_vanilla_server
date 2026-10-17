@@ -271,6 +271,7 @@ pub enum Exclusive {
     Flask,
     NegativeHaste,
     Snare,
+    GeneralsWarcry,
 }
 
 impl Exclusive {
@@ -308,6 +309,9 @@ const DISPEL_CURSE: u32 = 2;
 /// The exclusive kind of a spell, as Thistle Tea's `exclusive_category`
 /// works it out.
 pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
+    if matches!(s.id, 28418..=28420) {
+        return Some(Exclusive::GeneralsWarcry);
+    }
     let flags = s.family_flags as u32;
     let flags_hi = (s.family_flags >> 32) as u32;
     let aura = |a: u32| s.effects.iter().any(|e| e.effect == 6 && e.aura == a);
@@ -1804,9 +1808,7 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
         // Druid forms shake off roots and snares.
         if matches!(form, 1..=5 | 8 | 31) {
             remove_where(map, target, |h| {
-                !h.positive
-                    && (h.has(AURA_MOD_ROOT) || h.has(AURA_MOD_DECREASE_SPEED))
-                    && !matches!(h.mechanic, 1 | 2 | 5 | 8 | 12 | 13 | 18 | 20 | 23 | 24 | 27 | 30)
+                crate::game::map::spells::class_scripts::shapeshift_removable(&data, h)
             });
         }
     }
@@ -2000,7 +2002,13 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
             }
         }
+        AURA_PERIODIC_TRIGGER_SPELL
+            if a.trigger != 0
+                && !crate::game::map::spells::class_scripts::periodic_trigger_allowed(
+                    map, target, h,
+                ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
+            crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
             // A channel's trigger aims at the channel's target.
             let aim = if h.caster == target {
                 map.caster(h.caster)

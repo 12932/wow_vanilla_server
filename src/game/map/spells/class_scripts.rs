@@ -23,6 +23,7 @@
 //! - periodic timing: the totems that tick at once, and the auras whose
 //!   rhythm a refresh keeps.
 
+use rand::RngExt;
 use wow_world_messages::Guid;
 
 use crate::game::data::spells::{SpellData, SpellTemplate};
@@ -38,6 +39,22 @@ use super::outcome::Landing;
 use super::{Targets, cast_triggered, fail};
 
 pub const WEAKENED_SOUL: u32 = 6788;
+const WOLFSHEAD_HELM_ENERGY: u32 = 29940;
+/// Collecting Fallout's effects, one of which a cast keeps.
+const ONE_OF: [usize; 2] = [0, 1];
+const SHAPESHIFT_CLEANSE: u32 = 9033;
+const CAPTURE_CREATURE: u32 = 15998;
+const MERGE_OOZES: u32 = 16032;
+const GARGANTUAN_OOZE: u32 = 9621;
+const RESTORE_TO_LIFE: u32 = 8593;
+const SPIRIT_SPAWN_OUT: u32 = 17680;
+/// Mechanics a druid's form doesn't shake off.
+const PROTECTED_MECHANICS: [u32; 12] = [1, 2, 5, 8, 12, 13, 18, 20, 23, 24, 27, 30];
+/// Stealth, Vanish's and Prowl's icons: casting them keeps stealth.
+const STEALTH_ICONS: [u32; 3] = [250, 103, 252];
+const SAP_ICON: u32 = 249;
+const IMPROVED_SAP: [(u32, u32); 3] = [(14095, 90), (14094, 60), (14076, 30)];
+const CANNIBALIZE_EMOTE: u32 = 398;
 pub const FORBEARANCE: u32 = 25771;
 pub const RECENTLY_BANDAGED: u32 = 11196;
 const ENRAGE_ARMOR: u32 = 25503;
@@ -120,6 +137,9 @@ pub fn apply_trigger(s: &SpellTemplate) -> Option<u32> {
 
 /// What the caster casts when `s` is done.
 pub fn finish_trigger(s: &SpellTemplate) -> Option<u32> {
+    if script(s, "spell_wolfshead_helm") {
+        return Some(WOLFSHEAD_HELM_ENERGY);
+    }
     script(s, "spell_priest_holy_nova")
         .then(|| pair(&HOLY_NOVA, s.id))
         .flatten()
@@ -265,6 +285,9 @@ pub fn dummy(
     index: usize,
     amount: i32,
 ) -> bool {
+    if index == 0 && id_dummy(map, caster, target, s) {
+        return true;
+    }
     match s.script_name.as_str() {
         "spell_druid_enrage" => {
             // Less armor: less in dire bear form.
@@ -352,7 +375,20 @@ pub fn proc_spell(aura_spell: u32, trigger: u32) -> u32 {
 
 /// Intimidating Shout: the one it is at cowers (its first effect), the
 /// rest flee (the others).
-pub fn effects_for(s: &SpellTemplate, target: Guid, t: &Targets, effects: [bool; 3]) -> [bool; 3] {
+pub fn effects_for(
+    s: &SpellTemplate,
+    target: Guid,
+    t: &Targets,
+    effects: [bool; 3],
+    chosen: Option<usize>,
+) -> [bool; 3] {
+    if let Some(keep) = chosen {
+        let mut out = effects;
+        for i in ONE_OF {
+            out[i] = out[i] && i == keep;
+        }
+        return out;
+    }
     if !script(s, "spell_warrior_intimidating_shout") {
         return effects;
     }
@@ -362,6 +398,230 @@ pub fn effects_for(s: &SpellTemplate, target: Guid, t: &Targets, effects: [bool;
         *e = *e && ((i == 0) == main);
     }
     out
+}
+
+/// Which of Collecting Fallout's effects a cast keeps: one of its first
+/// two.
+pub fn one_of(map: &Map, s: &SpellTemplate) -> Option<usize> {
+    if !script(s, "spell_gnomeregan_collecting_fallout") {
+        return None;
+    }
+    Some(if super::outcome::rolling(map) {
+        ONE_OF[rand::rng().random_range(0..ONE_OF.len())]
+    } else {
+        ONE_OF[0]
+    })
+}
+
+/// The dummies vmangos scripts by spell id.
+fn id_dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> bool {
+    let dead = map.creature(target).is_some_and(|c| !c.alive());
+    let now = map.now;
+    match s.id {
+        // Druid shapeshifting's cleanse: roots and snares go.
+        SHAPESHIFT_CLEANSE => {
+            let data = map.realm.data.clone();
+            auras::remove_where(map, target, |h| shapeshift_removable(&data, h));
+        }
+        // A captured corpse goes in a moment, a captured creature at once.
+        11885..=11889 | 12699 if dead => {
+            if let Some(c) = map.creature_mut(target)
+                && let crate::game::map::creature::Life::Dead { corpse_until, .. } = &mut c.life
+            {
+                *corpse_until = now + std::time::Duration::from_secs(1);
+            }
+        }
+        11885..=11889 | 12699 => {}
+        CAPTURE_CREATURE if map.creature(target).is_some() => {
+            crate::game::map::scripts::despawn(map, target);
+        }
+        // Two oozes make a gargantuan one.
+        MERGE_OOZES if map.creature(caster).is_some() && map.creature(target).is_some() => {
+            let at = map.creature(caster).map(|c| (c.position, c.orientation));
+            if let Some((at, o)) = at {
+                let _ = crate::game::map::scripts::summon(
+                    map,
+                    caster,
+                    GARGANTUAN_OOZE,
+                    at,
+                    o,
+                    Some((std::time::Duration::from_secs(420), 1)),
+                );
+            }
+            crate::game::map::scripts::despawn(map, target);
+        }
+        // A dead creature lives again, for two minutes.
+        RESTORE_TO_LIFE if dead => {
+            if let Some(c) = map.creature_mut(target) {
+                let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+                c.life = crate::game::map::creature::Life::Alive;
+                c.despawned = false;
+                c.fields.set_u32(UNIT_FIELD_HEALTH, max.max(1));
+                c.fields.set_u32(UNIT_DYNAMIC_FLAGS, 0);
+                let s = c.scripted.get_or_insert_with(Default::default);
+                s.despawn_at = Some(now + std::time::Duration::from_secs(120));
+                s.despawn_type = 1;
+            }
+            map.dead_creatures.retain(|d| *d != target);
+            map.visibility_dirty.insert(target);
+        }
+        // A spirit out of combat goes.
+        28091 => {
+            let fighting = map.unit_fields(target).is_some_and(|f| {
+                f.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                )
+            });
+            if map.creature(target).is_some() && !fighting {
+                cast_triggered(map, target, SPIRIT_SPAWN_OUT, Some(target));
+            }
+        }
+        28006 => cast_triggered(map, caster, 29296, Some(target)),
+        28345 => cast_triggered(map, caster, 28281, Some(target)),
+        _ => return false,
+    }
+    true
+}
+
+/// What druid shapeshifting shakes off, as Thistle Tea's
+/// `Shapeshift.removable_spells` has it: roots, and snares but those of
+/// mechanics a form can't escape.
+pub fn shapeshift_removable(data: &crate::game::data::GameData, h: &Holder) -> bool {
+    if h.positive || h.passive {
+        return false;
+    }
+    let s = data.spells.get(h.spell);
+    let mechanics: Vec<u32> = std::iter::once(h.mechanic)
+        .chain(s.iter().flat_map(|s| s.effects.iter().map(|e| e.mechanic)))
+        .filter(|m| (1..=31).contains(m))
+        .collect();
+    if mechanics.is_empty() {
+        return false;
+    }
+    let icon = s.map_or(0, |s| s.spell_icon);
+    h.has(auras::AURA_MOD_ROOT)
+        || (h.has(auras::AURA_MOD_DECREASE_SPEED)
+            && !mechanics.iter().any(|m| PROTECTED_MECHANICS.contains(m))
+            && !(icon == 15 && h.dispel == 0 && !mechanics.contains(&11)))
+}
+
+/// Curse of Idiocy pulses until its caster's own target has lost 90
+/// intellect and spirit to it (and never on its caster).
+pub fn periodic_trigger_allowed(map: &Map, target: Guid, h: &Holder) -> bool {
+    let idiocy = map
+        .realm
+        .data
+        .spells
+        .get(h.spell)
+        .is_some_and(|t| script(t, "spell_warlock_curse_of_idiocy"));
+    if !idiocy {
+        return true;
+    }
+    if h.caster == target {
+        return false;
+    }
+    let lost = |stat: i32| -> i32 {
+        auras::auras(map, target).map_or(0, |a| {
+            a.holders
+                .iter()
+                .filter(|x| x.spell == h.spell)
+                .flat_map(|x| {
+                    x.effects
+                        .iter()
+                        .filter(|e| e.kind == auras::AURA_MOD_STAT && e.misc == stat)
+                        .map(move |e| e.amount * x.stacks.max(1) as i32)
+                })
+                .sum()
+        })
+    };
+    !(lost(3) <= -90 && lost(4) <= -90)
+}
+
+/// A periodic trigger went off: the Frost Trap's aura counts as its trap
+/// going off, for Entrapment.
+pub fn periodic_triggered(map: &mut Map, target: Guid, h: &Holder) {
+    let frost_trap = map
+        .realm
+        .data
+        .spells
+        .get(h.spell)
+        .is_some_and(|t| script(t, "spell_hunter_frost_trap_aura"));
+    if frost_trap && map.unit_view(target).is_some_and(|u| u.alive) {
+        crate::game::map::procs::trigger(
+            map,
+            crate::game::map::procs::Event {
+                actor: h.caster,
+                target,
+                actor_flags: crate::game::map::procs::PROC_TRAP,
+                target_flags: 0,
+                ex: crate::game::map::procs::EX_NORMAL_HIT,
+                spell: Some(h.spell),
+                damage: 0,
+                school: h.school,
+                offhand: false,
+                ranged: false,
+                extra_attack: false,
+            },
+        );
+    }
+}
+
+/// Whether casting `s` keeps `caster`'s stealth: the spells stealth allows,
+/// and Sap with Improved Sap's chance (Thistle Tea's `Spell.Stealth`).
+pub fn keeps_stealth(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
+    if STEALTH_ICONS.contains(&s.spell_icon)
+        || s.attr(1, crate::game::data::spells::ATTR_EX_ALLOW_WHILE_STEALTHED)
+    {
+        return true;
+    }
+    if s.spell_icon != SAP_ICON {
+        return false;
+    }
+    let known = |id: u32| {
+        map.players
+            .get(&caster)
+            .is_some_and(|p| p.spells.contains(&id))
+            || auras::auras(map, caster).is_some_and(|a| a.has_spell(id))
+    };
+    IMPROVED_SAP
+        .iter()
+        .find(|(id, _)| known(*id))
+        .is_some_and(|(_, chance)| super::outcome::chance(map, *chance as f32))
+}
+
+/// A weapon put on in a fight costs the global cooldown (Thistle Tea's
+/// `EquipmentTransitions.weapon_cooldown`).
+pub fn weapon_equipped(map: &mut Map, player: Guid, entry: u32) {
+    let Some(t) = map.realm.data.item(entry).cloned() else {
+        return;
+    };
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    let fighting = p.fields.has_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+    );
+    if !fighting || p.death != crate::game::map::death::Death::Alive {
+        return;
+    }
+    if t.class != 2 && t.inventory_type != 28 {
+        return;
+    }
+    let spell = if p.row.class == 4 { 6123 } else { 6119 };
+    let Some(s) = map.realm.data.spells.get(spell).cloned() else {
+        return;
+    };
+    let now = map.now;
+    if let Some(c) = map.caster_mut(player)
+        && c.gcd_until.is_none_or(|t| t <= now)
+    {
+        c.gcd_until = Some(
+            now + std::time::Duration::from_millis(u64::from(s.start_recovery_time.max(1000))),
+        );
+    }
+    super::cooldowns::send(map, player, &[(spell, 0)]);
 }
 
 /// A dispel took something: Devour Magic heals the felhunter.
@@ -422,10 +682,23 @@ fn vanish(map: &mut Map, rogue: Guid) {
     }
 }
 
+fn cannibalizing(map: &Map, h: &Holder) -> bool {
+    map.realm
+        .data
+        .spells
+        .get(h.spell)
+        .is_some_and(|t| script(t, "spell_cannibalize_aura"))
+}
+
 /// An aura went on: Stoneform's disease immunity beside its poison one
 /// (Thistle Tea's `extra_effects`, which the spell's three effects have no
 /// room for), and Bestial Wrath's immunities on the pet.
 pub fn aura_applied(map: &mut Map, target: Guid, h: &Holder) {
+    if cannibalizing(map, h)
+        && let Some(f) = map.unit_fields_mut(target)
+    {
+        f.set_u32(UNIT_NPC_EMOTESTATE, CANNIBALIZE_EMOTE);
+    }
     let stoneform = map
         .realm
         .data
@@ -482,6 +755,11 @@ pub fn aura_applied(map: &mut Map, target: Guid, h: &Holder) {
 /// An aura came off: Wyvern Sting's sleep leaves its poison (unless it was
 /// death that ended it); Bestial Wrath's immunities go with it.
 pub fn aura_gone(map: &mut Map, target: Guid, h: &Holder) {
+    if cannibalizing(map, h)
+        && let Some(f) = map.unit_fields_mut(target)
+    {
+        f.set_u32(UNIT_NPC_EMOTESTATE, 0);
+    }
     if let Some(poison) = pair(&WYVERN_STING, h.spell)
         && map.unit_view(target).is_some_and(|u| u.alive)
         && map.unit_view(h.caster).is_some()
