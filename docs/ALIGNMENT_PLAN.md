@@ -852,6 +852,61 @@ and the write-up are in peon: `results/2026-10-16/aligned/`, `results/2026-10-16
 **Done when:** the reports are committed in peon and the findings written up there, and the comparison above
 (Where they stand after the plan) records the result.
 
+### Phase 13's base (2026-10-17)
+
+- **Auras are holders:** one per spell, caster and item on a unit, with stacks, charges, an item source and the
+  spell's weapon restrictions.
+  - Thistle Tea's stacking rules: a caster's refresh, ranks, `spell_group` rules 1 and 3, and the exclusive kinds
+    (seals, blessings, curses, stings, aspects, armors, forms, mounts, food and drink, elixirs).
+  - Passive and hidden auras take no slot. Slot flags, levels and applications follow Thistle Tea's.
+- **Derived stats** (`derive.rs`), worked out again on every gear, level or aura change:
+  - stats with percent auras, health and power, armor and resistances;
+  - attack power and ranged attack power, weapon damage for both hands and ranged;
+  - haste and cast speed;
+  - crit, dodge, parry and block by vmangos's class rates, spell crit and spell power.
+  - Creatures keep their spawn values as a base. Gear's on-equip spells are auras that come and go with the item.
+- **Spell data:** weapon restrictions, aura states, focus and totems; vmangos's `spell_mod` and `spell_effect_mod`
+  corrections; `spell_proc_event`, `spell_chain`, `spell_threat`, `spell_group` and `spell_elixir`; and the item
+  enchantments.
+- wow_messages, patched in a local branch, reads 1.12's game object query, `/who`, loot window and cast result;
+  peon against it counted no parse errors in 30 bots' 100 seconds. The game object query response was missing its
+  fifth name, which the client needs.
+- The rest of phases 13 to 16 was fanned out to seven agents, each on its own branch, merged as each finishes.
+
+### Phase 15 (2026-10-17)
+
+**Group loot** (`loot.rs`), as Thistle Tea's:
+- Free for all, round robin (only the member whose turn it is may open), master loot (items at the threshold wait
+  for the master), group loot and need before greed (need only for those who can use the item).
+- Rolls start at the death and last 60 seconds. Need beats greed, the winner gets the item in their bags, and if
+  everyone passes it's free to take.
+- Quest items drop for each member who needs them, each a copy of their own. Gold is split among the members within
+  74 yards.
+- The loot window says its kind and each item's random property. The roll and money packets are encoded by hand, as
+  mangos-zero lays them out.
+
+**Professions** (`professions.rs`):
+- Herbalism, mining and lockpicking by the Lock DBC, with Thistle Tea's chances of success and skill-ups.
+- Skinning (a corpse with nothing left on it is skinnable at once), pick pocket (once a life, from stealth),
+  disenchanting.
+- Fishing with a bobber, bites, the zone's skill and fishing pools.
+- Crafting needs its spell focus and tools, and its skill rises by the recipe's colour.
+- Nodes and chests despawn and come back on their spawn's timer; veins may give again.
+
+**Enchantments** (`enchant.rs`):
+- Permanent and temporary slots, kept in the item's stored data. Their stats, resistances and weapon damage reach
+  the derived stats, and their equip spells become gear auras.
+- Item set bonuses by the count worn. Random properties rolled from `item_enchantment_template`.
+- Temporary enchantments run down and expire, with the client told the time.
+- Weapon procs: an enchantment's combat spell by chance or procs a minute, poisons' charges spent until they're
+  gone, and items' chance-on-hit spells.
+
+**Left for later:**
+- Loot conditions (`condition_id`), once there is a conditions evaluator.
+- Item charges and cooldowns on use, conjured and timed items.
+- The bobber lands at the caster's height, with no check for water or line of sight.
+- Skill bonuses from enchantments.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
