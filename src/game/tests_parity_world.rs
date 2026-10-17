@@ -536,3 +536,81 @@ async fn raised_chests_keep_their_loot_across_a_reload() {
         "the shard not back before its time"
     );
 }
+
+const DUNGEON: u32 = 36;
+
+fn dungeon() -> GameData {
+    let mut d = GameData::empty();
+    map_info(&mut d, DUNGEON, 1, 10, "");
+    d
+}
+
+fn owner_of(realm: &Realm, copy: MapKey) -> Option<instances::Owner> {
+    instances::save_of(realm, copy.instance).and_then(|s| s.owner)
+}
+
+fn group_id(realm: &Realm, g: Guid) -> u32 {
+    realm.social.groups.lock().group_of(g).unwrap().id
+}
+
+/// A group takes over its leader's copies as it forms, as Thistle Tea's
+/// `group_changed` hands them over, before anyone goes in; one disbanded
+/// leaves them without an owner, for its leader's next group; and a group
+/// keeps them when its leader leaves it.
+#[tokio::test]
+async fn a_group_adopts_its_leaders_copies_as_it_forms() {
+    let realm = lasting(dungeon(), Duration::from_secs(600));
+    let mut a = player(&realm, "Alice").await;
+    let b = player(&realm, "Bob").await;
+    let mut c = player(&realm, "Carol").await;
+    let online = |g: Guid| realm.registry.online(g).unwrap();
+    go(&realm, &mut a, DUNGEON).await;
+    let solo = key_of(&realm, a.guid);
+    go(&realm, &mut a, 0).await;
+    assert_eq!(
+        owner_of(&realm, solo),
+        Some(instances::Owner::Player(guid::counter(a.guid)))
+    );
+    // Alice and Bob: the group's at once.
+    assert!(crate::game::social::groups::join_directly(
+        &realm,
+        &online(a.guid),
+        &online(b.guid)
+    ));
+    let first = group_id(&realm, a.guid);
+    assert_eq!(
+        owner_of(&realm, solo),
+        Some(instances::Owner::Group(first)),
+        "adopted as the group forms"
+    );
+    // Bob goes, and the group with him: no one's.
+    crate::game::social::groups::leave(&realm, &online(b.guid));
+    assert_eq!(owner_of(&realm, solo), None, "left without an owner");
+    // Alice's next group takes it up.
+    assert!(crate::game::social::groups::join_directly(
+        &realm,
+        &online(a.guid),
+        &online(c.guid)
+    ));
+    let second = group_id(&realm, a.guid);
+    assert_eq!(
+        owner_of(&realm, solo),
+        Some(instances::Owner::Group(second))
+    );
+    assert!(crate::game::social::groups::join_directly(
+        &realm,
+        &online(a.guid),
+        &online(b.guid)
+    ));
+    // Alice leaves the three; Carol leads, and the copy is still theirs.
+    crate::game::social::groups::leave(&realm, &online(a.guid));
+    assert_eq!(
+        owner_of(&realm, solo),
+        Some(instances::Owner::Group(second))
+    );
+    go(&realm, &mut c, DUNGEON).await;
+    assert_eq!(key_of(&realm, c.guid), solo, "the group's copy");
+    // Alone, Alice has none of her own now.
+    go(&realm, &mut a, DUNGEON).await;
+    assert_ne!(key_of(&realm, a.guid), solo, "a copy of her own");
+}
