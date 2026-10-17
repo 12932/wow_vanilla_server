@@ -23,9 +23,10 @@ const AGGRO_SCAN_EVERY: Duration = Duration::from_millis(500);
 const DEFAULT_LEASH: f32 = 60.0;
 /// A chasing creature paths again when its victim has moved this far.
 const REPATH_YARDS: f32 = 1.5;
-/// How long a corpse lies before it goes.
-const CORPSE_DECAY: Duration = Duration::from_secs(60);
-const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(300);
+/// How long a corpse lies before it goes (Thistle Tea's `@corpse_decay_ms`):
+/// an elite's, ranks one to three, twice as long.
+const CORPSE_DECAY: Duration = Duration::from_secs(300);
+const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(600);
 /// The shortest wait before a creature respawns.
 const MIN_RESPAWN: Duration = Duration::from_secs(5);
 /// `UNIT_DYNAMIC_FLAGS`: the creature is tapped by someone else.
@@ -263,7 +264,7 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         return;
     };
     let template = data.creature_template(c.entry);
-    let elite = template.is_some_and(|t| t.rank == 1 || t.rank == 2);
+    let elite = template.is_some_and(|t| matches!(t.rank, 1..=3));
     let respawn = c
         .spawn_guid
         .and_then(|g| {

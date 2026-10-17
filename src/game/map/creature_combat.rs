@@ -77,6 +77,9 @@ pub struct Engagement {
     pub watch_at: Option<Instant>,
     /// When a frightened critter's escape ends.
     pub escape_at: Option<Instant>,
+    /// Damage it took from players' side, and from NPCs', this fight.
+    pub damage_by_players: u64,
+    pub damage_by_npcs: u64,
 }
 
 /// A civilian's call for the guards, answered: it makes one at a time.
@@ -128,6 +131,56 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.unreachable_since = None;
         c.engagement.flee = None;
         c.engagement.zone_pulse_at = None;
+        c.engagement.damage_by_players = 0;
+        c.engagement.damage_by_npcs = 0;
+    }
+}
+
+/// `static_flags1`: its corpse is the raid's, whoever fought it.
+const STATIC_CORPSE_RAID: u32 = 0x1000;
+
+/// Damage `amount` to creature `g` from `by` (Thistle Tea's
+/// `DamageOrigin.record`): a player's side's, or its own, counts as the
+/// players'; anything else as the NPCs'.
+pub fn damaged(map: &mut Map, g: Guid, by: Guid, amount: u32) {
+    if amount == 0 || !guid::is_unit(g) {
+        return;
+    }
+    let players = by == g || guid::is_player(crate::game::map::pets::master(map, by));
+    if let Some(c) = map.creature_mut(g) {
+        if players {
+            c.engagement.damage_by_players += u64::from(amount);
+        } else {
+            c.engagement.damage_by_npcs += u64::from(amount);
+        }
+    }
+}
+
+/// Whether a creature's corpse is lootable, and its kill rewarded: players
+/// dealt more than 35% of its damage, or its corpse is the raid's.
+pub fn loot_allowed(map: &Map, g: Guid) -> bool {
+    let Some(c) = map.creature(g) else {
+        return true;
+    };
+    let (p, n) = (c.engagement.damage_by_players, c.engagement.damage_by_npcs);
+    template(map, g).is_some_and(|t| t.static_flags1 & STATIC_CORPSE_RAID != 0)
+        || p + n == 0
+        || 65 * p > 35 * n
+}
+
+/// The share of a kill's XP its damage earns: the players' part of it.
+pub fn xp_share(map: &Map, g: Guid) -> f32 {
+    let Some(c) = map.creature(g) else {
+        return 1.0;
+    };
+    let (p, n) = (c.engagement.damage_by_players, c.engagement.damage_by_npcs);
+    if template(map, g).is_some_and(|t| t.static_flags1 & STATIC_CORPSE_RAID != 0) || p + n == 0
+    {
+        1.0
+    } else if loot_allowed(map, g) {
+        p as f32 / (p + n) as f32
+    } else {
+        0.0
     }
 }
 

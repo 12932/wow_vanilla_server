@@ -917,6 +917,7 @@ fn load_vendors(db: &Connection, data: &mut GameData) {
                         max_count: c.u32("maxcount"),
                         restock_secs: c.u32("incrtime"),
                         condition: c.u32("condition_id"),
+                        flags: c.u32("itemflags"),
                     },
                 )
             },
