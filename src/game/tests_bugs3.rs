@@ -1388,3 +1388,113 @@ async fn a_tapped_creature_is_grey_to_all_but_its_tappers() {
         "no one's when it evades"
     );
 }
+
+const HEALER: u32 = 900_410;
+const NEAR_WOLF: u32 = 900_411;
+const FAR_WOLF: u32 = 900_412;
+const WISP: u32 = 900_413;
+
+/// A ghost sees, of the creatures, only the living within 45 yards of its
+/// corpse, those its kind are shown to (type flag 0x2), and the spirit
+/// healers, which the living don't see: Thistle Tea's `Visibility.Filter`
+/// and mangos-classic's `Creature::IsVisibleInGridForPlayer` and
+/// `isInvisibleForAlive`.
+#[tokio::test]
+async fn a_ghost_sees_only_the_creatures_by_its_corpse() {
+    let mut d = GameData::empty();
+    let mut healer = plain_creature(HEALER, "Spirit Healer", 35);
+    healer.npc_flags = crate::game::map::npc::NPC_FLAG_SPIRITHEALER;
+    d.creature_templates.insert(HEALER, healer);
+    for (entry, name) in [(NEAR_WOLF, "Near Wolf"), (FAR_WOLF, "Far Wolf")] {
+        let mut w = plain_creature(entry, name, 35);
+        w.detection_range = 0.1;
+        d.creature_templates.insert(entry, w);
+    }
+    let mut wisp = plain_creature(WISP, "Wisp", 35);
+    wisp.type_flags = 0x2;
+    d.creature_templates.insert(WISP, wisp);
+    let at = |guid, entry, dx: f32| CreatureSpawn {
+        guid,
+        entries: vec![entry],
+        map: 0,
+        x: START.0 + dx,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    };
+    d.creature_spawns.insert(
+        0,
+        vec![
+            at(48, HEALER, 5.0),
+            at(49, NEAR_WOLF, 10.0),
+            at(50, FAR_WOLF, 60.0),
+            at(51, WISP, 70.0),
+        ],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, g, map) = enter(&realm, "A", "Ghost", Race::Human, Class::Warrior).await;
+    let of = |entry: u32| {
+        let map = map.clone();
+        async move {
+            on(&map, move |m| {
+                m.creatures
+                    .iter()
+                    .find(|(_, c)| c.entry == entry)
+                    .map(|(_, c)| c.guid)
+            })
+            .await
+            .expect("spawned")
+        }
+    };
+    let (healer, near, far, wisp) = (
+        of(HEALER).await,
+        of(NEAR_WOLF).await,
+        of(FAR_WOLF).await,
+        of(WISP).await,
+    );
+    for c in [near, far, wisp] {
+        a.sees(c).await;
+    }
+    let short = Duration::from_millis(300);
+    assert!(
+        !a.sees_within(healer, short).await,
+        "the living don't see a spirit healer"
+    );
+    on(&map, move |m| {
+        if let Some(p) = m.players.get_mut(&g) {
+            p.fields.set_u32(UNIT_FIELD_HEALTH, 1);
+        }
+        crate::game::map::combat::deal_damage(m, near, g, 1_000_000);
+    })
+    .await;
+    a.send(CMSG_REPOP_REQUEST {}).await;
+    a.wait_for("the teleport to the graveyard", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: g,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    a.forgets(far).await;
+    a.sees(healer).await;
+    let known = on(&map, move |m| {
+        let p = &m.players[&g];
+        (
+            p.known.contains(&near),
+            p.known.contains(&wisp),
+            p.known.contains(&far),
+        )
+    })
+    .await;
+    assert_eq!(
+        known,
+        (true, true, false),
+        "the near wolf and the wisp, not the far wolf"
+    );
+    on(&map, move |m| crate::game::map::death::resurrect(m, g, 1.0)).await;
+    a.sees(far).await;
+    a.forgets(healer).await;
+}
