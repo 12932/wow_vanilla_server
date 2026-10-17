@@ -38,6 +38,8 @@ const GUARDSMAN: u32 = 10_418;
 const TIMMY: u32 = 10_808;
 const WILLEY: u32 = 10_997;
 const WILLEYS_GATE: u32 = 175_969;
+const ACOLYTE: u32 = 10_399;
+const CRYSTAL: u32 = 10_415;
 const TEN_MINUTES: u32 = 27_863;
 
 fn data() -> GameData {
@@ -163,6 +165,46 @@ fn data() -> GameData {
             state: 0,
             ..Default::default()
         });
+    // The first crystal and its five acolytes, and an acolyte of the
+    // second's; spell 5 kills.
+    d.creature_templates
+        .insert(ACOLYTE, creature(ACOLYTE, "Acolyte"));
+    d.creature_templates
+        .insert(CRYSTAL, creature(CRYSTAL, "Crystal"));
+    for (spawn, entry) in [
+        (53_268, ACOLYTE),
+        (53_269, ACOLYTE),
+        (53_270, ACOLYTE),
+        (53_271, ACOLYTE),
+        (53_272, ACOLYTE),
+        (53_257, ACOLYTE),
+        (53_955, CRYSTAL),
+    ] {
+        d.creature_spawns
+            .entry(STRATHOLME)
+            .or_default()
+            .push(CreatureSpawn {
+                guid: spawn,
+                entries: vec![entry],
+                map: STRATHOLME,
+                x: AT.0 + 3.0,
+                y: AT.1 + 3.0,
+                z: AT.2,
+                ..Default::default()
+            });
+    }
+    let mut kill = SpellTemplate {
+        id: 5,
+        name: "Death Touch".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    kill.effects[0] = SpellEffect {
+        effect: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(5, kill);
     for id in [RUN_SPELL, TEN_MINUTES] {
         let mut s = SpellTemplate {
             id,
@@ -393,4 +435,27 @@ async fn timmy_comes_once_and_willey_shuts_his_gate() {
     })
     .await;
     assert_eq!(seen, ((0, 1), vec![false, true, false, true]));
+}
+
+/// Thistle Tea's crystals: a crystal topples when its own five acolytes
+/// are dead, not for another crystal's acolyte, and not before the fifth.
+#[tokio::test]
+async fn a_crystal_topples_with_its_own_five_acolytes() {
+    let (realm, _a, key) = inside().await;
+    let seen = on(&realm, key, |m| {
+        let crystal = of_spawn(m, 53_955);
+        let alive = |m: &Map| m.creature(crystal).is_some_and(|c| c.alive());
+        let mut seen = Vec::new();
+        for spawn in [53_257, 53_268, 53_269, 53_270, 53_271] {
+            let g = of_spawn(m, spawn);
+            instance_script::creature_event(m, g, Event::Death);
+        }
+        seen.push(alive(m));
+        let last = of_spawn(m, 53_272);
+        instance_script::creature_event(m, last, Event::Death);
+        seen.push(alive(m));
+        seen
+    })
+    .await;
+    assert_eq!(seen, vec![true, false]);
 }
