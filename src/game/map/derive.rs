@@ -726,6 +726,25 @@ fn speed(map: &mut Map, g: Guid) {
                 speed,
             });
         }
+        // Backwards, only slows count (Thistle Tea's `MovementStats`).
+        let slow = (1.0 + p.auras.min(AURA_MOD_DECREASE_SPEED).min(0) as f32 / 100.0).max(0.0);
+        let back = 4.5 * slow;
+        if !ghost && (back - p.speeds.run_back).abs() > 0.01 {
+            p.speeds.run_back = back;
+            p.outbound.send(&SMSG_FORCE_RUN_BACK_SPEED_CHANGE {
+                guid: g,
+                move_event: 0,
+                speed: back,
+            });
+        }
+        if !ghost && (2.5 - p.speeds.swim_back).abs() > 0.01 {
+            p.speeds.swim_back = 2.5;
+            p.outbound.send(&SMSG_FORCE_SWIM_BACK_SPEED_CHANGE {
+                guid: g,
+                move_event: 0,
+                speed: 2.5,
+            });
+        }
         let swim = 4.722_222 * (1.0 + p.auras.sum(AURA_MOD_INCREASE_SWIM_SPEED) as f32 / 100.0);
         if !ghost && (swim - p.speeds.swim).abs() > 0.01 {
             p.speeds.swim = swim;

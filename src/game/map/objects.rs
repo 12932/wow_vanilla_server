@@ -489,12 +489,101 @@ pub fn effect(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, t: &
         }
         EFFECT_ACTIVATE_OBJECT => {
             for o in object_targets(map, caster, s, t) {
-                activate(map, caster, o, e.misc_value.max(0) as u32, s.id);
+                activate(map, caster, o, e.misc_value.max(0) as u32);
             }
             true
         }
         _ => false,
     }
+}
+
+/// The Ritual of Summoning's target (Thistle Tea's `validate_ritual`): a
+/// player of the caster's group, online and out of combat; from a dungeon,
+/// one in it; nowhere from a battleground.
+pub fn ritual_check(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    use crate::game::map::spells::checks::fail;
+    if s.script_name != "spell_warlock_ritual_of_summoning" {
+        return None;
+    }
+    let target = map
+        .unit_fields(caster)
+        .map(|f| f.get_guid(UNIT_FIELD_TARGET))
+        .unwrap_or_default();
+    let in_combat = map.unit_fields(target).is_some_and(|f| {
+        f.get_u32(UNIT_FIELD_FLAGS) & crate::game::map::player::UNIT_FLAG_IN_COMBAT != 0
+    });
+    let valid = guid::is_player(target)
+        && target != caster
+        && map.realm.registry.online(target).is_some()
+        && same_group(map, caster, target);
+    if in_combat {
+        return Some(fail::TARGET_AFFECTING_COMBAT);
+    }
+    if !valid {
+        return Some(fail::BAD_TARGETS);
+    }
+    let kind = crate::game::instances::instance_type(&map.realm, map.key.map);
+    if matches!(kind, 1 | 2) && !map.players.contains_key(&target) {
+        return Some(TARGET_NOT_IN_INSTANCE);
+    }
+    if kind == 3 {
+        return Some(NOT_HERE);
+    }
+    None
+}
+
+/// `SpellCastResult`s the ritual's checks give.
+const NOT_HERE: u8 = 0x35;
+const TARGET_NOT_IN_INSTANCE: u8 = 0x7f;
+
+/// An object's lock (Thistle Tea's `GameObjectTemplate.lock_id`).
+pub fn lock_of(t: &GameObjectTemplate) -> u32 {
+    match t.kind {
+        GO_DOOR | GO_BUTTON => t.data[1],
+        25 => t.data[4],
+        2 | GO_CHEST | GO_TRAP | GO_GOOBER | 12 | 13 | 24 | 26 => t.data[0],
+        _ => 0,
+    }
+}
+
+/// An object whose lock is opened by attacking it (a battleground's
+/// banner: a skill key of lock type 17): a viewer's state starts fresh.
+pub fn resets_on_sight(map: &Map, object: Guid) -> bool {
+    let data = &map.realm.data;
+    let Some(t) = map
+        .gameobject(object)
+        .and_then(|o| data.gameobject_templates.get(&o.entry))
+    else {
+        return false;
+    };
+    data.crafts.locks.get(&lock_of(t)).is_some_and(|keys| {
+        keys.iter()
+            .any(|k| k.kind == crate::game::data::crafts::LOCK_KEY_SKILL && k.index == 17)
+    })
+}
+
+/// A spell that opens locks: no quest credit for what it opens (Thistle
+/// Tea's `queue_quest_cast_credit`).
+pub fn opens_lock(s: &SpellTemplate) -> bool {
+    s.effects.iter().any(|e| matches!(e.effect, 33 | 59))
+}
+
+/// The objects a cast is at: the one aimed at, and those its effect 86
+/// works.
+pub fn cast_at(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<Guid> {
+    let mut out: Vec<Guid> = t
+        .object
+        .filter(|o| map.gameobject(*o).is_some())
+        .into_iter()
+        .collect();
+    if s.effects.iter().any(|e| e.effect == EFFECT_ACTIVATE_OBJECT) {
+        for o in object_targets(map, caster, s, t) {
+            if !out.contains(&o) {
+                out.push(o);
+            }
+        }
+    }
+    out
 }
 
 /// The objects a spell works on: the one aimed at, or the nearest its
@@ -529,7 +618,7 @@ fn object_targets(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Ve
 /// Effect 86 on an object, by its action (vmangos'
 /// `GameObjectActions`): used, an animation, locked or unlocked, reset,
 /// gone, made usable or not.
-pub fn activate(map: &mut Map, user: Guid, object: Guid, action: u32, spell: u32) {
+pub fn activate(map: &mut Map, user: Guid, object: Guid, action: u32) {
     match action {
         5 | 8 => used_by_script(map, user, object),
         1..=4 => send(
@@ -556,10 +645,6 @@ pub fn activate(map: &mut Map, user: Guid, object: Guid, action: u32, spell: u32
             set_flag(map, object, GO_FLAG_LOCKED, true);
         }
         _ => {}
-    }
-    // A quest's spell to cast at it.
-    if map.players.contains_key(&user) {
-        crate::game::map::quests::cast_on_object(map, user, object, spell);
     }
 }
 
@@ -951,13 +1036,88 @@ fn show_readable(map: &mut Map, user: Guid, object: Guid, t: &GameObjectTemplate
 }
 
 fn in_reach(map: &Map, player: Guid, object: Guid) -> bool {
-    match (map.players.get(&player), map.gameobject(object)) {
-        (Some(p), Some(o)) => {
-            p.death == crate::game::map::death::Death::Alive
-                && dist(p.position(), o.position) <= USE_YARDS
-        }
-        _ => false,
+    map.players
+        .get(&player)
+        .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
+        && within_reach(map, player, object)
+}
+
+/// How near an object must be to use it (Thistle Tea's interaction
+/// radius).
+pub const INTERACT_YARDS: f32 = 5.555_56;
+
+/// Whether `player` may reach `object` to use it: within the interaction
+/// radius of its model's box, turned and scaled as it is (Thistle Tea's
+/// `GameObjectInteraction.within?`), or of where it stands without one.
+pub fn within_reach(map: &Map, player: Guid, object: Guid) -> bool {
+    let (Some(p), Some(o)) = (map.players.get(&player), map.gameobject(object)) else {
+        return false;
+    };
+    let at = p.position();
+    let (dx, dy, dz) = (
+        at.x - o.position.x,
+        at.y - o.position.y,
+        at.z - o.position.z,
+    );
+    let r = INTERACT_YARDS;
+    let bounds = map
+        .realm
+        .data
+        .gameobject_templates
+        .get(&o.entry)
+        .and_then(|t| t.bounds)
+        .filter(|(lo, hi)| lo.iter().chain(hi.iter()).any(|v| *v != 0.0));
+    let Some((lo, hi)) = bounds else {
+        return (dx * dx + dy * dy + dz * dz).sqrt() <= r;
+    };
+    let mut q = [0.0f32; 4];
+    for (i, v) in q.iter_mut().enumerate() {
+        *v = o.fields.get_f32(GAMEOBJECT_ROTATION + i as u16);
     }
+    if q[2] == 0.0 && q[3] == 0.0 {
+        q[2] = (o.orientation / 2.0).sin();
+        q[3] = (o.orientation / 2.0).cos();
+    }
+    let (x, y, z) = inverse_rotate((dx, dy, dz), q);
+    let scale = o.fields.get_f32(OBJECT_FIELD_SCALE_X);
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let inside = |v: f32, l: f32, h: f32| v >= l * scale - r && v <= h * scale + r;
+    inside(x, lo[0], hi[0]) && inside(y, lo[1], hi[1]) && inside(z, lo[2], hi[2])
+}
+
+/// A point turned back by a rotation's quaternion.
+fn inverse_rotate((x, y, z): (f32, f32, f32), [qx, qy, qz, qw]: [f32; 4]) -> (f32, f32, f32) {
+    let norm = qx * qx + qy * qy + qz * qz + qw * qw;
+    if norm <= 0.0 {
+        return (x, y, z);
+    }
+    let tx = 2.0 * (qz * y - qy * z) / norm;
+    let ty = 2.0 * (qx * z - qz * x) / norm;
+    let tz = 2.0 * (qy * x - qx * y) / norm;
+    (
+        x + qw * tx + qz * ty - qy * tz,
+        y + qw * ty + qx * tz - qz * tx,
+        z + qw * tz + qy * tx - qx * ty,
+    )
+}
+
+/// Whether `player` is near enough to use `object`: the interaction reach
+/// for the objects Thistle Tea measures (doors, buttons, quest givers,
+/// pages, quest objects, rituals, spell casters, meeting stones), ten
+/// yards for the rest.
+pub fn in_use_range(map: &Map, player: Guid, object: Guid) -> bool {
+    let Some(o) = map.gameobject(object) else {
+        return false;
+    };
+    if matches!(
+        o.kind,
+        GO_DOOR | GO_BUTTON | 2 | GO_TEXT | GO_GOOBER | GO_RITUAL | GO_SPELLCASTER | 23
+    ) {
+        return within_reach(map, player, object);
+    }
+    map.players
+        .get(&player)
+        .is_some_and(|p| dist(p.position(), o.position) <= USE_YARDS)
 }
 
 /// vmangos' `gameobject_requirement`: a spawn used only once another is

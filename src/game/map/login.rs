@@ -38,6 +38,8 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         y: p.row.y,
         z: p.row.z,
     });
+    // mangos sends it, and Thistle Tea after it.
+    out.send(&wow_world_messages::vanilla::SMSG_SET_REST_START { unknown1: 0 });
     out.send(&SMSG_BINDPOINTUPDATE {
         position: Vector3d {
             x: bind.x,

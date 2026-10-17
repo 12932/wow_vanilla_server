@@ -1851,6 +1851,10 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         // Dying to a creature wears gear down; to a player, it doesn't.
         if guid::is_unit(killer) {
             crate::game::map::vendor::wear(map, victim, 0.10);
+            if let Some(p) = map.players.get(&victim) {
+                p.outbound
+                    .send(&wow_world_messages::vanilla::SMSG_DURABILITY_DAMAGE_DEATH {});
+            }
         }
     } else {
         if crate::game::map::pets::died(map, killer, victim) {
@@ -2027,6 +2031,7 @@ pub fn update_players(map: &mut Map) {
     for g in fighting {
         sync_aura_state(map, g);
     }
+    let data = map.realm.data.clone();
     let threatened: ahash::AHashSet<Guid> = map
         .creatures
         .iter()
@@ -2046,6 +2051,7 @@ pub fn update_players(map: &mut Map) {
             p.combat.attackers.clear();
             p.fields
                 .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
+            crate::game::map::reputation::end_temporary_war(p, &data);
         }
         if p.combat
             .last_pvp
@@ -2081,6 +2087,10 @@ pub fn update_creatures(map: &mut Map) {
 /// A unit stops fighting: out of combat, attacking nothing.
 pub fn leave_combat(map: &mut Map, g: Guid) {
     stop_attack(map, g);
+    let data = map.realm.data.clone();
+    if let Some(p) = map.players.get_mut(&g) {
+        crate::game::map::reputation::end_temporary_war(p, &data);
+    }
     if let Some(c) = map.combat_mut(g) {
         c.attackers.clear();
         c.last_action = None;
