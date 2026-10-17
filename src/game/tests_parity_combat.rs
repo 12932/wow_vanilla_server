@@ -48,6 +48,11 @@ const BOLT: u32 = 95_009;
 const DOMINATE: u32 = 95_010;
 /// A mage's bolt, dear in mana.
 const DEAR_BOLT: u32 = 95_011;
+/// A buff; a debuff evading doesn't take.
+const BOON: u32 = 95_012;
+const LASTING: u32 = 95_013;
+/// A creature's own buff.
+const MOCK_BUFF: u32 = 95_014;
 
 /// The spawns: (guid, entry, east, north).
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
@@ -135,6 +140,8 @@ fn data() -> GameData {
         .insert(KOBOLD, creature(KOBOLD, "Kobold", PACK));
     let mut worn = creature(WORN, "Worn Kobold", PACK);
     worn.static_flags1 = 0x400;
+    // And keeps its buffs through an evade.
+    worn.flags_extra = 0x1000;
     d.creature_templates.insert(WORN, worn);
     // Sitting, weapon drawn, eating.
     d.creature_addons.insert(
@@ -245,7 +252,15 @@ fn data() -> GameData {
         }
         s.spells.insert(id, t);
     }
-    for (id, aura) in [(HIDE, 16), (GOAD, 11), (MOCK, 11), (DOMINATE, 6)] {
+    for (id, aura) in [
+        (HIDE, 16),
+        (GOAD, 11),
+        (MOCK, 11),
+        (DOMINATE, 6),
+        (BOON, 29),
+        (LASTING, 27),
+        (MOCK_BUFF, 29),
+    ] {
         let mut t = crate::game::data::spells::SpellTemplate {
             id,
             name: format!("Spell {id}"),
@@ -264,6 +279,15 @@ fn data() -> GameData {
             ..Default::default()
         };
         s.spells.insert(id, t);
+    }
+    if let Some(t) = s.spells.get_mut(&LASTING) {
+        t.custom_flags = crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE;
+    }
+    // The buffs are cast at a friend.
+    for id in [BOON, MOCK_BUFF] {
+        if let Some(t) = s.spells.get_mut(&id) {
+            t.effects[0].target_a = 21;
+        }
     }
     d
 }
@@ -1319,4 +1343,37 @@ async fn a_slowed_creature_goes_on_slower_and_a_possessed_one_is_told_as_a_playe
         },
     )
     .await;
+}
+
+/// What an evade takes (Thistle Tea's `remove_on_evade`): its debuffs,
+/// but not one marked to stay, nor a player's timed buff; its own buffs
+/// too, unless its template keeps them.
+#[tokio::test]
+async fn an_evade_keeps_a_players_buffs_and_what_is_marked_to_stay() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let (k, keeper) = (kobold(11), guid::unit(WORN, 12));
+    let out = map
+        .query(move |m| {
+            m.players.get_mut(&ga).unwrap().movement.position = at(26.0, 3.0);
+            let mut kept = Vec::new();
+            for g in [k, keeper] {
+                crate::game::map::ai::attacked(m, g, ga);
+                aura_on(m, ga, g, BOON, 10);
+                aura_on(m, ga, g, LASTING, -10);
+                aura_on(m, ga, g, CURSE, -10);
+                aura_on(m, g, g, MOCK_BUFF, 10);
+                crate::game::map::ai::enter_evade(m, g);
+                let a = crate::game::map::auras::auras(m, g).unwrap();
+                kept.push([BOON, LASTING, CURSE, MOCK_BUFF].map(|s| a.has_spell(s)));
+            }
+            kept
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out[0],
+        [true, true, false, false],
+        "a player's buff, what stays; not its debuff, nor its own buff"
+    );
+    assert_eq!(out[1], [true, true, false, true], "its own buff, kept");
 }
