@@ -118,6 +118,7 @@ const FAIL_CANT_BE_DISENCHANTED: u8 = 0x0c;
 const FAIL_CHEST_IN_USE: u8 = 0x15;
 const FAIL_ITEM_GONE: u8 = 0x26;
 const FAIL_LOW_CASTLEVEL: u8 = 0x2c;
+const FAIL_NOT_FISHABLE: u8 = 0x34;
 const FAIL_ONLY_STEALTHED: u8 = 0x57;
 const FAIL_OUT_OF_RANGE: u8 = 0x59;
 pub const FAIL_REQUIRES_SPELL_FOCUS: u8 = 0x5e;
@@ -879,14 +880,16 @@ fn cast_line(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize) {
         return;
     };
     let (pos, o, zone, area) = (p.position(), p.movement.orientation, p.zone, p.area);
+    // Where the cast found water; without a navmesh, ahead at the
+    // player's height.
+    let at = map
+        .loot_state
+        .fishing_spots
+        .remove(&caster)
+        .unwrap_or_else(|| line_reach(pos, o));
+    // The zone and area are the water's (Thistle Tea's, mangos's).
+    let (zone, area) = crate::game::map::world::zone_and_area(map, at).unwrap_or((zone, area));
     let mut rng = rand::rng();
-    let reach = 10.0 + rng.random_range(0.0f32..10.0);
-    let angle = o + rng.random_range(-0.25f32..0.25);
-    let at = Vector3d {
-        x: pos.x + reach * angle.cos(),
-        y: pos.y + reach * angle.sin(),
-        z: pos.z,
-    };
     let counter = map.next_creature_counter;
     map.next_creature_counter += 1;
     let mut go = GameObject::from_spawn(
@@ -932,8 +935,86 @@ fn cast_line(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize) {
         zone,
         area,
     });
+    // The channel lasts as long as the line is out (Thistle Tea's
+    // `adjust_channel`).
+    let lasts = bite + CATCH_WINDOW;
     if let Some(p) = map.players.get_mut(&caster) {
         p.fields.set_guid(UNIT_FIELD_CHANNEL_OBJECT, g);
+        if let Some(c) = p.caster.casting.as_mut().filter(|c| c.spell == s.id) {
+            c.ends = now + lasts;
+            c.channel_until = Some(now + lasts);
+            c.duration = lasts.as_millis() as u32;
+        }
+        p.outbound.send(&MSG_CHANNEL_UPDATE_Server {
+            time: lasts.as_millis() as u32,
+        });
+    }
+}
+
+/// Where a line cast from `at` facing `o` lands: ten to twenty yards
+/// ahead, a little to either side (Thistle Tea's `cast_position`).
+fn line_reach(at: Vector3d, o: f32) -> Vector3d {
+    let mut rng = rand::rng();
+    let reach = 10.0 + rng.random_range(0.0f32..10.0);
+    let angle = o + rng.random_range(-0.25f32..0.25);
+    Vector3d {
+        x: at.x + reach * angle.cos(),
+        y: at.y + reach * angle.sin(),
+        z: at.z,
+    }
+}
+
+/// As a fishing cast begins: where its line will land, on the surface of
+/// water a yard deep at least and in sight; else it isn't fishable
+/// (Thistle Tea's `prepare_cast`). Without a navmesh to say, it lands.
+pub fn fishing_spot(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    let fishing =
+        (0..3).any(|i| s.effects[i].effect == EFFECT_TRANS_DOOR && handles(&map.realm.data, s, i));
+    if !fishing {
+        return None;
+    }
+    let (pos, o) = map
+        .players
+        .get(&caster)
+        .map(|p| (p.position(), p.movement.orientation))?;
+    let nav = map.nav.as_mut()?;
+    let to = line_reach(pos, o);
+    let surface = nav.liquid_surface(Vector3d {
+        z: pos.z + 1.0,
+        ..to
+    });
+    let spot = surface.and_then(|surface| {
+        let floor = nav.floor_under(to.x, to.y, surface).unwrap_or(surface);
+        let at = Vector3d { z: surface, ..to };
+        (surface - floor >= 1.0 && nav.line_of_sight(pos, at)).then_some(at)
+    });
+    match spot {
+        Some(at) => {
+            map.loot_state.fishing_spots.insert(caster, at);
+            None
+        }
+        None => Some(FAIL_NOT_FISHABLE),
+    }
+}
+
+/// A fishing channel ended, cancelled or run out: its line comes out of
+/// the water, unhooked if its time was up (Thistle Tea's despawn and
+/// `fishing_expire`).
+pub fn line_ended(map: &mut Map, player: Guid) {
+    let now = map.now;
+    let lines: Vec<(Guid, bool)> = map
+        .loot_state
+        .bobbers
+        .iter()
+        .filter(|b| b.owner == player)
+        .map(|b| (b.guid, b.gone_at <= now))
+        .collect();
+    for (g, timed_out) in lines {
+        map.loot_state.bobbers.retain(|b| b.guid != g);
+        map.remove_gameobject(g);
+        if timed_out && let Some(p) = map.players.get(&player) {
+            p.outbound.send(&SMSG_FISH_NOT_HOOKED {});
+        }
     }
 }
 
@@ -1015,10 +1096,20 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         Some((hole, table)) => {
             let mut l = loot::personal(&data, &table, player, &wanted, LootKind::Fishing);
             l.gold = 0;
-            let max = data
+            // Between its least and most, rolled for the spawn (Thistle
+            // Tea's, mangos's).
+            let (least, most) = data
                 .gameobject_templates
                 .get(&map.gameobject(hole).map_or(0, |o| o.entry))
-                .map_or(1, |t| t.data[3].max(t.data[2]).max(1));
+                .map_or((1, 1), |t| {
+                    let least = t.data[2].max(1);
+                    (least, t.data[3].max(least))
+                });
+            let max = *map
+                .loot_state
+                .hole_uses
+                .entry(hole)
+                .or_insert_with(|| rand::rng().random_range(least..=most));
             let uses = {
                 let u = map.loot_state.node_uses.entry(hole).or_insert(0);
                 *u += 1;
@@ -1166,6 +1257,7 @@ fn despawn(map: &mut Map, object: Guid) {
     let data = map.realm.data.clone();
     map.loot_state.node_uses.remove(&object);
     map.loot_state.skilled.remove(&object);
+    map.loot_state.hole_uses.remove(&object);
     let Some(o) = map.remove_gameobject(object) else {
         return;
     };
@@ -1227,6 +1319,9 @@ pub fn respawn_nodes(map: &mut Map) {
     for (g, owner) in gone {
         map.loot_state.bobbers.retain(|b| b.guid != g);
         map.remove_gameobject(g);
+        if let Some(p) = map.players.get(&owner) {
+            p.outbound.send(&SMSG_FISH_NOT_HOOKED {});
+        }
         end_channel(map, owner);
     }
     if map.loot_state.respawns.is_empty() {
