@@ -10,6 +10,7 @@ pub mod auction;
 pub mod auras;
 pub mod battleground;
 pub mod boss_mechanics;
+pub mod charge;
 pub mod chat;
 pub mod cinematic;
 pub mod combat;
@@ -759,6 +760,7 @@ impl Map {
         eviction::update(self);
         self.unload_if_empty();
         pets::update(self);
+        charge::update(self);
         ai::update_creatures(self);
         combat::update_creatures(self);
         escorts::update(self);

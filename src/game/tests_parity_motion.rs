@@ -444,6 +444,7 @@ const CONFUSE: u32 = 92_002;
 const ROOT: u32 = 92_003;
 const STUN: u32 = 92_004;
 const DISTRACT: u32 = 92_005;
+const CHARGE: u32 = 92_006;
 
 /// The test spells: auras of fear, confusion, root and stun, ten seconds
 /// each, and a rogue's distract.
@@ -494,7 +495,18 @@ fn with_spells(mut d: GameData) -> GameData {
             },
         )
     };
+    // A warrior's charge: the run, at an enemy.
+    let charge = spell(
+        CHARGE,
+        "Charge",
+        SpellEffect {
+            effect: 96,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
     for t in [
+        charge,
         spell(FEAR, "Fear", aura(7)),
         spell(CONFUSE, "Confuse", aura(5)),
         spell(ROOT, "Root", aura(26)),
@@ -881,4 +893,87 @@ async fn a_leashing_creature_is_healed_as_it_turns_for_home() {
             assert_eq!(home.0, home.1 / 2, "nor at home");
         }
     }
+}
+
+/// Charge runs the caster to its target at four times its run speed, at
+/// most 24 yards a second, to half a yard inside its reach, and it swings
+/// there, not at once (Thistle Tea's `Movement.Charge`): a player's client
+/// is moved by a monster move for its own guid, its swing put off by the
+/// run; a creature runs the same way.
+#[tokio::test]
+async fn charge_runs_to_the_target_and_swings_there() {
+    let mut d = wolf_world();
+    d.creature_spawns.get_mut(&0).unwrap()[0] = spawn(80, WOLF, at(20.0, 0.0));
+    let (_realm, mut a, ga, map) = enter(d).await;
+    let g = wolf();
+    a.sees(g).await;
+    let (moved_at_once, attacking_at_once, swing_in) = map
+        .query(move |m| {
+            let now = m.now;
+            crate::game::map::spells::cast_triggered(m, ga, CHARGE, Some(g));
+            let p = &m.players[&ga];
+            (
+                dist(p.position(), at(0.0, 0.0)),
+                p.combat.attacking,
+                p.combat.next_swing.map(|t| t.duration_since(now)),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(moved_at_once < 0.01, "not teleported: {moved_at_once}");
+    assert!(!attacking_at_once, "no swing until it gets there");
+    // 20 yards less the reach (about 5), less half a yard: some 15.5.
+    assert!(
+        swing_in.is_some_and(|t| t >= Duration::from_millis(200 + 40 * 18)),
+        "its swing put off by the run: {swing_in:?}"
+    );
+    let run = next_move(&mut a, ga, |m| m.kind == 0).await;
+    assert_ne!(run.flags & 0x100, 0, "running");
+    let end = *run.points.last().unwrap();
+    let gap = dist(end, at(20.0, 0.0));
+    assert!(
+        (4.0..5.5).contains(&gap),
+        "to half a yard inside its reach: {gap}"
+    );
+    let length = dist(at(0.0, 0.0), end);
+    let ms = (length / 24.0 * 1000.0) as u32;
+    assert!(
+        run.duration.abs_diff(ms) <= 2,
+        "at 24 yards a second: {} {ms}",
+        run.duration
+    );
+    tokio::time::sleep(Duration::from_millis(u64::from(run.duration) + 300)).await;
+    let (there, attacking, victim) = map
+        .query(move |m| {
+            let p = &m.players[&ga];
+            (dist(p.position(), end), p.combat.attacking, p.combat.victim)
+        })
+        .await
+        .unwrap();
+    assert!(there < 0.5, "there: {there}");
+    assert!(attacking && victim == g, "and swinging at it");
+    // A creature charges the same way.
+    let (wolf_at_once, wolf_charging) = map
+        .query(move |m| {
+            let c = m.creature_mut(g).unwrap();
+            c.position = at(20.0, 20.0);
+            c.motion = Motion::Idle { until: None };
+            crate::game::map::spells::cast_triggered(m, g, CHARGE, Some(ga));
+            let c = m.creature(g).unwrap();
+            (dist(c.position, at(20.0, 20.0)), walking(m, g).is_some())
+        })
+        .await
+        .unwrap();
+    assert!(wolf_at_once < 0.01 && wolf_charging, "the wolf runs");
+    let wolf_run = next_move(&mut a, g, |m| m.kind == 0 && m.duration > 0).await;
+    tokio::time::sleep(Duration::from_millis(u64::from(wolf_run.duration) + 300)).await;
+    let (charging, fighting) = map
+        .query(move |m| {
+            let c = m.creature(g).unwrap();
+            let near = dist(c.position, m.players[&ga].position()) < 5.0;
+            (!near, c.combat.attacking && c.combat.victim == ga)
+        })
+        .await
+        .unwrap();
+    assert!(!charging && fighting, "it gets there and fights");
 }
