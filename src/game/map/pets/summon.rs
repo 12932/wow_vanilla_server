@@ -634,6 +634,7 @@ pub fn remove(map: &mut Map, g: Guid) {
             o.critter = None;
         }
         o.guardians.retain(|x| *x != g);
+        o.loose_totems.retain(|x| *x != g);
         for t in o.totems.iter_mut() {
             if *t == Some(g) {
                 *t = None;

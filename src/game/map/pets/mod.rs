@@ -214,6 +214,9 @@ pub struct Owned {
     /// A charmed or possessed unit, while it serves.
     pub charm: Option<Guid>,
     pub totems: [Option<Guid>; 4],
+    /// Totems of no element's slot (a battleground's standard, a ward):
+    /// as many as are summoned, none replacing another.
+    pub loose_totems: Vec<Guid>,
     pub guardians: Vec<Guid>,
     pub critter: Option<Guid>,
     /// The pet went away for a while (mounted, dead) and comes back.
@@ -562,6 +565,7 @@ pub fn owner_leaving(map: &mut Map, owner: Guid) {
         .totems
         .iter()
         .flatten()
+        .chain(owned.loose_totems.iter())
         .chain(owned.guardians.iter())
         .chain(owned.critter.iter())
     {

@@ -100,6 +100,29 @@ fn slot_spot(map: &Map, owner: Guid, slot: usize) -> (Vector3d, f32) {
     )
 }
 
+/// Where a totem of no slot stands: two yards in front of its owner.
+fn front_spot(map: &Map, owner: Guid) -> (Vector3d, f32) {
+    let (pos, o) = map
+        .unit_view(owner)
+        .map(|u| (u.position, u.orientation))
+        .unwrap_or((
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        ));
+    (
+        Vector3d {
+            x: pos.x + 2.0 * o.cos(),
+            y: pos.y + 2.0 * o.sin(),
+            z: pos.z,
+        },
+        o,
+    )
+}
+
 /// Effects a totem shrugs off (Thistle Tea's `Totems.immune_effect?`): heals
 /// and power, taunts, and harmful or healing auras, but its shaman's own
 /// and the shaman's totem spells.
@@ -117,7 +140,9 @@ pub fn immune(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
             && (!crate::game::map::auras::positive(s) || REGEN_AURAS.contains(&e.aura)))
 }
 
-/// A totem of `entry` for `owner`, in `slot` (the one there goes).
+/// A totem of `entry` for `owner`, in `slot` (the one there goes); one of
+/// no slot (`SUMMON_TOTEM`: a standard, a ward) stands in front and takes
+/// no element's place, as mangos's `TOTEM_SLOT_NONE`.
 pub fn summon_totem(
     map: &mut Map,
     owner: Guid,
@@ -126,11 +151,14 @@ pub fn summon_totem(
     slot: Option<usize>,
 ) {
     let now = map.now;
-    let slot = slot.unwrap_or(0).min(3);
-    if let Some(old) = map.players.get(&owner).and_then(|p| p.owned.totems[slot]) {
+    let slot = slot.map(|s| s.min(3));
+    if let Some(old) = slot.and_then(|slot| map.players.get(&owner)?.owned.totems[slot]) {
         summon::remove(map, old);
     }
-    let (at, o) = slot_spot(map, owner, slot);
+    let (at, o) = match slot {
+        Some(slot) => slot_spot(map, owner, slot),
+        None => front_spot(map, owner),
+    };
     let level = level_of(map, owner);
     let g = summon::spawn(map, owner, entry, Kind::Totem, level, at, o);
     let spell = totem_spell(map, entry, s);
@@ -155,7 +183,7 @@ pub fn summon_totem(
         c.fields.set_u32(UNIT_FIELD_HEALTH, health);
         c.base.max_health = health;
         if let Some(st) = c.pet.as_deref_mut() {
-            st.totem_slot = Some(slot);
+            st.totem_slot = slot;
             st.totem_spell = spell;
             st.summon_spell = s.id;
             st.react = REACT_PASSIVE;
@@ -164,7 +192,10 @@ pub fn summon_totem(
         }
     }
     if let Some(p) = map.players.get_mut(&owner) {
-        p.owned.totems[slot] = Some(g);
+        match slot {
+            Some(slot) => p.owned.totems[slot] = Some(g),
+            None => p.owned.loose_totems.push(g),
+        }
     }
     // A totem whose spell lasts on it (a pulse, a ward) has it from the
     // start.
