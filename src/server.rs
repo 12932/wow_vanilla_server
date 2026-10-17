@@ -68,6 +68,8 @@ async fn async_main(start: Start) -> u8 {
         )
         .with(tracy_layer)
         .init();
+    // Panics in the log, with where they happened, once.
+    crate::game::supervisor::install_panic_hook();
 
     let mut cfg = match crate::config::load(std::path::Path::new("config.toml")) {
         Ok(cfg) => cfg,
