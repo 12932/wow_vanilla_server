@@ -188,6 +188,10 @@ pub struct MapLoot {
     pub skilled: ahash::AHashMap<Guid, AHashSet<Guid>>,
     /// Creatures whose pockets are picked this life.
     pub picked: AHashSet<Guid>,
+    /// What a rogue left in a creature's pockets: theirs again when they
+    /// pick them again, this life (mangos's kept loot, Thistle Tea's
+    /// `Pockets`).
+    pub pockets: ahash::AHashMap<(Guid, Guid), Loot>,
     pub bobbers: Vec<crate::game::map::professions::Bobber>,
     /// Where each player's line will land, chosen as the cast began.
     pub fishing_spots: ahash::AHashMap<Guid, wow_world_messages::vanilla::Vector3d>,
@@ -420,6 +424,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     let lootable = !loot.is_empty() || loot.items.iter().any(|s| s.quest);
     let rolls: Vec<usize> = loot.rolls.iter().map(|r| r.slot).collect();
     map.loot_state.picked.remove(&creature);
+    map.loot_state.pockets.retain(|(c, _), _| *c != creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
@@ -1193,9 +1198,12 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
     }
     if guid::is_unit(target) {
         if kind == LootKind::Pickpocket {
-            // The pockets are picked; the creature keeps no window.
-            if let Some(c) = map.creature_mut(target) {
-                c.loot = None;
+            // The pockets are picked; what's left in them is the rogue's
+            // to find again.
+            if let Some(l) = map.creature_mut(target).and_then(|c| c.loot.take())
+                && !empty
+            {
+                map.loot_state.pockets.insert((target, player), l);
             }
             return;
         }
