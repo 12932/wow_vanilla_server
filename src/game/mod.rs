@@ -88,6 +88,8 @@ mod tests_ai5;
 mod tests_ai5_spells;
 #[cfg(test)]
 mod tests_ai5_conditions;
+#[cfg(test)]
+mod tests_ai5_instances;
 pub mod transports;
 pub mod update;
 pub mod weather;
