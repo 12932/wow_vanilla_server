@@ -1849,3 +1849,49 @@ async fn a_worn_item_shows_its_enchantments_and_suffix() {
     put(&realm, g, helm, (BAG_PLAYER, 23)).await;
     assert_eq!(on_map(&realm, shown).await, (0, 0, 0, 0), "taken off");
 }
+
+const POTION: u32 = 9360;
+const WAND: u32 = 9361;
+
+/// Thistle Tea's `ItemUse.plan/3` (mangos's `TakeCastItem`): one of a
+/// stack of expendables used, the rest keep their charge; an item bound on
+/// use is bound, and each charged spell of it spends one, its sign kept.
+#[tokio::test]
+async fn using_an_item_spends_a_charge_of_each_spell() {
+    let mut d = data();
+    let spell = |id, charges| crate::game::data::items::ItemSpell {
+        id,
+        charges,
+        ..Default::default()
+    };
+    let mut potion = item(POTION);
+    potion.stackable = 20;
+    potion.spells[0] = spell(10, -1);
+    d.items.insert(POTION, potion);
+    let mut wand = item(WAND);
+    wand.bonding = crate::game::map::items::BIND_ON_USE;
+    wand.spells[0] = spell(10, 3);
+    wand.spells[1] = spell(11, -5);
+    d.items.insert(WAND, wand);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let potions = give(&realm, g, POTION, 5).await;
+    let wand = give(&realm, g, WAND, 1).await;
+    let after = on_map(&realm, move |m| {
+        crate::game::map::items::used(m, g, potions, 10);
+        crate::game::map::items::used(m, g, wand, 10);
+        let p = &m.players[&g];
+        let potion = &p.items[p.item_by_guid(potions).unwrap()];
+        let w = &p.items[p.item_by_guid(wand).unwrap()];
+        (
+            potion.count(),
+            potion.fields.get_u32(ITEM_FIELD_SPELL_CHARGES) as i32,
+            w.fields.get_u32(ITEM_FIELD_FLAGS) & 1,
+            w.fields.get_u32(ITEM_FIELD_SPELL_CHARGES) as i32,
+            w.fields.get_u32(ITEM_FIELD_SPELL_CHARGES + 1) as i32,
+        )
+    })
+    .await;
+    assert_eq!(after, (4, -1, 1, 2, -4));
+}
