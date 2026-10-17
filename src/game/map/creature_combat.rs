@@ -89,6 +89,12 @@ pub struct Engagement {
     pub clock: Option<u32>,
     /// When its leash is next extended while it is under control.
     pub control_extend_at: Option<Instant>,
+    /// When it next looks to step about its victim, how often it has
+    /// stepped aside since its victim last moved, and whether a step is
+    /// under way (Thistle Tea's spreading).
+    pub spread_at: Option<Instant>,
+    pub spread_tries: u8,
+    pub spreading: bool,
 }
 
 /// How often a creature under control has its leash extended (Thistle
@@ -316,6 +322,9 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.pulse_at = None;
         c.engagement.clock = None;
         c.engagement.control_extend_at = None;
+        c.engagement.spread_at = None;
+        c.engagement.spread_tries = 0;
+        c.engagement.spreading = false;
     }
 }
 
