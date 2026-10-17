@@ -867,7 +867,8 @@ async fn scholomance_calls_gandling_and_kirtonos() {
                 map: 289,
                 x: 2.0,
                 rotation: [0.0, 0.0, 0.0, 1.0],
-                state: 1,
+                // The gate spawns open, as the world database has it.
+                state: if *e == 175570 { 0 } else { 1 },
                 ..Default::default()
             })
             .collect(),

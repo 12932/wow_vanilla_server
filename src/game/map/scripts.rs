@@ -1525,7 +1525,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         }
         // Everyone in the zone (here: the map) fights.
         49 => {
-            let players: Vec<Guid> = map.players.keys().copied().collect();
+            let players: Vec<Guid> = map
+                .players
+                .values()
+                .filter(|p| p.death == crate::game::map::death::Death::Alive)
+                .map(|p| p.guid)
+                .collect();
             for p in players {
                 crate::game::map::ai::attacked(map, source, p);
             }
