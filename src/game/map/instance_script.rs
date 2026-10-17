@@ -114,6 +114,8 @@ pub struct State {
     pub data: BTreeMap<u32, u32>,
     /// Timed steps: (when, what).
     pub timers: Vec<(Instant, u32)>,
+    /// Guids scripts stored (`SCRIPT_COMMAND_SET_INST_DATA64`).
+    pub guids: ahash::AHashMap<u32, Guid>,
 }
 
 impl State {
@@ -532,6 +534,9 @@ fn timer(map: &mut Map, key: u32) {
 /// `target_type` 12: a creature an instance script knows. Here, the
 /// index names an entry.
 pub fn guid_data(map: &Map, index: u32) -> Option<Guid> {
+    if let Some(g) = map.instance.guids.get(&index) {
+        return Some(*g);
+    }
     let entry = match (map.instance.script, index) {
         (Some(Script::ScarletMonastery), 2) => 3976,
         (Some(Script::ScarletMonastery), 3) => 3977,

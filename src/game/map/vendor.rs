@@ -77,6 +77,11 @@ pub fn list(map: &mut Map, player: Guid, npc: Guid) {
         let Some(t) = data.item(v.item) else {
             continue;
         };
+        if v.condition != 0
+            && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player))
+        {
+            continue;
+        }
         // Items for a standing the player hasn't reached aren't shown.
         if t.required_reputation_faction == 0
             && t.required_reputation_rank > 0
@@ -125,6 +130,10 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
         return;
     };
+    if v.condition != 0 && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player)) {
+        buy_failed(map, player, npc, item, BuyResult::CantFindItem);
+        return;
+    }
     let Some(t) = data.item(item) else {
         return;
     };

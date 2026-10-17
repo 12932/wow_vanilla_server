@@ -151,6 +151,27 @@ fn join(map: &mut Map, g: Guid, stone: Guid) {
     }
 }
 
+/// A script queues `g` for `area`'s meeting stone (`SCRIPT_COMMAND_MEETINGSTONE`).
+pub fn queue(map: &mut Map, g: Guid, area: u32) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let (team, class) = (p.team, p.row.class);
+    {
+        let mut stones = map.realm.social.meeting_stones.lock();
+        stones.queue.retain(|q| q.guid != g);
+        stones.queue.push(Queued {
+            guid: g,
+            area,
+            team,
+            class,
+            leader: false,
+            since: Instant::now(),
+        });
+    }
+    status(&map.realm, g, area, MeetingStoneStatus::JoinedQueue);
+}
+
 /// `CMSG_MEETINGSTONE_LEAVE`, or gone offline.
 pub fn leave(realm: &Realm, g: Guid) {
     let was = {

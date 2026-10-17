@@ -354,6 +354,9 @@ fn check(
     let Some(me) = map.unit_view(caster) else {
         return Some(SpellCastResult::ErrorX.as_int());
     };
+    if !crate::game::map::spell_areas::allowed(map, caster, s.id) {
+        return Some(SpellCastResult::RequiresArea.as_int());
+    }
     if !me.alive {
         return Some(SpellCastResult::CasterDead.as_int());
     }

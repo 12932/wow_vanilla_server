@@ -41,6 +41,12 @@ fn eval(map: &Map, id: u32, source: Option<Guid>, target: Option<Guid>, depth: u
     }
 }
 
+/// Whether an escort the world has under way says it failed: the hook the
+/// escort quests fill in. None does yet.
+pub fn escort_failed(_map: &Map, _source: Option<Guid>, _target: Option<Guid>) -> bool {
+    false
+}
+
 fn compare(actual: i64, expected: i64, mode: i32) -> bool {
     match mode {
         1 => actual >= expected,
@@ -103,9 +109,13 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
                 .or_else(|| of(target))
                 .is_some_and(|(z, a)| z == v1 as u32 || a == v1 as u32)
         }
-        // Reputation at least: without reputation tracked, neutral (3).
-        5 => player.is_some_and(|_| 3 >= v2),
-        30 => player.is_some_and(|_| 3 <= v2),
+        // Reputation: the rank with a faction, at least or at most.
+        5 => player.is_some_and(|p| {
+            crate::game::map::reputation::rank(p, &map.realm.data, v1.max(0) as u32) as i32 >= v2
+        }),
+        30 => player.is_some_and(|p| {
+            crate::game::map::reputation::rank(p, &map.realm.data, v1.max(0) as u32) as i32 <= v2
+        }),
         6 => player.is_some_and(|p| {
             let team = match p.team {
                 Team::Alliance => 469,
@@ -230,11 +240,19 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             let actual = crate::game::map::instance_script::get_data(map, v1 as u32);
             compare(i64::from(actual), i64::from(v2), v3)
         }
-        // Line of sight between the two.
-        37 => {
-            source.and_then(|s| map.position_of(s)).is_some()
-                && target.and_then(|t| map.position_of(t)).is_some()
-        }
+        // Line of sight between the two, eye to eye.
+        37 => match (
+            source.and_then(|s| map.position_of(s)),
+            target.and_then(|t| map.position_of(t)),
+        ) {
+            (Some(a), Some(b)) => {
+                let eye = |v: wow_world_messages::vanilla::Vector3d| {
+                    wow_world_messages::vanilla::Vector3d { z: v.z + 1.5, ..v }
+                };
+                map.nav.as_ref().is_none_or(|n| n.sight(eye(a), eye(b)))
+            }
+            _ => false,
+        },
         38 => match (
             source.and_then(|s| map.position_of(s)),
             target.and_then(|t| map.position_of(t)),
@@ -332,8 +350,36 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
                 p.fields.get_u32(word) & (1 << (bit % 32)) != 0
             })
         }),
-        // Saved variables, escorts, holidays, map events and the like
-        // aren't tracked.
+        // An escort's failure: the source (0x1) or target (0x2) dead, or
+        // them farther apart than value 2.
+        25 => {
+            let dead =
+                |g: Option<Guid>| g.is_some_and(|g| map.unit_view(g).is_none_or(|u| !u.alive));
+            let apart = v2 > 0
+                && match (
+                    source.and_then(|s| map.position_of(s)),
+                    target.and_then(|t| map.position_of(t)),
+                ) {
+                    (Some(a), Some(b)) => dist(a, b) > v2 as f32,
+                    _ => true,
+                };
+            (v1 & 0x1 != 0 && dead(source))
+                || (v1 & 0x2 != 0 && dead(target))
+                || apart
+                || crate::game::map::conditions::escort_failed(map, source, target)
+        }
+        // A holiday: one of the game events under way is it.
+        26 => {
+            let holidays = &map.realm.data.scripts.event_holidays;
+            map.realm
+                .social
+                .events
+                .lock()
+                .iter()
+                .any(|e| holidays.get(e).copied() == Some(v1 as u32))
+        }
+        // The instance scripts' own conditions, the reaction of one to the
+        // other, and the like aren't judged.
         _ => false,
     }
 }

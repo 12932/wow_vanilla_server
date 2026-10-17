@@ -92,6 +92,8 @@ pub struct LootSlot {
     /// Kept for the master looter, or rolled for.
     pub blocked: bool,
     pub quality: u32,
+    /// A condition the viewer must meet to see it.
+    pub condition: u32,
 }
 
 /// A roll under way for one slot.
@@ -137,9 +139,10 @@ impl Loot {
         self.owner.is_none_or(|o| o == g)
     }
 
-    /// Whether `g` sees slot `s`, needing `wanted`.
-    fn visible(&self, s: &LootSlot, g: Guid, wanted: &[u32]) -> bool {
-        if s.taken {
+    /// Whether `g` sees slot `s`, needing `wanted` and meeting the
+    /// conditions `met`.
+    fn visible(&self, s: &LootSlot, g: Guid, wanted: &[u32], met: &[u32]) -> bool {
+        if s.taken || (s.condition != 0 && !met.contains(&s.condition)) {
             return false;
         }
         if s.quest {
@@ -207,6 +210,7 @@ fn slot_for(data: &GameData, e: &LootEntry, rng: &mut impl rand::Rng) -> LootSlo
         random_property: crate::game::map::enchant::roll_random_property(data, e.item, rng),
         quest: is_quest_item(e),
         quality: data.item(e.item).map_or(0, |t| t.quality),
+        condition: e.condition,
         ..Default::default()
     }
 }
@@ -723,16 +727,33 @@ pub fn update(map: &mut Map) {
     crate::game::map::professions::respawn_nodes(map);
 }
 
+/// The conditions of `loot`'s slots that `viewer` meets, from the
+/// corpse or object `source`.
+pub fn conditions_met(map: &Map, loot: &Loot, source: Guid, viewer: Guid) -> Vec<u32> {
+    let mut ids: Vec<u32> = loot.items.iter().map(|s| s.condition).filter(|c| *c != 0).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.retain(|c| crate::game::map::conditions::met(map, *c, Some(source), Some(viewer)));
+    ids
+}
+
 /// `SMSG_LOOT_RESPONSE` in 1.12's layout for `viewer`: each item they may
 /// see with its count, look and random property.
-pub fn response(data: &GameData, g: Guid, loot: &Loot, viewer: Guid, wanted: &[u32]) -> Arc<[u8]> {
+pub fn response(
+    data: &GameData,
+    g: Guid,
+    loot: &Loot,
+    viewer: Guid,
+    wanted: &[u32],
+    met: &[u32],
+) -> Arc<[u8]> {
     let mut b = Body::default();
     b.u64(g.guid()).u8(loot.kind.wire()).u32(loot.gold);
     let shown: Vec<(usize, &LootSlot)> = loot
         .items
         .iter()
         .enumerate()
-        .filter(|(_, s)| loot.visible(s, viewer, wanted))
+        .filter(|(_, s)| loot.visible(s, viewer, wanted, met))
         .collect();
     b.u8(shown.len() as u8);
     for (i, s) in shown {
@@ -821,6 +842,9 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
         .get(&player)
         .map(|p| crate::game::map::quests::wanted_items(p, &data))
         .unwrap_or_default();
+    let met = loot_ref(map, target)
+        .map(|l| conditions_met(map, l, target, player))
+        .unwrap_or_default();
     let Some(loot) = loot_mut(map, target) else {
         return;
     };
@@ -829,7 +853,7 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
     }
     loot.looters.insert(player);
     let master_list = (loot.master == Some(player)).then(|| loot.allowed.clone());
-    let frame = response(&data, target, loot, player, &wanted);
+    let frame = response(&data, target, loot, player, &wanted, &met);
     if let Some(p) = map.players.get_mut(&player) {
         p.looting = Some(target);
         p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_LOOTING, true);
@@ -862,9 +886,12 @@ pub fn take_item(map: &mut Map, player: Guid, slot: u8) {
         .get(&player)
         .map(|p| crate::game::map::quests::wanted_items(p, &data))
         .unwrap_or_default();
+    let met = loot_ref(map, target)
+        .map(|l| conditions_met(map, l, target, player))
+        .unwrap_or_default();
     let Some((item, count, property, quest)) = loot_ref(map, target).and_then(|l| {
         let s = l.items.get(usize::from(slot))?;
-        (l.may_loot(player) && l.visible(s, player, &wanted) && !s.blocked)
+        (l.may_loot(player) && l.visible(s, player, &wanted, &met) && !s.blocked)
             .then_some((s.item, s.count, s.random_property, s.quest))
     }) else {
         return;

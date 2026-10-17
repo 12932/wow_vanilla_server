@@ -36,7 +36,18 @@ pub fn command_supported(command: u32) -> bool {
             | 76..=85
             | 87
             | 89..=92
-    ) && !matches!(command, 21 | 36 | 38 | 53 | 57 | 58 | 72 | 75 | 86 | 88)
+            | 21
+            | 30
+            | 36
+            | 38
+            | 53
+            | 57
+            | 58
+            | 72
+            | 75
+            | 86
+            | 88
+    )
 }
 
 /// A script under way.
@@ -1479,8 +1490,129 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 None => false,
             }
         }
-        // Flying, meeting stones, pet command states, taxis and the like have
-        // nothing to do here.
+        // Kept updating with no one near: every map here updates anyway.
+        21 => true,
+        30 => {
+            if guid::is_player(target) {
+                crate::game::map::npc::fly_path(map, target, d1);
+                true
+            } else {
+                false
+            }
+        }
+        36 => {
+            let player = if guid::is_player(target) {
+                target
+            } else {
+                source
+            };
+            if !guid::is_player(player) {
+                return false;
+            }
+            crate::game::map::meeting_stones::queue(map, player, d1);
+            true
+        }
+        // A guid the instance script keeps: the target's (0) or the source's.
+        38 => {
+            let g = if d2 == 0 { target } else { source };
+            map.instance.guids.insert(d1, g);
+            true
+        }
+        // Start (1) or stop (0) a game event.
+        53 => {
+            let realm = map.realm.clone();
+            crate::game::events::force(&realm, d1, d2 != 0);
+            true
+        }
+        // A cooldown on (57) or off (58) the target's spell.
+        57 => {
+            let until = now + Duration::from_secs(u64::from(d2));
+            if let Some(c) = map.caster_mut(target) {
+                c.cooldowns.insert(d1, until);
+            }
+            true
+        }
+        58 => {
+            if let Some(c) = map.caster_mut(target) {
+                c.cooldowns.remove(&d1);
+            }
+            if let Some(p) = map.players.get(&target) {
+                p.outbound.send(&SMSG_CLEAR_COOLDOWN { id: d1, target });
+            }
+            true
+        }
+        // Help the target with its fight.
+        72 => {
+            let foe = map
+                .combat(target)
+                .map(|c| c.victim)
+                .filter(|v| !v.is_zero() && alive(map, *v));
+            match foe {
+                Some(f) if guid::is_unit(source) => {
+                    crate::game::map::ai::attacked(map, source, f);
+                    true
+                }
+                _ => false,
+            }
+        }
+        75 => {
+            if guid::is_unit(source) && alive(map, target) {
+                crate::game::map::ai::add_threat(map, source, target, d1 as f32);
+                crate::game::map::ai::attacked(map, source, target);
+                true
+            } else {
+                false
+            }
+        }
+        // A player's PvP flag on (1) or off.
+        86 => {
+            let Some(p) = map.players.get_mut(&target) else {
+                return false;
+            };
+            p.fields.set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_PVP,
+                d1 != 0,
+            );
+            true
+        }
+        // A pet's command: stay, follow, attack the target, dismiss.
+        88 => {
+            if crate::game::map::pets::state(map, source).is_none() {
+                return false;
+            }
+            match d1 as u8 {
+                crate::game::map::pets::COMMAND_STAY => {
+                    let at = map.position_of(source);
+                    crate::game::map::combat::stop_attack(map, source);
+                    crate::game::map::pets::stop_where(map, source);
+                    if let Some(s) = crate::game::map::pets::state_mut(map, source) {
+                        s.command = crate::game::map::pets::COMMAND_STAY;
+                        s.stay_at = at;
+                    }
+                }
+                crate::game::map::pets::COMMAND_FOLLOW => {
+                    crate::game::map::combat::stop_attack(map, source);
+                    if let Some(s) = crate::game::map::pets::state_mut(map, source) {
+                        s.command = crate::game::map::pets::COMMAND_FOLLOW;
+                        s.stay_at = None;
+                    }
+                }
+                crate::game::map::pets::COMMAND_ATTACK => {
+                    if !crate::game::map::combat::can_attack(map, source, target) {
+                        return false;
+                    }
+                    crate::game::map::pets::attack_target(map, source, target);
+                }
+                crate::game::map::pets::COMMAND_DISMISS => {
+                    crate::game::map::pets::dismiss(map, source)
+                }
+                _ => return false,
+            }
+            true
+        }
+        // Flying has no use in 1.12.
+        77 => true,
         _ => true,
     }
 }
