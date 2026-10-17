@@ -241,6 +241,7 @@ pub fn teleport_ack(map: &mut Map, guid: Guid) {
     if let Some(p) = map.players.get_mut(&guid) {
         p.teleport = None;
     }
+    crate::game::map::pvp::arrived(map, guid);
 }
 
 /// `MSG_MOVE_WORLDPORT_ACK`: the client has loaded the map it was sent to;
@@ -257,6 +258,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
     map.visibility_dirty.insert(guid);
     crate::game::map::battleground::arrived(map, guid);
     crate::game::map::eviction::arrived(map, guid);
+    crate::game::map::pvp::arrived(map, guid);
 }
 
 /// Handle the packets of the movement family other than movement itself.

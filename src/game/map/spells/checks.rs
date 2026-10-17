@@ -252,6 +252,9 @@ pub fn check(
     if !triggered && let Some(code) = crate::game::map::battleground::spell_check(map, caster, s) {
         return Some(code);
     }
+    if !triggered && let Some(code) = crate::game::map::duel::check(map, caster, s, t.unit) {
+        return Some(code);
+    }
     if !triggered && let Some(code) = crate::game::map::objects::ritual_check(map, caster, s) {
         return Some(code);
     }
