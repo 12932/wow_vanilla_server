@@ -195,15 +195,14 @@ async fn spell_logs_are_laid_out_as_1_12_has_them() {
     let mut want = STEALTHY.to_le_bytes().to_vec();
     want.extend_from_slice(&g.guid().to_le_bytes());
     assert_eq!(event, want, "SMSG_COOLDOWN_EVENT");
-    // Fire on a player with 300 fire resistance and a ward of 30: half
-    // resisted, the ward's 30 absorbed, the rest hurts.
+    // Fire on a player with a ward of 30: the ward's 30 absorbed, the rest
+    // hurts (resistance rolls by vmangos's buckets, so none here).
     let ward = realm.data.spells.get(FIRE_WARD).cloned().unwrap();
     on_map(&realm, move |m| {
         crate::game::map::auras::apply(m, g, g, &ward, 0, 30);
         let p = m.players.get_mut(&g).unwrap();
         p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 10_000);
         p.fields.set_u32(UNIT_FIELD_HEALTH, 10_000);
-        p.fields.set_u32(UNIT_FIELD_RESISTANCES + 2, 300);
         crate::game::map::environment::damage(m, g, EnvironmentalDamageType::Fire, 200);
     })
     .await;
@@ -212,7 +211,7 @@ async fn spell_logs_are_laid_out_as_1_12_has_them() {
         .await;
     let mut want = g.guid().to_le_bytes().to_vec();
     want.push(EnvironmentalDamageType::Fire.as_int());
-    for v in [70u32, 30, 100] {
+    for v in [170u32, 30, 0] {
         want.extend_from_slice(&v.to_le_bytes());
     }
     assert_eq!(fire, want, "SMSG_ENVIRONMENTAL_DAMAGE_LOG");

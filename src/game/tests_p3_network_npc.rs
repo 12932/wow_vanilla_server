@@ -105,7 +105,7 @@ fn data() -> GameData {
     );
     d.creature_templates
         .insert(VENDOR, creature(VENDOR, "Vendor", 12, 0x4));
-    let mut gossiper = creature(GOSSIPER, "Gossiper", 12, 0x1 | 0x8 | 0x100);
+    let mut gossiper = creature(GOSSIPER, "Gossiper", 12, 0x1 | 0x2 | 0x8 | 0x100);
     gossiper.gossip_menu_id = MENU;
     d.creature_templates.insert(GOSSIPER, gossiper);
     d.creature_spawns
@@ -555,8 +555,9 @@ async fn a_flight_masters_node_and_map_are_laid_out_as_1_12_has_them() {
     let mut want = 1u32.to_le_bytes().to_vec();
     want.extend_from_slice(&npc.guid().to_le_bytes());
     want.extend_from_slice(&2u32.to_le_bytes());
+    // Node N at bit N - 1, as the client reads it.
     let mut mask = [0u32; 8];
-    mask[0] = 1 << 2;
+    mask[0] = 1 << (2 - 1);
     for w in mask {
         want.extend_from_slice(&w.to_le_bytes());
     }
