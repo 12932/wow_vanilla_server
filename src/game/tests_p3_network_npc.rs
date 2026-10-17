@@ -320,7 +320,8 @@ fn select(npc: Guid, option: u32) -> CMSG_GOSSIP_SELECT_OPTION {
 /// Thistle Tea's cmsg_gossip_select_option_test: a goodbye credits a quest
 /// asking to speak with the creature; an option whose condition no longer
 /// holds does nothing; the bank and flight map options open them; and a
-/// goodbye's script flies its player off.
+/// goodbye's script flies its player off, the client's own movement then
+/// ignored (msg_move_test's taxi flight).
 #[tokio::test]
 async fn gossip_options_talk_open_the_bank_and_flight_map_and_run_their_scripts() {
     let realm = harness::realm_with(data());
@@ -416,4 +417,17 @@ async fn gossip_options_talk_open_the_bank_and_flight_map_and_run_their_scripts(
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(flying, "the script's flight");
+    // Flying, the client's own movement counts for nothing.
+    let here = on_map(&realm, move |m| m.players[&g].position()).await;
+    a.heartbeat(here.x + 50.0, here.y + 50.0, here.z).await;
+    a.send(CMSG_QUERY_TIME {}).await;
+    a.wait_for("SMSG_QUERY_TIME_RESPONSE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(_)).then_some(())
+    })
+    .await;
+    let there = on_map(&realm, move |m| m.players[&g].position()).await;
+    assert!(
+        (there.x - (here.x + 50.0)).abs() > 1.0 || (there.y - (here.y + 50.0)).abs() > 1.0,
+        "not where the client said: {there:?}"
+    );
 }
