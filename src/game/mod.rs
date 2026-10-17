@@ -102,6 +102,8 @@ mod tests_p3_core_misc;
 #[cfg(test)]
 mod tests_p3_core_party;
 #[cfg(test)]
+mod tests_p3_core_reputation;
+#[cfg(test)]
 mod tests_p3_core_social;
 #[cfg(test)]
 mod tests_p3_core_trade;

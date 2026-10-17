@@ -430,6 +430,11 @@ pub fn temporary_war(map: &mut Map, player: Guid, creature: Guid) {
     let Some(faction) = faction_of(map, creature) else {
         return;
     };
+    temporary_war_with(map, player, faction);
+}
+
+/// [`temporary_war`], with the creature's faction.
+pub fn temporary_war_with(map: &mut Map, player: Guid, faction: u32) {
     let data = map.realm.data.clone();
     let Some(def) = data.misc.faction(faction) else {
         return;
