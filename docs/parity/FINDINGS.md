@@ -21,6 +21,20 @@ Phase 3. When something here is fixed, its line gets the commit.
 - **A pet set to autocast a positive spell casts nothing.** `pets/ai.rs` `pick_spell` returns `None` for every
   positive spell: Dash, Dive, Fire Shield, Paranoia.
 
+### From combat and auras (to confirm)
+
+- **A PvP-flagged player can attack an unflagged enemy.** `combat::can_attack` allows the attack when either player
+  is flagged. mangos's `Relations.cpp` needs the target flagged.
+- **Neutral factions are attackable without being at war.** The reputation check falls through to the faction
+  templates, where "not friendly" allows the attack. mangos treats such a faction as friendly unless at war. A
+  creature can attack a neutral creature the same way.
+- **The melee and ranged damage-taken auras never apply to abilities.** `spells::outcome::taken` filters auras 113,
+  114, 125 and 126 by school mask. Their misc value is 0 in the data, so they never match.
+- **Mana Shield absorbs with no mana left.** `auras::absorb` charges a fixed 2 mana a point, with `saturating_sub`,
+  and never caps the absorb by the mana there is.
+- **A DoT's threat is physical.** `spells::periodic_damage` deals school 1.
+- **`procs::ppm_chance` caps at 100%** before the chance modifier is applied. Thistle Tea applies the modifier first.
+
 ### Reported, not yet confirmed
 
 **Object gossip:**
@@ -114,6 +128,39 @@ Phase 3. When something here is fixed, its line gets the commit.
 - **Event creatures** are respawned in their event looks, which loses a fight. There are no per-event spell lists.
 - **Charmed creatures** get the whole spell list; Thistle Tea rolls charm spell slots.
 - **Wands** are untested. **Aggro's finer rules** have code but no tests.
+
+### Combat and auras (`core/combat`, `core/aura`: 94 of 1,081 covered)
+
+- **How long combat lasts.** wvs has a flat 6 seconds. Thistle Tea re-checks PvE contact after 750 ms, holds PvP
+  contact and creature hits for 5 s, holds while an aura interrupts regeneration, and clears the holds at death.
+- **Entering combat** should interrupt not-in-combat casts, reset their global cooldown, and break creatures'
+  hostile channels.
+- **Swing timers** restart when a weapon is swapped.
+- **Being hit while seated** should stand the player and end sitting-only auras.
+- **Silence** should go by the spell's prevention type. **Pacify** should pause both hands and the queued ability.
+- **The leash** (C15):
+  - DoT ticks shouldn't extend it, but channelled ticks should;
+  - a controlled creature's clock should be extended;
+  - its radius is max(threat radius, 1.5 × attack distance);
+  - a creature shares its leash clock with its summons.
+- **Weapon skill-ups** should come from abilities and ranged spells too, even when they miss.
+- **Elemental swings** need a resistance roll, with immunity checked before avoidance.
+- **Daze:** creatures can be dazed too, and charmed or summoned attackers don't daze.
+- **The damage-taken and healing-taken auras** (113, 114, 125, 126) have no tests.
+- **Fleeing for help:** a root pauses it, and a speed change re-times it.
+- **Auras:**
+  - linked parent and child auras;
+  - ground areas as an aura on each unit inside;
+  - immunities and their purges;
+  - proc details;
+  - diminishing returns' groups and their PvP rules;
+  - stealth and invisibility details;
+  - exclusivity (snares, food);
+  - shapeshifts shaking off roots and snares;
+  - the 16 harmful slots and aura priority;
+  - overlapping taunts;
+  - Fade;
+  - crowd control that damage breaks.
 
 ### World entities (`world/entity`: 146 of 1,251 covered)
 
