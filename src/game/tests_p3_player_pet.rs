@@ -317,3 +317,173 @@ async fn a_pets_loyalty_rises_past_each_threshold_with_its_levels_points_falls_i
     })
     .await;
 }
+
+/// Levels 8 to 10 of the hunter pets' table, as Thistle Tea's test has
+/// them: (level, health, armor, strength, agility, stamina).
+fn with_pet_levels(mut d: GameData) -> GameData {
+    for (level, health, armor, strength, agility, stamina) in [
+        (8, 156, 322, 29, 25, 28),
+        (9, 176, 412, 30, 26, 29),
+        (10, 198, 518, 31, 26, 30),
+    ] {
+        d.pets.levels.insert(
+            (1, level),
+            crate::game::data::pets::PetLevel {
+                health,
+                mana: 0,
+                armor,
+                damage: (0.0, 0.0),
+                stats: [strength, agility, stamina, 20, 20],
+            },
+        );
+    }
+    let mut kobold = d.creature_templates[&WOLF].clone();
+    kobold.entry = WOLF + 1;
+    kobold.name = "Kobold".into();
+    d.creature_templates.insert(WOLF + 1, kobold);
+    d
+}
+
+fn pet_level(m: &Map, pet: Guid) -> (u32, u32) {
+    let f = &m.creature(pet).unwrap().fields;
+    (
+        f.get_u32(UNIT_FIELD_LEVEL),
+        f.get_u32(UNIT_FIELD_PETEXPERIENCE),
+    )
+}
+
+#[tokio::test]
+async fn a_pet_levels_on_its_experience_to_its_masters_level_losing_what_is_over_there_and_its_kills_by_its_level()
+ {
+    let realm = harness::realm_with(with_pet_levels(data()));
+    let mut a = Client::connect(&realm, "H");
+    let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&h).unwrap();
+        crate::game::map::stats::set_level(p, &data, 20);
+        let at = p.position();
+        let fresh = |m: &mut Map| {
+            let pet = hunter::spawn(m, h, WOLF, Kind::Hunter, 8, at, 0.0);
+            m.players.get_mut(&h).unwrap().owned.pet = Some(pet);
+            set_happiness(m, pet, 500_000);
+            set_loyalty(m, pet, 1, 1_000, 0);
+            pet
+        };
+        // A part of a level is kept.
+        let pet = fresh(m);
+        hunter::gain_xp(m, pet, 73, 12);
+        let part = pet_level(m, pet);
+        // Far more, its master at 10: level 10, and nothing over; more
+        // still, nothing.
+        hunter::gain_xp(m, pet, 100_000, 10);
+        let capped = pet_level(m, pet);
+        let c = m.creature(pet).unwrap();
+        let full = (
+            c.fields.get_u32(UNIT_FIELD_HEALTH),
+            c.fields
+                .get_u32(UNIT_FIELD_POWER1 + crate::game::map::pets::POWER_FOCUS),
+        );
+        hunter::gain_xp(m, pet, 1_000, 10);
+        let still = pet_level(m, pet);
+        // Below the cap, what is over a level stays; at it, it goes; the
+        // master a level up, it goes on.
+        crate::game::map::pets::dismiss(m, pet);
+        let pet = fresh(m);
+        hunter::gain_xp(m, pet, 1_500, 10);
+        let nine = pet_level(m, pet);
+        hunter::gain_xp(m, pet, 2_000, 10);
+        let ten = pet_level(m, pet);
+        hunter::gain_xp(m, pet, 42, 11);
+        let resumed = pet_level(m, pet);
+        // A kill a level up gives the level's points (two a level at the
+        // third loyalty), then the kill's loyalty, which a rank up gives
+        // the new level's points too.
+        crate::game::map::pets::dismiss(m, pet);
+        let pet = fresh(m);
+        set_loyalty(m, pet, 3, 16_999, 7);
+        let need = crate::game::map::pets::pet_xp_to_level(&data, 8);
+        hunter::gain_xp(m, pet, need - 1, 20);
+        let victim = {
+            let counter = m.next_creature_counter | 0x90_0000;
+            m.next_creature_counter += 1;
+            let t = data.creature_template(WOLF + 1).unwrap().clone();
+            let c = crate::game::map::creature::Creature::new(
+                crate::game::guid::unit(WOLF + 1, counter),
+                &t,
+                10,
+                at,
+                0.0,
+            );
+            m.add_creature(c.with_base())
+        };
+        hunter::kill_xp(m, h, victim, crate::game::map::pets::KillShare::Solo);
+        let c = m.creature(pet).unwrap();
+        let s = c.pet.as_deref().unwrap();
+        let bonded = (
+            c.fields.get_u32(UNIT_FIELD_LEVEL),
+            c.fields.get_byte(UNIT_FIELD_BYTES_1, 1),
+            s.training_points,
+            s.loyalty_points,
+        );
+        // A group's share, for a pet no higher than the kill's best level.
+        let before = pet_level(m, pet).1;
+        hunter::kill_xp(
+            m,
+            h,
+            victim,
+            crate::game::map::pets::KillShare::Group {
+                xp: 17,
+                max_level: 9,
+            },
+        );
+        let shared = pet_level(m, pet).1 - before;
+        hunter::kill_xp(
+            m,
+            h,
+            victim,
+            crate::game::map::pets::KillShare::Group {
+                xp: 17,
+                max_level: 8,
+            },
+        );
+        let above = pet_level(m, pet).1 - before - shared;
+        (
+            part,
+            capped,
+            full,
+            still,
+            (nine, ten, resumed),
+            bonded,
+            (shared, above),
+        )
+    })
+    .await;
+    let (part, capped, full, still, (nine, ten, resumed), bonded, (shared, above)) = got;
+    assert_eq!(part, (8, 73));
+    assert_eq!(capped, (10, 0));
+    assert_eq!(full, (198, 100));
+    assert_eq!(still, (10, 0));
+    assert_eq!((nine, ten, resumed), ((9, 150), (10, 0), (10, 42)));
+    assert_eq!(bonded, (9, 4, 7 + 2 + 9, 10_000));
+    assert_eq!((shared, above), (17, 0));
+}
+
+#[test]
+fn a_pets_kill_is_its_masters_base_by_its_own_levels_factor() {
+    use crate::game::map::combat::{KillXp, kill_xp_with};
+    let plain = KillXp::default();
+    let elite = KillXp {
+        elite: true,
+        ..Default::default()
+    };
+    let none = KillXp {
+        no_xp: true,
+        ..Default::default()
+    };
+    assert_eq!(kill_xp_with(20, 8, 8, &plain), 145);
+    assert_eq!(kill_xp_with(20, 8, 12, &elite), 348);
+    assert_eq!(kill_xp_with(20, 8, 1, &plain), 0);
+    assert_eq!(kill_xp_with(20, 8, 8, &none), 0);
+    assert_eq!(kill_xp_with(60, 8, 52, &plain), 414);
+}
