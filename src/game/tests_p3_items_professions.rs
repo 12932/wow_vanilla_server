@@ -383,6 +383,14 @@ async fn pockets_are_picked_once_a_life() {
     let (gold, items) = window(&mut a).await;
     assert_eq!(gold % 10, 0, "in tens of copper");
     assert_eq!(items, vec![COIN], "no letter for Alice");
+    // Closed and picked again: the same, not rolled again.
+    a.clear();
+    on_map(&realm, move |m| {
+        loot::release(m, ga, mark);
+        run(m, ga, PICK, at(mark));
+    })
+    .await;
+    assert_eq!(window(&mut a).await, (gold, vec![COIN]), "what was left");
     let money = on_map(&realm, move |m| {
         let before = m.players[&ga].money();
         loot::take_money(m, ga);

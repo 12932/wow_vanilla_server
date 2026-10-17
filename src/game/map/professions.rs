@@ -855,6 +855,14 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     else {
         return;
     };
+    // What they left in them before, as it was.
+    if let Some(left) = map.loot_state.pockets.remove(&(creature, caster)) {
+        if let Some(c) = map.creature_mut(creature) {
+            c.loot = Some(left);
+        }
+        loot::show(map, caster, creature);
+        return;
+    }
     // Picked already this life, a pocket holds only the rogue's own quest
     // drops (Thistle Tea's `Pickpocket.session`).
     let picked_before = !map.loot_state.picked.insert(creature);
