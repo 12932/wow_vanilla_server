@@ -94,6 +94,8 @@ mod tests_p3_combat9;
 #[cfg(test)]
 mod tests_p3_entity;
 #[cfg(test)]
+mod tests_p3_entity_env;
+#[cfg(test)]
 mod tests_p3_entity_mob;
 #[cfg(test)]
 mod tests_p3_entity_objects;
