@@ -786,7 +786,7 @@ fn execute(
         }
     }
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo);
+    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
     if combo > 0 && (landed_on_main || targets.unit.is_none()) {
         clear_combo_points(map, caster);
     }

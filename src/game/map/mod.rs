@@ -57,6 +57,7 @@ pub mod spells;
 pub mod stats;
 pub mod tickets;
 pub mod trade;
+pub mod trinkets;
 pub mod vendor;
 pub mod visibility;
 pub mod world;

@@ -330,6 +330,9 @@ fn run(
         {
             x.proc_ready_at = Some(now + std::time::Duration::from_millis(u64::from(p.cooldown)));
         }
+        if crate::game::map::trinkets::proc(map, owner, &h, e) {
+            continue;
+        }
         fire(map, owner, other, &h, e);
         if h.charges > 0 {
             auras::spend_charge(map, owner, h.spell, h.caster);

@@ -204,6 +204,10 @@ pub fn run(
         if !which[index] {
             continue;
         }
+        // A totem shrugs off most of what others cast on it.
+        if crate::game::map::pets::immune(map, caster, target, s, index) {
+            continue;
+        }
         let e = s.effects[index];
         let points = l.mods.points(index, points_with(s, index, level, l.combo));
         let mut here = l.clone();
@@ -896,9 +900,14 @@ pub fn run_untargeted(
     t: &Targets,
     m: &Mods,
     combo: u8,
+    // The effects the professions ran (opening locks, gathering): skipped.
+    done: u8,
 ) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     for index in 0..3 {
+        if done & (1 << index) != 0 {
+            continue;
+        }
         let e = s.effects[index];
         match e.effect {
             EFFECT_PERSISTENT_AREA_AURA => {

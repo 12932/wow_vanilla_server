@@ -565,7 +565,17 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
     {
         return false;
     }
-    if ua.is_player && ub.is_player {
+    // A pet, totem or guardian fights on its master's side; a possessed
+    // player on their possessor's.
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    if ma == mb {
+        return false;
+    }
+    if map.players.contains_key(&ma) && map.players.contains_key(&mb) {
+        let (a, b) = (ma, mb);
         if crate::game::map::duel::dueling(map, a, b) {
             return true;
         }
@@ -669,10 +679,15 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
             f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
         }
     }
-    // A blow between the factions flags the attacker for PvP.
-    if let (Some(pa), Some(pb)) = (map.players.get(&a), map.players.get(&b))
+    // A blow between the factions flags the attacker (or its master) for
+    // PvP.
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    if let (Some(pa), Some(pb)) = (map.players.get(&ma), map.players.get(&mb))
         && pa.team != pb.team
-        && let Some(p) = map.players.get_mut(&a)
+        && let Some(p) = map.players.get_mut(&ma)
     {
         p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, true);
         p.combat.last_pvp = Some(now);
@@ -1575,13 +1590,15 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     if crate::game::map::gm_dev::invulnerable(map, victim) {
         return;
     }
-    let damage = if guid::is_player(victim) && guid::is_player(attacker) {
-        crate::game::map::duel::soften(map, attacker, victim, damage)
+    // A pet's blows count as its master's for duels and honor.
+    let by = crate::game::map::pets::master(map, attacker);
+    let damage = if guid::is_player(victim) && guid::is_player(by) {
+        crate::game::map::duel::soften(map, by, victim, damage)
     } else {
         damage
     };
     if guid::is_player(victim) {
-        crate::game::map::pvp::damaged(map, attacker, victim, damage);
+        crate::game::map::pvp::damaged(map, by, victim, damage);
     }
     if damage == 0 {
         return;
@@ -1657,8 +1674,9 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
                 .or_else(|| map.players.get(&killer).map(|p| p.name.to_string()))
                 .unwrap_or_else(|| format!("{killer}")),
         );
-        honor(map, killer, victim);
-        crate::game::map::battleground::died(map, victim, killer);
+        let by = crate::game::map::pets::master(map, killer);
+        honor(map, by, victim);
+        crate::game::map::battleground::died(map, victim, by);
         death::kill(map, victim);
         // Dying to a creature wears gear down; to a player, it doesn't.
         if guid::is_unit(killer) {
@@ -1671,7 +1689,7 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         let tapper = map
             .creature(victim)
             .and_then(|c| c.tapped_by)
-            .unwrap_or(killer);
+            .unwrap_or_else(|| crate::game::map::pets::master(map, killer));
         if guid::is_player(tapper) {
             reward(map, tapper, victim);
             crate::game::map::pets::owner_killed(map, tapper, victim);

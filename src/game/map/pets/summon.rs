@@ -148,6 +148,15 @@ pub fn apply_level(data: &GameData, c: &mut Creature, level: u8) {
         c.fields
             .set_f32(UNIT_FIELD_MAXDAMAGE, (max * mult).max(1.0));
     }
+    if hunter
+        && let Some(scale) = c
+            .pet
+            .as_deref()
+            .and_then(|s| data.pets.families.get(&s.family))
+            .and_then(|f| f.scale(u32::from(level)))
+    {
+        c.fields.set_f32(OBJECT_FIELD_SCALE_X, scale);
+    }
     if hunter {
         c.fields
             .set_u32(UNIT_FIELD_PETNEXTLEVELEXP, pet_xp_to_level(data, level));
@@ -358,6 +367,7 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     let level = r.level.max(1);
     let g = spawn(map, owner, r.entry, kind, level, at, o);
     let unix = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
+    let now = map.now;
     let c = map.creature_mut(g)?;
     if r.display_id != 0 {
         c.fields.set_u32(UNIT_FIELD_DISPLAYID, r.display_id);
@@ -403,6 +413,15 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         };
     }
     apply_level(&data, c, level);
+    // Its cooldowns ran on while it was away.
+    let unix = chrono::Utc::now().timestamp_millis();
+    for (spell, until) in &r.cooldowns {
+        if *until > unix {
+            c.caster
+                .cooldowns
+                .insert(*spell, now + Duration::from_millis((*until - unix) as u64));
+        }
+    }
     let max_health = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     let health = if r.health == 0 {
         max_health
@@ -450,41 +469,8 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
             );
         }
     }
-    owner_pet_auras(map, owner, g);
+    inherit::sync(map, g);
     Some(g)
-}
-
-/// The master's auras that give their pet another (`spell_pet_auras`).
-fn owner_pet_auras(map: &mut Map, owner: Guid, pet: Guid) {
-    let data = map.realm.data.clone();
-    let entry = map.creature(pet).map(|c| c.entry).unwrap_or(0);
-    let has: Vec<u32> = map
-        .players
-        .get(&owner)
-        .map(|p| p.auras.holders.iter().map(|h| h.spell).collect())
-        .unwrap_or_default();
-    for (spell, for_pet, aura) in data.pets.owner_auras.iter().copied() {
-        if (for_pet == 0 || for_pet == entry)
-            && has.contains(&spell)
-            && let Some(t) = data.spells.get(aura)
-        {
-            let effects: Vec<(usize, i32)> = (0..3)
-                .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
-                .map(|i| (i, crate::game::map::spells::points(t, i, 1)))
-                .collect();
-            let _ = crate::game::map::auras::apply_spell(
-                map,
-                owner,
-                pet,
-                t,
-                &effects,
-                crate::game::map::auras::Context {
-                    duration: Some(None),
-                    ..Default::default()
-                },
-            );
-        }
-    }
 }
 
 /// `pet` becomes `owner`'s: their summon field, and its bar to their
@@ -587,6 +573,16 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
         summon_spell: s.summon_spell,
         display_id: f.get_u32(UNIT_FIELD_NATIVEDISPLAYID),
         family: s.family,
+        cooldowns: {
+            let now = map.now;
+            let unix = chrono::Utc::now().timestamp_millis();
+            c.caster
+                .cooldowns
+                .iter()
+                .filter(|(_, t)| **t > now)
+                .map(|(spell, t)| (*spell, unix + t.duration_since(now).as_millis() as i64))
+                .collect()
+        },
     })
 }
 

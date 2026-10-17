@@ -168,6 +168,8 @@ pub struct PetRecord {
     pub summon_spell: u32,
     pub display_id: u32,
     pub family: u32,
+    /// Spells still cooling down, and until when (Unix milliseconds).
+    pub cooldowns: Vec<(u32, i64)>,
 }
 
 /// A character's pets.

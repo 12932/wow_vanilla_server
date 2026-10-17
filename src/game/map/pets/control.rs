@@ -105,6 +105,36 @@ fn command_state(c: u8) -> PetCommandState {
 /// `SMSG_PET_SPELLS` for `owner`'s pet (or charmed unit), or an empty one.
 pub fn send_spells(map: &mut Map, owner: Guid) {
     let data = map.realm.data.clone();
+    // A possessed player: attack, and their spells.
+    if let Some(v) = map
+        .players
+        .get(&owner)
+        .and_then(|p| p.owned.charm)
+        .filter(|c| {
+            map.players
+                .get(c)
+                .and_then(|v| v.owned.possessed_by)
+                .is_some_and(|pos| pos.master == owner)
+        })
+    {
+        let msg = SMSG_PET_SPELLS {
+            pet: v,
+            action_bars: Some(SMSG_PET_SPELLS_action_bars {
+                duration: 0,
+                react: PetReactState::Passive,
+                command: PetCommandState::Stay,
+                unknown: 0,
+                pet_enabled: PetEnabled::Disabled,
+                action_bars: possess::bar(map, v),
+                spells: Vec::new(),
+                cooldowns: Vec::new(),
+            }),
+        };
+        if let Some(p) = map.players.get(&owner) {
+            p.outbound.send(&msg);
+        }
+        return;
+    }
     let pet = pet_of(map, owner).or_else(|| {
         map.players
             .get(&owner)
@@ -226,6 +256,12 @@ pub fn learn(map: &mut Map, pet: Guid, spell: u32) {
 
 /// Whether `pet` is `player`'s to command.
 fn commands(map: &Map, player: Guid, pet: Guid) -> bool {
+    if let Some(v) = map.players.get(&pet) {
+        return v
+            .owned
+            .possessed_by
+            .is_some_and(|pos| pos.master == player && pos.manual);
+    }
     state(map, pet).is_some_and(|s| {
         s.owner == player
             && matches!(
@@ -244,10 +280,13 @@ fn feedback(map: &Map, player: Guid, f: PetFeedback) {
 /// The pet casts `spell` at `target` (its victim, or itself if helpful).
 fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>) {
     let data = map.realm.data.clone();
-    let Some(s) = state(map, pet) else {
-        return;
+    let knows = match map.players.get(&pet) {
+        Some(v) => v.spells.contains(&spell),
+        None => {
+            state(map, pet).is_some_and(|s| s.spells.contains(&spell) || s.kind == Kind::Possessed)
+        }
     };
-    if !s.spells.contains(&spell) && s.kind != Kind::Possessed {
+    if !knows {
         return;
     }
     let Some(t) = data.spells.get(spell) else {
@@ -328,6 +367,7 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                 }
                 ai::attack(map, pet, target);
             }
+            COMMAND_DISMISS if map.players.contains_key(&pet) => possess::release(map, pet),
             COMMAND_DISMISS => dismiss(map, pet),
             _ => {}
         },

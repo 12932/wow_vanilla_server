@@ -556,6 +556,11 @@ async fn a_miner_gathers_a_vein_and_learns_from_it() {
         opened = map
             .query(move |m| {
                 m.now = Instant::now();
+                // Each try is a fresh cast: no cooldown or cast left over.
+                if let Some(p) = m.players.get_mut(&g) {
+                    p.caster.gcd_until = None;
+                    p.caster.casting = None;
+                }
                 crate::game::map::spells::cast(
                     m,
                     g,
