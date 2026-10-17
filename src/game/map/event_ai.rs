@@ -593,7 +593,7 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
                 map,
                 e.condition,
                 Some(g),
-                target.or_else(|| victim(map, g)),
+                target.or_else(|| victim(map, g)).or(Some(g)),
             )
         {
             continue;

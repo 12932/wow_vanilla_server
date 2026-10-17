@@ -441,6 +441,7 @@ impl Import<'_> {
             return id;
         };
         let mut values = ["value1", "value2", "value3", "value4"].map(|k| int(v.get(k)) as i32);
+        let floats = ["value1", "value2", "value3", "value4"].map(|k| float(v.get(k)) as f32);
         let children: Vec<u32> = v
             .get("children")
             .and_then(Value::as_array)
@@ -500,6 +501,9 @@ impl Import<'_> {
                 flags,
             },
         );
+        if floats.iter().any(|f| f.fract() != 0.0) {
+            self.data.scripts.condition_floats.insert(id, floats);
+        }
         id
     }
 
@@ -571,9 +575,6 @@ impl Import<'_> {
             };
             texts.push((text, condition));
         }
-        // The last text whose condition holds is the greeting; the menu
-        // takes the first, so they go in backwards.
-        texts.reverse();
         let mut options = Vec::new();
         for (i, o) in v
             .get("options")

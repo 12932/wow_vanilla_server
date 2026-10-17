@@ -75,6 +75,7 @@ pub fn refresh(map: &mut Map, object: Guid) {
     } else if let Some(c) = map.creature_mut(object) {
         c.vis_anchor = pos;
     }
+    crate::game::map::conditions::locate(map, object, true);
     let radius = map.realm.config.visibility_yards;
     let keep = radius + MARGIN;
     let (r2, keep2) = (radius * radius, keep * keep);
@@ -204,6 +205,7 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
     if let Some(o) = map.observers_mut(object) {
         o.insert(observer);
     }
+    crate::game::map::conditions::locate(map, object, false);
     // A banner taken by attacking it starts each viewer afresh (Thistle
     // Tea's `reset_banner_interaction`), once they have it.
     if guid::is_game_object(object)

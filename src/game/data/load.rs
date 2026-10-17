@@ -1885,10 +1885,13 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     }) {
         s.cones.insert(id, degrees);
     }
-    for (id, kind, entry) in rows(db, &format!("SELECT * FROM spell_script_target {in_build}"), |c| {
-        (c.u32("entry"), c.u32("type"), c.u32("targetEntry"))
+    for (id, kind, entry, condition) in rows(db, &format!("SELECT * FROM spell_script_target {in_build}"), |c| {
+        (c.u32("entry"), c.u32("type"), c.u32("targetEntry"), c.u32("conditionId"))
     }) {
         s.script_targets.entry(id).or_default().push((kind, entry));
+        if condition != 0 {
+            s.script_target_conditions.insert((id, kind, entry), condition);
+        }
     }
     for (spell, learns) in rows(db, "SELECT * FROM spell_learn_spell", |c| {
         (c.u32("entry"), c.u32("SpellID"))

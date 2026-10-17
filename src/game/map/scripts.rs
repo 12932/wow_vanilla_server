@@ -212,8 +212,10 @@ pub fn execute(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
     if step.data_flags & SF_SWAP_FINAL_TARGETS != 0 {
         std::mem::swap(&mut source, &mut target);
     }
+    // With no target, a step's condition is judged on its source.
+    let judged = if target.is_zero() { source } else { target };
     if step.condition != 0
-        && !crate::game::map::conditions::met(map, step.condition, Some(source), Some(target))
+        && !crate::game::map::conditions::met(map, step.condition, Some(source), Some(judged))
     {
         return step.data_flags & SF_ABORT_ON_FAILURE == 0;
     }
@@ -1355,8 +1357,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // End the script if a condition holds (or, with datalong3 & 1,
         // doesn't), failing quest datalong2 for the player.
         32 => {
-            let met = crate::game::map::conditions::met(map, d1, Some(source), Some(target));
-            let end = met != (d3 & 0x1 != 0);
+            use crate::game::map::conditions::{Truth, check};
+            let judged = if target.is_zero() { source } else { target };
+            let end = match check(map, d1, Some(source), Some(judged)) {
+                Truth::Met => d3 & 0x1 == 0,
+                Truth::Unmet => d3 & 0x1 != 0,
+                Truth::Unknown => false,
+            };
             if end
                 && d2 > 0
                 && let Some(p) = script_player(source, target)

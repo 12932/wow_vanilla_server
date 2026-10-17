@@ -31,7 +31,7 @@ const UNIT_FLAG_DISABLE_MOVE: u32 = 0x0000_0004;
 /// A flight's speed, in yards a second.
 const TAXI_SPEED: f32 = 32.0;
 /// The text an NPC without its own shows.
-const DEFAULT_TEXT: u32 = 1;
+pub const DEFAULT_TEXT: u32 = 68;
 
 /// A flight in progress.
 #[derive(Debug, Clone)]
@@ -144,24 +144,32 @@ fn menu_options(
         .unwrap_or_default()
 }
 
-pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u32) {
-    let data = map.realm.data.clone();
-    let text = data
+/// A menu's greeting for `player`, as Thistle Tea picks it: of the texts
+/// whose condition holds (or that have none), the one with the highest
+/// condition, the lowest text of those; with none, the default.
+pub fn greeting(map: &Map, menu_id: u32, npc: Guid, player: Guid) -> u32 {
+    let conditions = &map.realm.data.scripts.conditions;
+    map.realm
+        .data
         .npc
         .gossip_menus
         .get(&menu_id)
         .and_then(|m| {
             m.texts
                 .iter()
-                .find(|(_, cond)| {
-                    *cond != 0
-                        && crate::game::map::conditions::met(map, *cond, Some(npc), Some(player))
+                .filter(|(_, cond)| {
+                    *cond == 0
+                        || !conditions.contains_key(cond)
+                        || crate::game::map::conditions::met(map, *cond, Some(npc), Some(player))
                 })
-                .or_else(|| m.texts.iter().find(|(_, cond)| *cond == 0))
-                .or(m.texts.first())
+                .min_by_key(|(text, cond)| (std::cmp::Reverse(*cond), *text))
         })
-        .map(|(t, _)| *t)
-        .unwrap_or(DEFAULT_TEXT);
+        .map_or(DEFAULT_TEXT, |(t, _)| *t)
+}
+
+pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u32) {
+    let data = map.realm.data.clone();
+    let text = greeting(map, menu_id, npc, player);
     if let Some(script) = data.scripts.gossip_menu_script.get(&menu_id).copied() {
         crate::game::map::scripts::start(
             map,

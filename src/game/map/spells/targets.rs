@@ -309,7 +309,7 @@ pub fn effect_targets(
         // (8): every one of them there, as Separation Anxiety and
         // Golemagg's Trust name theirs.
         (_, ScriptUnits) if matches!(e.target_b, 7 | 8) => {
-            script_area(map, center(map, caster, t, e.target_b == 8), s, r)
+            script_area(map, caster, center(map, caster, t, e.target_b == 8), s, r)
         }
         (GameObject, _) | (Location, _) => Vec::new(),
         (Other(_), _) => t.unit.into_iter().collect(),
@@ -389,53 +389,61 @@ fn chain(
     out
 }
 
+/// Whether `g`, of `entry`, is a target a `spell_script_target` row of
+/// `kinds` names for spell `spell`, meeting the row's condition with the
+/// caster as its source.
+pub fn script_target(map: &Map, caster: Guid, spell: u32, kinds: &[u32], entry: u32, g: Guid) -> bool {
+    let data = &map.realm.data.spells;
+    data.script_targets.get(&spell).is_some_and(|v| {
+        v.iter().any(|(k, e)| {
+            kinds.contains(k)
+                && *e == entry
+                && data
+                    .script_target_conditions
+                    .get(&(spell, *k, *e))
+                    .is_none_or(|c| crate::game::map::conditions::met(map, *c, Some(caster), Some(g)))
+        })
+    })
+}
+
 /// The units a scripted spell aims at: the creatures `spell_script_target`
 /// names, near the caster (or the target the client picked).
 /// Every creature a spell's script targets name within `radius` of `at`.
-fn script_area(map: &Map, at: Vector3d, s: &SpellTemplate, radius: f32) -> Vec<Guid> {
-    let Some(v) = map.realm.data.spells.script_targets.get(&s.id) else {
+fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius: f32) -> Vec<Guid> {
+    if !map.realm.data.spells.script_targets.contains_key(&s.id) {
         return Vec::new();
-    };
-    let entries: Vec<u32> = v
-        .iter()
-        .filter(|(k, _)| *k == 1 || *k == 2)
-        .map(|(_, e)| *e)
-        .collect();
+    }
     units_around(map, at, radius, |g| {
         map.creature(g)
-            .is_some_and(|c| c.alive() && entries.contains(&c.entry))
+            .is_some_and(|c| c.alive() && script_target(map, caster, s.id, &[1, 2], c.entry, g))
     })
 }
 
 fn script_units(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, radius: f32) -> Vec<Guid> {
-    let entries: Vec<u32> = map
+    let named = map
         .realm
         .data
         .spells
         .script_targets
         .get(&s.id)
-        .map(|v| {
-            v.iter()
-                .filter(|(k, _)| *k == 1 || *k == 2)
-                .map(|(_, e)| *e)
-                .collect()
-        })
-        .unwrap_or_default();
-    if entries.is_empty() {
+        .is_some_and(|v| v.iter().any(|(k, _)| *k == 1 || *k == 2));
+    if !named {
         return t.unit.into_iter().collect();
     }
+    let fits = |g: Guid| {
+        map.creature(g)
+            .is_some_and(|c| script_target(map, caster, s.id, &[1, 2], c.entry, g))
+    };
     if let Some(u) = t.unit
-        && map.creature(u).is_some_and(|c| entries.contains(&c.entry))
+        && fits(u)
     {
         return vec![u];
     }
     let at = center(map, caster, t, false);
-    units_around(map, at, radius.max(30.0), |g| {
-        map.creature(g).is_some_and(|c| entries.contains(&c.entry))
-    })
-    .into_iter()
-    .take(1)
-    .collect()
+    units_around(map, at, radius.max(30.0), fits)
+        .into_iter()
+        .take(1)
+        .collect()
 }
 
 #[cfg(test)]
