@@ -1017,3 +1017,30 @@ async fn healing_threat_is_split_and_by_the_healers_threat() {
         assert!((t - 35.0).abs() < 0.01, "each kobold's threat: {out:?}");
     }
 }
+
+#[tokio::test]
+async fn honor_stats_are_inspected_only_near() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "BUGINSPA");
+    a.enter("Buginspa", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGINSPB");
+    let other = b.enter("Buginspb", Race::Human, Class::Warrior).await;
+    let ask = async |a: &mut Client| {
+        a.clear();
+        a.send(MSG_INSPECT_HONOR_STATS_Client { guid: other }).await;
+        let parsed = a
+            .gets(Duration::from_millis(300), |m| {
+                matches!(m, ServerOpcodeMessage::MSG_INSPECT_HONOR_STATS(_)).then_some(())
+            })
+            .await
+            .is_some();
+        parsed
+            || a.raw
+                .iter()
+                .any(|f| u16::from_le_bytes([f[2], f[3]]) == 0x2D6)
+    };
+    assert!(ask(&mut a).await, "beside them");
+    b.heartbeat(START.0 + 60.0, START.1, START.2).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!ask(&mut a).await, "sixty yards off");
+}

@@ -473,8 +473,23 @@ pub fn apply(p: &mut Player, h: &Projection) {
     f.set_byte(PLAYER_FIELD_BYTES2, 0, h.rank_bar);
 }
 
-/// `MSG_INSPECT_HONOR_STATS`: a player's honor, for the inspect window.
+/// How near a player must be to be inspected (mangos's
+/// `INSPECT_DISTANCE`, the client's).
+const INSPECT_YARDS: f32 = 28.0;
+
+/// `MSG_INSPECT_HONOR_STATS`: a player's honor, for the inspect window: of
+/// one near and not an enemy (mangos's `HandleInspectHonorStatsOpcode`,
+/// Thistle Tea's `Inspection.available?`).
 pub fn inspect(map: &Map, g: Guid, target: Guid) {
+    let near = match (map.players.get(&g), map.players.get(&target)) {
+        (Some(a), Some(b)) => {
+            crate::game::map::combat::dist(a.position(), b.position()) <= INSPECT_YARDS
+        }
+        _ => false,
+    };
+    if !near || crate::game::map::combat::can_attack(map, g, target) {
+        return;
+    }
     let h = map.realm.social.honor.lock().project(guid::counter(target));
     let mut b = Body::default();
     b.u64(target.guid())
