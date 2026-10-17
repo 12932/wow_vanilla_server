@@ -534,3 +534,77 @@ async fn the_cavalry_charges_and_the_ground_assault_marches() {
         .unwrap();
     assert!(marching);
 }
+
+#[tokio::test]
+async fn a_beacon_left_a_minute_calls_down_its_gryphon_and_the_enemy_can_stop_one() {
+    let mut d = valley();
+    npc(&mut d, 13161, "Aerie Gryphon", 35);
+    for e in [178724, 178725] {
+        super::tests_pvp::banner(&mut d, e, 10);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Grom", Race::Orc, Class::Warrior).await;
+    let map = both_into(&realm, &mut a, &mut b, Map::AlteracValley).await;
+    // Two Alliance beacons planted where Grom is.
+    let at = map
+        .query({
+            let gb = b.guid;
+            move |m| m.players[&gb].position()
+        })
+        .await
+        .unwrap();
+    let (left, stopped) = map
+        .query(move |m| {
+            let mut place = |entry: u32, dx: f32| {
+                let t = m.realm.data.gameobject_templates[&entry].clone();
+                let mut go = crate::game::map::gameobject::GameObject::from_spawn(
+                    &t,
+                    &GameObjectSpawn {
+                        guid: 0x80_0100 + entry,
+                        entry,
+                        map: AV,
+                        x: at.x + dx,
+                        y: at.y,
+                        z: at.z,
+                        state: 1,
+                        ..Default::default()
+                    },
+                );
+                go.spawn_guid = None;
+                m.add_gameobject(go)
+            };
+            (place(178724, 1.0), place(178725, 2.0))
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    // Grom, of the Horde, disables one.
+    b.send(CMSG_GAMEOBJ_USE { guid: stopped }).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    map.query(|m| {
+        let x = &mut m.battleground.as_mut().unwrap().av.as_mut().unwrap().extras;
+        for b in x.beacons.iter_mut() {
+            b.ready_at = Instant::now();
+        }
+        x.hurry(Instant::now());
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let (gryphons, objects) = map
+        .query(move |m| {
+            (
+                m.creatures.iter().filter(|(_, c)| c.entry == 13161).count(),
+                (
+                    m.gameobject(left).is_some(),
+                    m.gameobject(stopped).is_some(),
+                ),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(gryphons, 1, "only the beacon left alone called");
+    assert_eq!(objects, (false, false));
+}

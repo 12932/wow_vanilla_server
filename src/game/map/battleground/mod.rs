@@ -811,7 +811,10 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     let alive = map.players.get(&g).is_some_and(|p| p.death == Death::Alive);
     match m.bg {
         BG_AB => near && alive && ab::use_object(map, g, object),
-        BG_AV => near && alive && av::use_object(map, g, object),
+        BG_AV => {
+            near && alive
+                && (av_quests::use_beacon(map, g, object) || av::use_object(map, g, object))
+        }
         _ => wsg::use_object(map, g, object),
     }
 }
