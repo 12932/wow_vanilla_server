@@ -800,12 +800,24 @@ fn effect(
             });
         }
         EFFECT_INTERRUPT_CAST => {
-            // The interrupted school is locked out for the spell's time.
+            // A cast a silence could stop is interrupted (mangos's
+            // `IsInterruptible`: its interrupt flag 0x8 and prevention 1),
+            // not the Hearthstone; its school locked out for the spell's
+            // time.
             let interrupted = map
                 .caster(target)
                 .and_then(|c| c.casting.as_ref())
-                .map(|c| c.spell);
-            super::interrupt(map, target);
+                .map(|c| c.spell)
+                .filter(|id| {
+                    map.realm
+                        .data
+                        .spells
+                        .get(*id)
+                        .is_some_and(|t| t.interrupt_flags & 0x8 != 0 && t.prevention_type == 1)
+                });
+            if interrupted.is_some() {
+                super::interrupt(map, target);
+            }
             if let Some(spell) = interrupted {
                 super::log::interrupt(map, caster, s.id, target, spell);
                 let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);

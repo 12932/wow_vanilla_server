@@ -322,7 +322,7 @@ pub fn check(
                 fail::NOT_READY
             });
         }
-        if s.start_recovery_category != 0 && c.gcd_until.is_some_and(|t| t > now) {
+        if super::on_gcd(c, s.start_recovery_category, now) {
             return Some(fail::NOT_READY);
         }
         // A school locked out by an interrupt.
