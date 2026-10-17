@@ -1,6 +1,7 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
 //! batch: the weather's seasons, sounds and changes; a scripted stay, a
-//! dead master's guardian, extra attacks in a cast, pets and civilians.
+//! dead master's guardian, extra attacks in a cast, pets and civilians, an
+//! event's looks in a fight.
 
 use std::time::Duration;
 
@@ -358,4 +359,73 @@ async fn a_pet_spares_civilians() {
         .unwrap();
     let wolf = tests_pets::place(&map, gh, tests_pets::WOLF, 0x70_0603, 8.0).await;
     until(&map, "the pet at the wolf", move |m| fighting(m, pet, wolf)).await;
+}
+
+/// A game event starting changes no creature under its foes: one in a
+/// fight keeps its looks, and its fight, and takes the event's when the
+/// fight is over (Thistle Tea changes the living creature in place).
+#[tokio::test]
+async fn an_event_changes_no_creature_in_a_fight() {
+    const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+    let mut d = tests_pets::data();
+    d.creature_spawns.insert(
+        0,
+        vec![crate::game::data::CreatureSpawn {
+            guid: 77,
+            entries: vec![tests_pets::WOLF],
+            map: 0,
+            x: START.0 + 3.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 60,
+            respawn_max: 60,
+            ..Default::default()
+        }],
+    );
+    d.world.event_creatures.insert(
+        77,
+        vec![crate::game::data::world::EventCreature {
+            event: 9,
+            display: 4321,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, ga, map) =
+        tests_pets::enter(&realm, "A", "Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let wolf = crate::game::guid::unit(tests_pets::WOLF, 77);
+    a.sees(wolf).await;
+    let display = move |m: &Map| {
+        m.creatures
+            .iter()
+            .find(|(_, c)| c.spawn_guid == Some(77))
+            .map(|(_, c)| c.fields.get_u32(UNIT_FIELD_DISPLAYID))
+    };
+    let before = map.query(move |m| display(m)).await.unwrap();
+    let on: ahash::AHashSet<u32> = [9].into_iter().collect();
+    *realm.social.events.lock() = on.clone();
+    let (fights, worn) = map
+        .query(move |m| {
+            if let Some(c) = m.creature_mut(wolf) {
+                c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+                c.fields.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+            }
+            crate::game::map::ai::attacked(m, wolf, ga);
+            crate::game::events::apply(m, &on);
+            (
+                m.creature(wolf)
+                    .is_some_and(|c| c.combat.attacking && c.combat.victim == ga),
+                display(m),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(fights, "the wolf fights on");
+    assert_eq!(worn, before, "in its own looks");
+    // Its fight over, it takes the event's.
+    map.query(move |m| crate::game::map::ai::enter_evade(m, wolf))
+        .await
+        .unwrap();
+    until(&map, "the event's looks", move |m| display(m) == Some(4321)).await;
 }

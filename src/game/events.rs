@@ -279,10 +279,18 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                 (false, Some((g, _))) => {
                     map.remove_creature(g);
                 }
-                // Out, and looking as it should in the events on?
+                // Out, and looking as it should in the events on? One in a
+                // fight isn't replaced under its foes: it changes when the
+                // fight is over (Thistle Tea changes it where it stands).
                 (true, Some((g, worn)))
                     if looks_differ && worn != looks(&data, s.guid, on).map_or(0, |e| e.event) =>
                 {
+                    if let Some(c) = map.creature_mut(g)
+                        && fighting(c)
+                    {
+                        c.event_looks_due = true;
+                        continue;
+                    }
                     map.remove_creature(g);
                     if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
                         map.add_creature(c);
@@ -323,6 +331,45 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
             Member::Object(s) => pools::spawn_object(map, s),
             Member::Pool(_) => {}
         }
+    }
+}
+
+/// Whether a creature is in a fight, or on its way home from one.
+pub fn fighting(c: &Creature) -> bool {
+    c.combat.attacking
+        || c.evading
+        || !c.threat.is_empty()
+        || c.fields.has_flag(
+            crate::game::fields::UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+}
+
+/// A creature whose looks changed while it fought, its fight over, takes
+/// the looks of the events on now.
+pub fn caught_up(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.event_looks_due = false;
+    let (Some(spawn), worn) = (c.spawn_guid, c.event_looks) else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    let on = current(&map.realm);
+    if worn == looks(&data, spawn, &on).map_or(0, |e| e.event) {
+        return;
+    }
+    let Some(s) = data
+        .creature_spawns
+        .get(&map.key.map)
+        .and_then(|v| v.iter().find(|s| s.guid == spawn))
+    else {
+        return;
+    };
+    map.remove_creature(g);
+    if let Some(c) = spawn_creature(&data, s, &on, &mut rand::rng()) {
+        map.add_creature(c);
     }
 }
 
