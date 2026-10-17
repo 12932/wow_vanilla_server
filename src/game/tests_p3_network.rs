@@ -803,3 +803,37 @@ async fn moving_stands_a_sitter_up_and_says_so() {
     assert_eq!(state, UnitStandState::Stand);
     assert_eq!(on_map(&realm, posture).await, (0, 0));
 }
+
+/// Thistle Tea's cmsg_move_spline_done_test and cmsg_move_time_skipped_test:
+/// a spline's end the server didn't start moves no one to where it says;
+/// time skipped for another's guid is no one's, and one's own reaches
+/// those who see them.
+#[tokio::test]
+async fn a_stray_spline_end_or_anothers_time_skip_counts_for_nothing() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(ga).await;
+    let at = on_map(&realm, move |m| m.players[&ga].position()).await;
+    a.send(CMSG_MOVE_SPLINE_DONE {
+        info: moving(MovementInfo_MovementFlags::empty(), 900.0, 0.0, 0.0),
+        movement_counter: 1,
+        unknown1: 0,
+    })
+    .await;
+    settled(&mut a).await;
+    let now = on_map(&realm, move |m| m.players[&ga].position()).await;
+    assert_eq!((now.x, now.y, now.z), (at.x, at.y, at.z), "not moved");
+    b.clear();
+    a.send(CMSG_MOVE_TIME_SKIPPED { guid: gb, lag: 25 }).await;
+    a.send(CMSG_MOVE_TIME_SKIPPED { guid: ga, lag: 32 }).await;
+    let (who, lag) = b
+        .wait_for("MSG_MOVE_TIME_SKIPPED", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TIME_SKIPPED(t) => Some((t.player, t.time_skipped)),
+            _ => None,
+        })
+        .await;
+    assert_eq!((who, lag), (ga, 32), "only Alice's own");
+}
