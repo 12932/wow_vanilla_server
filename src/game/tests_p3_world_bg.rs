@@ -650,8 +650,7 @@ async fn an_invitation_declined_leaves_the_match_without_a_word_to_those_in_it()
         .battlegrounds
         .lock()
         .matches
-        .iter()
-        .map(|(_, o)| o)
+        .values()
         .any(|m| m.invited.contains_key(&carl) || m.members.contains_key(&carl));
     assert!(!in_match, "his place gone");
     let left = a
