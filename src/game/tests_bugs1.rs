@@ -1098,3 +1098,33 @@ async fn a_cancelled_logout_keeps_a_stun() {
         .unwrap();
     assert!(stunned, "the stun's flag stays");
 }
+
+#[tokio::test]
+async fn the_ready_check_reaches_its_asker() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "BUGREADYA");
+    a.enter("Bugreadya", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGREADYB");
+    b.enter("Bugreadyb", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GROUP_INVITE {
+        name: "Bugreadyb".into(),
+    })
+    .await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_LIST(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_RAID_READY_CHECK_Client { answer: None }).await;
+    for c in [&mut b, &mut a] {
+        c.wait_for("the ready check", |m| match m {
+            ServerOpcodeMessage::MSG_RAID_READY_CHECK(r) => r.state_check.is_none().then_some(()),
+            _ => None,
+        })
+        .await;
+    }
+}
