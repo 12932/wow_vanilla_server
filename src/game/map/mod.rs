@@ -28,10 +28,12 @@ pub mod misc;
 pub mod movement;
 pub mod nav;
 pub mod npc;
+pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;
 pub mod professions;
 pub mod procs;
+pub mod pvp;
 pub mod query;
 pub mod quests;
 pub mod ranged;
@@ -258,6 +260,8 @@ pub struct Map {
     pub globals: Vec<Guid>,
     /// Rolls under way and gathered nodes to bring back.
     pub loot_state: loot::MapLoot,
+    /// A continent's world PvP: the Plaguelands' towers, Silithus.
+    pub outdoor: Option<outdoor_pvp::Outdoor>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -352,6 +356,7 @@ impl Map {
             battleground: battleground::for_map(key, Instant::now()),
             globals: Vec::new(),
             loot_state: Default::default(),
+            outdoor: outdoor_pvp::for_map(key),
         }
     }
 
@@ -615,6 +620,8 @@ impl Map {
         inventory::sync_gear_all(self);
         misc::update(self);
         combat::update_players(self);
+        pvp::update(self);
+        outdoor_pvp::update(self);
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);

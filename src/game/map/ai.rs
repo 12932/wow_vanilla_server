@@ -262,6 +262,8 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         map.send_to_observers(creature, &frame, false);
     }
     crate::game::map::loot::creature_died(map, creature, tapper);
+    crate::game::map::pvp::creature_killed(map, tapper, creature);
+    crate::game::map::battleground::creature_died(map, creature, tapper);
 }
 
 /// Corpses that decay and creatures that respawn.
@@ -339,6 +341,10 @@ fn respawn(map: &mut Map, g: Guid) {
     let Some(spawn) = spawn else {
         return;
     };
+    // A battleground's creature whose event has gone stays gone.
+    if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
+        return;
+    }
     if let Some(c) = Creature::from_spawn(&data, spawn, &mut rand::rng()) {
         map.add_creature(c);
     }

@@ -42,7 +42,9 @@ pub fn populate(map: &mut Map) {
     let mut rng = rand::rng();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on) {
+            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
+                || !crate::game::map::battleground::spawn_allowed(map, true, s.guid)
+            {
                 continue;
             }
             if let Some(c) = Creature::from_spawn(&data, s, &mut rng) {
@@ -52,7 +54,9 @@ pub fn populate(map: &mut Map) {
     }
     if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on) {
+            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
+                || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
+            {
                 continue;
             }
             if let Some(t) = data.gameobject_templates.get(&s.entry) {
@@ -283,6 +287,8 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     crate::game::map::quests::explored(map, guid, id);
     crate::game::map::rest::area_trigger(map, guid, id);
     crate::game::map::battleground::area_trigger(map, guid, id);
+    crate::game::map::outdoor_pvp::area_trigger(map, guid, id);
+    crate::game::map::pvp::entrance(map, guid, id);
     let Some(p) = map.players.get(&guid) else {
         return;
     };
@@ -328,7 +334,9 @@ pub const GO_CHAIR: u8 = 7;
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
 pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
-    if crate::game::map::battleground::use_object(map, player, object) {
+    if crate::game::map::battleground::use_object(map, player, object)
+        || crate::game::map::outdoor_pvp::use_object(map, player, object)
+    {
         return;
     }
     if crate::game::map::professions::use_object(map, player, object) {
