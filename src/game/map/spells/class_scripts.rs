@@ -40,6 +40,8 @@ use super::{Targets, cast_triggered, fail};
 
 pub const WEAKENED_SOUL: u32 = 6788;
 const WOLFSHEAD_HELM_ENERGY: u32 = 29940;
+/// Heart of the Wild's bear and cat form auras.
+const HEART_OF_THE_WILD_FORMS: [u32; 2] = [24899, 24900];
 /// Collecting Fallout's effects, one of which a cast keeps.
 const ONE_OF: [usize; 2] = [0, 1];
 const SHAPESHIFT_CLEANSE: u32 = 9033;
@@ -458,6 +460,9 @@ fn id_dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> boo
                 c.despawned = false;
                 c.fields.set_u32(UNIT_FIELD_HEALTH, max.max(1));
                 c.fields.set_u32(UNIT_DYNAMIC_FLAGS, 0);
+                // Nothing left on it to loot, and no one's kill.
+                c.loot = None;
+                c.tapped_by = None;
                 let s = c.scripted.get_or_insert_with(Default::default);
                 s.despawn_at = Some(now + std::time::Duration::from_secs(120));
                 s.despawn_type = 1;
@@ -613,15 +618,95 @@ pub fn weapon_equipped(map: &mut Map, player: Guid, entry: u32) {
     let Some(s) = map.realm.data.spells.get(spell).cloned() else {
         return;
     };
+    if s.start_recovery_time == 0 {
+        return;
+    }
     let now = map.now;
-    if let Some(c) = map.caster_mut(player)
-        && c.gcd_until.is_none_or(|t| t <= now)
-    {
-        c.gcd_until = Some(
-            now + std::time::Duration::from_millis(u64::from(s.start_recovery_time.max(1000))),
-        );
+    let gcd = std::time::Duration::from_millis(u64::from(s.start_recovery_time));
+    let Some(c) = map.caster_mut(player) else {
+        return;
+    };
+    // Weapons stay as they are until the lock is up (Thistle Tea's
+    // `Cooldowns.start_weapon_change`).
+    if c.weapon_change_until.is_some_and(|t| t > now) {
+        return;
+    }
+    c.weapon_change_until = Some(now + gcd);
+    if c.gcd_until.is_none_or(|t| t <= now) {
+        c.gcd_until = Some(now + gcd);
     }
     super::cooldowns::send(map, player, &[(spell, 0)]);
+}
+
+/// Why a fighting player can't swap `old` for `new` in an equipment slot,
+/// as Thistle Tea's `validate_combat_change` has it: only weapons,
+/// ammunition, shields, held things and relics change in a fight, and a
+/// weapon not while the last change's lock holds.
+pub fn combat_change_refused(
+    p: &crate::game::map::player::Player,
+    data: &crate::game::data::GameData,
+    old: Option<u32>,
+    new: Option<u32>,
+    now: std::time::Instant,
+) -> Option<crate::game::map::inventory::Fail> {
+    use crate::game::map::inventory::Fail;
+    let fighting = p.fields.has_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+    );
+    if !fighting {
+        return None;
+    }
+    let changeable = |entry: Option<u32>| {
+        entry
+            .and_then(|e| data.item(e))
+            .is_none_or(|t| matches!(t.class, 2 | 6) || matches!(t.inventory_type, 14 | 23 | 28))
+    };
+    if !changeable(old) || !changeable(new) {
+        return Some(Fail::NotInCombat);
+    }
+    let weapon = new.and_then(|e| data.item(e)).is_some_and(|t| t.class == 2);
+    if weapon && p.caster.weapon_change_until.is_some_and(|t| t > now) {
+        return Some(Fail::CantDoRightNow);
+    }
+    None
+}
+
+/// Heart of the Wild's form auras (Thistle Tea's `Druid.form_aura_ids`):
+/// in bear form its share more stamina, in cat form more strength, while
+/// the form lasts.
+pub fn heart_of_the_wild(map: &mut Map, g: Guid, form: u8) {
+    for id in HEART_OF_THE_WILD_FORMS {
+        auras::remove_spell(map, g, id, Some(g));
+    }
+    let data = map.realm.data.clone();
+    let amount = auras::auras(map, g).and_then(|a| {
+        a.effects()
+            .find(|(h, x)| {
+                x.kind == auras::AURA_MOD_TOTAL_STAT_PERCENTAGE
+                    && x.misc == 3
+                    && data
+                        .spells
+                        .get(h.spell)
+                        .is_some_and(|t| t.spell_icon == 240)
+            })
+            .map(|(_, x)| x.amount)
+    });
+    let Some(amount) = amount else {
+        return;
+    };
+    let id = match form {
+        auras::FORM_CAT => HEART_OF_THE_WILD_FORMS[1],
+        auras::FORM_BEAR | auras::FORM_DIREBEAR => HEART_OF_THE_WILD_FORMS[0],
+        _ => return,
+    };
+    if let Some(t) = data.spells.get(id) {
+        let effects: Vec<(usize, i32)> = (0..3)
+            .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
+            .map(|i| (i, amount))
+            .collect();
+        let _ = auras::apply_spell(map, g, g, t, &effects, auras::Context::default());
+    }
 }
 
 /// A dispel took something: Devour Magic heals the felhunter.

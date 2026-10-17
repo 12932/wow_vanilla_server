@@ -483,6 +483,8 @@ pub struct Holder {
     pub effects: Vec<Aura>,
     /// When crowd control may break early.
     pub heartbeat: Option<crate::game::map::spells::heartbeat::Heartbeat>,
+    /// From a triggered spell (worth less when the bar is full).
+    pub triggered: bool,
 }
 
 impl Holder {
@@ -718,6 +720,8 @@ pub struct Context {
     pub duration: Option<Option<u32>>,
     /// Charges the cast worked out.
     pub charges: Option<u32>,
+    /// From a triggered spell.
+    pub triggered: bool,
 }
 
 /// Why an aura couldn't be applied.
@@ -860,6 +864,7 @@ pub fn apply_spell(
         heartbeat: crate::game::map::spells::heartbeat::prepare(
             map, caster, target, spell, pos, duration,
         ),
+        triggered: ctx.triggered,
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
@@ -898,11 +903,14 @@ pub fn apply_spell(
                 .map(|x| (x.effect, x.next_tick, x.ticks))
                 .collect();
             let slot = old.slot;
+            let beat = old.heartbeat;
             *old = Holder {
                 stacks,
                 slot,
                 ..holder.clone()
             };
+            old.heartbeat =
+                crate::game::map::spells::heartbeat::refreshed(beat, holder.heartbeat, now);
             // A stacking aura keeps its ticks' rhythm (and some others).
             if crate::game::map::spells::class_scripts::preserves_periodic_timer(spell) {
                 for x in old.effects.iter_mut() {
@@ -1257,6 +1265,43 @@ pub fn interrupt(map: &mut Map, target: Guid, flags: u32) {
         .is_some_and(|a| a.holders.iter().any(|h| h.interrupt_flags & flags != 0));
     if any {
         remove_where(map, target, |h| h.interrupt_flags & flags != 0);
+    }
+}
+
+/// A channel pushed back by `cut`: `caster`'s holders of `spell` on
+/// `target` end that much sooner, and so does their crowd control's break
+/// (Thistle Tea's `delay_source_spell`).
+pub fn delay_source(map: &mut Map, target: Guid, spell: u32, caster: Guid, cut: Duration) {
+    let now = map.now;
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let mut shown = Vec::new();
+    for h in a
+        .holders
+        .iter_mut()
+        .filter(|h| h.spell == spell && h.caster == caster)
+    {
+        if let Some(t) = h.expires {
+            let t = t.checked_sub(cut).unwrap_or(now).max(now);
+            h.expires = Some(t);
+            if let Some(slot) = h.slot {
+                shown.push((slot, t.saturating_duration_since(now).as_millis() as u32));
+            }
+        }
+        if let Some(b) = h.heartbeat.as_mut()
+            && let Some(at) = b.break_at
+        {
+            b.break_at = Some(at.checked_sub(cut).unwrap_or(now).max(now));
+        }
+    }
+    if let Some(p) = map.players.get(&target) {
+        for (slot, ms) in shown {
+            p.outbound.send(&SMSG_UPDATE_AURA_DURATION {
+                aura_slot: slot as u8,
+                aura_duration: ms,
+            });
+        }
     }
 }
 
