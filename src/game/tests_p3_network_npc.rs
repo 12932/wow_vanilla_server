@@ -588,3 +588,43 @@ async fn a_quest_too_high_is_refused_and_hidden_rewards_are_not_shown() {
     assert_eq!(&body[40..44], &0i32.to_le_bytes(), "no money");
     assert_eq!(&body[60..140], &[0u8; 80][..], "no reward items");
 }
+
+/// Thistle Tea's chat_messages_test: a creature's whisper, its boss
+/// whisper and boss emote carry its name and then the GUID of the one they
+/// are for, as mangos-zero's BuildChatPacket lays them out; a boss's
+/// whisper has its own type.
+#[tokio::test]
+async fn a_creatures_whispers_and_emotes_name_it_and_whom_they_are_for() {
+    use crate::game::map::scripts::{
+        CHAT_BOSS_EMOTE, CHAT_BOSS_WHISPER, CHAT_TEXT_EMOTE, CHAT_WHISPER,
+    };
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let npc = guid::unit(GOSSIPER, 12);
+    a.sees(npc).await;
+    a.clear();
+    for (kind, wire) in [
+        (CHAT_WHISPER, 0x1Au8),
+        (CHAT_BOSS_WHISPER, 0x59),
+        (CHAT_BOSS_EMOTE, 0x5A),
+        (CHAT_TEXT_EMOTE, 0x0D),
+    ] {
+        on_map(&realm, move |m| {
+            crate::game::map::scripts::say(m, npc, "Come, $n.", kind, 0, g);
+        })
+        .await;
+        let said = a
+            .wait_frame("SMSG_MESSAGECHAT", 0x096, move |f| f[0] == wire)
+            .await;
+        let mut want = vec![wire];
+        want.extend_from_slice(&0u32.to_le_bytes());
+        want.extend_from_slice(&9u32.to_le_bytes());
+        want.extend_from_slice(b"Gossiper\0");
+        want.extend_from_slice(&g.guid().to_le_bytes());
+        want.extend_from_slice(&10u32.to_le_bytes());
+        want.extend_from_slice(b"Come, $n.\0");
+        want.push(0);
+        assert_eq!(said, want, "type 0x{wire:02X}");
+    }
+}
