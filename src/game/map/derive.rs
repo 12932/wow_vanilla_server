@@ -710,10 +710,17 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
 
 /// Run speed with the auras' hastes and slows, sent where it changed.
 fn speed(map: &mut Map, g: Guid) {
+    use crate::game::map::misc::{
+        MSG_MOVE_SET_RUN_BACK_SPEED, MSG_MOVE_SET_RUN_SPEED, MSG_MOVE_SET_SWIM_BACK_SPEED,
+        MSG_MOVE_SET_SWIM_SPEED,
+    };
     use wow_world_messages::vanilla::*;
     let mounted = map
         .unit_fields(g)
         .is_some_and(|f| f.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0);
+    // What changed, for those who see the player too (Thistle Tea's
+    // `broadcast_speed`).
+    let mut told: Vec<(u16, f32)> = Vec::new();
     if let Some(p) = map.players.get_mut(&g) {
         let pct = p.auras.speed_percent(mounted);
         let speed = (7.0 * (1.0 + pct as f32 / 100.0)).max(0.5);
@@ -725,6 +732,7 @@ fn speed(map: &mut Map, g: Guid) {
                 move_event: 0,
                 speed,
             });
+            told.push((MSG_MOVE_SET_RUN_SPEED, speed));
         }
         // Backwards, only slows count (Thistle Tea's `MovementStats`).
         let slow = (1.0 + p.auras.min(AURA_MOD_DECREASE_SPEED).min(0) as f32 / 100.0).max(0.0);
@@ -736,6 +744,7 @@ fn speed(map: &mut Map, g: Guid) {
                 move_event: 0,
                 speed: back,
             });
+            told.push((MSG_MOVE_SET_RUN_BACK_SPEED, back));
         }
         if !ghost && (2.5 - p.speeds.swim_back).abs() > 0.01 {
             p.speeds.swim_back = 2.5;
@@ -744,6 +753,7 @@ fn speed(map: &mut Map, g: Guid) {
                 move_event: 0,
                 speed: 2.5,
             });
+            told.push((MSG_MOVE_SET_SWIM_BACK_SPEED, 2.5));
         }
         // Forward swimming: the strongest swim bonus, and slows (Thistle
         // Tea's swimming speeds, vmangos's `Unit::UpdateSpeed`).
@@ -756,6 +766,10 @@ fn speed(map: &mut Map, g: Guid) {
                 move_event: 0,
                 speed: swim,
             });
+            told.push((MSG_MOVE_SET_SWIM_SPEED, swim));
+        }
+        for (opcode, speed) in told {
+            crate::game::map::misc::speed_to_observers(map, g, opcode, speed);
         }
         return;
     }

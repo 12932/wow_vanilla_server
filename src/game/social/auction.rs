@@ -124,12 +124,12 @@ pub fn rates(house: u32) -> (u32, u32) {
     if house == 7 { (25, 15) } else { (5, 5) }
 }
 
-/// mangos's deposit: the item's sell price, by the 2-hour periods, at the
-/// house's rate times three.
+/// Thistle Tea's deposit (`Auction.deposit`): the item's sell price, by
+/// the 2-hour periods, at the house's rate.
 pub fn deposit(sell_price: u32, count: u32, secs: u32, house: u32) -> u32 {
-    let periods = secs / MIN_AUCTION_SECS;
-    let base = sell_price as f32 * count as f32 * periods as f32;
-    (base * rates(house).0 as f32 * 3.0 / 100.0) as u32
+    let periods = u64::from(secs / MIN_AUCTION_SECS);
+    let base = u64::from(sell_price) * u64::from(count) * periods * u64::from(rates(house).0);
+    u32::try_from(base / 100).unwrap_or(u32::MAX)
 }
 
 fn save(realm: &Realm, a: &Auction) {
@@ -592,13 +592,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deposits_and_increments_follow_mangos() {
-        // A 1s item, two hours at a faction house: 3% of its price.
-        assert_eq!(deposit(100, 1, 7200, 2), 15);
+    fn deposits_and_increments_follow_thistle_tea() {
+        // A 1s item, two hours at a faction house: 5% of its price.
+        assert_eq!(deposit(100, 1, 7200, 2), 5);
         // Twenty-four hours: twelve periods.
-        assert_eq!(deposit(100, 1, 86_400, 2), 180);
+        assert_eq!(deposit(100, 1, 86_400, 2), 60);
         // The goblins take five times as much.
-        assert_eq!(deposit(100, 1, 7200, 7), 75);
+        assert_eq!(deposit(100, 1, 7200, 7), 25);
         let a = Auction {
             bid: 1000,
             ..Default::default()
