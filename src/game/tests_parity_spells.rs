@@ -1,7 +1,10 @@
 //! Stage 2a's spells and auras, against the real data when it is here: a
 //! dispel taking a passive aura, weapons' feral attack power held to the
 //! forms, healing taken by the spell's coefficient and at each tick, a
-//! killing spell that spares the gear, and the Net-o-Matic's backfire.
+//! killing spell that spares the gear, the Net-o-Matic's backfire, and
+//! Premeditation's points taken back.
+
+use std::time::Duration;
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -373,4 +376,53 @@ async fn the_net_o_matics_backfire_nets_its_thrower_and_leaves_no_marker() {
         (true, true, false),
         "(the target netted, the thrower netted, the marker left)"
     );
+}
+
+const PREMEDITATION: u32 = 14183;
+/// A builder's point (Ruthlessness's).
+const RUTHLESSNESS: u32 = 14157;
+
+#[tokio::test]
+async fn premeditations_points_come_off_when_it_runs_out_unless_a_builder_kept_them() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A6");
+    let rogue = c.enter("Parsix", Race::Human, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, rogue, 60);
+            let points = |m: &Map| {
+                let p = &m.players[&rogue];
+                (
+                    p.caster.combo_points,
+                    p.fields.get_byte(PLAYER_FIELD_BYTES, 1),
+                )
+            };
+            let kobold = dummy(m, rogue, 60, 3.0);
+            // One point of a builder's, then Premeditation's two.
+            spells::cast_triggered(m, rogue, RUTHLESSNESS, Some(kobold));
+            spells::cast_triggered(m, rogue, PREMEDITATION, Some(kobold));
+            let held = (points(m), has(m, rogue, PREMEDITATION));
+            m.now += Duration::from_secs(11);
+            auras::update(m);
+            let ran_out = (points(m), has(m, rogue, PREMEDITATION));
+            // Premeditation, then a builder: the points are kept.
+            spells::cast_triggered(m, rogue, PREMEDITATION, Some(kobold));
+            spells::cast_triggered(m, rogue, RUTHLESSNESS, Some(kobold));
+            let built = (points(m), has(m, rogue, PREMEDITATION));
+            m.now += Duration::from_secs(11);
+            auras::update(m);
+            let kept = points(m);
+            (held, ran_out, built, kept)
+        })
+        .await
+        .unwrap();
+    let (held, ran_out, built, kept) = out;
+    assert_eq!(held, ((3, 3), true), "three points, two of them held");
+    assert_eq!(ran_out, ((1, 1), false), "the two held go with the hold");
+    assert_eq!(built, ((4, 4), false), "a builder keeps them for good");
+    assert_eq!(kept, (4, 4));
 }

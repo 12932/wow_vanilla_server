@@ -1853,6 +1853,11 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     crate::game::map::spells::class_scripts::aura_gone(map, target, h);
     crate::game::map::trinkets::removed(map, target, h);
     crate::game::map::item_scripts::aura_gone(map, target, h, expired);
+    // Combo points held for a while go when the hold runs out, not when
+    // it's taken off.
+    if expired && h.has(AURA_RETAIN_COMBO_POINTS) {
+        crate::game::map::spells::retained_combo_points_expired(map, target, h);
+    }
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting
