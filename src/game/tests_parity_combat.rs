@@ -39,6 +39,11 @@ const DRAIN: u32 = 95_002;
 const HIDE: u32 = 95_003;
 const GOAD: u32 = 95_004;
 const MOCK: u32 = 95_005;
+/// Sap, a curse, a curse with no threat, a bolt.
+const SAP: u32 = 95_006;
+const CURSE: u32 = 95_007;
+const QUIET_CURSE: u32 = 95_008;
+const BOLT: u32 = 95_009;
 
 /// The spawns: (guid, entry, east, north).
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
@@ -53,6 +58,13 @@ const SPAWNS: &[(u32, u32, f32, f32)] = &[
     // Two that call each other, further off.
     (15, CALLER, 60.0, 0.0),
     (16, CALLER, 63.0, 0.0),
+    // A row to cast at, out of each other's sight.
+    (20, KOBOLD, 50.0, 20.0),
+    (21, KOBOLD, 50.0, 30.0),
+    (22, KOBOLD, 50.0, 40.0),
+    (23, KOBOLD, 50.0, 50.0),
+    (24, KOBOLD, 50.0, 60.0),
+    (25, KOBOLD, 50.0, 70.0),
 ];
 
 fn faction(id: u32, ours: u32, enemy_mask: u32) -> FactionTemplate {
@@ -184,6 +196,44 @@ fn data() -> GameData {
         };
         if channeled {
             t.attributes[1] = crate::game::data::spells::ATTR_EX_CHANNELED;
+        }
+        s.spells.insert(id, t);
+    }
+    for id in [SAP, CURSE, QUIET_CURSE, BOLT] {
+        let mut t = crate::game::data::spells::SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            range_index: 1,
+            equipped_item_class: -1,
+            duration_index: 9,
+            ..Default::default()
+        };
+        t.effects[0] = if id == BOLT {
+            crate::game::data::spells::SpellEffect {
+                effect: 2,
+                base_points: 9,
+                base_dice: 1,
+                die_sides: 1,
+                target_a: 6,
+                ..Default::default()
+            }
+        } else {
+            crate::game::data::spells::SpellEffect {
+                effect: 6,
+                aura: 33,
+                base_points: -50,
+                base_dice: 1,
+                die_sides: 1,
+                target_a: 6,
+                ..Default::default()
+            }
+        };
+        if id == SAP {
+            t.family_name = 8;
+            t.family_flags = 0x80;
+        }
+        if id == QUIET_CURSE {
+            t.attributes[1] = 0x400;
         }
         s.spells.insert(id, t);
     }
@@ -969,4 +1019,84 @@ async fn a_caster_stands_off_only_where_it_sees_its_victim() {
         blind.is_some_and(|d| d < 5.0),
         "unseen, it comes on: {blind:?}"
     );
+}
+
+/// Whether creature `g` is in a fight.
+fn fighting(m: &Map, g: Guid) -> bool {
+    m.creature(g).is_some_and(|c| {
+        c.combat.attacking
+            || c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+    })
+}
+
+/// A harmful spell puts a creature in the fight as Thistle Tea decides
+/// (`Spell.Combat.decide`): not Sap, seen or not; not a spell from a
+/// caster it doesn't see, nor one with no threat; one from a caster it
+/// sees, yes; and damage, seen or not.
+#[tokio::test]
+async fn a_harmful_spell_starts_a_fight_as_thistle_tea_decides() {
+    let (_realm, _a, ga, map) = setup(Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            m.players
+                .get_mut(&ga)
+                .unwrap()
+                .spells
+                .extend([SAP, CURSE, QUIET_CURSE, BOLT]);
+            let cast = |m: &mut Map, spawn: u32, dy: f32, spell: u32, hidden: bool| {
+                let k = kobold(spawn);
+                m.players.get_mut(&ga).unwrap().movement.position = at(45.0, dy);
+                if hidden {
+                    aura_on(m, ga, ga, HIDE, 100);
+                } else {
+                    crate::game::map::auras::remove_spell(m, ga, HIDE, None);
+                }
+                let sees = crate::game::map::spells::stealth::sees(m, k, ga);
+                let went = crate::game::map::spells::cast(
+                    m,
+                    ga,
+                    spell,
+                    crate::game::map::spells::Targets {
+                        unit: Some(k),
+                        ..Default::default()
+                    },
+                    None,
+                );
+                (went, sees, fighting(m, k))
+            };
+            [
+                cast(m, 20, 20.0, SAP, true),
+                cast(m, 21, 30.0, SAP, false),
+                cast(m, 22, 40.0, CURSE, true),
+                cast(m, 23, 50.0, CURSE, false),
+                cast(m, 24, 60.0, QUIET_CURSE, false),
+                cast(m, 25, 70.0, BOLT, true),
+            ]
+        })
+        .await
+        .unwrap();
+    let [sap_hidden, sap_seen, curse_hidden, curse_seen, quiet, bolt] = out;
+    for (what, (went, _, _)) in [
+        ("sap", sap_hidden),
+        ("sap", sap_seen),
+        ("curse", curse_hidden),
+        ("curse", curse_seen),
+        ("quiet", quiet),
+        ("bolt", bolt),
+    ] {
+        assert!(went, "the {what} went");
+    }
+    assert!(
+        !sap_hidden.1 && !curse_hidden.1 && !bolt.1,
+        "hidden is hidden"
+    );
+    assert!(!sap_hidden.2, "Sap from stealth starts no fight");
+    assert!(!sap_seen.2, "nor seen");
+    assert!(!curse_hidden.2, "a curse from one unseen starts none");
+    assert!(curse_seen.2, "seen, it does");
+    assert!(!quiet.2, "one with no threat doesn't");
+    assert!(bolt.2, "damage does, seen or not");
 }
