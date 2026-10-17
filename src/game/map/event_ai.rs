@@ -769,6 +769,12 @@ pub fn death(map: &mut Map, g: Guid, killer: Guid) {
     if has_events(map, g) {
         fire(map, g, |e| e.kind == EVENT_DEATH, Some(killer));
     }
+}
+
+/// Its summoner and its group hear of its death, once it is dead (as
+/// vmangos's `SummonedCreatureJustDied` comes): a summoner that asks
+/// whether any of them is left alive doesn't count it.
+pub fn death_heard(map: &mut Map, g: Guid) {
     // Its summoner hears of it.
     let summoner = scripted(map, g).and_then(|s| s.summoner);
     let entry = map.creature(g).map(|c| c.entry).unwrap_or(0);

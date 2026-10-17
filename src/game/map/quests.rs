@@ -428,17 +428,45 @@ pub fn object_hello(map: &mut Map, player: Guid, object: Guid) {
     }
 }
 
-fn rewards_of(q: &Quest) -> (Vec<QuestItemReward>, Vec<QuestItemReward>) {
-    let pick = |v: &[(u32, u32)]| {
-        v.iter()
-            .filter(|(i, _)| *i != 0)
-            .map(|(item, n)| QuestItemReward {
-                item: *item,
-                item_count: *n,
-            })
-            .collect()
-    };
-    (pick(&q.choice_rewards), pick(&q.rewards))
+/// `SMSG_QUESTGIVER_QUEST_DETAILS`'s opcode.
+pub const SMSG_QUESTGIVER_QUEST_DETAILS_OPCODE: u16 = 0x188;
+
+/// A quest's details as 1.12 lays them out (mangos-zero's, vmangos's and
+/// Thistle Tea's): its Accept button on, each reward item with its display
+/// id (which wow_messages' layout leaves out), the money it gives or asks
+/// for, and its emotes up to the last.
+pub fn details_frame(data: &GameData, giver: Guid, q: &Quest) -> std::sync::Arc<[u8]> {
+    let mut b = crate::game::data::items::Body::default();
+    b.u64(giver.guid())
+        .u32(q.id)
+        .cstr(&q.title)
+        .cstr(&q.details)
+        .cstr(&q.objectives)
+        .u32(1);
+    if q.flags & QUEST_FLAGS_HIDDEN_REWARDS != 0 {
+        b.u32(0).u32(0).u32(0);
+    } else {
+        for list in [&q.choice_rewards[..], &q.rewards[..]] {
+            let items: Vec<(u32, u32)> = list.iter().copied().filter(|(i, _)| *i != 0).collect();
+            b.u32(items.len() as u32);
+            for (item, n) in items {
+                let display = data.items.get(&item).map_or(0, |t| t.display_id);
+                b.u32(item).u32(n).u32(display);
+            }
+        }
+        b.i32(q.reward_money);
+    }
+    b.u32(q.reward_spell);
+    let emotes = q
+        .details_emotes
+        .iter()
+        .rposition(|(e, _)| *e != 0)
+        .map_or(&[][..], |last| &q.details_emotes[..=last]);
+    b.u32(emotes.len() as u32);
+    for (emote, delay) in emotes {
+        b.u32(*emote).u32(*delay);
+    }
+    b.frame(SMSG_QUESTGIVER_QUEST_DETAILS_OPCODE)
 }
 
 /// `CMSG_QUESTGIVER_QUERY_QUEST`, or a hello with one quest: its details.
@@ -447,29 +475,8 @@ pub fn details(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     let Some(q) = data.npc.quests.get(&quest) else {
         return;
     };
-    let (choice, items) = rewards_of(q);
     if let Some(p) = map.players.get(&player) {
-        p.outbound.send(&SMSG_QUESTGIVER_QUEST_DETAILS {
-            guid: giver,
-            quest_id: quest,
-            title: q.title.clone(),
-            details: q.details.clone(),
-            objectives: q.objectives.clone(),
-            auto_finish: false,
-            choice_item_rewards: choice,
-            item_rewards: items,
-            money_reward: (q.reward_money.max(0) as u32).into(),
-            reward_spell: q.reward_spell,
-            emotes: q
-                .details_emotes
-                .iter()
-                .filter(|(e, _)| *e != 0)
-                .map(|(e, d)| QuestDetailsEmote {
-                    emote: *e,
-                    emote_delay: std::time::Duration::from_millis(u64::from(*d)),
-                })
-                .collect(),
-        });
+        p.outbound.send_frame(details_frame(&data, giver, q));
     }
 }
 
@@ -630,6 +637,15 @@ pub fn killed(map: &mut Map, player: Guid, creature: Guid) {
     credit(map, player, creature, 0, &allowed);
 }
 
+/// The entry a creature or object is now (a script may have changed
+/// it, as a cured beast's), not the one its GUID was made with.
+pub fn entry_of(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .map(|c| c.entry)
+        .or_else(|| map.gameobject(g).map(|o| o.entry))
+        .unwrap_or_else(|| guid::entry(g))
+}
+
 /// A raid quest, by its type or its flags: killing counts in a raid.
 const QUEST_TYPE_RAID: u32 = 62;
 const QUEST_FLAGS_RAID: u32 = 0x40;
@@ -704,7 +720,7 @@ fn credit(
     spell: u32,
     eligible: &dyn Fn(&Quest) -> bool,
 ) {
-    let entry = guid::entry(target);
+    let entry = entry_of(map, target);
     let object = guid::is_game_object(target);
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
