@@ -1240,6 +1240,35 @@ Beyond Thistle Tea, which has no such event.
 - **Zones:** the navmesh's, at the point or the floor nearest it; else the tile's area; else the map's only zone.
 - God mode, not a GM account, now spares a player the environment.
 
+### An independent audit (2026-10-17)
+
+A fresh agent, given only the two code bases, compared them system by system. What it found:
+
+- **At parity:** the client opcodes (every one Thistle Tea dispatches), and each system's existence and core. wvs
+  also leads on persistence, accounts, GM levels and movement checks.
+- **High:**
+  - spells that summon game objects: hunter traps, mage portals, campfires, Ritual of Summoning;
+  - about 45 of vmangos's spell scripts that Thistle Tea ports, among them Bloodthirst's attack power, Weakened Soul,
+    Forbearance, Recently Bandaged, Swiftmend, Holy Nova's heal, Demonic Sacrifice and the item and engineering
+    gadgets.
+- **Medium:**
+  - the trade window's enchanting slot;
+  - quest objectives on game objects;
+  - spells' travel time;
+  - the dungeon death and corpse run;
+  - battleground group queueing and instance eviction;
+  - intoxication, spell taxis and pulls;
+  - zone-bound items and item targets.
+- **Low:**
+  - aquatic and flying creatures;
+  - wounded creatures' slowdown, pausing to talk, fleeing critters;
+  - the reclaim delay's escalation;
+  - the War Effort and zone-under-attack alerts;
+  - books;
+  - `SMSG_SUPERCEDED_SPELL` and some combat-log packets.
+
+Six agents took these on, each on its own branch.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
