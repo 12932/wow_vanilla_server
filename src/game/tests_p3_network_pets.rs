@@ -216,3 +216,64 @@ async fn a_hunters_pet_is_named_untrained_and_runs_off_as_1_12_has_it() {
     let gone = map.query(move |m| m.creature(pet).is_none()).await.unwrap();
     assert!(gone, "run off");
 }
+
+/// A helpful spell an imp may cast, on an ally.
+const IMP_BLESSING: u32 = 900_503;
+
+/// Thistle Tea's pet_messages_test: a pet's helpful spell sent with no
+/// target is aimed at the pet itself; one sent for a creature that isn't
+/// the player's is refused.
+#[tokio::test]
+async fn a_pets_helpful_spell_with_no_target_is_its_own_and_a_strangers_refused() {
+    let mut d = data();
+    let mut blessing = spell(
+        IMP_BLESSING,
+        "Blessing",
+        [effect(6, 5, 21), effect(0, 0, 0), effect(0, 0, 0)],
+    );
+    blessing.effects[0].aura = crate::game::map::auras::AURA_MOD_STAT;
+    d.spells.spells.insert(IMP_BLESSING, blessing);
+    let realm = harness::realm_with(d);
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[SUMMON_IMP]);
+    let wolf = place(&map, gw, WOLF, 0x70_0004, 10.0).await;
+    cast(&w, SUMMON_IMP, None).await;
+    let imp = pet_bar(&mut w).await;
+    map.query(move |m| pets::learn(m, imp, IMP_BLESSING)).await;
+    let none = || SpellCastTargets {
+        target_flags: SpellCastTargets_SpellCastTargetFlags::empty(),
+    };
+    w.send(CMSG_PET_CAST_SPELL {
+        guid: wolf,
+        id: IMP_BLESSING,
+        targets: none(),
+    })
+    .await;
+    w.send(CMSG_PET_CAST_SPELL {
+        guid: imp,
+        id: IMP_BLESSING,
+        targets: none(),
+    })
+    .await;
+    let mut blessed = false;
+    for _ in 0..200 {
+        blessed = map
+            .query(move |m| {
+                crate::game::map::auras::auras(m, imp).is_some_and(|a| a.has_spell(IMP_BLESSING))
+            })
+            .await
+            .unwrap();
+        if blessed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(blessed, "the imp blessed itself");
+    let wolf_blessed = map
+        .query(move |m| {
+            crate::game::map::auras::auras(m, wolf).is_some_and(|a| a.has_spell(IMP_BLESSING))
+        })
+        .await
+        .unwrap();
+    assert!(!wolf_blessed, "no stranger's cast");
+}
