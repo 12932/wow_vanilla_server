@@ -1077,6 +1077,18 @@ fn flags_extra(map: &Map, g: Guid) -> u32 {
         .map_or(0, |t| t.flags_extra)
 }
 
+/// A creature template's `static_flags1`.
+fn static_flags(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .map_or(0, |t| t.static_flags1)
+}
+
+/// `static_flags1`: it can't be killed, only brought to one health; it has
+/// no defense skill.
+pub const STATIC_UNKILLABLE: u32 = 0x8;
+pub const STATIC_NO_DEFENSE: u32 = 0x4000;
+
 /// Whether a unit wields two weapons: a player who can, or a creature
 /// whose off hand holds a weapon (not a shield or a held item).
 pub fn dual_wields(map: &Map, g: Guid) -> bool {
@@ -1157,7 +1169,13 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
             },
             va.level,
         ),
-        victim_defense: or_level(dv.defense, vb.level),
+        // A creature without defense meets every blow with none (Thistle
+        // Tea's `Skills.defense_value`).
+        victim_defense: if static_flags(map, victim) & STATIC_NO_DEFENSE != 0 {
+            0
+        } else {
+            or_level(dv.defense, vb.level)
+        },
         attacker_is_player: va.is_player,
         victim_is_player: vb.is_player,
         attacker_level: va.level as i32,
@@ -2375,8 +2393,12 @@ fn deal_damage_with(
         return;
     };
     let left = f.get_u32(UNIT_FIELD_HEALTH).saturating_sub(damage);
-    // A script can keep a creature from falling below a floor.
-    let floor = crate::game::map::event_ai::invincible_floor(map, victim);
+    // A script can keep a creature from falling below a floor, and an
+    // unkillable one never falls below one health (vmangos's
+    // `CREATURE_STATIC_FLAG_UNKILLABLE`, Thistle Tea's invincibility
+    // threshold).
+    let unkillable = u32::from(static_flags(map, victim) & STATIC_UNKILLABLE != 0);
+    let floor = crate::game::map::event_ai::invincible_floor(map, victim).max(unkillable);
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
     };
