@@ -73,6 +73,8 @@ pub struct SpellTemplate {
     pub max_target_level: u32,
     pub spell_icon: u32,
     pub custom_flags: u32,
+    /// vmangos's script for the spell, if any.
+    pub script_name: String,
     pub effects: [SpellEffect; 3],
     pub spell_visual: u32,
     pub name: String,
@@ -264,6 +266,11 @@ pub struct SpellData {
     pub enchant_ppm: AHashMap<u32, f32>,
     /// `spell_learn_spell`: spells another brings.
     pub learn_with: AHashMap<u32, Vec<u32>>,
+    /// `spell_cone`: a cone's width in degrees, where it isn't 60.
+    pub cones: AHashMap<u32, i32>,
+    /// `spell_script_target`: the creatures (type 1) or objects (type 0)
+    /// a scripted spell aims at.
+    pub script_targets: AHashMap<u32, Vec<(u32, u32)>>,
 }
 
 /// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.

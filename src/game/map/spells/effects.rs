@@ -1,0 +1,1217 @@
+//! A spell's effects on a target once it has landed: damage and healing
+//! through [`super::outcome`], a spell's auras as one holder, weapon damage
+//! as one blow, and the rest; effects at a place (persistent areas,
+//! missiles); and the party auras that follow their casters.
+
+use std::time::Duration;
+
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::{
+    Area as WireArea, Power, SMSG_BINDPOINTUPDATE, SMSG_RESURRECT_REQUEST, SMSG_SPELLENERGIZELOG,
+    Vector3d,
+};
+
+use crate::game::data::spells::{self as sd, SpellTemplate};
+use crate::game::fields::*;
+use crate::game::guid;
+use crate::game::map::Map;
+use crate::game::map::auras::{self, *};
+use crate::game::map::combat::{self, dist};
+
+use super::mods::{self, Mods};
+use super::outcome::{self, Kind, Landing};
+use super::*;
+
+/// Diminishing returns' groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Dr {
+    ControlledStun = 1,
+    TriggeredStun,
+    KidneyShot,
+    Sleep,
+    Polymorph,
+    ControlledRoot,
+    Fear,
+    WarlockFear,
+    Charm,
+    Silence,
+    Disarm,
+    Freeze,
+    Knockout,
+    Banish,
+    Horror,
+}
+
+/// A spell's diminishing returns group, as Thistle Tea follows vmangos.
+fn dr_group(s: &SpellTemplate) -> Option<Dr> {
+    let flags = s.family_flags as u32;
+    match (s.family_name, s.id) {
+        (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),
+        (8, _) if flags & 0x100_0000 != 0 => return None,
+        (9, _) if flags & 0x8 != 0 => return Some(Dr::Freeze),
+        (5, 6358) => return Some(Dr::WarlockFear),
+        (5, _) if flags & 0x8000_0000 != 0 && s.mechanic == 5 => return Some(Dr::WarlockFear),
+        (5, _) if flags & 0x8000_0000 != 0 => return None,
+        (4, _) if flags & 0x2 != 0 => return None,
+        (11, _) if flags & 0x8000_0000 != 0 => return Some(Dr::ControlledRoot),
+        (3, _) if s.spell_visual == 4325 => return None,
+        (0, 12355 | 18093) => return Some(Dr::TriggeredStun),
+        (_, 7922 | 20253 | 20614 | 20615) => return Some(Dr::ControlledStun),
+        _ => {}
+    }
+    let mechanics: Vec<u32> = std::iter::once(s.mechanic)
+        .chain(s.effects.iter().map(|e| e.mechanic))
+        .collect();
+    [
+        (12, Dr::ControlledStun),
+        (10, Dr::Sleep),
+        (17, Dr::Polymorph),
+        (7, Dr::ControlledRoot),
+        (5, Dr::Fear),
+        (1, Dr::Charm),
+        (9, Dr::Silence),
+        (3, Dr::Disarm),
+        (13, Dr::Freeze),
+        (14, Dr::Knockout),
+        (30, Dr::Knockout),
+        (18, Dr::Banish),
+        (24, Dr::Horror),
+    ]
+    .into_iter()
+    .find(|(m, _)| mechanics.contains(m))
+    .map(|(_, g)| g)
+}
+
+/// The duration a crowd control lasts on `target` after its diminishing
+/// returns: whole, a half, a quarter, then immune (`None`) for 15 seconds.
+fn diminished(
+    map: &mut Map,
+    target: Guid,
+    s: &SpellTemplate,
+    duration: Option<u32>,
+) -> Option<Option<u32>> {
+    let Some(ms) = duration else {
+        return Some(duration);
+    };
+    let Some(group) = dr_group(s) else {
+        return Some(duration);
+    };
+    let all = matches!(
+        group,
+        Dr::ControlledStun | Dr::TriggeredStun | Dr::KidneyShot
+    );
+    if !all && !guid::is_player(target) {
+        return Some(duration);
+    }
+    let now = map.now;
+    let c = map.caster_mut(target)?;
+    let entry = c.diminishing.iter_mut().find(|(g, _, _)| *g == group as u8);
+    let applications = match entry {
+        Some(e) if e.2.is_none_or(|r| r > now) => {
+            if e.1 >= 3 {
+                return None;
+            }
+            e.1 += 1;
+            e.2 = Some(
+                now + Duration::from_millis(u64::from(ms >> (e.1 - 1))) + Duration::from_secs(15),
+            );
+            e.1 - 1
+        }
+        Some(e) => {
+            *e = (
+                group as u8,
+                1,
+                Some(now + Duration::from_millis(u64::from(ms)) + Duration::from_secs(15)),
+            );
+            0
+        }
+        None => {
+            c.diminishing.push((
+                group as u8,
+                1,
+                Some(now + Duration::from_millis(u64::from(ms)) + Duration::from_secs(15)),
+            ));
+            0
+        }
+    };
+    Some(Some(ms >> applications))
+}
+
+/// An aura's duration: the spell's at the caster's level, longer for a
+/// finishing move's combo points, with the caster's modifiers.
+fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8) -> Option<u32> {
+    let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    let base = map.realm.data.spells.duration(s, level)?;
+    let mut ms = base;
+    if combo > 0
+        && let Some(d) = map.realm.data.spells.durations.get(&s.duration_index)
+        && d.max > base as i32
+    {
+        ms = base + (d.max as u32 - base) * u32::from(combo) / 5;
+    }
+    Some(m.apply_ms(mods::OP_DURATION, ms))
+}
+
+/// What an aura effect holds: for a periodic damage or heal, a tick's worth
+/// with spell power and the caster's modifiers.
+fn aura_amount(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    base: i32,
+    l: &Landing,
+) -> i32 {
+    let e = &s.effects[index];
+    match e.aura {
+        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
+            let mut d =
+                base as f32 + outcome::bonus(map, caster, target, s, index, Kind::Dot, &l.mods);
+            d *= outcome::done_multiplier(map, caster, target, s);
+            l.mods.apply(mods::OP_DOT, d).max(0.0) as i32
+        }
+        AURA_PERIODIC_HEAL => {
+            let mut h =
+                base as f32 + outcome::bonus(map, caster, target, s, index, Kind::Dot, &l.mods);
+            if let Some(a) = auras::auras(map, caster) {
+                h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
+            }
+            outcome::healing_taken(map, target, l.mods.apply(mods::OP_DOT, h)) as i32
+        }
+        _ => base,
+    }
+}
+
+/// The effects of `s` that land on `target` (those `which` marks).
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    which: [bool; 3],
+    l: &Landing,
+    chain: &mut [f32; 3],
+    item: Option<Guid>,
+    t: &Targets,
+) {
+    let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    let mut aura_effects = Vec::new();
+    let mut weapon = Vec::new();
+    for index in 0..3 {
+        if !which[index] {
+            continue;
+        }
+        let e = s.effects[index];
+        let points = l.mods.points(index, points_with(s, index, level, l.combo));
+        let mut here = l.clone();
+        here.chain = chain[index];
+        match e.effect {
+            EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY if e.aura != 0 => {
+                let amount = aura_amount(map, caster, target, s, index, points, &here);
+                aura_effects.push((index, amount));
+            }
+            EFFECT_WEAPON_DAMAGE
+            | EFFECT_WEAPON_DAMAGE_NOSCHOOL
+            | EFFECT_NORMALIZED_WEAPON_DMG
+            | EFFECT_WEAPON_PERCENT_DAMAGE => weapon.push((index, points)),
+            _ => effect(map, caster, target, s, index, points, &here, item, t),
+        }
+        if e.chain_target > 1 {
+            let falloff = l.mods.apply(
+                mods::OP_EFFECT_PAST_FIRST,
+                s.dmg_multiplier[index].max(0.0) * 100.0,
+            ) / 100.0;
+            chain[index] *= if falloff > 0.0 { falloff } else { 1.0 };
+        }
+    }
+    if !weapon.is_empty() {
+        weapon_damage(map, caster, target, s, &weapon, l);
+    }
+    if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
+        let duration = aura_duration(map, caster, s, &l.mods, l.combo);
+        let duration = if auras::positive(s) || target == caster {
+            Some(duration)
+        } else {
+            diminished(map, target, s, duration)
+        };
+        let Some(duration) = duration else {
+            outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
+            return;
+        };
+        let charges =
+            (s.proc_charges > 0).then(|| l.mods.apply_ms(mods::OP_CHARGES, s.proc_charges).max(1));
+        let ctx = auras::Context {
+            item,
+            equipped: false,
+            combo: l.combo,
+            duration: Some(duration),
+            charges,
+        };
+        if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
+            && caster != target
+        {
+            outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
+        }
+        if !auras::positive(s) {
+            let (done, taken) = outcome::proc_flags(s);
+            crate::game::map::procs::trigger(
+                map,
+                crate::game::map::procs::Event {
+                    actor: caster,
+                    target,
+                    actor_flags: done,
+                    target_flags: taken,
+                    ex: l.hit.proc_ex(),
+                    spell: Some(s.id),
+                    damage: 0,
+                    school: s.school_mask(),
+                    offhand: false,
+                    ranged: s.dmg_class == 3,
+                    extra_attack: false,
+                },
+            );
+        }
+        // An aura's threat: half a point a level for a helpful one, or the
+        // spell's own for a harmful.
+        if !auras::positive(s) {
+            super::threat(map, caster, target, s, 0.0, &l.mods);
+        }
+    }
+}
+
+/// A weapon's speed for normalized damage: 1.7 for daggers, 3.3 for
+/// two-handers, 2.8 for ranged, 2.4 for the rest.
+fn normalized_speed(subclass: u32, ranged: bool) -> f32 {
+    if ranged {
+        return 2.8;
+    }
+    match subclass {
+        15 => 1.7,
+        1 | 5 | 6 | 8 | 10 => 3.3,
+        _ => 2.4,
+    }
+}
+
+/// A weapon blow: the weapon's roll (normalized if any effect is) plus the
+/// flat effects, times the percent effects, then armor, the crit and the
+/// block.
+fn weapon_damage(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    effects: &[(usize, i32)],
+    l: &Landing,
+) {
+    let data = map.realm.data.clone();
+    let ranged = s.dmg_class == 3;
+    let offhand = s.attr(3, sd::ATTR_EX3_REQ_OFFHAND);
+    let normalized = effects
+        .iter()
+        .any(|(i, _)| s.effects[*i].effect == EFFECT_NORMALIZED_WEAPON_DMG);
+    let (min, max) = map
+        .unit_fields(caster)
+        .map(|f| {
+            if ranged {
+                (
+                    f.get_f32(UNIT_FIELD_MINRANGEDDAMAGE),
+                    f.get_f32(UNIT_FIELD_MAXRANGEDDAMAGE),
+                )
+            } else if offhand {
+                (
+                    f.get_f32(UNIT_FIELD_MINOFFHANDDAMAGE),
+                    f.get_f32(UNIT_FIELD_MAXOFFHANDDAMAGE),
+                )
+            } else {
+                (
+                    f.get_f32(UNIT_FIELD_MINDAMAGE),
+                    f.get_f32(UNIT_FIELD_MAXDAMAGE),
+                )
+            }
+        })
+        .unwrap_or((1.0, 2.0));
+    let mut base = roll_between(map, min, max);
+    // Hunter's Mark: ranged attack power against its target.
+    if ranged {
+        let bonus =
+            auras::auras(map, target).map_or(0, |a| a.sum(AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
+        let speed = map
+            .unit_fields(caster)
+            .map(|f| f.get_u32(UNIT_FIELD_RANGEDATTACKTIME))
+            .unwrap_or(2000);
+        base += bonus.max(0) as f32 / 14.0 * speed as f32 / 1000.0;
+    }
+    if normalized && let Some(p) = map.players.get(&caster) {
+        let g = crate::game::map::derive::gear(p, &data);
+        let w = if ranged {
+            g.ranged
+        } else if offhand {
+            g.off
+        } else {
+            g.main
+        };
+        if let Some(w) = w {
+            let ap = if ranged {
+                p.derived.ranged_attack_power
+            } else {
+                p.derived.attack_power
+            } as f32;
+            base =
+                roll_between(map, w.min, w.max) + ap / 14.0 * normalized_speed(w.subclass, ranged);
+        }
+    }
+    let flat: i32 = effects
+        .iter()
+        .filter(|(i, _)| s.effects[*i].effect != EFFECT_WEAPON_PERCENT_DAMAGE)
+        .map(|(_, p)| *p)
+        .sum();
+    let pct: f32 = effects
+        .iter()
+        .filter(|(i, _)| s.effects[*i].effect == EFFECT_WEAPON_PERCENT_DAMAGE)
+        .fold(1.0, |m, (_, p)| m * *p as f32 / 100.0);
+    let index = effects[0].0;
+    let mut weapon_spell = s.clone();
+    weapon_spell.school = if effects
+        .iter()
+        .all(|(i, _)| s.effects[*i].effect == EFFECT_WEAPON_DAMAGE_NOSCHOOL)
+    {
+        0
+    } else {
+        s.school
+    };
+    let d = outcome::damage(
+        map,
+        caster,
+        target,
+        &weapon_spell,
+        index,
+        (base + flat as f32) * pct,
+        l,
+    );
+    outcome::deal(map, caster, target, s, d, l);
+}
+
+fn roll_between(map: &Map, min: f32, max: f32) -> f32 {
+    use rand::RngExt;
+    if max <= min || !outcome::rolling(map) {
+        return (min + max) / 2.0;
+    }
+    rand::rng().random_range(min..=max)
+}
+
+/// One effect on one target.
+#[allow(clippy::too_many_arguments)]
+fn effect(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    amount: i32,
+    l: &Landing,
+    item: Option<Guid>,
+    t: &Targets,
+) {
+    let e = s.effects[index];
+    match e.effect {
+        _ if crate::game::map::pets::handles(s, index) => {
+            crate::game::map::pets::effect(map, caster, target, s, index, amount)
+        }
+        19 => {
+            crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
+        }
+        EFFECT_INSTAKILL => {
+            let health = map
+                .unit_fields(target)
+                .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
+                .unwrap_or(0);
+            combat::deal_damage(map, caster, target, health);
+        }
+        EFFECT_SCHOOL_DAMAGE | EFFECT_ENVIRONMENTAL_DAMAGE => {
+            if super::scripts::school_damage(map, caster, target, s, index, amount, l) {
+                return;
+            }
+            let d = outcome::damage(map, caster, target, s, index, amount.max(0) as f32, l);
+            outcome::deal(map, caster, target, s, d, l);
+        }
+        EFFECT_HEALTH_LEECH => {
+            let before = map
+                .unit_fields(target)
+                .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
+                .unwrap_or(0);
+            let d = outcome::damage(map, caster, target, s, index, amount.max(0) as f32, l);
+            outcome::deal(map, caster, target, s, d, l);
+            let after = map
+                .unit_fields(target)
+                .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
+                .unwrap_or(0);
+            let mult = if e.multiple_value > 0.0 {
+                e.multiple_value
+            } else {
+                1.0
+            };
+            let taken = before.saturating_sub(after);
+            heal(
+                map,
+                caster,
+                caster,
+                s.id,
+                (taken as f32 * mult) as u32,
+                false,
+            );
+        }
+        EFFECT_HEAL | EFFECT_HEAL_MECHANICAL => {
+            let h = outcome::healing(map, caster, target, s, index, amount.max(0) as f32, l);
+            heal_crit(map, caster, target, s.id, h, false, l.crit);
+            crate::game::map::procs::trigger(
+                map,
+                crate::game::map::procs::Event {
+                    actor: caster,
+                    target,
+                    actor_flags: crate::game::map::procs::PROC_DONE_POSITIVE_SPELL,
+                    target_flags: crate::game::map::procs::PROC_TAKEN_POSITIVE_SPELL,
+                    ex: if l.crit {
+                        crate::game::map::procs::EX_CRITICAL_HIT
+                    } else {
+                        crate::game::map::procs::EX_NORMAL_HIT
+                    },
+                    spell: Some(s.id),
+                    damage: h,
+                    school: s.school_mask(),
+                    offhand: false,
+                    ranged: s.dmg_class == 3,
+                    extra_attack: false,
+                },
+            );
+        }
+        EFFECT_HEAL_MAX_HEALTH => {
+            let max = map
+                .unit_fields(caster)
+                .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
+                .unwrap_or(0);
+            let h = outcome::healing_taken(map, target, max as f32) as u32;
+            heal(map, caster, target, s.id, h, false);
+        }
+        EFFECT_ENERGIZE => {
+            let power = e.misc_value.clamp(0, 4) as u16;
+            if let Some(f) = map.unit_fields_mut(target) {
+                let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
+                let now = f.get_u32(UNIT_FIELD_POWER1 + power);
+                f.set_u32(
+                    UNIT_FIELD_POWER1 + power,
+                    (now + amount.max(0) as u32).min(max),
+                );
+            }
+            if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLENERGIZELOG {
+                victim: target,
+                caster,
+                spell: s.id,
+                power: Power::try_from(power as u8).unwrap_or(Power::Mana),
+                damage: amount.max(0) as u32,
+            }) {
+                map.send_to_observers(target, &frame, true);
+            }
+            super::scripts::after_energize(map, caster, s);
+        }
+        EFFECT_POWER_DRAIN | EFFECT_POWER_BURN => {
+            let power = e.misc_value.clamp(0, 4) as u16;
+            let taken = map
+                .unit_fields_mut(target)
+                .map(|f| {
+                    let have = f.get_u32(UNIT_FIELD_POWER1 + power);
+                    let t = (amount.max(0) as u32).min(have);
+                    f.set_u32(UNIT_FIELD_POWER1 + power, have - t);
+                    t
+                })
+                .unwrap_or(0);
+            let mult = if e.multiple_value > 0.0 {
+                e.multiple_value
+            } else {
+                1.0
+            };
+            if e.effect == EFFECT_POWER_DRAIN {
+                if let Some(f) = map.unit_fields_mut(caster) {
+                    let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
+                    let now = f.get_u32(UNIT_FIELD_POWER1 + power);
+                    f.set_u32(
+                        UNIT_FIELD_POWER1 + power,
+                        (now + (taken as f32 * mult) as u32).min(max),
+                    );
+                }
+            } else {
+                // Mana burned is damage.
+                let d = outcome::Damage {
+                    amount: (taken as f32 * mult) as u32,
+                    resisted: 0,
+                    blocked: 0,
+                };
+                outcome::deal(map, caster, target, s, d, l);
+            }
+        }
+        EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY => {}
+        EFFECT_TELEPORT_UNITS => {
+            let data = map.realm.data.clone();
+            let to = match data.spells.target_positions.get(&s.id) {
+                Some(&(m, x, y, z, o)) => Some((m, Vector3d { x, y, z }, o)),
+                // The hearthstone and its kind: home.
+                None => home(map, target),
+            };
+            if let Some((m, pos, o)) = to {
+                map.teleport(target, crate::game::map::MapKey::world(m), pos, o);
+            }
+        }
+        EFFECT_TELEPORT_UNITS_FACE_CASTER => {
+            if let Some(me) = map.unit_view(caster) {
+                let at = Vector3d {
+                    x: me.position.x + 2.0 * me.orientation.cos(),
+                    y: me.position.y + 2.0 * me.orientation.sin(),
+                    z: me.position.z,
+                };
+                let o = me.orientation + std::f32::consts::PI;
+                map.teleport(target, map.key, at, o);
+            }
+        }
+        EFFECT_STUCK => {
+            if let Some((m, pos, o)) = home(map, target) {
+                map.teleport(target, crate::game::map::MapKey::world(m), pos, o);
+            }
+        }
+        EFFECT_BIND => {
+            let key = map.key;
+            if let Some(p) = map.players.get_mut(&target) {
+                let pos = p.position();
+                p.row.state.bind = Some(crate::game::store::Bind {
+                    map: key.map,
+                    zone: p.zone,
+                    x: pos.x,
+                    y: pos.y,
+                    z: pos.z,
+                });
+                p.outbound.send(&SMSG_BINDPOINTUPDATE {
+                    position: pos,
+                    map: crate::game::map::movement::map_enum(key.map),
+                    area: WireArea::try_from(p.zone).unwrap_or_default(),
+                });
+            }
+        }
+        EFFECT_LEAP => {
+            if let Some(me) = map.unit_view(caster) {
+                let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
+                let mut to = Vector3d {
+                    x: me.position.x + d * me.orientation.cos(),
+                    y: me.position.y + d * me.orientation.sin(),
+                    z: me.position.z,
+                };
+                // Short of a wall, on the ground.
+                if !super::checks::line_of_sight(map, me.position, to) {
+                    to = me.position;
+                }
+                if let Some(nav) = map.nav.as_mut()
+                    && let Some(z) = nav.ground(to.x, to.y, to.z + 2.0)
+                {
+                    to.z = z;
+                }
+                map.teleport(caster, map.key, to, me.orientation);
+            }
+        }
+        EFFECT_CHARGE => {
+            if let (Some(me), Some(them)) = (map.unit_view(caster), map.unit_view(target)) {
+                let d = dist(me.position, them.position).max(0.1);
+                let back = 2.0 / d;
+                let to = Vector3d {
+                    x: them.position.x + (me.position.x - them.position.x) * back,
+                    y: them.position.y + (me.position.y - them.position.y) * back,
+                    z: them.position.z,
+                };
+                let o = (them.position.y - me.position.y).atan2(them.position.x - me.position.x);
+                map.teleport(caster, map.key, to, o);
+                combat::start_attack(map, caster, target);
+            }
+        }
+        EFFECT_KNOCK_BACK => knock_back(map, caster, target, amount, e.misc_value),
+        EFFECT_CREATE_ITEM if e.item_type != 0 => {
+            let item = super::scripts::created_item(map, caster, s, e.item_type);
+            let _ = crate::game::map::inventory::add_item(
+                map,
+                caster,
+                item,
+                amount.max(1) as u32,
+                true,
+            );
+        }
+        EFFECT_LEARN_SPELL if e.trigger_spell != 0 => learn(map, target, e.trigger_spell),
+        EFFECT_TRIGGER_SPELL if e.trigger_spell != 0 => {
+            cast_triggered(map, caster, e.trigger_spell, Some(target));
+        }
+        EFFECT_DISPEL => {
+            let friendly = !combat::can_attack(map, caster, target);
+            let gone: Vec<(u32, Guid)> =
+                auras::dispellable(map, target, e.misc_value as u32, friendly)
+                    .into_iter()
+                    .take(amount.max(1) as usize)
+                    .collect();
+            for (spell, by) in gone {
+                auras::remove_spell(map, target, spell, Some(by));
+            }
+        }
+        EFFECT_DISPEL_MECHANIC => {
+            let mechanic = e.misc_value.max(0) as u32;
+            let data = map.realm.data.clone();
+            auras::remove_where(map, target, |h| {
+                !h.passive
+                    && (h.mechanic == mechanic
+                        || data.spells.get(h.spell).is_some_and(|t| {
+                            t.effects
+                                .iter()
+                                .any(|x| x.mechanic == mechanic && x.effect != 0)
+                        }))
+            });
+        }
+        EFFECT_INTERRUPT_CAST => {
+            // The interrupted school is locked out for the spell's time.
+            let interrupted = map
+                .caster(target)
+                .and_then(|c| c.casting.as_ref())
+                .map(|c| c.spell);
+            super::interrupt(map, target);
+            if let Some(spell) = interrupted {
+                let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+                let ms = map.realm.data.spells.duration(s, level).unwrap_or(0);
+                if ms > 0 {
+                    super::cooldowns::lock_school(map, target, spell, ms);
+                }
+            }
+        }
+        EFFECT_THREAT => {
+            let a = l.mods.apply(mods::OP_THREAT, amount as f32);
+            crate::game::map::ai::add_threat(map, target, caster, a);
+        }
+        EFFECT_MODIFY_THREAT_PERCENT => {
+            if let Some(c) = map.creature_mut(target) {
+                for (g, t) in c.threat.iter_mut() {
+                    if *g == caster {
+                        *t = (*t * (100 + amount) as f32 / 100.0).max(0.0);
+                    }
+                }
+            }
+        }
+        EFFECT_ATTACK_ME => {
+            if guid::is_unit(target) {
+                crate::game::map::ai::taunted(map, target, caster);
+            }
+        }
+        EFFECT_ATTACK => combat::start_attack(map, caster, target),
+        EFFECT_SANCTUARY => {
+            // Vanish: nothing fights the caster any more.
+            combat::leave_combat(map, target);
+            crate::game::map::ai::forget(map, target);
+            let snared: Vec<u32> = auras::auras(map, target)
+                .map(|a| {
+                    a.holders
+                        .iter()
+                        .filter(|h| {
+                            !h.positive && (h.has(AURA_MOD_ROOT) || h.has(AURA_MOD_DECREASE_SPEED))
+                        })
+                        .map(|h| h.spell)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for spell in snared {
+                auras::remove_spell(map, target, spell, None);
+            }
+        }
+        EFFECT_DISTRACT => {
+            let until = map.now + Duration::from_millis(amount.max(1000) as u64);
+            if let (Some(c), Some(at)) = (map.creature_mut(target), t.dest) {
+                if c.combat.attacking {
+                    return;
+                }
+                c.orientation = (at.y - c.position.y).atan2(at.x - c.position.x);
+                c.motion = crate::game::map::creature::Motion::Idle { until: Some(until) };
+            }
+        }
+        EFFECT_ADD_COMBO_POINTS => add_combo_points(map, caster, target, amount.max(1) as u8),
+        EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
+        EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
+            let name = map
+                .players
+                .get(&caster)
+                .map(|p| p.name.to_string())
+                .unwrap_or_default();
+            if let Some(p) = map.players.get_mut(&target)
+                && p.death != crate::game::map::death::Death::Alive
+            {
+                p.resurrect_offer = Some((caster, amount.clamp(1, 100) as u32));
+                p.outbound.send(&SMSG_RESURRECT_REQUEST {
+                    guid: caster,
+                    name,
+                    player: true,
+                });
+            }
+        }
+        EFFECT_SKILL | EFFECT_SKILL_STEP => {
+            let skill = e.misc_value.max(0) as u32;
+            let step = amount.max(1) as u32;
+            if let Some(p) = map.players.get_mut(&target) {
+                crate::game::map::skills::learn_skill(p, skill, step);
+            }
+        }
+        EFFECT_WEAPON | EFFECT_PROFICIENCY => proficiency(map, target, s),
+        EFFECT_QUEST_COMPLETE => {
+            let quest = e.misc_value.max(0) as u32;
+            if let Some(p) = map.players.get_mut(&target)
+                && let Some(slot) = p.journal.slot_of(quest)
+            {
+                p.journal.log[slot].explored = true;
+                crate::game::map::quests::check(map, target, quest);
+            }
+        }
+        EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
+            let pct = e.effect == EFFECT_DURABILITY_DAMAGE_PCT;
+            let slot = e.misc_value;
+            if let Some(p) = map.players.get_mut(&target) {
+                for it in p.items.iter_mut().filter(|i| {
+                    i.bag == crate::game::store::BAG_PLAYER
+                        && i.slot < 19
+                        && (slot < 0 || i.slot as i32 == slot)
+                }) {
+                    let max = it.fields.get_u32(ITEM_FIELD_MAXDURABILITY);
+                    let now = it.fields.get_u32(ITEM_FIELD_DURABILITY);
+                    let loss = if pct {
+                        max * amount.max(0) as u32 / 100
+                    } else {
+                        amount.max(0) as u32
+                    };
+                    it.fields
+                        .set_u32(ITEM_FIELD_DURABILITY, now.saturating_sub(loss));
+                }
+                p.gear_dirty = true;
+            }
+        }
+        EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT => {
+            super::scripts::dummy(map, caster, target, s, index, amount, l, item);
+        }
+        _ => {}
+    }
+}
+
+/// Where a player's hearthstone goes.
+fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
+    map.players.get(&g).and_then(|p| p.row.state.bind).map(|b| {
+        (
+            b.map,
+            Vector3d {
+                x: b.x,
+                y: b.y,
+                z: b.z,
+            },
+            0.0,
+        )
+    })
+}
+
+/// Combo points on `target`: a new target starts them over.
+pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
+    if let Some(c) = map.caster_mut(caster) {
+        if c.combo_target != target {
+            c.combo_target = target;
+            c.combo_points = 0;
+        }
+        c.combo_points = (c.combo_points + n).min(5);
+        let points = c.combo_points;
+        if let Some(p) = map.players.get_mut(&caster) {
+            p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, target);
+            p.fields.set_byte(PLAYER_FIELD_BYTES, 1, points);
+        }
+    }
+}
+
+/// A knock back: a player is thrown by their client; a creature slides.
+fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertical: i32) {
+    let (Some(me), Some(them)) = (map.unit_view(caster), map.unit_view(target)) else {
+        return;
+    };
+    let angle = if caster == target {
+        me.orientation + std::f32::consts::PI
+    } else {
+        (them.position.y - me.position.y).atan2(them.position.x - me.position.x)
+    };
+    let speed_xy = horizontal as f32 / 10.0;
+    let speed_z = -(vertical as f32) / 10.0;
+    if let Some(p) = map.players.get(&target) {
+        let mut b = crate::game::data::items::Body::default();
+        crate::game::update::write_packed_guid(&mut b.0, target);
+        b.u32(0)
+            .f32(angle.cos())
+            .f32(angle.sin())
+            .f32(speed_xy)
+            .f32(speed_z);
+        p.outbound.send_frame(b.frame(0x0EF));
+        return;
+    }
+    let to = Vector3d {
+        x: them.position.x + angle.cos() * speed_xy,
+        y: them.position.y + angle.sin() * speed_xy,
+        z: them.position.z,
+    };
+    map.teleport(target, map.key, to, them.orientation);
+}
+
+/// `SMSG_SET_PROFICIENCY`: the weapon or armor kinds a learned skill
+/// allows.
+pub fn proficiency(map: &Map, player: Guid, s: &SpellTemplate) {
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    if s.equipped_item_class <= 0 {
+        return;
+    }
+    let data = &map.realm.data;
+    let class = s.equipped_item_class;
+    let mask = p
+        .spells
+        .iter()
+        .filter_map(|id| data.spells.get(*id))
+        .filter(|t| {
+            t.equipped_item_class == class && t.effects.iter().any(|e| matches!(e.effect, 25 | 60))
+        })
+        .fold(0u32, |m, t| m | t.equipped_item_subclass_mask.max(0) as u32);
+    let mut b = crate::game::data::items::Body::default();
+    b.u8(class as u8).u32(mask);
+    p.outbound.send_frame(b.frame(0x127));
+}
+
+/// The effects with no unit: a persistent area at the destination, a
+/// missile's spell there, an object to open.
+pub fn run_untargeted(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    m: &Mods,
+    combo: u8,
+) {
+    let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    for index in 0..3 {
+        let e = s.effects[index];
+        match e.effect {
+            EFFECT_PERSISTENT_AREA_AURA => {
+                let at = t
+                    .dest
+                    .or_else(|| t.unit.and_then(|u| map.position_of(u)))
+                    .or_else(|| map.position_of(caster));
+                let Some(at) = at else {
+                    continue;
+                };
+                let radius = super::targets::radius(map, s, index, m).max(1.0);
+                let ms = aura_duration(map, caster, s, m, combo).unwrap_or(0);
+                let period = Duration::from_millis(u64::from(e.amplitude.max(1000)));
+                let l = Landing {
+                    mods: m.clone(),
+                    ..Default::default()
+                };
+                let base = m.points(index, points_with(s, index, level, combo));
+                let amount = aura_amount(map, caster, caster, s, index, base, &l);
+                let now = map.now;
+                map.spells.areas.push(Area {
+                    caster,
+                    spell: s.id,
+                    index,
+                    amount,
+                    at,
+                    radius,
+                    ends: now + Duration::from_millis(u64::from(ms)),
+                    next_tick: now
+                        + if s.channeled() {
+                            period
+                        } else {
+                            Duration::ZERO
+                        },
+                    period,
+                });
+            }
+            EFFECT_TRIGGER_MISSILE if e.trigger_spell != 0 => {
+                if let Some(at) = t.dest {
+                    cast_triggered_at(map, caster, e.trigger_spell, at);
+                } else {
+                    cast_triggered(map, caster, e.trigger_spell, t.unit);
+                }
+            }
+            EFFECT_OPEN_LOCK => {
+                if let Some(object) = t.object {
+                    crate::game::map::loot::open_object(map, caster, object);
+                }
+            }
+            // Summons and totems aim at a place: the caster's side.
+            _ if crate::game::map::pets::handles(s, index)
+                && super::targets::implicit(e.target_a) == super::targets::Implicit::Location =>
+            {
+                let amount = m.points(index, points_with(s, index, level, combo));
+                crate::game::map::pets::effect(map, caster, caster, s, index, amount);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The persistent areas tick: their aura's effect on every enemy (or, for
+/// a helpful one, friend) inside.
+pub fn tick_areas(map: &mut Map) {
+    let now = map.now;
+    map.spells.areas.retain(|a| a.ends > now);
+    let due: Vec<usize> = (0..map.spells.areas.len())
+        .filter(|i| map.spells.areas[*i].next_tick <= now)
+        .collect();
+    let data = map.realm.data.clone();
+    for i in due {
+        let Some(area) = map.spells.areas.get(i).cloned() else {
+            continue;
+        };
+        map.spells.areas[i].next_tick = now + area.period;
+        let Some(s) = data.spells.get(area.spell) else {
+            continue;
+        };
+        if map.unit_view(area.caster).is_none() {
+            continue;
+        }
+        let helpful = auras::positive(s);
+        let inside: Vec<Guid> = map
+            .grid
+            .around(area.at.x, area.at.y, area.radius)
+            .filter(|g| guid::is_player(*g) || guid::is_unit(*g))
+            .filter(|g| {
+                map.position_of(*g)
+                    .is_some_and(|p| dist(p, area.at) <= area.radius)
+            })
+            .filter(|g| map.unit_view(*g).is_some_and(|u| u.alive))
+            .filter(|g| {
+                if helpful {
+                    !combat::can_attack(map, area.caster, *g)
+                } else {
+                    *g != area.caster && combat::can_attack(map, area.caster, *g)
+                }
+            })
+            .collect();
+        let e = s.effects[area.index];
+        for g in inside {
+            match e.aura {
+                AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
+                    let h = area_holder(&area, s);
+                    periodic_damage(
+                        map,
+                        &h,
+                        g,
+                        area.amount.max(0) as u32,
+                        e.aura == AURA_PERIODIC_LEECH,
+                    );
+                    if guid::is_unit(g) {
+                        crate::game::map::ai::attacked(map, g, area.caster);
+                    }
+                }
+                AURA_PERIODIC_HEAL => {
+                    heal(
+                        map,
+                        area.caster,
+                        g,
+                        area.spell,
+                        area.amount.max(0) as u32,
+                        true,
+                    );
+                }
+                AURA_PERIODIC_TRIGGER_SPELL if e.trigger_spell != 0 => {
+                    cast_triggered(map, area.caster, e.trigger_spell, Some(g));
+                }
+                _ => {
+                    // A slow, a debuff: on those inside while they stay.
+                    let level = map.unit_view(area.caster).map(|u| u.level).unwrap_or(1);
+                    let amount = points(s, area.index, level);
+                    let left = area.ends.saturating_duration_since(now).as_millis() as u32;
+                    let _ = auras::apply_spell(
+                        map,
+                        area.caster,
+                        g,
+                        s,
+                        &[(area.index, amount)],
+                        auras::Context {
+                            duration: Some(Some(left.min(area.period.as_millis() as u32 + 500))),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
+    auras::Holder {
+        spell: area.spell,
+        caster: area.caster,
+        item: None,
+        equipped: false,
+        slot: None,
+        positive: false,
+        passive: false,
+        stacks: 1,
+        charges: 0,
+        expires: None,
+        duration: None,
+        level: 1,
+        school: s.school_mask(),
+        mechanic: s.mechanic,
+        dispel: s.dispel,
+        interrupt_flags: 0,
+        item_class: -1,
+        item_subclass_mask: 0,
+        item_inventory_mask: 0,
+        exclusive: None,
+        combo: 0,
+        proc_ready_at: None,
+        effects: Vec::new(),
+    }
+}
+
+/// Party auras (a paladin's aura, a totem's) follow their caster: every
+/// second, party members in range get them, and those out of range lose
+/// them.
+pub fn refresh_area_auras(map: &mut Map) {
+    let now = map.now;
+    if map.spells.area_auras_at.is_some_and(|t| t > now) {
+        return;
+    }
+    map.spells.area_auras_at = Some(now + Duration::from_secs(1));
+    let data = map.realm.data.clone();
+    // The casters' own holders of party auras.
+    type Source = (Guid, u32, Vec<(usize, i32)>, Option<std::time::Instant>);
+    let sources: Vec<Source> = map
+        .players
+        .values()
+        .flat_map(|p| {
+            p.auras
+                .holders
+                .iter()
+                .filter(|h| h.caster == p.guid)
+                .filter(|h| {
+                    data.spells.get(h.spell).is_some_and(|s| {
+                        s.effects
+                            .iter()
+                            .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
+                    })
+                })
+                .map(|h| {
+                    (
+                        p.guid,
+                        h.spell,
+                        h.effects
+                            .iter()
+                            .map(|x| (x.effect as usize, x.amount))
+                            .collect(),
+                        h.expires,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (caster, spell, effects, expires) in sources {
+        let Some(s) = data.spells.get(spell) else {
+            continue;
+        };
+        let radius = s
+            .effects
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
+            .map(|(i, _)| data.spells.radius(s.effects[i].radius_index))
+            .fold(0.0f32, f32::max)
+            .max(30.0);
+        let Some(at) = map.position_of(caster) else {
+            continue;
+        };
+        let party = {
+            let groups = map.realm.social.groups.lock();
+            groups
+                .group_of(caster)
+                .map(|g| {
+                    let sub = g
+                        .members
+                        .iter()
+                        .find(|m| m.guid == caster)
+                        .map(|m| m.subgroup);
+                    g.members
+                        .iter()
+                        .filter(|m| !g.raid || Some(m.subgroup) == sub)
+                        .map(|m| m.guid)
+                        .filter(|m| *m != caster)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        for member in party {
+            let near = map
+                .position_of(member)
+                .is_some_and(|p| dist(p, at) <= radius)
+                && map.unit_view(member).is_some_and(|u| u.alive);
+            let has = auras::auras(map, member).is_some_and(|a| {
+                a.holders
+                    .iter()
+                    .any(|h| h.spell == spell && h.caster == caster)
+            });
+            if near && !has {
+                let left = expires.map(|t| t.saturating_duration_since(now).as_millis() as u32);
+                let effects: Vec<(usize, i32)> = effects
+                    .iter()
+                    .copied()
+                    .filter(|(i, _)| s.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY)
+                    .collect();
+                let _ = auras::apply_spell(
+                    map,
+                    caster,
+                    member,
+                    s,
+                    &effects,
+                    auras::Context {
+                        duration: Some(left),
+                        ..Default::default()
+                    },
+                );
+            } else if !near && has {
+                auras::remove_spell(map, member, spell, Some(caster));
+            }
+        }
+    }
+    // Party auras whose caster is gone or has dropped them.
+    let orphans: Vec<(Guid, u32, Guid)> = map
+        .players
+        .values()
+        .flat_map(|p| {
+            p.auras
+                .holders
+                .iter()
+                .filter(|h| h.caster != p.guid)
+                .filter(|h| {
+                    data.spells.get(h.spell).is_some_and(|s| {
+                        s.effects.iter().all(|e| e.effect != EFFECT_APPLY_AURA)
+                            && s.effects
+                                .iter()
+                                .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
+                    })
+                })
+                .map(|h| (p.guid, h.spell, h.caster))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (member, spell, caster) in orphans {
+        let source = map.players.get(&caster).is_some_and(|p| {
+            p.auras
+                .holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == caster)
+        });
+        if !source {
+            auras::remove_spell(map, member, spell, Some(caster));
+        }
+    }
+}

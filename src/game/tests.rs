@@ -2283,8 +2283,10 @@ mod real {
             .collect();
         let mut out = Vec::new();
         for spell in castable {
-            // What the last spell left (Grovel kneels, and holds) goes.
+            // What the last spell left (Grovel kneels, and holds) goes, and
+            // so does its fight.
             auras::clear_on_death(m, g);
+            crate::game::map::combat::leave_combat(m, g);
             let s = data.spells.get(spell).unwrap();
             let counter = m.next_creature_counter;
             m.next_creature_counter += 1;
@@ -2304,6 +2306,11 @@ mod real {
             ));
             let p = m.players.get_mut(&g).unwrap();
             p.caster = Default::default();
+            // A finishing move wants a combo point on its target.
+            if s.finisher() {
+                p.caster.combo_target = kobold;
+                p.caster.combo_points = 1;
+            }
             for i in 0..5 {
                 p.fields.set_u32(UNIT_FIELD_MAXPOWER1 + i, 1000);
                 p.fields.set_u32(UNIT_FIELD_POWER1 + i, 1000);
@@ -2316,6 +2323,8 @@ mod real {
                 unit: (!helpful).then_some(kobold),
                 ..Default::default()
             };
+            let mods = spells::mods::for_spell(m, g, s);
+            let refused = spells::checks::check(m, g, s, &targets, None, false, &mods);
             spells::cast(m, g, spell, targets, None);
             let now = m.now;
             if let Some(c) = m
@@ -2349,7 +2358,11 @@ mod real {
             } else {
                 after.0 < before.0 || after.1 > before.1
             };
-            out.push((spell, s.name.clone(), !helpful, took));
+            let name = match refused {
+                Some(r) => format!("{} (refused {r:#x})", s.name),
+                None => s.name.clone(),
+            };
+            out.push((spell, name, !helpful, took));
             m.remove_creature(kobold);
         }
         out

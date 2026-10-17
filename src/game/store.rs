@@ -120,6 +120,10 @@ pub struct CharacterState {
     /// Friends and ignored characters, by GUID counter.
     pub friends: Vec<u32>,
     pub ignored: Vec<u32>,
+    /// Auras and cooldowns kept across a logout.
+    pub auras: Vec<crate::game::map::spells::cooldowns::SavedAura>,
+    pub cooldowns: Vec<(u32, u32)>,
+    pub category_cooldowns: Vec<(u32, u32)>,
     /// Standings with factions, as offsets from the base.
     pub reputation: Vec<crate::game::map::reputation::Standing>,
     /// The reputation index watched on the experience bar.

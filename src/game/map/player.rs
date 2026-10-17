@@ -326,11 +326,13 @@ impl Player {
         self.fields.get_u32(UNIT_FIELD_LEVEL) as u8
     }
 
+    /// The power the player uses now: rage, energy or mana by class, and
+    /// for a druid by form.
     pub fn power_type(&self) -> u8 {
-        match self.row.class {
-            1 => 1, // warrior: rage
-            4 => 3, // rogue: energy
-            _ => 0, // mana
+        match self.fields.get_byte(UNIT_FIELD_BYTES_0, 3) {
+            0 if self.row.class == 1 => 1,
+            0 if self.row.class == 4 => 3,
+            p => p,
         }
     }
 
@@ -524,6 +526,10 @@ impl Player {
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
         row.items = self.items.iter().map(Item::to_row).collect();
         row.state.quests = self.journal.clone();
+        row.state.auras = crate::game::map::spells::cooldowns::saved_auras(self, now);
+        row.state.cooldowns = crate::game::map::spells::cooldowns::saved_cooldowns(self, now);
+        row.state.category_cooldowns =
+            crate::game::map::spells::cooldowns::saved_category_cooldowns(self, now);
         row.spells = self.spells.clone();
         row
     }
