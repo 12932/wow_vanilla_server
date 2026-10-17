@@ -907,3 +907,66 @@ async fn a_creature_chooses_its_victim_as_thistle_tea_does() {
     assert!(!listed, "who comes off its list");
     assert_eq!(taunted, ga, "the older taunt holds");
 }
+
+/// A caster with a chase distance stands off within it only where it sees
+/// its victim, and in sight closes only to that distance (Thistle Tea's
+/// `CasterChase`): behind a wall it comes on.
+#[tokio::test]
+async fn a_caster_stands_off_only_where_it_sees_its_victim() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let k = kobold(11);
+    let out = map
+        .query(move |m| {
+            let goal = |m: &Map| match &m.creature(k).unwrap().motion {
+                Motion::Moving(w) => Some(w.destination()),
+                Motion::Idle { .. } => None,
+            };
+            crate::game::map::event_ai::scripted_mut(m, k)
+                .unwrap()
+                .caster_chase_distance = Some(20.0);
+            // Thirty yards off, in sight: it closes to twenty.
+            m.players.get_mut(&ga).unwrap().movement.position = at(0.0, 0.0);
+            crate::game::map::ai::attacked(m, k, ga);
+            step(m, 1);
+            let closing = goal(m).map(|p| dist(p, at(0.0, 0.0)));
+            step(m, 60);
+            let stood = (
+                goal(m).is_none(),
+                dist(m.creature(k).unwrap().position, at(0.0, 0.0)),
+            );
+            // A wall between: it comes on.
+            let k_at = m.creature(k).unwrap().position;
+            let mid = (k_at.x + START.0) / 2.0;
+            m.spells.walls.push((
+                Vector3d {
+                    x: mid,
+                    y: START.1 - 5.0,
+                    z: START.2,
+                },
+                Vector3d {
+                    x: mid,
+                    y: START.1 + 5.0,
+                    z: START.2,
+                },
+            ));
+            step(m, 2);
+            let blind = goal(m).map(|p| dist(p, at(0.0, 0.0)));
+            m.spells.walls.clear();
+            (closing, stood, blind)
+        })
+        .await
+        .unwrap();
+    let (closing, stood, blind) = out;
+    assert!(
+        closing.is_some_and(|d| (d - 20.0).abs() < 0.1),
+        "it closes to twenty: {closing:?}"
+    );
+    assert!(
+        stood.0 && (stood.1 - 20.0).abs() < 0.5,
+        "and stands: {stood:?}"
+    );
+    assert!(
+        blind.is_some_and(|d| d < 5.0),
+        "unseen, it comes on: {blind:?}"
+    );
+}

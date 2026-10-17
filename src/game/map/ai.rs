@@ -899,10 +899,12 @@ fn fight_step(map: &mut Map, g: Guid) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
-    // A caster with a chase distance stands off within it.
-    let stand_off = crate::game::map::event_ai::scripted(map, g)
-        .and_then(|s| s.caster_chase_distance)
-        .is_some_and(|d| dist(me.position, them.position) <= d);
+    // A caster with a chase distance stands off within it, where it sees
+    // its victim (Thistle Tea's `CasterChase.in_range?`).
+    let caster = crate::game::map::event_ai::scripted(map, g).and_then(|s| s.caster_chase_distance);
+    let sight = caster.is_some()
+        && crate::game::map::spells::checks::line_of_sight(map, me.position, them.position);
+    let stand_off = sight && caster.is_some_and(|d| dist(me.position, them.position) <= d + 0.01);
     let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off;
     let swing = crate::game::map::event_ai::melee(map, g);
     let in_reach = combat::in_melee_range(&me, &them);
@@ -956,17 +958,44 @@ fn fight_step(map: &mut Map, g: Guid) {
     if !stale {
         return;
     }
-    let to = combat::chase_distance(reach);
-    let to_me = Vector3d {
-        x: me.position.x - them.position.x,
-        y: me.position.y - them.position.y,
-        z: 0.0,
-    };
-    let len = (to_me.x * to_me.x + to_me.y * to_me.y).sqrt().max(0.01);
-    let goal = Vector3d {
-        x: them.position.x + to_me.x / len * to.min(len),
-        y: them.position.y + to_me.y / len * to.min(len),
-        z: them.position.z,
+    let goal = match caster.filter(|_| sight) {
+        // In sight, a caster closes only to its distance (Thistle Tea's
+        // `CasterChase.destination`); out of it, it comes on as any.
+        Some(d) => {
+            let from = if flies {
+                me.position
+            } else {
+                Vector3d {
+                    z: them.position.z,
+                    ..me.position
+                }
+            };
+            let apart = dist(from, them.position);
+            if apart > d {
+                let f = d / apart;
+                Vector3d {
+                    x: them.position.x + (from.x - them.position.x) * f,
+                    y: them.position.y + (from.y - them.position.y) * f,
+                    z: them.position.z + (from.z - them.position.z) * f,
+                }
+            } else {
+                from
+            }
+        }
+        None => {
+            let to = combat::chase_distance(reach);
+            let to_me = Vector3d {
+                x: me.position.x - them.position.x,
+                y: me.position.y - them.position.y,
+                z: 0.0,
+            };
+            let len = (to_me.x * to_me.x + to_me.y * to_me.y).sqrt().max(0.01);
+            Vector3d {
+                x: them.position.x + to_me.x / len * to.min(len),
+                y: them.position.y + to_me.y / len * to.min(len),
+                z: them.position.z,
+            }
+        }
     };
     // As its habitat lets it: through the air, the water, or only to the
     // edge of what it can't enter.
