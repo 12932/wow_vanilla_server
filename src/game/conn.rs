@@ -131,8 +131,9 @@ impl From<ClientOpcodeMessage> for Inbound {
 
 /// The client opcodes read by hand: `CMSG_SET_FACTION_ATWAR`,
 /// `CMSG_SET_FACTION_INACTIVE` and `CMSG_SET_WATCHED_FACTION` carry a
-/// 32-bit reputation index where wow_messages reads a faction.
-pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318];
+/// 32-bit reputation index where wow_messages reads a faction, and
+/// wow_messages's decompression of `CMSG_UPDATE_ACCOUNT_DATA` fails.
+pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318, 0x20B];
 
 /// A started connection: its outbound queue, and the packets it reads.
 pub struct Connection {

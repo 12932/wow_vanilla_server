@@ -92,7 +92,7 @@ pub fn refresh(map: &mut Map, object: Guid) {
         if p.awaiting_worldport {
             continue;
         }
-        let d2 = dist2(p.position(), pos);
+        let d2 = dist2(crate::game::map::cinematic::view_point(p), pos);
         let knows = p.known.contains(&object);
         let sees = death::can_see(map, g, object);
         if !knows && d2 <= r2 && sees {
@@ -107,7 +107,7 @@ pub fn refresh(map: &mut Map, object: Guid) {
         .filter(|o| {
             map.players
                 .get(o)
-                .is_none_or(|p| dist2(p.position(), pos) > keep2)
+                .is_none_or(|p| dist2(crate::game::map::cinematic::view_point(p), pos) > keep2)
         })
         .collect();
     for o in far {
@@ -118,6 +118,16 @@ pub fn refresh(map: &mut Map, object: Guid) {
     if !guid::is_player(object) {
         return;
     }
+    // What the player knows is what is near where they see from.
+    let view = map
+        .players
+        .get(&object)
+        .map_or(pos, crate::game::map::cinematic::view_point);
+    let (pos, nearby) = if dist2(view, pos) > 0.01 {
+        (view, map.grid.around(view.x, view.y, keep).collect())
+    } else {
+        (pos, nearby)
+    };
     for &g in &nearby {
         if g == object {
             continue;

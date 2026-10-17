@@ -2,11 +2,13 @@
 //! it, handles its players' packets as they arrive, and runs a 20 Hz update
 //! for what time drives.
 
+pub mod account_data;
 pub mod ai;
 pub mod auction;
 pub mod auras;
 pub mod battleground;
 pub mod chat;
+pub mod cinematic;
 pub mod combat;
 pub mod conditions;
 pub mod creature;
@@ -22,6 +24,7 @@ pub mod exploration;
 pub mod event_ai;
 pub mod gameobject;
 pub mod gm;
+pub mod gm_dev;
 pub mod grid;
 pub mod handlers;
 pub mod instance_script;

@@ -122,6 +122,11 @@ pub struct Quest {
     pub choice_rewards: [(u32, u32); 6],
     pub rewards: [(u32, u32); 4],
     pub reputation_rewards: [(u32, i32); 5],
+    /// A standing the player must have (at least, and below) to take it.
+    pub required_min_rep: (u32, i32),
+    pub required_max_rep: (u32, i32),
+    /// A standing to reach: an objective.
+    pub rep_objective: (u32, i32),
     pub reward_xp: u32,
     pub reward_money: i32,
     pub reward_money_max_level: u32,
@@ -141,6 +146,7 @@ impl Quest {
         self.required_items.iter().any(|(i, _)| *i != 0)
             || self.required_kills.iter().any(|(k, _)| *k != 0)
             || self.flags & QUEST_FLAGS_EXPLORATION != 0
+            || self.rep_objective.0 != 0
     }
 
     /// The level a quest is at for XP: its own, or the player's for one at

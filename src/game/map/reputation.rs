@@ -237,6 +237,17 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
     if !sent.is_empty() {
         p.outbound.send_frame(standing_frame(&sent));
     }
+    // Quests whose objective is a standing.
+    let waiting: Vec<u32> = p
+        .journal
+        .log
+        .iter()
+        .map(|l| l.quest)
+        .filter(|q| data.npc.quests.get(q).is_some_and(|q| q.rep_objective.0 != 0))
+        .collect();
+    for q in waiting {
+        crate::game::map::quests::check(map, g, q);
+    }
 }
 
 /// A gain's size after its rate, the level rate and auras' bonuses,

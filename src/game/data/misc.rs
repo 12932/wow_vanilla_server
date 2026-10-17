@@ -87,6 +87,9 @@ pub struct MiscData {
     pub exploration_xp: AHashMap<u32, u32>,
     /// Meeting stones by game object entry.
     pub meeting_stones: AHashMap<u32, MeetingStone>,
+    /// `cinematic_waypoints`: where an intro's camera is at each point of
+    /// its run, by cinematic sequence: (milliseconds, x, y, z), in order.
+    pub cinematic_waypoints: AHashMap<u32, Vec<(u32, f32, f32, f32)>>,
 }
 
 impl MiscData {
