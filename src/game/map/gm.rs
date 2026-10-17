@@ -1,7 +1,7 @@
 //! GM commands: a chat line starting with `.`.
 
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{SMSG_FORCE_RUN_SPEED_CHANGE, Vector3d};
+use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::data::CreatureTemplate;
 use crate::game::guid;
@@ -240,20 +240,10 @@ fn speed(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
     let Some(mult) = parse_f32(args.first()).filter(|m| *m > 0.0 && *m <= 10.0) else {
         return Some("Usage: .speed <multiplier from 0.1 to 10>".to_owned());
     };
-    let p = map.players.get_mut(&guid)?;
-    p.speeds.run = 7.0 * mult;
-    p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
-        guid,
-        move_event: 0,
-        speed: p.speeds.run,
-    });
-    let run = p.speeds.run;
-    crate::game::map::misc::speed_to_observers(
-        map,
-        guid,
-        crate::game::map::misc::MSG_MOVE_SET_RUN_SPEED,
-        run,
-    );
+    // The run's base, kept through what changes speeds; the run worked out
+    // again and told (to those watching too).
+    map.players.get_mut(&guid)?.speed_rate = mult;
+    crate::game::map::derive::unit(map, guid);
     None
 }
 
