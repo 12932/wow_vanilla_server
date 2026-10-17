@@ -549,11 +549,13 @@ fn battleground(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                 let mut m = battlegrounds::Match {
                     id,
                     bg,
-                    bracket: battlegrounds::bracket_of(p.level()),
+                    bracket: battlegrounds::bracket_for(bg, p.level()),
                     invited: Default::default(),
                     members: Default::default(),
                     started: std::time::Instant::now(),
                     ended: false,
+                    began: None,
+                    ended_at: None,
                 };
                 m.invited.insert(
                     g,
