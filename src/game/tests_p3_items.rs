@@ -1164,3 +1164,83 @@ async fn the_auction_house_takes_only_what_may_be_sold() {
     .await;
     assert_eq!(kept, (true, 10_000, 0));
 }
+
+const BANKER: u32 = 3302;
+
+/// Thistle Tea's `Bank.buy_slot/3`: six slots for their six prices, each
+/// once; short of money, or at the client's most, nothing; a vendor isn't
+/// a banker. wvs tells a purchase Ok, as mangos-classic's
+/// `HandleBuyBankSlotOpcode` does.
+#[tokio::test]
+async fn bank_slots_are_bought_for_their_prices() {
+    let mut d = data();
+    let mut t = d.creature_templates[&VENDOR].clone();
+    t.entry = BANKER;
+    t.npc_flags = crate::game::map::npc::NPC_FLAG_BANKER;
+    d.creature_templates.insert(BANKER, t);
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: 3,
+        entries: vec![BANKER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1 - 1.0,
+        z: START.2,
+        ..Default::default()
+    });
+    let prices = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000];
+    for (i, price) in prices.iter().enumerate() {
+        d.npc.bank_slot_prices.insert(i as u32 + 1, *price);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let banker = guid::unit(BANKER, 3);
+    a.sees(banker).await;
+    let result = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(r) => Some(r.result),
+        _ => None,
+    };
+    let state = move |m: &mut Map| {
+        let p = &m.players[&g];
+        (p.fields.get_byte(PLAYER_BYTES_2, 2), p.money())
+    };
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(999)
+    })
+    .await;
+    a.send(CMSG_BUY_BANK_SLOT { guid: banker }).await;
+    assert_eq!(
+        a.wait_for("the result", result).await,
+        BuyBankSlotResult::InsufficientFunds
+    );
+    assert_eq!(on_map(&realm, state).await, (0, 999));
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(2_000_000)
+    })
+    .await;
+    let mut left = 2_000_000;
+    for (n, price) in prices.iter().enumerate() {
+        a.send(CMSG_BUY_BANK_SLOT { guid: banker }).await;
+        assert_eq!(
+            a.wait_for("the result", result).await,
+            BuyBankSlotResult::Ok
+        );
+        left -= price;
+        assert_eq!(on_map(&realm, state).await, (n as u8 + 1, left));
+    }
+    assert_eq!(left, 139_000);
+    a.send(CMSG_BUY_BANK_SLOT { guid: banker }).await;
+    assert_eq!(
+        a.wait_for("the result", result).await,
+        BuyBankSlotResult::FailedTooMany
+    );
+    a.send(CMSG_BUY_BANK_SLOT {
+        guid: vendor_guid(),
+    })
+    .await;
+    assert_eq!(
+        a.wait_for("the result", result).await,
+        BuyBankSlotResult::NotBanker
+    );
+    assert_eq!(on_map(&realm, state).await, (6, 139_000));
+}
