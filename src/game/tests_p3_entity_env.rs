@@ -157,3 +157,177 @@ async fn each_copy_keeps_its_own_instance_data() {
     );
     assert_eq!(second, (false, false), "the second's own, untouched");
 }
+
+const LEVEL_ONE: u32 = 9_205;
+const LEVEL_SIXTY: u32 = 9_206;
+const WATCHER: u32 = 3_730;
+
+fn watcher_world() -> GameData {
+    let mut d = world();
+    condition(&mut d, LEVEL_ONE, 15, [1, 0, 0, 0]);
+    condition(&mut d, LEVEL_SIXTY, 15, [60, 0, 0, 0]);
+    let mut t = crate::game::tests_p3_combat::template(WATCHER, 7);
+    t.name = "Watcher".into();
+    d.creature_templates.insert(WATCHER, t);
+    // In a fight, it yells "one" if its victim is level 1, "sixty" if 60.
+    for (script, text, line) in [(11, 310, "one"), (12, 311, "sixty")] {
+        d.scripts.ai_scripts.insert(
+            script,
+            vec![ScriptStep {
+                id: script,
+                command: 0,
+                dataint: [text, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+        d.npc.broadcast_texts.insert(
+            text as u32,
+            crate::game::data::npc::BroadcastText {
+                male: line.into(),
+                chat_type: 1,
+                ..Default::default()
+            },
+        );
+    }
+    let event = |id, condition, action| AiEvent {
+        id,
+        creature: WATCHER,
+        condition,
+        kind: EVENT_TIMER_IN_COMBAT,
+        chance: 100,
+        params: [0, 0, 60_000, 60_000],
+        actions: [action, 0, 0],
+        ..Default::default()
+    };
+    d.scripts.ai_events.insert(
+        WATCHER,
+        vec![event(1, LEVEL_ONE, 11), event(2, LEVEL_SIXTY, 12)],
+    );
+    d
+}
+
+/// Thistle Tea's "captures EventAI world facts against the current victim"
+/// and "selected targets receive their own immutable condition facts": an
+/// EventAI event's condition is judged on the creature's victim, and a
+/// script step's on the target it selected.
+#[tokio::test]
+async fn an_event_is_judged_on_the_victim_and_a_step_on_its_target() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let (_realm, mut a, ga, map) = setup_with(watcher_world(), Class::Warrior).await;
+    let watcher = on(&map, move |m| spawn(m, ga, WATCHER, 20, 3.0)).await;
+    a.sees(watcher).await;
+    a.clear();
+    on(&map, move |m| {
+        crate::game::map::ai::attacked(m, watcher, ga)
+    })
+    .await;
+    let line = a
+        .wait_for("the watcher's yell", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => Some(c.message.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(line, "one", "judged on Alice, its victim, level 1");
+    assert!(
+        a.gets(crate::game::tests_p3_entity::NONE_WITHIN, |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == "sixty" => Some(()),
+            _ => None,
+        })
+        .await
+        .is_none(),
+        "not on itself, level 20"
+    );
+    // A step aimed at the nearest brute, its condition on that brute's
+    // level: the level-1 one is knelt, the level-60 one isn't.
+    let out = on(&map, move |m| {
+        let low = spawn(m, ga, BRUTE, 1, 5.0);
+        let high = spawn(m, ga, BRUTE, 60, 9.0);
+        for (target, cond) in [(low, LEVEL_ONE), (high, LEVEL_ONE)] {
+            let mut kneel = step(28, [8, 1, 0, 0]);
+            kneel.condition = cond;
+            crate::game::map::scripts::execute(m, &kneel, watcher, target);
+        }
+        [low, high].map(|g| {
+            m.unit_fields(g).map_or(u8::MAX, |f| {
+                f.get_byte(crate::game::fields::UNIT_FIELD_BYTES_1, 0)
+            })
+        })
+    })
+    .await;
+    assert_eq!(out, [8, 0], "each target judged on its own");
+}
+
+/// Thistle Tea's "observes the active melee victim after selection is
+/// cleared" and "observes an auto shot target after melee attack stop
+/// clears the selected target": a melee attack goes on when the player's
+/// selection is cleared, and Auto Shot keeps its target when the melee
+/// attack stops.
+#[tokio::test]
+async fn an_attack_keeps_its_victim_when_the_selection_goes() {
+    let (_realm, a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let brute = on(&map, move |m| spawn(m, ga, BRUTE, 20, 2.0)).await;
+    a.send(CMSG_SET_SELECTION { target: brute }).await;
+    a.send(CMSG_ATTACKSWING { guid: brute }).await;
+    crate::game::tests_p3_entity_objects::until(&map, "Alice attacks", move |m| {
+        m.players[&ga].combat.attacking
+    })
+    .await;
+    a.send(CMSG_SET_SELECTION {
+        target: Guid::zero(),
+    })
+    .await;
+    let out = {
+        let mut a = a;
+        a.send(CMSG_QUERY_TIME {}).await;
+        a.wait_for("SMSG_QUERY_TIME_RESPONSE", |m| {
+            matches!(
+                m,
+                wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(
+                    _
+                )
+            )
+            .then_some(())
+        })
+        .await;
+        let melee = on(&map, move |m| {
+            let c = &m.players[&ga].combat;
+            (c.attacking, c.victim)
+        })
+        .await;
+        // Auto Shot at the brute; the melee attack stops.
+        on(&map, move |m| {
+            let now = m.now;
+            m.players.get_mut(&ga).unwrap().combat.auto_repeat =
+                Some(crate::game::map::combat::AutoRepeat {
+                    spell: 75,
+                    target: brute,
+                    next_at: now + std::time::Duration::from_secs(60),
+                });
+        })
+        .await;
+        a.send(CMSG_ATTACKSTOP {}).await;
+        a.send(CMSG_QUERY_TIME {}).await;
+        a.wait_for("SMSG_QUERY_TIME_RESPONSE", |m| {
+            matches!(
+                m,
+                wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(
+                    _
+                )
+            )
+            .then_some(())
+        })
+        .await;
+        let shot = on(&map, move |m| {
+            let c = &m.players[&ga].combat;
+            (c.attacking, c.auto_repeat.map(|r| r.target))
+        })
+        .await;
+        (melee, shot)
+    };
+    assert_eq!(out.0, (true, brute), "still swinging at the brute");
+    assert_eq!(
+        out.1,
+        (false, Some(brute)),
+        "the melee stopped, the shot still at it"
+    );
+}
