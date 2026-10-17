@@ -1109,19 +1109,28 @@ pub fn respawn_nodes(map: &mut Map) {
     }
     map.loot_state.respawns.retain(|(t, _)| *t > now);
     let data = map.realm.data.clone();
+    use crate::game::map::pools::{self, Member};
     for spawn in due {
-        // A pooled node may come back as another of its pool.
-        let waiting: Vec<u32> = map.loot_state.respawns.iter().map(|(_, s)| *s).collect();
-        let spawn = crate::game::map::creature_groups::object_respawn_choice(map, spawn, &waiting);
-        let Some(s) = data
-            .gameobject_spawns
-            .get(&map.key.map)
-            .and_then(|l| l.iter().find(|s| s.guid == spawn))
-        else {
+        // A pooled node's pool picks again: it may come back as another.
+        let Some(back) = pools::came_back(map, Member::Object(spawn)) else {
+            let Some(s) = data
+                .gameobject_spawns
+                .get(&map.key.map)
+                .and_then(|l| l.iter().find(|s| s.guid == spawn))
+            else {
+                continue;
+            };
+            if let Some(t) = data.gameobject_templates.get(&s.entry) {
+                map.add_gameobject(GameObject::from_spawn(t, s));
+            }
             continue;
         };
-        if let Some(t) = data.gameobject_templates.get(&s.entry) {
-            map.add_gameobject(GameObject::from_spawn(t, s));
+        for m in back {
+            match m {
+                Member::Object(s) => pools::spawn_object(map, s),
+                Member::Creature(s) => crate::game::map::ai::spawn_creature_of(map, s),
+                Member::Pool(_) => {}
+            }
         }
     }
 }

@@ -371,7 +371,11 @@ async fn a_follower_keeps_its_place_in_radians() {
     let to = Vector3d { x, y, z };
     let place = map
         .query(move |m| {
-            crate::game::map::creature_groups::leader_walked(m, leader, to, 0.0, false);
+            let now = m.now;
+            let c = m.creature_mut(leader).unwrap();
+            let from = c.position;
+            c.walk(vec![from, to], false, now, 1);
+            crate::game::map::creature_groups::leader_walked(m, leader);
             match &m.creature(follower).unwrap().motion {
                 Motion::Moving(w) => Some(w.destination()),
                 _ => None,

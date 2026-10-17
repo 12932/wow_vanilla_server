@@ -61,18 +61,15 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 [AI5_GAPS.md](AI5_GAPS.md) lists each by its number; in short:
 
 - **Movement:**
-  - wander points aren't clamped to the spawn's radius;
-  - pools don't take limits over one, re-roll, or spawn for events;
-  - creatures don't charge, and fear, confusion and fleeing don't stop, anchor or check their paths as Thistle
-    Tea's do;
-  - distract isn't handled;
-  - formations and scripted following are close but not exact;
-  - flyers' spline packets differ in format.
+  - Distract stops and turns only creatures; Thistle Tea turns players too.
+  - A knockback moves a creature, as mangos-classic does; Thistle Tea only breaks its cast.
+  - A monster move's intermediate point within about 0.7 yards of the destination is left out, as mangos-classic
+    leaves it; Thistle Tea nudges its height instead.
 - **Creature combat:**
   - harmful casts and stealth;
   - melee range and the chase;
   - emote and stand state in a fight;
-  - healing on leashing, and the leash's extension;
+  - the leash's extension;
   - facing packets, and `SMSG_ATTACKSTART`/`STOP`'s timing;
   - creatures spreading round their target;
   - victim selection's finer rules, and casters' line of sight;
@@ -141,6 +138,8 @@ Thistle Tea, with these exceptions:
 - **wow_messages** comes from 12932's fork (`12932/wow_messages`, branch `vanilla-1.12-layouts`), as it does for
   rustigator and peon: gtker's `e8dc643` with 1.12's own layouts for the game object query, who, loot, the cast
   result, quest details (reward items with their display id, strings past 256 bytes) and the battlefield status.
+- A flyer's `SMSG_MONSTER_MOVE` is laid out by hand, in whole points as the 1.12 client reads them; wow_messages
+  (and so peon and the harness) can't read it.
 - wow_messages types the client's fall time as a float; it is a u32 of milliseconds, so wvs reads the raw bits.
 - **Load-sensitive tests.** Each real-data test loads the whole world. On a machine running several suites at once
   (load average 40 to 50 on 16 cores) a few can time out; they pass run alone. The harness waits 20 seconds for

@@ -81,8 +81,11 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if crate::game::map::pets::move_possessed(map, guid, &info, relay) {
         return;
     }
-    // Feared, confused or charmed: the server moves it, not its client.
-    if crate::game::map::player_motion::driven(map, guid) {
+    // Feared, confused, charmed or charging: the server moves it, not its
+    // client.
+    if crate::game::map::player_motion::driven(map, guid)
+        || crate::game::map::charge::charging(map, guid)
+    {
         return;
     }
     let Some(p) = map.players.get_mut(&guid) else {
@@ -153,6 +156,42 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     }
     if let Some(drop) = fall {
         fall_damage(map, guid, drop);
+    }
+    remember_safe_position(map, guid);
+}
+
+/// How far a player moves before where it stands is remembered again, and
+/// how near the ground it must be (Thistle Tea's `SafePosition`).
+const SAFE_SAMPLE: f32 = 3.0;
+const SAFE_SURFACE: f32 = 3.0;
+
+/// A player on the ground (not in the air, the water or on a transport)
+/// three yards from where it last stood: the place is remembered for
+/// Stuck, if the navmesh has ground there.
+fn remember_safe_position(map: &mut Map, g: Guid) {
+    let map_id = map.key.map;
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let f = &p.movement.flags;
+    let grounded = f.get_jumping().is_none()
+        && !f.get_fallingfar()
+        && f.get_swimming().is_none()
+        && f.get_on_transport().is_none();
+    let at = p.movement.position;
+    let moved = p.safe_position.is_none_or(|(m, last, _)| {
+        m != map_id || crate::game::map::combat::dist(last, at) >= SAFE_SAMPLE
+    });
+    if !grounded || !moved {
+        return;
+    }
+    let o = p.movement.orientation;
+    let on_ground = map.nav.as_mut().is_none_or(|n| {
+        n.ground(at.x, at.y, at.z)
+            .is_some_and(|z| (z - at.z).abs() <= SAFE_SURFACE)
+    });
+    if on_ground && let Some(p) = map.players.get_mut(&g) {
+        p.safe_position = Some((map_id, at, o));
     }
 }
 

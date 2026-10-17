@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use ahash::AHashMap;
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{SMSG_MONSTER_MOVE_MonsterMoveType, SplineFlag, Vector3d};
+use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::map::Map;
 use crate::game::map::battleground::av_quests::{extras, extras_mut};
@@ -62,9 +62,6 @@ pub struct Routes {
     pub flyers: ahash::AHashSet<Guid>,
 }
 
-/// Spline flags: running, flying.
-const SPLINE_RUN: u32 = 0x100;
-const SPLINE_FLYING: u32 = 0x200;
 /// Movement flags a flyer shows: it can fly, and is flying.
 pub const MOVE_FLYING: u32 = 0x0180_0000;
 
@@ -204,23 +201,14 @@ pub fn go(map: &mut Map, g: Guid, to: Vector3d) -> Option<Instant> {
     let c = map.creature_mut(g)?;
     let from = c.position;
     let run = c.scripted.as_deref().is_some_and(|s| s.run);
-    c.walk(vec![from, to], run, now, spline_id)?;
+    let frame = c.walk_at(vec![from, to], run, fly, None, now, spline_id)?;
     let Motion::Moving(w) = &c.motion else {
         return None;
     };
     let ends = w.started + w.duration;
-    let mut packet = w.packet(g, from);
-    if fly
-        && let SMSG_MONSTER_MOVE_MonsterMoveType::Normal { spline_flags, .. } =
-            &mut packet.move_type
-    {
-        *spline_flags = SplineFlag::new(SPLINE_FLYING | if run { SPLINE_RUN } else { 0 });
-    }
     c.orientation = (to.y - from.y).atan2(to.x - from.x);
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    if let Some(frame) = crate::game::conn::encode(&packet) {
-        map.send_to_observers(g, &frame, false);
-    }
+    map.send_to_observers(g, &frame, false);
     Some(ends)
 }
 
@@ -262,7 +250,7 @@ fn follow(map: &mut Map, leader: Guid, to: Vector3d) {
             crate::game::map::ai::advance_motion(map, m);
         }
     }
-    crate::game::map::creature_groups::leader_walked(map, leader, to, facing, run);
+    crate::game::map::creature_groups::leader_walked(map, leader);
     let places: Vec<(Guid, Place)> = extras(map)
         .map(|x| {
             x.routes

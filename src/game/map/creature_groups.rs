@@ -1,12 +1,9 @@
-//! Creature groups (`creature_groups`), links (`creature_linking`) and
-//! spawn pools (`pool_*`), as vmangos has them and Thistle Tea ports them.
-//! A group fights, evades and respawns together as its flags say, and
-//! walks in formation behind its leader; a linked slave follows its
-//! master's aggro, evade and respawn; a pool spawns at most its limit of
-//! its members, picked by their chances.
+//! Creature groups (`creature_groups`) and links (`creature_linking`), as
+//! vmangos has them and Thistle Tea ports them. A group fights, evades and
+//! respawns together as its flags say, and walks in formation behind its
+//! leader; a linked slave follows its master's aggro, evade and respawn.
+//! Spawn pools are `pools`.
 
-use ahash::AHashSet;
-use rand::RngExt;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
@@ -123,16 +120,18 @@ pub fn leave(map: &mut Map, g: Guid) {
     map.script_groups.remove(&g);
 }
 
-/// `g` was attacked by `enemy`: its group and its links join in.
+/// `g` was attacked by `enemy`: its group and its links join in. Its
+/// group's members join as told to (Thistle Tea's `CreatureGroup`
+/// `:attack`), calling no one themselves.
 pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
-    let mut join: Vec<Guid> = Vec::new();
     if leader_of(map, g).is_some_and(|l| group_flags(map, l) & GROUP_AGGRO_TOGETHER != 0)
         || script_flags(map, g) & GROUP_AGGRO_TOGETHER != 0
     {
-        join.extend(members_of(map, g));
+        let members = members_of(map, g);
+        join_all(map, members, enemy, false);
     }
+    let mut join: Vec<Guid> = Vec::new();
     let Some(spawn) = spawn_of(map, g) else {
-        attack_all(map, join, enemy);
         return;
     };
     let data = map.realm.data.clone();
@@ -156,13 +155,23 @@ pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
 }
 
 fn attack_all(map: &mut Map, who: Vec<Guid>, enemy: Guid) {
+    join_all(map, who, enemy, true);
+}
+
+/// Those of `who` free to join the fight against `enemy` do; `call`, and
+/// each calls for help as one attacked does.
+fn join_all(map: &mut Map, who: Vec<Guid>, enemy: Guid, call: bool) {
     for c in who {
         if map
             .creature(c)
             .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading)
             && crate::game::map::combat::can_attack(map, c, enemy)
         {
-            crate::game::map::ai::attacked(map, c, enemy);
+            if call {
+                crate::game::map::ai::attacked(map, c, enemy);
+            } else {
+                crate::game::map::ai::assist(map, c, enemy);
+            }
         }
     }
 }
@@ -207,22 +216,57 @@ pub fn evaded(map: &mut Map, g: Guid) {
             crate::game::map::ai::enter_evade(map, c);
         }
     }
+    // Its dead come back with the evade: on any member's (0x20), or on its
+    // leader's, or one's while its leader lives and they evade together
+    // (0x10).
+    let flags = leader_of(map, g).map_or(0, |l| group_flags(map, l)) | script_flags(map, g);
+    if flags & (GROUP_RESPAWN_ON_EVADE | GROUP_RESPAWN_ON_LEADER_EVADE) == 0 {
+        return;
+    }
+    let members = members_of(map, g);
+    let leader = leader_guid(map, g);
+    let leader_alive = leader.is_some_and(|l| map.creature(l).is_some_and(|c| c.alive()));
+    let leader_evades = leader == Some(g) || (flags & GROUP_EVADE_TOGETHER != 0 && leader_alive);
+    if flags & GROUP_RESPAWN_ON_EVADE != 0
+        || (flags & GROUP_RESPAWN_ON_LEADER_EVADE != 0 && leader_evades)
+    {
+        respawn_dead(map, &members, g);
+    }
+}
+
+/// The creature leading `g`'s group, if it is here.
+fn leader_guid(map: &Map, g: Guid) -> Option<Guid> {
+    if let Some((l, _, _, _)) = map.script_groups.get(&g) {
+        return Some(*l);
+    }
+    if map.script_groups.values().any(|(l, _, _, _)| *l == g) {
+        return Some(g);
+    }
+    leader_of(map, g).and_then(|s| creature_of_spawn(map, s))
+}
+
+/// The dead of `members` but `but` come back at once.
+fn respawn_dead(map: &mut Map, members: &[Guid], but: Guid) {
+    for m in members.iter().copied().filter(|m| *m != but) {
+        if map.creature(m).is_some_and(|c| !c.alive()) {
+            crate::game::map::ai::respawn_now(map, m);
+        }
+    }
 }
 
 /// `g` respawned: a group that respawns together, and links.
 pub fn respawned(map: &mut Map, g: Guid) {
+    leader_back(map, g);
     let data = map.realm.data.clone();
     let Some(spawn) = spawn_of(map, g) else {
         return;
     };
-    if data.scripts.groups.contains_key(&spawn)
-        && group_flags(map, spawn) & GROUP_RESPAWN_TOGETHER != 0
+    // Any member back, the rest of its dead come with it.
+    if leader_of(map, g).is_some_and(|l| group_flags(map, l) & GROUP_RESPAWN_TOGETHER != 0)
+        || script_flags(map, g) & GROUP_RESPAWN_TOGETHER != 0
     {
-        for m in members_of(map, g).into_iter().filter(|m| *m != g) {
-            if map.creature(m).is_some_and(|c| !c.alive()) {
-                crate::game::map::ai::respawn_now(map, m);
-            }
-        }
+        let members = members_of(map, g);
+        respawn_dead(map, &members, g);
     }
     for (slave, (master, flags)) in &data.scripts.links {
         if *master != spawn {
@@ -261,64 +305,270 @@ pub fn may_spawn(map: &Map, spawn: u32) -> bool {
     true
 }
 
-/// A leader starts a walk to `to`: its formation follows, each at its
-/// place behind it.
-pub fn leader_walked(map: &mut Map, leader: Guid, to: Vector3d, facing: f32, run: bool) {
-    // Those a script put in formation behind it.
-    let scripted: Vec<(Guid, f32, f32)> = map
+/// How far behind its leader a follower may fall before it is brought up
+/// to it, and how much faster than its run it may go to keep up (Thistle
+/// Tea's `BT.Formation`).
+const BROUGHT_UP: f32 = 100.0;
+const CATCH_UP: f32 = 1.3;
+
+/// The group (by its leader's spawn) whose formation `g` leads: its own,
+/// or one whose leader died that it leads meanwhile.
+fn led_group(map: &Map, g: Guid) -> Option<u32> {
+    if let Some((key, _)) = map.acting_leaders.iter().find(|(_, a)| **a == g) {
+        return Some(*key);
+    }
+    let spawn = spawn_of(map, g)?;
+    (map.realm.data.scripts.groups.contains_key(&spawn) && !map.acting_leaders.contains_key(&spawn))
+        .then_some(spawn)
+}
+
+/// The followers that keep their places by `leader` as it walks: those a
+/// script put in formation behind it, and its group's if the group walks
+/// in formation; with their distance and angle.
+fn formation_of(map: &Map, leader: Guid) -> Vec<(Guid, f32, f32)> {
+    let mut out: Vec<(Guid, f32, f32)> = map
         .script_groups
         .iter()
         .filter(|(_, (l, _, _, f))| *l == leader && f & GROUP_FORMATION != 0)
         .map(|(m, (_, d, a, _))| (*m, *d, *a))
         .collect();
-    for (c, distance, angle) in scripted {
-        let ok = map
-            .creature(c)
-            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading);
-        if ok {
-            let angle = facing + angle;
-            let place = Vector3d {
-                x: to.x + distance * angle.cos(),
-                y: to.y + distance * angle.sin(),
-                z: to.z,
-            };
-            crate::game::map::scripts::move_to(map, c, place, run);
+    let Some(key) = led_group(map, leader) else {
+        return out;
+    };
+    let Some(members) = map.realm.data.scripts.groups.get(&key) else {
+        return out;
+    };
+    if members.iter().fold(0, |f, m| f | m.flags) & GROUP_FORMATION == 0 {
+        return out;
+    }
+    let own = spawn_of(map, leader);
+    for m in members
+        .iter()
+        .filter(|m| m.guid != key && Some(m.guid) != own)
+    {
+        if let Some(c) = creature_of_spawn(map, m.guid) {
+            out.push((c, m.distance, m.angle));
         }
     }
-    let Some(spawn) = spawn_of(map, leader) else {
+    out
+}
+
+/// `g` died: a formation it led on a patrol is led on along it by its
+/// first member alive (by guid), from the point it was bound for, a
+/// second later (Thistle Tea's `CreatureGroup.on_death`).
+pub fn died(map: &mut Map, g: Guid) {
+    let Some(key) = led_group(map, g) else {
         return;
     };
     let data = map.realm.data.clone();
-    let Some(members) = data.scripts.groups.get(&spawn) else {
+    let Some(members) = data.scripts.groups.get(&key) else {
         return;
     };
-    if members.iter().fold(0, |f, m| f | m.flags) & GROUP_FORMATION == 0 {
+    let path = data.waypoints.get(&key).filter(|p| !p.is_empty());
+    let Some(path) = path.filter(|_| group_flags(map, key) & GROUP_FORMATION != 0) else {
         return;
-    }
-    for m in members.iter().filter(|m| m.guid != spawn) {
-        let Some(c) = creature_of_spawn(map, m.guid) else {
-            continue;
+    };
+    let (bound_for, last) = map
+        .creature(g)
+        .map_or((0, None), |c| (c.waypoint, c.last_waypoint));
+    let mut candidates: Vec<Guid> = members
+        .iter()
+        .filter(|m| m.guid != key)
+        .filter_map(|m| creature_of_spawn(map, m.guid))
+        .filter(|c| *c != g && map.creature(*c).is_some_and(|x| x.alive()))
+        .collect();
+    candidates.sort_by_key(|c| c.guid());
+    let Some(next) = candidates.first().copied() else {
+        map.acting_leaders.remove(&key);
+        return;
+    };
+    map.acting_leaders.insert(key, next);
+    let now = map.now;
+    let points = std::sync::Arc::new(path.clone());
+    let Some(c) = map.creature_mut(next) else {
+        return;
+    };
+    let s = c.scripted.get_or_insert_with(Default::default);
+    s.route = Some(crate::game::map::event_ai::Route {
+        points,
+        repeat: true,
+    });
+    c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
+    c.waypoint = bound_for;
+    c.last_waypoint = last;
+    if !c.combat.attacking && !c.evading {
+        c.motion = crate::game::map::creature::Motion::Idle {
+            until: Some(now + std::time::Duration::from_secs(1)),
         };
-        let ok = map
-            .creature(c)
-            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading);
-        if !ok {
+    }
+}
+
+/// `g` came back: the formation it leads, led meanwhile by another, is its
+/// again, and the other falls in behind it.
+fn leader_back(map: &mut Map, g: Guid) {
+    let Some(spawn) = spawn_of(map, g) else {
+        return;
+    };
+    let Some(acting) = map.acting_leaders.remove(&spawn) else {
+        return;
+    };
+    let Some(c) = map.creature_mut(acting) else {
+        return;
+    };
+    if let Some(s) = c.scripted.as_deref_mut() {
+        s.route = None;
+    }
+    c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+    if !c.combat.attacking && !c.evading {
+        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+    }
+}
+
+/// Whether `g` keeps its place in a formation rather than walking its own
+/// way: one of a formation's members, not leading it meanwhile.
+pub fn following(map: &Map, g: Guid) -> bool {
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
+    follows(&map.realm.data, c.spawn_guid) && !map.acting_leaders.values().any(|a| *a == g)
+}
+
+/// Whether a follower is free to keep its place: alive, out of a fight,
+/// not driven by fear, confusion or a flight, nor held by a root, stun or
+/// distraction, and not rooted to its spot by its template.
+fn free_to_follow(map: &Map, g: Guid) -> bool {
+    use crate::game::map::auras::{AURA_MOD_ROOT, AURA_MOD_STUN};
+    map.creature(g).is_some_and(|c| {
+        c.alive()
+            && !c.combat.attacking
+            && !c.evading
+            && c.engagement.control.is_none()
+            && !c.auras.has(AURA_MOD_ROOT)
+            && !c.auras.has(AURA_MOD_STUN)
+    }) && !crate::game::map::creature_motion::held_by_distraction(map, g)
+        && !crate::game::map::creature_motion::sessile(map, g)
+}
+
+/// A follower's place by a leader at `at` facing `heading`.
+fn place(at: Vector3d, heading: f32, distance: f32, angle: f32) -> Vector3d {
+    let a = heading + angle;
+    Vector3d {
+        x: at.x + distance * a.cos(),
+        y: at.y + distance * a.sin(),
+        z: at.z,
+    }
+}
+
+/// A leader set off on a walk: its formation follows, as Thistle Tea's
+/// `BT.Formation` has it, each to its place off where the walk ends, faced
+/// along the walk's last leg, timed to arrive with it (but no faster than
+/// 1.3 times its own run), and facing that way when there. One a hundred
+/// yards or more from its leader is brought up to it at once.
+pub fn leader_walked(map: &mut Map, leader: Guid) {
+    let now = map.now;
+    let Some(c) = map.creature(leader) else {
+        return;
+    };
+    let crate::game::map::creature::Motion::Moving(w) = &c.motion else {
+        return;
+    };
+    let dest = w.destination();
+    let Some(prev) = w.points.iter().rev().find(|p| **p != dest).copied() else {
+        return;
+    };
+    let heading = (dest.y - prev.y).atan2(dest.x - prev.x);
+    let arrives = w.started + w.duration;
+    let (at, facing) = (c.position, c.orientation);
+    for (m, distance, angle) in formation_of(map, leader) {
+        if !free_to_follow(map, m) {
             continue;
         }
-        let angle = facing + m.angle;
-        let place = Vector3d {
-            x: to.x + m.distance * angle.cos(),
-            y: to.y + m.distance * angle.sin(),
-            z: to.z,
+        crate::game::map::ai::advance_motion(map, m);
+        let Some(from) = map.creature(m).map(|c| c.position) else {
+            continue;
         };
-        let place = map
+        if crate::game::map::combat::dist(from, at) >= BROUGHT_UP {
+            crate::game::map::scripts::place(map, m, at, facing);
+            continue;
+        }
+        let spot = place(dest, heading, distance, angle);
+        let spot = map
             .nav
             .as_mut()
-            .and_then(|n| n.ground(place.x, place.y, place.z))
-            .map(|z| Vector3d { z, ..place })
-            .unwrap_or(place);
-        crate::game::map::scripts::move_to(map, c, place, run);
+            .and_then(|n| n.ground(spot.x, spot.y, spot.z))
+            .map(|z| Vector3d { z, ..spot })
+            .unwrap_or(spot);
+        if crate::game::map::combat::dist(from, spot) < 0.2 {
+            continue;
+        }
+        let path = match map.nav.as_mut() {
+            Some(nav) => match nav.path(from, spot) {
+                Some(p) => p,
+                None => continue,
+            },
+            None => vec![from, spot],
+        };
+        let length: f32 = path
+            .windows(2)
+            .map(|w| crate::game::map::combat::dist(w[0], w[1]))
+            .sum();
+        let left = arrives
+            .saturating_duration_since(now)
+            .max(std::time::Duration::from_millis(1));
+        let fly = crate::game::map::creature_motion::habitat(map, m).fly;
+        let spline_id = map.next_spline_id;
+        map.next_spline_id = map.next_spline_id.wrapping_add(1);
+        let Some(c) = map.creature_mut(m) else {
+            continue;
+        };
+        let speed = (length / left.as_secs_f32()).min(c.speeds.run * CATCH_UP);
+        let run = c.scripted.as_deref().is_some_and(|s| s.run);
+        let mut walk = crate::game::map::creature::Walk::new(path, speed, now, spline_id, run);
+        walk.fly = fly;
+        walk.face = Some(heading);
+        let frame = walk.frame(m, from);
+        c.motion = crate::game::map::creature::Motion::Moving(walk);
+        if let Some(s) = c.scripted.as_deref_mut() {
+            s.scripted_move = None;
+        }
+        if let Some(frame) = frame {
+            map.send_to_observers(m, &frame, false);
+        }
     }
+}
+
+/// Where a follower goes home to after a fight: its place by its leader
+/// as the leader now stands (Thistle Tea's `Formation.home_position`).
+pub fn formation_home(map: &Map, g: Guid) -> Option<Vector3d> {
+    let (leader, distance, angle) = match map.script_groups.get(&g) {
+        Some((l, d, a, f)) if f & GROUP_FORMATION != 0 => (*l, *d, *a),
+        _ => {
+            let spawn = spawn_of(map, g)?;
+            if !follows(&map.realm.data, Some(spawn)) {
+                return None;
+            }
+            let leader = *map.realm.data.scripts.group_of.get(&spawn)?;
+            let m = map
+                .realm
+                .data
+                .scripts
+                .groups
+                .get(&leader)?
+                .iter()
+                .find(|m| m.guid == spawn)?;
+            let leads = map
+                .acting_leaders
+                .get(&leader)
+                .copied()
+                .or_else(|| creature_of_spawn(map, leader))?;
+            if leads == g {
+                return None;
+            }
+            (leads, m.distance, m.angle)
+        }
+    };
+    let l = map.creature(leader).filter(|l| l.alive())?;
+    Some(place(l.position, l.orientation, distance, angle))
 }
 
 /// Whether a creature walks in a formation behind another, and so doesn't
@@ -335,193 +585,4 @@ pub fn follows(data: &GameData, spawn: Option<u32>) -> bool {
                 .get(leader)
                 .is_some_and(|m| m.iter().fold(0, |f, x| f | x.flags) & GROUP_FORMATION != 0)
     })
-}
-
-/// The pooled spawns that don't spawn this time: (creatures, objects).
-/// Pools spawn at most their limit, an explicitly chanced member by its
-/// chance, the rest evenly; a pool of pools spawns its picks' picks.
-pub fn unpicked(
-    data: &GameData,
-    map: u32,
-    rng: &mut impl rand::Rng,
-) -> (AHashSet<u32>, AHashSet<u32>) {
-    let s = &data.scripts;
-    let mut out = (AHashSet::new(), AHashSet::new());
-    if s.pools.is_empty() {
-        return out;
-    }
-    let on_map_creature: AHashSet<u32> = data
-        .creature_spawns
-        .get(&map)
-        .map(|v| {
-            v.iter()
-                .map(|c| c.guid)
-                .filter(|g| s.creature_pool.contains_key(g))
-                .collect()
-        })
-        .unwrap_or_default();
-    let on_map_object: AHashSet<u32> = data
-        .gameobject_spawns
-        .get(&map)
-        .map(|v| {
-            v.iter()
-                .map(|o| o.guid)
-                .filter(|g| s.object_pool.contains_key(g))
-                .collect()
-        })
-        .unwrap_or_default();
-    if on_map_creature.is_empty() && on_map_object.is_empty() {
-        return out;
-    }
-    // Every pooled spawn here starts unpicked; the picks are taken out.
-    out.0 = on_map_creature.clone();
-    out.1 = on_map_object.clone();
-    let mut roots: AHashSet<u32> = AHashSet::new();
-    for g in &on_map_creature {
-        roots.insert(root(s, s.creature_pool[g]));
-    }
-    for g in &on_map_object {
-        roots.insert(root(s, s.object_pool[g]));
-    }
-    for r in roots {
-        pick(s, r, rng, &mut out, 0);
-    }
-    out
-}
-
-fn root(s: &ScriptData, mut pool: u32) -> u32 {
-    for _ in 0..8 {
-        match s.pools.get(&pool) {
-            Some(p) if p.mother != 0 && s.pools.contains_key(&p.mother) => pool = p.mother,
-            _ => break,
-        }
-    }
-    pool
-}
-
-#[derive(Clone, Copy)]
-enum Member {
-    Creature(u32),
-    Object(u32),
-    Pool(u32),
-}
-
-fn pick(
-    s: &ScriptData,
-    pool: u32,
-    rng: &mut impl rand::Rng,
-    out: &mut (AHashSet<u32>, AHashSet<u32>),
-    depth: u32,
-) {
-    let Some(p) = s.pools.get(&pool) else {
-        return;
-    };
-    if depth > 8 {
-        return;
-    }
-    let members: Vec<(Member, f32)> = p
-        .creatures
-        .iter()
-        .map(|(g, c)| (Member::Creature(*g), *c))
-        .chain(p.objects.iter().map(|(g, c)| (Member::Object(*g), *c)))
-        .chain(p.pools.iter().map(|(g, c)| (Member::Pool(*g), *c)))
-        .collect();
-    if members.is_empty() {
-        return;
-    }
-    let limit = if p.max_limit == 0 {
-        members.len()
-    } else {
-        p.max_limit as usize
-    };
-    let mut chosen: Vec<Member> = Vec::new();
-    // One of the explicitly chanced, by its chance.
-    let explicit: Vec<&(Member, f32)> = members.iter().filter(|(_, c)| *c > 0.0).collect();
-    if !explicit.is_empty() {
-        let mut roll = rng.random_range(0.0f32..100.0);
-        for (m, c) in explicit {
-            roll -= c;
-            if roll < 0.0 {
-                chosen.push(*m);
-                break;
-            }
-        }
-    }
-    // The rest evenly, up to the limit.
-    let mut equal: Vec<Member> = members
-        .iter()
-        .filter(|(_, c)| *c <= 0.0)
-        .map(|(m, _)| *m)
-        .collect();
-    while chosen.len() < limit && !equal.is_empty() {
-        let i = rng.random_range(0..equal.len());
-        chosen.push(equal.swap_remove(i));
-    }
-    for m in chosen {
-        match m {
-            Member::Creature(g) => {
-                out.0.remove(&g);
-            }
-            Member::Object(g) => {
-                out.1.remove(&g);
-            }
-            Member::Pool(child) => pick(s, child, rng, out, depth + 1),
-        }
-    }
-}
-
-/// A pooled object (an herb, a vein, a chest) comes back: the spawn may
-/// be another of its pool, one not up now nor waiting to be.
-pub fn object_respawn_choice(map: &Map, spawn: u32, waiting: &[u32]) -> u32 {
-    let s = &map.realm.data.scripts;
-    let Some(pool) = s.object_pool.get(&spawn).and_then(|p| s.pools.get(p)) else {
-        return spawn;
-    };
-    if pool.objects.len() < 2 || pool.objects.iter().any(|(_, c)| *c > 0.0) {
-        return spawn;
-    }
-    let on_map: ahash::AHashSet<u32> = map
-        .realm
-        .data
-        .gameobject_spawns
-        .get(&map.key.map)
-        .map(|v| v.iter().map(|o| o.guid).collect())
-        .unwrap_or_default();
-    let free: Vec<u32> = pool
-        .objects
-        .iter()
-        .map(|(g, _)| *g)
-        .filter(|g| on_map.contains(g))
-        .filter(|g| {
-            *g == spawn
-                || (crate::game::map::scripts::object_of_spawn(map, *g).is_none()
-                    && !waiting.contains(g))
-        })
-        .collect();
-    if free.is_empty() {
-        return spawn;
-    }
-    free[rand::rng().random_range(0..free.len())]
-}
-
-/// A pooled creature died: the spawn that comes back may be another of its
-/// pool, one not up now.
-pub fn respawn_choice(map: &Map, spawn: u32) -> u32 {
-    let s = &map.realm.data.scripts;
-    let Some(pool) = s.creature_pool.get(&spawn).and_then(|p| s.pools.get(p)) else {
-        return spawn;
-    };
-    if pool.creatures.len() < 2 || pool.creatures.iter().any(|(_, c)| *c > 0.0) {
-        return spawn;
-    }
-    let free: Vec<u32> = pool
-        .creatures
-        .iter()
-        .map(|(g, _)| *g)
-        .filter(|g| *g == spawn || creature_of_spawn(map, *g).is_none())
-        .collect();
-    if free.is_empty() {
-        return spawn;
-    }
-    free[rand::rng().random_range(0..free.len())]
 }
