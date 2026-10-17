@@ -230,5 +230,8 @@ the questions waiting for you.
 | 3a: matrix gaps, spells and auras | running | |
 | 3b: matrix gaps, combat and creature AI | running | |
 | 3f: matrix gaps, network and inbound | running | |
+| 3c: matrix gaps, items, quests, loot, professions | running | |
+| 3d: matrix gaps, player systems | running | |
+| 3e: matrix gaps, world systems | running | |
 
 ## Left for later, and why
