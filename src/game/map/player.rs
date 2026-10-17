@@ -224,6 +224,10 @@ pub struct Player {
     pub duel: Option<crate::game::map::duel::Duel>,
     /// Where a player in a battleground came from.
     pub bg_return: Option<(crate::game::map::MapKey, Vector3d, f32)>,
+    /// When a player in a copy no longer theirs goes home.
+    pub eviction: Option<Instant>,
+    /// The copy's map just left, to tell the client once it's arrived.
+    pub last_instance: Option<u32>,
     /// The last position movement was checked from, and when.
     pub move_check: Option<(Vector3d, Instant)>,
     /// The top of a fall under way.
@@ -307,6 +311,8 @@ impl Player {
             trade: None,
             duel: None,
             bg_return: None,
+            eviction: None,
+            last_instance: None,
             move_check: None,
             fall_from: None,
             chat_last: None,

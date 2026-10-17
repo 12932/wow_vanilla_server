@@ -3776,9 +3776,10 @@ mod instances {
                 0.0,
             )
         });
+        // Refused as Thistle Tea refuses it: a raid group only.
         a.wait_for("the raid's refusal", |m| match m {
-            ServerOpcodeMessage::SMSG_AREA_TRIGGER_MESSAGE(t) => {
-                t.message.contains("raid").then_some(())
+            ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(r) => {
+                (r.homebind_timer == 0 && r.error == RaidGroupError::Required).then_some(())
             }
             _ => None,
         })
