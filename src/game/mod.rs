@@ -18,6 +18,7 @@ pub mod registry;
 pub mod session;
 pub mod social;
 pub mod store;
+pub mod supervisor;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
