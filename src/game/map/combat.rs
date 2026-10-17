@@ -2492,6 +2492,21 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     for h in holders {
         crate::game::map::spells::clear_combo_points(map, h);
     }
+    // The dead's reactive windows close with their bits (mangos's
+    // `ClearAllReactives` at death).
+    if let Some(c) = map.combat_mut(victim) {
+        c.defense_window = None;
+        c.hunter_parry_window = None;
+        c.dodge_combo_until = None;
+    }
+    if let Some(f) = map.unit_fields_mut(victim) {
+        let bits = f.get_u32(UNIT_FIELD_AURASTATE);
+        let cleared =
+            bits & !(AURA_STATE_DEFENSE | AURA_STATE_HUNTER_PARRY | AURA_STATE_HEALTHLESS_20);
+        if cleared != bits {
+            f.set_u32(UNIT_FIELD_AURASTATE, cleared);
+        }
+    }
     // A kill a player's on-kill procs count (Thistle Tea's
     // `KillFeedback.eligible?`): not grey, and no pet, totem or creature
     // worth no XP; a creature's kills all count.
