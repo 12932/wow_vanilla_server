@@ -201,7 +201,7 @@ pub fn effect_targets(
     // An area spares the creature types its spell doesn't name (Holy
     // Wrath's undead and demons), as Thistle Tea's target resolver does.
     let typed = |g: Guid| super::checks::unit_type_allowed(map, s, g);
-    let enemy = |g: Guid| alive(map, g) && combat::can_attack(map, about, g) && typed(g);
+    let enemy = |g: Guid| alive(map, g) && combat::can_attack_in_area(map, about, g) && typed(g);
     let ally = |g: Guid| {
         alive(map, g)
             && (g == about

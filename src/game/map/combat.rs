@@ -687,8 +687,13 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
     if !ua.alive || !ub.alive {
         return false;
     }
-    if let Some(c) = map.creature(b)
-        && (c.evading || c.fields.get_u32(UNIT_FIELD_FLAGS) & 0x0200_0000 != 0)
+    // One no one may attack: not attackable, made so by an aura, not
+    // selectable, or on a flight (mangos's `Unit::CanAttack`, Thistle
+    // Tea's `targetable?`); and a creature on its way home.
+    if map
+        .unit_fields(b)
+        .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAGS_NOT_ATTACKABLE != 0)
+        || map.creature(b).is_some_and(|c| c.evading)
     {
         return false;
     }
@@ -730,8 +735,14 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
         let ffa = |p: &crate::game::map::player::Player| {
             p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP)
         };
+        // Free for all, but not for one's own group (mangos's
+        // `GetReactionTo`: a group is friendly first).
         if ffa(pa) && ffa(pb) {
-            return true;
+            let groups = map.realm.social.groups.lock();
+            return !matches!(
+                (groups.group_of(a), groups.group_of(b)),
+                (Some(x), Some(y)) if x.id == y.id
+            );
         }
         // The one attacked must be flagged (contested is flagged too), as
         // mangos's `Unit::CanAttack` and Thistle Tea's
@@ -762,6 +773,57 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
         _ => false,
     }
 }
+
+/// Whether an area spell of `a`'s may hit `b`: as [`can_attack`], but a
+/// player's area spares players unless the caster is flagged too, they
+/// duel, or both fight free for all; so no one is flagged by an area they
+/// didn't mean (mangos's `CanAttackSpell` for an area, Thistle Tea's
+/// `can_attack_without_flagging?`).
+pub fn can_attack_in_area(map: &Map, a: Guid, b: Guid) -> bool {
+    if !can_attack(map, a, b) {
+        return false;
+    }
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    let (Some(pa), Some(pb)) = (map.players.get(&ma), map.players.get(&mb)) else {
+        return true;
+    };
+    let ffa = |p: &crate::game::map::player::Player| {
+        p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP)
+    };
+    crate::game::map::duel::dueling(map, ma, mb)
+        || (ffa(pa) && ffa(pb))
+        || pa.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP)
+}
+
+/// Whether `a` may help `b` (a heal, a buff): no one outside a duel helps
+/// its fighters, nor they anyone outside it, as mangos's `Unit::CanAssist`
+/// has it by the duel's arbiter (Thistle Tea's `can_assist?`).
+pub fn can_assist(map: &Map, a: Guid, b: Guid) -> bool {
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    if ma == mb {
+        return true;
+    }
+    let arbiter = |g: Guid| {
+        map.players
+            .get(&g)
+            .and_then(|p| p.duel)
+            .and_then(|d| (d.phase == crate::game::map::duel::Phase::Fighting).then_some(d.flag))
+    };
+    match (map.players.contains_key(&ma), map.players.contains_key(&mb)) {
+        (true, true) => arbiter(ma) == arbiter(mb),
+        _ => true,
+    }
+}
+
+/// The unit flags no one attacks through: not attackable, not attackable
+/// by an aura, not selectable, on a flight.
+pub const UNIT_FLAGS_NOT_ATTACKABLE: u32 = 0x2 | 0x1_0000 | 0x0200_0000 | 0x0010_0000;
 
 /// The unit flags that make a unit immune to players' side and to
 /// creatures'.
@@ -1015,6 +1077,18 @@ fn flags_extra(map: &Map, g: Guid) -> u32 {
         .map_or(0, |t| t.flags_extra)
 }
 
+/// A creature template's `static_flags1`.
+fn static_flags(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .map_or(0, |t| t.static_flags1)
+}
+
+/// `static_flags1`: it can't be killed, only brought to one health; it has
+/// no defense skill.
+pub const STATIC_UNKILLABLE: u32 = 0x8;
+pub const STATIC_NO_DEFENSE: u32 = 0x4000;
+
 /// Whether a unit wields two weapons: a player who can, or a creature
 /// whose off hand holds a weapon (not a shield or a held item).
 pub fn dual_wields(map: &Map, g: Guid) -> bool {
@@ -1095,7 +1169,13 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
             },
             va.level,
         ),
-        victim_defense: or_level(dv.defense, vb.level),
+        // A creature without defense meets every blow with none (Thistle
+        // Tea's `Skills.defense_value`).
+        victim_defense: if static_flags(map, victim) & STATIC_NO_DEFENSE != 0 {
+            0
+        } else {
+            or_level(dv.defense, vb.level)
+        },
         attacker_is_player: va.is_player,
         victim_is_player: vb.is_player,
         attacker_level: va.level as i32,
@@ -1182,6 +1262,18 @@ pub fn weapon_damage(
         damage *= 0.5;
     }
     if let Some(a) = auras::auras(map, attacker) {
+        // A blow of a magic school (an elemental's) takes its school's
+        // share of damage done, not the physical share its fields hold
+        // (Thistle Tea's `attack_damage_multipliers`).
+        let school_pct = if school & 1 == 0 {
+            let physical = a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, 1);
+            if physical > 0.0 {
+                damage /= physical;
+            }
+            a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, school)
+        } else {
+            1.0
+        };
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
         damage += a
@@ -1207,6 +1299,7 @@ pub fn weapon_damage(
             damage += ap as f32 / 14.0 * speed;
             damage *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, kind);
         }
+        damage *= school_pct;
         // An armed creature, disarmed, hits for four tenths.
         if a.has(AURA_MOD_DISARM)
             && let Some(c) = map.creature(attacker)
@@ -1283,6 +1376,15 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
         send_to(map, attacker, encode(&SMSG_ATTACKSWING_CANT_ATTACK {}));
         return;
     }
+    // Another victim: the old one hears the attack stop, and a strike
+    // queued for it goes (mangos's `Unit::Attack`, Thistle Tea's
+    // `start_melee_attack`).
+    if map
+        .combat(attacker)
+        .is_some_and(|c| c.attacking && c.victim != victim && !c.victim.is_zero())
+    {
+        stop_attack(map, attacker);
+    }
     let Some(c) = map.combat_mut(attacker) else {
         return;
     };
@@ -1305,7 +1407,9 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
     try_swing(map, attacker);
 }
 
-/// `CMSG_ATTACKSTOP`, or a fight that ends.
+/// `CMSG_ATTACKSTOP`, or a fight that ends. A strike queued for the next
+/// swing is interrupted, and its caster told (mangos's `MeleeAttackStop`
+/// interrupting the melee spell, Thistle Tea's `stop_melee_attack`).
 pub fn stop_attack(map: &mut Map, attacker: Guid) {
     let Some(c) = map.combat_mut(attacker) else {
         return;
@@ -1314,8 +1418,16 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
         return;
     }
     c.attacking = false;
-    c.queued = None;
+    let queued = c.queued.take();
     let victim = c.victim;
+    if let Some(spell) = queued {
+        crate::game::map::spells::send_cast_result(
+            map,
+            attacker,
+            spell,
+            Some(crate::game::map::spells::checks::fail::INTERRUPTED),
+        );
+    }
     if let Some(frame) = encode(&SMSG_ATTACKSTOP {
         player: attacker,
         enemy: victim,
@@ -1449,7 +1561,16 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         if let Some(c) = map.combat_mut(attacker) {
             let next = Some(now + Duration::from_millis(u64::from(period)));
             match hand {
-                Hand::Off => c.next_offhand = next,
+                // The hands keep a moment apart, the main one waiting too
+                // (mangos's `ATTACK_DISPLAY_DELAY`).
+                Hand::Off => {
+                    c.next_offhand = next;
+                    if c.next_swing
+                        .is_some_and(|t| t < now + Duration::from_millis(200))
+                    {
+                        c.next_swing = Some(now + Duration::from_millis(200));
+                    }
+                }
                 _ => {
                     c.next_swing = next;
                     // Reckoning's banked attacks arm on a regular swing.
@@ -1482,55 +1603,32 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         return;
     };
     let mut rng = rand::rng();
-    let outcome = roll_outcome(&roll, rng.random_range(0..10_000));
+    let outcome = rolled_outcome(&roll, &mut rng);
     let (raw, school) = weapon_damage(map, attacker, victim, hand, &mut rng);
-    let mitigated = if school & 1 != 0 {
-        armor_mitigate(map, attacker, victim, raw)
+    let mitigated = mitigate(map, attacker, victim, raw, school);
+    let kept = if outcome == Outcome::Glancing {
+        let caster_class = map
+            .players
+            .get(&attacker)
+            .is_some_and(|p| matches!(p.row.class, 5 | 8 | 9));
+        let gap = roll.victim_defense - roll.attacker_skill;
+        glancing_factor(gap, caster_class, rng.random_range(0.0f32..1.0))
     } else {
-        raw
+        1.0
     };
-    let block_value = derived(map, victim).block_value;
-    let caster_class = map
-        .players
-        .get(&attacker)
-        .is_some_and(|p| matches!(p.row.class, 5 | 8 | 9));
-    let (mut hit_info, state, damage, blocked) = match outcome {
-        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
-        Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
-        Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
-        Outcome::Block => {
-            let blocked = block_value.min(mitigated);
-            let state = if blocked >= mitigated {
-                VICTIMSTATE_BLOCKS
-            } else {
-                VICTIMSTATE_NORMAL
-            };
-            (HITINFO_NORMALSWING2, state, mitigated - blocked, blocked)
-        }
-        Outcome::Glancing => {
-            let gap = roll.victim_defense - roll.attacker_skill;
-            let kept = glancing_factor(gap, caster_class, rng.random_range(0.0f32..1.0));
-            (
-                HITINFO_NORMALSWING2 | HITINFO_GLANCING,
-                VICTIMSTATE_NORMAL,
-                ((mitigated as f32 * kept) as u32).max(raw.min(1)),
-                0,
-            )
-        }
-        Outcome::Crit => (
-            HITINFO_NORMALSWING2 | HITINFO_CRITICALHIT,
-            VICTIMSTATE_NORMAL,
-            (mitigated as f32 * crit_multiplier(map, attacker, victim)) as u32,
-            0,
-        ),
-        Outcome::Crushing => (
-            HITINFO_NORMALSWING2 | HITINFO_CRUSHING,
-            VICTIMSTATE_NORMAL,
-            mitigated * 3 / 2,
-            0,
-        ),
-        Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated, 0),
+    let crit = if outcome == Outcome::Crit {
+        crit_multiplier(map, attacker, victim)
+    } else {
+        2.0
     };
+    let (mut hit_info, state, damage, blocked) = blow(
+        outcome,
+        raw,
+        mitigated,
+        block_value(map, victim),
+        crit,
+        kept,
+    );
     // A blow on a unit its school can't touch does nothing.
     let immune = !matches!(outcome, Outcome::Miss | Outcome::Dodge | Outcome::Parry)
         && school_immune(map, victim, school);
@@ -1582,7 +1680,10 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     if matches!(outcome, Outcome::Dodge | Outcome::Parry) {
         gain_rage(map, attacker, mitigated * 3 / 4, false);
     }
-    skill_gains(map, attacker, victim, hand);
+    // A blow on the immune trains nothing (Thistle Tea's `CombatSkills`).
+    if !immune {
+        skill_gains(map, attacker, victim, hand);
+    }
     if left > 0 {
         // A blow on a caster pushes its cast back.
         crate::game::map::spells::pushback(map, victim);
@@ -1621,6 +1722,97 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     if left > 0 {
         daze(map, attacker, victim, &roll);
     }
+}
+
+/// What a white blow's `outcome` makes of its damage, `raw` before armor
+/// and `mitigated` after: its hit info, the victim's state, the damage and
+/// what a block stopped. A block stops up to `block_value` of the damage
+/// after armor; a crit multiplies it by `crit`; a glancing blow keeps
+/// `kept` of it, a crushing one half again.
+pub fn blow(
+    outcome: Outcome,
+    raw: u32,
+    mitigated: u32,
+    block_value: u32,
+    crit: f32,
+    kept: f32,
+) -> (u32, u32, u32, u32) {
+    match outcome {
+        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
+        Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
+        Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
+        Outcome::Block => {
+            let blocked = block_value.min(mitigated);
+            let state = if blocked >= mitigated {
+                VICTIMSTATE_BLOCKS
+            } else {
+                VICTIMSTATE_NORMAL
+            };
+            (HITINFO_NORMALSWING2, state, mitigated - blocked, blocked)
+        }
+        Outcome::Glancing => (
+            HITINFO_NORMALSWING2 | HITINFO_GLANCING,
+            VICTIMSTATE_NORMAL,
+            ((mitigated as f32 * kept) as u32).max(raw.min(1)),
+            0,
+        ),
+        Outcome::Crit => (
+            HITINFO_NORMALSWING2 | HITINFO_CRITICALHIT,
+            VICTIMSTATE_NORMAL,
+            (mitigated as f32 * crit) as u32,
+            0,
+        ),
+        Outcome::Crushing => (
+            HITINFO_NORMALSWING2 | HITINFO_CRUSHING,
+            VICTIMSTATE_NORMAL,
+            mitigated * 3 / 2,
+            0,
+        ),
+        Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated, 0),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's outcome for the white swings it makes, in place of the
+    /// roll.
+    pub static FORCED_OUTCOME: std::cell::Cell<Option<Outcome>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// A white swing's roll on the table (or a test's outcome for it).
+fn rolled_outcome(r: &Roll, rng: &mut impl rand::Rng) -> Outcome {
+    #[cfg(test)]
+    if let Some(o) = FORCED_OUTCOME.with(|f| f.get()) {
+        return o;
+    }
+    roll_outcome(r, rng.random_range(0..10_000))
+}
+
+/// What armor leaves of a blow of `school` (a mask): only a physical one
+/// is mitigated.
+pub fn mitigate(map: &Map, attacker: Guid, victim: Guid, raw: u32, school: u32) -> u32 {
+    if school & 1 != 0 {
+        armor_mitigate(map, attacker, victim, raw)
+    } else {
+        raw
+    }
+}
+
+/// What a unit's block stops: a player's shield's value, or a creature's
+/// half its level and a twentieth of its class's strength at that level
+/// (mangos's `Creature::GetShieldBlockValue`, Thistle Tea's
+/// `CombatRatings.block_value`).
+pub fn block_value(map: &Map, g: Guid) -> u32 {
+    let strength = map
+        .creature(g)
+        .and_then(|c| {
+            let t = map.realm.data.creature_template(c.entry)?;
+            let level = c.fields.get_u32(UNIT_FIELD_LEVEL).min(255) as u8;
+            map.realm.data.class_level_stats.get(&(t.unit_class, level))
+        })
+        .map_or(0, |s| s.strength);
+    derived(map, g).block_value + strength / 20
 }
 
 /// The `procEx` an outcome is.
@@ -1672,16 +1864,22 @@ pub fn after_outcome(map: &mut Map, attacker: Guid, victim: Guid, outcome: Outco
 }
 
 /// A parry hastens the parrier's next swing: the earlier hand loses up to
-/// two fifths of its period, to no less than a fifth.
+/// two fifths of its period, to no less than a fifth. The period is the
+/// weapon's own, before hastes (mangos's `GetAttackTime`, Thistle Tea's
+/// base attack time).
 pub fn parry_haste(map: &mut Map, g: Guid) {
     let now = map.now;
     let dual = dual_wields(map, g);
+    let haste = auras::auras(map, g)
+        .map_or(1.0, crate::game::map::derive::melee_haste)
+        .max(0.01);
+    let unhasted = |p: u32| (p as f32 / haste).round() as u32;
     let periods = map
         .unit_fields(g)
         .map(|f| {
             (
-                f.get_u32(UNIT_FIELD_BASEATTACKTIME),
-                f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1),
+                unhasted(f.get_u32(UNIT_FIELD_BASEATTACKTIME)),
+                unhasted(f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1)),
             )
         })
         .unwrap_or((2000, 2000));
@@ -1943,22 +2141,55 @@ fn daze(map: &mut Map, attacker: Guid, victim: Guid, roll: &Roll) {
     if !map.creature(attacker).is_some_and(|c| c.owner.is_none()) {
         return;
     }
-    let level = roll.victim_level as f32;
+    // Not a blow that killed, nor one on the invulnerable.
+    if !map.unit_view(victim).is_some_and(|u| u.alive)
+        || crate::game::map::gm_dev::invulnerable(map, victim)
+    {
+        return;
+    }
+    let chance = daze_chance(roll.victim_level, roll.attacker_skill, roll.victim_defense);
+    if daze_roll() < chance {
+        crate::game::map::spells::cast_triggered(map, attacker, SPELL_DAZED, Some(victim));
+    }
+}
+
+/// The chance, in percent, a creature's blow from behind dazes a player of
+/// `level` with `defense` (mangos's `CalculateEffectiveDazeChance`): a
+/// fifth at 30 and up, less below; a fifth of a point for each point of
+/// skill over defense; no more than two fifths.
+pub fn daze_chance(level: i32, skill: i32, defense: i32) -> f32 {
+    let level = level as f32;
     let base = if level < 30.0 {
         0.65 * level + 0.5
     } else {
         20.0
     };
-    let chance = (base + (roll.attacker_skill - roll.victim_defense) as f32 * 0.2).clamp(0.0, 40.0);
-    if rand::rng().random_range(0.0f32..100.0) < chance {
-        crate::game::map::spells::cast_triggered(map, attacker, SPELL_DAZED, Some(victim));
+    (base + (skill - defense) as f32 * 0.2).clamp(0.0, 40.0)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's roll for a daze, in percent, in place of the dice.
+    pub static FORCED_DAZE_ROLL: std::cell::Cell<Option<f32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn daze_roll() -> f32 {
+    #[cfg(test)]
+    if let Some(r) = FORCED_DAZE_ROLL.with(|f| f.get()) {
+        return r;
     }
+    rand::rng().random_range(0.0f32..100.0)
 }
 
 /// A spell (Windfury, Sword Specialization, Hand of Justice) owes `count`
 /// main-hand attacks at once; Reckoning banks one for the next swing. An
 /// extra attack can't give more, nor can a batch stack.
 pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
+    // The dead are owed nothing.
+    if !map.unit_view(g).is_some_and(|u| u.alive) {
+        return;
+    }
     let Some(c) = map.combat_mut(g) else {
         return;
     };
@@ -1968,7 +2199,9 @@ pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
         }
         return;
     }
-    if c.in_extra_attack || c.extra_attacks > 0 || count == 0 {
+    // Reckoning's bank holds off another batch until a swing arms it
+    // (Thistle Tea's `ExtraAttacks.grant`).
+    if c.in_extra_attack || c.extra_attacks > 0 || c.held_extra_attacks > 0 || count == 0 {
         return;
     }
     c.extra_attacks = count;
@@ -2194,7 +2427,10 @@ fn deal_damage_with(
         return;
     };
     let left = f.get_u32(UNIT_FIELD_HEALTH).saturating_sub(damage);
-    // A script can keep a creature from falling below a floor.
+    // A script can keep a creature from falling below a floor, and an
+    // unkillable one (vmangos's `CREATURE_STATIC_FLAG_UNKILLABLE`) never
+    // falls below one health unless a script's floor lets it (Thistle
+    // Tea's invincibility threshold).
     let floor = crate::game::map::event_ai::invincible_floor(map, victim);
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
@@ -2255,6 +2491,33 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         }
     }
     stop_attack(map, victim);
+    // Combo points on the dead go with them, and the dead's own (mangos's
+    // `ClearComboPointHolders`, Thistle Tea's `clear_combo_target`).
+    let holders: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| p.caster.combo_target == victim)
+        .map(|p| p.guid)
+        .chain(guid::is_player(victim).then_some(victim))
+        .collect();
+    for h in holders {
+        crate::game::map::spells::clear_combo_points(map, h);
+    }
+    // The dead's reactive windows close with their bits (mangos's
+    // `ClearAllReactives` at death).
+    if let Some(c) = map.combat_mut(victim) {
+        c.defense_window = None;
+        c.hunter_parry_window = None;
+        c.dodge_combo_until = None;
+    }
+    if let Some(f) = map.unit_fields_mut(victim) {
+        let bits = f.get_u32(UNIT_FIELD_AURASTATE);
+        let cleared =
+            bits & !(AURA_STATE_DEFENSE | AURA_STATE_HUNTER_PARRY | AURA_STATE_HEALTHLESS_20);
+        if cleared != bits {
+            f.set_u32(UNIT_FIELD_AURASTATE, cleared);
+        }
+    }
     // A kill a player's on-kill procs count (Thistle Tea's
     // `KillFeedback.eligible?`): not grey, and no pet, totem or creature
     // worth no XP; a creature's kills all count.
@@ -2513,10 +2776,12 @@ pub fn update_players(map: &mut Map) {
         if threatened.contains(&p.guid) && p.combat.last_action.is_some() {
             p.combat.last_action = Some(now);
         }
-        if !p.combat.attacking
-            && p.combat
-                .last_action
-                .is_some_and(|t| now.duration_since(t) > COMBAT_TIMEOUT)
+        // Swinging at no one in reach, or meaning to, holds no one in a
+        // fight (Thistle Tea's `attack intent alone`, mangos's combat
+        // timer): only blows and threat do.
+        if p.combat
+            .last_action
+            .is_some_and(|t| now.duration_since(t) > COMBAT_TIMEOUT)
         {
             p.combat.last_action = None;
             p.combat.attackers.clear();

@@ -2418,7 +2418,9 @@ pub fn absorb(map: &mut Map, target: Guid, damage: u32, school: u32) -> (u32, u3
 pub fn held(map: &Map, g: Guid, casting: bool) -> bool {
     auras(map, g).is_some_and(|a| {
         a.has(AURA_MOD_STUN)
-            || a.has(AURA_MOD_FEAR)
+            // A fear that may not make it flee holds nothing (mangos's
+            // `SetFeared` under SPELL_AURA_PREVENTS_FLEEING).
+            || (a.has(AURA_MOD_FEAR) && !a.has(AURA_PREVENTS_FLEEING))
             || a.has(AURA_MOD_CONFUSE)
             || (casting && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE)))
     })
