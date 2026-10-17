@@ -977,3 +977,56 @@ async fn charge_runs_to_the_target_and_swings_there() {
         .unwrap();
     assert!(!charging && fighting, "it gets there and fights");
 }
+
+/// Scripted following, as Thistle Tea's `BT.Follow`: the spot is off where
+/// the leader will be half a second on; the follower runs (a walking
+/// leader too) and faces as the leader does when there; a leader out of
+/// sight is waited for, not given up.
+#[tokio::test]
+async fn a_scripted_follower_runs_to_where_its_leader_will_be() {
+    let (_realm, mut a, ga, map) = enter(wolf_world()).await;
+    let g = wolf();
+    a.sees(g).await;
+    let leader_at = at(0.0, 0.0);
+    let (dest, speed, run_speed) = map
+        .query(move |m| {
+            let p = m.players.get_mut(&ga).unwrap();
+            p.movement.position = leader_at;
+            p.movement.orientation = 0.0;
+            p.movement.flags = MovementInfo_MovementFlags::new_forward().set_walk_mode();
+            let c = m.creature_mut(g).unwrap();
+            c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+            c.motion = Motion::Idle { until: None };
+            c.scripted.get_or_insert_with(Default::default).follow = Some((ga, 2.0, 0.0));
+            crate::game::map::event_ai::follow_step(m, g);
+            let c = m.creature(g).unwrap();
+            match &c.motion {
+                Motion::Moving(w) => (Some(w.destination()), w.speed, c.speeds.run),
+                Motion::Idle { .. } => (None, 0.0, c.speeds.run),
+            }
+        })
+        .await
+        .unwrap();
+    let dest = dest.expect("it follows");
+    // Walking east at 2.5 yards a second: 1.25 yards on, and two past that.
+    let want = at(1.25 + 2.0, 0.0);
+    assert!(dist(dest, want) < 0.1, "where the leader will be: {dest:?}");
+    assert!(speed >= run_speed, "running: {speed} {run_speed}");
+    let walk = next_move(&mut a, g, |m| m.kind != 1).await;
+    assert_eq!(walk.kind, 4, "facing as its leader does: {walk:?}");
+    assert!(walk.angle.is_some_and(|o| o.abs() < 0.01));
+    // A leader not here is waited for.
+    let ghost = guid::unit(WOLF, 999);
+    let still = map
+        .query(move |m| {
+            let c = m.creature_mut(g).unwrap();
+            c.scripted.get_or_insert_with(Default::default).follow = Some((ghost, 2.0, 0.0));
+            crate::game::map::event_ai::follow_step(m, g);
+            m.creature(g)
+                .and_then(|c| c.scripted.as_deref())
+                .and_then(|s| s.follow)
+        })
+        .await
+        .unwrap();
+    assert_eq!(still.map(|f| f.0), Some(ghost), "still following");
+}
