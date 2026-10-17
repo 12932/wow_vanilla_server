@@ -9,10 +9,33 @@ differs, in [docs/THISTLE_TEA_DIFFERENCES.md](docs/THISTLE_TEA_DIFFERENCES.md).
 
 ## Quick start
 
+You need [Rust](https://rustup.rs), [Git LFS](https://git-lfs.com) (the world's databases are in it) and a WoW
+1.12.1 client.
+
 ```sh
-cargo build --release --bin wow_vanilla_server
-./target/release/wow_vanilla_server
+git lfs install
+git clone https://github.com/12932/wow_vanilla_server
+cd wow_vanilla_server
+cargo run --release
 ```
+
+The first start finds your WoW client, asks, and builds the navmesh and the terrain from it with a progress bar:
+answer Y, and the server starts when they are done. All 36 maps take about 9 GB and, on 16 threads, three minutes;
+the Eastern Kingdoms alone (Gurubashi Arena, Stormwind, the Undercity) about 3 GB and one minute. The terrain takes
+seconds. To build without starting the server, or again later (more maps, another client):
+
+```sh
+cargo run --release --bin wvs-setup
+cargo run --release --bin wvs-setup -- --yes --client "C:\Games\WoW 1.12" --maps azeroth    # in a script
+```
+
+The setup looks where installers and launchers put the client: the registry, `Program Files`, `C:\Games` and the
+other drives' `Games`, Desktop, Downloads and Documents, and Wine, Lutris, Bottles, Proton and CrossOver prefixes. If
+it isn't there, it offers to search every drive. `--client <folder>` (or `WOW_DIR`) gives it the folder holding
+`WoW.exe` and `Data`; a copy of `Data` alone does too. `--maps` takes `all`, `azeroth`, or map names as the client
+names them (`Kalimdor,PVPZone03`), `--threads N` the cores to build with. Ctrl-C stops a build between tiles, keeping
+what is finished, and the next run carries on from there. Without a terminal (a service, a script) the server asks
+nothing: it logs how to build what is missing, and starts without it.
 
 It listens on `:3724` (auth) and `:8085` (world). Point a 1.12.1 client's `realmlist.wtf` at the host. By default
 an unknown username gets an account at its first login, with the username as its password (`[accounts] creation =
@@ -25,11 +48,11 @@ the checkout looks in the checkout's `data/`):
 
 | Directory | Holds | Without it |
 |---|---|---|
-| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export). They ship with the repository, in Git LFS: install it before cloning, or run `git lfs pull` after | the world is empty: no creatures, objects, spells or quests |
-| `data/nav` | a rustigator bake (`Azeroth.map` and the rest) | creatures walk straight lines |
-| `data/terrain` | Thistle Tea's terrain tiles (`MMMMRRCC.map`, from its `nix run .#terrain-data`) | liquids outside WMOs have no kind (the deep sea doesn't tire swimmers, lava doesn't burn) |
+| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export). They ship with the repository, in Git LFS: install it before cloning, or run `git lfs pull` after (the server says so if they are LFS pointers) | the world is empty: no creatures, objects, spells or quests |
+| `data/nav` | the navmesh, a rustigator bake (`Azeroth.map` and the rest), made by the setup from your client | creatures walk straight lines |
+| `data/terrain` | the terrain tiles (`MMMMRRCC.map`, as mangos-zero's extractor writes them), made by the setup from your client | liquids outside WMOs have no kind (the deep sea doesn't tire swimmers, lava doesn't burn) |
 
-Elsewhere, say so in `config.toml`:
+Elsewhere, say so in `config.toml` (the setup builds into these too):
 
 ```toml
 [world]
@@ -39,8 +62,7 @@ terrain_dir = "/path/to/terrain"
 ```
 
 The tests that read the real world find it the same way, or under `WVS_DATA` if it is set; without it they pass
-without running. Making `data/nav` and `data/terrain` from your own client by answering one question is planned in
-[docs/DATA_SETUP_PLAN.md](docs/DATA_SETUP_PLAN.md).
+without running. How the setup came about is in [docs/DATA_SETUP_PLAN.md](docs/DATA_SETUP_PLAN.md).
 
 ## Configuration
 

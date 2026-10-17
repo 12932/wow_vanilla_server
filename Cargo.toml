@@ -2,6 +2,7 @@
 name = "wow_vanilla_server"
 version = "0.1.1"
 edition = "2024"
+default-run = "wow_vanilla_server"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -31,9 +32,9 @@ wow_items = { git="https://github.com/gtker/wow_messages.git", rev = "e8dc643aea
 wow_srp = { git="https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163" }
 walkdir = "2.5.0"
 
-rustigator = { git = "https://github.com/12932/rustigator", rev = "c941c9b61fe990758353c976efb0e50585960e42", features = ["vanilla"] }
+rustigator = { git = "https://github.com/12932/rustigator", rev = "31c83fa0a747211c89187c64b7b729dc1722095d", features = ["vanilla"] }
 # The navmesh and terrain builds, for the data setup.
-rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "c941c9b61fe990758353c976efb0e50585960e42" }
+rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "31c83fa0a747211c89187c64b7b729dc1722095d" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -67,10 +68,30 @@ parking_lot = "0.12"
 flate2 = "1"
 md-5 = "0.10"
 serde_json = "1"
+# The data setup: its questions, its progress bars, and its flags.
+dialoguer = { version = "0.12", default-features = false }
+indicatif = "0.18"
+clap = { version = "4.6", features = ["derive"] }
+
+# Free disk space, and on Windows the registry and the fixed drives.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+] }
 
 [[bin]]
 name = "wow_vanilla_server"
 path = "src/main.rs"
+
+# Finds the WoW client and builds data/nav and data/terrain from it.
+[[bin]]
+name = "wvs-setup"
+path = "src/bin/wvs-setup.rs"
 
 [profile.release]
 debug = 0

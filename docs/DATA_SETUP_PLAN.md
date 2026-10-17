@@ -99,3 +99,16 @@ Start the server now? [Y/n]
 Stages 1 and 2 are in rustigator, and independent of each other; Stage 3 can start beside them. Stage 4 needs 2 and 3;
 Stage 5 needs 4; Stage 6 closes it. Stage 1 is the largest: a careful port with a golden
 comparison. The rest are small.
+
+## Where it stands
+
+- **Stages 3 to 5** are in wvs: `src/setup/` and the `wvs-setup` binary, on rustigator at 31c83fa (Stages 1 and
+  2), its builds behind a `Builder` trait that the tests fake. On the 5875 client the setup's terrain is the 2,429
+  reference tiles byte for byte; Ctrl-C between tiles keeps what is finished, and the next run carries on.
+- **Another client's output:** "current" doesn't know which client made a map, so each directory the setup builds
+  notes its client (`setup.json`: the archives' names and sizes). Another client's is built afresh only when the
+  player says so (`--fresh` in a script), the old one set aside as `<dir>.old`; a bake from elsewhere, with no note,
+  is kept and only what it lacks is built.
+- **Stage 6** is done: `build.rs` (checked by building both binaries for x86_64-pc-windows-gnu), and the timings, on
+  16 threads: the terrain in 1 s, the models in 1 s, Azeroth's navmesh in 55 s and all 36 maps' in 3 minutes, after a
+  20-second preflight.

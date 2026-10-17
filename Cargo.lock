@@ -336,6 +336,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.16.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e96a4956774c13c126a8b5af4daa79384f4d826534c95a02d76afb39e2ab64e3"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "unicode-width",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -433,6 +445,16 @@ dependencies = [
  "const-oid",
  "pem-rfc7468",
  "zeroize",
+]
+
+[[package]]
+name = "dialoguer"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f104b501bf2364e78d0d3974cbc774f738f5865306ed128e1e0d7499c0ad96"
+dependencies = [
+ "console 0.16.6",
+ "shell-words",
 ]
 
 [[package]]
@@ -804,10 +826,23 @@ version = "0.17.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "183b3088984b400f4cfac3620d5e076c84da5364016b4f49473de574b2586235"
 dependencies = [
- "console",
+ "console 0.15.11",
  "number_prefix",
  "portable-atomic",
  "unicode-width",
+ "web-time",
+]
+
+[[package]]
+name = "indicatif"
+version = "0.18.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9433806cd6b4ec1aba79c021c7e4c58fb4c3b9977c085062e611ac929998fb0c"
+dependencies = [
+ "console 0.16.6",
+ "portable-atomic",
+ "unicode-width",
+ "unit-prefix",
  "web-time",
 ]
 
@@ -848,7 +883,7 @@ dependencies = [
 [[package]]
 name = "landmark"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=c941c9b61fe990758353c976efb0e50585960e42#c941c9b61fe990758353c976efb0e50585960e42"
+source = "git+https://github.com/12932/rustigator?rev=31c83fa0a747211c89187c64b7b729dc1722095d#31c83fa0a747211c89187c64b7b729dc1722095d"
 dependencies = [
  "glam 0.34.1",
  "log",
@@ -1245,7 +1280,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a7ff566c5cb263cf6a9f3b8b8ccbeaf236c0b3516c184134c062863258b3789"
 dependencies = [
  "clap",
- "indicatif",
+ "indicatif 0.17.11",
  "thiserror",
 ]
 
@@ -1503,7 +1538,7 @@ dependencies = [
 [[package]]
 name = "rustigator"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=c941c9b61fe990758353c976efb0e50585960e42#c941c9b61fe990758353c976efb0e50585960e42"
+source = "git+https://github.com/12932/rustigator?rev=31c83fa0a747211c89187c64b7b729dc1722095d#31c83fa0a747211c89187c64b7b729dc1722095d"
 dependencies = [
  "glam 0.34.1",
  "rustigator-mapbuild",
@@ -1518,7 +1553,7 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=c941c9b61fe990758353c976efb0e50585960e42#c941c9b61fe990758353c976efb0e50585960e42"
+source = "git+https://github.com/12932/rustigator?rev=31c83fa0a747211c89187c64b7b729dc1722095d#31c83fa0a747211c89187c64b7b729dc1722095d"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1537,7 +1572,7 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=c941c9b61fe990758353c976efb0e50585960e42#c941c9b61fe990758353c976efb0e50585960e42"
+source = "git+https://github.com/12932/rustigator?rev=31c83fa0a747211c89187c64b7b729dc1722095d#31c83fa0a747211c89187c64b7b729dc1722095d"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1552,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=c941c9b61fe990758353c976efb0e50585960e42#c941c9b61fe990758353c976efb0e50585960e42"
+source = "git+https://github.com/12932/rustigator?rev=31c83fa0a747211c89187c64b7b729dc1722095d#31c83fa0a747211c89187c64b7b729dc1722095d"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1568,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=c941c9b61fe990758353c976efb0e50585960e42#c941c9b61fe990758353c976efb0e50585960e42"
+source = "git+https://github.com/12932/rustigator?rev=31c83fa0a747211c89187c64b7b729dc1722095d#31c83fa0a747211c89187c64b7b729dc1722095d"
 dependencies = [
  "byteorder",
  "glam 0.34.1",
@@ -1713,6 +1748,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"
@@ -2082,6 +2123,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unit-prefix"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "323402cff2dd658f39ca17c789b502021b3f18707c91cdf22e3838e1b4023817"
 
 [[package]]
 name = "utf8parse"
@@ -2576,9 +2623,13 @@ dependencies = [
  "ahash",
  "arc-swap",
  "chrono",
+ "clap",
+ "dialoguer",
  "dotenvy",
  "flate2",
+ "indicatif 0.18.6",
  "kanal",
+ "libc",
  "md-5",
  "mimalloc",
  "parking_lot",
@@ -2598,6 +2649,7 @@ dependencies = [
  "tracing-tracy",
  "tracy-client",
  "walkdir",
+ "windows-sys 0.61.2",
  "wow_items",
  "wow_login_messages",
  "wow_srp",
