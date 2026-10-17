@@ -246,7 +246,7 @@ the questions waiting for you.
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
 | 2c: creature combat (all 15 items) | merged | e557cf0 |
 | 2d: scripts, encounters, spell lists, the Molten Core rune | merged | e089517 |
-| 2e+2f: instances, quests, events (all 8 items) | merged | |
+| 2e+2f: instances, quests, events (all 8 items) | merged | 9669fc0 |
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
