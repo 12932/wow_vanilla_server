@@ -1195,14 +1195,22 @@ fn evade(map: &mut Map, g: Guid) {
     // Its scripts run on: a script that wants them stopped says so.
     crate::game::map::spells::lists::left_combat(map, g);
     crate::game::map::event_ai::evade(map, g);
+    // Whole again as it leashes, if it regenerates (Thistle Tea's
+    // `heal_to_full`), not once home.
+    if crate::game::map::creature_combat::regenerates(map, g)
+        && let Some(c) = map.creature_mut(g)
+    {
+        let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        c.fields.set_u32(UNIT_FIELD_HEALTH, max);
+    }
+    combat::sync_aura_state(map, g);
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
     }
 }
 
-/// An evading creature walks home, is whole again when it gets there,
-/// and rests there as it did.
+/// An evading creature walks home, and rests there as it did.
 fn evade_step(map: &mut Map, g: Guid) {
     let now = map.now;
     advance_motion(map, g);
@@ -1211,8 +1219,6 @@ fn evade_step(map: &mut Map, g: Guid) {
     };
     if matches!(c.motion, Motion::Idle { .. }) {
         c.evading = false;
-        let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
-        c.fields.set_u32(UNIT_FIELD_HEALTH, max);
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
@@ -1227,7 +1233,6 @@ fn evade_step(map: &mut Map, g: Guid) {
             }
             map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
         }
-        combat::sync_aura_state(map, g);
         crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);

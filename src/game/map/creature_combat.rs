@@ -835,6 +835,13 @@ pub fn combat_mana_per_tick(map: &Map, g: Guid) -> u32 {
     ((per_tick / 2.0 + 0.6 * intellect.sqrt() / 5.0) * 5.0).max(0.0) as u32
 }
 
+/// Whether a creature regenerates its health (Thistle Tea's
+/// `regenerates_health?`): its template doesn't say it doesn't.
+pub fn regenerates(map: &Map, g: Guid) -> bool {
+    map.creature(g).is_some()
+        && template(map, g).is_none_or(|t| t.static_flags1 & STATIC_NO_AUTOMATIC_REGEN == 0)
+}
+
 /// Creatures regenerate: a third of health and mana each tick out of a
 /// fight, health in one while polymorphed, and mana in one by spirit and
 /// intellect outside the five-second rule.

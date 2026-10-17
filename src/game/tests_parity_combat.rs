@@ -609,3 +609,45 @@ async fn a_fight_stands_a_creature_up_and_home_it_rests_again() {
     assert!(!evading, "home");
     assert_eq!(home, resting, "and sits again");
 }
+
+/// A creature is whole again as it leashes, not once it is home, and only
+/// one that regenerates (Thistle Tea's `heal_to_full`).
+#[tokio::test]
+async fn a_leashing_creature_is_healed_as_it_goes_if_it_regenerates() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let (fresh, worn) = (kobold(11), guid::unit(WORN, 12));
+    let out = map
+        .query(move |m| {
+            m.players.get_mut(&ga).unwrap().movement.position = at(24.0, 3.0);
+            let health = |m: &Map, g: Guid| {
+                let f = m.unit_fields(g).unwrap();
+                (
+                    f.get_u32(UNIT_FIELD_HEALTH),
+                    f.get_u32(UNIT_FIELD_MAXHEALTH),
+                )
+            };
+            let mut out = Vec::new();
+            for g in [fresh, worn] {
+                crate::game::map::ai::attacked(m, g, ga);
+                step(m, 20);
+                let max = health(m, g).1;
+                m.unit_fields_mut(g)
+                    .unwrap()
+                    .set_u32(UNIT_FIELD_HEALTH, max / 2);
+                crate::game::map::ai::enter_evade(m, g);
+                let going = (m.creature(g).unwrap().evading, health(m, g).0);
+                step(m, 100);
+                let home = (m.creature(g).unwrap().evading, health(m, g).0);
+                out.push((max, going, home));
+            }
+            out
+        })
+        .await
+        .unwrap();
+    let (max, going, home) = out[0];
+    assert_eq!(going, (true, max), "whole as it goes");
+    assert_eq!(home, (false, max));
+    let (max, going, home) = out[1];
+    assert_eq!(going, (true, max / 2), "a worn one stays worn");
+    assert_eq!(home, (false, max / 2), "home too");
+}
