@@ -81,6 +81,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     out.send(&SMSG_ACTION_BUTTONS { data: buttons });
     crate::game::map::reputation::send_login(p, &map.realm.data);
     crate::game::map::rest::restore(p, map.now);
+    crate::game::map::intoxication::restore(p);
     crate::game::map::exploration::init(p);
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_SETTIMESPEED {
