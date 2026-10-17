@@ -2382,8 +2382,8 @@ pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
 /// On death every aura but the passive and death-persistent ones goes, and
 /// so does the cast.
 pub fn clear_on_death(map: &mut Map, g: Guid) {
-    // What it held one of on another goes with it.
-    crate::game::map::spells::single_target::caster_gone(map, g);
+    // Its Hunter's Mark on another goes with it.
+    crate::game::map::spells::single_target::caster_died(map, g);
     crate::game::map::spells::interrupt(map, g);
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
