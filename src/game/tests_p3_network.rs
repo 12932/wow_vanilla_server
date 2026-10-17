@@ -700,3 +700,47 @@ async fn caches_uploaded_after_logout_are_kept_for_the_last_character() {
     assert_eq!(&times[7 * 16..8 * 16], &[0; 16]);
     assert_eq!(&times[4 * 16..5 * 16], &digest(b"MACRO 1"));
 }
+
+/// Thistle Tea's cmsg_cancel_growth_aura_test: `CMSG_CANCEL_GROWTH_AURA`
+/// changes nothing, a growth aura and the player's scale staying, as
+/// mangos's HandleCancelGrowthAuraOpcode has it.
+#[tokio::test]
+async fn cancelling_growth_leaves_the_player_as_big() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_MOD_SCALE,
+        base_points: 19,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    let grow = SpellTemplate {
+        id: 30_000,
+        name: "Grow".into(),
+        effects,
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    let scale = on_map(&realm, move |m| {
+        crate::game::map::auras::apply(m, g, g, &grow, 0, 20);
+        m.players[&g].fields.get_f32(OBJECT_FIELD_SCALE_X)
+    })
+    .await;
+    a.send(CMSG_CANCEL_GROWTH_AURA {}).await;
+    settled(&mut a).await;
+    let (grown, after) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (
+            p.auras.has_spell(30_000),
+            p.fields.get_f32(OBJECT_FIELD_SCALE_X),
+        )
+    })
+    .await;
+    assert!(grown, "the aura stays");
+    assert_eq!(after, scale);
+}

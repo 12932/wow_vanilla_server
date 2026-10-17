@@ -1469,13 +1469,10 @@ async fn the_deep_sea_tires_a_swimmer_out() {
 }
 
 #[tokio::test]
-async fn far_sight_ends_and_growth_auras_are_cancelled() {
+async fn far_sight_ends() {
     let (realm, a) = setup().await;
     let g = a.guid;
-    let mut grow = aura_spell(30000, &[(crate::game::map::auras::AURA_MOD_SCALE, 20, 0)]);
-    grow.duration_index = 0;
     on_map(&realm, move |m| {
-        crate::game::map::auras::apply(m, g, g, &grow, 0, 20);
         m.players
             .get_mut(&g)
             .unwrap()
@@ -1483,18 +1480,15 @@ async fn far_sight_ends_and_growth_auras_are_cancelled() {
             .set_guid(PLAYER_FARSIGHT, Guid::new(5));
     })
     .await;
-    a.send(CMSG_CANCEL_GROWTH_AURA {}).await;
     a.send(CMSG_FAR_SIGHT {
         operation: FarSightOperation::Remove,
     })
     .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let (grown, sight) = on_map(&realm, move |m| {
-        let p = &m.players[&g];
-        (p.auras.has_spell(30000), p.fields.get_guid(PLAYER_FARSIGHT))
+    let sight = on_map(&realm, move |m| {
+        m.players[&g].fields.get_guid(PLAYER_FARSIGHT)
     })
     .await;
-    assert!(!grown);
     assert!(sight.is_zero());
 }
 
