@@ -128,3 +128,65 @@ so the gaps are in what the interpreters make of what comes in.
 - E16. Smaller: group-member-died on the dead; movement inform when
   dead; summoned-unit order; summoned-despawn on every despawn; helper
   aggro order.
+
+## Creature combat
+
+- C1. Call for help: TT takes helpers within 10 yd that share the faction
+  template, whose faction answers calls (flag 0x01, not 0x400), free,
+  in sight; tells them 1.5 s later if the caller still fights; they don't
+  call on; a 1 s pulse calls friends within `call_for_help_range` while
+  more than 10 yd from home; 0x400 factions flee instead. wvs: same entry
+  within `call_for_help_range`, at once, chaining.
+- C2. Script command 47 always seeks help (M7).
+- C3. Reaction modes: passive (flags_extra 0x80|0x20000, static 0x02000000)
+  and defensive (flags_extra 0x2) creatures don't aggro on sight; passive
+  ones take no victim.
+- C4. No creature-against-creature (or pet) aggro on sight.
+- C5. Reputation-gated hostility falls back to the faction template.
+- C6. Any harmful cast puts the target in combat, Sap from stealth too.
+- C7. Stunned or pacified idle creatures still aggro.
+- C8. Mind Soothe reads the player's detect-range aura, not the creature's.
+- C9. Melee range +1 yd leeway; chase and repath distances.
+- C10. Emote and stand state not cleared on combat or restored at home.
+- C11. Evade heals on arrival; TT on leashing.
+- C12. No facing packets in combat (or home, M9).
+- C13. ATTACKSTART at aggro, not the first swing; none on a victim switch;
+  no ATTACKSTOP on death.
+- C14. No attacker spreading.
+- C15. Leash: DoTs extend it; control extends it; shared leash clocks;
+  radius max(50, 1.5 × aggro radius).
+- C16. Taunt auras leave permanent threat; ATTACK_ME raises to the top.
+- C17. Aggro: polled every 500 ms; LOS only on the nearest; 45 yd clamp and
+  detection 0 as 20; LOS eye heights +2/+1.
+- C18. Victim selection: only the top candidate; a 60 yd-from-home filter.
+- C19. A caster's stand-off ignores line of sight.
+- C20. No contested-PvP guard reaction.
+- C21. Creature charm of players: target and spell choice; ends with the
+  charmer's combat.
+- C22. Evade strips every aura (TT keeps positive ones for flags_extra
+  0x1000 and players' timed ones).
+
+## Conditions
+
+- K1. Item (2) counts the bank.
+- K2. Gossip greeting: highest allowed condition id, else text 68.
+- K3. Quest taken (9) accepts a failed quest.
+- K4. Argent Dawn commission (10) missing.
+- K5. Area (4) for a creature source; EventAI with no target uses self.
+- K6. Nearby creature (20): around the target; value4 excludes it; value3
+  dead only.
+- K7. Distance to position (54) missing; inline float values truncated.
+- K8. Conditions on `spell_script_target` ignored.
+- K9. Object fit (50) and object loot state (49) missing.
+- K10. Two-valued logic under NOT and reverse; TT keeps unknown unknown.
+- K11. Skill below (29) for an unknown skill.
+- K12. Conditions on reference loot rows ignored.
+- K13. DB guid (52) for a game object source.
+- K14. Nearby player (56): values swapped.
+- K15. PvP rank (51) on the wrong scale.
+- K16. Reaction (44) missing.
+- K17. Has pet (40) missing.
+- K18. Minor: LOS eye heights; moving (39) for players; instance data
+  outside a copy; escort (25) with no unit; map event targets gone; a
+  missing script target is the owner; nearby object (21) around the
+  target with the exact radius.
