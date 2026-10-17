@@ -666,7 +666,6 @@ fn start(map: &mut Map) {
         Some(BG_AV) => av::start(map),
         _ => wsg::start(map),
     }
-    send_world_states(map);
 }
 
 /// Resurrection waves: every 30 seconds the dead waiting rise at their

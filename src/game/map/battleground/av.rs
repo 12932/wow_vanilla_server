@@ -214,6 +214,7 @@ pub fn world_states(m: &bg::Match) -> Vec<(u32, u32)> {
 
 pub fn start(map: &mut Map) {
     bg::announce_text(map, None, 10640);
+    bg::send_world_states(map);
     let now = map.now;
     if let Some(m) = map.battleground.as_mut() {
         for s in 0..2 {

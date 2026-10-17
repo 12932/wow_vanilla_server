@@ -112,6 +112,7 @@ pub fn start(map: &mut Map) {
     }
     bg::start_buffs(map, &BUFFS);
     bg::announce_text(map, None, 10479);
+    bg::send_world_states(map);
 }
 
 /// Every update: resources for the bases held.
