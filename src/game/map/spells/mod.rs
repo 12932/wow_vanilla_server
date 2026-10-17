@@ -12,7 +12,9 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 pub mod environment;
+pub mod health_sync;
 pub mod heartbeat;
+pub mod immunity;
 mod holiday;
 pub mod log;
 pub mod mods;
@@ -20,6 +22,7 @@ pub mod outcome;
 pub mod redemption;
 pub mod scripts;
 pub mod sight;
+pub mod single_target;
 pub mod stealth;
 pub mod targets;
 
@@ -199,6 +202,8 @@ pub struct MapSpells {
     pub travel: Option<bool>,
     /// Missiles and bolts on their way.
     pub in_flight: Vec<InFlight>,
+    /// What units' auras last gave their health (Last Stand, bear form).
+    pub health_seen: AHashMap<Guid, health_sync::State>,
 }
 
 /// A persistent area aura on the ground.
@@ -1458,18 +1463,30 @@ pub fn pushback(map: &mut Map, g: Guid) {
     let now = map.now;
     let mut channel_left = None;
     let mut delayed = None;
-    let mut pushed = false;
+    let mut pushed = None;
     if let Some(c) = map.caster_mut(g)
         && let Some(casting) = c.casting.as_mut()
-        && casting.pushbacks < 2
     {
-        casting.pushbacks += 1;
-        pushed = true;
+        // A second less a fifth for each hit before, to a fifth (Thistle
+        // Tea's `take_pushback_delay`).
+        let delay = Duration::from_millis(if casting.pushbacks < 5 {
+            1_000 - u64::from(casting.pushbacks) * 200
+        } else {
+            200
+        });
+        casting.pushbacks = casting.pushbacks.saturating_add(1);
         match casting.channel_until.as_mut() {
-            None => casting.ends += Duration::from_millis(500),
+            None => {
+                // No further back than the cast's start.
+                let left = casting.ends.saturating_duration_since(now);
+                let full = Duration::from_millis(u64::from(casting.duration));
+                let delta = delay.min(full.saturating_sub(left));
+                casting.ends += delta;
+                pushed = Some(delta);
+            }
             Some(until) => {
-                let cut = Duration::from_millis(u64::from(casting.duration / 4));
                 let before = *until;
+                let cut = delay.min(until.saturating_duration_since(now));
                 *until = until.checked_sub(cut).unwrap_or(now).max(now);
                 casting.ends = *until;
                 channel_left = Some(until.saturating_duration_since(now).as_millis() as u32);
@@ -1478,12 +1495,13 @@ pub fn pushback(map: &mut Map, g: Guid) {
                     casting.targets.unit.unwrap_or(g),
                     before - *until,
                 ));
+                pushed = Some(cut);
             }
         }
     }
-    if !pushed {
+    let Some(delta) = pushed.filter(|d| !d.is_zero()) else {
         return;
-    }
+    };
     // The channel's auras end that much sooner too.
     if let Some((spell, target, cut)) = delayed
         && !cut.is_zero()
@@ -1501,7 +1519,7 @@ pub fn pushback(map: &mut Map, g: Guid) {
             p.outbound
                 .send(&wow_world_messages::vanilla::SMSG_SPELL_DELAYED {
                     guid: g,
-                    delay_time: 500,
+                    delay_time: delta.as_millis() as u32,
                 });
         }
     }

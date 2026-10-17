@@ -305,13 +305,40 @@ pub fn effect_targets(
         }
         (EnemyLocation, _) => t.unit.into_iter().collect(),
         (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, t, r),
+        // vmangos's script units about the source (7) or the destination
+        // (8): every one of them there, as Separation Anxiety and
+        // Golemagg's Trust name theirs.
+        (_, ScriptUnits) if matches!(e.target_b, 7 | 8) => {
+            script_area(map, center(map, caster, t, e.target_b == 8), s, r)
+        }
         (GameObject, _) | (Location, _) => Vec::new(),
         (Other(_), _) => t.unit.into_iter().collect(),
     };
-    if s.max_affected_targets > 0 && out.len() > s.max_affected_targets as usize {
-        out.truncate(s.max_affected_targets as usize);
-    }
+    limit(map, &mut out, s.max_affected_targets as usize, t.unit);
     out
+}
+
+/// No more than `max` of `out` (0 for no limit), as Thistle Tea's
+/// `TargetLimit` and target resolver pick them: each once, a random few
+/// when there are too many, the one aimed at among them if it is there.
+fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<Guid>) {
+    let mut seen = ahash::AHashSet::new();
+    out.retain(|g| seen.insert(*g));
+    if max == 0 || out.len() <= max {
+        return;
+    }
+    if super::outcome::rolling(map) {
+        use rand::seq::SliceRandom;
+        out.shuffle(&mut rand::rng());
+    }
+    match primary.filter(|p| out.contains(p)) {
+        Some(p) => {
+            out.retain(|g| *g != p);
+            out.truncate(max - 1);
+            out.push(p);
+        }
+        None => out.truncate(max),
+    }
 }
 
 /// A chain: the first target, then the nearest (or, for heals, the most
@@ -364,6 +391,22 @@ fn chain(
 
 /// The units a scripted spell aims at: the creatures `spell_script_target`
 /// names, near the caster (or the target the client picked).
+/// Every creature a spell's script targets name within `radius` of `at`.
+fn script_area(map: &Map, at: Vector3d, s: &SpellTemplate, radius: f32) -> Vec<Guid> {
+    let Some(v) = map.realm.data.spells.script_targets.get(&s.id) else {
+        return Vec::new();
+    };
+    let entries: Vec<u32> = v
+        .iter()
+        .filter(|(k, _)| *k == 1 || *k == 2)
+        .map(|(_, e)| *e)
+        .collect();
+    units_around(map, at, radius, |g| {
+        map.creature(g)
+            .is_some_and(|c| c.alive() && entries.contains(&c.entry))
+    })
+}
+
 fn script_units(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, radius: f32) -> Vec<Guid> {
     let entries: Vec<u32> = map
         .realm
