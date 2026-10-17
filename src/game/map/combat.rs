@@ -917,6 +917,13 @@ pub fn weapon_damage(
         } else {
             (AURA_MOD_MELEE_DAMAGE_TAKEN, AURA_MOD_MELEE_DAMAGE_TAKEN_PCT)
         };
+        // Attack power against a marked target (Hunter's Mark).
+        let marked = v.sum(if hand == Hand::Ranged {
+            AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS
+        } else {
+            AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS
+        });
+        damage += marked.max(0) as f32 / 14.0 * speed;
         damage += v.sum_mask(AURA_MOD_DAMAGE_TAKEN, school) as f32 + v.sum(flat_kind) as f32;
         damage *= v.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, school) * v.product(pct_kind);
     }

@@ -102,6 +102,9 @@ pub fn sees(map: &Map, viewer: Guid, target: Guid) -> bool {
                                     && d.amount >= x.amount)
                         })
                     })
+                    // The drunk see drunken invisibility.
+                    || (x.misc == crate::game::map::intoxication::DRUNK_INVISIBILITY
+                        && crate::game::map::intoxication::value(map, viewer) as i32 >= x.amount)
                 });
         if !detected {
             return false;

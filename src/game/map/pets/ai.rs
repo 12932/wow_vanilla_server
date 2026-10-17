@@ -68,6 +68,10 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             )
         });
     if expires.is_some_and(|t| t <= now) && !fighting {
+        // The Explosive Sheep's and the Goblin Bomb's time ends in a blast.
+        if crate::game::map::item_scripts::guardian_expired(map, g) {
+            return;
+        }
         if matches!(kind, Kind::Possessed) {
             release(map, owner, g);
         }

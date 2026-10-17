@@ -1626,6 +1626,7 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     let expired = h.expires.is_some_and(|t| t <= map.now);
     crate::game::map::spells::redemption::aura_gone(map, target, h.spell, expired);
     crate::game::map::trinkets::removed(map, target, h);
+    crate::game::map::item_scripts::aura_gone(map, target, h, expired);
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting
@@ -1831,6 +1832,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             } else {
                 (a.amount * stacks).max(0) as u32
             };
+            let amount = crate::game::map::item_scripts::periodic_damage(map, target, h, amount);
             crate::game::map::spells::periodic_damage(map, h, target, amount, a.kind == AURA_PERIODIC_LEECH);
         }
         AURA_PERIODIC_HEAL | AURA_OBS_MOD_HEALTH | AURA_MOD_REGEN => {
