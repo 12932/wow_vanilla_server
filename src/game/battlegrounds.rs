@@ -55,6 +55,15 @@ pub fn bracket_of(level: u8) -> u8 {
     (level / 10).saturating_sub(1).min(5)
 }
 
+/// A battleground's bracket for `level`: Alterac Valley has the one,
+/// 51 to 60 (Thistle Tea's `Battleground.bracket/2`).
+pub fn bracket_for(bg: u32, level: u8) -> u8 {
+    if bg == 1 { 0 } else { bracket_of(level) }
+}
+
+/// How long after the end everyone is sent home.
+pub const AUTO_LEAVE: Duration = Duration::from_secs(120);
+
 fn side(team: Team) -> usize {
     match team {
         Team::Alliance => 0,
@@ -108,9 +117,31 @@ pub struct Match {
     pub members: AHashMap<Guid, Team>,
     pub started: Instant,
     pub ended: bool,
+    /// When the battle began, and ended.
+    pub began: Option<Instant>,
+    pub ended_at: Option<Instant>,
 }
 
 impl Match {
+    /// Its `SMSG_BATTLEFIELD_STATUS` for one inside: the time left before
+    /// all are sent home (after the end), and since the battle began.
+    pub fn in_progress_frame(&self, now: Instant) -> std::sync::Arc<[u8]> {
+        let leave = self.ended_at.map_or(0, |t| {
+            (t + AUTO_LEAVE).saturating_duration_since(now).as_millis() as u32
+        });
+        let since = self
+            .began
+            .map_or(0, |t| now.saturating_duration_since(t).as_millis() as u32);
+        status_frame_in(
+            self.bracket,
+            map_of(self.bg),
+            self.id,
+            IN_PROGRESS,
+            leave,
+            since,
+        )
+    }
+
     fn count(&self, team: Team) -> usize {
         self.invited.values().filter(|(t, _)| *t == team).count()
             + self.members.values().filter(|t| **t == team).count()
@@ -152,12 +183,24 @@ pub fn status_frame(
     t1: u32,
     t2: u32,
 ) -> std::sync::Arc<[u8]> {
+    status_frame_in(0, map, instance, status, t1, t2)
+}
+
+/// [`status_frame`], with the match's bracket.
+pub fn status_frame_in(
+    bracket: u8,
+    map: u32,
+    instance: u32,
+    status: u32,
+    t1: u32,
+    t2: u32,
+) -> std::sync::Arc<[u8]> {
     let mut b = Body::default();
     b.u32(0);
     if status == 0 {
         b.u32(0);
     } else {
-        b.u32(map).u8(0).u32(instance).u32(status);
+        b.u32(map).u8(bracket).u32(instance).u32(status);
         match status {
             WAIT_QUEUE | IN_PROGRESS => {
                 b.u32(t1).u32(t2);
@@ -188,33 +231,30 @@ pub fn send_status(realm: &Realm, me: &Online) {
     let now = Instant::now();
     let frame = {
         let bgs = realm.social.battlegrounds.lock();
-        let queued = bgs
-            .queues
-            .iter()
-            .find_map(|((bg, _), q)| q.iter().find(|x| x.guid == me.guid).map(|x| (*bg, x.since)));
+        let queued = bgs.queues.iter().find_map(|((bg, bracket), q)| {
+            q.iter()
+                .find(|x| x.guid == me.guid)
+                .map(|x| (*bg, *bracket, x.since))
+        });
         if let Some(m) = bgs.match_of(me.guid) {
             match m.invited.get(&me.guid) {
-                Some((_, until)) => status_frame(
+                Some((_, until)) => status_frame_in(
+                    m.bracket,
                     map_of(m.bg),
                     m.id,
                     WAIT_JOIN,
                     until.saturating_duration_since(now).as_millis() as u32,
                     0,
                 ),
-                None => status_frame(
-                    map_of(m.bg),
-                    m.id,
-                    IN_PROGRESS,
-                    0,
-                    now.saturating_duration_since(m.started).as_millis() as u32,
-                ),
+                None => m.in_progress_frame(now),
             }
-        } else if let Some((bg, since)) = queued {
-            status_frame(
+        } else if let Some((bg, bracket, since)) = queued {
+            status_frame_in(
+                bracket,
                 map_of(bg),
                 0,
                 WAIT_QUEUE,
-                60_000,
+                0,
                 now.saturating_duration_since(since).as_millis() as u32,
             )
         } else {
@@ -224,13 +264,16 @@ pub fn send_status(realm: &Realm, me: &Online) {
     me.outbound.send_frame(frame);
 }
 
-/// The matches of `bg` in `bracket` that are still on, for the list.
+/// The matches of `bg` in `bracket` still on with room for either side,
+/// for the list.
 pub fn instances(realm: &Realm, bg: u32, bracket: u8) -> Vec<u32> {
+    let (_, max, _, _) = template(realm, bg);
     let bgs = realm.social.battlegrounds.lock();
     let mut out: Vec<u32> = bgs
         .matches
         .values()
         .filter(|m| m.bg == bg && m.bracket == bracket && !m.ended)
+        .filter(|m| m.count(Team::Alliance) < max as usize || m.count(Team::Horde) < max as usize)
         .map(|m| m.id)
         .collect();
     out.sort_unstable();
@@ -264,7 +307,7 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
     if guids.len() != who.len() {
         return Err(Refused::Duplicate);
     }
-    let bracket = bracket_of(who[0].level);
+    let bracket = bracket_for(bg, who[0].level);
     let team = who[0].team;
     {
         let bgs = realm.social.battlegrounds.lock();
@@ -290,7 +333,7 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
     if who.iter().any(|e| e.team != team) {
         return Err(Refused::InvalidTeam);
     }
-    if who.iter().any(|e| bracket_of(e.level) != bracket) {
+    if who.iter().any(|e| bracket_for(bg, e.level) != bracket) {
         return Err(Refused::MixedBracket);
     }
     if who.len() > max as usize {
@@ -333,7 +376,14 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
             send_frame(
                 realm,
                 e.guid,
-                &status_frame(map_of(bg), id, WAIT_JOIN, INVITE_FOR.as_millis() as u32, 0),
+                &status_frame_in(
+                    bracket,
+                    map_of(bg),
+                    id,
+                    WAIT_JOIN,
+                    INVITE_FOR.as_millis() as u32,
+                    0,
+                ),
             );
         }
     } else {
@@ -422,6 +472,8 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
                 members: AHashMap::new(),
                 started: Instant::now(),
                 ended: false,
+                began: None,
+                ended_at: None,
             };
             for team in [Team::Alliance, Team::Horde] {
                 for q in take(queue, team, max as usize) {
@@ -437,7 +489,14 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
         send_frame(
             realm,
             g,
-            &status_frame(map_of(bg), id, WAIT_JOIN, INVITE_FOR.as_millis() as u32, 0),
+            &status_frame_in(
+                bracket,
+                map_of(bg),
+                id,
+                WAIT_JOIN,
+                INVITE_FOR.as_millis() as u32,
+                0,
+            ),
         );
     }
 }
@@ -474,22 +533,23 @@ pub fn port(map: &mut Map, g: Guid, enter: bool) {
         if enter {
             m.members.insert(g, team);
         }
-        (m.key(), team, (m.bg, m.bracket))
+        (
+            m.key(),
+            team,
+            (m.bg, m.bracket, m.in_progress_frame(Instant::now())),
+        )
     };
     if !enter {
         send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
         fill(&realm, bg.0, bg.1);
         return;
     }
+    let inside = bg.2;
     let (at, facing) = start_of(&realm, bg.0, team);
     if let Some(p) = map.players.get_mut(&g) {
         p.bg_return = Some((map.key, p.position(), p.movement.orientation));
     }
-    send_frame(
-        &realm,
-        g,
-        &status_frame(key.map, key.instance, IN_PROGRESS, 0, 0),
-    );
+    send_frame(&realm, g, &inside);
     map.teleport(g, key, at, facing);
 }
 
@@ -554,6 +614,21 @@ pub fn leave(map: &mut Map, g: Guid) {
             Some(g),
         );
     }
+    // The dead and the ghosts go home alive and whole, their corpse gone
+    // (Thistle Tea's exit, as vmangos does it).
+    if map
+        .players
+        .get(&g)
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
+    {
+        crate::game::map::death::resurrect(map, g, 1.0);
+    }
+    crate::game::map::auras::remove_spell(
+        map,
+        g,
+        crate::game::map::battleground::SPELL_WAITING_TO_RESURRECT,
+        None,
+    );
     let back = map.players.get_mut(&g).and_then(|p| p.bg_return.take());
     if let Some((key, pos, o)) = back {
         map.teleport(g, key, pos, o);
@@ -571,6 +646,34 @@ pub fn leave(map: &mut Map, g: Guid) {
     }
 }
 
+/// `g` arrived on `map` while still in a match elsewhere (a hearthstone,
+/// a teleport): they've left it, a deserter if it was still on (Thistle
+/// Tea's `world_left`).
+pub fn strayed(map: &mut Map, g: Guid) {
+    let realm = map.realm.clone();
+    let ended = {
+        let mut bgs = realm.social.battlegrounds.lock();
+        let Some(m) = bgs
+            .matches
+            .values_mut()
+            .find(|m| m.members.contains_key(&g) && m.key() != map.key)
+        else {
+            return;
+        };
+        m.members.remove(&g);
+        m.ended
+    };
+    send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
+    if !ended {
+        crate::game::map::spells::cast_triggered(
+            map,
+            g,
+            crate::game::map::battleground::SPELL_DESERTER,
+            Some(g),
+        );
+    }
+}
+
 /// The match on `key` is over.
 pub fn ended(realm: &Realm, key: MapKey) {
     if let Some(m) = realm
@@ -581,6 +684,38 @@ pub fn ended(realm: &Realm, key: MapKey) {
         .get_mut(&key.instance)
     {
         m.ended = true;
+        m.ended_at = Some(Instant::now());
+    }
+}
+
+/// The battle on `key` began.
+pub fn began(realm: &Realm, key: MapKey) {
+    if let Some(m) = realm
+        .social
+        .battlegrounds
+        .lock()
+        .matches
+        .get_mut(&key.instance)
+    {
+        m.began = Some(Instant::now());
+    }
+}
+
+/// Everyone in the match on `key` hears where it stands: the time since
+/// it began, and (after the end) before they're sent home.
+pub fn status_to_members(realm: &Realm, key: MapKey) {
+    let (frame, members) = {
+        let bgs = realm.social.battlegrounds.lock();
+        let Some(m) = bgs.matches.get(&key.instance) else {
+            return;
+        };
+        (
+            m.in_progress_frame(Instant::now()),
+            m.members.keys().copied().collect::<Vec<_>>(),
+        )
+    };
+    for g in members {
+        send_frame(realm, g, &frame);
     }
 }
 
