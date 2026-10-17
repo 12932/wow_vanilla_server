@@ -512,6 +512,9 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid) {
     if let Some(c) = map.combat_mut(attacker) {
         c.next_swing = Some(now + Duration::from_millis(u64::from(attack_time)));
     }
+    if crate::game::map::spells::on_swing(map, attacker, victim) {
+        return;
+    }
     let mut rng = rand::rng();
     let roll = Roll {
         attacker_skill: (va.level * 5) as i32,

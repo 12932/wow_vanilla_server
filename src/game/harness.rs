@@ -32,6 +32,7 @@ pub fn test_config() -> RealmConfig {
         bg_start_delay: Duration::ZERO,
         pvp_realm: false,
         max_packets_per_sec: 200,
+        spell_rolls: false,
     }
 }
 

@@ -50,6 +50,8 @@ pub struct RealmConfig {
     pub pvp_realm: bool,
     /// Packets a client may send a second, sustained.
     pub max_packets_per_sec: u32,
+    /// Whether spells roll to hit, crit and resist (tests fix them).
+    pub spell_rolls: bool,
 }
 
 impl RealmConfig {
@@ -68,6 +70,7 @@ impl RealmConfig {
             bg_start_delay: Duration::from_secs(120),
             pvp_realm: c.world.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
+            spell_rolls: true,
         }
     }
 }

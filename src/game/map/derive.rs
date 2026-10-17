@@ -198,7 +198,7 @@ pub fn gear(p: &Player, data: &GameData) -> Gear {
 
 /// Whether an aura with a weapon restriction applies to `w`.
 pub fn fits(h: &Holder, w: Option<&Weapon>) -> bool {
-    if h.item_class < 0 {
+    if h.item_class <= 0 {
         return true;
     }
     let Some(w) = w else {
@@ -611,7 +611,6 @@ pub fn player(p: &mut Player, data: &GameData) {
             + spirit_power(i as u32)
     });
     let healing_power = a.sum(AURA_MOD_HEALING_DONE)
-        + a.sum(AURA_MOD_HEALING)
         + (spirit as i32 * a.sum(AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT) / 100).max(0);
     p.derived = Derived {
         crit,
