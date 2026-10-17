@@ -1269,3 +1269,76 @@ async fn faerie_fire_takes_stealth_and_invisibility_and_keeps_them_off() {
     assert!(!feral, "as its feral kind does");
     assert!(after, "gone, stealth again");
 }
+
+/// Made-up slows: snares of -40 for 20 s, -70 for 5 s, -50 for 20 s and
+/// -50 for 4 s; attack-speed slows of -10 for 30 s and -20 for 10 s.
+fn slow_spells(d: &mut crate::game::data::GameData) {
+    let slow = |id: u32, kind: u32, amount: i32, duration: u32| {
+        let mut s = made_up(id, 6, kind, 0, amount);
+        s.duration_index = duration;
+        s
+    };
+    for s in [
+        slow(990_900, auras::AURA_MOD_DECREASE_SPEED, -40, 18),
+        slow(990_901, auras::AURA_MOD_DECREASE_SPEED, -70, 28),
+        slow(990_902, auras::AURA_MOD_DECREASE_SPEED, -50, 18),
+        slow(990_903, auras::AURA_MOD_DECREASE_SPEED, -50, 35),
+        slow(990_904, auras::AURA_MOD_HASTE, -10, 2),
+        slow(990_905, auras::AURA_MOD_HASTE, -20, 1),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+}
+
+#[tokio::test]
+async fn a_slow_takes_a_weaker_ones_place_never_a_strongers() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(slow_spells);
+    let (_c, w, map) = player(&realm, "P3A22", "Slowone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            let a = dummy(m, w, 60, 5.0);
+            let b = dummy(m, w, 60, 6.0);
+            let on = |m: &mut Map, list: &[(Guid, u32)]| {
+                clear(m, w);
+                for (by, s) in list {
+                    apply(m, *by, w, *s);
+                }
+                spells_on(m, w)
+            };
+            let stronger = on(m, &[(a, 990_900), (b, 990_901)]);
+            let weaker = on(m, &[(a, 990_901), (b, 990_900)]);
+            // As strong: the one lasting less is passed over.
+            let shorter = on(m, &[(a, 990_902), (b, 990_903)]);
+            let longer = on(m, &[(a, 990_903), (b, 990_902)]);
+            // Attack speed's slows likewise.
+            let haste = on(m, &[(a, 990_904), (b, 990_905), (a, 990_904)]);
+            // A Frostbolt on one slowed more: its damage, not its chill.
+            clear(m, w);
+            apply(m, a, w, 990_901);
+            let before = health(m, w);
+            spells::cast_triggered(m, a, FROSTBOLT, Some(w));
+            let frostbolt = (health(m, w) < before, spells_on(m, w));
+            (stronger, weaker, shorter, longer, haste, frostbolt)
+        })
+        .await
+        .unwrap();
+    let (stronger, weaker, shorter, longer, haste, frostbolt) = out;
+    assert_eq!(stronger, vec![990_901], "a stronger slow takes its place");
+    assert_eq!(weaker, vec![990_901], "a weaker one is passed over");
+    assert_eq!(shorter, vec![990_902], "as strong but shorter, passed over");
+    assert_eq!(
+        longer,
+        vec![990_902],
+        "as strong and longer, it takes its place"
+    );
+    assert_eq!(haste, vec![990_905], "the stronger attack-speed slow stays");
+    assert_eq!(
+        frostbolt,
+        (true, vec![990_901]),
+        "Frostbolt hurts, its chill passed over"
+    );
+}

@@ -822,6 +822,40 @@ pub fn apply_spell(
         return Err(Refused::Immune);
     }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
+    // A weaker slow doesn't take a stronger one's place, nor one as strong
+    // that lasts less: it is passed over, the rest of its spell landing
+    // (Thistle Tea's `Slow`, after vmangos; in mangos the strongest of them
+    // counts).
+    if let Some(kind @ (Exclusive::Snare | Exclusive::NegativeHaste)) = excl {
+        let aura = if kind == Exclusive::Snare {
+            AURA_MOD_DECREASE_SPEED
+        } else {
+            AURA_MOD_HASTE
+        };
+        let mine = effects
+            .iter()
+            .filter(|(i, _)| spell.effects[*i].aura == aura)
+            .map(|(_, a)| *a)
+            .min()
+            .unwrap_or(0);
+        let weaker = existing.holders.iter().any(|h| {
+            if h.exclusive != Some(kind) || (h.spell == spell.id && h.caster == caster) {
+                return false;
+            }
+            let theirs = h
+                .effects
+                .iter()
+                .filter(|x| x.kind == aura)
+                .map(|x| x.amount)
+                .min()
+                .unwrap_or(0);
+            theirs < mine
+                || (theirs == mine && duration.unwrap_or(u32::MAX) < h.duration.unwrap_or(u32::MAX))
+        });
+        if weaker {
+            return Ok(());
+        }
+    }
     // A stronger rank of a helpful spell already there blocks a weaker.
     if pos && !passive {
         let blocked = existing.holders.iter().any(|h| {
