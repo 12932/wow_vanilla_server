@@ -98,6 +98,8 @@ mod tests_p3_entity_effects;
 #[cfg(test)]
 mod tests_p3_entity_env;
 #[cfg(test)]
+mod tests_p3_entity_eventai;
+#[cfg(test)]
 mod tests_p3_entity_mob;
 #[cfg(test)]
 mod tests_p3_entity_objects;
