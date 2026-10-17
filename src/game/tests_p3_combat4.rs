@@ -325,3 +325,93 @@ async fn a_stealthed_player_goes_unnoticed_unless_a_detection_aura_sees_them_in_
         .unwrap();
     assert_eq!(r, (true, false, true));
 }
+
+#[tokio::test]
+async fn a_creatures_reach_for_a_pet_is_its_masters_level_and_auras_move_it_but_not_below_five() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let watcher = spawn_at(m, WATCHER, 5, east(40.0), 0.0);
+            let pet = spawn_at(m, PREY, 60, east(30.0), 0.0);
+            let wild = spawn_at(m, PREY, 60, east(31.0), 0.0);
+            m.creature_mut(pet).unwrap().owner = Some(ga);
+            // A level-1 player's pet of 60 is reached as the player is.
+            let reach = (
+                ai::attack_distance(m, watcher, pet),
+                ai::attack_distance(m, watcher, ga),
+                ai::attack_distance(m, watcher, wild),
+            );
+            reach
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, r.1);
+    assert_eq!(r.1, 14.0);
+    assert_eq!(r.2, 5.0, "far above it: no nearer than five");
+    // Auras move it, never under five yards; none under a yard of
+    // detection, whatever the auras.
+    assert_eq!(ai::aggro_reach(10.0, 5, 40, -20.0), 5.0);
+    assert_eq!(ai::aggro_reach(10.0, 5, 5, 10.0), 20.0);
+    assert_eq!(ai::aggro_reach(0.5, 5, 5, 30.0), 0.0);
+}
+
+#[tokio::test]
+async fn a_creature_passes_over_the_unseen_the_dead_the_unselectable_and_the_far_above_and_waits_out_a_stun()
+ {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Rogue).await;
+    let r = map
+        .query(move |m| {
+            let watcher = spawn_at(m, WATCHER, 5, east(25.0), std::f32::consts::PI);
+            let prey = spawn_at(m, PREY, 5, east(29.0), 0.0);
+            let mut out = Vec::new();
+            let reset = |m: &mut Map, g: Guid| {
+                let c = m.creature_mut(g).unwrap();
+                c.combat = Default::default();
+                c.threat.clear();
+            };
+            // Stunned: it notices no one.
+            aura_of(m, watcher, 90_120, auras::AURA_MOD_STUN, 0, 1);
+            turn(m, watcher);
+            out.push(m.creature(watcher).unwrap().combat.attacking);
+            crate::game::map::auras::remove_spell(m, watcher, 90_120, None);
+            // Its prey unselectable, dead, or far above it: no.
+            for change in 0..3 {
+                reset(m, watcher);
+                match change {
+                    0 => m.unit_fields_mut(prey).unwrap().set_flag(
+                        UNIT_FIELD_FLAGS,
+                        0x0200_0000,
+                        true,
+                    ),
+                    1 => {
+                        m.unit_fields_mut(prey).unwrap().set_flag(
+                            UNIT_FIELD_FLAGS,
+                            0x0200_0000,
+                            false,
+                        );
+                        m.creature_mut(prey).unwrap().position.z += 20.0;
+                    }
+                    _ => {
+                        m.creature_mut(prey).unwrap().position.z -= 20.0;
+                        combat::kill(m, ga, prey);
+                    }
+                }
+                turn(m, watcher);
+                out.push(m.creature(watcher).unwrap().combat.attacking);
+            }
+            // A rogue unseen in stealth at three yards, and another enemy
+            // further: it goes for the one it sees.
+            let near = spawn_at(m, WATCHER, 5, east(3.0), std::f32::consts::PI);
+            let other = spawn_at(m, PREY, 5, east(8.0), 0.0);
+            let data = m.realm.data.clone();
+            crate::game::map::stats::set_level(m.players.get_mut(&ga).unwrap(), &data, 5);
+            aura_of(m, ga, 90_121, auras::AURA_MOD_STEALTH, 0, 25);
+            turn(m, near);
+            let c = m.creature(near).unwrap();
+            out.push(c.combat.attacking && c.combat.victim == other);
+            out
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, vec![false, false, false, false, true]);
+}
