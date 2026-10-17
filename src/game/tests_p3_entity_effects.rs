@@ -274,3 +274,63 @@ async fn a_soul_shard_is_of_a_death_worth_something_to_a_warlock() {
     assert_eq!(out.2, vec![(gw, SOUL_SHARD, 1)], "Bob's, with no tap");
     let _ = &mut b;
 }
+
+/// A leap ten yards ahead.
+const LEAP: u32 = 99_020;
+
+/// Thistle Tea's `Leap` "supports creature targets through the same
+/// resolver" and "rejects taxi passengers": a creature's leap puts it ten
+/// yards on, as a player's sends them; one on a flight doesn't leap.
+#[tokio::test]
+async fn a_leap_moves_a_creature_too_but_not_one_on_a_flight() {
+    let mut d = world();
+    d.spells.radii.insert(14, 10.0);
+    d.spells.spells.insert(
+        LEAP,
+        spell(
+            LEAP,
+            &[SpellEffect {
+                effect: crate::game::map::spells::EFFECT_LEAP,
+                target_a: 1,
+                radius_index: 14,
+                ..Default::default()
+            }],
+        ),
+    );
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    let (moved, flew) = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        let before = m.position_of(brute).unwrap();
+        spells::cast_triggered(m, brute, LEAP, Some(brute));
+        let after = m.position_of(brute).unwrap();
+        let moved = crate::game::map::combat::dist(before, after);
+        // On a flight, Alice stays on it.
+        let pos = m.players[&ga].position();
+        let far = Vector3d {
+            x: pos.x + 1000.0,
+            ..pos
+        };
+        m.players.get_mut(&ga).unwrap().flight = Some(crate::game::map::npc::Flight {
+            walk: crate::game::map::creature::Walk::new(vec![pos, far], 1.0, m.now, 0, true),
+            destination: 0,
+            mount: 0,
+        });
+        spells::cast_triggered(m, ga, LEAP, Some(ga));
+        (moved, m.players[&ga].flight.is_some())
+    })
+    .await;
+    assert!((moved - 10.0).abs() < 0.5, "the brute leapt {moved} yards");
+    assert!(flew, "still flying");
+    assert!(
+        a.gets(crate::game::tests_p3_entity::NONE_WITHIN, |m| {
+            matches!(
+                m,
+                wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)
+            )
+            .then_some(())
+        })
+        .await
+        .is_none(),
+        "and not sent anywhere"
+    );
+}
