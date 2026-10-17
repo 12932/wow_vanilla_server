@@ -27,6 +27,7 @@ use wow_world_messages::Guid;
 
 use crate::game::data::spells::{SpellData, SpellTemplate};
 use crate::game::fields::*;
+use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::auras::{self, AURA_MOD_STUN, AURA_PERIODIC_HEAL, Holder};
 use crate::game::map::combat;
@@ -51,6 +52,8 @@ const INFERNAL_ROOT: u32 = 22707;
 const INFERNAL_LANDING: u32 = 22703;
 const DISPEL_DISEASE: i32 = 3;
 
+const FAMILY_PRIEST: u32 = 6;
+const FAMILY_WARLOCK: u32 = 5;
 const FAMILY_DRUID: u32 = 7;
 const FAMILY_ROGUE: u32 = 8;
 const ROGUE_STEALTH: u64 = 0x0040_0000;
@@ -489,6 +492,181 @@ pub fn aura_gone(map: &mut Map, target: Guid, h: &Holder) {
         for id in BESTIAL_WRATH_IMMUNITIES {
             auras::remove_spell(map, target, id, Some(h.caster));
         }
+    }
+}
+
+/// Improved Blizzard's chill by its script.
+const BLIZZARD_CHILL: [(i32, u32); 3] = [(836, 12484), (988, 12485), (989, 12486)];
+/// Holy Power's and Totemic Power's buffs: for mana users, spell casters,
+/// fighters and warriors.
+const HEALING_POWER: [(u32, [u32; 4]); 2] = [
+    (28789, [28795, 28793, 28791, 28790]),
+    (28823, [28824, 28825, 28826, 28827]),
+];
+/// Obsidian Armor's and Adaptive Warding's answers by school index.
+const OBSIDIAN_ARMOR: u32 = 27539;
+const ADAPTIVE_WARDING: u32 = 28764;
+const REACTIVE_ARMOR: [(u32, [u32; 7]); 2] = [
+    (
+        OBSIDIAN_ARMOR,
+        [0, 27536, 27533, 27538, 27534, 27535, 27540],
+    ),
+    (ADAPTIVE_WARDING, [0, 0, 28765, 28768, 28766, 28769, 28770]),
+];
+
+/// A proc of `h` (on `owner`, `other` its other side) that a script says
+/// more of, as Thistle Tea's `ClassScript`, `HealingPower` and
+/// `ReactiveArmor` have it: Improved Blizzard's chill, Improved Mend Pet's
+/// cleanse, Corrupted Healing, the druid set's Rejuvenation and Regrowth
+/// gifts; Holy Power and Totemic Power for the healed one's class; and a
+/// school's answer from Obsidian Armor or Adaptive Warding.
+pub fn proc(
+    map: &mut Map,
+    owner: Guid,
+    other: Guid,
+    h: &Holder,
+    spell: Option<u32>,
+    outgoing: bool,
+) {
+    let data = map.realm.data.clone();
+    let by = spell.and_then(|id| data.spells.get(id));
+    if !outgoing {
+        let Some(answers) = REACTIVE_ARMOR.iter().find(|(id, _)| *id == h.spell) else {
+            return;
+        };
+        let armored = h.spell != ADAPTIVE_WARDING
+            || auras::auras(map, owner).is_some_and(|a| {
+                a.holders.iter().any(|x| {
+                    x.has(134)
+                        && data
+                            .spells
+                            .get(x.spell)
+                            .is_some_and(|t| family_flag(t, 3, 0x1000_0000))
+                })
+            });
+        if let Some(by) = by
+            && armored
+            && let Some(&answer) = answers.1.get(by.school as usize)
+            && answer != 0
+        {
+            cast_triggered(map, owner, answer, Some(owner));
+        }
+        return;
+    }
+    if !map.unit_view(other).is_some_and(|u| u.alive) {
+        return;
+    }
+    let victim = map.unit_fields(other).map(|f| {
+        (
+            f.get_byte(UNIT_FIELD_BYTES_0, 1),
+            f.get_byte(UNIT_FIELD_BYTES_0, 3),
+        )
+    });
+    if let Some((_, buffs)) = HEALING_POWER.iter().find(|(id, _)| *id == h.spell) {
+        let buff = match victim.map(|v| v.0) {
+            Some(2 | 5 | 7 | 11) => Some(buffs[0]),
+            Some(8 | 9) => Some(buffs[1]),
+            Some(3 | 4) => Some(buffs[2]),
+            Some(1) => Some(buffs[3]),
+            _ => None,
+        };
+        if let Some(buff) = buff {
+            cast_triggered(map, owner, buff, Some(other));
+        }
+        return;
+    }
+    for x in h
+        .effects
+        .iter()
+        .filter(|x| x.kind == auras::AURA_OVERRIDE_CLASS_SCRIPTS)
+    {
+        let trigger = match x.misc {
+            836 | 988 | 989 if by.is_some_and(|b| b.spell_visual == 259) => BLIZZARD_CHILL
+                .iter()
+                .find(|(k, _)| *k == x.misc)
+                .map(|(_, v)| *v),
+            4086 | 4087
+                if x.amount > 0
+                    && (x.amount >= 100 || super::outcome::chance(map, x.amount as f32)) =>
+            {
+                Some(24406)
+            }
+            3656 if by
+                .is_some_and(|b| b.effects.iter().any(|e| e.effect == super::EFFECT_HEAL)) =>
+            {
+                Some(23402)
+            }
+            4533 if by.is_some_and(|b| family_flag(b, FAMILY_DRUID, DRUID_REJUVENATION)) => {
+                match victim.map(|v| v.1) {
+                    Some(0) => Some(28722),
+                    Some(1) => Some(28723),
+                    Some(3) => Some(28724),
+                    _ => None,
+                }
+            }
+            4537 if by.is_some_and(|b| family_flag(b, FAMILY_DRUID, DRUID_REGROWTH)) => Some(28750),
+            _ => None,
+        };
+        if let Some(trigger) = trigger {
+            cast_triggered(map, owner, trigger, Some(other));
+        }
+    }
+}
+
+/// `SMSG_FEIGN_DEATH_RESISTED`.
+pub const SMSG_FEIGN_DEATH_RESISTED: u16 = 0x02B4;
+
+/// Whether a creature fighting `g` (alive, not a player's, near enough to
+/// notice) sees through its Feign Death `spell`: each rolls as against a
+/// spell of `g`'s.
+pub fn feign_death_resisted(map: &Map, g: Guid, spell: u32) -> bool {
+    let Some(s) = map.realm.data.spells.get(spell) else {
+        return false;
+    };
+    let Some(at) = map.position_of(g) else {
+        return false;
+    };
+    let level = map.unit_view(g).map_or(1, |u| u.level);
+    let mods = super::mods::for_spell(map, g, s);
+    map.creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && c.threat.iter().any(|(t, _)| *t == g))
+        .filter(|(_, c)| {
+            crate::game::map::pets::owner_of(map, c.guid).is_none_or(|o| !guid::is_player(o))
+        })
+        .filter(|(_, c)| {
+            let reach =
+                crate::game::map::ai::aggro_radius(20.0, c.fields.get_u32(UNIT_FIELD_LEVEL), level);
+            combat::dist(c.position, at) <= reach
+        })
+        .any(|(_, c)| {
+            !super::outcome::hits(
+                map,
+                super::outcome::spell_hit_chance(map, g, c.guid, s, &mods),
+            )
+        })
+}
+
+/// What periodic damage's `tick`th tick (from 1) adds to its points, as
+/// Thistle Tea's `PeriodicDamage.ramp_offset` has it: Curse of Agony's
+/// ticks go from half to one and a half times, Starshards' from two thirds
+/// to four thirds.
+pub fn ramp(data: &crate::game::data::GameData, spell: u32, tick: u32) -> f32 {
+    let Some(s) = data.spells.get(spell) else {
+        return 0.0;
+    };
+    if tick == 0 {
+        return 0.0;
+    }
+    let agony = family_flag(s, FAMILY_WARLOCK, 0x400);
+    let starshards = family_flag(s, FAMILY_PRIEST, 0x20_0000);
+    let base = (s.effects[0].base_points + s.effects[0].base_dice) as f32;
+    if agony {
+        (((tick - 1) / 4) as f32 - 1.0) * base / 2.0
+    } else if starshards {
+        (((tick - 1) / 2) as f32 - 1.0) * base / 3.0
+    } else {
+        0.0
     }
 }
 

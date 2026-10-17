@@ -333,6 +333,7 @@ fn run(
         let script = crate::game::map::proc_scripts::fire(map, owner, other, &h, e);
         if script == crate::game::map::proc_scripts::Outcome::Unhandled {
             fire(map, owner, other, &h);
+            crate::game::map::spells::class_scripts::proc(map, owner, other, &h, e.spell, outgoing);
         }
         if h.charges > 0 && script != crate::game::map::proc_scripts::Outcome::DoneOwnCharges {
             auras::spend_charge(map, owner, h.spell, h.caster);

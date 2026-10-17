@@ -344,6 +344,20 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
             return Hit::Reflect;
         }
     }
+    let chance = spell_hit_chance(map, caster, target, s, m);
+    if roll_strict(map, chance) {
+        Hit::Hit
+    } else {
+        Hit::Resist
+    }
+}
+
+/// The chance, in hundredths of a percent, that magic spell `s` from
+/// `caster` lands on `target` (before immunities and reflection).
+pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mods) -> i32 {
+    let Some(a) = auras::auras(map, target) else {
+        return 10_000;
+    };
     let caster_level = level(map, caster);
     let target_level = level(map, target);
     let d = derived(map, caster);
@@ -369,19 +383,14 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     } else {
         0.0
     } + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
-    let chance = magic_hit_chance(
+    magic_hit_chance(
         caster_level,
         target_level,
         guid::is_player(target),
         hit_bonus - aoe,
         mechanic,
         binary_resist,
-    );
-    if roll_strict(map, chance) {
-        Hit::Hit
-    } else {
-        Hit::Resist
-    }
+    )
 }
 
 /// Improved Fire Ward and Frost Warding: a ward up against its school may
@@ -422,6 +431,11 @@ fn ward_reflect(map: &Map, target: Guid, s: &SpellTemplate) -> i32 {
 }
 
 /// A hit roll: in the fixed rolls of tests, anything above 1% hits.
+/// Whether a chance of `chance_bp` hundredths of a percent comes up.
+pub fn hits(map: &Map, chance_bp: i32) -> bool {
+    roll_strict(map, chance_bp)
+}
+
 fn roll_strict(map: &Map, chance_bp: i32) -> bool {
     if !rolling(map) {
         return chance_bp > 100;
