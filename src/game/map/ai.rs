@@ -298,6 +298,7 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     }
     // A flyer falls to the ground.
     crate::game::map::creature_motion::fall_dead(map, creature);
+    crate::game::map::event_ai::death_heard(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
     crate::game::map::battleground::creature_died(map, creature, tapper);
 }
