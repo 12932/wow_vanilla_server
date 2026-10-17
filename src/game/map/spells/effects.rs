@@ -313,8 +313,11 @@ pub fn run(
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
             return;
         };
-        let charges =
-            (s.proc_charges > 0).then(|| l.mods.apply_ms(mods::OP_CHARGES, s.proc_charges).max(1));
+        // The caster's charge modifiers, whether the spell has charges or
+        // not; none left is no limit (mangos's `SpellAuraHolder`, Thistle
+        // Tea's `Application`).
+        let charges = (s.proc_charges > 0 || l.mods.any(mods::OP_CHARGES))
+            .then(|| l.mods.apply_ms(mods::OP_CHARGES, s.proc_charges));
         let ctx = auras::Context {
             item,
             equipped: false,
