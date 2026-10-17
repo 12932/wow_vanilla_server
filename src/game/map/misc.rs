@@ -56,6 +56,8 @@ pub struct PlayerMisc {
     pub quest_shared: Option<(Guid, u32)>,
     /// When the self-resurrection last went off.
     pub self_res_at: Option<Instant>,
+    /// A GM's god mode: no damage taken.
+    pub god: bool,
     /// An opened item's loot: the item, and what is in it.
     pub item_loot: Option<(Guid, crate::game::map::loot::Loot)>,
 }
@@ -421,7 +423,7 @@ pub fn talent_wipe_offer(map: &mut Map, g: Guid, npc: Guid) {
 }
 
 /// The talent spells a player knows, and those they taught.
-fn talent_spells(p: &crate::game::map::player::Player, data: &crate::game::data::GameData) -> Vec<u32> {
+pub fn talent_spells(p: &crate::game::map::player::Player, data: &crate::game::data::GameData) -> Vec<u32> {
     let mut out = Vec::new();
     for t in data.spells.talents.values() {
         for r in t.ranks.iter().filter(|r| **r != 0 && p.spells.contains(r)) {

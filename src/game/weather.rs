@@ -75,6 +75,34 @@ fn packet(w: Weather) -> SMSG_WEATHER {
     }
 }
 
+/// Set a zone's weather (a GM's `.weather`): `kind` 0 fine, 1 rain, 2 snow,
+/// 3 storm; held a change period, or for good. Those in the zone see it.
+pub fn set(realm: &Realm, zone: u32, kind: u8, grade: f32, permanent: bool) {
+    let now = crate::game::social::mail::now();
+    let w = Weather {
+        kind,
+        grade: if kind == 0 { 0.0 } else { grade.clamp(0.0, 1.0) },
+        next: if permanent {
+            i64::MAX
+        } else {
+            now + CHANGE_EVERY.as_secs() as i64
+        },
+    };
+    realm.social.weather.lock().insert(zone, w);
+    for o in realm.registry.all_online() {
+        if o.zone() == zone {
+            o.outbound.send(&packet(w));
+        }
+    }
+}
+
+/// A zone's weather back to the season's rolls.
+pub fn release(realm: &Realm, zone: u32) {
+    if let Some(w) = realm.social.weather.lock().get_mut(&zone) {
+        w.next = 0;
+    }
+}
+
 /// The zone's weather to one player, on entering it.
 pub fn tell(realm: &Realm, o: &Online, zone: u32) {
     let w = realm

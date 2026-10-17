@@ -16,6 +16,9 @@ const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, 
 /// change the world, administrators run accounts.
 pub fn needed_level(command: &str) -> u8 {
     use crate::accounts::{ADMINISTRATOR, GAME_MASTER, MODERATOR};
+    if let Some(level) = crate::game::map::gm_dev::needed_level(command) {
+        return level;
+    }
     match command {
         "gps" | "online" | "maps" | "save" | "announce" | "kick" | "gm" | "help" | "ticket" => {
             MODERATOR
@@ -169,8 +172,9 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         }
         "ticket" => Some(crate::game::map::tickets::command(map, guid, &args)),
         "honor" => Some(crate::game::map::pvp::gm(map, guid, &args)),
-        "help" => Some(HELP.to_owned()),
-        other => Some(format!("No command {other}. {HELP}")),
+        "help" => Some(format!("{HELP} {}", crate::game::map::gm_dev::HELP)),
+        other => crate::game::map::gm_dev::command(map, guid, other, &args)
+            .unwrap_or_else(|| Some(format!("No command {other}. {HELP}"))),
     };
     if let Some(reply) = reply {
         map.system_message(guid, &reply);
@@ -198,20 +202,22 @@ fn go(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         return Some("Usage: .go [xyz] <x> <y> <z> [map]".to_owned());
     };
     let target = match args.get(3) {
+        Some(&"here") | None => map.key,
         Some(m) => match m.parse::<u32>() {
             Ok(id) => MapKey::world(id),
             Err(_) => return Some(format!("{m} isn't a map id.")),
         },
-        None => map.key,
     };
     if target != map.key && wow_world_messages::vanilla::Map::try_from(target.map).is_err() {
         return Some(format!("There's no map {}.", target.map));
     }
-    let orientation = map
-        .players
-        .get(&guid)
-        .map(|p| p.movement.orientation)
-        .unwrap_or(0.0);
+    // A facing in radians, or the GM's own.
+    let orientation = parse_f32(args.get(4)).unwrap_or_else(|| {
+        map.players
+            .get(&guid)
+            .map(|p| p.movement.orientation)
+            .unwrap_or(0.0)
+    });
     map.teleport(guid, target, Vector3d { x, y, z }, orientation);
     None
 }
@@ -310,15 +316,20 @@ fn tele(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         return Some("Usage: .tele <place>".to_owned());
     }
     let data = map.realm.data.clone();
-    let place = data
+    let starting: Vec<&crate::game::data::Tele> = data
         .tele
         .iter()
-        .find(|t| t.name.to_lowercase() == wanted)
-        .or_else(|| {
-            data.tele
-                .iter()
-                .find(|t| t.name.to_lowercase().starts_with(&wanted))
-        })?;
+        .filter(|t| t.name.to_lowercase().starts_with(&wanted))
+        .collect();
+    let exact = data.tele.iter().find(|t| t.name.to_lowercase() == wanted);
+    // Several fit and none exactly: they are listed.
+    if exact.is_none() && starting.len() > 1 {
+        let names: Vec<&str> = starting.iter().take(15).map(|t| t.name.as_str()).collect();
+        return Some(format!("Places: {}", names.join(", ")));
+    }
+    let Some(place) = exact.or(starting.first().copied()) else {
+        return Some(format!("No place {wanted}."));
+    };
     map.teleport(
         guid,
         MapKey::world(place.map),
