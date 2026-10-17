@@ -125,35 +125,47 @@ fn whisper(map: &Map, me: &Online, to: &str, text: &str, language: Language, tag
     }
 }
 
-/// `/afk` and `/dnd`: on with a message, off again without one (or when
-/// already on).
+/// `/afk` and `/dnd`, as mangos's `HandleMessagechatOpcode` and Thistle
+/// Tea's `ChatStatus.change` take them: on, with the message (and the
+/// other off); on already, a message changes the reply and none turns it
+/// off. No one goes AFK in a fight.
 fn away(map: &mut Map, g: Guid, flag: u32, text: &str) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let on = !p.fields.has_flag(PLAYER_FLAGS, flag);
-    p.fields.set_flag(PLAYER_FLAGS, flag, on);
-    // AFK and DND are one or the other.
-    let other = if flag == PLAYER_FLAGS_AFK {
-        PLAYER_FLAGS_DND
+    let fighting = p.fields.has_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+    );
+    if flag == PLAYER_FLAGS_AFK && fighting {
+        return;
+    }
+    let was = p.fields.has_flag(PLAYER_FLAGS, flag);
+    let empty = text.trim().is_empty();
+    if was && empty {
+        p.fields.set_flag(PLAYER_FLAGS, flag, false);
     } else {
-        PLAYER_FLAGS_AFK
-    };
-    if on {
+        // AFK and DND are one or the other.
+        let other = if flag == PLAYER_FLAGS_AFK {
+            PLAYER_FLAGS_DND
+        } else {
+            PLAYER_FLAGS_AFK
+        };
         p.fields.set_flag(PLAYER_FLAGS, other, false);
+        p.fields.set_flag(PLAYER_FLAGS, flag, true);
+        let default = if flag == PLAYER_FLAGS_AFK {
+            "Away"
+        } else {
+            "Busy"
+        };
+        *p.online.away.lock() = if empty {
+            default.to_owned()
+        } else {
+            text.to_owned()
+        };
     }
     let flags = p.fields.get_u32(PLAYER_FLAGS) & (PLAYER_FLAGS_AFK | PLAYER_FLAGS_DND);
     p.online.flags.store(flags, Ordering::Relaxed);
-    let default = if flag == PLAYER_FLAGS_AFK {
-        "Away"
-    } else {
-        "Busy"
-    };
-    *p.online.away.lock() = if text.trim().is_empty() {
-        default.to_owned()
-    } else {
-        text.to_owned()
-    };
 }
 
 /// `CMSG_WHO`: those online on the same side, by level, name, race, class,
@@ -505,8 +517,18 @@ fn stats_of(p: &crate::game::map::player::Player) -> MemberStats {
     for (i, a) in auras.iter_mut().enumerate() {
         *a = f.get_u32(UNIT_FIELD_AURA + i as u16);
     }
+    // Away or busy shows on the party's frames too (Thistle Tea's
+    // `MemberStats.from_character`).
+    let away = if f.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_AFK) {
+        groups::STATUS_AFK
+    } else if f.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_DND) {
+        groups::STATUS_DND
+    } else {
+        0
+    };
     MemberStats {
         status: groups::STATUS_ONLINE
+            | away
             | match p.death {
                 Death::Alive => 0,
                 Death::Dead { .. } => groups::STATUS_DEAD,

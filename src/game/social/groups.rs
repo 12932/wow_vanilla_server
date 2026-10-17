@@ -43,6 +43,8 @@ pub const STAT_PLAYER: u32 = 0x7FF;
 pub const STATUS_ONLINE: u8 = 0x1;
 pub const STATUS_DEAD: u8 = 0x4;
 pub const STATUS_GHOST: u8 = 0x8;
+pub const STATUS_AFK: u8 = 0x40;
+pub const STATUS_DND: u8 = 0x80;
 
 #[derive(Debug, Clone)]
 pub struct Slot {
