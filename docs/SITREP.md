@@ -58,6 +58,17 @@ the questions waiting for you.
    - A dispel now takes passive auras of its type. vmangos's own `EffectDispel` has no passive check either, so the
      old note that "vmangos skips them" was wrong.
 
+7. **Creature size and reach** (found while mapping), aligned with Thistle Tea's mob builder.
+   - **The size:** the template's for its display, else the display's own (CreatureDisplayInfo's scale times its
+     model's).
+   - **Reach and radius:** they grow from the display's own size. Before, they were multiplied by the whole scale,
+     so Onyxia reached 47 yards rather than 26.
+   - **Where mangos-classic differs:** it would give Onyxia 23.4, the model's reach at her template's own scale. I
+     followed Thistle Tea.
+   - **What you'll notice:** creatures whose template sets no scale (Hogger, Kobold Miners) now show at their
+     display's size, 1.15, instead of 1. The kobold's reach didn't change; your kobold report was the yard of slack
+     in decision 1.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -65,7 +76,8 @@ the questions waiting for you.
 | The kobold's reach | done | dd2d397 |
 | 1a: the test matrix, listed | done | b50233b |
 | 1a: the matrix, mapped (entity, ai, spell, combat) | done: 573 of 4,481 applicable covered (13%); findings in docs/parity/FINDINGS.md | efcd9d3 |
-| 1a: the matrix, mapped (core rest, world, network) | running | |
+| 1a: the matrix, mapped (core rest, world, network) | done: all 8,850 mapped, 1,781 of 8,429 applicable covered (21%) | f9bad00 |
+| Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement | running | |
