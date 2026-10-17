@@ -709,3 +709,33 @@ async fn a_winner_keeps_what_does_not_fit() {
         .await;
     assert_eq!(property, 1182, "the blade it rolled, kept through the roll");
 }
+
+/// Thistle Tea's `Corpse.prepare/2`: a corpse the players dealt 35% of the
+/// damage to or less has nothing on it and isn't lootable; one past it has
+/// its loot.
+#[tokio::test]
+async fn a_corpse_mostly_others_kill_has_nothing() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(kobold(24)).await;
+    let corpses = on_map(&realm, move |m| {
+        [(24, 35, 65), (25, 36, 64)].map(|(n, players, npcs)| {
+            let k = kobold(n);
+            let c = m.creature_mut(k).unwrap();
+            c.engagement.damage_by_players = players;
+            c.engagement.damage_by_npcs = npcs;
+            loot::creature_died(m, k, ga);
+            let c = m.creature(k).unwrap();
+            let l = c.loot.as_ref().unwrap();
+            (
+                l.items.iter().map(|s| s.item).collect::<Vec<_>>(),
+                l.gold,
+                c.fields.get_u32(UNIT_DYNAMIC_FLAGS) & loot::DYNFLAG_LOOTABLE != 0,
+            )
+        })
+    })
+    .await;
+    assert_eq!(corpses[0], (vec![], 0, false), "35% is too little");
+    assert_eq!(corpses[1], (vec![BLADE], 30, true), "36% is enough");
+}
