@@ -824,3 +824,139 @@ fn the_real_valley_is_scripted_as_thistle_tea_scripts_it() {
         );
     }
 }
+
+#[tokio::test]
+async fn alice_takes_a_fallen_horde_players_insignia_and_his_corpse_is_bones() {
+    let mut d = valley();
+    let mut s = crate::game::data::spells::SpellTemplate {
+        id: 22027,
+        name: "Remove Insignia".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0].effect = bg::insignia::EFFECT_SKIN_PLAYER_CORPSE;
+    d.spells.spells.insert(22027, s);
+    let realm = harness::realm_with(d);
+    let (mut a, alice, mut b, grom, map) = pair(&realm).await;
+    let at = map
+        .query(move |m| m.players[&alice].position())
+        .await
+        .unwrap();
+    put(&map, &mut b, at.x + 2.0, at.y, at.z).await;
+    // Grom falls: his is a body with insignia to take.
+    map.query(move |m| {
+        m.players
+            .get_mut(&grom)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_LEVEL, 60);
+        bg::died(m, grom, alice);
+        crate::game::map::death::kill(m, grom);
+    })
+    .await;
+    let skinnable = map
+        .query(move |m| {
+            m.players[&grom]
+                .fields
+                .has_flag(UNIT_FIELD_FLAGS, bg::insignia::UNIT_FLAG_SKINNABLE)
+        })
+        .await
+        .unwrap();
+    assert!(skinnable);
+    // Alice takes it: he is made to release, and his corpse is bones she
+    // finds gold on.
+    a.clear();
+    map.query(move |m| crate::game::map::spells::cast_triggered(m, alice, 22027, Some(grom)))
+        .await;
+    let frame = a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await;
+    assert!(frame.len() > 13);
+    let (ghost, corpse, bones) = map
+        .query(move |m| {
+            let p = &m.players[&grom];
+            let bones: Vec<(u32, u32)> = m
+                .corpses
+                .values()
+                .map(|c| {
+                    (
+                        c.fields.get_u32(CORPSE_FIELD_FLAGS),
+                        c.fields.get_u32(CORPSE_FIELD_DYNAMIC_FLAGS),
+                    )
+                })
+                .collect();
+            (
+                matches!(p.death, crate::game::map::death::Death::Ghost { .. }),
+                p.row.state.corpse.is_some(),
+                bones,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(ghost, "made to release");
+    assert!(!corpse, "no corpse to take back");
+    assert_eq!(bones, vec![(0x05, 0x01)]);
+    b.wait_for("SMSG_PLAYER_SKINNED", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_PLAYER_SKINNED(_)).then_some(())
+    })
+    .await;
+    let before = map.query(move |m| m.players[&alice].money()).await.unwrap();
+    a.send(CMSG_LOOT_MONEY {}).await;
+    until(&map, move |m| m.players[&alice].money() > before).await;
+    let after = map.query(move |m| m.players[&alice].money()).await.unwrap();
+    assert!(after - before >= bg::insignia::gold(60, 50));
+}
+
+#[tokio::test]
+async fn a_released_players_corpse_still_has_its_insignia_for_the_enemy() {
+    let mut d = valley();
+    let mut s = crate::game::data::spells::SpellTemplate {
+        id: 22027,
+        name: "Remove Insignia".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0].effect = bg::insignia::EFFECT_SKIN_PLAYER_CORPSE;
+    d.spells.spells.insert(22027, s);
+    let realm = harness::realm_with(d);
+    let (mut a, alice, _b, grom, map) = pair(&realm).await;
+    // Grom falls and releases; his corpse lies where he fell.
+    let corpse = map
+        .query(move |m| {
+            bg::died(m, grom, alice);
+            crate::game::map::death::kill(m, grom);
+            crate::game::map::death::release(m, grom);
+            m.corpses
+                .values()
+                .find(|c| c.owner == grom)
+                .map(|c| (c.guid, c.position, c.fields.get_u32(CORPSE_FIELD_FLAGS)))
+        })
+        .await
+        .flatten();
+    let (corpse, at, flags) = corpse.expect("his corpse");
+    assert_eq!(flags, 0x24, "with insignia");
+    put(&map, &mut a, at.x + 1.0, at.y, at.z).await;
+    a.clear();
+    map.query(move |m| crate::game::map::spells::cast_triggered(m, alice, 22027, Some(corpse)))
+        .await;
+    a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await;
+    let left = map
+        .query(move |m| {
+            (
+                m.corpses.contains_key(&corpse),
+                m.corpses
+                    .values()
+                    .filter(|c| c.fields.get_u32(CORPSE_FIELD_FLAGS) == 0x05)
+                    .count(),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, (false, 1), "bones in its place");
+}
+
+#[test]
+fn insignia_gold_grows_with_the_fallens_level() {
+    use crate::game::map::battleground::insignia::gold;
+    assert_eq!(gold(1, 150), 0);
+    assert_eq!(gold(60, 100), 560);
+    assert!(gold(30, 100) < gold(60, 100));
+}
