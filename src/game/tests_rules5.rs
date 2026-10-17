@@ -1289,17 +1289,12 @@ async fn a_copy_holds_as_many_as_its_map_template_says() {
     })
     .await;
     let reason = b
-        .wait_frame(
-            "SMSG_TRANSFER_ABORTED",
-            crate::game::map::SMSG_TRANSFER_ABORTED,
-            |_| true,
-        )
+        .wait_for("SMSG_TRANSFER_ABORTED", |m| match m {
+            ServerOpcodeMessage::SMSG_TRANSFER_ABORTED(t) => Some(t.reason),
+            _ => None,
+        })
         .await;
-    assert_eq!(
-        reason,
-        vec![TransferAbortReason::IsFull.as_int()],
-        "one to the copy"
-    );
+    assert_eq!(reason, TransferAbortReason::IsFull, "one to the copy");
 }
 
 /// A new character knows their race's languages as skills (Language:
