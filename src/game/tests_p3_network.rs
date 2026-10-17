@@ -916,3 +916,90 @@ async fn an_items_slow_spell_spends_it_only_when_cast() {
     settled(&mut a).await;
     assert_eq!(on_map(&realm, count).await, 1, "spent when it lands");
 }
+
+/// Thistle Tea's cmsg_use_item_test: an item whose spell changes it into
+/// another, used, becomes that other where it lay; the charge it spends
+/// doesn't take the new item too.
+#[tokio::test]
+async fn an_item_that_changes_into_another_is_not_spent_as_well() {
+    use crate::game::data::GameData;
+    use crate::game::data::items::ItemSpell;
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const SOURCE: u32 = 9_020;
+    const CHANGED: u32 = 9_021;
+    const CHANGE: u32 = 900_202;
+    let mut d = GameData::empty();
+    let mut change = SpellTemplate {
+        id: CHANGE,
+        name: "Transform".into(),
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    change.effects[0] = SpellEffect {
+        effect: 34,
+        misc_value: CHANGED as i32,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(CHANGE, change);
+    let item = |entry, name: &str| crate::game::data::ItemTemplate {
+        entry,
+        name: name.into(),
+        stackable: 1,
+        allowable_class: -1,
+        allowable_race: -1,
+        ..Default::default()
+    };
+    let mut source = item(SOURCE, "Unopened Gift");
+    source.spells[0] = ItemSpell {
+        id: CHANGE,
+        trigger: 0,
+        charges: -1,
+        cooldown: -1,
+        ..Default::default()
+    };
+    d.items.insert(SOURCE, source);
+    d.items.insert(CHANGED, item(CHANGED, "Opened Gift"));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let (bag, slot) = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, SOURCE, 1, false).unwrap();
+        let i = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == SOURCE)
+            .unwrap();
+        (i.bag, i.slot)
+    })
+    .await;
+    a.send(CMSG_USE_ITEM {
+        bag_index: bag,
+        bag_slot: slot,
+        spell_index: 0,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::empty(),
+        },
+    })
+    .await;
+    a.wait_for("SMSG_SPELL_GO", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == CHANGE => Some(()),
+        _ => None,
+    })
+    .await;
+    settled(&mut a).await;
+    let (source, changed) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (
+            p.count_of(SOURCE),
+            p.items
+                .iter()
+                .find(|i| i.entry == CHANGED)
+                .map(|i| (i.bag, i.slot)),
+        )
+    })
+    .await;
+    assert_eq!(source, 0);
+    assert_eq!(changed, Some((bag, slot)), "the new item where the old lay");
+}
