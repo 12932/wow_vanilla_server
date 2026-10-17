@@ -838,7 +838,7 @@ pub fn damage(
     }
     let mut blocked = 0;
     if l.hit == Hit::Block {
-        blocked = derived(map, target).block_value.min(d as u32);
+        blocked = crate::game::map::combat::block_value(map, target).min(d as u32);
         d -= blocked as f32;
     }
     let amount = d.max(0.0) as u32;

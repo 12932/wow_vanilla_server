@@ -1469,55 +1469,32 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         return;
     };
     let mut rng = rand::rng();
-    let outcome = roll_outcome(&roll, rng.random_range(0..10_000));
+    let outcome = rolled_outcome(&roll, &mut rng);
     let (raw, school) = weapon_damage(map, attacker, victim, hand, &mut rng);
-    let mitigated = if school & 1 != 0 {
-        armor_mitigate(map, attacker, victim, raw)
+    let mitigated = mitigate(map, attacker, victim, raw, school);
+    let kept = if outcome == Outcome::Glancing {
+        let caster_class = map
+            .players
+            .get(&attacker)
+            .is_some_and(|p| matches!(p.row.class, 5 | 8 | 9));
+        let gap = roll.victim_defense - roll.attacker_skill;
+        glancing_factor(gap, caster_class, rng.random_range(0.0f32..1.0))
     } else {
-        raw
+        1.0
     };
-    let block_value = derived(map, victim).block_value;
-    let caster_class = map
-        .players
-        .get(&attacker)
-        .is_some_and(|p| matches!(p.row.class, 5 | 8 | 9));
-    let (mut hit_info, state, damage, blocked) = match outcome {
-        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
-        Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
-        Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
-        Outcome::Block => {
-            let blocked = block_value.min(mitigated);
-            let state = if blocked >= mitigated {
-                VICTIMSTATE_BLOCKS
-            } else {
-                VICTIMSTATE_NORMAL
-            };
-            (HITINFO_NORMALSWING2, state, mitigated - blocked, blocked)
-        }
-        Outcome::Glancing => {
-            let gap = roll.victim_defense - roll.attacker_skill;
-            let kept = glancing_factor(gap, caster_class, rng.random_range(0.0f32..1.0));
-            (
-                HITINFO_NORMALSWING2 | HITINFO_GLANCING,
-                VICTIMSTATE_NORMAL,
-                ((mitigated as f32 * kept) as u32).max(raw.min(1)),
-                0,
-            )
-        }
-        Outcome::Crit => (
-            HITINFO_NORMALSWING2 | HITINFO_CRITICALHIT,
-            VICTIMSTATE_NORMAL,
-            (mitigated as f32 * crit_multiplier(map, attacker, victim)) as u32,
-            0,
-        ),
-        Outcome::Crushing => (
-            HITINFO_NORMALSWING2 | HITINFO_CRUSHING,
-            VICTIMSTATE_NORMAL,
-            mitigated * 3 / 2,
-            0,
-        ),
-        Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated, 0),
+    let crit = if outcome == Outcome::Crit {
+        crit_multiplier(map, attacker, victim)
+    } else {
+        2.0
     };
+    let (mut hit_info, state, damage, blocked) = blow(
+        outcome,
+        raw,
+        mitigated,
+        block_value(map, victim),
+        crit,
+        kept,
+    );
     // A blow on a unit its school can't touch does nothing.
     let immune = !matches!(outcome, Outcome::Miss | Outcome::Dodge | Outcome::Parry)
         && school_immune(map, victim, school);
@@ -1610,6 +1587,97 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     }
 }
 
+/// What a white blow's `outcome` makes of its damage, `raw` before armor
+/// and `mitigated` after: its hit info, the victim's state, the damage and
+/// what a block stopped. A block stops up to `block_value` of the damage
+/// after armor; a crit multiplies it by `crit`; a glancing blow keeps
+/// `kept` of it, a crushing one half again.
+pub fn blow(
+    outcome: Outcome,
+    raw: u32,
+    mitigated: u32,
+    block_value: u32,
+    crit: f32,
+    kept: f32,
+) -> (u32, u32, u32, u32) {
+    match outcome {
+        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
+        Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
+        Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
+        Outcome::Block => {
+            let blocked = block_value.min(mitigated);
+            let state = if blocked >= mitigated {
+                VICTIMSTATE_BLOCKS
+            } else {
+                VICTIMSTATE_NORMAL
+            };
+            (HITINFO_NORMALSWING2, state, mitigated - blocked, blocked)
+        }
+        Outcome::Glancing => (
+            HITINFO_NORMALSWING2 | HITINFO_GLANCING,
+            VICTIMSTATE_NORMAL,
+            ((mitigated as f32 * kept) as u32).max(raw.min(1)),
+            0,
+        ),
+        Outcome::Crit => (
+            HITINFO_NORMALSWING2 | HITINFO_CRITICALHIT,
+            VICTIMSTATE_NORMAL,
+            (mitigated as f32 * crit) as u32,
+            0,
+        ),
+        Outcome::Crushing => (
+            HITINFO_NORMALSWING2 | HITINFO_CRUSHING,
+            VICTIMSTATE_NORMAL,
+            mitigated * 3 / 2,
+            0,
+        ),
+        Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated, 0),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's outcome for the white swings it makes, in place of the
+    /// roll.
+    pub static FORCED_OUTCOME: std::cell::Cell<Option<Outcome>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// A white swing's roll on the table (or a test's outcome for it).
+fn rolled_outcome(r: &Roll, rng: &mut impl rand::Rng) -> Outcome {
+    #[cfg(test)]
+    if let Some(o) = FORCED_OUTCOME.with(|f| f.get()) {
+        return o;
+    }
+    roll_outcome(r, rng.random_range(0..10_000))
+}
+
+/// What armor leaves of a blow of `school` (a mask): only a physical one
+/// is mitigated.
+pub fn mitigate(map: &Map, attacker: Guid, victim: Guid, raw: u32, school: u32) -> u32 {
+    if school & 1 != 0 {
+        armor_mitigate(map, attacker, victim, raw)
+    } else {
+        raw
+    }
+}
+
+/// What a unit's block stops: a player's shield's value, or a creature's
+/// half its level and a twentieth of its class's strength at that level
+/// (mangos's `Creature::GetShieldBlockValue`, Thistle Tea's
+/// `CombatRatings.block_value`).
+pub fn block_value(map: &Map, g: Guid) -> u32 {
+    let strength = map
+        .creature(g)
+        .and_then(|c| {
+            let t = map.realm.data.creature_template(c.entry)?;
+            let level = c.fields.get_u32(UNIT_FIELD_LEVEL).min(255) as u8;
+            map.realm.data.class_level_stats.get(&(t.unit_class, level))
+        })
+        .map_or(0, |s| s.strength);
+    derived(map, g).block_value + strength / 20
+}
+
 /// The `procEx` an outcome is.
 pub fn outcome_ex(outcome: Outcome) -> u32 {
     match outcome {
@@ -1659,16 +1727,22 @@ pub fn after_outcome(map: &mut Map, attacker: Guid, victim: Guid, outcome: Outco
 }
 
 /// A parry hastens the parrier's next swing: the earlier hand loses up to
-/// two fifths of its period, to no less than a fifth.
+/// two fifths of its period, to no less than a fifth. The period is the
+/// weapon's own, before hastes (mangos's `GetAttackTime`, Thistle Tea's
+/// base attack time).
 pub fn parry_haste(map: &mut Map, g: Guid) {
     let now = map.now;
     let dual = dual_wields(map, g);
+    let haste = auras::auras(map, g)
+        .map_or(1.0, crate::game::map::derive::melee_haste)
+        .max(0.01);
+    let unhasted = |p: u32| (p as f32 / haste).round() as u32;
     let periods = map
         .unit_fields(g)
         .map(|f| {
             (
-                f.get_u32(UNIT_FIELD_BASEATTACKTIME),
-                f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1),
+                unhasted(f.get_u32(UNIT_FIELD_BASEATTACKTIME)),
+                unhasted(f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1)),
             )
         })
         .unwrap_or((2000, 2000));
