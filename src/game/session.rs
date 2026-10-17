@@ -214,7 +214,18 @@ impl Session {
         let rows = self.realm.store.characters(&self.account).await;
         let characters = rows
             .iter()
-            .map(|r| character_entry(&self.realm.data, r))
+            .map(|r| {
+                let mut c = character_entry(&self.realm.data, r);
+                // The guild it is in (Thistle Tea's character list shows it).
+                c.guild_id = self
+                    .realm
+                    .social
+                    .guilds
+                    .lock()
+                    .of(guid::player(r.guid))
+                    .map_or(0, |g| g.id);
+                c
+            })
             .collect();
         self.outbound.send(&SMSG_CHAR_ENUM { characters });
     }
@@ -333,6 +344,7 @@ impl Session {
             crate::game::social::mail::character_deleted(&self.realm, counter);
             crate::game::social::auction::character_deleted(&self.realm, counter);
             crate::game::social::friends::character_deleted(&self.realm, g);
+            crate::game::social::groups::character_deleted(&self.realm, g);
             WorldResult::CharDeleteSuccess
         } else {
             WorldResult::CharDeleteFailed
@@ -486,6 +498,25 @@ fn valid_name(name: &str) -> Result<String, WorldResult> {
 }
 
 fn character_entry(data: &crate::game::data::GameData, r: &CharacterRow) -> Character {
+    // The pet that comes back at login, unless a ghost's (display, level,
+    // family).
+    let ghost = r.state.dead && r.state.corpse.is_some();
+    let pet = r
+        .state
+        .pets
+        .current
+        .as_ref()
+        .filter(|p| r.state.pets.active && !ghost && !p.dead)
+        .map(|p| {
+            let display = if p.display_id != 0 {
+                p.display_id
+            } else {
+                data.creature_template(p.entry)
+                    .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
+                    .unwrap_or(0)
+            };
+            (display, p.level, p.family)
+        });
     let mut equipment: [CharacterGear; 19] = Default::default();
     for item in &r.items {
         if item.bag != BAG_PLAYER || item.slot >= 19 {
@@ -518,13 +549,32 @@ fn character_entry(data: &crate::game::data::GameData, r: &CharacterRow) -> Char
             z: r.z,
         },
         guild_id: 0,
-        flags: CharacterFlags::empty(),
+        flags: CharacterFlags::new(enum_flags(r)),
         first_login: r.at_login & AT_LOGIN_FIRST != 0,
-        pet_display_id: 0,
-        pet_level: Level::new(0),
-        pet_family: CreatureFamily::None,
+        pet_display_id: pet.map_or(0, |p| p.0),
+        pet_level: Level::new(pet.map_or(0, |p| p.1)),
+        pet_family: pet
+            .and_then(|p| CreatureFamily::try_from(p.2 as u8).ok())
+            .unwrap_or(CreatureFamily::None),
         equipment,
     }
+}
+
+/// The character list's flags (Thistle Tea's `enum_flags`): the helm and
+/// cloak hidden, and a ghost.
+fn enum_flags(r: &CharacterRow) -> u32 {
+    use crate::game::map::player::{PLAYER_FLAGS_HIDE_CLOAK, PLAYER_FLAGS_HIDE_HELM};
+    let mut flags = 0;
+    if r.state.flags & PLAYER_FLAGS_HIDE_HELM != 0 {
+        flags |= CharacterFlags::HIDE_HELM;
+    }
+    if r.state.flags & PLAYER_FLAGS_HIDE_CLOAK != 0 {
+        flags |= CharacterFlags::HIDE_CLOAK;
+    }
+    if r.state.dead && r.state.corpse.is_some() {
+        flags |= CharacterFlags::GHOST;
+    }
+    flags
 }
 
 #[cfg(test)]

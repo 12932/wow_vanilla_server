@@ -15,7 +15,10 @@ use crate::game::data::GameData;
 use crate::game::store::Store;
 use crate::game::{Realm, RealmConfig, session};
 
-pub const WAIT: Duration = Duration::from_secs(5);
+/// How long a test waits for what it expects. Generous, as only a
+/// failing test waits it out, and a loaded machine (several suites at
+/// once) can take seconds over a character creation.
+pub const WAIT: Duration = Duration::from_secs(20);
 
 pub fn test_config() -> RealmConfig {
     RealmConfig {
