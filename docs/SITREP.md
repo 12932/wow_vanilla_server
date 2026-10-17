@@ -80,6 +80,19 @@ the questions waiting for you.
     uses 5 s for PvP and for being hit, and 0 for hitting a creature. Move to Thistle Tea's model? It changes how
     soon players leave combat after a kill.
 
+21. **The grey quest "!"** (from 3c). It shows for quests up to 4 levels below the player. Thistle Tea shows it at
+    any gap; mangos's default is 7. 4, 7, or unlimited?
+22. **Abandoning a quest** (from 3c) keeps its collected quest items, as mangos does; Thistle Tea destroys them.
+    Which?
+23. **An untapped creature's soul shard** (from 3c). Draining one still gives a shard, as mangos's
+    `isAllowedToLoot` does; Thistle Tea gives none. Which?
+24. **Model height from a mislabelled column** (from 3e). dbc.sqlite's `CreatureModelData` columns are shifted by one
+    from 1.12's: `collision_height` holds the width. wvs now reads the height from `mount_height`, as mangos-classic
+    does; Thistle Tea reads the width. Is the shift known? It affects anything else reading that table.
+25. **Fixing the wow_messages fork** (from 3f and robustness). An agent is fixing the layouts wvs hand-encodes, and
+    the crash bugs, in your fork. Nothing is reported upstream without your say.
+26. **The reconnect protocol version** (from 3f). Both 2 and 3 are accepted. Which does the 1.12.1 client send?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -252,6 +265,28 @@ the questions waiting for you.
     - **A dead master's guardian** is kept while it fights, and as a corpse.
     - **Extra attacks** swing during a cast, as vmangos and Thistle Tea do; mangos-classic holds them.
 
+18. **Phase 3's choices** (3b, 3c, 3e, 3f; each agent's full list is in its merge commit):
+    - **Unkillable:** one rule, Thistle Tea's, where a script's floor of 0 lets an unkillable creature die. 2d and 3b
+      had each written one.
+    - **Combat (3b):** auto-attack alone no longer keeps a player in combat. Block value and parry haste follow
+      mangos. Units flagged unattackable (0x2, 0x10000, 0x02000000, or on a taxi) can't be attacked.
+    - **Quests (3c):**
+      - givers must be alive and carry the quest-giver flag, and the player must be alive;
+      - auto-complete quests turn in without the log;
+      - sharing needs a shareable quest;
+      - error codes follow mangos.
+    - **World (3e):**
+      - the taxi mask is translated as the client reads it (node N at bit N-1), with stored masks unchanged;
+      - new characters know their race's flight points;
+      - the bank's seventh bag slot is gone;
+      - environmental damage resists by vmangos's buckets.
+    - **Network (3f):**
+      - root packets now carry a packed guid; before, a real client was never rooted;
+      - AUTH_FAILED is sent for an unknown account too, as Thistle Tea does;
+      - several packets are hand-encoded, which wow_messages can't read yet.
+    - **Merge notes:** escort quest walks now wait for the escortee to come back as a quest giver before turning in.
+      3c's giver check needs the quest-giver flag, which an escort clears while it runs.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -275,10 +310,10 @@ the questions waiting for you.
 | wow_messages stop layout | done | 2bed07d |
 | Performance | running | |
 | 3a: matrix gaps, spells and auras | running | |
-| 3b: matrix gaps, combat and creature AI | running | |
-| 3f: matrix gaps, network and inbound | running | |
-| 3c: matrix gaps, items, quests, loot, professions | running | |
+| 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
+| 3f: matrix gaps, network and inbound (232 rows) | merged | |
+| 3c: matrix gaps, items, quests, loot, professions (241 rows) | merged | |
 | 3d: matrix gaps, player systems | running | |
-| 3e: matrix gaps, world systems | running | |
+| 3e: matrix gaps, world systems (140 rows) | merged | |
 
 ## Left for later, and why

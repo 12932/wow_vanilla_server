@@ -1202,7 +1202,58 @@ async fn take(
 /// Turn `quest` in at `ender`, beside it.
 async fn turn_in(realm: &Arc<Realm>, c: &mut Client, ender: u32, quest: u32) {
     let g = c.guid;
-    let (map, who, _) = visit(realm, c, ender).await;
+    // An ender that escorted or followed takes quests again once it is
+    // back as a quest giver (its escort's end brings it home).
+    let mut at = None;
+    for _ in 0..120 {
+        let (map, who, _) = match try_visit(realm, c, ender).await {
+            Ok(v) => v,
+            // Gone with its escort's end: back at its spawn, as its
+            // respawn brings it.
+            Err(_) => {
+                let (id, _) = spawn_of(realm, ender).expect("spawned");
+                let map = realm.maps.get(realm, crate::game::map::MapKey::world(id));
+                map.query(move |m| {
+                    let dead: Vec<Guid> = m
+                        .creatures
+                        .iter()
+                        .filter(|(_, c)| c.entry == ender && !c.alive())
+                        .map(|(_, c)| c.guid)
+                        .collect();
+                    for d in dead {
+                        crate::game::map::ai::respawn_now(m, d);
+                    }
+                })
+                .await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        let giving = map
+            .query(move |m| {
+                let giving = crate::game::map::npc::npc_entry(
+                    m,
+                    g,
+                    who,
+                    crate::game::map::npc::NPC_FLAG_QUESTGIVER,
+                )
+                .is_some();
+                if !giving {
+                    skip(m, Duration::from_secs(5));
+                }
+                giving
+            })
+            .await
+            .unwrap_or(false);
+        if giving {
+            at = Some((map, who));
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let Some((map, who)) = at else {
+        panic!("{quest}'s ender never takes quests again");
+    };
     map.query(move |m| crate::game::map::quests::choose_reward(m, g, who, quest, 0))
         .await;
     assert!(
