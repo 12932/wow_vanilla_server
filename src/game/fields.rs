@@ -329,6 +329,10 @@ pub struct Fields {
     /// Whether any bit of `dirty` is set: the map's update asks of every
     /// object, every update, and this answers without reading the mask.
     any_dirty: bool,
+    /// A unit's health or mana (its first power) below its maximum, kept
+    /// as those four fields change: the update asks of every creature,
+    /// every update, whether it has anything to regenerate.
+    below_max: bool,
 }
 
 impl Fields {
@@ -339,6 +343,7 @@ impl Fields {
             values: vec![0; usize::from(count)],
             dirty: Mask::new(count),
             any_dirty: false,
+            below_max: false,
         };
         f.set_guid(OBJECT_FIELD_GUID, guid);
         f.set_u32(OBJECT_FIELD_TYPE, type_id.type_mask());
@@ -389,7 +394,35 @@ impl Fields {
             *slot = value;
             self.dirty.set(index);
             self.any_dirty = true;
+            self.changed(index);
         }
+    }
+
+    /// What follows from `index`'s change.
+    #[inline]
+    fn changed(&mut self, index: u16) {
+        if matches!(
+            index,
+            UNIT_FIELD_HEALTH | UNIT_FIELD_POWER1 | UNIT_FIELD_MAXHEALTH | UNIT_FIELD_MAXPOWER1
+        ) && matches!(self.type_id, TypeId::Unit | TypeId::Player)
+        {
+            self.below_max = self.health_or_power_short();
+        }
+    }
+
+    fn health_or_power_short(&self) -> bool {
+        self.get_u32(UNIT_FIELD_HEALTH) < self.get_u32(UNIT_FIELD_MAXHEALTH)
+            || self.get_u32(UNIT_FIELD_POWER1) < self.get_u32(UNIT_FIELD_MAXPOWER1)
+    }
+
+    /// A unit's: its health below its maximum, or its mana (the first
+    /// power). Answered without reading the fields.
+    pub fn below_max(&self) -> bool {
+        debug_assert!(
+            !matches!(self.type_id, TypeId::Unit | TypeId::Player)
+                || self.below_max == self.health_or_power_short()
+        );
+        self.below_max
     }
 
     pub fn set_i32(&mut self, index: u16, value: i32) {
@@ -413,6 +446,7 @@ impl Fields {
                 *slot = v;
                 self.dirty.set(i);
                 self.any_dirty = true;
+                self.changed(i);
             }
         }
     }
