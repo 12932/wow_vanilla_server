@@ -91,6 +91,8 @@ pub struct Landing {
     pub mods: Mods,
     /// The spell was reflected: the caster is its target.
     pub reflected: bool,
+    /// How many share its first effect's damage (a meteor's), if any do.
+    pub shared: u32,
 }
 
 /// Whether spell outcomes are rolled (production), or fixed: always a hit,

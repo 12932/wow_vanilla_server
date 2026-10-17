@@ -64,6 +64,7 @@ pub fn moved(map: &mut Map, g: Guid) {
     }
     map.spells.outdoor_checked.insert(g, (now, at));
     reconcile(map, g, now);
+    super::area::reconcile(map, g);
 }
 
 /// Outdoor auras go indoors; outdoor passives come back outdoors.

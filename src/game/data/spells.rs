@@ -104,6 +104,7 @@ pub const ATTR_ONLY_INDOORS: u32 = 0x4000;
 pub const ATTR_ONLY_OUTDOORS: u32 = 0x8000;
 pub const ATTR_NOT_SHAPESHIFTED: u32 = 0x1_0000;
 pub const ATTR_ONLY_STEALTHED: u32 = 0x2_0000;
+pub const ATTR_LEVEL_DAMAGE_CALCULATION: u32 = 0x8_0000;
 pub const ATTR_CANCELS_AUTO_ATTACK: u32 = 0x10_0000;
 pub const ATTR_CASTABLE_WHILE_DEAD: u32 = 0x80_0000;
 pub const ATTR_ALLOW_WHILE_MOUNTED: u32 = 0x100_0000;
@@ -271,6 +272,26 @@ pub struct SpellData {
     /// `spell_script_target`: the creatures (type 1) or objects (type 0)
     /// a scripted spell aims at.
     pub script_targets: AHashMap<u32, Vec<(u32, u32)>>,
+    /// `spell_area`: where (and for whom) a spell may be cast, or is had.
+    pub areas: AHashMap<u32, Vec<SpellArea>>,
+}
+
+/// A `spell_area` row: the zone or area a spell is for, and who may have
+/// it there.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpellArea {
+    pub spell: u32,
+    pub area: u32,
+    pub quest_start: u32,
+    pub quest_start_active: bool,
+    pub quest_end: u32,
+    /// An aura the player must have (or, negative, must not).
+    pub aura_spell: i32,
+    pub race_mask: u32,
+    /// 0 or 1, or 2 for either.
+    pub gender: u8,
+    /// Had without casting by whoever matches it.
+    pub autocast: bool,
 }
 
 /// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.
