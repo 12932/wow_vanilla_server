@@ -674,3 +674,96 @@ async fn cast_failures_say_why_as_1_12_has_them() {
         "nothing to eat"
     );
 }
+
+const AIMED: u32 = 900_341;
+const BOW: u32 = 50_210;
+const ARROW: u32 = 50_211;
+
+/// Thistle Tea's smsg_spell_cast_test: a spell of the ranged slot (Aimed
+/// Shot's kind) sets the ammo flag in its start and its go, and ends each
+/// with the arrow's look and inventory type, as mangos's
+/// WriteAmmoToPacket writes them.
+#[tokio::test]
+async fn a_ranged_spell_shows_its_arrow_at_start_and_go() {
+    let mut d = data();
+    let mut aimed = spell(
+        AIMED,
+        &[SpellEffect {
+            effect: 3,
+            target_a: 25,
+            ..Default::default()
+        }],
+    );
+    aimed.attributes[0] = crate::game::data::spells::ATTR_RANGED;
+    aimed.casting_time_index = 98;
+    d.spells.cast_times.insert(98, 200);
+    d.spells.spells.insert(AIMED, aimed);
+    let item =
+        |entry, class, subclass, inventory_type, display_id| crate::game::data::ItemTemplate {
+            entry,
+            name: format!("Item {entry}"),
+            class,
+            subclass,
+            inventory_type,
+            display_id,
+            stackable: if class == 6 { 200 } else { 1 },
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        };
+    let mut bow = item(BOW, 2, 2, 15, 8_000);
+    bow.ammo_type = 2;
+    bow.delay = 2_000;
+    d.items.insert(BOW, bow);
+    d.items.insert(ARROW, item(ARROW, 6, 2, 24, 5_996));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, ga, BOW, 1, false).unwrap();
+        crate::game::map::inventory::add_item(m, ga, ARROW, 100, false).unwrap();
+        let at = {
+            let i = m.players[&ga]
+                .items
+                .iter()
+                .find(|i| i.entry == BOW)
+                .unwrap();
+            (i.bag, i.slot)
+        };
+        crate::game::map::inventory::auto_equip(m, ga, at);
+        crate::game::map::ranged::set_ammo(m, ga, ARROW);
+        m.players.get_mut(&ga).unwrap().spells.push(AIMED);
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_CAST_SPELL {
+        spell: AIMED,
+        targets: wire_targets(&Targets {
+            unit: Some(gb),
+            ..Default::default()
+        }),
+    })
+    .await;
+    let arrow = [5_996u32.to_le_bytes(), 24u32.to_le_bytes()].concat();
+    let start = a
+        .wait_frame("SMSG_SPELL_START", 0x131, |f| {
+            f.windows(4).any(|w| w == AIMED.to_le_bytes())
+        })
+        .await;
+    assert_eq!(&start[start.len() - 8..], &arrow[..], "the start's arrow");
+    let go = a
+        .wait_frame("SMSG_SPELL_GO", 0x132, |f| {
+            f.windows(4).any(|w| w == AIMED.to_le_bytes())
+        })
+        .await;
+    assert_eq!(&go[go.len() - 8..], &arrow[..], "the go's arrow");
+    // The flags, after the item (none) and caster, packed, and the spell:
+    // ammo's 0x20.
+    let flags_at = packed(Guid::zero()).len() + packed(ga).len() + 4;
+    assert_ne!(
+        u16::from_le_bytes([start[flags_at], start[flags_at + 1]]) & 0x20,
+        0
+    );
+}
