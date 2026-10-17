@@ -278,6 +278,9 @@ pub fn check(
             return Some(fail::NOT_MOUNTED);
         }
     }
+    if let Some(code) = crate::game::map::mounts::check(map, caster, s, triggered) {
+        return Some(code);
+    }
     if let Some(c) = map.caster(caster)
         && !triggered
     {

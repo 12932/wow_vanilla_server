@@ -518,6 +518,9 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
         }
     }
     let m = mods::for_spell(map, caster, s);
+    if crate::game::map::mounts::dismissed(map, caster, s) {
+        return;
+    }
     if map.players.contains_key(&caster)
         && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
         && !s.has_aura(auras::AURA_MOUNTED)

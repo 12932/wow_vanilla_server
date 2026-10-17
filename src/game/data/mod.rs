@@ -156,6 +156,8 @@ pub struct DisplayInfo {
     pub scale: f32,
     pub bounding_radius: f32,
     pub combat_reach: f32,
+    /// A model a rider may mount in (a transformed player's).
+    pub can_mount: bool,
 }
 
 #[derive(Debug, Clone, Default)]

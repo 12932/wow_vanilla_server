@@ -166,6 +166,7 @@ pub fn kill(map: &mut Map, g: Guid) {
     crate::game::map::misc::capture_self_res(map, g);
     crate::game::map::combat::leave_combat(map, g);
     crate::game::map::auras::clear_on_death(map, g);
+    crate::game::map::intoxication::clear(map, g);
     crate::game::map::duel::left(map, g, false);
     crate::game::map::trade::cancel(
         map,
