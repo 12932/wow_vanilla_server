@@ -462,6 +462,14 @@ pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Opti
             if r == checks::fail::REQUIRES_AREA {
                 b.u32(area::required(&map.realm.data, spell));
             }
+            // A gear failure names the gear: its class, subclasses and
+            // inventory types (mangos-zero's `SendCastResult`).
+            if r == checks::fail::EQUIPPED_ITEM_CLASS {
+                let s = map.realm.data.spells.get(spell);
+                b.i32(s.map_or(-1, |s| s.equipped_item_class))
+                    .i32(s.map_or(0, |s| s.equipped_item_subclass_mask))
+                    .i32(s.map_or(0, |s| s.equipped_item_inventory_type_mask));
+            }
         }
     }
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));

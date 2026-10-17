@@ -135,3 +135,53 @@ async fn a_resurrection_offer_says_whether_it_waits_on_the_timer() {
         .await;
     assert_eq!(offer[offer.len() - 2..], [0, 0], "at once");
 }
+
+const SHIELD_BASH: u32 = 900_310;
+const SMSG_CAST_RESULT: u16 = 0x130;
+
+/// A cast refused for the gear it wants names the gear: its class, its
+/// subclasses and its inventory types, as mangos-zero sends them and
+/// wow_messages reads them.
+#[tokio::test]
+async fn a_cast_refused_for_its_gear_names_the_gear() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    let mut bash = unit_spell(SHIELD_BASH, 2);
+    bash.effects[0].target_a = 1;
+    bash.equipped_item_class = 4;
+    bash.equipped_item_subclass_mask = 1 << 6;
+    bash.equipped_item_inventory_type_mask = 1 << 14;
+    d.spells.spells.insert(SHIELD_BASH, bash);
+    let realm = harness::realm_with(d);
+    let (mut a, g, map) = enter(&realm, "A", "Bare", Race::Human, Class::Warrior).await;
+    on(&map, move |m| {
+        crate::game::map::spells::learn(m, g, SHIELD_BASH)
+    })
+    .await;
+    a.send(CMSG_CAST_SPELL {
+        spell: SHIELD_BASH,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::empty(),
+        },
+    })
+    .await;
+    let refused = a
+        .wait_frame("the refusal", SMSG_CAST_RESULT, |b| b.len() > 5)
+        .await;
+    let mut want = SHIELD_BASH.to_le_bytes().to_vec();
+    want.extend([2, crate::game::map::spells::fail::EQUIPPED_ITEM_CLASS]);
+    want.extend(4u32.to_le_bytes());
+    want.extend((1u32 << 6).to_le_bytes());
+    want.extend((1u32 << 14).to_le_bytes());
+    assert_eq!(refused, want, "a shield, in the off hand");
+    let parsed = a
+        .wait_for("the refusal, read", |m| match m {
+            ServerOpcodeMessage::SMSG_CAST_RESULT(r) => Some(r.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(matches!(
+        parsed.result,
+        SMSG_CAST_RESULT_SimpleSpellCastResult::Failure { .. }
+    ));
+}
