@@ -3,6 +3,13 @@
 //! battleground's map) when both sides have enough, and later ones topped
 //! up from the queue. The match's rules run on its map
 //! ([`crate::game::map::battleground`]).
+//!
+//! Joining is Thistle Tea's: a player or their group's leader for the
+//! whole group, every one of the same side and bracket, within the
+//! battleground's levels, no deserter and no one already in a match; a
+//! group goes in together, to the match picked from the list or the first
+//! with room. A player who goes offline in a match keeps their place a
+//! while, and logging in again takes them back in.
 
 use std::time::{Duration, Instant};
 
@@ -60,6 +67,36 @@ pub struct Queued {
     pub guid: Guid,
     pub team: Team,
     pub since: Instant,
+    /// The group queued together (0 for one alone): it goes in whole.
+    pub party: u32,
+}
+
+/// One who joins: their side, level, and what would keep them out.
+#[derive(Debug, Clone, Copy)]
+pub struct Entrant {
+    pub guid: Guid,
+    pub team: Team,
+    pub level: u8,
+    pub deserter: bool,
+    /// Already in a battleground.
+    pub inside: bool,
+}
+
+/// Why a join was refused, as Thistle Tea's `BattlegroundSystem` has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    Empty,
+    Duplicate,
+    AlreadyQueued,
+    Deserter,
+    AlreadyInside,
+    LevelRestricted,
+    InvalidTeam,
+    MixedBracket,
+    GroupTooLarge,
+    InvalidInstance,
+    NotLeader,
+    MemberOffline,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +128,7 @@ impl Match {
 pub struct Battlegrounds {
     queues: AHashMap<(u32, u8), Vec<Queued>>,
     pub matches: AHashMap<u32, Match>,
+    next_party: u32,
 }
 
 impl Battlegrounds {
@@ -199,27 +237,148 @@ pub fn instances(realm: &Realm, bg: u32, bracket: u8) -> Vec<u32> {
     out
 }
 
-/// `CMSG_BATTLEMASTER_JOIN`: into the queue for `bg`.
-pub fn join(realm: &Realm, me: &Online, team: Team, level: u8, bg: u32) {
-    let (_, _, lo, hi) = template(realm, bg);
-    if u32::from(level) < lo || u32::from(level) > hi {
-        return;
+/// `SMSG_GROUP_JOINED_BATTLEGROUND`: queued for `bg`, or (`None`) not, a
+/// deserter.
+pub fn joined_frame(bg: Option<u32>) -> Option<std::sync::Arc<[u8]>> {
+    use wow_world_messages::vanilla::{BgTypeId, SMSG_GROUP_JOINED_BATTLEGROUND};
+    let id = match bg {
+        Some(1) => BgTypeId::QueuedForAv,
+        Some(3) => BgTypeId::QueuedForAb,
+        Some(_) => BgTypeId::QueuedForWsg,
+        None => BgTypeId::RemoveFromQueue,
+    };
+    crate::game::conn::encode(&SMSG_GROUP_JOINED_BATTLEGROUND { id })
+}
+
+/// Into `bg`'s queue, or straight into the match `instance` (0 for the
+/// first with room), together: those who join hear they're queued, and
+/// where they stand.
+pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Result<(), Refused> {
+    let (_, max, lo, hi) = template(realm, bg);
+    if who.is_empty() {
+        return Err(Refused::Empty);
     }
-    let bracket = bracket_of(level);
+    let mut guids: Vec<Guid> = who.iter().map(|e| e.guid).collect();
+    guids.sort_by_key(|g| g.guid());
+    guids.dedup();
+    if guids.len() != who.len() {
+        return Err(Refused::Duplicate);
+    }
+    let bracket = bracket_of(who[0].level);
+    let team = who[0].team;
     {
-        let mut bgs = realm.social.battlegrounds.lock();
-        if bgs.queued(me.guid) || bgs.match_of(me.guid).is_some() {
-            return;
+        let bgs = realm.social.battlegrounds.lock();
+        if who
+            .iter()
+            .any(|e| bgs.queued(e.guid) || bgs.match_of(e.guid).is_some())
+        {
+            return Err(Refused::AlreadyQueued);
         }
-        bgs.queues.entry((bg, bracket)).or_default().push(Queued {
-            guid: me.guid,
-            team,
-            since: Instant::now(),
-        });
     }
-    me.outbound
-        .send_frame(status_frame(map_of(bg), 0, WAIT_QUEUE, 60_000, 0));
-    fill(realm, bg, bracket);
+    if who.iter().any(|e| e.deserter) {
+        return Err(Refused::Deserter);
+    }
+    if who.iter().any(|e| e.inside) {
+        return Err(Refused::AlreadyInside);
+    }
+    if who
+        .iter()
+        .any(|e| u32::from(e.level) < lo || u32::from(e.level) > hi)
+    {
+        return Err(Refused::LevelRestricted);
+    }
+    if who.iter().any(|e| e.team != team) {
+        return Err(Refused::InvalidTeam);
+    }
+    if who.iter().any(|e| bracket_of(e.level) != bracket) {
+        return Err(Refused::MixedBracket);
+    }
+    if who.len() > max as usize {
+        return Err(Refused::GroupTooLarge);
+    }
+    let now = Instant::now();
+    let direct = {
+        let mut bgs = realm.social.battlegrounds.lock();
+        if instance > 0 {
+            // The match picked from the list, if it has room for them all.
+            let Some(m) = bgs.matches.get_mut(&instance).filter(|m| {
+                m.bg == bg
+                    && m.bracket == bracket
+                    && !m.ended
+                    && m.count(team) + who.len() <= max as usize
+            }) else {
+                return Err(Refused::InvalidInstance);
+            };
+            for e in who {
+                m.invited.insert(e.guid, (team, now + INVITE_FOR));
+            }
+            Some(m.id)
+        } else {
+            bgs.next_party += 1;
+            let party = if who.len() > 1 { bgs.next_party } else { 0 };
+            let queue = bgs.queues.entry((bg, bracket)).or_default();
+            for e in who {
+                queue.push(Queued {
+                    guid: e.guid,
+                    team,
+                    since: now,
+                    party,
+                });
+            }
+            None
+        }
+    };
+    if let Some(id) = direct {
+        for e in who {
+            send_frame(
+                realm,
+                e.guid,
+                &status_frame(map_of(bg), id, WAIT_JOIN, INVITE_FOR.as_millis() as u32, 0),
+            );
+        }
+    } else {
+        fill(realm, bg, bracket);
+    }
+    for e in who {
+        if let Some(o) = realm.registry.online(e.guid) {
+            if let Some(frame) = joined_frame(Some(bg)) {
+                o.outbound.send_frame(frame);
+            }
+            send_status(realm, &o);
+        }
+    }
+    Ok(())
+}
+
+/// Up to `room` of `team` from the queue, first come first: a group whole,
+/// or not at all.
+fn take(queue: &mut Vec<Queued>, team: Team, room: usize) -> Vec<Queued> {
+    let mut out = Vec::new();
+    let mut skipped: Vec<u32> = Vec::new();
+    let mut i = 0;
+    while i < queue.len() && out.len() < room {
+        let q = &queue[i];
+        if q.team != team || skipped.contains(&q.party) {
+            i += 1;
+            continue;
+        }
+        if q.party == 0 {
+            out.push(queue.remove(i));
+            continue;
+        }
+        let party = q.party;
+        let size = queue.iter().filter(|x| x.party == party).count();
+        if out.len() + size <= room {
+            let (theirs, rest): (Vec<Queued>, Vec<Queued>) =
+                queue.drain(..).partition(|x| x.party == party);
+            *queue = rest;
+            out.extend(theirs);
+        } else {
+            skipped.push(party);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Matches topped up from the queue, and a new one when both sides have
@@ -229,18 +388,23 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
     let mut invites = Vec::new();
     {
         let mut bgs = realm.social.battlegrounds.lock();
-        let Battlegrounds { queues, matches } = &mut *bgs;
+        let Battlegrounds {
+            queues, matches, ..
+        } = &mut *bgs;
         let queue = queues.entry((bg, bracket)).or_default();
-        for m in matches
-            .values_mut()
+        let mut ids: Vec<u32> = matches
+            .values()
             .filter(|m| m.bg == bg && m.bracket == bracket && !m.ended)
-        {
+            .map(|m| m.id)
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            let Some(m) = matches.get_mut(&id) else {
+                continue;
+            };
             for team in [Team::Alliance, Team::Horde] {
-                while m.count(team) < max as usize {
-                    let Some(i) = queue.iter().position(|q| q.team == team) else {
-                        break;
-                    };
-                    let q = queue.remove(i);
+                let room = (max as usize).saturating_sub(m.count(team));
+                for q in take(queue, team, room) {
                     m.invited
                         .insert(q.guid, (team, Instant::now() + INVITE_FOR));
                     invites.push((q.guid, m.bg, m.id));
@@ -260,11 +424,7 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
                 ended: false,
             };
             for team in [Team::Alliance, Team::Horde] {
-                for _ in 0..max {
-                    let Some(i) = queue.iter().position(|q| q.team == team) else {
-                        break;
-                    };
-                    let q = queue.remove(i);
+                for q in take(queue, team, max as usize) {
                     m.invited
                         .insert(q.guid, (team, Instant::now() + INVITE_FOR));
                     invites.push((q.guid, bg, id));
@@ -286,6 +446,12 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
 /// the invitation.
 pub fn port(map: &mut Map, g: Guid, enter: bool) {
     let realm = map.realm.clone();
+    // A deserter can't take it up: it's declined for them.
+    let deserter = enter && deserter(map, g);
+    let enter = enter && !deserter;
+    if deserter && let Some(frame) = joined_frame(None) {
+        send_frame(&realm, g, &frame);
+    }
     let (key, team, bg) = {
         let mut bgs = realm.social.battlegrounds.lock();
         let Some(m) = bgs
@@ -293,6 +459,15 @@ pub fn port(map: &mut Map, g: Guid, enter: bool) {
             .values_mut()
             .find(|m| m.invited.contains_key(&g))
         else {
+            // Declined while still queued: out of the queue.
+            let queued = bgs.queued(g);
+            if !enter && queued {
+                for q in bgs.queues.values_mut() {
+                    q.retain(|x| x.guid != g);
+                }
+                drop(bgs);
+                send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
+            }
             return;
         };
         let (team, _) = m.invited.remove(&g).expect("found above");
@@ -347,8 +522,15 @@ pub fn start_of(realm: &Realm, bg: u32, team: Team) -> (Vector3d, f32) {
     }
 }
 
-/// A member leaves the match (and the map): back where they came from.
-/// Before the end, they are a deserter.
+/// Whether `g` is a deserter still.
+pub fn deserter(map: &Map, g: Guid) -> bool {
+    crate::game::map::auras::auras(map, g)
+        .is_some_and(|a| a.has_spell(crate::game::map::battleground::SPELL_DESERTER))
+}
+
+/// A member leaves the match (and the map): back where they came from
+/// (or, logged in again inside, home). Before the end, they are a
+/// deserter.
 pub fn leave(map: &mut Map, g: Guid) {
     let realm = map.realm.clone();
     let ended = {
@@ -375,6 +557,17 @@ pub fn leave(map: &mut Map, g: Guid) {
     let back = map.players.get_mut(&g).and_then(|p| p.bg_return.take());
     if let Some((key, pos, o)) = back {
         map.teleport(g, key, pos, o);
+    } else if let Some(b) = map.players.get(&g).and_then(|p| p.row.state.bind) {
+        map.teleport(
+            g,
+            MapKey::world(b.map),
+            Vector3d {
+                x: b.x,
+                y: b.y,
+                z: b.z,
+            },
+            0.0,
+        );
     }
 }
 
@@ -401,7 +594,9 @@ pub fn closed(realm: &Realm, key: MapKey) {
         .remove(&key.instance);
 }
 
-/// A player going offline leaves the queues and their invitations.
+/// A player going offline leaves the queues and their invitations; one in
+/// a match keeps their place for an invitation's while, as Thistle Tea
+/// keeps it, to come back to.
 pub fn logged_out(realm: &Realm, g: Guid) {
     let mut refill = Vec::new();
     {
@@ -411,15 +606,33 @@ pub fn logged_out(realm: &Realm, g: Guid) {
             let _ = (bg, bracket);
         }
         for m in bgs.matches.values_mut() {
-            if m.invited.remove(&g).is_some() {
+            if let Some(team) = m.members.remove(&g) {
+                if !m.ended {
+                    m.invited.insert(g, (team, Instant::now() + INVITE_FOR));
+                }
+            } else if m.invited.remove(&g).is_some() {
                 refill.push((m.bg, m.bracket));
             }
-            m.members.remove(&g);
         }
     }
     for (bg, bracket) in refill {
         fill(realm, bg, bracket);
     }
+}
+
+/// Logging in on `map`, a battleground's: the match `g` kept their place
+/// in, still on, which takes them back. `None` sends them home.
+pub fn rejoin(realm: &Realm, g: Guid, map: u32) -> Option<MapKey> {
+    let mut bgs = realm.social.battlegrounds.lock();
+    let m = bgs.matches.values_mut().find(|m| {
+        map_of(m.bg) == map
+            && !m.ended
+            && (m.members.contains_key(&g) || m.invited.contains_key(&g))
+    })?;
+    if let Some((team, _)) = m.invited.remove(&g) {
+        m.members.insert(g, team);
+    }
+    Some(m.key())
 }
 
 /// Invitations not taken in time lapse.
