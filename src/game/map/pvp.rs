@@ -291,13 +291,29 @@ pub fn entrance(map: &mut Map, g: Guid, trigger: u32) {
         let min = data.battlegrounds.get(&e.bg).map_or(10, |t| t.min_level);
         map.system_message(
             g,
-            &format!("You must be in the {side} and at least level {min} to enter."),
+            &format!(
+                "You must be in the {side} and at least {} level to enter.",
+                ordinal(min)
+            ),
         );
     }
     if e.exit_map == map.key.map {
         let (x, y, z, o) = e.exit;
         map.teleport(g, map.key, Vector3d { x, y, z }, o);
     }
+}
+
+/// A level as the portals' refusal names it: 1st, 2nd, 3rd, 11th, 51st
+/// (Thistle Tea's `Entrance.ordinal`).
+fn ordinal(n: u32) -> String {
+    let suffix = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
 }
 
 /// `CMSG_TOGGLE_PVP`: the player wants their flag, or not (it lingers five

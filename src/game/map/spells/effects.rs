@@ -539,7 +539,29 @@ fn effect(
                 .unwrap_or(0);
             combat::deal_damage_by(map, caster, target, health, 1, Some(s.id));
         }
-        EFFECT_SCHOOL_DAMAGE | EFFECT_ENVIRONMENTAL_DAMAGE => {
+        // The world's harm by a spell (a campfire's, a brazier's): its own
+        // amount, no bonus and no crit. A player takes it as fire from the
+        // world; anything else only has its shields soak it, and is told
+        // (mangos's `EffectEnvironmentalDMG`, Thistle Tea's
+        // `environmental_damage`).
+        EFFECT_ENVIRONMENTAL_DAMAGE => {
+            let amount = amount.max(0) as u32;
+            if guid::is_player(target) {
+                crate::game::map::environment::damage(
+                    map,
+                    target,
+                    wow_world_messages::vanilla::EnvironmentalDamageType::Fire,
+                    amount,
+                );
+            } else {
+                let (_, absorbed) = auras::absorb(map, target, amount, s.school_mask());
+                let frame = outcome::damage_log(
+                    caster, target, s.id, s.school, amount, absorbed, 0, 0, false,
+                );
+                map.send_to_observers(target, &frame, true);
+            }
+        }
+        EFFECT_SCHOOL_DAMAGE => {
             if super::scripts::school_damage(map, caster, target, s, index, amount, l) {
                 return;
             }

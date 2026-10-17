@@ -193,6 +193,9 @@ pub struct DisplayInfo {
     pub combat_reach: f32,
     /// A model a rider may mount in (a transformed player's).
     pub can_mount: bool,
+    /// Its model's height (`CreatureModelData`'s collision height), at
+    /// object scale one: where the head is, for the breath; 0 for unknown.
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -422,6 +425,9 @@ pub struct RaceInfo {
     pub female_display: u32,
     pub faction: u32,
     pub cinematic: u32,
+    /// The flight points a new character of the race knows, as the client
+    /// counts them: node N is bit N - 1 (`ChrRaces`' starting taxi mask).
+    pub starting_taxi_mask: u32,
 }
 
 #[derive(Debug, Default)]

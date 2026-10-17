@@ -2408,7 +2408,11 @@ fn deal_damage_with(
     if damage == 0 || crate::game::map::event_ai::feigning(map, victim) {
         return;
     }
-    gain_rage(map, victim, damage, true);
+    // No rage from one's own harm, the world's (mangos's `dealer !=
+    // victim`).
+    if attacker != victim {
+        gain_rage(map, victim, damage, true);
+    }
     crate::game::map::creature_combat::damaged(map, victim, attacker, damage);
     crate::game::map::vendor::wear_from_blow(map, attacker, victim);
     if guid::is_unit(victim) {
@@ -2444,8 +2448,12 @@ fn deal_damage_with(
     if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
         return;
     }
-    // A priest with Spirit of Redemption becomes a spirit instead.
+    // A priest with Spirit of Redemption becomes a spirit instead: in a
+    // battleground, defeated all the same, the death to come (Thistle Tea's
+    // `count_death?: false`).
     if left == 0 && crate::game::map::spells::redemption::saves(map, victim) {
+        let by = crate::game::map::pets::master(map, attacker);
+        crate::game::map::battleground::defeated(map, victim, by, false);
         return;
     }
     let Some(f) = map.unit_fields_mut(victim) else {
