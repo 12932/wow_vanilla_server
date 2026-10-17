@@ -201,7 +201,7 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
     }
     // Made afresh: as no quest has it, until the next look.
     p.quest_objects.remove(&object);
-    map.batches.entry(observer).or_default().push(&block);
+    map.batches.entry(observer).or_default().push_for(object, &block);
     if let Some(o) = map.observers_mut(object) {
         o.insert(observer);
     }

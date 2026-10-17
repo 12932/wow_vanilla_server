@@ -324,11 +324,27 @@ const PACKET_LIMIT: usize = 24 * 1024;
 
 /// One observer's blocks for one update, framed into packets by
 /// [`Batch::finish`].
+///
+/// What the client is to forget goes first, in one out-of-range block, as
+/// mangos writes it: the 1.12 client crashes on a values or create block
+/// for an object it was told in the same packet to forget, and on corpses
+/// created ahead of their owners' going. A block about an object (a create,
+/// or a values block sent during the update) is kept with its object, so
+/// forgetting the object drops what the client would no longer have.
 #[derive(Debug, Default)]
 pub struct Batch {
-    count: u32,
+    forget: Vec<Guid>,
     body: Vec<u8>,
-    packets: Vec<Arc<[u8]>>,
+    spans: Vec<Span>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Span {
+    object: Option<Guid>,
+    start: u32,
+    len: u32,
+    create: bool,
+    live: bool,
 }
 
 impl Batch {
@@ -337,34 +353,100 @@ impl Batch {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.count == 0 && self.packets.is_empty()
+        self.forget.is_empty() && !self.spans.iter().any(|s| s.live)
     }
 
+    /// A block about nothing the update may take away.
     pub fn push(&mut self, block: &[u8]) {
-        if !self.body.is_empty() && self.body.len() + block.len() > PACKET_LIMIT {
-            self.cut();
-        }
+        self.add(None, block);
+    }
+
+    /// A block about `object`: a create, or its values.
+    pub fn push_for(&mut self, object: Guid, block: &[u8]) {
+        self.add(Some(object), block);
+    }
+
+    fn add(&mut self, object: Option<Guid>, block: &[u8]) {
+        let create = matches!(
+            block.first(),
+            Some(&UPDATETYPE_CREATE_OBJECT | &UPDATETYPE_CREATE_OBJECT2)
+        );
+        self.spans.push(Span {
+            object,
+            start: self.body.len() as u32,
+            len: block.len() as u32,
+            create,
+            live: true,
+        });
         self.body.extend_from_slice(block);
-        self.count += 1;
     }
 
-    fn cut(&mut self) {
-        if self.count == 0 {
-            return;
+    /// The creates for `object` in the batch.
+    pub fn creates_of(&self, object: Guid) -> usize {
+        self.spans
+            .iter()
+            .filter(|s| s.live && s.create && s.object == Some(object))
+            .count()
+    }
+
+    /// The client forgets `object` first of all.
+    pub fn forget(&mut self, object: Guid) {
+        if !self.forget.contains(&object) {
+            self.forget.push(object);
         }
-        let mut payload = Vec::with_capacity(5 + self.body.len());
-        payload.extend_from_slice(&self.count.to_le_bytes());
-        payload.push(0);
-        payload.extend_from_slice(&self.body);
-        self.packets.push(frame_update(&payload));
-        self.body.clear();
-        self.count = 0;
     }
 
-    /// The batch's packets, ready to queue.
-    pub fn finish(mut self) -> Vec<Arc<[u8]>> {
-        self.cut();
-        self.packets
+    /// What the batch says about `object`, all of it (`keep_last_create`:
+    /// but its last create and what follows it).
+    pub fn drop_for(&mut self, object: Guid, keep_last_create: bool) {
+        let last = keep_last_create
+            .then(|| {
+                self.spans
+                    .iter()
+                    .rposition(|s| s.live && s.create && s.object == Some(object))
+            })
+            .flatten();
+        for (i, s) in self.spans.iter_mut().enumerate() {
+            if s.object == Some(object) && last.is_none_or(|l| i < l) {
+                s.live = false;
+            }
+        }
+    }
+
+    /// The batch's packets, ready to queue: the out-of-range block first,
+    /// then the blocks in order, cut so no packet needs a size the 1.12
+    /// client can't read.
+    pub fn finish(self) -> Vec<Arc<[u8]>> {
+        let mut packets = Vec::new();
+        let mut count = 0u32;
+        let mut body = Vec::new();
+        let mut cut = |count: &mut u32, body: &mut Vec<u8>| {
+            if *count == 0 {
+                return;
+            }
+            let mut payload = Vec::with_capacity(5 + body.len());
+            payload.extend_from_slice(&count.to_le_bytes());
+            payload.push(0);
+            payload.extend_from_slice(body);
+            packets.push(frame_update(&payload));
+            body.clear();
+            *count = 0;
+        };
+        // At most 9 bytes a guid: a block that keeps under the limit.
+        for guids in self.forget.chunks(PACKET_LIMIT / 9) {
+            body.extend_from_slice(&out_of_range_block(guids));
+            count += 1;
+        }
+        for s in self.spans.iter().filter(|s| s.live) {
+            let block = &self.body[s.start as usize..(s.start + s.len) as usize];
+            if !body.is_empty() && body.len() + block.len() > PACKET_LIMIT {
+                cut(&mut count, &mut body);
+            }
+            body.extend_from_slice(block);
+            count += 1;
+        }
+        cut(&mut count, &mut body);
+        packets
     }
 }
 
@@ -571,5 +653,89 @@ mod tests {
             panic!("not a player mask");
         };
         assert_eq!(p.player_field_coinage(), Some(5));
+    }
+
+    fn unit_create(g: Guid, fields: &Fields) -> Vec<u8> {
+        create_block(
+            &Create {
+                guid: g,
+                type_id: TypeId::Unit,
+                placement: Placement::Position {
+                    position: Vector3d {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    },
+                    orientation: 0.0,
+                },
+                fields,
+                is_self: false,
+                melee_target: None,
+            },
+            Visibility::Public,
+        )
+    }
+
+    fn kinds(packets: &[Arc<[u8]>]) -> Vec<(&'static str, Vec<Guid>)> {
+        let mut out = Vec::new();
+        for p in packets {
+            let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) = parse(p) else {
+                panic!("not an update object");
+            };
+            for o in &m.objects {
+                out.push(match &o.update_type {
+                    Object_UpdateType::OutOfRangeObjects { guids } => ("forget", guids.clone()),
+                    Object_UpdateType::CreateObject { guid3, .. }
+                    | Object_UpdateType::CreateObject2 { guid3, .. } => ("create", vec![*guid3]),
+                    Object_UpdateType::Values { guid1, .. } => ("values", vec![*guid1]),
+                    other => panic!("unexpected {other:?}"),
+                });
+            }
+        }
+        out
+    }
+
+    /// What the 1.12 client crashed on: corpses created, then their owners
+    /// forgotten; a creature made anew, forgotten, then its values. What is
+    /// forgotten goes first.
+    #[test]
+    fn what_is_forgotten_goes_first() {
+        let (owner, x) = (guid::player(0x20), guid::unit(299, 7));
+        let fields = unit_fields(x);
+        let mut batch = Batch::new();
+        batch.push_for(x, &unit_create(x, &fields));
+        batch.forget(owner);
+        batch.push(&values_block(x, &fields, Visibility::Public).unwrap());
+        assert_eq!(
+            kinds(&batch.finish()),
+            [
+                ("forget", vec![owner]),
+                ("create", vec![x]),
+                ("values", vec![x]),
+            ]
+        );
+    }
+
+    /// Learned of and lost in one update: nothing of it goes. Lost and
+    /// learned of again: it is forgotten, then made anew, once.
+    #[test]
+    fn what_the_client_wont_have_is_dropped() {
+        let x = guid::unit(299, 7);
+        let fields = unit_fields(x);
+        let mut batch = Batch::new();
+        batch.push_for(x, &unit_create(x, &fields));
+        assert_eq!(batch.creates_of(x), 1);
+        batch.drop_for(x, false);
+        assert!(batch.is_empty());
+        assert!(batch.finish().is_empty());
+        let mut batch = Batch::new();
+        batch.push_for(x, &unit_create(x, &fields));
+        batch.push_for(x, &unit_create(x, &fields));
+        batch.forget(x);
+        batch.drop_for(x, true);
+        assert_eq!(
+            kinds(&batch.finish()),
+            [("forget", vec![x]), ("create", vec![x])]
+        );
     }
 }

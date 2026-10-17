@@ -357,7 +357,7 @@ pub fn update_objects(map: &mut Map) {
                 p.quest_objects.remove(&o);
             }
             if let Some(block) = crate::game::update::values_block(o, &f, Visibility::Public) {
-                map.batches.entry(g).or_default().push(&block);
+                map.batches.entry(g).or_default().push_for(o, &block);
             }
         }
     }
