@@ -118,8 +118,6 @@ async fn level_ups(c: &mut Client) -> Vec<u8> {
     out
 }
 
-const SMSG_LOG_XPGAIN: u16 = 0x1D0;
-
 /// Wait until the map has handled what `c` sent so far: it answers
 /// `CMSG_PLAYED_TIME` in turn.
 async fn synced(c: &mut Client) {
@@ -169,7 +167,6 @@ async fn experience_chains_levels_from_one_grant_stops_at_the_top_and_takes_noth
     assert_eq!((level, xp), (60, 0));
     // At the top, a grant is not even told.
     a.clear();
-    a.raw.clear();
     let xp = on_map(&realm, move |m| {
         stats::give_xp(m, ga, 500, None);
         m.players[&ga].fields.get_u32(PLAYER_XP)
@@ -179,19 +176,14 @@ async fn experience_chains_levels_from_one_grant_stops_at_the_top_and_takes_noth
     assert!(!told_xp(&mut a).await);
 }
 
-/// Whether `SMSG_LOG_XPGAIN` came in a moment, read or raw.
+/// Whether `SMSG_LOG_XPGAIN` came in a moment.
 async fn told_xp(c: &mut Client) -> bool {
-    let read = c
-        .gets(Duration::from_millis(300), |m| match m {
-            ServerOpcodeMessage::SMSG_LOG_XPGAIN(_) => Some(()),
-            _ => None,
-        })
-        .await
-        .is_some();
-    let before = c.raw.len();
-    c.raw
-        .retain(|f| u16::from_le_bytes([f[2], f[3]]) != SMSG_LOG_XPGAIN);
-    read || c.raw.len() < before
+    c.gets(Duration::from_millis(300), |m| match m {
+        ServerOpcodeMessage::SMSG_LOG_XPGAIN(_) => Some(()),
+        _ => None,
+    })
+    .await
+    .is_some()
 }
 
 #[test]
