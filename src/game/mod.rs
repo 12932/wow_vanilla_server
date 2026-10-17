@@ -70,6 +70,8 @@ mod tests_p3_combat;
 #[cfg(test)]
 mod tests_p3_combat10;
 #[cfg(test)]
+mod tests_p3_combat11;
+#[cfg(test)]
 mod tests_p3_combat2;
 #[cfg(test)]
 mod tests_p3_combat3;
