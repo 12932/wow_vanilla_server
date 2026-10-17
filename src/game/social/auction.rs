@@ -232,10 +232,28 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
         return;
     };
     let item = &p.items[i];
+    // Carried, not worn nor banked; not bound, conjured, timed, nor a bag
+    // with something in it (mangos's `HandleAuctionSellItem`, Thistle Tea's
+    // `validate_sale`), as mangos tells it.
     let bound = item.fields.get_u32(crate::game::fields::ITEM_FIELD_FLAGS) & 0x1 != 0;
     let worn = item.bag == crate::game::store::BAG_PLAYER && item.slot < 19;
-    if bound || worn {
-        fail(map, R2::ErrItemNotFound);
+    let conjured = realm
+        .data
+        .item(item.entry)
+        .is_some_and(|t| t.flags & crate::game::map::items::TEMPLATE_FLAG_CONJURED != 0);
+    let timed = item
+        .fields
+        .get_u32(crate::game::fields::ITEM_FIELD_DURATION)
+        != 0;
+    let full_bag =
+        item.bag == crate::game::store::BAG_PLAYER && p.items.iter().any(|x| x.bag == item.slot);
+    if bound || worn || !item.carried() || conjured || timed || full_bag {
+        fail(
+            map,
+            R2::ErrInventory {
+                inventory_result2: InventoryResult::ItemNotFound,
+            },
+        );
         return;
     }
     let count = item.count();
@@ -475,18 +493,34 @@ pub fn list(map: &Map, g: Guid, m: &CMSG_AUCTION_LIST_ITEMS) {
     let Some(house) = house_at(map, g, m.auctioneer) else {
         return;
     };
+    let Some(me) = map.players.get(&g) else {
+        return;
+    };
     let market = market_of(house);
     let name = m.searched_name.to_lowercase();
+    let now = mail::now();
     let auctions = realm.social.auctions.lock();
     let mut found: Vec<&Auction> = auctions
         .auctions
         .values()
-        .filter(|a| a.market == market)
+        .filter(|a| a.market == market && a.expires_at > now)
         .filter(|a| {
             let Some(t) = realm.data.item(a.item.entry) else {
                 return false;
             };
-            (name.is_empty() || t.name.to_lowercase().contains(&name))
+            // Its name with its suffix, "Silk Robe of the Eagle" (Thistle
+            // Tea's `Query`).
+            let full = match realm
+                .data
+                .crafts
+                .random_property_names
+                .get(&Item::shown(&realm.data, &a.item).random_property)
+            {
+                Some(suffix) => format!("{} {}", t.name, suffix),
+                None => t.name.clone(),
+            };
+            (name.is_empty() || full.to_lowercase().contains(&name))
+                && (m.usable == 0 || usable_by(me, &realm.data, t))
                 && (m.minimum_level == 0 || t.required_level >= u32::from(m.minimum_level))
                 && (m.maximum_level == 0 || t.required_level <= u32::from(m.maximum_level))
                 && (m.auction_slot_id == u32::MAX || t.inventory_type == m.auction_slot_id)
@@ -511,8 +545,42 @@ pub fn list(map: &Map, g: Guid, m: &CMSG_AUCTION_LIST_ITEMS) {
     }
 }
 
-/// `CMSG_AUCTION_LIST_OWNER_ITEMS` and `CMSG_AUCTION_LIST_BIDDER_ITEMS`.
-pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool) {
+/// Whether `p` could use `t`, for the usable filter (Thistle Tea's
+/// `Auction.Eligibility`): the level, class, race and proficiency, its
+/// spell known, and a recipe not learned already.
+fn usable_by(
+    p: &crate::game::map::player::Player,
+    data: &GameData,
+    t: &crate::game::data::ItemTemplate,
+) -> bool {
+    // A recipe's second spell is what it teaches (its first, Learning, 483,
+    // teaches it), or a spell of it teaches one.
+    const RECIPE: u32 = 9;
+    const LEARNING: u32 = 483;
+    let teaches = |id: u32| {
+        std::iter::once(id).chain(
+            data.spells
+                .get(id)
+                .into_iter()
+                .flat_map(|s| s.effects.iter().map(|e| e.trigger_spell)),
+        )
+    };
+    let learned = t.class == RECIPE
+        && t.spells
+            .iter()
+            .filter(|s| s.id != 0 && s.id != LEARNING)
+            .flat_map(|s| teaches(s.id))
+            .any(|taught| taught != 0 && p.spells.contains(&taught));
+    u32::from(p.level()) >= t.required_level
+        && crate::game::map::loot::usable(p, t)
+        && (t.required_spell == 0 || p.spells.contains(&t.required_spell))
+        && !learned
+}
+
+/// `CMSG_AUCTION_LIST_OWNER_ITEMS` and `CMSG_AUCTION_LIST_BIDDER_ITEMS`:
+/// the player's auctions, or those they hold the bid on and those they ask
+/// after, outbid (mangos's `HandleAuctionListBidderItems`).
+pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32]) {
     let realm = &map.realm;
     let Some(house) = house_at(map, g, auctioneer) else {
         return;
@@ -520,10 +588,20 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool) {
     let me = guid::counter(g);
     let market = market_of(house);
     let auctions = realm.social.auctions.lock();
+    let mut asked: Vec<u32> = outbid.to_vec();
+    asked.sort_unstable();
+    asked.dedup();
     let mine: Vec<AuctionListItem> = auctions
         .auctions
         .values()
-        .filter(|a| a.market == market && if bids { a.bidder == me } else { a.owner == me })
+        .filter(|a| {
+            a.market == market
+                && if bids {
+                    a.bidder == me || asked.contains(&a.id)
+                } else {
+                    a.owner == me
+                }
+        })
         .map(|a| a.list_item(&realm.data))
         .collect();
     let total = mine.len() as u32;

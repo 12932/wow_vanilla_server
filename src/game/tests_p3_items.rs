@@ -929,3 +929,238 @@ async fn until<T: Send + 'static>(
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
+
+const AUCTIONEER: u32 = 3301;
+const ROBE: u32 = 9320;
+const AXE: u32 = 9321;
+const RECIPE: u32 = 9322;
+const HIGH: u32 = 9323;
+const PLAIN: u32 = 9324;
+const COOKED: u32 = 900_610;
+
+/// An auctioneer (the goblins', for want of a faction) by the start, and
+/// what is up for auction.
+fn auction_data() -> GameData {
+    let mut d = data();
+    let mut t = d.creature_templates[&VENDOR].clone();
+    t.entry = AUCTIONEER;
+    t.npc_flags = crate::game::map::npc::NPC_FLAG_AUCTIONEER;
+    d.creature_templates.insert(AUCTIONEER, t);
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: 2,
+        entries: vec![AUCTIONEER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1 + 1.0,
+        z: START.2,
+        ..Default::default()
+    });
+    let mut robe = item(ROBE);
+    (robe.name, robe.class, robe.subclass, robe.inventory_type) = ("Silk Robe".into(), 4, 1, 20);
+    robe.quality = 3;
+    robe.required_level = 20;
+    d.items.insert(ROBE, robe);
+    let mut axe = item(AXE);
+    (axe.name, axe.class) = ("Axe".into(), 2);
+    d.items.insert(AXE, axe);
+    let mut recipe = item(RECIPE);
+    (recipe.name, recipe.class) = ("Recipe: Cooked Thing".into(), 9);
+    recipe.spells[0].id = 483;
+    recipe.spells[1].id = COOKED;
+    d.items.insert(RECIPE, recipe);
+    let mut high = item(HIGH);
+    high.name = "Lofty Thing".into();
+    high.required_level = 30;
+    d.items.insert(HIGH, high);
+    let mut plain = item(PLAIN);
+    plain.name = "Plain Thing".into();
+    d.items.insert(PLAIN, plain);
+    d.crafts
+        .random_property_names
+        .insert(1182, "of the Bear".into());
+    d
+}
+
+fn auctioneer() -> Guid {
+    guid::unit(AUCTIONEER, 2)
+}
+
+async fn search(a: &mut Client, name: &str, usable: u8) -> (Vec<u32>, u32) {
+    a.clear();
+    a.send(CMSG_AUCTION_LIST_ITEMS {
+        auctioneer: auctioneer(),
+        list_start_item: 0,
+        searched_name: name.into(),
+        minimum_level: 0,
+        maximum_level: 0,
+        auction_slot_id: u32::MAX,
+        auction_main_category: u32::MAX,
+        auction_sub_category: u32::MAX,
+        auction_quality: ItemQuality::Poor,
+        usable,
+    })
+    .await;
+    a.wait_for("SMSG_AUCTION_LIST_RESULT", |m| match m {
+        ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(l) => {
+            let mut ids: Vec<u32> = l.auctions.iter().map(|x| x.id).collect();
+            ids.sort_unstable();
+            Some((ids, l.total_amount_of_auctions))
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's `Auction.Query` and `Eligibility`: an item found by its
+/// suffix; other markets' and lapsed auctions left out; the usable filter,
+/// when asked for, leaving out what the player is too low for and recipes
+/// they know; the bidder's list with the auctions they ask after.
+#[tokio::test]
+async fn the_auction_house_finds_what_is_asked_for() {
+    use crate::game::social::auction::Auction;
+    let realm = harness::realm_with(auction_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(auctioneer()).await;
+    let now = crate::game::social::mail::now();
+    {
+        let mut auctions = realm.social.auctions.lock();
+        let mut up =
+            |id: u32, entry: u32, data: &str, market: u32, expires_at: i64, bidder: u32| {
+                auctions.auctions.insert(
+                    id,
+                    Auction {
+                        id,
+                        market,
+                        house: 7,
+                        item: crate::game::store::ItemRow {
+                            guid: 800_000 + id,
+                            entry,
+                            count: 1,
+                            data: data.into(),
+                            ..Default::default()
+                        },
+                        owner: 99,
+                        start_bid: 100,
+                        buyout: 1000,
+                        bidder,
+                        bid: if bidder > 0 { 100 } else { 0 },
+                        expires_at,
+                        ..Default::default()
+                    },
+                );
+            };
+        up(1, ROBE, "rp:1182", 7, now + 7200, 0);
+        up(2, AXE, "", 7, now + 7200, 98);
+        up(3, ROBE, "", 2, now + 7200, 0);
+        up(4, ROBE, "", 7, now - 1, 0);
+        up(5, RECIPE, "", 7, now + 7200, 0);
+        up(6, HIGH, "", 7, now + 7200, 0);
+        up(7, PLAIN, "", 7, now + 7200, 0);
+    }
+    assert_eq!(search(&mut a, "OF THE BEAR", 0).await, (vec![1], 1));
+    assert_eq!(search(&mut a, "eagle", 0).await, (vec![], 0));
+    assert_eq!(
+        search(&mut a, "robe", 0).await,
+        (vec![1], 1),
+        "not abroad nor lapsed"
+    );
+    assert_eq!(search(&mut a, "", 0).await.0, vec![1, 2, 5, 6, 7]);
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().spells.push(COOKED)
+    })
+    .await;
+    assert_eq!(
+        search(&mut a, "thing", 1).await,
+        (vec![7], 1),
+        "not too high, nor a recipe known"
+    );
+    assert_eq!(search(&mut a, "thing", 0).await.0, vec![5, 6, 7]);
+    // Outbid on the axe, Alice asks after it.
+    a.send(CMSG_AUCTION_LIST_BIDDER_ITEMS {
+        auctioneer: auctioneer(),
+        start_from_page: 0,
+        outbid_item_ids: vec![2, 2, 99],
+    })
+    .await;
+    let bids = a
+        .wait_for("SMSG_AUCTION_BIDDER_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(l) => {
+                Some(l.auctions.iter().map(|x| x.id).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(bids, vec![2]);
+}
+
+/// Thistle Tea's `validate_sale/5`: not a bound, conjured or timed item, a
+/// banked one, nor a bag with something in it; told as an inventory error,
+/// as mangos tells it.
+#[tokio::test]
+async fn the_auction_house_takes_only_what_may_be_sold() {
+    let mut d = auction_data();
+    let mut conjured = item(9325);
+    conjured.flags = crate::game::map::items::TEMPLATE_FLAG_CONJURED;
+    d.items.insert(9325, conjured);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(auctioneer()).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(10_000)
+    })
+    .await;
+    let sell = |item| CMSG_AUCTION_SELL_ITEM {
+        auctioneer: auctioneer(),
+        item,
+        starting_bid: 100,
+        buyout: 200,
+        auction_duration_in_minutes: 120,
+    };
+    let bound = give(&realm, g, TRINKET, 1).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.item_by_guid(bound).unwrap();
+        p.items[i].fields.set_u32(ITEM_FIELD_FLAGS, 1);
+    })
+    .await;
+    let conjured = give(&realm, g, 9325, 1).await;
+    let timed = give(&realm, g, PLAIN, 1).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.item_by_guid(timed).unwrap();
+        p.items[i].fields.set_u32(ITEM_FIELD_DURATION, 600);
+    })
+    .await;
+    let banked = give(&realm, g, AXE, 1).await;
+    put(&realm, g, banked, (BAG_PLAYER, BANK_START)).await;
+    let satchel = give(&realm, g, SATCHEL, 1).await;
+    put(&realm, g, satchel, (BAG_PLAYER, BAG_START)).await;
+    let inside = give(&realm, g, WIDGET, 1).await;
+    put(&realm, g, inside, (BAG_START, 0)).await;
+    for item in [bound, conjured, timed, banked, satchel] {
+        a.send(sell(item)).await;
+        let why = a
+            .wait_for("SMSG_AUCTION_COMMAND_RESULT", |m| match m {
+                ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => {
+                    Some(format!("{:?}", r.action))
+                }
+                _ => None,
+            })
+            .await;
+        assert!(why.contains("ErrInventory"), "{why}");
+    }
+    let kept = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (
+            [bound, conjured, timed, banked, satchel, inside]
+                .iter()
+                .all(|i| p.item_by_guid(*i).is_some()),
+            p.money(),
+            m.realm.social.auctions.lock().auctions.len(),
+        )
+    })
+    .await;
+    assert_eq!(kept, (true, 10_000, 0));
+}
