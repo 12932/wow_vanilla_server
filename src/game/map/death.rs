@@ -168,6 +168,10 @@ pub fn kill(map: &mut Map, g: Guid) {
     crate::game::map::corpses::died(p, crate::game::map::corpses::unix_ms());
     p.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+    // The dead dance, sit or kneel no more (Thistle Tea's death clears
+    // the emote state and the posture).
+    p.fields.set_u32(UNIT_NPC_EMOTESTATE, 0);
+    p.set_stand_state(0);
     p.logout_at = None;
     crate::game::map::misc::capture_self_res(map, g);
     crate::game::map::combat::leave_combat(map, g);
