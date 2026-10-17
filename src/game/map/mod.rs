@@ -310,6 +310,10 @@ pub struct Map {
     pub creature_by_guid: AHashMap<Guid, usize>,
     pub gameobjects: Slab<GameObject>,
     pub gameobject_by_guid: AHashMap<Guid, usize>,
+    /// The game objects (their keys) that may have changed since the last
+    /// update's flush: every change to one goes through
+    /// `Map::gameobject_mut`, or comes with `Map::add_gameobject`.
+    touched_objects: Vec<usize>,
     pub corpses: AHashMap<Guid, death::Corpse>,
     /// Creatures dead and waiting to decay or respawn.
     pub dead_creatures: Vec<Guid>,
@@ -370,6 +374,23 @@ pub struct Map {
     /// Scripted map events under way.
     pub map_events: map_events::Events,
     pub spells: spells::MapSpells,
+    /// Which of the rarer states a creature here may be in (a charge, a
+    /// flight, a call for help, a cast, a pet), so the update can skip its
+    /// looks for them.
+    pub rare: creature_combat::RareStates,
+    /// Creatures that may be awake: seen by a player, or in a fight
+    /// (attacking, attacked, evading, or down in a feign death). Every
+    /// creature that is, and some that were: a player coming to know one
+    /// adds it, as does [`Map::note_fighting`], and [`Map::awake_where`]
+    /// lets go of those no longer awake. The update's looks for what only
+    /// an awake creature could be go through it, not every creature.
+    pub awake: ahash::AHashSet<Guid>,
+    /// Creatures that may have auras: every creature that has, and some
+    /// that had. An aura is only ever added through `auras::auras_mut`,
+    /// which adds its creature, as `Map::add_creature` adds one that
+    /// arrives with auras; `Map::with_auras_where` lets go of those
+    /// without.
+    pub with_auras: ahash::AHashSet<Guid>,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
     /// The Elemental Invasion's rifts and their invaders.
@@ -390,6 +411,60 @@ pub struct Map {
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
+}
+
+/// What `out` makes of each creature of `set` that `pred` takes, in key
+/// order (as a look through every creature goes); members gone, or no
+/// longer `kept`, are let go.
+fn members_where<T>(
+    set: &mut ahash::AHashSet<Guid>,
+    creatures: &Slab<Creature>,
+    by_guid: &AHashMap<Guid, usize>,
+    kept: impl Fn(&Creature) -> bool,
+    pred: impl Fn(&Creature) -> bool,
+    out: impl Fn(usize, &Creature) -> T,
+) -> Vec<T> {
+    let mut keys = Vec::with_capacity(set.len());
+    set.retain(
+        |g| match by_guid.get(g).and_then(|&k| Some((k, creatures.get(k)?))) {
+            Some((k, c)) if kept(c) => {
+                keys.push(k);
+                true
+            }
+            _ => false,
+        },
+    );
+    keys.sort_unstable();
+    keys.into_iter()
+        .filter_map(|k| Some((k, creatures.get(k)?)))
+        .filter(|(_, c)| pred(c))
+        .map(|(k, c)| out(k, c))
+        .collect()
+}
+
+/// What `out` makes of each creature `pred` takes, looking at every one:
+/// what the shortcuts must find, for debug builds' checks.
+fn every_creature_where<T>(
+    creatures: &Slab<Creature>,
+    pred: impl Fn(&Creature) -> bool,
+    out: impl Fn(usize, &Creature) -> T,
+) -> Vec<T> {
+    creatures
+        .iter()
+        .filter(|(_, c)| pred(c))
+        .map(|(k, c)| out(k, c))
+        .collect()
+}
+
+/// Whether `c` is awake (see `Map::awake`): seen, or in a fight.
+pub fn awake(c: &Creature) -> bool {
+    !c.observers.is_empty()
+        || c.combat.attacking
+        || !c.combat.attackers.is_empty()
+        || c.evading
+        || c.scripted
+            .as_deref()
+            .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
 }
 
 /// Run `f` on the map; a panic in it is logged and the map goes on, so a
@@ -490,6 +565,7 @@ impl Map {
             creature_by_guid: AHashMap::new(),
             gameobjects: Slab::new(),
             gameobject_by_guid: AHashMap::new(),
+            touched_objects: Vec::new(),
             corpses: AHashMap::new(),
             dead_creatures: Vec::new(),
             vendor_stock: AHashMap::new(),
@@ -523,6 +599,9 @@ impl Map {
             pools: AHashMap::new(),
             map_events: Default::default(),
             spells: Default::default(),
+            rare: Default::default(),
+            awake: ahash::AHashSet::new(),
+            with_auras: ahash::AHashSet::new(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
@@ -995,7 +1074,15 @@ impl Map {
             }
             p.fields.clear_dirty();
         }
-        for (_, o) in self.gameobjects.iter_mut() {
+        // Only a game object changed since the last flush can have dirty
+        // fields; in key order, as a look through every one goes.
+        let mut touched = std::mem::take(&mut self.touched_objects);
+        touched.sort_unstable();
+        touched.dedup();
+        for k in touched {
+            let Some(o) = self.gameobjects.get_mut(k) else {
+                continue;
+            };
             if !o.fields.is_dirty() {
                 continue;
             }
@@ -1008,6 +1095,11 @@ impl Map {
             }
             o.fields.clear_dirty();
         }
+        debug_assert!(
+            self.gameobjects.iter().all(|(_, o)| !o.fields.is_dirty()),
+            "{}: a game object changed, but not through Map::gameobject_mut",
+            self.key
+        );
         // Creatures whose tap their observers see anew: taken or gone, or
         // their flags sent again to those outside it.
         let mut taps = Vec::new();
@@ -1097,6 +1189,63 @@ impl Map {
         self.creatures.get_mut(k)
     }
 
+    /// `g`, if a creature, may be in a fight from now (see `awake`).
+    pub fn note_fighting(&mut self, g: Guid) {
+        if self.creature_by_guid.contains_key(&g) {
+            self.awake.insert(g);
+        }
+    }
+
+    /// What `out` makes of each awake creature `pred` takes, in the order
+    /// of a look through every creature, which is what debug builds check
+    /// it finds (so `pred` takes only creatures that are awake). Those no
+    /// longer awake are let go.
+    pub fn awake_where<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        pred: impl Fn(&Creature) -> bool,
+        out: impl Fn(usize, &Creature) -> T,
+    ) -> Vec<T> {
+        let found = members_where(
+            &mut self.awake,
+            &self.creatures,
+            &self.creature_by_guid,
+            awake,
+            &pred,
+            &out,
+        );
+        debug_assert_eq!(
+            found,
+            every_creature_where(&self.creatures, &pred, &out),
+            "{}: a creature is awake but not in Map::awake",
+            self.key
+        );
+        found
+    }
+
+    /// [`Map::awake_where`] for the creatures with auras (`with_auras`):
+    /// `pred` takes only creatures with auras.
+    pub fn with_auras_where<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        pred: impl Fn(&Creature) -> bool,
+        out: impl Fn(usize, &Creature) -> T,
+    ) -> Vec<T> {
+        let found = members_where(
+            &mut self.with_auras,
+            &self.creatures,
+            &self.creature_by_guid,
+            |c| !c.auras.is_empty(),
+            &pred,
+            &out,
+        );
+        debug_assert_eq!(
+            found,
+            every_creature_where(&self.creatures, &pred, &out),
+            "{}: a creature has auras but isn't in Map::with_auras",
+            self.key
+        );
+        found
+    }
+
     pub fn gameobject(&self, guid: Guid) -> Option<&GameObject> {
         self.gameobject_by_guid
             .get(&guid)
@@ -1105,6 +1254,7 @@ impl Map {
 
     pub fn gameobject_mut(&mut self, guid: Guid) -> Option<&mut GameObject> {
         let k = *self.gameobject_by_guid.get(&guid)?;
+        self.touched_objects.push(k);
         self.gameobjects.get_mut(k)
     }
 
@@ -1122,6 +1272,13 @@ impl Map {
         {
             self.ai_spawned.push(guid);
         }
+        self.rare.note(&c);
+        if awake(&c) {
+            self.awake.insert(guid);
+        }
+        if !c.auras.is_empty() {
+            self.with_auras.insert(guid);
+        }
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
@@ -1134,6 +1291,7 @@ impl Map {
         let guid = g.guid;
         let cell = g.cell;
         let key = self.gameobjects.insert(g);
+        self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);

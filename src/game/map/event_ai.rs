@@ -1385,6 +1385,7 @@ pub fn feign_death(map: &mut Map, g: Guid) -> bool {
         crate::game::map::auras::remove_spell(map, g, spell, None);
     }
     let at = map.position_of(g);
+    map.note_fighting(g);
     if let Some(c) = map.creature_mut(g) {
         c.motion = crate::game::map::creature::Motion::Idle { until: None };
         c.fields.set_u32(UNIT_FIELD_HEALTH, 1);

@@ -261,11 +261,12 @@ pub fn update(map: &mut Map) {
 fn separation_anxiety(map: &mut Map) {
     let now = map.now;
     let data = map.realm.data.clone();
-    let holders: Vec<(Guid, u32, Guid, u32)> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.alive())
-        .flat_map(|(_, c)| {
+    // Only a creature with auras can bear it.
+    let bearers = map.with_auras_where(|c| c.alive() && !c.auras.is_empty(), |k, _| k);
+    let holders: Vec<(Guid, u32, Guid, u32)> = bearers
+        .into_iter()
+        .filter_map(|k| map.creatures.get(k))
+        .flat_map(|c| {
             c.auras.holders.iter().filter_map(move |h| {
                 SEPARATION_ANXIETY
                     .iter()

@@ -684,6 +684,7 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
         .map(|p| p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
         .unwrap_or(0);
     let data = map.realm.data.clone();
+    map.rare.pet = true;
     let Some(c) = map.creature_mut(unit) else {
         return;
     };
@@ -855,12 +856,21 @@ pub fn move_possessed(
 /// Run what every player controls.
 pub fn update(map: &mut Map) {
     let now = map.now;
-    let controlled: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.pet.is_some())
-        .map(|(_, c)| c.guid)
-        .collect();
+    let mut controlled: Vec<Guid> = Vec::new();
+    if map.rare.pet {
+        controlled = map
+            .creatures
+            .iter()
+            .filter(|(_, c)| c.pet.is_some())
+            .map(|(_, c)| c.guid)
+            .collect();
+        map.rare.pet = !controlled.is_empty();
+    } else {
+        debug_assert!(
+            map.creatures.iter().all(|(_, c)| c.pet.is_none()),
+            "a pet unnoted (RareStates)"
+        );
+    }
     for g in controlled {
         ai::step(map, g, now);
     }

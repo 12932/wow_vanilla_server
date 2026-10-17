@@ -671,6 +671,8 @@ impl Map {
         if self.players.contains_key(&g) {
             return self.players.get_mut(&g).map(|p| &mut p.caster);
         }
+        // Every cast begins here (see `RareStates`).
+        self.rare.casting = true;
         self.creature_mut(g).map(|c| &mut c.caster)
     }
 
@@ -2048,12 +2050,26 @@ pub fn update(map: &mut Map) {
         .filter(|p| p.caster.casting.as_ref().is_some_and(|c| c.ends <= now))
         .map(|p| p.guid)
         .collect();
-    done.extend(
-        map.creatures
-            .iter()
-            .filter(|(_, c)| c.caster.casting.as_ref().is_some_and(|x| x.ends <= now))
-            .map(|(_, c)| c.guid),
-    );
+    if map.rare.casting {
+        let mut any = false;
+        done.extend(
+            map.creatures
+                .iter()
+                .filter(|(_, c)| {
+                    any |= c.caster.casting.is_some();
+                    c.caster.casting.as_ref().is_some_and(|x| x.ends <= now)
+                })
+                .map(|(_, c)| c.guid),
+        );
+        map.rare.casting = any;
+    } else {
+        debug_assert!(
+            map.creatures
+                .iter()
+                .all(|(_, c)| c.caster.casting.is_none()),
+            "a creature casts unnoted (RareStates)"
+        );
+    }
     for g in done {
         let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
             continue;
