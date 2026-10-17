@@ -962,3 +962,58 @@ async fn a_fight_stops_a_cast_not_for_one() {
     );
     assert_eq!(out[1], (Some(BOLT), Some(BOLT)), "not another");
 }
+
+#[tokio::test]
+async fn healing_threat_is_split_and_by_the_healers_threat() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGPRIEST");
+    let priest = c.enter("Bugpriest", Race::Human, Class::Priest).await;
+    let mut d = Client::connect(&realm, "BUGTANK");
+    let tank = d.enter("Bugtank", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            ready(m, tank, 60, &[]);
+            let kobolds = [
+                spawn(m, tank, 6, 60, 3.0, 100_000),
+                spawn(m, tank, 6, 60, 4.0, 100_000),
+            ];
+            for k in kobolds {
+                crate::game::map::ai::add_threat(m, k, tank, 1.0);
+            }
+            // Blessing of Salvation: three tenths less threat.
+            let s = m.realm.data.spells.get(1038).unwrap().clone();
+            let effects: Vec<(usize, i32)> = (0..3)
+                .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+                .map(|i| (i, spells::points(&s, i, 60)))
+                .collect();
+            let _ = crate::game::map::auras::apply_spell(
+                m,
+                priest,
+                priest,
+                &s,
+                &effects,
+                crate::game::map::auras::Context::default(),
+            );
+            let max = m.unit_fields(tank).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
+            m.unit_fields_mut(tank)
+                .unwrap()
+                .set_u32(UNIT_FIELD_HEALTH, max - 200);
+            spells::heal(m, priest, tank, 2050, 200, false);
+            kobolds.map(|k| {
+                m.creature(k)
+                    .and_then(|c| c.threat.iter().find(|(t, _)| *t == priest).map(|(_, v)| *v))
+                    .unwrap_or(0.0)
+            })
+        })
+        .await
+        .unwrap();
+    // 200 healed: half of it, three tenths less, split in two.
+    for t in out {
+        assert!((t - 35.0).abs() < 0.01, "each kobold's threat: {out:?}");
+    }
+}

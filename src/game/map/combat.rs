@@ -1998,11 +1998,12 @@ pub fn cancel_queued(map: &mut Map, g: Guid) {
     }
 }
 
-/// A heal makes threat for the healer on every creature fighting the
-/// healed: half the health it gave back.
+/// A heal makes threat for the healer on the creatures fighting the
+/// healed that may fight the healer: half the health it gave back, by the
+/// healer's threat, split among them (mangos's `threatAssist`, Thistle
+/// Tea's `heal_threat`).
 pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained: u32) {
-    pvp_contact(map, healer, healed, Contact::Assist);
-    if gained == 0 {
+    if gained == 0 || healer.is_zero() {
         return;
     }
     let school = map
@@ -2011,19 +2012,20 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
         .spells
         .get(spell)
         .map_or(2, |s| s.school_mask());
-    let threat = gained as f32 * 0.5 * threat_multiplier(map, healer, school);
     let fighting: Vec<Guid> = map
         .creatures
         .iter()
-        .filter(|(_, c)| {
-            c.alive() && c.combat.attacking && c.threat.iter().any(|(t, _)| *t == healed)
-        })
+        .filter(|(_, c)| c.alive() && c.threat.iter().any(|(t, _)| *t == healed))
         .map(|(_, c)| c.guid)
+        .filter(|c| can_attack(map, *c, healer))
         .collect();
+    if fighting.is_empty() {
+        return;
+    }
+    let threat =
+        gained as f32 * 0.5 * threat_multiplier(map, healer, school) / fighting.len() as f32;
     for c in fighting {
-        if can_attack(map, c, healer) {
-            crate::game::map::ai::add_threat(map, c, healer, threat);
-        }
+        crate::game::map::ai::add_threat(map, c, healer, threat);
     }
 }
 
