@@ -407,6 +407,47 @@ async fn relentless_strikes_goes_by_the_combo_points() {
 }
 
 #[tokio::test]
+async fn health_regeneration_auras_give_their_health_in_and_out_of_combat() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "TROLLBLOOD");
+    let p = c.enter("Trollb", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let gained = map
+        .query(move |m| {
+            level(m, p, 60, &[]);
+            // Major Troll's Blood: 12 health every five seconds.
+            apply(m, p, p, 3223);
+            let mut gained = Vec::new();
+            for fighting in [true, false] {
+                let pl = m.players.get_mut(&p).unwrap();
+                pl.fields.set_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    fighting,
+                );
+                // No spirit, for none of its health.
+                pl.fields.set_u32(UNIT_FIELD_STAT0 + 4, 0);
+                pl.fields.set_u32(UNIT_FIELD_HEALTH, 100);
+                for _ in 0..10 {
+                    m.now += crate::game::map::stats::REGEN_INTERVAL;
+                    crate::game::map::stats::regen(m);
+                }
+                gained.push(health(m, p) - 100);
+            }
+            gained
+        })
+        .await
+        .unwrap();
+    // Twenty seconds: four times 12, in a fight or out of one.
+    for g in &gained {
+        assert!((47..=48).contains(g), "gained {gained:?}");
+    }
+}
+
+#[tokio::test]
 async fn a_modifier_touches_only_its_mask_past_32_bits() {
     if !have_data() {
         return;
