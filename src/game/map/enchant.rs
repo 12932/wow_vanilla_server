@@ -79,18 +79,31 @@ pub fn roll_random_property(data: &GameData, entry: u32, rng: &mut impl rand::Rn
     else {
         return 0;
     };
-    let total: f32 = pool.iter().map(|(_, c)| c.max(0.0)).sum();
+    select_property(pool, rng.random_range(0.0..=1.0)).unwrap_or(0)
+}
+
+/// The property a `roll` from 0 to 1 picks of `pool`'s, by their chances
+/// made to sum to one, a chance out of mangos's range (above 0.000001, at
+/// most 100) left out (Thistle Tea's `ItemProperties.select`, mangos's
+/// `LoadRandomEnchantmentsTable`); none of an empty pool.
+pub fn select_property(pool: &[(u32, f32)], roll: f32) -> Option<u32> {
+    let valid: Vec<(u32, f32)> = pool
+        .iter()
+        .copied()
+        .filter(|(_, c)| *c > 0.000_001 && *c <= 100.0)
+        .collect();
+    let total: f32 = valid.iter().map(|(_, c)| c).sum();
     if total <= 0.0 {
-        return 0;
+        return None;
     }
-    let mut r = rng.random_range(0.0..total);
-    for (id, c) in pool {
-        r -= c.max(0.0);
-        if r < 0.0 {
-            return *id;
+    let mut at = 0.0;
+    for (id, c) in &valid {
+        at += c / total;
+        if roll <= at {
+            return Some(*id);
         }
     }
-    pool.last().map_or(0, |(id, _)| *id)
+    valid.last().map(|(id, _)| *id)
 }
 
 /// Give an item its random property: the id the client names it by, and

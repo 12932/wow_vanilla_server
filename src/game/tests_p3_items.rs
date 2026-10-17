@@ -1735,3 +1735,21 @@ async fn a_vendor_sells_what_may_be_bought() {
         "stale"
     );
 }
+
+/// Thistle Tea's `ItemProperties.select/2`: chances made to sum to one,
+/// both ends of the roll; chances out of range left out; nothing of an
+/// empty or worthless pool.
+#[test]
+fn a_random_property_is_picked_by_its_share() {
+    use crate::game::map::enchant::select_property;
+    let pool = [(1182, 2.0), (1183, 6.0)];
+    assert_eq!(select_property(&pool, 0.0), Some(1182));
+    assert_eq!(select_property(&pool, 0.25), Some(1182));
+    assert_eq!(select_property(&pool, 0.25001), Some(1183));
+    assert_eq!(select_property(&pool, 1.0), Some(1183));
+    let odd = [(1, 0.0), (2, -1.0), (3, 0.000_001), (4, 100.1), (5, 0.5)];
+    assert_eq!(select_property(&odd, 0.0), Some(5));
+    assert_eq!(select_property(&odd, 1.0), Some(5));
+    assert_eq!(select_property(&[], 0.5), None);
+    assert_eq!(select_property(&[(1, 0.0)], 0.5), None);
+}
