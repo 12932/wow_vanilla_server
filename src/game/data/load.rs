@@ -122,6 +122,7 @@ pub fn load(dir: &Path) -> GameData {
             load_vmangos(&db, &mut data);
             load_npcs(&db, dbc.as_ref(), &mut data);
             load_spells(&db, dbc.as_ref(), &mut data);
+            load_misc(&db, dbc.as_ref(), &mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -1743,6 +1744,139 @@ fn load_players(db: &Connection, data: &mut GameData) {
         (c.u8("lvl"), c.u32("xp_for_next_level"))
     }) {
         data.xp_for_level.insert(level, xp);
+    }
+}
+
+/// Factions and reputation, page texts, mail templates, exploration XP
+/// and meeting stones.
+fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
+    use super::misc::*;
+    let m = &mut data.misc;
+    if let Some(dbc) = dbc {
+        for f in rows(dbc, "SELECT * FROM Faction", |c| FactionDef {
+            id: c.u32("id"),
+            index: c.i64("reputation_index") as u32,
+            parent: c.u32("parent_faction"),
+            name: c.string("name_en_gb"),
+            variants: std::array::from_fn(|i| {
+                (
+                    c.i64(&format!("reputation_race_mask_{i}")) as u32,
+                    c.i64(&format!("reputation_class_mask_{i}")) as u32,
+                    c.i64(&format!("reputation_base_{i}")) as i32,
+                    c.i64(&format!("reputation_flags_{i}")) as u32,
+                )
+            }),
+        }) {
+            if f.index < 64 {
+                m.faction_by_index.insert(f.index, f.id);
+                m.factions.insert(f.id, f);
+            }
+        }
+        for (id, subject) in rows(dbc, "SELECT * FROM MailTemplate", |c| {
+            (c.u32("id"), c.string("body_en_gb"))
+        }) {
+            // The DBC's one text is the mail's body, as Thistle Tea reads it.
+            m.mail_templates.insert(id, (String::new(), subject));
+        }
+    }
+    for (faction, spills) in rows(db, "SELECT * FROM reputation_spillover_template", |c| {
+        let spills: Vec<Spillover> = (1..=4)
+            .map(|i| Spillover {
+                faction: c.u32(&format!("faction{i}")),
+                rate: c.f32(&format!("rate_{i}")),
+                max_rank: c.u32(&format!("rank_{i}")),
+            })
+            .filter(|s| s.faction != 0)
+            .collect();
+        (c.u32("faction"), spills)
+    }) {
+        m.spillovers.insert(faction, spills);
+    }
+    let mut best: AHashMap<u32, (u32, Vec<KillReputation>)> = AHashMap::new();
+    for (creature, patch, rewards) in rows(db, "SELECT * FROM creature_onkill_reputation", |c| {
+        let team_dependent = c.u32("TeamDependent") != 0;
+        let rewards: Vec<KillReputation> = (1..=2)
+            .map(|i| KillReputation {
+                faction: c.u32(&format!("RewOnKillRepFaction{i}")),
+                value: c.i32(&format!("RewOnKillRepValue{i}")),
+                max_rank: c.u32(&format!("MaxStanding{i}")),
+                team: if team_dependent { i as u8 } else { 0 },
+                team_award: c.u32(&format!("IsTeamAward{i}")) != 0,
+            })
+            .filter(|r| r.faction != 0 && r.value != 0)
+            .collect();
+        (c.u32("creature_id"), c.u32("patch"), rewards)
+    }) {
+        if patch > 10 {
+            continue;
+        }
+        match best.get(&creature) {
+            Some((p, _)) if *p > patch => {}
+            _ => {
+                best.insert(creature, (patch, rewards));
+            }
+        }
+    }
+    m.kill_reputation = best.into_iter().map(|(k, (_, v))| (k, v)).collect();
+    for (entry, text, next) in rows(db, "SELECT * FROM page_text", |c| {
+        (c.u32("entry"), c.string("text"), c.u32("next_page"))
+    }) {
+        m.page_texts.insert(entry, (text, next));
+    }
+    for (id, body) in rows(db, "SELECT * FROM mail_text_template", |c| {
+        (c.u32("entry"), c.string("content_default"))
+    }) {
+        let t = m.mail_templates.entry(id).or_default();
+        if t.1.is_empty() {
+            t.1 = body;
+        }
+    }
+    for (entry, item, count) in rows(
+        db,
+        "SELECT * FROM mail_loot_template WHERE patch_min <= 10",
+        |c| (c.u32("entry"), c.u32("item"), c.u32("mincountOrRef").max(1)),
+    ) {
+        if item != 0 {
+            m.mail_items.entry(entry).or_default().push((item, count));
+        }
+    }
+    for (quest, mail) in rows(
+        db,
+        "SELECT entry, RewMailTemplateId, RewMailDelaySecs, RewMailMoney FROM quest_template \
+         WHERE RewMailTemplateId > 0",
+        |c| {
+            (
+                c.u32("entry"),
+                QuestMail {
+                    template: c.u32("RewMailTemplateId"),
+                    delay_secs: c.u32("RewMailDelaySecs"),
+                    money: c.u32("RewMailMoney"),
+                },
+            )
+        },
+    ) {
+        m.quest_mail.insert(quest, mail);
+    }
+    for (level, xp) in rows(db, "SELECT * FROM exploration_basexp", |c| {
+        (c.u32("level"), c.u32("basexp"))
+    }) {
+        m.exploration_xp.insert(level, xp);
+    }
+    for (entry, stone) in rows(
+        db,
+        "SELECT entry, data0, data1, data2 FROM gameobject_template WHERE type = 23",
+        |c| {
+            (
+                c.u32("entry"),
+                MeetingStone {
+                    min_level: c.u32("data0"),
+                    max_level: c.u32("data1"),
+                    area: c.u32("data2"),
+                },
+            )
+        },
+    ) {
+        m.meeting_stones.insert(entry, stone);
     }
 }
 

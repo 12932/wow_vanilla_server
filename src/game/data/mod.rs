@@ -8,6 +8,7 @@
 
 pub mod items;
 pub mod load;
+pub mod misc;
 pub mod npc;
 pub mod spells;
 
@@ -419,6 +420,7 @@ pub struct GameData {
     pub safe_locs: AHashMap<u32, (u32, f32, f32, f32)>,
     /// Text emote → the animation it plays.
     pub text_emote_anims: AHashMap<u32, u32>,
+    pub misc: misc::MiscData,
 }
 
 impl GameData {

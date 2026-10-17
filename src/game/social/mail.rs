@@ -147,6 +147,53 @@ pub fn post(realm: &Realm, mut m: Mail) -> u32 {
     id
 }
 
+/// A quest's mail when it is rewarded: its template's text and items,
+/// from the creature that gave it, after its delay.
+pub fn quest_mail(realm: &Realm, receiver: Guid, giver: Guid, quest: u32) {
+    let data = &realm.data;
+    let Some(q) = data.misc.quest_mail.get(&quest) else {
+        return;
+    };
+    let (subject, body) = data
+        .misc
+        .mail_templates
+        .get(&q.template)
+        .cloned()
+        .unwrap_or_default();
+    let sender = if guid::is_unit(giver) { guid::entry(giver) } else { 0 };
+    let now = now();
+    let items = data.misc.mail_items.get(&q.template).cloned().unwrap_or_default();
+    // One mail an item, as mangos sends a template's.
+    let mut attachments: Vec<Option<(u32, u32)>> = items.into_iter().map(Some).collect();
+    if attachments.is_empty() {
+        attachments.push(None);
+    }
+    for (i, attachment) in attachments.into_iter().enumerate() {
+        let item = attachment.map(|(entry, count)| ItemRow {
+            guid: realm.next_item.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            entry,
+            count: count.max(1),
+            durability: crate::game::map::player::max_durability(data, entry),
+            ..Default::default()
+        });
+        post(
+            realm,
+            Mail {
+                kind: CREATURE,
+                sender,
+                receiver: guid::counter(receiver),
+                subject: subject.clone(),
+                body: body.clone(),
+                item,
+                money: if i == 0 { q.money } else { 0 },
+                deliver_at: now + i64::from(q.delay_secs),
+                expires_at: now + i64::from(q.delay_secs) + 30 * DAY,
+                ..Default::default()
+            },
+        );
+    }
+}
+
 fn result(map: &Map, g: Guid, mail_id: u32, action: SMSG_SEND_MAIL_RESULT_MailAction) {
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SEND_MAIL_RESULT { mail_id, action });

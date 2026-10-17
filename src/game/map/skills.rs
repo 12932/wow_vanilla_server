@@ -59,6 +59,16 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
     p.fields.set_u32(base + 1, value.min(max) | (max << 16));
 }
 
+/// Forget a skill: its slot is cleared.
+pub fn forget_skill(p: &mut Player, skill: u32) {
+    if let Some(slot) = slot_of(p, skill) {
+        let base = PLAYER_SKILL_INFO_1_1 + slot * 3;
+        p.fields.set_u32(base, 0);
+        p.fields.set_u32(base + 1, 0);
+        p.fields.set_u32(base + 2, 0);
+    }
+}
+
 /// The skills a character's spells give, set on login.
 pub fn init(p: &mut Player, data: &GameData) {
     let spells = p.spells.clone();
