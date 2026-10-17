@@ -516,6 +516,9 @@ async fn the_combat_log_packets() {
     let realm = realm();
     let mut c = Client::connect(&realm, "LOGGER");
     let g = c.enter("Loggera", Race::Human, Class::Paladin).await;
+    // The intro's camera done with: they see from where they stand, not
+    // from wherever the camera has got to.
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
     let kobold = map
         .query(move |m| {
