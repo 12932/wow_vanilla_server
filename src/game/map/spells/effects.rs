@@ -1144,10 +1144,20 @@ pub fn retained_combo_points_expired(map: &mut Map, g: Guid, h: &auras::Holder) 
 }
 
 /// A knock back: a player is thrown by their client; a creature slides.
+/// A knockback, as Thistle Tea's `Knockback.launch` has it: a unit free to
+/// move has its cast interrupted, and the client that moves it (a player's,
+/// or a possessed creature's master's) is told to launch it. A creature the
+/// server runs stays where it is (mangos: "no non player controlled
+/// pre-wotlk").
 fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertical: i32) {
     let (Some(me), Some(them)) = (map.unit_view(caster), map.unit_view(target)) else {
         return;
     };
+    let held =
+        auras::auras(map, target).is_some_and(|a| a.has(AURA_MOD_ROOT) || a.has(AURA_MOD_STUN));
+    if !them.alive || held {
+        return;
+    }
     let angle = if caster == target {
         me.orientation + std::f32::consts::PI
     } else {
@@ -1155,7 +1165,15 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
     };
     let speed_xy = horizontal as f32 / 10.0;
     let speed_z = -(vertical as f32) / 10.0;
-    if let Some(p) = map.players.get(&target) {
+    super::interrupt(map, target);
+    let mover = if map.players.contains_key(&target) {
+        Some(target)
+    } else {
+        crate::game::map::pets::state(map, target)
+            .filter(|s| s.kind == crate::game::map::pets::Kind::Possessed)
+            .map(|s| s.owner)
+    };
+    if let Some(p) = mover.and_then(|g| map.players.get(&g)) {
         let mut b = crate::game::data::items::Body::default();
         crate::game::update::write_packed_guid(&mut b.0, target);
         b.u32(0)
@@ -1164,14 +1182,7 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
             .f32(speed_xy)
             .f32(speed_z);
         p.outbound.send_frame(b.frame(0x0EF));
-        return;
     }
-    let to = Vector3d {
-        x: them.position.x + angle.cos() * speed_xy,
-        y: them.position.y + angle.sin() * speed_xy,
-        z: them.position.z,
-    };
-    map.teleport(target, map.key, to, them.orientation);
 }
 
 /// `SMSG_SET_PROFICIENCY`: the weapon or armor kinds a learned skill
