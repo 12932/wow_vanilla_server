@@ -170,6 +170,9 @@ pub struct Av {
     pub mines: [Mine; 2],
     /// Objective events whose creature has fallen.
     pub defeated: AHashSet<u8>,
+    /// The quest-driven extras: armor, offerings, the air, cavalry and
+    /// ground assaults.
+    pub extras: crate::game::map::battleground::av_quests::Extras,
 }
 
 impl Av {
@@ -211,7 +214,7 @@ impl Av {
             Some(_) => 1,
             None => 2,
         };
-        let upgrade = 0u8;
+        let upgrade = p.owner.map_or(0, |s| self.extras.armor[s].tier);
         match NODES[id].1 {
             Kind::Graveyard if p.owner.is_none() => vec![(15 + id as u8, 8)],
             Kind::Graveyard => vec![(15 + id as u8, team(p.owner) * 4 + upgrade)],
@@ -299,7 +302,9 @@ pub fn start(map: &mut Map) {
     }
 }
 
-pub fn update(_map: &mut Map) {}
+pub fn update(map: &mut Map) {
+    crate::game::map::battleground::av_quests::update(map);
+}
 
 pub fn due(map: &mut Map, d: Due) {
     let now = map.now;
@@ -543,6 +548,7 @@ fn objective(map: &mut Map, s: usize, kind: Reward, count: u32) {
 /// A creature fell: a mine's keeper, a captain, a commander, an
 /// explosives expert, a lieutenant or a general.
 pub fn creature_died(map: &mut Map, creature: Guid, killer: Guid) {
+    crate::game::map::battleground::av_quests::creature_died(map, creature);
     let spawn = map.creature(creature).and_then(|c| c.spawn_guid);
     let bindings = bg::bindings(map, true, spawn);
     let Some(m) = map.battleground.as_ref() else {

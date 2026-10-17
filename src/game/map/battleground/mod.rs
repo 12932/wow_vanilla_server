@@ -8,6 +8,7 @@
 
 pub mod ab;
 pub mod av;
+pub mod av_quests;
 pub mod wsg;
 
 use std::time::{Duration, Instant};
@@ -747,6 +748,24 @@ pub fn died(map: &mut Map, g: Guid, killer: Guid) {
     if map.battleground.as_ref().is_some_and(|m| m.bg == BG_WSG) {
         wsg::died(map, g);
     }
+}
+
+/// A quest turned in during the match.
+pub fn quest_rewarded(map: &mut Map, g: Guid, quest: u32) {
+    if map.battleground.as_ref().is_some_and(|m| m.bg == BG_AV) {
+        av_quests::quest_rewarded(map, g, quest);
+    }
+}
+
+/// `CMSG_GOSSIP_HELLO` with an NPC of the match's own: whether it was one.
+pub fn gossip_hello(map: &mut Map, g: Guid, npc: Guid) -> bool {
+    map.battleground.as_ref().is_some_and(|m| m.bg == BG_AV) && av_quests::gossip_hello(map, g, npc)
+}
+
+/// `CMSG_GOSSIP_SELECT_OPTION` on such an NPC's menu.
+pub fn gossip_select(map: &mut Map, g: Guid, npc: Guid, option: u32) -> bool {
+    map.battleground.as_ref().is_some_and(|m| m.bg == BG_AV)
+        && av_quests::gossip_select(map, g, npc, option)
 }
 
 /// A creature fell in the match.

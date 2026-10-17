@@ -30,6 +30,10 @@ pub const DAMAGE_MEMORY: Duration = Duration::from_secs(60);
 pub const SHARE_YARDS: f32 = 74.0;
 
 pub const PLAYER_FLAGS_PVP_DESIRED: u32 = 0x200;
+/// Contested: guards of one's own side may attack.
+pub const PLAYER_FLAGS_CONTESTED_PVP: u32 = 0x100;
+/// How long attacking a player (or carrying silithyst) contests.
+pub const CONTESTED_FOR: Duration = Duration::from_secs(30);
 /// Honorless Target: one just arrived in PvP territory is worth no honor.
 pub const SPELL_HONORLESS_TARGET: u32 = 2479;
 
@@ -45,6 +49,8 @@ pub struct PvpState {
     /// The zone the territory was last worked out for.
     pub zone: u32,
     pub map: u32,
+    /// Contested until then.
+    pub contested_until: Option<Instant>,
 }
 
 impl PvpState {
@@ -291,6 +297,11 @@ pub fn update(map: &mut Map) {
         }
     }
     for p in map.players.values_mut() {
+        if p.pvp.contested_until.is_some_and(|t| t <= now) {
+            p.pvp.contested_until = None;
+            p.fields
+                .set_flag(PLAYER_FLAGS, PLAYER_FLAGS_CONTESTED_PVP, false);
+        }
         let flagged = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP);
         let holds = p.pvp.holds(now);
         if holds && !flagged {
@@ -405,11 +416,32 @@ fn credit(map: &Map, g: Guid, honor: i32, victim: Guid, rank: u32) {
     }
 }
 
-/// A player hurt another: the damage counts toward sharing the kill.
+/// A player is contested for a while, and flagged for five minutes.
+pub fn contest(map: &mut Map, g: Guid) {
+    let now = map.now;
+    if let Some(p) = map.players.get_mut(&g) {
+        p.pvp.contested_until = Some(now + CONTESTED_FOR);
+        p.pvp.until = Some(now + PVP_LINGER);
+        p.fields
+            .set_flag(PLAYER_FLAGS, PLAYER_FLAGS_CONTESTED_PVP, true);
+        p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, true);
+    }
+}
+
+/// A player hurt another: the damage counts toward sharing the kill, and
+/// attacking a player contests the attacker.
 pub fn damaged(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
     let now = map.now;
     if !guid::is_player(attacker) || attacker == victim || damage == 0 {
         return;
+    }
+    let duel = crate::game::map::duel::dueling(map, attacker, victim);
+    let ffa = map.players.get(&attacker).is_some_and(|p| {
+        p.fields
+            .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_FFA_PVP)
+    });
+    if !duel && !ffa {
+        contest(map, attacker);
     }
     let Some(p) = map.players.get_mut(&victim) else {
         return;
@@ -574,11 +606,32 @@ pub fn bonus_honor(map: &mut Map, g: Guid, amount: u32) {
     refresh(map, g);
 }
 
-/// Reputation with a battleground's faction. The world keeps no
-/// reputation yet, so this is where it will be given.
+/// Reputation with a battleground's faction, with its spillover.
 pub fn reputation(map: &mut Map, g: Guid, faction: u32, amount: i32) {
-    let _ = map;
-    tracing::trace!("{g}: {amount} reputation with faction {faction}");
+    if amount != 0 {
+        crate::game::map::reputation::modify(map, g, faction, amount, true);
+    }
+}
+
+/// The highest rank a player has reached: items of a rank are worn by
+/// those who ever reached it.
+pub fn highest_rank(p: &Player) -> u8 {
+    p.fields.get_byte(PLAYER_FIELD_BYTES, 3)
+}
+
+/// The rank a player holds now: rank rewards are bought at it.
+pub fn current_rank(p: &Player) -> u8 {
+    p.fields.get_byte(PLAYER_BYTES_3, 3)
+}
+
+pub fn rank_allows_use(p: &Player, t: &crate::game::data::ItemTemplate) -> bool {
+    u32::from(highest_rank(p)) >= t.required_honor_rank
+}
+
+pub fn rank_allows_buy(p: &Player, t: &crate::game::data::ItemTemplate) -> bool {
+    t.required_honor_rank == 0
+        || (u32::from(current_rank(p)) >= t.required_honor_rank
+            && u32::from(p.level()) >= t.required_level)
 }
 
 /// The realm's honor in time: the day moves on, each finished week is
