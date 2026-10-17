@@ -1800,10 +1800,9 @@ mod npcs {
         })
         .await;
         a.send(CMSG_QUEST_QUERY { quest_id: 600 }).await;
-        a.wait_for("SMSG_QUEST_QUERY_RESPONSE", |m| {
-            matches!(m, ServerOpcodeMessage::SMSG_QUEST_QUERY_RESPONSE(_)).then_some(())
-        })
-        .await;
+        // 1.12's layout, which upstream wow_messages reads differently.
+        a.wait_frame("SMSG_QUEST_QUERY_RESPONSE", 0x5D, |_| true)
+            .await;
         // Kill the kobold.
         let kobold = guid::unit(4005, 45);
         let map = realm.maps.get(&realm, MapKey::world(0));

@@ -1036,6 +1036,9 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     c.i32(&format!("RewRepValue{}", i + 1)),
                 )
             }),
+            required_min_rep: (c.u32("RequiredMinRepFaction"), c.i32("RequiredMinRepValue")),
+            required_max_rep: (c.u32("RequiredMaxRepFaction"), c.i32("RequiredMaxRepValue")),
+            rep_objective: (c.u32("RepObjectiveFaction"), c.i32("RepObjectiveValue")),
             reward_xp: c.u32("RewXP"),
             reward_money: c.i32("RewOrReqMoney"),
             reward_money_max_level: c.u32("RewMoneyMaxLevel"),

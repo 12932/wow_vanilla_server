@@ -188,6 +188,8 @@ pub struct Logged {
     pub kills: [u32; 4],
     pub explored: bool,
     pub failed: bool,
+    /// The quest's reputation objective is met.
+    pub rep_met: bool,
 }
 
 /// A player's quests: the log, and those rewarded.

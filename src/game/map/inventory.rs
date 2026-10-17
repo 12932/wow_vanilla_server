@@ -59,6 +59,10 @@ pub enum Fail {
     OnlyEmptyBags,
     InventoryFull,
     YouAreDead,
+    /// Not the standing the item asks for.
+    Reputation,
+    /// Not the honor rank the item asks for.
+    Rank,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -146,6 +150,16 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::YouAreDead => R::YouAreDead {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::Reputation => R::CantEquipReputation {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::Rank => R::CantEquipRank {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -518,6 +532,23 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
             return Err(Fail::DoesntGoToSlot);
         };
         can_equip(p, t, slot)?;
+        // A standing, and an honor rank (the highest reached), the item
+        // asks for.
+        if t.required_reputation_faction != 0
+            && !crate::game::map::reputation::meets(
+                p,
+                data,
+                t.required_reputation_faction,
+                t.required_reputation_rank,
+            )
+        {
+            return Err(Fail::Reputation);
+        }
+        if t.required_honor_rank != 0
+            && u32::from(p.fields.get_byte(PLAYER_FIELD_BYTES, 3)) < t.required_honor_rank
+        {
+            return Err(Fail::Rank);
+        }
         // A two-hander needs the off hand free, and the reverse.
         if slot == SLOT_OFF_HAND
             && p.item_at(BAG_PLAYER, SLOT_MAIN_HAND)
