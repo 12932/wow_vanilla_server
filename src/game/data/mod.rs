@@ -9,6 +9,7 @@
 pub mod items;
 pub mod load;
 pub mod npc;
+pub mod pets;
 pub mod spells;
 
 use ahash::AHashMap;
@@ -419,6 +420,7 @@ pub struct GameData {
     pub safe_locs: AHashMap<u32, (u32, f32, f32, f32)>,
     /// Text emote → the animation it plays.
     pub text_emote_anims: AHashMap<u32, u32>,
+    pub pets: pets::PetData,
 }
 
 impl GameData {

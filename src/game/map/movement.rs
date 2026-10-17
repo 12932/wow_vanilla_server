@@ -18,7 +18,7 @@ pub fn map_enum(id: u32) -> wow_world_messages::vanilla::Map {
     wow_world_messages::vanilla::Map::try_from(id).unwrap_or_default()
 }
 
-type Relay = fn(Guid, MovementInfo) -> Option<Arc<[u8]>>;
+pub type Relay = fn(Guid, MovementInfo) -> Option<Arc<[u8]>>;
 
 macro_rules! relays {
     ($msg:expr, $($name:ident => $server:ident),* $(,)?) => {
@@ -78,6 +78,9 @@ fn finite(info: &MovementInfo) -> bool {
 
 /// A movement packet from `guid`'s client.
 pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
+    if crate::game::map::pets::move_possessed(map, guid, &info, relay) {
+        return;
+    }
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };

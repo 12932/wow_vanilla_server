@@ -120,6 +120,54 @@ pub struct CharacterState {
     /// Friends and ignored characters, by GUID counter.
     pub friends: Vec<u32>,
     pub ignored: Vec<u32>,
+    /// The hunter's pets and the warlock's demon.
+    pub pets: PetsState,
+}
+
+/// A pet as it is kept: the one out (or dismissed), and those stabled.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PetRecord {
+    pub number: u32,
+    pub entry: u32,
+    /// 1 a hunter's pet, 2 a summoned demon.
+    pub kind: u8,
+    pub name: String,
+    pub renamed: bool,
+    pub level: u8,
+    pub xp: u32,
+    pub health: u32,
+    pub power: u32,
+    pub happiness: u32,
+    pub loyalty: u8,
+    pub loyalty_points: i32,
+    pub training_points: i32,
+    pub spells: Vec<u32>,
+    pub autocast: Vec<u32>,
+    pub bar: Vec<u32>,
+    pub react: u8,
+    pub command: u8,
+    pub dead: bool,
+    pub summon_spell: u32,
+    pub display_id: u32,
+    pub family: u32,
+}
+
+/// A character's pets.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PetsState {
+    /// The current pet: out, or dismissed (a hunter's).
+    pub current: Option<PetRecord>,
+    /// Whether the current pet was out, to bring back on login.
+    pub active: bool,
+    /// The stabled pets, each with its slot (1 or 2).
+    pub stable: Vec<(u8, PetRecord)>,
+    pub stable_slots: u8,
+    pub next_number: u32,
+    /// What untraining the pet last cost, and when (Unix seconds).
+    pub untrain_cost: u32,
+    pub untrain_at: i64,
 }
 
 /// A quest in a player's log.
