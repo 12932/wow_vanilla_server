@@ -93,6 +93,20 @@ impl Nav {
             .min_by(|a, b| (a - z_hint).abs().total_cmp(&(b - z_hint).abs()))
     }
 
+    /// The liquid at a point: its kind where a WMO holds it (1 water, 2
+    /// ocean, 3 magma, 4 slime; 0 where the terrain does), and its surface.
+    pub fn liquid(&mut self, p: Vector3d) -> Option<(u8, f32)> {
+        self.ensure(p.x, p.y);
+        if let Ok(Some(s)) = self.map.wmo_liquid(p.x, p.y, p.z) {
+            return Some((s.entry, s.surface));
+        }
+        self.map
+            .liquid_surface(p.x, p.y, p.z)
+            .ok()
+            .flatten()
+            .map(|z| (0, z))
+    }
+
     pub fn line_of_sight(&mut self, from: Vector3d, to: Vector3d) -> bool {
         self.ensure(from.x, from.y);
         self.ensure(to.x, to.y);

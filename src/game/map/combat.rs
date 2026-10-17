@@ -581,6 +581,14 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
                 || pa.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP));
     }
     let data = &map.realm.data;
+    // A player may attack a faction they are at war with, or hostile with.
+    if ua.is_player
+        && let Some(faction) = crate::game::map::reputation::faction_of(map, b)
+        && data.misc.faction(faction).is_some()
+        && crate::game::map::reputation::at_war(&map.players[&a], data, faction)
+    {
+        return true;
+    }
     match (
         data.faction_templates.get(&ua.faction),
         data.faction_templates.get(&ub.faction),
@@ -597,6 +605,16 @@ pub fn hostile(map: &Map, a: Guid, b: Guid) -> bool {
         return false;
     };
     let data = &map.realm.data;
+    // A creature turns on a player hated or hostile with its faction.
+    if !ua.is_player
+        && ub.is_player
+        && let Some(faction) = crate::game::map::reputation::faction_of(map, a)
+        && data.misc.faction(faction).is_some()
+        && crate::game::map::reputation::rank(&map.players[&b], data, faction)
+            <= crate::game::data::misc::RANK_HOSTILE
+    {
+        return true;
+    }
     match (
         data.faction_templates.get(&ua.faction),
         data.faction_templates.get(&ub.faction),

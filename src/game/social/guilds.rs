@@ -1374,3 +1374,60 @@ pub fn petition_turn_in(map: &mut Map, g: Guid, item: Guid) {
         },
     );
 }
+
+/// Whether a character leads a guild with others in it: they may not be
+/// deleted.
+pub fn leads_others(realm: &Realm, counter: u32) -> bool {
+    let guilds = realm.social.guilds.lock();
+    guilds
+        .of
+        .get(&counter)
+        .and_then(|id| guilds.guilds.get(id))
+        .is_some_and(|g| g.leader == counter && g.members.len() > 1)
+}
+
+/// A character deleted: out of their guild (which goes if they were all of
+/// it), and their charters and signatures with them.
+pub fn character_deleted(realm: &Realm, counter: u32) {
+    let disband = {
+        let mut guilds = realm.social.guilds.lock();
+        let id = guilds.of.remove(&counter);
+        let mut disband = None;
+        if let Some(id) = id
+            && let Some(g) = guilds.guilds.get_mut(&id)
+        {
+            g.members.retain(|m| m.guid != counter);
+            if g.members.is_empty() {
+                disband = Some(id);
+            } else {
+                save(realm, g);
+            }
+        }
+        let owned: Vec<u32> = guilds
+            .petitions
+            .values()
+            .filter(|p| p.owner == counter)
+            .map(|p| p.id)
+            .collect();
+        for id in owned {
+            guilds.petitions.remove(&id);
+            realm.store.delete_record(KIND_PETITION, u64::from(id));
+        }
+        let signed: Vec<u32> = guilds
+            .petitions
+            .values()
+            .filter(|p| p.signers.contains(&counter))
+            .map(|p| p.id)
+            .collect();
+        for id in signed {
+            if let Some(p) = guilds.petitions.get_mut(&id) {
+                p.signers.retain(|s| *s != counter);
+                save_petition(realm, p);
+            }
+        }
+        disband
+    };
+    if let Some(id) = disband {
+        disband_guild(realm, id);
+    }
+}

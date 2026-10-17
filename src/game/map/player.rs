@@ -226,6 +226,7 @@ pub struct Player {
     pub derived: crate::game::map::derive::Derived,
     /// The pet, totems, guardians and charmed unit the player controls.
     pub owned: crate::game::map::pets::Owned,
+    pub misc: crate::game::map::misc::PlayerMisc,
     /// The gear changed: its auras want bringing in line.
     pub gear_dirty: bool,
 }
@@ -298,6 +299,7 @@ impl Player {
             muted_until: None,
             derived: Default::default(),
             owned: Default::default(),
+            misc: Default::default(),
             gear_dirty: true,
             row,
         };

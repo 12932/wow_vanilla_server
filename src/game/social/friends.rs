@@ -279,3 +279,16 @@ pub fn del_ignore(map: &mut Map, g: Guid, i: Guid) {
     }
     status(&realm, g, IGNORE_REMOVED, i);
 }
+
+/// A character deleted: off the friends and ignore lists of those online.
+pub fn character_deleted(realm: &Realm, g: Guid) {
+    let mut lists = realm.social.lists.lock();
+    for f in lists.friends.values_mut() {
+        f.remove(&g);
+    }
+    for i in lists.ignores.values_mut() {
+        i.remove(&g);
+    }
+    lists.friends.remove(&g);
+    lists.ignores.remove(&g);
+}

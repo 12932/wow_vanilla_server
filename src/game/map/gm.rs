@@ -10,14 +10,16 @@ use crate::game::map::{Map, MapKey, chat};
 
 const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, .die, .revive, .levelup [n], .gm [on|off], .speed <multiplier>, \
 .online, .maps, .save, .announce <text>, .kick <name>, .spawn <entry>, .account create|password <name> <password>, \
-.account gm <name> <level>, .ban <account> <minutes|perm> [reason], .unban <account>, .help";
+.account gm <name> <level>, .ban <account> <minutes|perm> [reason], .unban <account>, .ticket list|<id>|respond <id> <answer>|close <id>, .help";
 
 /// The GM level a command needs: moderators look and talk, game masters
 /// change the world, administrators run accounts.
 pub fn needed_level(command: &str) -> u8 {
     use crate::accounts::{ADMINISTRATOR, GAME_MASTER, MODERATOR};
     match command {
-        "gps" | "online" | "maps" | "save" | "announce" | "kick" | "gm" | "help" => MODERATOR,
+        "gps" | "online" | "maps" | "save" | "announce" | "kick" | "gm" | "help" | "ticket" => {
+            MODERATOR
+        }
         "account" | "ban" | "unban" => ADMINISTRATOR,
         _ => GAME_MASTER,
     }
@@ -165,6 +167,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             }
             Some(format!("GM mode {}.", if on { "on" } else { "off" }))
         }
+        "ticket" => Some(crate::game::map::tickets::command(map, guid, &args)),
         "help" => Some(HELP.to_owned()),
         other => Some(format!("No command {other}. {HELP}")),
     };
