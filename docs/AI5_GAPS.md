@@ -228,3 +228,45 @@ so the gaps are in what the interpreters make of what comes in.
   who teleports; 20/19 distancing; 90 ungrouped; C_LOSE_HEALTH off by one;
   extra target the newest; area trigger alive check and cooldown; nested
   starts slipping a tick.
+
+## Encounters (dungeon and raid scripts)
+
+Root causes shared by many encounters:
+
+- D-R1. Summon despawn types: TT's types 1, 2 and 4 time from the spawn,
+  wait out a fight and restart after it; 2 and 5 vanish at death; 7 has
+  no timer. wvs: only 2 waits, never restarts; none vanish at death.
+  (Ragnaros's Sons, Wyrmthalak's and Nerub'enkan's adds, Willey's
+  riflemen, Onyxia's whelps, Jandice's illusions, Angerforge's reserves,
+  the Nightmare's druids, the SM trainees.)
+- D-R2. A dying summon still counts alive when its summoner hears of it
+  (Ragnaros's early emerge, Majordomo's Champion).
+- D-R3. A fight's end cancels the creature's timed scripts and its path's
+  hold (S13: Emi Shortfuse, the Disciple of Naralex, Herod).
+- D-R4. static_flags1 0x8 (unkillable: a floor of 1 health) is ignored
+  (Majordomo).
+- D-R5. Creature-cast summons get no AI (E3: Lava Spawn, Dream Fog,
+  Shades of Taerar, Doom'rel's voidwalkers, Zum'rah's skeletons).
+- D-R6. update_entry partial (S17: Lathoric, Balnazzar keeps Dathrohan's
+  events in TT).
+- D-R7. zone_combat_pulse (S15).
+- D-R8. Script emotes: TT sets the emote state for state emotes
+  (Emotes.dbc spec_proc, or 0); wvs always sends SMSG_EMOTE.
+- D-R9. Talk: the chat-type override (S16); wvs also plays the broadcast
+  text's sound (vmangos does; TT doesn't) — kept.
+- D-R10. Failed casts count as success (E2).
+
+By encounter (beyond the root causes):
+
+- D2. The last Core Hound's corpse: TT removes it (a TT quirk; vmangos
+  keeps it) — kept.
+- D5. Guards of dead bosses come back every 5 min (quiet_death's fixed
+  respawn).
+- D18. The Nightmare's druids may attack pets: the summon step's target
+  params aren't copied to the attack target's selector.
+- D20. "Nearest hostile player" with radius 0 defaults to 100 yd; TT 30.
+- D21. Eranikus: Remulos's quest 8736 escort is missing, so the event
+  can't start.
+- D25. Mizzle: a script's walk home (movement 7) never fires reached
+  home, so the Gordok tribute can't be had.
+- D30. The Emperor's rally: friendly creatures in sight (C1).
