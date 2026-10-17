@@ -50,6 +50,8 @@ pub struct ServerConfig {
     pub world: WorldConfig,
     pub accounts: AccountsConfig,
     pub spawn: SpawnConfig,
+    /// Gurubashi Arena's last man standing.
+    pub arena: crate::game::map::arena::ArenaConfig,
 }
 
 #[derive(Debug, Deserialize)]

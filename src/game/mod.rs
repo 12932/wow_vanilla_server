@@ -44,6 +44,8 @@ mod tests_spells;
 mod tests_pvp2;
 #[cfg(test)]
 mod tests_world;
+#[cfg(test)]
+mod tests_arena;
 pub mod transports;
 pub mod update;
 pub mod weather;
@@ -82,6 +84,7 @@ pub struct RealmConfig {
     pub honor_reset_weekday: u8,
     /// Whether spells roll to hit, crit and resist (tests fix them).
     pub spell_rolls: bool,
+    pub arena: crate::game::map::arena::ArenaConfig,
 }
 
 impl RealmConfig {
@@ -102,6 +105,7 @@ impl RealmConfig {
             max_packets_per_sec: c.network.max_packets_per_sec,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
+            arena: c.arena.clone(),
         }
     }
 }
