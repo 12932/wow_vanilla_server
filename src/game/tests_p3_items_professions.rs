@@ -575,3 +575,97 @@ async fn a_soul_shard_is_for_the_tap_and_its_group() {
     .await;
     assert_eq!(none, vec![], "none of nothing");
 }
+
+/// Thistle Tea's `OpenLock.resolve/4`: a skill's bonuses count only if it
+/// is known; an item cast has its own strength alone and no gain; an item
+/// key opens its lock, else the first skill way decides; a key spell wants
+/// its key; an ordinary opening wants no skill and gains none.
+#[tokio::test]
+async fn a_lock_opens_by_its_ways() {
+    use crate::game::data::crafts::LockKey;
+    use professions::{Opening, resolve_lock};
+    const MINING: u32 = 186;
+    let mut d = data();
+    let key = |kind, index, skill| LockKey { kind, index, skill };
+    // A vein (3) wanting 65; a chest (1) wanting 125, a charge's (16) 150;
+    // an item key or lockpicking 100; a key alone; an ordinary lock (5).
+    d.crafts.locks.insert(39, vec![key(2, 3, 65)]);
+    d.crafts.locks.insert(40, vec![key(2, 1, 125)]);
+    d.crafts.locks.insert(41, vec![key(2, 16, 150)]);
+    d.crafts
+        .locks
+        .insert(42, vec![key(1, 123, 0), key(2, 1, 100)]);
+    d.crafts.locks.insert(83, vec![key(1, 5397, 0)]);
+    d.crafts.locks.insert(44, vec![key(2, 5, 100)]);
+    d.crafts.locks.insert(45, vec![key(2, 3, 1)]);
+    let open = |id: u32, kind: u32, points: i32| {
+        spell(
+            id,
+            &[(professions::EFFECT_OPEN_LOCK, 0, kind as i32, points)],
+        )
+    };
+    let fire = spell(900_740, &[(professions::EFFECT_OPEN_LOCK_ITEM, 0, 0, 0)]);
+    for s in [
+        spell(900_750, &[(6, 30, MINING as i32, 5)]),
+        open(900_723, 3, 0),
+        open(900_721, 1, 125),
+        open(900_736, 16, 150),
+        open(900_731, 1, 0),
+        open(900_725, 5, 0),
+        fire,
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Rogue).await;
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        let s = |id: u32| data.spells.get(id).cloned().unwrap();
+        let resolve = |m: &Map, spell: u32, lock: u32, item: Option<u32>| {
+            resolve_lock(&data, &m.players[&g], &s(spell), 0, lock, item)
+        };
+        let unknown = resolve(m, 900_723, 45, None);
+        learn_skill(m, g, MINING, 60);
+        crate::game::map::spells::cast_triggered(m, g, 900_750, Some(g));
+        let known = resolve(m, 900_723, 39, None);
+        (
+            unknown,
+            known,
+            resolve(m, 900_721, 40, Some(15_870)),
+            resolve(m, 900_721, 40, Some(15_870)).map(|o| o.gain),
+            resolve(m, 900_736, 41, Some(4367)),
+            resolve(m, 900_731, 42, Some(123)),
+            resolve(m, 900_731, 42, Some(456)),
+            resolve(m, 900_740, 83, Some(5397)),
+            resolve(m, 900_740, 83, Some(1234)),
+            resolve(m, 900_740, 83, None),
+            resolve(m, 900_725, 44, None),
+        )
+    })
+    .await;
+    assert_eq!(got.0, Err(LOW_CASTLEVEL), "no bonus for a skill not known");
+    assert_eq!(
+        got.1,
+        Ok(Opening {
+            skill: Some(MINING),
+            value: 65,
+            required: 65,
+            gain: true
+        }),
+        "60 and 5"
+    );
+    assert_eq!(got.2.map(|o| o.value), Ok(125), "the key's own 125");
+    assert_eq!(got.3, Ok(false), "no gain from an item");
+    assert_eq!(got.4.map(|o| (o.value, o.gain)), Ok((150, false)));
+    assert_eq!(got.5, Ok(Opening::default()), "its item key");
+    assert_eq!(got.6, Err(LOW_CASTLEVEL), "then lockpicking, short");
+    assert_eq!(got.7, Ok(Opening::default()));
+    assert_eq!(got.8, Err(BAD_TARGETS), "another key");
+    assert_eq!(got.9, Err(BAD_TARGETS), "no key");
+    assert_eq!(
+        got.10.map(|o| (o.skill, o.required, o.gain)),
+        Ok((None, 0, false)),
+        "ordinary"
+    );
+}
