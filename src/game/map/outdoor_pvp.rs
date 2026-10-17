@@ -610,7 +610,13 @@ fn towers(map: &mut Map, elapsed: i64) {
                     (m.position_state, m.slider()),
                 ],
             );
-        } else if before_sliders[*i] != m.slider() || before[*i] != after[*i] {
+        } else if before_sliders[*i] != m.slider()
+            || before[*i] != after[*i]
+            || after_states != before_states
+        {
+            // Last, after the towers' states, as Thistle Tea's
+            // `Towers.updates` orders them: the client shows the slider
+            // from the latest.
             send_states(map, *g, &[(m.position_state, m.slider())]);
         }
     }
@@ -862,7 +868,8 @@ fn reconcile_services(map: &mut Map) {
         if let Some(o) = map.outdoor.as_mut() {
             o.services.insert((i, s.slot), (s.entry, g));
         }
-        if i == EASTWALL && s.slot > 0 {
+        // The squad's soldiers, not the flare of a tower held whole.
+        if i == EASTWALL && s.creature && s.slot > 0 {
             link_soldier(map, g, usize::from(s.slot));
         }
     }
@@ -896,7 +903,9 @@ fn link_soldier(map: &mut Map, g: Guid, slot: usize) {
         return;
     };
     let (lx, ly, _, _) = SQUAD[0];
-    let (x, y, _, o) = SQUAD[slot];
+    let Some(&(x, y, _, o)) = SQUAD.get(slot) else {
+        return;
+    };
     let angle = (y - ly).atan2(x - lx) - o;
     // In formation, fighting and evading together.
     crate::game::map::creature_groups::join_with(
