@@ -362,6 +362,50 @@ async fn a_teleport_within_a_copy_stays_in_it() {
     );
 }
 
+const RELENTLESS_STRIKES: u32 = 14179;
+
+const EVISCERATE: u32 = 2098;
+
+#[tokio::test]
+async fn relentless_strikes_goes_by_the_combo_points() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "RELENTLESS");
+    let r = c.enter("Relentr", Race::Human, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let energy = map
+        .query(move |m| {
+            level(m, r, 60, &[RELENTLESS_STRIKES, EVISCERATE]);
+            let kobold = spawn(m, r, 6, 60, 2.0);
+            if let Some(c) = m.caster_mut(r) {
+                c.combo_points = 5;
+                c.combo_target = kobold;
+            }
+            m.players
+                .get_mut(&r)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_POWER1 + 3, 100);
+            let went = spells::cast(
+                m,
+                r,
+                EVISCERATE,
+                Targets {
+                    unit: Some(kobold),
+                    ..Default::default()
+                },
+                None,
+            );
+            (went, m.players[&r].fields.get_u32(UNIT_FIELD_POWER1 + 3))
+        })
+        .await
+        .unwrap();
+    // Five points are a sure 25 energy back, of the 35 Eviscerate cost.
+    assert_eq!(energy, (true, 90));
+}
+
 #[tokio::test]
 async fn a_modifier_touches_only_its_mask_past_32_bits() {
     if !have_data() {
