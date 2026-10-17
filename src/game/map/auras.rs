@@ -1991,6 +1991,8 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
         }
         if map.players.contains_key(&target) {
             crate::game::map::spells::restore_form_passives(map, target);
+            // Gear whose spells name forms: held to this one.
+            crate::game::map::inventory::sync_gear(map, target);
         }
     }
 }
