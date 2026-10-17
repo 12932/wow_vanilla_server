@@ -43,8 +43,13 @@ pub fn applied(map: &mut Map, target: Guid, h: &Holder) {
     }
     let spell = h.spell;
     auras::remove_where(map, target, |o| {
-        if o.spell == spell || o.positive || o.passive {
+        if o.spell == spell || o.passive {
             return false;
+        }
+        // A dispel immunity takes the helpful of its type too: Faerie
+        // Fire's, stealth and invisibility.
+        if o.positive {
+            return dispels.contains(&o.dispel);
         }
         let mechanic = |m: u32| m > 0 && mechanics & (1 << (m - 1).min(63)) != 0;
         let mechanic_hit = mechanic(o.mechanic)

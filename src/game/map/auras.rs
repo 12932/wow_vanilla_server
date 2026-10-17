@@ -807,10 +807,14 @@ pub fn apply_spell(
         if mechanic_immune
             || (!spell.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES)
                 && existing.school_immune(spell.school_mask()))
-            || existing.dispel_immune(spell.dispel)
         {
             return Err(Refused::Immune);
         }
+    }
+    // A dispel type kept off, helpful or not: Faerie Fire's keeps stealth
+    // and invisibility off (mangos's `IsImmuneToSpell`).
+    if !spell.attr(0, sd::ATTR_NO_IMMUNITIES) && existing.dispel_immune(spell.dispel) {
+        return Err(Refused::Immune);
     }
     // A shield, a bandage or a bubble too soon after the last: Weakened
     // Soul, Recently Bandaged and Forbearance are immunities to its kind.
