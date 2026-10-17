@@ -81,7 +81,7 @@ fn price(t: &ItemTemplate, count: u32) -> u32 {
 
 /// How many of a limited item a vendor has (`u32::MAX`: unlimited): what
 /// was left, and a buy count back for each restock interval since.
-fn stock_left(map: &mut Map, npc: Guid, v: &VendorItem, buy_count: u32) -> u32 {
+pub fn stock_left(map: &mut Map, npc: Guid, v: &VendorItem, buy_count: u32) -> u32 {
     if v.max_count == 0 {
         return u32::MAX;
     }
