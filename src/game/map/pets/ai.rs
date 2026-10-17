@@ -38,7 +38,36 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         summon::remove(map, g);
         return;
     }
-    if expires.is_some_and(|t| t <= now) {
+    let owner_dead = map
+        .players
+        .get(&owner)
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive);
+    if owner_dead && matches!(kind, Kind::Totem | Kind::Guardian | Kind::Critter) {
+        summon::remove(map, g);
+        return;
+    }
+    mirror_flags(map, g, owner);
+    if matches!(
+        kind,
+        Kind::Hunter | Kind::Demon | Kind::Guardian | Kind::Totem
+    ) && alive
+        && state(map, g).is_some_and(|s| s.inherit_at <= now)
+    {
+        if let Some(s) = state_mut(map, g) {
+            s.inherit_at = now + inherit::EVERY;
+        }
+        inherit::sync(map, g);
+    }
+    // A guardian's time waits while it fights (Thistle Tea's
+    // `TemporarySummon`).
+    let fighting = kind == Kind::Guardian
+        && map.unit_fields(g).is_some_and(|f| {
+            f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+        });
+    if expires.is_some_and(|t| t <= now) && !fighting {
         if matches!(kind, Kind::Possessed) {
             release(map, owner, g);
         }
@@ -103,6 +132,27 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             }
             act(map, g, now);
         }
+    }
+}
+
+/// A player's creature is flagged for PvP as its master is.
+fn mirror_flags(map: &mut Map, g: Guid, owner: Guid) {
+    let Some(pvp) = map.players.get(&owner).map(|p| {
+        p.fields
+            .has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_PVP)
+    }) else {
+        return;
+    };
+    if let Some(c) = map.creature_mut(g)
+        && c.fields
+            .has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_PVP)
+            != pvp
+    {
+        c.fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_PVP,
+            pvp,
+        );
     }
 }
 
@@ -184,14 +234,17 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
     }
     map.grid
         .around(pos.x, pos.y, AGGRO_YARDS)
-        .filter(|v| guid::is_unit(*v) && *v != g)
+        .filter(|v| (guid::is_unit(*v) || guid::is_player(*v)) && *v != g && *v != owner)
         .filter(|v| {
-            map.creature(*v)
-                .is_some_and(|c| c.alive() && c.owner.is_none())
-                && map
-                    .position_of(*v)
-                    .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
-                && combat::hostile(map, *v, owner)
+            // Hostile creatures, and enemy players the rules let it fight.
+            let foe = guid::is_player(*v)
+                || (map
+                    .creature(*v)
+                    .is_some_and(|c| c.alive() && c.owner.is_none())
+                    && combat::hostile(map, *v, owner));
+            foe && map
+                .position_of(*v)
+                .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
                 && combat::can_attack(map, g, *v)
         })
         .min_by(|a, b| {

@@ -21,6 +21,8 @@ use crate::game::map::spells::Targets;
 mod ai;
 mod control;
 mod hunter;
+mod inherit;
+mod possess;
 mod summon;
 mod totems;
 
@@ -80,6 +82,8 @@ pub const HAPPINESS_LEVEL: u32 = 333_000;
 /// The unit is a player's: it is attackable as one is.
 pub const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x0000_0008;
 pub const UNIT_FLAG_POSSESSED: u32 = 0x0100_0000;
+/// `UNIT_DYNFLAG_SPECIALINFO`: Beast Lore's view of a beast.
+pub const DYNFLAG_SPECIALINFO: u32 = 0x10;
 
 /// How far a pet follows behind, and where it stops trying and jumps to
 /// its master.
@@ -148,6 +152,8 @@ pub struct PetState {
     pub food_mask: u32,
     pub family: u32,
     pub dead_at: Option<Instant>,
+    /// When what it has of its master's is next brought in line.
+    pub inherit_at: Instant,
     /// A charmed unit's own faction, to go back to.
     pub was_faction: u32,
     pub was_hostile: bool,
@@ -182,6 +188,7 @@ impl PetState {
             food_mask: 0,
             family: 0,
             dead_at: None,
+            inherit_at: now,
             was_faction: 0,
             was_hostile: false,
         }
@@ -200,7 +207,27 @@ pub struct Owned {
     pub critter: Option<Guid>,
     /// The pet went away for a while (mounted, dead) and comes back.
     pub unsummoned: bool,
+    /// Who controls this player, if anyone.
+    pub possessed_by: Option<possess::Possession>,
+    /// The unit the client moves, when not its own character.
+    pub mover: Option<Guid>,
 }
+
+/// Whose side `g` fights on: a player's pet, totem, guardian or charmed
+/// unit fights on its master's, a controlled player on its controller's;
+/// anything else on its own.
+pub fn master(map: &Map, g: Guid) -> Guid {
+    if let Some(c) = map.creature(g) {
+        return c.owner.filter(|o| guid::is_player(*o)).unwrap_or(g);
+    }
+    map.players
+        .get(&g)
+        .and_then(|p| p.owned.possessed_by)
+        .map_or(g, |pos| pos.master)
+}
+
+pub use possess::{not_mover, set_mover};
+pub use totems::immune;
 
 /// The pet of `owner` (or the unit they charm), if one is out.
 pub fn pet_of(map: &Map, owner: Guid) -> Option<Guid> {
@@ -259,6 +286,7 @@ pub fn handles(s: &SpellTemplate, index: usize) -> bool {
                 | EFFECT_APPLY_AREA_AURA_PET
     ) || (s.id == SPELL_TAME_BEAST_TICK && e == 3)
         || teaches_pet(s, index)
+        || crate::game::map::trinkets::handles(s)
 }
 
 /// Whether effect `index` of `s` teaches the caster's pet a spell: a
@@ -287,6 +315,11 @@ pub fn effect(
     amount: i32,
 ) {
     let e = s.effects[index];
+    // The stacking trinkets' hit scripts ride the same hook.
+    if crate::game::map::trinkets::handles(s) {
+        crate::game::map::trinkets::effect(map, caster, s);
+        return;
+    }
     if teaches_pet(s, index) {
         let hunter_pet = pet_of(map, caster)
             .and_then(|g| state(map, g))
@@ -339,8 +372,8 @@ pub fn effect(
         | EFFECT_SUMMON_PHANTASM
         | EFFECT_SUMMON_DEMON => {
             let count = amount.clamp(1, 5) as usize;
-            for _ in 0..count {
-                totems::summon_guardian(map, caster, e.misc_value.max(0) as u32, s);
+            for i in 0..count {
+                totems::summon_guardian(map, caster, e.misc_value.max(0) as u32, s, i == 0);
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),
@@ -488,6 +521,15 @@ pub fn owner_arrived(map: &mut Map, owner: Guid) {
 /// control is kept (their pet) or let go (totems, guardians, charms).
 pub fn owner_leaving(map: &mut Map, owner: Guid) {
     sync_record(map, owner);
+    possess::release(map, owner);
+    if let Some(c) = map
+        .players
+        .get(&owner)
+        .and_then(|p| p.owned.charm)
+        .filter(|c| map.players.contains_key(c))
+    {
+        possess::release(map, c);
+    }
     let Some(p) = map.players.get(&owner) else {
         return;
     };
@@ -592,6 +634,10 @@ pub fn owner_killed(map: &mut Map, owner: Guid, victim: Guid) {
 
 /// `master` takes control of `unit` (charm or possession).
 pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
+    if map.players.contains_key(&unit) {
+        possess::take(map, master, unit);
+        return;
+    }
     if !guid::is_player(master) || map.creature(unit).is_none() {
         return;
     }
@@ -663,6 +709,15 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
 
 /// The charm or possession of `unit` ended.
 pub fn uncharmed(map: &mut Map, master: Guid, unit: Guid) {
+    if map
+        .players
+        .get(&unit)
+        .and_then(|p| p.owned.possessed_by)
+        .is_some_and(|pos| pos.master == master)
+    {
+        possess::release(map, unit);
+        return;
+    }
     let charmed = state(map, unit)
         .is_some_and(|s| matches!(s.kind, Kind::Charmed | Kind::Possessed) && s.owner == master);
     if charmed {
@@ -692,6 +747,9 @@ fn release(map: &mut Map, master: Guid, unit: Guid) {
     if let Some(p) = map.players.get_mut(&master) {
         if p.owned.charm == Some(unit) {
             p.owned.charm = None;
+        }
+        if p.owned.mover == Some(unit) {
+            p.owned.mover = None;
         }
         p.fields.set_guid(UNIT_FIELD_CHARM, Guid::zero());
         if possess {
@@ -742,35 +800,15 @@ fn release(map: &mut Map, master: Guid, unit: Guid) {
     }
 }
 
-/// Movement from a player's client while they possess a unit moves the
-/// unit. True when it did.
+/// Movement from a player's client: a possessed unit's when the client
+/// has made it its active mover. True when it is handled here.
 pub fn move_possessed(
     map: &mut Map,
     player: Guid,
     info: &wow_world_messages::vanilla::MovementInfo,
     relay: crate::game::map::movement::Relay,
 ) -> bool {
-    let Some(unit) = map.players.get(&player).and_then(|p| p.owned.charm) else {
-        return false;
-    };
-    if !state(map, unit).is_some_and(|s| s.kind == Kind::Possessed) {
-        return false;
-    }
-    let Some(c) = map.creature_mut(unit) else {
-        return false;
-    };
-    let (anchor, old_cell) = (c.vis_anchor, c.cell);
-    c.position = info.position;
-    c.orientation = info.orientation;
-    c.motion = crate::game::map::creature::Motion::Idle { until: None };
-    let new_cell = crate::game::map::grid::cell_of(info.position.x, info.position.y);
-    c.cell = new_cell;
-    map.grid.relocate(unit, old_cell, new_cell);
-    crate::game::map::visibility::moved(map, unit, anchor, info.position);
-    if let Some(frame) = relay(unit, info.clone()) {
-        map.send_to_observers(unit, &frame, false);
-    }
-    true
+    possess::moved(map, player, info, relay)
 }
 
 /// Run what every player controls.
@@ -785,6 +823,7 @@ pub fn update(map: &mut Map) {
     for g in controlled {
         ai::step(map, g, now);
     }
+    possess::update(map);
     // Pets away for a while come back when their master can have them;
     // those whose master mounted or died go away for a while.
     let waiting: Vec<Guid> = map

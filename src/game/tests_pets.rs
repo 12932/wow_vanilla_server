@@ -18,28 +18,33 @@ use crate::game::map::creature::Creature;
 use crate::game::map::pets::{self, ACT_COMMAND, COMMAND_ATTACK, Kind};
 use crate::game::map::{Map, MapHandle};
 
-const BOAR: u32 = 3000;
-const WOLF: u32 = 2000;
-const IMP: u32 = 416;
-const STRENGTH_TOTEM: u32 = 5874;
-const STONESKIN_TOTEM: u32 = 5873;
-const STABLE_MASTER: u32 = 3010;
-const FELHUNTER: u32 = 3020;
+pub(crate) const BOAR: u32 = 3000;
+pub(crate) const WOLF: u32 = 2000;
+pub(crate) const IMP: u32 = 416;
+pub(crate) const STRENGTH_TOTEM: u32 = 5874;
+pub(crate) const STONESKIN_TOTEM: u32 = 5873;
+pub(crate) const STABLE_MASTER: u32 = 3010;
+pub(crate) const FELHUNTER: u32 = 3020;
 
-const TAME_BEAST: u32 = 1515;
-const CALL_PET: u32 = 883;
-const DISMISS_PET: u32 = 2641;
-const SUMMON_IMP: u32 = 688;
-const FIREBOLT: u32 = 3110;
-const STRENGTH_OF_EARTH_TOTEM: u32 = 8075;
-const STRENGTH_OF_EARTH: u32 = 8076;
-const STONESKIN_TOTEM_SPELL: u32 = 8071;
-const STONESKIN: u32 = 8072;
-const ENSLAVE_DEMON: u32 = 1098;
-const GORE: u32 = 9101;
-const TRAIN_GORE: u32 = 9001;
+pub(crate) const TAME_BEAST: u32 = 1515;
+pub(crate) const CALL_PET: u32 = 883;
+pub(crate) const DISMISS_PET: u32 = 2641;
+pub(crate) const SUMMON_IMP: u32 = 688;
+pub(crate) const FIREBOLT: u32 = 3110;
+pub(crate) const STRENGTH_OF_EARTH_TOTEM: u32 = 8075;
+pub(crate) const STRENGTH_OF_EARTH: u32 = 8076;
+pub(crate) const STONESKIN_TOTEM_SPELL: u32 = 8071;
+pub(crate) const STONESKIN: u32 = 8072;
+pub(crate) const ENSLAVE_DEMON: u32 = 1098;
+pub(crate) const GORE: u32 = 9101;
+pub(crate) const TRAIN_GORE: u32 = 9001;
 
-fn faction(id: u32, ours: u32, friend_mask: u32, enemy_mask: u32) -> (u32, FactionTemplate) {
+pub(crate) fn faction(
+    id: u32,
+    ours: u32,
+    friend_mask: u32,
+    enemy_mask: u32,
+) -> (u32, FactionTemplate) {
     (
         id,
         FactionTemplate {
@@ -53,7 +58,7 @@ fn faction(id: u32, ours: u32, friend_mask: u32, enemy_mask: u32) -> (u32, Facti
     )
 }
 
-fn effect(effect: u32, base_points: i32, target_a: u32) -> SpellEffect {
+pub(crate) fn effect(effect: u32, base_points: i32, target_a: u32) -> SpellEffect {
     SpellEffect {
         effect,
         base_points,
@@ -64,7 +69,7 @@ fn effect(effect: u32, base_points: i32, target_a: u32) -> SpellEffect {
     }
 }
 
-fn spell(id: u32, name: &str, effects: [SpellEffect; 3]) -> SpellTemplate {
+pub(crate) fn spell(id: u32, name: &str, effects: [SpellEffect; 3]) -> SpellTemplate {
     SpellTemplate {
         id,
         name: name.into(),
@@ -75,7 +80,7 @@ fn spell(id: u32, name: &str, effects: [SpellEffect; 3]) -> SpellTemplate {
     }
 }
 
-fn template(entry: u32, name: &str, faction: u32, unit_class: u8) -> CreatureTemplate {
+pub(crate) fn template(entry: u32, name: &str, faction: u32, unit_class: u8) -> CreatureTemplate {
     CreatureTemplate {
         entry,
         name: name.into(),
@@ -98,7 +103,7 @@ fn template(entry: u32, name: &str, faction: u32, unit_class: u8) -> CreatureTem
 
 /// The data the pets need: the beasts, the imp, two earth totems, a
 /// stable master, and the spells.
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = GameData::empty();
     d.faction_templates.extend([
         faction(1, 3, 2, 12),
@@ -295,7 +300,7 @@ fn data() -> GameData {
 }
 
 /// A player in the world: their client, GUID and map.
-async fn enter(
+pub(crate) async fn enter(
     realm: &std::sync::Arc<crate::game::Realm>,
     account: &str,
     name: &str,
@@ -310,7 +315,7 @@ async fn enter(
 
 /// Put a creature of `entry` `d` yards before `g`, with the GUID counter
 /// `counter`.
-async fn place(map: &MapHandle, g: Guid, entry: u32, counter: u32, d: f32) -> Guid {
+pub(crate) async fn place(map: &MapHandle, g: Guid, entry: u32, counter: u32, d: f32) -> Guid {
     map.query(move |m| {
         let data = m.realm.data.clone();
         let t = data.creature_template(entry).cloned().unwrap();
@@ -334,7 +339,7 @@ async fn place(map: &MapHandle, g: Guid, entry: u32, counter: u32, d: f32) -> Gu
     .unwrap()
 }
 
-fn learn(map: &MapHandle, g: Guid, spells: &'static [u32]) {
+pub(crate) fn learn(map: &MapHandle, g: Guid, spells: &'static [u32]) {
     map.call(move |m| {
         if let Some(p) = m.players.get_mut(&g) {
             p.spells.extend_from_slice(spells);
@@ -346,14 +351,14 @@ fn learn(map: &MapHandle, g: Guid, spells: &'static [u32]) {
     });
 }
 
-fn at(target: Guid) -> SpellCastTargets {
+pub(crate) fn at(target: Guid) -> SpellCastTargets {
     crate::game::map::spells::wire_targets(&crate::game::map::spells::Targets {
         unit: Some(target),
         ..Default::default()
     })
 }
 
-async fn cast(c: &Client, spell: u32, target: Option<Guid>) {
+pub(crate) async fn cast(c: &Client, spell: u32, target: Option<Guid>) {
     c.send(CMSG_CAST_SPELL {
         spell,
         targets: match target {
@@ -367,7 +372,7 @@ async fn cast(c: &Client, spell: u32, target: Option<Guid>) {
 }
 
 /// The next pet bar this client gets: the pet's GUID, or zero for none.
-async fn pet_bar(c: &mut Client) -> Guid {
+pub(crate) async fn pet_bar(c: &mut Client) -> Guid {
     c.wait_for("SMSG_PET_SPELLS", |m| match m {
         ServerOpcodeMessage::SMSG_PET_SPELLS(s) => Some(s.pet),
         _ => None,
@@ -375,13 +380,13 @@ async fn pet_bar(c: &mut Client) -> Guid {
     .await
 }
 
-fn pet_kind(m: &Map, g: Guid) -> Option<Kind> {
+pub(crate) fn pet_kind(m: &Map, g: Guid) -> Option<Kind> {
     pets::state(m, g).map(|s| s.kind)
 }
 
 /// A hunter with a tamed boar near a wolf: their client, GUID, map, the
 /// pet and the wolf.
-async fn tamed() -> (
+pub(crate) async fn tamed() -> (
     std::sync::Arc<crate::game::Realm>,
     Client,
     Guid,
@@ -646,7 +651,7 @@ async fn a_totem_holds_its_aura_over_the_party_and_gives_way_to_another_of_its_e
     assert!(!old_aura, "the old totem's aura went with it");
 }
 
-async fn stable_result(h: &mut Client) -> StableResult {
+pub(crate) async fn stable_result(h: &mut Client) -> StableResult {
     h.wait_for("SMSG_STABLE_RESULT", |m| match m {
         ServerOpcodeMessage::SMSG_STABLE_RESULT(r) => Some(r.result),
         _ => None,

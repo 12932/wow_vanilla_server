@@ -75,6 +75,48 @@ fn level_of(map: &Map, g: Guid) -> u8 {
     map.unit_view(g).map(|u| u.level).unwrap_or(1).clamp(1, 63) as u8
 }
 
+/// Where a totem of `slot` stands: two yards out, each element on its own
+/// side (Thistle Tea's `Totems.position`).
+fn slot_spot(map: &Map, owner: Guid, slot: usize) -> (Vector3d, f32) {
+    let (pos, o) = map
+        .unit_view(owner)
+        .map(|u| (u.position, u.orientation))
+        .unwrap_or((
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        ));
+    let a = o + std::f32::consts::FRAC_PI_4 - slot as f32 * std::f32::consts::FRAC_PI_2;
+    (
+        Vector3d {
+            x: pos.x + 2.0 * a.cos(),
+            y: pos.y + 2.0 * a.sin(),
+            z: pos.z,
+        },
+        o,
+    )
+}
+
+/// Effects a totem shrugs off (Thistle Tea's `Totems.immune_effect?`): heals
+/// and power, taunts, and harmful or healing auras, but its shaman's own
+/// and the shaman's totem spells.
+pub fn immune(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: usize) -> bool {
+    if caster == target || !state(map, target).is_some_and(|t| t.kind == Kind::Totem) {
+        return false;
+    }
+    if s.family_name == 11 && s.family_flags as u32 & 0x0400_6000 != 0 {
+        return false;
+    }
+    let e = s.effects[index];
+    const REGEN_AURAS: [u32; 6] = [8, 24, 20, 21, 84, 85];
+    matches!(e.effect, 114 | 10 | 67 | 75 | 30)
+        || (matches!(e.effect, 6 | 27 | 35)
+            && (!crate::game::map::auras::positive(s) || REGEN_AURAS.contains(&e.aura)))
+}
+
 /// A totem of `entry` for `owner`, in `slot` (the one there goes).
 pub fn summon_totem(
     map: &mut Map,
@@ -88,7 +130,7 @@ pub fn summon_totem(
     if let Some(old) = map.players.get(&owner).and_then(|p| p.owned.totems[slot]) {
         summon::remove(map, old);
     }
-    let (at, o) = before(map, owner, 2.0);
+    let (at, o) = slot_spot(map, owner, slot);
     let level = level_of(map, owner);
     let g = summon::spawn(map, owner, entry, Kind::Totem, level, at, o);
     let spell = totem_spell(map, entry, s);
@@ -302,8 +344,29 @@ pub fn lift_auras(map: &mut Map, g: Guid) {
 
 /// A guardian of `entry` for `owner`, for the spell's time: it fights
 /// what its summoner fights.
-pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate) {
+pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate, replace: bool) {
     if entry == 0 {
+        return;
+    }
+    // A player's cast replaces their guardians of its kind (Thistle Tea's
+    // `Guardians.prepare`); a creature's add up, to sixteen.
+    let same: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| {
+            c.owner == Some(owner)
+                && c.entry == entry
+                && c.pet.as_deref().is_some_and(|p| p.kind == Kind::Guardian)
+        })
+        .map(|(_, c)| c.guid)
+        .collect();
+    if guid::is_player(owner) {
+        if replace {
+            for g in same {
+                summon::remove(map, g);
+            }
+        }
+    } else if same.len() >= 16 {
         return;
     }
     let now = map.now;
