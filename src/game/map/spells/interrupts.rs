@@ -19,7 +19,6 @@ pub const INVULNERABLE: u32 = 0x20_0000;
 /// The Discombobulator Ray's transform.
 const DISCOMBOBULATE: u32 = 4060;
 
-
 /// End `target`'s holders with any of `flags`, but `except`'s.
 fn end(map: &mut Map, target: Guid, flags: u32, except: u32) {
     let any = auras::auras(map, target).is_some_and(|a| {
