@@ -106,16 +106,16 @@ fn friend_entry(realm: &Realm, owner: &Online, g: Guid) -> Friend {
     Friend { guid: g, status }
 }
 
-/// At login: the lists are sent, and those with the player as a friend
-/// told.
-pub fn logged_in(map: &mut Map, g: Guid) {
+/// The friend and ignore lists, sent: the characters since deleted gone
+/// from both (Thistle Tea's `send_lists`). Their sets, for the lists of
+/// those online.
+fn send_lists(map: &mut Map, g: Guid) -> Option<(AHashSet<Guid>, AHashSet<Guid>)> {
     let realm = map.realm.clone();
-    let Some(p) = map.players.get(&g) else {
-        return;
-    };
-    let Some(me) = realm.registry.online(g) else {
-        return;
-    };
+    let me = realm.registry.online(g)?;
+    let p = map.players.get_mut(&g)?;
+    let exists = |c: &u32| realm.registry.name(guid::player(*c)).is_some();
+    p.row.state.friends.retain(exists);
+    p.row.state.ignored.retain(exists);
     let friends: AHashSet<Guid> = p
         .row
         .state
@@ -139,6 +139,51 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     p.outbound.send(&SMSG_IGNORE_LIST {
         ignored: ignores.iter().map(|i| i.guid()).collect(),
     });
+    Some((friends, ignores))
+}
+
+/// `CMSG_FRIEND_LIST`: the lists again, with each friend's status now
+/// (mangos's `HandleFriendListOpcode`).
+pub fn list(map: &mut Map, g: Guid) {
+    if let Some((friends, ignores)) = send_lists(map, g) {
+        let mut lists = map.realm.social.lists.lock();
+        lists.friends.insert(g, friends);
+        lists.ignores.insert(g, ignores);
+    }
+}
+
+/// `CMSG_CHAT_IGNORED`: the client didn't show `other`'s line, as `g`
+/// ignores them; `other` is told, if `g` does (mangos's
+/// `HandleChatIgnoredOpcode`, Thistle Tea's `Social.ignored`).
+pub fn chat_ignored(map: &Map, g: Guid, other: Guid) {
+    let realm = &map.realm;
+    if !realm.social.lists.lock().ignores(g, other) {
+        return;
+    }
+    let Some(me) = realm.registry.name(g) else {
+        return;
+    };
+    let Some(frame) = crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_MESSAGECHAT {
+        chat_type: wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::Ignored { sender2: g },
+        language: wow_world_messages::vanilla::Language::Universal,
+        message: me.name.to_string(),
+        tag: wow_world_messages::vanilla::PlayerChatTag::None,
+    }) else {
+        return;
+    };
+    send_frame(realm, other, &frame);
+}
+
+/// At login: the lists are sent, and those with the player as a friend
+/// told.
+pub fn logged_in(map: &mut Map, g: Guid) {
+    let realm = map.realm.clone();
+    let Some(me) = realm.registry.online(g) else {
+        return;
+    };
+    let Some((friends, ignores)) = send_lists(map, g) else {
+        return;
+    };
     let watchers = {
         let mut lists = realm.social.lists.lock();
         lists.friends.insert(g, friends);
