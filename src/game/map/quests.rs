@@ -748,10 +748,10 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     }
     // A shared quest: still near its sharer, and the sharer's time left.
     let shared_expiry = if shared {
-        match crate::game::map::questshare::admit(map, player, giver, quest) {
-            Ok(expires) => Some(expires),
-            Err(()) => return,
-        }
+        let Some(expires) = crate::game::map::questshare::admit(map, player, giver, quest) else {
+            return;
+        };
+        Some(expires)
     } else {
         None
     };

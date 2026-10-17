@@ -117,12 +117,10 @@ pub fn push(map: &mut Map, g: Guid, quest: u32) {
 /// A shared quest taken: still near the sharer and able to take it, or
 /// the sharer hears why not and the offer goes (Thistle Tea's
 /// `QuestSharing.accept`). The sharer's time left, for a timed quest
-/// (mangos's `AddQuest`).
-pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Result<i64, ()> {
+/// (mangos's `AddQuest`); none, refused.
+pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Option<i64> {
     let data = map.realm.data.clone();
-    let Some(q) = data.npc.quests.get(&quest) else {
-        return Err(());
-    };
+    let q = data.npc.quests.get(&quest)?;
     let near = match (map.players.get(&g), map.players.get(&sharer)) {
         (Some(p), Some(s)) => {
             crate::game::map::combat::dist(p.position(), s.position()) <= SHARE_YARDS
@@ -146,14 +144,14 @@ pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Result<i64, ()
             p.misc.quest_shared = None;
         }
         result(map, sharer, g, why);
-        return Err(());
+        return None;
     }
     let expires = map
         .players
         .get(&sharer)
         .and_then(|s| s.journal.slot_of(quest).map(|i| s.journal.log[i].expires))
         .unwrap_or(0);
-    Ok(expires)
+    Some(expires)
 }
 
 /// `MSG_QUEST_PUSH_RESULT` from a member: told to the one sharing with
