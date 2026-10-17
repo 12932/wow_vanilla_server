@@ -94,9 +94,15 @@ async fn rest_logged_out_is_earned_by_where_one_left() {
     })
     .await;
     let (next, earned) = out;
-    assert!((earned[0].0 - next / 40.0).abs() < 1.0, "{earned:?} of {next}");
+    assert!(
+        (earned[0].0 - next / 40.0).abs() < 1.0,
+        "{earned:?} of {next}"
+    );
     assert_eq!(earned[0].1, (next / 40.0) as u32, "and the field with it");
-    assert!((earned[1].0 - next / 160.0).abs() < 1.0, "{earned:?} of {next}");
+    assert!(
+        (earned[1].0 - next / 160.0).abs() < 1.0,
+        "{earned:?} of {next}"
+    );
     // The connection drops: it was a logout then, away from rest.
     let before = wall_now();
     a.disconnect();
@@ -221,10 +227,7 @@ async fn a_teleport_ends_a_fall_a_cast_and_a_ride() {
     .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     let (after, casting) = on(&map, move |m| {
-        (
-            health(m),
-            m.caster(ga).is_some_and(|c| c.casting.is_some()),
-        )
+        (health(m), m.caster(ga).is_some_and(|c| c.casting.is_some()))
     })
     .await;
     assert_eq!(after, before, "the fall was forgotten");
@@ -312,7 +315,11 @@ async fn a_teleport_ends_a_fall_a_cast_and_a_ride() {
     })
     .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(on(&kalimdor, move |m| health(m)).await, before, "no fall in Kalimdor");
+    assert_eq!(
+        on(&kalimdor, move |m| health(m)).await,
+        before,
+        "no fall in Kalimdor"
+    );
     assert!(
         a.gets(NONE_WITHIN, |m| {
             matches!(m, ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(_)).then_some(())

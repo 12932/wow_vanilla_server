@@ -369,7 +369,12 @@ fn objects_world() -> GameData {
         object(CHEST_TRAP, 6, "Chest Trap", &[]),
         // A trap of five yards with no limit, two seconds between springs.
         object(TRAP, 6, "Trap", &[(2, 5), (3, MARK), (4, 0), (5, 2)]),
-        object(TWO_TRAP, 6, "Two Trap", &[(2, 5), (3, MARK), (4, 2), (5, 1)]),
+        object(
+            TWO_TRAP,
+            6,
+            "Two Trap",
+            &[(2, 5), (3, MARK), (4, 2), (5, 1)],
+        ),
         object(BUTTON, 1, "Button", &[(3, BUTTON_TRAP)]),
         object(BUTTON_TRAP, 6, "Button Trap", &[(2, 0), (3, DONE)]),
     ] {
@@ -431,7 +436,11 @@ async fn summoned_objects_go_with_their_slot_their_owner_or_their_time() {
     .await;
     let (first, linked, alive, creators) = out;
     assert_eq!(linked.len(), 1, "the chest came with its trap");
-    assert_eq!(alive, [false, true, true, true, true], "only Alice's slot 1");
+    assert_eq!(
+        alive,
+        [false, true, true, true, true],
+        "only Alice's slot 1"
+    );
     let linked = linked[0];
     let gone = on(&map, move |m| m.gameobject(linked).is_none()).await;
     assert!(gone, "its linked trap went with it");
@@ -454,7 +463,11 @@ async fn summoned_objects_go_with_their_slot_their_owner_or_their_time() {
         (creator == owner, kept, summoned_alive(m, post))
     })
     .await;
-    assert_eq!(out, (true, true, false), "the creature's, kept by its corpse, gone with it");
+    assert_eq!(
+        out,
+        (true, true, false),
+        "the creature's, kept by its corpse, gone with it"
+    );
     // Alice's owned post and an ownerless one with a time: she logs out.
     let (owned, wild) = on(&map, move |m| {
         let owned = objects::summon(m, Some(ga), POST, here(), 0.0, 0, 0, 3, None).unwrap();
@@ -485,11 +498,18 @@ async fn summoned_objects_go_with_their_slot_their_owner_or_their_time() {
     })
     .await;
     cs[0].say(".go xyz 1629 -4373 31 1").await;
-    until(&map, "Bob's post gone", move |m| m.gameobject(bobs).is_none()).await;
+    until(&map, "Bob's post gone", move |m| {
+        m.gameobject(bobs).is_none()
+    })
+    .await;
 }
 
 /// Wait until `f` holds on the map.
-pub(crate) async fn until(map: &MapHandle, what: &str, f: impl Fn(&Map) -> bool + Send + Sync + Clone + 'static) {
+pub(crate) async fn until(
+    map: &MapHandle,
+    what: &str,
+    f: impl Fn(&Map) -> bool + Send + Sync + Clone + 'static,
+) {
     let deadline = tokio::time::Instant::now() + harness::WAIT;
     loop {
         let f = f.clone();
@@ -594,7 +614,11 @@ async fn a_trap_springs_on_a_foe_as_its_charges_and_cooldown_allow() {
     assert_eq!(out.0, 0, "a neutral sheep at rest is passed over");
     assert_eq!(out.1, 1, "fighting, it springs the trap");
     assert_eq!(out.2, 0, "not again before its cooldown");
-    assert_eq!(out.3, (1, true, true), "after it, again, its two seconds again, with no limit");
+    assert_eq!(
+        out.3,
+        (1, true, true),
+        "after it, again, its two seconds again, with no limit"
+    );
     assert_eq!(out.4, vec![(1, true), (1, false)], "two springs, then gone");
     // The button: Alice by it, the nearer of its traps sprung on her.
     let (near, far) = (

@@ -98,6 +98,8 @@ mod tests_p3_entity_mob;
 #[cfg(test)]
 mod tests_p3_entity_objects;
 #[cfg(test)]
+mod tests_p3_entity_pets;
+#[cfg(test)]
 mod tests_p3_entity_player;
 #[cfg(test)]
 mod tests_p3_items;
