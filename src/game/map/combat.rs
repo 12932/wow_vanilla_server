@@ -1262,6 +1262,18 @@ pub fn weapon_damage(
         damage *= 0.5;
     }
     if let Some(a) = auras::auras(map, attacker) {
+        // A blow of a magic school (an elemental's) takes its school's
+        // share of damage done, not the physical share its fields hold
+        // (Thistle Tea's `attack_damage_multipliers`).
+        let school_pct = if school & 1 == 0 {
+            let physical = a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, 1);
+            if physical > 0.0 {
+                damage /= physical;
+            }
+            a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, school)
+        } else {
+            1.0
+        };
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
         damage += a
@@ -1287,6 +1299,7 @@ pub fn weapon_damage(
             damage += ap as f32 / 14.0 * speed;
             damage *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, kind);
         }
+        damage *= school_pct;
         // An armed creature, disarmed, hits for four tenths.
         if a.has(AURA_MOD_DISARM)
             && let Some(c) = map.creature(attacker)
