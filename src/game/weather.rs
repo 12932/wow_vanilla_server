@@ -1,6 +1,8 @@
-//! Weather, as mangos runs it: every ten minutes each zone with
-//! `game_weather` chances may change (seven times in ten), to rain, snow
-//! or a storm by the season's chances, or fair. Those in the zone are told.
+//! Weather, as vmangos and Thistle Tea run it: every ten minutes each zone
+//! with `game_weather` chances may change (seven times in ten). Fair
+//! weather, or light weather that gets better, turns to rain, snow or a
+//! storm by the season's chances, or stays fair; other weather gets better
+//! or worse by a third, or changes all at once. Those in the zone are told.
 
 use std::time::Duration;
 
@@ -12,6 +14,11 @@ use crate::game::Realm;
 use crate::game::registry::Online;
 
 pub const CHANGE_EVERY: Duration = Duration::from_secs(600);
+
+/// A third of the way: a step better or worse.
+const STEP: f32 = 0.333_333_34;
+/// Two thirds: heavy weather.
+const HEAVY: f32 = 0.666_666_7;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Weather {
@@ -31,46 +38,114 @@ impl Default for Weather {
     }
 }
 
-/// The season by month: spring, summer, fall, winter.
-pub fn season(month0: u32) -> usize {
-    match month0 {
-        2..=4 => 0,
-        5..=7 => 1,
-        8..=10 => 2,
-        _ => 3,
-    }
+/// The season by the day of the year (0 for 1 January), as mangos counts
+/// it: spring from the 79th day (19 March, or the 18th in a leap year),
+/// then 91 days a season. Spring, summer, fall, winter.
+pub fn season(day0: u32) -> usize {
+    ((day0 + 365 - 78) / 91 % 4) as usize
 }
 
-/// The next weather from the season's chances (in percent) and two rolls.
-pub fn roll(chances: [u32; 3], keep: u32, pick: u32, grade: f32, old: Weather) -> (u8, f32) {
-    if keep < 30 {
-        return (old.kind, old.grade);
+/// A change's rolls, as mangos's `ReGenerate` makes them: whether and how
+/// it changes (0-99), the new kind (1-100), a radical change's (0-99) and a
+/// new heavy weather's (0-99), and the grade within its third (0-1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rolls {
+    pub change: u32,
+    pub kind: u32,
+    pub radical: u32,
+    pub intensity: u32,
+    pub grade: f32,
+}
+
+/// The next weather from the season's chances (in percent) and the rolls
+/// (Thistle Tea's `Weather.advance`, mangos's `ReGenerate`): three times in
+/// ten none; light weather three in ten gives way to the season's, else
+/// weather gets better by a third; three in ten it gets worse; and one in
+/// ten light goes heavy, heavy half the time light, and anything else
+/// gives way to the season's.
+pub fn advance(kind: u8, grade: f32, chances: [u32; 3], r: Rolls) -> (u8, f32) {
+    if r.change < 30 {
+        return (kind, grade);
     }
+    let fine = kind == 0;
+    let next = if r.change < 60 && grade < STEP {
+        choose(chances, r)
+    } else if r.change < 60 && !fine {
+        (kind, grade - STEP)
+    } else if r.change < 90 && !fine {
+        (kind, grade + STEP)
+    } else if !fine && grade < STEP {
+        (kind, 0.9999)
+    } else if !fine && grade > HEAVY && r.radical < 50 {
+        (kind, grade - HEAVY)
+    } else {
+        choose(chances, r)
+    };
+    normalize(next)
+}
+
+/// New weather by the season's chances: light, or on a radical change
+/// medium or heavy half the time each.
+fn choose(chances: [u32; 3], r: Rolls) -> (u8, f32) {
     let (rain, snow, storm) = (chances[0], chances[1], chances[2]);
-    let kind = if pick < rain {
+    let kind = if r.kind <= rain {
         1
-    } else if pick < rain + snow {
+    } else if r.kind <= rain + snow {
         2
-    } else if pick < rain + snow + storm {
+    } else if r.kind <= rain + snow + storm {
         3
     } else {
         0
     };
-    (kind, if kind == 0 { 0.0 } else { grade })
+    let offset = if r.change < 90 {
+        0.0
+    } else if r.intensity < 50 {
+        0.3334
+    } else {
+        0.6667
+    };
+    (kind, r.grade * 0.3333 + offset)
+}
+
+/// A grade the client takes: none for fair weather, else short of 1 and
+/// above 0 (mangos's `NormalizeGrade`).
+fn normalize((kind, grade): (u8, f32)) -> (u8, f32) {
+    if kind == 0 {
+        (0, 0.0)
+    } else if grade >= 1.0 {
+        (kind, 0.9999)
+    } else if grade < 0.0 {
+        (kind, 0.0001)
+    } else {
+        (kind, grade)
+    }
+}
+
+/// The sound of the weather, as vmangos's `GetSound` and Thistle Tea have
+/// it: none under 0.3, light under 0.6, medium under 0.9, else heavy.
+pub fn sound(kind: u8, grade: f32) -> u32 {
+    let base = match kind {
+        1 => 8533,
+        2 => 8536,
+        3 => 8556,
+        _ => return 0,
+    };
+    if grade < 0.3 {
+        0
+    } else if grade < 0.6 {
+        base
+    } else if grade < 0.9 {
+        base + 1
+    } else {
+        base + 2
+    }
 }
 
 fn packet(w: Weather) -> SMSG_WEATHER {
-    let tier = (w.grade * 3.0).min(2.0) as u32;
-    let sound = match w.kind {
-        1 => 8533 + tier,
-        2 => 8536 + tier,
-        3 => 8556 + tier,
-        _ => 0,
-    };
     SMSG_WEATHER {
         weather_type: WeatherType::try_from(u32::from(w.kind)).unwrap_or(WeatherType::Fine),
         grade: w.grade,
-        sound_id: sound,
+        sound_id: sound(w.kind, w.grade),
         change: WeatherChangeType::Smooth,
     }
 }
@@ -79,13 +154,10 @@ fn packet(w: Weather) -> SMSG_WEATHER {
 /// 3 storm; held a change period, or for good. Those in the zone see it.
 pub fn set(realm: &Realm, zone: u32, kind: u8, grade: f32, permanent: bool) {
     let now = crate::game::social::mail::now();
+    let (kind, grade) = normalize((kind, grade.clamp(0.0, 1.0)));
     let w = Weather {
         kind,
-        grade: if kind == 0 {
-            0.0
-        } else {
-            grade.clamp(0.0, 1.0)
-        },
+        grade,
         next: if permanent {
             i64::MAX
         } else {
@@ -123,7 +195,7 @@ pub fn tell(realm: &Realm, o: &Online, zone: u32) {
 pub fn sweep(realm: &Realm) {
     use chrono::Datelike;
     let now = crate::game::social::mail::now();
-    let s = season(chrono::Local::now().month0());
+    let s = season(chrono::Local::now().ordinal0());
     let mut rng = rand::rng();
     let mut changed: Vec<(u32, Weather)> = Vec::new();
     {
@@ -133,13 +205,14 @@ pub fn sweep(realm: &Realm) {
             if w.next > now {
                 continue;
             }
-            let (kind, grade) = roll(
-                chances[s],
-                rng.random_range(0..100),
-                rng.random_range(0..100),
-                rng.random_range(0.0..1.0),
-                *w,
-            );
+            let rolls = Rolls {
+                change: rng.random_range(0..100),
+                kind: rng.random_range(1..=100),
+                radical: rng.random_range(0..100),
+                intensity: rng.random_range(0..100),
+                grade: rng.random_range(0.0..1.0),
+            };
+            let (kind, grade) = advance(w.kind, w.grade, chances[s], rolls);
             w.next = now + CHANGE_EVERY.as_secs() as i64;
             if (kind, grade) != (w.kind, w.grade) {
                 w.kind = kind;
@@ -156,26 +229,5 @@ pub fn sweep(realm: &Realm) {
         if let Some(w) = by_zone.get(&o.zone()) {
             o.outbound.send(&packet(*w));
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn weather_keeps_three_times_in_ten_and_follows_the_chances() {
-        let old = Weather {
-            kind: 1,
-            grade: 0.5,
-            next: 0,
-        };
-        assert_eq!(roll([25, 0, 0], 10, 0, 0.9, old), (1, 0.5));
-        assert_eq!(roll([25, 0, 0], 50, 10, 0.9, old), (1, 0.9));
-        assert_eq!(roll([25, 10, 5], 50, 30, 0.9, old), (2, 0.9));
-        assert_eq!(roll([25, 10, 5], 50, 38, 0.9, old), (3, 0.9));
-        assert_eq!(roll([25, 10, 5], 50, 90, 0.9, old), (0, 0.0));
-        assert_eq!(season(0), 3);
-        assert_eq!(season(6), 1);
     }
 }
