@@ -366,7 +366,7 @@ pub fn points_with(s: &SpellTemplate, index: usize, level: u32, combo: u8) -> i3
     e.base_points + dice + per_level + (e.points_per_combo_point * f32::from(combo)) as i32
 }
 
-fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
+pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
     let Some(p) = map.players.get(&caster) else {
         return;
     };
@@ -1529,6 +1529,8 @@ pub fn update(map: &mut Map) {
                 auras::tick_due(map, g, casting.spell, g);
             }
             end_channel(map, g, &casting);
+            // A taming rod's, run its course, tames its beast.
+            crate::game::map::pets::rods::channel_done(map, g, casting.spell, casting.targets.unit);
             continue;
         }
         let Some(s) = data.spells.get(casting.spell) else {

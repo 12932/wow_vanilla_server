@@ -45,7 +45,7 @@ pub fn complete(p: &Player, q: &Quest, l: &Logged) -> bool {
             return false;
         }
     }
-    if q.flags & crate::game::data::npc::QUEST_FLAGS_EXPLORATION != 0 && !l.explored {
+    if q.needs_event() && !l.explored {
         return false;
     }
     if q.rep_objective.0 != 0 && !l.rep_met {
@@ -1009,12 +1009,15 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     if xp > 0 {
         crate::game::map::stats::give_xp(map, player, xp, None);
     }
-    if q.reward_spell != 0 {
-        crate::game::map::spells::learn(map, player, q.reward_spell);
-    }
-    // The spell the quest casts on its rewarded: honor, a buff, an item.
-    if q.reward_spell_cast != 0 {
-        crate::game::map::spells::cast_triggered(map, player, q.reward_spell_cast, Some(player));
+    // The spell the quest casts on its rewarded (honor, a buff, an item,
+    // a lesson), else the one it shows: Thistle Tea's and vmangos' rule.
+    let cast = if q.reward_spell_cast != 0 {
+        q.reward_spell_cast
+    } else {
+        q.reward_spell
+    };
+    if cast != 0 {
+        crate::game::map::spells::cast_triggered(map, player, cast, Some(player));
     }
     crate::game::map::reputation::quest_rewarded(map, player, &q);
     crate::game::map::battleground::quest_rewarded(map, player, quest);
