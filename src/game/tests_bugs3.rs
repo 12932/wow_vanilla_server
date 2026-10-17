@@ -1607,3 +1607,97 @@ async fn a_slave_barred_both_ways_spawns_while_its_master_lives() {
     .await;
     assert!(alive, "up while Loatheb lives");
 }
+
+const VALTHALAK: u32 = 900_430;
+const ARUGAL: u32 = 900_431;
+const HENZE: u32 = 900_432;
+const BRAZIER: u32 = 900_433;
+
+/// vmangos's spawn flags, as Thistle Tea reads them: a disabled spawn (0x2)
+/// isn't put out, a creature or an object; one not visible (0x40) is out
+/// but hidden until a script shows it; one dead (0x80) lies as a corpse
+/// with nothing on it.
+#[tokio::test]
+async fn spawn_flags_disable_hide_and_lay_out_dead() {
+    let mut d = GameData::empty();
+    for (entry, name) in [
+        (VALTHALAK, "Lord Valthalak"),
+        (ARUGAL, "Arugal"),
+        (HENZE, "Henze Faulk"),
+    ] {
+        d.creature_templates
+            .insert(entry, plain_creature(entry, name, 35));
+    }
+    let at = |guid, entry, dx: f32, flags| CreatureSpawn {
+        guid,
+        entries: vec![entry],
+        map: 0,
+        x: START.0 + dx,
+        y: START.1,
+        z: START.2,
+        respawn_min: 60,
+        respawn_max: 60,
+        spawn_flags: flags,
+        ..Default::default()
+    };
+    d.creature_spawns.insert(
+        0,
+        vec![
+            at(57, VALTHALAK, 5.0, crate::game::data::SPAWN_FLAG_DISABLED),
+            at(58, ARUGAL, 6.0, crate::game::data::SPAWN_FLAG_NOT_VISIBLE),
+            at(59, HENZE, 7.0, crate::game::data::SPAWN_FLAG_DEAD),
+        ],
+    );
+    d.gameobject_templates.insert(
+        BRAZIER,
+        GameObjectTemplate {
+            entry: BRAZIER,
+            kind: 5,
+            display_id: 1,
+            name: "Brazier".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 60,
+            entry: BRAZIER,
+            map: 0,
+            x: START.0 + 3.0,
+            y: START.1,
+            z: START.2,
+            spawn_flags: crate::game::data::SPAWN_FLAG_DISABLED,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, _g, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let (valthalak, arugal, henze, brazier) = on(&map, |m| {
+        let of = |spawn| crate::game::map::scripts::creature_of_spawn(m, spawn);
+        let brazier = m.gameobjects.iter().any(|(_, o)| o.entry == BRAZIER);
+        (of(57), of(58), of(59), brazier)
+    })
+    .await;
+    assert_eq!(valthalak, None, "a disabled creature isn't out");
+    assert!(!brazier, "nor a disabled object");
+    let (arugal, henze) = (arugal.expect("out"), henze.expect("out"));
+    a.sees(henze).await;
+    let short = Duration::from_millis(300);
+    assert!(!a.sees_within(arugal, short).await, "hidden");
+    let (alive, health, lootable) = on(&map, move |m| {
+        let c = m.creature(henze).unwrap();
+        (
+            c.alive(),
+            c.fields.get_u32(UNIT_FIELD_HEALTH),
+            c.fields.get_u32(UNIT_DYNAMIC_FLAGS) & 0x1,
+        )
+    })
+    .await;
+    assert_eq!(
+        (alive, health, lootable),
+        (false, 0, 0),
+        "a corpse with nothing on it"
+    );
+}

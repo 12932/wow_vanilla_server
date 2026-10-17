@@ -417,6 +417,10 @@ impl Creature {
             spawn.orientation,
         );
         c.spawn_guid = Some(spawn.guid);
+        // Out, but unseen until a script shows it.
+        if spawn.spawn_flags & crate::game::data::SPAWN_FLAG_NOT_VISIBLE != 0 {
+            c.scripted.get_or_insert_with(Default::default).concealed = true;
+        }
         if let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) {
             let health =
                 crate::game::data::load::creature_health(stats.health, template.health_multiplier);
