@@ -1,5 +1,6 @@
 //! Stage 2a's spells and auras, against the real data when it is here: a
-//! dispel taking a passive aura.
+//! dispel taking a passive aura, and weapons' feral attack power held to
+//! the forms.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -11,6 +12,7 @@ use crate::game::harness::{self, Client};
 use crate::game::map::creature::Creature;
 use crate::game::map::spells;
 use crate::game::map::{Map, MapKey, auras};
+use crate::game::store::BAG_PLAYER;
 
 static DB: std::sync::LazyLock<std::path::PathBuf> =
     std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
@@ -111,4 +113,57 @@ async fn a_dispel_takes_a_passive_aura_of_its_kind() {
         })
         .await;
     assert_eq!(dispelled, vec![LIGHTNING_HIDE]);
+}
+
+const HAMMER_OF_BESTIAL_FURY: u32 = 20580;
+const FERAL_ATTACK_POWER: u32 = 24994;
+const CAT_FORM: u32 = 768;
+const BEAR_FORM: u32 = 5487;
+
+#[tokio::test]
+async fn a_weapons_feral_attack_power_holds_only_in_the_forms_it_names() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A2");
+    let druid = c.enter("Partwo", Race::NightElf, Class::Druid).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let out = map
+        .query(move |m| {
+            ready(m, druid, 60);
+            let data = m.realm.data.clone();
+            let p = m.players.get_mut(&druid).unwrap();
+            p.items.retain(|i| !(i.bag == BAG_PLAYER && i.slot == 15));
+            crate::game::map::inventory::add_item(m, druid, HAMMER_OF_BESTIAL_FURY, 1, false)
+                .expect("room for it");
+            let p = m.players.get_mut(&druid).unwrap();
+            let i = p
+                .items
+                .iter()
+                .rposition(|i| i.entry == HAMMER_OF_BESTIAL_FURY)
+                .unwrap();
+            p.items[i].bag = BAG_PLAYER;
+            p.items[i].slot = 15;
+            p.refresh_inventory(&data);
+            crate::game::map::inventory::sync_gear(m, druid);
+            let caster = has(m, druid, FERAL_ATTACK_POWER);
+            spells::cast_triggered(m, druid, CAT_FORM, Some(druid));
+            let cat = has(m, druid, FERAL_ATTACK_POWER);
+            auras::remove_spell(m, druid, CAT_FORM, None);
+            let left = has(m, druid, FERAL_ATTACK_POWER);
+            spells::cast_triggered(m, druid, BEAR_FORM, Some(druid));
+            let bear = has(m, druid, FERAL_ATTACK_POWER);
+            // A change of gear in a form keeps it.
+            crate::game::map::inventory::sync_gear(m, druid);
+            let synced = has(m, druid, FERAL_ATTACK_POWER);
+            (caster, cat, left, bear, synced)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (false, true, false, true, true),
+        "(caster form, cat, cat left, bear, bear synced)"
+    );
 }
