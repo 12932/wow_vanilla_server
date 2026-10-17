@@ -1320,3 +1320,102 @@ async fn no_ticket_is_the_bare_default_status() {
         .await;
     assert_eq!(status, 0x0Au32.to_le_bytes().to_vec());
 }
+
+/// Thistle Tea's server_test: a session whose task dies closes its
+/// connection: what the client sends goes nowhere, and the player is off
+/// the world.
+#[tokio::test]
+async fn a_session_that_dies_closes_its_connection() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let online = realm.registry.online(g).unwrap();
+    online
+        .session
+        .send(crate::game::session::Control::Panic)
+        .unwrap();
+    let mut closed = false;
+    for _ in 0..500 {
+        if !a.try_send(CMSG_QUERY_TIME {}).await {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(closed, "the connection closes");
+    for _ in 0..500 {
+        if realm.registry.online(g).is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("Alice still online");
+}
+
+/// Thistle Tea's msg_move_teleport_test: a player teleported within the
+/// map is shown to those who see them with `MSG_MOVE_TELEPORT`, the packed
+/// GUID then the movement, standing, where they now are.
+#[tokio::test]
+async fn a_teleport_in_the_map_is_shown_as_one() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(ga).await;
+    let at = on_map(&realm, move |m| m.players[&ga].position()).await;
+    let to = Vector3d {
+        x: at.x + 20.0,
+        y: at.y,
+        z: at.z,
+    };
+    b.clear();
+    on_map(&realm, move |m| {
+        let key = m.key;
+        m.teleport(ga, key, to, 1.5);
+    })
+    .await;
+    let seen = b.wait_frame("MSG_MOVE_TELEPORT", 0x0C5, |_| true).await;
+    let mut want = Vec::new();
+    crate::game::update::write_packed_guid(&mut want, ga);
+    assert_eq!(&seen[..want.len()], &want[..]);
+    let info = &seen[want.len()..];
+    assert_eq!(u32_at(info, 0), 0, "standing");
+    let f = |at: usize| f32::from_le_bytes(info[at..at + 4].try_into().unwrap());
+    assert_eq!((f(8), f(12), f(16), f(20)), (to.x, to.y, to.z, 1.5));
+    assert_eq!(info.len(), 28, "flags, time, place, facing, fall time");
+}
+
+/// Thistle Tea's server_test: queries sent after a logout is asked for
+/// leave it to finish once: one `SMSG_LOGOUT_COMPLETE`, the character
+/// screen after, and the session still answering.
+#[tokio::test]
+async fn queries_after_a_logout_leave_it_one_completion() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.clear();
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    for _ in 0..5 {
+        a.send(CMSG_NAME_QUERY { guid: g }).await;
+        a.send(CMSG_QUERY_TIME {}).await;
+    }
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    a.send(CMSG_CHAR_ENUM {}).await;
+    a.wait_for("SMSG_CHAR_ENUM", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_CHAR_ENUM(_)).then_some(())
+    })
+    .await;
+    assert!(
+        a.gets(Duration::from_millis(200), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+        })
+        .await
+        .is_none(),
+        "one completion"
+    );
+    assert!(realm.registry.online(g).is_none());
+}
