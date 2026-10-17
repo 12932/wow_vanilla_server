@@ -8,7 +8,8 @@ doesn't do yet. Thistle Tea's web server is out of scope throughout.
 It is not one for one. Three independent audits and a module-by-module sweep of every area of Thistle Tea's
 `lib/game` found what is listed here; what isn't listed was compared and matches. Each sweep's own notes go into
 more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professions, vendors, death) and
-[AI5_GAPS.md](AI5_GAPS.md) (creature AI, scripts, instances).
+[AI5_GAPS.md](AI5_GAPS.md) (creature AI, scripts, instances). The plan to close what is left is
+[FULL_PARITY_PLAN.md](FULL_PARITY_PLAN.md).
 
 ## Where the two stand
 

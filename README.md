@@ -39,7 +39,8 @@ terrain_dir = "/path/to/terrain"
 ```
 
 The tests that read the real world find it the same way, or under `WVS_DATA` if it is set; without it they pass
-without running.
+without running. Making `data/nav` and `data/terrain` from your own client by answering one question is planned in
+[docs/DATA_SETUP_PLAN.md](docs/DATA_SETUP_PLAN.md).
 
 ## Configuration
 

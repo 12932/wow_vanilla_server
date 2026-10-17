@@ -1446,4 +1446,4 @@ Thistle Tea writes in code rather than data. Closed since:
 ## Where the plan leaves the gap
 
 [THISTLE_TEA_DIFFERENCES.md](THISTLE_TEA_DIFFERENCES.md): what wvs does differently on purpose, and what it doesn't do
-yet.
+yet. [FULL_PARITY_PLAN.md](FULL_PARITY_PLAN.md) closes it.
