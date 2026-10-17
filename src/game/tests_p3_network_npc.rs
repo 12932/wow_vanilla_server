@@ -750,4 +750,17 @@ async fn an_auction_house_opens_sells_takes_bids_and_lists() {
     assert_eq!(word(&unbid, 40), 0, "no increment without a bid");
     assert_eq!(word(&unbid, 48), 0, "no time left");
     assert_eq!(&unbid[52..60], &[0u8; 8], "no bidder");
+    // Cancelled by its owner: removed, all right.
+    a.send(CMSG_AUCTION_REMOVE_ITEM {
+        auctioneer: npc,
+        auction_id: expired,
+    })
+    .await;
+    let removed = a
+        .wait_frame("SMSG_AUCTION_COMMAND_RESULT", 0x25B, |_| true)
+        .await;
+    assert_eq!(
+        (word(&removed, 0), word(&removed, 4), word(&removed, 8)),
+        (expired, 1, 0)
+    );
 }
