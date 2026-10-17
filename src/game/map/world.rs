@@ -276,6 +276,8 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     }
     crate::game::map::quests::explored(map, guid, id);
     crate::game::map::battleground::area_trigger(map, guid, id);
+    crate::game::map::outdoor_pvp::area_trigger(map, guid, id);
+    crate::game::map::pvp::entrance(map, guid, id);
     let Some(p) = map.players.get(&guid) else {
         return;
     };
@@ -321,7 +323,9 @@ pub const GO_CHAIR: u8 = 7;
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
 pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
-    if crate::game::map::battleground::use_object(map, player, object) {
+    if crate::game::map::battleground::use_object(map, player, object)
+        || crate::game::map::outdoor_pvp::use_object(map, player, object)
+    {
         return;
     }
     let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {

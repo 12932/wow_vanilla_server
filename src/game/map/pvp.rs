@@ -175,6 +175,42 @@ pub fn battlefield_list(map: &Map, g: Guid, battlemaster: Guid, map_id: u32) {
     });
 }
 
+/// A battleground's portal in the world: its list, for a player of its
+/// side and levels; and out at its exit.
+pub fn entrance(map: &mut Map, g: Guid, trigger: u32) {
+    let data = map.realm.data.clone();
+    let Some(e) = data.bg_entrances.get(&trigger) else {
+        return;
+    };
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let team_ok = match (e.team, p.team) {
+        (469, Team::Alliance) | (67, Team::Horde) => true,
+        (469 | 67, _) => false,
+        _ => true,
+    };
+    let level = u32::from(p.level());
+    let levels_ok = data
+        .battlegrounds
+        .get(&e.bg)
+        .is_none_or(|t| level >= t.min_level && level <= t.max_level);
+    if team_ok && levels_ok {
+        battlefield_list(map, g, Guid::zero(), crate::game::battlegrounds::map_of(e.bg));
+    } else {
+        let side = if e.team == 469 { "Alliance" } else { "Horde" };
+        let min = data.battlegrounds.get(&e.bg).map_or(10, |t| t.min_level);
+        map.system_message(
+            g,
+            &format!("You must be in the {side} and at least level {min} to enter."),
+        );
+    }
+    if e.exit_map == map.key.map {
+        let (x, y, z, o) = e.exit;
+        map.teleport(g, map.key, Vector3d { x, y, z }, o);
+    }
+}
+
 /// `CMSG_TOGGLE_PVP`: the player wants their flag, or not (it lingers five
 /// minutes).
 pub fn toggle(map: &mut Map, g: Guid, set: Option<bool>) {

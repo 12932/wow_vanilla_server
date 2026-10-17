@@ -22,6 +22,7 @@ pub mod loot;
 pub mod movement;
 pub mod nav;
 pub mod npc;
+pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;
 pub mod procs;
@@ -245,6 +246,8 @@ pub struct Map {
     pub battleground: Option<battleground::Match>,
     /// Objects every player in the map knows: the boats and zeppelins.
     pub globals: Vec<Guid>,
+    /// A continent's world PvP: the Plaguelands' towers, Silithus.
+    pub outdoor: Option<outdoor_pvp::Outdoor>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -338,6 +341,7 @@ impl Map {
             stopping: false,
             battleground: battleground::for_map(key, Instant::now()),
             globals: Vec::new(),
+            outdoor: outdoor_pvp::for_map(key),
         }
     }
 
@@ -596,6 +600,7 @@ impl Map {
         inventory::sync_gear_all(self);
         combat::update_players(self);
         pvp::update(self);
+        outdoor_pvp::update(self);
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);
