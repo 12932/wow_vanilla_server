@@ -671,6 +671,10 @@ fn the_real_eventai_uses_known_event_types() {
         data.scripts.ai_events.contains_key(&12118),
         "Lucifron's script"
     );
+    assert!(
+        data.scripts.ai_events.get(&9196).is_some_and(|e| e.len() >= 6),
+        "Highlord Omokk's timed casts, from Thistle Tea's script"
+    );
     assert!(data.scripts.conditions.len() > 1_000);
     assert!(data.scripts.pools.len() > 1_000);
     assert_eq!(

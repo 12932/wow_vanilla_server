@@ -12,6 +12,7 @@ pub mod conditions;
 pub mod creature;
 pub mod creature_groups;
 pub mod creature_scripts;
+mod creature_scripts_ported;
 pub mod death;
 pub mod derive;
 pub mod duel;

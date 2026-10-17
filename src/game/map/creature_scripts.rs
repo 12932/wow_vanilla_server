@@ -191,13 +191,65 @@ pub fn install(data: &mut GameData) {
     for entry in ENTRIES {
         s.ai_events.remove(entry);
     }
+    // The others' simple events, where the world database has none.
+    let has_own: ahash::AHashSet<u32> = super::creature_scripts_ported::ROWS
+        .iter()
+        .map(|r| r.entry)
+        .filter(|e| s.ai_events.get(e).is_some_and(|v| !v.is_empty()))
+        .collect();
     let mut b = Builder {
         data: s,
         next: BASE,
     };
     molten_core(&mut b);
     onyxia(&mut b);
+    for r in super::creature_scripts_ported::ROWS {
+        if has_own.contains(&r.entry) {
+            continue;
+        }
+        let cast_step = if r.target == SELF {
+            cast_self(r.spell, r.flags)
+        } else {
+            cast(r.spell, r.target, r.flags)
+        };
+        match r.kind {
+            Kind::Timer => b.every(r.entry, r.first, r.repeat, vec![cast_step]),
+            Kind::Below => b.below(r.entry, r.pct, 0, vec![cast_step]),
+            Kind::AggroZone => b.aggro(r.entry, vec![zone_combat()]),
+            Kind::AggroCast => b.aggro(r.entry, vec![cast_step]),
+        }
+    }
 }
+
+/// A simple event from Thistle Tea's other scripts
+/// (`creature_scripts_ported`).
+#[derive(Debug, Clone, Copy)]
+pub enum Kind {
+    /// A cast on a timer in combat.
+    Timer,
+    /// A cast once below a share of health.
+    Below,
+    /// Calls the whole place into the fight on aggro.
+    AggroZone,
+    /// A cast on aggro.
+    AggroCast,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Row {
+    pub entry: u32,
+    pub kind: Kind,
+    pub first: (i32, i32),
+    pub repeat: (i32, i32),
+    pub spell: u32,
+    /// A target type, or [`SELF`].
+    pub target: u32,
+    pub flags: u32,
+    pub pct: i32,
+}
+
+/// A cast on the caster itself.
+pub const SELF: u32 = u32::MAX;
 
 const LUCIFRON: u32 = 12118;
 const GEHENNAS: u32 = 12259;
