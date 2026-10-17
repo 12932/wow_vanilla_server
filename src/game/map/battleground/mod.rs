@@ -109,6 +109,12 @@ pub enum Due {
     CaptainBuff(usize),
     /// A pickup comes back.
     Buff(usize),
+    /// A Warsong flag left on the ground goes home, if still there.
+    FlagReturn { side: u8, object: Guid },
+    /// Warsong's flags stand again after a capture.
+    FlagsPlaced,
+    /// A second into the battle: everyone's status and the scoreboard.
+    StatusRefresh,
 }
 
 /// A pickup's place: what's there now, and since when it's been gone.
@@ -338,16 +344,15 @@ pub fn stop_respawns(map: &mut Map, event: u8) {
 
 /// A battleground message to everyone in the match, or one side.
 pub fn announce(map: &Map, s: Option<usize>, text: &str) {
+    announce_by(map, s, text, Guid::zero());
+}
+
+/// A battleground message, from the player it tells of.
+pub fn announce_by(map: &Map, s: Option<usize>, text: &str, actor: Guid) {
     let chat_type = match s {
-        Some(0) => SMSG_MESSAGECHAT_ChatType::BgSystemAlliance {
-            sender2: Guid::zero(),
-        },
-        Some(_) => SMSG_MESSAGECHAT_ChatType::BgSystemHorde {
-            sender2: Guid::zero(),
-        },
-        None => SMSG_MESSAGECHAT_ChatType::BgSystemNeutral {
-            sender2: Guid::zero(),
-        },
+        Some(0) => SMSG_MESSAGECHAT_ChatType::BgSystemAlliance { sender2: actor },
+        Some(_) => SMSG_MESSAGECHAT_ChatType::BgSystemHorde { sender2: actor },
+        None => SMSG_MESSAGECHAT_ChatType::BgSystemNeutral { sender2: actor },
     };
     let Some(frame) = crate::game::conn::encode(&SMSG_MESSAGECHAT {
         chat_type,
@@ -365,11 +370,25 @@ pub fn announce(map: &Map, s: Option<usize>, text: &str) {
 /// A broadcast text as a battleground message, its `$1776W`-style world
 /// states filled in.
 pub fn announce_text(map: &Map, s: Option<usize>, id: u32) {
+    announce_text_by(map, s, id, Guid::zero());
+}
+
+/// A broadcast text as a battleground message about `actor`: their name
+/// for its `$n`, and they its sender.
+pub fn announce_text_by(map: &Map, s: Option<usize>, id: u32, actor: Guid) {
     let Some(line) = map.realm.data.npc.broadcast_line(id, false) else {
         return;
     };
-    let text = fill_world_states(map, line);
-    announce(map, s, &text);
+    let mut text = fill_world_states(map, line);
+    if !actor.is_zero() && text.contains("$n") {
+        let name = map
+            .players
+            .get(&actor)
+            .map(|p| p.name.to_string())
+            .unwrap_or_else(|| "Unknown".into());
+        text = text.replace("$n", &name).replace("$N", &name);
+    }
+    announce_by(map, s, &text, actor);
 }
 
 fn fill_world_states(map: &Map, line: &str) -> String {
@@ -579,7 +598,7 @@ pub fn update(map: &mut Map) {
         match map.battleground.as_ref().map(|m| m.bg) {
             Some(BG_AB) => ab::update(map),
             Some(BG_AV) => av::update(map),
-            _ => {}
+            _ => wsg::update(map),
         }
         buffs(map);
     }
@@ -594,7 +613,7 @@ fn countdown(map: &mut Map, left: Duration) {
     let (minute, half) = match m.bg {
         BG_AB => (10477, 10478),
         BG_AV => (10638, 10639),
-        _ => return,
+        _ => wsg::COUNTDOWN,
     };
     let done = m.countdown;
     let say = if left <= Duration::from_secs(30) && done < 2 {
@@ -634,10 +653,14 @@ fn run_timers(map: &mut Map) {
         }
         match d {
             Due::Buff(slot) => spawn_buff(map, slot),
+            Due::StatusRefresh => {
+                battlegrounds::status_to_members(&map.realm, map.key);
+                scoreboard_all(map);
+            }
             _ => match map.battleground.as_ref().map(|m| m.bg) {
                 Some(BG_AB) => ab::due(map, d),
                 Some(BG_AV) => av::due(map, d),
-                _ => {}
+                _ => wsg::due(map, d),
             },
         }
     }
@@ -669,7 +692,9 @@ fn start(map: &mut Map) {
     if let Some(m) = map.battleground.as_mut() {
         m.phase = Phase::Playing;
         m.started_at = Some(now);
+        m.schedule(now + Duration::from_secs(1), Due::StatusRefresh);
     }
+    battlegrounds::began(&map.realm, map.key);
     match map.battleground.as_ref().map(|m| m.bg) {
         Some(BG_AB) => ab::start(map),
         Some(BG_AV) => av::start(map),
@@ -1051,12 +1076,17 @@ pub fn finish(map: &mut Map, winner: usize) {
     {
         return;
     }
+    if bg == BG_WSG {
+        wsg::finished(map);
+    }
     if let Some(m) = map.battleground.as_mut() {
         m.phase = Phase::Ended { winner, at: now };
         m.timers.clear();
         m.resurrect_queue.clear();
     }
     battlegrounds::ended(&map.realm, map.key);
+    // Everyone hears how long until they're sent home.
+    battlegrounds::status_to_members(&map.realm, map.key);
     let template = map.realm.data.battlegrounds.get(&bg).cloned();
     let everyone: Vec<(Guid, usize)> = map
         .players
