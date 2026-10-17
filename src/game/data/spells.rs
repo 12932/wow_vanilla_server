@@ -271,6 +271,8 @@ pub struct SpellData {
     /// Spells by the skill line they teach (`SkillLineAbility`): spell → skill.
     pub spell_skills: AHashMap<u32, u32>,
     pub skill_abilities: AHashMap<u32, Vec<SkillAbility>>,
+    /// `SkillRaceClassInfo`: skill → (race mask, class mask, flags).
+    pub skill_race_class: AHashMap<u32, Vec<(u32, u32, u32)>>,
     pub proc_events: AHashMap<u32, ProcEvent>,
     pub ranks: AHashMap<u32, SpellRank>,
     /// `spell_threat`: flat threat and a multiplier.

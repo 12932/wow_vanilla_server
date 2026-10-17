@@ -1206,3 +1206,42 @@ async fn a_charter_is_bought_only_from_a_guild_master_near() {
         "from the guild master beside them"
     );
 }
+
+#[tokio::test]
+async fn only_what_the_client_lets_go_is_unlearned() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "BUGUNLEARN");
+    let g = a.enter("Bugunlearn", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        for skill in [43, 95, 129, 182] {
+            crate::game::map::skills::learn_skill(p, skill, 1);
+        }
+    })
+    .await
+    .unwrap();
+    for skill in [
+        Skill::Swords,
+        Skill::Defense,
+        Skill::FirstAid,
+        Skill::Herbalism,
+    ] {
+        a.send(CMSG_UNLEARN_SKILL { skill }).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let kept = map
+        .query(move |m| {
+            [43, 95, 129, 182].map(|s| crate::game::map::skills::value(&m.players[&g], s).is_some())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        kept,
+        [true, true, true, false],
+        "swords, defense and first aid kept; herbalism unlearned"
+    );
+}
