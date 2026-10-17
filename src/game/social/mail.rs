@@ -690,7 +690,17 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
         .map(|m| m.id)
         .collect();
     for id in gone {
-        mails.mails.remove(&id);
+        let Some(mut m) = mails.mails.remove(&id) else {
+            continue;
+        };
+        // An item sent cash on delivery goes back to its sender (Thistle
+        // Tea's `Mail.forfeit`); the rest goes with the character.
+        if m.cod > 0 && m.item.is_some() && m.kind == NORMAL && m.sender != counter {
+            m.money = 0;
+            send_back(realm, &mut m);
+            mails.mails.insert(id, m);
+            continue;
+        }
         realm.store.delete_record(KIND_MAIL, u64::from(id));
     }
 }
