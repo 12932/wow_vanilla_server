@@ -328,6 +328,20 @@ fn the_real_spells_load_as_thistle_tea_reads_them() {
         .copied()
         .unwrap();
     assert_eq!((reaction.misc_value, reaction.base_points), (575, 3));
+    // Heals' coefficients: Flash Heal's, Renew's, Holy Light's; Flash of
+    // Light's ranks have none of their own, their triggered heal (19993,
+    // as wvs's script casts) its 0.429.
+    for (id, c) in [
+        (10_917, 0.429),
+        (10_929, 0.2),
+        (25_292, 0.714),
+        (19_993, 0.429),
+    ] {
+        assert_eq!(spell(d, id).effects[0].bonus_coefficient, c, "{id}");
+    }
+    for id in [19_750, 19_939, 19_940, 19_941, 19_942, 19_943] {
+        assert_eq!(spell(d, id).effects[0].bonus_coefficient, 0.0, "{id}");
+    }
     // Trainers greet with their own text where vmangos has one.
     let greeting = |e: u32| d.npc.trainer_greetings.get(&e).map(String::as_str);
     assert_eq!(

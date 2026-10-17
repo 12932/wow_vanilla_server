@@ -737,3 +737,131 @@ async fn real_damage_taken_auras_shares_and_wards() {
     }
     assert_eq!(after, (1000, decimate_alone), "gone, Smite is itself again");
 }
+
+const BLESSING_OF_LIGHT: [u32; 2] = [19_979, 25_890];
+const HEALING_WAY: u32 = 29_203;
+const HEALING_WAVE: u32 = 331;
+const LESSER_HEALING_WAVE: u32 = 8004;
+const CHAIN_HEAL: u32 = 1064;
+const SUPPRESSIONS: [(u32, u32); 4] = [(9035, 160), (19_716, 50), (23_230, 100), (25_646, 180)];
+const MORTAL_WOUND: u32 = 25_646;
+const MECHANICAL_PATCH_KIT: u32 = 15_057;
+const HARVEST_GOLEM: u32 = 36;
+const FLASH_OF_LIGHT: u32 = 19_750;
+
+/// Thistle Tea's healing on the real spells (`healing_bonus_dbc_test.exs`,
+/// `healing_bonus_vmangos_test.exs`, `healing_received_dbc_test.exs`,
+/// `mechanical_healing_dbc_test.exs`): one Dampen or Amplify Magic on a
+/// unit, of any rank or caster, the last; Blessing of Light's points by
+/// the heal's coefficient (Holy Light's 0.714, Flash of Light's 0.429 of
+/// its triggered heal); Healing Way's stacks for Healing Wave alone; the
+/// real healing cuts, and Mortal Wound's ten stacks to nothing; a Flash
+/// of Light that heals; and the Mechanical Patch Kit's 700 on a machine.
+#[tokio::test]
+async fn real_healing_bonuses_cuts_and_machines() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_p, paladin, map) = enter(&realm, "P3JHEAL1", "Heala", Race::Human, Class::Paladin).await;
+    let (_m, mage, _) = enter(&realm, "P3JHEAL2", "Healb", Race::Human, Class::Mage).await;
+    let out = on(&map, move |m| {
+        ready(m, paladin, 60, &[]);
+        ready(m, mage, 60, &[]);
+        let data = m.realm.data.clone();
+        // One magic of the mage's kind on a unit, whoever's.
+        let mut magic = Vec::new();
+        for ids in [[10_170, 10_174, 1008], [10_174, 10_170, 604]] {
+            for (i, id) in ids.into_iter().enumerate() {
+                apply_real(m, if i % 2 == 0 { paladin } else { mage }, paladin, id);
+            }
+            let held: Vec<u32> = auras::auras(m, paladin)
+                .map(|a| {
+                    a.holders
+                        .iter()
+                        .filter(|h| [ids[0], ids[1], ids[2]].contains(&h.spell))
+                        .map(|h| h.spell)
+                        .collect()
+                })
+                .unwrap_or_default();
+            magic.push((held, ids[2]));
+            for id in ids {
+                auras::remove_spell(m, paladin, id, None);
+            }
+        }
+        let mut light = Vec::new();
+        for id in BLESSING_OF_LIGHT {
+            apply_real(m, paladin, mage, id);
+            light.push((
+                spells::scripts::blessing_of_light_bonus(m, mage, true),
+                spells::scripts::blessing_of_light_bonus(m, mage, false),
+            ));
+            auras::remove_spell(m, mage, id, None);
+        }
+        // Healing Way: three stacks.
+        for _ in 0..3 {
+            apply_real(m, mage, paladin, HEALING_WAY);
+        }
+        let taken = |m: &Map, id: u32| {
+            outcome::spell_healing_taken(
+                m,
+                paladin,
+                200.0,
+                data.spells.get(id).unwrap(),
+                0,
+                outcome::Kind::Direct,
+                1,
+                1.0,
+            )
+        };
+        let way = [HEALING_WAVE, LESSER_HEALING_WAVE, CHAIN_HEAL].map(|id| taken(m, id) as u32);
+        auras::remove_spell(m, paladin, HEALING_WAY, None);
+        let way_gone = taken(m, HEALING_WAVE) as u32;
+        let mut cuts = Vec::new();
+        for (id, left) in SUPPRESSIONS {
+            apply_real(m, mage, paladin, id);
+            cuts.push((id, outcome::healing_taken(m, paladin, 200.0) as u32, left));
+            auras::remove_spell(m, paladin, id, None);
+        }
+        for _ in 0..10 {
+            apply_real(m, mage, paladin, MORTAL_WOUND);
+        }
+        let wounded = outcome::healing_taken(m, paladin, 200.0) as u32;
+        auras::remove_spell(m, paladin, MORTAL_WOUND, None);
+        // Flash of Light heals; a Patch Kit mends a machine.
+        m.players
+            .get_mut(&paladin)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_HEALTH, 100);
+        spells::cast_triggered(m, paladin, FLASH_OF_LIGHT, Some(paladin));
+        let flash = health(m, paladin) > 100;
+        let golem = dummy(m, paladin, HARVEST_GOLEM, 60, 3.0);
+        m.unit_fields_mut(golem)
+            .unwrap()
+            .set_u32(UNIT_FIELD_HEALTH, 100);
+        spells::cast_triggered(m, paladin, MECHANICAL_PATCH_KIT, Some(golem));
+        let mended = health(m, golem);
+        (magic, light, way, way_gone, cuts, wounded, flash, mended)
+    })
+    .await;
+    let (magic, light, way, way_gone, cuts, wounded, flash, mended) = out;
+    for (held, last) in magic {
+        assert_eq!(held, vec![last], "the last magic only");
+    }
+    assert_eq!(
+        light,
+        vec![(285, 49), (285, 49)],
+        "400 and 115 by 0.714 and 0.429"
+    );
+    // 18% more, as mangos's float takes it (235.99...).
+    assert!(matches!(way[0], 235 | 236), "Healing Way's 18%: {way:?}");
+    assert_eq!(&way[1..], [200, 200], "for Healing Wave alone");
+    assert_eq!(way_gone, 200);
+    for (id, got, left) in cuts {
+        assert_eq!(got, left, "{id}");
+    }
+    assert_eq!(wounded, 0, "ten Mortal Wounds heal nothing");
+    assert!(flash, "Flash of Light heals");
+    assert_eq!(mended, 800, "the Patch Kit's 700");
+}
