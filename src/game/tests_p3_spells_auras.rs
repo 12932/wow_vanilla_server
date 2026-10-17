@@ -1156,3 +1156,74 @@ async fn mind_control_takes_a_creature_and_lets_it_go_on_its_master_unless_dead(
         "killed while held, it turns on no one"
     );
 }
+
+const THICKSKULL: u32 = 829;
+const FEARLESS: u32 = 830;
+const HUNTERS_WILL: u32 = 1542;
+const HAMMER_OF_JUSTICE: u32 = 853;
+const HAND_OF_THAURISSAN: u32 = 17492;
+const FEAR: u32 = 5782;
+
+fn stunned(m: &Map, g: Guid) -> bool {
+    auras::auras(m, g).is_some_and(|a| a.has(auras::AURA_MOD_STUN))
+}
+
+#[tokio::test]
+async fn an_immunity_to_an_auras_kind_keeps_it_off_and_a_purging_one_takes_it() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, pally, map) =
+        player(&realm, "P3A20", "Stateone", Race::Human, Class::Paladin).await;
+    let out = map
+        .query(move |m| {
+            ready(m, pally, 60, &[]);
+            let ogre = dummy(m, pally, 60, 5.0);
+            // Thickskull: no stun lands, a stun with damage hurts alone.
+            apply(m, ogre, ogre, THICKSKULL);
+            spells::cast_triggered(m, pally, HAMMER_OF_JUSTICE, Some(ogre));
+            let hammered = stunned(m, ogre);
+            let before = health(m, ogre);
+            spells::cast_triggered(m, pally, HAND_OF_THAURISSAN, Some(ogre));
+            let hand = (health(m, ogre) < before, stunned(m, ogre));
+            // Fearless keeps the fear off, not the rest of Fear.
+            apply(m, ogre, ogre, FEARLESS);
+            spells::cast_triggered(m, pally, FEAR, Some(ogre));
+            let feared = auras::auras(m, ogre).is_some_and(|a| a.has(auras::AURA_MOD_FEAR));
+            // Two of them: one gone, still kept off; both gone, it lands.
+            apply(m, pally, ogre, HUNTERS_WILL);
+            auras::remove_spell(m, ogre, THICKSKULL, None);
+            spells::cast_triggered(m, pally, HAMMER_OF_JUSTICE, Some(ogre));
+            let one_left = stunned(m, ogre);
+            auras::remove_spell(m, ogre, HUNTERS_WILL, None);
+            spells::cast_triggered(m, pally, HAMMER_OF_JUSTICE, Some(ogre));
+            let none_left = stunned(m, ogre);
+            // A stun on: a plain immunity leaves it, a purging one takes it.
+            apply(m, ogre, ogre, THICKSKULL);
+            let kept = stunned(m, ogre);
+            auras::remove_spell(m, ogre, THICKSKULL, None);
+            apply(m, pally, ogre, HUNTERS_WILL);
+            let purged = stunned(m, ogre);
+            (hammered, hand, feared, one_left, none_left, kept, purged)
+        })
+        .await
+        .unwrap();
+    let (hammered, hand, feared, one_left, none_left, kept, purged) = out;
+    assert!(!hammered, "Thickskull keeps the Hammer of Justice off");
+    assert_eq!(
+        missed(&mut c, HAMMER_OF_JUSTICE).await,
+        7,
+        "immune, the caster is told"
+    );
+    assert_eq!(
+        hand,
+        (true, false),
+        "the Hand's damage lands, its stun doesn't"
+    );
+    assert!(!feared, "Fearless keeps the fear off");
+    assert!(!one_left, "one immunity left keeps it off");
+    assert!(none_left, "none left, it lands");
+    assert!(kept, "a plain immunity leaves a stun on");
+    assert!(!purged, "a purging one takes it");
+}

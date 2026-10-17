@@ -269,3 +269,16 @@ pub async fn saw_go(c: &mut Client, spell: u32) -> bool {
     .await
     .is_some()
 }
+
+/// How `c` was told `spell` missed its first target: `SMSG_SPELLLOGMISS`'s
+/// reason (7 immune, 2 resist, 11 reflect).
+pub async fn missed(c: &mut Client, spell: u32) -> u8 {
+    let b = c
+        .wait_frame(
+            "SMSG_SPELLLOGMISS",
+            crate::game::map::spells::outcome::SMSG_SPELLLOGMISS,
+            |b| b[..4] == spell.to_le_bytes(),
+        )
+        .await;
+    b[25]
+}

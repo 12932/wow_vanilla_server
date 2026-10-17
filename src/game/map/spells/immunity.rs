@@ -1,7 +1,8 @@
 //! Immunity that purges what it guards against, as Thistle Tea's
 //! `Spell.Immunity` has it for a spell marked so (vmangos's
-//! `SPELL_ATTR_EX_DISPEL_AURAS_ON_IMMUNITY`): a school, mechanic or dispel
-//! immunity going on takes the harmful auras it would have kept off
+//! `SPELL_ATTR_EX_DISPEL_AURAS_ON_IMMUNITY`): a school, mechanic, dispel
+//! or aura kind's immunity going on takes the harmful auras it would have
+//! kept off
 //! (Blessing of Freedom's roots and snares, Will of the Forsaken's fear).
 
 use wow_world_messages::Guid;
@@ -24,8 +25,10 @@ pub fn applied(map: &mut Map, target: Guid, h: &Holder) {
     let mut schools = 0u32;
     let mut mechanics = 0u64;
     let mut dispels = Vec::new();
+    let mut kinds = Vec::new();
     for x in &h.effects {
         match x.kind {
+            auras::AURA_STATE_IMMUNITY if x.misc > 0 => kinds.push(x.misc as u32),
             auras::AURA_SCHOOL_IMMUNITY => schools |= x.misc as u32,
             auras::AURA_MECHANIC_IMMUNITY if x.misc > 0 => {
                 mechanics |= 1 << (x.misc as u64 - 1).min(63)
@@ -35,7 +38,7 @@ pub fn applied(map: &mut Map, target: Guid, h: &Holder) {
             _ => {}
         }
     }
-    if schools == 0 && mechanics == 0 && dispels.is_empty() {
+    if schools == 0 && mechanics == 0 && dispels.is_empty() && kinds.is_empty() {
         return;
     }
     let spell = h.spell;
@@ -50,6 +53,9 @@ pub fn applied(map: &mut Map, target: Guid, h: &Holder) {
                     .iter()
                     .any(|e| e.effect != 0 && mechanic(e.mechanic))
             });
-        o.school & schools != 0 || mechanic_hit || dispels.contains(&o.dispel)
+        o.school & schools != 0
+            || mechanic_hit
+            || dispels.contains(&o.dispel)
+            || o.effects.iter().any(|x| kinds.contains(&x.kind))
     });
 }
