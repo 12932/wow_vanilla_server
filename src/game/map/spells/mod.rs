@@ -4,6 +4,7 @@
 //! modifiers ([`mods`]) and their targets ([`targets`]).
 
 pub mod area;
+pub mod aura_rank;
 pub mod checks;
 pub mod cooldowns;
 pub mod dynamic;
@@ -493,6 +494,17 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
     if s.passive() {
         return;
     }
+    // A buff too high for its target goes on at a rank that may.
+    if item.is_none() && map.players.contains_key(&caster) {
+        match aura_rank::chosen(map, caster, s, &targets) {
+            Some(id) if id != spell => return cast(map, caster, id, targets, item),
+            None => {
+                send_cast_result(map, caster, spell, Some(fail::LOWLEVEL));
+                return;
+            }
+            _ => {}
+        }
+    }
     let m = mods::for_spell(map, caster, s);
     if map.players.contains_key(&caster)
         && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
@@ -692,6 +704,11 @@ fn execute(
         .map_or(0, |c| c.combo_points);
     let targets = magnet(map, caster, s, targets);
     let resolved = resolve(map, caster, s, &targets, &m);
+    let resolved = if !triggered && item.is_none() && map.players.contains_key(&caster) {
+        aura_rank::recipients(map, caster, s, &targets, resolved)
+    } else {
+        resolved
+    };
     let hits: Vec<Guid> = resolved.iter().map(|(g, _)| *g).collect();
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_GO {
         cast_item: item.unwrap_or_default(),
