@@ -132,7 +132,9 @@ impl Group {
                 continue;
             }
             set_leader_flag(realm, me.guid, me.guid == self.leader);
-            send_to(realm, me.guid, &self.list_for(realm, me));
+            if let Some(frame) = list_frame(&self.list_for(realm, me)) {
+                send_frame(realm, me.guid, &frame);
+            }
         }
     }
 
@@ -171,6 +173,21 @@ impl Group {
         }
     }
 }
+
+/// `SMSG_GROUP_LIST` as Thistle Tea and mangos-classic end it: past the
+/// loot rules, a byte for the dungeon difficulty (0, there being none in
+/// 1.12), which wow_messages' layout and mangos-zero leave off.
+fn list_frame(list: &SMSG_GROUP_LIST) -> Option<Arc<[u8]>> {
+    let frame = encode(list)?;
+    if list.group_not_empty.is_none() {
+        return Some(frame);
+    }
+    let mut body = frame[4..].to_vec();
+    body.push(0);
+    Some(crate::game::update::frame(SMSG_GROUP_LIST_OPCODE, &body))
+}
+
+const SMSG_GROUP_LIST_OPCODE: u16 = 0x07D;
 
 /// `PLAYER_FLAGS_GROUP_LEADER` on `g`, in whatever map they are: on for
 /// the group's leader, off for everyone else, as each is sent the roster

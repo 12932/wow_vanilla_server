@@ -500,3 +500,26 @@ async fn an_items_suffix_enchantment_and_charges_are_shown() {
         .await;
     assert_eq!(mailed, (CRUSADER, BEAR, 3), "in the mailbox");
 }
+
+/// A group's roster ends with the byte Thistle Tea and mangos-classic send
+/// past the loot rules; an empty roster ends at its leader.
+#[tokio::test]
+async fn a_groups_roster_ends_with_its_difficulty_byte() {
+    let realm = harness::realm();
+    let (mut a, _, _) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Bea", Race::Human, Class::Warrior).await;
+    a.clear();
+    group(&mut a, &mut b, "Bea").await;
+    let roster = a
+        .wait_frame("the roster", 0x07D, |b| u32_at(b, 2) == 1)
+        .await;
+    // Type, flags, one member ("Bea", guid, online, flags), the leader,
+    // the loot rules and the last byte.
+    assert_eq!(
+        roster.len(),
+        1 + 1 + 4 + (4 + 8 + 1 + 1) + 8 + (1 + 8 + 1) + 1
+    );
+    assert_eq!(roster[roster.len() - 1], 0);
+    assert_eq!(&roster[6..10], b"Bea\0");
+    assert_eq!(u32_at(&roster, 10), gb.guid() as u32);
+}
