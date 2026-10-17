@@ -320,6 +320,13 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     if corpse.is_some() {
         map.remove_corpse(guid::corpse(guid::counter(g)));
     }
+    // Risen any way, no longer Waiting to Resurrect.
+    crate::game::map::auras::remove_spell(
+        map,
+        g,
+        crate::game::map::battleground::SPELL_WAITING_TO_RESURRECT,
+        None,
+    );
     // The living see each other again.
     map.visibility_dirty.insert(g);
     let observers: Vec<Guid> = map
