@@ -1,8 +1,11 @@
 //! Bugs the mapping against Thistle Tea's tests turned up, through the
 //! protocol and on the real data when it is here: the dead killed again,
 //! containers looted twice, mana in druid forms, quests from items, the
-//! rituals' cooldowns, pets' positive autocasts, and the smaller checks
-//! after them.
+//! rituals' cooldowns, pets' positive autocasts; objects' gossip, Disarm
+//! Trap, locked loot, casts that can't pay or make room, ghosts exploring,
+//! forced reactions, fights and teleports stopping casts, healing threat,
+//! honor inspection, a cancelled logout, the ready check, charters,
+//! unlearning, quest sharing and a freed charmed creature.
 
 use std::time::Duration;
 
