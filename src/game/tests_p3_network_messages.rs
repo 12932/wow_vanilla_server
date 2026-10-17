@@ -767,3 +767,89 @@ async fn a_ranged_spell_shows_its_arrow_at_start_and_go() {
         0
     );
 }
+
+const MIND_VISION: u32 = 900_351;
+const DECEIVE: u32 = 900_352;
+
+/// Thistle Tea's msg_channel_start_test and reputation_messages_test: a
+/// channel starts with its spell and length and, cancelled, its client is
+/// told 0 left; the reactions auras force are each faction and the rank
+/// forced, after their count.
+#[tokio::test]
+async fn a_channel_and_forced_reactions_are_laid_out_as_1_12_has_them() {
+    let mut d = data();
+    let mut vision = spell(
+        MIND_VISION,
+        &[SpellEffect {
+            effect: 3,
+            target_a: 1,
+            ..Default::default()
+        }],
+    );
+    vision.attributes[1] = crate::game::data::spells::ATTR_EX_CHANNELED;
+    vision.duration_index = 97;
+    d.spells.durations.insert(
+        97,
+        crate::game::data::spells::SpellDuration {
+            base: 8_000,
+            per_level: 0,
+            max: 8_000,
+        },
+    );
+    d.spells.spells.insert(MIND_VISION, vision);
+    for (id, faction, rank) in [(DECEIVE, 575, 3), (DECEIVE + 1, 529, 0)] {
+        d.spells.spells.insert(
+            id,
+            spell(
+                id,
+                &[aura(
+                    crate::game::map::auras::AURA_FORCE_REACTION,
+                    rank,
+                    faction,
+                    0,
+                )],
+            ),
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Priest).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().spells.push(MIND_VISION)
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_CAST_SPELL {
+        spell: MIND_VISION,
+        targets: wire_targets(&Targets {
+            unit: Some(g),
+            ..Default::default()
+        }),
+    })
+    .await;
+    let start = a.wait_frame("MSG_CHANNEL_START", 0x139, |_| true).await;
+    assert_eq!(
+        start,
+        [MIND_VISION.to_le_bytes(), 8_000u32.to_le_bytes()].concat()
+    );
+    a.send(CMSG_CANCEL_CHANNELLING { id: MIND_VISION }).await;
+    let update = a.wait_frame("MSG_CHANNEL_UPDATE", 0x13A, |_| true).await;
+    assert_eq!(update, 0u32.to_le_bytes().to_vec());
+    let (first, second) = (
+        realm.data.spells.get(DECEIVE).cloned().unwrap(),
+        realm.data.spells.get(DECEIVE + 1).cloned().unwrap(),
+    );
+    on_map(&realm, move |m| {
+        crate::game::map::auras::apply(m, g, g, &first, 0, 3);
+        crate::game::map::auras::apply(m, g, g, &second, 0, 0);
+    })
+    .await;
+    let reactions = a
+        .wait_frame("SMSG_SET_FORCED_REACTIONS", 0x2A5, |f| f[0] == 2)
+        .await;
+    let mut want = 2u32.to_le_bytes().to_vec();
+    for v in [529u32, 0, 575, 3] {
+        want.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(reactions, want);
+}
