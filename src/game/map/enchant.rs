@@ -240,6 +240,14 @@ pub fn set_spells(data: &GameData, p: &Player) -> Vec<(Guid, u32)> {
         let Some(s) = data.crafts.item_sets.get(&set) else {
             continue;
         };
+        // A set that asks a skill gives nothing short of it (Thistle Tea's
+        // `EquipmentSets.qualified?`).
+        if s.required_skill != 0
+            && crate::game::map::professions::skill_value(p, s.required_skill)
+                < s.required_skill_rank.max(1)
+        {
+            continue;
+        }
         for (spell, needed) in &s.spells {
             if worn >= *needed {
                 out.push((holder, *spell));
