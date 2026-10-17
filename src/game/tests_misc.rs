@@ -1237,10 +1237,21 @@ async fn under_water_the_breath_runs_out_and_drowning_hurts() {
         _ => None,
     })
     .await;
-    // A minute on, the breath is gone and the water hurts.
+    // A minute on, the breath is gone and the water hurts. Under again at
+    // once first: the map's own update, between the two, finds the player
+    // dry (there is no water here) and gives the breath back.
     let (before, after) = on_map(&realm, move |m| {
         let before = m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH);
-        let later = m.now + Duration::from_secs(61);
+        let now = m.now;
+        crate::game::map::environment::breathe(
+            m,
+            g,
+            true,
+            crate::game::map::environment::BREATH,
+            true,
+            now,
+        );
+        let later = now + Duration::from_secs(61);
         crate::game::map::environment::breathe(
             m,
             g,
