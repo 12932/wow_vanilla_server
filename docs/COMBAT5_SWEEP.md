@@ -94,6 +94,9 @@ and its state: **fixed**, or **left** with why.
     ("try again") under the corpse's need unless the skill is 300; elites
     of rank 3 double the skill-up chance too. wvs always skinned, and
     doubled for ranks 1 and 2 only.
+21. `loot/pickpocket.ex`: a creature's pockets are rolled once a life, but
+    a later rogue still finds their own quest drops there. wvs refused any
+    pick after the first ("no pockets").
 
 ## core/death
 
