@@ -34,12 +34,15 @@ const FIRE_NOVA_TOTEM: u32 = 1535;
 const FIRE_NOVA_PULSE: u32 = 8443;
 const IMPROVED_FIRE_NOVA_TOTEM: u32 = 16544;
 const DRINK: u32 = 24355;
+const BLOODRAGE: u32 = 29131;
 
 /// A magic spell of the physical school, made up: Obsidian Armor has no
 /// answer to it.
 const PHYSICAL_BOLT: u32 = 995_001;
 /// A percentage of mana with no amplitude, made up.
 const SPRING: u32 = 995_002;
+/// A periodic energize of mana, made up.
+const WELLSPRING: u32 = 995_003;
 
 /// A block taken from `attacker`, for `g`'s procs.
 fn block(m: &mut Map, attacker: Guid, g: Guid) {
@@ -347,6 +350,59 @@ async fn a_percent_mana_tick_threatens_by_half_what_it_gave() {
         "the tick's amount"
     );
     assert_eq!(period, Some(Duration::from_secs(1)), "each second");
+}
+
+/// A periodic energize of rage makes threat as a heal does, half the rage
+/// it gave (Bloodrage's on the warrior's foes), as Thistle Tea's
+/// spell_threat_test and mangos's `threatAssist` have it; one of mana makes
+/// none, as Thistle Tea has it.
+#[tokio::test]
+async fn an_energize_of_rage_threatens_and_one_of_mana_doesnt() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        let mut s = made_up(WELLSPRING, 6, auras::AURA_PERIODIC_ENERGIZE, 0, 50);
+        s.effects[0].amplitude = 1000;
+        s.duration_index = 21;
+        d.spells.spells.insert(WELLSPRING, s);
+    });
+    let (_c, warrior, map) = player(&realm, "B5BR", "Rageone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, warrior, 60, &[]);
+            let kobold = dummy(m, warrior, 60, 5.0);
+            crate::game::map::ai::attacked(m, kobold, warrior);
+            let threat = |m: &Map| {
+                m.creature(kobold).map_or(0.0, |c| {
+                    c.threat
+                        .iter()
+                        .find(|(g, _)| *g == warrior)
+                        .map_or(0.0, |(_, t)| *t)
+                })
+            };
+            let mut out = Vec::new();
+            for (spell, index) in [(BLOODRAGE, 1), (WELLSPRING, 0)] {
+                set_power(m, warrior, index, 0);
+                apply(m, warrior, warrior, spell);
+                let before = threat(m);
+                tick_now(m, warrior, spell);
+                out.push((power(m, warrior, index), threat(m) - before));
+                auras::remove_spell(m, warrior, spell, None);
+            }
+            out
+        })
+        .await
+        .unwrap();
+    let (rage, threat) = out[0];
+    assert_eq!(rage, 10, "a rage a second");
+    assert!(
+        (threat - 5.0).abs() < 0.01,
+        "half of it as threat: {threat}"
+    );
+    let (mana, threat) = out[1];
+    assert_eq!(mana, 50, "the mana");
+    assert!(threat.abs() < 0.01, "and no threat: {threat}");
 }
 
 const WSG: u32 = 489;
