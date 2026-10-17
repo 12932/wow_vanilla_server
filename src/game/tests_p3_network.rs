@@ -837,3 +837,82 @@ async fn a_stray_spline_end_or_anothers_time_skip_counts_for_nothing() {
         .await;
     assert_eq!((who, lag), (ga, 32), "only Alice's own");
 }
+
+/// Thistle Tea's cmsg_use_item_test: an item whose spell takes time to cast
+/// is kept while the cast goes on, and spent when it lands.
+#[tokio::test]
+async fn an_items_slow_spell_spends_it_only_when_cast() {
+    use crate::game::data::GameData;
+    use crate::game::data::items::ItemSpell;
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const SCROLL: u32 = 9_010;
+    const SLOW: u32 = 900_201;
+    let mut d = GameData::empty();
+    let mut slow = SpellTemplate {
+        id: SLOW,
+        name: "Slow Heal".into(),
+        equipped_item_class: -1,
+        range_index: 1,
+        casting_time_index: 99,
+        ..Default::default()
+    };
+    slow.effects[0] = SpellEffect {
+        effect: 10,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(SLOW, slow);
+    d.spells.cast_times.insert(99, 1_000);
+    let mut scroll = crate::game::data::ItemTemplate {
+        entry: SCROLL,
+        name: "Scroll".into(),
+        stackable: 5,
+        allowable_class: -1,
+        allowable_race: -1,
+        ..Default::default()
+    };
+    scroll.spells[0] = ItemSpell {
+        id: SLOW,
+        trigger: 0,
+        charges: -1,
+        cooldown: -1,
+        ..Default::default()
+    };
+    d.items.insert(SCROLL, scroll);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let (bag, slot) = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, SCROLL, 2, false).unwrap();
+        let i = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == SCROLL)
+            .unwrap();
+        (i.bag, i.slot)
+    })
+    .await;
+    a.send(CMSG_USE_ITEM {
+        bag_index: bag,
+        bag_slot: slot,
+        spell_index: 0,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::empty(),
+        },
+    })
+    .await;
+    a.wait_for("SMSG_SPELL_START", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_START(s) if s.spell == SLOW => Some(()),
+        _ => None,
+    })
+    .await;
+    let count = move |m: &mut Map| m.players[&g].count_of(SCROLL);
+    assert_eq!(on_map(&realm, count).await, 2, "kept while it casts");
+    a.wait_for("SMSG_SPELL_GO", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == SLOW => Some(()),
+        _ => None,
+    })
+    .await;
+    settled(&mut a).await;
+    assert_eq!(on_map(&realm, count).await, 1, "spent when it lands");
+}
