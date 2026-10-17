@@ -188,6 +188,15 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
         C::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(m) if m.guid == g => {
             speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_RUN_SPEED)
         }
+        // The unit it moves has it: those who see that unit hear of it.
+        C::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(m)
+            if map
+                .players
+                .get(&g)
+                .is_some_and(|p| p.owned.mover == Some(m.guid)) =>
+        {
+            speed_ack(map, m.guid, m.info, m.new_speed, MSG_MOVE_SET_RUN_SPEED)
+        }
         C::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK(m) if m.guid == g => {
             speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_RUN_BACK_SPEED)
         }

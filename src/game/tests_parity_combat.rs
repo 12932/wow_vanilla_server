@@ -1248,3 +1248,75 @@ async fn a_charmed_caster_with_nothing_to_cast_fights_by_blade() {
         .unwrap();
     assert_eq!(struck, Some(gb), "by blade");
 }
+
+/// A creature slowed on the move goes on at its new speed, sent again
+/// from where it is (mangos's `propagateSpeedChange`, Thistle Tea's
+/// `retime`); one a player's client moves hears of it as a player does,
+/// and those who see it once that client has it (both of them).
+#[tokio::test]
+async fn a_slowed_creature_goes_on_slower_and_a_possessed_one_is_told_as_a_player() {
+    let (realm, mut a, ga, map) = setup(Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.heartbeat(START.0, START.1, START.2).await;
+    let (k, held) = (kobold(11), kobold(13));
+    b.sees(k).await;
+    a.clear();
+    let out = map
+        .query(move |m| {
+            m.players.get_mut(&ga).unwrap().movement.position = at(10.0, 0.0);
+            crate::game::map::ai::attacked(m, k, ga);
+            step(m, 2);
+            let speed = |m: &Map| match &m.creature(k).unwrap().motion {
+                Motion::Moving(w) => Some((w.speed, w.spline_id)),
+                Motion::Idle { .. } => None,
+            };
+            let before = speed(m);
+            aura_on(m, gb, k, CURSE, -50);
+            let after = speed(m);
+            // Bob's client moves the other.
+            m.players.get_mut(&gb).unwrap().owned.mover = Some(held);
+            aura_on(m, ga, held, CURSE, -50);
+            (before, after, m.creature(held).unwrap().speeds.run)
+        })
+        .await
+        .unwrap();
+    let (before, after, held_speed) = out;
+    let (before, chase) = before.expect("it runs");
+    let (after, again) = after.expect("it runs on");
+    assert!(
+        (after - before / 2.0).abs() < 0.01,
+        "half as fast: {before} {after}"
+    );
+    assert_ne!(chase, again, "a new run");
+    a.wait_for("its run again, from where it is", |m| match m {
+        ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == k && mv.spline_id == again => {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    let forced = b
+        .wait_for("the possessed one's speed, as a player's", |m| match m {
+            ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(s) if s.guid == held => Some(s.speed),
+            _ => None,
+        })
+        .await;
+    assert!((forced - held_speed).abs() < 0.01);
+    b.send(CMSG_FORCE_RUN_SPEED_CHANGE_ACK {
+        guid: held,
+        counter: 0,
+        info: movement(START.0 + 33.0, 0.0, false),
+        new_speed: forced,
+    })
+    .await;
+    a.wait_frame(
+        "those who see it hear of it",
+        crate::game::map::misc::MSG_MOVE_SET_RUN_SPEED,
+        |body| {
+            let mut i = 0;
+            packed_guid(body, &mut i) == Some(held)
+        },
+    )
+    .await;
+}

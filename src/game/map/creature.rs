@@ -636,6 +636,30 @@ impl Creature {
         frame
     }
 
+    /// Its run going on at its new run speed, from where it is, if it was
+    /// running at `was` (a timed move keeps its time): the packet.
+    pub fn retime(&mut self, was: f32, now: Instant, spline_id: u32) -> Option<Arc<[u8]>> {
+        let Motion::Moving(w) = &self.motion else {
+            return None;
+        };
+        if !w.run || w.falling || w.done(now) || (w.speed - was).abs() > 0.01 {
+            return None;
+        }
+        let (at, _) = w.position_at(now);
+        let mut points = vec![at];
+        points.extend(w.remaining(now));
+        if points.len() < 2 {
+            return None;
+        }
+        let mut walk = Walk::new(points, self.speeds.run, now, spline_id, true);
+        walk.fly = w.fly;
+        walk.face = w.face;
+        self.position = at;
+        let frame = encode(&walk.packet(self.guid, at));
+        self.motion = Motion::Moving(walk);
+        frame
+    }
+
     /// A move in a fight: [`Self::walk_at`], facing `victim` as it goes
     /// and at the end, as Thistle Tea's `Navigation.chase` and mangos's
     /// chase (`SetFacing`) send it: a chase at a run, a step about its
