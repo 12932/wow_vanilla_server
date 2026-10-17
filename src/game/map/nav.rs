@@ -11,6 +11,8 @@ use wow_world_messages::vanilla::Vector3d;
 
 /// An ADT tile's side, in yards.
 const ADT_SIZE: f32 = 533.333_3;
+/// How far under a floor its area is asked for.
+const AREA_FLOOR_TOLERANCE: f32 = 0.1;
 
 pub struct Nav {
     map: PathfindMap,
@@ -58,10 +60,24 @@ impl Nav {
         }
     }
 
-    /// The zone and area at a point.
+    /// The zone and area at a point; where the point says nothing, those
+    /// of the floor nearest it, as Thistle Tea looks.
     pub fn zone_and_area(&mut self, p: Vector3d) -> Option<(u32, u32)> {
         self.ensure(p.x, p.y);
-        self.map.get_zone_and_area(p.x, p.y, p.z).ok()
+        let known =
+            |ids: Option<(u32, u32)>| ids.filter(|&(_, area)| area != 0 && area != u32::MAX);
+        if let Some(ids) = known(self.map.get_zone_and_area(p.x, p.y, p.z).ok()) {
+            return Some(ids);
+        }
+        let mut floors = self.map.find_heights(p.x, p.y).ok()?.to_vec();
+        floors.sort_by(|a, b| (a - p.z).abs().total_cmp(&(b - p.z).abs()));
+        floors.into_iter().find_map(|h| {
+            known(
+                self.map
+                    .get_zone_and_area(p.x, p.y, h - AREA_FLOOR_TOLERANCE)
+                    .ok(),
+            )
+        })
     }
 
     /// A walkable path from `from` to `to`, its first point `from`.
@@ -93,18 +109,19 @@ impl Nav {
             .min_by(|a, b| (a - z_hint).abs().total_cmp(&(b - z_hint).abs()))
     }
 
-    /// The liquid at a point: its kind where a WMO holds it (1 water, 2
-    /// ocean, 3 magma, 4 slime; 0 where the terrain does), and its surface.
-    pub fn liquid(&mut self, p: Vector3d) -> Option<(u8, f32)> {
+    /// The liquid a WMO holds at a point: its entry (1 water, 2 ocean, 3
+    /// magma, 4 slime, 21 Naxxramas slime), its surface and the floor under
+    /// it.
+    pub fn wmo_liquid(&mut self, p: Vector3d) -> Option<(u8, f32, f32)> {
         self.ensure(p.x, p.y);
-        if let Ok(Some(s)) = self.map.wmo_liquid(p.x, p.y, p.z) {
-            return Some((s.entry, s.surface));
-        }
-        self.map
-            .liquid_surface(p.x, p.y, p.z)
-            .ok()
-            .flatten()
-            .map(|z| (0, z))
+        let s = self.map.wmo_liquid(p.x, p.y, p.z).ok()??;
+        Some((s.entry, s.surface, s.floor))
+    }
+
+    /// The navmesh's liquid surface nearest the point, of whatever kind.
+    pub fn liquid_surface(&mut self, p: Vector3d) -> Option<f32> {
+        self.ensure(p.x, p.y);
+        self.map.liquid_surface(p.x, p.y, p.z).ok().flatten()
     }
 
     pub fn line_of_sight(&mut self, from: Vector3d, to: Vector3d) -> bool {

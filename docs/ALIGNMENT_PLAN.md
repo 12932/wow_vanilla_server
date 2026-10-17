@@ -1181,6 +1181,17 @@ Beyond Thistle Tea, which has no such event.
 - **peon's last-man-standing scenario** plays it out: 100 level-60 bots to one champion in four minutes, at 0.10
   cores.
 
+### Terrain liquids (2026-10-17)
+
+- **Thistle Tea's terrain tiles** (`[world] terrain_dir`, MaNGOS z1.5 `.map` files from its `nix run
+  .#terrain-data`), read a tile at a time as players reach it: each cell's area, ground and liquid.
+- **The liquid** is a WMO's first (rustigator's), else the tile's:
+  - the deep sea tires swimmers, and a worn-out ghost goes to its graveyard;
+  - lava burns after a second touching it, 605 to 610 every two seconds;
+  - Naxxramas's slime puts Slime on while in it; other slime does nothing, as in Thistle Tea.
+- **Zones:** the navmesh's, at the point or the floor nearest it; else the tile's area; else the map's only zone.
+- God mode, not a GM account, now spares a player the environment.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
