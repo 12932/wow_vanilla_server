@@ -1395,7 +1395,10 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 }
             }
         }
-        AURA_FAR_SIGHT | AURA_BIND_SIGHT => {
+        AURA_BIND_SIGHT => {
+            crate::game::map::spells::sight::grant(map, h.caster, target);
+        }
+        AURA_FAR_SIGHT => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_guid(PLAYER_FARSIGHT, h.caster);
             }
@@ -1552,7 +1555,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 });
             }
         }
-        AURA_FAR_SIGHT | AURA_BIND_SIGHT => {
+        AURA_BIND_SIGHT => {
+            crate::game::map::spells::sight::release(map, h.caster, target);
+        }
+        AURA_FAR_SIGHT => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_guid(PLAYER_FARSIGHT, Guid::zero());
             }
@@ -1607,6 +1613,8 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
     }
+    let expired = h.expires.is_some_and(|t| t <= map.now);
+    crate::game::map::spells::redemption::aura_gone(map, target, h.spell, expired);
     crate::game::map::trinkets::removed(map, target, h);
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)

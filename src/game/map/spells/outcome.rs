@@ -616,15 +616,21 @@ pub fn coefficient(map: &Map, s: &SpellTemplate, index: usize, kind: Kind) -> f3
         let factor = if ticks > 0 { base / ticks as f32 } else { base };
         c = time / 3500.0 * factor;
     }
+    c * level_penalty(s)
+}
+
+/// Spells learned below level 20 get less of the caster's power.
+pub fn level_penalty(s: &SpellTemplate) -> f32 {
     if (1..=20).contains(&s.spell_level) {
-        c *= 1.0 - (20 - s.spell_level) as f32 * 0.0375;
+        1.0 - (20 - s.spell_level) as f32 * 0.0375
+    } else {
+        1.0
     }
-    c
 }
 
 /// The caster's spell power for `s`, or healing power, including the
 /// creature-type bonuses against `target`.
-fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: bool) -> f32 {
+pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: bool) -> f32 {
     let d = derived(map, caster);
     if heal {
         let spirit = map

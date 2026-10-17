@@ -113,6 +113,13 @@ impl Nav {
         self.map.line_of_sight(from, to).unwrap_or(true)
     }
 
+    /// Whether a point is outdoors, from the floor below it; `None` where
+    /// the bake can't say.
+    pub fn outdoors(&mut self, p: Vector3d) -> Option<bool> {
+        self.ensure(p.x, p.y);
+        self.map.is_outdoors(p.x, p.y, p.z).ok().flatten()
+    }
+
     pub fn tiles_tried(&self) -> usize {
         self.tried.len()
     }

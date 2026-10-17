@@ -337,6 +337,13 @@ pub fn check(
         if let Some(e) = form_error(s, auras::form(map, caster)) {
             return Some(e);
         }
+        if let Some(e) = super::environment::check(map, caster, s) {
+            return Some(e);
+        }
+        // A spirit of redemption only heals.
+        if !super::redemption::allows(map, caster, s) {
+            return Some(fail::NOT_SHAPESHIFT);
+        }
         if s.caster_aura_state != 0 && !aura_state(map, caster, s.caster_aura_state) {
             return Some(fail::CASTER_AURASTATE);
         }

@@ -853,6 +853,9 @@ impl Map {
         } else if guid::is_corpse(object) {
             let c = self.corpses.get(&object)?;
             Arc::from(update::create_block(&c.create(), Visibility::Public))
+        } else if spells::dynamic::is_dynamic_object(object) {
+            let d = self.spells.dynamic.get(&object)?;
+            Arc::from(update::create_block(&d.create(), Visibility::Public))
         } else {
             return None;
         };
@@ -950,6 +953,8 @@ impl Map {
             self.gameobject(object).map(|g| g.position)
         } else if guid::is_corpse(object) {
             self.corpses.get(&object).map(|c| c.position)
+        } else if spells::dynamic::is_dynamic_object(object) {
+            self.spells.dynamic.get(&object).map(|d| d.position)
         } else {
             None
         }
@@ -965,6 +970,8 @@ impl Map {
             self.gameobject(object).map(|g| &g.observers)
         } else if guid::is_corpse(object) {
             self.corpses.get(&object).map(|c| &c.observers)
+        } else if spells::dynamic::is_dynamic_object(object) {
+            self.spells.dynamic.get(&object).map(|d| &d.observers)
         } else {
             None
         }
@@ -979,6 +986,8 @@ impl Map {
             self.gameobject_mut(object).map(|g| &mut g.observers)
         } else if guid::is_corpse(object) {
             self.corpses.get_mut(&object).map(|c| &mut c.observers)
+        } else if spells::dynamic::is_dynamic_object(object) {
+            self.spells.dynamic.get_mut(&object).map(|d| &mut d.observers)
         } else {
             None
         }

@@ -180,8 +180,27 @@ fn aura_amount(
             }
             outcome::healing_taken(map, target, l.mods.apply(mods::OP_DOT, h)) as i32
         }
+        AURA_SCHOOL_ABSORB => base + absorb_bonus(map, caster, target, s, index),
         _ => base,
     }
+}
+
+/// Thistle Tea's `AbsorbBonus`: Power Word: Shield gets a tenth of healing
+/// power, the mage's elemental wards and Shadow Ward a tenth of their
+/// school's spell power, less below level 20.
+fn absorb_bonus(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: usize) -> i32 {
+    let flags = s.family_flags as u32;
+    let power = if s.family_name == 6 && flags & 0x1 != 0 {
+        outcome::power(map, caster, target, s, true)
+    } else if (s.family_name == 3 && flags & 0x108 != 0)
+        || (matches!(s.family_name, 0 | 5) && s.school == 5 && s.spell_icon == 207 && s.category == 56)
+    {
+        outcome::power(map, caster, target, s, false)
+    } else {
+        return 0;
+    };
+    let _ = index;
+    (power.max(0.0) * 0.1 * outcome::level_penalty(s)) as i32
 }
 
 /// The effects of `s` that land on `target` (those `which` marks).
@@ -928,7 +947,17 @@ pub fn run_untargeted(
                 let base = m.points(index, points_with(s, index, level, combo));
                 let amount = aura_amount(map, caster, caster, s, index, base, &l);
                 let now = map.now;
+                let object = super::dynamic::spawn(
+                    map,
+                    caster,
+                    s.id,
+                    super::dynamic::KIND_AREA_SPELL,
+                    at,
+                    radius,
+                    Some(ms),
+                );
                 map.spells.areas.push(Area {
+                    object,
                     caster,
                     spell: s.id,
                     index,
@@ -944,6 +973,10 @@ pub fn run_untargeted(
                         },
                     period,
                 });
+            }
+            EFFECT_ADD_FARSIGHT => {
+                let ms = aura_duration(map, caster, s, m, combo);
+                super::sight::far_sight(map, caster, s, index, t, ms);
             }
             EFFECT_TRIGGER_MISSILE if e.trigger_spell != 0 => {
                 if let Some(at) = t.dest {
@@ -973,6 +1006,16 @@ pub fn run_untargeted(
 /// a helpful one, friend) inside.
 pub fn tick_areas(map: &mut Map) {
     let now = map.now;
+    let ended: Vec<Guid> = map
+        .spells
+        .areas
+        .iter()
+        .filter(|a| a.ends <= now)
+        .map(|a| a.object)
+        .collect();
+    for g in ended {
+        super::dynamic::remove(map, g);
+    }
     map.spells.areas.retain(|a| a.ends > now);
     let due: Vec<usize> = (0..map.spells.areas.len())
         .filter(|i| map.spells.areas[*i].next_tick <= now)
@@ -1096,16 +1139,34 @@ pub fn refresh_area_auras(map: &mut Map) {
     }
     map.spells.area_auras_at = Some(now + Duration::from_secs(1));
     let data = map.realm.data.clone();
-    // The casters' own holders of party auras.
+    // The casters' own holders of party auras: players', and those a totem
+    // or pet holds of its own (Grounding Totem's magnet), for its master's
+    // party.
     type Source = (Guid, u32, Vec<(usize, i32)>, Option<std::time::Instant>);
-    let sources: Vec<Source> = map
+    let owned: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && !c.auras.is_empty())
+        .map(|(_, c)| c.guid)
+        .filter(|g| crate::game::map::pets::owner_of(map, *g).is_some())
+        .collect();
+    let holders_of = |g: Guid| -> Vec<auras::Holder> {
+        auras::auras(map, g).map(|a| a.holders.clone()).unwrap_or_default()
+    };
+    let units: Vec<(Guid, Vec<auras::Holder>)> = map
         .players
-        .values()
-        .flat_map(|p| {
-            p.auras
-                .holders
+        .keys()
+        .copied()
+        .chain(owned)
+        .map(|g| (g, holders_of(g)))
+        .collect();
+    let sources: Vec<Source> = units
+        .iter()
+        .flat_map(|(g, holders)| {
+            let g = *g;
+            holders
                 .iter()
-                .filter(|h| h.caster == p.guid)
+                .filter(move |h| h.caster == g)
                 .filter(|h| {
                     data.spells.get(h.spell).is_some_and(|s| {
                         s.effects
@@ -1113,9 +1174,9 @@ pub fn refresh_area_auras(map: &mut Map) {
                             .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
                     })
                 })
-                .map(|h| {
+                .map(move |h| {
                     (
-                        p.guid,
+                        g,
                         h.spell,
                         h.effects
                             .iter()
@@ -1142,15 +1203,18 @@ pub fn refresh_area_auras(map: &mut Map) {
         let Some(at) = map.position_of(caster) else {
             continue;
         };
+        // A totem's or pet's party is its master's, the master too.
+        let master = crate::game::map::pets::owner_of(map, caster);
+        let leader = master.unwrap_or(caster);
         let party = {
             let groups = map.realm.social.groups.lock();
             groups
-                .group_of(caster)
+                .group_of(leader)
                 .map(|g| {
                     let sub = g
                         .members
                         .iter()
-                        .find(|m| m.guid == caster)
+                        .find(|m| m.guid == leader)
                         .map(|m| m.subgroup);
                     g.members
                         .iter()
@@ -1159,7 +1223,7 @@ pub fn refresh_area_auras(map: &mut Map) {
                         .filter(|m| *m != caster)
                         .collect::<Vec<_>>()
                 })
-                .unwrap_or_default()
+                .unwrap_or_else(|| master.into_iter().collect())
         };
         for member in party {
             let near = map
@@ -1216,12 +1280,8 @@ pub fn refresh_area_auras(map: &mut Map) {
         })
         .collect();
     for (member, spell, caster) in orphans {
-        let source = map.players.get(&caster).is_some_and(|p| {
-            p.auras
-                .holders
-                .iter()
-                .any(|h| h.spell == spell && h.caster == caster)
-        });
+        let source = auras::auras(map, caster)
+            .is_some_and(|a| a.holders.iter().any(|h| h.spell == spell && h.caster == caster));
         if !source {
             auras::remove_spell(map, member, spell, Some(caster));
         }
