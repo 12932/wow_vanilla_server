@@ -688,9 +688,17 @@ fn effect(
                 map.teleport(target, map.key, at, o);
             }
         }
+        // Back to where it last stood on the ground (Thistle Tea's
+        // `SafePosition`), not home; none known, nowhere.
         EFFECT_STUCK => {
-            if let Some((m, pos, o)) = home(map, target) {
-                map.teleport(target, crate::game::map::MapKey::world(m), pos, o);
+            let here = map.key.map;
+            if let Some((_, pos, o)) = map
+                .players
+                .get(&target)
+                .and_then(|p| p.safe_position)
+                .filter(|(m, _, _)| *m == here)
+            {
+                crate::game::map::movement::teleport_within(map, target, pos, o);
             }
         }
         EFFECT_BIND => {
@@ -1022,10 +1030,34 @@ pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
 }
 
 /// A knock back: a player is thrown by their client; a creature slides.
+/// Whether a knockback can move `g` (Thistle Tea's `Knockback.movable?`):
+/// alive, not on a walk the server drives (a charge, fear or confusion, a
+/// creature's walk under way), rooted, stunned, nor on a flight.
+fn knockable(map: &Map, g: Guid) -> bool {
+    let held = auras::auras(map, g).is_some_and(|a| {
+        a.has(AURA_MOD_ROOT)
+            || a.has(AURA_MOD_STUN)
+            || a.has(AURA_MOD_FEAR)
+            || a.has(AURA_MOD_CONFUSE)
+    });
+    let free = match map.players.get(&g) {
+        Some(p) => p.flight.is_none() && p.driven.is_none() && p.charge.is_none(),
+        None => map.creature(g).is_some_and(|c| {
+            c.engagement.control.is_none()
+                && !matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if !w.done(map.now))
+        }),
+    };
+    !held && free && map.unit_view(g).is_some_and(|u| u.alive)
+}
+
 fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertical: i32) {
     let (Some(me), Some(them)) = (map.unit_view(caster), map.unit_view(target)) else {
         return;
     };
+    // What it would move stops casting (Thistle Tea's `Knockback.launch`).
+    if knockable(map, target) {
+        super::interrupt(map, target);
+    }
     let angle = if caster == target {
         me.orientation + std::f32::consts::PI
     } else {
