@@ -13,6 +13,7 @@ pub mod death;
 pub mod derive;
 pub mod duel;
 pub mod enchant;
+pub mod escorts;
 pub mod gameobject;
 pub mod gm;
 pub mod grid;
@@ -250,6 +251,8 @@ pub struct Map {
     pub globals: Vec<Guid>,
     /// Rolls under way and gathered nodes to bring back.
     pub loot_state: loot::MapLoot,
+    /// Escort and follower quests under way.
+    pub escorts: Vec<escorts::Active>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -344,6 +347,7 @@ impl Map {
             battleground: battleground::for_map(key, Instant::now()),
             globals: Vec::new(),
             loot_state: Default::default(),
+            escorts: Vec::new(),
         }
     }
 
@@ -390,6 +394,7 @@ impl Map {
                 p.row.map = self.key.map;
                 let guid = p.guid;
                 items::on_login(&mut p, &self.realm.data.clone());
+                crate::game::transports::place_aboard(&self.realm, &mut p);
                 login::send_login(self, &mut p);
                 let corpse = p.row.state.corpse;
                 if p.row.state.dead {
@@ -615,6 +620,7 @@ impl Map {
         battleground::update(self);
         self.unload_if_empty();
         ai::update_creatures(self);
+        escorts::update(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);
         self.flush_forgets();

@@ -3979,6 +3979,9 @@ mod transports {
         let mut d = GameData::empty();
         let mut data = [0u32; 24];
         data[0] = 77;
+        // Fast, so the test's round is short.
+        data[1] = 1000;
+        data[2] = 1000;
         d.gameobject_templates.insert(
             BOAT,
             GameObjectTemplate {
@@ -4008,9 +4011,13 @@ mod transports {
             77,
             vec![
                 node(0, START.0, START.1),
+                node(0, START.0 + 30.0, START.1),
+                node(0, START.0 + 60.0, START.1),
                 node(0, START.0 + 100.0, START.1),
+                node(1, 990.0, 1000.0),
                 node(1, 1000.0, 1000.0),
-                node(1, 1100.0, 1000.0),
+                node(1, 1010.0, 1000.0),
+                node(1, 1020.0, 1000.0),
             ],
         );
         d

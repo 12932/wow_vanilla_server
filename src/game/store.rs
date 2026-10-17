@@ -122,6 +122,9 @@ pub struct CharacterState {
     pub ignored: Vec<u32>,
     /// A flight under way at logout, to take up again.
     pub flight: Option<SavedFlight>,
+    /// Aboard a transport at logout: its entry, and the place on deck
+    /// (x, y, z, facing).
+    pub transport: Option<(u32, f32, f32, f32, f32)>,
 }
 
 /// A flight's rest: the points still to fly, where it lands, and the

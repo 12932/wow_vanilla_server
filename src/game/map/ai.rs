@@ -202,6 +202,9 @@ fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     crate::game::map::auras::clear_on_death(map, creature);
+    if let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) {
+        crate::game::invasion::creature_died(map, entry, at);
+    }
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
