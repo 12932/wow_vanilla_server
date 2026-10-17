@@ -21,7 +21,9 @@ pub struct SpellEffect {
     pub amplitude: u32,
     pub multiple_value: f32,
     pub chain_target: u32,
-    pub item_type: u32,
+    /// `EffectItemType`: an item (one created, one a death gives), or the
+    /// family flags a modifier or trigger touches, all 64 bits of them.
+    pub item_type: u64,
     pub misc_value: i32,
     pub trigger_spell: u32,
     pub points_per_combo_point: f32,
@@ -357,6 +359,30 @@ impl SpellData {
     /// Whether `a` and `b` are ranks of one spell.
     pub fn same_kind(&self, a: u32, b: u32) -> bool {
         a == b || self.first_rank(a) == self.first_rank(b)
+    }
+
+    /// A higher rank with no `spell_proc_event` row of its own takes its
+    /// first rank's, by `spell_chain` or a talent's ranks (vmangos's
+    /// `LoadSpellProcEvents` over its chains, Thistle Tea's `proc_rule`):
+    /// Lightning Shield's, the seals', Flurry's and Enrage's higher ranks.
+    pub fn inherit_proc_events(&mut self) {
+        let mut firsts: Vec<(u32, u32)> = self.ranks.iter().map(|(id, r)| (*id, r.first)).collect();
+        for t in self.talents.values() {
+            firsts.extend(
+                t.ranks[1..]
+                    .iter()
+                    .filter(|r| **r != 0)
+                    .map(|r| (*r, t.ranks[0])),
+            );
+        }
+        for (id, first) in firsts {
+            if id != first
+                && !self.proc_events.contains_key(&id)
+                && let Some(p) = self.proc_events.get(&first).copied()
+            {
+                self.proc_events.insert(id, p);
+            }
+        }
     }
 
     pub fn cast_time(&self, s: &SpellTemplate) -> u32 {

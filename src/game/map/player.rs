@@ -206,6 +206,9 @@ pub struct Player {
     pub death: crate::game::map::death::Death,
     /// When health and power next regenerate.
     pub regen_at: Instant,
+    /// The part of a point of health regenerated and not yet given, for
+    /// the next tick (Thistle Tea's `health_regen_carry`).
+    pub health_regen_carry: f32,
     /// When mana was last spent, for the five-second rule.
     pub mana_spent_at: Option<Instant>,
     pub combat: crate::game::map::combat::Combat,
@@ -312,6 +315,7 @@ impl Player {
             save_at: now,
             death: crate::game::map::death::Death::Alive,
             regen_at: now + crate::game::map::stats::REGEN_INTERVAL,
+            health_regen_carry: 0.0,
             mana_spent_at: None,
             combat: Default::default(),
             looting: None,

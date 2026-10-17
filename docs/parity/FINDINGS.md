@@ -21,7 +21,7 @@ Phase 3. When something here is fixed, its line gets the commit.
 - **A pet set to autocast a positive spell casts nothing.** `pets/ai.rs` `pick_spell` returns `None` for every
   positive spell: Dash, Dive, Fire Shield, Paranoia.
 
-### From combat and auras (to confirm)
+### From combat and auras (fixed: fix/bugs2)
 
 - **A PvP-flagged player can attack an unflagged enemy.** `combat::can_attack` allows the attack when either player
   is flagged. mangos's `Relations.cpp` needs the target flagged.
@@ -35,7 +35,7 @@ Phase 3. When something here is fixed, its line gets the commit.
 - **A DoT's threat is physical.** `spells::periodic_damage` deals school 1.
 - **`procs::ppm_chance` caps at 100%** before the chance modifier is applied. Thistle Tea applies the modifier first.
 
-### From spells and power (to confirm)
+### From spells and power (fixed: fix/bugs2)
 
 - **Health-cost spells are paid from power 5 (happiness).** `power_index` takes `power_type.min(4)`, and type -2
   is stored as 4294967294. Life Tap, Health Funnel and Bloodrage are refused NO_POWER for real players. The tests'

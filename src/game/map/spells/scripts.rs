@@ -263,18 +263,7 @@ pub fn dummy(
             return;
         }
         "spell_cannibalize" => {
-            let corpse = map.creatures.iter().any(|(_, c)| {
-                !c.alive()
-                    && map
-                        .realm
-                        .data
-                        .creature_template(c.entry)
-                        .is_some_and(|t| matches!(t.creature_type, 6 | 7))
-                    && map
-                        .position_of(caster)
-                        .is_some_and(|p| combat::dist(p, c.position) <= 5.0)
-            });
-            if corpse {
+            if edible_corpse(map, caster, s) {
                 cast_triggered(map, caster, SPELL_CANNIBALIZE_CHANNEL, Some(caster));
             }
             return;
@@ -488,6 +477,39 @@ pub fn after_energize(map: &mut Map, caster: Guid, s: &SpellTemplate) {
         );
         p.combat.last_action = Some(map.now);
     }
+}
+
+/// Whether Cannibalize (`s`) has a body to eat within its range: a dead
+/// humanoid or undead creature, a dead player not yet a ghost, or a
+/// player's corpse, none of them a friend's (mangos's
+/// `CannibalizeObjectCheck`, Thistle Tea's `CorpseTarget`).
+pub fn edible_corpse(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
+    let Some(at) = map.position_of(caster) else {
+        return false;
+    };
+    let range = map.realm.data.spells.range(s).1.max(5.0);
+    let near = |p| combat::dist(at, p) <= range;
+    let foe = |g| !combat::friendly(map, caster, g);
+    map.creatures.iter().any(|(_, c)| {
+        !c.alive()
+            && near(c.position)
+            && map
+                .realm
+                .data
+                .creature_template(c.entry)
+                .is_some_and(|t| matches!(t.creature_type, 6 | 7))
+            && foe(c.guid)
+    }) || map.players.values().any(|p| {
+        matches!(p.death, crate::game::map::death::Death::Dead { .. })
+            && near(p.position())
+            && foe(p.guid)
+    }) || map.corpses.values().any(|c| {
+        near(c.position)
+            && map
+                .players
+                .get(&c.owner)
+                .is_some_and(|p| p.death != crate::game::map::death::Death::Alive && foe(p.guid))
+    })
 }
 
 /// The item a create-item effect makes: its own, or a script's choice.

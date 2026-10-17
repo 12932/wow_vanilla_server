@@ -239,8 +239,9 @@ pub struct Aura {
     pub amount: i32,
     pub misc: i32,
     pub trigger: u32,
-    /// `EffectItemType`: the spells a modifier or trigger affects.
-    pub mask: u32,
+    /// `EffectItemType`: the spells a modifier or trigger affects (its
+    /// family flags), or an item.
+    pub mask: u64,
     pub period: Option<Duration>,
     pub next_tick: Option<Instant>,
     pub ticks: u32,
@@ -431,8 +432,9 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         {
             return Some(Exclusive::NegativeHaste);
         }
-        // A snare, but not a daze.
-        if only(AURA_MOD_DECREASE_SPEED) && s.attributes[1] & 0x0040_0000 == 0 {
+        // A snare, but not a daze (the second attributes' 0x0004_0000, as
+        // Thistle Tea's `Slow.daze?` tells one).
+        if only(AURA_MOD_DECREASE_SPEED) && s.attributes[1] & 0x0004_0000 == 0 {
             return Some(Exclusive::Snare);
         }
     }
@@ -2261,7 +2263,29 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
             crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
-            // A channel's trigger aims at the channel's target.
+            // A spell aimed at a unit the client picks goes at the unit the
+            // aura is on, or a channel's at the channel's target. Anything
+            // else (an area, a group, a place, the caster) is about the unit
+            // the aura is on, as mangos's `PickTargetsForSpellTrigger` has
+            // it: Hellfire's flames are about the warlock, not the warlock's
+            // target, and Plague's about the one it is on.
+            use crate::game::map::spells::targets::{Implicit, implicit};
+            let picked = map.realm.data.spells.get(a.trigger).is_some_and(|t| {
+                matches!(
+                    implicit(t.effects[0].target_a),
+                    Implicit::Enemy | Implicit::AnyUnit
+                )
+            });
+            if !picked {
+                let targets = crate::game::map::spells::Targets {
+                    unit: Some(target),
+                    dest: map.position_of(target),
+                    origin: Some(target),
+                    ..Default::default()
+                };
+                crate::game::map::spells::cast_triggered_with(map, h.caster, a.trigger, targets);
+                return;
+            }
             let aim = if h.caster == target {
                 map.caster(h.caster)
                     .and_then(|c| c.casting.as_ref())
@@ -2282,41 +2306,70 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
 }
 
-/// Damage of `school` a unit takes, less what its absorb auras and mana
-/// shields soak: (what's left, what's absorbed).
+/// Damage of `school` a unit takes, less what its absorb auras soak, then
+/// its mana shields, each no more than the mana there is pays for at its
+/// spell's rate (its effect's multiple value, with the unit's modifiers),
+/// as mangos's `CalculateDamageAbsorbAndResist` and Thistle Tea's
+/// `Absorption` have it: (what's left, what's absorbed).
 pub fn absorb(map: &mut Map, target: Guid, damage: u32, school: u32) -> (u32, u32) {
+    let data = map.realm.data.clone();
+    let rates: Vec<(u32, f32)> = auras(map, target)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| h.has(AURA_MANA_SHIELD))
+                .filter_map(|h| {
+                    let s = data.spells.get(h.spell)?;
+                    let e = s.effects.iter().find(|e| e.aura == AURA_MANA_SHIELD)?;
+                    let m = crate::game::map::spells::mods::for_spell(map, target, s);
+                    let rate = m.apply(
+                        crate::game::map::spells::mods::OP_MULTIPLE_VALUE,
+                        e.multiple_value,
+                    );
+                    Some((h.spell, rate.max(0.0)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let had = map
+        .unit_fields(target)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_POWER1));
+    let mut mana = had;
     let Some(a) = auras_mut(map, target) else {
         return (damage, 0);
     };
     let mut left = damage as i32;
     let mut used_up = Vec::new();
-    let mut mana_cost = 0u32;
-    for h in a.holders.iter_mut() {
-        for x in h.effects.iter_mut() {
-            if left <= 0 {
-                break;
-            }
-            if !matches!(x.kind, AURA_SCHOOL_ABSORB | AURA_MANA_SHIELD)
-                || (x.misc as u32) & school == 0
-            {
-                continue;
-            }
-            let soak = x.left.min(left).max(0);
-            x.left -= soak;
-            left -= soak;
-            if x.kind == AURA_MANA_SHIELD {
-                mana_cost += soak as u32 * 2;
-            }
-            if x.left <= 0 {
-                used_up.push((h.spell, h.caster));
+    for kind in [AURA_SCHOOL_ABSORB, AURA_MANA_SHIELD] {
+        for h in a.holders.iter_mut() {
+            for x in h.effects.iter_mut() {
+                if left <= 0 {
+                    break;
+                }
+                if x.kind != kind || (x.misc as u32) & school == 0 {
+                    continue;
+                }
+                let mut soak = x.left.min(left).max(0);
+                let rate = rates
+                    .iter()
+                    .find(|(spell, _)| *spell == h.spell)
+                    .map_or(0.0, |r| r.1);
+                if kind == AURA_MANA_SHIELD && rate > 0.0 {
+                    soak = soak.min((mana as f32 / rate) as i32);
+                    mana -= ((soak as f32 * rate).round() as u32).min(mana);
+                }
+                x.left -= soak;
+                left -= soak;
+                if x.left <= 0 {
+                    used_up.push((h.spell, h.caster));
+                }
             }
         }
     }
-    if mana_cost > 0
+    if mana != had
         && let Some(f) = map.unit_fields_mut(target)
     {
-        let mana = f.get_u32(UNIT_FIELD_POWER1);
-        f.set_u32(UNIT_FIELD_POWER1, mana.saturating_sub(mana_cost));
+        f.set_u32(UNIT_FIELD_POWER1, mana);
     }
     for (spell, caster) in used_up {
         remove_spell(map, target, spell, Some(caster));

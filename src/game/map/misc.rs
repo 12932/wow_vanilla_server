@@ -348,7 +348,7 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     }
     let e = s.effects[index];
     let m = crate::game::map::spells::mods::for_spell(map, g, s);
-    let points = m.points(index, e.base_points + e.base_dice.max(1));
+    let points = m.points(s, index, e.base_points + e.base_dice.max(1));
     let (max_health, max_mana) = (
         p.fields.get_u32(UNIT_FIELD_MAXHEALTH),
         p.fields.get_u32(UNIT_FIELD_MAXPOWER1),
