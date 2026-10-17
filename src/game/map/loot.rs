@@ -912,6 +912,24 @@ pub fn open(map: &mut Map, player: Guid, target: Guid) {
             _ => return,
         }
     } else if let Some(o) = map.gameobject(target) {
+        // A locked object (a chest, a vein, a herb) is looked in only by
+        // one who opened it, as Thistle Tea's `Chest.authorized?` has it.
+        // The window shuts on one who didn't (Thistle Tea's).
+        let lock = crate::game::map::professions::object_lock(&map.realm.data, o.entry);
+        if lock != 0
+            && !o
+                .loot
+                .as_ref()
+                .is_some_and(|l| l.opened_by.contains(&player))
+        {
+            if let Some(p) = map.players.get(&player) {
+                p.outbound.send(&SMSG_LOOT_RELEASE_RESPONSE {
+                    guid: target,
+                    unknown1: 1,
+                });
+            }
+            return;
+        }
         // A bobber is looted from the shore.
         let reach = if o.kind == crate::game::map::professions::GO_FISHING_NODE {
             30.0

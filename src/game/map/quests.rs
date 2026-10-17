@@ -486,15 +486,34 @@ fn invalid(p: &Player, msg: QuestFailedReason) {
 
 /// `CMSG_QUESTGIVER_ACCEPT_QUEST`: into the log.
 pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
+    accept_with(map, player, giver, quest, true);
+}
+
+/// A quest every member must accept, taken by one asked to (mangos's
+/// `AddQuest` with no giver): its start script has already run.
+pub fn accept_asked(map: &mut Map, player: Guid, asker: Guid, quest: u32) {
+    accept_with(map, player, asker, quest, false);
+}
+
+fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: bool) {
     let data = map.realm.data.clone();
     let Some(q) = data.npc.quests.get(&quest) else {
         return;
     };
     let (starts, _) = relations(map, giver);
-    let item_start = guid::high(giver) == Some(guid::HighGuid::Item)
-        || (guid::is_player(giver)
-            && crate::game::map::questshare::shared_by(map, player, giver, quest));
-    if !item_start && (!starts.contains(&quest) || !near_giver(map, player, giver)) {
+    // From an item: one the player has, that starts the quest (mangos's
+    // `Item::HasQuest`, Thistle Tea's `QuestItems.starter`).
+    let from_item = guid::high(giver) == Some(guid::HighGuid::Item);
+    let starter = map.players.get(&player).and_then(|p| {
+        let i = p.item_by_guid(giver)?;
+        (data.item(p.items[i].entry)?.start_quest == quest).then_some(p.items[i].entry)
+    });
+    if from_item && starter.is_none() {
+        return;
+    }
+    let shared = guid::is_player(giver)
+        && crate::game::map::questshare::shared_by(map, player, giver, quest);
+    if !from_item && !shared && (!starts.contains(&quest) || !near_giver(map, player, giver)) {
         return;
     }
     let condition = condition_ok(map, player, giver, quest);
@@ -530,7 +549,13 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     check(map, player, quest);
     crate::game::map::questshare::accepted(map, player, giver, quest);
     crate::game::map::spell_areas::reconcile(map, player);
-    if let Some(script) = data.scripts.quest_start_script.get(&quest).copied() {
+    if let Some(script) = data
+        .scripts
+        .quest_start_script
+        .get(&quest)
+        .copied()
+        .filter(|_| script)
+    {
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::QuestStart,
@@ -540,6 +565,18 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
         );
     }
     crate::game::map::escorts::accepted(map, player, quest);
+    // The item that started it goes, unless the quest gives it or asks for
+    // it (mangos-zero's `AddQuest`, Thistle Tea's `QuestItems.acceptance`).
+    if let Some(entry) = starter
+        && q.source_item != entry
+        && !q.required_items.iter().any(|(i, _)| *i == entry)
+        && let Some((i, count)) = map
+            .players
+            .get(&player)
+            .and_then(|p| p.item_by_guid(giver).map(|i| (i, p.items[i].count())))
+    {
+        inventory::take_item(map, player, i, count);
+    }
 }
 
 /// The log's update fields, from the journal.

@@ -155,6 +155,15 @@ the questions waiting for you.
       town NPCs, can't be attacked by players now.
     - **Health regeneration auras:** percentage ones work only out of combat, as both references have it.
 
+13. **bugs1's choices:**
+    - **Unlearning skills** goes by the client's SkillRaceClassInfo, so First Aid, Cooking and Fishing can't be
+      unlearned, as in mangos and Thistle Tea.
+    - **An item that starts a quest** is taken on accept, unless the quest gives it or asks for it, as mangos-zero
+      and Thistle Tea do (mangos-classic doesn't take it).
+    - **A freed charmed creature** still tags itself for its former master, as Thistle Tea has it.
+    - **Merge note:** traps now have their lock, as mangos's `GetLockId` gives it, which Disarm Trap needed after the
+      lock rules from 2g.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -164,7 +173,7 @@ the questions waiting for you.
 | 1a: the matrix, mapped (entity, ai, spell, combat) | done: 573 of 4,481 applicable covered (13%); findings in docs/parity/FINDINGS.md | efcd9d3 |
 | 1a: the matrix, mapped (core rest, world, network) | done: all 8,850 mapped, 1,781 of 8,429 applicable covered (21%) | f9bad00 |
 | Creature size and reach | done | c5e1440 |
-| Bugs from the mapping, batch 1 (23) | running | |
+| Bugs from the mapping, batch 1 (23) | merged | |
 | Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | d2dd886 |
 | Bugs from the mapping, batch 3 (24: visibility, spawns, wire layouts) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |

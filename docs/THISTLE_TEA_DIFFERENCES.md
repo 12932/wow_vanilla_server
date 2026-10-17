@@ -38,6 +38,9 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   a possessed one's controller with `SMSG_FORCE_RUN_SPEED_CHANGE`.
 - **A creature running in to strike** swings once it has got there, half a yard inside its reach, not as it crosses
   into reach: the client shows a creature on the move a little behind where it is. Thistle Tea swings at once.
+- **Honor inspection** answers within 28 yards, as mangos and the client have it; Thistle Tea's reach is 10.
+- **Every teleport stops a player's cast.** Thistle Tea spares its "combat teleports", which wvs doesn't tell apart.
+- **A guild charter** is sold by any petitioner; Thistle Tea also wants the tabard designer's flag.
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.

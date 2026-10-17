@@ -1,0 +1,1449 @@
+//! Bugs the mapping against Thistle Tea's tests turned up, through the
+//! protocol and on the real data when it is here: the dead killed again,
+//! containers looted twice, mana in druid forms, quests from items, the
+//! rituals' cooldowns, pets' positive autocasts; objects' gossip, Disarm
+//! Trap, locked loot, casts that can't pay or make room, ghosts exploring,
+//! forced reactions, fights and teleports stopping casts, healing threat,
+//! honor inspection, a cancelled logout, the ready check, charters,
+//! unlearning, quest sharing and a freed charmed creature.
+
+use std::time::Duration;
+
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::*;
+
+use crate::game::fields::*;
+use crate::game::guid;
+use crate::game::harness::{self, Client};
+use crate::game::map::creature::Creature;
+use crate::game::map::spells;
+use crate::game::map::{Map, MapKey};
+
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
+
+fn have_data() -> bool {
+    DB.as_path().join("vmangos.sqlite").exists()
+}
+
+fn realm() -> std::sync::Arc<crate::game::Realm> {
+    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+}
+
+/// A creature of `entry` at `level`, `yards` in front of `g`, with
+/// `health` and no armor.
+fn spawn(m: &mut Map, g: Guid, entry: u32, level: u8, yards: f32, health: u32) -> Guid {
+    let data = m.realm.data.clone();
+    let template = data
+        .creature_template(entry)
+        .cloned()
+        .expect("the creature");
+    let p = &m.players[&g];
+    let (pos, o) = (p.position(), p.movement.orientation);
+    let at = Vector3d {
+        x: pos.x + yards * o.cos(),
+        y: pos.y + yards * o.sin(),
+        z: pos.z,
+    };
+    let counter = m.next_creature_counter;
+    m.next_creature_counter += 1;
+    let mut c = Creature::new(
+        guid::unit(entry, counter | 0x80_0000),
+        &template,
+        level,
+        at,
+        o + std::f32::consts::PI,
+    );
+    c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
+    c.fields.set_u32(UNIT_FIELD_HEALTH, health);
+    c.fields.set_u32(UNIT_FIELD_RESISTANCES, 0);
+    let c = c.with_base();
+    m.add_creature(c)
+}
+
+fn ready(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
+    let data = m.realm.data.clone();
+    let p = m.players.get_mut(&g).unwrap();
+    crate::game::map::stats::set_level(p, &data, level);
+    for s in learn {
+        spells::learn(m, g, *s);
+    }
+    let p = m.players.get_mut(&g).unwrap();
+    for i in 0..5 {
+        p.fields.set_u32(UNIT_FIELD_MAXPOWER1 + i, 100_000);
+        p.fields.set_u32(UNIT_FIELD_POWER1 + i, 100_000);
+    }
+}
+
+fn health(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
+}
+
+fn xp(m: &Map, g: Guid) -> u32 {
+    m.players[&g].fields.get_u32(PLAYER_XP)
+}
+
+#[tokio::test]
+async fn the_dead_are_not_killed_again() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGMAGE1");
+    let mage = c.enter("Bugmagea", Race::Human, Class::Mage).await;
+    let mut d = Client::connect(&realm, "BUGROGUE1");
+    let rogue = d.enter("Bugroguea", Race::Undead, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 10, &[]);
+            // A blow on a corpse: no second reward.
+            let kobold = spawn(m, mage, 6, 10, 5.0, 100);
+            crate::game::map::combat::deal_damage(m, mage, kobold, 100);
+            let first = xp(m, mage);
+            crate::game::map::combat::deal_damage(m, mage, kobold, 100);
+            crate::game::map::combat::deal_damage_school(m, mage, kobold, 100, 4);
+            crate::game::map::combat::kill(m, mage, kobold);
+            let blows = xp(m, mage);
+            // A Frostbolt in flight when its target dies lands on nothing.
+            m.spells.travel = Some(true);
+            let other = spawn(m, mage, 6, 10, 20.0, 100);
+            spells::cast_triggered(m, mage, 116, Some(other));
+            let flying = m.spells.in_flight.len();
+            crate::game::map::combat::deal_damage(m, mage, other, 100);
+            let second = xp(m, mage);
+            m.now += Duration::from_secs(3);
+            spells::update(m);
+            let landed = xp(m, mage);
+            m.spells.travel = None;
+            // A player killed, then hit again: one honorable kill.
+            ready(m, rogue, 60, &[]);
+            ready(m, mage, 60, &[]);
+            let h = health(m, rogue);
+            crate::game::map::combat::deal_damage(m, mage, rogue, h);
+            crate::game::map::combat::deal_damage(m, mage, rogue, h);
+            crate::game::map::combat::kill(m, mage, rogue);
+            let kills = m
+                .realm
+                .social
+                .honor
+                .lock()
+                .victim_kills(guid::counter(mage), u64::from(guid::counter(rogue)));
+            (first, blows, flying, second, landed, kills)
+        })
+        .await
+        .unwrap();
+    let (first, blows, flying, second, landed, kills) = out;
+    assert!(first > 0, "the kill's experience");
+    assert_eq!(blows, first, "a corpse hit again is worth nothing");
+    assert_eq!(flying, 1, "the Frostbolt flies");
+    assert!(second > first, "the second kobold's experience");
+    assert_eq!(landed, second, "a missile on a corpse kills nothing");
+    assert_eq!(kills, 1, "one honorable kill of a corpse hit twice");
+}
+
+fn item(entry: u32, name: &str) -> crate::game::data::ItemTemplate {
+    crate::game::data::ItemTemplate {
+        entry,
+        name: name.into(),
+        allowable_class: -1,
+        allowable_race: -1,
+        stackable: 1,
+        buy_count: 1,
+        ..Default::default()
+    }
+}
+
+async fn relog(c: &mut Client) {
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+    let g = c.guid;
+    c.login(g).await;
+}
+
+/// The items and gold a 1.12 loot window shows.
+fn window(frame: &[u8]) -> (Guid, u32, Vec<u32>) {
+    let u32_at = |at: usize| u32::from_le_bytes(frame[at..at + 4].try_into().unwrap());
+    let items = (0..usize::from(frame[13]))
+        .map(|n| u32_at(14 + n * 22 + 1))
+        .collect();
+    (
+        Guid::new(u64::from_le_bytes(frame[0..8].try_into().unwrap())),
+        u32_at(9),
+        items,
+    )
+}
+
+#[tokio::test]
+async fn a_part_looted_container_keeps_what_is_left() {
+    const CLAM: u32 = 9000;
+    const MEAT: u32 = 9001;
+    const PEARL: u32 = 9002;
+    let mut d = crate::game::data::GameData::empty();
+    let mut clam = item(CLAM, "Small Barnacled Clam");
+    clam.flags = 0x4;
+    clam.min_money_loot = 1;
+    clam.max_money_loot = 1000;
+    d.items.insert(CLAM, clam);
+    d.items.insert(MEAT, item(MEAT, "Clam Meat"));
+    d.items.insert(PEARL, item(PEARL, "Small Lustrous Pearl"));
+    let entry = |item| crate::game::data::LootEntry {
+        item,
+        chance: 100.0,
+        min: 1,
+        max: 1,
+        ..Default::default()
+    };
+    d.loot.item.insert(CLAM, vec![entry(MEAT), entry(PEARL)]);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGCLAM");
+    let g = a.enter("Bugclam", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let at = map
+        .query(move |m| {
+            crate::game::map::inventory::add_item(m, g, CLAM, 1, false).unwrap();
+            let i = m.players[&g]
+                .items
+                .iter()
+                .find(|i| i.entry == CLAM)
+                .unwrap();
+            (i.bag, i.slot)
+        })
+        .await
+        .unwrap();
+    let open = async |a: &mut Client| {
+        a.clear();
+        a.send(CMSG_OPEN_ITEM {
+            bag_index: at.0,
+            slot: at.1,
+        })
+        .await;
+        window(&a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await)
+    };
+    let (clam, gold, first) = open(&mut a).await;
+    assert_eq!(first, vec![MEAT, PEARL]);
+    // The meat taken, the window closed: the pearl and the gold are left.
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    let (_, gold_again, again) = open(&mut a).await;
+    assert_eq!((gold_again, again), (gold, vec![PEARL]), "reopened");
+    // And after a logout too.
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    relog(&mut a).await;
+    let (_, gold_later, later) = open(&mut a).await;
+    assert_eq!((gold_later, later), (gold, vec![PEARL]), "after a logout");
+    // Emptied, it is used up.
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_MONEY {}).await;
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    a.wait_for("SMSG_LOOT_RELEASE_RESPONSE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(_)).then_some(())
+    })
+    .await;
+    let left = map
+        .query(move |m| {
+            let p = &m.players[&g];
+            (p.count_of(CLAM), p.count_of(MEAT), p.count_of(PEARL))
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, (0, 1, 1));
+}
+
+#[tokio::test]
+async fn a_druid_regenerates_mana_in_bear_and_cat_forms() {
+    let realm = harness::realm();
+    let mut c = Client::connect(&realm, "BUGDRUID");
+    let g = c.enter("Bugdruid", Race::NightElf, Class::Druid).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let out = map
+        .query(move |m| {
+            let mut gained = Vec::new();
+            // Rage in bear form, energy in cat form.
+            for power in [1u8, 3] {
+                let p = m.players.get_mut(&g).unwrap();
+                p.fields.set_byte(UNIT_FIELD_BYTES_0, 3, power);
+                p.fields.set_u32(UNIT_FIELD_MAXPOWER1, 1000);
+                p.fields.set_u32(UNIT_FIELD_POWER1, 100);
+                p.fields.set_u32(UNIT_FIELD_POWER1 + 3, 0);
+                p.mana_spent_at = None;
+                p.regen_at = m.now;
+                crate::game::map::stats::regen(m);
+                let p = &m.players[&g];
+                gained.push((
+                    p.fields.get_u32(UNIT_FIELD_POWER1),
+                    p.fields.get_u32(UNIT_FIELD_POWER1 + 3),
+                ));
+            }
+            gained
+        })
+        .await
+        .unwrap();
+    assert!(out[0].0 > 100, "mana in bear form: {out:?}");
+    assert!(out[1].0 > 100, "mana in cat form: {out:?}");
+    assert!(out[1].1 > 0, "and energy in cat form: {out:?}");
+}
+
+#[tokio::test]
+async fn only_an_item_the_player_has_that_starts_the_quest_starts_it() {
+    use crate::game::data::npc::Quest;
+    const LETTER: u32 = 9100;
+    const RELIC: u32 = 9101;
+    const OTHER: u32 = 9102;
+    const FROM_LETTER: u32 = 800;
+    const FROM_RELIC: u32 = 801;
+    let mut d = crate::game::data::GameData::empty();
+    let quest = |id| Quest {
+        id,
+        level: 1,
+        min_level: 1,
+        title: "From an item".into(),
+        ..Default::default()
+    };
+    d.npc.quests.insert(FROM_LETTER, quest(FROM_LETTER));
+    // The relic is asked for: it stays.
+    let mut relic_quest = quest(FROM_RELIC);
+    relic_quest.required_items[0] = (RELIC, 1);
+    d.npc.quests.insert(FROM_RELIC, relic_quest);
+    let mut letter = item(LETTER, "A Letter");
+    letter.start_quest = FROM_LETTER;
+    d.items.insert(LETTER, letter);
+    let mut relic = item(RELIC, "A Relic");
+    relic.start_quest = FROM_RELIC;
+    d.items.insert(RELIC, relic);
+    d.items.insert(OTHER, item(OTHER, "Not a Letter"));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGQUEST");
+    let g = a.enter("Bugquest", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let held = map
+        .query(move |m| {
+            for e in [LETTER, RELIC, OTHER] {
+                crate::game::map::inventory::add_item(m, g, e, 1, false).unwrap();
+            }
+            let p = &m.players[&g];
+            [LETTER, RELIC, OTHER].map(|e| p.items.iter().find(|i| i.entry == e).unwrap().guid)
+        })
+        .await
+        .unwrap();
+    let [letter, relic, other] = held;
+    let has = async |q| {
+        map.query(move |m| m.players[&g].journal.has(q))
+            .await
+            .unwrap()
+    };
+    // An item GUID no one has, and an item that starts something else.
+    for giver in [guid::item(0xFFF0), other] {
+        a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+            guid: giver,
+            quest_id: FROM_LETTER,
+        })
+        .await;
+    }
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: letter,
+        quest_id: FROM_RELIC,
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!has(FROM_LETTER).await, "no item of the player's starts it");
+    assert!(!has(FROM_RELIC).await, "the letter starts its own quest");
+    // The letter starts its quest and goes; the relic is kept.
+    for (giver, q) in [(letter, FROM_LETTER), (relic, FROM_RELIC)] {
+        a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+            guid: giver,
+            quest_id: q,
+        })
+        .await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(has(FROM_LETTER).await && has(FROM_RELIC).await);
+    let left = map
+        .query(move |m| {
+            let p = &m.players[&g];
+            (p.count_of(LETTER), p.count_of(RELIC))
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, (0, 1), "the letter is taken, the relic kept");
+}
+
+#[tokio::test]
+async fn the_ritual_of_dooms_cooldown_waits_for_its_portal() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGLOCK");
+    let g = c.enter("Buglock", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            const DOOM: u32 = 18540;
+            ready(m, g, 60, &[DOOM]);
+            crate::game::map::inventory::add_item(m, g, 16583, 3, false).unwrap();
+            let portal = |m: &Map| {
+                m.objects
+                    .summoned
+                    .iter()
+                    .find(|s| s.owner == Some(g) && s.spell == DOOM)
+                    .map(|s| s.guid)
+            };
+            let waiting = |m: &Map| {
+                m.caster(g)
+                    .is_some_and(|c| c.pending_cooldowns.contains(&DOOM))
+            };
+            let cooling = |m: &Map| {
+                m.caster(g)
+                    .is_some_and(|c| c.cooldowns.get(&DOOM).is_some_and(|t| *t > m.now))
+            };
+            // Cast, then the channel stopped short: the portal goes, and
+            // there is no cooldown.
+            let first = spells::cast_now(m, g, DOOM, Default::default());
+            let raised = (portal(m).is_some(), waiting(m));
+            spells::cancel(m, g);
+            let stopped = (portal(m).is_some(), waiting(m), cooling(m));
+            // Cast again; the ritual done, its portal goes and the hour
+            // starts.
+            m.now += Duration::from_secs(2);
+            ready(m, g, 60, &[]);
+            let second = spells::cast_now(m, g, DOOM, Default::default());
+            let o = portal(m);
+            if let Some(o) = o {
+                m.objects.rituals.get_mut(&o).unwrap().completed = true;
+                crate::game::map::objects::despawn(m, o);
+            }
+            let done = (waiting(m), cooling(m));
+            (first, raised, stopped, second, o.is_some(), done)
+        })
+        .await
+        .unwrap();
+    let (first, raised, stopped, second, again, done) = out;
+    assert!(first, "the ritual is cast");
+    assert_eq!(raised, (true, true), "its portal up, its cooldown waiting");
+    assert_eq!(stopped, (false, false, false), "stopped short, no cooldown");
+    assert!(second && again, "so it can be cast again");
+    assert_eq!(done, (false, true), "done, the hour starts");
+}
+
+#[tokio::test]
+async fn a_pet_autocasts_its_positive_spells() {
+    if !have_data() {
+        return;
+    }
+    const FIRE_SHIELD: u32 = 2947;
+    const PARANOIA: u32 = 19480;
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGIMP");
+    let g = c.enter("Bugimp", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            spells::cast_triggered(m, g, 688, None);
+            let imp = crate::game::map::pets::pet_of(m, g).expect("the imp");
+            let think = |m: &mut Map| {
+                for _ in 0..3 {
+                    m.now += Duration::from_secs(2);
+                    if let Some(c) = m.caster_mut(imp) {
+                        c.casting = None;
+                        c.gcd_until = None;
+                    }
+                    if let Some(f) = m.unit_fields_mut(imp) {
+                        f.set_u32(UNIT_FIELD_POWER1, 10_000);
+                    }
+                    crate::game::map::pets::update(m);
+                }
+            };
+            let has = |m: &Map, who: Guid, spell: u32| {
+                crate::game::map::auras::auras(m, who).is_some_and(|a| a.has_spell(spell))
+            };
+            // Out of a fight: its own buff, and no shield for one not
+            // under attack.
+            crate::game::map::pets::state_mut(m, imp).unwrap().autocast =
+                vec![FIRE_SHIELD, PARANOIA];
+            think(m);
+            let calm = (has(m, imp, PARANOIA), has(m, g, FIRE_SHIELD));
+            // Its master attacked: a shield on them.
+            let kobold = spawn(m, g, 6, 60, 4.0, 100_000);
+            crate::game::map::combat::start_attack(m, kobold, g);
+            crate::game::map::combat::engage(m, kobold, g);
+            think(m);
+            let attacked = has(m, g, FIRE_SHIELD);
+            (calm, attacked)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (true, false), "Paranoia out of a fight, no shield");
+    assert!(out.1, "Fire Shield on its master under attack");
+}
+
+const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+
+#[tokio::test]
+async fn an_objects_gossip_options_show_and_are_chosen() {
+    use crate::game::data::npc::{GossipMenu, GossipOption};
+    const STATUE: u32 = 9200;
+    const MENU: u32 = 7000;
+    const DEEPER: u32 = 7001;
+    let mut d = crate::game::data::GameData::empty();
+    let mut statue = crate::game::data::GameObjectTemplate {
+        entry: STATUE,
+        kind: 2,
+        display_id: 1,
+        name: "Old Statue".into(),
+        size: 1.0,
+        ..Default::default()
+    };
+    statue.data[3] = MENU;
+    d.gameobject_templates.insert(STATUE, statue);
+    d.gameobject_spawns.insert(
+        0,
+        vec![crate::game::data::GameObjectSpawn {
+            guid: 600,
+            entry: STATUE,
+            map: 0,
+            x: START.0 + 1.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    // A gossip option flagged for a gossip NPC, as the real menus' are.
+    d.npc.gossip_menus.insert(
+        MENU,
+        GossipMenu {
+            texts: vec![(100, 0)],
+            options: vec![GossipOption {
+                id: 0,
+                text: "Read the inscription.".into(),
+                kind: 1,
+                npc_flag: 1,
+                action_menu: DEEPER as i32,
+                ..Default::default()
+            }],
+        },
+    );
+    d.npc.gossip_menus.insert(
+        DEEPER,
+        GossipMenu {
+            texts: vec![(101, 0)],
+            options: Vec::new(),
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGGOSSIP");
+    a.enter("Buggossip", Race::Human, Class::Warrior).await;
+    let statue = guid::game_object(STATUE, 600);
+    a.sees(statue).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: statue }).await;
+    let shown = a
+        .wait_for("SMSG_GOSSIP_MESSAGE", |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => {
+                Some(g.gossips.iter().map(|o| o.id).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(shown, vec![0], "the object's gossip option");
+    a.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: statue,
+        gossip_list_id: 0,
+        unknown: None,
+    })
+    .await;
+    let next = a
+        .wait_for("the menu it leads to", |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => Some(g.title_text_id),
+            _ => None,
+        })
+        .await;
+    assert_eq!(next, 101);
+}
+
+#[tokio::test]
+async fn disarm_trap_spends_the_trap_and_opens_no_loot() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGROGUE2");
+    let g = c.enter("Bugrogueb", Race::Human, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[1842]);
+            // Thieves' Tools.
+            crate::game::map::inventory::add_item(m, g, 5060, 1, false).unwrap();
+            let p = &m.players[&g];
+            let (at, o) = (p.position(), p.movement.orientation);
+            let spot = Vector3d {
+                x: at.x + 2.0 * o.cos(),
+                y: at.y + 2.0 * o.sin(),
+                z: at.z,
+            };
+            // A Freezing Trap nobody set.
+            let trap = crate::game::map::objects::summon(m, None, 2561, spot, o, 0, 0, 0, None)
+                .expect("the trap");
+            let cast = spells::cast_now(
+                m,
+                g,
+                1842,
+                spells::Targets {
+                    object: Some(trap),
+                    ..Default::default()
+                },
+            );
+            (cast, m.gameobject(trap).is_some(), m.players[&g].looting)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, false, None),
+        "cast, the trap gone, no loot window"
+    );
+}
+
+#[tokio::test]
+async fn a_locked_objects_loot_is_for_those_who_opened_it() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "BUGHERB1");
+    let herbalist = a.enter("Bugherba", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGHERB2");
+    let other = b.enter("Bugherbb", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            let at = m.players[&herbalist].position();
+            for g in [herbalist, other] {
+                m.players.get_mut(&g).unwrap().movement.position = at;
+            }
+            let spot = Vector3d {
+                x: at.x + 1.0,
+                ..at
+            };
+            // Peacebloom, locked to herbalism.
+            let node = crate::game::map::objects::summon(m, None, 1618, spot, 0.0, 0, 0, 0, None)
+                .expect("the herb");
+            let locked = crate::game::map::professions::object_lock(&m.realm.data, 1618) != 0;
+            // Gathered by one; the other asks for its loot window.
+            crate::game::map::loot::open_object(m, herbalist, node);
+            let gathered = m.players[&herbalist].looting;
+            crate::game::map::loot::open(m, other, node);
+            (locked, gathered == Some(node), m.players[&other].looting)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, None), "only the herbalist looks in it");
+}
+
+/// Fill `g`'s bags with Worn Shortbows.
+fn fill_bags(m: &mut Map, g: Guid) {
+    while crate::game::map::inventory::add_item(m, g, 2504, 1, false).is_ok() {}
+}
+
+#[tokio::test]
+async fn crafting_into_full_bags_fails_before_it_costs_anything() {
+    if !have_data() {
+        return;
+    }
+    const CLOTH: u32 = 2589;
+    const BANDAGE: u32 = 1251;
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGCRAFT");
+    let g = c.enter("Bugcraft", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[3273, 3275]);
+            crate::game::map::inventory::add_item(m, g, CLOTH, 2, false).unwrap();
+            let skill = |m: &Map| crate::game::map::skills::value(&m.players[&g], 129);
+            let before = skill(m);
+            // Bags full as it begins: refused.
+            let m2 = |m: &mut Map| {
+                let p = &m.players[&g];
+                (p.count_of(CLOTH), p.count_of(BANDAGE))
+            };
+            fill_bags(m, g);
+            let begun = spells::cast(m, g, 3275, Default::default(), None);
+            let refused = m2(m);
+            // Bags filled while it is cast: it fails as it ends.
+            let bows: Vec<usize> = m.players[&g]
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| i.entry == 2504)
+                .map(|(i, _)| i)
+                .take(1)
+                .collect();
+            for i in bows {
+                let n = m.players[&g].items[i].count();
+                crate::game::map::inventory::take_item(m, g, i, n);
+            }
+            let again = spells::cast(m, g, 3275, Default::default(), None);
+            fill_bags(m, g);
+            m.now += Duration::from_secs(10);
+            spells::update(m);
+            (begun, refused, again, m2(m), skill(m) == before)
+        })
+        .await
+        .unwrap();
+    let (begun, refused, again, ended, same_skill) = out;
+    assert!(!begun, "no room, no cast");
+    assert_eq!(refused, (2, 0), "the cloth kept");
+    assert!(again, "with room it begins");
+    assert_eq!(ended, (2, 0), "and filled meanwhile, keeps its cloth");
+    assert!(same_skill, "and no skill for it");
+    c.wait_for("the full inventory", |m| match m {
+        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(f) => matches!(
+            f.result,
+            SMSG_INVENTORY_CHANGE_FAILURE_InventoryResult::InventoryFull { .. }
+        )
+        .then_some(()),
+        _ => None,
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_cast_with_nothing_left_to_pay_with_fails() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGHUNT");
+    let hunter = c.enter("Bughunt", Race::NightElf, Class::Hunter).await;
+    let mut d = Client::connect(&realm, "BUGMAGE2");
+    let mage = d.enter("Bugmageb", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let map0 = realm.maps.get(&realm, MapKey::world(0));
+    let shot = map
+        .query(move |m| {
+            ready(m, hunter, 60, &[3044]);
+            // A bow, and not an arrow.
+            let projectiles: Vec<usize> = m.players[&hunter]
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| m.realm.data.item(i.entry).is_some_and(|t| t.class == 6))
+                .map(|(i, _)| i)
+                .rev()
+                .collect();
+            for i in projectiles {
+                let n = m.players[&hunter].items[i].count();
+                crate::game::map::inventory::take_item(m, hunter, i, n);
+            }
+            let ranged = m.players[&hunter]
+                .items
+                .iter()
+                .any(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == 17);
+            let boar = spawn(m, hunter, 6, 60, 15.0, 100_000);
+            let mana = |m: &Map| m.players[&hunter].fields.get_u32(UNIT_FIELD_POWER1);
+            let before = (mana(m), health(m, boar));
+            spells::cast(
+                m,
+                hunter,
+                3044,
+                spells::Targets {
+                    unit: Some(boar),
+                    ..Default::default()
+                },
+                None,
+            );
+            m.now += Duration::from_secs(1);
+            spells::update(m);
+            (ranged, before, (mana(m), health(m, boar)))
+        })
+        .await
+        .unwrap();
+    let drained = map0
+        .query(move |m| {
+            ready(m, mage, 60, &[116]);
+            let kobold = spawn(m, mage, 6, 60, 20.0, 100_000);
+            let began = spells::cast(
+                m,
+                mage,
+                116,
+                spells::Targets {
+                    unit: Some(kobold),
+                    ..Default::default()
+                },
+                None,
+            );
+            // Drained while casting.
+            if let Some(f) = m.unit_fields_mut(mage) {
+                f.set_u32(UNIT_FIELD_POWER1, 0);
+            }
+            m.now += Duration::from_secs(4);
+            spells::update(m);
+            let cooling = m
+                .caster(mage)
+                .is_some_and(|c| c.gcd_until.is_some() && c.cooldowns.contains_key(&116));
+            (began, health(m, kobold), cooling)
+        })
+        .await
+        .unwrap();
+    let (ranged, before, after) = shot;
+    assert!(ranged, "a bow in the ranged slot");
+    assert_eq!(after, before, "no arrows: no shot, no mana spent");
+    assert_eq!(drained, (true, 100_000, false), "drained: no Frostbolt");
+}
+
+#[tokio::test]
+async fn a_ghost_explores_nothing() {
+    const AREA: u32 = 12;
+    let mut d = crate::game::data::GameData::empty();
+    d.areas.insert(
+        AREA,
+        crate::game::data::AreaInfo {
+            id: AREA,
+            map: 0,
+            explore_bit: 33,
+            level: 1,
+            name: "Elwynn Forest".into(),
+            ..Default::default()
+        },
+    );
+    d.misc.exploration_xp.insert(1, 5);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGGHOST");
+    let g = a.enter("Bugghost", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let explored =
+        move |m: &Map| m.players[&g].fields.get_u32(PLAYER_EXPLORED_ZONES_1 + 1) & 0x2 != 0;
+    let out = map
+        .query(move |m| {
+            let now = m.now;
+            m.players.get_mut(&g).unwrap().death =
+                crate::game::map::death::Death::Ghost { since: now };
+            crate::game::map::exploration::entered(m, g, AREA);
+            let as_ghost = (explored(m), xp(m, g));
+            m.players.get_mut(&g).unwrap().death = crate::game::map::death::Death::Alive;
+            crate::game::map::exploration::entered(m, g, AREA);
+            (as_ghost, (explored(m), xp(m, g)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (false, 0), "a ghost explores nothing");
+    assert_eq!(out.1, (true, 5), "alive again, it is explored");
+}
+
+#[tokio::test]
+async fn forced_reactions_are_sent_as_they_change() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const FORCE: u32 = 21500;
+    const FACTION: i32 = 76;
+    let mut d = crate::game::data::GameData::empty();
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_FORCE_REACTION,
+        base_points: 3,
+        base_dice: 1,
+        misc_value: FACTION,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        FORCE,
+        SpellTemplate {
+            id: FORCE,
+            name: "Forced".into(),
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGFORCE");
+    let g = a.enter("Bugforce", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    // The login's, with nothing forced.
+    let reactions = |b: &[u8]| u32::from_le_bytes(b[0..4].try_into().unwrap());
+    let login = a
+        .wait_frame("the login's forced reactions", 0x2A5, |_| true)
+        .await;
+    assert_eq!(reactions(&login), 0);
+    map.query(move |m| {
+        let s = m.realm.data.spells.get(FORCE).unwrap().clone();
+        let _ = crate::game::map::auras::apply_spell(
+            m,
+            g,
+            g,
+            &s,
+            &[(0, 4)],
+            crate::game::map::auras::Context::default(),
+        );
+    })
+    .await
+    .unwrap();
+    let on = a.wait_frame("the forced reaction", 0x2A5, |_| true).await;
+    assert_eq!(
+        (
+            reactions(&on),
+            u32::from_le_bytes(on[4..8].try_into().unwrap())
+        ),
+        (1, FACTION as u32)
+    );
+    map.query(move |m| crate::game::map::auras::remove_spell(m, g, FORCE, None))
+        .await
+        .unwrap();
+    let off = a.wait_frame("it gone", 0x2A5, |_| true).await;
+    assert_eq!(reactions(&off), 0);
+}
+
+#[tokio::test]
+async fn a_fight_stops_a_cast_not_for_one() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const MOUNT: u32 = 21600;
+    const BOLT: u32 = 21601;
+    let mut d = crate::game::data::GameData::empty();
+    d.spells.cast_times.insert(14, 3000);
+    for (id, attr) in [(MOUNT, 0x1000_0000u32), (BOLT, 0)] {
+        let mut effects = [SpellEffect::default(); 3];
+        effects[0] = SpellEffect {
+            effect: 3,
+            target_a: 1,
+            ..Default::default()
+        };
+        d.spells.spells.insert(
+            id,
+            SpellTemplate {
+                id,
+                name: format!("Spell {id}"),
+                casting_time_index: 14,
+                attributes: [attr, 0, 0, 0, 0],
+                effects,
+                equipped_item_class: -1,
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGMOUNT");
+    let g = a.enter("Bugmount", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGFOE");
+    let foe = b.enter("Bugfoe", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            let casting = |m: &Map| {
+                m.caster(g)
+                    .and_then(|c| c.casting.as_ref())
+                    .map(|c| c.spell)
+            };
+            let mut seen = Vec::new();
+            for spell in [MOUNT, BOLT] {
+                for p in [g, foe] {
+                    crate::game::map::combat::leave_combat(m, p);
+                }
+                spells::learn(m, g, spell);
+                spells::cast(m, g, spell, Default::default(), None);
+                let began = casting(m);
+                crate::game::map::combat::engage(m, foe, g);
+                seen.push((began, casting(m)));
+                spells::cancel(m, g);
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out[0],
+        (Some(MOUNT), None),
+        "the fight stops the mount's cast"
+    );
+    assert_eq!(out[1], (Some(BOLT), Some(BOLT)), "not another");
+}
+
+#[tokio::test]
+async fn healing_threat_is_split_and_by_the_healers_threat() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGPRIEST");
+    let priest = c.enter("Bugpriest", Race::Human, Class::Priest).await;
+    let mut d = Client::connect(&realm, "BUGTANK");
+    let tank = d.enter("Bugtank", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            ready(m, tank, 60, &[]);
+            let kobolds = [
+                spawn(m, tank, 6, 60, 3.0, 100_000),
+                spawn(m, tank, 6, 60, 4.0, 100_000),
+            ];
+            for k in kobolds {
+                crate::game::map::ai::add_threat(m, k, tank, 1.0);
+            }
+            // Blessing of Salvation: three tenths less threat.
+            let s = m.realm.data.spells.get(1038).unwrap().clone();
+            let effects: Vec<(usize, i32)> = (0..3)
+                .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+                .map(|i| (i, spells::points(&s, i, 60)))
+                .collect();
+            let _ = crate::game::map::auras::apply_spell(
+                m,
+                priest,
+                priest,
+                &s,
+                &effects,
+                crate::game::map::auras::Context::default(),
+            );
+            let max = m.unit_fields(tank).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
+            m.unit_fields_mut(tank)
+                .unwrap()
+                .set_u32(UNIT_FIELD_HEALTH, max - 200);
+            spells::heal(m, priest, tank, 2050, 200, false);
+            kobolds.map(|k| {
+                m.creature(k)
+                    .and_then(|c| c.threat.iter().find(|(t, _)| *t == priest).map(|(_, v)| *v))
+                    .unwrap_or(0.0)
+            })
+        })
+        .await
+        .unwrap();
+    // 200 healed: half of it, three tenths less, split in two.
+    for t in out {
+        assert!((t - 35.0).abs() < 0.01, "each kobold's threat: {out:?}");
+    }
+}
+
+#[tokio::test]
+async fn honor_stats_are_inspected_only_near() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "BUGINSPA");
+    a.enter("Buginspa", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGINSPB");
+    let other = b.enter("Buginspb", Race::Human, Class::Warrior).await;
+    let ask = async |a: &mut Client| {
+        a.clear();
+        a.send(MSG_INSPECT_HONOR_STATS_Client { guid: other }).await;
+        let parsed = a
+            .gets(Duration::from_millis(300), |m| {
+                matches!(m, ServerOpcodeMessage::MSG_INSPECT_HONOR_STATS(_)).then_some(())
+            })
+            .await
+            .is_some();
+        parsed
+            || a.raw
+                .iter()
+                .any(|f| u16::from_le_bytes([f[2], f[3]]) == 0x2D6)
+    };
+    assert!(ask(&mut a).await, "beside them");
+    b.heartbeat(START.0 + 60.0, START.1, START.2).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!ask(&mut a).await, "sixty yards off");
+}
+
+#[tokio::test]
+async fn a_cancelled_logout_keeps_a_stun() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const STUN: u32 = 21700;
+    let mut d = crate::game::data::GameData::empty();
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_MOD_STUN,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        STUN,
+        SpellTemplate {
+            id: STUN,
+            name: "Stun".into(),
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGLOGOUT");
+    let g = a.enter("Buglogout", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let stunned = map
+        .query(move |m| {
+            // Logging out, rooted for it; then stunned.
+            let now = m.now;
+            let p = m.players.get_mut(&g).unwrap();
+            p.logout_at = Some(now + Duration::from_secs(20));
+            p.misc.logout_rooted = true;
+            let s = m.realm.data.spells.get(STUN).unwrap().clone();
+            let _ = crate::game::map::auras::apply_spell(
+                m,
+                g,
+                g,
+                &s,
+                &[(0, 0)],
+                crate::game::map::auras::Context::default(),
+            );
+            crate::game::map::login::cancel_logout(m, g);
+            m.players[&g].fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_STUNNED,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(stunned, "the stun's flag stays");
+}
+
+#[tokio::test]
+async fn the_ready_check_reaches_its_asker() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "BUGREADYA");
+    a.enter("Bugreadya", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGREADYB");
+    b.enter("Bugreadyb", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GROUP_INVITE {
+        name: "Bugreadyb".into(),
+    })
+    .await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_LIST(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_RAID_READY_CHECK_Client { answer: None }).await;
+    for c in [&mut b, &mut a] {
+        c.wait_for("the ready check", |m| match m {
+            ServerOpcodeMessage::MSG_RAID_READY_CHECK(r) => r.state_check.is_none().then_some(()),
+            _ => None,
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn a_charter_is_bought_only_from_a_guild_master_near() {
+    use crate::game::data::{CreatureSpawn, CreatureTemplate};
+    const CHARTER: u32 = 5863;
+    let mut d = crate::game::data::GameData::empty();
+    d.items.insert(CHARTER, item(CHARTER, "Guild Charter"));
+    for (entry, flags, guid, dx) in [
+        (3100, 0x200, 50, 2.0),
+        (3101, 0x1, 51, -2.0),
+        (3102, 0x200, 52, 60.0),
+    ] {
+        d.creature_templates.insert(
+            entry,
+            CreatureTemplate {
+                entry,
+                name: format!("Npc {entry}"),
+                display_ids: [903, 0, 0, 0],
+                display_probabilities: [1, 0, 0, 0],
+                level_min: 30,
+                level_max: 30,
+                faction: 12,
+                npc_flags: flags,
+                unit_class: 1,
+                health_multiplier: 1.0,
+                health_max: 500,
+                ..Default::default()
+            },
+        );
+        d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+            guid,
+            entries: vec![entry],
+            map: 0,
+            x: START.0 + dx,
+            y: START.1,
+            z: START.2,
+            respawn_min: 60,
+            respawn_max: 60,
+            ..Default::default()
+        });
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGCHARTER");
+    let g = a.enter("Bugcharter", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    map.query(move |m| m.players.get_mut(&g).unwrap().set_money(10_000))
+        .await
+        .unwrap();
+    let (master, plain, far) = (
+        guid::unit(3100, 50),
+        guid::unit(3101, 51),
+        guid::unit(3102, 52),
+    );
+    for n in [master, plain, far] {
+        a.sees(n).await;
+    }
+    let bought = async |a: &mut Client, npc: Guid| {
+        a.send(CMSG_PETITION_BUY {
+            npc,
+            name: "Bugs".into(),
+            index: 1,
+            ..Default::default()
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        map.query(move |m| m.players[&g].count_of(CHARTER))
+            .await
+            .unwrap()
+    };
+    for npc in [Guid::zero(), plain, far] {
+        assert_eq!(bought(&mut a, npc).await, 0, "not from {npc}");
+    }
+    assert_eq!(
+        bought(&mut a, master).await,
+        1,
+        "from the guild master beside them"
+    );
+}
+
+#[tokio::test]
+async fn only_what_the_client_lets_go_is_unlearned() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "BUGUNLEARN");
+    let g = a.enter("Bugunlearn", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        for skill in [43, 95, 129, 182] {
+            crate::game::map::skills::learn_skill(p, skill, 1);
+        }
+    })
+    .await
+    .unwrap();
+    for skill in [
+        Skill::Swords,
+        Skill::Defense,
+        Skill::FirstAid,
+        Skill::Herbalism,
+    ] {
+        a.send(CMSG_UNLEARN_SKILL { skill }).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let kept = map
+        .query(move |m| {
+            [43, 95, 129, 182].map(|s| crate::game::map::skills::value(&m.players[&g], s).is_some())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        kept,
+        [true, true, true, false],
+        "swords, defense and first aid kept; herbalism unlearned"
+    );
+}
+
+#[tokio::test]
+async fn a_teleport_stops_a_cast() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const BOLT: u32 = 21800;
+    let mut d = crate::game::data::GameData::empty();
+    d.spells.cast_times.insert(14, 3000);
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 3,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        BOLT,
+        SpellTemplate {
+            id: BOLT,
+            name: "Bolt".into(),
+            casting_time_index: 14,
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGPORT");
+    let g = a.enter("Bugport", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            spells::learn(m, g, BOLT);
+            spells::cast(m, g, BOLT, Default::default(), None);
+            let began = m.caster(g).is_some_and(|c| c.casting.is_some());
+            let to = Vector3d {
+                x: START.0 + 30.0,
+                y: START.1,
+                z: START.2,
+            };
+            let key = m.key;
+            m.teleport(g, key, to, 0.0);
+            (began, m.caster(g).is_some_and(|c| c.casting.is_some()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, false), "teleported, the cast stops");
+}
+
+#[tokio::test]
+async fn a_party_quest_starts_once_and_no_share_is_answered_unasked() {
+    use crate::game::data::npc::Quest;
+    use crate::game::data::scripts::ScriptStep;
+    use crate::game::data::{CreatureSpawn, CreatureTemplate};
+    const GIVER: u32 = 3200;
+    const IMP: u32 = 3201;
+    const ESCORT: u32 = 900;
+    const SCRIPT: u32 = 9000;
+    let mut d = crate::game::data::GameData::empty();
+    for (entry, flags) in [(GIVER, 0x2), (IMP, 0)] {
+        d.creature_templates.insert(
+            entry,
+            CreatureTemplate {
+                entry,
+                name: format!("Npc {entry}"),
+                display_ids: [903, 0, 0, 0],
+                display_probabilities: [1, 0, 0, 0],
+                level_min: 10,
+                level_max: 10,
+                faction: 12,
+                npc_flags: flags,
+                unit_class: 1,
+                health_multiplier: 1.0,
+                health_max: 500,
+                ..Default::default()
+            },
+        );
+    }
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 60,
+        entries: vec![GIVER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1,
+        z: START.2,
+        respawn_min: 60,
+        respawn_max: 60,
+        ..Default::default()
+    });
+    d.npc.quests.insert(
+        ESCORT,
+        Quest {
+            id: ESCORT,
+            level: 1,
+            min_level: 1,
+            title: "Escort".into(),
+            flags: crate::game::map::questshare::QUEST_FLAGS_PARTY_ACCEPT,
+            ..Default::default()
+        },
+    );
+    d.npc.creature_starts.insert(GIVER, vec![ESCORT]);
+    d.scripts.quest_start_script.insert(ESCORT, SCRIPT);
+    d.scripts.quest_start.insert(
+        SCRIPT,
+        vec![ScriptStep {
+            id: SCRIPT,
+            command: 10,
+            datalong: [IMP, 60_000, 0, 0],
+            x: START.0 + 4.0,
+            y: START.1,
+            z: START.2,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGSHAREA");
+    let ga = a.enter("Bugsharea", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGSHAREB");
+    let gb = b.enter("Bugshareb", Race::Human, Class::Warrior).await;
+    // Unasked, a member's word that they took it reaches no one.
+    b.send(MSG_QUEST_PUSH_RESULT {
+        guid: ga,
+        message: QuestPartyMessage::AcceptQuest,
+    })
+    .await;
+    let faked = a
+        .gets(Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(r) if r.guid == gb => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(faked.is_none(), "an unasked answer");
+    a.send(CMSG_GROUP_INVITE {
+        name: "Bugshareb".into(),
+    })
+    .await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_LIST(_)).then_some(())
+    })
+    .await;
+    let giver = guid::unit(GIVER, 60);
+    a.sees(giver).await;
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: giver,
+        quest_id: ESCORT,
+    })
+    .await;
+    b.wait_for("SMSG_QUEST_CONFIRM_ACCEPT", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_QUEST_CONFIRM_ACCEPT(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_QUEST_CONFIRM_ACCEPT { quest_id: ESCORT }).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (imps, both) = map
+        .query(move |m| {
+            (
+                m.creatures.iter().filter(|(_, c)| c.entry == IMP).count(),
+                m.players[&ga].journal.has(ESCORT) && m.players[&gb].journal.has(ESCORT),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(both, "both on the escort");
+    assert_eq!(imps, 1, "its start script ran once");
+}
+
+#[tokio::test]
+async fn a_freed_creature_turns_on_its_master_in_earnest() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGCHARM");
+    let g = c.enter("Bugcharm", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let kobold = spawn(m, g, 6, 60, 4.0, 5_000);
+            crate::game::map::pets::charmed(m, g, kobold, false);
+            let held = m.creature(kobold).is_some_and(|c| c.pet.is_some());
+            // No aura holds it: it goes free at its next step.
+            crate::game::map::pets::update(m);
+            let c = m.creature(kobold).unwrap();
+            let threat = c.threat.iter().find(|(t, _)| *t == g).map(|(_, v)| *v);
+            (held, c.pet.is_none(), c.combat.victim == g, threat)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, true, true, Some(5_000.0)),
+        "free, on its master, with its health's threat"
+    );
+}

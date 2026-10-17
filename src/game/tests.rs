@@ -3018,6 +3018,22 @@ mod commerce {
             respawn_max: 1,
             ..Default::default()
         });
+        let mut guild_master = d.creature_templates[&3000].clone();
+        guild_master.entry = 3003;
+        guild_master.name = "Guild Master".into();
+        guild_master.npc_flags = crate::game::map::npc::NPC_FLAG_PETITIONER;
+        d.creature_templates.insert(3003, guild_master);
+        d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+            guid: 41,
+            entries: vec![3003],
+            map: 0,
+            x: START.0 - 2.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 1,
+            respawn_max: 1,
+            ..Default::default()
+        });
         d.spells.spells.insert(
             7266,
             SpellTemplate {
@@ -3189,8 +3205,9 @@ mod commerce {
         let (mut a, mut b) = two_warriors(realm.clone()).await;
         let (ga, gb) = (a.guid, b.guid);
         set_money(&realm, ga, 5000).await;
+        a.sees(guid::unit(3003, 41)).await;
         a.send(CMSG_PETITION_BUY {
-            npc: Guid::zero(),
+            npc: guid::unit(3003, 41),
             name: "Grunts".into(),
             index: 1,
             ..Default::default()

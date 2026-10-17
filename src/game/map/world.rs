@@ -433,11 +433,13 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
     }
     let new_area = p.area != area;
     p.area = area;
+    // Explored as it is walked in, not only as it is entered: a ghost's
+    // area once they live again.
+    crate::game::map::exploration::entered(map, guid, area);
+    if zone != 0 && zone != area {
+        crate::game::map::exploration::entered(map, guid, zone);
+    }
     if new_area {
-        crate::game::map::exploration::entered(map, guid, area);
-        if zone != 0 && zone != area {
-            crate::game::map::exploration::entered(map, guid, zone);
-        }
         crate::game::map::spell_areas::reconcile(map, guid);
     }
     let ffa = area_is_ffa(&data, area) || crate::game::map::arena::fighting(map, guid);

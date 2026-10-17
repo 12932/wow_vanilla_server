@@ -164,13 +164,15 @@ pub fn skill_value(p: &Player, skill: u32) -> u32 {
     (base as i32 + bonus).max(0) as u32
 }
 
-/// A game object's lock.
-fn object_lock(data: &GameData, entry: u32) -> u32 {
+/// A game object's lock, 0 for none.
+pub fn object_lock(data: &GameData, entry: u32) -> u32 {
     data.gameobject_templates
         .get(&entry)
         .map(|t| match t.kind {
             GO_DOOR | GO_BUTTON => t.data[1],
-            GO_CHEST | GO_GOOBER => t.data[0],
+            // A trap's lock is what Disarm Trap opens (mangos's
+            // `GameObjectInfo::GetLockId`).
+            GO_CHEST | GO_GOOBER | crate::game::map::objects::GO_TRAP => t.data[0],
             _ => 0,
         })
         .unwrap_or(0)
@@ -724,6 +726,9 @@ fn open_lock(
         }
         // A battleground's banner or beacon.
         _ if crate::game::map::battleground::opened(map, caster, object) => {}
+        // Disarm Trap: the trap is spent, with nothing to loot (mangos's
+        // `SendLoot` for a trap, Thistle Tea's `deplete_trap`).
+        crate::game::map::objects::GO_TRAP => crate::game::map::objects::disarm(map, object),
         _ => {
             loot::open_object(map, caster, object);
             crate::game::map::scripts::object_used(map, caster, object);

@@ -830,6 +830,12 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
     let alive = map.unit_view(unit).is_some_and(|u| u.alive);
     if turn && alive && crate::game::map::combat::can_attack(map, unit, master) {
         crate::game::map::ai::attacked(map, unit, master);
+        // Its health's worth of threat, as for being charmed (mangos's
+        // `Uncharm`, Thistle Tea's `turn_on_controller`).
+        let max = map
+            .unit_fields(unit)
+            .map_or(0, |f| f.get_u32(UNIT_FIELD_MAXHEALTH));
+        crate::game::map::ai::add_threat(map, unit, master, max as f32);
     }
 }
 

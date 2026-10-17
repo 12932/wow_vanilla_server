@@ -190,6 +190,7 @@ fn act(map: &mut Map, g: Guid, now: Instant) {
                 combat::stop_attack(map, g);
             }
             calm(map, g, now);
+            buff_self(map, g, now);
             let stay = state(map, g).and_then(|s| (s.command == COMMAND_STAY).then_some(s.stay_at));
             match stay {
                 Some(Some(at)) => go_to(map, g, at, now),
@@ -297,8 +298,8 @@ pub fn attack(map: &mut Map, g: Guid, target: Guid) {
     }
 }
 
-/// The spell a pet would cast at `victim` now, of its autocast ones: the
-/// first ready, affordable and in range.
+/// The spell a pet would cast at `victim` now, of its harmful autocast
+/// ones: the first ready, affordable and in range.
 fn pick_spell(map: &Map, g: Guid, victim: Guid) -> Option<(u32, f32)> {
     let s = state(map, g)?;
     let data = &map.realm.data;
@@ -333,6 +334,169 @@ fn pick_spell(map: &Map, g: Guid, victim: Guid) -> Option<(u32, f32)> {
         let (_, max) = data.spells.range(t);
         (d <= max + 2.0).then_some((id, max))
     })
+}
+
+/// `Attributes`: not in combat; it stops a swing; `AttributesEx`: no AI
+/// autocasts it (Thistle Tea's `:not_in_combat`,
+/// `:cancels_auto_attack_combat` and `:no_autocast_ai`).
+const ATTR_NOT_IN_COMBAT: u32 = 0x1000_0000;
+const ATTR_STOPS_ATTACK: u32 = 0x0010_0000;
+const ATTR_EX_NO_AUTOCAST_AI: u32 = 0x0002_0000;
+
+/// Out of a fight, a pet casts its autocast spells on itself that are
+/// worth it (Thistle Tea's `autocast_self_spell`): Paranoia, Blood Pact.
+fn buff_self(map: &mut Map, g: Guid, now: Instant) {
+    if map.caster(g).is_some_and(|c| c.casting.is_some()) {
+        return;
+    }
+    if !state(map, g).is_some_and(|s| s.next_think <= now) {
+        return;
+    }
+    if let Some(s) = state_mut(map, g) {
+        s.next_think = now + THINK_EVERY;
+    }
+    if let Some((spell, at)) = pick_positive(map, g, None) {
+        crate::game::map::spells::cast(
+            map,
+            g,
+            spell,
+            Targets {
+                unit: Some(at),
+                ..Default::default()
+            },
+            None,
+        );
+    }
+}
+
+/// A positive autocast spell worth casting now and whom on, as Thistle
+/// Tea's `Autocast` has it: on the pet itself, or (a single friend's) its
+/// master or itself; out of a fight (no `victim`), only on itself and not
+/// those for a fight. Dash and Dive while it isn't in reach, Fire Shield on
+/// one under attack, a heal on the hurt, and a buff on one without it.
+fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)> {
+    let s = state(map, g)?;
+    let data = &map.realm.data;
+    let now = map.now;
+    let caster = map.caster(g)?;
+    if caster.casting.is_some() || caster.gcd_until.is_some_and(|t| t > now) {
+        return None;
+    }
+    let f = map.unit_fields(g)?;
+    s.autocast.iter().copied().find_map(|id| {
+        let t = data.spells.get(id)?;
+        if !crate::game::map::auras::positive(t)
+            || t.passive()
+            || t.attr(1, ATTR_EX_NO_AUTOCAST_AI)
+            || (victim.is_some() && t.attr(0, ATTR_STOPS_ATTACK))
+            || (victim.is_none() && combat_only(map, t) && !t.attr(0, ATTR_NOT_IN_COMBAT))
+        {
+            return None;
+        }
+        if caster.cooldowns.get(&id).is_some_and(|c| *c > now)
+            || (t.category != 0
+                && caster
+                    .category_cooldowns
+                    .get(&t.category)
+                    .is_some_and(|c| *c > now))
+            || f.get_u32(UNIT_FIELD_POWER1 + t.power_type.min(4) as u16) < t.mana_cost
+        {
+            return None;
+        }
+        let on_self = t
+            .effects
+            .iter()
+            .filter(|e| e.effect != 0)
+            .all(|e| matches!(e.target_a, 0 | 1 | 20 | 22));
+        let whom: &[Guid] = if on_self {
+            &[g]
+        } else if victim.is_some() {
+            &[s.owner, g]
+        } else {
+            &[]
+        };
+        whom.iter()
+            .copied()
+            .find(|w| worth(map, g, t, *w, victim))
+            .map(|w| (id, w))
+    })
+}
+
+/// Fire Shield (Thistle Tea's `fire_shield?`).
+fn fire_shield(t: &crate::game::data::spells::SpellTemplate) -> bool {
+    t.spell_visual == 289 && t.family_name == 5 && t.family_flags & 0x0080_0000 != 0
+}
+
+/// A spell for a fight only (Thistle Tea's `combat_only?`): one that
+/// kills or raises damage, or whose cooldown outlasts it.
+fn combat_only(map: &Map, t: &crate::game::data::spells::SpellTemplate) -> bool {
+    use crate::game::map::auras::AURA_MOD_DAMAGE_DONE;
+    if fire_shield(t) {
+        return false;
+    }
+    if t.spell_icon == 153 || t.has_effect(5) || t.has_aura(AURA_MOD_DAMAGE_DONE) {
+        return true;
+    }
+    let cooldown = t.recovery_time.max(t.category_recovery_time);
+    map.realm
+        .data
+        .spells
+        .duration(t, 1)
+        .is_some_and(|d| cooldown > d)
+}
+
+/// Whether `t` on `whom` does any good now (Thistle Tea's `shield_useful?`,
+/// `heal_useful?` and `auras_useful?`).
+fn worth(
+    map: &Map,
+    g: Guid,
+    t: &crate::game::data::spells::SpellTemplate,
+    whom: Guid,
+    victim: Option<Guid>,
+) -> bool {
+    use crate::game::map::auras::*;
+    if !map.unit_view(whom).is_some_and(|u| u.alive) {
+        return false;
+    }
+    if fire_shield(t)
+        && !map.combat(whom).is_some_and(|c| {
+            c.attackers
+                .iter()
+                .any(|a| map.unit_view(*a).is_some_and(|x| x.alive))
+        })
+    {
+        return false;
+    }
+    let heals = t.has_effect(10) || t.has_aura(AURA_PERIODIC_HEAL);
+    if heals
+        && map
+            .unit_fields(whom)
+            .is_some_and(|f| f.get_u32(UNIT_FIELD_HEALTH) >= f.get_u32(UNIT_FIELD_MAXHEALTH))
+    {
+        return false;
+    }
+    if t.has_effect(2) {
+        return true;
+    }
+    let held = auras(map, whom).is_some_and(|a| a.has_spell(t.id));
+    let in_reach = victim
+        .and_then(|v| map.unit_view(v))
+        .zip(map.unit_view(g))
+        .is_some_and(|(v, me)| combat::in_melee_range(&me, &v));
+    t.effects.iter().all(|e| match e.effect {
+        6 if t.stack_amount <= 1 => {
+            !held
+                && !(e.aura == AURA_MOD_INCREASE_SPEED && in_reach)
+                && !(e.aura == AURA_MOD_STUN && stunned(map, whom))
+        }
+        35 => !held,
+        _ => true,
+    })
+}
+
+fn stunned(map: &Map, g: Guid) -> bool {
+    map.unit_fields(g)
+        .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & 0x0004_0000 != 0)
 }
 
 /// The longest range of the pet's autocast harmful spells it can afford:
@@ -372,13 +536,16 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
         if let Some(s) = state_mut(map, g) {
             s.next_think = now + THINK_EVERY;
         }
-        if let Some((spell, _)) = pick_spell(map, g, victim) {
+        let pick = pick_spell(map, g, victim)
+            .map(|(spell, _)| (spell, victim))
+            .or_else(|| pick_positive(map, g, Some(victim)));
+        if let Some((spell, at)) = pick {
             crate::game::map::spells::cast(
                 map,
                 g,
                 spell,
                 Targets {
-                    unit: Some(victim),
+                    unit: Some(at),
                     ..Default::default()
                 },
                 None,

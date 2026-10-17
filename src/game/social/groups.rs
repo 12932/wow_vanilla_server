@@ -840,8 +840,10 @@ pub fn ready_check(realm: &Realm, me: &Online, answer: Option<u8>) {
             if !gr.can_lead(me.guid) {
                 return;
             }
+            // To everyone, its asker too (mangos's `BroadcastPacket`,
+            // Thistle Tea's `Notifier.broadcast`): their client shows it.
             if let Some(frame) = encode(&MSG_RAID_READY_CHECK_Server { state_check: None }) {
-                gr.broadcast(realm, &frame, Some(me.guid));
+                gr.broadcast(realm, &frame, None);
             }
             // Those offline can't answer: not ready, the leader hears.
             for m in gr

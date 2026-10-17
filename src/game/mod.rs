@@ -38,6 +38,8 @@ mod tests_bg6;
 #[cfg(test)]
 mod tests_bosses;
 #[cfg(test)]
+mod tests_bugs1;
+#[cfg(test)]
 mod tests_bugs2;
 #[cfg(test)]
 mod tests_combat;
