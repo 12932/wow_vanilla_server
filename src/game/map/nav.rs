@@ -99,6 +99,14 @@ impl Nav {
             .ok()
     }
 
+    /// Where a walk over the navmesh from `from` toward `to` stops
+    /// (Thistle Tea's `walk_hit_position`); `None` off the navmesh.
+    pub fn walk_hit(&mut self, from: Vector3d, to: Vector3d) -> Option<Vector3d> {
+        self.ensure(from.x, from.y);
+        self.ensure(to.x, to.y);
+        self.map.walk_hit_position(from, to).ok().flatten()
+    }
+
     /// The ground nearest `z_hint` at `(x, y)`.
     pub fn ground(&mut self, x: f32, y: f32, z_hint: f32) -> Option<f32> {
         self.ensure(x, y);
