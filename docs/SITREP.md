@@ -142,7 +142,7 @@ the questions waiting for you.
 | 2c: creature combat | running | |
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
-| 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | |
+| 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
 | Performance | running | |
