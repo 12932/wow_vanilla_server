@@ -212,10 +212,31 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
             id,
             DisplayInfo {
                 scale,
-                bounding_radius: 0.0,
-                combat_reach: 0.0,
+                ..Default::default()
             },
         );
+    }
+    // A humanoid model of a race that rides, or one flagged to, may mount.
+    for (id, can_mount) in rows(
+        dbc,
+        "SELECT d.id AS id, m.flags AS model_flags, x.id AS extra, r.flags AS race_flags \
+         FROM CreatureDisplayInfo d JOIN CreatureModelData m ON m.id = d.model \
+         LEFT JOIN CreatureDisplayInfoExtra x ON x.id = d.extended_display_info \
+         LEFT JOIN ChrRaces r ON r.id = x.display_race",
+        |c| {
+            let extra = c.u32("extra") > 0;
+            let race = match c.value("race_flags") {
+                rusqlite::types::Value::Null => None,
+                _ => Some(c.u32("race_flags")),
+            };
+            let can =
+                extra && (c.u32("model_flags") & 0x80 != 0 || race.is_none_or(|r| r & 0x04 != 0));
+            (c.u32("id"), can)
+        },
+    ) {
+        if let Some(d) = data.display_info.get_mut(&id) {
+            d.can_mount = can_mount;
+        }
     }
     for (id, emote) in rows(dbc, "SELECT id, emote FROM EmotesText", |c| {
         (c.u32("id"), c.u32("emote"))

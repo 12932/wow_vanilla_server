@@ -392,6 +392,7 @@ pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate
     if let Some(p) = map.players.get_mut(&owner) {
         p.owned.guardians.push(g);
     }
+    crate::game::map::item_scripts::guardian_summoned(map, g, entry);
 }
 
 /// A companion: it follows, and fights nothing. Summoning the one out
