@@ -1018,3 +1018,212 @@ async fn a_level_raises_the_weapon_skills_caps_not_the_armors_and_the_same_level
     assert_eq!(after, (Some(1), Some(30), Some(1), Some(1)));
     assert_eq!((kept, next), (500, 0));
 }
+
+const QUICK_20: u32 = 961_601;
+const QUICK_25: u32 = 961_602;
+const SLOW_CAST_50: u32 = 961_603;
+const SLOW_CAST_20: u32 = 961_604;
+const BOLT: u32 = 961_605;
+const BOLT_FASTER: u32 = 961_606;
+const TRADE: u32 = 961_607;
+
+fn with_casts(mut d: GameData) -> GameData {
+    use crate::game::data::spells::SpellEffect;
+    for s in [
+        aura(QUICK_20, AURA_MOD_CASTING_SPEED, 20, 0, false),
+        aura(QUICK_25, AURA_MOD_CASTING_SPEED, 25, 0, false),
+        aura(SLOW_CAST_50, AURA_MOD_CASTING_SPEED, -50, 0, false),
+        aura(SLOW_CAST_20, AURA_MOD_CASTING_SPEED, -20, 0, false),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    // A bolt of 2.5 seconds at its target, of family 3 and flag 1; a
+    // talent taking half a second off it; a craft of 2.5 seconds.
+    d.spells.cast_times.insert(9_901, 2_500);
+    let mut bolt = SpellTemplate {
+        id: BOLT,
+        name: "Bolt".into(),
+        casting_time_index: 9_901,
+        family_name: 3,
+        family_flags: 1,
+        range_index: 1,
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    bolt.effects[0] = SpellEffect {
+        effect: 2,
+        base_points: 9,
+        base_dice: 1,
+        target_a: 6,
+        ..Default::default()
+    };
+    d.spells.spells.insert(BOLT, bolt);
+    let mut faster = aura(BOLT_FASTER, AURA_ADD_FLAT_MODIFIER, -500, 10, true);
+    faster.family_name = 3;
+    faster.effects[0].item_type = 1;
+    d.spells.spells.insert(BOLT_FASTER, faster);
+    let mut trade = d.spells.spells[&BOLT].clone();
+    trade.id = TRADE;
+    trade.family_name = 0;
+    trade.attributes[0] = crate::game::data::spells::ATTR_TRADESKILL;
+    trade.effects[0] = SpellEffect::default();
+    d.spells.spells.insert(TRADE, trade);
+    d
+}
+
+#[tokio::test]
+async fn cast_speed_multiplies_its_hastes_and_slows_by_the_stack_and_lengthens_a_spells_cast_after_its_modifiers()
+ {
+    let (realm, _a, g) = player(with_casts(data()), Class::Mage).await;
+    let got = on_map(&realm, move |m| {
+        let speed = |m: &Map| m.players[&g].fields.get_f32(UNIT_MOD_CAST_SPEED);
+        for s in [QUICK_20, QUICK_25, SLOW_CAST_50] {
+            put(m, g, s);
+        }
+        let balanced = speed(m);
+        for s in [QUICK_20, QUICK_25, SLOW_CAST_50] {
+            take(m, g, s);
+        }
+        let plain = speed(m);
+        put(m, g, SLOW_CAST_20);
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .auras
+            .holders
+            .iter_mut()
+            .filter(|h| h.spell == SLOW_CAST_20)
+            .for_each(|h| h.stacks = 3);
+        derive::unit(m, g);
+        let stacked = speed(m);
+        take(m, g, SLOW_CAST_20);
+        // Half slower, with half a second off by the talent: 3 seconds.
+        put(m, g, SLOW_CAST_50);
+        put(m, g, BOLT_FASTER);
+        let p = m.players.get_mut(&g).unwrap();
+        p.spells.push(BOLT);
+        p.spells.push(TRADE);
+        for i in 0..5 {
+            p.fields.set_u32(UNIT_FIELD_POWER1 + i, 100_000);
+        }
+        let target = {
+            let data = m.realm.data.clone();
+            let t = crate::game::data::CreatureTemplate {
+                entry: 961_700,
+                name: "Dummy".into(),
+                display_ids: [903, 0, 0, 0],
+                display_probabilities: [1, 0, 0, 0],
+                level_min: 10,
+                level_max: 10,
+                faction: 14,
+                unit_class: 1,
+                health_multiplier: 1.0,
+                health_max: 500,
+                ..Default::default()
+            };
+            let _ = data;
+            let p = &m.players[&g];
+            let (pos, o) = (p.position(), p.movement.orientation);
+            let at = Vector3d {
+                x: pos.x + 3.0 * o.cos(),
+                y: pos.y + 3.0 * o.sin(),
+                z: pos.z,
+            };
+            let c = crate::game::map::creature::Creature::new(
+                guid::unit(961_700, 0x7F_0000),
+                &t,
+                10,
+                at,
+                o + std::f32::consts::PI,
+            );
+            m.add_creature(c.with_base())
+        };
+        let now = m.now;
+        let cast_ms = |m: &mut Map, spell: u32| {
+            m.players.get_mut(&g).unwrap().caster.casting = None;
+            m.players.get_mut(&g).unwrap().caster.gcd_until = None;
+            crate::game::map::spells::cast(
+                m,
+                g,
+                spell,
+                crate::game::map::spells::Targets {
+                    unit: Some(target),
+                    ..Default::default()
+                },
+                None,
+            );
+            m.players[&g]
+                .caster
+                .casting
+                .as_ref()
+                .map(|c| (c.ends - now).as_millis())
+        };
+        let bolt = cast_ms(m, BOLT);
+        // A craft isn't slowed.
+        let craft = cast_ms(m, TRADE);
+        (balanced, plain, stacked, bolt, craft)
+    })
+    .await;
+    let (balanced, plain, stacked, bolt, craft) = got;
+    assert!((balanced - 1.0).abs() < 1e-5, "{balanced}");
+    assert_eq!(plain, 1.0);
+    assert!((stacked - 1.6).abs() < 1e-5, "{stacked}");
+    assert_eq!(bolt, Some(3_000));
+    assert_eq!(craft, Some(2_500));
+}
+
+#[tokio::test]
+async fn a_hunters_ranged_attack_power_takes_gear_and_auras_flat_then_percent_into_the_shot() {
+    const RAP_PLUS_50: u32 = 961_801;
+    const RAP_HALF_MORE: u32 = 961_802;
+    const LONGBOW: u32 = 961_803;
+    let mut d = with_gear_spells(data());
+    for s in [
+        aura(RAP_PLUS_50, AURA_MOD_RANGED_ATTACK_POWER, 50, 0, false),
+        aura(
+            RAP_HALF_MORE,
+            AURA_MOD_RANGED_ATTACK_POWER_PCT,
+            50,
+            0,
+            false,
+        ),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let mut bow = weapon(LONGBOW, 2, 15, 2800, 0);
+    bow.damages[0] = (10.0, 20.0, 0);
+    d.items.insert(LONGBOW, bow);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Dwarf, Class::Hunter).await;
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        stats::set_level(m.players.get_mut(&g).unwrap(), &data, 60);
+        derive::unit(m, g);
+        wear(m, g, LONGBOW, 17);
+        wear(m, g, RANGED_ROBE, 4);
+        put(m, g, RAP_PLUS_50);
+        put(m, g, RAP_HALF_MORE);
+        let p = &m.players[&g];
+        let f = &p.fields;
+        (
+            f.get_u32(UNIT_FIELD_STAT0) as f32,
+            f.get_u32(UNIT_FIELD_STAT0 + 1) as f32,
+            p.derived.ranged_attack_power as f32,
+            p.derived.attack_power as f32,
+            f.get_f32(UNIT_FIELD_MINRANGEDDAMAGE),
+            f.get_f32(UNIT_FIELD_MAXRANGEDDAMAGE),
+        )
+    })
+    .await;
+    let (strength, agility, rap, ap, min, max) = got;
+    let want_rap = ((60.0 * 2.0 + agility * 2.0 - 10.0) + 40.0 + 50.0) * 1.5;
+    assert!((rap - want_rap.trunc()).abs() <= 1.0, "{rap} {want_rap}");
+    assert!(
+        (ap - (60.0 * 2.0 + strength + agility - 20.0)).abs() <= 1.0,
+        "{ap}"
+    );
+    let bonus = rap / 14.0 * 2.8;
+    assert!((min - (10.0 + bonus)).abs() < 1.0, "{min}");
+    assert!((max - (20.0 + bonus)).abs() < 1.0, "{max}");
+}
