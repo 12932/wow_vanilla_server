@@ -167,6 +167,10 @@ pub struct PetState {
     pub was_hostile: bool,
     /// Under Eyes of the Beast: the react and command it had before.
     pub eyes: Option<(u8, u8)>,
+    /// Called back by Follow: on its way to its master, it takes no
+    /// fight up until it is back (mangos's `IsRetreating`, Thistle Tea's
+    /// recall).
+    pub returning: bool,
 }
 
 impl PetState {
@@ -202,6 +206,7 @@ impl PetState {
             was_faction: 0,
             was_hostile: false,
             eyes: None,
+            returning: false,
         }
     }
 }

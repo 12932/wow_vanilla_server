@@ -125,6 +125,14 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   - Respawning a creature (71) with target type 10 still finds dead creatures; Thistle Tea's search finds only the
     living, so it could never respawn a dead one.
   - The Nightmare's druids may attack pets.
+  - Silithus's wind stones aren't ported: `tt_scripts.json.gz` has their entries with empty steps.
+  - Huldar and Miran's ambush (area trigger 171) can't spring: its first step explores quest 273 before the second
+    asks for it incomplete.
+- **Pets:**
+  - A pet takes crowd-controlled targets, and doesn't hold off while on Stay.
+  - Auto Shot isn't cancelled by pacify or range, and its dead zone is measured centre to centre.
+  - A wand's shot takes no damage-done or school bonuses.
+- **Swings:** errors repeat each second, and the off hand rolls the main hand's weapon skill.
 
 ### Quests and events
 
@@ -164,5 +172,5 @@ Thistle Tea, with these exceptions:
 - **Load-sensitive tests.** Each real-data test loads the whole world. On a machine running several suites at once
   (load average 40 to 50 on 16 cores) a few can time out; they pass run alone. The harness waits 20 seconds for
   what a test expects.
-- Not covered by a test of their own: the play-object-sound script command, the meeting stone's in-progress
-  message, and Ritual of Summoning's dungeon and battleground refusals.
+- Not covered by a test of their own: the meeting stone's in-progress message, and Ritual of Summoning's dungeon and
+  battleground refusals.

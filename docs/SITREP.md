@@ -102,6 +102,11 @@ the questions waiting for you.
 30. **Melee attack-speed slows** (from 3d). They don't stack, as vmangos and Thistle Tea have it (done); mangos-classic
     multiplies them. Keep?
 
+31. **A creature-owned totem when its owner dies** (from 3i). Should it outlive its owner until it expires (Thistle
+    Tea), or go with it (mangos, and wvs)?
+32. **A scripted follower's evade** (from 3i). Should it evade where it stands (Thistle Tea), or to its place by its
+    leader (mangos)? wvs walks it to its spawn.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -326,6 +331,15 @@ the questions waiting for you.
     - **peon's release binary** was built before the appearance fix, which is why 11-19% of bots failed character
       creation in these runs. Rebuild it.
 
+21. **3i's choices:**
+    - **EventAI actions** run their steps at once and ignore step delays, as Thistle Tea does. No row in the data
+      has one.
+    - **Command 83** now credits the step's creature or object. Before, it credited entry 0, so the 11 rows using it
+      gave no quest credit.
+    - **Pets** choose targets as mangos and Thistle Tea do: their own attackers, then their master's victim, then
+      their master's attackers.
+    - **A pet recalled to Follow** takes no new fight until it's back.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -351,6 +365,7 @@ the questions waiting for you.
 | 3a: matrix gaps, spells and auras (195 rows) | merged | 5e26640 |
 | 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
 | 3f: matrix gaps, network and inbound (232 rows) | merged | |
+| 3i: matrix gaps, creature AI, EventAI, scripts, pets (263 rows) | merged | |
 | 3c: matrix gaps, items, quests, loot, professions (241 rows) | merged | |
 | 3d: matrix gaps, player systems (311 rows) | merged | 5e26640 |
 | 3e: matrix gaps, world systems (140 rows) | merged | |

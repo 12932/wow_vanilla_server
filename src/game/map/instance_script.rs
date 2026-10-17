@@ -459,10 +459,13 @@ pub fn set_data(map: &mut Map, field: u32, value: u32, mode: u32) {
         return;
     };
     let old = get_data(map, field);
+    // A set, a rise or a fall; any other mode is none (Thistle Tea's
+    // `ScriptStep` refuses it).
     let mut new = match mode {
+        0 => value,
         1 => old.saturating_add(value),
         2 => old.saturating_sub(value),
-        _ => value,
+        _ => return,
     };
     if super::instance_adapters::set_data(map, s, field, new) {
         return;

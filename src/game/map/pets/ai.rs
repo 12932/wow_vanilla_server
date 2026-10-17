@@ -171,15 +171,16 @@ fn act(map: &mut Map, g: Guid, now: Instant) {
     let Some(s) = state(map, g) else {
         return;
     };
-    let (owner, react) = (s.owner, s.react);
+    let (owner, react, returning) = (s.owner, s.react, s.returning);
     let guardian = s.kind == Kind::Guardian;
     let current = map
         .combat(g)
         .filter(|c| c.attacking)
         .map(|c| c.victim)
         .filter(|v| still_fights(map, g, owner, *v));
+    // Called back, it takes nothing new up on the way.
     let victim = current.or_else(|| {
-        if react == REACT_PASSIVE && !guardian {
+        if (react == REACT_PASSIVE && !guardian) || returning {
             None
         } else {
             acquire(map, g, owner, react == REACT_AGGRESSIVE || guardian)
@@ -212,34 +213,42 @@ fn still_fights(map: &Map, g: Guid, owner: Guid, v: Guid) -> bool {
     near_owner && map.unit_view(v).is_some_and(|u| u.alive) && combat::can_attack(map, g, v)
 }
 
-/// What a pet's stance makes it fight: whoever fights its master or it,
-/// and (aggressive) what hostile comes near.
+/// What a pet's stance makes it fight: those fighting it, then its
+/// master's victim, then those fighting its master (mangos's `AttackedBy`
+/// and `getAttackerForHelper`, Thistle Tea's `TargetSelection.next`), the
+/// nearest of each; and (aggressive) what hostile comes near.
 fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
-    let mut fighting: Vec<Guid> = map
+    let pos = map.position_of(g)?;
+    let nearest = |list: Vec<Guid>| {
+        list.into_iter()
+            .filter(|v| *v != g && *v != owner && still_fights(map, g, owner, *v))
+            .filter(|v| {
+                map.combat(*v).is_some_and(|c| {
+                    c.attackers.contains(&owner) || c.attackers.contains(&g) || c.attacking
+                })
+            })
+            .min_by(|a, b| {
+                let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, pos));
+                let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, pos));
+                da.total_cmp(&db).then(a.guid().cmp(&b.guid()))
+            })
+    };
+    let own: Vec<Guid> = map
+        .combat(g)
+        .map(|c| c.attackers.iter().copied().collect())
+        .unwrap_or_default();
+    let owners_victim: Vec<Guid> = map
+        .combat(owner)
+        .filter(|c| c.attacking)
+        .map(|c| vec![c.victim])
+        .unwrap_or_default();
+    let owners: Vec<Guid> = map
         .combat(owner)
         .map(|c| c.attackers.iter().copied().collect())
         .unwrap_or_default();
-    if let Some(c) = map.combat(g) {
-        fighting.extend(c.attackers.iter().copied());
-    }
-    // A guardian joins its master's own fight too.
-    if let Some(c) = map.combat(owner).filter(|c| c.attacking) {
-        fighting.push(c.victim);
-    }
-    let pos = map.position_of(g)?;
-    let pick = fighting
-        .into_iter()
-        .filter(|v| *v != g && *v != owner && still_fights(map, g, owner, *v))
-        .filter(|v| {
-            map.combat(*v).is_some_and(|c| {
-                c.attackers.contains(&owner) || c.attackers.contains(&g) || c.attacking
-            })
-        })
-        .min_by(|a, b| {
-            let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, pos));
-            let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, pos));
-            da.total_cmp(&db)
-        });
+    let pick = nearest(own)
+        .or_else(|| nearest(owners_victim))
+        .or_else(|| nearest(owners));
     if pick.is_some() || !aggressive {
         return pick;
     }
@@ -277,7 +286,7 @@ pub fn defend(map: &mut Map, g: Guid, attacker: Guid) {
     let Some(s) = state(map, g) else {
         return;
     };
-    if s.react == REACT_PASSIVE && s.kind != Kind::Guardian {
+    if (s.react == REACT_PASSIVE && s.kind != Kind::Guardian) || s.returning {
         return;
     }
     if map
@@ -296,6 +305,7 @@ pub fn defend(map: &mut Map, g: Guid, attacker: Guid) {
 
 /// Go for `target`.
 pub fn attack(map: &mut Map, g: Guid, target: Guid) {
+    back(map, g);
     if let Some(c) = map.creature_mut(g) {
         c.chase_target_at = None;
     }
@@ -444,7 +454,8 @@ fn combat_only(map: &Map, t: &crate::game::data::spells::SpellTemplate) -> bool 
     if fire_shield(t) {
         return false;
     }
-    if t.spell_icon == 153 || t.has_effect(5) || t.has_aura(AURA_MOD_DAMAGE_DONE) {
+    // Effect 1 is an instant kill (Sacrifice).
+    if t.spell_icon == 153 || t.has_effect(1) || t.has_aura(AURA_MOD_DAMAGE_DONE) {
         return true;
     }
     let cooldown = t.recovery_time.max(t.category_recovery_time);
@@ -719,9 +730,11 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
     let d = dist(pos, spot);
     if d > TELEPORT_DISTANCE {
         jump(map, g, spot, o.orientation);
+        back(map, g);
         return;
     }
     if d <= FOLLOW_DISTANCE * 1.25 {
+        back(map, g);
         return;
     }
     if destination(map, g).is_some_and(|dest| dist(dest, spot) <= FOLLOW_DISTANCE) {
@@ -738,6 +751,13 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
         c.speeds.run = own.max(owner_speed);
     }
     walk(map, g, spot, now);
+}
+
+/// Back at its master's side: a recall is over.
+fn back(map: &mut Map, g: Guid) {
+    if let Some(s) = state_mut(map, g) {
+        s.returning = false;
+    }
 }
 
 /// Put the pet at `at` at once.
