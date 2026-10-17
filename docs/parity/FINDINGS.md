@@ -63,6 +63,58 @@ Phase 3. When something here is fixed, its line gets the commit.
   - `end_channel` leaves Mend Pet's aura on the pet;
   - the immune-to-player flag 0x100 is never checked.
 
+### From the world, network and loaders (to confirm)
+
+- **Creature reach and size** were scaled by the whole object scale (Onyxia's reach about 47 yards for Thistle
+  Tea's 26), from the template's display before the addon's. Fixed on master: `Creature::fit_model`.
+- **Ghosts see every living creature.** mangos-classic (`Creature::IsVisibleInGridForPlayer`) and Thistle Tea show
+  them only those within 45 yards of the corpse, plus creatures visible to ghosts.
+- **`spawn_flags` is loaded and never read.** 40 disabled creatures (Lord Valthalak among them) and 31 disabled
+  objects spawn; dead-by-default and hidden spawns aren't honoured.
+- **`creature_linking_template` is never used**, so Rajaxx's captains and Loatheb's maggots have no master.
+- **The tapped flag is never set**, so there are no grey tags.
+- **Blink** stops dead at a wall rather than at it, and the back, left and right Blinks go forward.
+- **`vendor::buy` sells reputation-gated items to anyone.**
+- **`single_target::caster_gone`** ends Polymorph, Fear and Sap when the caster dies. mangos ends none of them, and
+  Thistle Tea ends only Hunter's Mark.
+- **Knockback on a creature** calls `map.teleport`, which moves only players.
+- **`outdoor_pvp`'s state** is made only for maps 0 and 1, so the tower buffs never reach Stratholme or Scholomance,
+  nor Cenarion Favor Ahn'Qiraj.
+- **`trade::traded` doesn't check the offered items again**, so one equipped or banked after the offer may still be
+  traded.
+- **Barkskin's aura 192** does nothing.
+- **Creature-owned totems and guardians get `UNIT_FLAG_PLAYER_CONTROLLED`.**
+- **Update blocks are sent after the update's other packets**, so a packet naming an object can reach the client
+  before its create.
+- **`PLAYER_FIELD_COMBO_TARGET` is cleared with the points.**
+- **Wire layouts that differ from mangos and Thistle Tea:**
+  - `SMSG_LOG_XPGAIN`'s kill and non-kill fields are swapped;
+  - `SMSG_RESURRECT_REQUEST` lacks its second byte;
+  - the equipped-item-class cast result lacks its payload;
+  - the has-transport byte is always 0;
+  - `SMSG_GROUP_LIST` lacks its trailing byte;
+  - random property, enchantment and charges are zeroed in item push, auction and mail;
+  - compression starts at 1,024 bytes, where mangos starts at 100.
+- **Smaller:**
+  - `misc::cancel_growth` removes growth auras;
+  - `spell_script_target` types 1 and 2 aren't told apart;
+  - `game_event_creature_data` has no `ORDER BY patch`;
+  - `PLAYER_FLAGS_GROUP_LEADER` is never set;
+  - `Map::players_near` is 2D.
+
+### From the rest of core (to confirm)
+
+- **Dual wield is inconsistent.** `inventory.rs` lets a level-20 warrior or hunter equip an off-hand weapon by level
+  alone, while `derive.rs` swings the off hand only with Dual Wield (674). vmangos refuses the equip without the
+  skill.
+- **Equipping ignores an item's skill, skill rank and spell requirements** (`may_place`, `can_equip`).
+- **`inventory::proficient` grants by level.** Every class can hold a fishing pole, and hunters and shamans get mail
+  at 40 untrained.
+- **Weather:**
+  - its seasons go by the month, so spring starts on the 1st of March, not vanilla's 19th;
+  - its sound tier is grade times 3, not vanilla's thresholds;
+  - it never changes gradually or suddenly.
+
 ### Reported, not yet confirmed
 
 **Object gossip:**
@@ -228,6 +280,123 @@ Phase 3. When something here is fixed, its line gets the commit.
   - heal-over-time ticks proccing;
   - reflection charges.
 - **Threat:** modifiers multiplied, not added; crit threat; DoT tick threat.
+
+### The world, network and loaders (522 of 1,561 covered)
+
+- **Movement control.** There is no table of the changes waiting on the client's acknowledgement: every
+  force-speed, root and knockback goes with counter 0, acks are checked only by the mover, and none are consumed.
+  The client's motion isn't projected between updates, `MSG_MOVE_TELEPORT` is never sent, and monster moves have no
+  facing types.
+- **The real navmesh.** No wvs test covers paths (the Deadmines' overlaps, Ragefire Chasm, the Elwynn mines), line
+  of sight on real geometry, or the navmesh's zones and areas. rustigator's own tests port some of these.
+- **Visibility for the dead.** Ghosts see everything, and spirit healers go to the living.
+- **Per-viewer fields:**
+  - the tapped flag;
+  - Beast Lore's flag;
+  - a pet's owner-only fields;
+  - the lootable flag.
+- **Stealth.** It is checked again on moving but not on turning, there is no window after Vanish, and Far Sight
+  doesn't switch the camera.
+- **Quest-giver status** is never pushed when an event, skill, spell, health requirement, variable or time gate
+  changes it.
+- **Spawn data:**
+  - `spawn_flags`;
+  - creature linking;
+  - formations' leader promotion and disbanding;
+  - pools with several members, and child pools.
+- **Combat:**
+  - shared leash clocks;
+  - calls for help are untested;
+  - damage sharing (Sacrifice, Soul Link) for DoTs and melee;
+  - kill rewards by the group at the tap.
+- **Auth and the handshake** have no network-level tests. A bad proof closes the socket where Thistle Tea answers
+  with a failure.
+- **Systems:**
+  - map-event commands 64, 66, 68, 69 and 92;
+  - events can be driven on but not off;
+  - weather is per zone across the realm, so dungeon copies share it;
+  - battleground pickups;
+  - channel commands;
+  - trades checked again at the accept;
+  - talk-to credit on closing gossip;
+  - SrcSpell;
+  - a rogue's Lockpicking and Poisons;
+  - skills starting at their cap.
+
+### The rest of core (686 of 2,386 covered)
+
+- **Inventory moves.** Swapping, splitting, destroying and auto-storing are untested, and so are bags' own rules,
+  two-handers, unique limits and bank bag slots.
+- **Equip requirements:** skills, ranks and spells; proficiency from learned spells.
+- **Stats:**
+  - haste;
+  - armor and resistance formulas;
+  - penetration;
+  - power against creature types;
+  - temporary spell power;
+  - the gear sync.
+- **Aura stacking and cancelling:**
+  - ranks replacing ranks;
+  - exclusive categories;
+  - the same buff from a second caster;
+  - shared Sunder stacks;
+  - the cancel refusals.
+- **Absorbs and splits:** Fire Ward and Mana Shield, damage splits, and shields against the environment.
+- **Procs:**
+  - proc cooldowns;
+  - cast-end, kill and crit-heal procs;
+  - charge-only procs;
+  - Vampiric Embrace, Illumination and Retaliation;
+  - Windfury's flat chance.
+- **Hunter and warlock pets** (about 150 rows):
+  - happiness and loyalty;
+  - pet XP;
+  - Revive Pet and renaming;
+  - training and untraining;
+  - follow and passive;
+  - combat contact;
+  - mini-pets;
+  - totems at logout, death and map change.
+- **Resurrection offers,** and the real Soulstone's and Reincarnation's flat restores.
+- **Movement:**
+  - Charge;
+  - knockback launches;
+  - distract;
+  - safe fall, feather fall and hover.
+- **Breath, lava and fatigue's edge cases.**
+- **Quests:**
+  - abandoning, and what it removes;
+  - quest items;
+  - masks;
+  - status icons;
+  - the quest log's layout;
+  - escort point actions.
+- **Instance scripts.** Most dungeons' are untested: the Ring of Law, Dire Maul, Gnomeregan, Uldaman, Scarlet
+  Monastery, the Baron run, Zul'Farrak and Molten Core.
+- **Battlegrounds:**
+  - Warsong Gulch's gates, and capturing while your own flag is away;
+  - the scoreboard's kills;
+  - Arathi Basin's pause and graveyard;
+  - Alterac Valley's captains;
+  - the entrance portals.
+- **PvP and honor:**
+  - the flag's countdown;
+  - territories;
+  - duels' bounds and forfeit;
+  - honor by contribution;
+  - a dishonorable kill's cost.
+- **Social:**
+  - declining and uninviting;
+  - the leader leaving;
+  - raid assistants;
+  - channel moderation;
+  - AFK in a fight;
+  - `/who`'s filters.
+- **Loot:**
+  - Need Before Greed and the rest of the roll's resolution;
+  - reservations;
+  - pickpocketing.
+- **The auction house:** bids, outbids, cancelling, searching and the owner's lists.
 
 ### World entities (`world/entity`: 146 of 1,251 covered)
 
