@@ -27,6 +27,8 @@ mod tests_pets;
 mod tests_misc;
 #[cfg(test)]
 mod tests_pvp;
+#[cfg(test)]
+mod tests_scripts;
 pub mod transports;
 pub mod update;
 pub mod weather;

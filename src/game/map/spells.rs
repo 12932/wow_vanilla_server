@@ -724,6 +724,30 @@ fn execute_effects(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) 
         for target in effect_targets(map, caster, s, index, t) {
             let amount = points(s, index, level);
             effect(map, caster, target, s, index, amount);
+            if index == 0 || s.effects[..index].iter().all(|x| x.effect == 0) {
+                crate::game::map::event_ai::spell_hit(map, target, caster, s.id, s.school_mask());
+            }
+            // A script for the spell, and the events it sends.
+            if matches!(e.effect, EFFECT_DUMMY | 77)
+                && map.realm.data.scripts.spell.contains_key(&s.id)
+            {
+                crate::game::map::scripts::start(
+                    map,
+                    crate::game::data::scripts::ScriptTable::Spell,
+                    s.id,
+                    caster,
+                    target,
+                );
+            }
+            if e.effect == 61 && e.misc_value > 0 {
+                crate::game::map::scripts::start(
+                    map,
+                    crate::game::data::scripts::ScriptTable::Event,
+                    e.misc_value as u32,
+                    caster,
+                    target,
+                );
+            }
         }
         if e.effect == EFFECT_OPEN_LOCK
             && let Some(object) = t.object

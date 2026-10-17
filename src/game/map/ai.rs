@@ -71,6 +71,8 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if c.combat.attacking {
         return;
     }
+    let first =
+        c.combat_start.is_none() || !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
     c.combat_start = Some(now);
     c.combat.victim = attacker;
     c.combat.attacking = true;
@@ -90,6 +92,9 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
         }
     }
     call_for_help(map, creature, attacker);
+    if first {
+        crate::game::map::event_ai::aggro(map, creature, attacker);
+    }
 }
 
 /// Damage from `from` raises its threat on `creature`.
@@ -208,6 +213,13 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
     crate::game::map::auras::clear_on_death(map, creature);
+    crate::game::map::scripts::stop_for(map, creature);
+    crate::game::map::event_ai::death(map, creature, tapper);
+    crate::game::map::instance_script::creature_event(
+        map,
+        creature,
+        crate::game::map::instance_script::Event::Death,
+    );
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
@@ -255,7 +267,20 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
     c.tapped_by = Some(tapper);
     let pos = c.position;
+    let (spawn, locks_raid) = (
+        c.spawn_guid,
+        template.is_some_and(|t| {
+            t.static_flags2 & crate::game::instances::STATIC_FLAG2_LOCKS_RAID != 0
+        }),
+    );
+    let boss = template.is_some_and(|t| t.rank == 3) || locks_raid;
     map.dead_creatures.push(creature);
+    if let Some(spawn) = spawn {
+        crate::game::instances::spawn_died(&map.realm, map.key, spawn, (!boss).then_some(respawn));
+    }
+    if locks_raid {
+        crate::game::instances::bind_raid(map);
+    }
     if moving {
         map.next_spline_id = map.next_spline_id.wrapping_add(1);
         let frame = stop_packet(creature, pos, spline_id);
@@ -345,9 +370,76 @@ fn respawn(map: &mut Map, g: Guid) {
     if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
         return;
     }
-    if let Some(c) = Creature::from_spawn(&data, spawn, &mut rand::rng()) {
-        map.add_creature(c);
+    // A pooled spawn may give way to another of its pool.
+    let chosen = crate::game::map::creature_groups::respawn_choice(map, spawn.guid);
+    let spawn = if chosen == spawn.guid {
+        spawn
+    } else {
+        data.creature_spawns
+            .get(&map.key.map)
+            .and_then(|v| v.iter().find(|s| s.guid == chosen))
+            .unwrap_or(spawn)
+    };
+    crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
+    if !crate::game::map::creature_groups::may_spawn(map, spawn.guid) {
+        return;
     }
+    if let Some(c) = Creature::from_spawn(&data, spawn, &mut rand::rng()) {
+        let g = map.add_creature(c);
+        crate::game::map::creature_groups::respawned(map, g);
+    }
+}
+
+/// A dead creature (or one never spawned, like a pooled spawn's other
+/// pick) comes back at once.
+pub fn respawn_now(map: &mut Map, g: Guid) {
+    if map.creature(g).is_some_and(|c| !c.alive()) {
+        map.dead_creatures.retain(|d| *d != g);
+        respawn(map, g);
+    }
+}
+
+/// A creature goes as though it died, with no loot or credit, and comes
+/// back on its spawn's timer.
+pub fn quiet_death(map: &mut Map, g: Guid) {
+    let now = map.now;
+    crate::game::map::auras::clear_on_death(map, g);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if !c.alive() {
+        return;
+    }
+    c.life = Life::Dead {
+        corpse_until: now,
+        respawn_at: now + Duration::from_secs(300),
+    };
+    c.threat.clear();
+    c.combat = Default::default();
+    c.evading = false;
+    c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    c.despawned = true;
+    map.dead_creatures.push(g);
+    despawn_from_view(map, g);
+}
+
+/// A creature spawned dead, waiting `respawn_in` to come back, as a copy
+/// saved it.
+pub fn lie_dead(map: &mut Map, g: Guid, respawn_in: Option<Duration>) {
+    let now = map.now;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.life = Life::Dead {
+        corpse_until: now,
+        respawn_at: now + respawn_in.unwrap_or(Duration::from_secs(10 * 365 * 86_400)),
+    };
+    c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    c.despawned = true;
+    let cell = c.cell;
+    map.grid.remove(g, cell);
+    map.visibility_dirty.remove(&g);
+    map.dead_creatures.push(g);
 }
 
 /// Run the creatures some player sees, or that are fighting.
@@ -361,19 +453,30 @@ pub fn update_creatures(map: &mut Map) {
         .map(|(k, _)| k)
         .collect();
     for key in keys {
-        let Some(c) = map.creatures.get(key) else {
+        let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
         };
-        let g = c.guid;
+        crate::game::map::event_ai::tick(map, g);
+        let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
+            continue;
+        };
         if c.evading {
             evade_step(map, g);
         } else if c.combat.attacking {
             fight_step(map, g);
         } else {
-            if c.hostile_to_players && c.aggro_check_at <= now && !c.observers.is_empty() {
+            let passive = c.scripted.as_deref().is_some_and(|s| s.passive);
+            if c.hostile_to_players
+                && !passive
+                && c.aggro_check_at <= now
+                && !c.observers.is_empty()
+            {
                 aggro_scan(map, g);
             }
-            if !map.creature(g).is_some_and(|c| c.combat.attacking) {
+            if !map
+                .creature(g)
+                .is_some_and(|c| c.combat.attacking || c.evading)
+            {
                 crate::game::map::world::step_creature_key(map, key);
             }
         }
@@ -544,7 +647,9 @@ fn fight_step(map: &mut Map, g: Guid) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
-    if combat::in_melee_range(&me, &them) {
+    let chase = crate::game::map::event_ai::combat_movement(map, g);
+    let swing = crate::game::map::event_ai::melee(map, g);
+    if combat::in_melee_range(&me, &them) || !chase {
         let spline_id = map.next_spline_id;
         let Some(c) = map.creature_mut(g) else {
             return;
@@ -556,7 +661,9 @@ fn fight_step(map: &mut Map, g: Guid) {
             let frame = stop_packet(g, me.position, spline_id);
             map.send_to_observers(g, &frame, false);
         }
-        combat::try_swing(map, g);
+        if swing && combat::in_melee_range(&me, &them) {
+            combat::try_swing(map, g);
+        }
         return;
     }
     // Chase: path again if the victim has moved since the last one.
@@ -595,6 +702,69 @@ fn fight_step(map: &mut Map, g: Guid) {
     };
     c.chase_target_at = Some(them.position);
     if let Some(frame) = c.walk(path, true, now, spline_id) {
+        map.send_to_observers(g, &frame, false);
+    }
+}
+
+/// A script's `enter evade`.
+pub fn enter_evade(map: &mut Map, g: Guid) {
+    evade(map, g);
+}
+
+/// Creatures of the same faction within `radius` join `g`'s fight.
+pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let enemy = c.combat.victim;
+    if enemy.is_zero() {
+        return;
+    }
+    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
+    let radius = if radius > 0.0 { radius } else { 10.0 };
+    let helpers: Vec<Guid> = map
+        .grid
+        .around(pos.x, pos.y, radius)
+        .filter(|h| guid::is_unit(*h) && *h != g)
+        .filter(|h| {
+            map.creature(*h).is_some_and(|x| {
+                x.alive()
+                    && !x.combat.attacking
+                    && x.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction
+                    && dist(x.position, pos) <= radius
+            })
+        })
+        .collect();
+    for h in helpers {
+        attacked(map, h, enemy);
+    }
+}
+
+/// Run from the victim for a while (a script's `flee`).
+pub fn flee(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let spline_id = map.next_spline_id;
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let from = c.position;
+    let away = map
+        .position_of(c.combat.victim)
+        .map(|v| (from.y - v.y).atan2(from.x - v.x))
+        .unwrap_or(c.orientation);
+    let to = Vector3d {
+        x: from.x + 15.0 * away.cos(),
+        y: from.y + 15.0 * away.sin(),
+        z: from.z,
+    };
+    let path = match map.nav.as_mut() {
+        Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
+        None => vec![from, to],
+    };
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    if let Some(c) = map.creature_mut(g)
+        && let Some(frame) = c.walk(path, false, now, spline_id)
+    {
         map.send_to_observers(g, &frame, false);
     }
 }
@@ -653,6 +823,8 @@ fn evade(map: &mut Map, g: Guid) {
             c.attackers.remove(&g);
         }
     }
+    crate::game::map::scripts::stop_for(map, g);
+    crate::game::map::event_ai::evade(map, g);
 }
 
 /// An evading creature walks home, and is whole again when it gets there.
@@ -670,6 +842,7 @@ fn evade_step(map: &mut Map, g: Guid) {
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
+        crate::game::map::event_ai::reached_home(map, g);
     }
 }
 

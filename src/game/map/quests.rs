@@ -322,6 +322,15 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     }
     check(map, player, quest);
     crate::game::map::questshare::accepted(map, player, giver, quest);
+    if let Some(script) = data.scripts.quest_start_script.get(&quest).copied() {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::QuestStart,
+            script,
+            giver,
+            player,
+        );
+    }
 }
 
 /// The log's update fields, from the journal.
@@ -679,6 +688,15 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     }
     crate::game::map::reputation::quest_rewarded(map, player, &q);
     crate::game::social::mail::quest_mail(&map.realm, player, giver, quest);
+    if let Some(script) = data.scripts.quest_complete_script.get(&quest).copied() {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::QuestEnd,
+            script,
+            giver,
+            player,
+        );
+    }
     // The chain's next quest, offered at once.
     if q.next_in_chain != 0
         && map
