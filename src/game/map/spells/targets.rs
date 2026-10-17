@@ -314,10 +314,31 @@ pub fn effect_targets(
         (GameObject, _) | (Location, _) => Vec::new(),
         (Other(_), _) => t.unit.into_iter().collect(),
     };
-    if s.max_affected_targets > 0 && out.len() > s.max_affected_targets as usize {
-        out.truncate(s.max_affected_targets as usize);
-    }
+    limit(map, &mut out, s.max_affected_targets as usize, t.unit);
     out
+}
+
+/// No more than `max` of `out` (0 for no limit), as Thistle Tea's
+/// `TargetLimit` and target resolver pick them: each once, a random few
+/// when there are too many, the one aimed at among them if it is there.
+fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<Guid>) {
+    let mut seen = ahash::AHashSet::new();
+    out.retain(|g| seen.insert(*g));
+    if max == 0 || out.len() <= max {
+        return;
+    }
+    if super::outcome::rolling(map) {
+        use rand::seq::SliceRandom;
+        out.shuffle(&mut rand::rng());
+    }
+    match primary.filter(|p| out.contains(p)) {
+        Some(p) => {
+            out.retain(|g| *g != p);
+            out.truncate(max - 1);
+            out.push(p);
+        }
+        None => out.truncate(max),
+    }
 }
 
 /// A chain: the first target, then the nearest (or, for heals, the most
