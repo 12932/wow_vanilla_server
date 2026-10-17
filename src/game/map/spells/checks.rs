@@ -275,9 +275,6 @@ pub fn check(
     }
     let player = map.players.get(&caster);
     if let Some(p) = player {
-        if item.is_none() && !triggered && !p.spells.contains(&s.id) {
-            return Some(fail::NOT_KNOWN);
-        }
         if !triggered && p.stand_state() != 0 && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
             return Some(fail::NOT_STANDING);
         }
