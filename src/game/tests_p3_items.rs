@@ -1546,3 +1546,192 @@ fn quests_check(m: &mut Map, g: Guid, quest: u32) {
 fn complete_bit(m: &Map, g: Guid) -> bool {
     m.players[&g].fields.get_u32(PLAYER_QUEST_LOG_1_1 + 1) & (1 << 24) != 0
 }
+
+const PEDDLER: u32 = 3303;
+const BUNDLE: u32 = 9340;
+const MEDAL: u32 = 9341;
+const SECRET: u32 = 9342;
+const UNKNOWN: u32 = 9343;
+
+/// A peddler with bundles of three that stack in fives, a rank 8 medal for
+/// level 30, an item for level 10 and over, one under a condition with no
+/// row; and a merchant with nothing, no menu.
+fn peddler_data() -> GameData {
+    let mut d = data();
+    for (entry, guid_n, y) in [(PEDDLER, 4, -2.0), (PEDDLER + 1, 5, 2.0)] {
+        let mut t = d.creature_templates[&VENDOR].clone();
+        t.entry = entry;
+        d.creature_templates.insert(entry, t);
+        d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+            guid: guid_n,
+            entries: vec![entry],
+            map: 0,
+            x: START.0 + 2.0,
+            y: START.1 + y,
+            z: START.2,
+            ..Default::default()
+        });
+    }
+    let mut bundle = item(BUNDLE);
+    (bundle.buy_price, bundle.buy_count, bundle.stackable) = (2, 3, 5);
+    d.items.insert(BUNDLE, bundle);
+    let mut medal = item(MEDAL);
+    (
+        medal.required_honor_rank,
+        medal.required_level,
+        medal.buy_price,
+    ) = (8, 30, 1);
+    d.items.insert(MEDAL, medal);
+    d.items.insert(SECRET, item(SECRET));
+    d.items.insert(UNKNOWN, item(UNKNOWN));
+    let entry = |slot, item, condition| VendorItem {
+        slot,
+        item,
+        condition,
+        ..Default::default()
+    };
+    d.vendors.insert(
+        PEDDLER,
+        vec![
+            entry(0, BUNDLE, 0),
+            entry(1, MEDAL, 0),
+            entry(2, SECRET, 1),
+            entry(3, UNKNOWN, 999),
+        ],
+    );
+    d.scripts.conditions.insert(
+        1,
+        crate::game::data::scripts::Condition {
+            entry: 1,
+            kind: 15,
+            values: [10, 1, 0, 0],
+            flags: 0,
+        },
+    );
+    d
+}
+
+async fn listed(a: &mut Client, from: Guid) -> Vec<u32> {
+    a.clear();
+    a.send(CMSG_LIST_INVENTORY { guid: from }).await;
+    a.wait_for("SMSG_LIST_INVENTORY", |m| match m {
+        ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) => {
+            Some(l.items.iter().map(|i| i.item).collect())
+        }
+        _ => None,
+    })
+    .await
+}
+
+async fn buy_one(a: &mut Client, from: Guid, item: u32, amount: u8) -> Option<BuyResult> {
+    a.clear();
+    a.send(CMSG_BUY_ITEM {
+        vendor: from,
+        item,
+        amount,
+        unknown1: 0,
+    })
+    .await;
+    handled(a).await;
+    a.gets(Duration::from_millis(1), |m| match m {
+        ServerOpcodeMessage::SMSG_BUY_FAILED(f) => Some(f.result),
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's vendor tests: a merchant with no menu opens its empty
+/// list, not when dead; four bundles of three in stacks of five, paid once;
+/// a ranked medal shown but refused the demoted and the young, then the
+/// poor; a conditioned item hidden, shown when met, refused stale; one under
+/// a condition with no row never shown.
+#[tokio::test]
+async fn a_vendor_sells_what_may_be_bought() {
+    let realm = harness::realm_with(peddler_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let peddler = guid::unit(PEDDLER, 4);
+    let empty = guid::unit(PEDDLER + 1, 5);
+    a.sees(peddler).await;
+    a.sees(empty).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(100)
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_GOSSIP_HELLO { guid: empty }).await;
+    let list = a
+        .wait_for("SMSG_LIST_INVENTORY", |m| match m {
+            ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) => Some((l.vendor, l.items.len())),
+            _ => None,
+        })
+        .await;
+    assert_eq!(list, (empty, 0), "an empty merchant");
+    on_map(&realm, move |m| crate::game::map::combat::kill(m, g, empty)).await;
+    a.clear();
+    a.send(CMSG_GOSSIP_HELLO { guid: empty }).await;
+    handled(&mut a).await;
+    assert!(
+        !a.backlog
+            .iter()
+            .any(|m| matches!(m, ServerOpcodeMessage::SMSG_LIST_INVENTORY(_))),
+        "not dead"
+    );
+    // Four bundles: twelve, in stacks of five, for eight copper.
+    assert_eq!(buy_one(&mut a, peddler, BUNDLE, 4).await, None);
+    let bought = on_map(&realm, move |m| {
+        let mut stacks: Vec<u32> = m.players[&g]
+            .items
+            .iter()
+            .filter(|i| i.entry == BUNDLE)
+            .map(|i| i.count())
+            .collect();
+        stacks.sort_unstable();
+        (stacks, m.players[&g].money())
+    })
+    .await;
+    assert_eq!(bought, (vec![2, 5, 5], 92));
+    // The medal: shown, but the young and the demoted are refused.
+    assert_eq!(listed(&mut a, peddler).await, vec![BUNDLE, MEDAL]);
+    let rank = move |m: &mut Map, level: u8, current: u8| {
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &d, level);
+        p.fields.set_byte(PLAYER_FIELD_BYTES, 3, 18);
+        p.fields.set_byte(PLAYER_BYTES_3, 3, current);
+    };
+    on_map(&realm, move |m| rank(m, 30, 7)).await;
+    assert_eq!(
+        buy_one(&mut a, peddler, MEDAL, 1).await,
+        Some(BuyResult::RankRequire),
+        "demoted"
+    );
+    on_map(&realm, move |m| rank(m, 29, 8)).await;
+    assert_eq!(
+        buy_one(&mut a, peddler, MEDAL, 1).await,
+        Some(BuyResult::RankRequire),
+        "too young"
+    );
+    on_map(&realm, move |m| {
+        rank(m, 30, 8);
+        m.players.get_mut(&g).unwrap().set_money(0);
+    })
+    .await;
+    assert_eq!(
+        buy_one(&mut a, peddler, MEDAL, 1).await,
+        Some(BuyResult::NotEnoughtMoney)
+    );
+    // Level 30 meets the secret's condition; at 9 it's hidden and refused.
+    assert_eq!(listed(&mut a, peddler).await, vec![BUNDLE, MEDAL, SECRET]);
+    on_map(&realm, move |m| {
+        rank(m, 9, 8);
+        m.players.get_mut(&g).unwrap().set_money(100);
+    })
+    .await;
+    assert_eq!(listed(&mut a, peddler).await, vec![BUNDLE, MEDAL]);
+    assert_eq!(
+        buy_one(&mut a, peddler, SECRET, 1).await,
+        Some(BuyResult::CantFindItem),
+        "stale"
+    );
+}
