@@ -742,13 +742,15 @@ pub fn cast(
     }) {
         map.send_to_observers(caster, &frame, true);
     }
-    if s.start_recovery_category != 0 {
-        let gcd = m
-            .apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time.max(1000))
-            .max(1000);
-        if let Some(c) = map.caster_mut(caster) {
-            c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
-        }
+    // The global cooldown is the spell's start time with its modifiers:
+    // none for one without (vmangos, mangos's `Player::AddGCD`, Thistle
+    // Tea's `Cooldowns.gcd_duration`).
+    let gcd = m.apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time);
+    if s.start_recovery_category != 0
+        && gcd > 0
+        && let Some(c) = map.caster_mut(caster)
+    {
+        c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
     }
     if time == 0 {
         execute(map, caster, s, targets, item, false);

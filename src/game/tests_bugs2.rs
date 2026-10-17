@@ -448,6 +448,27 @@ async fn health_regeneration_auras_give_their_health_in_and_out_of_combat() {
 }
 
 #[tokio::test]
+async fn a_spell_with_no_global_cooldown_starts_none() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "NOGCD");
+    let p = c.enter("Nogcd", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let gcd = map
+        .query(move |m| {
+            level(m, p, 60, &[10668]);
+            // Spirit of Boar: category 133, no time.
+            let went = spells::cast(m, p, 10668, Targets::default(), None);
+            (went, has(m, p, 10668), m.players[&p].caster.gcd_until)
+        })
+        .await
+        .unwrap();
+    assert_eq!(gcd, (true, true, None));
+}
+
+#[tokio::test]
 async fn a_modifier_touches_only_its_mask_past_32_bits() {
     if !have_data() {
         return;
