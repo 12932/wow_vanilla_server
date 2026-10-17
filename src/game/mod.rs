@@ -92,6 +92,14 @@ mod tests_scripts2;
 mod tests_creatures4;
 #[cfg(test)]
 mod tests_bosses;
+#[cfg(test)]
+mod tests_ai5;
+#[cfg(test)]
+mod tests_ai5_spells;
+#[cfg(test)]
+mod tests_ai5_conditions;
+#[cfg(test)]
+mod tests_ai5_instances;
 pub mod transports;
 pub mod update;
 pub mod weather;

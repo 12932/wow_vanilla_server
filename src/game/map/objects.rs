@@ -589,17 +589,22 @@ pub fn cast_at(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<G
 /// The objects a spell works on: the one aimed at, or the nearest its
 /// script targets name.
 fn object_targets(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<Guid> {
-    if let Some(o) = t.object.filter(|o| map.gameobject(*o).is_some()) {
-        return vec![o];
+    let named = |o: &GameObject| {
+        crate::game::map::spells::targets::script_target(map, caster, s.id, &[0], o.entry, o.guid)
+    };
+    // The object aimed at, unless a condition its row puts on it fails.
+    if let Some(o) = t.object.and_then(|o| map.gameobject(o)) {
+        let barred = map
+            .realm
+            .data
+            .spells
+            .script_target_conditions
+            .contains_key(&(s.id, 0, o.entry))
+            && !named(o);
+        if !barred {
+            return vec![o.guid];
+        }
     }
-    let entries: Vec<u32> = map
-        .realm
-        .data
-        .spells
-        .script_targets
-        .get(&s.id)
-        .map(|v| v.iter().filter(|(k, _)| *k == 0).map(|(_, e)| *e).collect())
-        .unwrap_or_default();
     let Some(at) = map.position_of(caster) else {
         return Vec::new();
     };
@@ -608,7 +613,7 @@ fn object_targets(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Ve
         .around(at.x, at.y, reach)
         .filter(|g| guid::is_game_object(*g))
         .filter_map(|g| map.gameobject(g))
-        .filter(|o| entries.contains(&o.entry) && dist(o.position, at) <= reach)
+        .filter(|o| named(o) && dist(o.position, at) <= reach)
         .min_by(|a, b| dist(a.position, at).total_cmp(&dist(b.position, at)))
         .map(|o| o.guid)
         .into_iter()
@@ -695,7 +700,7 @@ fn set_state(map: &mut Map, object: Guid, state: u32) {
 }
 
 /// The state an object rests in: its spawn's.
-fn resting_state(map: &Map, object: Guid) -> u32 {
+pub fn resting_state(map: &Map, object: Guid) -> u32 {
     let Some(o) = map.gameobject(object) else {
         return GO_STATE_READY;
     };

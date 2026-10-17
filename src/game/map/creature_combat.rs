@@ -80,195 +80,10 @@ pub struct Engagement {
     /// Damage it took from players' side, and from NPCs', this fight.
     pub damage_by_players: u64,
     pub damage_by_npcs: u64,
-    /// Those it called as the fight began, to come when the call is due.
-    pub assist: Option<Assist>,
-    /// When, away from its spawn, it next calls for help.
-    pub call_at: Option<Instant>,
-}
-
-/// A call for help on its way (Thistle Tea's `CallAssistance`).
-#[derive(Debug, Clone)]
-pub struct Assist {
-    pub at: Instant,
-    pub enemy: Guid,
-    pub helpers: Vec<Guid>,
-}
-
-/// How far a creature's call as a fight begins carries, and how long its
-/// helpers take to come (Thistle Tea's `Assistance`).
-pub const ASSIST_CALL_RADIUS: f32 = 10.0;
-pub const ASSIST_DELAY: Duration = Duration::from_millis(1500);
-/// Away from its spawn past this, a fighting creature calls again each
-/// second, as far as its call for help range.
-const CALL_PULSE_DISTANCE: f32 = 10.0;
-const CALL_PULSE_EVERY: Duration = Duration::from_secs(1);
-/// `FactionTemplate` flags: it answers a call for help; it flees from one.
-const FACTION_RESPONDS: u32 = 0x01;
-const FACTION_FLEES: u32 = 0x400;
-/// `flags_extra`: it never assists.
-const EXTRA_NO_ASSIST: u32 = 0x1_0000;
-/// Unit flags that keep a creature from helping: not selectable, stunned,
-/// not attackable; and pacified.
-const UNAVAILABLE_FLAGS: u32 = 0x0200_0000 | 0x0004_0000 | 0x2;
-const PACIFIED: u32 = 0x0002_0000;
-
-/// How far `g` calls for help: a script's range over its template's.
-fn call_range(map: &Map, g: Guid) -> f32 {
-    let Some(c) = map.creature(g) else {
-        return 0.0;
-    };
-    c.scripted
-        .as_deref()
-        .and_then(|s| s.call_for_help_range)
-        .or_else(|| template(map, g).map(|t| t.call_for_help_range))
-        .filter(|r| *r > 0.0)
-        .unwrap_or(0.0)
-}
-
-/// Whether a creature can come to help (Thistle Tea's
-/// `Assistance.available?`): alive, out of a fight, its own, free to act.
-fn can_assist(map: &Map, h: Guid) -> bool {
-    let Some(c) = map.creature(h) else {
-        return false;
-    };
-    let flags = c.fields.get_u32(UNIT_FIELD_FLAGS);
-    c.alive()
-        && !c.evading
-        && !c.combat.attacking
-        && c.combat.attackers.is_empty()
-        && c.owner.is_none()
-        && c.pet.is_none()
-        && flags & (UNAVAILABLE_FLAGS | PACIFIED) == 0
-        && !c.auras.has(AURA_MOD_INVISIBILITY)
-        && !c.scripted.as_deref().is_some_and(|s| s.passive)
-        && !crate::game::map::creature_motion::critter(map, h)
-        && template(map, h).is_none_or(|t| t.flags_extra & EXTRA_NO_ASSIST == 0)
-}
-
-/// Whether `h` answers `caller`'s call against `enemy` (Thistle Tea's
-/// `Assistance.eligible?`): its faction answers calls, is the caller's
-/// (or, `friendly`, a friend of it), and no friend of the enemy.
-fn answers(map: &Map, h: Guid, caller: Guid, enemy: Guid, friendly: bool) -> bool {
-    let faction = |g: Guid| {
-        map.unit_fields(g)
-            .map(|f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
-    };
-    let templates = &map.realm.data.faction_templates;
-    let (Some(fh), Some(fc)) = (faction(h), faction(caller)) else {
-        return false;
-    };
-    let (Some(th), Some(tc)) = (templates.get(&fh), templates.get(&fc)) else {
-        return false;
-    };
-    let responds = th.flags & FACTION_RESPONDS != 0 && th.flags & FACTION_FLEES == 0;
-    let allied = fh == fc || (friendly && th.friendly_to(tc));
-    let enemy_friend = faction(enemy)
-        .and_then(|f| templates.get(&f))
-        .is_some_and(|te| th.friendly_to(te));
-    can_assist(map, h) && responds && allied && !enemy_friend
-}
-
-/// The creatures near `g` that would answer its call against `enemy`, in
-/// sight.
-fn helpers(map: &mut Map, g: Guid, enemy: Guid, radius: f32, friendly: bool) -> Vec<Guid> {
-    let Some(at) = map.creature(g).map(|c| c.position) else {
-        return Vec::new();
-    };
-    let near: Vec<(Guid, Vector3d)> = map
-        .grid
-        .around(at.x, at.y, radius)
-        .filter(|h| guid::is_unit(*h) && *h != g)
-        .filter_map(|h| map.creature(h).map(|c| (h, c.position)))
-        .filter(|(_, p)| dist(*p, at) <= radius)
-        .collect();
-    let mut out = Vec::new();
-    for (h, p) in near {
-        if !answers(map, h, g, enemy, friendly) {
-            continue;
-        }
-        let seen = match map.nav.as_mut() {
-            Some(nav) => {
-                let eye = |v: Vector3d| Vector3d { z: v.z + 1.5, ..v };
-                nav.line_of_sight(eye(at), eye(p))
-            }
-            None => true,
-        };
-        if seen {
-            out.push(h);
-        }
-    }
-    out
-}
-
-/// A fight begins for `g` against `enemy` (Thistle Tea's
-/// `CallForHelp.capture`): one that calls for help gathers those of its
-/// faction within ten yards, who come a second and a half on.
-pub fn called_for_help(map: &mut Map, g: Guid, enemy: Guid) {
-    if call_range(map, g) <= 0.0
-        || map
-            .creature(g)
-            .is_none_or(|c| c.pet.is_some() || c.owner.is_some())
-    {
-        return;
-    }
-    let found = helpers(map, g, enemy, ASSIST_CALL_RADIUS, false);
-    let now = map.now;
-    if let Some(c) = map.creature_mut(g) {
-        c.engagement.call_at = Some(now + CALL_PULSE_EVERY);
-        if !found.is_empty() {
-            c.engagement.assist = Some(Assist {
-                at: now + ASSIST_DELAY,
-                enemy,
-                helpers: found,
-            });
-        }
-    }
-}
-
-/// Calls for help come due: those called come if they still can; one
-/// fighting away from its spawn calls its friends near again.
-fn answer_calls(map: &mut Map) {
-    let now = map.now;
-    let due: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| {
-            c.engagement.assist.as_ref().is_some_and(|a| a.at <= now)
-                || c.engagement.call_at.is_some_and(|t| t <= now)
-        })
-        .map(|(_, c)| c.guid)
-        .collect();
-    for g in due {
-        let Some(c) = map.creature_mut(g) else {
-            continue;
-        };
-        let fighting = c.alive() && c.combat.attacking && !c.evading;
-        let assist = c.engagement.assist.take_if(|a| a.at <= now);
-        let pulse = c.engagement.call_at.is_some_and(|t| t <= now);
-        if pulse {
-            c.engagement.call_at = fighting.then_some(now + CALL_PULSE_EVERY);
-        }
-        let (victim, away) = (
-            c.combat.victim,
-            dist(c.position, c.home) > CALL_PULSE_DISTANCE,
-        );
-        if !fighting {
-            continue;
-        }
-        if let Some(a) = assist {
-            for h in a.helpers {
-                if answers(map, h, g, a.enemy, false) {
-                    crate::game::map::ai::attacked(map, h, a.enemy);
-                }
-            }
-        }
-        if pulse && away && !victim.is_zero() {
-            let radius = call_range(map, g);
-            for h in helpers(map, g, victim, radius, true) {
-                crate::game::map::ai::attacked(map, h, victim);
-            }
-        }
-    }
+    /// Its calls for help on their way.
+    pub assist: Vec<crate::game::map::assistance::Assist>,
+    /// When it next calls its friends, fighting away from its spawn.
+    pub pulse_at: Option<Instant>,
 }
 
 /// A civilian's call for the guards, answered: it makes one at a time.
@@ -322,8 +137,8 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.zone_pulse_at = None;
         c.engagement.damage_by_players = 0;
         c.engagement.damage_by_npcs = 0;
-        c.engagement.assist = None;
-        c.engagement.call_at = None;
+        c.engagement.assist.clear();
+        c.engagement.pulse_at = None;
     }
 }
 
@@ -532,10 +347,11 @@ fn flee_prevented(map: &Map, g: Guid) -> bool {
     })
 }
 
-/// vmangos's `DoFleeToGetAssistance` (EventAI's flee for assistance): to
-/// the nearest creature of its faction not fighting, which joins in on
-/// arrival; with none near, it runs in fear for seven seconds.
-pub fn flee_for_assistance(map: &mut Map, g: Guid) {
+/// A creature flees (script command 47): seeking help (`seek`), to the
+/// nearest creature of its faction within 30 yards in sight that answers
+/// calls, which it calls on arrival; else, or with none, it runs in fear
+/// for seven seconds (Thistle Tea's `Flee.start`).
+pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
     let now = map.now;
     if flee_prevented(map, g) {
         return;
@@ -547,22 +363,11 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid) {
     if from.is_zero() {
         return;
     }
-    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
-    let helper = map
-        .grid
-        .around(pos.x, pos.y, FLEE_ASSISTANCE_RADIUS)
-        .filter(|h| guid::is_unit(*h) && *h != g)
-        .filter_map(|h| {
-            let hc = map.creature(h)?;
-            (hc.alive()
-                && !hc.combat.attacking
-                && hc.owner.is_none()
-                && hc.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction)
-                .then(|| (h, dist(hc.position, pos)))
-        })
-        .filter(|(_, d)| *d <= FLEE_ASSISTANCE_RADIUS)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(h, _)| h);
+    let helper = if seek {
+        crate::game::map::assistance::nearest_helper(map, g)
+    } else {
+        None
+    };
     emote(map, g, "%s attempts to run away in fear!");
     crate::game::map::spells::interrupt(map, g);
     let Some(c) = map.creature_mut(g) else {
@@ -642,7 +447,7 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
                 // Arrived: help is called, and given a moment.
                 if f.called_at.is_none() {
                     if !f.from.is_zero() {
-                        crate::game::map::ai::attacked(map, helper, f.from);
+                        crate::game::map::assistance::drawn_in(map, g, f.from);
                     }
                     if let Some(c) = map.creature_mut(g)
                         && let Some(fl) = c.engagement.flee.as_mut()
@@ -1065,7 +870,7 @@ pub fn regenerate(map: &mut Map) {
 pub fn update(map: &mut Map) {
     regenerate(map);
     watch_for_enemies(map);
-    answer_calls(map);
+    crate::game::map::assistance::update(map);
     let now = map.now;
     let pulses: Vec<(Guid, Guid)> = map
         .creatures

@@ -745,7 +745,7 @@ fn effect(
                 combat::start_attack(map, caster, target);
             }
         }
-        EFFECT_KNOCK_BACK => knock_back(map, caster, target, amount, e.misc_value),
+        EFFECT_KNOCK_BACK => knock_back(map, caster, target, e.misc_value, amount),
         EFFECT_CREATE_ITEM if e.item_type != 0 => {
             let item = super::scripts::created_item(map, caster, s, e.item_type);
             let _ = crate::game::map::inventory::add_item(

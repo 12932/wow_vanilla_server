@@ -342,12 +342,18 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
         }
         return true;
     };
-    let run = hab.fly
-        || map
-            .creatures
-            .get(key)
-            .and_then(|c| c.scripted.as_deref())
-            .is_some_and(|s| s.run);
+    // A circling flyer runs; one on a path flies at a walk unless a script
+    // says run (a cyclic one, too, unless its template always runs).
+    let scripted_run = map
+        .creatures
+        .get(key)
+        .and_then(|c| c.scripted.as_deref())
+        .is_some_and(|s| s.run);
+    let run = match kind {
+        MOVEMENT_RANDOM => hab.fly || scripted_run,
+        MOVEMENT_CYCLIC => scripted_run || always_runs(map, g),
+        _ => scripted_run,
+    };
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(c) = map.creatures.get_mut(key) else {
@@ -377,6 +383,15 @@ fn plan(map: &mut Map, key: usize, g: Guid, kind: u8, hab: Habitat) -> Option<Ve
         }
         MOVEMENT_CYCLIC => {
             let points = waypoints(map, g)?;
+            // Far from its lap, it makes its way to the start first.
+            let first = points.first().map(|w| Vector3d {
+                x: w.x,
+                y: w.y,
+                z: w.z,
+            })?;
+            if crate::game::map::combat::dist(pos, first) > 10.0 {
+                return route(map, g, pos, first).map(|(p, _, _)| p);
+            }
             let mut lap: Vec<Vector3d> = vec![pos];
             lap.extend(points.iter().map(|w| Vector3d {
                 x: w.x,
@@ -394,10 +409,11 @@ fn plan(map: &mut Map, key: usize, g: Guid, kind: u8, hab: Habitat) -> Option<Ve
         }
         _ => {
             // Waypoints, through the air.
+            // To the point it is bound for (the usual step moves it on
+            // when it gets there).
             let points = waypoints(map, g)?;
-            let c = map.creatures.get_mut(key)?;
-            c.waypoint = c.waypoint.wrapping_add(1) % points.len();
-            let w = points[c.waypoint];
+            let c = map.creatures.get(key)?;
+            let w = points[c.waypoint % points.len()];
             let to = Vector3d {
                 x: w.x,
                 y: w.y,
@@ -408,9 +424,16 @@ fn plan(map: &mut Map, key: usize, g: Guid, kind: u8, hab: Habitat) -> Option<Ve
     }
 }
 
+/// Whether its template has it always run (`flags_extra` 0x40).
+fn always_runs(map: &Map, g: Guid) -> bool {
+    map.creature(g)
+        .and_then(|c| map.realm.data.creature_templates.get(&c.entry))
+        .is_some_and(|t| t.flags_extra & 0x40 != 0)
+}
+
 /// The waypoints a creature walks: a script's route, its spawn's or its
 /// entry's.
-fn waypoints(map: &Map, g: Guid) -> Option<Vec<crate::game::data::Waypoint>> {
+pub fn waypoints(map: &Map, g: Guid) -> Option<Vec<crate::game::data::Waypoint>> {
     let c = map.creature(g)?;
     let points = match c.scripted.as_deref().and_then(|s| s.route.as_ref()) {
         Some(r) => (*r.points).clone(),

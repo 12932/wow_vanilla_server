@@ -571,10 +571,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("id"),
                 Waypoint {
+                    point: c.u32("point"),
                     x: c.f32("position_x"),
                     y: c.f32("position_y"),
                     z: c.f32("position_z"),
-                    orientation: c.f32("orientation"),
+                    orientation: super::waypoint_facing(c.f32("orientation")),
                     wait_ms: c.u32("waittime"),
                     script_id: c.u32("script_id"),
                 },
@@ -590,10 +591,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("entry"),
                 Waypoint {
+                    point: c.u32("point"),
                     x: c.f32("position_x"),
                     y: c.f32("position_y"),
                     z: c.f32("position_z"),
-                    orientation: c.f32("orientation"),
+                    orientation: super::waypoint_facing(c.f32("orientation")),
                     wait_ms: c.u32("waittime"),
                     script_id: c.u32("script_id"),
                 },
@@ -609,10 +611,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("id"),
                 Waypoint {
+                    point: c.u32("point"),
                     x: c.f32("position_x"),
                     y: c.f32("position_y"),
                     z: c.f32("position_z"),
-                    orientation: c.f32("orientation"),
+                    orientation: super::waypoint_facing(c.f32("orientation")),
                     wait_ms: c.u32("waittime"),
                     script_id: c.u32("script_id"),
                 },
@@ -628,10 +631,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("entry"),
                 Waypoint {
+                    point: c.u32("pointid"),
                     x: c.f32("location_x"),
                     y: c.f32("location_y"),
                     z: c.f32("location_z"),
-                    orientation: 0.0,
+                    orientation: None,
                     wait_ms: c.u32("waittime"),
                     script_id: 0,
                 },
@@ -1568,18 +1572,19 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     for (list, spells) in rows(db, "SELECT * FROM creature_spells", |c| {
         let spells: Vec<CreatureSpell> = (1..=8)
-            .map(|n| CreatureSpell {
-                spell: c.u32(&format!("spellId_{n}")),
-                probability: c.u32(&format!("probability_{n}")),
-                target: c.u32(&format!("castTarget_{n}")),
-                delay_initial: (
-                    c.u32(&format!("delayInitialMin_{n}")),
-                    c.u32(&format!("delayInitialMax_{n}")),
-                ),
-                delay_repeat: (
-                    c.u32(&format!("delayRepeatMin_{n}")),
-                    c.u32(&format!("delayRepeatMax_{n}")),
-                ),
+            .map(|n| {
+                let ms = |column: &str| c.u32(&format!("{column}_{n}")).saturating_mul(1000);
+                CreatureSpell {
+                    spell: c.u32(&format!("spellId_{n}")),
+                    probability: c.u32(&format!("probability_{n}")),
+                    target: c.u32(&format!("castTarget_{n}")),
+                    target_param1: c.u32(&format!("targetParam1_{n}")),
+                    target_param2: c.u32(&format!("targetParam2_{n}")),
+                    flags: c.u32(&format!("castFlags_{n}")),
+                    delay_initial: (ms("delayInitialMin"), ms("delayInitialMax")),
+                    delay_repeat: (ms("delayRepeatMin"), ms("delayRepeatMax")),
+                    script: c.u32(&format!("scriptId_{n}")),
+                }
             })
             .filter(|s| s.spell != 0)
             .collect();
@@ -1892,10 +1897,13 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     }) {
         s.cones.insert(id, degrees);
     }
-    for (id, kind, entry) in rows(db, &format!("SELECT * FROM spell_script_target {in_build}"), |c| {
-        (c.u32("entry"), c.u32("type"), c.u32("targetEntry"))
+    for (id, kind, entry, condition) in rows(db, &format!("SELECT * FROM spell_script_target {in_build}"), |c| {
+        (c.u32("entry"), c.u32("type"), c.u32("targetEntry"), c.u32("conditionId"))
     }) {
         s.script_targets.entry(id).or_default().push((kind, entry));
+        if condition != 0 {
+            s.script_target_conditions.insert((id, kind, entry), condition);
+        }
     }
     for (spell, learns) in rows(db, "SELECT * FROM spell_learn_spell", |c| {
         (c.u32("entry"), c.u32("SpellID"))

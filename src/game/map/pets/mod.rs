@@ -27,10 +27,12 @@ mod possess;
 pub mod rods;
 mod summon;
 mod totems;
+mod wild;
 
 pub use control::{button, handle, send_spells};
 pub use hunter::{NPC_FLAG_STABLEMASTER, list_stable, pet_xp_to_level, untrain_offer};
 pub use summon::{dismiss, spellbook, unsummon};
+pub use wild::remove_guardians;
 /// A pet sent at a target, or stopped where it is: for scripts.
 pub use ai::{attack as attack_target, stop as stop_where};
 
@@ -381,6 +383,14 @@ pub fn effect(
         | EFFECT_SUMMON_PHANTASM
         | EFFECT_SUMMON_DEMON => {
             let count = amount.clamp(1, 5) as usize;
+            // A creature's wild summons and guardians are creatures of
+            // their own.
+            if matches!(e.effect, EFFECT_SUMMON_WILD | EFFECT_SUMMON_GUARDIAN)
+                && wild::by_creature(map, caster)
+            {
+                wild::summon(map, caster, e.misc_value.max(0) as u32, s, index, count);
+                return;
+            }
             for i in 0..count {
                 totems::summon_guardian(map, caster, e.misc_value.max(0) as u32, s, i == 0);
             }

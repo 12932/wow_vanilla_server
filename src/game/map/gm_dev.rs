@@ -505,24 +505,8 @@ fn instance(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let Ok(m) = m.parse::<u32>() else {
                 return Some("Usage: .instance raid-reset <map>".into());
             };
-            let gone: Vec<u32> = {
-                let mut inst = realm.social.instances.lock();
-                let ids: Vec<u32> = inst.raids.values().filter(|r| r.map == m).map(|r| r.id).collect();
-                for id in &ids {
-                    inst.raids.remove(id);
-                }
-                ids
-            };
-            for id in &gone {
-                realm
-                    .store
-                    .delete_record(crate::game::instances::KIND_RAID, u64::from(*id));
-                realm.maps.stop(MapKey {
-                    map: m,
-                    instance: *id,
-                });
-            }
-            Some(format!("{} raid copies of map {m} reset.", gone.len()))
+            let gone = crate::game::instances::reset_raid(&realm, m);
+            Some(format!("{gone} raid copies of map {m} reset."))
         }
         _ => Some("Usage: .instance info|reset|switch <id>|raid-reset <map>".into()),
     }
