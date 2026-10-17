@@ -732,13 +732,18 @@ fn effect(
         EFFECT_CREATE_ITEM if e.item_type != 0 => {
             if let Some(to) = created_for(map, caster, target, &e, t) {
                 let item = super::scripts::created_item(map, caster, s, e.item_type);
-                let _ = crate::game::map::inventory::add_item(
+                let made = crate::game::map::inventory::add_item(
                     map,
                     to,
                     item,
                     amount.max(1) as u32,
                     true,
                 );
+                // A recipe's skill rises once its product is stored (Thistle
+                // Tea's `commit_store`, mangos's `UpdateCraftSkill`).
+                if made.is_ok() {
+                    crate::game::map::professions::recipe_skill_up(map, caster, s);
+                }
             }
         }
         EFFECT_LEARN_SPELL if e.trigger_spell != 0 => learn(map, target, e.trigger_spell),

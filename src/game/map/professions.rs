@@ -41,13 +41,14 @@ pub const SKILL_FISHING: u32 = 356;
 pub const SKILL_SKINNING: u32 = 393;
 pub const SKILL_LOCKPICKING: u32 = 633;
 
-/// The skills recipes raise.
+/// The skills recipes raise: smelting raises Mining.
 const CRAFTS: &[u32] = &[
     SKILL_FIRST_AID,
     SKILL_BLACKSMITHING,
     SKILL_LEATHERWORKING,
     SKILL_ALCHEMY,
     SKILL_COOKING,
+    SKILL_MINING,
     SKILL_TAILORING,
     SKILL_ENGINEERING,
     SKILL_ENCHANTING,
@@ -74,11 +75,12 @@ pub const FINKLE_IS_EINHORN: u32 = 16_710;
 /// knives that skin.
 pub fn tool_missing(p: &Player, s: &SpellTemplate, tool: u32) -> Option<u8> {
     use crate::game::map::spells::checks::fail;
-    if p.count_of(tool) > 0 {
+    if p.carried_count_of(tool) > 0 {
         return None;
     }
     if SKINNING_TOOLS.contains(&tool) && s.has_effect(EFFECT_SKINNING) {
-        return (!SKINNING_TOOLS.iter().any(|t| p.count_of(*t) > 0)).then_some(fail::EQUIPPED_ITEM);
+        return (!SKINNING_TOOLS.iter().any(|t| p.carried_count_of(*t) > 0))
+            .then_some(fail::EQUIPPED_ITEM);
     }
     Some(fail::TOTEMS)
 }
@@ -110,7 +112,7 @@ const FISHING_HOLE_RANGE: f32 = 22.0;
 const FAIL_BAD_TARGETS: u8 = 0x0a;
 const FAIL_CANT_BE_DISENCHANTED: u8 = 0x0c;
 const FAIL_CHEST_IN_USE: u8 = 0x15;
-const FAIL_ITEM_NOT_FOUND: u8 = 0x27;
+const FAIL_ITEM_GONE: u8 = 0x26;
 const FAIL_LOW_CASTLEVEL: u8 = 0x2c;
 const FAIL_ONLY_STEALTHED: u8 = 0x57;
 pub const FAIL_REQUIRES_SPELL_FOCUS: u8 = 0x5e;
@@ -210,24 +212,24 @@ pub fn skinning_required(level: u32, skill: u32) -> u32 {
     }
 }
 
-/// A gathering skill's chance to rise, in percent (Thistle Tea's
-/// `Gathering.gain_chance`).
-pub fn gather_gain_chance(skill: u32, value: u32, required: u32, multiplier: u32) -> u32 {
+/// A gathering skill's chance to rise, in percent, not rounded (Thistle
+/// Tea's `Gathering.gain_chance`).
+pub fn gather_gain_chance(skill: u32, value: u32, required: u32, multiplier: u32) -> f64 {
     let chance = if value >= required + 100 {
-        0
+        0.0
     } else if value >= required + 50 {
-        25
+        25.0
     } else if value >= required + 25 {
-        75
+        75.0
     } else {
-        100
+        100.0
     };
     let divisor = if matches!(skill, SKILL_MINING | SKILL_SKINNING) {
-        1 << (value / 75).min(8)
+        f64::from(1u32 << (value / 75).min(8))
     } else {
-        1
+        1.0
     };
-    (chance * multiplier / divisor).min(100)
+    (chance * f64::from(multiplier) / divisor).min(100.0)
 }
 
 /// A recipe's chance to raise its skill: orange, yellow, green, grey.
@@ -243,9 +245,10 @@ pub fn craft_gain_chance(value: u32, yellow: u32, gray: u32) -> u32 {
     }
 }
 
-/// Raise `skill` by one, `chance` percent of the time.
-pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: u32) -> bool {
-    let roll = rand::rng().random_range(0..100);
+/// Raise `skill` by one, `chance` percent of the time (a roll in
+/// `[0, 100)` under it, as Thistle Tea rolls).
+pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: f64) -> bool {
+    let roll = rand::rng().random_range(0.0..100.0);
     roll < chance
         && map
             .players
@@ -327,7 +330,7 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
             EFFECT_OPEN_LOCK_ITEM => {
                 let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
                 let Some(item) = item else {
-                    return Some(FAIL_ITEM_NOT_FOUND);
+                    return Some(FAIL_ITEM_GONE);
                 };
                 let lock = data.item(item.entry).map_or(0, |t| t.lock_id);
                 if lock == 0 {
@@ -377,22 +380,31 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
                     return Some(FAIL_TARGET_NO_POCKETS);
                 }
             }
+            // Thistle Tea's `Disenchant.validate_item`: an enchanter, and a
+            // single carried item that may be.
             EFFECT_DISENCHANT => {
-                let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
+                if skills::value(p, SKILL_ENCHANTING).unwrap_or(0) == 0 {
+                    return Some(FAIL_LOW_CASTLEVEL);
+                }
+                let item = t
+                    .item
+                    .and_then(|g| p.items.iter().find(|i| i.guid == g && i.carried()));
                 let ok = item.is_some_and(|i| {
                     i.count() == 1
                         && data.item(i.entry).is_some_and(|t| {
                             t.disenchant_id != 0 && t.flags & ITEM_FLAG_NO_DISENCHANT == 0
                         })
                 });
-                if !ok || skill_value(p, SKILL_ENCHANTING) == 0 {
+                if !ok {
                     return Some(FAIL_CANT_BE_DISENCHANTED);
                 }
             }
             EFFECT_ENCHANT_ITEM | EFFECT_ENCHANT_ITEM_TEMPORARY => {
-                let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
+                let item = t
+                    .item
+                    .and_then(|g| p.items.iter().find(|i| i.guid == g && i.carried()));
                 let Some(item) = item else {
-                    return Some(FAIL_ITEM_NOT_FOUND);
+                    return Some(FAIL_ITEM_GONE);
                 };
                 let fits = data.item(item.entry).is_some_and(|it| {
                     (s.equipped_item_class < 0 || it.class as i32 == s.equipped_item_class)
@@ -428,8 +440,15 @@ fn focus_near(map: &Map, at: Vector3d, focus: u32) -> bool {
 }
 
 /// Run `s`'s profession effects at `t`; the effects run are returned as a
-/// mask, and a recipe raises its skill.
-pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u8 {
+/// mask. An enchantment made by hand raises its skill (Thistle Tea's
+/// `advance_skill`); one from an item, or for a time, doesn't.
+pub fn execute(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    cast_item: Option<Guid>,
+) -> u8 {
     let data = map.realm.data.clone();
     let mut done = 0u8;
     for index in 0..3 {
@@ -460,7 +479,7 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
             }
             EFFECT_DISENCHANT => {
                 if let Some(item) = t.item {
-                    disenchant(map, caster, item);
+                    disenchant(map, caster, item, s.id);
                 }
             }
             EFFECT_ENCHANT_ITEM | EFFECT_ENCHANT_ITEM_TEMPORARY => {
@@ -473,37 +492,39 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
                                 data.crafts.enchant_charges.get(&s.id).copied().unwrap_or(0);
                             (secs * 1000, charges)
                         });
-                    crate::game::map::enchant::enchant_item(map, caster, item, id, temporary);
+                    let enchanted =
+                        crate::game::map::enchant::enchant_item(map, caster, item, id, temporary);
+                    if enchanted && temporary.is_none() && cast_item.is_none() {
+                        recipe_skill_up(map, caster, s);
+                    }
                 }
             }
             EFFECT_TRANS_DOOR => cast_line(map, caster, s, index),
             _ => {}
         }
     }
-    recipe_skill_up(map, caster, s);
     done
 }
 
-/// A recipe crafted: its skill may rise, by the recipe's colour.
+/// A recipe made: its skill may rise, by the recipe's colour. The first of
+/// its rows a craft names counts (Thistle Tea's `Skill.recipe`).
 pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     let data = map.realm.data.clone();
-    let Some(abilities) = data.spells.skill_abilities.get(&s.id) else {
+    let Some(a) = data.spells.skill_abilities.get(&s.id).and_then(|rows| {
+        rows.iter()
+            .find(|a| CRAFTS.contains(&a.skill) && a.trivial_high > 0)
+    }) else {
         return;
     };
-    for a in abilities
-        .iter()
-        .filter(|a| CRAFTS.contains(&a.skill) && a.trivial_high > 0)
-    {
-        let Some(value) = map
-            .players
-            .get(&caster)
-            .and_then(|p| skills::value(p, a.skill))
-        else {
-            continue;
-        };
-        let chance = craft_gain_chance(value, a.trivial_low, a.trivial_high);
-        try_raise(map, caster, a.skill, chance);
-    }
+    let Some(value) = map
+        .players
+        .get(&caster)
+        .and_then(|p| skills::value(p, a.skill))
+    else {
+        return;
+    };
+    let chance = craft_gain_chance(value, a.trivial_low, a.trivial_high);
+    try_raise(map, caster, a.skill, f64::from(chance));
 }
 
 /// Gathering, lockpicking or a plain opening: a lock opened with skill
@@ -705,7 +726,7 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
 }
 
 /// Disenchanting an item: it goes, and its dust and shards are looted.
-fn disenchant(map: &mut Map, caster: Guid, item: Guid) {
+fn disenchant(map: &mut Map, caster: Guid, item: Guid, spell: u32) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&caster) else {
         return;
@@ -716,10 +737,17 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid) {
     let Some(t) = data.item(p.items[i].entry) else {
         return;
     };
-    let Some(table) = data.loot.disenchant.get(&t.disenchant_id) else {
+    // Nothing to roll, or nothing rolled: try again, the item kept
+    // (Thistle Tea's).
+    let loot = data
+        .loot
+        .disenchant
+        .get(&t.disenchant_id)
+        .map(|table| loot::personal(&data, table, caster, &[], LootKind::Disenchant));
+    let Some(loot) = loot.filter(|l| !l.items.is_empty()) else {
+        send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
     };
-    let loot = loot::personal(&data, table, caster, &[], LootKind::Disenchant);
     crate::game::map::inventory::take_item(map, caster, i, 1);
     let value = map
         .players
@@ -732,7 +760,7 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid) {
         20.. => 75,
         _ => 100,
     };
-    try_raise(map, caster, SKILL_ENCHANTING, chance);
+    try_raise(map, caster, SKILL_ENCHANTING, f64::from(chance));
     loot::show_item_loot(map, caster, item, loot);
 }
 
@@ -869,7 +897,12 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         .get(&player)
         .and_then(|p| skills::value(p, SKILL_FISHING))
         .unwrap_or(0);
-    try_raise(map, player, SKILL_FISHING, fishing_gain_chance(learned));
+    try_raise(
+        map,
+        player,
+        SKILL_FISHING,
+        f64::from(fishing_gain_chance(learned)),
+    );
     let wanted = map
         .players
         .get(&player)
@@ -1136,9 +1169,9 @@ mod tests {
         assert_eq!(craft_gain_chance(15, 15, 35), 75);
         assert_eq!(craft_gain_chance(25, 15, 35), 25);
         assert_eq!(craft_gain_chance(35, 15, 35), 0);
-        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 1, 0, 1), 100);
-        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1), 25);
-        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1), 12);
+        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 1, 0, 1), 100.0);
+        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1), 25.0);
+        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1), 12.5);
         assert_eq!(fishing_gain_chance(150), 25);
         assert!(catch_landed(100, 0, 100));
         assert!(!catch_landed(30, 50, 1));

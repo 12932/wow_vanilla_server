@@ -436,8 +436,9 @@ pub fn check(
         if let Some(p) = map.players.get(&caster)
             && !p.gm
         {
+            // Carried, not banked (Thistle Tea's `count_entry`).
             for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0) {
-                if p.count_of(*reagent) < *count {
+                if p.carried_count_of(*reagent) < *count {
                     return Some(fail::REAGENTS);
                 }
             }

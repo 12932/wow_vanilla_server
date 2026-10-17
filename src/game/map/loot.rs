@@ -77,7 +77,8 @@ impl LootKind {
             // The client has no skinning type: pickpocketing's window.
             LootKind::Pickpocket | LootKind::Skinning => 2,
             LootKind::Fishing => 3,
-            LootKind::Disenchant => 4,
+            // An item's loot shows as Thistle Tea and mangos show it.
+            LootKind::Disenchant => 2,
         }
     }
 }

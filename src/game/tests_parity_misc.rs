@@ -951,3 +951,287 @@ async fn a_corpse_wears_its_items_inventory_types() {
     .await;
     assert_eq!(field >> 24, 20, "the inventory type over the look");
 }
+
+// Crafting and disenchanting, line by line with Thistle Tea.
+
+const RECIPE: u32 = 900_110;
+const TWICE_LISTED: u32 = 900_111;
+const SMELT: u32 = 900_112;
+const DISENCHANT: u32 = 13_262;
+const ENCHANT: u32 = 900_113;
+const CRAFTED: u32 = 900_500;
+const FILLER: u32 = 900_501;
+const REAGENT: u32 = 900_502;
+const SWORD: u32 = 900_503;
+const DUST: u32 = 900_504;
+const DUSTLESS: u32 = 900_505;
+const DUST_TABLE: u32 = 900;
+const EMPTY_TABLE: u32 = 901;
+
+fn crafting_data() -> GameData {
+    use crate::game::data::LootEntry;
+    use crate::game::data::spells::SkillAbility;
+    let mut d = data();
+    let made = |id, item| {
+        let mut s = create_item(id, 1, item);
+        s.effects[0].base_points = 0;
+        s
+    };
+    let mut recipe = made(RECIPE, CRAFTED);
+    recipe.reagents[0] = (REAGENT, 1);
+    d.spells.spells.insert(RECIPE, recipe);
+    d.spells
+        .spells
+        .insert(TWICE_LISTED, made(TWICE_LISTED, CRAFTED));
+    d.spells.spells.insert(SMELT, made(SMELT, CRAFTED));
+    let mut disenchant = create_item(DISENCHANT, 0, 0);
+    disenchant.effects[0] = SpellEffect {
+        effect: 99,
+        ..Default::default()
+    };
+    d.spells.spells.insert(DISENCHANT, disenchant);
+    let mut enchant = create_item(ENCHANT, 0, 0);
+    enchant.effects[0] = SpellEffect {
+        effect: 53,
+        misc_value: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(ENCHANT, enchant);
+    let row = |spell, skill, low, high| SkillAbility {
+        skill,
+        spell,
+        trivial_low: low,
+        trivial_high: high,
+        ..Default::default()
+    };
+    d.spells
+        .skill_abilities
+        .insert(RECIPE, vec![row(RECIPE, 164, 5, 10)]);
+    d.spells.skill_abilities.insert(
+        TWICE_LISTED,
+        vec![row(TWICE_LISTED, 164, 5, 10), row(TWICE_LISTED, 164, 5, 10)],
+    );
+    d.spells
+        .skill_abilities
+        .insert(SMELT, vec![row(SMELT, 186, 25, 70)]);
+    // Disenchant's own row, as the client's data has it.
+    d.spells
+        .skill_abilities
+        .insert(DISENCHANT, vec![row(DISENCHANT, 333, 20, 60)]);
+    for (entry, stackable, disenchant_id) in [
+        (CRAFTED, 20, 0),
+        (FILLER, 1, 0),
+        (REAGENT, 20, 0),
+        (SWORD, 1, DUST_TABLE),
+        (DUSTLESS, 1, EMPTY_TABLE),
+        (DUST, 20, 0),
+    ] {
+        d.items.insert(
+            entry,
+            ItemTemplate {
+                entry,
+                name: format!("Item {entry}"),
+                class: if disenchant_id != 0 { 2 } else { 7 },
+                stackable,
+                disenchant_id,
+                quality: 2,
+                ..Default::default()
+            },
+        );
+    }
+    d.loot.disenchant.insert(
+        DUST_TABLE,
+        vec![LootEntry {
+            item: DUST,
+            chance: 100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }],
+    );
+    d.loot.disenchant.insert(EMPTY_TABLE, Vec::new());
+    d
+}
+
+fn skill(m: &Map, g: Guid, skill: u32) -> u32 {
+    crate::game::map::skills::value(&m.players[&g], skill).unwrap_or(0)
+}
+
+/// Cast `spell` as `g` would, from no cooldown.
+fn cast(m: &mut Map, g: Guid, spell: u32, targets: crate::game::map::spells::Targets) {
+    m.now = std::time::Instant::now();
+    if let Some(p) = m.players.get_mut(&g) {
+        p.caster.gcd_until = None;
+        if !p.spells.contains(&spell) {
+            p.spells.push(spell);
+        }
+    }
+    crate::game::map::spells::cast(m, g, spell, targets, None);
+}
+
+/// An item put in the bank's first slot.
+fn banked(m: &mut Map, g: Guid, entry: u32, count: u32) {
+    let data = m.realm.data.clone();
+    let counter = m
+        .realm
+        .next_item
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let item = crate::game::map::player::Item::new(
+        &data,
+        crate::game::guid::item(counter),
+        g,
+        entry,
+        crate::game::store::BAG_PLAYER,
+        crate::game::map::inventory::BANK_START,
+        count,
+    );
+    m.players.get_mut(&g).unwrap().items.push(item);
+}
+
+/// The reason of the last failed `SMSG_CAST_RESULT` for `spell`.
+async fn failed(c: &mut Client, spell: u32) -> u8 {
+    let frame = c
+        .wait_frame(
+            "a failed SMSG_CAST_RESULT",
+            crate::game::map::spells::SMSG_CAST_RESULT,
+            |f| f[..4] == spell.to_le_bytes() && f[4] == 2,
+        )
+        .await;
+    frame[5]
+}
+
+#[tokio::test]
+async fn a_recipe_rises_once_its_product_is_stored_and_by_its_first_row() {
+    let realm = harness::realm_with(crafting_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let (full, stored, twice, smelted) = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::skills::learn_skill(p, 164, 1);
+        crate::game::map::skills::learn_skill(p, 186, 1);
+        let _ = crate::game::map::inventory::add_item(m, g, REAGENT, 5, false);
+        // The pack full: nothing made, the skill as it was.
+        while crate::game::map::inventory::add_item(m, g, FILLER, 1, false).is_ok() {}
+        cast(m, g, RECIPE, Default::default());
+        let full = (skill(m, g, 164), m.players[&g].count_of(CRAFTED));
+        let i = m.players[&g]
+            .items
+            .iter()
+            .position(|i| i.entry == FILLER)
+            .unwrap();
+        crate::game::map::inventory::take_item(m, g, i, 1);
+        cast(m, g, RECIPE, Default::default());
+        let stored = (skill(m, g, 164), m.players[&g].count_of(CRAFTED));
+        // Listed twice, one roll.
+        cast(m, g, TWICE_LISTED, Default::default());
+        let twice = skill(m, g, 164);
+        // Smelting raises Mining.
+        cast(m, g, SMELT, Default::default());
+        (full, stored, twice, skill(m, g, 186))
+    })
+    .await;
+    assert_eq!(full, (1, 0), "with the pack full, no product and no rise");
+    assert_eq!(stored, (2, 1));
+    assert_eq!(twice, 3, "a recipe rises once a cast");
+    assert_eq!(smelted, 2, "smelting is Mining's");
+}
+
+#[tokio::test]
+async fn reagents_come_from_the_bags_and_products_go_to_them() {
+    let realm = harness::realm_with(crafting_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        // Not a GM, whom reagents don't bind.
+        p.gm = false;
+        crate::game::map::skills::learn_skill(p, 164, 1);
+        banked(m, g, REAGENT, 5);
+        cast(m, g, RECIPE, Default::default());
+    })
+    .await;
+    assert_eq!(
+        failed(&mut a, RECIPE).await,
+        0x5C,
+        "a reagent in the bank isn't to hand"
+    );
+    let (banked_reagents, made) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (p.count_of(REAGENT), p.count_of(CRAFTED))
+    })
+    .await;
+    assert_eq!((banked_reagents, made), (5, 0));
+    // A product doesn't join a stack in the bank.
+    let in_bank = on_map(&realm, move |m| {
+        banked(m, g, CRAFTED, 1);
+        let _ = crate::game::map::inventory::add_item(m, g, REAGENT, 1, false);
+        cast(m, g, RECIPE, Default::default());
+        let p = &m.players[&g];
+        let bank = p
+            .items
+            .iter()
+            .find(|i| i.entry == CRAFTED && !i.carried())
+            .map(|i| i.count());
+        (bank, p.carried_count_of(CRAFTED))
+    })
+    .await;
+    assert_eq!(in_bank, (Some(1), 1));
+}
+
+#[tokio::test]
+async fn a_disenchant_rolls_once_shows_as_an_items_loot_and_needs_something_to_give() {
+    let realm = harness::realm_with(crafting_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let target = |item| crate::game::map::spells::Targets {
+        item: Some(item),
+        ..Default::default()
+    };
+    let guid_of = move |m: &Map, entry| {
+        m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == entry)
+            .unwrap()
+            .guid
+    };
+    // No Enchanting: too low.
+    on_map(&realm, move |m| {
+        let _ = crate::game::map::inventory::add_item(m, g, SWORD, 1, false);
+        let _ = crate::game::map::inventory::add_item(m, g, DUSTLESS, 1, false);
+        let sword = guid_of(m, SWORD);
+        cast(m, g, DISENCHANT, target(sword));
+    })
+    .await;
+    assert_eq!(failed(&mut a, DISENCHANT).await, 0x2C);
+    // An enchanter: one rise for the one disenchant, and an item's window.
+    a.clear();
+    let (after, swords) = on_map(&realm, move |m| {
+        crate::game::map::skills::learn_skill(m.players.get_mut(&g).unwrap(), 333, 1);
+        let sword = guid_of(m, SWORD);
+        cast(m, g, DISENCHANT, target(sword));
+        (skill(m, g, 333), m.players[&g].count_of(SWORD))
+    })
+    .await;
+    assert_eq!((after, swords), (2, 0), "one roll, the item gone");
+    let window = a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await;
+    assert_eq!(window[8], 2, "an item's loot");
+    // Nothing on its table: try again, the item kept, no rise.
+    on_map(&realm, move |m| {
+        let item = guid_of(m, DUSTLESS);
+        cast(m, g, DISENCHANT, target(item));
+    })
+    .await;
+    assert_eq!(failed(&mut a, DISENCHANT).await, 0x7A);
+    let (after, kept) = on_map(&realm, move |m| {
+        (skill(m, g, 333), m.players[&g].count_of(DUSTLESS))
+    })
+    .await;
+    assert_eq!((after, kept), (2, 1));
+    // An enchantment at an item not there: gone.
+    on_map(&realm, move |m| {
+        cast(m, g, ENCHANT, target(crate::game::guid::item(999_999)));
+    })
+    .await;
+    assert_eq!(failed(&mut a, ENCHANT).await, 0x26);
+}
