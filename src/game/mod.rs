@@ -68,6 +68,8 @@ mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
+mod tests_p3_world_bg;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
