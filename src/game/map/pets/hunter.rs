@@ -160,8 +160,7 @@ pub fn tame(map: &mut Map, hunter: Guid, beast: Guid, spell: u32) {
 
 /// The hunter's kill: their pet earns the experience of it, if it is below
 /// its master.
-pub fn kill_xp(map: &mut Map, owner: Guid, victim: Guid) {
-    let data = map.realm.data.clone();
+pub fn kill_xp(map: &mut Map, owner: Guid, victim: Guid, share: super::KillShare) {
     let Some(pet) = map.players.get(&owner).and_then(|p| p.owned.pet) else {
         return;
     };
@@ -182,18 +181,25 @@ pub fn kill_xp(map: &mut Map, owner: Guid, victim: Guid) {
     let Some(v) = map.creature(victim) else {
         return;
     };
-    let t = data.creature_template(v.entry);
-    if t.is_some_and(|t| t.static_flags1 & 0x2 != 0) {
+    let mob_level = v.fields.get_u32(UNIT_FIELD_LEVEL);
+    let xp = match share {
+        super::KillShare::Solo => crate::game::map::combat::kill_xp_with(
+            u32::from(owner_level),
+            u32::from(level),
+            mob_level,
+            &crate::game::map::combat::kill_options(map, victim),
+        ),
+        super::KillShare::Group { xp, max_level } => {
+            if u32::from(level) <= max_level {
+                xp
+            } else {
+                0
+            }
+        }
+    };
+    if xp == 0 {
         return;
     }
-    let elite = t.is_some_and(|t| t.rank == 1 || t.rank == 2);
-    let mult = t.map(|t| t.xp_multiplier).unwrap_or(1.0);
-    let xp = crate::game::map::combat::kill_xp(
-        u32::from(level),
-        v.fields.get_u32(UNIT_FIELD_LEVEL),
-        elite,
-        mult,
-    );
     gain_xp(map, pet, xp, owner_level);
     // A kill bonds them more.
     let rank = map

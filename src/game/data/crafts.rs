@@ -27,6 +27,9 @@ pub struct ItemSet {
     pub items: Vec<u32>,
     /// (spell, items worn).
     pub spells: Vec<(u32, u32)>,
+    /// A skill its bonuses ask for, and how much of it.
+    pub required_skill: u32,
+    pub required_skill_rank: u32,
 }
 
 #[derive(Debug, Default)]
@@ -116,6 +119,8 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut CraftData) {
             })
             .filter(|(s, _)| *s != 0)
             .collect(),
+        required_skill: c.u32("required_skill"),
+        required_skill_rank: c.u32("required_skill_rank"),
     }) {
         d.item_sets.insert(s.id, s);
     }

@@ -46,6 +46,61 @@ pub fn dueling(map: &Map, a: Guid, b: Guid) -> bool {
         .is_some_and(|d| d.opponent == b && d.phase == Phase::Fighting)
 }
 
+/// Areas where duels may be fought (`AreaTable` flags).
+pub const AREA_FLAG_DUELS: u32 = 0x40;
+/// `SpellCastResult`s a challenge is refused with.
+const FAIL_BAD_TARGETS: u8 = 0x0a;
+const FAIL_NO_DUELING: u8 = 0x47;
+const FAIL_TARGET_DUELING: u8 = 0x68;
+
+/// Why `caster` can't challenge `target` with `s`, as Thistle Tea's duel
+/// admission has it: only a player, on this map, not one who ignores the
+/// challenger; neither already in a duel; both where duels are allowed
+/// (an area whose flags are unknown allows them).
+pub fn check(
+    map: &Map,
+    caster: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+    target: Option<Guid>,
+) -> Option<u8> {
+    if !s
+        .effects
+        .iter()
+        .any(|e| e.effect == crate::game::map::spells::EFFECT_DUEL)
+    {
+        return None;
+    }
+    let (Some(a), Some(b)) = (
+        map.players.get(&caster),
+        target.and_then(|t| map.players.get(&t)),
+    ) else {
+        return Some(FAIL_BAD_TARGETS);
+    };
+    if a.guid == b.guid
+        || map
+            .realm
+            .social
+            .lists
+            .lock()
+            .ignores(b.guid, a.guid)
+    {
+        return Some(FAIL_BAD_TARGETS);
+    }
+    if a.duel.is_some() || b.duel.is_some() {
+        return Some(FAIL_TARGET_DUELING);
+    }
+    let allowed = |area: u32| {
+        map.realm
+            .data
+            .area(area)
+            .is_none_or(|i| i.flags & AREA_FLAG_DUELS != 0)
+    };
+    if !allowed(a.area) || !allowed(b.area) {
+        return Some(FAIL_NO_DUELING);
+    }
+    None
+}
+
 /// The Duel spell's effect: `caster` challenges `target`.
 pub fn challenge(map: &mut Map, caster: Guid, target: Guid) {
     let (Some(a), Some(b)) = (map.players.get(&caster), map.players.get(&target)) else {
@@ -166,6 +221,21 @@ fn end(map: &mut Map, loser: Guid, how: Option<DuelWinnerReason>) {
             p.outbound.send(&SMSG_DUEL_COMPLETE {
                 ended_without_interruption: how.is_some(),
             });
+        }
+    }
+    // Their pets stop fighting the other side.
+    for (g, other) in [(loser, winner), (winner, loser)] {
+        if let Some(pet) = crate::game::map::pets::pet_of(map, g) {
+            let foes = [other, crate::game::map::pets::pet_of(map, other).unwrap_or_default()];
+            if map
+                .creature(pet)
+                .is_some_and(|c| c.combat.attacking && foes.contains(&c.combat.victim))
+            {
+                combat::stop_attack(map, pet);
+                if let Some(c) = map.creature_mut(pet) {
+                    c.threat.retain(|(t, _)| !foes.contains(t));
+                }
+            }
         }
     }
     if let Some(reason) = how {

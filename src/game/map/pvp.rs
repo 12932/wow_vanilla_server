@@ -239,20 +239,18 @@ pub fn battlefield_list(map: &Map, g: Guid, battlemaster: Guid, map_id: u32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let level = p.level();
-    let bracket = match level {
-        0..=19 => BattlegroundBracket::Tens,
-        20..=29 => BattlegroundBracket::Twenties,
-        30..=39 => BattlegroundBracket::Thirties,
-        40..=49 => BattlegroundBracket::Fourties,
-        50..=59 => BattlegroundBracket::Fifties,
+    let bg = crate::game::battlegrounds::bg_of_map(map_id).unwrap_or(0);
+    // Alterac Valley's one bracket is the first (Thistle Tea's list).
+    let number = crate::game::battlegrounds::bracket_for(bg, p.level());
+    let bracket = match number {
+        0 => BattlegroundBracket::Tens,
+        1 => BattlegroundBracket::Twenties,
+        2 => BattlegroundBracket::Thirties,
+        3 => BattlegroundBracket::Fourties,
+        4 => BattlegroundBracket::Fifties,
         _ => BattlegroundBracket::Sixty,
     };
-    let instances = crate::game::battlegrounds::instances(
-        &map.realm,
-        crate::game::battlegrounds::bg_of_map(map_id).unwrap_or(0),
-        crate::game::battlegrounds::bracket_of(level),
-    );
+    let instances = crate::game::battlegrounds::instances(&map.realm, bg, number);
     p.outbound.send(&SMSG_BATTLEFIELD_LIST {
         battlemaster,
         map: crate::game::map::movement::map_enum(map_id),
@@ -382,6 +380,26 @@ pub fn update(map: &mut Map) {
         } else if !holds && flagged && p.combat.last_pvp.is_none() {
             p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, false);
         }
+    }
+}
+
+/// Arrived somewhere (a worldport, a teleport, a flight's end): one who
+/// must be flagged there is an Honorless Target a while, as Thistle Tea's
+/// `Honor.Protection` has it. A battleground gives its own on arrival.
+pub fn arrived(map: &mut Map, g: Guid) {
+    if map.battleground.is_some() {
+        return;
+    }
+    crate::game::map::world::update_zone(map, g);
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    if p.death != Death::Alive || p.flight.is_some() {
+        return;
+    }
+    let (team, zone) = (p.team, p.zone);
+    if enforced(map, team, zone) {
+        crate::game::map::spells::cast_triggered(map, g, SPELL_HONORLESS_TARGET, Some(g));
     }
 }
 
@@ -605,62 +623,70 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
     }
 }
 
-/// A creature died at a player's hand: killing a civilian is dishonorable
-/// (unless it was worth nothing anyway), an enemy leader honorable.
+/// A creature died at a player's (or their pet's) hand, as Thistle Tea's
+/// `Honor.creature_award` has it: a civilian too low to matter (gray, or
+/// worth no experience) is a dishonorable kill, an enemy leader an
+/// honorable one, for the killer and their group's living members near.
+/// A pet, or one Honorless, is worth nothing.
 pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
+    let killer = crate::game::map::pets::master(map, killer);
     if !guid::is_player(killer) {
         return;
     }
     let Some(c) = map.creature(creature) else {
         return;
     };
+    if c.owner.is_some() || c.auras.has(crate::game::map::auras::AURA_NO_PVP_CREDIT) {
+        return;
+    }
     let Some(t) = map.realm.data.creature_template(c.entry) else {
         return;
     };
-    let (civilian, leader) = (t.civilian, t.racial_leader);
+    let (civilian, leader, at, entry) = (t.civilian, t.racial_leader, c.position, t.entry);
     let xp_free = t.xp_multiplier == 0.0;
     let mob_level = c.fields.get_u32(UNIT_FIELD_LEVEL);
-    let Some(level) = map.players.get(&killer).map(|p| p.level()) else {
-        return;
-    };
-    let award = if civilian
-        && (mob_level <= crate::game::map::combat::gray_level(u32::from(level)) || xp_free)
-    {
-        // A gray civilian costs nothing more than the kill.
-        None
-    } else if civilian {
-        Some(Award {
-            kind: AwardKind::Dishonorable,
-            points: honor::dishonorable_points(level),
-            victim: None,
-            victim_rank: 0,
+    let recipients: Vec<(Guid, u8)> = crate::game::map::loot::tap_group(map, killer, at)
+        .into_iter()
+        .filter_map(|g| {
+            map.players
+                .get(&g)
+                .filter(|p| p.death == Death::Alive)
+                .map(|p| (g, p.level()))
         })
-    } else if leader {
-        Some(Award {
-            kind: AwardKind::Honorable,
-            points: 488.0,
-            victim: Some(u64::from(c.entry) << 32),
-            victim_rank: 19,
-        })
-    } else {
-        None
-    };
-    let Some(a) = award else {
-        return;
-    };
-    register(map, killer);
-    map.realm
-        .social
-        .honor
-        .lock()
-        .award(guid::counter(killer), a);
-    let shown = if a.kind == AwardKind::Dishonorable {
-        -(a.points as i32)
-    } else {
-        a.points as i32
-    };
-    credit(map, killer, shown, creature, a.victim_rank);
-    refresh(map, killer);
+        .collect();
+    for (g, level) in recipients {
+        let award = if civilian
+            && (mob_level <= crate::game::map::combat::gray_level(u32::from(level)) || xp_free)
+        {
+            Some(Award {
+                kind: AwardKind::Dishonorable,
+                points: honor::dishonorable_points(level),
+                victim: None,
+                victim_rank: 0,
+            })
+        } else if leader {
+            Some(Award {
+                kind: AwardKind::Honorable,
+                points: 488.0,
+                victim: Some(u64::from(entry) << 32),
+                victim_rank: 19,
+            })
+        } else {
+            None
+        };
+        let Some(a) = award else {
+            continue;
+        };
+        register(map, g);
+        map.realm.social.honor.lock().award(guid::counter(g), a);
+        let shown = if a.kind == AwardKind::Dishonorable {
+            -(a.points as i32)
+        } else {
+            a.points as i32
+        };
+        credit(map, g, shown, creature, a.victim_rank);
+        refresh(map, g);
+    }
 }
 
 /// Bonus honor: battleground objectives and wins.

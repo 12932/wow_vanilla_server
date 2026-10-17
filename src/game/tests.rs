@@ -3952,19 +3952,34 @@ mod warsong {
         }
         assert!(horde_flag.is_some(), "the flags go up");
         for capture in 1..=3 {
-            let flag = map
-                .query(|m| match m.battleground.as_ref().and_then(|b| b.flags[1]) {
-                    Some(Flag::AtBase(go)) => Some(go),
-                    _ => None,
-                })
-                .await
-                .flatten()
-                .expect("the Horde's flag at its base");
+            // After a capture the flags stand again 23 seconds on: now.
+            let mut flag = None;
+            for _ in 0..100 {
+                flag = map
+                    .query(|m| {
+                        let b = m.battleground.as_mut()?;
+                        for t in b.timers.iter_mut() {
+                            t.0 = std::time::Instant::now();
+                        }
+                        match b.flags[1] {
+                            Some(Flag::AtBase(go)) => Some(go),
+                            _ => None,
+                        }
+                    })
+                    .await
+                    .flatten();
+                if flag.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let flag = flag.expect("the Horde's flag at its base");
             put(&map, &mut a, 916.0, 1434.0, 345.5).await;
             a.send(CMSG_GAMEOBJ_USE { guid: flag }).await;
+            // The Horde's flag carried: the Alliance's side shows it (2339).
             a.wait_for("the flag taken", |m| match m {
                 ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => {
-                    (w.state.state == 2338 && w.state.value == 2).then_some(())
+                    (w.state.state == 2339 && w.state.value == 2).then_some(())
                 }
                 _ => None,
             })
@@ -3974,9 +3989,12 @@ mod warsong {
                 trigger_id: CAPTURE_TRIGGERS[0],
             })
             .await;
+            // Every change sends all the states: the capture's count.
             let score = a
                 .wait_for("the capture", |m| match m {
-                    ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) if w.state.state == 1581 => {
+                    ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w)
+                        if w.state.state == 1581 && w.state.value == capture =>
+                    {
                         Some(w.state.value)
                     }
                     _ => None,
@@ -4383,7 +4401,9 @@ mod security {
                     z,
                 },
                 orientation: 0.0,
-                fall_time: 0.0,
+                // The client's fall time, in ms (a u32 wow_messages reads as a
+                // float): long enough to hurt.
+                fall_time: f32::from_bits(2000),
             },
         };
         a.send(at(START.2 + 30.0, true)).await;

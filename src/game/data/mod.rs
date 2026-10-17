@@ -376,6 +376,9 @@ pub struct VendorItem {
     pub max_count: u32,
     pub restock_secs: u32,
     pub condition: u32,
+    /// `itemflags`: 1, the restock time varies; 2, it shortens with the
+    /// realm's population.
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -462,6 +465,9 @@ pub struct GameData {
     pub scripts: scripts::ScriptData,
     /// Text emote → the animation it plays.
     pub text_emote_anims: AHashMap<u32, u32>,
+    /// `Emotes.dbc`'s animations that are a state the unit stays in (a
+    /// dance), not played once.
+    pub emote_states: ahash::AHashSet<u32>,
     /// Locks, item sets, random properties and the like.
     pub crafts: crafts::CraftData,
     pub pets: pets::PetData,

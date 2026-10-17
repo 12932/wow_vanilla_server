@@ -164,9 +164,19 @@ pub struct Roll {
     pub no_parry: bool,
     pub no_block: bool,
     pub always_crush: bool,
+    /// What the victim's auras take off its attackers' hit chance (in
+    /// percent; negative helps them).
+    pub attacker_hit: f32,
+    /// A player victim with weapons sheathed doesn't block.
+    pub sheathed: bool,
 }
 
 impl Roll {
+    /// The miss chance, in hundredths of a percent.
+    pub fn miss_bp(&self) -> i32 {
+        self.miss()
+    }
+
     fn skill_diff(&self) -> i32 {
         self.attacker_skill - self.victim_defense
     }
@@ -214,7 +224,10 @@ impl Roll {
         } else {
             self.hit
         };
-        bp((self.low_level(5.0 + penalty - skill_bonus) - hit).clamp(0.0, 60.0))
+        bp(
+            (self.low_level(5.0 + penalty - skill_bonus) - hit - self.attacker_hit)
+                .clamp(0.0, 60.0),
+        )
     }
 
     fn sitting_crit(&self) -> bool {
@@ -259,7 +272,12 @@ impl Roll {
     }
 
     fn block(&self) -> i32 {
-        if self.ranged || self.avoidance_disabled || self.from_behind || self.block <= 0.0 {
+        if self.ranged
+            || self.avoidance_disabled
+            || self.from_behind
+            || self.block <= 0.0
+            || (self.victim_is_player && self.sheathed)
+        {
             return 0;
         }
         if self.victim_is_player {
@@ -385,17 +403,112 @@ pub fn armor_reduction(armor: u32, attacker_level: u32) -> f32 {
 
 /// XP for a kill (vmangos's `MaNGOS::XP::BaseGain`, vanilla content).
 pub fn kill_xp(player_level: u32, mob_level: u32, elite: bool, multiplier: f32) -> u32 {
-    let base = if mob_level >= player_level {
-        let diff = (mob_level - player_level).min(4);
-        ((player_level * 5 + 45) * (20 + diff) / 10).div_ceil(2)
-    } else if mob_level <= gray_level(player_level) {
-        0
-    } else {
-        let zd = zero_difference(player_level);
-        (player_level * 5 + 45) * (zd + mob_level - player_level) / zd
+    let o = KillXp {
+        elite,
+        multiplier,
+        ..Default::default()
     };
-    let m = if multiplier > 0.0 { multiplier } else { 1.0 };
-    (base as f32 * m * if elite { 2.0 } else { 1.0 }).round() as u32
+    kill_xp_with(player_level, player_level, mob_level, &o)
+}
+
+/// What a kill's XP depends on beyond the levels (Thistle Tea's
+/// `Experience.kill_options`).
+#[derive(Debug, Clone, Copy)]
+pub struct KillXp {
+    pub elite: bool,
+    /// In a five-man dungeon, an elite is worth more.
+    pub dungeon: bool,
+    /// The template's multiplier (none set counts as one).
+    pub multiplier: f32,
+    /// The share of its damage players dealt (`DamageOrigin`).
+    pub damage_share: f32,
+    pub no_xp: bool,
+    /// The victim was a pet.
+    pub pet_victim: bool,
+}
+
+impl Default for KillXp {
+    fn default() -> Self {
+        KillXp {
+            elite: false,
+            dungeon: false,
+            multiplier: 1.0,
+            damage_share: 1.0,
+            no_xp: false,
+            pet_victim: false,
+        }
+    }
+}
+
+/// Thistle Tea's `Experience.kill_xp`: the base from `owner_level` (a
+/// hunter's for their pet), the level factor from `unit_level`, in
+/// single-precision floats as the client counts, rounded half to even.
+pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillXp) -> u32 {
+    if o.no_xp {
+        return 0;
+    }
+    let factor = if mob_level >= unit_level {
+        1.0 + 0.05f32 * (mob_level - unit_level).min(4) as f32
+    } else if mob_level > gray_level(unit_level) {
+        let zd = zero_difference(unit_level) as f32;
+        (zd + mob_level as f32 - unit_level as f32) / zd
+    } else {
+        0.0
+    };
+    let base = (owner_level * 5 + 45) as f32 * factor;
+    let elite = if o.pet_victim || !o.elite {
+        1.0
+    } else if o.dungeon {
+        2.5
+    } else {
+        2.0
+    };
+    let mut xp = base * elite;
+    if o.pet_victim {
+        xp *= 0.75;
+    }
+    xp *= if o.multiplier > 0.0 {
+        o.multiplier
+    } else {
+        1.0
+    };
+    xp *= o.damage_share;
+    round_half_even(xp)
+}
+
+/// Rounded to the nearest, a half to the even.
+fn round_half_even(x: f32) -> u32 {
+    let whole = x.trunc();
+    if x - whole == 0.5 {
+        (whole as u32) + (whole as u32) % 2
+    } else {
+        x.round().max(0.0) as u32
+    }
+}
+
+/// The options of a kill of creature `victim` (Thistle Tea's
+/// `Experience.kill_options`): elites are ranks one to three; nothing for a
+/// creature flagged so, one a player controls, or a summoned critter,
+/// totem or the like.
+pub fn kill_options(map: &Map, victim: Guid) -> KillXp {
+    let Some(c) = map.creature(victim) else {
+        return KillXp {
+            no_xp: true,
+            ..Default::default()
+        };
+    };
+    let t = map.realm.data.creature_template(c.entry);
+    let controlled = c.owner.is_some_and(guid::is_player);
+    let summoned = c.fields.get_u32(UNIT_CREATED_BY_SPELL) != 0
+        && t.is_some_and(|t| matches!(t.creature_type, 8 | 10 | 11) || t.health_multiplier <= 0.1);
+    KillXp {
+        elite: t.is_some_and(|t| matches!(t.rank, 1..=3)),
+        dungeon: crate::game::instances::instance_type(&map.realm, map.key.map) == 1,
+        multiplier: t.map_or(1.0, |t| t.xp_multiplier),
+        damage_share: crate::game::map::creature_combat::xp_share(map, victim),
+        no_xp: controlled || summoned || t.is_some_and(|t| t.static_flags1 & 0x2 != 0),
+        pet_victim: c.pet.is_some(),
+    }
 }
 
 /// Levels at or below which a kill gives nothing.
@@ -780,6 +893,27 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
             })
     };
     let extra = flags_extra(map, victim);
+    // The victim's auras on those attacking it (Thistle Tea's
+    // `attacker_hit_debuff` and `attacker_crit_bonus`).
+    let (hit_kind, crit_kind) = if ranged {
+        (
+            AURA_MOD_ATTACKER_RANGED_HIT_CHANCE,
+            AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE,
+        )
+    } else {
+        (
+            AURA_MOD_ATTACKER_MELEE_HIT_CHANCE,
+            AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE,
+        )
+    };
+    let (attacker_hit, attacker_crit) = auras::auras(map, victim).map_or((0.0, 0.0), |a| {
+        (a.sum(hit_kind) as f32, a.sum(crit_kind) as f32)
+    });
+    // A player's weapons put away can't block.
+    let sheathed = map
+        .players
+        .get(&victim)
+        .is_some_and(|p| p.fields.get_byte(UNIT_FIELD_BYTES_2, 0) == 0);
     Some(Roll {
         attacker_skill: or_level(
             if ranged {
@@ -794,7 +928,7 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         victim_is_player: vb.is_player,
         attacker_level: va.level as i32,
         victim_level: vb.level as i32,
-        crit: if ranged { da.ranged_crit } else { da.crit },
+        crit: if ranged { da.ranged_crit } else { da.crit } + attacker_crit,
         hit: if ranged { da.ranged_hit } else { da.hit },
         dodge: dv.dodge,
         parry: dv.parry,
@@ -811,6 +945,8 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         no_parry: extra & FLAG_EXTRA_NO_PARRY != 0,
         no_block: extra & FLAG_EXTRA_NO_BLOCK != 0,
         always_crush: flags_extra(map, attacker) & FLAG_EXTRA_ALWAYS_CRUSH != 0,
+        attacker_hit,
+        sheathed,
     })
 }
 
@@ -1047,7 +1183,9 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     // doesn't swing at all.
     if map.caster(attacker).is_some_and(|c| c.casting.is_some())
         || auras::held(map, attacker, false)
-        || auras::auras(map, attacker).is_some_and(|a| a.has(AURA_MOD_PACIFY))
+        || auras::auras(map, attacker).is_some_and(|a| {
+            a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE) || a.has(AURA_FEIGN_DEATH)
+        })
     {
         return;
     }
@@ -1380,6 +1518,58 @@ pub fn parry_haste(map: &mut Map, g: Guid) {
     let period = period.max(1) as f32;
     let shortened = remaining.min((period * 0.2).max(remaining - period * 0.4));
     *slot = Some(now + Duration::from_millis(shortened as u64));
+}
+
+/// `CMSG_SETSHEATHED` (Thistle Tea's `Sheath.request`): weapons out or
+/// away; a channel and the auras that sheathing breaks end first.
+pub fn sheathe(map: &mut Map, g: Guid, state: u8) {
+    if state > 2 {
+        return;
+    }
+    let channel = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell);
+    if channel
+        .and_then(|s| map.realm.data.spells.get(s))
+        .is_some_and(|s| s.channel_interrupt_flags & INTERRUPT_SHEATHING != 0)
+    {
+        crate::game::map::spells::interrupt(map, g);
+    }
+    auras::interrupt(map, g, INTERRUPT_SHEATHING);
+    if let Some(p) = map.players.get_mut(&g) {
+        p.fields.set_byte(UNIT_FIELD_BYTES_2, 0, state);
+    }
+}
+
+/// A cast of `s` went off (Thistle Tea's `CastingCombat`): one that
+/// interrupts the swing (interrupt flag 0x08) starts its caster's swings
+/// over, unless it says not to; one that cancels auto attack ends it.
+pub fn spell_launched(map: &mut Map, caster: Guid, s: &crate::game::data::spells::SpellTemplate) {
+    let now = map.now;
+    if s.interrupt_flags & 0x08 != 0 && !s.attr(2, 0x2_0000) {
+        let dual = dual_wields(map, caster);
+        let periods = map.unit_fields(caster).map_or((2000, 2000), |f| {
+            (
+                f.get_u32(UNIT_FIELD_BASEATTACKTIME),
+                f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1),
+            )
+        });
+        if let Some(c) = map.combat_mut(caster)
+            && c.attacking
+        {
+            c.next_swing = Some(now + Duration::from_millis(u64::from(periods.0.max(1))));
+            if dual {
+                c.next_offhand = Some(now + Duration::from_millis(u64::from(periods.1.max(1))));
+            }
+        }
+    }
+    if s.attr(0, crate::game::data::spells::ATTR_CANCELS_AUTO_ATTACK)
+        && map.combat(caster).is_some_and(|c| c.attacking)
+    {
+        stop_attack(map, caster);
+    }
 }
 
 /// `UNIT_FIELD_AURASTATE` brought in line: the reactive windows still open,
@@ -1757,6 +1947,8 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
         return;
     }
     gain_rage(map, victim, damage, true);
+    crate::game::map::creature_combat::damaged(map, victim, attacker, damage);
+    crate::game::map::vendor::wear_from_blow(map, attacker, victim);
     if guid::is_unit(victim) {
         let threat = damage as f32 * threat_multiplier(map, attacker, school);
         crate::game::map::ai::add_threat(map, victim, attacker, threat);
@@ -1848,8 +2040,11 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         crate::game::map::battleground::died(map, victim, by);
         crate::game::map::arena::died(map, victim, by);
         death::kill(map, victim);
-        // Dying to a creature wears gear down; to a player, it doesn't.
-        if guid::is_unit(killer) {
+        // Dying to a creature or the world wears gear down; to a player or
+        // their pet, or in a battleground, it doesn't (Thistle Tea's
+        // `Durability.resolve`).
+        let battleground = crate::game::instances::instance_type(&map.realm, map.key.map) == 3;
+        if !battleground && (killer == victim || !guid::is_player(by)) {
             crate::game::map::vendor::wear(map, victim, 0.10);
             if let Some(p) = map.players.get(&victim) {
                 p.outbound
@@ -1860,13 +2055,20 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         if crate::game::map::pets::died(map, killer, victim) {
             return;
         }
+        // Mostly NPCs' doing, it isn't the tapper's: the killer's side has
+        // the quest credit alone (Thistle Tea's `KillReward.selection`).
+        let allowed = crate::game::map::creature_combat::loot_allowed(map, victim);
         let tapper = map
             .creature(victim)
             .and_then(|c| c.tapped_by)
+            .filter(|_| allowed)
             .unwrap_or_else(|| crate::game::map::pets::master(map, killer));
         if guid::is_player(tapper) {
-            reward(map, tapper, victim);
-            crate::game::map::pets::owner_killed(map, tapper, victim);
+            if allowed {
+                reward(map, tapper, victim);
+            } else {
+                crate::game::map::quests::killed(map, tapper, victim);
+            }
         }
         crate::game::map::local_defense::fallen(map, victim, killer);
         crate::game::map::ai::die(map, victim, tapper);
@@ -1889,105 +2091,114 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
 /// How near a corpse a member must be for a share of the kill.
 pub const GROUP_REWARD_YARDS: f32 = 74.0;
 
-/// vmangos's group XP bonus: three, four and five share more.
-pub fn group_xp_rate(count: usize, raid: bool) -> f32 {
-    if raid {
-        return 1.0;
-    }
+/// Thistle Tea's `Experience.group_rate`: three, four and five share more;
+/// a raid's members less the more of them.
+pub fn group_xp_rate(count: usize) -> f32 {
     match count {
-        0..=2 => 1.0,
         3 => 1.166,
         4 => 1.3,
-        _ => 1.4,
+        5 => 1.4,
+        n if n > 5 => (1.0 - n as f32 * 0.05).max(0.01),
+        _ => 1.0,
     }
 }
 
+/// Each member's share of a kill's XP (Thistle Tea's
+/// `Experience.group_rewards`), from their levels: a level-weighted share
+/// of the highest non-grey level's XP, halved plus one when a member above
+/// that level is there, and nothing for those above it. Also the highest
+/// non-grey level, for the pets.
+pub fn group_shares(levels: &[u32], mob_level: u32, o: &KillXp) -> (Vec<u32>, Option<u32>) {
+    let sum: u32 = levels.iter().sum();
+    let top = levels.iter().copied().max().unwrap_or(0);
+    let top_not_gray = levels
+        .iter()
+        .copied()
+        .filter(|l| mob_level > gray_level(*l))
+        .max();
+    let Some(level) = top_not_gray.filter(|_| sum > 0) else {
+        return (vec![0; levels.len()], None);
+    };
+    let base = kill_xp_with(level, level, mob_level, o) as f32;
+    let rate = group_xp_rate(levels.len());
+    let shares = levels
+        .iter()
+        .map(|l| {
+            if base <= 0.0 {
+                return 0;
+            }
+            let share = base * rate * *l as f32 / sum as f32;
+            if top == level {
+                share as u32
+            } else {
+                (share / 2.0) as u32 + 1
+            }
+        })
+        .collect();
+    (shares, Some(level))
+}
+
 /// XP and kill credit for a creature's death: the tapper's, or shared with
-/// their group near the corpse, as vmangos shares them.
+/// their group near the corpse (Thistle Tea's `GroupReward`): the living
+/// and the original tapper count; the dead earn nothing, and a released
+/// spirit no quest credit.
 fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
     let Some(at) = map.creature(victim).map(|c| c.position) else {
         return;
     };
-    let (members, raid) = {
+    let members: Vec<Guid> = {
         let groups = map.realm.social.groups.lock();
         match groups.group_of(tapper) {
-            Some(g) => (g.members.iter().map(|m| m.guid).collect::<Vec<_>>(), g.raid),
-            None => (vec![tapper], false),
+            Some(g) => g.members.iter().map(|m| m.guid).collect(),
+            None => vec![tapper],
         }
     };
-    let near: Vec<(Guid, u32, bool)> = members
+    let near: Vec<(Guid, u32, Death)> = members
         .into_iter()
         .filter_map(|g| {
             let p = map.players.get(&g)?;
             (dist(p.position(), at) <= GROUP_REWARD_YARDS || g == tapper)
-                .then(|| (g, u32::from(p.level()), p.death == Death::Alive))
+                .then(|| (g, u32::from(p.level()), p.death))
         })
         .collect();
-    if near.len() <= 1 {
-        kill_reward(map, tapper, victim);
-        crate::game::map::quests::killed(map, tapper, victim);
-        return;
-    }
-    let template = map
-        .creature(victim)
-        .and_then(|c| map.realm.data.creature_template(c.entry));
-    let no_xp = template.is_some_and(|t| t.static_flags1 & 0x2 != 0);
-    let elite = template.is_some_and(|t| t.rank == 1 || t.rank == 2);
-    let mult = template.map(|t| t.xp_multiplier).unwrap_or(1.0);
+    let o = kill_options(map, victim);
     let mob_level = map
         .creature(victim)
         .map(|c| c.fields.get_u32(UNIT_FIELD_LEVEL))
         .unwrap_or(1);
-    let alive: Vec<&(Guid, u32, bool)> = near.iter().filter(|m| m.2).collect();
-    let sum_level: u32 = alive.iter().map(|m| m.1).sum();
-    let top = alive.iter().map(|m| m.1).max().unwrap_or(0);
-    let top_not_gray = alive
+    let sharing: Vec<&(Guid, u32, Death)> = near
         .iter()
-        .map(|m| m.1)
-        .filter(|l| mob_level > gray_level(*l))
-        .max();
-    if let Some(level) = top_not_gray.filter(|_| !no_xp && sum_level > 0) {
-        let xp = kill_xp(level, mob_level, elite, mult) as f32;
-        let rate = group_xp_rate(near.len(), raid);
-        for m in alive.iter().filter(|m| m.1 <= level) {
-            let share = if top == level {
-                xp * rate * m.1 as f32 / sum_level as f32
-            } else {
-                xp * rate / 2.0 + 1.0
-            };
-            crate::game::map::stats::give_xp(map, m.0, share as u32, Some(victim));
+        .filter(|m| m.2 == Death::Alive || m.0 == tapper)
+        .collect();
+    let levels: Vec<u32> = sharing.iter().map(|m| m.1).collect();
+    let (shares, top) = group_shares(&levels, mob_level, &o);
+    let solo = sharing.len() <= 1;
+    for (m, share) in sharing.iter().zip(shares) {
+        if m.2 != Death::Alive {
+            continue;
         }
+        let xp = if top.is_some_and(|t| m.1 <= t) {
+            share
+        } else {
+            0
+        };
+        crate::game::map::stats::give_xp(map, m.0, xp, Some(victim));
+        let pet = if solo {
+            crate::game::map::pets::KillShare::Solo
+        } else {
+            crate::game::map::pets::KillShare::Group {
+                xp: share,
+                max_level: top.unwrap_or(0),
+            }
+        };
+        crate::game::map::pets::owner_killed(map, m.0, victim, pet);
     }
     // Quest credit for the living, and the dead not yet released.
-    for (g, _, _) in near {
-        if map
-            .players
-            .get(&g)
-            .is_some_and(|p| matches!(p.death, Death::Alive | Death::Dead { .. }))
-        {
+    for (g, _, death) in near {
+        if matches!(death, Death::Alive | Death::Dead { .. }) {
             crate::game::map::quests::killed(map, g, victim);
         }
     }
-}
-
-/// XP for a creature's death.
-fn kill_reward(map: &mut Map, player: Guid, victim: Guid) {
-    let Some(c) = map.creature(victim) else {
-        return;
-    };
-    let template = map.realm.data.creature_template(c.entry);
-    // No XP for a creature flagged so.
-    if template.is_some_and(|t| t.static_flags1 & 0x2 != 0) {
-        return;
-    }
-    let elite = template.is_some_and(|t| t.rank == 1 || t.rank == 2);
-    let mult = template.map(|t| t.xp_multiplier).unwrap_or(1.0);
-    let mob_level = c.fields.get_u32(UNIT_FIELD_LEVEL);
-    let Some(p) = map.players.get(&player) else {
-        return;
-    };
-    let xp = kill_xp(u32::from(p.level()), mob_level, elite, mult);
-    crate::game::map::stats::give_xp(map, player, xp, Some(victim));
 }
 
 /// An honorable kill: honor for the killer and those who helped.

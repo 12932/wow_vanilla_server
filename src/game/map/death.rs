@@ -205,6 +205,7 @@ pub fn release(map: &mut Map, g: Guid) {
     map.add_corpse(corpse);
     // In a battleground, the fallen wait at their side's start.
     if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
+        crate::game::map::battleground::released(map, g);
         map.teleport(g, map.key, at, facing);
         return;
     }
@@ -417,7 +418,8 @@ pub fn spirit_healer_activate(map: &mut Map, g: Guid, healer: Guid) {
     };
     if near {
         resurrect(map, g, 0.5);
-        crate::game::map::vendor::wear(map, g, 0.25);
+        // Everything carried wears a quarter (Thistle Tea's `SpiritHealer`).
+        crate::game::map::vendor::wear_carried(map, g, 0.25);
         resurrection_sickness(map, g);
     }
 }

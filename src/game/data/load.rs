@@ -134,6 +134,7 @@ pub fn load(dir: &Path) -> GameData {
             load_vmangos(&db, &mut data);
             load_npcs(&db, dbc.as_ref(), &mut data);
             load_spells(&db, dbc.as_ref(), &mut data);
+            crate::game::map::boss_mechanics::fixups(&mut data);
             super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
             load_pets(&db, dbc.as_ref(), &mut data);
             load_misc(&db, dbc.as_ref(), &mut data);
@@ -242,6 +243,13 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
         (c.u32("id"), c.u32("emote"))
     }) {
         data.text_emote_anims.insert(id, emote);
+    }
+    for (id, spec) in rows(dbc, "SELECT id, spec_proc FROM Emotes", |c| {
+        (c.u32("id"), c.u32("spec_proc"))
+    }) {
+        if spec != 0 {
+            data.emote_states.insert(id);
+        }
     }
     for (id, loc) in rows(dbc, "SELECT * FROM WorldSafeLocs", |c| {
         (
@@ -917,6 +925,7 @@ fn load_vendors(db: &Connection, data: &mut GameData) {
                         max_count: c.u32("maxcount"),
                         restock_secs: c.u32("incrtime"),
                         condition: c.u32("condition_id"),
+                        flags: c.u32("itemflags"),
                     },
                 )
             },
@@ -1842,6 +1851,7 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
                 prev: c.u32("prev_spell"),
                 first: c.u32("first_spell"),
                 rank: c.u32("rank"),
+                req: c.u32("req_spell"),
             },
         )
     }) {

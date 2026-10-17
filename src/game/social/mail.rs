@@ -21,6 +21,8 @@ pub const KIND_MAIL: &str = "mail";
 pub const KIND_TEXT: &str = "text";
 
 pub const POSTAGE: u32 = 30;
+/// The mails a mailbox lists.
+const MAX_LISTED: usize = 254;
 pub const MAX_MAILS: usize = 100;
 pub const DAY: i64 = 86_400;
 /// The letter a mail's text is copied onto.
@@ -213,7 +215,8 @@ pub fn list(map: &Map, g: Guid) {
     let list = mails
         .of(guid::counter(g), now)
         .into_iter()
-        .take(50)
+        // As many as the list's count byte holds, as Thistle Tea shows.
+        .take(MAX_LISTED)
         .map(|m| {
             let item = m.item.as_ref();
             let max_durability = item
@@ -497,6 +500,10 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
 pub fn mark_read(map: &Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
     with_mail(map, g, id, |m| {
+        // Read, it goes in three days at most (Thistle Tea's `mark_read`).
+        if m.flags & READ == 0 {
+            m.expires_at = m.expires_at.min(now() + 3 * DAY);
+        }
         m.flags |= READ;
         save(&realm, m);
     });
@@ -690,7 +697,17 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
         .map(|m| m.id)
         .collect();
     for id in gone {
-        mails.mails.remove(&id);
+        let Some(mut m) = mails.mails.remove(&id) else {
+            continue;
+        };
+        // An item sent cash on delivery goes back to its sender (Thistle
+        // Tea's `Mail.forfeit`); the rest goes with the character.
+        if m.cod > 0 && m.item.is_some() && m.kind == NORMAL && m.sender != counter {
+            m.money = 0;
+            send_back(realm, &mut m);
+            mails.mails.insert(id, m);
+            continue;
+        }
         realm.store.delete_record(KIND_MAIL, u64::from(id));
     }
 }

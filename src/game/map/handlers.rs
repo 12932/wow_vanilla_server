@@ -251,21 +251,10 @@ impl Map {
                 }
             }
             ClientOpcodeMessage::CMSG_STANDSTATECHANGE(m) => {
-                if let Some(p) = self.players.get_mut(&guid)
-                    && p.logout_at.is_none()
-                {
-                    let state = m.animation_state.as_int();
-                    p.set_stand_state(state);
-                    p.outbound.send(&SMSG_STANDSTATE_UPDATE {
-                        state: m.animation_state,
-                    });
-                }
+                chat::stand_state(self, guid, m.animation_state);
             }
             ClientOpcodeMessage::CMSG_SETSHEATHED(m) => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    p.fields
-                        .set_byte(UNIT_FIELD_BYTES_2, 0, m.sheathed.as_int());
-                }
+                crate::game::map::combat::sheathe(self, guid, m.sheathed.as_int());
             }
             ClientOpcodeMessage::CMSG_TOGGLE_HELM => self.toggle_flag(guid, PLAYER_FLAGS_HIDE_HELM),
             ClientOpcodeMessage::CMSG_TOGGLE_CLOAK => {
@@ -352,6 +341,12 @@ impl Map {
         if let Some(p) = self.players.get_mut(&guid) {
             let on = !p.fields.has_flag(PLAYER_FLAGS, flag);
             p.fields.set_flag(PLAYER_FLAGS, flag, on);
+            // Kept with the character: the helm and cloak stay hidden.
+            if on {
+                p.row.state.flags |= flag;
+            } else {
+                p.row.state.flags &= !flag;
+            }
         }
     }
 

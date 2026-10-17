@@ -21,6 +21,7 @@ pub const NPC_FLAG_VENDOR: u32 = 0x4;
 pub const NPC_FLAG_FLIGHTMASTER: u32 = 0x8;
 pub const NPC_FLAG_TRAINER: u32 = 0x10;
 pub const NPC_FLAG_SPIRITHEALER: u32 = 0x20;
+pub const NPC_FLAG_SPIRITGUIDE: u32 = 0x40;
 pub const NPC_FLAG_INNKEEPER: u32 = 0x80;
 pub const NPC_FLAG_BANKER: u32 = 0x100;
 pub const NPC_FLAG_BATTLEMASTER: u32 = 0x800;
@@ -46,7 +47,24 @@ pub struct Flight {
 pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
     let p = map.players.get(&player)?;
     let c = map.creature(npc)?;
-    if !c.alive() || (flag != 0 && c.fields.get_u32(UNIT_NPC_FLAGS) & flag == 0) {
+    let flags = c.fields.get_u32(UNIT_NPC_FLAGS);
+    if !c.alive() || (flag != 0 && flags & flag == 0) {
+        return None;
+    }
+    // The dead talk to spirit healers and guides alone; no one in flight
+    // or out of their own control, nor to a creature hostile to them
+    // (vmangos's `GetNPCIfCanInteractWith`, Thistle Tea's service checks).
+    let spirit = flags & (NPC_FLAG_SPIRITHEALER | NPC_FLAG_SPIRITGUIDE) != 0;
+    if p.death != crate::game::map::death::Death::Alive && !spirit {
+        return None;
+    }
+    use crate::game::map::auras::{
+        AURA_MOD_CHARM, AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_POSSESS, AURA_MOD_STUN,
+    };
+    let held = [AURA_MOD_STUN, AURA_MOD_FEAR, AURA_MOD_CONFUSE, AURA_MOD_CHARM, AURA_MOD_POSSESS]
+        .iter()
+        .any(|a| p.auras.has(*a));
+    if p.flight.is_some() || held || crate::game::map::combat::hostile(map, npc, player) {
         return None;
     }
     if dist(p.position(), c.position) > vendor::NPC_YARDS {
@@ -313,6 +331,84 @@ pub fn npc_text(map: &Map, player: Guid, text_id: u32) {
     send(map, player, &SMSG_NPC_TEXT_UPDATE { text_id, texts });
 }
 
+/// The professions a player may have two of.
+const PRIMARY_PROFESSIONS: [u32; 9] = [164, 165, 171, 182, 186, 197, 202, 333, 393];
+const EFFECT_SKILL_STEP: u32 = 44;
+
+/// What a trainer's spell is to a player, as Thistle Tea's `Trainer`
+/// works it out.
+struct Teaching {
+    state: TrainerSpellState,
+    /// A primary profession's first rank, and whether a profession is
+    /// free for it.
+    first_profession: bool,
+    free_profession: bool,
+    prev: u32,
+    req: u32,
+}
+
+/// The profession rank a trainer's spell teaches: its skill and the rank's
+/// most.
+fn skill_step(data: &crate::game::data::GameData, teach: u32) -> Option<(u32, u32)> {
+    data.spells.get(teach)?.effects.iter().find_map(|e| {
+        (e.effect == EFFECT_SKILL_STEP && e.misc_value > 0)
+            .then(|| (e.misc_value as u32, (e.base_points.max(0) as u32 + 1) * 75))
+    })
+}
+
+/// Whether a spell is for a player's class and race (`SkillLineAbility`).
+fn fits_class_race(data: &crate::game::data::GameData, teach: u32, class: u8, race: u8) -> bool {
+    let learned = crate::game::map::spells::learns(data, teach);
+    let Some(lines) = data.spells.skill_abilities.get(&learned).filter(|l| !l.is_empty()) else {
+        return true;
+    };
+    let (class_bit, race_bit) = (1u32 << (class.max(1) - 1), 1u32 << (race.max(1) - 1));
+    lines.iter().any(|a| {
+        (a.class_mask == 0 || a.class_mask & class_bit != 0) && (a.race_mask == 0 || a.race_mask & race_bit != 0)
+    })
+}
+
+/// Gray if known, red if a level, an earlier rank or a skill is missing,
+/// else green; and a first profession rank's slot.
+fn teaching(
+    data: &crate::game::data::GameData,
+    p: &crate::game::map::player::Player,
+    s: &crate::game::data::npc::TrainerSpell,
+) -> Teaching {
+    use crate::game::map::skills;
+    let learned = crate::game::map::spells::learns(data, s.spell);
+    let step = skill_step(data, s.spell);
+    let rank = data.spells.ranks.get(&learned).copied().unwrap_or_default();
+    let missing = |spell: u32| spell != 0 && !p.spells.contains(&spell);
+    let known = p.spells.contains(&learned)
+        || step.is_some_and(|(skill, max)| skills::max_value(p, skill).is_some_and(|m| m >= max));
+    let state = if known {
+        TrainerSpellState::Gray
+    } else if p.level() < s.required_level
+        || missing(rank.prev)
+        || missing(rank.req)
+        || (s.required_skill > 0
+            && skills::value(p, s.required_skill).unwrap_or(0) < s.required_skill_value)
+    {
+        TrainerSpellState::Red
+    } else {
+        TrainerSpellState::Green
+    };
+    let first_profession = step.is_some_and(|(skill, max)| PRIMARY_PROFESSIONS.contains(&skill) && max == 75);
+    let primaries = PRIMARY_PROFESSIONS
+        .iter()
+        .filter(|sk| skills::value(p, **sk).is_some())
+        .count();
+    let already = step.is_some_and(|(skill, _)| skills::value(p, skill).is_some());
+    Teaching {
+        state,
+        first_profession,
+        free_profession: already || primaries < 2,
+        prev: rank.prev,
+        req: rank.req,
+    }
+}
+
 /// `CMSG_TRAINER_LIST`.
 pub fn trainer_list(map: &mut Map, player: Guid, npc: Guid) {
     let Some(entry) = npc_entry(map, player, npc, NPC_FLAG_TRAINER) else {
@@ -333,26 +429,21 @@ pub fn trainer_list(map: &mut Map, player: Guid, npc: Guid) {
         .npc
         .trainer_spells(entry, t.trainer_id)
         .iter()
+        .filter(|s| fits_class_race(&data, s.spell, p.row.class, p.row.race))
         .map(|s| {
-            let learned = crate::game::map::spells::learns(&data, s.spell);
-            let known = p.spells.contains(&learned);
-            let state = if known {
-                TrainerSpellState::Gray
-            } else if p.level() >= s.required_level {
-                TrainerSpellState::Green
-            } else {
-                TrainerSpellState::Red
-            };
+            let t = teaching(&data, p, s);
             TrainerSpell {
                 spell: s.spell,
-                state,
-                spell_cost: s.cost,
-                talent_point_cost: 0,
-                first_rank: 0,
+                state: t.state,
+                spell_cost: crate::game::map::reputation::price(map, player, npc, s.cost),
+                // Equal, the learn button is on: a first profession rank
+                // needs a free profession.
+                talent_point_cost: u32::from(t.first_profession && t.free_profession),
+                first_rank: u32::from(t.first_profession),
                 required_level: s.required_level,
                 required_skill: Skill::try_from(s.required_skill as u16).unwrap_or_default(),
                 required_skill_value: s.required_skill_value,
-                required_spells: [0; 3],
+                required_spells: [t.prev, t.req, 0],
             }
         })
         .collect();
@@ -389,6 +480,7 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
         return;
     };
     let learned = crate::game::map::spells::learns(&data, s.spell);
+    let cost = crate::game::map::reputation::price(map, player, npc, s.cost);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
@@ -399,13 +491,17 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
             error,
         });
     };
-    if p.spells.contains(&learned) || p.level() < s.required_level {
+    let t = teaching(&data, p, &s);
+    let learnable = t.state == TrainerSpellState::Green
+        && (!t.first_profession || t.free_profession)
+        && fits_class_race(&data, s.spell, p.row.class, p.row.race);
+    if !learnable {
         return fail(p, TrainingFailureReason::Unavailable);
     }
-    if p.money() < s.cost {
+    if p.money() < cost {
         return fail(p, TrainingFailureReason::NotEnoughMoney);
     }
-    let money = p.money() - s.cost;
+    let money = p.money() - cost;
     p.set_money(money);
     p.outbound.send(&SMSG_TRAINER_BUY_SUCCEEDED {
         guid: npc,
@@ -414,19 +510,35 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
     crate::game::map::spells::learn(map, player, learned);
 }
 
-/// `CMSG_BINDER_ACTIVATE`: the innkeeper binds the player here.
+/// The innkeeper's Bind, and the Hearthstone it gives one without.
+const SPELL_BIND: u32 = 3286;
+const HEARTHSTONE: u32 = 6948;
+
+/// `CMSG_BINDER_ACTIVATE`: the innkeeper binds the player here, as
+/// Thistle Tea's `HomeBind`: not in a dungeon or battleground copy, to the
+/// area they stand in, with Bind's visual and a Hearthstone if they have
+/// none.
 pub fn bind(map: &mut Map, player: Guid, npc: Guid) {
     if npc_entry(map, player, npc, NPC_FLAG_INNKEEPER).is_none() {
         return;
     }
     let key = map.key;
+    let kind = crate::game::instances::instance_type(&map.realm, key.map);
+    if key.instance != 0 || matches!(kind, 1..=4) {
+        return;
+    }
+    send(map, player, &SMSG_GOSSIP_COMPLETE {});
+    if map.realm.data.spells.get(SPELL_BIND).is_some() {
+        crate::game::map::spells::cast_triggered(map, npc, SPELL_BIND, Some(player));
+    }
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
     let pos = p.position();
+    let area = if p.area != 0 { p.area } else { p.zone };
     p.row.state.bind = Some(crate::game::store::Bind {
         map: key.map,
-        zone: p.zone,
+        zone: area,
         x: pos.x,
         y: pos.y,
         z: pos.z,
@@ -434,12 +546,16 @@ pub fn bind(map: &mut Map, player: Guid, npc: Guid) {
     p.outbound.send(&SMSG_BINDPOINTUPDATE {
         position: pos,
         map: crate::game::map::movement::map_enum(key.map),
-        area: Area::try_from(p.zone).unwrap_or_default(),
+        area: Area::try_from(area).unwrap_or_default(),
     });
     p.outbound.send(&SMSG_PLAYERBOUND {
         guid: npc,
-        area: Area::try_from(p.zone).unwrap_or_default(),
+        area: Area::try_from(area).unwrap_or_default(),
     });
+    let lacks = p.count_of(HEARTHSTONE) == 0;
+    if lacks && map.realm.data.item(HEARTHSTONE).is_some() {
+        let _ = crate::game::map::inventory::add_item(map, player, HEARTHSTONE, 1, true);
+    }
 }
 
 /// `CMSG_BANKER_ACTIVATE`.
@@ -609,6 +725,7 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
     let now = map.now;
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    crate::game::map::spells::interrupts::taking_flight(map, player);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
@@ -645,6 +762,49 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
     map.send_to_observers(player, &frame, true);
 }
 
+/// Shapeshift forms a flight takes (Thistle Tea's `disallowed_form?`):
+/// none, the warrior's stances, Shadowform and Stealth.
+pub const FLIGHT_FORMS: [u8; 6] = [0, 17, 18, 19, 28, 30];
+/// How near the flight's first node its flier must be.
+const TAXI_START_YARDS: f32 = 31.622_776;
+
+/// Why `player` can't take a flight along `route` now, as Thistle Tea
+/// refuses it: busy (dead, flying, fighting, casting), mounted, in a form,
+/// not standing, at the node already, or far from its first node.
+fn taxi_refusal(map: &Map, player: Guid, route: &[u32]) -> Option<ActivateTaxiReply> {
+    let p = map.players.get(&player)?;
+    let busy = p.death != crate::game::map::death::Death::Alive
+        || p.flight.is_some()
+        || p.fields.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT)
+        || p.caster.casting.is_some();
+    if busy {
+        return Some(ActivateTaxiReply::PlayerBusy);
+    }
+    if p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0 {
+        return Some(ActivateTaxiReply::PlayerAlreadyMounted);
+    }
+    if !FLIGHT_FORMS.contains(&crate::game::map::auras::form(map, player)) {
+        return Some(ActivateTaxiReply::PlayerShapeShifted);
+    }
+    if p.stand_state() != 0 {
+        return Some(ActivateTaxiReply::NotStanding);
+    }
+    if route.last() == route.first() {
+        return Some(ActivateTaxiReply::SameNode);
+    }
+    let node = map.realm.data.npc.taxi_nodes.get(route.first()?)?;
+    let at = Vector3d {
+        x: node.x,
+        y: node.y,
+        z: node.z,
+    };
+    let unplaced = node.x == 0.0 && node.y == 0.0 && node.z == 0.0;
+    if !unplaced && (node.map != map.key.map || dist(p.position(), at) > TAXI_START_YARDS) {
+        return Some(ActivateTaxiReply::TooFarAway);
+    }
+    None
+}
+
 /// `CMSG_ACTIVATETAXI`: pay, mount and fly.
 pub fn activate_taxi(map: &mut Map, player: Guid, npc: Guid, from: u32, to: u32) {
     activate_route(map, player, npc, &[from, to]);
@@ -666,12 +826,17 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
         return reply(map, ActivateTaxiReply::NoSuchPath);
     }
     let data = map.realm.data.clone();
+    if let Some(r) = taxi_refusal(map, player, route) {
+        return reply(map, r);
+    }
     let mut cost = 0u32;
     let mut hops: Vec<(u32, Vec<TaxiPathNode>)> = Vec::new();
     for hop in route.windows(2) {
         let Some(&(path, hop_cost)) = data.npc.taxi_paths.get(&(hop[0], hop[1])) else {
             return reply(map, ActivateTaxiReply::NoSuchPath);
         };
+        // A tenth off each hop from honored up.
+        let hop_cost = crate::game::map::reputation::price(map, player, npc, hop_cost);
         cost = cost.saturating_add(hop_cost);
         let hop_nodes = data
             .npc
@@ -697,7 +862,7 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     };
     if route[1..].iter().any(|n| !knows_node(&p.row.state.taxi_mask, *n)) {
         p.outbound.send(&SMSG_ACTIVATETAXIREPLY {
-            reply: ActivateTaxiReply::NoSuchPath,
+            reply: ActivateTaxiReply::NotVisited,
         });
         return;
     }
@@ -712,6 +877,13 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     p.outbound.send(&SMSG_ACTIVATETAXIREPLY {
         reply: ActivateTaxiReply::Ok,
     });
+    // A trade doesn't fly along.
+    crate::game::map::trade::cancel(map, player, SMSG_TRADE_STATUS_TradeStatus::TargetToFar);
+    // Out of stealth, off the mount, out of a form that can't fly.
+    crate::game::map::spells::interrupts::taking_flight(map, player);
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
     let mount_creature = data
         .npc
         .taxi_nodes

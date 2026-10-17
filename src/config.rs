@@ -144,7 +144,7 @@ impl Default for WorldConfig {
             pvp_realm: false,
             petition_signatures: 9,
             mail_delay_secs: 3600,
-            honor_reset_weekday: 3,
+            honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         }
     }
 }
