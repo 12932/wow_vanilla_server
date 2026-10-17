@@ -1211,3 +1211,88 @@ async fn a_trade_checks_its_offer_again_as_it_goes_through() {
     let theirs = on(&map, move |m| m.players[&gb].count_of(POTIONS)).await;
     assert_eq!(theirs, 0);
 }
+
+/// Send `c` into `map`'s copy and wait for it to land.
+async fn go(realm: &Arc<Realm>, c: &mut Client, map: u32) -> MapHandle {
+    let g = c.guid;
+    let from = realm.registry.online(g).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            g,
+            crate::game::map::MapKey::world(map),
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    });
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+    realm.registry.online(g).unwrap().map()
+}
+
+/// Whether `g` comes to have `spell` (or, `on` false, to lose it) within
+/// a few of world PvP's seconds.
+async fn comes_to(map: &MapHandle, g: Guid, spell: u32, on_it: bool) -> bool {
+    for _ in 0..40 {
+        let has = on(map, move |m| {
+            m.players.get(&g).is_some_and(|p| p.auras.has_spell(spell))
+        })
+        .await;
+        if has == on_it {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// The Plaguelands' tower buff reaches Stratholme and Scholomance, and the
+/// Cenarion Favor the Ruins and Temple of Ahn'Qiraj, as Thistle Tea's
+/// `buff_zone?` and mangos's affected zones give them.
+#[tokio::test]
+async fn world_pvp_buffs_reach_their_dungeons() {
+    const TWO_TOWERS: u32 = 11_414;
+    const FAVOR: u32 = 30_754;
+    let mut d = GameData::empty();
+    for id in [11_413, TWO_TOWERS, 11_415, 1386, FAVOR] {
+        let mut s = unit_spell(id, 6);
+        s.effects[0].target_a = 1;
+        s.effects[0].aura = crate::game::map::auras::AURA_MOD_RESISTANCE;
+        s.duration_index = 0;
+        d.spells.spells.insert(id, s);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Ana", Race::Human, Class::Warrior).await;
+    *realm.social.outdoor.lock() = crate::game::map::outdoor_pvp::Shared {
+        towers: [2, 0],
+        favor: Some(0),
+    };
+    let strat = go(&realm, &mut a, 329).await;
+    a.send(CMSG_ZONEUPDATE {
+        area: Area::try_from(2017u32).unwrap(),
+    })
+    .await;
+    assert!(
+        comes_to(&strat, g, TWO_TOWERS, true).await,
+        "two towers' buff in Stratholme"
+    );
+    let ruins = go(&realm, &mut a, 509).await;
+    a.send(CMSG_ZONEUPDATE {
+        area: Area::try_from(3429u32).unwrap(),
+    })
+    .await;
+    assert!(
+        comes_to(&ruins, g, FAVOR, true).await,
+        "the Favor in the Ruins"
+    );
+    realm.social.outdoor.lock().favor = None;
+    assert!(comes_to(&ruins, g, FAVOR, false).await, "gone with it");
+}
