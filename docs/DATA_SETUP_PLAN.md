@@ -102,10 +102,9 @@ comparison. The rest are small.
 
 ## Where it stands
 
-- **Stages 3 to 5** are in wvs: `src/setup/` and the `wvs-setup` binary, coded against rustigator-mapbuild's
-  interface at c941c9b (`build_map_with`, `build_bvh_with`, `terrain::extract`, `preflight`) behind a `Builder`
-  trait, and tested with a fake one. The bars fill once rustigator is pinned past Stage 2, and the terrain builds
-  once Stage 1 lands.
+- **Stages 3 to 5** are in wvs: `src/setup/` and the `wvs-setup` binary, on rustigator at 31c83fa (Stages 1 and
+  2), its builds behind a `Builder` trait that the tests fake. On the 5875 client the setup's terrain is the 2,429
+  reference tiles byte for byte; Ctrl-C between tiles keeps what is finished, and the next run carries on.
 - **Another client's output:** "current" doesn't know which client made a map, so each directory the setup builds
   notes its client (`setup.json`: the archives' names and sizes). Another client's is built afresh only when the
   player says so (`--fresh` in a script), the old one set aside as `<dir>.old`; a bake from elsewhere, with no note,
