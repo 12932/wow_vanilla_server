@@ -110,6 +110,10 @@ pub struct WorldConfig {
     /// A rustigator bake (the directory with `Azeroth.map`); without it
     /// creatures walk straight lines and zones come from the client.
     pub nav_dir: Option<PathBuf>,
+    /// Thistle Tea's terrain tiles (MaNGOS z1.5 `.map` files, from its
+    /// `nix run .#terrain-data`); without them liquids have no kind outside
+    /// WMOs: no deep-sea fatigue, no lava in the open.
+    pub terrain_dir: Option<PathBuf>,
     /// Shown to every player at login.
     pub motd: String,
     pub max_characters_per_account: usize,
@@ -133,6 +137,7 @@ impl Default for WorldConfig {
             characters_db: PathBuf::from("characters.sqlite"),
             data_dir: None,
             nav_dir: None,
+            terrain_dir: None,
             motd: "Welcome to wow_vanilla_server.".to_owned(),
             max_characters_per_account: 10,
             reserved_names: Vec::new(),

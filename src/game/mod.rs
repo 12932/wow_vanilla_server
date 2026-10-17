@@ -46,6 +46,8 @@ mod tests_pvp2;
 mod tests_world;
 #[cfg(test)]
 mod tests_arena;
+#[cfg(test)]
+mod tests_terrain;
 pub mod transports;
 pub mod update;
 pub mod weather;
@@ -71,6 +73,8 @@ pub struct RealmConfig {
     pub everyone_gm: bool,
     pub max_characters_per_account: usize,
     pub nav_dir: Option<std::path::PathBuf>,
+    /// Thistle Tea's terrain tiles (`MMMMRRCC.map`): liquid kinds and areas.
+    pub terrain_dir: Option<std::path::PathBuf>,
     pub petition_signatures: u32,
     pub mail_delay: Duration,
     pub instance_unload: Duration,
@@ -96,6 +100,7 @@ impl RealmConfig {
             everyone_gm: c.accounts.everyone_gm,
             max_characters_per_account: c.world.max_characters_per_account,
             nav_dir: c.world.nav_dir.clone(),
+            terrain_dir: c.world.terrain_dir.clone(),
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
             instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,

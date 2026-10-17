@@ -1,8 +1,9 @@
 //! The environment's harm, as Thistle Tea's `Core.Environment` has it:
 //! breath under water (a minute, then a fifth of health every two
-//! seconds), fatigue in the deep sea, and lava and slime burning. The
-//! liquid under a player comes from the navmesh: its surface everywhere,
-//! and its kind where a WMO holds it.
+//! seconds), fatigue in the deep sea, lava burning after a second in it,
+//! and the spells liquids put on (Naxxramas's slime). The liquid's kind
+//! comes from a WMO where one holds it, else from the terrain tiles; the
+//! surface breath is held under, from the navmesh.
 
 use std::time::{Duration, Instant};
 
@@ -14,21 +15,17 @@ use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::auras::{AURA_MOD_WATER_BREATHING, AURA_WATER_BREATHING};
 use crate::game::map::death::Death;
+use crate::game::map::terrain::{Liquid, SPELL_NAXX_SLIME};
 
 pub const BREATH: Duration = Duration::from_secs(60);
 pub const FATIGUE: Duration = Duration::from_secs(60);
+/// How long lava is touched before it burns.
+pub const LAVA_GRACE: Duration = Duration::from_secs(1);
 const PULSE: Duration = Duration::from_secs(2);
 /// How often a player's liquid is looked at.
 const CHECK_EVERY: Duration = Duration::from_millis(500);
 /// How deep the head is: two yards at scale 1.
 const BODY_HEIGHT: f32 = 2.0;
-
-// The navmesh's liquid kinds.
-pub const LIQUID_WATER: u8 = 1;
-pub const LIQUID_OCEAN: u8 = 2;
-pub const LIQUID_MAGMA: u8 = 3;
-pub const LIQUID_SLIME: u8 = 4;
-pub const LIQUID_NAXX_SLIME: u8 = 21;
 
 /// A mirror timer: what is left, the whole, and whether it drains (-1) or
 /// fills again (10).
@@ -108,13 +105,25 @@ pub fn damage(map: &mut Map, g: Guid, kind: EnvironmentalDamageType, amount: u32
     }
 }
 
-/// What a player's liquid is: (kind, surface), the kind 0 where the
-/// navmesh doesn't say.
-fn liquid_at(map: &mut Map, at: Vector3d) -> Option<(u8, f32)> {
-    map.nav.as_mut()?.liquid(at)
+/// The liquid at a point, as Thistle Tea's `terrain_liquid` has it: a
+/// WMO's, else the terrain tile's.
+pub fn liquid_at(map: &mut Map, at: Vector3d) -> Option<Liquid> {
+    if let Some((entry, surface, floor)) = map.nav.as_mut().and_then(|n| n.wmo_liquid(at)) {
+        return Liquid::from_wmo(entry, surface, floor);
+    }
+    map.terrain.as_mut()?.liquid(at)
 }
 
-/// Every player's breath, fatigue and burning.
+/// The surface over a point: the navmesh's liquid, of any kind; else that
+/// of the liquid there.
+fn surface_at(map: &mut Map, at: Vector3d, liquid: Option<Liquid>) -> Option<f32> {
+    map.nav
+        .as_mut()
+        .and_then(|n| n.liquid_surface(at))
+        .or(liquid.map(|l| l.surface))
+}
+
+/// Every player's breath, fatigue, burning and liquid spell.
 pub fn update(map: &mut Map) {
     let now = map.now;
     let due: Vec<Guid> = map
@@ -132,39 +141,51 @@ pub fn update(map: &mut Map) {
             continue;
         };
         p.misc.env_checked_at = Some(now);
-        let protected = p.gm
+        let alive = p.death == Death::Alive;
+        let ghost = matches!(p.death, Death::Ghost { .. });
+        // A ghost still tires in the deep sea; a body lying there doesn't.
+        let protected = p.misc.god
             || p.flight.is_some()
             || p.movement.flags.get_on_transport().is_some()
-            || p.death != Death::Alive;
+            || !(alive || ghost);
         let at = p.position();
         let scale = p.fields.get_f32(OBJECT_FIELD_SCALE_X).max(0.1);
-        let swimming = p.movement.flags.get_swimming().is_some();
         let breath_for = if p.auras.has(AURA_WATER_BREATHING) {
             Duration::ZERO
         } else {
             BREATH.mul_f32(p.auras.product(AURA_MOD_WATER_BREATHING))
         };
+        let liquid = liquid_at(map, at);
+        liquid_spell(map, g, liquid.filter(|_| alive).and_then(|l| l.spell(at.z)));
         if protected {
             stop(map, g);
             continue;
         }
-        let liquid = if swimming || map.nav.is_some() {
-            liquid_at(map, at)
-        } else {
-            None
-        };
-        let depth = liquid.map_or(0.0, |(_, surface)| surface - at.z);
+        match liquid {
+            Some(l) => fatigue(map, g, l.deep(), now),
+            None => stop_fatigue(map, g),
+        }
+        if !alive {
+            stop_breath(map, g);
+            lava(map, g, None, now);
+            continue;
+        }
+        let depth = surface_at(map, at, liquid).map_or(0.0, |surface| surface - at.z);
         let submerged = depth > BODY_HEIGHT * scale;
         breathe(map, g, submerged && breath_for > Duration::ZERO, breath_for, depth > 0.0, now);
-        let kind = liquid.map_or(0, |l| l.0);
-        fatigue(map, g, depth > 0.0 && kind == LIQUID_OCEAN, now);
-        if depth > 0.0 && matches!(kind, LIQUID_MAGMA | LIQUID_SLIME | LIQUID_NAXX_SLIME) {
-            burn(map, g, kind, now);
-        }
+        lava(map, g, liquid.map(|l| l.magma() && l.touching(at.z)), now);
     }
 }
 
 fn stop(map: &mut Map, g: Guid) {
+    stop_breath(map, g);
+    stop_fatigue(map, g);
+    if let Some(p) = map.players.get_mut(&g) {
+        p.misc.lava = None;
+    }
+}
+
+fn stop_breath(map: &mut Map, g: Guid) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -173,11 +194,24 @@ fn stop(map: &mut Map, g: Guid) {
             timer: TimerType::Breath,
         });
     }
+}
+
+fn stop_fatigue(map: &mut Map, g: Guid) {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
     if p.misc.fatigue.take().is_some() {
         p.outbound.send(&SMSG_STOP_MIRROR_TIMER {
             timer: TimerType::Fatigue,
         });
     }
+}
+
+/// A fifth of the most health, and up to the level more.
+fn fifth(p: &crate::game::map::player::Player) -> u32 {
+    let level = p.fields.get_u32(UNIT_FIELD_LEVEL).max(1);
+    let bonus = rand::rng().random_range(0..level);
+    (p.fields.get_u32(UNIT_FIELD_MAXHEALTH) / 5 + bonus).max(1)
 }
 
 /// The breath timer: draining with the head under, filling above it,
@@ -215,15 +249,16 @@ pub fn breathe(map: &mut Map, g: Guid, under: bool, duration: Duration, in_water
     }
     let drowning = timer.is_some_and(|m| m.draining && m.remaining.is_zero());
     if drowning && timer.is_some_and(|m| m.next_damage.is_none_or(|t| t <= now)) {
-        let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        let amount = fifth(p);
         if let Some(m) = p.misc.breath.as_mut() {
             m.next_damage = Some(now + PULSE);
         }
-        damage(map, g, EnvironmentalDamageType::Drowning, (max / 5).max(1));
+        damage(map, g, EnvironmentalDamageType::Drowning, amount);
     }
 }
 
-/// The fatigue timer, in the deep sea.
+/// The fatigue timer, in the deep sea; filling in other liquid. A ghost
+/// worn out goes to its graveyard.
 pub fn fatigue(map: &mut Map, g: Guid, deep: bool, now: Instant) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
@@ -254,28 +289,77 @@ pub fn fatigue(map: &mut Map, g: Guid, deep: bool, now: Instant) {
     }
     let exhausted = timer.is_some_and(|m| m.draining && m.remaining.is_zero());
     if exhausted && timer.is_some_and(|m| m.next_damage.is_none_or(|t| t <= now)) {
-        let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        if matches!(p.death, Death::Ghost { .. }) {
+            let (zone, team, pos) = (p.zone, p.team, p.position());
+            stop_fatigue(map, g);
+            let (to, at, facing) = crate::game::map::death::nearest_graveyard(map, zone, team, pos);
+            map.teleport(g, to, at, facing);
+            return;
+        }
+        let amount = fifth(p);
         if let Some(m) = p.misc.fatigue.as_mut() {
             m.next_damage = Some(now + PULSE);
         }
-        damage(map, g, EnvironmentalDamageType::Exhausted, (max / 5).max(1));
+        damage(map, g, EnvironmentalDamageType::Exhausted, amount);
     }
 }
 
-/// Lava and slime burn every two seconds.
-fn burn(map: &mut Map, g: Guid, kind: u8, now: Instant) {
+/// Lava: a second's grace touching it, then 605 to 610 fire every two
+/// seconds; the grace comes back ten times as fast out of it. `touching`
+/// is `None` out of any liquid.
+pub fn lava(map: &mut Map, g: Guid, touching: Option<bool>, now: Instant) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    if p.misc.env_damage_at.is_some_and(|t| t > now) {
+    let Some(touching) = touching else {
+        p.misc.lava = None;
         return;
-    }
-    p.misc.env_damage_at = Some(now + PULSE);
-    let amount = rand::rng().random_range(600..=700);
-    let kind = if kind == LIQUID_MAGMA {
-        EnvironmentalDamageType::Lava
-    } else {
-        EnvironmentalDamageType::Slime
     };
-    damage(map, g, kind, amount);
+    let timer = match p.misc.lava {
+        None if touching => Some(Mirror::new(LAVA_GRACE, now)),
+        None => None,
+        Some(mut m) => {
+            m.advance(now);
+            m.draining = touching;
+            if !touching {
+                m.next_damage = None;
+            }
+            (touching || m.remaining < m.duration).then_some(m)
+        }
+    };
+    p.misc.lava = timer;
+    let burning = timer.is_some_and(|m| m.draining && m.remaining.is_zero());
+    if burning && timer.is_some_and(|m| m.next_damage.is_none_or(|t| t <= now)) {
+        if let Some(m) = p.misc.lava.as_mut() {
+            m.next_damage = Some(now + PULSE);
+        }
+        let amount = 604 + rand::rng().random_range(1..=6);
+        damage(map, g, EnvironmentalDamageType::Lava, amount);
+        if let Some(p) = map.players.get_mut(&g)
+            && p.death != Death::Alive
+        {
+            p.misc.lava = None;
+        }
+    }
+}
+
+/// The spell the liquid a player is in puts on: on while in it, off out of
+/// it (and off one brought from another map).
+pub fn liquid_spell(map: &mut Map, g: Guid, spell: Option<u32>) {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    let before = std::mem::replace(&mut p.misc.liquid_spell, spell).or_else(|| {
+        p.auras
+            .has_spell(SPELL_NAXX_SLIME)
+            .then_some(SPELL_NAXX_SLIME)
+    });
+    if let Some(old) = before.filter(|&old| Some(old) != spell) {
+        crate::game::map::auras::remove_spell(map, g, old, None);
+    }
+    if let Some(spell) = spell
+        && !map.players.get(&g).is_some_and(|p| p.auras.has_spell(spell))
+    {
+        crate::game::map::spells::cast_triggered(map, g, spell, Some(g));
+    }
 }

@@ -26,9 +26,12 @@ For the world, point `config.toml` at vmangos's database and the client's DBCs a
 [world]
 data_dir = "/path/to/db"
 nav_dir = "/path/to/bake"
+terrain_dir = "/path/to/terrain"
 ```
 
-Without them the world is empty and creatures walk straight lines.
+Without them the world is empty and creatures walk straight lines. `terrain_dir` is Thistle Tea's terrain tiles
+(`MMMMRRCC.map`, from its `nix run .#terrain-data`): they give the liquids outside WMOs their kind (the deep sea
+tires swimmers, lava burns) and areas where the navmesh has none.
 
 ## Configuration
 
