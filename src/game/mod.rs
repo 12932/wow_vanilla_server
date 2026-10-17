@@ -70,6 +70,10 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_p3_player;
 #[cfg(test)]
+mod tests_p3_player_chat;
+#[cfg(test)]
+mod tests_p3_player_stats;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

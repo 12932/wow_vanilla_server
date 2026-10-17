@@ -2335,6 +2335,11 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         m.exploration_xp.insert(level, xp);
     }
+    for (key, rate) in rows(db, "SELECT * FROM player_crit_per_agility", |c| {
+        ((c.u32("class") as u8, c.u32("level") as u8), c.f32("rate"))
+    }) {
+        m.crit_per_agility.insert(key, rate);
+    }
     for (entry, stone) in rows(
         db,
         "SELECT entry, data0, data1, data2 FROM gameobject_template WHERE type = 23",
