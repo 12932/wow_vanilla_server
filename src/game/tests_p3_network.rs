@@ -466,3 +466,107 @@ async fn played_time_counts_the_session_and_not_the_time_away() {
     let (again, _) = played(&mut a).await;
     assert!(again <= total + 1, "{total} then {again}");
 }
+
+/// Thistle Tea's cmsg_page_text_query_test and cmsg_read_item_test: a
+/// letter is read; a rock, or nothing, is not found; a page query sends
+/// the whole chain, a missing page says so, and a page come back to ends
+/// it.
+#[tokio::test]
+async fn letters_are_read_whole_and_rocks_are_not() {
+    use crate::game::data::{GameData, ItemTemplate};
+    const LETTER: u32 = 9_000;
+    const ROCK: u32 = 9_001;
+    let mut d = GameData::empty();
+    let item = |entry, name: &str, page_text| ItemTemplate {
+        entry,
+        name: name.into(),
+        allowable_class: -1,
+        allowable_race: -1,
+        stackable: 1,
+        buy_count: 1,
+        page_text,
+        ..Default::default()
+    };
+    d.items.insert(LETTER, item(LETTER, "Sealed Letter", 9_101));
+    d.items.insert(ROCK, item(ROCK, "Rock", 0));
+    d.misc.page_texts.insert(9_101, ("Page one.".into(), 9_102));
+    d.misc.page_texts.insert(9_102, ("Page two.".into(), 0));
+    d.misc.page_texts.insert(9_104, ("Loop.".into(), 9_104));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let (letter, rock) = on_map(&realm, move |m| {
+        for entry in [LETTER, ROCK] {
+            crate::game::map::inventory::add_item(m, g, entry, 1, false).unwrap();
+        }
+        let p = &m.players[&g];
+        let at = |entry| {
+            p.items
+                .iter()
+                .find(|i| i.entry == entry)
+                .map(|i| (i.guid, i.bag, i.slot))
+                .unwrap()
+        };
+        (at(LETTER), at(ROCK))
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_READ_ITEM {
+        bag_index: letter.1,
+        slot: letter.2,
+    })
+    .await;
+    let read = a
+        .wait_for("SMSG_READ_ITEM_OK", |m| match m {
+            ServerOpcodeMessage::SMSG_READ_ITEM_OK(r) => Some(r.guid),
+            _ => None,
+        })
+        .await;
+    assert_eq!(read, letter.0);
+    // The rock, and the backpack's last slot, empty: not found.
+    for (bag, slot) in [(rock.1, rock.2), (255, 38)] {
+        a.send(CMSG_READ_ITEM {
+            bag_index: bag,
+            slot,
+        })
+        .await;
+        let f = a
+            .wait_frame("SMSG_INVENTORY_CHANGE_FAILURE", 0x112, |_| true)
+            .await;
+        assert_eq!(f[0], InventoryResult::ItemNotFound.as_int(), "{bag}/{slot}");
+    }
+    assert!(
+        a.gets(Duration::from_millis(100), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_READ_ITEM_FAILED(_)).then_some(())
+        })
+        .await
+        .is_none()
+    );
+    let page = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_PAGE_TEXT_QUERY_RESPONSE(r) => {
+            Some((r.page_id, r.text.clone(), r.next_page_id))
+        }
+        _ => None,
+    };
+    a.send(CMSG_PAGE_TEXT_QUERY { page_id: 9_101 }).await;
+    assert_eq!(
+        a.wait_for("page one", page).await,
+        (9_101, "Page one.".into(), 9_102)
+    );
+    assert_eq!(
+        a.wait_for("page two", page).await,
+        (9_102, "Page two.".into(), 0)
+    );
+    a.send(CMSG_PAGE_TEXT_QUERY { page_id: 9_103 }).await;
+    assert_eq!(
+        a.wait_for("a missing page", page).await,
+        (9_103, "Item page missing.".into(), 0)
+    );
+    a.send(CMSG_PAGE_TEXT_QUERY { page_id: 9_104 }).await;
+    assert_eq!(a.wait_for("the loop", page).await.0, 9_104);
+    settled(&mut a).await;
+    assert!(
+        a.gets(Duration::from_millis(100), page).await.is_none(),
+        "the loop sent once"
+    );
+}
