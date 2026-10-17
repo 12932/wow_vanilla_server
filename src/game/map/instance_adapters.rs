@@ -276,9 +276,20 @@ fn despawn(map: &mut Map, g: Guid) {
 
 /// An object the world database keeps back, up for `for_ms`; one already
 /// up stays as it is, as Thistle Tea's `respawn_game_object` leaves a
-/// spawn it didn't start.
+/// spawn it didn't start. A chest raised before the copy last went comes
+/// back as it was left: with what was in it, or, emptied, not until it
+/// fills again.
 pub(super) fn raise_object(map: &mut Map, spawn: u32, for_ms: u64) {
-    if crate::game::map::scripts::object_of_spawn(map, spawn).is_some() {
+    if crate::game::map::scripts::object_of_spawn(map, spawn).is_some()
+        || map.loot_state.respawns.iter().any(|(_, s)| *s == spawn)
+    {
+        return;
+    }
+    map.instance.raised.insert(spawn);
+    let left = super::instance_script::chest_left(map, spawn);
+    if let super::instance_script::Left::Gone(after) = left {
+        let at = map.now + after;
+        map.loot_state.respawns.push((at, spawn));
         return;
     }
     let data = map.realm.data.clone();
@@ -292,6 +303,11 @@ pub(super) fn raise_object(map: &mut Map, spawn: u32, for_ms: u64) {
         });
     if let Some(g) = g {
         crate::game::map::scripts::set_object_state(map, g, 1);
+        if let super::instance_script::Left::Loot(loot) = left
+            && let Some(o) = map.gameobject_mut(g)
+        {
+            o.loot = Some(loot);
+        }
         map.visibility_dirty.insert(g);
         map.object_resets
             .push((map.now + Duration::from_millis(for_ms), g, u32::MAX));

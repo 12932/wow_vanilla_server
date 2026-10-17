@@ -1000,6 +1000,7 @@ pub fn take_item(map: &mut Map, player: Guid, slot: u8) {
                     p.outbound.send(&SMSG_LOOT_REMOVED { slot });
                 }
             }
+            crate::game::map::instance_script::chest_changed(map, target);
         }
         Err(f) => {
             if let Some(p) = map.players.get(&player) {
@@ -1052,6 +1053,7 @@ pub fn take_money(map: &mut Map, player: Guid) {
             p.outbound.send(&SMSG_LOOT_CLEAR_MONEY {});
         }
     }
+    crate::game::map::instance_script::chest_changed(map, target);
 }
 
 /// `CMSG_LOOT_MASTER_GIVE`: the master looter gives a kept item to a
@@ -1120,8 +1122,11 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
         if empty && kind == LootKind::Corpse {
             crate::game::map::professions::corpse_looted(map, target);
         }
-    } else if empty {
-        crate::game::map::professions::object_looted(map, player, target);
+    } else {
+        if empty {
+            crate::game::map::professions::object_looted(map, player, target);
+        }
+        crate::game::map::instance_script::chest_changed(map, target);
     }
 }
 
@@ -1168,6 +1173,7 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
                 ..Default::default()
             });
         }
+        crate::game::map::instance_script::chest_changed(map, object);
     }
     open(map, player, object);
 }

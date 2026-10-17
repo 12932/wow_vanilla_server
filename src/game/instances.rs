@@ -78,6 +78,34 @@ pub struct InstanceSave {
     /// Its raid reset with players inside: it takes no one more, and goes
     /// once they have left.
     pub expired: bool,
+    /// The chests its script raised that have been opened, by spawn: what
+    /// is left in them, so one raised again after a reload keeps it.
+    pub chests: BTreeMap<u32, SavedChest>,
+}
+
+/// What a raised chest holds, as it was last left.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SavedChest {
+    pub items: Vec<SavedSlot>,
+    pub gold: u32,
+    /// Emptied and gone: when (Unix seconds) it comes back, filled anew.
+    pub back_at: Option<i64>,
+}
+
+/// A slot of a saved chest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SavedSlot {
+    pub item: u32,
+    pub count: u32,
+    pub taken: bool,
+    pub random_property: u32,
+    pub quest: bool,
+    /// For a quest item, who has taken theirs, by GUID counter.
+    pub taken_by: Vec<u32>,
+    pub quality: u32,
+    pub condition: u32,
 }
 
 #[derive(Debug, Default)]
@@ -587,6 +615,28 @@ pub fn spawn_back(realm: &Realm, key: MapKey, spawn: u32) {
 pub fn data_changed(realm: &Realm, key: MapKey, data: &BTreeMap<u32, u32>) {
     let data = data.clone();
     change_save(realm, key, |s| s.data = data);
+}
+
+/// A raised chest's loot as it is now, saved with the copy; `None`
+/// forgets it.
+pub fn chest_changed(realm: &Realm, key: MapKey, spawn: u32, chest: Option<SavedChest>) {
+    let unchanged = realm
+        .social
+        .instances
+        .lock()
+        .saves
+        .get(&key.instance)
+        .is_some_and(|s| s.chests.get(&spawn) == chest.as_ref());
+    if !unchanged {
+        change_save(realm, key, |s| match chest {
+            Some(c) => {
+                s.chests.insert(spawn, c);
+            }
+            None => {
+                s.chests.remove(&spawn);
+            }
+        });
+    }
 }
 
 /// A boss that locks its raid died: everyone in the copy is bound to it
