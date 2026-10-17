@@ -408,26 +408,8 @@ pub fn battlemaster_hello(map: &mut Map, player: Guid, npc: Guid) {
     if npc_entry(map, player, npc, NPC_FLAG_BATTLEMASTER).is_none() {
         return;
     }
-    let level = map.players.get(&player).map(|p| p.level()).unwrap_or(1);
-    let bracket = match level {
-        0..=19 => BattlegroundBracket::Tens,
-        20..=29 => BattlegroundBracket::Twenties,
-        30..=39 => BattlegroundBracket::Thirties,
-        40..=49 => BattlegroundBracket::Fourties,
-        50..=59 => BattlegroundBracket::Fifties,
-        _ => BattlegroundBracket::Sixty,
-    };
     let bg_map = crate::game::map::battleground::map_for_battlemaster(map, npc);
-    send(
-        map,
-        player,
-        &SMSG_BATTLEFIELD_LIST {
-            battlemaster: npc,
-            map: crate::game::map::movement::map_enum(bg_map),
-            bracket,
-            battlegrounds: Vec::new(),
-        },
-    );
+    crate::game::map::pvp::battlefield_list(map, player, npc, bg_map);
 }
 
 /// `MSG_AUCTION_HELLO`: which house this auctioneer is of.

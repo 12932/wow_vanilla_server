@@ -25,6 +25,7 @@ pub mod npc;
 pub mod pets;
 pub mod player;
 pub mod procs;
+pub mod pvp;
 pub mod query;
 pub mod quests;
 pub mod skills;
@@ -594,6 +595,7 @@ impl Map {
         self.update_players();
         inventory::sync_gear_all(self);
         combat::update_players(self);
+        pvp::update(self);
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);

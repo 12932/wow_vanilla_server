@@ -622,6 +622,9 @@ pub fn deal_damage(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
     } else {
         damage
     };
+    if guid::is_player(victim) {
+        crate::game::map::pvp::damaged(map, attacker, victim, damage);
+    }
     if damage == 0 {
         return;
     }
@@ -800,36 +803,9 @@ fn kill_reward(map: &mut Map, player: Guid, victim: Guid) {
     crate::game::map::stats::give_xp(map, player, xp, Some(victim));
 }
 
-/// An honorable kill: an enemy player not too far below the killer.
+/// An honorable kill: honor for the killer and those who helped.
 fn honor(map: &mut Map, killer: Guid, victim: Guid) {
-    let (Some(k), Some(v)) = (map.players.get(&killer), map.players.get(&victim)) else {
-        return;
-    };
-    if k.team == v.team || u32::from(v.level()) <= gray_level(u32::from(k.level())) {
-        return;
-    }
-    let victim_level = v.level();
-    let Some(k) = map.players.get_mut(&killer) else {
-        return;
-    };
-    let (today, yesterday) = {
-        let v = k.fields.get_u32(PLAYER_FIELD_SESSION_KILLS);
-        (v & 0xFFFF, v >> 16)
-    };
-    k.fields.set_shorts(
-        PLAYER_FIELD_SESSION_KILLS,
-        (today + 1) as u16,
-        yesterday as u16,
-    );
-    let life = k.fields.get_u32(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
-    k.fields
-        .set_u32(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS, life + 1);
-    k.outbound
-        .send(&wow_world_messages::vanilla::SMSG_PVP_CREDIT {
-            honor_points: u32::from(victim_level),
-            victim,
-            rank: wow_world_messages::vanilla::PvpRank::NoRank,
-        });
+    crate::game::map::pvp::player_killed(map, killer, victim);
 }
 
 /// Run the players' swings, and expire their combat and PvP flags.

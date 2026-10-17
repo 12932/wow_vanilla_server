@@ -144,6 +144,19 @@ fn template(realm: &Realm, bg: u32) -> (u32, u32, u32, u32) {
     (min, max, lo, hi)
 }
 
+/// The matches of `bg` in `bracket` that are still on, for the list.
+pub fn instances(realm: &Realm, bg: u32, bracket: u8) -> Vec<u32> {
+    let bgs = realm.social.battlegrounds.lock();
+    let mut out: Vec<u32> = bgs
+        .matches
+        .values()
+        .filter(|m| m.bg == bg && m.bracket == bracket && !m.ended)
+        .map(|m| m.id)
+        .collect();
+    out.sort_unstable();
+    out
+}
+
 /// `CMSG_BATTLEMASTER_JOIN`: into the queue for `bg`.
 pub fn join(realm: &Realm, me: &Online, team: Team, level: u8, bg: u32) {
     let (_, _, lo, hi) = template(realm, bg);

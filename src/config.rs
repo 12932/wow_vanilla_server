@@ -119,6 +119,8 @@ pub struct WorldConfig {
     pub petition_signatures: u32,
     /// How long mail with items or money takes between accounts.
     pub mail_delay_secs: u64,
+    /// The weekday honor is ranked on, each week: 1 Monday to 7 Sunday.
+    pub honor_reset_weekday: u8,
 }
 
 impl Default for WorldConfig {
@@ -135,6 +137,7 @@ impl Default for WorldConfig {
             pvp_realm: false,
             petition_signatures: 9,
             mail_delay_secs: 3600,
+            honor_reset_weekday: 3,
         }
     }
 }
