@@ -2035,8 +2035,12 @@ pub fn threat_multiplier(map: &Map, g: Guid, school: u32) -> f32 {
 /// Damage of `school` (a mask) on a unit: the rage it gives, threat, the
 /// auras damage breaks, health, death.
 pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u32, school: u32) {
-    // A GM in god mode takes nothing.
-    if crate::game::map::gm_dev::invulnerable(map, victim) {
+    // A GM in god mode takes nothing, and the dead nothing more (mangos's
+    // `DealMeleeDamage` and `DealSpellDamage`): a blow or a tick that gets
+    // to a corpse doesn't kill it again.
+    if crate::game::map::gm_dev::invulnerable(map, victim)
+        || map.unit_view(victim).is_none_or(|u| !u.alive)
+    {
         return;
     }
     // A pet's blows count as its master's for duels and honor.
@@ -2100,8 +2104,12 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     }
 }
 
-/// `victim` dies at `killer`'s hand.
+/// `victim` dies at `killer`'s hand, once: the dead aren't killed again
+/// (Thistle Tea's `Entity.kill`).
 pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
+    if map.unit_view(victim).is_none_or(|u| !u.alive) {
+        return;
+    }
     let attackers: Vec<Guid> = map
         .combat(victim)
         .map(|c| c.attackers.iter().copied().collect())
