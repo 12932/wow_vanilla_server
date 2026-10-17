@@ -397,7 +397,7 @@ impl Session {
             let back = if battleground {
                 crate::game::battlegrounds::rejoin(&self.realm, g, row.map).ok_or(())
             } else {
-                crate::game::instances::key_for(&self.realm, g, online.gm, row.map).map_err(|_| ())
+                crate::game::instances::resume(&self.realm, g, online.gm, row.map).ok_or(())
             };
             match back {
                 Ok(k) => map = self.realm.maps.get(&self.realm, k),
