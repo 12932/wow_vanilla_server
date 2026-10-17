@@ -37,7 +37,8 @@ fn exclusive(d: &GameData, id: u32) -> Option<Exclusive> {
 /// invisibility, vmangos's effect fixes and per-level points, the stances
 /// and what is locked to them, spell threat, Sunder's stacks, the health
 /// costs, crit auras and Shatter's scripts, the rogue's and the paladin's,
-/// warlock's and hunter's spells, and a forced reaction.
+/// warlock's and hunter's spells, a forced reaction, and trainers' own
+/// greetings.
 #[test]
 fn the_real_spells_load_as_thistle_tea_reads_them() {
     let Some(d) = real() else {
@@ -327,4 +328,16 @@ fn the_real_spells_load_as_thistle_tea_reads_them() {
         .copied()
         .unwrap();
     assert_eq!((reaction.misc_value, reaction.base_points), (575, 3));
+    // Trainers greet with their own text where vmangos has one.
+    let greeting = |e: u32| d.npc.trainer_greetings.get(&e).map(String::as_str);
+    assert_eq!(
+        greeting(198),
+        Some("Hello, mage!  Ready for some training?")
+    );
+    assert!(greeting(223).is_some_and(|g| g.contains("beast hides into armor")));
+    assert_eq!(
+        greeting(913),
+        Some("Hello, warrior!  Ready for some training?")
+    );
+    assert_eq!(greeting(2870), None);
 }

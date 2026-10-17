@@ -454,3 +454,68 @@ async fn real_teleports_to_a_caster_land_where_their_targets_say() {
         assert!((turned - facing).abs() < 0.01, "{turned} {facing}");
     }
 }
+
+/// Thistle Tea's debug grants (`spell_vmangos_test.exs`'s talent grants,
+/// rogue, paladin, warlock, hunter, shaman and druid rows): `.debug spells`
+/// teaches a sixtieth-level character their trainers' spells and their
+/// class quests' (the warlock's demons, the hunter's pet spells, the
+/// shaman's totems, the druid's forms), but no talent nor a talent's
+/// trained rank (Mortal Strike's) to one without the talent.
+#[tokio::test]
+async fn debug_spells_teach_trainers_and_class_quests_but_no_talents() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let classes: [(Race, Class, &[u32], &[u32]); 7] = [
+        (
+            Race::Human,
+            Class::Warrior,
+            &[71, 2458, 78],
+            &[
+                12_294, 21_551, 21_553, 23_881, 23_892, 23_894, 12_975, 12_320,
+            ],
+        ),
+        (
+            Race::Human,
+            Class::Rogue,
+            &[53],
+            &[13_750, 13_877, 14_177, 14_185, 14_056],
+        ),
+        (
+            Race::Human,
+            Class::Paladin,
+            &[635],
+            &[20_066, 20_473, 20_375],
+        ),
+        (
+            Race::Human,
+            Class::Warlock,
+            &[688, 697, 712, 691, 1122, 18_540],
+            &[18_288],
+        ),
+        (Race::Dwarf, Class::Hunter, &[1515, 883, 982, 136], &[]),
+        (Race::Orc, Class::Shaman, &[8071, 3599, 5394, 8512], &[]),
+        (Race::Tauren, Class::Druid, &[5487, 1066, 768], &[]),
+    ];
+    for (i, (race, class, has, hasnt)) in classes.into_iter().enumerate() {
+        let (mut c, g, map) = enter(
+            &realm,
+            &format!("P3JDEBUG{i}"),
+            &format!("Debuga{}", (b'a' + i as u8) as char),
+            race,
+            class,
+        )
+        .await;
+        on(&map, move |m| ready(m, g, 60, &[])).await;
+        c.say(".debug spells").await;
+        c.system_message("Learned").await;
+        let known = on(&map, move |m| m.players[&g].spells.clone()).await;
+        for s in has {
+            assert!(known.contains(s), "{class:?} learns {s}");
+        }
+        for s in hasnt {
+            assert!(!known.contains(s), "{class:?} learns no talent's {s}");
+        }
+    }
+}
