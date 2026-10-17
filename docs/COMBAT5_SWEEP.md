@@ -44,6 +44,14 @@ and its state: **fixed**, or **left** with why.
    clears, and XP scales by the players' share. wvs had none of it.
 10. `world/entity/mob/corpse.ex`: a corpse lies 300 seconds, an elite's
     (ranks 1-3) 600. wvs: 60 and 300.
+10a. `assistance.ex`, `world/combat/call_for_help.ex`: a creature that
+    calls for help, entering a fight, gathers the creatures of its faction
+    within ten yards in sight whose faction answers calls (flag 0x01, not
+    0x400), who are free and no friend of the enemy, and they come a second
+    and a half on if still free; fighting more than ten yards from its spawn
+    it calls each second as far as its call for help range, to friendly
+    factions too. wvs called at once as far as its range, any of the same
+    faction id, in sight or not, answering flag or not, and never again.
 10b. `threat.ex`: a creature looks down its threat list from the top: past
     110% of its victim's threat one in melee range takes over, past 130%
     anyone; one at range between the two doesn't stop one in melee further
