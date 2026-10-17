@@ -6,7 +6,7 @@ use std::time::Instant;
 use ahash::AHashMap;
 use rusqlite::types::Value;
 use rusqlite::{Connection, OpenFlags, Row};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use super::*;
 
@@ -53,11 +53,31 @@ impl Cols<'_, '_> {
     }
 }
 
-fn open(path: &Path) -> rusqlite::Result<Connection> {
+/// Whether `path` is a Git LFS pointer, as a clone made without Git LFS
+/// leaves the databases.
+pub fn lfs_pointer(path: &Path) -> bool {
+    use std::io::Read;
+    const POINTER: &[u8] = b"version https://git-lfs.github.com/spec/v1";
+    let mut head = [0u8; POINTER.len()];
+    std::fs::File::open(path).is_ok_and(|mut f| f.read_exact(&mut head).is_ok()) && head == POINTER
+}
+
+/// The database at `path`, read-only; `None`, with a warning, if it won't
+/// open. A Git LFS pointer is named as such, not left to SQLite.
+fn open(path: &Path) -> Option<Connection> {
+    if lfs_pointer(path) {
+        error!(
+            "{} is a Git LFS pointer: run `git lfs pull`",
+            path.display()
+        );
+        return None;
+    }
     Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
+    .inspect_err(|e| warn!("game data: {}: {e}", path.display()))
+    .ok()
 }
 
 /// Every row of `sql`, through `f`.
@@ -109,7 +129,8 @@ pub fn real_data() -> Option<&'static GameData> {
     static DATA: std::sync::OnceLock<Option<GameData>> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
         let dir = &crate::game::harness::real_data("db");
-        dir.join("vmangos.sqlite").exists().then(|| load(dir))
+        let db = dir.join("vmangos.sqlite");
+        (db.exists() && !lfs_pointer(&db)).then(|| load(dir))
     })
     .as_ref()
 }
@@ -119,33 +140,24 @@ pub fn real_data() -> Option<&'static GameData> {
 pub fn load(dir: &Path) -> GameData {
     let started = Instant::now();
     let mut data = GameData::empty();
-    let dbc = match open(&dir.join("dbc.sqlite")) {
-        Ok(dbc) => {
-            load_dbc(&dbc, &mut data);
-            Some(dbc)
-        }
-        Err(e) => {
-            warn!("game data: {}: {e}", dir.join("dbc.sqlite").display());
-            None
-        }
-    };
-    match open(&dir.join("vmangos.sqlite")) {
-        Ok(db) => {
-            load_vmangos(&db, &mut data);
-            load_npcs(&db, dbc.as_ref(), &mut data);
-            load_spells(&db, dbc.as_ref(), &mut data);
-            crate::game::map::boss_mechanics::fixups(&mut data);
-            super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
-            load_pets(&db, dbc.as_ref(), &mut data);
-            load_misc(&db, dbc.as_ref(), &mut data);
-            super::scripts_load::load(&db, &mut data);
-            super::world::load(&db, dbc.as_ref(), &mut data.world);
-            let _ = super::tt_scripts::install(&mut data);
-            // Alterac Valley's NPCs as the battleground drives them, over the
-            // general import.
-            crate::game::map::battleground::av_scripts::install(&mut data);
-        }
-        Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
+    let dbc = open(&dir.join("dbc.sqlite"));
+    if let Some(dbc) = &dbc {
+        load_dbc(dbc, &mut data);
+    }
+    if let Some(db) = open(&dir.join("vmangos.sqlite")) {
+        load_vmangos(&db, &mut data);
+        load_npcs(&db, dbc.as_ref(), &mut data);
+        load_spells(&db, dbc.as_ref(), &mut data);
+        crate::game::map::boss_mechanics::fixups(&mut data);
+        super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
+        load_pets(&db, dbc.as_ref(), &mut data);
+        load_misc(&db, dbc.as_ref(), &mut data);
+        super::scripts_load::load(&db, &mut data);
+        super::world::load(&db, dbc.as_ref(), &mut data.world);
+        let _ = super::tt_scripts::install(&mut data);
+        // Alterac Valley's NPCs as the battleground drives them, over the
+        // general import.
+        crate::game::map::battleground::av_scripts::install(&mut data);
     }
     let spawns: usize = data.creature_spawns.values().map(Vec::len).sum();
     let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();
@@ -2296,6 +2308,56 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clone made without Git LFS has pointers for databases: they are
+    /// named as such (not "file is not a database" a query at a time), and
+    /// the world is empty.
+    #[test]
+    fn a_git_lfs_pointer_is_named_and_the_world_is_empty() {
+        #[derive(Clone, Default)]
+        struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Log {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("wvs-lfs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pointer = "version https://git-lfs.github.com/spec/v1\n\
+                       oid sha256:190cb3b341a8f6b5c1d7e0f2a9c4b3e6d5f8a7b0c9d2e1f4a3b6c5d8e7f0a9b2\n\
+                       size 140783616\n";
+        for db in ["vmangos.sqlite", "dbc.sqlite"] {
+            std::fs::write(dir.join(db), pointer).unwrap();
+        }
+        assert!(lfs_pointer(&dir.join("vmangos.sqlite")));
+        assert!(!lfs_pointer(&dir.join("nowhere.sqlite")));
+        let log = Log::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .with_ansi(false)
+            .finish();
+        let data = tracing::subscriber::with_default(subscriber, || load(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(data.creature_templates.is_empty());
+        let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains("vmangos.sqlite is a Git LFS pointer: run `git lfs pull`"),
+            "{log}"
+        );
+        assert!(log.contains("dbc.sqlite is a Git LFS pointer"), "{log}");
+        assert!(!log.contains("not a database"), "{log}");
+        let real = crate::game::harness::real_data("db").join("vmangos.sqlite");
+        if real.exists() {
+            assert!(!lfs_pointer(&real), "{} is a pointer", real.display());
+        }
+    }
 
     /// Against the real databases, when they are here (they aren't in CI).
     #[test]
