@@ -799,6 +799,177 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
     }
 }
 
+/// A creature's stats from its class at its level, as a spawn's: health,
+/// mana for its list's spells, damage, attack power and armour.
+fn template_stats(
+    data: &crate::game::data::GameData,
+    c: &mut Creature,
+    template: &crate::game::data::CreatureTemplate,
+    level: u8,
+) {
+    let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) else {
+        return;
+    };
+    let health = crate::game::data::load::creature_health(stats.health, template.health_multiplier);
+    c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
+    c.fields.set_u32(UNIT_FIELD_HEALTH, health);
+    let mana = (stats.mana as f32 * template.mana_multiplier.max(0.0)).round() as u32;
+    if mana > 0 {
+        c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
+        c.fields.set_u32(UNIT_FIELD_POWER1, mana);
+    }
+    let mult = if template.damage_multiplier > 0.0 {
+        template.damage_multiplier
+    } else {
+        1.0
+    };
+    let base = stats.melee_damage * mult;
+    c.fields
+        .set_f32(UNIT_FIELD_MINDAMAGE, (base * 0.86).max(1.0));
+    c.fields
+        .set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
+    c.fields
+        .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
+    c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
+}
+
+/// `SCRIPT_COMMAND_UPDATE_ENTRY`, as Thistle Tea's `CreatureEntry.apply`:
+/// the creature becomes another entry, its identity, fight, auras, target
+/// and posture kept. It takes the new template's look and size, faction,
+/// NPC and unit flags (its old template's own given up), level (in the new
+/// range), stats (health and mana kept in proportion), speeds, weapons,
+/// and unkillable floor; its EventAI stays its old entry's, and a spell
+/// list stays where the new template has none. A respawn brings the old
+/// entry back.
+pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
+    let data = map.realm.data.clone();
+    let Some(t) = data.creature_template(entry) else {
+        return false;
+    };
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
+    if c.entry == entry {
+        return true;
+    }
+    let old = data.creature_template(c.entry);
+    let old_list = crate::game::map::spells::lists::base_list(map, g);
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL) as u8;
+    let level = if (t.level_min..=t.level_max.max(t.level_min)).contains(&level) {
+        level
+    } else if t.level_max > t.level_min {
+        rand::rng().random_range(t.level_min..=t.level_max)
+    } else {
+        t.level_min.max(1)
+    };
+    let mut fresh = Creature::new(c.guid, t, level, c.position, c.orientation);
+    template_stats(&data, &mut fresh, t, level);
+    let display = fresh.fields.get_u32(UNIT_FIELD_DISPLAYID);
+    let scale = fresh.fields.get_f32(OBJECT_FIELD_SCALE_X);
+    if let Some(d) = data.display_info.get(&display) {
+        if d.bounding_radius > 0.0 {
+            fresh
+                .fields
+                .set_f32(UNIT_FIELD_BOUNDINGRADIUS, d.bounding_radius * scale);
+        }
+        if d.combat_reach > 0.0 {
+            fresh
+                .fields
+                .set_f32(UNIT_FIELD_COMBATREACH, d.combat_reach * scale);
+        }
+    }
+    for (i, r) in t.resistances.iter().enumerate() {
+        fresh
+            .fields
+            .set_u32(UNIT_FIELD_RESISTANCES + 1 + i as u16, (*r).max(0) as u32);
+    }
+    let base = crate::game::map::derive::UnitBase::capture(&fresh.fields, fresh.speeds.run);
+    let ai = crate::game::map::event_ai::ai_entry(c);
+    let Some(c) = map.creature_mut(g) else {
+        return false;
+    };
+    let (health, max_health) = (
+        c.fields.get_u32(UNIT_FIELD_HEALTH),
+        c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+    );
+    let (mana, max_mana) = (
+        c.fields.get_u32(UNIT_FIELD_POWER1),
+        c.fields.get_u32(UNIT_FIELD_MAXPOWER1),
+    );
+    c.entry = entry;
+    c.fields.set_u32(OBJECT_FIELD_ENTRY, entry);
+    for field in [
+        UNIT_FIELD_DISPLAYID,
+        UNIT_FIELD_NATIVEDISPLAYID,
+        UNIT_FIELD_LEVEL,
+        UNIT_FIELD_FACTIONTEMPLATE,
+        UNIT_NPC_FLAGS,
+        UNIT_FIELD_BASEATTACKTIME,
+        UNIT_FIELD_BASEATTACKTIME + 1,
+        UNIT_FIELD_RANGEDATTACKTIME,
+    ] {
+        c.fields.set_u32(field, fresh.fields.get_u32(field));
+    }
+    c.fields.set_f32(OBJECT_FIELD_SCALE_X, scale);
+    for field in [UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_COMBATREACH] {
+        c.fields.set_f32(field, fresh.fields.get_f32(field));
+    }
+    c.fields.set_byte(
+        UNIT_FIELD_BYTES_0,
+        1,
+        fresh.fields.get_byte(UNIT_FIELD_BYTES_0, 1),
+    );
+    // Its old template's unit flags give way to the new one's; dynamic
+    // flags add up.
+    let flags = c.fields.get_u32(UNIT_FIELD_FLAGS) & !old.map_or(0, |o| o.unit_flags);
+    c.fields.set_u32(UNIT_FIELD_FLAGS, flags | t.unit_flags);
+    let dynamic = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
+    c.fields
+        .set_u32(UNIT_DYNAMIC_FLAGS, dynamic | t.dynamic_flags);
+    c.speeds.walk = fresh.speeds.walk;
+    c.speeds.run = fresh.speeds.run;
+    if crate::game::map::creature_motion::template_flies(t) {
+        c.move_flags |= FLIGHT_FLAGS;
+    }
+    c.base = base;
+    crate::game::map::derive::creature(c);
+    // Health and mana kept in proportion; alive, it keeps one at least.
+    let scaled = |now: u32, max: u32, new_max: u32| {
+        if max == 0 {
+            new_max
+        } else {
+            ((u64::from(now) * u64::from(new_max)) / u64::from(max)) as u32
+        }
+    };
+    let new_max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+    let new_health = scaled(health, max_health, new_max);
+    c.fields.set_u32(
+        UNIT_FIELD_HEALTH,
+        if health > 0 { new_health.max(1) } else { 0 },
+    );
+    let new_mana = c.fields.get_u32(UNIT_FIELD_MAXPOWER1);
+    c.fields
+        .set_u32(UNIT_FIELD_POWER1, scaled(mana, max_mana, new_mana));
+    c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, t.faction, t.civilian);
+    let weapons = data
+        .creature_equipment
+        .get(&t.equipment_id)
+        .copied()
+        .unwrap_or([0; 3]);
+    c.set_equipment_slots(&data, weapons.map(Some));
+    let new_list = t.spell_list_id != 0;
+    if new_list {
+        c.caster.spell_list = None;
+    }
+    let s = c.scripted.get_or_insert_with(Default::default);
+    s.ai_entry = Some(ai);
+    s.temp_faction = None;
+    s.invincible_hp = None;
+    s.base_spell_list = (!new_list && old_list != 0).then_some(old_list);
+    map.visibility_dirty.insert(g);
+    true
+}
+
 /// A creature summoned by `summoner` at `at`.
 pub fn summon(
     map: &mut Map,
@@ -825,39 +996,20 @@ pub fn summon(
         at,
         orientation,
     );
-    if let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) {
-        let health =
-            crate::game::data::load::creature_health(stats.health, template.health_multiplier);
-        c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
-        c.fields.set_u32(UNIT_FIELD_HEALTH, health);
-        // Its mana, as a spawn's, for its list's spells.
-        let mana = (stats.mana as f32 * template.mana_multiplier.max(0.0)).round() as u32;
-        if mana > 0 {
-            c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
-            c.fields.set_u32(UNIT_FIELD_POWER1, mana);
-        }
-        let mult = if template.damage_multiplier > 0.0 {
-            template.damage_multiplier
-        } else {
-            1.0
-        };
-        let base = stats.melee_damage * mult;
-        c.fields
-            .set_f32(UNIT_FIELD_MINDAMAGE, (base * 0.86).max(1.0));
-        c.fields
-            .set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
-        c.fields
-            .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
-        c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
-    }
+    template_stats(&data, &mut c, template, level);
     c.hostile_to_players =
         crate::game::map::ai::hostile_to_players(&data, template.faction, template.civilian);
     let mut c = c.with_base();
     let s = c.scripted.get_or_insert_with(Default::default);
     s.summoner = Some(summoner);
+    // Its time runs from now, from its death, or not at all, as its type
+    // has it.
     if let Some((after, kind)) = despawn {
-        s.despawn_at = Some(map.now + after);
+        s.despawn_after = Some(after);
         s.despawn_type = kind;
+        if event_ai::timer_at_spawn(kind) {
+            s.despawn_at = Some(map.now + after);
+        }
     }
     let g = map.add_creature(c);
     if let Some(s) = event_ai::scripted_mut(map, summoner) {
@@ -990,6 +1142,8 @@ pub struct Move {
     pub face: Option<f32>,
     /// The point its arrival tells of.
     pub point: Option<u32>,
+    /// A walk home: its arrival is as an evade's (`reached_home`).
+    pub home: bool,
 }
 
 /// Move a creature as `how` says, remembering the move so its arrival
@@ -1022,6 +1176,7 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
             to,
             point: how.point,
             face: how.face,
+            home: how.home,
         });
     } else {
         // Already there.
@@ -1031,6 +1186,9 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
         }
         if let Some(point) = how.point {
             event_ai::movement_inform(map, g, event_ai::POINT_MOTION, point);
+        }
+        if how.home {
+            event_ai::home_reached(map, g);
         }
     }
     if let Some(frame) = frame {
@@ -1192,6 +1350,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     time: (d2 > 0).then(|| Duration::from_millis(u64::from(d2))),
                     face: (face > 0.0).then_some(face),
                     point: (d4 & 0x2 != 0).then_some(step.dataint[0].max(0) as u32),
+                    home: false,
                 },
             )
         }
@@ -1497,27 +1656,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 false
             }
         }
-        // Become another entry: its look and faction.
-        27 => {
-            let Some(t) = data.creature_template(d1) else {
-                return false;
-            };
-            let display = t.display_ids.iter().copied().find(|d| *d != 0).unwrap_or(0);
-            let Some(c) = creature_mut(map, source) else {
-                return false;
-            };
-            c.entry = d1;
-            c.fields.set_u32(OBJECT_FIELD_ENTRY, d1);
-            if display != 0 {
-                c.fields.set_u32(UNIT_FIELD_DISPLAYID, display);
-                c.fields.set_u32(UNIT_FIELD_NATIVEDISPLAYID, display);
-            }
-            if d2 == 0 {
-                c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, t.faction);
-            }
-            c.fields.set_u32(UNIT_NPC_FLAGS, t.npc_flags);
-            true
-        }
+        // Become another entry (datalong2, the team for its look, plays no
+        // part in 1.12).
+        27 => update_entry(map, source, d1),
         28 => {
             let g = if d2 != 0 { target } else { source };
             if let Some(p) = map.players.get_mut(&g) {
@@ -1793,7 +1934,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 d1
             };
             if let Some(s) = event_ai::scripted_mut(map, source) {
-                s.invincible_hp = floor;
+                s.invincible_hp = Some(floor);
             }
             true
         }
@@ -2777,6 +2918,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 Move {
                     pathfind: true,
                     face: Some(o),
+                    home: true,
                     ..Default::default()
                 },
             );
