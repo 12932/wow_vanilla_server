@@ -120,6 +120,7 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     let passive = !critter
         && crate::game::map::assistance::reaction(map, creature)
             == crate::game::map::assistance::Reaction::Passive;
+    map.note_fighting(creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
@@ -224,6 +225,7 @@ pub fn forget(map: &mut Map, g: Guid) {
                     cr.combat.attacking = false;
                 }
                 attacked(map, c, t);
+                map.note_fighting(c);
                 if let Some(cr) = map.creature_mut(c) {
                     cr.combat.victim = t;
                     cr.combat.attacking = true;
@@ -546,21 +548,19 @@ pub fn lie_dead(map: &mut Map, g: Guid, respawn_in: Option<Duration>) {
 /// Run the creatures some player sees, or that are fighting.
 pub fn update_creatures(map: &mut Map) {
     let now = map.now;
-    let keys: Vec<usize> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.pet.is_none())
-        .filter(|(_, c)| {
-            c.alive()
+    let keys: Vec<usize> = map.awake_where(
+        |c| {
+            c.pet.is_none()
+                && c.alive()
                 && (!c.observers.is_empty()
                     || c.combat.attacking
                     || c.evading
                     || c.scripted
                         .as_deref()
                         .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some())))
-        })
-        .map(|(k, _)| k)
-        .collect();
+        },
+        |k, _| k,
+    );
     for key in keys {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
@@ -1110,6 +1110,7 @@ fn evade(map: &mut Map, g: Guid) {
     for (spell, caster) in held {
         crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
     }
+    map.note_fighting(g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };

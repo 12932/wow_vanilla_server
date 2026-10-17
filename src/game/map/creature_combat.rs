@@ -756,17 +756,11 @@ fn answered(map: &mut Map, caller: Guid, answer: GuardCall) {
 /// their detection range, level with them, in sight and seen; in a fight,
 /// only for whom they fight.
 fn watch_for_enemies(map: &mut Map) {
-    // Only a creature some player sees watches, and a map without players
-    // has none.
-    if map.players.is_empty() {
-        return;
-    }
     let now = map.now;
     let data = map.realm.data.clone();
-    let watching: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| {
+    // Only a creature some player sees watches.
+    let watching: Vec<Guid> = map.awake_where(
+        |c| {
             c.alive()
                 && !c.evading
                 && c.pet.is_none()
@@ -776,9 +770,9 @@ fn watch_for_enemies(map: &mut Map) {
                 && data
                     .creature_template(c.entry)
                     .is_some_and(|t| t.static_flags1 & STATIC_CALLS_GUARDS != 0)
-        })
-        .map(|(_, c)| c.guid)
-        .collect();
+        },
+        |_, c| c.guid,
+    );
     for g in watching {
         if let Some(c) = map.creature_mut(g) {
             c.engagement.watch_at = Some(now + WATCH_EVERY);

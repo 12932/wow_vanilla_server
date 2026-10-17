@@ -342,18 +342,16 @@ pub fn update(map: &mut Map) {
             }
         }
     }
-    let pulses: Vec<(Guid, Guid)> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| {
+    let pulses: Vec<(Guid, Guid)> = map.awake_where(
+        |c| {
             c.alive()
                 && c.combat.attacking
                 && !c.evading
                 && c.engagement.pulse_at.is_none_or(|t| t <= now)
                 && dist(c.position, c.home) > PULSE_FROM_SPAWN
-        })
-        .map(|(_, c)| (c.guid, c.combat.victim))
-        .collect();
+        },
+        |_, c| (c.guid, c.combat.victim),
+    );
     for (g, victim) in pulses {
         let range = call_range(map, g);
         if let Some(c) = map.creature_mut(g) {
