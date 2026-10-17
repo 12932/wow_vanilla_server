@@ -444,9 +444,7 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
                 u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
             })
         })
-        .max_by(|a, b| {
-            effective_threat(map, a.0, a.1).total_cmp(&effective_threat(map, b.0, b.1))
-        })
+        .max_by(|a, b| effective_threat(map, a.0, a.1).total_cmp(&effective_threat(map, b.0, b.1)))
         .map(|(t, _)| *t)
 }
 

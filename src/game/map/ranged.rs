@@ -76,7 +76,11 @@ fn ammo_index(map: &mut Map, g: Guid, ammo_type: u32) -> Option<usize> {
     let entry = p.items[i].entry;
     p.fields.set_u32(PLAYER_AMMO_ID, entry);
     crate::game::map::auras::recalc(map, g);
-    map.players.get(&g)?.items.iter().position(|x| x.entry == entry)
+    map.players
+        .get(&g)?
+        .items
+        .iter()
+        .position(|x| x.entry == entry)
 }
 
 /// `CMSG_SET_AMMO`: the ammunition the ranged weapon uses.
@@ -219,7 +223,8 @@ fn shoot(map: &mut Map, g: Guid) {
         crate::game::map::inventory::take_item(map, g, i, 1);
         data.item(entry).map(|t| (t.display_id, t.inventory_type))
     } else {
-        data.item(weapon.entry).map(|t| (t.display_id, t.inventory_type))
+        data.item(weapon.entry)
+            .map(|t| (t.display_id, t.inventory_type))
     };
     let period = map
         .unit_fields(g)
@@ -328,7 +333,8 @@ fn resolve(
             attacker: g,
             spell: s.id,
             damage: left,
-            school: SpellSchool::try_from(school.trailing_zeros() as u8).unwrap_or(SpellSchool::Normal),
+            school: SpellSchool::try_from(school.trailing_zeros() as u8)
+                .unwrap_or(SpellSchool::Normal),
             absorbed_damage: absorbed,
             resisted: 0,
             periodic_log: school & 1 != 0,
