@@ -72,6 +72,8 @@ mod tests_p3_combat2;
 #[cfg(test)]
 mod tests_p3_combat3;
 #[cfg(test)]
+mod tests_p3_combat4;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
