@@ -54,11 +54,14 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
     }
     if let Some(c) = map.caster_mut(caster) {
         if recovery > 0 {
-            c.cooldowns.insert(s.id, now + Duration::from_millis(u64::from(recovery)));
+            c.cooldowns
+                .insert(s.id, now + Duration::from_millis(u64::from(recovery)));
         }
         if category != 0 && category_recovery > 0 {
-            c.category_cooldowns
-                .insert(category, now + Duration::from_millis(u64::from(category_recovery)));
+            c.category_cooldowns.insert(
+                category,
+                now + Duration::from_millis(u64::from(category_recovery)),
+            );
         }
     }
     let ms = recovery.max(category_recovery);
@@ -94,7 +97,10 @@ pub fn send(map: &Map, player: Guid, cooldowns: &[(u32, u32)]) {
 /// `SMSG_CLEAR_COOLDOWN`: a cooldown ended early.
 pub fn send_clear(map: &Map, player: Guid, spell: u32) {
     if let Some(p) = map.players.get(&player) {
-        p.outbound.send(&SMSG_CLEAR_COOLDOWN { id: spell, target: player });
+        p.outbound.send(&SMSG_CLEAR_COOLDOWN {
+            id: spell,
+            target: player,
+        });
     }
 }
 
@@ -114,10 +120,14 @@ pub fn aura_gone(map: &mut Map, target: Guid, spell: u32) {
     };
     let recovery = s.recovery_time.max(s.category_recovery_time);
     if let Some(c) = map.caster_mut(target) {
-        c.cooldowns.insert(spell, now + Duration::from_millis(u64::from(recovery)));
+        c.cooldowns
+            .insert(spell, now + Duration::from_millis(u64::from(recovery)));
     }
     if let Some(p) = map.players.get(&target) {
-        p.outbound.send(&SMSG_COOLDOWN_EVENT { id: spell, guid: target });
+        p.outbound.send(&SMSG_COOLDOWN_EVENT {
+            id: spell,
+            guid: target,
+        });
     }
 }
 
@@ -126,7 +136,10 @@ pub fn item_on_cooldown(map: &Map, player: Guid, spell: &ItemSpell) -> bool {
     let now = map.now;
     map.caster(player).is_some_and(|c| {
         c.cooldowns.get(&spell.id).is_some_and(|t| *t > now)
-            || (spell.category != 0 && c.category_cooldowns.get(&spell.category).is_some_and(|t| *t > now))
+            || (spell.category != 0
+                && c.category_cooldowns
+                    .get(&spell.category)
+                    .is_some_and(|t| *t > now))
     })
 }
 
@@ -140,7 +153,8 @@ pub fn lock_school(map: &mut Map, target: Guid, interrupted: u32, ms: u32) {
     };
     let mask = s.school_mask();
     if let Some(c) = map.caster_mut(target) {
-        c.school_lockout.push((mask, now + Duration::from_millis(u64::from(ms))));
+        c.school_lockout
+            .push((mask, now + Duration::from_millis(u64::from(ms))));
     }
     let Some(p) = map.players.get(&target) else {
         return;
@@ -193,18 +207,29 @@ pub fn saved_auras(p: &Player, now: Instant) -> Vec<SavedAura> {
             item: h.item.map_or(0, |i| i.guid()),
             stacks: h.stacks,
             charges: h.charges,
-            left: h.expires.map(|t| t.saturating_duration_since(now).as_millis() as u32),
+            left: h
+                .expires
+                .map(|t| t.saturating_duration_since(now).as_millis() as u32),
             amounts: h.effects.iter().map(|x| (x.effect, x.amount)).collect(),
             combo: h.combo,
         })
         .collect()
 }
 
-/// The cooldowns a player keeps: (spell, milliseconds left); a category's
-/// under its spell id 0 slot is not kept, the spells' are.
+/// The cooldowns a player keeps: (spell, milliseconds left).
 pub fn saved_cooldowns(p: &Player, now: Instant) -> Vec<(u32, u32)> {
     p.caster
         .cooldowns
+        .iter()
+        .filter(|(_, t)| **t > now)
+        .map(|(id, t)| (*id, t.saturating_duration_since(now).as_millis() as u32))
+        .collect()
+}
+
+/// The category cooldowns a player keeps: (category, milliseconds left).
+pub fn saved_category_cooldowns(p: &Player, now: Instant) -> Vec<(u32, u32)> {
+    p.caster
+        .category_cooldowns
         .iter()
         .filter(|(_, t)| **t > now)
         .map(|(id, t)| (*id, t.saturating_duration_since(now).as_millis() as u32))
@@ -219,15 +244,27 @@ pub fn restore(map: &mut Map, player: Guid) {
         return;
     };
     let saved = std::mem::take(&mut p.row.state.auras);
-    let cooldowns = std::mem::take(&mut p.row.state.cooldowns);
+    let mut cooldowns = std::mem::take(&mut p.row.state.cooldowns);
+    let categories = std::mem::take(&mut p.row.state.category_cooldowns);
     for (id, ms) in &cooldowns {
-        p.caster.cooldowns.insert(*id, now + Duration::from_millis(u64::from(*ms)));
-        if let Some(s) = data.spells.get(*id)
-            && s.category != 0
-        {
-            p.caster
-                .category_cooldowns
-                .insert(s.category, now + Duration::from_millis(u64::from(*ms)));
+        p.caster
+            .cooldowns
+            .insert(*id, now + Duration::from_millis(u64::from(*ms)));
+    }
+    for (category, ms) in &categories {
+        p.caster
+            .category_cooldowns
+            .insert(*category, now + Duration::from_millis(u64::from(*ms)));
+        // The client hears of each known spell in the category.
+        for id in &p.spells {
+            if data
+                .spells
+                .get(*id)
+                .is_some_and(|s| s.category == *category)
+                && !cooldowns.iter().any(|c| c.0 == *id)
+            {
+                cooldowns.push((*id, *ms));
+            }
         }
     }
     for a in saved {
@@ -259,9 +296,11 @@ pub fn restore(map: &mut Map, player: Guid) {
                 charges: Some(a.charges),
             },
         );
-        if let Some(h) = auras::auras_mut(map, player)
-            .and_then(|x| x.holders.iter_mut().find(|h| h.spell == a.spell && h.caster == caster))
-        {
+        if let Some(h) = auras::auras_mut(map, player).and_then(|x| {
+            x.holders
+                .iter_mut()
+                .find(|h| h.spell == a.spell && h.caster == caster)
+        }) {
             h.stacks = a.stacks.max(1);
         }
     }

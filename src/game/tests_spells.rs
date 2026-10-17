@@ -71,7 +71,11 @@ fn ready(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
 /// The cast under way finishes now.
 fn finish(m: &mut Map, g: Guid) {
     let now = m.now;
-    if let Some(c) = m.players.get_mut(&g).and_then(|p| p.caster.casting.as_mut()) {
+    if let Some(c) = m
+        .players
+        .get_mut(&g)
+        .and_then(|p| p.caster.casting.as_mut())
+    {
         c.ends = now;
     }
     spells::update(m);
@@ -169,13 +173,17 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
             let fireball = m.realm.data.spells.get(FIREBALL).unwrap().clone();
             let none = spells::mods::Mods::default();
             let even = (0..2000)
-                .filter(|_| outcome::roll_hit(m, g, kobold, &fireball, &none) == outcome::Hit::Resist)
+                .filter(|_| {
+                    outcome::roll_hit(m, g, kobold, &fireball, &none) == outcome::Hit::Resist
+                })
                 .count();
             let data = m.realm.data.clone();
             let p = m.players.get_mut(&g).unwrap();
             crate::game::map::stats::set_level(p, &data, 1);
             let low = (0..2000)
-                .filter(|_| outcome::roll_hit(m, g, kobold, &fireball, &none) == outcome::Hit::Resist)
+                .filter(|_| {
+                    outcome::roll_hit(m, g, kobold, &fireball, &none) == outcome::Hit::Resist
+                })
                 .count();
             (plain, improved, dealt, ignite, blocked, clear, even, low)
         })
@@ -189,10 +197,16 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
     let ignite = ignite.expect("Ignite on the target");
     let per_tick = ignite.effects[0].amount;
     // Two ticks of 40% of the crit between them.
-    assert!((per_tick as u32 * 2).abs_diff(dealt * 40 / 100) <= 2, "{per_tick} a tick from {dealt}");
+    assert!(
+        (per_tick as u32 * 2).abs_diff(dealt * 40 / 100) <= 2,
+        "{per_tick} a tick from {dealt}"
+    );
     assert_eq!(blocked, Some(fail::LINE_OF_SIGHT));
     assert_eq!(clear, None);
-    assert!((40..140).contains(&even), "{even} of 2000 resisted at even level");
+    assert!(
+        (40..140).contains(&even),
+        "{even} of 2000 resisted at even level"
+    );
     assert!(low > 1400, "{low} of 2000 resisted 59 levels up");
 }
 
@@ -227,7 +241,10 @@ async fn a_rogues_eviscerate_scales_with_combo_points_and_spends_them() {
                     },
                     None,
                 );
-                hits.push((before - health(m, kobold), m.players[&g].caster.combo_points));
+                hits.push((
+                    before - health(m, kobold),
+                    m.players[&g].caster.combo_points,
+                ));
             }
             // With none, it can't be cast.
             rested(m, g);
@@ -252,7 +269,10 @@ async fn a_rogues_eviscerate_scales_with_combo_points_and_spends_them() {
     let (hits, none) = out;
     let (one, five) = (hits[0].0, hits[1].0);
     assert!(one > 0, "it hit");
-    assert!(five > one * 25 / 10, "five points ({five}) far above one ({one})");
+    assert!(
+        five > one * 25 / 10,
+        "five points ({five}) far above one ({one})"
+    );
     assert_eq!(hits[0].1, 0, "the points are spent");
     assert_eq!(hits[1].1, 0);
     assert_eq!(none, Some(fail::NO_COMBO_POINTS));
@@ -263,24 +283,21 @@ async fn a_rogues_eviscerate_scales_with_combo_points_and_spends_them() {
 pub const AURAS_RUN: &[u32] = &[
     // auras.rs: control, periodics, shapes, mounts, tracking, absorbs,
     // charm, taunt, stealth, sight, scale, feign death, unit flags, Fade.
-    1, 2, 3, 5, 6, 7, 8, 11, 12, 16, 18, 20, 21, 23, 24, 25, 26, 27, 36, 44, 45, 53, 56, 60, 61,
-    62, 64, 66, 67, 69, 76, 78, 84, 85, 89, 93, 97, 100, 103, 104, 105, 106, 162,
+    1, 2, 3, 5, 6, 7, 8, 11, 12, 16, 18, 20, 21, 23, 24, 25, 26, 27, 36, 44, 45, 53, 56, 60, 61, 62,
+    64, 66, 67, 69, 76, 78, 84, 85, 89, 93, 97, 100, 103, 104, 105, 106, 162,
     // derive.rs: stats, resistances, power, speed, haste, chances.
-    9, 13, 22, 29, 30, 31, 32, 33, 34, 35, 47, 49, 51, 52, 54, 55, 57, 58, 65, 71, 79, 80, 83, 98, 99,
-    101, 122, 124, 129, 130, 132, 133, 137, 138, 140, 141, 142, 143, 150, 158, 166, 167, 171, 172,
-    174, 175,
+    9, 13, 22, 29, 30, 31, 32, 33, 34, 35, 47, 49, 51, 52, 54, 55, 57, 58, 65, 71, 79, 80, 83, 98,
+    99, 101, 122, 124, 129, 130, 132, 133, 137, 138, 140, 141, 142, 143, 150, 158, 166, 167, 171,
+    172, 174, 175,
     // spells: immunities, reflection, damage and healing done and taken,
     // resistance penetration and chance, mechanic resistance, costs,
     // pushback, threat, modifiers, Shatter, crit versus types, soul shards.
     10, 14, 28, 39, 40, 41, 59, 72, 73, 74, 77, 86, 87, 90, 107, 108, 112, 113, 114, 115, 117, 118,
     123, 125, 126, 135, 136, 147, 149, 160, 163, 168, 169,
     // stealth's detection and level, Hunter's Mark; the AI's detect range.
-    17, 19, 68, 91, 127, 154,
-    // splitting damage, Safe Fall.
-    81, 153, 144,
-    // stats.rs: regeneration.
-    88, 94, 110, 116, 134, 161,
-    // death.rs: the ghost.
+    17, 19, 68, 91, 127, 154, // splitting damage, Safe Fall.
+    81, 153, 144, // stats.rs: regeneration.
+    88, 94, 110, 116, 134, 161, // death.rs: the ghost.
     95,
 ];
 
@@ -291,16 +308,56 @@ pub const AURAS_PROCS: &[u32] = &[15, 42, 43, 70, 109, 111];
 /// nothing the spell needs (riding skills, finishers' and Arcane Missiles'
 /// markers).
 const DUMMIES: &[&str] = &[
-    "Berserking", "Blood Fury", "Cannibalize", "Last Stand", "Preparation", "Cold Snap", "Ignite",
-    "Execute", "Life Tap", "Improved Life Tap", "Improved Healthstone", "Holy Shock", "Eviscerate",
-    "Expose Armor", "Kidney Shot", "Rupture", "Slice and Dice", "Blessing of Light",
-    "Greater Blessing of Light", "Healing Way", "Combustion", "Master of Elements", "Vampiric Embrace",
-    "Arcane Missiles", "Seal of Justice", "Seal of Light", "Seal of Wisdom", "Seal of the Crusader",
-    "Seal of Command", "Seal of Righteousness", "Horse Riding", "Kodo Riding", "Ram Riding",
-    "Raptor Riding", "Tiger Riding", "Wolf Riding", "Riding", "Mechanostrider Piloting",
-    "Undead Horsemanship", "Dummy Trigger", "Lightning Shield", "Enrage", "Shadowguard",
-    "Magic Absorption", "Predatory Strikes", "Frost Warding", "Improved Fire Ward", "Eye for an Eye",
-    "Furor", "Leader of the Pack",
+    "Berserking",
+    "Blood Fury",
+    "Cannibalize",
+    "Last Stand",
+    "Preparation",
+    "Cold Snap",
+    "Ignite",
+    "Execute",
+    "Life Tap",
+    "Improved Life Tap",
+    "Improved Healthstone",
+    "Holy Shock",
+    "Eviscerate",
+    "Expose Armor",
+    "Kidney Shot",
+    "Rupture",
+    "Slice and Dice",
+    "Blessing of Light",
+    "Greater Blessing of Light",
+    "Healing Way",
+    "Combustion",
+    "Master of Elements",
+    "Vampiric Embrace",
+    "Arcane Missiles",
+    "Seal of Justice",
+    "Seal of Light",
+    "Seal of Wisdom",
+    "Seal of the Crusader",
+    "Seal of Command",
+    "Seal of Righteousness",
+    "Horse Riding",
+    "Kodo Riding",
+    "Ram Riding",
+    "Raptor Riding",
+    "Tiger Riding",
+    "Wolf Riding",
+    "Riding",
+    "Mechanostrider Piloting",
+    "Undead Horsemanship",
+    "Dummy Trigger",
+    "Lightning Shield",
+    "Enrage",
+    "Shadowguard",
+    "Magic Absorption",
+    "Predatory Strikes",
+    "Frost Warding",
+    "Improved Fire Ward",
+    "Eye for an Eye",
+    "Furor",
+    "Leader of the Pack",
 ];
 
 /// The spells a player can have: trainers' to 60, talents, the starting
@@ -331,10 +388,18 @@ fn player_spells(data: &crate::game::data::GameData) -> Vec<u32> {
             continue;
         }
         if let Some(t) = data.spells.get(s) {
-            todo.extend(t.effects.iter().map(|e| e.trigger_spell).filter(|t| *t != 0));
+            todo.extend(
+                t.effects
+                    .iter()
+                    .map(|e| e.trigger_spell)
+                    .filter(|t| *t != 0),
+            );
         }
     }
-    let mut v: Vec<u32> = seen.into_iter().filter(|s| data.spells.get(*s).is_some()).collect();
+    let mut v: Vec<u32> = seen
+        .into_iter()
+        .filter(|s| data.spells.get(*s).is_some())
+        .collect();
     v.sort_unstable();
     v
 }
@@ -349,8 +414,9 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
     assert!(all.len() > 3000, "{}", all.len());
     // Effects other modules run, and the passives that need nothing.
     const ELSEWHERE: &[u32] = &[
-        20, 21, 22, 23, 26, 39, 40, 47, 48, 49, 53, 54, 28, 41, 42, 55, 56, 57, 87, 88, 89, 90, 95, 50,
-        76, 104, 105, 106, 107, 71, 99, 102, 101, 112, 109, 110, 73, 97, 59, 94, 85, 61, 19, 45, 72, 37,
+        20, 21, 22, 23, 26, 39, 40, 47, 48, 49, 53, 54, 28, 41, 42, 55, 56, 57, 87, 88, 89, 90, 95,
+        50, 76, 104, 105, 106, 107, 71, 99, 102, 101, 112, 109, 110, 73, 97, 59, 94, 85, 61, 19,
+        45, 72, 37,
     ];
     let runs = |s: &SpellTemplate, procs: bool| {
         s.effects.iter().filter(|e| e.effect != 0).all(|e| {
@@ -360,10 +426,16 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
                 || (e.aura == 4 && DUMMIES.contains(&s.name.as_str()));
             let effect_ok = (spells::RUN.contains(&e.effect) || ELSEWHERE.contains(&e.effect))
                 && (e.effect != 3 || DUMMIES.contains(&s.name.as_str()) || e.trigger_spell != 0);
-            effect_ok && aura_ok && spells::target_supported(e.target_a) && spells::target_supported(e.target_b)
+            effect_ok
+                && aura_ok
+                && spells::target_supported(e.target_a)
+                && spells::target_supported(e.target_b)
         })
     };
-    let alone = all.iter().filter(|id| runs(data.spells.get(**id).unwrap(), false)).count();
+    let alone = all
+        .iter()
+        .filter(|id| runs(data.spells.get(**id).unwrap(), false))
+        .count();
     let mut missing: ahash::AHashMap<String, usize> = ahash::AHashMap::new();
     let mut ok = 0;
     for id in &all {
@@ -385,14 +457,17 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
             {
                 format!("aura {}", e.aura)
             } else {
-                format!("target {}/{} effect {} aura {} ({})", e.target_a, e.target_b, e.effect, e.aura, s.name)
+                format!(
+                    "target {}/{} effect {} aura {} ({})",
+                    e.target_a, e.target_b, e.effect, e.aura, s.name
+                )
             };
             *missing.entry(key).or_default() += 1;
         }
     }
     let share = ok as f32 / all.len() as f32;
     let mut top: Vec<(String, usize)> = missing.into_iter().collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.sort_by_key(|t| std::cmp::Reverse(t.1));
     println!(
         "{ok} of {} run every effect ({:.1}%), {alone} without counting the procs ({:.1}%); short: {top:?}",
         all.len(),
@@ -400,4 +475,138 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
         alone as f32 * 100.0 / all.len() as f32
     );
     assert!(share >= 0.9, "{ok} of {}: {top:?}", all.len());
+}
+
+#[tokio::test]
+async fn auras_cooldowns_and_crowd_control_hold_as_they_should() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let mut c = Client::connect(&realm, "PALA");
+    let g = c.enter("Pala", Race::Human, Class::Paladin).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            const FORTITUDE: u32 = 1243;
+            const HAMMER: u32 = 853;
+            const BLIZZARD: u32 = 10;
+            ready(m, g, 60, &[FORTITUDE, HAMMER, BLIZZARD]);
+            let kobold = dummy(m, g, 60, 4.0);
+            // A buff and a cooldown, saved at logout and back at login.
+            spells::cast(m, g, FORTITUDE, Targets::default(), None);
+            rested(m, g);
+            spells::cast(
+                m,
+                g,
+                HAMMER,
+                Targets {
+                    unit: Some(kobold),
+                    ..Default::default()
+                },
+                None,
+            );
+            let now = m.now;
+            let row = m.players.get_mut(&g).unwrap().to_row(now);
+            let saved = (
+                row.state.auras.clone(),
+                row.state.category_cooldowns.clone(),
+            );
+            let p = m.players.get_mut(&g).unwrap();
+            p.row.state.auras = row.state.auras;
+            p.row.state.cooldowns = row.state.cooldowns;
+            p.row.state.category_cooldowns = row.state.category_cooldowns;
+            p.caster.cooldowns.clear();
+            p.caster.category_cooldowns.clear();
+            auras::remove_spell(m, g, FORTITUDE, None);
+            spells::cooldowns::restore(m, g);
+            let p = &m.players[&g];
+            let back = p
+                .auras
+                .holders
+                .iter()
+                .any(|h| h.spell == FORTITUDE && h.expires.is_some());
+            let category = m.realm.data.spells.get(HAMMER).map_or(0, |s| s.category);
+            let cooling = p.caster.cooldowns.contains_key(&HAMMER)
+                || p.caster.category_cooldowns.contains_key(&category);
+            // Stuns diminish: whole, half, a quarter, then immune.
+            let mut stuns = Vec::new();
+            for _ in 0..4 {
+                auras::remove_spell(m, kobold, HAMMER, None);
+                rested(m, g);
+                m.players
+                    .get_mut(&g)
+                    .unwrap()
+                    .caster
+                    .category_cooldowns
+                    .clear();
+                spells::cast(
+                    m,
+                    g,
+                    HAMMER,
+                    Targets {
+                        unit: Some(kobold),
+                        ..Default::default()
+                    },
+                    None,
+                );
+                let now = m.now;
+                stuns.push(auras::auras(m, kobold).and_then(|a| {
+                    a.holders
+                        .iter()
+                        .find(|h| h.spell == HAMMER)
+                        .and_then(|h| h.expires)
+                        .map(|t| t.saturating_duration_since(now).as_millis() as u32)
+                }));
+            }
+            // Blizzard on the kobold's ground ticks on it.
+            rested(m, g);
+            auras::remove_spell(m, kobold, HAMMER, None);
+            let at = m.creature(kobold).unwrap().position;
+            let before = health(m, kobold);
+            spells::cast(
+                m,
+                g,
+                BLIZZARD,
+                Targets {
+                    dest: Some(at),
+                    ..Default::default()
+                },
+                None,
+            );
+            let now = m.now;
+            for a in m.spells.areas.iter_mut() {
+                a.next_tick = now;
+            }
+            spells::update(m);
+            let froze = before - health(m, kobold);
+            let hammer = m.realm.data.spells.get(HAMMER).unwrap().clone();
+            let full = m.realm.data.spells.duration(&hammer, 60).unwrap_or(0);
+            (saved, back, cooling, stuns, froze, full)
+        })
+        .await
+        .unwrap();
+    let (saved, back, cooling, stuns, froze, full) = out;
+    assert!(
+        saved.0.iter().any(|a| a.spell == 1243),
+        "Fortitude saved: {saved:?}"
+    );
+    assert!(
+        !saved.1.is_empty(),
+        "the Hammer's cooldown saved: {saved:?}"
+    );
+    assert!(back, "Fortitude back with its time");
+    assert!(cooling, "the Hammer still cooling down");
+    // The first stun was the one before the logout: these are the second,
+    // third and fourth.
+    assert!(
+        stuns[0].is_some_and(|d| d.abs_diff(full / 2) <= 50),
+        "{full}: {stuns:?}"
+    );
+    assert!(
+        stuns[1].is_some_and(|d| d.abs_diff(full / 4) <= 50),
+        "{full}: {stuns:?}"
+    );
+    assert_eq!(stuns[2], None, "immune the fourth time");
+    assert!(froze > 0, "Blizzard ticked");
 }

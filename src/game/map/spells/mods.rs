@@ -131,9 +131,10 @@ fn used_by(op: usize, s: &SpellTemplate, data: &crate::game::data::GameData) -> 
         OP_COST => s.mana_cost > 0 || s.mana_cost_per_level > 0 || s.mana_cost_percentage > 0,
         OP_CASTING_TIME => data.spells.cast_time(s) > 0,
         OP_COOLDOWN => s.recovery_time > 0 || s.category_recovery_time > 0,
-        OP_CRITICAL_CHANCE | OP_CRIT_DAMAGE_BONUS => {
-            s.effects.iter().any(|e| matches!(e.effect, 2 | 9 | 10 | 17 | 31 | 58 | 121))
-        }
+        OP_CRITICAL_CHANCE | OP_CRIT_DAMAGE_BONUS => s
+            .effects
+            .iter()
+            .any(|e| matches!(e.effect, 2 | 9 | 10 | 17 | 31 | 58 | 121)),
         OP_DOT | OP_ACTIVATION_TIME => s.effects.iter().any(|e| e.amplitude > 0),
         _ => true,
     }
@@ -190,7 +191,11 @@ pub fn changed(map: &Map, player: Guid, mask: u32, op: usize, pct: bool) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let kind = if pct { AURA_ADD_PCT_MODIFIER } else { AURA_ADD_FLAT_MODIFIER };
+    let kind = if pct {
+        AURA_ADD_PCT_MODIFIER
+    } else {
+        AURA_ADD_FLAT_MODIFIER
+    };
     for bit in 0..32 {
         if mask & (1 << bit) == 0 {
             continue;
