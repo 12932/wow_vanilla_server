@@ -669,3 +669,140 @@ async fn a_lock_opens_by_its_ways() {
         "ordinary"
     );
 }
+
+const STRONGBOX: u32 = 180_900;
+const GATE: u32 = 180_901;
+const ORE: u32 = 9406;
+const FISHING: u32 = 356;
+
+/// A strongbox and a gate behind a lock of fishing's type (19: never missed,
+/// and its gains certain at the bottom), by the start.
+fn lock_data() -> GameData {
+    use crate::game::data::crafts::LockKey;
+    let mut d = data();
+    d.crafts.locks.insert(
+        47,
+        vec![LockKey {
+            kind: crate::game::data::crafts::LOCK_KEY_SKILL,
+            index: 19,
+            skill: 0,
+        }],
+    );
+    let mut box_data = [0u32; 24];
+    (box_data[0], box_data[1]) = (47, 60);
+    let mut gate_data = [0u32; 24];
+    gate_data[1] = 47;
+    for (entry, kind, data) in [(STRONGBOX, 3, box_data), (GATE, 0, gate_data)] {
+        d.gameobject_templates.insert(
+            entry,
+            GameObjectTemplate {
+                entry,
+                kind,
+                display_id: 1,
+                name: format!("Object {entry}"),
+                size: 1.0,
+                data,
+                ..Default::default()
+            },
+        );
+    }
+    let spawn = |guid, entry, dy: f32| GameObjectSpawn {
+        guid,
+        entry,
+        map: 0,
+        x: START.0 + 1.0,
+        y: START.1 + dy,
+        z: START.2,
+        state: 1,
+        respawn_min: 60,
+        ..Default::default()
+    };
+    d.gameobject_spawns
+        .insert(0, vec![spawn(600, STRONGBOX, 0.5), spawn(601, GATE, -0.5)]);
+    d.items.insert(ORE, item(ORE));
+    d.loot.gameobject.insert(
+        60,
+        vec![LootEntry {
+            item: ORE,
+            chance: 100.0,
+            min: 2,
+            max: 2,
+            ..Default::default()
+        }],
+    );
+    d.spells.spells.insert(
+        900_760,
+        spell(900_760, &[(professions::EFFECT_OPEN_LOCK, 0, 19, 0)]),
+    );
+    d
+}
+
+fn skill(m: &Map, g: Guid, id: u32) -> u32 {
+    crate::game::map::skills::value(&m.players[&g], id).unwrap_or(0)
+}
+
+/// Thistle Tea's `ObjectLock.open/5`: a locked box's loot is no one's who
+/// hasn't opened it, nor another's while one has it open; reopened, it
+/// keeps its loot, and a player's skill gains once a spawn, a gate's too.
+#[tokio::test]
+async fn a_lock_is_opened_by_one_and_gains_once() {
+    let realm = harness::realm_with(lock_data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let strongbox = guid::game_object(STRONGBOX, 600);
+    let gate = guid::game_object(GATE, 601);
+    a.sees(strongbox).await;
+    b.sees(strongbox).await;
+    let object = |o: Guid| Targets {
+        object: Some(o),
+        ..Default::default()
+    };
+    on_map(&realm, move |m| {
+        learn_skill(m, ga, FISHING, 1);
+        learn_skill(m, gb, FISHING, 1);
+    })
+    .await;
+    // Bob looks before anyone opens it: the window shuts.
+    b.clear();
+    b.send(CMSG_LOOT { guid: strongbox }).await;
+    b.wait_for("SMSG_LOOT_RELEASE_RESPONSE", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(
+            r,
+        ) => (r.guid == strongbox).then_some(()),
+        _ => None,
+    })
+    .await;
+    a.clear();
+    let first = on_map(&realm, move |m| {
+        run(m, ga, 900_760, object(strongbox));
+        let in_use = why(m, gb, 900_760, object(strongbox));
+        (skill(m, ga, FISHING), in_use)
+    })
+    .await;
+    assert_eq!(first, (2, Some(0x15)), "a point, and in use for Bob");
+    assert_eq!(window(&mut a).await.1, vec![ORE]);
+    let again = on_map(&realm, move |m| {
+        loot::release(m, ga, strongbox);
+        run(m, ga, 900_760, object(strongbox));
+        let left = loot::loot_ref(m, strongbox).map(|l| l.items.len());
+        loot::release(m, ga, strongbox);
+        run(m, gb, 900_760, object(strongbox));
+        (skill(m, ga, FISHING), left, skill(m, gb, FISHING))
+    })
+    .await;
+    assert_eq!(
+        again,
+        (2, Some(1), 2),
+        "no second point; the ore kept; Bob's one"
+    );
+    let gate_gains = on_map(&realm, move |m| {
+        run(m, ga, 900_760, object(gate));
+        let once = skill(m, ga, FISHING);
+        run(m, ga, 900_760, object(gate));
+        (once, skill(m, ga, FISHING))
+    })
+    .await;
+    assert_eq!(gate_gains, (3, 3), "a gate's point once too");
+}
