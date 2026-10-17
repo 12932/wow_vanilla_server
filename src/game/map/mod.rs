@@ -60,6 +60,7 @@ pub mod skills;
 pub mod social;
 pub mod spells;
 pub mod stats;
+pub mod terrain;
 pub mod tickets;
 pub mod trade;
 pub mod trinkets;
@@ -253,6 +254,8 @@ pub struct Map {
     /// Vendors' limited stock: (vendor, item).
     pub vendor_stock: AHashMap<(Guid, u32), vendor::Stock>,
     pub nav: Option<nav::Nav>,
+    /// The map's terrain tiles: liquid kinds and areas.
+    pub terrain: Option<terrain::Terrain>,
     pub grid: Grid,
     /// Objects whose visibility must be worked out at the next update.
     pub visibility_dirty: ahash::AHashSet<Guid>,
@@ -385,6 +388,7 @@ impl Map {
             dead_creatures: Vec::new(),
             vendor_stock: AHashMap::new(),
             nav: None,
+            terrain: None,
             grid: Grid::new(),
             visibility_dirty: ahash::AHashSet::new(),
             forget: AHashMap::new(),

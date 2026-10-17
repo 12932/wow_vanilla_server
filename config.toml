@@ -12,6 +12,11 @@ save_interval_secs = 300
 characters_db = "characters.sqlite"
 # The directory with vmangos.sqlite and dbc.sqlite, as Thistle Tea exports them.
 #data_dir = "/path/to/db"
+# A rustigator bake: the navmesh.
+#nav_dir = "/path/to/bake"
+# Thistle Tea's terrain tiles (`nix run .#terrain-data`): the kind of liquid outside WMOs, for
+# deep-sea fatigue and lava, and areas where the navmesh has none.
+#terrain_dir = "/path/to/terrain"
 motd = "Welcome to wow_vanilla_server."
 # Signatures a guild charter needs.
 petition_signatures = 9

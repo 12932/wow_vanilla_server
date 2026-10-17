@@ -38,6 +38,9 @@ pub fn populate(map: &mut Map) {
             map.nav = Nav::open(dir, &name);
         }
     }
+    if let Some(dir) = map.realm.config.terrain_dir.as_ref() {
+        map.terrain = crate::game::map::terrain::Terrain::open(dir, map.key.map);
+    }
     let on = crate::game::events::current(&map.realm);
     let mut rng = rand::rng();
     let (skip_creatures, skip_objects) =
@@ -285,23 +288,49 @@ fn random_point(center: Vector3d, radius: f32, rng: &mut impl rand::Rng) -> Vect
     }
 }
 
-/// Work out the zone and area a player is in, from the navmesh, and the
-/// free-for-all flag that goes with an arena.
+/// The zone and area at a point, as Thistle Tea works them out: the
+/// navmesh's; else those of the terrain tile's area bit; else the map's
+/// only zone. `None` with neither a navmesh nor terrain tiles.
+pub fn zone_and_area(map: &mut Map, pos: Vector3d) -> Option<(u32, u32)> {
+    if map.nav.is_none() && map.terrain.is_none() {
+        return None;
+    }
+    let data = map.realm.data.clone();
+    let id = map.key.map;
+    map.nav
+        .as_mut()
+        .and_then(|n| n.zone_and_area(pos))
+        .map(|(zone, area)| (if zone != 0 { zone } else { data.zone_of(area) }, area))
+        .or_else(|| {
+            let bit = map.terrain.as_mut()?.area_bit(pos.x, pos.y)? as u32;
+            let a = data
+                .areas
+                .values()
+                .find(|a| a.map == id && a.explore_bit == bit)?;
+            Some((data.zone_of(a.id), a.id))
+        })
+        .or_else(|| {
+            let mut zones = data.areas.values().filter(|a| a.map == id && a.zone == 0);
+            match (zones.next(), zones.next()) {
+                (Some(z), None) => Some((z.id, z.id)),
+                _ => None,
+            }
+        })
+}
+
+/// Work out the zone and area a player is in, from the navmesh or the
+/// terrain, and the free-for-all flag that goes with an arena.
 pub fn update_zone(map: &mut Map, guid: Guid) {
     let Some(pos) = map.players.get(&guid).map(|p| p.position()) else {
         return;
     };
-    let Some(nav) = map.nav.as_mut() else {
-        return;
-    };
-    let Some((zone, area)) = nav.zone_and_area(pos) else {
+    let Some((zone, area)) = zone_and_area(map, pos) else {
         return;
     };
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
-    let zone = if zone != 0 { zone } else { data.zone_of(area) };
     let new_zone = zone != 0 && zone != p.zone;
     if new_zone {
         p.zone = zone;

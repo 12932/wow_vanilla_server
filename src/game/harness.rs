@@ -25,6 +25,7 @@ pub fn test_config() -> RealmConfig {
         everyone_gm: true,
         max_characters_per_account: 10,
         nav_dir: None,
+        terrain_dir: None,
         petition_signatures: 1,
         mail_delay: Duration::ZERO,
         instance_unload: Duration::from_millis(200),
