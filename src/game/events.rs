@@ -263,7 +263,14 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                 continue;
             }
             let out = creatures.get(&s.guid).copied();
+            // A pooled one comes and goes as its pool picks (below).
+            let pooled = tie.is_some()
+                && crate::game::map::pools::pooled(
+                    map,
+                    crate::game::map::pools::Member::Creature(s.guid),
+                );
             match (spawned(tie, on), out) {
+                (true, None) | (false, Some(_)) if pooled => {}
                 (true, None) => {
                     if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
                         map.add_creature(c);
@@ -291,6 +298,10 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                 continue;
             };
             let out = objects.get(&s.guid).copied();
+            if crate::game::map::pools::pooled(map, crate::game::map::pools::Member::Object(s.guid))
+            {
+                continue;
+            }
             match (spawned(Some(tie), on), out) {
                 (true, None) => {
                     if let Some(t) = data.gameobject_templates.get(&s.entry) {
@@ -302,6 +313,15 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                 }
                 _ => {}
             }
+        }
+    }
+    // Pools whose spawns the events allow changed pick anew.
+    use crate::game::map::pools::{self, Member};
+    for m in pools::events_changed(map, on) {
+        match m {
+            Member::Creature(s) => crate::game::map::ai::spawn_creature_of(map, s),
+            Member::Object(s) => pools::spawn_object(map, s),
+            Member::Pool(_) => {}
         }
     }
 }

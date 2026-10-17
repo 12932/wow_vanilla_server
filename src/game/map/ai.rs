@@ -358,8 +358,9 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
         let frame = stop_packet(creature, pos, spline_id);
         map.send_to_observers(creature, &frame, false);
     }
-    // A flyer falls to the ground.
+    // A flyer falls to the ground; a formation it led goes on without it.
     crate::game::map::creature_motion::fall_dead(map, creature);
+    crate::game::map::creature_groups::died(map, creature);
     crate::game::map::event_ai::death_heard(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
     crate::game::map::battleground::creature_died(map, creature, tapper);
@@ -446,16 +447,38 @@ fn respawn(map: &mut Map, g: Guid) {
     if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
         return;
     }
-    // A pooled spawn may give way to another of its pool.
-    let chosen = crate::game::map::creature_groups::respawn_choice(map, spawn.guid);
-    let spawn = if chosen == spawn.guid {
-        spawn
-    } else {
-        data.creature_spawns
-            .get(&map.key.map)
-            .and_then(|v| v.iter().find(|s| s.guid == chosen))
-            .unwrap_or(spawn)
+    // A pooled spawn's pool picks again: it, or others of the pool, come.
+    use crate::game::map::pools::{self, Member};
+    let back = match pools::came_back(map, Member::Creature(spawn.guid)) {
+        Some(picked) => {
+            crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
+            picked
+        }
+        None => vec![Member::Creature(spawn.guid)],
     };
+    for m in back {
+        match m {
+            Member::Creature(s) => spawn_creature_of(map, s),
+            Member::Object(s) => pools::spawn_object(map, s),
+            Member::Pool(_) => {}
+        }
+    }
+}
+
+/// A spawn's creature comes into the map anew, unless a battleground or a
+/// link bars it.
+pub fn spawn_creature_of(map: &mut Map, spawn_guid: u32) {
+    let data = map.realm.data.clone();
+    let Some(spawn) = data
+        .creature_spawns
+        .get(&map.key.map)
+        .and_then(|v| v.iter().find(|s| s.guid == spawn_guid))
+    else {
+        return;
+    };
+    if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
+        return;
+    }
     crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
     if !crate::game::map::creature_groups::may_spawn(map, spawn.guid) {
         return;
@@ -591,9 +614,11 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
         // Passive in a fight: it waits it out until no one it could
         // fight is left.
         passive_fight(map, g);
+        // A distraction holds it where it stands.
         if !map
             .creature(g)
             .is_some_and(|c| c.combat.attacking || c.evading)
+            && !crate::game::map::creature_motion::distracted(map, g)
         {
             crate::game::map::world::step_creature_key(map, key);
         }
@@ -612,7 +637,7 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
     if moving {
         crate::game::map::event_ai::scripted_move_ended(map, g);
     }
-    if follows && !fighting {
+    if follows && !fighting && !crate::game::map::creature_motion::held_by_distraction(map, g) {
         crate::game::map::event_ai::follow_step(map, g);
     }
 }
@@ -841,6 +866,10 @@ fn fight_step(map: &mut Map, g: Guid) {
     if crate::game::map::creature_motion::critter_step(map, g) {
         return;
     }
+    // A charge runs its course.
+    if crate::game::map::charge::step(map, g) {
+        return;
+    }
     let Some(c) = map.creature(g) else {
         return;
     };
@@ -1035,8 +1064,12 @@ fn evade(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    // A patroller goes back to the last point of its path it reached.
-    let (from, home) = (c.position, patrol_home(map, g).unwrap_or(c.home));
+    // A follower goes back to its place by its leader; a patroller to the
+    // last point of its path it reached.
+    let home = crate::game::map::creature_groups::formation_home(map, g)
+        .or_else(|| patrol_home(map, g))
+        .unwrap_or(c.home);
+    let from = c.position;
     let path = match map.nav.as_mut() {
         Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
         None => vec![from, home],
@@ -1108,12 +1141,25 @@ fn evade(map: &mut Map, g: Guid) {
     // Its scripts run on: a script that wants them stopped says so.
     crate::game::map::spells::lists::left_combat(map, g);
     crate::game::map::event_ai::evade(map, g);
+    // Whole again as it leashes, if it regenerates (Thistle Tea's
+    // `heal_to_full`), not when it gets home.
+    if crate::game::map::creature_combat::regenerates_health(map, g)
+        && let Some(c) = map.creature_mut(g)
+        && c.alive()
+    {
+        let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        if c.fields.get_u32(UNIT_FIELD_HEALTH) < max {
+            c.fields.set_u32(UNIT_FIELD_HEALTH, max);
+            combat::sync_aura_state(map, g);
+            crate::game::map::creature_motion::health_changed(map, g);
+        }
+    }
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::spawn_auras::restore(map, g);
     }
 }
 
-/// An evading creature walks home, and is whole again when it gets there.
+/// An evading creature walks home.
 fn evade_step(map: &mut Map, g: Guid) {
     let now = map.now;
     advance_motion(map, g);
@@ -1122,8 +1168,6 @@ fn evade_step(map: &mut Map, g: Guid) {
     };
     if matches!(c.motion, Motion::Idle { .. }) {
         c.evading = false;
-        let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
-        c.fields.set_u32(UNIT_FIELD_HEALTH, max);
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
@@ -1172,7 +1216,7 @@ pub fn advance_motion(map: &mut Map, g: Guid) {
     };
     let done = w.done(now);
     let (pos, o) = if done {
-        (w.destination(), c.orientation)
+        (w.destination(), w.face.unwrap_or(c.orientation))
     } else {
         w.position_at(now)
     };
@@ -1206,6 +1250,13 @@ pub fn hostile_to_players(
         || f.enemies
             .iter()
             .any(|e| matches!(*e, 469 | 67 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 115 | 116))
+}
+
+/// A creature on the move stops where it is now along its walk, its
+/// watchers told.
+pub fn halt(map: &mut Map, g: Guid) {
+    advance_motion(map, g);
+    stop_moving(map, g);
 }
 
 /// A creature on the move stops where it is.

@@ -54,8 +54,10 @@ const DEFAULT_RADIUS: f32 = 0.389;
 pub const TALK_PAUSE: Duration = Duration::from_secs(180);
 /// How long a frightened critter keeps away.
 pub const ESCAPE: Duration = Duration::from_secs(30);
-/// Gravity, for a falling corpse.
+/// Gravity, and the speed a fall goes no faster than, for a falling
+/// corpse.
 const GRAVITY: f32 = 19.291_105;
+const TERMINAL_VELOCITY: f32 = 60.148_003;
 
 /// Where a creature may go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,6 +302,11 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
         return true;
     }
     let hab = habitat(map, g);
+    // One keeping its place in a formation goes only where it is led.
+    if (hab.fly || hab.swims) && crate::game::map::creature_groups::following(map, g) {
+        crate::game::map::ai::advance_motion(map, g);
+        return true;
+    }
     let Some(c) = map.creatures.get(key) else {
         return false;
     };
@@ -367,6 +374,8 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
     }
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
+        // It leads its formation, as one on foot does.
+        crate::game::map::creature_groups::leader_walked(map, g);
     }
     true
 }
@@ -496,16 +505,12 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
         return;
     }
     let at = c.position;
-    let Some(ground) = map
-        .nav
-        .as_mut()
-        .and_then(|n| n.ground(at.x, at.y, at.z))
-        .filter(|z| *z < at.z - 1.0)
-    else {
+    // To the highest ground under it.
+    let Some(ground) = floor_under(map, at).filter(|z| *z < at.z - 0.1) else {
         return;
     };
     let height = at.z - ground;
-    let time = (2.0 * height / GRAVITY).sqrt();
+    let time = fall_time(height);
     let to = Vector3d { z: ground, ..at };
     let now = map.now;
     let spline_id = map.next_spline_id;
@@ -522,7 +527,7 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
         false,
     );
     walk.falling = true;
-    let frame = crate::game::conn::encode(&walk.packet(g, at));
+    let frame = walk.frame(g, at);
     c.position = to;
     c.motion = Motion::Idle { until: None };
     let (anchor, old) = (c.vis_anchor, c.cell);
@@ -533,6 +538,20 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
     }
+}
+
+/// How long a fall of `height` yards takes (Thistle Tea's
+/// `Falling.duration`): under gravity, no faster than its terminal
+/// velocity, to the millisecond.
+pub fn fall_time(height: f32) -> f32 {
+    let terminal_time = TERMINAL_VELOCITY / GRAVITY;
+    let terminal_distance = TERMINAL_VELOCITY * TERMINAL_VELOCITY / (2.0 * GRAVITY);
+    let seconds = if height >= terminal_distance {
+        (height - terminal_distance) / TERMINAL_VELOCITY + terminal_time
+    } else {
+        (2.0 * height / GRAVITY).sqrt()
+    };
+    (seconds * 1000.0).ceil() / 1000.0
 }
 
 /// How fast a creature's wounds let it run: 70, 60 and 50 percent below
@@ -638,6 +657,84 @@ pub fn retime(map: &mut Map, g: Guid) {
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
     }
+}
+
+/// Whether a creature heeds a distraction (Thistle Tea's
+/// `Distraction.responsive?`): alive, out of a fight and going nowhere of
+/// its own, not feared, stunned, confused or feigning death.
+fn heeds_distraction(map: &Map, g: Guid) -> bool {
+    use crate::game::map::auras::{
+        AURA_FEIGN_DEATH, AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_STUN, AURA_PREVENTS_FLEEING,
+    };
+    map.creature(g).is_some_and(|c| {
+        let a = &c.auras;
+        c.alive()
+            && c.pet.is_none()
+            && !c.evading
+            && !c.combat.attacking
+            && !c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+            && !(a.has(AURA_MOD_FEAR) && !a.has(AURA_PREVENTS_FLEEING))
+            && !a.has(AURA_MOD_STUN)
+            && !a.has(AURA_MOD_CONFUSE)
+            && !a.has(AURA_FEIGN_DEATH)
+    })
+}
+
+/// Distract (spell effect 69), as Thistle Tea's `Distraction.apply`: a
+/// creature that heeds it stops where it is, turns to `at`, its watchers
+/// told, and stands for the effect's `seconds`, its wandering or patrol
+/// waiting (the point it was bound for kept). One that never moves pays it
+/// no heed.
+pub fn distract(map: &mut Map, g: Guid, at: Vector3d, seconds: i32) {
+    if seconds <= 0 || !heeds_distraction(map, g) || sessile(map, g) {
+        return;
+    }
+    let now = map.now;
+    let until = now + Duration::from_secs(seconds as u64);
+    crate::game::map::ai::halt(map, g);
+    let spline_id = map.next_spline_id;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let pos = c.position;
+    if at.x != pos.x || at.y != pos.y {
+        c.orientation = (at.y - pos.y).atan2(at.x - pos.x);
+    }
+    let o = c.orientation;
+    c.engagement.distracted_until = Some(until);
+    c.motion = Motion::Idle { until: Some(until) };
+    let frame = crate::game::map::ai::face_packet(g, pos, o, spline_id);
+    map.send_to_observers(g, &frame, false);
+}
+
+/// Whether a distraction holds a creature still now. It ends with its
+/// time, or as soon as the creature no longer heeds it (a fight, fear).
+pub fn distracted(map: &mut Map, g: Guid) -> bool {
+    let now = map.now;
+    let until = map.creature(g).and_then(|c| c.engagement.distracted_until);
+    let Some(until) = until else {
+        return false;
+    };
+    if until > now && heeds_distraction(map, g) {
+        return true;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.distracted_until = None;
+    }
+    false
+}
+
+/// [`distracted`], without ending one.
+pub fn held_by_distraction(map: &Map, g: Guid) -> bool {
+    let now = map.now;
+    map.creature(g)
+        .and_then(|c| c.engagement.distracted_until)
+        .is_some_and(|t| t > now)
+        && heeds_distraction(map, g)
 }
 
 /// A player greets a creature or picks its gossip: its wandering or patrol

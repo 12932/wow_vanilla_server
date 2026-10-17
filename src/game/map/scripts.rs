@@ -844,8 +844,7 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
         map.send_to_observers(g, &frame, false);
     }
     if moved {
-        let facing = (to.y - from.y).atan2(to.x - from.x);
-        crate::game::map::creature_groups::leader_walked(map, g, to, facing, how.run);
+        crate::game::map::creature_groups::leader_walked(map, g);
     }
     true
 }

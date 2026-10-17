@@ -294,11 +294,8 @@ Fixed on ai5 (with tests in `tests_ai5*.rs`):
 
 Open (not done):
 
-- M2 wander points unclamped; M4 pools (limits over 1, re-rolls, event
-  spawns); M5 charge; M8 fear/confuse/flee spline stops, anchor and
-  checks; M9's heal timing; M10 distract; M11 formation fidelity; M12
-  scripted follow; M14 flying spline packet format; M18 (to confirm);
-  M19's other minor items.
+- (Movement's M2, M4, M5, M8, M9, M10, M11, M12, M14, M18 and M19 were
+  done in Phase 2b, with tests in `tests_parity_motion.rs`.)
 - I2's real-data check (`tests_ai5_instances::the_real_instances`,
   ignored): the Quintessence doesn't douse the rune on the merged branch.
 - E16 (smaller EventAI ordering items).

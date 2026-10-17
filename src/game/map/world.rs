@@ -41,8 +41,7 @@ pub fn populate(map: &mut Map) {
     }
     let on = crate::game::events::current(&map.realm);
     let mut rng = rand::rng();
-    let (skip_creatures, skip_objects) =
-        crate::game::map::creature_groups::unpicked(&data, map.key.map, &mut rng);
+    let (skip_creatures, skip_objects) = crate::game::map::pools::populate(map, &on, &mut rng);
     // A copy's save: its dead stay dead until they are due back.
     let save = (map.key.instance != 0)
         .then(|| crate::game::instances::save_of(&map.realm, map.key.instance))
@@ -149,7 +148,7 @@ fn step_creature(
         let Some(c) = map.creatures.get(key) else {
             return;
         };
-        if crate::game::map::creature_groups::follows(&map.realm.data, c.spawn_guid)
+        if crate::game::map::creature_groups::following(map, c.guid)
             && !matches!(c.motion, Motion::Moving(_))
         {
             return;
@@ -259,31 +258,46 @@ fn step_creature(
                 }
                 (_, MOVEMENT_RANDOM) => {
                     let (home, radius) = (c.home, c.wander_distance);
-                    nav.as_mut()
-                        .and_then(|n| n.random_point(home, radius))
-                        .or_else(|| Some(random_point(home, radius, rng)))
+                    match nav.as_mut() {
+                        Some(n) => wander_point(n, home, radius, rng),
+                        None => Some(random_point(home, radius, rng)),
+                    }
                 }
                 _ => None,
             };
+            let wanders = waypoints.as_ref().is_none_or(|w| w.is_empty())
+                && c.movement_type == MOVEMENT_RANDOM;
             match target {
                 Some(target) => {
                     let from = c.position;
+                    // A waypoint is reached even where the navmesh stops
+                    // short; a wanderer goes nowhere it has no path to.
                     let path = match nav {
                         Some(n) => {
                             let target = n
                                 .ground(target.x, target.y, target.z)
                                 .map(|z| Vector3d { z, ..target })
                                 .unwrap_or(target);
-                            n.path(from, target).unwrap_or_else(|| vec![from, target])
+                            match n.path(from, target) {
+                                Some(p) => Some(p),
+                                None if wanders => None,
+                                None => Some(vec![from, target]),
+                            }
                         }
-                        None => vec![from, target],
+                        None => Some(vec![from, target]),
                     };
                     let run = c.scripted.as_deref().is_some_and(|s| s.run);
-                    frame = c.walk(path, run, now, spline_id);
+                    frame = path.and_then(|p| c.walk(p, run, now, spline_id));
                     if frame.is_none() {
                         c.motion = Motion::Idle {
                             until: Some(now + wander_pause(rng)),
                         };
+                    }
+                }
+                // No point for a wanderer: it idles two to six seconds.
+                None if wanders => {
+                    c.motion = Motion::Idle {
+                        until: Some(now + idle_pause(rng)),
                     }
                 }
                 None => c.motion = Motion::Idle { until: None },
@@ -294,11 +308,7 @@ fn step_creature(
     let (pos, anchor, old_cell) = (c.position, c.vis_anchor, c.cell);
     let new_cell = cell_of(pos.x, pos.y);
     c.cell = new_cell;
-    let walked = match (&frame, &c.motion) {
-        (Some(_), Motion::Moving(w)) => Some((w.destination(), w.run)),
-        _ => None,
-    };
-    let facing = c.orientation;
+    let walked = frame.is_some() && matches!(c.motion, Motion::Moving(_));
     if frame.is_some() {
         map.next_spline_id = map.next_spline_id.wrapping_add(1);
     }
@@ -307,8 +317,8 @@ fn step_creature(
     if let Some(frame) = frame {
         map.send_to_observers(guid, &frame, false);
     }
-    if let Some((to, run)) = walked {
-        crate::game::map::creature_groups::leader_walked(map, guid, to, facing, run);
+    if walked {
+        crate::game::map::creature_groups::leader_walked(map, guid);
     }
     if let Some((point, script)) = arrived {
         crate::game::map::event_ai::movement_inform(map, guid, 2, point);
@@ -322,6 +332,36 @@ fn step_creature(
             );
         }
     }
+}
+
+/// Thistle Tea's wander point (`Pathfinding.find_random_point_around_circle`):
+/// a random point of the navmesh around `anchor`; one the navmesh gives
+/// beyond `radius` is pulled back toward the anchor, to a random distance
+/// within it, as far as a walk over the navmesh gets.
+pub fn wander_point(
+    nav: &mut Nav,
+    anchor: Vector3d,
+    radius: f32,
+    rng: &mut impl rand::Rng,
+) -> Option<Vector3d> {
+    let p = nav.random_point(anchor, radius)?;
+    let d = ((p.x - anchor.x).powi(2) + (p.y - anchor.y).powi(2)).sqrt();
+    if d <= radius {
+        return Some(p);
+    }
+    let f = rng.random_range(0.0f32..1.0).sqrt() * radius / d;
+    let to = Vector3d {
+        x: anchor.x + (p.x - anchor.x) * f,
+        y: anchor.y + (p.y - anchor.y) * f,
+        z: anchor.z,
+    };
+    nav.walk_hit(anchor, to)
+}
+
+/// How long a wanderer with nowhere to go waits: two to six seconds
+/// (Thistle Tea's `idle_delay`).
+fn idle_pause(rng: &mut impl rand::Rng) -> Duration {
+    Duration::from_millis(rng.random_range(2_000..6_000))
 }
 
 /// A point within `radius` of `center`, on the same height.

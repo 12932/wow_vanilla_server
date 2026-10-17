@@ -28,6 +28,9 @@ the questions waiting for you.
    itself. Should they also be fixed in your fork, or reported to gtker upstream? That would be a public issue,
    which is why I'm asking first.
 
+5. **Knockback on creatures** (from 2b). Should a knockback move a creature, as mangos-classic does and wvs now
+   does, or only break its cast, as Thistle Tea does? I kept mangos-classic's.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -94,6 +97,18 @@ the questions waiting for you.
      - a declared decompressed size is at most 0xFFFFF;
      - a GM command's coordinates must be finite and within ±100,000.
 
+9. **2b's choices:**
+   - **Run mode:** every monster move carries it, walking creatures too. mangos-classic always sets it ("client has
+     strange issues without that flag"), and so does Thistle Tea.
+   - **Points:** a move's points are offsets from its destination, which the old code got wrong for 1.12.
+     Intermediate points within 0.7 yards of the destination are left out, as mangos-classic does.
+   - **Flyers' splines** are hand-encoded, in whole points.
+   - **Distract** affects creatures only.
+   - **Charge:** a rooted player mid-charge gets the root at once; Thistle Tea defers it to arrival.
+   - **Pools:** an event change re-picks a pool, removing members that are out even mid-fight, as Thistle Tea does.
+   - **Healing on leashing:** a creature heals as it leashes, and only if it regenerates, rather than on getting
+     home (M9 and C11).
+
 ## Progress
 
 | Stage | State | Commit |
@@ -105,7 +120,7 @@ the questions waiting for you.
 | Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
-| 2b: creature movement | running | |
+| 2b: creature movement (all 11 items) | merged | |
 | 2c: creature combat | running | |
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
