@@ -464,3 +464,123 @@ async fn the_dead_and_their_ghosts_take_no_harm_and_cast_no_more() {
     assert_eq!(ghost.0, ghost.2, "the ghost unhurt");
     assert!(ghost.1 <= 1, "a missile flew, or none was let fly");
 }
+
+const BOAT: u32 = 9_998;
+
+/// A boat that sails 100 yards from the start, crosses to Kalimdor and
+/// back, every 1.6 seconds.
+fn boat_world() -> crate::game::data::GameData {
+    use crate::game::data::npc::TaxiPathNode;
+    use crate::game::data::{GameObjectTemplate, TransportRoute};
+    let mut d = world();
+    let mut data = [0u32; 24];
+    data[0] = 78;
+    data[1] = 1000;
+    data[2] = 1000;
+    d.gameobject_templates.insert(
+        BOAT,
+        GameObjectTemplate {
+            entry: BOAT,
+            kind: 15,
+            display_id: 3015,
+            name: "The Test Boat".into(),
+            size: 1.0,
+            data,
+            ..Default::default()
+        },
+    );
+    d.transports.push(TransportRoute {
+        entry: BOAT,
+        name: "Here and There".into(),
+        period: 1600,
+    });
+    let node = |map, x: f32, y: f32| TaxiPathNode {
+        map,
+        x,
+        y,
+        z: START.2,
+        flags: 0,
+        delay: 0,
+    };
+    d.npc.taxi_path_nodes.insert(
+        78,
+        vec![
+            node(0, START.0, START.1),
+            node(0, START.0 + 30.0, START.1),
+            node(0, START.0 + 60.0, START.1),
+            node(0, START.0 + 100.0, START.1),
+            node(1, 990.0, 1000.0),
+            node(1, 1000.0, 1000.0),
+            node(1, 1010.0, 1000.0),
+            node(1, 1020.0, 1000.0),
+        ],
+    );
+    d
+}
+
+/// Thistle Tea's "resurrects a dead passenger before a transport map
+/// change": one lying dead on deck, not released, rises whole as the ship
+/// takes them to another map (mangos's `Transport::TeleportTransport`).
+#[tokio::test]
+async fn a_dead_passenger_rises_as_the_ship_crosses() {
+    let realm = harness::realm_with(boat_world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let boat = crate::game::guid::make(crate::game::guid::HighGuid::MoTransport, 0, BOAT);
+    assert!(
+        a.sees_within(boat, Duration::from_secs(3)).await,
+        "the boat"
+    );
+    a.send(MSG_MOVE_HEARTBEAT_Client {
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::empty().set_on_transport(
+                MovementInfo_MovementFlags_OnTransport {
+                    transport: TransportInfo {
+                        guid: boat,
+                        position: Vector3d {
+                            x: 1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        orientation: 0.0,
+                        timestamp: 0,
+                    },
+                },
+            ),
+            timestamp: 0,
+            position: Vector3d {
+                x: START.0 + 1.0,
+                y: START.1,
+                z: START.2,
+            },
+            orientation: 0.0,
+            fall_time: 0.0,
+        },
+    })
+    .await;
+    let map = realm.registry.online(ga).unwrap().map();
+    crate::game::tests_p3_entity_objects::until(&map, "Alice aboard", move |m| {
+        m.players
+            .get(&ga)
+            .is_some_and(|p| p.movement.flags.get_on_transport().is_some())
+    })
+    .await;
+    on(&map, move |m| crate::game::map::death::kill(m, ga)).await;
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(ga).await;
+    let kalimdor = realm.registry.online(ga).unwrap().map();
+    let (alive, whole) = on(&kalimdor, move |m| {
+        let p = &m.players[&ga];
+        (
+            p.death == crate::game::map::death::Death::Alive,
+            p.fields.get_u32(UNIT_FIELD_HEALTH) == p.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+        )
+    })
+    .await;
+    assert!(alive, "she rose with the crossing");
+    assert!(whole, "whole");
+}
