@@ -112,6 +112,41 @@ pub fn drive(realm: &Realm, event: u32, on: bool) {
     sweep(realm);
 }
 
+/// A GM starts or stops an event (mangos' `.event start|stop`, which
+/// moves the event's start): started, it runs its length from now; stopped,
+/// it is over until its next turn would come round. `None` if there is no
+/// such event, `Some(false)` if it already was so.
+pub fn force(realm: &Realm, event: u32, on: bool) -> Option<bool> {
+    let e = realm.data.events.get(&event)?;
+    if current(realm).contains(&event) == on {
+        return Some(false);
+    }
+    let now = crate::game::social::mail::now();
+    let until = if on && e.length > 0 {
+        now + e.length * 60
+    } else if !on && e.length > 0 && e.occurence > e.length {
+        now + (e.occurence - e.length) * 60
+    } else {
+        i64::MAX
+    };
+    realm.social.gm_events.lock().insert(event, (on, until));
+    sweep(realm);
+    Some(true)
+}
+
+/// The GM's starts and stops still in force, over what is on.
+fn overridden(realm: &Realm, now: i64, on: &mut AHashSet<u32>) {
+    let mut forced = realm.social.gm_events.lock();
+    forced.retain(|_, (_, until)| *until > now);
+    for (e, (start, _)) in forced.iter() {
+        if *start {
+            on.insert(*e);
+        } else {
+            on.remove(e);
+        }
+    }
+}
+
 /// Whether a quest tied to an event may be offered now.
 pub fn quest_offered(realm: &Realm, quest: u32) -> bool {
     match realm.data.world.event_quests.get(&quest) {
@@ -138,7 +173,8 @@ pub fn current(realm: &Realm) -> AHashSet<u32> {
 pub fn sweep(realm: &Realm) {
     let now = crate::game::social::mail::now();
     let driven = realm.social.driven_events.lock().clone();
-    let on = active_with(&realm.data, now, &driven);
+    let mut on = active_with(&realm.data, now, &driven);
+    overridden(realm, now, &mut on);
     {
         let mut events = realm.social.events.lock();
         if *events == on {

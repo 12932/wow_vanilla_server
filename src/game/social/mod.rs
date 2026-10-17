@@ -37,6 +37,8 @@ pub struct Social {
     pub world_states: Mutex<ahash::AHashMap<u32, u32>>,
     /// Events the world starts and stops, not the calendar.
     pub driven_events: Mutex<ahash::AHashMap<u32, bool>>,
+    /// Events a GM started or stopped: on or off, until when.
+    pub gm_events: Mutex<ahash::AHashMap<u32, (bool, i64)>>,
     pub invasion: Mutex<crate::game::invasion::State>,
     pub elemental: Mutex<crate::game::elemental::State>,
     pub omen: Mutex<crate::game::omen::Watch>,

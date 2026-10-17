@@ -20,7 +20,7 @@ pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spel
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
 events [start|stop <id>]|explore|position|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
-skill <id> <value>|skills|spells|taxi|transport|random equipment";
+skill <id> <value>|skills|spells|taxi|transport|random equipment, .event list [all]|start <id>|stop <id>|<id>";
 
 /// The level a command here needs, if it is one of these: looking is for
 /// moderators, the rest for game masters.
@@ -30,7 +30,9 @@ pub fn needed_level(name: &str) -> Option<u8> {
         "guid" | "pos" | "threat" => MODERATOR,
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "damage" | "kill"
         | "respawn" | "move" | "modify" | "rested" | "start" | "talents" | "tgm" | "weather"
-        | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion" => GAME_MASTER,
+        | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion" | "event" => {
+            GAME_MASTER
+        }
         _ => return None,
     })
 }
@@ -60,7 +62,73 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "bg" | "battleground" => battleground(map, g, args),
         "mail" => mail(map, g, args),
         "debug" => debug(map, g, args),
+        "event" => event(map, args),
         _ => return None,
+    })
+}
+
+/// `.event list [all]`, `.event start|stop <id>`, `.event <id>`: mangos'
+/// event commands. A start or stop holds for the event's turn, as mangos
+/// moves its start.
+fn event(map: &mut Map, args: &[&str]) -> Option<String> {
+    let realm = map.realm.clone();
+    let data = &realm.data;
+    let on = crate::game::events::current(&realm);
+    let label = |e: u32| {
+        let name = data.events.get(&e).map(|x| x.name.as_str()).unwrap_or("");
+        format!(
+            "{e} {name}{}",
+            if on.contains(&e) { " (active)" } else { "" }
+        )
+    };
+    Some(match args {
+        [] | ["list"] | ["list", "all"] => {
+            let mut ids: Vec<u32> = if args.len() == 2 {
+                data.events.keys().copied().collect()
+            } else {
+                on.iter().copied().collect()
+            };
+            ids.sort_unstable();
+            let list: Vec<String> = ids.into_iter().map(label).collect();
+            format!(
+                "Events: {}",
+                if list.is_empty() {
+                    "none".into()
+                } else {
+                    list.join(", ")
+                }
+            )
+        }
+        [action @ ("start" | "stop"), id] => {
+            let Ok(id) = id.parse::<u32>() else {
+                return Some("Usage: .event start|stop <id>".into());
+            };
+            let start = *action == "start";
+            match crate::game::events::force(&realm, id, start) {
+                None => format!("No event {id}."),
+                Some(false) if start => format!("Event {id} is already active."),
+                Some(false) => format!("Event {id} is not active."),
+                Some(true) => format!(
+                    "Event {} {}.",
+                    label(id).trim_end_matches(" (active)"),
+                    if start { "started" } else { "stopped" }
+                ),
+            }
+        }
+        [id] => {
+            let Some(e) = id.parse::<u32>().ok().and_then(|id| data.events.get(&id)) else {
+                return Some("Usage: .event list [all] | start <id> | stop <id> | <id>".into());
+            };
+            format!(
+                "Event {}: {}, every {} minutes for {}{}.",
+                e.id,
+                e.name,
+                e.occurence,
+                e.length,
+                if on.contains(&e.id) { ", active" } else { "" }
+            )
+        }
+        _ => "Usage: .event list [all] | start <id> | stop <id> | <id>".into(),
     })
 }
 
@@ -615,27 +683,7 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             on.sort();
             Some(format!("Events on: {}", if on.is_empty() { "none".into() } else { on.join(", ") }))
         }
-        ["events", action @ ("start" | "stop"), id] => {
-            let Ok(id) = id.parse::<u32>() else {
-                return Some("Usage: .debug events start|stop <id>".into());
-            };
-            let realm = map.realm.clone();
-            let on = {
-                let mut events = realm.social.events.lock();
-                if *action == "start" {
-                    events.insert(id);
-                } else {
-                    events.remove(&id);
-                }
-                events.clone()
-            };
-            // Until the schedule says otherwise.
-            for h in realm.maps.all() {
-                let on = on.clone();
-                h.call(move |m| crate::game::events::apply(m, &on));
-            }
-            Some(format!("Event {id} {}.", if *action == "start" { "started" } else { "stopped" }))
-        }
+        ["events", action @ ("start" | "stop"), id] => event(map, &[*action, *id]),
         ["explore"] => {
             let to = player_target(map, g);
             let p = map.players.get_mut(&to)?;

@@ -702,6 +702,7 @@ impl Map {
         crate::game::elemental::update(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);
+        quests::update_objects(self);
         self.flush_forgets();
         self.flush_values();
         self.flush_batches();

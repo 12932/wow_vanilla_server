@@ -15,8 +15,9 @@ use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::data::items::Body;
 use crate::game::map::inventory::{
-    self, BANK_BAG_END, BANK_BAG_START, BANK_END, BANK_START, EQUIPMENT_END,
+    self, BAG_END, BANK_BAG_END, BANK_BAG_START, BANK_END, BANK_START, EQUIPMENT_END,
 };
+use crate::game::map::items::ITEM_FLAG_SOULBOUND;
 use crate::game::map::loot::{self, Loot};
 use crate::game::store::BAG_PLAYER;
 
@@ -38,6 +39,46 @@ const WRAPPINGS: [(u32, u32); 6] = [
 ];
 /// What an item's stored data says it wraps.
 const GIFT_PREFIX: &str = "gift:";
+
+/// What a gift holds (mangos' `character_gifts`): the wrapped item's entry
+/// and flags, and who wrapped it. The rest of the item (its GUID, wear,
+/// enchantments, text) is the gift's own, and its owner is whoever has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wrapped {
+    pub entry: u32,
+    pub flags: u32,
+    pub creator: u64,
+}
+
+/// The gift an item's stored data holds, if it is one.
+pub fn wrapped(data: &str) -> Option<Wrapped> {
+    let rest = data.split(';').find_map(|t| t.strip_prefix(GIFT_PREFIX))?;
+    let mut v = rest.split('/');
+    let entry = v.next()?.parse().ok()?;
+    let flags = v.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let creator = v.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    Some(Wrapped {
+        entry,
+        flags,
+        creator,
+    })
+}
+
+/// `data` with its gift token replaced by `gift` (or dropped).
+fn with_gift(data: &str, gift: Option<Wrapped>) -> String {
+    let mut out: Vec<String> = data
+        .split(';')
+        .filter(|t| !t.is_empty() && !t.starts_with(GIFT_PREFIX))
+        .map(str::to_owned)
+        .collect();
+    if let Some(w) = gift {
+        out.push(format!(
+            "{GIFT_PREFIX}{}/{}/{}",
+            w.entry, w.flags, w.creator
+        ));
+    }
+    out.join(";")
+}
 
 pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     use ClientOpcodeMessage as C;
@@ -90,27 +131,36 @@ pub fn open(map: &mut Map, g: Guid, bag: u8, slot: u8) {
     let item = &p.items[i];
     let item_guid = item.guid;
     let flags = item.fields.get_u32(ITEM_FIELD_FLAGS);
-    // A gift: the wrapped item is back.
+    let Some(t) = data.item(item.entry) else {
+        fail(p, InventoryResult::ItemNotFound, item_guid);
+        return;
+    };
+    if p.death != crate::game::map::death::Death::Alive {
+        fail(p, InventoryResult::YouAreDead, item_guid);
+        return;
+    }
+    if p.flight.is_some() {
+        fail(p, InventoryResult::CantDoRightNow, item_guid);
+        return;
+    }
+    // A gift: the wrapped item is back, with its own entry and flags; it
+    // stays whoever's it is now.
     if flags & ITEM_DYNFLAG_WRAPPED != 0 {
-        let Some(entry) = item
-            .data
-            .strip_prefix(GIFT_PREFIX)
-            .and_then(|e| e.parse::<u32>().ok())
-        else {
+        let Some(w) = wrapped(&item.data) else {
+            // Nothing inside (mangos: no `character_gifts` row): it goes.
+            inventory::take_item(map, g, i, 1);
             return;
         };
         let item = &mut p.items[i];
-        item.entry = entry;
-        item.data.clear();
-        item.fields.set_u32(OBJECT_FIELD_ENTRY, entry);
-        item.fields.set_flag(ITEM_FIELD_FLAGS, ITEM_DYNFLAG_WRAPPED, false);
+        item.entry = w.entry;
+        item.data = with_gift(&item.data, None);
+        item.fields.set_u32(OBJECT_FIELD_ENTRY, w.entry);
+        item.fields.set_u32(ITEM_FIELD_FLAGS, w.flags);
         item.fields.set_guid(ITEM_FIELD_GIFTCREATOR, Guid::zero());
         p.refresh_inventory(&data);
+        crate::game::map::quests::items_changed(map, g, w.entry);
         return;
     }
-    let Some(t) = data.item(item.entry) else {
-        return;
-    };
     if t.lock_id != 0 && flags & ITEM_DYNFLAG_UNLOCKED == 0 {
         fail(p, InventoryResult::ItemLocked, item_guid);
         return;
@@ -252,38 +302,75 @@ pub fn page_text(map: &Map, g: Guid, page: u32) {
 }
 
 /// `CMSG_WRAP_ITEM`: wrapping paper makes an item a gift, which keeps what
-/// it was.
+/// it was. mangos' checks in mangos' order, with Thistle Tea's refusals of
+/// the dead, the casting and the flying.
 fn wrap(map: &mut Map, g: Guid, paper: (u8, u8), what: (u8, u8)) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let (Some(pi), Some(wi)) = (p.item_at(paper.0, paper.1), p.item_at(what.0, what.1)) else {
+    if p.death != crate::game::map::death::Death::Alive {
+        fail(p, InventoryResult::YouAreDead, Guid::zero());
+        return;
+    }
+    if p.caster.casting.is_some() || p.flight.is_some() {
+        fail(p, InventoryResult::CantDoRightNow, Guid::zero());
+        return;
+    }
+    let Some(pi) = p.item_at(paper.0, paper.1) else {
         fail(p, InventoryResult::ItemNotFound, Guid::zero());
         return;
     };
+    // Only wrapping paper (all of it stacks) makes a gift, and only into a
+    // gift that is one.
     let paper_entry = p.items[pi].entry;
-    let Some(gift) = WRAPPINGS
+    let gift = WRAPPINGS
         .iter()
         .find(|(w, _)| *w == paper_entry)
         .map(|(_, gift)| *gift)
-        .filter(|_| data.item(paper_entry).is_none_or(|t| t.flags & ITEM_FLAG_WRAPPER != 0))
-    else {
-        fail(p, InventoryResult::CantDoRightNow, p.items[pi].guid);
+        .filter(|_| {
+            data.item(paper_entry)
+                .is_some_and(|t| t.flags & ITEM_FLAG_WRAPPER != 0 && t.stackable != 1)
+        })
+        .filter(|gift| data.item(*gift).is_some_and(|t| t.stackable == 1));
+    let Some(gift) = gift else {
+        fail(p, InventoryResult::ItemNotFound, p.items[pi].guid);
+        return;
+    };
+    let Some(wi) = p.item_at(what.0, what.1) else {
+        fail(p, InventoryResult::ItemNotFound, Guid::zero());
         return;
     };
     let item = &p.items[wi];
+    let flags = item.fields.get_u32(ITEM_FIELD_FLAGS);
     let template = data.item(item.entry);
     let why = if pi == wi {
-        Some(InventoryResult::CantDoRightNow)
-    } else if item.fields.get_u32(ITEM_FIELD_FLAGS) & ITEM_DYNFLAG_WRAPPED != 0 {
         Some(InventoryResult::WrappedCantBeWrapped)
-    } else if item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END {
+    } else if item.bag == BAG_PLAYER && item.slot < BAG_END {
+        // Worn, or one of the bags themselves.
         Some(InventoryResult::EquippedCantBeWrapped)
-    } else if item.count() > 1 {
-        Some(InventoryResult::StackableCantBeWrapped)
-    } else if template.is_some_and(|t| t.bonding == 1 || t.max_count > 0) {
+    } else if flags & ITEM_DYNFLAG_WRAPPED != 0
+        || !item.fields.get_guid(ITEM_FIELD_GIFTCREATOR).is_zero()
+    {
+        Some(InventoryResult::WrappedCantBeWrapped)
+    } else if item.fields.type_id() == crate::game::fields::TypeId::Container
+        || template.is_some_and(|t| t.container_slots > 0)
+    {
+        Some(InventoryResult::BagsCantBeWrapped)
+    } else if flags & ITEM_FLAG_SOULBOUND != 0 {
         Some(InventoryResult::BoundCantBeWrapped)
+    } else if template.is_some_and(|t| t.stackable != 1) || item.count() != 1 {
+        Some(InventoryResult::StackableCantBeWrapped)
+    } else if template.is_some_and(|t| t.max_count > 0) {
+        Some(InventoryResult::UniqueCantBeWrapped)
+    } else if p
+        .misc
+        .item_loot
+        .as_ref()
+        .is_some_and(|(x, _)| *x == item.guid)
+    {
+        // Opened, with its loot still in it.
+        Some(InventoryResult::ItemLocked)
     } else {
         None
     };
@@ -292,13 +379,28 @@ fn wrap(map: &mut Map, g: Guid, paper: (u8, u8), what: (u8, u8)) {
         return;
     }
     let item = &mut p.items[wi];
-    item.data = format!("{GIFT_PREFIX}{}", item.entry);
+    let inside = Wrapped {
+        entry: item.entry,
+        flags,
+        creator: g.guid(),
+    };
+    item.data = with_gift(&item.data, Some(inside));
     item.entry = gift;
     item.fields.set_u32(OBJECT_FIELD_ENTRY, gift);
-    item.fields.set_flag(ITEM_FIELD_FLAGS, ITEM_DYNFLAG_WRAPPED, true);
+    item.fields.set_u32(ITEM_FIELD_FLAGS, ITEM_DYNFLAG_WRAPPED);
     item.fields.set_guid(ITEM_FIELD_GIFTCREATOR, g);
     p.refresh_inventory(&data);
+    crate::game::map::quests::items_changed(map, g, inside.entry);
     inventory::take_item(map, g, pi, 1);
+}
+
+/// A stored gift, loaded as what it wraps (so its wear, charges and time
+/// are that item's): it shows as the gift again, wrapped by whoever did.
+pub fn rewrap_loaded(item: &mut crate::game::map::player::Item, gift: u32, w: Wrapped) {
+    item.entry = gift;
+    item.fields.set_u32(OBJECT_FIELD_ENTRY, gift);
+    item.fields
+        .set_guid(ITEM_FIELD_GIFTCREATOR, Guid::new(w.creator));
 }
 
 /// The bank's slots: its own, then its bags'.
