@@ -308,17 +308,20 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>
         feedback(map, player, PetFeedback::NothingToAttack);
         return;
     }
+    let targets = Targets {
+        unit,
+        ..Default::default()
+    };
+    // A cast that can't be made is told to its master, as Thistle Tea's
+    // `PetCasting` tells it.
+    let m = crate::game::map::spells::mods::for_spell(map, pet, t);
+    if let Some(r) = crate::game::map::spells::checks::check(map, pet, t, &targets, None, false, &m)
+    {
+        cast_failed(map, player, pet, spell, r);
+        return;
+    }
     let before = map.caster(pet).map(|c| c.cooldowns.len());
-    crate::game::map::spells::cast(
-        map,
-        pet,
-        spell,
-        Targets {
-            unit,
-            ..Default::default()
-        },
-        None,
-    );
+    crate::game::map::spells::cast(map, pet, spell, targets, None);
     let cast = map.caster(pet).map(|c| c.cooldowns.len()) != before
         || map.caster(pet).is_some_and(|c| c.casting.is_some());
     // A harmful spell starts the fight with its target.
@@ -327,6 +330,28 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>
         && let Some(u) = unit
     {
         ai::attack(map, pet, u);
+    }
+}
+
+pub const SMSG_PET_CAST_FAILED: u16 = 0x138;
+
+/// `SMSG_PET_CAST_FAILED` to the master, and the spell's cooldown on the
+/// pet's bar cleared if it has none.
+pub fn cast_failed(map: &Map, player: Guid, pet: Guid, spell: u32, reason: u8) {
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    let mut b = crate::game::data::items::Body::default();
+    b.u32(spell).u8(2).u8(reason);
+    p.outbound.send_frame(b.frame(SMSG_PET_CAST_FAILED));
+    let cooling = map
+        .caster(pet)
+        .is_some_and(|c| c.cooldowns.get(&spell).is_some_and(|t| *t > map.now));
+    if !cooling {
+        p.outbound.send(&SMSG_CLEAR_COOLDOWN {
+            id: spell,
+            target: pet,
+        });
     }
 }
 
