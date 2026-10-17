@@ -112,22 +112,30 @@ async fn handshake(
     .await?;
     let c = read_auth_session(stream).await?;
     let account = c.username;
-    let session_key = {
-        let users = realm.users.as_ref().ok_or("no auth server")?;
+    let session_key = realm.users.as_ref().and_then(|users| {
         let mut users = crate::auth::users_lock(users);
-        let srp = users
-            .get_mut(&account)
-            .ok_or_else(|| format!("unknown account {account}"))?;
-        *srp.session_key()
+        users.get_mut(&account).map(|srp| *srp.session_key())
+    });
+    let crypto = match (session_key, NormalizedString::new(&account)) {
+        (Some(key), Ok(name)) => seed
+            .into_server_header_crypto(&name, key, c.client_proof, c.client_seed)
+            .map_err(|e| format!("bad proof from {account}: {e:?}")),
+        _ => Err(format!("unknown account {account}")),
     };
-    let mut crypto = seed
-        .into_server_header_crypto(
-            &NormalizedString::new(&account)?,
-            session_key,
-            c.client_proof,
-            c.client_seed,
-        )
-        .map_err(|e| format!("bad proof from {account}: {e:?}"))?;
+    // A refusal is told, unencrypted as there is no key to encrypt it
+    // with, as mangos's HandleAuthSession and Thistle Tea's
+    // CmsgAuthSession send it, before the connection closes.
+    let mut crypto = match crypto {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = SMSG_AUTH_RESPONSE {
+                result: SMSG_AUTH_RESPONSE_WorldResult::AuthFailed,
+            }
+            .tokio_write_unencrypted_server(&mut *stream)
+            .await;
+            return Err(e.into());
+        }
+    };
     SMSG_AUTH_RESPONSE {
         result: SMSG_AUTH_RESPONSE_WorldResult::AuthOk {
             billing_flags: 0,

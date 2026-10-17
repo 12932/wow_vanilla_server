@@ -68,6 +68,8 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_p3_network;
 #[cfg(test)]
+mod tests_p3_network_auth;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
