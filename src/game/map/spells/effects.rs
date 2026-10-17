@@ -917,6 +917,9 @@ pub fn run_untargeted(
                     crate::game::map::battleground::plant(map, caster, e.misc_value.max(0) as u32);
                 }
             }
+            crate::game::map::battleground::insignia::EFFECT_SKIN_PLAYER_CORPSE => {
+                crate::game::map::battleground::insignia::remove(map, caster, t.object.or(t.unit));
+            }
             EFFECT_PERSISTENT_AREA_AURA => {
                 let at = t
                     .dest

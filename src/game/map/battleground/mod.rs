@@ -11,6 +11,7 @@ pub mod av;
 pub mod av_quests;
 pub mod av_routes;
 pub mod av_scripts;
+pub mod insignia;
 pub mod wsg;
 
 use std::time::{Duration, Instant};
@@ -142,6 +143,8 @@ pub struct Match {
     pub ab: Option<ab::Ab>,
     pub av: Option<av::Av>,
     pub buffs: Vec<BuffSlot>,
+    /// Bones left by insignia taken, and when they go.
+    pub bones: Vec<(Instant, Guid)>,
 }
 
 impl Match {
@@ -163,6 +166,7 @@ impl Match {
             ab: (bg == BG_AB).then(ab::Ab::default),
             av: (bg == BG_AV).then(av::Av::new),
             buffs: Vec::new(),
+            bones: Vec::new(),
         }
     }
 
@@ -570,6 +574,7 @@ pub fn update(map: &mut Map) {
         _ => {}
     }
     run_timers(map);
+    insignia::update(map);
     if map.battleground.as_ref().is_some_and(|m| m.playing()) {
         match map.battleground.as_ref().map(|m| m.bg) {
             Some(BG_AB) => ab::update(map),
@@ -712,6 +717,7 @@ fn resurrect_wave(map: &mut Map) {
 /// honorable kill for the killer's side near them; a flag they carried
 /// drops.
 pub fn died(map: &mut Map, g: Guid, killer: Guid) {
+    insignia::fallen(map, g);
     let pos = map.position_of(g);
     let Some(m) = map.battleground.as_mut() else {
         return;
