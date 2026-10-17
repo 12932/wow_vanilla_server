@@ -178,6 +178,9 @@ pub struct Player {
     pub fields: Fields,
     pub movement: MovementInfo,
     pub speeds: Speeds,
+    /// A GM's `.speed`: the run's base, as a multiple of a run, kept
+    /// through what changes speeds (Thistle Tea's `base_run_speed`).
+    pub speed_rate: f32,
     pub team: Team,
     pub zone: u32,
     pub area: u32,
@@ -287,6 +290,7 @@ impl Player {
             fields: Fields::new(TypeId::Player, guid, 0),
             movement,
             speeds: Speeds::default(),
+            speed_rate: 1.0,
             team: Team::of_race(row.race),
             zone: row.zone,
             area: 0,

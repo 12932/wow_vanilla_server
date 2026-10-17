@@ -420,7 +420,7 @@ async fn a_ghosts_release_and_revive_tell_their_speeds_at_the_change() {
 }
 
 #[tokio::test]
-async fn the_speed_commands_tell_those_watching_at_the_change() {
+async fn the_speed_commands_tell_those_watching_at_the_change_and_hold() {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
     let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -434,6 +434,14 @@ async fn the_speed_commands_tell_those_watching_at_the_change() {
     a.say(".modify speed 3").await;
     let run = told_speed(&mut b, ga, MSG_MOVE_SET_RUN_SPEED).await;
     assert!((run - 21.0).abs() < 0.01, "{run}");
+    // The rate is the run's base: a sprint goes on from it.
+    on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, ga, SPRINT, Some(ga));
+        crate::game::map::auras::recalc(m, ga);
+    })
+    .await;
+    let run = told_speed(&mut b, ga, MSG_MOVE_SET_RUN_SPEED).await;
+    assert!((run - 31.5).abs() < 0.01, "{run}");
 }
 
 /// How many of `entry` `g` carries, and where they are bound.

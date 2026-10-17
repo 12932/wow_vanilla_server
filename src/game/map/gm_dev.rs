@@ -381,19 +381,8 @@ fn modify(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             if !(0.1..=10.0).contains(&value) {
                 return Some("Speed goes from 0.1 to 10.".into());
             }
-            p.speeds.run = 7.0 * value;
-            p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
-                guid: to,
-                move_event: 0,
-                speed: p.speeds.run,
-            });
-            let run = p.speeds.run;
-            crate::game::map::misc::speed_to_observers(
-                map,
-                to,
-                crate::game::map::misc::MSG_MOVE_SET_RUN_SPEED,
-                run,
-            );
+            p.speed_rate = value;
+            crate::game::map::derive::unit(map, to);
         }
         other => return Some(format!("Can't modify {other}.")),
     }
