@@ -366,6 +366,8 @@ pub struct Map {
     /// Scripted map events under way.
     pub map_events: map_events::Events,
     pub spells: spells::MapSpells,
+    /// Which of a fight's rarer states a creature here may be in.
+    pub rare: creature_combat::RareStates,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
     /// The Elemental Invasion's rifts and their invaders.
@@ -517,6 +519,7 @@ impl Map {
             pools: AHashMap::new(),
             map_events: Default::default(),
             spells: Default::default(),
+            rare: Default::default(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
@@ -1070,6 +1073,7 @@ impl Map {
         if event_ai::has_events_entry(&self.realm.data, c.entry) || self.instance.script.is_some() {
             self.ai_spawned.push(guid);
         }
+        self.rare.note(&c.engagement);
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
