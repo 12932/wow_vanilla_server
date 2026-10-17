@@ -3,6 +3,7 @@
 //! data when it is here.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
@@ -864,4 +865,451 @@ async fn real_healing_bonuses_cuts_and_machines() {
     assert_eq!(wounded, 0, "ten Mortal Wounds heal nothing");
     assert!(flash, "Flash of Light heals");
     assert_eq!(mended, 800, "the Patch Kit's 700");
+}
+
+/// `caster` puts real spell `id`'s auras, at `level`'s points, on `target`.
+fn apply_real_at(m: &mut Map, caster: Guid, target: Guid, id: u32, level: u32) {
+    let data = m.realm.data.clone();
+    let s = data
+        .spells
+        .get(id)
+        .unwrap_or_else(|| panic!("spell {id}"))
+        .clone();
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].aura != 0)
+        .map(|i| (i, spells::points(&s, i, level)))
+        .collect();
+    let _ = auras::apply_spell(m, caster, target, &s, &effects, auras::Context::default());
+}
+
+/// A unit's armor and resistances, and its intellect.
+fn defenses(m: &Map, g: Guid) -> ([u32; 7], u32) {
+    let f = m.unit_fields(g).unwrap();
+    (
+        std::array::from_fn(|i| f.get_u32(UNIT_FIELD_RESISTANCES + i as u16)),
+        f.get_u32(UNIT_FIELD_STAT0 + 3),
+    )
+}
+
+/// What `g`'s auras take off a target's resistances, by school mask.
+fn penetration(m: &Map, g: Guid, mask: u32) -> i32 {
+    auras::auras(m, g).map_or(0, |a| a.sum_mask(auras::AURA_MOD_TARGET_RESISTANCE, mask))
+}
+
+const MARK_OF_THE_WILD: u32 = 9885;
+const FIRE_RESISTANCE_AURA: u32 = 19_891;
+const SERRATED_BLADES: [(u32, u32, i32); 4] = [
+    (14_171, 60, -100),
+    (14_172, 60, -200),
+    (14_173, 60, -300),
+    (14_173, 40, -200),
+];
+const BONEREAVER: u32 = 21_153;
+const SCHOOL_PENETRATION: [(u32, u32, i32); 5] = [
+    (11_210, 126, -5),
+    (12_592, 126, -10),
+    (25_717, 4, -300),
+    (25_718, 16, -300),
+    (25_975, 124, -10),
+];
+const BASE_RESISTANCE: [(u32, u32, bool); 3] =
+    [(819, 15, true), (21_740, 100, false), (21_925, 40, false)];
+const SLAYING: [(u32, &[u32], u32, u32); 4] = [
+    (11_406, &[3], 265, 0),
+    (23_930, &[6], 81, 81),
+    (29_112, &[3, 6], 150, 150),
+    (17_352, &[6], 200, 0),
+];
+
+/// Thistle Tea's resistances and penetration on the real spells
+/// (`resistance_dbc_test.exs`, `resistance_penetration_dbc_test.exs`,
+/// `spell_base_resistance_dbc_test.exs`, `target_attack_power_dbc_test.exs`):
+/// Mark of the Wild beside a stronger Fire Resistance Aura, fire's the
+/// stronger and the Mark's back when it goes; Serrated Blades by the
+/// rogue's level, Bonereaver's three stacks, the talents' and gear's
+/// school masks; base armor and resistances; and slaying's attack power
+/// against its creature types alone.
+#[tokio::test]
+async fn real_resistances_penetration_and_slaying() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_d, druid, map) = enter(&realm, "P3JRES1", "Resa", Race::NightElf, Class::Druid).await;
+    let out = on(&map, move |m| {
+        ready(m, druid, 60, &[]);
+        let bare = defenses(m, druid);
+        let mut marked = Vec::new();
+        for order in [
+            [MARK_OF_THE_WILD, FIRE_RESISTANCE_AURA],
+            [FIRE_RESISTANCE_AURA, MARK_OF_THE_WILD],
+        ] {
+            for id in order {
+                apply_real(m, druid, druid, id);
+            }
+            let both = defenses(m, druid);
+            auras::remove_spell(m, druid, FIRE_RESISTANCE_AURA, None);
+            let mark = defenses(m, druid);
+            auras::remove_spell(m, druid, MARK_OF_THE_WILD, None);
+            let none = defenses(m, druid);
+            marked.push((both, mark, none));
+        }
+        let mut serrated = Vec::new();
+        for (id, level, _) in SERRATED_BLADES {
+            apply_real_at(m, druid, druid, id, level);
+            serrated.push(penetration(m, druid, 1));
+            auras::remove_spell(m, druid, id, None);
+        }
+        for _ in 0..4 {
+            apply_real(m, druid, druid, BONEREAVER);
+        }
+        let bonereaver = penetration(m, druid, 1);
+        auras::remove_spell(m, druid, BONEREAVER, None);
+        let mut schools = Vec::new();
+        for (id, mask, _) in SCHOOL_PENETRATION {
+            apply_real(m, druid, druid, id);
+            schools.push((
+                penetration(m, druid, mask),
+                penetration(m, druid, 1 | (!mask & 0x7e)),
+            ));
+            auras::remove_spell(m, druid, id, None);
+        }
+        let kobold = dummy(m, druid, KOBOLD_VERMIN, 60, 3.0);
+        let mut base = Vec::new();
+        for (id, _, _) in BASE_RESISTANCE {
+            let before = defenses(m, kobold).0;
+            apply_real(m, druid, kobold, id);
+            let after = defenses(m, kobold).0;
+            base.push(std::array::from_fn::<i32, 7, _>(|i| {
+                after[i] as i32 - before[i] as i32
+            }));
+            auras::remove_spell(m, kobold, id, None);
+        }
+        let mut slaying = Vec::new();
+        for (id, _, _, _) in SLAYING {
+            apply_real(m, druid, druid, id);
+            let by_type: Vec<(i32, i32)> = (1..=9)
+                .map(|t| {
+                    let bit = 1 << (t - 1);
+                    let a = auras::auras(m, druid).unwrap();
+                    (
+                        a.sum_mask(auras::AURA_MOD_MELEE_ATTACK_POWER_VERSUS, bit),
+                        a.sum_mask(auras::AURA_MOD_RANGED_ATTACK_POWER_VERSUS, bit),
+                    )
+                })
+                .collect();
+            slaying.push(by_type);
+            auras::remove_spell(m, druid, id, None);
+        }
+        (bare, marked, serrated, bonereaver, schools, base, slaying)
+    })
+    .await;
+    let (bare, marked, serrated, bonereaver, schools, base, slaying) = out;
+    let up = |d: ([u32; 7], u32)| -> ([i32; 7], i32) {
+        (
+            std::array::from_fn(|i| d.0[i] as i32 - bare.0[i] as i32),
+            d.1 as i32 - bare.1 as i32,
+        )
+    };
+    // The Mark's 285 armor, and twice its 12 agility's.
+    for (both, mark, none) in marked {
+        assert_eq!(
+            up(both),
+            ([309, 20, 30, 20, 20, 20, 20], 12),
+            "both, fire's the stronger"
+        );
+        assert_eq!(
+            up(mark),
+            ([309, 20, 20, 20, 20, 20, 20], 12),
+            "the Mark's own fire"
+        );
+        assert_eq!(up(none), ([0; 7], 0), "and nothing");
+    }
+    assert_eq!(
+        serrated,
+        SERRATED_BLADES.map(|(_, _, a)| a).to_vec(),
+        "by level"
+    );
+    assert_eq!(bonereaver, -2100, "three stacks of 700");
+    for ((on, off), (id, _, amount)) in schools.into_iter().zip(SCHOOL_PENETRATION) {
+        assert_eq!((on, off), (amount, 0), "{id}: its schools alone");
+    }
+    assert_eq!(base[0], [15, 0, 0, 0, 0, 0, 0], "Toughness: armor");
+    assert_eq!(
+        base[1],
+        [0, 100, 100, 100, 100, 100, 100],
+        "every magic school"
+    );
+    assert_eq!(base[2], [0, 40, 40, 40, 40, 40, 40]);
+    for (by_type, (id, types, melee, ranged)) in slaying.into_iter().zip(SLAYING) {
+        for (t, (got_melee, got_ranged)) in (1..=9).zip(by_type) {
+            let on = types.contains(&t);
+            assert_eq!(
+                (got_melee, got_ranged),
+                if on {
+                    (melee as i32, ranged as i32)
+                } else {
+                    (0, 0)
+                },
+                "{id} against type {t}"
+            );
+        }
+    }
+}
+
+/// A real creature of each type, 1 (beast) to 9 (mechanical).
+const OF_TYPE: [u32; 9] = [2, 29, 49, 92, 90, 3, 6, 1, 36];
+const SLAYER_DAMAGE: [(u32, u32, u32); 5] = [
+    (7784, 1, 2),
+    (13_650, 1, 6),
+    (13_651, 4, 6),
+    (4719, 6, 13),
+    (4646, 3, 8),
+];
+const BEAST_DAMAGE_10: u32 = 7594;
+const SLAYER_SPELL_POWER: [(u32, &[u32], u32); 8] = [
+    (21_010, &[6], 14),
+    (21_011, &[3], 14),
+    (22_849, &[6], 35),
+    (24_197, &[6], 48),
+    (24_198, &[6], 48),
+    (28_876, &[6], 26),
+    (28_890, &[6], 60),
+    (29_113, &[3, 6], 85),
+];
+const SHADOW_BOLT: u32 = 686;
+
+/// Thistle Tea's slaying on the real spells (`target_damage_dbc_test.exs`,
+/// `target_spell_power_dbc_test.exs`): the slayers' damage against their
+/// creature type alone, an equipped one's apart from the damage shown and
+/// the spell power; and the slaying gear's and potions' spell power (aura
+/// 180) against theirs alone, none of it shown as spell power.
+#[tokio::test]
+async fn real_slaying_damage_and_spell_power_by_creature_type() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_w, warlock, map) = enter(&realm, "P3JSLAY1", "Slaya", Race::Human, Class::Warlock).await;
+    let out = on(&map, move |m| {
+        ready(m, warlock, 60, &[]);
+        let foes: Vec<Guid> = OF_TYPE
+            .iter()
+            .map(|e| dummy(m, warlock, *e, 60, 2.0))
+            .collect();
+        // Each blow of 100 (an aura's coming or going works the weapon's
+        // damage out again).
+        let blow = |m: &mut Map, foe: Guid| {
+            hits_for(m, warlock, 100.0);
+            combat::weapon_damage(m, warlock, foe, Hand::Main, &mut rand::rng()).0 as i32
+        };
+        let base: Vec<i32> = foes.iter().map(|f| blow(m, *f)).collect();
+        let mut damage = Vec::new();
+        for (id, _, _) in SLAYER_DAMAGE {
+            apply_real(m, warlock, warlock, id);
+            let by_type: Vec<i32> = foes
+                .iter()
+                .zip(&base)
+                .map(|(f, b)| blow(m, *f) - b)
+                .collect();
+            damage.push(by_type);
+            auras::remove_spell(m, warlock, id, None);
+        }
+        let shown = |m: &mut Map| {
+            auras::recalc(m, warlock);
+            let f = m.unit_fields(warlock).unwrap();
+            (
+                f.get_f32(UNIT_FIELD_MINDAMAGE) as i32,
+                combat::derived(m, warlock).spell_power,
+            )
+        };
+        let before = shown(m);
+        apply_real(m, warlock, warlock, BEAST_DAMAGE_10);
+        let unshown = shown(m) == before;
+        let beast = (blow(m, foes[0]) - base[0], unshown);
+        auras::remove_spell(m, warlock, BEAST_DAMAGE_10, None);
+        let data = m.realm.data.clone();
+        let bolt = data.spells.get(SHADOW_BOLT).unwrap();
+        let power = |m: &Map, foe: Guid| outcome::power(m, warlock, foe, bolt, false) as i32;
+        let bare: Vec<i32> = foes.iter().map(|f| power(m, *f)).collect();
+        let mut spell_power = Vec::new();
+        for (id, _, _) in SLAYER_SPELL_POWER {
+            apply_real(m, warlock, warlock, id);
+            let by_type: Vec<i32> = foes
+                .iter()
+                .zip(&bare)
+                .map(|(f, b)| power(m, *f) - b)
+                .collect();
+            spell_power.push((by_type, shown(m) == before));
+            auras::remove_spell(m, warlock, id, None);
+        }
+        (damage, beast, spell_power)
+    })
+    .await;
+    let (damage, beast, spell_power) = out;
+    for (by_type, (id, kind, amount)) in damage.into_iter().zip(SLAYER_DAMAGE) {
+        let want: Vec<i32> = (1..=9)
+            .map(|t| if t == kind { amount as i32 } else { 0 })
+            .collect();
+        assert_eq!(by_type, want, "{id}");
+    }
+    assert_eq!(beast, (10, true), "on a beast, and not shown");
+    for ((by_type, unshown), (id, kinds, amount)) in spell_power.into_iter().zip(SLAYER_SPELL_POWER)
+    {
+        let want: Vec<i32> = (1..=9)
+            .map(|t| if kinds.contains(&t) { amount as i32 } else { 0 })
+            .collect();
+        assert_eq!(by_type, want, "{id}");
+        assert!(unshown, "{id}: no spell power shown");
+    }
+}
+
+const MANA_SHIELD: u32 = 1463;
+const IMPROVED_MANA_SHIELD: [(u32, u32); 2] = [(11_252, 146), (12_605, 152)];
+const FOOD_AND_DRINK: [(u32, u32, u32); 5] = [
+    (24_355, 0, 2),
+    (24_707, 3, 3),
+    (25_990, 5, 5),
+    (26_263, 4, 3),
+    (29_055, 4, 3),
+];
+const SLOW_MANA: [(u32, u64, u32); 2] = [(18_792, 4, 2), (23_779, 3, 1)];
+const RENEW: u32 = 139;
+const CORRUPTION: u32 = 172;
+
+/// `g`'s periodic effects of `spell`: (period, next tick, ticks done).
+fn ticking(m: &Map, g: Guid, spell: u32) -> Vec<(Option<Duration>, Option<Instant>, u32)> {
+    auras::auras(m, g)
+        .map(|a| {
+            a.effects()
+                .filter(|(h, x)| h.spell == spell && x.period.is_some())
+                .map(|(_, x)| (x.period, x.next_tick, x.ticks))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Make `g`'s periodic effects of `spell` due now, as if their time had
+/// come, `ticks` of them done.
+fn come_due(m: &mut Map, g: Guid, spell: u32, ticks: u32) {
+    let now = m.now;
+    if let Some(a) = auras::auras_mut(m, g) {
+        for h in a.holders.iter_mut().filter(|h| h.spell == spell) {
+            for x in h.effects.iter_mut().filter(|x| x.period.is_some()) {
+                x.next_tick = Some(now);
+                x.ticks = ticks;
+            }
+        }
+    }
+}
+
+/// Thistle Tea's shields, food and periodic cadence on the real spells
+/// (`spell_mana_shield_dbc_test.exs`, `percent_mana_recovery_dbc_test.exs`,
+/// `periodic_damage_ramps_dbc_test.exs`): Improved Mana Shield's ranks on
+/// a live shield's mana a point; food and drink's shares of health and
+/// mana a second; Fel Energy's and Resurgence's slower ticks; Renew and
+/// Corruption cast again starting their interval over.
+#[tokio::test]
+async fn real_shields_food_and_periodic_cadence() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_m, mage, map) = enter(&realm, "P3JTICK1", "Ticka", Race::Human, Class::Mage).await;
+    let out = on(&map, move |m| {
+        ready(m, mage, 50, &[]);
+        let mana = |m: &Map| m.unit_fields(mage).unwrap().get_u32(UNIT_FIELD_POWER1);
+        let set = |m: &mut Map, health: u32, mana: u32| {
+            let f = m.unit_fields_mut(mage).unwrap();
+            f.set_u32(UNIT_FIELD_HEALTH, health);
+            f.set_u32(UNIT_FIELD_POWER1, mana);
+        };
+        let mut shields = Vec::new();
+        for (talent, _) in IMPROVED_MANA_SHIELD {
+            apply_real_at(m, mage, mage, talent, 50);
+            set(m, 1000, 200);
+            apply_real_at(m, mage, mage, MANA_SHIELD, 50);
+            let soaked = auras::absorb(m, mage, 30, 1);
+            shields.push((soaked, mana(m)));
+            auras::remove_spell(m, mage, MANA_SHIELD, None);
+            auras::remove_spell(m, mage, talent, None);
+        }
+        let max = |m: &Map| {
+            let f = m.unit_fields(mage).unwrap();
+            (
+                f.get_u32(UNIT_FIELD_MAXHEALTH),
+                f.get_u32(UNIT_FIELD_MAXPOWER1),
+            )
+        };
+        let mut food = Vec::new();
+        for (id, _, _) in FOOD_AND_DRINK {
+            set(m, 100, 100);
+            apply_real_at(m, mage, mage, id, 50);
+            let period = ticking(m, mage, id).first().and_then(|t| t.0);
+            come_due(m, mage, id, 0);
+            auras::tick_due(m, mage, id, mage);
+            let (mh, mm) = max(m);
+            food.push((id, period, health(m, mage) - 100, mana(m) - 100, mh, mm));
+            auras::remove_spell(m, mage, id, None);
+        }
+        let mut slow = Vec::new();
+        for (id, _, _) in SLOW_MANA {
+            set(m, 100, 100);
+            apply_real_at(m, mage, mage, id, 50);
+            let period = ticking(m, mage, id).first().and_then(|t| t.0);
+            come_due(m, mage, id, 0);
+            auras::tick_due(m, mage, id, mage);
+            slow.push((id, period, mana(m) - 100, max(m).1));
+            auras::remove_spell(m, mage, id, None);
+        }
+        let kobold = dummy(m, mage, KOBOLD_VERMIN, 50, 5.0);
+        let mut again = Vec::new();
+        for (id, on) in [(RENEW, mage), (CORRUPTION, kobold)] {
+            spells::cast_triggered(m, mage, id, Some(on));
+            // Two and a half seconds on, a tick done: cast again.
+            let soon = m.now + Duration::from_millis(500);
+            if let Some(a) = auras::auras_mut(m, on) {
+                for h in a.holders.iter_mut().filter(|h| h.spell == id) {
+                    for x in h.effects.iter_mut().filter(|x| x.period.is_some()) {
+                        x.next_tick = Some(soon);
+                        x.ticks = 1;
+                    }
+                }
+            }
+            spells::cast_triggered(m, mage, id, Some(on));
+            let now = m.now;
+            again.push((
+                id,
+                ticking(m, on, id)
+                    .into_iter()
+                    .map(|(p, next, ticks)| (p, next.map(|n| n - now), ticks))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        (shields, food, slow, again)
+    })
+    .await;
+    let (shields, food, slow, again) = out;
+    for ((soaked, mana), (talent, left)) in shields.into_iter().zip(IMPROVED_MANA_SHIELD) {
+        assert_eq!(
+            (soaked, mana),
+            ((0, 30), left),
+            "{talent}: less mana a point"
+        );
+    }
+    for ((id, period, health, mana, mh, mm), (_, hp, mp)) in food.into_iter().zip(FOOD_AND_DRINK) {
+        assert_eq!(period, Some(Duration::from_secs(1)), "{id}");
+        assert_eq!((health, mana), (mh * hp / 100, mm * mp / 100), "{id}");
+    }
+    for ((id, period, mana, mm), (_, secs, pct)) in slow.into_iter().zip(SLOW_MANA) {
+        assert_eq!(
+            (period, mana),
+            (Some(Duration::from_secs(secs)), mm * pct / 100),
+            "{id}"
+        );
+    }
+    let three = Some(Duration::from_secs(3));
+    for (id, ticks) in again {
+        assert_eq!(ticks, vec![(three, three, 0)], "{id} starts over");
+    }
 }
