@@ -165,6 +165,8 @@ pub enum ArrivalKind {
 pub struct MapHandle {
     pub key: MapKey,
     tx: mpsc::UnboundedSender<MapEvent>,
+    /// What the actor tells the watchdog.
+    pulse: Arc<crate::game::supervisor::Pulse>,
 }
 
 impl std::fmt::Debug for MapHandle {
@@ -181,6 +183,10 @@ impl MapHandle {
     /// Whether the actor has gone: what is sent is lost.
     pub fn is_closed(&self) -> bool {
         self.tx.is_closed()
+    }
+
+    pub fn pulse(&self) -> &crate::game::supervisor::Pulse {
+        &self.pulse
     }
 
     pub fn call(&self, f: impl FnOnce(&mut Map) + Send + 'static) -> bool {
@@ -225,7 +231,11 @@ impl Maps {
             tracing::error!("{key}'s actor has gone; starting it again");
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let handle = MapHandle { key, tx };
+        let handle = MapHandle {
+            key,
+            tx,
+            pulse: Default::default(),
+        };
         let map = Map::new(key, realm.clone(), handle.clone());
         tokio::spawn(run(map, rx));
         handles.insert(key, handle.clone());
@@ -413,6 +423,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        map.handle.pulse.beat(rx.len());
         tokio::select! {
             event = rx.recv() => {
                 let Some(event) = event else { break };

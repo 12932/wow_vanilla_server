@@ -519,3 +519,101 @@ async fn a_map_whose_actor_has_gone_is_started_again() {
     assert_eq!(new.query(|m| m.key).await, Some(key));
     assert_eq!(try_login(&mut a, g).await, Ok(()));
 }
+
+/// The watchdog says when a map has been in one event or update too long
+/// (an endless loop), and when it is going again; and when a map's
+/// mailbox grows past what it can keep up with.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_watchdog_sees_a_map_hang_and_a_mailbox_swell() {
+    use crate::game::supervisor::{Alarm, Limits, Watched};
+    let mut watched = Watched::default();
+    let mut check =
+        |realm: &Realm, limits| crate::game::supervisor::check(realm, limits, &mut watched);
+    let realm = harness::realm();
+    let key = MapKey::world(0);
+    let map = realm.maps.get(&realm, key);
+    map.query(|_| ()).await.unwrap();
+    let limits = Limits {
+        hung_after: Duration::from_millis(500),
+        mailbox: 500,
+    };
+    assert_eq!(check(&realm, limits), []);
+    // Stuck in one event for a second.
+    map.call(|_| std::thread::sleep(Duration::from_millis(1200)));
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let alarms = check(&realm, limits);
+    assert!(
+        matches!(alarms[..], [Alarm::Hung(k, _)] if k == key),
+        "{alarms:?}"
+    );
+    assert_eq!(check(&realm, limits), [], "said once");
+    map.query(|_| ()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(check(&realm, limits), [Alarm::Back(key)]);
+    // Sent more than it can get through: each event takes a millisecond.
+    for _ in 0..2_000 {
+        map.call(|_| std::thread::sleep(Duration::from_millis(1)));
+    }
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let alarms = check(&realm, limits);
+    assert!(
+        alarms
+            .iter()
+            .any(|a| matches!(a, Alarm::Swamped(k, n) if *k == key && *n >= 500)),
+        "{alarms:?}"
+    );
+    map.query(|_| ()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(check(&realm, limits).contains(&Alarm::Drained(key)));
+}
+
+/// The panic hook logs a panic through tracing with where it happened, and
+/// a backtrace the first time at that place only.
+#[test]
+fn the_panic_hook_logs_where_once_with_a_backtrace() {
+    use std::io::Write;
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<parking_lot::Mutex<Vec<u8>>>);
+    impl Write for Buffer {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let out = Buffer::default();
+    let writer = out.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    crate::game::supervisor::install_panic_hook();
+    let line = std::sync::atomic::AtomicU32::new(0);
+    tracing::subscriber::with_default(subscriber, || {
+        for _ in 0..2 {
+            let _ = std::panic::catch_unwind(|| {
+                line.store(line!() + 1, std::sync::atomic::Ordering::Relaxed);
+                panic!("a test's panic");
+            });
+        }
+    });
+    let _ = std::panic::take_hook();
+    let at = format!(
+        "{}:{}:17",
+        file!(),
+        line.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    assert_eq!(crate::game::supervisor::seen(&at), 2, "{at}");
+    let log = String::from_utf8(out.0.lock().clone()).unwrap();
+    let said = format!("at {at}: a test's panic");
+    assert_eq!(log.matches(&said).count(), 2, "{log}");
+    assert_eq!(log.matches("a test's panic").count(), 2, "{log}");
+    assert_eq!(
+        log.matches("its backtrace is at the first").count(),
+        1,
+        "{log}"
+    );
+    assert!(log.contains("ERROR"), "{log}");
+}
