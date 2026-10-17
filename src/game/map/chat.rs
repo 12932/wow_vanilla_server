@@ -221,10 +221,28 @@ fn may_emote(map: &Map, g: Guid) -> bool {
     })
 }
 
+/// What an animation ends (Thistle Tea's `Emote.interrupt`): a channel
+/// its interrupt flags say an animation ends, and such auras.
+fn animation_interrupts(map: &mut Map, g: Guid) {
+    const ANIMATION: u32 = crate::game::map::auras::INTERRUPT_ENTER_COMBAT;
+    let channel = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell);
+    let breaks = channel
+        .and_then(|s| map.realm.data.spells.get(s))
+        .is_some_and(|s| s.channel_interrupt_flags & ANIMATION != 0);
+    if breaks {
+        crate::game::map::spells::interrupt(map, g);
+    }
+    crate::game::map::auras::interrupt(map, g, ANIMATION);
+}
+
 /// An emote's animation: a state the player stays in, or played once to
 /// everyone who sees them; and the auras an animation ends.
 pub fn play_animation(map: &mut Map, g: Guid, emote: u32) {
-    crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_ENTER_COMBAT);
+    animation_interrupts(map, g);
     if emote == 0 || map.realm.data.emote_states.contains(&emote) {
         if let Some(p) = map.players.get_mut(&g) {
             p.fields
@@ -259,7 +277,7 @@ pub fn stand_state(map: &mut Map, g: Guid, state: wow_world_messages::vanilla::U
     p.set_stand_state(posture);
     p.outbound
         .send(&wow_world_messages::vanilla::SMSG_STANDSTATE_UPDATE { state });
-    crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_ENTER_COMBAT);
+    animation_interrupts(map, g);
     if posture == 0 {
         crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_NOT_SEATED);
     }

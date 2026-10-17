@@ -119,6 +119,8 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     let old_cell = p.cell;
     let before = p.movement.position;
     let f = &info.flags;
+    let was_swimming = p.movement.flags.get_swimming().is_some();
+    let swimming = f.get_swimming().is_some();
     let translating = f.get_forward() || f.get_backward() || f.get_strafe_left() || f.get_strafe_right();
     let moved = translating || crate::game::map::combat::dist(before, info.position) > 0.0;
     let turned = f.get_turn_left()
@@ -137,6 +139,13 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
         map.send_to_observers(guid, &frame, false);
     }
     body_moved(map, guid, moved, turned);
+    // Into the water or out of it: the auras that ends (Thistle Tea's
+    // `interrupt_water_auras`).
+    if was_swimming != swimming {
+        use crate::game::map::auras::{INTERRUPT_ABOVE_WATER, INTERRUPT_UNDER_WATER};
+        let mask = if swimming { INTERRUPT_UNDER_WATER } else { INTERRUPT_ABOVE_WATER };
+        crate::game::map::auras::interrupt(map, guid, mask);
+    }
     if let Some(drop) = fall {
         fall_damage(map, guid, drop);
     }
