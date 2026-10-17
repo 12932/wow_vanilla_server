@@ -632,7 +632,7 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
 /// vmangos's `ThreatManager`: a taunter while the taunt lasts; otherwise
 /// the current victim, until another passes its threat by a tenth in
 /// melee range or three tenths beyond.
-fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
+pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     let Some(c) = map.creature(g) else {
         return current;
     };

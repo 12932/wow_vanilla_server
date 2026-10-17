@@ -27,6 +27,8 @@ mod tests_combat2;
 #[cfg(test)]
 mod tests_combat3;
 #[cfg(test)]
+mod tests_combat5;
+#[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
 mod tests_loot;
