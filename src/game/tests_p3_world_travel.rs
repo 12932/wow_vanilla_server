@@ -469,3 +469,95 @@ fn a_ship_and_a_zeppelin_are_open_to_the_sky_only_at_their_deck_spots() {
         "no such transport"
     );
 }
+
+#[test]
+fn the_real_taxi_tables_have_stormwinds_node_the_spells_paths_and_the_bank_slots_prices() {
+    let Some(d) = crate::game::data::load::real_data() else {
+        return;
+    };
+    // Stormwind's node: where it is, and the Alliance's gryphon's look.
+    let n = &d.npc.taxi_nodes[&2];
+    assert_eq!(n.name, "Stormwind, Elwynn");
+    assert!(
+        (n.x + 8840.56).abs() < 0.01 && (n.y - 489.7).abs() < 0.01 && (n.z - 109.61).abs() < 0.01
+    );
+    let gryphon = d.creature_template(n.mounts[0]).unwrap();
+    assert_eq!(
+        gryphon.display_ids.iter().copied().find(|x| *x != 0),
+        Some(6852)
+    );
+    // The paths spells send players along (SEND_TAXI).
+    let mut spell_paths: Vec<u32> = d
+        .spells
+        .spells
+        .values()
+        .flat_map(|s| s.effects.iter())
+        .filter(|e| e.effect == 123 && e.misc_value > 0)
+        .map(|e| e.misc_value as u32)
+        .collect();
+    spell_paths.sort_unstable();
+    spell_paths.dedup();
+    assert_eq!(spell_paths, vec![315, 316, 472, 494, 495, 496]);
+    // The bank's six bag slots' prices (the table's seventh a sentinel).
+    let prices: Vec<Option<u32>> = (1..=6)
+        .map(|i| d.npc.bank_slot_prices.get(&i).copied())
+        .collect();
+    assert_eq!(
+        prices,
+        vec![
+            Some(1_000),
+            Some(10_000),
+            Some(100_000),
+            Some(250_000),
+            Some(500_000),
+            Some(1_000_000)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_bank_sells_six_bag_slots_and_no_seventh() {
+    let mut d = world();
+    d.creature_templates
+        .insert(90_410, creature(90_410, "Banker", 0x100, 1));
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 9_410,
+        entries: vec![90_410],
+        map: 0,
+        x: START.0 - 2.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    for (slot, price) in [(1, 1_000), (6, 1_000_000), (7, 999_999_999)] {
+        d.npc.bank_slot_prices.insert(slot, price);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let banker = guid::unit(90_410, 9_410);
+    a.sees(banker).await;
+    map(&realm)
+        .query(move |m| {
+            let p = m.players.get_mut(&g).unwrap();
+            p.fields.set_byte(PLAYER_BYTES_2, 2, 6);
+            p.set_money(2_000_000_000);
+        })
+        .await;
+    a.send(CMSG_BUY_BANK_SLOT { guid: banker }).await;
+    let result = a
+        .wait_for("SMSG_BUY_BANK_SLOT_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(r) => Some(r.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(result, BuyBankSlotResult::FailedTooMany);
+    let (slots, money) = map(&realm)
+        .query(move |m| {
+            let p = &m.players[&g];
+            (p.fields.get_byte(PLAYER_BYTES_2, 2), p.money())
+        })
+        .await
+        .unwrap();
+    assert_eq!((slots, money), (6, 2_000_000_000));
+}

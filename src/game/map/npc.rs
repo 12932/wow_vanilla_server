@@ -652,6 +652,9 @@ pub fn banker(map: &mut Map, player: Guid, npc: Guid) {
 }
 
 /// `CMSG_BUY_BANK_SLOT`: one more bank bag slot.
+/// The bank's bag slots.
+pub const MAX_BANK_BAG_SLOTS: u8 = 6;
+
 pub fn buy_bank_slot(map: &mut Map, player: Guid, npc: Guid) {
     let banker = npc_entry(map, player, npc, NPC_FLAG_BANKER).is_some();
     let data = map.realm.data.clone();
@@ -662,7 +665,14 @@ pub fn buy_bank_slot(map: &mut Map, player: Guid, npc: Guid) {
         BuyBankSlotResult::NotBanker
     } else {
         let slots = p.fields.get_byte(PLAYER_BYTES_2, 2);
-        match data.npc.bank_slot_prices.get(&(u32::from(slots) + 1)) {
+        // Six bag slots in the bank, however many prices the table has
+        // (its seventh, 999,999,999, a sentinel; Thistle Tea's six).
+        match data
+            .npc
+            .bank_slot_prices
+            .get(&(u32::from(slots) + 1))
+            .filter(|_| slots < MAX_BANK_BAG_SLOTS)
+        {
             None => BuyBankSlotResult::FailedTooMany,
             Some(price) if p.money() < *price => BuyBankSlotResult::InsufficientFunds,
             Some(price) => {
