@@ -591,7 +591,9 @@ async fn triage(realm: &Arc<Realm>) {
 
 /// An escort under way, hurried: the escortee walks fast, sets out at
 /// once, and its player keeps up, until `quest` is done and the escort
-/// over (leaving it sooner fails the quest).
+/// over (leaving it sooner fails the quest). The creatures it passes are
+/// kept off it: an escort waits out its fights (as it should), and a pack
+/// along the way could hold it past any wait, or kill it.
 async fn hurry_escort(map: &MapHandle, g: Guid, escortee: u32, quest: u32) -> bool {
     // A minute at most: a loaded machine can take a while over the walk.
     for _ in 0..2000 {
@@ -604,9 +606,18 @@ async fn hurry_escort(map: &MapHandle, g: Guid, escortee: u32, quest: u32) -> bo
                     .filter(|(_, c)| c.entry == escortee && c.alive())
                     .map(|(_, c)| c.guid)
                     .find(|c| m.escorts.iter().any(|e| e.creature == *c));
+                if let Some(w) = who
+                    && m.creature(w).is_some_and(|c| c.combat.attacking)
+                {
+                    crate::game::map::ai::forget(m, w);
+                    crate::game::map::combat::leave_combat(m, w);
+                }
                 if let Some(c) = who.and_then(|w| m.creature_mut(w)) {
                     c.speeds.walk = 60.0;
                     c.speeds.run = 60.0;
+                    let max = c.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH);
+                    c.fields
+                        .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
                     let at = c.position;
                     if let Some(p) = m.players.get_mut(&g) {
                         p.movement.position = at;
@@ -623,6 +634,26 @@ async fn hurry_escort(map: &MapHandle, g: Guid, escortee: u32, quest: u32) -> bo
             return true;
         }
     }
+    // Why not: where the escortee is, and what it is doing.
+    let state = map
+        .query(move |m| {
+            m.creatures
+                .iter()
+                .filter(|(_, c)| c.entry == escortee)
+                .map(|(_, c)| {
+                    format!(
+                        "{:?} alive {} fighting {} at {:?} motion {:?}",
+                        c.guid,
+                        c.alive(),
+                        c.combat.attacking,
+                        c.position,
+                        c.motion
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .await;
+    eprintln!("escort for {quest} not over: {state:?}");
     false
 }
 
