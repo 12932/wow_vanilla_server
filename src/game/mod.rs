@@ -37,6 +37,8 @@ mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
 #[cfg(test)]
+mod tests_taming;
+#[cfg(test)]
 mod tests_gifts;
 #[cfg(test)]
 mod tests_misc;

@@ -24,6 +24,7 @@ pub mod eyes;
 mod hunter;
 mod inherit;
 mod possess;
+pub mod rods;
 mod summon;
 mod totems;
 
@@ -291,6 +292,7 @@ pub fn handles(s: &SpellTemplate, index: usize) -> bool {
                 | EFFECT_SUMMON_DEMON
                 | EFFECT_APPLY_AREA_AURA_PET
     ) || (s.id == SPELL_TAME_BEAST_TICK && e == 3)
+        || (s.id == rods::SPELL_DESPAWN_CASTER && e == 3)
         || teaches_pet(s, index)
         || crate::game::map::trinkets::handles(s)
 }
@@ -347,6 +349,7 @@ pub fn effect(
                 Some(target),
             );
         }
+        3 if s.id == rods::SPELL_DESPAWN_CASTER => rods::despawn(map, caster),
         EFFECT_TAME_CREATURE => hunter::tame(map, caster, target, s.id),
         EFFECT_SUMMON_PET => {
             if e.misc_value > 0 {
@@ -734,6 +737,11 @@ pub fn uncharmed(map: &mut Map, master: Guid, unit: Guid) {
 /// Let a charmed or possessed unit go: its own faction again, and (alive)
 /// it turns on its master.
 fn release(map: &mut Map, master: Guid, unit: Guid) {
+    let_go(map, master, unit, true);
+}
+
+/// Let a charmed or possessed unit go, turning on its master if `turn`.
+fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
     let Some(s) = map.creature_mut(unit).and_then(|c| c.pet.take()) else {
         return;
     };
@@ -801,7 +809,7 @@ fn release(map: &mut Map, master: Guid, unit: Guid) {
         return;
     }
     let alive = map.unit_view(unit).is_some_and(|u| u.alive);
-    if alive && crate::game::map::combat::can_attack(map, unit, master) {
+    if turn && alive && crate::game::map::combat::can_attack(map, unit, master) {
         crate::game::map::ai::attacked(map, unit, master);
     }
 }
