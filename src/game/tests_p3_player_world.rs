@@ -118,13 +118,13 @@ async fn the_innkeeper_binds_only_one_near_and_alive_and_the_home_is_told_at_eve
     // Too far by the time it is asked: no bind.
     a.heartbeat(START.0 + 40.0, START.1, START.2).await;
     a.clear();
-    a.send(activate.clone()).await;
+    a.send(activate).await;
     assert!(!bound(&mut a).await, "out of reach");
     // Dead: none either.
     a.heartbeat(START.0, START.1, START.2).await;
     on_map(&realm, move |m| crate::game::map::death::kill(m, g)).await;
     a.clear();
-    a.send(activate.clone()).await;
+    a.send(activate).await;
     assert!(!bound(&mut a).await, "dead");
     on_map(&realm, move |m| {
         crate::game::map::death::resurrect(m, g, 1.0);
