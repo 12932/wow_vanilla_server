@@ -674,6 +674,15 @@ pub fn killed(map: &mut Map, player: Guid, creature: Guid) {
     credit(map, player, creature, 0, &allowed);
 }
 
+/// A creature's gossip closed by an option: talking to it, credit for the
+/// quests asking for it with no spell, as mangos's TalkedToCreature and
+/// Thistle Tea's `credit_talk` give it; not those waiting on an event.
+pub fn talked(map: &mut Map, player: Guid, creature: Guid) {
+    if guid::is_unit(creature) {
+        credit(map, player, creature, 0, &|q: &Quest| !q.needs_event());
+    }
+}
+
 /// The entry a creature or object is now (a script may have changed
 /// it, as a cured beast's), not the one its GUID was made with.
 pub fn entry_of(map: &Map, g: Guid) -> u32 {
