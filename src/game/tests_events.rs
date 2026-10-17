@@ -537,6 +537,38 @@ fn hurry(m: &mut Map, g: Guid) {
     }
 }
 
+/// Creature `g`'s out-of-combat timers held off an hour: a patient's
+/// bleeding, so a test's pace (a loaded machine's) doesn't bleed it out,
+/// as it doesn't regenerate (Thistle Tea's `set_regeneration` 0).
+fn stanch(m: &mut Map, g: Guid) {
+    let later = m.now + Duration::from_secs(3600);
+    let Some(entry) = m.creature(g).map(|c| c.entry) else {
+        return;
+    };
+    let bleeds: Vec<usize> = m
+        .realm
+        .data
+        .scripts
+        .ai_events
+        .get(&entry)
+        .map(|events| {
+            events
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.kind == crate::game::data::scripts::EVENT_TIMER_OOC)
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
+        for i in bleeds {
+            if let Some(t) = s.timers.get_mut(i) {
+                *t = Some(later);
+            }
+        }
+    }
+}
+
 /// Triage: the doctor lays the wounded in his bunks; fifteen bandaged
 /// before six die do it.
 async fn triage(realm: &Arc<Realm>) {
@@ -557,18 +589,26 @@ async fn triage(realm: &Arc<Realm>) {
         let next = map
             .query(move |m| {
                 hurry(m, doctor);
-                m.creatures
+                let wounded: Vec<Guid> = m
+                    .creatures
                     .iter()
                     .filter(|(_, c)| WOUNDED.contains(&c.entry) && c.alive())
                     .map(|(_, c)| c.guid)
-                    .find(|w| !seen.contains(w))
+                    .collect();
+                for w in &wounded {
+                    stanch(m, *w);
+                }
+                let w = wounded.into_iter().find(|w| !seen.contains(w))?;
+                Some((w, m.position_of(w)?))
             })
             .await
             .flatten();
-        let Some(wounded) = next else {
+        let Some((wounded, at)) = next else {
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         };
+        // Beside the patient's bunk, as a bandage's reach is short.
+        put(&map, &mut c, beside(at)).await;
         use_on(&mut c, &map, BANDAGE, wounded).await;
         until(&map, move |m| {
             m.players[&g]
