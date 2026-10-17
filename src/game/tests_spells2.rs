@@ -459,7 +459,8 @@ async fn eating_still_level_scaled_costs_and_spell_areas() {
             const MOONSTALKER: u32 = 6298;
             const BLESSING: u32 = 31906;
             const BLESSED: u32 = 30238;
-            ready(m, g, 60, &[FOOD, MOONSTALKER]);
+            const DRAUGHT: u32 = 21393;
+            ready(m, g, 60, &[FOOD, MOONSTALKER, DRAUGHT]);
             let data = m.realm.data.clone();
             let mods = spells::mods::Mods::default();
             let at_self = Targets {
@@ -481,6 +482,9 @@ async fn eating_still_level_scaled_costs_and_spell_areas() {
             let tap = spells::power_cost(m, g, &life_tap);
             let tap_capped = life_tap.mana_cost
                 + life_tap.mana_cost_per_level * (life_tap.max_level - life_tap.base_level);
+            // A Healing Draught is for battlegrounds.
+            let draught = data.spells.get(DRAUGHT).unwrap().clone();
+            let outside = spells::checks::check(m, g, &draught, &at_self, None, false, &mods);
             // Form of the Moonstalker is for Darkshore only.
             let moon = data.spells.get(MOONSTALKER).unwrap().clone();
             let away = spells::checks::check(m, g, &moon, &at_self, None, false, &mods);
@@ -518,11 +522,18 @@ async fn eating_still_level_scaled_costs_and_spell_areas() {
                 unblessed,
                 had,
                 left,
+                outside,
             )
         })
         .await
         .unwrap();
-    let (walking, still, scaled, base, tap, tap_capped, away, there, unblessed, had, left) = out;
+    let (walking, still, scaled, base, tap, tap_capped, away, there, unblessed, had, left, outside) =
+        out;
+    assert_eq!(
+        outside,
+        Some(spells::fail::ONLY_BATTLEGROUNDS),
+        "a draught outside"
+    );
     assert_eq!(walking, Some(spells::fail::MOVING), "no eating on the move");
     assert_ne!(still, Some(spells::fail::MOVING), "standing still, food");
     // 260 / (1.117 * 20 / 60 - 0.1327) = 1084.99, truncated.
@@ -635,4 +646,35 @@ async fn a_buff_too_high_for_its_target_goes_on_at_a_lower_rank() {
     let (on, kept) = out;
     assert_eq!(on, vec![1245], "rank 3, for a level 20");
     assert_eq!(kept, vec![g], "the group buff passes over the low one");
+}
+
+#[tokio::test]
+async fn hallows_end_tricks_treats_and_costumes() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let mut c = Client::connect(&realm, "HALLOW1");
+    let a = c.enter("Hallowa", Race::Human, Class::Warrior).await;
+    let mut d = Client::connect(&realm, "HALLOW2");
+    let b = d.enter("Hallowb", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            const PIRATE_WAND: u32 = 24717;
+            const PIRATE: [u32; 2] = [24708, 24709];
+            ready(m, a, 60, &[]);
+            ready(m, b, 60, &[]);
+            // An innkeeper's Trick or Treat.
+            let innkeeper = dummy(m, a, 60, 3.0);
+            spells::cast_triggered(m, innkeeper, 24751, Some(a));
+            let marked = auras::auras(m, a).is_some_and(|x| x.has_spell(24755));
+            // A Hallowed Wand dresses its target as a pirate.
+            spells::cast_triggered(m, a, PIRATE_WAND, Some(b));
+            let pirate = auras::auras(m, b).is_some_and(|x| PIRATE.iter().any(|p| x.has_spell(*p)));
+            (marked, pirate)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true), "tricked or treated, and a pirate");
 }
