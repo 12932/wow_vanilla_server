@@ -145,6 +145,9 @@ pub struct ClassLevelStats {
     pub attack_power: u32,
     pub ranged_attack_power: u32,
     pub armor: u32,
+    /// For a creature's mana in a fight.
+    pub intellect: u32,
+    pub spirit: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
