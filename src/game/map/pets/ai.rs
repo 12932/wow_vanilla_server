@@ -42,7 +42,18 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         .players
         .get(&owner)
         .is_some_and(|p| p.death != crate::game::map::death::Death::Alive);
-    if owner_dead && matches!(kind, Kind::Totem | Kind::Guardian | Kind::Critter) {
+    // A guardian's time waits while it fights (Thistle Tea's
+    // `TemporarySummon`), and it outlives a dead master while it fights,
+    // or as a corpse (`Guardian.lifetime`).
+    let fighting = kind == Kind::Guardian
+        && map.unit_fields(g).is_some_and(|f| {
+            f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+        });
+    let stays = kind == Kind::Guardian && (fighting || !alive);
+    if owner_dead && matches!(kind, Kind::Totem | Kind::Guardian | Kind::Critter) && !stays {
         summon::remove(map, g);
         return;
     }
@@ -58,15 +69,6 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         }
         inherit::sync(map, g);
     }
-    // A guardian's time waits while it fights (Thistle Tea's
-    // `TemporarySummon`).
-    let fighting = kind == Kind::Guardian
-        && map.unit_fields(g).is_some_and(|f| {
-            f.has_flag(
-                UNIT_FIELD_FLAGS,
-                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-            )
-        });
     if expires.is_some_and(|t| t <= now) && !fighting {
         // The Explosive Sheep's and the Goblin Bomb's time ends in a blast.
         if crate::game::map::item_scripts::guardian_expired(map, g) {
