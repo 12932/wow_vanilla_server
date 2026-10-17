@@ -54,22 +54,28 @@ pub fn complete(p: &Player, q: &Quest, l: &Logged) -> bool {
     true
 }
 
-/// Whether `p` may take `q`.
+/// Whether `p` may take `q` (Thistle Tea's `QuestRequirements`, after
+/// mangos' `CanTakeQuest`): not on it or done with it, no second timed
+/// quest, the race, class, skill and standings, what it depends on, and
+/// the level.
 pub fn can_take(p: &Player, q: &Quest, data: &GameData) -> bool {
     let j = &p.journal;
-    if j.has(q.id) {
+    if j.has(q.id) || rewarded(p, data, q.id) {
         return false;
     }
-    if j.rewarded.contains(&q.id) && q.special_flags & QUEST_SPECIAL_REPEATABLE == 0 {
-        return false;
-    }
-    if p.level() < q.min_level {
+    if q.limit_time > 0 && j.log.iter().any(|l| l.expires != 0 && !l.failed) {
         return false;
     }
     if q.required_races != 0 && q.required_races & (1 << (p.row.race - 1)) == 0 {
         return false;
     }
     if q.required_classes != 0 && q.required_classes & (1 << (p.row.class - 1)) == 0 {
+        return false;
+    }
+    if q.required_skill != 0
+        && crate::game::map::skills::value_with_bonuses(p, q.required_skill)
+            < q.required_skill_value
+    {
         return false;
     }
     // A standing at least, and below.
@@ -81,23 +87,74 @@ pub fn can_take(p: &Player, q: &Quest, data: &GameData) -> bool {
     if max_f != 0 && crate::game::map::reputation::standing(p, data, max_f) >= max_v {
         return false;
     }
-    if q.prev_quest > 0 && !j.rewarded.contains(&(q.prev_quest as u32)) {
+    if !dependencies_met(p, q, data) {
         return false;
     }
-    if q.prev_quest < 0 && !j.has(q.prev_quest.unsigned_abs()) {
+    p.level() >= q.min_level
+}
+
+/// Rewarded, and not to be done again.
+fn rewarded(p: &Player, data: &GameData, quest: u32) -> bool {
+    p.journal.rewarded.contains(&quest)
+        && data
+            .npc
+            .quests
+            .get(&quest)
+            .is_none_or(|q| q.special_flags & QUEST_SPECIAL_REPEATABLE == 0)
+}
+
+/// On it, or done with it for good.
+fn taken(p: &Player, data: &GameData, quest: u32) -> bool {
+    p.journal.has(quest) || rewarded(p, data, quest)
+}
+
+/// What `q` depends on: its prerequisites met; none of its exclusive group,
+/// nor its chain's next, taken; its chain's previous, and any breadcrumb to
+/// it, not on; and, a breadcrumb, the quests it leads to still to be had.
+fn dependencies_met(p: &Player, q: &Quest, data: &GameData) -> bool {
+    let g = data.npc.quest_graph();
+    let j = &p.journal;
+    if g.invalid.contains(&q.id) {
         return false;
     }
-    if q.exclusive_group > 0 {
-        let taken = data.npc.quests.values().any(|o| {
-            o.exclusive_group == q.exclusive_group
-                && o.id != q.id
-                && (j.rewarded.contains(&o.id) || j.has(o.id))
-        });
-        if taken {
+    if let Some(pre) = g.prerequisites.get(&q.id) {
+        let state = |quest: u32, current: bool| {
+            if current {
+                j.has(quest)
+            } else {
+                j.rewarded.contains(&quest)
+            }
+        };
+        // The first met decides, with all of its group.
+        let met = pre
+            .iter()
+            .find(|x| state(x.quest, x.current))
+            .is_some_and(|x| x.group.iter().all(|o| state(*o, x.current)));
+        if !met {
             return false;
         }
     }
-    true
+    if g.exclusive
+        .get(&q.id)
+        .is_some_and(|o| o.iter().any(|x| taken(p, data, *x)))
+    {
+        return false;
+    }
+    if q.next_in_chain != 0 && taken(p, data, q.next_in_chain) {
+        return false;
+    }
+    let on = |v: Option<&Vec<u32>>| v.is_some_and(|v| v.iter().any(|x| j.has(*x)));
+    if on(g.previous_chain.get(&q.id)) || on(g.breadcrumbs_to.get(&q.id)) {
+        return false;
+    }
+    g.breadcrumb_targets.get(&q.id).is_none_or(|targets| {
+        targets.iter().all(|t| {
+            data.npc
+                .quests
+                .get(t)
+                .is_some_and(|tq| can_take(p, tq, data))
+        })
+    })
 }
 
 /// Whether `p` is a few levels short of `q`: shown as unavailable.
@@ -205,6 +262,94 @@ fn near_giver(map: &Map, player: Guid, giver: Guid) -> bool {
     crate::game::map::combat::dist(p.position(), pos) <= crate::game::map::vendor::NPC_YARDS + 2.0
 }
 
+/// Whether `giver`, beside `player`, takes `quest` back (mangos'
+/// `HasInvolvedQuest`).
+fn ends_here(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
+    relations(map, giver).1.contains(&quest) && near_giver(map, player, giver)
+}
+
+/// `GAMEOBJECT_DYN_FLAGS`: usable for a quest.
+const GO_DYNFLAG_ACTIVATE: u32 = 0x1;
+const GO_QUESTGIVER: u8 = 2;
+const GO_GOOBER: u8 = 10;
+
+/// Whether a quest object is usable to `player`: a quest giver with
+/// something for them, a goober for a quest of theirs under way, or for
+/// anyone (Thistle Tea's `QuestGivers`, mangos' `ActivateToQuest`).
+fn activates(map: &Map, player: Guid, object: Guid, kind: u8, data: &[u32; 24]) -> bool {
+    if kind == GO_QUESTGIVER {
+        return !giver_quests(map, player, object).is_empty();
+    }
+    let Some(p) = map.players.get(&player) else {
+        return false;
+    };
+    let quests = &map.realm.data.npc.quests;
+    let under_way = |l: &Logged| quests.get(&l.quest).is_some_and(|q| !complete(p, q, l));
+    let entry = guid::entry(object) as i32;
+    data[1] as i32 == -1
+        || p.journal.log.iter().any(|l| {
+            under_way(l)
+                && (l.quest == data[1]
+                    || quests.get(&l.quest).is_some_and(|q| {
+                        q.required_kills
+                            .iter()
+                            .enumerate()
+                            .any(|(i, (id, n))| *id == -entry && l.kills[i] < *n)
+                    }))
+        })
+}
+
+/// Every few updates: each player's quest objects shown as usable to them
+/// or not, as their quests stand.
+pub fn update_objects(map: &mut Map) {
+    if !map.stats.updates.is_multiple_of(10) {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let players: Vec<Guid> = map.players.keys().copied().collect();
+    for g in players {
+        let known: Vec<Guid> = map.players[&g]
+            .known
+            .iter()
+            .copied()
+            .filter(|k| guid::is_game_object(*k))
+            .collect();
+        let mut changed = Vec::new();
+        for o in known {
+            let Some(t) = map
+                .gameobject(o)
+                .and_then(|x| data.gameobject_templates.get(&x.entry))
+                .filter(|t| matches!(t.kind, GO_QUESTGIVER | GO_GOOBER))
+            else {
+                continue;
+            };
+            let on = activates(map, g, o, t.kind, &t.data);
+            if on != map.players[&g].quest_objects.contains(&o) {
+                changed.push((o, on));
+            }
+        }
+        let Some(p) = map.players.get_mut(&g) else {
+            continue;
+        };
+        p.quest_objects.retain(|o| p.known.contains(o));
+        for (o, on) in changed {
+            let flag = if on { GO_DYNFLAG_ACTIVATE } else { 0 };
+            let mut f = Fields::new(TypeId::GameObject, o, guid::entry(o));
+            f.set_u32(GAMEOBJECT_DYN_FLAGS, flag ^ GO_DYNFLAG_ACTIVATE);
+            f.clear_dirty();
+            f.set_u32(GAMEOBJECT_DYN_FLAGS, flag);
+            if on {
+                p.quest_objects.insert(o);
+            } else {
+                p.quest_objects.remove(&o);
+            }
+            if let Some(block) = crate::game::update::values_block(o, &f, Visibility::Public) {
+                map.batches.entry(g).or_default().push(&block);
+            }
+        }
+    }
+}
+
 /// `CMSG_QUESTGIVER_STATUS_QUERY`.
 pub fn status_query(map: &Map, player: Guid, giver: Guid) {
     let s = status(map, player, giver);
@@ -245,6 +390,27 @@ pub fn hello(map: &mut Map, player: Guid, giver: Guid) {
             emote: 0,
             quest_items: quests,
         });
+    }
+}
+
+/// `CMSG_GAMEOBJ_USE` on a quest giver (a present under the tree, a wanted
+/// poster): its menu with its quests, or just its quests (mangos'
+/// `PrepareGossipMenu`, then `SendPreparedGossip`).
+pub fn object_hello(map: &mut Map, player: Guid, object: Guid) {
+    let menu = map
+        .gameobject(object)
+        .and_then(|o| map.realm.data.gameobject_templates.get(&o.entry))
+        .map_or(0, |t| t.data[3]);
+    let menu = if map.realm.data.npc.gossip_menus.contains_key(&menu) {
+        menu
+    } else {
+        0
+    };
+    if menu == 0 && !giver_quests(map, player, object).is_empty() {
+        return hello(map, player, object);
+    }
+    if near_giver(map, player, object) {
+        crate::game::map::npc::show_menu(map, player, object, menu, 0);
     }
 }
 
@@ -536,6 +702,9 @@ pub fn complete_quest(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     let Some(q) = data.npc.quests.get(&quest) else {
         return;
     };
+    if !ends_here(map, player, giver, quest) {
+        return;
+    }
     let Some(p) = map.players.get(&player) else {
         return;
     };
@@ -590,6 +759,9 @@ pub fn offer_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     let Some(q) = data.npc.quests.get(&quest) else {
         return;
     };
+    if !ends_here(map, player, giver, quest) {
+        return;
+    }
     let Some(p) = map.players.get(&player) else {
         return;
     };
@@ -655,6 +827,9 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     let Some(q) = data.npc.quests.get(&quest).cloned() else {
         return;
     };
+    if !ends_here(map, player, giver, quest) {
+        return;
+    }
     let Some(p) = map.players.get(&player) else {
         return;
     };

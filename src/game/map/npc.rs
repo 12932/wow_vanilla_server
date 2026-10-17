@@ -143,7 +143,7 @@ fn menu_options(
         .unwrap_or_default()
 }
 
-fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u32) {
+pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u32) {
     let data = map.realm.data.clone();
     let text = data
         .npc

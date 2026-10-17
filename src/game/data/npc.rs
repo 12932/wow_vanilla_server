@@ -98,6 +98,8 @@ pub struct Quest {
     pub next_quest: i32,
     pub exclusive_group: i32,
     pub next_in_chain: u32,
+    /// A breadcrumb leads to this quest, and isn't taken beside it.
+    pub breadcrumb_for: u32,
     pub source_item: u32,
     pub source_item_count: u32,
     pub limit_time: u32,
@@ -192,6 +194,145 @@ pub struct NpcData {
     pub quest_greetings: AHashMap<u32, String>,
     /// The quests that need each one done first: quest → those after it.
     pub quests_after: AHashMap<u32, Vec<u32>>,
+    /// The quests' dependencies, worked out from `quests` when first asked.
+    pub graph: std::sync::OnceLock<QuestGraph>,
+}
+
+/// A quest that must be rewarded (or, `current`, in the log) first; with a
+/// negative exclusive group, all of its group must be.
+#[derive(Debug, Clone, Default)]
+pub struct Prerequisite {
+    pub quest: u32,
+    pub current: bool,
+    pub group: Vec<u32>,
+}
+
+/// What each quest depends on (Thistle Tea's `QuestGraph`, after mangos'
+/// `prevQuests`): signed prerequisites, its own and those whose next quest
+/// it is; the others of its exclusive group; the chain around it; and the
+/// breadcrumbs that lead to it, or the quests it leads to.
+#[derive(Debug, Clone, Default)]
+pub struct QuestGraph {
+    pub prerequisites: AHashMap<u32, Vec<Prerequisite>>,
+    pub exclusive: AHashMap<u32, Vec<u32>>,
+    /// Quest → the quests whose next in chain it is.
+    pub previous_chain: AHashMap<u32, Vec<u32>>,
+    /// Breadcrumb → the quests it leads to, nearest first.
+    pub breadcrumb_targets: AHashMap<u32, Vec<u32>>,
+    /// Quest → the breadcrumbs that lead to it.
+    pub breadcrumbs_to: AHashMap<u32, Vec<u32>>,
+    /// Breadcrumbs that lead nowhere, or round in a circle.
+    pub invalid: AHashSet<u32>,
+}
+
+impl QuestGraph {
+    pub fn compile(quests: &AHashMap<u32, Quest>) -> Self {
+        let mut g = Self::default();
+        let mut groups: AHashMap<i32, Vec<u32>> = AHashMap::new();
+        let mut incoming: AHashMap<u32, Vec<&Quest>> = AHashMap::new();
+        for q in quests.values() {
+            if q.exclusive_group != 0 {
+                groups.entry(q.exclusive_group).or_default().push(q.id);
+            }
+            if q.next_quest != 0 {
+                incoming
+                    .entry(q.next_quest.unsigned_abs())
+                    .or_default()
+                    .push(q);
+            }
+            if q.next_in_chain != 0 {
+                g.previous_chain
+                    .entry(q.next_in_chain)
+                    .or_default()
+                    .push(q.id);
+            }
+        }
+        for v in groups.values_mut() {
+            v.sort_unstable();
+        }
+        for q in quests.values() {
+            // Where its breadcrumbs go, if it is one.
+            if q.breadcrumb_for != 0 {
+                let mut path = Vec::new();
+                let mut seen = AHashSet::from([q.id]);
+                let mut at = q.breadcrumb_for;
+                loop {
+                    let Some(t) = quests.get(&at).filter(|_| seen.insert(at)) else {
+                        g.invalid.insert(q.id);
+                        break;
+                    };
+                    path.push(at);
+                    if t.breadcrumb_for == 0 {
+                        break;
+                    }
+                    at = t.breadcrumb_for;
+                }
+                if !g.invalid.contains(&q.id) {
+                    for t in &path {
+                        g.breadcrumbs_to.entry(*t).or_default().push(q.id);
+                    }
+                    g.breadcrumb_targets.insert(q.id, path);
+                }
+            }
+            let mut signed: Vec<i64> = Vec::new();
+            if q.prev_quest != 0
+                && quests
+                    .get(&q.prev_quest.unsigned_abs())
+                    .is_some_and(|p| p.breadcrumb_for == 0)
+            {
+                signed.push(i64::from(q.prev_quest));
+            }
+            let mut before = incoming.get(&q.id).cloned().unwrap_or_default();
+            before.sort_by_key(|p| p.id);
+            for p in before {
+                let id = i64::from(p.id);
+                signed.push(if p.next_quest < 0 { -id } else { id });
+            }
+            let mut seen = AHashSet::new();
+            signed.retain(|s| seen.insert(*s));
+            let prereqs: Vec<Prerequisite> = signed
+                .into_iter()
+                .filter_map(|s| {
+                    let p = quests.get(&(s.unsigned_abs() as u32))?;
+                    let group = if p.exclusive_group < 0 {
+                        groups.get(&p.exclusive_group).cloned().unwrap_or_default()
+                    } else {
+                        vec![p.id]
+                    };
+                    Some(Prerequisite {
+                        quest: p.id,
+                        current: s < 0,
+                        group,
+                    })
+                })
+                .collect();
+            if !prereqs.is_empty() {
+                g.prerequisites.insert(q.id, prereqs);
+            }
+            if q.exclusive_group > 0 {
+                let others: Vec<u32> = groups[&q.exclusive_group]
+                    .iter()
+                    .copied()
+                    .filter(|o| *o != q.id)
+                    .collect();
+                g.exclusive.insert(q.id, others);
+            }
+        }
+        for v in g.previous_chain.values_mut() {
+            v.sort_unstable();
+        }
+        for v in g.breadcrumbs_to.values_mut() {
+            v.sort_unstable();
+        }
+        g
+    }
+}
+
+impl NpcData {
+    /// The quests' dependencies.
+    pub fn quest_graph(&self) -> &QuestGraph {
+        self.graph.get_or_init(|| QuestGraph::compile(&self.quests))
+    }
 }
 
 impl NpcData {
