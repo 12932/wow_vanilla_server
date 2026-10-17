@@ -81,6 +81,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     out.send(&SMSG_ACTION_BUTTONS { data: buttons });
     crate::game::map::reputation::send_login(p, &map.realm.data);
     crate::game::map::rest::restore(p, map.now);
+    crate::game::map::intoxication::restore(p);
     crate::game::map::exploration::init(p);
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_SETTIMESPEED {
@@ -182,9 +183,9 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
     let Some(p) = map.players.get(&guid) else {
         return;
     };
-    if p.logout_at.is_some() {
-        return;
-    }
+    // A request during a countdown starts it again, or, refused, ends it
+    // (mangos's `HandleLogoutRequestOpcode`, Thistle Tea's `Logout.request`).
+    let pending = p.logout_at.is_some();
     if let Some(target) = p.looting {
         crate::game::map::loot::release(map, guid, target);
     }
@@ -210,6 +211,9 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         None
     };
     if let Some(result) = refused {
+        if p.logout_at.take().is_some() {
+            undo_logout(p);
+        }
         p.outbound.send(&SMSG_LOGOUT_RESPONSE {
             result,
             speed: LogoutSpeed::Delayed,
@@ -236,6 +240,9 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         return;
     }
     p.logout_at = Some(now + delay);
+    if pending {
+        return;
+    }
     use crate::game::map::auras::{AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_ROOT, AURA_MOD_STUN};
     let held = [
         AURA_MOD_ROOT,

@@ -1690,6 +1690,11 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         s.talents.insert(t.id, t);
     }
+    for (tab, classes) in rows(dbc, "SELECT * FROM TalentTab", |c| {
+        (c.u32("id"), c.u32("class_mask"))
+    }) {
+        s.talent_tab_classes.insert(tab, classes);
+    }
     for a in rows(dbc, "SELECT * FROM SkillLineAbility", |c| SkillAbility {
         skill: c.u32("skill_line"),
         spell: c.u32("spell"),
@@ -2365,6 +2370,11 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         (c.u32("level"), c.u32("basexp"))
     }) {
         m.exploration_xp.insert(level, xp);
+    }
+    for (key, rate) in rows(db, "SELECT * FROM player_crit_per_agility", |c| {
+        ((c.u32("class") as u8, c.u32("level") as u8), c.f32("rate"))
+    }) {
+        m.crit_per_agility.insert(key, rate);
     }
     for (entry, stone) in rows(
         db,

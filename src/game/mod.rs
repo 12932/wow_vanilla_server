@@ -116,6 +116,26 @@ mod tests_p3_network_real;
 #[cfg(test)]
 mod tests_p3_network_wire;
 #[cfg(test)]
+mod tests_p3_player;
+#[cfg(test)]
+mod tests_p3_player_chat;
+#[cfg(test)]
+mod tests_p3_player_class;
+#[cfg(test)]
+mod tests_p3_player_death;
+#[cfg(test)]
+mod tests_p3_player_honor;
+#[cfg(test)]
+mod tests_p3_player_items;
+#[cfg(test)]
+mod tests_p3_player_pet;
+#[cfg(test)]
+mod tests_p3_player_social;
+#[cfg(test)]
+mod tests_p3_player_stats;
+#[cfg(test)]
+mod tests_p3_player_world;
+#[cfg(test)]
 mod tests_p3_spells;
 #[cfg(test)]
 mod tests_p3_spells_auras;

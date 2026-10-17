@@ -62,8 +62,12 @@ pub fn view_point(p: &Player) -> Vector3d {
     p.misc.view.unwrap_or_else(|| p.position())
 }
 
-/// The intro starts: its camera is followed if the data has its path.
+/// The intro starts: its camera is followed if the data has its path. One
+/// under way keeps its clock (Thistle Tea's `Cinematic.begin`).
 pub fn begin(map: &Map, p: &mut Player, sequence: u32) {
+    if p.misc.camera.is_some() {
+        return;
+    }
     let Some(points) = map.realm.data.misc.cinematic_waypoints.get(&sequence) else {
         return;
     };

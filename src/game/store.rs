@@ -142,6 +142,8 @@ pub struct CharacterState {
     pub reputation: Vec<crate::game::map::reputation::Standing>,
     /// The reputation index watched on the experience bar.
     pub watched_faction: Option<u32>,
+    /// How drunk the player was at logout (`map::intoxication`).
+    pub drunk: u32,
     /// Rested XP waiting, and the rest the player was in at logout.
     pub rest_bonus: f32,
     pub rest_type: Option<crate::game::map::rest::RestType>,
