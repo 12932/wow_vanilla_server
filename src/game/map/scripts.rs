@@ -2476,6 +2476,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
     }
     match d1 {
         0 => {
+            crate::game::map::escorts::halt(map, source);
             let at = map.position_of(source);
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
@@ -2508,6 +2509,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
         // Its path (the spawn's, else the entry's), as START_WAYPOINTS
         // with the start point datalong3 and round again with datalong2.
         2 => {
+            crate::game::map::escorts::resume(map, source);
             let walk = ScriptStep {
                 command: 60,
                 datalong: [0, d3, 0, d2],

@@ -417,9 +417,12 @@ pub fn resume(realm: &Realm, g: Guid, gm: bool, map: u32) -> Option<MapKey> {
         return None;
     }
     admit_copy(realm, g, gm, key).ok()?;
+    // The group first: the groups' lock is never taken under this one's,
+    // as a group's change takes this one under theirs.
+    let group = group_of(realm, g);
     let group_bound = {
         let inst = realm.social.instances.lock();
-        group_bind(&inst, group_of(realm, g), map) == Some(id)
+        group_bind(&inst, group, map) == Some(id)
     };
     entered(realm, g, key, kind, group_bound);
     Some(key)
