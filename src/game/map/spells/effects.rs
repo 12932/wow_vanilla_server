@@ -731,19 +731,12 @@ fn effect(
                 map.teleport(caster, map.key, to, me.orientation);
             }
         }
+        // A run to the target, and a swing there if it is a harmful spell
+        // that doesn't end the fight (Thistle Tea's `attack_on_arrival?`).
         EFFECT_CHARGE => {
-            if let (Some(me), Some(them)) = (map.unit_view(caster), map.unit_view(target)) {
-                let d = dist(me.position, them.position).max(0.1);
-                let back = 2.0 / d;
-                let to = Vector3d {
-                    x: them.position.x + (me.position.x - them.position.x) * back,
-                    y: them.position.y + (me.position.y - them.position.y) * back,
-                    z: them.position.z,
-                };
-                let o = (them.position.y - me.position.y).atan2(them.position.x - me.position.x);
-                map.teleport(caster, map.key, to, o);
-                combat::start_attack(map, caster, target);
-            }
+            let attack = !auras::positive(s)
+                && !s.attr(0, crate::game::data::spells::ATTR_CANCELS_AUTO_ATTACK);
+            crate::game::map::charge::start(map, caster, target, attack);
         }
         EFFECT_KNOCK_BACK => knock_back(map, caster, target, e.misc_value, amount),
         EFFECT_CREATE_ITEM if e.item_type != 0 => {

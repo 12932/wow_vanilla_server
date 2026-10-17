@@ -83,6 +83,8 @@ pub struct Engagement {
     pub escape_at: Option<Instant>,
     /// Until when a distraction holds it.
     pub distracted_until: Option<Instant>,
+    /// A charge it is on.
+    pub charge: Option<crate::game::map::charge::Charge>,
     /// Damage it took from players' side, and from NPCs', this fight.
     pub damage_by_players: u64,
     pub damage_by_npcs: u64,

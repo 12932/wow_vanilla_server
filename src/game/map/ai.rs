@@ -835,6 +835,10 @@ fn fight_step(map: &mut Map, g: Guid) {
     if crate::game::map::creature_motion::critter_step(map, g) {
         return;
     }
+    // A charge runs its course.
+    if crate::game::map::charge::step(map, g) {
+        return;
+    }
     let Some(c) = map.creature(g) else {
         return;
     };
