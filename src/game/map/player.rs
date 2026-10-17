@@ -218,6 +218,7 @@ pub struct Player {
     pub chat_burst: u32,
     pub muted_until: Option<Instant>,
     pub derived: crate::game::map::derive::Derived,
+    pub misc: crate::game::map::misc::PlayerMisc,
     /// The gear changed: its auras want bringing in line.
     pub gear_dirty: bool,
 }
@@ -289,6 +290,7 @@ impl Player {
             chat_burst: 0,
             muted_until: None,
             derived: Default::default(),
+            misc: Default::default(),
             gear_dirty: true,
             row,
         };

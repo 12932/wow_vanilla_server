@@ -77,13 +77,24 @@ pub fn list(map: &mut Map, player: Guid, npc: Guid) {
         let Some(t) = data.item(v.item) else {
             continue;
         };
+        // Items for a standing the player hasn't reached aren't shown.
+        if t.required_reputation_faction == 0
+            && t.required_reputation_rank > 0
+            && let Some(f) = crate::game::map::reputation::faction_of(map, npc)
+            && map.players.get(&player).is_some_and(|p| {
+                !crate::game::map::reputation::meets(p, &data, f, t.required_reputation_rank)
+            })
+        {
+            continue;
+        }
         let left = stock_left(map, npc, v.item, v.max_count, v.restock_secs);
         items.push(ListInventoryItem {
             item_stack_count: i as u32 + 1,
             item: v.item,
             item_display_id: t.display_id,
             max_items: if left == u32::MAX { u32::MAX } else { left },
-            price: price(t, t.buy_count.max(1)).into(),
+            price: crate::game::map::reputation::price(map, player, npc, price(t, t.buy_count.max(1)))
+                .into(),
             max_durability: t.max_durability,
             durability: t.buy_count.max(1),
         });
@@ -123,7 +134,7 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         buy_failed(map, player, npc, item, BuyResult::ItemAlreadySold);
         return;
     }
-    let cost = price(t, count);
+    let cost = crate::game::map::reputation::price(map, player, npc, price(t, count));
     if map.players.get(&player).is_none_or(|p| p.money() < cost) {
         buy_failed(map, player, npc, item, BuyResult::NotEnoughtMoney);
         return;

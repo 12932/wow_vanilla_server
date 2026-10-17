@@ -47,7 +47,7 @@ pub fn realm() -> Arc<Realm> {
 /// A client connected to `realm`, as `account`.
 pub struct Client {
     pub account: String,
-    tx: mpsc::Sender<ClientOpcodeMessage>,
+    tx: mpsc::Sender<crate::game::conn::Inbound>,
     rx: kanal::Receiver<Arc<[u8]>>,
     pub guid: Guid,
     /// Everything received and not yet looked at.
@@ -86,14 +86,26 @@ impl Client {
 
     pub async fn send(&self, msg: impl Into<ClientOpcodeMessage>) {
         self.tx
-            .send(msg.into())
+            .send(crate::game::conn::Inbound::Msg(msg.into()))
+            .await
+            .expect("the session is running");
+    }
+
+    /// Send a packet as raw bytes, as the session gets those wow_messages
+    /// can't read.
+    pub async fn send_raw(&self, opcode: u16, body: &[u8]) {
+        self.tx
+            .send(crate::game::conn::Inbound::Raw(opcode, body.to_vec()))
             .await
             .expect("the session is running");
     }
 
     /// Send, or false if the session has gone.
     pub async fn try_send(&self, msg: impl Into<ClientOpcodeMessage>) -> bool {
-        self.tx.send(msg.into()).await.is_ok()
+        self.tx
+            .send(crate::game::conn::Inbound::Msg(msg.into()))
+            .await
+            .is_ok()
     }
 
     /// Close the connection, as a client that goes away.

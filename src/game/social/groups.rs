@@ -728,6 +728,65 @@ pub fn change_subgroup(realm: &Realm, me: &Online, name: &str, subgroup: u8) {
     gr.send_update(realm);
 }
 
+/// `CMSG_GROUP_SWAP_SUB_GROUP`: two raid members trade subgroups.
+pub fn swap_subgroups(realm: &Realm, me: &Online, a: &str, b: &str) {
+    let mut groups = realm.social.groups.lock();
+    let Some(gr) = groups.mine(me.guid) else {
+        return;
+    };
+    if !gr.raid || !gr.can_lead(me.guid) {
+        return;
+    }
+    let find = |gr: &Group, n: &str| gr.members.iter().position(|m| m.name.eq_ignore_ascii_case(n));
+    let (Some(i), Some(j)) = (find(gr, a), find(gr, b)) else {
+        return;
+    };
+    let (si, sj) = (gr.members[i].subgroup, gr.members[j].subgroup);
+    gr.members[i].subgroup = sj;
+    gr.members[j].subgroup = si;
+    gr.send_update(realm);
+}
+
+/// Put `member` straight into `leader`'s party (a meeting stone's match),
+/// making one if the leader has none. False if either can't.
+pub fn join_directly(realm: &Realm, leader: &Online, member: &Online) -> bool {
+    let mut groups = realm.social.groups.lock();
+    if groups.of.contains_key(&member.guid) || groups.invites.contains_key(&member.guid) {
+        return false;
+    }
+    let id = match groups.of.get(&leader.guid).copied() {
+        Some(id) => id,
+        None => {
+            groups.next_id += 1;
+            let id = groups.next_id;
+            groups.groups.insert(id, Group::new(id, leader));
+            groups.of.insert(leader.guid, id);
+            id
+        }
+    };
+    let Some(gr) = groups.groups.get_mut(&id) else {
+        return false;
+    };
+    if gr.full() || gr.raid {
+        return false;
+    }
+    gr.formed = true;
+    let subgroup = gr.free_subgroup();
+    gr.members.push(Slot {
+        guid: member.guid,
+        name: member.name.clone(),
+        subgroup,
+        assistant: false,
+    });
+    if gr.looter.is_zero() {
+        gr.looter = gr.leader;
+    }
+    gr.send_update(realm);
+    groups.of.insert(member.guid, id);
+    groups.stats.remove(&member.guid);
+    true
+}
+
 /// `CMSG_GROUP_ASSISTANT_LEADER`.
 pub fn set_assistant(realm: &Realm, me: &Online, who: Guid, on: bool) {
     let mut groups = realm.social.groups.lock();

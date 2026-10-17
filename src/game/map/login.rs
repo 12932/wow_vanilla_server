@@ -5,9 +5,9 @@ use std::time::Duration;
 use tracing::debug;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
-    Area, DateTime, FactionFlag, FactionInitializer, InitialSpell, LogoutResult, LogoutSpeed,
+    Area, DateTime, InitialSpell, LogoutResult, LogoutSpeed,
     SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT,
-    SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES, SMSG_INITIAL_SPELLS, SMSG_INITIALIZE_FACTIONS,
+    SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES, SMSG_INITIAL_SPELLS,
     SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK, SMSG_LOGOUT_RESPONSE,
     SMSG_TUTORIAL_FLAGS, Vector3d,
 };
@@ -70,14 +70,10 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         }
     }
     out.send(&SMSG_ACTION_BUTTONS { data: buttons });
-    out.send(&SMSG_INITIALIZE_FACTIONS {
-        factions: (0..64)
-            .map(|_| FactionInitializer {
-                flag: FactionFlag::empty(),
-                standing: 0,
-            })
-            .collect(),
-    });
+    crate::game::map::reputation::send_login(p, &map.realm.data);
+    crate::game::map::rest::restore(p, map.now);
+    crate::game::map::exploration::init(p);
+    let out = &p.outbound;
     out.send(&SMSG_LOGIN_SETTIMESPEED {
         datetime: game_time(),
         timescale: 1.0 / 60.0,

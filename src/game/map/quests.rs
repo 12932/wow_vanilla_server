@@ -290,7 +290,9 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
         return;
     };
     let (starts, _) = relations(map, giver);
-    let item_start = guid::high(giver) == Some(guid::HighGuid::Item) || guid::is_player(giver);
+    let item_start = guid::high(giver) == Some(guid::HighGuid::Item)
+        || (guid::is_player(giver)
+            && crate::game::map::questshare::shared_by(map, player, giver, quest));
     if !item_start && (!starts.contains(&quest) || !near_giver(map, player, giver)) {
         return;
     }
@@ -319,6 +321,7 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
         let _ = inventory::add_item(map, player, q.source_item, q.source_item_count.max(1), true);
     }
     check(map, player, quest);
+    crate::game::map::questshare::accepted(map, player, giver, quest);
 }
 
 /// The log's update fields, from the journal.
@@ -674,6 +677,8 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     if q.reward_spell != 0 {
         crate::game::map::spells::learn(map, player, q.reward_spell);
     }
+    crate::game::map::reputation::quest_rewarded(map, player, &q);
+    crate::game::social::mail::quest_mail(&map.realm, player, giver, quest);
     // The chain's next quest, offered at once.
     if q.next_in_chain != 0
         && map

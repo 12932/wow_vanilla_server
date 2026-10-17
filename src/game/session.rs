@@ -152,7 +152,17 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
 }
 
 impl Session {
-    async fn packet(&mut self, msg: ClientOpcodeMessage) {
+    async fn packet(&mut self, msg: crate::game::conn::Inbound) {
+        let msg = match msg {
+            crate::game::conn::Inbound::Msg(m) => m,
+            crate::game::conn::Inbound::Raw(opcode, body) => {
+                if let State::InWorld { guid, map } = &self.state {
+                    let g = *guid;
+                    map.call(move |m| m.handle_raw(g, opcode, &body));
+                }
+                return;
+            }
+        };
         if let State::InWorld { guid, map } = &self.state {
             if !map.send(MapEvent::Packet(*guid, msg)) {
                 warn!("{}'s map is gone; disconnecting", self.account);

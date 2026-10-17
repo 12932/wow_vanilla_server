@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, warn};
@@ -114,10 +114,29 @@ impl Outbound {
     }
 }
 
+/// A packet a client sent: one wow_messages reads, or (for those it lays
+/// out differently from 1.12) its opcode and body.
+#[derive(Debug)]
+pub enum Inbound {
+    Msg(ClientOpcodeMessage),
+    Raw(u16, Vec<u8>),
+}
+
+impl From<ClientOpcodeMessage> for Inbound {
+    fn from(m: ClientOpcodeMessage) -> Self {
+        Inbound::Msg(m)
+    }
+}
+
+/// The client opcodes read by hand: `CMSG_SET_FACTION_ATWAR`,
+/// `CMSG_SET_FACTION_INACTIVE` and `CMSG_SET_WATCHED_FACTION` carry a
+/// 32-bit reputation index where wow_messages reads a faction.
+pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318];
+
 /// A started connection: its outbound queue, and the packets it reads.
 pub struct Connection {
     pub outbound: Outbound,
-    pub inbound: mpsc::Receiver<ClientOpcodeMessage>,
+    pub inbound: mpsc::Receiver<Inbound>,
 }
 
 /// Start the reader and writer tasks for an authenticated stream.
@@ -144,19 +163,26 @@ pub fn start(stream: TcpStream, crypto: HeaderCrypto) -> Connection {
 async fn run_reader<R: AsyncRead + Unpin + Send>(
     mut read: R,
     mut decrypter: DecrypterHalf,
-    tx: mpsc::Sender<ClientOpcodeMessage>,
+    tx: mpsc::Sender<Inbound>,
     outbound: Outbound,
 ) {
     let idle = crate::config::config().network.client_idle_timeout();
     let mut bad = BadPacketLimit::new();
     loop {
-        let read_one = ClientOpcodeMessage::tokio_read_encrypted(&mut read, &mut decrypter);
+        let read_one = read_packet(&mut read, &mut decrypter);
         let Ok(msg) = tokio::time::timeout(idle, read_one).await else {
             debug!("client sent nothing for {idle:?}; disconnecting");
             break;
         };
         let msg = match msg {
-            Ok(m) => m,
+            Ok(Inbound::Msg(m)) => m,
+            Ok(raw) => {
+                PACKETS_IN.fetch_add(1, Ordering::Relaxed);
+                if tx.send(raw).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             // wow_messages reads a packet's whole body before dispatching on
             // its opcode, so an unknown or unparseable packet is already
             // consumed: skip it.
@@ -183,7 +209,7 @@ async fn run_reader<R: AsyncRead + Unpin + Send>(
             });
             continue;
         }
-        if tx.send(msg).await.is_err() {
+        if tx.send(Inbound::Msg(msg)).await.is_err() {
             break;
         }
         if outbound.is_closed() {
@@ -191,6 +217,28 @@ async fn run_reader<R: AsyncRead + Unpin + Send>(
         }
     }
     outbound.close();
+}
+
+/// Read one packet: its header decrypted, its body whole; those read by
+/// hand stay raw, the rest go to wow_messages.
+async fn read_packet<R: AsyncRead + Unpin + Send>(
+    read: &mut R,
+    decrypter: &mut DecrypterHalf,
+) -> Result<Inbound, ExpectedOpcodeError> {
+    let mut header = [0u8; 6];
+    read.read_exact(&mut header).await?;
+    let header = decrypter.decrypt_client_header(header);
+    let size = header.size.saturating_sub(4) as usize;
+    let mut body = vec![0u8; size];
+    read.read_exact(&mut body).await?;
+    if RAW_OPCODES.contains(&header.opcode) {
+        return Ok(Inbound::Raw(header.opcode as u16, body));
+    }
+    let mut plain = Vec::with_capacity(6 + size);
+    plain.extend_from_slice(&header.size.to_be_bytes());
+    plain.extend_from_slice(&header.opcode.to_le_bytes());
+    plain.extend_from_slice(&body);
+    ClientOpcodeMessage::read_unencrypted(&plain[..]).map(Inbound::Msg)
 }
 
 /// Drain queued frames, encrypt each header in order (ARC4 is a stream

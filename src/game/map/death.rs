@@ -23,8 +23,14 @@ pub const SPELL_GHOST: u32 = 8326;
 pub const RECLAIM_YARDS: f32 = 39.0;
 /// How long after release a ghost must wait to reclaim.
 pub const RECLAIM_DELAY: Duration = Duration::from_secs(30);
-/// How much faster a ghost runs.
-const GHOST_SPEED: f32 = 1.5;
+/// How much faster a ghost runs: the ghost aura's 25%, a wisp's 50%.
+const GHOST_SPEED: f32 = 1.25;
+const WISP_SPEED: f32 = 1.5;
+/// The night elf's wisp form.
+pub const SPELL_WISP: u32 = 20584;
+const RACE_NIGHT_ELF: u8 = 4;
+/// Resurrection sickness, from a spirit healer at level 11 and up.
+pub const SPELL_RESURRECTION_SICKNESS: u32 = 15007;
 /// `UNIT_NPC_FLAGS`: a spirit healer.
 pub const NPC_FLAG_SPIRIT_HEALER: u32 = 0x20;
 
@@ -148,6 +154,7 @@ pub fn kill(map: &mut Map, g: Guid) {
     p.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     p.logout_at = None;
+    crate::game::map::misc::capture_self_res(map, g);
     crate::game::map::combat::leave_combat(map, g);
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::duel::left(map, g, false);
@@ -193,9 +200,17 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
     p.row.state.dead = true;
     p.fields.set_u32(UNIT_FIELD_HEALTH, 1);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST, true);
+    p.fields.set_u32(PLAYER_SELF_RES_SPELL, 0);
     p.fields.set_u32(UNIT_FIELD_AURA, SPELL_GHOST);
-    p.speeds.run = 7.0 * GHOST_SPEED;
-    p.speeds.swim = 4.722_222 * GHOST_SPEED;
+    // A night elf's wisp runs faster (Thistle Tea's ghost spells).
+    let speed = if p.row.race == RACE_NIGHT_ELF {
+        p.fields.set_u32(UNIT_FIELD_AURA + 1, SPELL_WISP);
+        WISP_SPEED
+    } else {
+        GHOST_SPEED
+    };
+    p.speeds.run = 7.0 * speed;
+    p.speeds.swim = 4.722_222 * speed;
     p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
         guid: p.guid,
         move_event: 0,
@@ -233,6 +248,10 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     if p.fields.get_u32(UNIT_FIELD_AURA) == SPELL_GHOST {
         p.fields.set_u32(UNIT_FIELD_AURA, 0);
     }
+    if p.fields.get_u32(UNIT_FIELD_AURA + 1) == SPELL_WISP {
+        p.fields.set_u32(UNIT_FIELD_AURA + 1, 0);
+    }
+    p.fields.set_u32(PLAYER_SELF_RES_SPELL, 0);
     if was_ghost {
         p.speeds.run = 7.0;
         p.speeds.swim = 4.722_222;
@@ -342,7 +361,41 @@ pub fn spirit_healer_activate(map: &mut Map, g: Guid, healer: Guid) {
     if near {
         resurrect(map, g, 0.5);
         crate::game::map::vendor::wear(map, g, 0.25);
+        resurrection_sickness(map, g);
     }
+}
+
+/// How long resurrection sickness lasts at `level`: a minute a level from
+/// eleven, ten at most.
+pub fn resurrection_sickness_ms(level: u32) -> Option<u32> {
+    (level >= 11).then(|| ((level - 10) * 60_000).min(600_000))
+}
+
+/// A spirit healer's price: resurrection sickness.
+fn resurrection_sickness(map: &mut Map, g: Guid) {
+    let level = map.players.get(&g).map_or(1, |p| u32::from(p.level()));
+    let Some(ms) = resurrection_sickness_ms(level) else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    let Some(s) = data.spells.get(SPELL_RESURRECTION_SICKNESS) else {
+        return;
+    };
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+        .map(|i| (i, crate::game::map::spells::points(s, i, level)))
+        .collect();
+    let _ = crate::game::map::auras::apply_spell(
+        map,
+        g,
+        g,
+        s,
+        &effects,
+        crate::game::map::auras::Context {
+            duration: Some(Some(ms)),
+            ..Default::default()
+        },
+    );
 }
 
 /// The graveyard a player at `pos` in `zone` goes to: one for their zone and

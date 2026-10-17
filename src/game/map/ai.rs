@@ -201,6 +201,9 @@ fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
 
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
+    if guid::is_player(tapper) {
+        crate::game::map::reputation::creature_killed(map, tapper, creature);
+    }
     crate::game::map::auras::clear_on_death(map, creature);
     let now = map.now;
     let data = map.realm.data.clone();

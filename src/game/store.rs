@@ -120,6 +120,16 @@ pub struct CharacterState {
     /// Friends and ignored characters, by GUID counter.
     pub friends: Vec<u32>,
     pub ignored: Vec<u32>,
+    /// Standings with factions, as offsets from the base.
+    pub reputation: Vec<crate::game::map::reputation::Standing>,
+    /// The reputation index watched on the experience bar.
+    pub watched_faction: Option<u32>,
+    /// Rested XP waiting, and the rest the player was in at logout.
+    pub rest_bonus: f32,
+    pub rest_type: Option<crate::game::map::rest::RestType>,
+    /// Talent resets: how many, and when the last was (Unix seconds).
+    pub talent_wipes: u32,
+    pub last_talent_wipe: i64,
 }
 
 /// A quest in a player's log.
