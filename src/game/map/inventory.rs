@@ -433,6 +433,23 @@ pub fn add_item_with_property(
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
+    store(map, g, entry, count, alert, NewItemCreationType::Received)
+}
+
+/// [`add_item`] for what a player made: told as created ("You create"),
+/// as Thistle Tea and mangos tell a craft.
+pub fn add_created_item(map: &mut Map, g: Guid, entry: u32, count: u32) -> Result<(), Fail> {
+    store(map, g, entry, count, true, NewItemCreationType::Created)
+}
+
+fn store(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    alert: bool,
+    creation: NewItemCreationType,
+) -> Result<(), Fail> {
     let data = map.realm.data.clone();
     let Some(t) = data.item(entry).cloned() else {
         return Err(Fail::NotFound);
@@ -481,11 +498,13 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
     if left > 0 {
         return Err(Fail::InventoryFull);
     }
+    // Where it went, for the push: a stack it joined is no one slot (-1,
+    // Thistle Tea's and mangos's).
     let mut last = None;
     for (i, add) in onto {
         let item = &mut p.items[i];
         item.set_count(item.count() + add);
-        last = Some((item.bag, item.slot));
+        last = Some((item.bag, u32::MAX));
     }
     let mut batch = update::Batch::new();
     for (bag, slot, n) in new_slots {
@@ -495,7 +514,7 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         let item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
         p.items.push(item);
-        last = Some((bag, slot));
+        last = Some((bag, u32::from(slot)));
     }
     for frame in batch.finish() {
         p.outbound.send_frame(frame);
@@ -512,10 +531,10 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
             guid: g,
             source: NewItemSource::Looted,
-            creation_type: NewItemCreationType::Received,
+            creation_type: creation,
             alert_chat: NewItemChatAlert::Show,
             bag_slot: bag,
-            item_slot: u32::from(slot),
+            item_slot: slot,
             item: entry,
             item_suffix_factor: 0,
             item_random_property_id: 0,

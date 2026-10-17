@@ -732,13 +732,13 @@ fn effect(
         EFFECT_CREATE_ITEM if e.item_type != 0 => {
             if let Some(to) = created_for(map, caster, target, &e, t) {
                 let item = super::scripts::created_item(map, caster, s, e.item_type);
-                let made = crate::game::map::inventory::add_item(
-                    map,
-                    to,
-                    item,
-                    amount.max(1) as u32,
-                    true,
-                );
+                // A player's own make is created; another's gift received.
+                let count = amount.max(1) as u32;
+                let made = if to == caster {
+                    crate::game::map::inventory::add_created_item(map, to, item, count)
+                } else {
+                    crate::game::map::inventory::add_item(map, to, item, count, true)
+                };
                 // A recipe's skill rises once its product is stored (Thistle
                 // Tea's `commit_store`, mangos's `UpdateCraftSkill`).
                 if made.is_ok() {
