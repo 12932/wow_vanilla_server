@@ -1227,3 +1227,45 @@ async fn an_immunity_to_an_auras_kind_keeps_it_off_and_a_purging_one_takes_it() 
     assert!(kept, "a plain immunity leaves a stun on");
     assert!(!purged, "a purging one takes it");
 }
+
+const FAERIE_FIRE_FERAL: u32 = 16857;
+const STEALTH: u32 = 1784;
+const LESSER_INVISIBILITY: u32 = 66;
+
+#[tokio::test]
+async fn faerie_fire_takes_stealth_and_invisibility_and_keeps_them_off() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, rogue, map) = player(&realm, "P3A21", "Fireone", Race::Human, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, rogue, 60, &[STEALTH]);
+            let druid = dummy(m, rogue, 60, 5.0);
+            spells::cast_triggered(m, rogue, STEALTH, None);
+            apply(m, rogue, rogue, LESSER_INVISIBILITY);
+            let hidden = (has(m, rogue, STEALTH), has(m, rogue, LESSER_INVISIBILITY));
+            apply(m, druid, rogue, FAERIE_FIRE);
+            let lit = (has(m, rogue, STEALTH), has(m, rogue, LESSER_INVISIBILITY));
+            // Under it, no stealth; after it, stealth again.
+            spells::cast_triggered(m, rogue, STEALTH, None);
+            let under = has(m, rogue, STEALTH);
+            auras::remove_spell(m, rogue, FAERIE_FIRE, None);
+            apply(m, druid, rogue, FAERIE_FIRE_FERAL);
+            spells::cast_triggered(m, rogue, STEALTH, None);
+            let feral = has(m, rogue, STEALTH);
+            auras::remove_spell(m, rogue, FAERIE_FIRE_FERAL, None);
+            spells::cast_triggered(m, rogue, STEALTH, None);
+            let after = has(m, rogue, STEALTH);
+            (hidden, lit, under, feral, after)
+        })
+        .await
+        .unwrap();
+    let (hidden, lit, under, feral, after) = out;
+    assert_eq!(hidden, (true, true), "stealthed and invisible");
+    assert_eq!(lit, (false, false), "Faerie Fire takes both");
+    assert!(!under, "and keeps stealth off");
+    assert!(!feral, "as its feral kind does");
+    assert!(after, "gone, stealth again");
+}
