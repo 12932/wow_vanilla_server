@@ -420,12 +420,13 @@ async fn a_copy_holds_its_templates_limit() {
         .map()
         .call(move |m| m.teleport(g, MapKey::world(DUNGEON), Vector3d::default(), 0.0));
     let reason = b
-        .wait_for("SMSG_TRANSFER_ABORTED", |m| match m {
-            ServerOpcodeMessage::SMSG_TRANSFER_ABORTED(t) => Some(t.reason),
-            _ => None,
-        })
+        .wait_frame(
+            "SMSG_TRANSFER_ABORTED",
+            crate::game::map::SMSG_TRANSFER_ABORTED,
+            |_| true,
+        )
         .await;
-    assert_eq!(reason, TransferAbortReason::IsFull);
+    assert_eq!(reason, vec![TransferAbortReason::IsFull.as_int()]);
 }
 
 /// Scholomance's doors: the room gate keeps its spawned state (open) at
