@@ -1453,6 +1453,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             {
                 f.set_u32(UNIT_FIELD_DISPLAYID, display);
             }
+            crate::game::map::spells::interrupts::transformed(map, target, h.spell, a.effect);
         }
         AURA_MOUNTED => {
             let display = map

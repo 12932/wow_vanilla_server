@@ -3,8 +3,9 @@
 //! mounting interrupts and dismounting what needs a mount; stealth,
 //! invisibility and a believed Feign Death end what losing sight of the
 //! unit does; invulnerability ends what it does (a flag, silithyst);
-//! leaving the map and teleporting end theirs; and taking a flight ends
-//! stealth, a form that can't fly, and the mount.
+//! leaving the map and teleporting end theirs; taking a flight ends
+//! stealth, a form that can't fly, and the mount; and Discombobulate's
+//! transform ends the mount.
 
 use wow_world_messages::Guid;
 
@@ -14,6 +15,9 @@ use crate::game::map::auras::{self, *};
 /// Flags vmangos's `AuraInterruptFlags` give these moments.
 pub const IMMUNE_OR_LOST_SELECTION: u32 = 0x10_0000;
 pub const INVULNERABLE: u32 = 0x20_0000;
+
+/// The Discombobulator Ray's transform.
+const DISCOMBOBULATE: u32 = 4060;
 
 /// Forms a flight keeps: none, the warrior's stances, and the rogue's
 /// stealth form and the like.
@@ -33,9 +37,22 @@ fn end(map: &mut Map, target: Guid, flags: u32, except: u32) {
     }
 }
 
-/// `target` mounted (with `mount`).
+/// `target` mounted (with `mount`): its banked swings go too (Thistle
+/// Tea's `MountSync` clearing extra attacks).
 pub fn mounted(map: &mut Map, target: Guid, mount: u32) {
+    if let Some(c) = map.combat_mut(target) {
+        c.extra_attacks = 0;
+        c.held_extra_attacks = 0;
+    }
     end(map, target, INTERRUPT_MOUNTING, mount);
+}
+
+/// Discombobulate's transform (its first effect) knocks `target` off its
+/// mount (`MountSync.dismount_on_transform`).
+pub fn transformed(map: &mut Map, target: Guid, spell: u32, effect: u8) {
+    if spell == DISCOMBOBULATE && effect == 0 {
+        auras::remove_where(map, target, |h| h.has(AURA_MOUNTED));
+    }
 }
 
 /// `target` is off its mount.

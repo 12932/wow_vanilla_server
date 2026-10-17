@@ -728,6 +728,11 @@ async fn auras_end_on_mounting_concealment_teleports_and_flights() {
             on(m, 990_736, auras::INTERRUPT_MOUNTING);
             spells::interrupts::taking_flight(m, mage);
             let flying = (has(m, mage, 1784), has(m, mage, 990_736));
+            // Discombobulate knocks a rider off.
+            apply(m, mage, mage, 458);
+            apply(m, mage, mage, 4060);
+            let flying = (flying.0, flying.1 || has(m, mage, 458));
+            auras::remove_spell(m, mage, 4060, None);
             // The client's cost fields by school, and the cost they show.
             let flat = plain_aura(990_737, auras::AURA_MOD_POWER_COST_SCHOOL, 0x10, 0);
             let share = plain_aura(990_738, auras::AURA_MOD_POWER_COST_SCHOOL_PCT, 0x10, 0);
@@ -764,7 +769,7 @@ async fn auras_end_on_mounting_concealment_teleports_and_flights() {
     assert_eq!(stealthed, (true, false), "stealth ends the seen");
     assert!(!shielded, "Divine Shield ends invulnerability's");
     assert_eq!(teleported, (false, true), "a teleport's, in the map");
-    assert_eq!(flying, (false, false), "a flight's");
+    assert_eq!(flying, (false, false), "a flight's, and Discombobulate's");
     assert_eq!(fields, (-5, -0.1, 0.0), "frost's cost fields");
     let (base, now) = cost;
     assert_eq!(
