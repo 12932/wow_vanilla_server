@@ -36,6 +36,8 @@ pub use wsg::{
 };
 
 pub const SPELL_DESERTER: u32 = 26013;
+/// Waiting to Resurrect: a ghost in the match, for the next wave.
+pub const SPELL_WAITING_TO_RESURRECT: u32 = 2584;
 pub const RESURRECT_EVERY: Duration = Duration::from_secs(30);
 pub const CLOSE_AFTER: Duration = Duration::from_secs(120);
 /// How near a kill a side's players must be to share its honorable kill.
@@ -734,6 +736,7 @@ fn resurrect_wave(map: &mut Map) {
             continue;
         };
         crate::game::map::death::resurrect(map, g, 1.0);
+        crate::game::map::auras::remove_spell(map, g, SPELL_WAITING_TO_RESURRECT, None);
         map.teleport(g, map.key, at, o);
     }
 }
@@ -850,6 +853,10 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     match m.bg {
         BG_AB => near && alive && ab::use_object(map, g, object),
         BG_AV => {
+            // A mine's supplies are its holders' alone.
+            if av::supplies_barred(map, m.team_of(g), object) {
+                return true;
+            }
             near && alive
                 && (av_scripts::use_ritual(map, g, object)
                     // A beacon is disarmed by the Attacking cast.
@@ -926,7 +933,10 @@ pub fn spell_check(
 /// A beacon planted where `caster` stands: Alliance's or the Horde's, no
 /// one's own, and it outlasts its planter.
 pub fn plant(map: &mut Map, caster: Guid, entry: u32) {
-    let Some((at, o)) = map.players.get(&caster).map(|p| (p.position(), p.movement.orientation))
+    let Some((at, o)) = map
+        .players
+        .get(&caster)
+        .map(|p| (p.position(), p.movement.orientation))
     else {
         return;
     };
@@ -1227,15 +1237,55 @@ fn clear_buffs(map: &mut Map) {
     }
 }
 
-/// `CMSG_AREA_SPIRIT_HEALER_QUEUE`: a ghost waits for the next wave.
+/// `CMSG_AREA_SPIRIT_HEALER_QUEUE`: a ghost waits for the next wave,
+/// Waiting to Resurrect.
 pub fn queue_resurrection(map: &mut Map, g: Guid) {
     let dead = map.players.get(&g).is_some_and(|p| p.death != Death::Alive);
-    if let Some(m) = map.battleground.as_mut()
+    let queued = if let Some(m) = map.battleground.as_mut()
         && dead
         && m.scores.contains_key(&g)
     {
         m.resurrect_queue.insert(g);
+        true
+    } else {
+        false
+    };
+    if queued {
+        waiting(map, g);
     }
+}
+
+/// Waiting to Resurrect on a ghost, put straight on as Thistle Tea does
+/// (`Aura.apply_spell`): a cast wouldn't land on the dead.
+fn waiting(map: &mut Map, g: Guid) {
+    if map
+        .players
+        .get(&g)
+        .is_none_or(|p| p.auras.has_spell(SPELL_WAITING_TO_RESURRECT))
+    {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let Some(s) = data.spells.get(SPELL_WAITING_TO_RESURRECT) else {
+        return;
+    };
+    let level = map.unit_view(g).map(|u| u.level).unwrap_or(1);
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+        .map(|i| (i, crate::game::map::spells::points(s, i, level)))
+        .collect();
+    let _ = crate::game::map::auras::apply_spell(map, g, g, s, &effects, Default::default());
+}
+
+/// A player released their spirit in the match: Waiting to Resurrect, as
+/// Thistle Tea gives it, and in the queue for the next wave.
+pub fn released(map: &mut Map, g: Guid) {
+    if let Some(m) = map.battleground.as_mut()
+        && m.scores.contains_key(&g)
+    {
+        m.resurrect_queue.insert(g);
+    }
+    waiting(map, g);
 }
 
 /// `MSG_BATTLEGROUND_PLAYER_POSITIONS`: where the flag carriers are.
