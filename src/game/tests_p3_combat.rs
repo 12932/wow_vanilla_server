@@ -21,24 +21,30 @@ use crate::game::map::creature::Creature;
 use crate::game::map::{Map, MapHandle, MapKey};
 use crate::game::store::BAG_PLAYER;
 
-const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+pub(crate) const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
-const HUMANS: u32 = 1;
+pub(crate) const HUMANS: u32 = 1;
 /// Hostile to humans, and not quick to notice them.
-const PACK: u32 = 40;
+pub(crate) const PACK: u32 = 40;
 
 /// A humanoid warrior of level 20; a beast.
-const BRUTE: u32 = 3700;
-const BEAST: u32 = 3701;
+pub(crate) const BRUTE: u32 = 3700;
+pub(crate) const BEAST: u32 = 3701;
+/// A humanoid on the humans' side.
+pub(crate) const HELPER: u32 = 3702;
 
-const SHIELD: u32 = 63_001;
+pub(crate) const SHIELD: u32 = 63_001;
 /// A next-swing strike for ten.
-const STRIKE: u32 = 95_200;
-const SWORD: u32 = 63_002;
+pub(crate) const STRIKE: u32 = 95_200;
+/// Ten threat, ten less, and an attack-me (Taunt's matching effect).
+pub(crate) const THREAT_UP: u32 = 95_201;
+pub(crate) const THREAT_DOWN: u32 = 95_202;
+pub(crate) const ATTACK_ME: u32 = 95_203;
+pub(crate) const SWORD: u32 = 63_002;
 
-const OFF_HAND: u8 = 16;
+pub(crate) const OFF_HAND: u8 = 16;
 
-fn faction(id: u32, ours: u32, enemy_mask: u32) -> FactionTemplate {
+pub(crate) fn faction(id: u32, ours: u32, enemy_mask: u32) -> FactionTemplate {
     FactionTemplate {
         id,
         faction: id,
@@ -49,7 +55,7 @@ fn faction(id: u32, ours: u32, enemy_mask: u32) -> FactionTemplate {
     }
 }
 
-fn template(entry: u32, creature_type: u32) -> CreatureTemplate {
+pub(crate) fn template(entry: u32, creature_type: u32) -> CreatureTemplate {
     CreatureTemplate {
         entry,
         name: format!("Creature {entry}"),
@@ -68,7 +74,7 @@ fn template(entry: u32, creature_type: u32) -> CreatureTemplate {
     }
 }
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = GameData::empty();
     d.faction_templates.extend([
         (HUMANS, faction(HUMANS, 0x1, 0x2)),
@@ -90,6 +96,9 @@ fn data() -> GameData {
     d.player_class_stats.insert((1, 60), (1000, 0));
     d.creature_templates.insert(BRUTE, template(BRUTE, 7));
     d.creature_templates.insert(BEAST, template(BEAST, 1));
+    let mut helper = template(HELPER, 7);
+    helper.faction = HUMANS;
+    d.creature_templates.insert(HELPER, helper);
     d.items.insert(
         SHIELD,
         ItemTemplate {
@@ -136,10 +145,34 @@ fn data() -> GameData {
         ..Default::default()
     };
     d.spells.spells.insert(STRIKE, strike);
+    for (id, effect, points) in [
+        (THREAT_UP, 63, 10),
+        (THREAT_DOWN, 63, -10),
+        (ATTACK_ME, 114, 0),
+    ] {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            range_index: 1,
+            equipped_item_class: -1,
+            ..Default::default()
+        };
+        s.effects[0] = SpellEffect {
+            effect,
+            base_points: points - 1,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            ..Default::default()
+        };
+        d.spells.spells.insert(id, s);
+    }
     d
 }
 
-async fn setup(class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
+pub(crate) async fn setup(
+    class: Class,
+) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
     let ga = a.enter("Alice", Race::Human, class).await;
@@ -150,7 +183,7 @@ async fn setup(class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, Gui
 
 /// A creature of `entry` at `level`, `yards` in front of `g` and facing
 /// them.
-fn spawn(m: &mut Map, g: Guid, entry: u32, level: u8, yards: f32) -> Guid {
+pub(crate) fn spawn(m: &mut Map, g: Guid, entry: u32, level: u8, yards: f32) -> Guid {
     let data = m.realm.data.clone();
     let t = data
         .creature_template(entry)
@@ -182,7 +215,7 @@ fn spawn(m: &mut Map, g: Guid, entry: u32, level: u8, yards: f32) -> Guid {
 }
 
 /// A test aura of `kind` and `misc`, holding `amount`, from `g` on itself.
-fn aura_of(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32) {
+pub(crate) fn aura_of(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32) {
     let mut effects = [SpellEffect::default(); 3];
     effects[0] = SpellEffect {
         effect: 6,
@@ -204,7 +237,7 @@ fn aura_of(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32) {
 }
 
 /// Put an item of `entry` in the equipment slot `slot`.
-fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) {
+pub(crate) fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) {
     if let Some(p) = m.players.get_mut(&g) {
         p.items.retain(|i| !(i.bag == BAG_PLAYER && i.slot == slot));
     }
@@ -222,7 +255,7 @@ fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) {
     p.apply_stats(&data);
 }
 
-fn level(m: &mut Map, g: Guid, to: u8) {
+pub(crate) fn level(m: &mut Map, g: Guid, to: u8) {
     let data = m.realm.data.clone();
     let p = m.players.get_mut(&g).unwrap();
     crate::game::map::stats::set_level(p, &data, to);
@@ -230,7 +263,7 @@ fn level(m: &mut Map, g: Guid, to: u8) {
 
 /// Swing `attacker`'s main hand at `victim` now, with `outcome` in place of
 /// the roll.
-fn forced_swing(m: &mut Map, attacker: Guid, victim: Guid, outcome: Outcome) {
+pub(crate) fn forced_swing(m: &mut Map, attacker: Guid, victim: Guid, outcome: Outcome) {
     combat::FORCED_OUTCOME.with(|f| f.set(Some(outcome)));
     let now = m.now;
     if let Some(c) = m.combat_mut(attacker) {
@@ -245,7 +278,7 @@ fn forced_swing(m: &mut Map, attacker: Guid, victim: Guid, outcome: Outcome) {
 
 /// An even fight at `level`: a player's swing at a creature with the
 /// usual five percent of each.
-fn even(level: i32) -> Roll {
+pub(crate) fn even(level: i32) -> Roll {
     Roll {
         attacker_skill: level * 5,
         victim_defense: level * 5,
@@ -725,7 +758,7 @@ async fn a_mana_user_gets_no_rage_from_a_swing() {
 
 /// A creature in a fight, its next swing `main` milliseconds off and its
 /// off hand's `off` (if it has one).
-fn parrier(m: &mut Map, g: Guid, main: i64, off: Option<i64>) -> Guid {
+pub(crate) fn parrier(m: &mut Map, g: Guid, main: i64, off: Option<i64>) -> Guid {
     let brute = spawn(m, g, BRUTE, 20, 1.0);
     let now = m.now;
     let at = |ms: i64| {
@@ -751,7 +784,7 @@ fn parrier(m: &mut Map, g: Guid, main: i64, off: Option<i64>) -> Guid {
 }
 
 /// What's left of each hand's wait, in milliseconds.
-fn waits(m: &Map, g: Guid) -> (Option<u64>, Option<u64>) {
+pub(crate) fn waits(m: &Map, g: Guid) -> (Option<u64>, Option<u64>) {
     let now = m.now;
     let c = m.combat(g).unwrap();
     let left = |t: Option<std::time::Instant>| {
@@ -907,7 +940,7 @@ async fn a_parried_swing_hastens_the_parrier_and_deals_nothing() {
 
 /// A swing's log: its hit info, damage, the victim's state and what was
 /// blocked.
-fn swing_log(b: &[u8]) -> (u32, u32, u32, u32) {
+pub(crate) fn swing_log(b: &[u8]) -> (u32, u32, u32, u32) {
     let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
     let mut at = 4;
     for _ in 0..2 {
