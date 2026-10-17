@@ -1208,14 +1208,27 @@ fn skip(m: &mut Map, by: Duration) {
             r.started = t;
         }
     }
+    let sooner = |t: &mut std::time::Instant| {
+        if let Some(s) = t.checked_sub(by) {
+            *t = s;
+        }
+    };
     let all: Vec<Guid> = m.creatures.iter().map(|(_, c)| c.guid).collect();
     for g in all {
         if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
             for t in s.timers.iter_mut().flatten() {
-                if let Some(sooner) = t.checked_sub(by) {
-                    *t = sooner;
-                }
+                sooner(t);
             }
+            if let Some(h) = s.hold.as_mut() {
+                sooner(&mut h.until);
+                sooner(&mut h.ready_at);
+            }
+        }
+        // A wait at a waypoint.
+        if let Some(c) = m.creature_mut(g)
+            && let crate::game::map::creature::Motion::Idle { until: Some(t) } = &mut c.motion
+        {
+            sooner(t);
         }
     }
     for e in m.escorts.iter_mut() {
@@ -1707,6 +1720,118 @@ async fn freedom_for_all_creatures(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, KINDAL, QUEST).await;
 }
 
+/// The Gizelton Caravan: Cork Gizelton's caravan sets out on its loop
+/// through Desolace; Rigger offers Gizelton Caravan (5943) at the first
+/// stop and Cork Bodyguard for Hire (5821) at the second. Each taken, the
+/// caravan moves on, holds out against three ambushes, and the quest is
+/// done at the end of the leg.
+async fn the_gizelton_caravan(realm: &Arc<Realm>) {
+    const CORK: u32 = 11625;
+    const RIGGER: u32 = 11626;
+    const KODO: u32 = 11564;
+    const SMEED: u32 = 11596;
+    let (mut c, g, _) = hero(realm, "GUARD", Race::Orc, Class::Warrior, 40).await;
+    let (map, _, _) = visit(realm, &mut c, CORK).await;
+    let cork = map
+        .query(|m| npc(m, CORK).map(|(k, _)| k))
+        .await
+        .flatten()
+        .unwrap();
+    // The caravan, along its way, the player beside Cork; whatever falls
+    // on it put down.
+    let caravan = move |m: &mut Map| -> Vec<Guid> {
+        let mut v = vec![cork];
+        v.extend(alive_of(m, &[RIGGER, KODO]));
+        v
+    };
+    let ride = move |m: &mut Map, by: Duration| {
+        let members = caravan(m);
+        for c in &members {
+            if let Some(c) = m.creature_mut(*c) {
+                c.speeds.walk = 30.0;
+                c.speeds.run = 30.0;
+            }
+        }
+        if let Some(at) = m.creature(cork).map(|c| c.position) {
+            place(m, g, beside(at));
+        }
+        let mut protected = members;
+        protected.push(g);
+        defend(m, &protected);
+        skip(m, by);
+    };
+    // The caravan stops, and Rigger, or Cork, offers a quest.
+    let offering = move |m: &Map, giver: u32| {
+        let held = crate::game::map::event_ai::scripted(m, cork).is_some_and(|s| s.hold.is_some());
+        held && npc(m, giver).is_some_and(|(r, _)| {
+            m.creature(r)
+                .is_some_and(|c| c.fields.get_u32(crate::game::fields::UNIT_NPC_FLAGS) & 0x2 != 0)
+        })
+    };
+    for (quest, giver) in [(5943, RIGGER), (5821, CORK)] {
+        let mut offered = false;
+        for i in 0..3000 {
+            let (yes, at) = map
+                .query(move |m| {
+                    ride(m, Duration::from_secs(2));
+                    (offering(m, giver), m.creature(cork).map(|c| c.position))
+                })
+                .await
+                .unwrap();
+            if debug() && i % 100 == 0 {
+                eprintln!("caravan to {quest}: Cork at {at:?}");
+            }
+            if yes {
+                offered = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(offered, "{giver} offers {quest}");
+        let who = map
+            .query(move |m| npc(m, giver).map(|(r, _)| r))
+            .await
+            .flatten()
+            .unwrap();
+        map.query(move |m| {
+            if let Some(at) = m.creature(who).map(|c| c.position) {
+                place(m, g, beside(at));
+            }
+            crate::game::map::quests::accept(m, g, who, quest);
+        })
+        .await;
+        assert!(
+            until(&map, move |m| logged(m, g, quest)).await,
+            "{quest} taken"
+        );
+        let mut credited = false;
+        for i in 0..3000 {
+            let (yes, at, event) = map
+                .query(move |m| {
+                    ride(m, Duration::from_secs(2));
+                    (
+                        done(m, g, quest),
+                        m.creature(cork).map(|c| c.position),
+                        crate::game::map::map_events::active(m, quest),
+                    )
+                })
+                .await
+                .unwrap();
+            if debug() && i % 100 == 0 {
+                eprintln!("caravan {quest}: Cork at {at:?}, event {event}");
+            }
+            if yes {
+                credited = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(credited, "{quest} done at the end of the leg");
+    }
+    turn_in(realm, &mut c, SMEED, 5943).await;
+    turn_in(realm, &mut c, SMEED, 5821).await;
+}
+
 /// The event quests Thistle Tea builds in code, walked through on the real
 /// world: Freedom for All Creatures, the Gizelton Caravan, The Great
 /// Masquerade, The Balance of Light and Shadow.
@@ -1718,6 +1843,9 @@ async fn the_imported_event_quests_are_done_end_to_end() {
     let realm = real_realm();
     if wanted("freedom") {
         freedom_for_all_creatures(&realm).await;
+    }
+    if wanted("caravan") {
+        the_gizelton_caravan(&realm).await;
     }
 }
 
