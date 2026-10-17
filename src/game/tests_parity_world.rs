@@ -1991,6 +1991,68 @@ async fn the_great_masquerade(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, BOLVAR, QUEST).await;
 }
 
+/// The Balance of Light and Shadow (7622): Eris Havenfire's peasants flee
+/// the burning village for her light under the Scourge's arrows; the
+/// priest keeps them whole and cures their plague, and fifty saved do it.
+async fn the_balance_of_light_and_shadow(realm: &Arc<Realm>) {
+    const QUEST: u32 = 7622;
+    const ERIS: u32 = 14494;
+    const PEASANTS: [u32; 2] = [14484, 14485];
+    const FOES: [u32; 2] = [14486, 14489];
+    const SEETHING_PLAGUE: u32 = 23072;
+    let (mut c, g, _) = hero(realm, "BLESSED", Race::Human, Class::Priest, 60).await;
+    let map = take(realm, &mut c, ERIS, QUEST, &[7621]).await;
+    let field = map
+        .query(|m| npc(m, ERIS).map(|(_, at)| at))
+        .await
+        .flatten()
+        .unwrap();
+    let mut saved = false;
+    for i in 0..4000 {
+        let (yes, state) = map
+            .query(move |m| {
+                place(m, g, field);
+                hardy(m, g);
+                // The Scourge put down as it comes; the peasants kept whole,
+                // cured, and quick on their feet.
+                for f in alive_of(m, &FOES) {
+                    crate::game::map::combat::deal_damage(m, g, f, 1_000_000);
+                }
+                for p in alive_of(m, &PEASANTS) {
+                    crate::game::map::auras::remove_spell(m, p, SEETHING_PLAGUE, None);
+                    if let Some(c) = m.creature_mut(p) {
+                        c.speeds.walk = 20.0;
+                        c.speeds.run = 20.0;
+                        let max = c.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH);
+                        c.fields
+                            .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
+                    }
+                }
+                skip(m, Duration::from_secs(1));
+                (
+                    done(m, g, QUEST),
+                    (
+                        alive_of(m, &PEASANTS).len(),
+                        crate::game::map::map_events::data(m, QUEST, 0),
+                        crate::game::map::map_events::data(m, QUEST, 1),
+                    ),
+                )
+            })
+            .await
+            .unwrap();
+        if debug() && i % 100 == 0 {
+            eprintln!("balance: peasants, saved, died {state:?}");
+        }
+        if yes {
+            saved = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(saved, "{QUEST} done, fifty saved");
+    turn_in(realm, &mut c, ERIS, QUEST).await;
+}
+
 /// The event quests Thistle Tea builds in code, walked through on the real
 /// world: Freedom for All Creatures, the Gizelton Caravan, The Great
 /// Masquerade, The Balance of Light and Shadow.
@@ -2008,6 +2070,9 @@ async fn the_imported_event_quests_are_done_end_to_end() {
     }
     if wanted("masquerade") {
         the_great_masquerade(&realm).await;
+    }
+    if wanted("balance") {
+        the_balance_of_light_and_shadow(&realm).await;
     }
 }
 
