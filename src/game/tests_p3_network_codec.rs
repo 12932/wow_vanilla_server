@@ -274,3 +274,68 @@ async fn combo_points_gone_are_none_on_the_last_target() {
     .await;
     assert_eq!((field, points), (target, 0));
 }
+
+/// Thistle Tea's smsg_monster_move_test: a walk's final facing is its own
+/// move type (3, a target; 4, an angle), the target preferred, never a
+/// spline flag; the flags are run mode's alone; and a flyer's spline is
+/// written as whole points after the start, its flags flying and run mode.
+#[test]
+fn a_monster_moves_facing_and_flying_splines_are_laid_out_as_1_12_has_them() {
+    use crate::game::map::creature::Walk;
+    let at = |x: f32, y: f32, z: f32| Vector3d { x, y, z };
+    let g = guid::unit(1, 1);
+    let mut w = Walk::new(
+        vec![at(0.0, 0.0, 0.0), at(10.0, 0.0, 0.0)],
+        2.5,
+        Instant::now(),
+        5,
+        false,
+    );
+    let flags = |m: &SMSG_MONSTER_MOVE_MonsterMoveType| match m {
+        SMSG_MONSTER_MOVE_MonsterMoveType::Normal { spline_flags, .. }
+        | SMSG_MONSTER_MOVE_MonsterMoveType::FacingTarget { spline_flags, .. }
+        | SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { spline_flags, .. } => {
+            spline_flags.as_int()
+        }
+        _ => panic!("{m:?}"),
+    };
+    let target = guid::player(2);
+    w.face_target = Some(target);
+    w.face = Some(1.5);
+    let m = w.packet(g, at(0.0, 0.0, 0.0)).move_type;
+    assert!(
+        matches!(m, SMSG_MONSTER_MOVE_MonsterMoveType::FacingTarget { target: t, .. } if t == target),
+        "the target preferred"
+    );
+    assert_eq!(flags(&m), 0x100, "run mode alone, no facing flag");
+    w.face_target = None;
+    let m = w.packet(g, at(0.0, 0.0, 0.0)).move_type;
+    assert!(
+        matches!(m, SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle, .. } if angle == 1.5)
+    );
+    // A flyer: whole points.
+    let mut fly = Walk::new(
+        vec![at(0.0, 0.0, 0.0), at(1.0, 2.0, 3.0), at(4.0, 5.0, 6.0)],
+        2.5,
+        Instant::now(),
+        5,
+        false,
+    );
+    fly.fly = true;
+    let frame = fly.frame(g, at(0.0, 0.0, 0.0)).unwrap();
+    let body = &frame[4..];
+    let mut want = Vec::new();
+    update::write_packed_guid(&mut want, g);
+    for f in [0.0f32, 0.0, 0.0] {
+        want.extend_from_slice(&f.to_le_bytes());
+    }
+    want.extend_from_slice(&5u32.to_le_bytes());
+    want.push(0);
+    want.extend_from_slice(&0x300u32.to_le_bytes());
+    want.extend_from_slice(&(fly.duration.as_millis() as u32).to_le_bytes());
+    want.extend_from_slice(&2u32.to_le_bytes());
+    for f in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0] {
+        want.extend_from_slice(&f.to_le_bytes());
+    }
+    assert_eq!(body, &want[..]);
+}
