@@ -83,6 +83,59 @@ fn ammo_index(map: &mut Map, g: Guid, ammo_type: u32) -> Option<usize> {
         .position(|x| x.entry == entry)
 }
 
+/// Inventory type: a thrown weapon.
+const INVENTORY_THROWN: u32 = 25;
+
+/// What a ranged attack costs, as Thistle Tea's `Ammunition` works it out:
+/// a round of the chosen arrows or bullets; one of a thrown stack, or a
+/// point of a single thrown weapon's durability; nothing for a wand. The
+/// look of what flies, for the shot's packet; or why it can't be paid.
+pub fn pay_ammunition(map: &mut Map, g: Guid) -> Result<Option<(u32, u32)>, u8> {
+    let data = map.realm.data.clone();
+    let Some(weapon) = combat::hand_weapon(map, g, Hand::Ranged) else {
+        return Err(SPELL_FAILED_EQUIPPED_ITEM_CLASS);
+    };
+    let look = |entry: u32| data.item(entry).map(|t| (t.display_id, t.inventory_type));
+    let Some(t) = data.item(weapon.entry) else {
+        return Ok(None);
+    };
+    if t.inventory_type == INVENTORY_THROWN {
+        let Some(i) = map.players.get(&g).and_then(|p| {
+            p.items
+                .iter()
+                .position(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == 17)
+        }) else {
+            return Err(SPELL_FAILED_EQUIPPED_ITEM_CLASS);
+        };
+        if t.stackable <= 1 {
+            let Some(p) = map.players.get_mut(&g) else {
+                return Ok(None);
+            };
+            let f = &mut p.items[i].fields;
+            let durability = f.get_u32(ITEM_FIELD_DURABILITY);
+            if f.get_u32(ITEM_FIELD_MAXDURABILITY) > 0 {
+                f.set_u32(ITEM_FIELD_DURABILITY, durability.saturating_sub(1));
+                if durability <= 1 {
+                    p.gear_dirty = true;
+                    p.refresh_inventory(&data);
+                }
+            }
+        } else {
+            crate::game::map::inventory::take_item(map, g, i, 1);
+        }
+        return Ok(look(weapon.entry));
+    }
+    if weapon.ammo_type != 0 {
+        let Some(i) = ammo_index(map, g, weapon.ammo_type) else {
+            return Err(SPELL_FAILED_NO_AMMO);
+        };
+        let entry = map.players[&g].items[i].entry;
+        crate::game::map::inventory::take_item(map, g, i, 1);
+        return Ok(look(entry));
+    }
+    Ok(None)
+}
+
 /// `CMSG_SET_AMMO`: the ammunition the ranged weapon uses.
 pub fn set_ammo(map: &mut Map, g: Guid, item: u32) {
     let data = map.realm.data.clone();
@@ -213,18 +266,13 @@ fn shoot(map: &mut Map, g: Guid) {
         return;
     };
     // A round of ammunition.
-    let ammo_display = if weapon.ammo_type != 0 {
-        let Some(i) = ammo_index(map, g, weapon.ammo_type) else {
+    let ammo_display = match pay_ammunition(map, g) {
+        Ok(look) => look,
+        Err(reason) => {
             cancel(map, g, true);
-            cast_result(map, g, ar.spell, Some(SPELL_FAILED_NO_AMMO));
+            cast_result(map, g, ar.spell, Some(reason));
             return;
-        };
-        let entry = map.players[&g].items[i].entry;
-        crate::game::map::inventory::take_item(map, g, i, 1);
-        data.item(entry).map(|t| (t.display_id, t.inventory_type))
-    } else {
-        data.item(weapon.entry)
-            .map(|t| (t.display_id, t.inventory_type))
+        }
     };
     let period = map
         .unit_fields(g)

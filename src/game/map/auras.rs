@@ -762,6 +762,10 @@ pub fn apply_spell(
     let Some(existing) = auras(map, target) else {
         return Ok(());
     };
+    // A creature's template's immunities.
+    if crate::game::map::creature_combat::spell_immune(map, target, caster, spell) {
+        return Err(Refused::Immune);
+    }
     // Immunities: a harmful spell's mechanic or school.
     if !pos && !spell.attr(0, sd::ATTR_NO_IMMUNITIES) {
         let mechanic_immune = existing.mechanic_immune(spell.mechanic)
@@ -961,6 +965,15 @@ pub fn apply_spell(
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
     }
     recalc(map, target);
+    // Helping a flagged player flags the helper.
+    if pos && caster != target {
+        crate::game::map::combat::pvp_contact(
+            map,
+            caster,
+            target,
+            crate::game::map::combat::Contact::Assist,
+        );
+    }
     Ok(())
 }
 

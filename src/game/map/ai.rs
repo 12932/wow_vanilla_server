@@ -74,6 +74,8 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     let first =
         c.combat_start.is_none() || !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
     c.combat_start = Some(now);
+    c.engagement.origin = Some(c.position);
+    c.engagement.last_hostile = Some(now);
     c.combat.victim = attacker;
     c.combat.attacking = true;
     c.combat.next_swing.get_or_insert(now);
@@ -95,6 +97,7 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if first {
         crate::game::map::event_ai::aggro(map, creature, attacker);
     }
+    crate::game::map::creature_combat::call_guards(map, creature, attacker);
 }
 
 /// Damage from `from` raises its threat on `creature`.
@@ -466,6 +469,13 @@ pub fn update_creatures(map: &mut Map) {
         let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
             continue;
         };
+        let (g, evading) = (c.guid, c.evading);
+        if !evading && crate::game::map::creature_combat::controlled_step(map, g) {
+            continue;
+        }
+        let Some(c) = map.creatures.get(key) else {
+            continue;
+        };
         if c.evading {
             evade_step(map, g);
         } else if c.combat.attacking {
@@ -621,20 +631,18 @@ fn fight_step(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let leash = leash_of(map, c);
-    let (home, pos) = (c.home, c.position);
     let current = c.combat.victim;
-    let victim = if map
-        .unit_view(current)
-        .is_some_and(|u| u.alive && dist(u.position, home) <= leash)
-        && dist(pos, home) <= leash
+    let victim = if map.unit_view(current).is_some_and(|u| u.alive)
         && combat::can_attack(map, g, current)
+        && !crate::game::map::creature_combat::should_evade(map, g, current)
     {
         Some(overtake(map, g, current))
     } else {
         pick_victim(map, g)
     };
-    let Some(victim) = victim.filter(|_| dist(pos, home) <= leash) else {
+    let Some(victim) =
+        victim.filter(|v| !crate::game::map::creature_combat::should_evade(map, g, *v))
+    else {
         evade(map, g);
         return;
     };
@@ -659,6 +667,9 @@ fn fight_step(map: &mut Map, g: Guid) {
     let chase = crate::game::map::event_ai::combat_movement(map, g);
     let swing = crate::game::map::event_ai::melee(map, g);
     if combat::in_melee_range(&me, &them) || !chase {
+        if combat::in_melee_range(&me, &them) {
+            crate::game::map::creature_combat::reach(map, g, true);
+        }
         let spline_id = map.next_spline_id;
         let Some(c) = map.creature_mut(g) else {
             return;
@@ -698,12 +709,9 @@ fn fight_step(map: &mut Map, g: Guid) {
         y: them.position.y + to_me.y / len * reach.min(len),
         z: them.position.z,
     };
-    let path = match map.nav.as_mut() {
-        Some(nav) => nav
-            .path(me.position, goal)
-            .unwrap_or_else(|| vec![me.position, goal]),
-        None => vec![me.position, goal],
-    };
+    let routed = map.nav.as_mut().map(|nav| nav.path(me.position, goal));
+    crate::game::map::creature_combat::reach(map, g, !matches!(routed, Some(None)));
+    let path = routed.flatten().unwrap_or_else(|| vec![me.position, goal]);
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(c) = map.creature_mut(g) else {
@@ -780,6 +788,7 @@ pub fn flee(map: &mut Map, g: Guid) {
 
 /// Give up the fight and run home.
 fn evade(map: &mut Map, g: Guid) {
+    crate::game::map::creature_combat::disengaged(map, g);
     let now = map.now;
     let spline_id = map.next_spline_id;
     let Some(c) = map.creature(g) else {

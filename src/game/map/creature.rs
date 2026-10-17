@@ -205,6 +205,8 @@ pub struct Creature {
     pub event_looks: u32,
     /// When something summoned it, for a summons that lasts a while.
     pub summoned_at: Option<Instant>,
+    /// Its fight's leash, reach, flight and regeneration.
+    pub engagement: crate::game::map::creature_combat::Engagement,
 }
 
 /// Alive, or dead and waiting.
@@ -301,6 +303,7 @@ impl Creature {
             scripted: None,
             event_looks: 0,
             summoned_at: None,
+            engagement: Default::default(),
         }
         .with_base()
     }
