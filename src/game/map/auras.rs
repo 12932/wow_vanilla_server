@@ -769,6 +769,9 @@ pub fn apply_spell(
     effects: &[(usize, i32)],
     ctx: Context,
 ) -> Result<(), Refused> {
+    if crate::game::map::item_scripts::instead_of_aura(map, caster, spell) {
+        return Ok(());
+    }
     let now = map.now;
     let data = map.realm.data.clone();
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
