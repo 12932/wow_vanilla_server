@@ -134,6 +134,7 @@ pub fn load(dir: &Path) -> GameData {
             load_vmangos(&db, &mut data);
             load_npcs(&db, dbc.as_ref(), &mut data);
             load_spells(&db, dbc.as_ref(), &mut data);
+            crate::game::map::boss_mechanics::fixups(&mut data);
             super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
             load_pets(&db, dbc.as_ref(), &mut data);
             load_misc(&db, dbc.as_ref(), &mut data);

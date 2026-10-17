@@ -1944,6 +1944,12 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     if !alive {
         return;
     }
+    // An encounter's pulse that the data can't say.
+    if a.kind == AURA_PERIODIC_TRIGGER_SPELL
+        && crate::game::map::boss_mechanics::periodic_trigger(map, target, h, a)
+    {
+        return;
+    }
     let stacks = h.stacks.max(1) as i32;
     match a.kind {
         AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_DAMAGE_PERCENT
@@ -2151,6 +2157,7 @@ pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
 pub fn clear_on_death(map: &mut Map, g: Guid) {
     crate::game::map::spells::interrupt(map, g);
     let data = map.realm.data.clone();
+    let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
     remove_where(map, g, |h| {
         !h.passive
             && !data
@@ -2158,6 +2165,7 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
                 .get(h.spell)
                 .is_some_and(|s| s.attr(3, sd::ATTR_EX3_DEATH_PERSISTENT))
     });
+    crate::game::map::boss_mechanics::cast_on_death(map, g, death_casts);
 }
 
 /// The holders a dispel of `dispel` can take, helpful (`friendly` target)
