@@ -471,7 +471,9 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
         return false;
     }
     let d = derived(map, caster);
-    let mut c = if physical(s) {
+    let mut c = if super::class_scripts::melee_crit(s) {
+        d.crit
+    } else if physical(s) {
         if s.dmg_class == 3 {
             d.ranged_crit
         } else {

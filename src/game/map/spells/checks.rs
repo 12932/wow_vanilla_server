@@ -249,9 +249,7 @@ pub fn check(
     if !me.alive && !s.attr(0, sd::ATTR_CASTABLE_WHILE_DEAD) {
         return Some(fail::CASTER_DEAD);
     }
-    if !triggered
-        && let Some(code) = crate::game::map::battleground::spell_check(map, caster, s)
-    {
+    if !triggered && let Some(code) = crate::game::map::battleground::spell_check(map, caster, s) {
         return Some(code);
     }
     let player = map.players.get(&caster);
@@ -560,6 +558,9 @@ fn check_target(
     }
     if s.target_aura_state != 0 && !aura_state(map, target, s.target_aura_state) {
         return Some(fail::TARGET_AURASTATE);
+    }
+    if let Some(e) = super::class_scripts::check_target(map, caster, s, target) {
+        return Some(e);
     }
     // Mechanic immunity of a harmful spell.
     if harmful
