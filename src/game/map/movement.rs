@@ -211,9 +211,13 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
         p.fields
             .set_u32(crate::game::fields::UNIT_NPC_EMOTESTATE, 0);
     }
-    // Sitting, sleeping or kneeling; not dead.
+    // Sitting, sleeping or kneeling; not dead: up, and told so, as mangos's
+    // SetStandState and Thistle Tea's `Emote.move` tell it.
     if !matches!(p.stand_state(), 0 | 7) && p.death == crate::game::map::death::Death::Alive {
         p.set_stand_state(0);
+        p.outbound.send(&SMSG_STANDSTATE_UPDATE {
+            state: UnitStandState::Stand,
+        });
     }
     let mask = if moved {
         INTERRUPT_MOVE | INTERRUPT_TURNING | INTERRUPT_NOT_SEATED

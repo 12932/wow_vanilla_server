@@ -744,3 +744,62 @@ async fn cancelling_growth_leaves_the_player_as_big() {
     assert!(grown, "the aura stays");
     assert_eq!(after, scale);
 }
+
+fn moving(flags: MovementInfo_MovementFlags, x: f32, y: f32, z: f32) -> MovementInfo {
+    MovementInfo {
+        flags,
+        timestamp: 0,
+        position: Vector3d { x, y, z },
+        orientation: 0.0,
+        fall_time: 0.0,
+    }
+}
+
+/// Thistle Tea's msg_move_test: a heartbeat standing still keeps a sitter
+/// seated and their emote going; moving stands them up, ends the emote,
+/// and tells their client with `SMSG_STANDSTATE_UPDATE`.
+#[tokio::test]
+async fn moving_stands_a_sitter_up_and_says_so() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let at = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.set_stand_state(1);
+        p.fields.set_u32(UNIT_NPC_EMOTESTATE, 10);
+        p.position()
+    })
+    .await;
+    a.clear();
+    let still = moving(MovementInfo_MovementFlags::empty(), at.x, at.y, at.z);
+    a.send(MSG_MOVE_HEARTBEAT_Client { info: still }).await;
+    settled(&mut a).await;
+    let posture = move |m: &mut Map| {
+        let p = &m.players[&g];
+        (p.stand_state(), p.fields.get_u32(UNIT_NPC_EMOTESTATE))
+    };
+    assert_eq!(on_map(&realm, posture).await, (1, 10), "still seated");
+    assert!(
+        a.gets(Duration::ZERO, |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(_)).then_some(())
+        })
+        .await
+        .is_none()
+    );
+    let forward = moving(
+        MovementInfo_MovementFlags::new_forward(),
+        at.x + 0.5,
+        at.y,
+        at.z,
+    );
+    a.send(MSG_MOVE_START_FORWARD_Client { info: forward })
+        .await;
+    let state = a
+        .wait_for("SMSG_STANDSTATE_UPDATE", |m| match m {
+            ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(s) => Some(s.state),
+            _ => None,
+        })
+        .await;
+    assert_eq!(state, UnitStandState::Stand);
+    assert_eq!(on_map(&realm, posture).await, (0, 0));
+}
