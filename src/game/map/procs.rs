@@ -297,6 +297,23 @@ fn run(
         if !spell_allowed(pe, trigger_spell, e.school) || !outcome_allowed(pe, e.ex) {
             continue;
         }
+        // A mechanic immunity procs only on a spell of its mechanic (mangos's
+        // `HandleMechanicImmuneResistanceAuraProc`): Fear Ward isn't spent
+        // by a Frostbolt; what it keeps off spends it.
+        let immunity = h
+            .effects
+            .iter()
+            .find(|x| x.kind == auras::AURA_MECHANIC_IMMUNITY);
+        if let Some(x) = immunity
+            && !trigger_spell.is_some_and(|t| {
+                t.mechanic == x.misc as u32
+                    || t.effects
+                        .iter()
+                        .any(|f| f.effect != 0 && f.mechanic == x.misc as u32)
+            })
+        {
+            continue;
+        }
         let hand = hand_of(e);
         if outgoing
             && h.item_class == 2

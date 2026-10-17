@@ -1007,3 +1007,277 @@ async fn an_area_takes_its_count_its_kinds_and_its_reach() {
         "and twelve with Arctic Reach"
     );
 }
+
+const SLICE_AND_DICE: u32 = 5171;
+
+#[tokio::test]
+async fn slice_and_dice_goes_at_the_combo_target_and_spends_its_points() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, rogue, map) = player(&realm, "P3P13", "Sliceone", Race::Human, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, rogue, 60, &[SLICE_AND_DICE]);
+            let kobold = dummy(m, rogue, 60, 3.0);
+            if let Some(c) = m.caster_mut(rogue) {
+                c.combo_target = kobold;
+                c.combo_points = 3;
+            }
+            let data = m.realm.data.clone();
+            let s = data.spells.get(SLICE_AND_DICE).cloned().unwrap();
+            let mods = spells::mods::Mods::default();
+            let checked = spells::checks::check(m, rogue, &s, &at(kobold), None, false, &mods);
+            let cast = cast_fresh(m, rogue, SLICE_AND_DICE, at(kobold));
+            let sliced = holder(m, rogue, SLICE_AND_DICE).and_then(|h| h.duration);
+            let points = m.caster(rogue).map(|c| c.combo_points);
+            (checked, cast, sliced, points, kobold)
+        })
+        .await
+        .unwrap();
+    let (checked, cast, sliced, points, kobold) = out;
+    // As the client asks it.
+    c.clear();
+    let k = kobold;
+    map.query(move |m| {
+        if let Some(c) = m.caster_mut(rogue) {
+            c.combo_target = k;
+            c.combo_points = 2;
+        }
+        fresh(m, rogue);
+    })
+    .await
+    .unwrap();
+    c.send(CMSG_CAST_SPELL {
+        spell: SLICE_AND_DICE,
+        targets: spells::wire_targets(&at(kobold)),
+    })
+    .await;
+    let b = c
+        .wait_frame("SMSG_CAST_RESULT", spells::SMSG_CAST_RESULT, |b| {
+            b[..4] == SLICE_AND_DICE.to_le_bytes()
+        })
+        .await;
+    assert_eq!((b[4] != 0).then(|| b[5]), None, "the client's cast goes");
+    // Aimed at no one, or at the rogue: at the combo target.
+    let out2 = map
+        .query(move |m| {
+            let mut seen = Vec::new();
+            for t in [spells::Targets::default(), at(rogue)] {
+                auras::remove_spell(m, rogue, SLICE_AND_DICE, None);
+                if let Some(c) = m.caster_mut(rogue) {
+                    c.combo_target = k;
+                    c.combo_points = 1;
+                }
+                seen.push((
+                    cast_fresh(m, rogue, SLICE_AND_DICE, t),
+                    has(m, rogue, SLICE_AND_DICE),
+                ));
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out2,
+        vec![(true, true), (true, true)],
+        "no target or oneself: the combo target"
+    );
+    assert_eq!(checked, None, "at the combo target, it may go");
+    assert!(cast, "and goes");
+    assert!(
+        sliced.is_some_and(|d| d > 9_000),
+        "longer for three points: {sliced:?}"
+    );
+    assert_eq!(points, Some(0), "spending them");
+}
+
+const AIMED_SHOT: u32 = 19434;
+const RAPID_FIRE: u32 = 3045;
+
+#[tokio::test]
+async fn a_ranged_ability_is_sped_by_ranged_haste_and_a_spell_by_casting_speed() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, hunter, map) = player(&realm, "P3P14", "Aimone", Race::Dwarf, Class::Hunter).await;
+    let out = map
+        .query(move |m| {
+            ready(m, hunter, 60, &[]);
+            let data = m.realm.data.clone();
+            let mods = spells::mods::Mods::default();
+            let aimed = data.spells.get(AIMED_SHOT).cloned().unwrap();
+            let bolt = data.spells.get(FROSTBOLT).cloned().unwrap();
+            let before = (
+                spells::cast_time(m, hunter, &aimed, &mods),
+                spells::cast_time(m, hunter, &bolt, &mods),
+            );
+            apply(m, hunter, hunter, RAPID_FIRE);
+            let after = (
+                spells::cast_time(m, hunter, &aimed, &mods),
+                spells::cast_time(m, hunter, &bolt, &mods),
+            );
+            (before, after)
+        })
+        .await
+        .unwrap();
+    let (before, after) = out;
+    assert_eq!(before.0, 3000, "Aimed Shot's three seconds");
+    assert_eq!(after.0, (3000.0 / 1.4) as u32, "Rapid Fire's 40% speeds it");
+    assert_eq!(after.1, before.1, "not a spell's cast");
+}
+
+const FEAR_WARD: u32 = 6346;
+const FEAR: u32 = 5782;
+const CONFLAGRATE: u32 = 17962;
+const IMMOLATE: u32 = 348;
+const FEIGN_DEATH: u32 = 5384;
+const SINISTER_STRIKE: u32 = 1752;
+const RESURRECTION: u32 = 2006;
+
+fn feared(m: &Map, g: wow_world_messages::Guid) -> bool {
+    auras::auras(m, g).is_some_and(|a| a.has(auras::AURA_MOD_FEAR))
+}
+
+#[tokio::test]
+async fn fear_ward_is_spent_by_the_fear_it_keeps_off_and_conflagrate_wants_immolate() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, w, map) = player(&realm, "P3P15", "Wardone", Race::Human, Class::Warrior).await;
+    let (_d, lock, _) = player(&realm, "P3P16", "Wardtwo", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            ready(m, lock, 60, &[CONFLAGRATE]);
+            let kobold = dummy(m, w, 60, 5.0);
+            // Fear Ward: a Frostbolt doesn't spend it, a Fear does, kept off.
+            apply(m, w, w, FEAR_WARD);
+            spells::cast_triggered(m, kobold, FROSTBOLT, Some(w));
+            let after_bolt = has(m, w, FEAR_WARD);
+            spells::cast_triggered(m, kobold, FEAR, Some(w));
+            let warded = (feared(m, w), has(m, w, FEAR_WARD));
+            if let Some(c) = m.caster_mut(w) {
+                c.diminishing.clear();
+            }
+            spells::cast_triggered(m, kobold, FEAR, Some(w));
+            let next = feared(m, w);
+            // Conflagrate: refused without the warlock's own Immolate.
+            let target = dummy(m, lock, 60, 5.0);
+            let data = m.realm.data.clone();
+            let s = data.spells.get(CONFLAGRATE).cloned().unwrap();
+            let mods = spells::mods::Mods::default();
+            let check = |m: &mut Map| {
+                fresh(m, lock);
+                spells::checks::check(m, lock, &s, &at(target), None, false, &mods)
+            };
+            let none = check(m);
+            apply(m, kobold, target, IMMOLATE);
+            let anothers = check(m);
+            apply(m, lock, target, IMMOLATE);
+            let own = check(m);
+            (after_bolt, warded, next, none, anothers, own)
+        })
+        .await
+        .unwrap();
+    let (after_bolt, warded, next, none, anothers, own) = out;
+    assert!(after_bolt, "a Frostbolt doesn't spend Fear Ward");
+    assert_eq!(warded, (false, false), "the Fear kept off, the ward spent");
+    assert!(next, "the next Fear lands");
+    use spells::fail::TARGET_AURASTATE;
+    assert_eq!(
+        (none, anothers, own),
+        (Some(TARGET_AURASTATE), Some(TARGET_AURASTATE), None)
+    );
+}
+
+#[tokio::test]
+async fn an_emote_ends_feign_death_and_a_weapon_spell_unarmed_wants_its_weapon() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (c, hunter, map) = player(&realm, "P3P17", "Feignone", Race::Dwarf, Class::Hunter).await;
+    map.query(move |m| {
+        ready(m, hunter, 60, &[]);
+        spells::cast_triggered(m, hunter, FEIGN_DEATH, None);
+    })
+    .await
+    .unwrap();
+    let feigning = map
+        .query(move |m| has(m, hunter, FEIGN_DEATH))
+        .await
+        .unwrap();
+    c.send(CMSG_TEXT_EMOTE {
+        text_emote: TextEmote::Wave,
+        emote: 0,
+        target: wow_world_messages::Guid::zero(),
+    })
+    .await;
+    let mut ended = false;
+    for _ in 0..200 {
+        if !map
+            .query(move |m| has(m, hunter, FEIGN_DEATH))
+            .await
+            .unwrap()
+        {
+            ended = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(feigning, "feigning");
+    assert!(ended, "a wave ends it");
+    // Unarmed, a weapon's strike: the weapon is wanted.
+    let unarmed = map
+        .query(move |m| {
+            let p = m.players.get_mut(&hunter).unwrap();
+            p.items
+                .retain(|i| !(i.bag == crate::game::store::BAG_PLAYER && i.slot < 19));
+            p.gm = false;
+            p.spells.push(SINISTER_STRIKE);
+            let kobold = dummy(m, hunter, 60, 2.0);
+            let s = m.realm.data.spells.get(SINISTER_STRIKE).cloned().unwrap();
+            let mods = spells::mods::Mods::default();
+            spells::checks::check(m, hunter, &s, &at(kobold), None, false, &mods)
+        })
+        .await
+        .unwrap();
+    assert_eq!(unarmed, Some(spells::fail::EQUIPPED_ITEM_CLASS));
+}
+
+#[tokio::test]
+async fn resurrection_is_at_the_dead_it_is_aimed_at() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, priest, map) = player(&realm, "P3P18", "Raiseone", Race::Human, Class::Priest).await;
+    let (_d, dead, _) = player(&realm, "P3P19", "Raisetwo", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, priest, 60, &[RESURRECTION]);
+            place(m, priest, dead, 5.0);
+            let s = m.realm.data.spells.get(RESURRECTION).cloned().unwrap();
+            let mods = spells::mods::Mods::default();
+            let living = spells::checks::check(m, priest, &s, &at(dead), None, false, &mods);
+            crate::game::map::death::kill(m, dead);
+            let ok = spells::checks::check(m, priest, &s, &at(dead), None, false, &mods);
+            spells::cast_triggered(m, priest, RESURRECTION, Some(dead));
+            let offered = m.players[&dead].resurrect_offer.map(|o| o.0);
+            (living, ok, offered)
+        })
+        .await
+        .unwrap();
+    let (living, ok, offered) = out;
+    assert_eq!(
+        living,
+        Some(spells::fail::TARGET_NOT_DEAD),
+        "not on the living"
+    );
+    assert_eq!(ok, None, "on the dead");
+    assert_eq!(offered, Some(priest), "who is offered it");
+}

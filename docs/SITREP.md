@@ -93,6 +93,15 @@ the questions waiting for you.
     the crash bugs, in your fork. Nothing is reported upstream without your say.
 26. **The reconnect protocol version** (from 3f). Both 2 and 3 are accepted. Which does the 1.12.1 client send?
 
+27. **Snares** (from 3a). wvs now follows Thistle Tea and vmangos: one snare at a time, and a weaker or shorter
+    one is passed over. mangos-classic lets snares coexist, with the strongest counting. Which?
+28. **A charm or Mind Control ending** (from 3a). Should the freed creature's cast or channel be interrupted
+    (Thistle Tea), or carry on (mangos's `Uncharm`, and wvs today)?
+29. **Talent reset decay** (from 3d). After one reset, should the cost fall back to 1 gold after a month (Thistle
+    Tea), or stay at 5 gold (mangos, and wvs)?
+30. **Melee attack-speed slows** (from 3d). They don't stack, as vmangos and Thistle Tea have it (done); mangos-classic
+    multiplies them. Keep?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -287,6 +296,22 @@ the questions waiting for you.
     - **Merge notes:** escort quest walks now wait for the escortee to come back as a quest giver before turning in.
       3c's giver check needs the quest-giver flag, which an escort clears while it runs.
 
+19. **3a's and 3d's choices:**
+    - **Kick and Counterspell** stop only what a silence could (interrupt flag 0x8 and prevention 1, mangos's
+      `IsInterruptible`), so they can't stop a Hearthstone. On an interrupt, the cast result goes before the failure,
+      in Thistle Tea's order.
+    - **Run speed** follows mangos's `UpdateSpeed`: when mounted, only the mount's bonus counts; the worst slow
+      multiplies; a normal-speed aura caps the bonuses.
+    - **Damage-over-time timing.** DoTs and ground spells keep their own cadence through late updates. Before, they
+      lost their last tick: Corruption did 3 of 4, and Blizzard 7 waves of 8.
+    - **Stealth's flag** goes in the visibility byte. Before, it was written into the form byte, so a prowling cat
+      read as Travel Form.
+    - **Parry** needs a weapon in hand, as mangos has it.
+    - **AFK** is refused in combat, as mangos has it, and party members see AFK and DND.
+    - **Pet names** may be in any one script, not ASCII only.
+    - **Merge note:** the 3f, 3d and 3a tests that waited for a parsed unroot now look for its frame, since its
+      packed guid is hand-encoded until the wow_messages repin.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -309,11 +334,11 @@ the questions waiting for you.
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
 | Performance | running | |
-| 3a: matrix gaps, spells and auras | running | |
+| 3a: matrix gaps, spells and auras (195 rows) | merged | |
 | 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
 | 3f: matrix gaps, network and inbound (232 rows) | merged | |
 | 3c: matrix gaps, items, quests, loot, professions (241 rows) | merged | |
-| 3d: matrix gaps, player systems | running | |
+| 3d: matrix gaps, player systems (311 rows) | merged | |
 | 3e: matrix gaps, world systems (140 rows) | merged | |
 
 ## Left for later, and why

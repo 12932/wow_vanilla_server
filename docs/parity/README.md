@@ -4,27 +4,28 @@
 Phase 1a of [FULL_PARITY_PLAN.md](../FULL_PARITY_PLAN.md): its headline, covered over applicable, measures how close
 wvs is.
 
-## Where it stands (2026-10-17, against wvs at 20461ca)
+## Where it stands (2026-10-18, after Phase 3's first round)
 
-Every row is mapped. **1,781 of the 8,429 applicable Thistle Tea tests are covered: 21%.** Most gaps are behaviour wvs
-has with no test asserting it, not behaviour it lacks. The rest are listed by feature in [FINDINGS.md](FINDINGS.md).
+Every row is mapped. Phase 1a found 1,781 of the 8,429 applicable tests covered (21%). Phase 3's first round (3a to
+3f) settled 1,377 more rows, most as covered, with a fix where a test showed wvs differed. The open gaps are listed by
+feature in [FINDINGS.md](FINDINGS.md).
 
 | Area | Covered or accepted / applicable | | The rest |
 |---|---|---|---|
-| game/core | 1091 / 5431 | 20.1% | gap 4339, not-applicable 242, wrong-for-1.12 1 |
-| game/world | 510 / 2572 | 19.8% | gap 2062, not-applicable 149 |
-| game/network | 123 / 264 | 46.6% | gap 140, not-applicable 3, wrong-for-1.12 1 |
-| game/inbound | 42 / 120 | 35.0% | gap 78 |
-| . | 14 / 20 | 70.0% | gap 6, not-applicable 1 |
+| game/core | 1966 / 5423 | 36.3% | gap 3436, not-applicable 250, wrong-for-1.12 21 |
+| game/world | 686 / 2571 | 26.7% | gap 1884, not-applicable 150, wrong-for-1.12 1 |
+| game/network | 222 / 261 | 85.1% | gap 38, not-applicable 6, wrong-for-1.12 1 |
+| game/inbound | 101 / 119 | 84.9% | gap 16, not-applicable 1, wrong-for-1.12 2 |
+| . | 17 / 20 | 85.0% | gap 3, not-applicable 1 |
 | game | 1 / 12 | 8.3% | gap 11 |
 | game/architecture | 0 / 0 | 100.0% | not-applicable 8 |
 | telemetry | 0 / 0 | 100.0% | not-applicable 7 |
-| auth | 0 / 6 | 0.0% | gap 6 |
+| auth | 6 / 6 | 100.0% |  |
 | dev_seed | 0 / 0 | 100.0% | not-applicable 6 |
 | db/mangos | 0 / 4 | 0.0% | gap 4 |
 | native | 0 / 0 | 100.0% | not-applicable 3 |
 | web/utils | 0 / 0 | 100.0% | not-applicable 2 |
-| **all** | 1781 / 8429 | 21.1% | gap 6646, not-applicable 421, wrong-for-1.12 2 |
+| **all** | 2999 / 8416 | 35.6% | gap 5392, not-applicable 434, wrong-for-1.12 25 |
 
 ## The columns
 
