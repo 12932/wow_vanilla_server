@@ -9,6 +9,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::*;
+use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::harness::{self, Client};
 use crate::game::map::combat::{self, dist};
@@ -22,13 +23,16 @@ const HUMANS: u32 = 1;
 const PACK: u32 = 14;
 
 const KOBOLD: u32 = 4100;
+/// A kobold that doesn't regenerate.
+const WORN: u32 = 4101;
 
 /// The spawns: (guid, entry, east, north).
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
     // Beside the start.
     (10, KOBOLD, 4.0, 0.0),
-    // Off to the east, out of sight.
+    // Off to the east, out of sight: one sitting at its fire, one worn.
     (11, KOBOLD, 30.0, 0.0),
+    (12, WORN, 30.0, 6.0),
 ];
 
 fn faction(id: u32, ours: u32, enemy_mask: u32) -> FactionTemplate {
@@ -86,6 +90,19 @@ fn data() -> GameData {
     );
     d.creature_templates
         .insert(KOBOLD, creature(KOBOLD, "Kobold", PACK));
+    let mut worn = creature(WORN, "Worn Kobold", PACK);
+    worn.static_flags1 = 0x400;
+    d.creature_templates.insert(WORN, worn);
+    // Sitting, weapon drawn, eating.
+    d.creature_addons.insert(
+        11,
+        CreatureAddon {
+            stand_state: 1,
+            sheath_state: 1,
+            emote_state: 10,
+            ..Default::default()
+        },
+    );
     let spawns = SPAWNS
         .iter()
         .map(|(g, e, dx, dy)| {
@@ -554,4 +571,41 @@ async fn a_fighting_creature_turns_to_face_its_victim() {
         seen.contains(&format!("face {}", ga.guid())),
         "told: {seen:?}"
     );
+}
+
+fn posture(m: &Map, g: Guid) -> (u8, u8, u32) {
+    let f = m.unit_fields(g).unwrap();
+    (
+        f.get_byte(UNIT_FIELD_BYTES_1, 0),
+        f.get_byte(UNIT_FIELD_BYTES_2, 0),
+        f.get_u32(UNIT_NPC_EMOTESTATE),
+    )
+}
+
+/// A creature drawn into a fight stands up and stops its idle emote, and
+/// home again sits back down to it (Thistle Tea's `Emote.reset` and
+/// `Posture.restore`).
+#[tokio::test]
+async fn a_fight_stands_a_creature_up_and_home_it_rests_again() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let sitting = kobold(11);
+    let out = map
+        .query(move |m| {
+            let resting = posture(m, sitting);
+            m.players.get_mut(&ga).unwrap().movement.position = at(24.0, 0.0);
+            crate::game::map::ai::attacked(m, sitting, ga);
+            let fighting = posture(m, sitting);
+            step(m, 20);
+            crate::game::map::ai::enter_evade(m, sitting);
+            step(m, 100);
+            let c = m.creature(sitting).unwrap();
+            (resting, fighting, c.evading, posture(m, sitting))
+        })
+        .await
+        .unwrap();
+    let (resting, fighting, evading, home) = out;
+    assert_eq!(resting, (1, 1, 10), "it sits, eating");
+    assert_eq!((fighting.0, fighting.2), (0, 0), "it stands to fight");
+    assert!(!evading, "home");
+    assert_eq!(home, resting, "and sits again");
 }

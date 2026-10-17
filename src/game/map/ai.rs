@@ -147,6 +147,7 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
         if first {
+            crate::game::map::creature_combat::stand_up(map, creature);
             crate::game::map::event_ai::aggro(map, creature, attacker);
         }
         return;
@@ -159,7 +160,11 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     c.combat.next_swing.get_or_insert(now);
     c.fields.set_guid(UNIT_FIELD_TARGET, attacker);
     c.fields
-        .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true); // Its SMSG_ATTACKSTART waits for its first swing in reach (`announce`).
+        .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+    if first {
+        crate::game::map::creature_combat::stand_up(map, creature);
+    }
+    // Its SMSG_ATTACKSTART waits for its first swing in reach (`announce`).
     // A critter calls no one, and fights no one.
     if critter {
         return;
@@ -1191,11 +1196,13 @@ fn evade(map: &mut Map, g: Guid) {
     crate::game::map::spells::lists::left_combat(map, g);
     crate::game::map::event_ai::evade(map, g);
     if map.creature(g).is_some_and(|c| !c.evading) {
+        crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
     }
 }
 
-/// An evading creature walks home, and is whole again when it gets there.
+/// An evading creature walks home, is whole again when it gets there,
+/// and rests there as it did.
 fn evade_step(map: &mut Map, g: Guid) {
     let now = map.now;
     advance_motion(map, g);
@@ -1221,6 +1228,7 @@ fn evade_step(map: &mut Map, g: Guid) {
             map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
         }
         combat::sync_aura_state(map, g);
+        crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
