@@ -447,6 +447,9 @@ pub struct GameData {
     /// id) or outside it (negative).
     pub event_creatures: AHashMap<u32, i32>,
     pub event_objects: AHashMap<u32, i32>,
+    /// `gameobject_requirement`: spawn → (0 a creature dead, 1 an object
+    /// open; its spawn).
+    pub object_requirements: AHashMap<u32, (u8, u32)>,
     /// `game_weather`: a zone's rain, snow and storm chances, by season.
     pub weather: AHashMap<u32, [[u32; 3]; 4]>,
     /// `WorldSafeLocs`: id → map, x, y, z.

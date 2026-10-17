@@ -611,6 +611,15 @@ pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Gu
     execute(map, caster, s, targets, None, true);
 }
 
+/// A spell cast for free at `targets`: a trap's on whoever sprang it, at
+/// the trap.
+pub fn cast_triggered_with(map: &mut Map, caster: Guid, spell: u32, targets: Targets) {
+    let data = map.realm.data.clone();
+    if let Some(s) = data.spells.get(spell) {
+        execute(map, caster, s, targets, None, true);
+    }
+}
+
 /// A spell cast for free at a place.
 pub fn cast_triggered_at(map: &mut Map, caster: Guid, spell: u32, at: Vector3d) {
     let data = map.realm.data.clone();
@@ -1214,6 +1223,7 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&MSG_CHANNEL_UPDATE_Server { time: 0 });
     }
+    crate::game::map::objects::channel_ended(map, g, casting.spell);
 }
 
 /// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a
