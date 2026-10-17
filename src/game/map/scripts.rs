@@ -738,7 +738,6 @@ pub fn summon(
     if let Some(s) = event_ai::scripted_mut(map, summoner) {
         s.summoned.push(g);
     }
-    event_ai::summoned_unit(map, summoner, g);
     Some(g)
 }
 
@@ -753,15 +752,16 @@ pub fn despawn(map: &mut Map, g: Guid) {
     crate::game::map::combat::leave_combat(map, g);
     stop_for(map, g);
     match spawn {
+        // Its summoner hears of it as it goes (`Map::remove_creature`).
         None => {
             map.remove_creature(g);
         }
         Some(_) => {
             crate::game::map::ai::quiet_death(map, g);
+            if let Some(s) = summoner {
+                event_ai::summoned_despawned(map, s, g, entry);
+            }
         }
-    }
-    if let Some(s) = summoner {
-        event_ai::summoned_despawned(map, s, g, entry);
     }
 }
 

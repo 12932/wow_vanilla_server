@@ -31,6 +31,12 @@ const WORN: u32 = 4101;
 const KEEN: u32 = 4102;
 /// One that calls its kind near for help.
 const CALLER: u32 = 4103;
+/// A group's leader and member; a summoner and what it summons, with
+/// EventAI events.
+const LEADER: u32 = 4110;
+const MEMBER: u32 = 4111;
+const SUMMONER: u32 = 4112;
+const SUMMONED: u32 = 4113;
 
 /// A burn over time, and a drain channelled.
 const BURN: u32 = 95_001;
@@ -67,6 +73,10 @@ const SPAWNS: &[(u32, u32, f32, f32)] = &[
     // Two that call each other, further off.
     (15, CALLER, 60.0, 0.0),
     (16, CALLER, 63.0, 0.0),
+    // A leader and its member; a summoner.
+    (30, LEADER, -40.0, 0.0),
+    (31, MEMBER, -40.0, 3.0),
+    (32, SUMMONER, -40.0, 20.0),
     // A row to cast at, out of each other's sight.
     (20, KOBOLD, 50.0, 20.0),
     (21, KOBOLD, 50.0, 30.0),
@@ -174,6 +184,7 @@ fn data() -> GameData {
     let mut keen = creature(KEEN, "Keen Kobold", PACK);
     keen.detection_range = 40.0;
     d.creature_templates.insert(KEEN, keen);
+    eventai(&mut d);
     let mut caller = creature(CALLER, "Kobold Caller", CALLERS);
     caller.call_for_help_range = 10.0;
     d.creature_templates.insert(CALLER, caller);
@@ -290,6 +301,118 @@ fn data() -> GameData {
         }
     }
     d
+}
+
+/// The EventAI the order tests read: each event raises its creature's
+/// phase by one, or yells a line (`EVENT_*`, script commands 44 and 0).
+fn eventai(d: &mut GameData) {
+    use crate::game::data::scripts::*;
+    for (entry, name) in [
+        (LEADER, "Leader"),
+        (MEMBER, "Member"),
+        (SUMMONER, "Summoner"),
+        (SUMMONED, "Summoned"),
+    ] {
+        d.creature_templates
+            .insert(entry, creature(entry, name, PACK));
+    }
+    let s = &mut d.scripts;
+    s.groups.insert(
+        30,
+        vec![
+            GroupMember {
+                guid: 30,
+                flags: GROUP_AGGRO_TOGETHER,
+                ..Default::default()
+            },
+            GroupMember {
+                guid: 31,
+                flags: GROUP_AGGRO_TOGETHER,
+                ..Default::default()
+            },
+        ],
+    );
+    s.group_of.insert(30, 30);
+    s.group_of.insert(31, 30);
+    // 1 raises the phase; 2 to 5 yell "leader", "member", "summoned",
+    // "summoner".
+    s.ai_scripts.insert(
+        1,
+        vec![ScriptStep {
+            id: 1,
+            command: 44,
+            datalong: [1, 1, 0, 0],
+            ..Default::default()
+        }],
+    );
+    for (script, text) in [(2, 200), (3, 201), (4, 202), (5, 203)] {
+        s.ai_scripts.insert(
+            script,
+            vec![ScriptStep {
+                id: script,
+                command: 0,
+                dataint: [text, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+    }
+    for (text, line) in [
+        (200, "leader"),
+        (201, "member"),
+        (202, "summoned"),
+        (203, "summoner"),
+    ] {
+        d.npc.broadcast_texts.insert(
+            text as u32,
+            crate::game::data::npc::BroadcastText {
+                male: line.into(),
+                chat_type: 1,
+                ..Default::default()
+            },
+        );
+    }
+    let s = &mut d.scripts;
+    let event = |id, creature, kind, params: [i32; 4], action| AiEvent {
+        id,
+        creature,
+        kind,
+        chance: 100,
+        flags: EF_REPEATABLE,
+        params,
+        actions: [action, 0, 0],
+        ..Default::default()
+    };
+    s.ai_events
+        .insert(LEADER, vec![event(1, LEADER, EVENT_AGGRO, [0; 4], 2)]);
+    s.ai_events.insert(
+        MEMBER,
+        vec![
+            event(2, MEMBER, EVENT_AGGRO, [0; 4], 3),
+            event(3, MEMBER, EVENT_GROUP_MEMBER_DIED, [0, 1, 0, 0], 1),
+            event(4, MEMBER, EVENT_MOVEMENT_INFORM, [2, 7, 0, 0], 1),
+        ],
+    );
+    s.ai_events.insert(
+        SUMMONER,
+        vec![
+            event(
+                5,
+                SUMMONER,
+                EVENT_SUMMONED_UNIT,
+                [SUMMONED as i32, 0, 0, 0],
+                5,
+            ),
+            event(
+                6,
+                SUMMONER,
+                EVENT_SUMMONED_JUST_DESPAWN,
+                [SUMMONED as i32, 0, 0, 0],
+                1,
+            ),
+        ],
+    );
+    s.ai_events
+        .insert(SUMMONED, vec![event(7, SUMMONED, EVENT_SPAWNED, [0; 4], 4)]);
 }
 
 async fn setup(class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
@@ -1376,4 +1499,89 @@ async fn an_evade_keeps_a_players_buffs_and_what_is_marked_to_stay() {
         "a player's buff, what stays; not its debuff, nor its own buff"
     );
     assert_eq!(out[1], [true, true, false, true], "its own buff, kept");
+}
+
+/// The lines creatures said to a client, in order.
+async fn lines(c: &mut Client) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Some(line) = c
+        .gets(Duration::from_millis(200), |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c)
+                if matches!(c.chat_type, SMSG_MESSAGECHAT_ChatType::MonsterYell { .. }) =>
+            {
+                Some(c.message.clone())
+            }
+            _ => None,
+        })
+        .await
+    {
+        out.push(line);
+    }
+    out
+}
+
+/// EventAI's order, as Thistle Tea's: a group's member hears of its
+/// leader's death only alive, and of reaching a point only alive; a
+/// leader's own aggro events come before its group joins in; a summon's
+/// spawned events before its summoner hears of it; and its summoner hears
+/// it has gone however it goes, its corpse too.
+#[tokio::test]
+async fn eventai_hears_in_thistle_teas_order() {
+    let (_realm, mut a, ga, map) = setup(Class::Warrior).await;
+    let (leader, member, summoner) = (
+        guid::unit(LEADER, 30),
+        guid::unit(MEMBER, 31),
+        guid::unit(SUMMONER, 32),
+    );
+    a.sees(leader).await;
+    a.clear();
+    let phase = |m: &Map, g: Guid| crate::game::map::event_ai::phase(m, g);
+    m_aggro(&map, leader, ga).await;
+    let fought = lines(&mut a).await;
+    assert_eq!(
+        fought,
+        ["leader", "member"],
+        "the leader's, then its group's"
+    );
+    let out = map
+        .query(move |m| {
+            // Dead, the member hears nothing.
+            crate::game::map::ai::die(m, member, ga);
+            crate::game::map::event_ai::movement_inform(m, member, 2, 7);
+            crate::game::map::ai::die(m, leader, ga);
+            let deaf = phase(m, member);
+            // A summon: its own spawned events, then its summoner's.
+            let at = m.creature(summoner).unwrap().position;
+            let summoned =
+                crate::game::map::scripts::summon(m, summoner, SUMMONED, at, 0.0, None).unwrap();
+            crate::game::map::event_ai::update_despawns(m);
+            // Its corpse gone, its summoner hears.
+            crate::game::map::ai::die(m, summoned, ga);
+            let now = m.now;
+            if let Some(c) = m.creature_mut(summoned)
+                && let crate::game::map::creature::Life::Dead { corpse_until, .. } = &mut c.life
+            {
+                *corpse_until = now;
+            }
+            crate::game::map::ai::update_dead(m);
+            (deaf, phase(m, summoner))
+        })
+        .await
+        .unwrap();
+    let (deaf, heard) = out;
+    assert_eq!(deaf, 0, "the dead member heard nothing");
+    assert_eq!(heard, 1, "its corpse gone, the summoner heard");
+    let summoned = lines(&mut a).await;
+    assert_eq!(
+        summoned,
+        ["summoned", "summoner"],
+        "its own, then its summoner's"
+    );
+}
+
+/// `g` is attacked by `by`.
+async fn m_aggro(map: &MapHandle, g: Guid, by: Guid) {
+    map.query(move |m| crate::game::map::ai::attacked(m, g, by))
+        .await
+        .unwrap();
 }

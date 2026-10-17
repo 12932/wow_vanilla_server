@@ -781,17 +781,25 @@ pub fn update_despawns(map: &mut Map) {
 }
 
 fn spawned_now(map: &mut Map, g: Guid) {
-    if map.creature(g).is_none_or(|c| !c.alive()) {
+    let Some(c) = map.creature(g) else {
         return;
+    };
+    let (alive, summoner) = (c.alive(), c.scripted.as_deref().and_then(|s| s.summoner));
+    if alive {
+        crate::game::map::instance_script::creature_event(
+            map,
+            g,
+            crate::game::map::instance_script::Event::Spawned,
+        );
+        if has_events(map, g) {
+            ensure_started(map, g);
+            fire(map, g, |e| e.kind == EVENT_SPAWNED, None);
+        }
     }
-    crate::game::map::instance_script::creature_event(
-        map,
-        g,
-        crate::game::map::instance_script::Event::Spawned,
-    );
-    if has_events(map, g) {
-        ensure_started(map, g);
-        fire(map, g, |e| e.kind == EVENT_SPAWNED, None);
+    // Its summoner hears of it once it is in the world, its own spawned
+    // events first (Thistle Tea's `handle_continue({:spawned, _})`).
+    if let Some(s) = summoner.filter(|s| guid::is_unit(*s)) {
+        summoned_unit(map, s, g);
     }
 }
 
@@ -808,7 +816,13 @@ pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
         g,
         crate::game::map::instance_script::Event::Aggro,
     );
+    own_aggro(map, g, enemy);
+    // Its group and links join in after its own events (Thistle Tea
+    // tells them by an effect queued as it enters combat).
     crate::game::map::creature_groups::aggro(map, g, enemy);
+}
+
+fn own_aggro(map: &mut Map, g: Guid, enemy: Guid) {
     let now = map.now;
     if !has_events(map, g) {
         return;
@@ -854,7 +868,12 @@ pub fn death_heard(map: &mut Map, g: Guid) {
     // Its group hears of it.
     let members = crate::game::map::creature_groups::members_of(map, g);
     let leader = crate::game::map::creature_groups::is_leader(map, g);
+    // The dead hear nothing (Thistle Tea's `{:member_died, ..}`).
+    let alive = |map: &Map, m: Guid| map.creature(m).is_some_and(|c| c.alive());
     for m in members.into_iter().filter(|m| *m != g) {
+        if !alive(map, m) {
+            continue;
+        }
         fire(
             map,
             m,
@@ -1000,9 +1019,10 @@ pub fn summoned_despawned(map: &mut Map, g: Guid, summoned: Guid, entry: u32) {
     }
 }
 
-/// It reached a point of its movement: 2 for a waypoint.
+/// It reached a point of its movement: 2 for a waypoint. A dead one hears
+/// nothing of it (Thistle Tea's `on_movement_inform`).
 pub fn movement_inform(map: &mut Map, g: Guid, kind: u32, point: u32) {
-    if has_events(map, g) {
+    if has_events(map, g) && map.creature(g).is_some_and(|c| c.alive()) {
         fire(
             map,
             g,

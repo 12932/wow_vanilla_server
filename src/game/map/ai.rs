@@ -416,8 +416,13 @@ pub fn update_dead(map: &mut Map) {
         }
         if corpse_until <= now && !c.despawned {
             c.despawned = true;
+            let (entry, summoner) = (c.entry, c.scripted.as_deref().and_then(|s| s.summoner));
             despawn_from_view(map, g);
             crate::game::map::scripts::stop_for(map, g);
+            // A summon's corpse gone, its summoner hears it has gone.
+            if let Some(s) = summoner {
+                crate::game::map::event_ai::summoned_despawned(map, s, g, entry);
+            }
         }
         still.push(g);
     }
@@ -448,6 +453,7 @@ fn respawn(map: &mut Map, g: Guid) {
     };
     let spawn_guid = old.spawn_guid;
     let despawned = old.despawned;
+    let (entry, summoner) = (old.entry, old.scripted.as_deref().and_then(|s| s.summoner));
     let data = map.realm.data.clone();
     let spawn = spawn_guid.and_then(|sg| {
         data.creature_spawns
@@ -456,6 +462,9 @@ fn respawn(map: &mut Map, g: Guid) {
     });
     if !despawned {
         despawn_from_view(map, g);
+        if let Some(s) = summoner {
+            crate::game::map::event_ai::summoned_despawned(map, s, g, entry);
+        }
     }
     crate::game::map::scripts::stop_for(map, g);
     if let Some(c) = map
@@ -914,8 +923,8 @@ fn fight_step(map: &mut Map, g: Guid) {
         }
         // On its way in, a chaser runs on to where it aimed, inside its
         // reach, until it touches its victim (Thistle Tea's
-        // `halt_at_contact`): it doesn't stop on the reach's edge.
-        // A step about its victim goes on to its end.
+        // `halt_at_contact`): it doesn't stop on the reach's edge. A step
+        // about its victim goes on to its end.
         let (moving, spreading) = map.creature(g).map_or((false, false), |c| {
             (
                 matches!(c.motion, Motion::Moving(_)),

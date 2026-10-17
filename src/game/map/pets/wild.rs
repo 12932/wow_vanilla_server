@@ -150,7 +150,6 @@ pub fn summon(
         if let Some(s) = event_ai::scripted_mut(map, caster) {
             s.summoned.push(g);
         }
-        event_ai::summoned_unit(map, caster, g);
     }
 }
 
