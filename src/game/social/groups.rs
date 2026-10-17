@@ -382,6 +382,7 @@ impl Groups {
             }) {
                 gr.broadcast(realm, &frame, None);
             }
+            crate::game::instances::group_changed(realm, Some((id, g)), Some((id, gr.leader)));
         }
         if gr.looter == g {
             gr.looter = gr.leader;
@@ -393,6 +394,9 @@ impl Groups {
         let Some(gr) = self.groups.remove(&id) else {
             return;
         };
+        if gr.formed {
+            crate::game::instances::group_changed(realm, Some((id, gr.leader)), None);
+        }
         for m in &gr.members {
             self.of.remove(&m.guid);
             self.stats.remove(&m.guid);
@@ -533,6 +537,7 @@ pub fn accept(realm: &Realm, me: &Online) {
         );
         return;
     }
+    let forms = !gr.formed;
     gr.formed = true;
     let subgroup = gr.free_subgroup();
     gr.members.push(Slot {
@@ -545,6 +550,9 @@ pub fn accept(realm: &Realm, me: &Online) {
         gr.looter = gr.leader;
     }
     gr.send_update(realm);
+    if forms {
+        crate::game::instances::group_changed(realm, None, Some((id, gr.leader)));
+    }
     groups.of.insert(me.guid, id);
     // The newcomer's stats go to everyone at the next push; theirs to them.
     let others = groups.others(me.guid);
@@ -677,10 +685,12 @@ pub fn set_leader(realm: &Realm, me: &Online, to: Guid) {
     if gr.leader != me.guid || !gr.is_member(to) || realm.registry.online(to).is_none() {
         return;
     }
+    let id = gr.id;
     gr.leader = to;
     if let Some(s) = gr.members.iter_mut().find(|m| m.guid == to) {
         s.assistant = false;
     }
+    crate::game::instances::group_changed(realm, Some((id, me.guid)), Some((id, to)));
     let name = gr.slot(to).map(|s| s.name.to_string()).unwrap_or_default();
     if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER { name }) {
         gr.broadcast(realm, &frame, None);
@@ -796,6 +806,7 @@ pub fn join_directly(realm: &Realm, leader: &Online, member: &Online) -> bool {
     if gr.full() || gr.raid {
         return false;
     }
+    let forms = !gr.formed;
     gr.formed = true;
     let subgroup = gr.free_subgroup();
     gr.members.push(Slot {
@@ -808,6 +819,9 @@ pub fn join_directly(realm: &Realm, leader: &Online, member: &Online) -> bool {
         gr.looter = gr.leader;
     }
     gr.send_update(realm);
+    if forms {
+        crate::game::instances::group_changed(realm, None, Some((id, gr.leader)));
+    }
     groups.of.insert(member.guid, id);
     groups.stats.remove(&member.guid);
     true
