@@ -1305,7 +1305,10 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
     try_swing(map, attacker);
 }
 
-/// `CMSG_ATTACKSTOP`, or a fight that ends.
+/// `CMSG_ATTACKSTOP`, or a fight that ends. The swing timers are kept;
+/// a next-swing spell waiting is interrupted, its button let go, as
+/// mangos's MeleeAttackStop interrupts `CURRENT_MELEE_SPELL` and Thistle
+/// Tea's `MeleeSpell.interrupt` fails it.
 pub fn stop_attack(map: &mut Map, attacker: Guid) {
     let Some(c) = map.combat_mut(attacker) else {
         return;
@@ -1314,7 +1317,7 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
         return;
     }
     c.attacking = false;
-    c.queued = None;
+    let queued = c.queued.take();
     let victim = c.victim;
     if let Some(frame) = encode(&SMSG_ATTACKSTOP {
         player: attacker,
@@ -1322,6 +1325,14 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
         unknown1: 0,
     }) {
         map.send_to_observers(attacker, &frame, true);
+    }
+    if let Some(spell) = queued {
+        crate::game::map::spells::send_cast_result(
+            map,
+            attacker,
+            spell,
+            Some(crate::game::map::spells::checks::fail::INTERRUPTED),
+        );
     }
 }
 

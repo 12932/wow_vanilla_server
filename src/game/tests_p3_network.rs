@@ -423,3 +423,46 @@ async fn every_channel_command_does_what_it_says() {
     );
     assert_eq!(notified(&mut b, PLAYER_INVITED, "Custom").await, b"Carol\0");
 }
+
+async fn played(c: &mut Client) -> (u32, u32) {
+    c.send(CMSG_PLAYED_TIME {}).await;
+    c.wait_for("SMSG_PLAYED_TIME", |m| match m {
+        ServerOpcodeMessage::SMSG_PLAYED_TIME(p) => {
+            Some((p.total_played_time, p.level_played_time))
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's character_preferences_test: `/played` tells the total and
+/// the level's time, counting the time since login and not the time
+/// before it.
+#[tokio::test]
+async fn played_time_counts_the_session_and_not_the_time_away() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    on_map(&realm, move |m| {
+        let now = m.now;
+        let p = m.players.get_mut(&g).unwrap();
+        p.row.played_total = 7_200;
+        p.row.played_level = 600;
+        p.played_at = now - Duration::from_secs(30);
+    })
+    .await;
+    let (total, level) = played(&mut a).await;
+    assert!((7_230..=7_231).contains(&total), "{total}");
+    assert!((630..=631).contains(&level), "{level}");
+    // Two seconds away count for nothing.
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    a.clear();
+    a.login(g).await;
+    let (again, _) = played(&mut a).await;
+    assert!(again <= total + 1, "{total} then {again}");
+}
