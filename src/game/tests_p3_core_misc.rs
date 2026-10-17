@@ -232,3 +232,54 @@ async fn mail_with_things_waits_an_hour_and_cash_on_delivery_three_days() {
     }
     assert_eq!((item.1, cod.1), (30 * day, 3 * day));
 }
+
+/// Thistle Tea's `Weather.set/2`, a GM's `.weather`: rain at its fullest
+/// told short of 1, fine weather with no grade at all; a grade past 0 to
+/// 1, or weather of no kind, refused and the zone's weather kept.
+#[tokio::test]
+async fn a_gm_sets_the_weather_the_client_can_show() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.send(CMSG_ZONEUPDATE {
+        area: Area::ElwynnForest,
+    })
+    .await;
+    let weather = || {
+        realm
+            .social
+            .weather
+            .lock()
+            .get(&12)
+            .map(|w| (w.kind, w.grade))
+    };
+    a.say(".weather rain 1").await;
+    let told = a
+        .wait_for("the rain", |m| match m {
+            ServerOpcodeMessage::SMSG_WEATHER(w) if w.weather_type == WeatherType::Rain => {
+                Some(w.grade)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(told, 0.9999);
+    a.clear();
+    a.say(".weather fine 0.8").await;
+    a.wait_for("fine", |m| match m {
+        ServerOpcodeMessage::SMSG_WEATHER(w) if w.weather_type == WeatherType::Fine => {
+            Some(w.grade)
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(weather(), Some((0, 0.0)));
+    for line in [
+        ".weather rain -0.1",
+        ".weather snow 1.1",
+        ".weather lava 0.2",
+    ] {
+        a.say(line).await;
+        a.system_message("").await;
+        assert_eq!(weather(), Some((0, 0.0)), "{line}");
+    }
+}

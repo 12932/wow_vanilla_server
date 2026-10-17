@@ -468,6 +468,10 @@ fn weather(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
         _ => return Some("Usage: .weather fine|rain|snow|storm [0..1] [permanent]|auto".into()),
     };
     let grade = float(args.get(1)).unwrap_or(0.5);
+    // A grade the client may be told, or none (Thistle Tea's `Weather.set/2`).
+    if !(0.0..=1.0).contains(&grade) {
+        return Some("The weather's grade is from 0 to 1.".into());
+    }
     let permanent = args.contains(&"permanent");
     crate::game::weather::set(&realm, zone, kind, grade, permanent);
     None

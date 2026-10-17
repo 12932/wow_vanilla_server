@@ -171,6 +171,11 @@ pub fn kill(map: &mut Map, g: Guid) {
     p.logout_at = None;
     crate::game::map::misc::capture_self_res(map, g);
     crate::game::map::combat::leave_combat(map, g);
+    // Creatures let go of the dead: their threat on them goes, and they
+    // turn to the next or go home (mangos's `deleteReferences` on death,
+    // Thistle Tea's released threat), so none is held through a
+    // resurrection.
+    crate::game::map::ai::forget(map, g);
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::intoxication::clear(map, g);
     crate::game::map::duel::left(map, g, false);
