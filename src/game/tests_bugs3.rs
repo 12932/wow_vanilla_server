@@ -634,3 +634,76 @@ async fn spent_combo_points_keep_their_target() {
     assert_eq!(points, 0, "spent");
     assert_eq!(field, target, "the target they were on");
 }
+
+const SHAMAN: u32 = 900_340;
+const TOTEM: u32 = 900_341;
+const TOTEM_SPELL: u32 = 900_342;
+
+fn plain_creature(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
+    CreatureTemplate {
+        entry,
+        name: name.into(),
+        display_ids: [903, 0, 0, 0],
+        display_probabilities: [1, 0, 0, 0],
+        level_min: 10,
+        level_max: 10,
+        faction,
+        unit_class: 1,
+        health_max: 500,
+        ..Default::default()
+    }
+}
+
+/// A totem is under a player's control only if its owner is: a creature's
+/// has no `UNIT_FLAG_PLAYER_CONTROLLED` (mangos copies the caster's flag;
+/// Thistle Tea's `attach_owner` sets it for a player's alone).
+#[tokio::test]
+async fn a_creatures_totem_is_not_player_controlled() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    let mut totem_spell = unit_spell(TOTEM_SPELL, crate::game::map::pets::EFFECT_SUMMON_TOTEM);
+    totem_spell.effects[0].target_a = 1;
+    totem_spell.effects[0].misc_value = TOTEM as i32;
+    d.spells.spells.insert(TOTEM_SPELL, totem_spell);
+    d.creature_templates
+        .insert(SHAMAN, plain_creature(SHAMAN, "Shaman", 35));
+    d.creature_templates
+        .insert(TOTEM, plain_creature(TOTEM, "Totem", 35));
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 43,
+        entries: vec![SHAMAN],
+        map: 0,
+        x: START.0 + 4.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let (_a, g, map) = enter(&realm, "A", "Player", Race::Human, Class::Warrior).await;
+    let flags = on(&map, move |m| {
+        let shaman = m
+            .creatures
+            .iter()
+            .find(|(_, c)| c.entry == SHAMAN)
+            .map(|(_, c)| c.guid)
+            .unwrap();
+        crate::game::map::spells::cast_triggered(m, shaman, TOTEM_SPELL, None);
+        crate::game::map::spells::cast_triggered(m, g, TOTEM_SPELL, None);
+        let mut out: Vec<(bool, u32)> = m
+            .creatures
+            .iter()
+            .filter(|(_, c)| c.entry == TOTEM)
+            .map(|(_, c)| (c.owner == Some(g), c.fields.get_u32(UNIT_FIELD_FLAGS)))
+            .collect();
+        out.sort();
+        out
+    })
+    .await;
+    assert_eq!(flags.len(), 2, "both totems: {flags:?}");
+    assert_eq!(
+        flags[0].1 & 0x8,
+        0,
+        "the creature's isn't player-controlled"
+    );
+    assert_ne!(flags[1].1 & 0x8, 0, "the player's is");
+}
