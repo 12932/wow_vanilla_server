@@ -41,8 +41,7 @@ pub fn populate(map: &mut Map) {
     }
     let on = crate::game::events::current(&map.realm);
     let mut rng = rand::rng();
-    let (skip_creatures, skip_objects) =
-        crate::game::map::creature_groups::unpicked(&data, map.key.map, &mut rng);
+    let (skip_creatures, skip_objects) = crate::game::map::pools::populate(map, &on, &mut rng);
     // A copy's save: its dead stay dead until they are due back.
     let save = (map.key.instance != 0)
         .then(|| crate::game::instances::save_of(&map.realm, map.key.instance))
