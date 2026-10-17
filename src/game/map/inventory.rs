@@ -493,6 +493,69 @@ pub fn can_equip(p: &Player, prof: &Proficiency, t: &ItemTemplate, slot: u8) -> 
     Ok(())
 }
 
+/// Gear worn that its wearer can no longer use (a character made when
+/// proficiency came by class and level, before they trained it) comes off
+/// as they log in, as mangos's `_LoadInventory` takes off what it can't
+/// equip: into the bags, or, with no room, by mail to themselves (mangos
+/// mails it all; Thistle Tea's `EquipmentEligibility` tries the bags
+/// first). What is to be mailed is returned.
+pub fn unusable_off_on_login(p: &mut Player, data: &GameData) -> Vec<crate::game::store::ItemRow> {
+    let prof = Proficiency::of(p, data);
+    let off: Vec<usize> = p
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.bag == BAG_PLAYER && i.slot < EQUIPMENT_END)
+        .filter(|(_, i)| {
+            data.item(i.entry).is_some_and(|t| {
+                proficient(p, &prof, t).is_err()
+                    || (i.slot == SLOT_OFF_HAND && wants_dual_wield(t) && !prof.dual_wield)
+            })
+        })
+        .map(|(k, _)| k)
+        .collect();
+    let mut mailed = Vec::new();
+    // From the last, so the indices of the rest hold.
+    for k in off.into_iter().rev() {
+        let t = data.item(p.items[k].entry);
+        let free = crate::game::map::items::carry_slots(data, p, t)
+            .into_iter()
+            .find(|(b, s)| p.item_at(*b, *s).is_none());
+        match free {
+            Some((bag, slot)) => {
+                p.items[k].bag = bag;
+                p.items[k].slot = slot;
+            }
+            None => mailed.push(p.items.remove(k).to_row()),
+        }
+    }
+    p.refresh_inventory(data);
+    mailed
+}
+
+/// Mail an item that came off on login (`unusable_off_on_login`) to its
+/// owner, as mangos's "not equipped item" and Thistle Tea's do.
+pub fn mail_back(realm: &crate::game::Realm, owner: Guid, item: crate::game::store::ItemRow) {
+    use crate::game::social::mail;
+    let now = mail::now();
+    let me = guid::counter(owner);
+    mail::post(
+        realm,
+        mail::Mail {
+            kind: mail::NORMAL,
+            sender: me,
+            receiver: me,
+            subject: "Not equipped item".into(),
+            item: Some(item),
+            deliver_at: now,
+            expires_at: now + 30 * mail::DAY,
+            flags: mail::COPIED,
+            stationery: 61,
+            ..Default::default()
+        },
+    );
+}
+
 /// [`add_item`], with a random property (a suffix) on a new item.
 pub fn add_item_with_property(
     map: &mut Map,

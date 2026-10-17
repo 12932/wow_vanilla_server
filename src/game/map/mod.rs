@@ -585,6 +585,13 @@ impl Map {
                 p.row.map = self.key.map;
                 let guid = p.guid;
                 items::on_login(&mut p, &self.realm.data.clone());
+                let mailed = inventory::unusable_off_on_login(&mut p, &self.realm.data.clone());
+                if !mailed.is_empty() {
+                    p.save_at = self.now;
+                }
+                for item in mailed {
+                    inventory::mail_back(&self.realm, guid, item);
+                }
                 crate::game::transports::place_aboard(&self.realm, &mut p);
                 login::send_login(self, &mut p);
                 crate::game::instances::send_saved(&self.realm, p.guid, &p.outbound);

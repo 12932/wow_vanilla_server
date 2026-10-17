@@ -2,8 +2,8 @@
 //! batch: the weather's seasons, sounds and changes; a scripted stay, a
 //! dead master's guardian, extra attacks in a cast, pets and civilians, an
 //! event's looks in a fight; and equipment: Dual Wield, proficiency from
-//! the spells learned, the skill and spell an item asks for; a profession's
-//! skill as it is learned.
+//! the spells learned, the skill and spell an item asks for, gear not learned
+//! coming off on login; a profession's skill as it is learned.
 
 use std::time::Duration;
 
@@ -679,6 +679,85 @@ fn every_start_wears_its_gear() {
         assert!(!prof.dual_wield, "race {race} class {class}");
     }
     assert!(checked > 100, "{checked}");
+}
+
+/// A character made when proficiency came by class and level, wearing
+/// what it hasn't learned, finds it in its bags on logging in, or, with
+/// no room, in its mail, as mangos's `_LoadInventory` takes off what it
+/// can't equip.
+#[tokio::test]
+async fn gear_not_learned_comes_off_on_login() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (mut h, g, map) =
+        tests_pets::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    // Mail on, at 40, as the old rules let a hunter.
+    let put_on = move |m: &mut Map| {
+        level(m, g, 40, &[]);
+        if let Some(i) = m.players[&g].item_at(BAG_PLAYER, SLOT_CHEST) {
+            crate::game::map::inventory::take_item(m, g, i, 1);
+        }
+        crate::game::map::inventory::add_item(m, g, LIGHT_MAIL, 1, false).unwrap();
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.items.iter().position(|i| i.entry == LIGHT_MAIL).unwrap();
+        p.items[i].bag = BAG_PLAYER;
+        p.items[i].slot = SLOT_CHEST;
+    };
+    map.query(put_on).await.unwrap();
+    let relog = async |h: &mut Client| {
+        h.send(CMSG_LOGOUT_REQUEST {}).await;
+        h.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+        })
+        .await;
+        h.clear();
+        h.login(g).await;
+    };
+    relog(&mut h).await;
+    let map = realm.registry.online(g).unwrap().map();
+    let (off, bagged) = map
+        .query(move |m| (worn(m, g, SLOT_CHEST), carried(m, g, LIGHT_MAIL)))
+        .await
+        .unwrap();
+    assert_eq!(off, None, "off");
+    assert!(bagged.is_some(), "into the bags");
+    // On again, with the bags full: by mail.
+    map.query(move |m| {
+        crate::game::map::inventory::take_item(
+            m,
+            g,
+            m.players[&g]
+                .item_by_guid(
+                    m.players[&g]
+                        .items
+                        .iter()
+                        .find(|i| i.entry == LIGHT_MAIL)
+                        .unwrap()
+                        .guid,
+                )
+                .unwrap(),
+            1,
+        );
+        put_on(m);
+        while crate::game::map::inventory::add_item(m, g, SHORTSWORD, 1, false).is_ok() {}
+    })
+    .await
+    .unwrap();
+    relog(&mut h).await;
+    let map = realm.registry.online(g).unwrap().map();
+    let still = map
+        .query(move |m| m.players[&g].count_of(LIGHT_MAIL))
+        .await
+        .unwrap();
+    assert_eq!(still, 0, "not on, nor carried");
+    let counter = crate::game::guid::counter(g);
+    let mailed =
+        realm.social.mail.lock().mails.values().any(|m| {
+            m.receiver == counter && m.item.as_ref().is_some_and(|i| i.entry == LIGHT_MAIL)
+        });
+    assert!(mailed, "mailed to itself");
 }
 
 /// A profession's rank learned gives its skill at once, at the step its
