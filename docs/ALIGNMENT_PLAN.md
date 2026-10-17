@@ -1385,8 +1385,10 @@ Six agents took these on, each on its own branch.
   to the area, outside dungeons, with Bind and a Hearthstone.
 - **Elsewhere:** area triggers explore and script for the living, with cooldowns; temporary enchantments' time at
   login; copies sized by `map_template`.
-- Kept as mangos has them rather than Thistle Tea: the auction deposit's threefold rate, a GM's instant logout,
-  and services' 8-yard reach from centres.
+- **As Thistle Tea, over mangos:** the auction deposit without the threefold rate; a GM's logout waits like anyone's;
+  services are in reach five yards past both bodies; ready-check answers go to the leader alone.
+- **Interrupts and observers:** an emote ends a channel an animation breaks; going into or out of the water ends what
+  that breaks; speed changes reach those who see the player (`MSG_MOVE_SET_*_SPEED`).
 
 ## Where the plan leaves the gap
 
