@@ -76,6 +76,17 @@ pub fn origin(dir: &Path, client: &Client) -> Origin {
     }
 }
 
+/// The client the setup last built `dirs` from, where it still is: what to
+/// offer when it asks again.
+pub fn last_client(dirs: &Dirs) -> Option<PathBuf> {
+    [&dirs.nav, &dirs.terrain]
+        .into_iter()
+        .filter_map(|d| std::fs::read(d.join(RECORD)).ok())
+        .filter_map(|b| serde_json::from_slice::<Record>(&b).ok())
+        .map(|r| PathBuf::from(r.client))
+        .find(|p| p.exists())
+}
+
 /// Note in `dir` that `client` builds it.
 pub fn mark(dir: &Path, client: &Client) -> std::io::Result<()> {
     let record = Record {

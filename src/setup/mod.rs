@@ -1,5 +1,5 @@
-//! The data setup (docs/DATA_SETUP_PLAN.md): finds the player's WoW 1.12.1
-//! client and builds the navmesh (`data/nav`) and the terrain
+//! The data setup (docs/DATA_SETUP_PLAN.md): asks where the player's WoW
+//! 1.12.1 client is and builds the navmesh (`data/nav`) and the terrain
 //! (`data/terrain`) from it, with a question or two and progress bars.
 //! `wvs-setup` runs it; the server offers it at start-up, on a terminal,
 //! when either is missing.
@@ -14,13 +14,14 @@ pub mod ui;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
 pub use builder::{Builder, Fake, Rustigator};
 pub use maps::Selection;
 pub use plan::Dirs;
 
-use discover::{Build, Client, Found};
+use discover::Client;
 use maps::{MAPS, about};
 use plan::{Origin, Stop, Todo};
 use ui::say;
@@ -28,14 +29,13 @@ use ui::say;
 /// What the player asked for on the command line.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
-    /// The client's folder; else `WOW_DIR`; else it is looked for.
+    /// The client: its folder, its `WoW.exe` or its `Data`; else `WOW_DIR`;
+    /// else asked.
     pub client: Option<PathBuf>,
     /// What to build; else asked, or everything.
     pub maps: Option<Selection>,
-    /// Ask nothing: the first client found, and everything (or `maps`).
+    /// Ask nothing: the client given, and everything (or `maps`).
     pub yes: bool,
-    /// Search every drive when the usual places have no client, unasked.
-    pub search: bool,
     /// Build afresh what another client built, unasked (setting it aside).
     pub fresh: bool,
     pub threads: Option<u32>,
@@ -52,9 +52,6 @@ pub enum Outcome {
     Declined,
 }
 
-/// How long the full search goes on without a limit asked for.
-const SEARCH_LIMIT: Duration = Duration::from_secs(10 * 60);
-
 /// Whether someone is at a terminal to ask.
 pub fn terminal() -> bool {
     std::io::stdin().is_terminal()
@@ -67,7 +64,7 @@ pub fn terminal() -> bool {
 pub fn run(opts: &Options, dirs: &Dirs, builder: &dyn Builder) -> Result<Outcome, String> {
     let ctrl_c = ui::CtrlC::watch();
     let ask = !opts.yes;
-    let Some(client) = choose_client(opts, ask, &ctrl_c)? else {
+    let Some(client) = choose_client(opts, ask, dirs)? else {
         return Ok(Outcome::Declined);
     };
     let Some(marks) = settle(opts, ask, dirs, &client)? else {
@@ -242,160 +239,57 @@ fn settle(
     Ok(Some(marks))
 }
 
-/// The client to build from: the one given, or the one found and chosen.
-fn choose_client(opts: &Options, ask: bool, ctrl_c: &ui::CtrlC) -> Result<Option<Client>, String> {
+/// The client to build from: the one given, or the one the player names
+/// when asked (again, with what was wrong, until it is one or they stop).
+fn choose_client(opts: &Options, ask: bool, dirs: &Dirs) -> Result<Option<Client>, String> {
     let given = opts.client.clone().or_else(|| {
         std::env::var_os("WOW_DIR")
             .filter(|d| !d.is_empty())
             .map(PathBuf::from)
     });
-    if let Some(dir) = given {
-        let client = discover::given(&dir)?;
-        say(format!("Using {}.", client.describe()));
-        if let Some(note) = client.note() {
-            say(format!("Note: {note}."));
-        }
+    if let Some(path) = given {
+        let client = discover::given(&discover::clean(&path.to_string_lossy()))?;
+        found(&client);
         return Ok(Some(client));
-    }
-
-    let looking = ui::spinner("Looking for World of Warcraft 1.12.1...");
-    let mut found = discover::usual(&mut |dir, _| {
-        looking.set_message(format!("Looking in {}", dir.display()));
-        !ctrl_c.pressed()
-    });
-    looking.finish_and_clear();
-    ctrl_c.reset();
-    let mut searched = false;
-    if found.clients.is_empty() {
-        for (root, reason) in &found.rejected {
-            say(format!("Not using {}: {reason}.", root.display()));
-        }
-        let search = if ask {
-            say("No WoW 1.12.1 client in the usual places.");
-            ui::confirm("Search every drive for it? It can take some minutes", true) == Some(true)
-        } else {
-            opts.search
-        };
-        if search {
-            let limit = if ask {
-                let items = [
-                    "For up to 2 minutes".to_owned(),
-                    "For up to 10 minutes".to_owned(),
-                    "Until it has looked everywhere".to_owned(),
-                ];
-                match ui::select("How long?", &items, 1) {
-                    Some(0) => Some(Duration::from_secs(120)),
-                    Some(1) => Some(SEARCH_LIMIT),
-                    Some(_) => None,
-                    None => return Ok(None),
-                }
-            } else {
-                Some(SEARCH_LIMIT)
-            };
-            let before = found.rejected.len();
-            search_drives(limit, ctrl_c, &mut found);
-            for (root, reason) in &found.rejected[before..] {
-                say(format!("Not using {}: {reason}.", root.display()));
-            }
-            searched = true;
-        }
-    }
-    if found.clients.is_empty() {
-        return Err(format!(
-            "no WoW 1.12.1 client found. Give its folder (the one holding WoW.exe and Data) with \
-             --client <folder>, or set WOW_DIR to it{}",
-            if searched {
-                ""
-            } else {
-                "; or search every drive with --search"
-            }
-        ));
     }
     if !ask {
-        let client = found.clients.swap_remove(0);
-        say(format!("Using {}.", client.describe()));
-        return Ok(Some(client));
+        return Err(
+            "say where the WoW 1.12.1 client is: --client <path> (its folder, its WoW.exe or its \
+             Data folder), or set WOW_DIR to it"
+                .to_owned(),
+        );
     }
-    let chosen = if found.clients.len() == 1 {
-        let client = &found.clients[0];
-        say(format!("Found {}", client.describe()));
-        if let Some(note) = client.note() {
-            say(format!("Note: {note}."));
+    say("The navmesh and terrain are made from your WoW 1.12.1 client.");
+    let last = plan::last_client(dirs).map(|p| p.display().to_string());
+    loop {
+        let Some(answer) = ui::input(
+            "Where is it? Its folder, WoW.exe or Data folder (paste or drag it here)",
+            last.as_deref(),
+        ) else {
+            return Ok(None);
+        };
+        if answer.trim().is_empty() {
+            say("Nothing given: stopping. Run the setup again when you have the client.");
+            return Ok(None);
         }
-        match ui::confirm("Use it to build the navmesh and terrain?", true) {
-            Some(true) => Some(0),
-            _ => None,
-        }
-    } else {
-        let mut items: Vec<String> = found
-            .clients
-            .iter()
-            .map(|c| match c.note() {
-                Some(note) => format!("{} ({note})", c.describe()),
-                None => c.describe(),
-            })
-            .collect();
-        items.push("None of these".into());
-        ui::select(
-            &format!(
-                "Found {} WoW clients. Build the navmesh and terrain from which?",
-                found.clients.len()
-            ),
-            &items,
-            0,
-        )
-        .filter(|&i| i < found.clients.len())
-    };
-    match chosen {
-        Some(i) => Ok(Some(found.clients.swap_remove(i))),
-        None => {
-            say("Give the setup another client with --client <folder>, or set WOW_DIR.");
-            Ok(None)
+        match discover::given(&discover::clean(&answer)) {
+            Ok(client) => {
+                found(&client);
+                return Ok(Some(client));
+            }
+            Err(e) => say(format!(
+                "{e}. Try again (or press Enter on an empty line to stop)."
+            )),
         }
     }
 }
 
-/// Search every fixed drive into `found`, until a 1.12 client turns up (one
-/// of another vanilla build doesn't stop it), the time is up, or Ctrl-C.
-fn search_drives(limit: Option<Duration>, ctrl_c: &ui::CtrlC, found: &mut Found) {
-    let started = Instant::now();
-    let spinner = ui::spinner("Searching...");
-    let mut folders = 0u64;
-    let mut timed_out = false;
-    for root in discover::drives() {
-        let finished = discover::search(&root, None, found, &mut |dir, found| {
-            folders += 1;
-            spinner.set_message(format!(
-                "{} folders searched (Ctrl-C stops): {}",
-                indicatif::HumanCount(folders),
-                dir.display()
-            ));
-            timed_out = limit.is_some_and(|l| started.elapsed() >= l);
-            !ctrl_c.pressed()
-                && !timed_out
-                && !found
-                    .clients
-                    .iter()
-                    .any(|c| !matches!(c.build, Build::OtherVanilla(_)))
-        });
-        if !finished {
-            break;
-        }
+/// Which client the setup builds from, and what to know about it.
+fn found(client: &Client) {
+    say(format!("Using {}.", client.describe()));
+    if let Some(note) = client.note() {
+        say(format!("Note: {note}."));
     }
-    spinner.finish_and_clear();
-    say(format!(
-        "Searched {} folders in {}{}.",
-        indicatif::HumanCount(folders),
-        ui::short(started.elapsed()),
-        if ctrl_c.pressed() {
-            ", and stopped"
-        } else if timed_out {
-            ", the time asked"
-        } else {
-            ""
-        }
-    ));
-    ctrl_c.reset();
 }
 
 /// What to build: as given, as chosen, or everything.
@@ -510,7 +404,7 @@ pub fn startup(missing: Missing, dirs: &Dirs, terminal: bool) -> Startup {
     if terminal {
         Startup::Ask {
             missing: what,
-            question: format!("Find your WoW client and build {it} now?"),
+            question: format!("Build {it} now from your WoW 1.12.1 client?"),
         }
     } else {
         Startup::Hint(format!(
@@ -606,7 +500,7 @@ mod tests {
         };
         assert!(missing.starts_with("No navmesh in "), "{missing}");
         assert!(missing.ends_with("creatures will walk straight lines."));
-        assert_eq!(question, "Find your WoW client and build it now?");
+        assert_eq!(question, "Build it now from your WoW 1.12.1 client?");
         assert_eq!(
             startup(
                 Missing {
@@ -678,8 +572,20 @@ mod tests {
         assert!(
             run(&nowhere, &d, &Fake::default())
                 .unwrap_err()
-                .contains("doesn't exist")
+                .contains("nothing at")
         );
+        // Asking nothing, it must be told where the client is.
+        let untold = Options {
+            client: None,
+            ..opts.clone()
+        };
+        if std::env::var_os("WOW_DIR").is_none() {
+            assert!(
+                run(&untold, &d, &Fake::default())
+                    .unwrap_err()
+                    .contains("--client")
+            );
+        }
         let tbc = t.0.join("TBC");
         fake_client(&tbc, &["common.MPQ", "expansion.MPQ"], None);
         let err = run(

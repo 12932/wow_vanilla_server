@@ -1,6 +1,6 @@
-//! Finding the player's WoW client: a folder whose `Data` holds 1.12's
-//! archives. Where it was given, then where installers and launchers put it,
-//! then (if asked) every folder of every fixed drive.
+//! The player's WoW client, where they say it is: a folder whose `Data`
+//! holds 1.12's archives, named by that folder, its `WoW.exe` (or any `.exe`
+//! beside `Data`), the `Data` folder, or a file in it.
 
 use std::path::{Path, PathBuf};
 
@@ -93,14 +93,6 @@ impl Client {
             }
         }
     }
-
-    fn rank(&self) -> u8 {
-        match self.build {
-            Build::Exact => 0,
-            Build::ByArchives { .. } => 1,
-            Build::OtherVanilla(_) => 2,
-        }
-    }
 }
 
 /// What a folder turned out to be.
@@ -114,15 +106,6 @@ pub enum Verdict {
     },
 }
 
-impl Verdict {
-    fn root(&self) -> &Path {
-        match self {
-            Verdict::Client(c) => &c.root,
-            Verdict::Rejected { root, .. } => root,
-        }
-    }
-}
-
 /// The entries of `dir`, by lower-cased name.
 fn entries(dir: &Path) -> Vec<(String, std::fs::DirEntry)> {
     let Ok(read) = std::fs::read_dir(dir) else {
@@ -133,25 +116,36 @@ fn entries(dir: &Path) -> Vec<(String, std::fs::DirEntry)> {
         .collect()
 }
 
-/// A folder, not a link to one (a search doesn't follow links).
-fn is_dir(e: &std::fs::DirEntry) -> bool {
-    e.file_type().is_ok_and(|t| t.is_dir())
-}
-
 /// A folder, or a link to one: a client's `Data` may be either.
 fn leads_to_dir(e: &std::fs::DirEntry) -> bool {
     e.path().is_dir()
 }
 
-/// What `dir` is: a client folder (holding `Data`), its `Data` itself, or
-/// its `WoW.exe`. `None` if it isn't a WoW folder at all.
-pub fn inspect(dir: &Path) -> Option<Verdict> {
+/// What `path` is: a client folder (holding `Data`), its `Data` itself, a
+/// file in `Data` (an archive), or an `.exe` beside `Data` (its `WoW.exe`,
+/// or a renamed one, whose version is read). `None` if it isn't a WoW
+/// folder at all.
+pub fn inspect(path: &Path) -> Option<Verdict> {
+    inspect_with(path, None)
+}
+
+fn inspect_with(dir: &Path, exe: Option<PathBuf>) -> Option<Verdict> {
     let named = |p: &Path, n: &str| {
         p.file_name()
             .is_some_and(|f| f.to_string_lossy().eq_ignore_ascii_case(n))
     };
-    if dir.is_file() && named(dir, "wow.exe") {
-        return inspect(dir.parent()?);
+    if dir.is_file() {
+        let parent = dir.parent()?;
+        let is_exe = dir
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+        if is_exe {
+            return inspect_with(parent, Some(dir.to_path_buf()));
+        }
+        // An archive, or anything else, in Data.
+        return named(parent, "data")
+            .then(|| inspect_with(parent, exe))
+            .flatten();
     }
     let (root, data) = match entries(dir)
         .into_iter()
@@ -191,17 +185,22 @@ pub fn inspect(dir: &Path) -> Option<Verdict> {
             names.join(", ")
         ));
     }
-    let exe = entries(&root)
-        .into_iter()
-        .find(|(n, e)| n == "wow.exe" && !leads_to_dir(e))
-        .map(|(_, e)| e.path());
+    let exe = exe.or_else(|| {
+        entries(&root)
+            .into_iter()
+            .find(|(n, e)| n == "wow.exe" && !leads_to_dir(e))
+            .map(|(_, e)| e.path())
+    });
     let build = match exe {
         None => Build::ByArchives { exe: false },
         Some(exe) => match std::fs::read(&exe).ok().and_then(|b| pe::file_version(&b)) {
             None => Build::ByArchives { exe: true },
             Some(v) if v == BUILD => Build::Exact,
             Some(v) if v.0 == 1 => Build::OtherVanilla(v),
-            Some(v) => return rejected(format!("WoW.exe is {v}; the server needs {BUILD}")),
+            Some(v) => {
+                let name = exe.file_name().unwrap_or_default().to_string_lossy();
+                return rejected(format!("{name} is {v}; the server needs {BUILD}"));
+            }
         },
     };
     let mut archives: Vec<(String, u64)> = files
@@ -218,212 +217,55 @@ pub fn inspect(dir: &Path) -> Option<Verdict> {
     }))
 }
 
-/// What a search found: the usable clients, the best first, and the WoW
-/// folders turned away.
-#[derive(Debug, Default)]
-pub struct Found {
-    pub clients: Vec<Client>,
-    pub rejected: Vec<(PathBuf, String)>,
+/// A path as the player typed or pasted it: without the quotes (and the
+/// `& '...'` PowerShell puts round a file dragged onto it), the spaces
+/// round it and a trailing separator, with `~` as their home folder.
+pub fn clean(input: &str) -> PathBuf {
+    let mut s = input.trim();
+    if let Some(rest) = s.strip_prefix("& ") {
+        s = rest.trim();
+    }
+    for q in ['"', '\''] {
+        if s.len() >= 2 && s.starts_with(q) && s.ends_with(q) {
+            s = &s[1..s.len() - 1];
+        }
+    }
+    let s = s.trim();
+    let home = || {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from)
+    };
+    let path = match s.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => match home() {
+            Some(h) => h.join(rest.trim_start_matches(['/', '\\'])),
+            None => PathBuf::from(s),
+        },
+        _ => PathBuf::from(s),
+    };
+    let trimmed = path.to_string_lossy();
+    let trimmed = trimmed.trim_end_matches(['/', '\\']);
+    // Not a root's own separator (`/`, `C:\`).
+    if trimmed.is_empty() || trimmed.ends_with(':') {
+        path
+    } else {
+        PathBuf::from(trimmed)
+    }
 }
 
-impl Found {
-    fn add(&mut self, v: Verdict) {
-        let key = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        let root = key(v.root());
-        if self.clients.iter().any(|c| key(&c.root) == root)
-            || self.rejected.iter().any(|(r, _)| key(r) == root)
-        {
-            return;
-        }
-        match v {
-            Verdict::Client(c) => {
-                self.clients.push(c);
-                self.clients.sort_by_key(Client::rank);
-            }
-            Verdict::Rejected { root, reason } => self.rejected.push((root, reason)),
-        }
+/// The client at `path`, as the player named it (`--client`, `WOW_DIR` or
+/// the question), or what is wrong with it, said so they can put it right.
+pub fn given(path: &Path) -> Result<Client, String> {
+    if !path.exists() {
+        return Err(format!("there is nothing at {}", path.display()));
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.clients.is_empty() && self.rejected.is_empty()
-    }
-}
-
-/// A folder a search skips: the system's and package managers' own, which
-/// never hold a game, and are large.
-fn skipped(path: &Path, name: &str) -> bool {
-    const ANYWHERE: [&str; 9] = [
-        "$recycle.bin",
-        "system volume information",
-        "programdata",
-        "node_modules",
-        ".git",
-        "target",
-        ".cache",
-        ".cargo",
-        ".rustup",
-    ];
-    // Directly under `/`: the system's, not the user's. (`/run/media` holds
-    // other drives, and is searched on its own.)
-    const UNIX_ROOT: [&str; 17] = [
-        "proc", "sys", "dev", "run", "boot", "usr", "lib", "lib32", "lib64", "bin", "sbin", "etc",
-        "var", "nix", "snap", "System", "private",
-    ];
-    if ANYWHERE.contains(&name.to_ascii_lowercase().as_str()) {
-        return true;
-    }
-    if cfg!(unix) && path.parent() == Some(Path::new("/")) && UNIX_ROOT.contains(&name) {
-        return true;
-    }
-    // Windows's own folder, wherever the drive is mounted.
-    name.eq_ignore_ascii_case("windows") && path.join("System32").is_dir()
-}
-
-/// Search `root` and the folders below it, `depth` levels down (`None`: all
-/// the way), into `found`. `visit` is told of each folder searched (and
-/// what is found so far), and stops the search by returning `false`; then
-/// this returns `false`.
-pub fn search(
-    root: &Path,
-    depth: Option<usize>,
-    found: &mut Found,
-    visit: &mut dyn FnMut(&Path, &Found) -> bool,
-) -> bool {
-    let mut stack = vec![(root.to_path_buf(), 0usize)];
-    while let Some((dir, level)) = stack.pop() {
-        if !visit(&dir, found) {
-            return false;
-        }
-        let entries = entries(&dir);
-        if entries.iter().any(|(n, e)| n == "data" && leads_to_dir(e))
-            && let Some(v) = inspect(&dir)
-        {
-            found.add(v);
-            // A client's folder holds no other client.
-            continue;
-        }
-        if depth.is_some_and(|d| level >= d) {
-            continue;
-        }
-        let mut below: Vec<PathBuf> = entries
-            .iter()
-            // Not into links: they loop, and lead off the drive.
-            .filter(|(_, e)| is_dir(e))
-            .filter(|(_, e)| !skipped(&e.path(), &e.file_name().to_string_lossy()))
-            .map(|(_, e)| e.path())
-            .collect();
-        // Depth first, in name order.
-        below.sort_by(|a, b| b.cmp(a));
-        stack.extend(below.into_iter().map(|p| (p, level + 1)));
-    }
-    true
-}
-
-/// Where installers, launchers and players put the client, with how deep
-/// to look in each, fastest first.
-pub fn usual_places() -> Vec<(PathBuf, usize)> {
-    let mut places: Vec<(PathBuf, usize)> = super::platform::registry_install_paths()
-        .into_iter()
-        .map(|p| (p, 0))
-        .collect();
-    let home = home();
-    if cfg!(windows) {
-        for drive in super::platform::fixed_drives() {
-            for (dir, depth) in [
-                ("Games", 2),
-                ("Program Files (x86)", 2),
-                ("Program Files", 2),
-                ("", 1),
-            ] {
-                places.push((drive.join(dir), depth));
-            }
-        }
-    }
-    if let Some(home) = &home {
-        for (dir, depth) in [
-            ("Desktop", 2),
-            ("Downloads", 2),
-            ("Documents", 2),
-            ("Games", 4),
-            ("", 1),
-        ] {
-            let place = if dir.is_empty() {
-                home.clone()
-            } else {
-                home.join(dir)
-            };
-            places.push((place, depth));
-        }
-        if !cfg!(windows) {
-            // Wine, Lutris (whose prefixes are under ~/Games), Bottles,
-            // Proton's prefixes, CrossOver.
-            for (dir, depth) in [
-                (".wine/drive_c", 3),
-                (".local/share/bottles/bottles", 5),
-                (".var/app/com.usebottles.bottles/data/bottles/bottles", 5),
-                (".steam/steam/steamapps/compatdata", 6),
-                (".local/share/Steam/steamapps/compatdata", 6),
-                (
-                    ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/compatdata",
-                    6,
-                ),
-                ("Library/Application Support/CrossOver/Bottles", 5),
-                ("Applications", 2),
-            ] {
-                places.push((home.join(dir), depth));
-            }
-        }
-    }
-    if cfg!(target_os = "macos") {
-        places.push((PathBuf::from("/Applications"), 2));
-    } else if cfg!(unix) {
-        places.push((PathBuf::from("/opt"), 2));
-    }
-    places.retain(|(p, _)| p.is_dir());
-    places
-}
-
-/// Where the full search starts: every fixed drive.
-pub fn drives() -> Vec<PathBuf> {
-    let mut roots = super::platform::fixed_drives();
-    // Other drives on Linux are mounted under the skipped `/run`.
-    if cfg!(target_os = "linux") {
-        roots.push(PathBuf::from("/run/media"));
-    }
-    roots.retain(|p| p.is_dir());
-    roots
-}
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-}
-
-/// Search the usual places.
-pub fn usual(visit: &mut dyn FnMut(&Path, &Found) -> bool) -> Found {
-    let mut found = Found::default();
-    for (place, depth) in usual_places() {
-        if !search(&place, Some(depth), &mut found, visit) {
-            break;
-        }
-    }
-    found
-}
-
-/// The client at `dir`, given by the player (`--client` or `WOW_DIR`), or
-/// why it isn't one.
-pub fn given(dir: &Path) -> Result<Client, String> {
-    if !dir.exists() {
-        return Err(format!("{} doesn't exist", dir.display()));
-    }
-    match inspect(dir) {
+    match inspect(path) {
         Some(Verdict::Client(c)) => Ok(c),
         Some(Verdict::Rejected { root, reason }) => Err(format!("{}: {reason}", root.display())),
         None => Err(format!(
-            "{} isn't a WoW client: it has no Data folder holding {}. Give the folder with WoW.exe \
-             and Data in it",
-            dir.display(),
+            "{} isn't a WoW client: there is no Data folder in it with {}. Give the folder that \
+             holds WoW.exe and Data, WoW.exe itself, or the Data folder",
+            path.display(),
             ARCHIVES.map(|a| a.replace(".mpq", ".MPQ")).join(", ")
         )),
     }
@@ -592,58 +434,60 @@ pub(super) mod tests {
         assert!(
             given(&t.0.join("nowhere"))
                 .unwrap_err()
-                .contains("doesn't exist")
+                .contains("nothing at")
         );
     }
 
     #[test]
-    fn a_search_finds_clients_below_and_skips_what_it_should() {
-        let t = Temp::new("search");
-        fake_client(&t.0.join("Games/WoW 1.12"), &VANILLA, Some(BUILD));
-        fake_client(&t.0.join("Games/Old/vanilla copy"), &VANILLA, None);
-        fake_client(
-            &t.0.join("Games/TBC"),
-            &["common.MPQ", "expansion.MPQ"],
-            None,
+    fn the_client_is_named_by_its_folder_any_exe_its_data_or_a_file_in_it() {
+        let t = Temp::new("named");
+        let root = t.0.join("World of Warcraft 1.12");
+        fake_client(&root, &VANILLA, Some(BUILD));
+        let c = given(&root).unwrap();
+        for named in [
+            root.join("WoW.exe"),
+            root.join("Data"),
+            root.join("Data").join("dbc.MPQ"),
+        ] {
+            assert_eq!(given(&named).unwrap(), c, "{}", named.display());
+        }
+        // A renamed WoW.exe is read for its version.
+        std::fs::rename(root.join("WoW.exe"), root.join("WoW-tweaked.exe")).unwrap();
+        let renamed = given(&root.join("WoW-tweaked.exe")).unwrap();
+        assert_eq!(renamed.build, Build::Exact);
+        assert_eq!(renamed.root, root);
+        // Another file beside Data is not the client.
+        std::fs::write(root.join("readme.txt"), b"").unwrap();
+        assert!(
+            given(&root.join("readme.txt"))
+                .unwrap_err()
+                .contains("isn't a WoW client")
         );
-        fake_client(&t.0.join("work/node_modules/wow"), &VANILLA, None);
-        let mut seen = 0;
-        let mut found = Found::default();
-        assert!(search(&t.0, None, &mut found, &mut |_, _| {
-            seen += 1;
-            true
-        }));
-        let roots: Vec<&Path> = found.clients.iter().map(|c| c.root.as_path()).collect();
-        // The exact build first.
+        assert!(
+            given(&t.0.join("nowhere"))
+                .unwrap_err()
+                .contains("nothing at")
+        );
+    }
+
+    #[test]
+    fn a_typed_or_pasted_path_is_cleaned() {
+        let p = |s: &str| clean(s).to_string_lossy().into_owned();
+        assert_eq!(p("  C:\\Games\\WoW  "), "C:\\Games\\WoW");
         assert_eq!(
-            roots,
-            [
-                t.0.join("Games/WoW 1.12"),
-                t.0.join("Games/Old/vanilla copy")
-            ]
+            p("\"C:\\Program Files (x86)\\WoW\\\""),
+            "C:\\Program Files (x86)\\WoW"
         );
-        assert_eq!(found.rejected.len(), 1);
-        assert!(found.rejected[0].1.contains("Burning Crusade"));
-        // Not into node_modules, nor below a client's own folder.
-        assert_eq!(seen, 7, "the root, work, Games, Old and the three clients");
-        // Too shallow to reach the copy two levels down.
-        let mut found = Found::default();
-        search(&t.0.join("Games"), Some(1), &mut found, &mut |_, _| true);
-        assert_eq!(found.clients.len(), 1);
-        // Stopped at once.
-        let mut found = Found::default();
-        assert!(!search(&t.0, None, &mut found, &mut |_, _| false));
-        assert!(found.is_empty());
-        // The same client found twice is one.
-        let mut found = Found::default();
-        search(&t.0.join("Games"), Some(2), &mut found, &mut |_, _| true);
-        search(
-            &t.0.join("Games/WoW 1.12"),
-            Some(0),
-            &mut found,
-            &mut |_, _| true,
+        assert_eq!(
+            p("& 'C:\\Games\\World of Warcraft\\WoW.exe'"),
+            "C:\\Games\\World of Warcraft\\WoW.exe"
         );
-        assert_eq!(found.clients.len(), 2);
+        assert_eq!(p("'/home/me/wow/'"), "/home/me/wow");
+        assert_eq!(p("C:\\"), "C:\\");
+        assert_eq!(p("/"), "/");
+        if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+            assert_eq!(clean("~/Games/WoW"), PathBuf::from(home).join("Games/WoW"));
+        }
     }
 
     /// A real client, in `WOW_DIR` where it is set.
