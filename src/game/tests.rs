@@ -195,6 +195,7 @@ async fn a_logged_out_character_keeps_where_it_was() {
 async fn a_logout_waits_twenty_seconds_outside_an_inn_and_can_be_cancelled() {
     let mut cfg = harness::test_config();
     cfg.everyone_gm = false;
+    cfg.logout_delay = crate::game::map::login::LOGOUT_DELAY;
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = crate::game::Realm::new(cfg, store, startup, Default::default(), None);
     let mut a = Client::connect(&realm, "A");

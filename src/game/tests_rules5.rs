@@ -57,6 +57,7 @@ fn data() -> GameData {
 fn players_realm(d: GameData) -> Arc<Realm> {
     let mut cfg = harness::test_config();
     cfg.everyone_gm = false;
+    cfg.logout_delay = crate::game::map::login::LOGOUT_DELAY;
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     Realm::new(cfg, store, startup, d, None)
 }

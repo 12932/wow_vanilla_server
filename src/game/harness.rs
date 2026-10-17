@@ -29,6 +29,9 @@ pub fn test_config() -> RealmConfig {
         petition_signatures: 1,
         mail_delay: Duration::ZERO,
         instance_unload: Duration::from_millis(200),
+        // Logouts over at once (a test sets the real delay where it waits
+        // on it).
+        logout_delay: Duration::ZERO,
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
         pvp_realm: false,
