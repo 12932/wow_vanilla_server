@@ -122,11 +122,23 @@ client.
 Each connection has a reader task (it decrypts headers, decodes with wow_messages and answers pings) and a writer
 task (it encrypts headers and coalesces writes).
 
-**A panic** in the reader (wow_messages panicking on a malformed body, say) ends that task. Its channel to the
-session is dropped, so the session ends and disconnects the player, saved. A panic in the writer drops the socket's
-write half. The client sees the connection close, and the reader then ends at EOF, which ends the session the same
-way. The chaos test also feeds every well-typed message it generates through wow_messages' parser under a guard,
-and reports any parse that panics.
+**An abort.** This was the worst failure the survey found. Some of wow_messages' readers reserve memory for a count
+taken from the packet before they read what it counts. Those are a `/who`'s zones and search strings, an express
+flight's nodes, a bidder's item list, a bug report's text, and the uncompressed size of an auth session's addon
+data or a ticket's chat. An absurd count asks for gigabytes. A `/who` that claims 4 billion search strings asks for
+96 GB, the allocation fails, and the process aborts (`memory allocation of 103079215080 bytes failed`). No guard can
+catch that, so one packet from any logged-in client took the whole server down. The reader now checks those counts
+against the packet's length (`conn::fits`) and drops the packet unread if it can't hold what it claims. The world
+handshake reads its `CMSG_AUTH_SESSION` the same way, so a client that hasn't authenticated yet can't make it
+reserve 4 GB either. (`a_packet_that_would_abort_the_server_is_dropped`,
+`packets_that_would_have_wow_messages_reserve_gigabytes_are_refused`,
+`the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one`)
+
+**A panic** in wow_messages' parser (compressed data that isn't zlib, or a body shorter than its own size field)
+used to end the reader task, and with it the connection. The parse is now guarded, so the packet is dropped and
+counts as a bad packet. Any other panic in the reader still ends the task. Its channel to the session is dropped,
+so the session ends and disconnects the player, saved. A panic in the writer drops the socket's write half. The
+client sees the connection close, and the reader then ends at EOF, which ends the session the same way.
 
 **A hang.** The reader has an idle timeout (`client_idle_timeout_secs`). A writer stuck on a client that doesn't
 read is bounded by the next item.
@@ -151,6 +163,12 @@ only the bad one is lost, and it is logged with what it was. (`a_bad_save_loses_
 action button in a character used to be such a bad save: the `character_spells` and `character_actions` primary
 keys failed the insert, and with it the whole batch, at every save. The second copy is now ignored (a spell) or
 replaces the first (a button).
+
+**A field that won't load** used to cost the character's whole state. A character's state beyond its columns is
+JSON, and a float that was NaN is saved as `null`, which an `f32` won't take back. The whole state then failed to
+parse and went back to its defaults: quests, reputation, pets, talents and the hearthstone's place. A GM's
+`.rested nan` was enough. Now only the field that won't parse goes back to its default.
+(`a_saved_field_that_wont_parse_costs_only_itself`)
 
 **A hang** (a disk that doesn't answer) stalls every save and read behind it: character screens wait, saves queue
 up. SQLite's busy timeout bounds lock waits at 5 s a statement. There is no watchdog on the store.
@@ -190,6 +208,7 @@ when the map last came round its loop, and how many events wait for it. It logs,
 - a map with 10,000 events waiting ("it can't keep up"), and when it is down to a tenth of that.
 
 A hung map can't be stopped, so the watchdog only tells you. (`the_watchdog_sees_a_map_hang_and_a_mailbox_swell`)
+A GM's `.maps` shows each map's panics, quarantined creatures and restarts.
 
 ## The panic hook
 
@@ -207,9 +226,12 @@ log. (`the_panic_hook_logs_where_once_with_a_backtrace`)
 **A panic** in a login connection's task loses that login; its permit is released as the task's future is dropped.
 The session keys are in `auth::UserCache`, a `std` mutex shared with the world handshake. A panic while it was held
 used to poison it for good, and then every login and every world handshake failed ("users mutex poisoned"): no one
-could log in or enter the world until a restart. The lock now recovers from poisoning. A panic in the accept loop,
-or a port that can't be bound, used to end the login server for good, while the world ran on with no way in. It is
-now supervised: logged, and started again after a backoff.
+could log in or enter the world until a restart. The lock now recovers from poisoning: each change to the cache is
+a single insert, so what it holds is still good. (`a_panic_holding_the_session_keys_locks_no_one_out`) A panic in
+the accept loop used to end the login server for good, while the world ran on with no way in. A port already taken
+panicked it at start-up the same way. The login server is now supervised (`supervisor::supervise`): a panic is
+logged and the server is started again, at once and then after a backoff. A taken port is now retried every 5 s.
+(`a_supervised_task_that_panics_is_started_again`)
 
 ## The accounts connection
 
@@ -217,6 +239,7 @@ now supervised: logged, and started again after a backoff.
 level at login) and by maps (GM commands). Each query blocks the tokio worker it runs on while it lasts. A write
 waits up to SQLite's 5 s busy timeout if the store holds the lock. A panic while the mutex was held used to poison
 it, and every login was then refused. It now recovers from poisoning.
+(`accounts::tests::a_panic_while_the_connection_was_held_doesnt_lock_everyone_out`)
 
 ## The registry
 
@@ -230,7 +253,35 @@ prevent it.
 
 On SIGTERM or Ctrl-C, `Realm::shutdown` tells every map to save its players and stop, and waits for each to answer.
 It then flushes the store. A hung map used to hang the shutdown for good, and the other maps' saves already queued
-never reached the disk. It now waits at most 15 s for each map, then flushes the store anyway.
+never reached the disk. It now waits at most 15 s for all the maps together, then flushes the store, and waits at
+most 15 s for that too. (`a_shutdown_does_not_wait_for_a_hung_map`)
+
+## The chaos test
+
+`tests_robust::chaos` loads the real world and puts three characters at the human start, among Northshire's
+creatures, NPCs and objects. It then has them send random, well-typed client messages in random orders. For each
+client opcode wow_messages reads, it builds bodies from values the players might name: the guids around them, their
+items, and the world's spell, item, quest, area trigger and map ids. Floats include NaN, infinity and 1e9, and
+strings range from empty to long. A shape that parses is kept and filled afresh. Players who die are raised, those
+sent elsewhere arrive, and those kicked log back in. After each round of 250 messages, every player's map has to
+answer a name query, and the test asserts that no map panicked. `random_client_messages_never_panic_a_map` runs it as
+players. `random_gm_commands_never_panic_a_map` runs it as GMs, with a quarter of the messages GM commands with random
+arguments. `gm_commands_with_odd_arguments_never_panic` tries every GM command with numbers out of range, NaN and
+infinities. The suite runs 40 rounds (10,000 messages) of each; `WVS_CHAOS_ROUNDS` and `WVS_CHAOS_SEED` run more or
+others.
+
+At 300 rounds (about 73,000 messages each, reaching about 300 opcodes and drawing about 110 kinds of answer), the
+players' run found no panic in the game's own code. What it and the GMs' runs found:
+
+- **wow_messages panics** on compressed data that isn't zlib (`CMSG_AUTH_SESSION`, `CMSG_GMTICKET_CREATE`), and
+  overflows on bodies shorter than their size fields (`CMSG_WARDEN_DATA`, `CMSG_BUG`). Each used to end the
+  connection. Reading those parsers led to the allocation that aborts the process (see Connections). Both are now
+  dropped packets.
+- **A creature walk to a place no finite distance off** (a GM's `.move nan nan nan`, or `.go 1e30 1e30 1e30` with
+  creatures following) panicked while working out the walk's duration, on every turn of every creature walking it.
+  The walk now takes no time, and a GM's numbers have to be finite and, for a place, in the world.
+  (`a_walk_to_nowhere_finite_takes_no_time`, `a_gms_numbers_must_be_finite_and_in_the_world`)
+- **A NaN saved** cost the character's whole state at the next login (see the store).
 
 ## What OTP has and wvs does not
 
