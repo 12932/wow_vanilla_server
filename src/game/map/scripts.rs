@@ -632,6 +632,9 @@ fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid) -> Vec<Guid> 
     }
 }
 
+/// `SMSG_MESSAGECHAT`'s type for a raid boss's whisper.
+const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x59;
+
 /// `speaker` says `line`.
 pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u32, target: Guid) {
     let name = speaker_name(map, speaker);
@@ -641,16 +644,19 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
             sender_name: name,
             target,
         },
+        // An emote's or a whisper's GUID is its target's, after the
+        // speaker's name (mangos-zero's BuildChatPacket; wow_messages
+        // calls it the monster).
         CHAT_TEXT_EMOTE => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-            monster: speaker,
+            monster: target,
             monster_name: name,
         },
         CHAT_BOSS_EMOTE => SMSG_MESSAGECHAT_ChatType::RaidBossEmote {
-            monster: speaker,
+            monster: target,
             monster_name: name,
         },
         CHAT_WHISPER | CHAT_BOSS_WHISPER => SMSG_MESSAGECHAT_ChatType::MonsterWhisper {
-            monster: speaker,
+            monster: target,
             monster_name: name,
         },
         _ => SMSG_MESSAGECHAT_ChatType::MonsterSay {
@@ -659,7 +665,7 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
             target,
         },
     };
-    let Some(frame) = crate::game::conn::encode(&SMSG_MESSAGECHAT {
+    let Some(mut frame) = crate::game::conn::encode(&SMSG_MESSAGECHAT {
         chat_type: kind,
         language: Language::try_from(language).unwrap_or(Language::Universal),
         message: line.to_owned(),
@@ -667,6 +673,13 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
     }) else {
         return;
     };
+    // A boss's whisper is laid out as a monster's, with its own type:
+    // wow_messages has it a GUID alone.
+    if chat_type == CHAT_BOSS_WHISPER {
+        let mut bytes = frame.to_vec();
+        bytes[4] = CHAT_MSG_RAID_BOSS_WHISPER;
+        frame = std::sync::Arc::from(bytes);
+    }
     for g in hearers(map, speaker, chat_type, target) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
