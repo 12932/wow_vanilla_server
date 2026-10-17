@@ -3,7 +3,8 @@
 //! and completes the quest; the tame's Despawn Caster sends the beast
 //! away; one charm at a time; the third quest's reward teaches Tame Beast,
 //! and Training the Beast's teaches Beast Training, Feed Pet and Revive
-//! Pet. An event quest waits on its event.
+//! Pet. An event quest waits on its event; a hunter learns to teach the
+//! passives their pet came with.
 
 use std::path::Path;
 use std::time::Duration;
@@ -359,4 +360,49 @@ fn an_event_quest_waits_on_its_event() {
     assert!(!Quest::default().needs_event());
     assert_eq!(pets::rods::tame_of(19548), Some(19597));
     assert_eq!(pets::rods::tame_of(1515), None);
+}
+
+#[tokio::test]
+async fn a_hunter_learns_to_teach_the_passives_their_pet_came_with() {
+    use crate::game::data::pets::PetAbility;
+    use crate::game::tests_pets as tp;
+    const THICK_HIDE: u32 = 9201;
+    const TRAIN_THICK_HIDE: u32 = 9202;
+    let mut d = tp::data();
+    // A boar's family passive, and the hunter's spell that teaches it.
+    d.pets.abilities.get_mut(&211).unwrap().push(PetAbility {
+        spell: THICK_HIDE,
+        skill: 211,
+        acquire: 2,
+        ..Default::default()
+    });
+    d.pets.teaching.insert(THICK_HIDE, TRAIN_THICK_HIDE);
+    let none = Default::default();
+    let mut hide = tp::effect(6, 5, 1);
+    hide.aura = 22;
+    let mut passive = tp::spell(THICK_HIDE, "Thick Hide", [hide, none, none]);
+    passive.attributes[0] = crate::game::data::spells::ATTR_PASSIVE;
+    let mut teach = tp::effect(36, 0, 5);
+    teach.trigger_spell = THICK_HIDE;
+    let recipe = tp::spell(TRAIN_THICK_HIDE, "Thick Hide", [teach, none, none]);
+    d.spells.spells.insert(THICK_HIDE, passive);
+    d.spells.spells.insert(TRAIN_THICK_HIDE, recipe);
+    let realm = harness::realm_with(d);
+    let (mut h, g, map) = tp::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    tp::learn(&map, g, &[tp::TAME_BEAST]);
+    let boar = tp::place(&map, g, tp::BOAR, 0x70_0001, 4.0).await;
+    h.sees(boar).await;
+    tp::cast(&h, tp::TAME_BEAST, Some(boar)).await;
+    assert!(!tp::pet_bar(&mut h).await.is_zero(), "the tamed boar");
+    let known = map
+        .query(move |m| {
+            let pet = m.players[&g].owned.pet.unwrap();
+            (
+                pets::state(m, pet).is_some_and(|s| s.spells.contains(&THICK_HIDE)),
+                m.players[&g].spells.contains(&TRAIN_THICK_HIDE),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(known, (true, true), "its passive, and its master's recipe");
 }
