@@ -112,6 +112,10 @@ pub struct Combat {
     pub hunter_parry_window: Option<(Guid, Instant)>,
     /// When the combo point a dodge gave a warrior (Overpower) runs out.
     pub dodge_combo_until: Option<Instant>,
+    /// The victim a creature's `SMSG_ATTACKSTART` went out for: it goes
+    /// out at its first swing in reach, and again for each new victim
+    /// (Thistle Tea's `attack_started`).
+    pub announced: Option<Guid>,
 }
 
 /// A repeating ranged attack.
@@ -871,6 +875,31 @@ pub fn in_melee_range(a: &UnitView, b: &UnitView) -> bool {
         0.0
     };
     dist(a.position, b.position) <= melee_range(a, b) + leeway
+}
+
+/// Whether `a` and `b` touch: their combat reaches meet, on the ground
+/// (Thistle Tea's `contact_distance`). A chasing creature halts there.
+pub fn in_contact(a: &UnitView, b: &UnitView) -> bool {
+    let (dx, dy) = (a.position.x - b.position.x, a.position.y - b.position.y);
+    (dx * dx + dy * dy).sqrt() <= a.combat_reach + b.combat_reach
+}
+
+/// How far inside its melee range a chasing creature aims to stop
+/// (Thistle Tea's `@chase_distance_inset`): there it is in reach as the
+/// client measures it, not on the edge.
+pub const CHASE_INSET: f32 = 0.5;
+
+/// How far from its victim a creature chases to, for a melee range of
+/// `reach` (Thistle Tea's `chase_target_distance`).
+pub fn chase_distance(reach: f32) -> f32 {
+    (reach - CHASE_INSET).max(0.0)
+}
+
+/// How far its victim may go from where a chaser last aimed before it
+/// paths again (Thistle Tea's `chase_rechase_distance`): three quarters of
+/// the reach, less the victim's bounding radius.
+pub fn rechase_distance(reach: f32, bounding: f32) -> f32 {
+    (reach * 0.75 - bounding).max(0.0)
 }
 
 /// Whether `a` faces `b` within `arc` radians.
