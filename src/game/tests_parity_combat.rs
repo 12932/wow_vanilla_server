@@ -767,7 +767,7 @@ async fn moves_and_starts(c: &mut Client, creature: Guid) -> Vec<String> {
 
 /// `SMSG_ATTACKSTART` goes out at the creature's first swing in reach, not
 /// as the fight begins, and again for a new victim once it reaches that
-/// one (Thistle Tea's `attack_started`).
+/// one (Thistle Tea's `attack_started`); its death ends it.
 #[tokio::test]
 async fn attack_start_comes_with_the_first_swing_in_reach_and_for_each_new_victim() {
     let (realm, mut a, ga, map) = setup(Class::Warrior).await;
@@ -814,6 +814,13 @@ async fn attack_start_comes_with_the_first_swing_in_reach_and_for_each_new_victi
         seen[at_a + 1..at_b].iter().any(|s| s.starts_with("move")),
         "Bob's after it went to him: {seen:?}"
     );
+    // Its death ends its attack.
+    map.query(move |m| combat::kill(m, ga, kobold)).await;
+    a.wait_for("its SMSG_ATTACKSTOP as it dies", |m| match m {
+        ServerOpcodeMessage::SMSG_ATTACKSTOP(s) if s.player == kobold => Some(()),
+        _ => None,
+    })
+    .await;
 }
 
 /// A creature fighting faces its victim, and tells its observers (Thistle
