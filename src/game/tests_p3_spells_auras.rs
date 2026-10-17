@@ -573,3 +573,178 @@ async fn a_crowd_control_a_full_bar_refuses_spends_no_returns() {
     assert!(on, "with room it goes on");
     assert_eq!(spent, Some(1), "and spends one");
 }
+
+const SHIELD_BLOCK: u32 = 2565;
+const IMPROVED_SHIELD_BLOCK: u32 = 12945;
+
+/// Made-up warrior spells for charge modifiers: a 2-charge and a
+/// charge-less block like Shield Block's, one of other flags, a strike of
+/// its flags, and modifiers of -1, -10, +25% and a charged +1.
+fn charge_spells(d: &mut crate::game::data::GameData) {
+    let block = |id: u32, charges: u32, flags: u64| {
+        let mut s = made_up(id, 6, auras::AURA_MOD_BLOCK_PERCENT, 0, 75);
+        s.family_name = 4;
+        s.family_flags = flags;
+        s.proc_charges = charges;
+        s.duration_index = 28;
+        s
+    };
+    for s in [
+        block(990_700, 2, 0x1000),
+        block(990_701, 0, 0x1000),
+        block(990_702, 1, 0x2),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let mut strike = made_up(990_703, 2, 0, 0, 10);
+    strike.family_name = 4;
+    strike.family_flags = 0x1000;
+    strike.range_index = 4;
+    strike.effects[0].target_a = 6;
+    d.spells.spells.insert(strike.id, strike);
+    let modifier = |id: u32, kind: u32, amount: i32, charges: u32| {
+        let mut s = made_up(id, 6, kind, 4, amount);
+        s.family_name = 4;
+        s.effects[0].item_type = 0x1000;
+        s.duration_index = 21;
+        s.proc_charges = charges;
+        s
+    };
+    for s in [
+        modifier(990_710, auras::AURA_ADD_FLAT_MODIFIER, -1, 0),
+        modifier(990_711, auras::AURA_ADD_FLAT_MODIFIER, -10, 0),
+        modifier(990_712, auras::AURA_ADD_PCT_MODIFIER, 25, 0),
+        modifier(990_713, auras::AURA_ADD_FLAT_MODIFIER, 1, 1),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+}
+
+fn charges(m: &Map, g: Guid, spell: u32) -> Option<u32> {
+    holder(m, g, spell).map(|h| h.charges)
+}
+
+#[tokio::test]
+async fn charge_modifiers_add_to_their_spells_charges_flat_then_percent() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(charge_spells);
+    let (_c, w, map) = player(&realm, "P3A11", "Chargeone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[SHIELD_BLOCK, IMPROVED_SHIELD_BLOCK]);
+            let kobold = dummy(m, w, 60, 5.0);
+            let cast = |m: &mut Map, by: Guid, spell: u32| {
+                spells::cast_triggered(m, by, spell, Some(w));
+                charges(m, w, spell)
+            };
+            // Improved Shield Block's charge, and the count the client sees.
+            let block = cast(m, w, SHIELD_BLOCK);
+            let apps = holder(m, w, SHIELD_BLOCK).and_then(|h| h.slot).map(|slot| {
+                m.players[&w]
+                    .fields
+                    .get_u32(UNIT_FIELD_AURAAPPLICATIONS + (slot / 4) as u16)
+                    >> ((slot % 4) * 8)
+                    & 0xFF
+            });
+            // Spent, then cast again; another's cast replaces it, unmodified.
+            auras::spend_charge(m, w, SHIELD_BLOCK, w);
+            let spent = charges(m, w, SHIELD_BLOCK);
+            m.now += Duration::from_secs(2);
+            let again = cast(m, w, SHIELD_BLOCK);
+            let expires = holder(m, w, SHIELD_BLOCK).map(|h| {
+                (
+                    h.expires.map(|t| t.saturating_duration_since(m.now)),
+                    h.duration.map(|d| Duration::from_millis(u64::from(d))),
+                )
+            });
+            apply(m, kobold, w, SHIELD_BLOCK);
+            let others = charges(m, w, SHIELD_BLOCK);
+            let held = auras::auras(m, w).map_or(0, |a| {
+                a.holders.iter().filter(|h| h.spell == SHIELD_BLOCK).count()
+            });
+            // Flat, then a quarter more: (2 + 1) * 1.25, truncated.
+            apply(m, w, w, 990_712);
+            let percent = cast(m, w, 990_700);
+            auras::remove_spell(m, w, 990_712, None);
+            // A charge-less spell of its flags gets one; one of other flags
+            // none.
+            let given = cast(m, w, 990_701);
+            let other_flags = cast(m, w, 990_702);
+            // Less than none left is no limit.
+            auras::remove_spell(m, w, IMPROVED_SHIELD_BLOCK, None);
+            apply(m, w, w, 990_710);
+            let minus_one = cast(m, w, SHIELD_BLOCK);
+            auras::remove_spell(m, w, 990_710, None);
+            apply(m, w, w, 990_711);
+            let minus_ten = cast(m, w, SHIELD_BLOCK);
+            auras::remove_spell(m, w, 990_711, None);
+            // A charged modifier is spent by the aura it adds a charge to,
+            // not by a strike of its flags.
+            spells::learn(m, w, 990_700);
+            spells::learn(m, w, 990_703);
+            apply(m, w, w, 990_713);
+            cast_fresh(m, w, 990_703, at(kobold));
+            let after_strike = has(m, w, 990_713);
+            auras::remove_spell(m, w, 990_700, None);
+            cast_fresh(m, w, 990_700, spells::Targets::default());
+            let charged = (charges(m, w, 990_700), has(m, w, 990_713));
+            (
+                block,
+                apps,
+                spent,
+                again,
+                expires,
+                others,
+                held,
+                percent,
+                given,
+                other_flags,
+                minus_one,
+                minus_ten,
+                after_strike,
+                charged,
+            )
+        })
+        .await
+        .unwrap();
+    let (
+        block,
+        apps,
+        spent,
+        again,
+        expires,
+        others,
+        held,
+        percent,
+        given,
+        other_flags,
+        minus_one,
+        minus_ten,
+        after_strike,
+        charged,
+    ) = out;
+    assert_eq!(block, Some(2), "Improved Shield Block's extra charge");
+    assert_eq!(apps, Some(1), "the client counts two");
+    assert_eq!(spent, Some(1), "one spent");
+    assert_eq!(again, Some(2), "cast again, two");
+    let (left, full) = expires.unwrap();
+    assert_eq!(left, full, "and its whole time again");
+    assert_eq!(
+        (others, held),
+        (Some(1), 1),
+        "another's replaces it, unmodified"
+    );
+    assert_eq!(percent, Some(3), "(2 + 1) and a quarter, truncated");
+    assert_eq!(given, Some(1), "a charge-less spell of its flags gets one");
+    assert_eq!(other_flags, Some(1), "one of other flags keeps its own");
+    assert_eq!(minus_one, Some(0), "none left is no limit");
+    assert_eq!(minus_ten, Some(0), "nor less");
+    assert!(after_strike, "a strike doesn't spend a charge modifier");
+    assert_eq!(
+        charged,
+        (Some(3), false),
+        "the aura does, and has its charge"
+    );
+}
