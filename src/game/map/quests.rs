@@ -633,6 +633,15 @@ pub fn killed(map: &mut Map, player: Guid, creature: Guid) {
     credit(map, player, creature, 0, &allowed);
 }
 
+/// The entry a creature or object is now (a script may have changed
+/// it, as a cured beast's), not the one its GUID was made with.
+pub fn entry_of(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .map(|c| c.entry)
+        .or_else(|| map.gameobject(g).map(|o| o.entry))
+        .unwrap_or_else(|| guid::entry(g))
+}
+
 /// A raid quest, by its type or its flags: killing counts in a raid.
 const QUEST_TYPE_RAID: u32 = 62;
 const QUEST_FLAGS_RAID: u32 = 0x40;
@@ -707,7 +716,7 @@ fn credit(
     spell: u32,
     eligible: &dyn Fn(&Quest) -> bool,
 ) {
-    let entry = guid::entry(target);
+    let entry = entry_of(map, target);
     let object = guid::is_game_object(target);
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
