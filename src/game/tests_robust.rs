@@ -212,3 +212,108 @@ async fn a_bad_save_loses_only_itself() {
     );
     assert_eq!(levels, (Some(7), Some(9)));
 }
+
+const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+
+/// A sweep that panics rests (a second, then twice as long each time it
+/// panics again) while the other sweeps go on; then it is tried again.
+/// Before, the panic ended the sweeps' task: mail, auctions, instance
+/// resets, battlegrounds, events and weather stopped for good.
+#[tokio::test]
+async fn a_sweep_that_panics_rests_and_the_others_go_on() {
+    let realm = harness::realm();
+    let faults = &realm.social.faults;
+    faults.arm("the mail sweep", 1);
+    let mut watch = crate::game::social::Watch::default();
+    let t0 = std::time::Instant::now();
+    crate::game::social::sweep_watched(&realm, &mut watch, t0);
+    assert_eq!(faults.checked("the mail sweep"), 1);
+    assert_eq!(faults.checked("the weather sweep"), 1, "the rest went on");
+    // Resting at once after.
+    crate::game::social::sweep_watched(&realm, &mut watch, t0);
+    assert_eq!(faults.checked("the mail sweep"), 1);
+    assert_eq!(faults.checked("the weather sweep"), 2);
+    // Tried again at the next round, five seconds on.
+    crate::game::social::sweep_watched(&realm, &mut watch, t0 + crate::game::social::SWEEP_EVERY);
+    assert_eq!(faults.checked("the mail sweep"), 2);
+}
+
+/// The transports' clock outlives a panic: the route rests a moment, and
+/// the boat sails on between its maps. Before, the clock's task died and
+/// every boat and zeppelin stopped where it was.
+#[tokio::test]
+async fn the_transports_clock_outlives_a_panic() {
+    use crate::game::data::npc::TaxiPathNode;
+    use crate::game::data::*;
+    const BOAT: u32 = 9999;
+    let mut d = GameData::empty();
+    let mut data = [0u32; 24];
+    data[0] = 77;
+    data[1] = 1000;
+    data[2] = 1000;
+    d.gameobject_templates.insert(
+        BOAT,
+        GameObjectTemplate {
+            entry: BOAT,
+            kind: 15,
+            display_id: 3015,
+            name: "The Test Boat".into(),
+            size: 1.0,
+            data,
+            ..Default::default()
+        },
+    );
+    d.transports.push(TransportRoute {
+        entry: BOAT,
+        name: "Here and There".into(),
+        period: 1600,
+    });
+    let node = |map, x: f32, y: f32| TaxiPathNode {
+        map,
+        x,
+        y,
+        z: START.2,
+        flags: 0,
+        delay: 0,
+    };
+    d.npc.taxi_path_nodes.insert(
+        77,
+        vec![
+            node(0, START.0, START.1),
+            node(0, START.0 + 30.0, START.1),
+            node(0, START.0 + 60.0, START.1),
+            node(0, START.0 + 100.0, START.1),
+            node(1, 990.0, 1000.0),
+            node(1, 1000.0, 1000.0),
+            node(1, 1010.0, 1000.0),
+            node(1, 1020.0, 1000.0),
+        ],
+    );
+    // Armed before the clock starts: its first tick panics.
+    let realm = {
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        let social_faults_first = |r: &Arc<Realm>| r.social.faults.arm("transport", 1);
+        let r = Realm::new(harness::test_config(), store, startup, d, None);
+        social_faults_first(&r);
+        r
+    };
+    let boat = guid::make(guid::HighGuid::MoTransport, 0, BOAT);
+    let on = |realm: &Arc<Realm>, map: u32| {
+        let h = realm.maps.get(realm, MapKey::world(map));
+        async move { h.query(move |m| m.gameobject(boat).is_some()).await == Some(true) }
+    };
+    eventually("the clock panics", || {
+        realm.social.faults.checked("transport") >= 1
+    })
+    .await;
+    let first = if on(&realm, 0).await { 0 } else { 1 };
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while !on(&realm, 1 - first).await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the boat never crossed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(realm.social.faults.checked("transport") > 1);
+}
