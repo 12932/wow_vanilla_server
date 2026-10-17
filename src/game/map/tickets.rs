@@ -126,6 +126,72 @@ fn ticket_message(realm: &Realm, player: u32) -> SMSG_GMTICKET_GETTICKET {
     }
 }
 
+pub const CMSG_GMSURVEY_SUBMIT: u16 = 0x32A;
+
+/// A GM survey: its id, each question's id, answer and comment, and the
+/// closing comment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Survey {
+    pub id: u32,
+    pub answers: Vec<(u32, u8, String)>,
+    pub comment: String,
+}
+
+/// `CMSG_GMSURVEY_SUBMIT`, read by hand: its answers run to a zero
+/// question or the tenth, as mangos's HandleGMSurveySubmitOpcode and
+/// Thistle Tea's CmsgGmsurveySubmit read them, where wow_messages wants
+/// all ten.
+pub fn parse_survey(body: &[u8]) -> Option<Survey> {
+    fn u32_at(b: &[u8], at: &mut usize) -> Option<u32> {
+        let v = u32::from_le_bytes(b.get(*at..*at + 4)?.try_into().ok()?);
+        *at += 4;
+        Some(v)
+    }
+    fn string(b: &[u8], at: &mut usize) -> Option<String> {
+        let len = b.get(*at..)?.iter().position(|c| *c == 0)?;
+        let s = String::from_utf8_lossy(&b[*at..*at + len]).into_owned();
+        *at += len + 1;
+        Some(s)
+    }
+    let mut at = 0;
+    let id = u32_at(body, &mut at)?;
+    let mut answers = Vec::new();
+    while answers.len() < 10 {
+        let question = u32_at(body, &mut at)?;
+        if question == 0 {
+            break;
+        }
+        let answer = *body.get(at)?;
+        at += 1;
+        answers.push((question, answer, string(body, &mut at)?));
+    }
+    let comment = string(body, &mut at)?;
+    Some(Survey {
+        id,
+        answers,
+        comment,
+    })
+}
+
+/// A survey submitted: logged.
+pub fn survey(map: &Map, g: Guid, body: &[u8]) {
+    let Some(s) = parse_survey(body) else {
+        tracing::debug!("an unreadable GM survey from {g}");
+        return;
+    };
+    let name = map
+        .players
+        .get(&g)
+        .map(|p| p.name.to_string())
+        .unwrap_or_default();
+    tracing::info!(
+        "GM survey {} from {name}: {:?} {}",
+        s.id,
+        s.answers,
+        s.comment
+    );
+}
+
 pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     use ClientOpcodeMessage as C;
     match msg {
@@ -147,19 +213,6 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
         ),
         C::CMSG_GMTICKET_UPDATETEXT(m) => update(map, g, m.ticket_type.as_int(), m.message),
         C::CMSG_GMTICKET_DELETETICKET => abandon(map, g),
-        C::CMSG_GMSURVEY_SUBMIT(m) => {
-            let name = map
-                .players
-                .get(&g)
-                .map(|p| p.name.to_string())
-                .unwrap_or_default();
-            tracing::info!(
-                "GM survey {} from {name}: {:?} {}",
-                m.survey_id,
-                m.questions,
-                m.answer_comment
-            );
-        }
         other => return Some(other),
     }
     None

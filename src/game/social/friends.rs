@@ -106,6 +106,56 @@ fn friend_entry(realm: &Realm, owner: &Online, g: Guid) -> Friend {
     Friend { guid: g, status }
 }
 
+/// `CMSG_FRIEND_LIST`: the friend and ignore lists, as mangos's
+/// HandleFriendListOpcode and Thistle Tea send them.
+pub fn send_lists(map: &Map, g: Guid) {
+    let realm = &map.realm;
+    let (Some(p), Some(me)) = (map.players.get(&g), realm.registry.online(g)) else {
+        return;
+    };
+    p.outbound.send(&SMSG_FRIEND_LIST {
+        friends: p
+            .row
+            .state
+            .friends
+            .iter()
+            .map(|c| friend_entry(realm, &me, guid::player(*c)))
+            .collect(),
+    });
+    p.outbound.send(&SMSG_IGNORE_LIST {
+        ignored: p
+            .row
+            .state
+            .ignored
+            .iter()
+            .map(|c| guid::player(*c).guid())
+            .collect(),
+    });
+}
+
+/// `CMSG_CHAT_IGNORED`: the player's client didn't show `speaker`'s line,
+/// ignoring them; they are told so, as mangos's HandleChatIgnoredOpcode
+/// and Thistle Tea's `Social.ignored` tell them, if the player does ignore
+/// them.
+pub fn chat_ignored(map: &Map, g: Guid, speaker: Guid) {
+    let realm = &map.realm;
+    if !realm.social.lists.lock().ignores(g, speaker) {
+        return;
+    }
+    let (Some(p), Some(o)) = (map.players.get(&g), realm.registry.online(speaker)) else {
+        return;
+    };
+    o.outbound
+        .send(&wow_world_messages::vanilla::SMSG_MESSAGECHAT {
+            chat_type: wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::Ignored {
+                sender2: g,
+            },
+            language: wow_world_messages::vanilla::Language::Universal,
+            message: p.name.to_string(),
+            tag: wow_world_messages::vanilla::PlayerChatTag::None,
+        });
+}
+
 /// At login: the lists are sent, and those with the player as a friend
 /// told.
 pub fn logged_in(map: &mut Map, g: Guid) {

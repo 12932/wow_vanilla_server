@@ -127,11 +127,14 @@ fn whisper(map: &Map, me: &Online, to: &str, text: &str, language: Language, tag
 
 /// `/afk` and `/dnd`: on with a message, off again without one (or when
 /// already on).
+/// `/afk` and `/dnd`: on, with a message or the default; already on, an
+/// empty message turns it off and another only changes it, as mangos's
+/// HandleMessagechatOpcode and Thistle Tea's `ChatStatus.change` have it.
 fn away(map: &mut Map, g: Guid, flag: u32, text: &str) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let on = !p.fields.has_flag(PLAYER_FLAGS, flag);
+    let on = !p.fields.has_flag(PLAYER_FLAGS, flag) || !text.is_empty();
     p.fields.set_flag(PLAYER_FLAGS, flag, on);
     // AFK and DND are one or the other.
     let other = if flag == PLAYER_FLAGS_AFK {
@@ -163,19 +166,19 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     let Some(me) = online(map, g) else {
         return;
     };
+    // More than the client can send is no query, as mangos's
+    // HandleWhoOpcode and Thistle Tea's CmsgWho turn it away.
+    if m.zones.len() > 10 || m.search_strings.len() > 4 {
+        return;
+    }
     let (low, high) = (
         u32::from(m.minimum_level.as_int()),
         u32::from(m.maximum_level.as_int()),
     );
     let name = m.player_name.to_lowercase();
     let guild_filter = m.guild_name.to_lowercase();
-    let words: Vec<String> = m
-        .search_strings
-        .iter()
-        .take(4)
-        .map(|s| s.to_lowercase())
-        .collect();
-    let zones: Vec<u32> = m.zones.iter().take(10).copied().collect();
+    let words: Vec<String> = m.search_strings.iter().map(|s| s.to_lowercase()).collect();
+    let zones: Vec<u32> = m.zones.clone();
     let mut matched = 0usize;
     let mut b = Body::default();
     let mut listed = 0u32;
@@ -343,6 +346,8 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_DEL_FRIEND(m) => friends::del_friend(map, g, m.guid),
         C::CMSG_ADD_IGNORE(m) => friends::add_ignore(map, g, &m.name),
         C::CMSG_DEL_IGNORE(m) => friends::del_ignore(map, g, m.guid),
+        C::CMSG_FRIEND_LIST => friends::send_lists(map, g),
+        C::CMSG_CHAT_IGNORED(m) => friends::chat_ignored(map, g, m.guid),
         C::CMSG_WHO(m) => who(map, g, &m),
         C::CMSG_INSPECT(m) => inspect(map, g, m.guid),
         C::CMSG_GROUP_INVITE(m) => groups::invite(&realm, &me, &m.name),

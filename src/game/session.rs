@@ -52,6 +52,9 @@ pub struct Session {
     control: mpsc::UnboundedSender<Control>,
     control_rx: mpsc::UnboundedReceiver<Control>,
     state: State,
+    /// The character last logged in: the client uploads its caches after
+    /// its logout, on the character screen.
+    last_character: Option<u32>,
 }
 
 /// However a session ends (the client goes, the task panics or is
@@ -112,22 +115,30 @@ async fn handshake(
     .await?;
     let c = read_auth_session(stream).await?;
     let account = c.username;
-    let session_key = {
-        let users = realm.users.as_ref().ok_or("no auth server")?;
+    let session_key = realm.users.as_ref().and_then(|users| {
         let mut users = crate::auth::users_lock(users);
-        let srp = users
-            .get_mut(&account)
-            .ok_or_else(|| format!("unknown account {account}"))?;
-        *srp.session_key()
+        users.get_mut(&account).map(|srp| *srp.session_key())
+    });
+    let crypto = match (session_key, NormalizedString::new(&account)) {
+        (Some(key), Ok(name)) => seed
+            .into_server_header_crypto(&name, key, c.client_proof, c.client_seed)
+            .map_err(|e| format!("bad proof from {account}: {e:?}")),
+        _ => Err(format!("unknown account {account}")),
     };
-    let mut crypto = seed
-        .into_server_header_crypto(
-            &NormalizedString::new(&account)?,
-            session_key,
-            c.client_proof,
-            c.client_seed,
-        )
-        .map_err(|e| format!("bad proof from {account}: {e:?}"))?;
+    // A refusal is told, unencrypted as there is no key to encrypt it
+    // with, as mangos's HandleAuthSession and Thistle Tea's
+    // CmsgAuthSession send it, before the connection closes.
+    let mut crypto = match crypto {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = SMSG_AUTH_RESPONSE {
+                result: SMSG_AUTH_RESPONSE_WorldResult::AuthFailed,
+            }
+            .tokio_write_unencrypted_server(&mut *stream)
+            .await;
+            return Err(e.into());
+        }
+    };
     SMSG_AUTH_RESPONSE {
         result: SMSG_AUTH_RESPONSE_WorldResult::AuthOk {
             billing_flags: 0,
@@ -184,6 +195,7 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
         control,
         control_rx,
         state: State::Screen,
+        last_character: None,
     };
     #[allow(clippy::large_enum_variant)] // Each packet goes through once.
     enum Next {
@@ -222,6 +234,8 @@ impl Session {
                 if let State::InWorld { guid, map } = &self.state {
                     let g = *guid;
                     map.call(move |m| m.handle_raw(g, opcode, &body));
+                } else if opcode == crate::game::map::account_data::CMSG_UPDATE_ACCOUNT_DATA {
+                    self.screen_account_data(&body);
                 }
                 return;
             }
@@ -452,6 +466,24 @@ impl Session {
         self.outbound.send(&SMSG_CHAR_DELETE { result });
     }
 
+    /// A cache the client uploads on the character screen, after a
+    /// logout: the account's, or the character last logged in's, as
+    /// Thistle Tea's `AccountCaches` files it.
+    fn screen_account_data(&self, body: &[u8]) {
+        use crate::game::map::account_data;
+        let Some((kind, data)) = account_data::parse_update(body) else {
+            return;
+        };
+        let character = match self.last_character {
+            Some(c) => c,
+            None if account_data::account_wide(kind) => 0,
+            None => return,
+        };
+        let now = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
+        let k = account_data::key(&self.account, character, kind);
+        self.realm.store.set_account_data(&k, kind, now, data);
+    }
+
     async fn login(&mut self, g: Guid) {
         let fail = |out: &Outbound, result| {
             out.send(&SMSG_CHARACTER_LOGIN_FAILED { result });
@@ -491,6 +523,7 @@ impl Session {
                 mended.facial_hair,
             );
         }
+        self.last_character = Some(row.guid);
         // The client's caches, and the account's tutorials.
         let (caches, tutorials) =
             crate::game::map::account_data::load(&self.realm, &self.account, row.guid).await;

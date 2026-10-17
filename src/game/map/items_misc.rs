@@ -353,43 +353,52 @@ fn release(map: &mut Map, g: Guid, target: Guid) {
     }
 }
 
-/// `CMSG_READ_ITEM`: an item with a page may be read.
+/// `CMSG_READ_ITEM`: an item with a page may be read; an empty slot, or
+/// an item with nothing to read, is not found, as mangos's
+/// HandleReadItemOpcode and Thistle Tea's CmsgReadItem answer it.
 fn read(map: &mut Map, g: Guid, bag: u8, slot: u8) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let Some(i) = p.item_at(bag, slot) else {
-        return;
-    };
-    let item = &p.items[i];
-    let readable = data.item(item.entry).is_some_and(|t| t.page_text != 0)
-        || item.fields.get_u32(ITEM_FIELD_ITEM_TEXT_ID) != 0;
-    if readable {
-        p.outbound.send(&SMSG_READ_ITEM_OK { guid: item.guid });
-    } else {
-        p.outbound.send(&SMSG_READ_ITEM_FAILED { guid: item.guid });
+    let readable = p.item_at(bag, slot).map(|i| &p.items[i]).filter(|item| {
+        data.item(item.entry).is_some_and(|t| t.page_text != 0)
+            || item.fields.get_u32(ITEM_FIELD_ITEM_TEXT_ID) != 0
+    });
+    match readable {
+        Some(item) => {
+            p.outbound.send(&SMSG_READ_ITEM_OK { guid: item.guid });
+        }
+        None => fail(p, InventoryResult::ItemNotFound, Guid::zero()),
     }
 }
 
-/// `CMSG_PAGE_TEXT_QUERY`: a page, and the page after it.
+/// `CMSG_PAGE_TEXT_QUERY`: the page and every page after it, as mangos's
+/// HandlePageTextQueryOpcode sends them; a page come back to ends it, as
+/// Thistle Tea's does, and a missing page says so.
 pub fn page_text(map: &Map, g: Guid, page: u32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let (text, next) = map
-        .realm
-        .data
-        .misc
-        .page_texts
-        .get(&page)
-        .cloned()
-        .unwrap_or_else(|| ("Item page missing.".to_owned(), 0));
-    p.outbound.send(&SMSG_PAGE_TEXT_QUERY_RESPONSE {
-        page_id: page,
-        text,
-        next_page_id: next,
-    });
+    let mut sent = Vec::new();
+    let mut page = page;
+    while page != 0 && !sent.contains(&page) && sent.len() < 64 {
+        sent.push(page);
+        let (text, next) = map
+            .realm
+            .data
+            .misc
+            .page_texts
+            .get(&page)
+            .cloned()
+            .unwrap_or_else(|| ("Item page missing.".to_owned(), 0));
+        p.outbound.send(&SMSG_PAGE_TEXT_QUERY_RESPONSE {
+            page_id: page,
+            text,
+            next_page_id: next,
+        });
+        page = next;
+    }
 }
 
 /// `CMSG_WRAP_ITEM`: wrapping paper makes an item a gift, which keeps what

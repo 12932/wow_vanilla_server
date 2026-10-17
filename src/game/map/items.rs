@@ -272,7 +272,16 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
         expendable |= ks.charges < 0;
         exhausted |= left == 0;
     }
-    if expendable && exhausted {
+    // An item its spell changes into another is replaced, not used up as
+    // well: mangos's EffectSummonChangeItem lets go of the cast item before
+    // TakeCastItem, and Thistle Tea keeps it until the change.
+    let changes = data.spells.get(spell).is_some_and(|s| {
+        s.effects.iter().any(|e| {
+            e.effect == crate::game::map::extra_effects::EFFECT_SUMMON_CHANGE_ITEM
+                && e.misc_value > 0
+        })
+    });
+    if expendable && exhausted && !changes {
         crate::game::map::inventory::take_item(map, player, i, 1);
     }
 }
