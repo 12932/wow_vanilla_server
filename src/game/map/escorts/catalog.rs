@@ -299,6 +299,34 @@ pub const ESCORTS: &[Escort] = &[
     },
 
     Escort {
+        quest: 1222,
+        entry: 4880,
+        credit_point: Some(24),
+        giver: None,
+        max_distance: 100.0f32,
+        start_delay_ms: 2500,
+        credit_delay_ms: 0,
+        instant_respawn: false,
+        accept: &[Act::Faction(113), Act::Stand(0)],
+        points: &[(0, &[Act::Say(1610)]), (4, &[Act::Say(1611)]), (8, &[Act::Say(1612)]), (16, &[Act::After(3000, &[Act::Say(1614)]), Act::After(4000, &[Act::Say(1615)])]), (18, &[Act::Stand(8), Act::After(1000, &[Act::Stand(0)]), Act::After(2000, &[Act::Say(1617)])]), (24, &[Act::Say(1618)])],
+        path: None,
+    },
+
+    Escort {
+        quest: 1270,
+        entry: 4880,
+        credit_point: Some(24),
+        giver: None,
+        max_distance: 100.0f32,
+        start_delay_ms: 2500,
+        credit_delay_ms: 0,
+        instant_respawn: false,
+        accept: &[Act::Faction(113), Act::Stand(0)],
+        points: &[(0, &[Act::Say(1610)]), (4, &[Act::Say(1611)]), (8, &[Act::Say(1612)]), (16, &[Act::After(3000, &[Act::Say(1614)]), Act::After(4000, &[Act::Say(1615)])]), (18, &[Act::Stand(8), Act::After(1000, &[Act::Stand(0)]), Act::After(2000, &[Act::Say(1617)])]), (24, &[Act::Say(1618)])],
+        path: None,
+    },
+
+    Escort {
         quest: 4261,
         entry: 9598,
         credit_point: Some(36),
