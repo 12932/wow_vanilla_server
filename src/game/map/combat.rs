@@ -1571,6 +1571,10 @@ pub fn threat_multiplier(map: &Map, g: Guid, school: u32) -> f32 {
 /// Damage of `school` (a mask) on a unit: the rage it gives, threat, the
 /// auras damage breaks, health, death.
 pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u32, school: u32) {
+    // A GM in god mode takes nothing.
+    if crate::game::map::gm_dev::invulnerable(map, victim) {
+        return;
+    }
     let damage = if guid::is_player(victim) && guid::is_player(attacker) {
         crate::game::map::duel::soften(map, attacker, victim, damage)
     } else {

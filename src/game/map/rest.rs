@@ -52,6 +52,12 @@ fn set_bonus(p: &mut Player, bonus: f32) {
     p.fields.set_byte(PLAYER_BYTES_2, 3, state);
 }
 
+/// Add to the pool (a GM's `.rested`).
+pub fn add_bonus(p: &mut Player, amount: f32) {
+    let bonus = p.row.state.rest_bonus + amount;
+    set_bonus(p, bonus);
+}
+
 /// What resting since `since` has earned.
 fn accrue(p: &mut Player, now: Instant) {
     if let (Some(_), Some(since)) = (p.row.state.rest_type, p.misc.rest_since) {

@@ -11,7 +11,7 @@ const SLOTS: u16 = 128;
 const LANGUAGES: &[u32] = &[
     98, 109, 111, 113, 115, 137, 138, 139, 140, 141, 313, 315, 673,
 ];
-const PROFESSIONS: &[u32] = &[129, 164, 165, 171, 182, 185, 186, 197, 202, 333, 356, 393];
+pub const PROFESSIONS: &[u32] = &[129, 164, 165, 171, 182, 185, 186, 197, 202, 333, 356, 393];
 
 fn slot_of(p: &Player, skill: u32) -> Option<u16> {
     (0..SLOTS).find(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF == skill)
@@ -77,6 +77,23 @@ pub fn raise(p: &mut Player, skill: u32, by: u32) -> bool {
     }
     p.fields.set_u32(field, (value + by).min(max) | (max << 16));
     true
+}
+
+/// Every skill the player has.
+pub fn known(p: &Player) -> Vec<u32> {
+    (0..SLOTS)
+        .map(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF)
+        .filter(|s| *s != 0)
+        .collect()
+}
+
+/// Set a skill's value, within its cap.
+pub fn set_value(p: &mut Player, skill: u32, value: u32) {
+    if let Some(i) = slot_of(p, skill) {
+        let field = PLAYER_SKILL_INFO_1_1 + i * 3 + 1;
+        let max = p.fields.get_u32(field) >> 16;
+        p.fields.set_u32(field, value.min(max) | (max << 16));
+    }
 }
 
 /// Forget a skill: its slot is cleared.

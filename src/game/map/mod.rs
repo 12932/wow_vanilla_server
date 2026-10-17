@@ -17,6 +17,7 @@ pub mod environment;
 pub mod exploration;
 pub mod gameobject;
 pub mod gm;
+pub mod gm_dev;
 pub mod grid;
 pub mod handlers;
 pub mod inventory;
