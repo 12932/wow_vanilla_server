@@ -144,6 +144,7 @@ pub fn forget(map: &mut Map, g: Guid) {
         .map(|(_, c)| c.guid)
         .collect();
     for c in fighting {
+        crate::game::map::spells::threat_sync::removed(map, c, g);
         let next = {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
@@ -176,17 +177,21 @@ pub fn forget(map: &mut Map, g: Guid) {
     }
 }
 
-/// A taunt: `by` goes to the top of `creature`'s threat, and is its victim
-/// while the taunt lasts.
+/// A taunt: `by` is `creature`'s victim while the taunt lasts, and level
+/// with its old target's threat meanwhile.
 pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    let top = c.threat.iter().map(|(_, t)| *t).fold(0.0f32, f32::max);
-    match c.threat.iter_mut().find(|(g, _)| *g == by) {
-        Some((_, t)) => *t = t.max(top),
-        None => c.threat.push((by, top)),
+    // On the threat list, and borrowing what brings it level with the
+    // creature's target for the taunt (Thistle Tea's `apply_taunt`).
+    if !c.threat.iter().any(|(g, _)| *g == by) {
+        c.threat.push((by, 0.0));
     }
+    crate::game::map::spells::threat_sync::taunted(map, creature, by);
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
     c.taunted_by = Some(by);
     c.combat.victim = by;
     c.fields.set_guid(UNIT_FIELD_TARGET, by);
@@ -199,6 +204,7 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
     {
         c.taunted_by = None;
     }
+    crate::game::map::spells::threat_sync::taunt_ended(map, creature, by);
 }
 
 /// Creatures of the same faction near `creature` join its fight.
@@ -243,6 +249,9 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     if guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
+    // Honor sees the auras it died with (Honorless Target), before death
+    // takes them.
+    crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::auras::clear_on_death(map, creature);
     crate::game::map::scripts::stop_for(map, creature);
     crate::game::map::event_ai::death(map, creature, tapper);
@@ -259,6 +268,7 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
+    crate::game::map::spells::threat_sync::wiped(map, creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
@@ -325,7 +335,6 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     // A flyer falls to the ground.
     crate::game::map::creature_motion::fall_dead(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
-    crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::battleground::creature_died(map, creature, tapper);
 }
 
@@ -443,6 +452,7 @@ pub fn respawn_now(map: &mut Map, g: Guid) {
 pub fn quiet_death(map: &mut Map, g: Guid) {
     let now = map.now;
     crate::game::map::auras::clear_on_death(map, g);
+    crate::game::map::spells::threat_sync::wiped(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -634,12 +644,11 @@ fn aggro_scan(map: &mut Map, g: Guid) {
     }
 }
 
-/// A unit's threat on a creature, with what its auras take off for now
-/// (Fade).
-fn effective_threat(map: &Map, unit: Guid, threat: f32) -> f32 {
-    let fade = crate::game::map::auras::auras(map, unit)
-        .map_or(0, |a| a.sum(crate::game::map::auras::AURA_MOD_TOTAL_THREAT));
-    (threat + fade as f32).max(0.0)
+/// A unit's threat on a creature, never below none. Fade's share is in the
+/// threat itself, for those fighting the priest when it went on
+/// (`threat_sync`).
+fn effective_threat(threat: f32) -> f32 {
+    threat.max(0.0)
 }
 
 /// The highest threat still worth fighting, if any.
@@ -654,7 +663,7 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
                 u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
             })
         })
-        .max_by(|a, b| effective_threat(map, a.0, a.1).total_cmp(&effective_threat(map, b.0, b.1)))
+        .max_by(|a, b| effective_threat(a.1).total_cmp(&effective_threat(b.1)))
         .map(|(t, _)| *t)
 }
 
@@ -681,7 +690,7 @@ fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
         c.threat
             .iter()
             .find(|(x, _)| *x == t)
-            .map_or(0.0, |(_, v)| effective_threat(map, t, *v))
+            .map_or(0.0, |(_, v)| effective_threat(*v))
     };
     let (mine, theirs) = (threat_of(current), threat_of(best));
     let near = match (map.unit_view(g), map.unit_view(best)) {
@@ -899,6 +908,7 @@ pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, _for: Option<Duration>) {
 /// Give up the fight and run home.
 fn evade(map: &mut Map, g: Guid) {
     crate::game::map::creature_combat::disengaged(map, g);
+    crate::game::map::spells::threat_sync::wiped(map, g);
     let now = map.now;
     let spline_id = map.next_spline_id;
     let Some(c) = map.creature(g) else {

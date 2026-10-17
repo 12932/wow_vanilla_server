@@ -685,10 +685,13 @@ impl Map {
                 }
             }
         }
+        // What a teleport ends, and leaving the map.
+        crate::game::map::spells::interrupts::teleported(self, guid);
         if key == self.key {
             movement::teleport_within(self, guid, position, orientation);
             return;
         }
+        crate::game::map::spells::interrupts::changed_map(self, guid);
         let Some(p) = self.players.get(&guid) else {
             return;
         };
