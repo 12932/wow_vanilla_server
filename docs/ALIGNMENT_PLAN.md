@@ -1023,6 +1023,34 @@ The battlegrounds share one layer, `map/battleground/{mod,wsg,ab,av}.rs`:
 - The bobber lands at the caster's height, with no check for water or line of sight.
 - Skill bonuses from enchantments.
 
+### Phase 16 (2026-10-17)
+
+- **EventAI** (`map/event_ai.rs`) runs 6,252 of the 6,256 event rows (Thistle Tea: 6,220). Only types 13, 34 and 35
+  aren't run, as in Thistle Tea.
+- **The database scripts** (`map/scripts.rs`): every script table's steps, map events (commands 61 to 69), their
+  target types and data flags. It covers 98.9% of `creature_ai_scripts` rows (Thistle Tea: 97.9%) and 91 to 100% of
+  the other tables.
+- **Conditions** (`map/conditions.rs`): and, or and not, reverse and swap, and about 45 kinds. Gossip options and
+  texts obey them.
+- **Creature groups, links and pools** (`map/creature_groups.rs`): a group fights, evades and comes back together,
+  with followers in formation behind the leader. Linked creatures follow `creature_linking`'s flags, and spawn pools
+  pick by chance and limit.
+- **Instance scripts** (`map/instance_script.rs`): bosses' doors and encounter state for the Deadmines, Shadowfang
+  Keep, Razorfen Kraul, Scarlet Monastery, Maraudon and Molten Core (its runes, Majordomo, guards staying dead).
+- **Boss scripts** (`map/creature_scripts.rs`), as EventAI events:
+  - by hand, Molten Core's lieutenants and their guards, and Onyxia's three phases;
+  - by a converter (`tools/port_creature_scripts.py`), 90 simpler events for 33 more of Thistle Tea's bosses, where
+    the world database has none.
+- **Instances** (`instances.rs`):
+  - each copy is saved with its dead, its script data and its owner, so a boss stays dead and his door open across a
+    restart;
+  - a raid binds when a boss that locks it dies, and the lockout outlives the copy;
+  - an account may enter five copies an hour;
+  - logging in inside a copy puts the player back in it, or home if it won't have them;
+  - a reset makes a dungeon new.
+- **A panic count:** maps count the panics `guarded()` catches. A real-data test fights EventAI creatures in Northshire
+  and the Deadmines and finds none.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
