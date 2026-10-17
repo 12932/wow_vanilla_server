@@ -2181,8 +2181,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             crate::game::map::combat::leave_combat(map, source);
             if let Some(c) = creature_mut(map, source) {
                 c.threat.clear();
-                c.combat.victim = Guid::zero();
                 c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+            }
+            if map.creature(source).is_some()
+                && let Some(c) = map.combat_mut(source)
+            {
+                c.victim = Guid::zero();
             }
             if map.creature(source).is_some() {
                 event_ai::combat_stopped(map, source, false);

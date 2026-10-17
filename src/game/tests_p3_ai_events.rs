@@ -643,8 +643,10 @@ fn fight(m: &mut Map, g: Guid, victim: Guid) {
 
 /// `g` out of its fight where it stands, its EventAI not told.
 fn calm(m: &mut Map, g: Guid) {
+    if let Some(c) = m.combat_mut(g) {
+        *c = Default::default();
+    }
     if let Some(c) = m.creature_mut(g) {
-        c.combat = Default::default();
         c.threat.clear();
         c.fields.set_flag(
             UNIT_FIELD_FLAGS,

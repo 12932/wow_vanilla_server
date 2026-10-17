@@ -534,7 +534,7 @@ async fn help_threat_events_attacks_and_flight() {
             run(m, &step(47, [0; 4]), host, Guid::zero());
             let fled = m.creature(host).unwrap().engagement.flee.is_some();
             // With a victim.
-            m.creature_mut(host).unwrap().combat.victim = foe;
+            m.combat_mut(host).unwrap().victim = foe;
             run(
                 m,
                 &ScriptStep {
@@ -566,9 +566,8 @@ async fn help_threat_events_attacks_and_flight() {
             );
             let attacks = m.creature(host).unwrap().combat.attacking;
             // Threat: a cut on the victim, then on all.
-            let c = m.creature_mut(host).unwrap();
-            c.threat = vec![(foe, 100.0), (third, 50.0)];
-            c.combat.victim = foe;
+            m.creature_mut(host).unwrap().threat = vec![(foe, 100.0), (third, 50.0)];
+            m.combat_mut(host).unwrap().victim = foe;
             run(
                 m,
                 &ScriptStep {
@@ -795,7 +794,7 @@ async fn turn_to_faces_the_victim_or_the_creature_it_names() {
     let (_realm, mut a, me, map) = setup().await;
     let (host, buddy) = (host(), buddy());
     map.query(move |m| {
-        m.creature_mut(host).unwrap().combat.victim = me;
+        m.combat_mut(host).unwrap().victim = me;
         run(
             m,
             &ScriptStep {
@@ -813,7 +812,7 @@ async fn turn_to_faces_the_victim_or_the_creature_it_names() {
     })
     .await;
     map.query(move |m| {
-        m.creature_mut(host).unwrap().combat.victim = Guid::zero();
+        m.combat_mut(host).unwrap().victim = Guid::zero();
         let to_buddy = ScriptStep {
             target_type: 11,
             target_param1: 2,
@@ -1545,6 +1544,19 @@ async fn the_target_types_pick_as_thistle_tea_does() {
     let (realm, _a, me, map) = setup_with(d).await;
     let mut b = Client::connect(&realm, "B");
     let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    // Bob ten yards behind Alice, from the creatures.
+    b.heartbeat(START.0 - 10.0, START.1, START.2).await;
+    while map
+        .query(move |m| {
+            m.players
+                .get(&bob)
+                .is_none_or(|p| p.position().x > START.0 - 9.0)
+        })
+        .await
+        .unwrap()
+    {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let (host, buddy, third, foe) = (host(), buddy(), third(), foe());
     let out = map
         .query(move |m| {
@@ -1568,9 +1580,8 @@ async fn the_target_types_pick_as_thistle_tea_does() {
                     stand(m, *g) == 1 || m.players.get(g).is_some_and(|p| p.stand_state() == 1)
                 })
             };
-            let c = m.creature_mut(host).unwrap();
-            c.threat = vec![(buddy, 100.0), (third, 70.0)];
-            c.combat.victim = buddy;
+            m.creature_mut(host).unwrap().threat = vec![(buddy, 100.0), (third, 70.0)];
+            m.combat_mut(host).unwrap().victim = buddy;
             let second = sits(m, 5, 0, 0);
             let farthest = sits(m, 7, 0, 0);
             let nearest_player = sits(m, 25, 20, 0);
@@ -1862,4 +1873,162 @@ async fn instance_data_modes_other_than_set_raise_and_lower_are_none() {
         .await
         .unwrap();
     assert_eq!(out, (6, 6, 5, 9));
+}
+
+/// The scripted ways of a fight and a walk: a follow at the step's
+/// distance and angle (or a random angle), ended by another movement; a
+/// melee spell that takes a swing's place, and cleared; a caster's chase
+/// distance, gone with a respawn; and distancing refused for itself, no
+/// one, or the dead.
+#[tokio::test]
+async fn follows_melee_spells_chase_distances_and_distancing_from_a_script() {
+    let (_realm, _a, me, map) = setup().await;
+    let (host, buddy, foe) = (host(), buddy(), foe());
+    let out = map
+        .query(move |m| {
+            run(
+                m,
+                &ScriptStep {
+                    x: 4.0,
+                    o: 1.0,
+                    ..step(20, [15, 0, 0, 0])
+                },
+                host,
+                me,
+            );
+            let follow = event_ai::scripted(m, host).and_then(|s| s.follow);
+            run(
+                m,
+                &ScriptStep {
+                    x: 4.0,
+                    o: -1.0,
+                    ..step(20, [15, 0, 0, 0])
+                },
+                buddy,
+                me,
+            );
+            let random = event_ai::scripted(m, buddy)
+                .and_then(|s| s.follow)
+                .is_some_and(|(g, d, a)| {
+                    g == me && d == 4.0 && (0.0..std::f32::consts::TAU).contains(&a)
+                });
+            run(m, &step(20, [0; 4]), host, Guid::zero());
+            let ended = event_ai::scripted(m, host).and_then(|s| s.follow);
+            // A melee spell in a swing's place.
+            run(
+                m,
+                &step(scripts::C_SET_MELEE_SPELL, [MARK, 0, 0, 0]),
+                host,
+                Guid::zero(),
+            );
+            let set = event_ai::melee_spell(m, host);
+            let health = m.unit_fields(me).unwrap().get_u32(UNIT_FIELD_HEALTH);
+            let now = m.now;
+            // Into the fight through combat_mut, as the map's update
+            // wants to hear of it.
+            let c = m.combat_mut(host).unwrap();
+            c.victim = me;
+            c.attacking = true;
+            c.next_swing = Some(now);
+            let at = m.players[&me].position();
+            scripts::place(
+                m,
+                host,
+                Vector3d {
+                    x: at.x + 1.0,
+                    ..at
+                },
+                std::f32::consts::PI,
+            );
+            crate::game::map::combat::try_swing(m, host);
+            let swung = (
+                has_aura(m, me, MARK),
+                m.unit_fields(me).unwrap().get_u32(UNIT_FIELD_HEALTH) == health,
+            );
+            run(
+                m,
+                &step(scripts::C_SET_MELEE_SPELL, [0; 4]),
+                host,
+                Guid::zero(),
+            );
+            let cleared = event_ai::melee_spell(m, host);
+            crate::game::map::combat::stop_attack(m, host);
+            // A chase distance, gone with a respawn.
+            run(
+                m,
+                &step(scripts::C_SET_CASTER_CHASE_DISTANCE, [30, 0, 0, 0]),
+                buddy,
+                Guid::zero(),
+            );
+            let chase = event_ai::scripted(m, buddy).and_then(|s| s.caster_chase_distance);
+            ai::die(m, buddy, me);
+            ai::respawn_now(m, buddy);
+            let respawned = event_ai::scripted(m, buddy).and_then(|s| s.caster_chase_distance);
+            // Distancing from itself, no one, and the dead.
+            let away = ScriptStep {
+                x: 12.0,
+                ..step(20, [19, 0, 0, 0])
+            };
+            let moves = |m: &Map, g: Guid| {
+                event_ai::scripted(m, g).is_some_and(|s| s.scripted_move.is_some())
+            };
+            run(m, &away, third(), third());
+            let from_self = moves(m, third());
+            run(m, &away, third(), Guid::zero());
+            let from_none = moves(m, third());
+            ai::die(m, foe, me);
+            run(m, &away, third(), foe);
+            let from_dead = moves(m, third());
+            (
+                follow,
+                random,
+                ended,
+                (set, swung, cleared),
+                (chase, respawned),
+                (from_self, from_none, from_dead),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, Some((me, 4.0, 1.0)), "at its distance and angle");
+    assert!(out.1, "at a random angle");
+    assert_eq!(out.2, None, "another movement ends it");
+    assert_eq!(
+        out.3,
+        (Some(MARK), (true, true), None),
+        "its spell for the swing, then cleared"
+    );
+    assert_eq!(out.4, (Some(30.0), None), "gone with a respawn");
+    assert_eq!(out.5, (false, false, false), "no distancing");
+}
+
+/// A call for help on aggro at the range a script sets: friends within it
+/// are called; with 0, none (nor ever for a pet's fight).
+#[tokio::test]
+async fn a_scripts_call_for_help_range_of_none_calls_no_one() {
+    let (_realm, _a, _me, map) = setup().await;
+    let (host, buddy, foe) = (host(), buddy(), foe());
+    let out = map
+        .query(move |m| {
+            run(
+                m,
+                &step(scripts::C_SET_CALL_FOR_HELP_RANGE, [10, 0, 0, 0]),
+                host,
+                Guid::zero(),
+            );
+            ai::attacked(m, host, foe);
+            let called = !m.creature(host).unwrap().engagement.assist.is_empty();
+            run(
+                m,
+                &step(scripts::C_SET_CALL_FOR_HELP_RANGE, [0; 4]),
+                buddy,
+                Guid::zero(),
+            );
+            ai::attacked(m, buddy, foe);
+            let quiet = m.creature(buddy).unwrap().engagement.assist.is_empty();
+            (called, quiet)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true));
 }
