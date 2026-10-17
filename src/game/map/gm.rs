@@ -247,6 +247,13 @@ fn speed(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         move_event: 0,
         speed: p.speeds.run,
     });
+    let run = p.speeds.run;
+    crate::game::map::misc::speed_to_observers(
+        map,
+        guid,
+        crate::game::map::misc::MSG_MOVE_SET_RUN_SPEED,
+        run,
+    );
     None
 }
 
