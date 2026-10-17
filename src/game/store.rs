@@ -119,6 +119,10 @@ pub struct CharacterState {
     pub dead: bool,
     /// Where the corpse of a released character lies.
     pub corpse: Option<CorpseState>,
+    /// Until when (Unix ms) repeated deaths lengthen the wait to reclaim a
+    /// corpse, and when (Unix ms, 0 for not) the spirit was released.
+    pub reclaim_until: i64,
+    pub released_at: i64,
     pub quests: Journal,
     /// Friends and ignored characters, by GUID counter.
     pub friends: Vec<u32>,

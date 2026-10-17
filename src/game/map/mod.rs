@@ -12,6 +12,7 @@ pub mod chat;
 pub mod cinematic;
 pub mod combat;
 pub mod conditions;
+pub mod corpses;
 pub mod creature;
 pub mod creature_groups;
 pub mod creature_combat;
@@ -33,6 +34,7 @@ pub mod handlers;
 mod instance_adapters;
 pub mod instance_script;
 pub mod inventory;
+pub mod item_rules;
 pub mod items_misc;
 pub mod items;
 pub mod login;
@@ -66,6 +68,7 @@ pub mod stats;
 pub mod terrain;
 pub mod tickets;
 pub mod trade;
+pub mod trade_spells;
 pub mod trinkets;
 pub mod vendor;
 pub mod visibility;
@@ -511,6 +514,7 @@ impl Map {
                     });
                 let guid = p.guid;
                 self.insert_player(*p);
+                corpses::arrived(self, guid);
                 pets::owner_arrived(self, guid);
             }
         }

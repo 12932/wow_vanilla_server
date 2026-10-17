@@ -150,7 +150,7 @@ fn object_lock(data: &GameData, entry: u32) -> u32 {
 
 /// What opening a lock takes: (skill, its value with the spell's bonus,
 /// the value needed), or an error.
-fn resolve_lock(
+pub fn resolve_lock(
     data: &GameData,
     p: &Player,
     s: &SpellTemplate,
@@ -224,7 +224,7 @@ pub fn craft_gain_chance(value: u32, yellow: u32, gray: u32) -> u32 {
 }
 
 /// Raise `skill` by one, `chance` percent of the time.
-fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: u32) -> bool {
+pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: u32) -> bool {
     let roll = rand::rng().random_range(0..100);
     roll < chance && map.players.get_mut(&player).is_some_and(|p| skills::raise(p, skill, 1))
 }
@@ -443,7 +443,7 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
 }
 
 /// A recipe crafted: its skill may rise, by the recipe's colour.
-fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
+pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     let data = map.realm.data.clone();
     let Some(abilities) = data.spells.skill_abilities.get(&s.id) else {
         return;

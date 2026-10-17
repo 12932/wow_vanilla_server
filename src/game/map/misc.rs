@@ -66,6 +66,11 @@ pub struct PlayerMisc {
     pub view: Option<Vector3d>,
     /// An opened item's loot: the item, and what is in it.
     pub item_loot: Option<(Guid, crate::game::map::loot::Loot)>,
+    /// When the items were last looked over for where they may be, whether
+    /// the bank has been since login, and the timed items told of.
+    pub items_checked_at: Option<Instant>,
+    pub items_login_checked: bool,
+    pub timed_told: Vec<Guid>,
 }
 
 /// A summons: to the summoner's side.
@@ -114,6 +119,8 @@ pub fn handle_all(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Cl
     let msg = crate::game::map::items_misc::handle(map, g, msg)?;
     let msg = crate::game::map::meeting_stones::handle(map, g, msg)?;
     let msg = crate::game::map::account_data::handle(map, g, msg)?;
+    let msg = crate::game::map::trade_spells::handle(map, g, msg)?;
+    let msg = crate::game::map::item_rules::handle(map, g, msg)?;
     match msg {
         ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC => {
             crate::game::map::cinematic::finish(map, g);
@@ -227,6 +234,7 @@ pub fn update(map: &mut Map) {
     crate::game::map::rest::update(map);
     crate::game::map::cinematic::update(map);
     crate::game::map::environment::update(map);
+    crate::game::map::item_rules::update(map);
     let now = map.now;
     for p in map.players.values_mut() {
         if p.misc.summon.is_some_and(|s| s.until <= now) {

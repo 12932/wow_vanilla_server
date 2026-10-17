@@ -219,7 +219,8 @@ pub struct SpellArea {
     pub autocast: bool,
 }
 
-/// `map_template`: a map's instance script and reset.
+/// `map_template`: a map's instance script and reset, and for a dungeon
+/// the dungeon it is in and where its entrance is outside.
 #[derive(Debug, Clone, Default)]
 pub struct MapTemplate {
     pub map: u32,
@@ -227,6 +228,12 @@ pub struct MapTemplate {
     pub player_limit: u32,
     pub reset_delay: u32,
     pub script_name: String,
+    pub name: String,
+    pub parent: u32,
+    /// The zone its graveyards are linked to.
+    pub linked_zone: u32,
+    /// The entrance a ghost is shown: map, x, y.
+    pub ghost_entrance: Option<(u32, f32, f32)>,
 }
 
 #[derive(Debug, Default)]

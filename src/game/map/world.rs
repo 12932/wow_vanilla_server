@@ -447,6 +447,14 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     let Some(tp) = &t.teleport else {
         return;
     };
+    // A ghost enters only the dungeon their corpse is in.
+    let tp = match crate::game::map::corpses::portal(map, guid, tp) {
+        Ok(tp) => tp,
+        Err(text) => {
+            crate::game::map::corpses::refuse(map, guid, text);
+            return;
+        }
+    };
     let barred = data
         .scripts
         .teleport_condition
@@ -464,6 +472,7 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
         map.system_message(guid, &text);
         return;
     }
+    crate::game::map::corpses::revive_for_map(map, guid, tp.map);
     map.teleport(
         guid,
         MapKey::world(tp.map),
