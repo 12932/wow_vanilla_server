@@ -85,3 +85,48 @@ fn the_holidays_nights_have_fireworks_and_only_the_winter_ones_a_toast() {
     assert_eq!(rules("2026-07-04 23:15:00", &[41]), (false, false));
     assert_eq!(rules("2026-07-05 23:05:00", &[]), (false, false));
 }
+
+#[test]
+fn an_area_trigger_holds_who_is_in_its_sphere_or_its_turned_box_with_five_yards_slack() {
+    use crate::game::data::AreaTrigger;
+    use crate::game::map::world::inside;
+    use wow_world_messages::vanilla::Vector3d;
+    let v = |x, y, z| Vector3d { x, y, z };
+    // A sphere of nine yards: in it, at its edge with mangos's and Thistle
+    // Tea's five yards of slack, and far out.
+    let sphere = AreaTrigger {
+        map: 0,
+        x: -9796.18,
+        y: 157.773,
+        z: 25.3878,
+        radius: 9.0,
+        ..Default::default()
+    };
+    assert!(inside(&sphere, v(-9796.0, 157.0, 25.0)));
+    assert!(inside(&sphere, v(-9790.0, 157.0, 30.0)));
+    assert!(!inside(&sphere, v(-9700.0, 157.0, 25.0)));
+    // A box ten long, four wide and six high: in, and out past its slack
+    // along each side.
+    let box_ = AreaTrigger {
+        map: 0,
+        box_length: 10.0,
+        box_width: 4.0,
+        box_height: 6.0,
+        ..Default::default()
+    };
+    assert!(inside(&box_, v(4.0, 1.0, 2.0)));
+    assert!(!inside(&box_, v(10.5, 1.0, 2.0)));
+    assert!(!inside(&box_, v(4.0, 7.5, 2.0)));
+    assert!(!inside(&box_, v(4.0, 1.0, 8.5)));
+    // Turned a quarter, its length runs along y.
+    let turned = AreaTrigger {
+        map: 0,
+        box_length: 10.0,
+        box_width: 2.0,
+        box_height: 6.0,
+        box_yaw: std::f32::consts::FRAC_PI_2,
+        ..Default::default()
+    };
+    assert!(inside(&turned, v(0.0, 9.0, 0.0)));
+    assert!(!inside(&turned, v(8.0, 0.0, 0.0)));
+}
