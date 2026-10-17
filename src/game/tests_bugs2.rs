@@ -564,3 +564,44 @@ async fn permafrost_slows_frostbolt_more() {
     // Frostbolt's 40%, and Permafrost's 4 more.
     assert_eq!(slow, Some(-44));
 }
+
+const FIRE_SHIELD: u32 = 2947;
+
+#[tokio::test]
+async fn a_party_members_spell_lands_only_on_a_party_member() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "PARTYA");
+    let ga = a.enter("Partya", Race::Human, Class::Warlock).await;
+    let mut b = Client::connect(&realm, "PARTYB");
+    let gb = b.enter("Partyb", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "PARTYC");
+    let gc = c.enter("Partyc", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Partyb").await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            let s = m.realm.data.spells.get(FIRE_SHIELD).unwrap().clone();
+            let at = |unit: Guid| Targets {
+                unit: Some(unit),
+                ..Default::default()
+            };
+            let none = spells::mods::Mods::default();
+            let lands = |m: &Map, unit: Guid| {
+                spells::targets::effect_targets(m, ga, &s, 0, &at(unit), &none)
+            };
+            (
+                lands(m, gb),
+                lands(m, gc),
+                // (As if triggered: the warlock doesn't know the imp's spell.)
+                spells::checks::check(m, ga, &s, &at(gc), None, true, &none),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, vec![gb], "on the party member");
+    assert!(out.1.is_empty(), "not on the caster for a stranger");
+    assert_eq!(out.2, Some(spells::fail::BAD_TARGETS));
+}

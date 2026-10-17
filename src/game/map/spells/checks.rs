@@ -523,6 +523,15 @@ fn check_target(
     } else if !u.alive && !s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET) && !s.has_effect(95) {
         return Some(fail::TARGETS_DEAD);
     }
+    // A party member's spell is for the caster's party and pets, not the
+    // caster (Thistle Tea's `validate_party_unit_query`).
+    if s.effects
+        .iter()
+        .any(|e| e.effect != 0 && targets::implicit(e.target_a) == Implicit::PartyMember)
+        && !targets::party_unit(map, caster, target)
+    {
+        return Some(fail::BAD_TARGETS);
+    }
     if target != caster {
         let requires_enemy = s
             .effects
