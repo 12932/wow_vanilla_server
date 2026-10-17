@@ -147,8 +147,16 @@ impl Quest {
     pub fn has_objectives(&self) -> bool {
         self.required_items.iter().any(|(i, _)| *i != 0)
             || self.required_kills.iter().any(|(k, _)| *k != 0)
-            || self.flags & QUEST_FLAGS_EXPLORATION != 0
+            || self.needs_event()
             || self.rep_objective.0 != 0
+    }
+
+    /// Whether the quest waits on an exploration or an event (a script,
+    /// a spell): Thistle Tea's `exploration?`, `SpecialFlags` 0x2, of
+    /// which `QuestFlags` 0x4 is a part.
+    pub fn needs_event(&self) -> bool {
+        self.special_flags & QUEST_SPECIAL_EXPLORATION_OR_EVENT != 0
+            || self.flags & QUEST_FLAGS_EXPLORATION != 0
     }
 
     /// The level a quest is at for XP: its own, or the player's for one at
@@ -166,6 +174,8 @@ impl Quest {
 pub const QUEST_FLAGS_EXPLORATION: u32 = 0x0004;
 /// `SpecialFlags`: repeatable.
 pub const QUEST_SPECIAL_REPEATABLE: u32 = 0x1;
+/// `SpecialFlags`: done by an exploration or an event.
+pub const QUEST_SPECIAL_EXPLORATION_OR_EVENT: u32 = 0x2;
 
 #[derive(Debug, Default)]
 pub struct NpcData {

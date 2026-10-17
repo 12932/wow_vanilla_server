@@ -862,6 +862,13 @@ fn effect(
         EFFECT_WEAPON | EFFECT_PROFICIENCY => proficiency(map, target, s),
         EFFECT_QUEST_COMPLETE => {
             let quest = e.misc_value.max(0) as u32;
+            // One aimed at a creature (a rod's tame at its beast) is the
+            // caster's.
+            let target = if map.players.contains_key(&target) {
+                target
+            } else {
+                caster
+            };
             if let Some(p) = map.players.get_mut(&target)
                 && let Some(slot) = p.journal.slot_of(quest)
             {
