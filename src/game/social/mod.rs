@@ -35,6 +35,7 @@ pub struct Social {
     /// Events the world starts and stops, not the calendar.
     pub driven_events: Mutex<ahash::AHashMap<u32, bool>>,
     pub invasion: Mutex<crate::game::invasion::State>,
+    pub elemental: Mutex<crate::game::elemental::State>,
 }
 
 impl Social {
@@ -100,5 +101,6 @@ pub fn sweep(realm: &Realm) {
     crate::game::battlegrounds::sweep(realm);
     crate::game::events::sweep(realm);
     crate::game::invasion::sweep(realm);
+    crate::game::elemental::sweep(realm);
     crate::game::weather::sweep(realm);
 }

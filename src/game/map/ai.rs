@@ -204,6 +204,7 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     crate::game::map::auras::clear_on_death(map, creature);
     if let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) {
         crate::game::invasion::creature_died(map, entry, at);
+        crate::game::elemental::creature_died(map, creature, entry);
     }
     let now = map.now;
     let data = map.realm.data.clone();

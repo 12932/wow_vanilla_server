@@ -253,6 +253,9 @@ pub struct Map {
     pub loot_state: loot::MapLoot,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
+    /// The Elemental Invasion's rifts and their invaders.
+    pub rifts: AHashMap<Guid, crate::game::elemental::Rift>,
+    pub rifts_checked_at: Option<Instant>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -348,6 +351,8 @@ impl Map {
             globals: Vec::new(),
             loot_state: Default::default(),
             escorts: Vec::new(),
+            rifts: AHashMap::new(),
+            rifts_checked_at: None,
         }
     }
 
@@ -621,6 +626,7 @@ impl Map {
         self.unload_if_empty();
         ai::update_creatures(self);
         escorts::update(self);
+        crate::game::elemental::update(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);
         self.flush_forgets();

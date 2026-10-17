@@ -69,6 +69,12 @@ pub fn on_equip(data: &GameData, item: &mut Item) {
     }
 }
 
+/// A player's honor rank, as `PLAYER_BYTES_3` carries it for the client
+/// (the PvP side keeps it there).
+pub fn honor_rank(p: &Player) -> u32 {
+    u32::from(p.fields.get_byte(PLAYER_BYTES_3, 3))
+}
+
 /// The keyring's slots at `level`, as the 1.12 client draws them.
 pub fn keyring_size(level: u8) -> u8 {
     match level {
