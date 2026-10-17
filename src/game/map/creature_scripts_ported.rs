@@ -1,4 +1,4 @@
-//! Generated from Thistle Tea's creature scripts by runs/scripts-port/convert.py:
+//! Generated from Thistle Tea's creature scripts by tools/port_creature_scripts.py:
 //! their timed casts, health thresholds and aggro calls. Do not edit by hand.
 
 use super::creature_scripts::{Kind, Row, SELF};
