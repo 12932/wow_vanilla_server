@@ -306,6 +306,9 @@ pub struct Creature {
     pub scripted: Option<Box<crate::game::map::event_ai::Scripted>>,
     /// The event whose looks it wears; 0 for its own.
     pub event_looks: u32,
+    /// An event changed its looks while it fought: it takes them when its
+    /// fight is over (`events::caught_up`).
+    pub event_looks_due: bool,
     /// When something summoned it, for a summons that lasts a while.
     pub summoned_at: Option<Instant>,
     /// Its fight's leash, reach, flight and regeneration.
@@ -435,6 +438,7 @@ impl Creature {
             pet: None,
             scripted: None,
             event_looks: 0,
+            event_looks_due: false,
             summoned_at: None,
             engagement: Default::default(),
             wounded: 1.0,

@@ -262,6 +262,36 @@ async fn reaction_modes() {
         .await
         .unwrap();
     assert!(fights);
+    // No one left in its fight, the passive one's ends.
+    let in_combat = |m: &Map, g: Guid| {
+        m.creature(g).is_some_and(|c| {
+            c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+        })
+    };
+    let still_in = map
+        .query(move |m| {
+            let still_in = in_combat(m, still);
+            crate::game::map::death::kill(m, ga);
+            still_in
+        })
+        .await
+        .unwrap();
+    assert!(still_in, "in the fight while its foe stands");
+    let mut over = false;
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        over = map
+            .query(move |m| m.creature(still).is_some() && !in_combat(m, still))
+            .await
+            .unwrap();
+        if over {
+            break;
+        }
+    }
+    assert!(over, "the passive one's fight is over");
 }
 
 /// A guard and a wolf of factions at odds fight on sight, with no player

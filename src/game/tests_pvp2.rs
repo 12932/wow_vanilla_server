@@ -337,7 +337,13 @@ async fn rank_rewards_are_worn_at_the_rank_reached() {
             let t = m.realm.data.item(16437).unwrap().clone();
             let p = &m.players[&g];
             (
-                crate::game::map::inventory::can_equip(p, &t, 4).is_ok(),
+                crate::game::map::inventory::can_equip(
+                    p,
+                    &crate::game::map::inventory::Proficiency::of(p, &m.realm.data),
+                    &t,
+                    4,
+                )
+                .is_ok(),
                 crate::game::map::pvp::rank_allows_buy(p, &t),
             )
         })

@@ -736,6 +736,12 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
     let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
         return;
     };
+    // An event changed its looks while it fought: its fight over, it
+    // takes them.
+    if c.event_looks_due && !crate::game::events::fighting(c) {
+        crate::game::events::caught_up(map, g);
+        return;
+    }
     if c.evading {
         evade_step(map, g);
     } else if c.combat.attacking {
