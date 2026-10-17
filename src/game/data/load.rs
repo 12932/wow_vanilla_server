@@ -703,9 +703,25 @@ fn load_gameobjects(db: &Connection, data: &mut GameData) {
             data: d,
             gold_min: c.u32("mingold"),
             gold_max: c.u32("maxgold"),
+            bounds: None,
         };
         (t.entry, c.i64("patch"), t)
     }));
+    let boxes: AHashMap<u32, ([f32; 3], [f32; 3])> =
+        rows(db, "SELECT * FROM gameobject_display_info_addon", |c| {
+            (
+                c.u32("display_id"),
+                (
+                    [c.f32("min_x"), c.f32("min_y"), c.f32("min_z")],
+                    [c.f32("max_x"), c.f32("max_y"), c.f32("max_z")],
+                ),
+            )
+        })
+        .into_iter()
+        .collect();
+    for t in data.gameobject_templates.values_mut() {
+        t.bounds = boxes.get(&t.display_id).copied();
+    }
     for s in rows(
         db,
         &format!("SELECT * FROM gameobject WHERE {IN_PATCH}"),
@@ -835,7 +851,21 @@ fn load_items(db: &Connection, data: &mut GameData) {
     }));
 }
 
+/// `forbidden_items`: what patch 1.12 hasn't (removed by a patch up to it,
+/// or not yet added before one from it), off vendors and out of loot.
+fn forbidden_items(db: &Connection) -> ahash::AHashSet<u32> {
+    rows(
+        db,
+        "SELECT entry FROM forbidden_items \
+         WHERE (after_or_before = 0 AND patch <= 10) OR (after_or_before = 1 AND patch >= 10)",
+        |c| c.u32("entry"),
+    )
+    .into_iter()
+    .collect()
+}
+
 fn load_loot(db: &Connection, data: &mut GameData) {
+    let forbidden = forbidden_items(db);
     let table = |name: &str| {
         let mut out: AHashMap<u32, Vec<LootEntry>> = AHashMap::new();
         for (entry, e) in rows(db, &format!("SELECT * FROM {name} WHERE {IN_PATCH}"), |c| {
@@ -851,6 +881,10 @@ fn load_loot(db: &Connection, data: &mut GameData) {
                 },
             )
         }) {
+            // A reference stays; a forbidden item doesn't drop.
+            if e.min >= 0 && forbidden.contains(&e.item) {
+                continue;
+            }
             out.entry(entry).or_default().push(e);
         }
         out
@@ -868,6 +902,7 @@ fn load_loot(db: &Connection, data: &mut GameData) {
 }
 
 fn load_vendors(db: &Connection, data: &mut GameData) {
+    let forbidden = forbidden_items(db);
     let list = |name: &str| {
         let mut out: AHashMap<u32, Vec<VendorItem>> = AHashMap::new();
         for (entry, v) in rows(
@@ -886,6 +921,9 @@ fn load_vendors(db: &Connection, data: &mut GameData) {
                 )
             },
         ) {
+            if forbidden.contains(&v.item) {
+                continue;
+            }
             out.entry(entry).or_default().push(v);
         }
         out
@@ -1044,6 +1082,18 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             )
         }) {
             npc.taxi_paths.insert((from, to), (id, cost));
+        }
+        for (paths, nodes) in rows(
+            db,
+            "SELECT * FROM taxi_path_transitions WHERE build_min <= 5875",
+            |c| {
+                (
+                    (c.u32("in_path"), c.u32("out_path")),
+                    (c.u32("in_node") as usize, c.u32("out_node") as usize),
+                )
+            },
+        ) {
+            npc.taxi_transitions.insert(paths, nodes);
         }
         for (path, n) in rows(
             dbc,
@@ -2170,6 +2220,18 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         },
     ) {
         m.quest_mail.insert(quest, mail);
+    }
+    for (faction, rates) in rows(db, "SELECT * FROM reputation_reward_rate", |c| {
+        (
+            c.u32("faction"),
+            (
+                c.f32("quest_rate"),
+                c.f32("creature_rate"),
+                c.f32("spell_rate"),
+            ),
+        )
+    }) {
+        m.reward_rates.insert(faction, rates);
     }
     for (level, xp) in rows(db, "SELECT * FROM exploration_basexp", |c| {
         (c.u32("level"), c.u32("basexp"))

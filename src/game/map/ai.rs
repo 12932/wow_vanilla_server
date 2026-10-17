@@ -65,10 +65,14 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if c.tapped_by.is_none() && guid::is_player(attacker) {
         c.tapped_by = Some(attacker);
     }
-    if c.threat.iter().all(|(g, _)| *g != attacker) {
+    let new = c.threat.iter().all(|(g, _)| *g != attacker);
+    if new {
         c.threat.push((attacker, 0.0));
     }
     let attacking = c.combat.attacking;
+    if new && guid::is_player(attacker) {
+        crate::game::map::reputation::temporary_war(map, attacker, creature);
+    }
     // A critter runs, from each hit anew.
     let critter = crate::game::map::creature_motion::critter(map, creature);
     if critter {
@@ -121,7 +125,12 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
     };
     match c.threat.iter_mut().find(|(g, _)| *g == from) {
         Some((_, t)) => *t += amount,
-        None => c.threat.push((from, amount)),
+        None => {
+            c.threat.push((from, amount));
+            if guid::is_player(from) {
+                crate::game::map::reputation::temporary_war(map, from, creature);
+            }
+        }
     }
 }
 

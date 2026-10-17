@@ -42,7 +42,7 @@ pub fn effect(
             crate::game::map::intoxication::drink(map, target, amount);
         }
         EFFECT_REPUTATION if e.misc_value > 0 && guid::is_player(target) => {
-            crate::game::map::reputation::modify(map, target, e.misc_value as u32, amount, true);
+            crate::game::map::reputation::spell_reward(map, target, e.misc_value as u32, amount);
         }
         EFFECT_SEND_TAXI if e.misc_value > 0 && guid::is_player(target) => {
             crate::game::map::npc::fly_path(map, target, e.misc_value as u32);

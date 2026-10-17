@@ -214,6 +214,8 @@ pub struct Player {
     pub gossip_menu: Option<(Guid, u32)>,
     /// The quest objects this client knows shown as usable for a quest.
     pub quest_objects: AHashSet<Guid>,
+    /// Factions at war with the player only for the fight they are in.
+    pub temporary_war: Vec<u32>,
     pub flight: Option<crate::game::map::npc::Flight>,
     pub journal: crate::game::map::quests::Journal,
     pub auras: crate::game::map::auras::Auras,
@@ -305,6 +307,7 @@ impl Player {
             buyback_next: 0,
             gossip_menu: None,
             quest_objects: AHashSet::new(),
+            temporary_war: Vec::new(),
             flight: None,
             journal: row.state.quests.clone(),
             auras: Default::default(),

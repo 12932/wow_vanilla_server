@@ -770,8 +770,13 @@ async fn a_door_waits_on_its_guard_and_a_spell_works_a_lever() {
     // A spell works the lever: no more to be used, and the quest asking
     // for the spell on it is credited.
     let lever = spawned(&realm, BUTTON).await;
-    on_map(&realm, move |m| take_quest(m, g, BUTTON_QUEST)).await;
-    cast(&realm, g, WORK_BUTTON).await;
+    on_map(&realm, move |m| {
+        take_quest(m, g, BUTTON_QUEST);
+        // Cast, not for free: a triggered spell credits no quest.
+        m.players.get_mut(&g).unwrap().spells.push(WORK_BUTTON);
+        crate::game::map::spells::cast(m, g, WORK_BUTTON, Targets::default(), None);
+    })
+    .await;
     let (flags, credit) = on_map(&realm, move |m| {
         (
             m.gameobject(lever)

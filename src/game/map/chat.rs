@@ -142,7 +142,19 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
     let gm_line = m.message.starts_with('.')
         && map.players.get(&guid).is_some_and(|p| p.gm_level > 0);
     if !gm_line {
-        m.language = resolve_language(map, guid, &m.chat_type, m.language)?;
+        let Some(language) = resolve_language(map, guid, &m.chat_type, m.language) else {
+            // A language not learned (Thistle Tea's `Language.resolve`).
+            if m.language.as_int() != ADDON
+                && let Some(p) = map.players.get(&guid)
+            {
+                p.outbound
+                    .send(&wow_world_messages::vanilla::SMSG_NOTIFICATION {
+                        notification: "You have not learned that language.".into(),
+                    });
+            }
+            return None;
+        };
+        m.language = language;
     }
     // A player's "." line is chat; a GM's, a command.
     let gm = map.players.get(&guid).is_some_and(|p| p.gm_level > 0);

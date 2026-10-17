@@ -83,6 +83,8 @@ pub struct MiscData {
     /// `mail_loot_template`: template → items and counts it sends.
     pub mail_items: AHashMap<u32, Vec<(u32, u32)>>,
     pub quest_mail: AHashMap<u32, QuestMail>,
+    /// `reputation_reward_rate`: faction → its quest, kill and spell rates.
+    pub reward_rates: AHashMap<u32, (f32, f32, f32)>,
     /// `exploration_basexp`: level → XP for finding an area.
     pub exploration_xp: AHashMap<u32, u32>,
     /// Meeting stones by game object entry.
