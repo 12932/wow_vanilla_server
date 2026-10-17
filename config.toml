@@ -34,7 +34,7 @@ honor_reset_weekday = 2
 # development and load tests). `existing`: only accounts made with `.account create`.
 creation = "auto"
 # Every account is an administrator. For development and load tests only.
-everyone_gm = false
+everyone_gm = true
 # GM levels by account: 1 moderator, 2 game master, 3 administrator.
 #gm = { ADMIN = 3 }
 
