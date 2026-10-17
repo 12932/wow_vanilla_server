@@ -1030,6 +1030,10 @@ pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
     if TURN_IN[s] != trigger || p.death != Death::Alive || !p.auras.has_spell(SPELL_CARRYING) {
         return;
     }
+    // Home, not fallen: no longer a carrier before the aura goes.
+    if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
+        si.carriers.remove(&g);
+    }
     crate::game::map::auras::remove_spell(map, g, SPELL_CARRYING, None);
     crate::game::map::auras::remove_spell(map, g, SPELL_TEAM_CARRYING[s], None);
     for r in TURN_IN_REWARDS {
@@ -1039,7 +1043,6 @@ pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
     let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) else {
         return;
     };
-    si.carriers.remove(&g);
     si.brought[s] += 1;
     let captured = si.brought[s] >= SILITHYST_LIMIT;
     if captured {
@@ -1069,12 +1072,12 @@ fn silithus_states(si: &Silithus) -> Vec<(u32, u32)> {
     ]
 }
 
-/// Each second in Kalimdor: carriers who mount, stealth or take a flight
-/// lose the silithyst, as its aura's interrupts have it; silithyst lost
-/// any way but at the camp (fallen, mounted, cancelled, gone from the
-/// map) falls where its carrier was, with their side's aura off them
-/// (Thistle Tea's `Silithyst.after_remove`); those who come into Silithus
-/// see its tallies, and those who leave it, none.
+/// Each second in Kalimdor, behind the aura's interrupts that end it at
+/// the moment: carriers who mount, stealth or take a flight lose the
+/// silithyst; silithyst lost any way but at the camp (fallen, mounted,
+/// cancelled, gone from the map) falls where its carrier was, with their
+/// side's aura off them (Thistle Tea's `Silithyst.after_remove`); those
+/// who come into Silithus see its tallies, and those who leave it, none.
 fn silithus_update(map: &mut Map) {
     use crate::game::map::auras::{AURA_MOD_INVISIBILITY, AURA_MOD_STEALTH};
     let Some(si) = map.outdoor.as_ref().and_then(|o| o.silithus.as_ref()) else {
@@ -1131,10 +1134,23 @@ fn silithus_update(map: &mut Map) {
     }
 }
 
-/// A carrier lost the silithyst, not at the camp: it falls at `at`.
+/// The silithyst's aura came off `g` (mounted, stealthed, flown, dead,
+/// cancelled, off the map): it falls where they are, at the moment
+/// (Thistle Tea's `Silithyst.after_remove`); the second's check is the
+/// backstop.
+pub fn carrying_ended(map: &mut Map, g: Guid) {
+    if let Some(at) = map.players.get(&g).map(|p| p.position()) {
+        lost(map, g, at);
+    }
+}
+
+/// A carrier lost the silithyst, not at the camp: it falls at `at`, once.
 fn lost(map: &mut Map, g: Guid, at: Vector3d) {
-    if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
-        si.carriers.remove(&g);
+    let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) else {
+        return;
+    };
+    if si.carriers.remove(&g).is_none() {
+        return;
     }
     for a in SPELL_TEAM_CARRYING {
         crate::game::map::auras::remove_spell(map, g, a, None);
