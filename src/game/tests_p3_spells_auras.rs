@@ -923,3 +923,236 @@ async fn heals_over_time_go_off_by_their_ticks_and_direct_heals_by_their_cast() 
     assert!(!by_renew, "Renew's tick doesn't corrupt");
     assert!(by_heal, "a direct heal does");
 }
+
+/// The spells of `g`'s holders, in order.
+fn spells_on(m: &Map, g: Guid) -> Vec<u32> {
+    auras::auras(m, g)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| !h.passive)
+                .map(|h| h.spell)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn clear(m: &mut Map, g: Guid) {
+    auras::remove_where(m, g, |h| !h.passive);
+}
+
+#[tokio::test]
+async fn food_drink_well_fed_and_flasks_replace_their_own_kind() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, w, map) = player(&realm, "P3A17", "Eatone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            let kobold = dummy(m, w, 60, 5.0);
+            let mut seen = Vec::new();
+            let mut run = |m: &mut Map, list: &[(Guid, u32)]| {
+                clear(m, w);
+                for (by, s) in list {
+                    apply(m, *by, w, *s);
+                }
+                spells_on(m, w)
+            };
+            // A food replaces a food, a drink a drink; food and drink both,
+            // and both are replaced by either.
+            seen.push(run(m, &[(w, 433), (w, 430), (w, 434)]));
+            seen.push(run(m, &[(w, 430), (w, 434), (w, 431)]));
+            seen.push(run(m, &[(w, 434), (w, 431), (w, 2639)]));
+            seen.push(run(m, &[(w, 2639), (w, 434)]));
+            seen.push(run(m, &[(w, 2639), (w, 431)]));
+            // Well Fed from two: the last.
+            seen.push(run(m, &[(w, 24799), (kobold, 19705)]));
+            // Flasks replace flasks; plain elixirs and Well Fed stay.
+            seen.push(run(
+                m,
+                &[(w, 17628), (w, 11348), (w, 24799), (w, 17627), (w, 11396)],
+            ));
+            // Standing ends food, not Well Fed.
+            run(m, &[(w, 2639), (w, 24799)]);
+            auras::interrupt(m, w, auras::INTERRUPT_NOT_SEATED);
+            let stood = spells_on(m, w);
+            // A food that gives Well Fed, replaced, gives nothing.
+            run(m, &[(w, 5005), (w, 435)]);
+            pass(m, 11_000);
+            let replaced = spells_on(m, w);
+            // Death keeps the flask that outlasts it.
+            run(m, &[(w, 17628), (w, 24799), (w, 11348)]);
+            crate::game::map::death::kill(m, w);
+            let died = spells_on(m, w);
+            (seen, stood, replaced, died)
+        })
+        .await
+        .unwrap();
+    let (seen, stood, replaced, died) = out;
+    assert_eq!(
+        seen,
+        vec![
+            vec![430, 434],
+            vec![434, 431],
+            vec![2639],
+            vec![434],
+            vec![431],
+            vec![19705],
+            vec![11348, 24799, 17627, 11396],
+        ]
+    );
+    assert_eq!(stood, vec![24799], "standing ends the food alone");
+    assert_eq!(
+        replaced,
+        vec![435],
+        "the replaced food's Well Fed never comes"
+    );
+    assert_eq!(died, vec![17628], "death keeps the flask alone");
+}
+
+const LINKENS_BOOMERANG: u32 = 15712;
+const DISARM: u32 = 15752;
+const KNOCKDOWN: u32 = 15753;
+const SCORPID_SURPRISE: u32 = 6410;
+const SCORPID_POISON: u32 = 6411;
+const DIVINE_SHIELD: u32 = 642;
+
+#[tokio::test]
+async fn a_boomerang_and_a_scorpid_surprise_roll_their_rare_extras() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, w, map) = player(&realm, "P3A18", "Rareone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            let kobold = dummy(m, w, 60, 5.0);
+            let (mut disarmed, mut knocked, mut poisoned) = (0, 0, 0);
+            for _ in 0..620 {
+                spells::cast_triggered(m, w, LINKENS_BOOMERANG, Some(kobold));
+                disarmed += has(m, kobold, DISARM) as u32;
+                knocked += has(m, kobold, KNOCKDOWN) as u32;
+                clear(m, kobold);
+                // Each a first knockdown, not a diminished one.
+                if let Some(c) = m.caster_mut(kobold) {
+                    c.diminishing.clear();
+                }
+                spells::cast_triggered(m, w, SCORPID_SURPRISE, Some(w));
+                poisoned += has(m, w, SCORPID_POISON) as u32;
+                clear(m, w);
+                set_health(m, kobold, 1_000_000);
+            }
+            // On one shielded, nothing; on the dead, nothing.
+            apply(m, kobold, kobold, DIVINE_SHIELD);
+            let before = health(m, kobold);
+            for _ in 0..40 {
+                spells::cast_triggered(m, w, LINKENS_BOOMERANG, Some(kobold));
+            }
+            let shielded = (
+                health(m, kobold) == before,
+                has(m, kobold, DISARM) || has(m, kobold, KNOCKDOWN),
+            );
+            clear(m, kobold);
+            set_health(m, kobold, 5);
+            spells::cast_triggered(m, w, LINKENS_BOOMERANG, Some(kobold));
+            let killed = (
+                m.creature(kobold).is_none_or(|c| !c.alive()),
+                has(m, kobold, DISARM) || has(m, kobold, KNOCKDOWN),
+            );
+            (disarmed, knocked, poisoned, shielded, killed)
+        })
+        .await
+        .unwrap();
+    let (disarmed, knocked, poisoned, shielded, killed) = out;
+    assert!(
+        (5..=45).contains(&disarmed),
+        "disarmed one in 31: {disarmed} of 620"
+    );
+    assert!(
+        (25..=100).contains(&knocked),
+        "knocked down one in 11: {knocked} of 620"
+    );
+    assert!(
+        (25..=100).contains(&poisoned),
+        "poisoned one in 11: {poisoned} of 620"
+    );
+    assert_eq!(shielded, (true, false), "Divine Shield takes nothing");
+    assert_eq!(
+        killed,
+        (true, false),
+        "the killing hit leaves nothing on the dead"
+    );
+}
+
+const MIND_CONTROL: u32 = 605;
+
+#[tokio::test]
+async fn mind_control_takes_a_creature_and_lets_it_go_on_its_master_unless_dead() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, priest, map) = player(&realm, "P3A19", "Mindone", Race::Human, Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            ready(m, priest, 60, &[MIND_CONTROL]);
+            let kobold = dummy(m, priest, 60, 5.0);
+            let fields = |m: &Map, g: Guid| {
+                m.unit_fields(g).map(|f| {
+                    (
+                        f.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+                        f.get_u32(UNIT_FIELD_FLAGS) & 0x0100_0008,
+                    )
+                })
+            };
+            let before = fields(m, kobold);
+            spells::cast_triggered(m, priest, MIND_CONTROL, Some(kobold));
+            let held = fields(m, kobold);
+            let mine = m
+                .unit_fields(priest)
+                .map(|f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
+            // Let go: as it was, and on the priest with its health's threat.
+            spells::interrupt(m, priest);
+            crate::game::map::pets::update(m);
+            let freed = fields(m, kobold);
+            let c = m.creature(kobold).unwrap();
+            let turned = (
+                c.combat.victim == priest,
+                c.threat.iter().find(|(t, _)| *t == priest).map(|(_, v)| *v),
+            );
+            // One killed while held turns on no one.
+            let other = dummy(m, priest, 60, 6.0);
+            fresh(m, priest);
+            spells::cast_triggered(m, priest, MIND_CONTROL, Some(other));
+            crate::game::map::combat::deal_damage(m, priest, other, 2_000_000);
+            crate::game::map::pets::update(m);
+            let dead = m
+                .creature(other)
+                .map(|c| (c.alive(), c.combat.victim == priest));
+            (before, held, mine, freed, turned, dead)
+        })
+        .await
+        .unwrap();
+    let (before, held, mine, freed, turned, dead) = out;
+    let (faction, flags) = before.unwrap();
+    assert_eq!(flags, 0, "a creature of its own");
+    assert_eq!(
+        held,
+        Some((mine.unwrap(), 0x0100_0008)),
+        "the priest's, possessed"
+    );
+    assert_eq!(freed, Some((faction, 0)), "let go, as it was");
+    assert_eq!(
+        turned,
+        (true, Some(1_000_000.0)),
+        "and on the priest with its health's threat"
+    );
+    assert_eq!(
+        dead,
+        Some((false, false)),
+        "killed while held, it turns on no one"
+    );
+}
