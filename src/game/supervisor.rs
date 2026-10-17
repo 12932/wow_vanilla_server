@@ -90,6 +90,33 @@ impl Backoff {
     }
 }
 
+/// Run a long-lived task, starting it again whenever it panics: OTP's
+/// permanent child. The first restart is at once, and each one after rests
+/// twice as long as the last, up to [`Backoff::MAX`]. It ends when the
+/// task returns.
+pub async fn supervise<F, Fut>(what: &str, mut start: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut rest = Duration::ZERO;
+    loop {
+        match tokio::spawn(start()).await {
+            Ok(()) => return,
+            Err(e) if e.is_panic() => {
+                let e = message(&*e.into_panic());
+                error!(
+                    "{what} panicked: {e}; starting it again in {} s",
+                    rest.as_secs()
+                );
+                tokio::time::sleep(rest).await;
+                rest = (rest * 2).clamp(Backoff::MIN, Backoff::MAX);
+            }
+            Err(_) => return,
+        }
+    }
+}
+
 /// Panics seen by the hook, by where they happened.
 static SEEN: LazyLock<Mutex<AHashMap<String, u64>>> = LazyLock::new(Default::default);
 

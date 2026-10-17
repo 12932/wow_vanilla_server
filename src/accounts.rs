@@ -129,8 +129,17 @@ impl Accounts {
         }
     }
 
+    /// The connection, locked. A panic while it was held leaves it usable
+    /// (SQLite rolls back what was unfinished); a poisoned lock would
+    /// instead refuse every login until a restart.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn find(&self, name: &str) -> Option<Account> {
-        let conn = self.conn.lock().ok()?;
+        let conn = self.lock();
         conn.query_row(
             "SELECT name, salt, verifier, gm_level, banned_until, ban_reason FROM accounts WHERE name = ?1",
             params![name],
@@ -158,7 +167,7 @@ impl Accounts {
             return Err("names and passwords are letters and digits".into());
         };
         let v = SrpVerifier::from_username_and_password(n, p);
-        let conn = self.conn.lock().map_err(|_| "the accounts lock")?;
+        let conn = self.lock();
         conn.execute(
             "INSERT INTO accounts (name, salt, verifier, created) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(name) DO UPDATE SET salt = ?2, verifier = ?3",
@@ -174,24 +183,22 @@ impl Accounts {
     }
 
     pub fn set_gm_level(&self, name: &str, level: u8) -> bool {
-        self.conn.lock().ok().is_some_and(|c| {
-            c.execute(
+        self.lock()
+            .execute(
                 "UPDATE accounts SET gm_level = ?2 WHERE name = ?1",
                 params![name, level.min(ADMINISTRATOR)],
             )
             .is_ok_and(|n| n > 0)
-        })
     }
 
     /// Ban an account until `until` (Unix seconds, or -1 for good); 0 lifts it.
     pub fn ban(&self, name: &str, until: i64, reason: &str) -> bool {
-        self.conn.lock().ok().is_some_and(|c| {
-            c.execute(
+        self.lock()
+            .execute(
                 "UPDATE accounts SET banned_until = ?2, ban_reason = ?3 WHERE name = ?1",
                 params![name, until, reason],
             )
             .is_ok_and(|n| n > 0)
-        })
     }
 
     /// The account's SRP verifier for a login, made first if policy
@@ -247,6 +254,22 @@ mod tests {
         assert_eq!(strict.login("STRANGER").err(), Some(Refused::Unknown));
         strict.set_password("KNOWN", "SECRET").unwrap();
         assert!(strict.login("KNOWN").is_ok());
+    }
+
+    #[test]
+    fn a_panic_while_the_connection_was_held_doesnt_lock_everyone_out() {
+        let a = Accounts::in_memory(Creation::Auto, false);
+        a.set_password("ALICE", "PW").unwrap();
+        let poisoned = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _held = a.conn.lock();
+                panic!("a panic while the accounts are held");
+            })
+            .join()
+        });
+        assert!(poisoned.is_err() && a.conn.is_poisoned());
+        assert!(a.find("ALICE").is_some());
+        assert!(a.login("BOB").is_ok(), "a new account is still made");
     }
 
     #[test]
