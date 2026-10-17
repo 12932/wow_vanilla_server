@@ -14,7 +14,7 @@ use crate::game::Realm;
 use crate::game::guid;
 use crate::game::harness::{self, Client};
 use crate::game::map::creature::Creature;
-use crate::game::map::{Map, MapHandle, quests};
+use crate::game::map::{Map, MapHandle, MapKey, quests};
 
 const DB: &str = "/local/home/wallenx/runs/tt-data/db";
 
@@ -133,14 +133,84 @@ fn rewarded(m: &Map, g: Guid, quest: u32) -> bool {
 
 /// Take `quest` from the creature (or object) `giver`, beside it, its
 /// earlier quests done.
-async fn take(c: &mut Client, map: &MapHandle, giver: u32, quest: u32, before: &'static [u32]) {
+
+/// Where `entry` (a creature, else an object) is spawned: its map and
+/// place.
+fn spawn_of(realm: &Realm, entry: u32) -> Option<(u32, Vector3d)> {
+    let data = &realm.data;
+    let mut creatures: Vec<_> = data
+        .creature_spawns
+        .values()
+        .flatten()
+        .filter(|s| s.entries.contains(&entry))
+        .map(|s| (s.guid, s.map, s.x, s.y, s.z))
+        .collect();
+    creatures.sort_by_key(|s| s.0);
+    let mut objects: Vec<_> = data
+        .gameobject_spawns
+        .values()
+        .flatten()
+        .filter(|s| s.entry == entry)
+        .map(|s| (s.guid, s.map, s.x, s.y, s.z))
+        .collect();
+    objects.sort_by_key(|s| s.0);
+    creatures.first().or(objects.first()).map(|s| {
+        (
+            s.1,
+            Vector3d {
+                x: s.2,
+                y: s.3,
+                z: s.4,
+            },
+        )
+    })
+}
+
+/// `c` at `at` in map `id`, by a teleport across maps if need be: the
+/// map they are in then.
+async fn go(realm: &Arc<Realm>, c: &mut Client, id: u32, at: Vector3d) -> MapHandle {
     let g = c.guid;
+    let from = realm.registry.online(g).expect("online").map();
+    let here = from.query(|m| m.key.map).await.unwrap();
+    if here == id {
+        put(&from, c, at).await;
+        return from;
+    }
+    from.call(move |m| m.teleport(g, MapKey::world(id), at, 0.0));
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+    realm.registry.online(g).expect("online").map()
+}
+
+/// `c` beside the spawn of `entry`: the map, the creature or object, and
+/// where it stands.
+async fn visit(realm: &Arc<Realm>, c: &mut Client, entry: u32) -> (MapHandle, Guid, Vector3d) {
+    let (id, at) = spawn_of(realm, entry).expect("spawned");
+    let map = go(realm, c, id, beside(at)).await;
     let (who, at) = map
-        .query(move |m| npc(m, giver).or_else(|| object(m, giver)))
+        .query(move |m| npc(m, entry).or_else(|| object(m, entry)))
         .await
         .flatten()
-        .expect("the quest's giver");
-    put(map, c, beside(at)).await;
+        .expect("here");
+    put(&map, c, beside(at)).await;
+    (map, who, at)
+}
+
+/// Take `quest` from the creature (or object) `giver`, beside it, its
+/// earlier quests done: the map it is in.
+async fn take(
+    realm: &Arc<Realm>,
+    c: &mut Client,
+    giver: u32,
+    quest: u32,
+    before: &'static [u32],
+) -> MapHandle {
+    let g = c.guid;
+    let (map, who, _) = visit(realm, c, giver).await;
     map.query(move |m| {
         m.players
             .get_mut(&g)
@@ -152,24 +222,20 @@ async fn take(c: &mut Client, map: &MapHandle, giver: u32, quest: u32, before: &
     })
     .await;
     assert!(
-        until(map, move |m| logged(m, g, quest)).await,
+        until(&map, move |m| logged(m, g, quest)).await,
         "{quest} taken"
     );
+    map
 }
 
 /// Turn `quest` in at `ender`, beside it.
-async fn turn_in(c: &mut Client, map: &MapHandle, ender: u32, quest: u32) {
+async fn turn_in(realm: &Arc<Realm>, c: &mut Client, ender: u32, quest: u32) {
     let g = c.guid;
-    let (who, at) = map
-        .query(move |m| npc(m, ender).or_else(|| object(m, ender)))
-        .await
-        .flatten()
-        .expect("the quest's ender");
-    put(map, c, beside(at)).await;
+    let (map, who, _) = visit(realm, c, ender).await;
     map.query(move |m| quests::choose_reward(m, g, who, quest, 0))
         .await;
     assert!(
-        until(map, move |m| rewarded(m, g, quest)).await,
+        until(&map, move |m| rewarded(m, g, quest)).await,
         "{quest} rewarded"
     );
 }
@@ -242,8 +308,8 @@ async fn curing_the_sick(
     cured: u32,
 ) {
     const SALVE: u32 = 15826;
-    let (mut c, g, map) = hero(realm, account, race, Class::Druid, 14).await;
-    take(&mut c, &map, giver, quest, before).await;
+    let (mut c, g, _) = hero(realm, account, race, Class::Druid, 14).await;
+    let map = take(realm, &mut c, giver, quest, before).await;
     assert_eq!(
         map.query(move |m| item_at(m, g, SALVE).is_some()).await,
         Some(true)
@@ -270,7 +336,80 @@ async fn curing_the_sick(
         );
     }
     assert_eq!(map.query(move |m| done(m, g, quest)).await, Some(true));
-    turn_in(&mut c, &map, 11802, quest).await;
+    turn_in(realm, &mut c, 11802, quest).await;
+}
+
+/// The id of the option in `npc`'s menu that reads `text`.
+async fn option(c: &mut Client, npc: Guid, text: &'static str) -> u32 {
+    c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+    c.wait_for("the menu", |m| match m {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) if g.guid == npc => g
+            .gossips
+            .iter()
+            .find(|o| o.message.contains(text))
+            .map(|o| o.id),
+        _ => None,
+    })
+    .await
+}
+
+async fn choose(c: &Client, npc: Guid, option: u32) {
+    c.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: npc,
+        gossip_list_id: option,
+        unknown: None,
+    })
+    .await;
+}
+
+async fn emote_at(c: &Client, emote: TextEmote, target: Guid) {
+    c.send(CMSG_TEXT_EMOTE {
+        text_emote: emote,
+        emote: 0,
+        target,
+    })
+    .await;
+}
+
+/// Get the Scoop: beckoned, Plucky Johnson is himself again, and tells
+/// the phrase.
+async fn get_the_scoop(realm: &Arc<Realm>) {
+    const QUEST: u32 = 1950;
+    const PLUCKY: u32 = 6626;
+    let (mut c, g, _) = hero(realm, "SCOOP", Race::Human, Class::Mage, 30).await;
+    take(realm, &mut c, 6548, QUEST, &[1949]).await;
+    let (map, plucky, _) = visit(realm, &mut c, PLUCKY).await;
+    emote_at(&c, TextEmote::Beckon, plucky).await;
+    let id = option(&mut c, plucky, "Phrase").await;
+    choose(&c, plucky, id).await;
+    assert!(
+        until(&map, move |m| done(m, g, QUEST)).await,
+        "{QUEST} done"
+    );
+    turn_in(realm, &mut c, 6548, QUEST).await;
+}
+
+/// The Spider God: the Tablet of Theka, read in Zul'Farrak, names him.
+async fn the_spider_god(realm: &Arc<Realm>) {
+    const QUEST: u32 = 2936;
+    const TABLET: u32 = 142715;
+    let (mut c, g, _) = hero(realm, "SPIDER", Race::Troll, Class::Shaman, 45).await;
+    take(realm, &mut c, 3188, QUEST, &[2935]).await;
+    let (map, tablet, _) = visit(realm, &mut c, TABLET).await;
+    c.send(CMSG_GAMEOBJ_USE { guid: tablet }).await;
+    assert!(
+        until(&map, move |m| done(m, g, QUEST)).await,
+        "{QUEST} done"
+    );
+    turn_in(realm, &mut c, 3188, QUEST).await;
+}
+
+fn wanted(name: &str) -> bool {
+    let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
+    if yes {
+        eprintln!("event quests: {name}");
+    }
+    yes
 }
 
 #[tokio::test]
@@ -279,26 +418,34 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
         return;
     }
     let realm = realm();
-    curing_the_sick(
-        &realm,
-        "TAUREN",
-        Race::Tauren,
-        6129,
-        3448,
-        &[6128],
-        12296,
-        12297,
-    )
-    .await;
-    curing_the_sick(
-        &realm,
-        "ELF",
-        Race::NightElf,
-        6124,
-        3702,
-        &[6123],
-        12298,
-        12299,
-    )
-    .await;
+    if wanted("sick") {
+        curing_the_sick(
+            &realm,
+            "TAUREN",
+            Race::Tauren,
+            6129,
+            3448,
+            &[6128],
+            12296,
+            12297,
+        )
+        .await;
+        curing_the_sick(
+            &realm,
+            "ELF",
+            Race::NightElf,
+            6124,
+            3702,
+            &[6123],
+            12298,
+            12299,
+        )
+        .await;
+    }
+    if wanted("scoop") {
+        get_the_scoop(&realm).await;
+    }
+    if wanted("spider") {
+        the_spider_god(&realm).await;
+    }
 }
