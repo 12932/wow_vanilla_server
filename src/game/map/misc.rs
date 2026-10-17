@@ -110,6 +110,18 @@ fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
     map.send_to_observers(g, &frame, false);
 }
 
+/// A player's new speed, to those who see them: `MSG_MOVE_SET_*_SPEED`
+/// with where they are (Thistle Tea's observer speed packets).
+pub fn speed_to_observers(map: &Map, g: Guid, opcode: u16, speed: f32) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let mut b = Body(movement_bytes(g, &p.movement));
+    b.0.extend_from_slice(&speed.to_le_bytes());
+    let frame = b.frame(opcode);
+    map.send_to_observers(g, &frame, false);
+}
+
 fn speed_ack(map: &mut Map, g: Guid, info: MovementInfo, speed: f32, opcode: u16) {
     relay(map, g, info, opcode, &speed.to_le_bytes());
 }
