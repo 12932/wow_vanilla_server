@@ -221,9 +221,10 @@ async fn kazzaks_whirl_turns(realm: &Arc<Realm>) {
     clear(&map, vec![kazzak]);
 }
 
-/// The Emerald Dream's dragons: their aura stuns whom they marked, and a
-/// player dying under the mark's aura keeps the mark; Azuregos's Arcane
-/// Vacuum pulls a player to him and forgets them.
+/// The Emerald Dream's dragons: their aura stuns whom they marked, a
+/// player dying under the mark's aura keeps the mark, and one dying under
+/// Emeriss's leaves a mushroom; Azuregos's Arcane Vacuum pulls a player
+/// to him and forgets them.
 async fn the_dragons_marks_and_vacuum(realm: &Arc<Realm>) {
     let (mut a, alice, map) = player(realm, "Daria").await;
     let dragon = boss(&map, 14887, 4.0, 0.0).await;
@@ -242,6 +243,24 @@ async fn the_dragons_marks_and_vacuum(realm: &Arc<Realm>) {
     map.call(move |m| crate::game::map::combat::deal_damage(m, dragon, bob, 1_000_000));
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(has(&map, bob, 25040).await, "the fallen keep the mark");
+    // Dying under Emeriss's aura leaves a Putrid Mushroom where one fell.
+    let (_e, emma, _) = player(realm, "Emma").await;
+    put(&map, emma, 4.0, 8.0);
+    cast(&map, dragon, 24906, emma);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(has(&map, emma, 24906).await);
+    map.call(move |m| crate::game::map::combat::deal_damage(m, dragon, emma, 1_000_000));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mushroom = map
+        .query(move |m| {
+            let at = m.players[&emma].position();
+            m.gameobjects.iter().any(|(_, o)| {
+                o.entry == 180517 && crate::game::map::combat::dist(o.position, at) < 3.0
+            })
+        })
+        .await
+        .unwrap();
+    assert!(mushroom, "a mushroom where they fell");
     // Azuregos's Arcane Vacuum.
     let (_c, cara, _) = player(realm, "Cara").await;
     let azuregos = boss(&map, 6109, -30.0, 0.0).await;
