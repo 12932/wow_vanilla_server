@@ -1183,3 +1183,50 @@ async fn a_cinematic_under_way_keeps_its_clock_and_the_eight_caches_are_the_clie
         assert_eq!(told, answered, "kind {kind}");
     }
 }
+
+#[tokio::test]
+async fn a_capital_rests_its_own_side_only_and_the_rest_ends_outside_it() {
+    use crate::game::data::AreaInfo;
+    let mut d = data();
+    for (id, flags, team) in [(1519, 0x100, 2), (1637, 0x100, 4), (12, 0, 0)] {
+        d.areas.insert(
+            id,
+            AreaInfo {
+                id,
+                flags,
+                team,
+                name: format!("Zone {id}"),
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let got = on_map(&realm, move |m| {
+        let mut out = Vec::new();
+        for zone in [1519, 12, 1637, 1519, 9999] {
+            let p = m.players.get_mut(&ga).unwrap();
+            p.zone = zone;
+            p.misc.rest_checked_at = None;
+            rest::update(m);
+            let p = &m.players[&ga];
+            out.push((
+                p.row.state.rest_type,
+                p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING),
+            ));
+        }
+        out
+    })
+    .await;
+    assert_eq!(
+        got,
+        vec![
+            (Some(RestType::City), true),
+            (None, false),
+            (None, false),
+            (Some(RestType::City), true),
+            (None, false),
+        ]
+    );
+}
