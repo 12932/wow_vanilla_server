@@ -260,12 +260,17 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
 
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
+    die_by(map, creature, tapper, tapper);
+}
+
+/// It died to `killer`, `tapper` holding its tap. Its scripts run on to
+/// its corpse's end, as Thistle Tea's do.
+pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     if guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
     crate::game::map::auras::clear_on_death(map, creature);
-    crate::game::map::scripts::stop_for(map, creature);
-    crate::game::map::event_ai::death(map, creature, tapper);
+    crate::game::map::event_ai::death(map, creature, killer);
     crate::game::map::instance_script::creature_event(
         map,
         creature,
@@ -375,6 +380,7 @@ pub fn update_dead(map: &mut Map) {
         if corpse_until <= now && !c.despawned {
             c.despawned = true;
             despawn_from_view(map, g);
+            crate::game::map::scripts::stop_for(map, g);
         }
         still.push(g);
     }
@@ -414,6 +420,7 @@ fn respawn(map: &mut Map, g: Guid) {
     if !despawned {
         despawn_from_view(map, g);
     }
+    crate::game::map::scripts::stop_for(map, g);
     if let Some(c) = map
         .creature_by_guid
         .remove(&g)
@@ -523,7 +530,10 @@ pub fn update_creatures(map: &mut Map) {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
         };
-        crate::game::map::event_ai::tick(map, g);
+        // Its timed events wait while it walks home.
+        if !map.creatures.get(key).is_some_and(|c| c.evading) {
+            crate::game::map::event_ai::tick(map, g);
+        }
         let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
             continue;
         };
@@ -1049,7 +1059,7 @@ fn evade(map: &mut Map, g: Guid) {
             c.attackers.remove(&g);
         }
     }
-    crate::game::map::scripts::stop_for(map, g);
+    // Its scripts run on: a script that wants them stopped says so.
     crate::game::map::event_ai::evade(map, g);
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::spawn_auras::restore(map, g);
