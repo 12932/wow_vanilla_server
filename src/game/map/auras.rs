@@ -431,8 +431,9 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         {
             return Some(Exclusive::NegativeHaste);
         }
-        // A snare, but not a daze.
-        if only(AURA_MOD_DECREASE_SPEED) && s.attributes[1] & 0x0040_0000 == 0 {
+        // A snare, but not a daze (the second attributes' 0x0004_0000, as
+        // Thistle Tea's `Slow.daze?` tells one).
+        if only(AURA_MOD_DECREASE_SPEED) && s.attributes[1] & 0x0004_0000 == 0 {
             return Some(Exclusive::Snare);
         }
     }
