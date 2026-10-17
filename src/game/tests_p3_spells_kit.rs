@@ -184,17 +184,6 @@ pub fn pass(m: &mut Map, ms: u64) {
     auras::update(m);
 }
 
-/// Move the clock on `ms` in steps of `step`, running spells and auras at
-/// each.
-pub fn pass_by(m: &mut Map, ms: u64, step: u64) {
-    let mut gone = 0;
-    while gone < ms {
-        let s = step.min(ms - gone);
-        pass(m, s);
-        gone += s;
-    }
-}
-
 /// A spell made up for a test: one effect, its aura of `aura` with `misc`
 /// and `amount`, on its target.
 pub fn made_up(id: u32, effect: u32, aura: u32, misc: i32, amount: i32) -> SpellTemplate {
@@ -216,17 +205,6 @@ pub fn made_up(id: u32, effect: u32, aura: u32, misc: i32, amount: i32) -> Spell
         effects,
         ..Default::default()
     }
-}
-
-/// The result of `spell`'s cast as the client hears it: none for a cast
-/// that went, else the failure.
-pub async fn cast_result(c: &mut Client, spell: u32) -> Option<u8> {
-    let b = c
-        .wait_frame("SMSG_CAST_RESULT", spells::SMSG_CAST_RESULT, |b| {
-            b[..4] == spell.to_le_bytes()
-        })
-        .await;
-    (b[4] != 0).then(|| b[5])
 }
 
 /// `g` free to cast again: no cast under way, no global cooldown, no

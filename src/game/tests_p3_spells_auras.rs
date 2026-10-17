@@ -953,7 +953,7 @@ async fn food_drink_well_fed_and_flasks_replace_their_own_kind() {
             ready(m, w, 60, &[]);
             let kobold = dummy(m, w, 60, 5.0);
             let mut seen = Vec::new();
-            let mut run = |m: &mut Map, list: &[(Guid, u32)]| {
+            let run = |m: &mut Map, list: &[(Guid, u32)]| {
                 clear(m, w);
                 for (by, s) in list {
                     apply(m, *by, w, *s);
