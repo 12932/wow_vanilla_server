@@ -1060,6 +1060,7 @@ fn evade(map: &mut Map, g: Guid) {
         }
     }
     // Its scripts run on: a script that wants them stopped says so.
+    crate::game::map::spells::lists::left_combat(map, g);
     crate::game::map::event_ai::evade(map, g);
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::spawn_auras::restore(map, g);

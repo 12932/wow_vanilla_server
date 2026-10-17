@@ -1561,18 +1561,19 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     for (list, spells) in rows(db, "SELECT * FROM creature_spells", |c| {
         let spells: Vec<CreatureSpell> = (1..=8)
-            .map(|n| CreatureSpell {
-                spell: c.u32(&format!("spellId_{n}")),
-                probability: c.u32(&format!("probability_{n}")),
-                target: c.u32(&format!("castTarget_{n}")),
-                delay_initial: (
-                    c.u32(&format!("delayInitialMin_{n}")),
-                    c.u32(&format!("delayInitialMax_{n}")),
-                ),
-                delay_repeat: (
-                    c.u32(&format!("delayRepeatMin_{n}")),
-                    c.u32(&format!("delayRepeatMax_{n}")),
-                ),
+            .map(|n| {
+                let ms = |column: &str| c.u32(&format!("{column}_{n}")).saturating_mul(1000);
+                CreatureSpell {
+                    spell: c.u32(&format!("spellId_{n}")),
+                    probability: c.u32(&format!("probability_{n}")),
+                    target: c.u32(&format!("castTarget_{n}")),
+                    target_param1: c.u32(&format!("targetParam1_{n}")),
+                    target_param2: c.u32(&format!("targetParam2_{n}")),
+                    flags: c.u32(&format!("castFlags_{n}")),
+                    delay_initial: (ms("delayInitialMin"), ms("delayInitialMax")),
+                    delay_repeat: (ms("delayRepeatMin"), ms("delayRepeatMax")),
+                    script: c.u32(&format!("scriptId_{n}")),
+                }
             })
             .filter(|s| s.spell != 0)
             .collect();
