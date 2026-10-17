@@ -30,6 +30,10 @@ pub struct Social {
     /// The seasonal events on.
     pub events: Mutex<ahash::AHashSet<u32>>,
     pub weather: Mutex<ahash::AHashMap<u32, crate::game::weather::Weather>>,
+    /// Server-wide world states events publish: state → value.
+    pub world_states: Mutex<ahash::AHashMap<u32, u32>>,
+    /// Events the world starts and stops, not the calendar.
+    pub driven_events: Mutex<ahash::AHashMap<u32, bool>>,
 }
 
 impl Social {

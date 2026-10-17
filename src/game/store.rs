@@ -120,6 +120,19 @@ pub struct CharacterState {
     /// Friends and ignored characters, by GUID counter.
     pub friends: Vec<u32>,
     pub ignored: Vec<u32>,
+    /// A flight under way at logout, to take up again.
+    pub flight: Option<SavedFlight>,
+}
+
+/// A flight's rest: the points still to fly, where it lands, and the
+/// mount.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedFlight {
+    pub map: u32,
+    pub points: Vec<(f32, f32, f32)>,
+    pub destination: u32,
+    pub mount: u32,
 }
 
 /// A quest in a player's log.
@@ -130,6 +143,9 @@ pub struct Logged {
     pub kills: [u32; 4],
     pub explored: bool,
     pub failed: bool,
+    /// A timed quest's end, in Unix seconds; 0 for none.
+    #[serde(default)]
+    pub expires: i64,
 }
 
 /// A player's quests: the log, and those rewarded.

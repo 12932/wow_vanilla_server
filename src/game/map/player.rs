@@ -92,7 +92,7 @@ impl Item {
             fields.set_u32(ITEM_FIELD_DURATION, t.duration);
         }
         let display = item_display(data, entry).map(|d| d.0).unwrap_or(0);
-        Self {
+        let mut item = Self {
             guid,
             entry,
             bag,
@@ -100,7 +100,9 @@ impl Item {
             fields,
             data: String::new(),
             display,
-        }
+        };
+        crate::game::map::items::on_create(data, &mut item);
+        item
     }
 
     pub fn from_row(data: &GameData, row: &ItemRow, owner: Guid) -> Self {
@@ -513,6 +515,17 @@ impl Player {
         }
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
         row.items = self.items.iter().map(Item::to_row).collect();
+        row.state.flight = self.flight.as_ref().map(|f| crate::game::store::SavedFlight {
+            map: self.row.map,
+            points: f
+                .walk
+                .remaining(now)
+                .into_iter()
+                .map(|p| (p.x, p.y, p.z))
+                .collect(),
+            destination: f.destination,
+            mount: f.mount,
+        });
         row.state.quests = self.journal.clone();
         row.spells = self.spells.clone();
         row

@@ -4096,6 +4096,7 @@ mod world_around {
                 end: now + 86_400,
                 occurence: 1440,
                 length: 1440,
+                hardcoded: false,
             },
         );
         let spawn = |guid, dx: f32| CreatureSpawn {

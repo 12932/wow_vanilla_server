@@ -333,7 +333,8 @@ fn respawn(map: &mut Map, g: Guid) {
     let Some(spawn) = spawn else {
         return;
     };
-    if let Some(c) = Creature::from_spawn(&data, spawn, &mut rand::rng()) {
+    let on = crate::game::events::current(&map.realm);
+    if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         map.add_creature(c);
     }
 }

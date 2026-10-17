@@ -79,6 +79,17 @@ impl Walk {
         *self.points.last().expect("a walk has points")
     }
 
+    /// The points still ahead at `now`.
+    pub fn remaining(&self, now: Instant) -> Vec<Vector3d> {
+        let travelled = now.duration_since(self.started).as_secs_f32() * self.speed;
+        self.points
+            .iter()
+            .zip(&self.lengths)
+            .filter(|(_, l)| **l > travelled)
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
     pub fn done(&self, now: Instant) -> bool {
         now.duration_since(self.started) >= self.duration
     }
@@ -186,6 +197,8 @@ pub struct Creature {
     pub taunted_by: Option<Guid>,
     /// The unit that summoned or owns it: a pet's master, a totem's shaman.
     pub owner: Option<Guid>,
+    /// The event whose looks it wears; 0 for its own.
+    pub event_looks: u32,
 }
 
 /// Alive, or dead and waiting.
@@ -278,6 +291,7 @@ impl Creature {
             derived: Default::default(),
             taunted_by: None,
             owner: None,
+            event_looks: 0,
         }
         .with_base()
     }

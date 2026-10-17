@@ -548,6 +548,9 @@ fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, targets: Targets, ite
             p.mana_spent_at = Some(now);
         }
     }
+    if let Some(i) = item {
+        crate::game::map::items::used(map, caster, i, s.id);
+    }
     for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0) {
         let mut left = *count;
         while left > 0 {
@@ -1240,9 +1243,18 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
         return;
     };
     // Trigger 0: on use.
-    let Some(spell) = template.spells.iter().find(|s| s.id != 0 && s.trigger == 0) else {
+    let Some((index, spell)) = template
+        .spells
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.id != 0 && s.trigger == 0)
+    else {
         return;
     };
+    if let Some(code) = crate::game::map::items::check_use(map, player, item_guid, index) {
+        crate::game::map::items::send_failure(map, player, spell.id, code);
+        return;
+    }
     let mut targets = targets_of(t);
     targets.item = targets.item.or(Some(item_guid));
     cast(map, player, spell.id, targets, Some(item_guid));
