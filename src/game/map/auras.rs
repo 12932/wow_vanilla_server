@@ -1507,17 +1507,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             shapeshift(map, target, misc.max(0) as u8, h.spell);
         }
         AURA_TRANSFORM => {
-            let display = map
-                .realm
-                .data
-                .creature_template(misc.max(0) as u32)
-                .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
-                .unwrap_or(0);
-            if display != 0
-                && let Some(f) = map.unit_fields_mut(target)
-            {
-                f.set_u32(UNIT_FIELD_DISPLAYID, display);
-            }
+            sync_display(map, target);
             crate::game::map::spells::interrupts::transformed(map, target, h.spell, a.effect);
         }
         AURA_MOUNTED => {
@@ -1722,12 +1712,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_SHAPESHIFT if !still(map, AURA_MOD_SHAPESHIFT) => {
             shapeshift(map, target, 0, h.spell);
         }
-        AURA_TRANSFORM if !still(map, AURA_TRANSFORM) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                let native = f.get_u32(UNIT_FIELD_NATIVEDISPLAYID);
-                f.set_u32(UNIT_FIELD_DISPLAYID, native);
-            }
-        }
+        AURA_TRANSFORM => sync_display(map, target),
         AURA_MOUNTED if !still(map, AURA_MOUNTED) => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 0);
@@ -1924,7 +1909,11 @@ pub const FORM_TREE: u8 = 2;
 pub const FORM_TRAVEL: u8 = 3;
 pub const FORM_AQUA: u8 = 4;
 pub const FORM_BEAR: u8 = 5;
+pub const FORM_GHOUL: u8 = 7;
 pub const FORM_DIREBEAR: u8 = 8;
+pub const FORM_CREATURE_BEAR: u8 = 14;
+pub const FORM_GHOST_WOLF: u8 = 16;
+pub const FORM_SPIRIT_OF_REDEMPTION: u8 = 32;
 pub const FORM_STEALTH: u8 = 30;
 pub const FORM_MOONKIN: u8 = 31;
 pub const FORM_BATTLE: u8 = 17;
@@ -1957,6 +1946,7 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
     if let Some(f) = map.unit_fields_mut(target) {
         f.set_byte(UNIT_FIELD_BYTES_1, 2, form);
     }
+    sync_display(map, target);
     let data = map.realm.data.clone();
     // A form left ends the unit's own auras that hang on forms (Thistle
     // Tea's `Shapeshift.interrupt_holders`); the new form's come back
@@ -2042,6 +2032,74 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
             // Gear whose spells name forms: held to this one.
             crate::game::map::inventory::sync_gear(map, target);
         }
+    }
+}
+
+/// The look a form gives a unit of `race`, as mangos's
+/// `HandleAuraModShapeshift` has them: the Horde's own cat, bear and
+/// moonkin; none for the forms that keep the unit's own.
+fn form_display(form: u8, race: u8) -> u32 {
+    let horde = matches!(race, 2 | 5 | 6 | 8);
+    match form {
+        FORM_CAT if horde => 8571,
+        FORM_CAT => 892,
+        FORM_TREE => 864,
+        FORM_TRAVEL => 632,
+        FORM_AQUA => 2428,
+        FORM_BEAR | FORM_DIREBEAR if horde => 2289,
+        FORM_BEAR | FORM_DIREBEAR => 2281,
+        FORM_GHOUL if !horde => 10045,
+        FORM_CREATURE_BEAR => 902,
+        FORM_GHOST_WOLF => 4613,
+        FORM_MOONKIN if horde => 15375,
+        FORM_MOONKIN => 15374,
+        FORM_SPIRIT_OF_REDEMPTION => 16031,
+        _ => 0,
+    }
+}
+
+/// The look a unit shows: its newest transform's (a harmful one's before
+/// any helpful), else its form's, else its own, as mangos's
+/// `RestoreDisplayId` and Thistle Tea's `Appearance` work it out whenever
+/// a transform or a form comes or goes.
+fn sync_display(map: &mut Map, target: Guid) {
+    let data = map.realm.data.clone();
+    let Some(a) = auras(map, target) else {
+        return;
+    };
+    let transforms: Vec<(bool, u32)> = a
+        .holders
+        .iter()
+        .flat_map(|h| {
+            h.effects
+                .iter()
+                .filter(|x| x.kind == AURA_TRANSFORM)
+                .map(move |x| (h.positive, x.misc))
+        })
+        .filter_map(|(positive, misc)| {
+            data.creature_template(misc.max(0) as u32)
+                .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
+                .map(|d| (positive, d))
+        })
+        .collect();
+    let transform = transforms
+        .iter()
+        .rev()
+        .find(|(positive, _)| !positive)
+        .or(transforms.last())
+        .map(|(_, d)| *d);
+    let Some(f) = map.unit_fields_mut(target) else {
+        return;
+    };
+    let form = form_display(
+        f.get_byte(UNIT_FIELD_BYTES_1, 2),
+        f.get_byte(UNIT_FIELD_BYTES_0, 0),
+    );
+    let display = transform
+        .or((form != 0).then_some(form))
+        .unwrap_or_else(|| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
+    if display != 0 && f.get_u32(UNIT_FIELD_DISPLAYID) != display {
+        f.set_u32(UNIT_FIELD_DISPLAYID, display);
     }
 }
 

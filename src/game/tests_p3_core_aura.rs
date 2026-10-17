@@ -51,6 +51,19 @@ const SHEEP_DISPLAY: u32 = 856;
 const STUCK_ARMOR: u32 = 95_904;
 const PASSIVE_ARMOR: u32 = 95_905;
 
+/// Cat Form (with its immunity to polymorph), Bear Form, Ghost Wolf and
+/// Spirit of Redemption's form.
+const CAT_FORM: u32 = 768;
+const BEAR_FORM: u32 = 5487;
+const GHOST_WOLF: u32 = 2645;
+const SPIRIT: u32 = 27_827;
+/// The looks: a night elf's cat and bear, the wolf's and the spirit's.
+const CAT_DISPLAY: u32 = 892;
+const BEAR_DISPLAY: u32 = 2281;
+const WOLF_DISPLAY: u32 = 4613;
+const SPIRIT_DISPLAY: u32 = 16_031;
+const MECHANIC_POLYMORPH: i32 = 17;
+
 const SCHOOL_FIRE: u32 = 0x4;
 const SCHOOL_FROST: u32 = 0x10;
 
@@ -137,6 +150,34 @@ fn data() -> GameData {
     let mut passive = aura_spell(PASSIVE_ARMOR, ten_minutes, &[(AURA_MOD_RESISTANCE, 1)]);
     passive.attributes[0] |= sd::ATTR_PASSIVE;
     all.extend([stuck, passive]);
+    all.extend([
+        aura_spell(
+            CAT_FORM,
+            None,
+            &[
+                (AURA_MOD_SHAPESHIFT, i32::from(FORM_CAT)),
+                (AURA_MECHANIC_IMMUNITY, MECHANIC_POLYMORPH),
+            ],
+        ),
+        aura_spell(
+            BEAR_FORM,
+            None,
+            &[(AURA_MOD_SHAPESHIFT, i32::from(FORM_BEAR))],
+        ),
+        aura_spell(GHOST_WOLF, None, &[(AURA_MOD_SHAPESHIFT, 16)]),
+        aura_spell(SPIRIT, Some(15_000), &[(AURA_MOD_SHAPESHIFT, 32)]),
+    ]);
+    // Polymorph cast at a target.
+    let polymorph = all
+        .iter_mut()
+        .find(|s| s.id == POLYMORPH)
+        .expect("Polymorph");
+    polymorph.mechanic = MECHANIC_POLYMORPH as u32;
+    polymorph.range_index = 1;
+    polymorph.aura_interrupt_flags = INTERRUPT_DAMAGE;
+    for e in &mut polymorph.effects[..2] {
+        e.target_a = 6;
+    }
     for s in all {
         if s.duration_index != 0 {
             d.spells.durations.insert(
@@ -604,4 +645,158 @@ async fn only_a_cancelable_helpful_aura_is_cancelled() {
         assert!(tokio::time::Instant::now() < deadline, "not cancelled");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+/// A night elf druid's client, entered in Teldrassil, with its map.
+async fn druid(
+    data: GameData,
+) -> (
+    std::sync::Arc<crate::game::Realm>,
+    crate::game::harness::Client,
+    Guid,
+    crate::game::map::MapHandle,
+) {
+    let realm = crate::game::harness::realm_with(data);
+    let mut a = crate::game::harness::Client::connect(&realm, "D");
+    let g = a.enter("Druid", Race::NightElf, Class::Druid).await;
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(1));
+    (realm, a, g, map)
+}
+
+/// Thistle Tea's `druid shapeshifting` and `cat form energy`: Cat Form
+/// takes a druid's power to energy, none of it yet out of a hundred, and
+/// the cat's look; what comes on later doesn't refill it. Bear Form takes
+/// it to rage, with the bear's look; out of it, mana again, and the
+/// druid's own look.
+#[tokio::test]
+async fn the_druid_forms_take_their_power_and_look_and_leaving_them_gives_both_back() {
+    let (_realm, _a, g, map) = druid(data()).await;
+    let got = map
+        .query(move |m| {
+            let state = |m: &Map| {
+                let f = m.unit_fields(g).unwrap();
+                (
+                    f.get_byte(UNIT_FIELD_BYTES_1, 2),
+                    f.get_byte(UNIT_FIELD_BYTES_0, 3),
+                    f.get_u32(UNIT_FIELD_DISPLAYID),
+                )
+            };
+            let own = field(m, g, UNIT_FIELD_NATIVEDISPLAYID);
+            m.unit_fields_mut(g)
+                .unwrap()
+                .set_u32(UNIT_FIELD_POWER1 + 3, 50);
+            let before = state(m);
+            put(m, g, g, CAT_FORM, &[0, 0]).unwrap();
+            let cat = (
+                state(m),
+                field(m, g, UNIT_FIELD_POWER1 + 3),
+                field(m, g, UNIT_FIELD_MAXPOWER1 + 3),
+            );
+            m.unit_fields_mut(g)
+                .unwrap()
+                .set_u32(UNIT_FIELD_POWER1 + 3, 42);
+            put(m, g, g, LASTING, &[3]).unwrap();
+            let kept = field(m, g, UNIT_FIELD_POWER1 + 3);
+            put(m, g, g, BEAR_FORM, &[0]).unwrap();
+            let bear = (state(m), field(m, g, UNIT_FIELD_POWER1 + 1));
+            auras::cancel(m, g, BEAR_FORM);
+            let out = (state(m), field(m, g, UNIT_FIELD_POWER1 + 1));
+            let forms: Vec<u32> = holders(m, g)
+                .into_iter()
+                .map(|h| h.0)
+                .filter(|s| [CAT_FORM, BEAR_FORM].contains(s))
+                .collect();
+            (own, before, cat, kept, bear, out, forms)
+        })
+        .await
+        .unwrap();
+    let (own, before, cat, kept, bear, out, forms) = got;
+    assert_eq!(before, (0, 0, own));
+    assert_eq!(cat, ((FORM_CAT, 3, CAT_DISPLAY), 0, 100));
+    assert_eq!(kept, 42, "not refilled");
+    assert_eq!(bear, ((FORM_BEAR, 1, BEAR_DISPLAY), 0));
+    assert_eq!(out, ((0, 0, own), 0));
+    assert!(forms.is_empty(), "{forms:?}");
+}
+
+/// Thistle Tea's `druid shapeshifting` and `mod_confuse`: Spirit of
+/// Redemption's form has the spirit's look; Ghost Wolf the wolf's, and
+/// Polymorph goes over it, the form kept; Polymorph broken, the wolf's
+/// look is back, and with the wolf gone the unit's own.
+#[tokio::test]
+async fn the_forms_have_their_looks_and_polymorph_goes_over_them() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Mage).await;
+    let got = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 5.0);
+            let look = |m: &Map| {
+                (
+                    field(m, ga, UNIT_FIELD_DISPLAYID),
+                    m.unit_fields(ga).unwrap().get_byte(UNIT_FIELD_BYTES_1, 2),
+                )
+            };
+            let own = field(m, ga, UNIT_FIELD_NATIVEDISPLAYID);
+            put(m, ga, ga, SPIRIT, &[0]).unwrap();
+            let spirit = look(m);
+            auras::remove_spell(m, ga, SPIRIT, None);
+            put(m, ga, ga, GHOST_WOLF, &[0]).unwrap();
+            let wolf = look(m);
+            put(m, brute, ga, POLYMORPH, &[0, 0]).unwrap();
+            let sheep = look(m);
+            crate::game::map::combat::deal_damage(m, brute, ga, 1);
+            let broken = (
+                look(m),
+                holders(m, ga).into_iter().map(|h| h.0).collect::<Vec<_>>(),
+            );
+            auras::remove_spell(m, ga, GHOST_WOLF, None);
+            (own, spirit, wolf, sheep, broken, look(m))
+        })
+        .await
+        .unwrap();
+    let (own, spirit, wolf, sheep, broken, gone) = got;
+    assert_eq!(spirit, (SPIRIT_DISPLAY, 32));
+    assert_eq!(wolf, (WOLF_DISPLAY, 16));
+    assert_eq!(sheep, (SHEEP_DISPLAY, 16));
+    assert_eq!(broken, ((WOLF_DISPLAY, 16), vec![GHOST_WOLF]));
+    assert_eq!(gone, (own, 0));
+}
+
+/// Thistle Tea's `mod_confuse`: Cat Form's immunity turns Polymorph away
+/// and its diminishing returns don't count it; on one out of form it
+/// lands and counts.
+#[tokio::test]
+async fn a_forms_immunity_turns_polymorph_away_without_diminishing_it() {
+    let realm = crate::game::harness::realm_with(data());
+    let mut clients = Vec::new();
+    for (account, name, class) in [
+        ("D", "Druid", Class::Druid),
+        ("E", "Mage", Class::Warrior),
+        ("F", "Other", Class::Warrior),
+    ] {
+        let mut c = crate::game::harness::Client::connect(&realm, account);
+        let g = c.enter(name, Race::NightElf, class).await;
+        clients.push((c, g));
+    }
+    let (d, e, f) = (clients[0].1, clients[1].1, clients[2].1);
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(1));
+    let got = map
+        .query(move |m| {
+            put(m, d, d, CAT_FORM, &[0, 0]).unwrap();
+            let counted = |m: &Map, g: Guid| m.players[&g].caster.diminishing.len();
+            crate::game::map::spells::cast_triggered(m, e, POLYMORPH, Some(d));
+            let druid = (
+                holders(m, d).into_iter().map(|h| h.0).collect::<Vec<_>>(),
+                counted(m, d),
+            );
+            crate::game::map::spells::cast_triggered(m, e, POLYMORPH, Some(f));
+            let other = (
+                holders(m, f).into_iter().map(|h| h.0).collect::<Vec<_>>(),
+                counted(m, f),
+            );
+            (druid, other)
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.0, (vec![CAT_FORM], 0));
+    assert_eq!(got.1, (vec![POLYMORPH], 1));
 }
