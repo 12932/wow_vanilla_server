@@ -238,8 +238,8 @@ async fn a_warriors_stances_set_the_form_one_at_a_time_and_lock_their_abilities_
         ("berserker", 19, None),
         ("pummel", 19, None),
         ("bash", 19, Some(fail::ONLY_SHAPESHIFT)),
-        // Thistle Tea and mangos answer EQUIPPED_ITEM_CLASS; wvs's own.
-        ("unarmed", 19, Some(fail::MAINHAND_EMPTY)),
+        // As Thistle Tea and mangos answer it.
+        ("unarmed", 19, Some(fail::EQUIPPED_ITEM_CLASS)),
         ("gone", 0, None),
     ];
     assert_eq!(steps, want);

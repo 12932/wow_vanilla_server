@@ -690,13 +690,26 @@ pub fn cast_request(map: &mut Map, caster: Guid, spell: u32, t: &SpellCastTarget
 
 /// The cast time of `s` for `caster`: its own, with modifiers, and the
 /// caster's cast speed for spells (abilities don't haste).
-fn cast_time(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods) -> u32 {
+pub(crate) fn cast_time(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods) -> u32 {
     let base = map.realm.data.spells.cast_time(s);
     if base == 0 {
         return 0;
     }
     let t = m.apply(mods::OP_CASTING_TIME, base as f32);
-    let speed = if s.ability() || s.attr(0, sd::ATTR_TRADESKILL) {
+    let speed = if s.attr(0, sd::ATTR_RANGED) && !s.auto_repeat() {
+        // A ranged ability (Aimed Shot, Multi-Shot) by the ranged haste
+        // (mangos's `GetSpellCastTime`: `m_modAttackSpeedPct[RANGED]`).
+        auras::auras(map, caster).map_or(1.0, |a| {
+            crate::game::map::derive::period_multiplier(
+                a,
+                &[
+                    auras::AURA_MOD_RANGED_HASTE,
+                    auras::AURA_MOD_ATTACKSPEED,
+                    auras::AURA_MOD_RANGED_AMMO_HASTE,
+                ],
+            )
+        })
+    } else if s.ability() || s.attr(0, sd::ATTR_TRADESKILL) {
         1.0
     } else {
         map.unit_fields(caster)
@@ -734,6 +747,16 @@ pub fn cast(
             }
             _ => {}
         }
+    }
+    // A finisher aimed at no one, or at its caster (Slice and Dice), is at
+    // the unit its combo points are on.
+    if s.finisher()
+        && targets.unit.is_none_or(|u| u == caster)
+        && let Some(c) = map.caster(caster)
+        && c.combo_points > 0
+        && map.unit_view(c.combo_target).is_some()
+    {
+        targets.unit = Some(c.combo_target);
     }
     let m = mods::for_spell(map, caster, s);
     if crate::game::map::mounts::dismissed(map, caster, s) {
@@ -1130,6 +1153,40 @@ fn execute(
     }
 }
 
+/// A mechanic immunity with charges kept `s` off `target`: a charge of it
+/// goes, as Thistle Tea's `EffectImmunity` spends Fear Ward's.
+fn spend_immunity(map: &mut Map, target: Guid, s: &SpellTemplate) {
+    let mechanics: Vec<u32> = std::iter::once(s.mechanic)
+        .chain(
+            s.effects
+                .iter()
+                .filter(|e| e.effect != 0)
+                .map(|e| e.mechanic),
+        )
+        .filter(|m| *m != 0)
+        .collect();
+    let charged = auras::auras(map, target).and_then(|a| {
+        a.holders
+            .iter()
+            .find(|h| {
+                h.charges > 0
+                    && h.effects.iter().any(|x| {
+                        mechanics.iter().any(|m| match x.kind {
+                            auras::AURA_MECHANIC_IMMUNITY => x.misc as u32 == *m,
+                            auras::AURA_MECHANIC_IMMUNITY_MASK => {
+                                (x.misc as u32) & (1 << (m - 1).min(31)) != 0
+                            }
+                            _ => false,
+                        })
+                    })
+            })
+            .map(|h| (h.spell, h.caster))
+    });
+    if let Some((spell, caster)) = charged {
+        auras::spend_charge(map, target, spell, caster);
+    }
+}
+
 /// What a spell carries to each target it lands on.
 #[derive(Debug, Clone)]
 pub struct Launch {
@@ -1235,6 +1292,10 @@ fn land(
     if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
         hit = Hit::Immune;
     }
+    // A charged immunity that keeps it off is spent (Fear Ward).
+    if hit == Hit::Immune {
+        spend_immunity(map, target, s);
+    }
     let mut aim = target;
     if hit == Hit::Reflect {
         // Back at the caster.
@@ -1295,6 +1356,9 @@ fn land(
             } else if outcome::effect_resisted(map, aim, s, i) {
                 *on = false;
             }
+        }
+        if immune {
+            spend_immunity(map, aim, s);
         }
         if before > 0 && !effects.iter().any(|e| *e) {
             let why = if immune { Hit::Immune } else { Hit::Resist };

@@ -220,6 +220,23 @@ pub fn check_target(map: &Map, caster: Guid, s: &SpellTemplate, target: Guid) ->
     {
         return Some(fail::TARGET_AURASTATE);
     }
+    // Conflagrate wants the caster's Immolate on its target (Thistle Tea's
+    // `check_warlock_target`).
+    if script(s, "spell_warlock_conflagrate")
+        && !auras::auras(map, target).is_some_and(|a| {
+            a.holders.iter().any(|h| {
+                h.caster == caster
+                    && map
+                        .realm
+                        .data
+                        .spells
+                        .get(h.spell)
+                        .is_some_and(|t| family_flag(t, FAMILY_WARLOCK, 0x4))
+            })
+        })
+    {
+        return Some(fail::TARGET_AURASTATE);
+    }
     // Mongoose Bite and Counterattack are at whoever opened their window.
     let window = if script(s, "spell_hunter_mongoose_bite") {
         map.combat(caster).and_then(|c| c.defense_window)

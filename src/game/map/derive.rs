@@ -236,7 +236,7 @@ fn speed_factor(amount: i32) -> f32 {
 /// multiply, but of the melee slows only the strongest counts, beside any
 /// a passive aura gives (vanilla's slows don't stack, as Thistle Tea's
 /// `AttackSpeed.multiplier` has it).
-fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
+pub(crate) fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
     let mut slow = 0;
     let m = a
         .effects()
