@@ -56,7 +56,83 @@ pub struct Scripted {
     pub gossip_menu: Option<u32>,
     /// It was in combat at the last tick.
     pub in_combat: bool,
+    /// A script's move under way.
+    pub scripted_move: Option<ScriptedMove>,
+    /// It flies (`SCRIPT_COMMAND_SET_FLY`).
+    pub fly: bool,
+    /// A unit it follows: (whom, distance, angle from its facing).
+    pub follow: Option<(Guid, f32, f32)>,
+    /// Hidden from players until a script shows it.
+    pub concealed: bool,
+    /// A triggered spell its swings are, in place of plain blows.
+    pub melee_spell: Option<u32>,
+    /// How far it calls for help on aggro (0 not at all), over its
+    /// template's.
+    pub call_for_help_range: Option<f32>,
+    /// A caster that stops this far from its victim, not in melee.
+    pub caster_chase_distance: Option<f32>,
+    /// What it regenerates out of combat (Thistle Tea's stats mask), over
+    /// its own.
+    pub regenerate: Option<u32>,
+    /// Its path held where it is.
+    pub hold: Option<Hold>,
+    /// It feigns death at a killing blow while kin of its are near.
+    pub feign: Option<Feign>,
+    /// A path a script set it walking, over its spawn's.
+    pub route: Option<Route>,
 }
+
+/// A path held, as vmangos's escorts pause: until the summons made since
+/// are gone (or, `signal`, until a script lets it go), and at most until
+/// `until`. Its release runs a script; one that ran out unsignalled runs
+/// `expired` if it has one.
+#[derive(Debug, Clone)]
+pub struct Hold {
+    pub until: Instant,
+    pub ready_at: Instant,
+    pub signal: bool,
+    pub signaled: bool,
+    pub earlier: Vec<Guid>,
+    pub release_script: u32,
+    pub expired_script: u32,
+}
+
+/// Linked feign death: a killing blow leaves it down, not dead, and after
+/// `delay` it gets up unless every creature of `entry` within `radius`
+/// is down too. `fall` and `revive` are scripts; `pacify` the aura it
+/// lies under.
+#[derive(Debug, Clone, Copy)]
+pub struct Feign {
+    pub delay: Duration,
+    pub entry: u32,
+    pub radius: f32,
+    pub pacify: u32,
+    pub fall_script: u32,
+    pub revive_script: u32,
+    /// Down since then.
+    pub down_at: Option<Instant>,
+}
+
+/// A path a script started: its points, and whether it goes round again.
+#[derive(Debug, Clone)]
+pub struct Route {
+    pub points: std::sync::Arc<Vec<crate::game::data::Waypoint>>,
+    pub repeat: bool,
+}
+
+/// A move a script started: its spline, where it ends, the point its
+/// arrival tells of (a movement inform of type 9), and which way it faces
+/// there.
+#[derive(Debug, Clone, Copy)]
+pub struct ScriptedMove {
+    pub spline_id: u32,
+    pub to: wow_world_messages::vanilla::Vector3d,
+    pub point: Option<u32>,
+    pub face: Option<f32>,
+}
+
+/// The motion type of a script's point movement.
+pub const POINT_MOTION: u32 = 9;
 
 /// The events of creature `entry`.
 fn events_of(map: &Map, entry: u32) -> Option<&[AiEvent]> {
@@ -474,7 +550,7 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
         if e.chance == 0 {
             continue;
         }
-        run_actions(map, g, e, target.or_else(|| victim(map, g)));
+        run_actions(map, g, i, e, target.or_else(|| victim(map, g)));
         // An action may have killed or despawned the creature.
         if map.creature(g).is_none() {
             return;
@@ -482,21 +558,66 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
     }
 }
 
-fn run_actions(map: &mut Map, g: Guid, e: &AiEvent, target: Option<Guid>) {
+fn run_actions(map: &mut Map, g: Guid, i: usize, e: &AiEvent, target: Option<Guid>) {
     let actions: Vec<u32> = e.actions.iter().copied().filter(|a| *a != 0).collect();
     let chosen: Vec<u32> = if e.flags & EF_RANDOM_ACTION != 0 && !actions.is_empty() {
         vec![actions[rand::rng().random_range(0..actions.len())]]
     } else {
         actions
     };
+    let checked = (e.flags & EF_CHECK_RESULT != 0).then_some((g, i));
     for script in chosen {
-        scripts::start(
+        scripts::start_checked(
             map,
             ScriptTable::CreatureAi,
             script,
             g,
             target.unwrap_or_default(),
+            checked,
         );
+    }
+}
+
+/// A result-checked event whose actions failed: due again at once, as a
+/// vmangos timer starts over only when its cast lands.
+pub fn retry(map: &mut Map, g: Guid, i: usize) {
+    let now = map.now;
+    if let Some(s) = map.creature_mut(g).and_then(|c| c.scripted.as_deref_mut())
+        && i < s.timers.len()
+    {
+        s.timers[i] = Some(now);
+        s.disabled[i] = false;
+    }
+}
+
+/// A script's move ended: its facing, and the point it tells of.
+pub fn scripted_move_ended(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let Some(m) = c.scripted.as_deref().and_then(|s| s.scripted_move) else {
+        return;
+    };
+    let moving = match &c.motion {
+        crate::game::map::creature::Motion::Moving(w) => Some(w.spline_id),
+        _ => None,
+    };
+    if moving == Some(m.spline_id) {
+        return;
+    }
+    if let Some(s) = c.scripted.as_deref_mut() {
+        s.scripted_move = None;
+    }
+    // Another move took its place, or it stopped short.
+    if moving.is_some() || dist(c.position, m.to) > 2.0 {
+        return;
+    }
+    if let Some(o) = m.face {
+        c.orientation = o;
+        map.visibility_dirty.insert(g);
+    }
+    if let Some(point) = m.point {
+        movement_inform(map, g, POINT_MOTION, point);
     }
 }
 
@@ -779,6 +900,37 @@ pub fn movement_inform(map: &mut Map, g: Guid, kind: u32, point: u32) {
             None,
         );
     }
+}
+
+/// A follower keeps its place by the one it follows.
+pub fn follow_step(map: &mut Map, g: Guid) {
+    let Some((leader, distance, angle)) = scripted(map, g).and_then(|s| s.follow) else {
+        return;
+    };
+    let Some(l) = map.unit_view(leader).filter(|l| l.alive) else {
+        if let Some(s) = scripted_mut(map, g) {
+            s.follow = None;
+        }
+        return;
+    };
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let a = l.orientation + angle;
+    let spot = wow_world_messages::vanilla::Vector3d {
+        x: l.position.x + distance * a.cos(),
+        y: l.position.y + distance * a.sin(),
+        z: l.position.z,
+    };
+    let heading = match &c.motion {
+        crate::game::map::creature::Motion::Moving(w) => Some(w.destination()),
+        _ => None,
+    };
+    if dist(c.position, spot) < 2.0 || heading.is_some_and(|h| dist(h, spot) < 2.0) {
+        return;
+    }
+    let run = dist(c.position, spot) > 10.0 || scripted(map, g).is_some_and(|s| s.run);
+    scripts::move_to(map, g, spot, run);
 }
 
 /// The phase scripts set.

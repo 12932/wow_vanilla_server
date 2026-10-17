@@ -1178,9 +1178,12 @@ pub fn creature_cast(map: &mut Map, creature: Guid, victim: Guid) {
     if c.caster.casting.is_some() || c.caster.next_spell_at.is_some_and(|t| t > now) {
         return;
     }
-    let list = data
-        .creature_template(c.entry)
-        .map(|t| t.spell_list_id)
+    // A list a script set (0 for none) stands over the template's.
+    let list = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.spell_list)
+        .or_else(|| data.creature_template(c.entry).map(|t| t.spell_list_id))
         .filter(|l| *l != 0)
         .and_then(|l| data.spells.creature_spells.get(&l));
     let Some(list) = list else {

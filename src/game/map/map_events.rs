@@ -257,9 +257,8 @@ pub fn update(map: &mut Map) {
     map.map_events.next_check = Some(now + CHECK_EVERY);
     let events: Vec<ScriptedEvent> = map.map_events.active.values().cloned().collect();
     for e in events {
-        let outcome = if now >= e.expires {
-            Some(false)
-        } else if met(map, e.failure_condition, e.source, e.target) {
+        // Out of time, or failed.
+        let outcome = if now >= e.expires || met(map, e.failure_condition, e.source, e.target) {
             Some(false)
         } else if met(map, e.success_condition, e.source, e.target) {
             Some(true)

@@ -11,8 +11,6 @@ pub mod combat;
 pub mod conditions;
 pub mod creature;
 pub mod creature_groups;
-pub mod creature_scripts;
-mod creature_scripts_ported;
 pub mod death;
 pub mod derive;
 pub mod duel;
@@ -284,8 +282,8 @@ pub struct Map {
     /// Objects a script changed that go back: (when, object, state; MAX
     /// to go).
     pub object_resets: Vec<(Instant, Guid, u32)>,
-    /// Groups scripts made: member → (leader, distance, angle).
-    pub script_groups: AHashMap<Guid, (Guid, f32, f32)>,
+    /// Groups scripts made: member → (leader, distance, angle, flags).
+    pub script_groups: AHashMap<Guid, (Guid, f32, f32, u32)>,
     /// Scripted map events under way.
     pub map_events: map_events::Events,
 }

@@ -46,6 +46,8 @@ pub struct Walk {
     pub speed: f32,
     pub spline_id: u32,
     pub run: bool,
+    /// Through the air, not along the ground.
+    pub fly: bool,
 }
 
 impl Walk {
@@ -72,6 +74,7 @@ impl Walk {
             speed,
             spline_id,
             run,
+            fly: false,
         }
     }
 
@@ -105,6 +108,11 @@ impl Walk {
         (b, (b.y - a.y).atan2(b.x - a.x))
     }
 
+    /// Run mode (0x100) and flying (0x200).
+    pub fn spline_flags(&self) -> u32 {
+        (if self.run { 0x100 } else { 0 }) | (if self.fly { 0x200 } else { 0 })
+    }
+
     /// The walk as `SMSG_MONSTER_MOVE` puts it: the destination, then the
     /// points between as offsets from the path's middle.
     pub fn packet(&self, guid: Guid, from: Vector3d) -> SMSG_MONSTER_MOVE {
@@ -130,7 +138,7 @@ impl Walk {
             spline_point: from,
             spline_id: self.spline_id,
             move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
-            spline_flags: SplineFlag::new(if self.run { 0x100 } else { 0 }),
+            spline_flags: SplineFlag::new(self.spline_flags()),
             duration: self.duration.as_millis() as u32,
             splines,
         }
@@ -463,7 +471,7 @@ impl Creature {
                     p,
                     o,
                     Some(SplineState {
-                        flags: if w.run { 0x100 } else { 0 },
+                        flags: w.spline_flags(),
                         time_passed: elapsed,
                         duration: w.duration.as_millis() as u32,
                         id: w.spline_id,
@@ -502,15 +510,33 @@ impl Creature {
         now: Instant,
         spline_id: u32,
     ) -> Option<Arc<[u8]>> {
+        self.walk_at(points, run, false, None, now, spline_id)
+    }
+
+    /// [`Self::walk`], flying or not, and taking `time` if it is given.
+    pub fn walk_at(
+        &mut self,
+        points: Vec<Vector3d>,
+        run: bool,
+        fly: bool,
+        time: Option<Duration>,
+        now: Instant,
+        spline_id: u32,
+    ) -> Option<Arc<[u8]>> {
         if points.len() < 2 {
             return None;
         }
-        let speed = if run {
+        let mut speed = if run {
             self.speeds.run
         } else {
             self.speeds.walk
         };
-        let walk = Walk::new(points, speed, now, spline_id, run);
+        if let Some(t) = time.filter(|t| !t.is_zero()) {
+            let length: f32 = points.windows(2).map(|w| dist3(w[0], w[1])).sum();
+            speed = length / t.as_secs_f32();
+        }
+        let mut walk = Walk::new(points, speed, now, spline_id, run);
+        walk.fly = fly;
         let frame = encode(&walk.packet(self.guid, self.position));
         self.motion = Motion::Moving(walk);
         frame

@@ -25,6 +25,51 @@ pub struct ScriptStep {
     pub z: f32,
     pub o: f32,
     pub condition: u32,
+    /// What only a code-built step has (Thistle Tea's creature scripts).
+    pub ext: Option<Box<StepExt>>,
+}
+
+/// A code-built step's extras, as Thistle Tea's `ScriptStep` has them.
+#[derive(Debug, Clone, Default)]
+pub struct StepExt {
+    /// Lines to say, one at random, in place of broadcast texts.
+    pub texts: Vec<InlineText>,
+    /// A summon's places: one no living creature stands on, at random.
+    pub positions: Vec<[f32; 4]>,
+    /// A summon lands on a random point this far around its place.
+    pub scatter: f32,
+    /// How many a summon brings.
+    pub count: SummonCount,
+    /// A summon or teleport at the target's feet.
+    pub at_target: bool,
+    /// A group join keeps the creature's distance and bearing from its
+    /// leader.
+    pub formation_from_position: bool,
+    /// The target must be farther than this, flat, past both bounding
+    /// radii.
+    pub min_target_distance_2d: Option<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InlineText {
+    pub text: String,
+    pub chat_type: u32,
+    pub language: u32,
+    pub emote: u32,
+}
+
+/// A summon's count: a number, or one that scales with the living
+/// players on the summoner's threat list (ratio, at least, at most).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SummonCount {
+    Fixed(u32),
+    ThreatPlayers(f32, u32, u32),
+}
+
+impl Default for SummonCount {
+    fn default() -> Self {
+        SummonCount::Fixed(1)
+    }
 }
 
 /// `data_flags`.
@@ -53,6 +98,10 @@ pub const EF_REPEATABLE: u32 = 0x1;
 pub const EF_RANDOM_ACTION: u32 = 0x2;
 pub const EF_NOT_CASTING: u32 = 0x4;
 pub const EF_CHECK_RESULT: u32 = 0x8;
+/// Thistle Tea's: fires only with its victim in melee reach, and its timer
+/// waits while it is stunned.
+pub const EF_VICTIM_IN_MELEE: u32 = 0x100;
+pub const EF_PAUSE_WHILE_STUNNED: u32 = 0x200;
 
 // Event types.
 pub const EVENT_TIMER_IN_COMBAT: u32 = 0;
@@ -223,6 +272,9 @@ pub struct ScriptData {
     pub teleport_condition: AHashMap<u32, u32>,
     /// `spell_area`: auras a place (and a quest, race or gender) brings.
     pub spell_areas: Vec<SpellArea>,
+    /// Paths creature scripts walk (`start_waypoints` source 5): by entry
+    /// and variant.
+    pub routes: super::tt_scripts::Routes,
 }
 
 impl ScriptData {

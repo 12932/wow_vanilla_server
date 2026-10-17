@@ -15,6 +15,7 @@ pub mod pets;
 pub mod scripts;
 mod scripts_load;
 pub mod spells;
+pub mod tt_scripts;
 
 use ahash::AHashMap;
 use wow_world_base::vanilla::{Class, Gender, PlayerGender, PlayerRace, Race, RaceClass};
@@ -381,6 +382,10 @@ pub struct GameData {
     /// `creature_movement_template`: paths by creature entry, for spawns
     /// with none of their own.
     pub waypoints_by_entry: AHashMap<u32, Vec<Waypoint>>,
+    /// `creature_movement_special`: paths by entry that scripts start.
+    pub waypoints_special: AHashMap<u32, Vec<Waypoint>>,
+    /// `script_waypoint`: the paths C++ escort scripts walk, by entry.
+    pub script_waypoints: AHashMap<u32, Vec<Waypoint>>,
     pub class_level_stats: AHashMap<(u8, u8), ClassLevelStats>,
     pub display_info: AHashMap<u32, DisplayInfo>,
     pub gameobject_templates: AHashMap<u32, GameObjectTemplate>,
