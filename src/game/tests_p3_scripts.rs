@@ -360,6 +360,13 @@ pub(super) async fn timed_cast(
         "{id}: first in {t:?}, not {first:?}"
     );
     c.clear();
+    // Out of the last cast's global cooldown.
+    map.query(move |m| {
+        if let Some(cr) = m.caster_mut(g) {
+            cr.gcd_until = None;
+        }
+    })
+    .await;
     fire(map, g, id).await;
     let t = timer(map, g, id).await;
     // A next swing's ability goes with the swing.
