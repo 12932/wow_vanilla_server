@@ -2390,12 +2390,19 @@ pub fn update_players(map: &mut Map) {
         sync_aura_state(map, g);
     }
     let data = map.realm.data.clone();
-    let threatened: ahash::AHashSet<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.alive() && c.combat.attacking)
-        .flat_map(|(_, c)| c.threat.iter().map(|(t, _)| *t))
-        .collect();
+    // Who creatures fighting hold a threat on: it keeps a player in a
+    // fight, so it matters only if someone is in one (and saves a look at
+    // every creature when no one is).
+    let threatened: ahash::AHashSet<Guid> =
+        if map.players.values().any(|p| p.combat.last_action.is_some()) {
+            map.creatures
+                .iter()
+                .filter(|(_, c)| c.alive() && c.combat.attacking)
+                .flat_map(|(_, c)| c.threat.iter().map(|(t, _)| *t))
+                .collect()
+        } else {
+            Default::default()
+        };
     for p in map.players.values_mut() {
         if threatened.contains(&p.guid) && p.combat.last_action.is_some() {
             p.combat.last_action = Some(now);
