@@ -1560,6 +1560,11 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         },
     );
     let items = outcome::death_items(map, target, left);
+    // A leech takes no more than the health there was (mangos's
+    // `PeriodicTick`: `min(pdamage, victim's health)`).
+    let had = map
+        .unit_fields(target)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
         // Its threat is of its school, and has the spell's threat
@@ -1593,7 +1598,7 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             h.caster,
             h.caster,
             h.spell,
-            (left as f32 * mult) as u32,
+            (left.min(had) as f32 * mult) as u32,
             true,
         );
     }
