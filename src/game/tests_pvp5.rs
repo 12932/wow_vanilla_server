@@ -376,7 +376,7 @@ fn creature_template(entry: u32, civilian: bool, xp: f32) -> CreatureTemplate {
         faction: 35,
         health_max: 10,
         civilian,
-        xp_multiplier: xp,
+        xp_multiplier: Some(xp),
         ..Default::default()
     }
 }

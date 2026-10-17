@@ -451,7 +451,10 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
                 c.i32("shadow_res"),
                 c.i32("arcane_res"),
             ],
-            xp_multiplier: c.f32("xp_multiplier"),
+            xp_multiplier: match c.value("xp_multiplier") {
+                Value::Null => None,
+                _ => Some(c.f32("xp_multiplier")),
+            },
             loot_id: c.u32("loot_id"),
             pickpocket_loot_id: c.u32("pickpocket_loot_id"),
             skinning_loot_id: c.u32("skinning_loot_id"),

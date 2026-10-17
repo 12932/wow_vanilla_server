@@ -94,7 +94,7 @@ pub(crate) fn template(entry: u32, name: &str, faction: u32, unit_class: u8) -> 
         health_multiplier: 1.0,
         damage_multiplier: 1.0,
         base_attack_time: 2000,
-        xp_multiplier: 1.0,
+        xp_multiplier: Some(1.0),
         speed_run: 1.0,
         speed_walk: 1.0,
         ..Default::default()
