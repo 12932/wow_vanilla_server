@@ -26,8 +26,10 @@ pub fn states_for(map: &Map, zone: u32) -> Vec<WorldState> {
 /// A zone's own world states outside a battleground (outdoor PvP's
 /// objectives).
 pub fn zone_states(map: &Map, zone: u32) -> Vec<WorldState> {
-    let _ = (map, zone);
-    Vec::new()
+    crate::game::map::outdoor_pvp::zone_states(map, zone)
+        .into_iter()
+        .map(|(state, value)| WorldState { state, value })
+        .collect()
 }
 
 /// The server-wide world states, as events last published them.

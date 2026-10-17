@@ -183,6 +183,8 @@ pub struct SavedAura {
     /// Each effect's index and amount.
     pub amounts: Vec<(u8, i32)>,
     pub combo: u8,
+    /// From a triggered spell (it keeps its lesser worth).
+    pub triggered: bool,
 }
 
 /// The auras a player keeps across a logout: not passive ones, not gear's,
@@ -212,6 +214,7 @@ pub fn saved_auras(p: &Player, now: Instant) -> Vec<SavedAura> {
                 .map(|t| t.saturating_duration_since(now).as_millis() as u32),
             amounts: h.effects.iter().map(|x| (x.effect, x.amount)).collect(),
             combo: h.combo,
+            triggered: h.triggered,
         })
         .collect()
 }
@@ -294,7 +297,7 @@ pub fn restore(map: &mut Map, player: Guid) {
                 combo: a.combo,
                 duration: Some(a.left),
                 charges: Some(a.charges),
-                triggered: false,
+                triggered: a.triggered,
             },
         );
         if let Some(h) = auras::auras_mut(map, player).and_then(|x| {
@@ -320,10 +323,14 @@ mod tests {
             stacks: 1,
             left: Some(1_799_000),
             amounts: vec![(0, 3)],
+            triggered: true,
             ..Default::default()
         };
         let json = serde_json::to_string(&a).unwrap();
         let back: SavedAura = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
+        // One saved before the flag was kept reads as not triggered.
+        let old: SavedAura = serde_json::from_str(r#"{"spell":1243,"caster":7}"#).unwrap();
+        assert!(!old.triggered);
     }
 }
