@@ -365,9 +365,12 @@ pub fn enforced(map: &Map, team: Team, zone: u32) -> bool {
 /// long it lingers.
 pub fn update(map: &mut Map) {
     let now = map.now;
+    // Land flown over on a taxi isn't entered (Thistle Tea's territory):
+    // where they land is worked out as they do.
     let changed: Vec<(Guid, Team, u32)> = map
         .players
         .values()
+        .filter(|p| p.flight.is_none())
         .filter(|p| p.pvp.zone != p.zone || p.pvp.map != map.key.map + 1)
         .map(|p| (p.guid, p.team, p.zone))
         .collect();
