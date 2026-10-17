@@ -2195,8 +2195,12 @@ fn deal_damage_with(
     if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
         return;
     }
-    // A priest with Spirit of Redemption becomes a spirit instead.
+    // A priest with Spirit of Redemption becomes a spirit instead: in a
+    // battleground, defeated all the same, the death to come (Thistle Tea's
+    // `count_death?: false`).
     if left == 0 && crate::game::map::spells::redemption::saves(map, victim) {
+        let by = crate::game::map::pets::master(map, attacker);
+        crate::game::map::battleground::defeated(map, victim, by, false);
         return;
     }
     let Some(f) = map.unit_fields_mut(victim) else {
