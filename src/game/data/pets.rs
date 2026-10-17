@@ -28,6 +28,26 @@ pub struct Family {
     pub food_mask: u32,
     pub min_scale: f32,
     pub max_scale: f32,
+    pub min_scale_level: u32,
+    pub max_scale_level: u32,
+}
+
+impl Family {
+    /// A hunter's pet's size at `level` (vmangos's `Pet::InitStatsForLevel`).
+    pub fn scale(&self, level: u32) -> Option<f32> {
+        if self.min_scale <= 0.0 {
+            return None;
+        }
+        Some(if level >= self.max_scale_level {
+            self.max_scale
+        } else if level <= self.min_scale_level {
+            self.min_scale
+        } else {
+            self.min_scale
+                + (level - self.min_scale_level) as f32 / self.max_scale_level.max(1) as f32
+                    * (self.max_scale - self.min_scale)
+        })
+    }
 }
 
 /// A spell of a pet skill line (`SkillLineAbility`).

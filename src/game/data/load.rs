@@ -1888,6 +1888,8 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         food_mask: c.u32("category"),
         min_scale: c.f32("min_scale"),
         max_scale: c.f32("max_scale"),
+        min_scale_level: c.u32("min_scale_level"),
+        max_scale_level: c.u32("max_scale_level"),
     }) {
         pets.families.insert(f.id, f);
     }

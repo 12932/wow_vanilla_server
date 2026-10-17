@@ -740,6 +740,7 @@ fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
         _ if crate::game::map::pets::handles(s, index) => {
             crate::game::map::pets::effect(map, caster, target, s, index, amount)
         }
+        _ if crate::game::map::pets::immune(map, caster, target, s, index) => {}
         EFFECT_INSTAKILL => {
             let health = map
                 .unit_fields(target)
