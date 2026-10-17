@@ -1701,3 +1701,73 @@ async fn spawn_flags_disable_hide_and_lay_out_dead() {
         "a corpse with nothing on it"
     );
 }
+
+const BLINK: u32 = 900_440;
+const BLINK_BACK: u32 = 900_441;
+
+fn blink(id: u32, target_b: u32) -> spells::SpellTemplate {
+    let mut s = unit_spell(id, crate::game::map::spells::EFFECT_LEAP);
+    s.effects[0].target_a = 1;
+    s.effects[0].target_b = target_b;
+    s.effects[0].radius_index = 9;
+    s
+}
+
+/// Where `g` stands after the next teleport its client is told of.
+async fn landed(c: &mut Client) -> Vector3d {
+    c.wait_for("the teleport", |m| match m {
+        ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.position),
+        _ => None,
+    })
+    .await
+}
+
+/// Blink stops at a wall, short of it, where it would have gone through,
+/// and its other forms go where they face: back for 48 (and left for 49,
+/// right for 50), as mangos's caster-relative targets and Thistle Tea's
+/// `CasterLocation` angles have them.
+#[tokio::test]
+async fn blink_stops_at_a_wall_and_goes_its_way() {
+    let mut d = GameData::empty();
+    d.spells.radii.insert(9, 20.0);
+    d.spells.spells.insert(BLINK, blink(BLINK, 55));
+    d.spells.spells.insert(BLINK_BACK, blink(BLINK_BACK, 48));
+    let realm = harness::realm_with(d);
+    let (mut a, g, map) = enter(&realm, "A", "Mage", Race::Human, Class::Mage).await;
+    let face_east = move |m: &mut Map| {
+        if let Some(p) = m.players.get_mut(&g) {
+            p.movement.position = Vector3d {
+                x: START.0,
+                y: START.1,
+                z: START.2,
+            };
+            p.movement.orientation = 0.0;
+        }
+    };
+    // A wall ten yards ahead, across the way.
+    on(&map, move |m| {
+        face_east(m);
+        let at = |y: f32| Vector3d {
+            x: START.0 + 10.0,
+            y: START.1 + y,
+            z: START.2,
+        };
+        m.spells.walls.push((at(-5.0), at(5.0)));
+        crate::game::map::spells::cast_triggered(m, g, BLINK, None);
+    })
+    .await;
+    let to = landed(&mut a).await;
+    let ahead = to.x - START.0;
+    assert!(ahead > 8.0 && ahead < 10.0, "short of the wall: {ahead}");
+    on(&map, move |m| {
+        m.spells.walls.clear();
+        face_east(m);
+        crate::game::map::spells::cast_triggered(m, g, BLINK_BACK, None);
+    })
+    .await;
+    let to = landed(&mut a).await;
+    assert!(
+        (to.x - (START.0 - 20.0)).abs() < 0.1,
+        "twenty yards back: {to:?}"
+    );
+}
