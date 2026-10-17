@@ -395,6 +395,8 @@ async fn a_lava_spawn_is_its_own(map: &MapHandle) {
             let firelord = spawn(m, FIRELORD, 0.0, -40.0);
             ai::attacked(m, firelord, foe);
             spells::cast_triggered(m, firelord, 19392, Some(firelord));
+            // Its spawned events, and then its summoner hears of it.
+            event_ai::update_despawns(m);
             let of = |m: &Map, summoner: Guid| -> Vec<Guid> {
                 m.creatures
                     .iter()
@@ -429,6 +431,7 @@ async fn a_lava_spawn_is_its_own(map: &MapHandle) {
                 s.next_tick = None;
             }
             event_ai::tick(m, lava);
+            event_ai::update_despawns(m);
             let split = (m.creature(lava).is_none(), of(m, lava).len());
             let mut gone = of(m, lava);
             gone.extend([firelord, foe]);
