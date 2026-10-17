@@ -739,8 +739,13 @@ pub fn bonus(
     p * c + m.flat[mods::OP_SPELL_BONUS_DAMAGE] as f32
 }
 
-/// The caster's multiplier on damage of `s`'s school done to `target`.
+/// The caster's multiplier on damage of `s`'s school done to `target`:
+/// none for a spell that ignores its caster's modifiers (Thaddius's
+/// charges).
 pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate) -> f32 {
+    if s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS) {
+        return 1.0;
+    }
     let Some(a) = auras::auras(map, caster) else {
         return 1.0;
     };
@@ -915,7 +920,9 @@ pub fn healing(
 ) -> u32 {
     let mut h = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
     h *= if l.chain > 0.0 { l.chain } else { 1.0 };
-    if let Some(a) = auras::auras(map, caster) {
+    if let Some(a) = auras::auras(map, caster)
+        && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+    {
         h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
     }
     h = l.mods.apply(mods::OP_DAMAGE, h);
