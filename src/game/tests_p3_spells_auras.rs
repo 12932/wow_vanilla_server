@@ -1788,3 +1788,64 @@ async fn a_dispel_takes_its_kind_a_stack_a_try_unless_held_on() {
     assert!(wrong, "a cure of poison takes no magic");
     assert!(held, "held on by its caster's talent");
 }
+
+const BROWN_HORSE: u32 = 458;
+const SWIFT_PALOMINO: u32 = 23227;
+
+fn run_speed(m: &Map, g: Guid) -> f32 {
+    m.players[&g].speeds.run
+}
+
+#[tokio::test]
+async fn a_mount_runs_by_its_own_bonus_and_a_slow_multiplies() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, w, map) = player(&realm, "P3A31", "Rideone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            let lasting = |m: &mut Map, id: u32, kind: u32, amount: i32| {
+                let mut s = made_up(id, 6, kind, 0, amount);
+                s.duration_index = 21;
+                apply_template(m, w, w, &s);
+            };
+            let plain = run_speed(m, w);
+            apply(m, w, w, BROWN_HORSE);
+            let horse = run_speed(m, w);
+            apply(m, w, w, SWIFT_PALOMINO);
+            let swift = (run_speed(m, w), has(m, w, BROWN_HORSE));
+            auras::remove_spell(m, w, SWIFT_PALOMINO, None);
+            let off = run_speed(m, w);
+            // A run bonus on foot, then a mount: the mount's alone; a snare
+            // multiplies; off the mount, the foot bonus and the snare.
+            lasting(m, 990_995, auras::AURA_MOD_INCREASE_SPEED, 100);
+            let sprinting = run_speed(m, w);
+            apply(m, w, w, BROWN_HORSE);
+            let mounted = run_speed(m, w);
+            lasting(m, 990_996, auras::AURA_MOD_DECREASE_SPEED, -50);
+            let snared = run_speed(m, w);
+            auras::remove_spell(m, w, BROWN_HORSE, None);
+            let afoot = run_speed(m, w);
+            (plain, horse, swift, off, sprinting, mounted, snared, afoot)
+        })
+        .await
+        .unwrap();
+    let (plain, horse, swift, off, sprinting, mounted, snared, afoot) = out;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(near(plain, 7.0));
+    assert!(near(horse, 11.2), "a 60% mount: {horse}");
+    assert!(
+        near(swift.0, 14.0) && !swift.1,
+        "the swift one takes its place: {swift:?}"
+    );
+    assert!(near(off, 7.0), "off it, afoot again");
+    assert!(near(sprinting, 14.0), "a 100% run bonus: {sprinting}");
+    assert!(
+        near(mounted, 11.2),
+        "mounted, the mount's bonus alone: {mounted}"
+    );
+    assert!(near(snared, 5.6), "a snare halves it: {snared}");
+    assert!(near(afoot, 7.0), "afoot, the bonus and the snare: {afoot}");
+}
