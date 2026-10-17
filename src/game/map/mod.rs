@@ -4,6 +4,7 @@
 
 pub mod ai;
 pub mod auction;
+pub mod arena;
 pub mod auras;
 pub mod battleground;
 pub mod chat;
@@ -262,6 +263,8 @@ pub struct Map {
     pub loot_state: loot::MapLoot,
     /// A continent's world PvP: the Plaguelands' towers, Silithus.
     pub outdoor: Option<outdoor_pvp::Outdoor>,
+    /// Gurubashi Arena's battles and Booty Run (on its continent).
+    pub arena: arena::Arena,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -357,6 +360,7 @@ impl Map {
             globals: Vec::new(),
             loot_state: Default::default(),
             outdoor: outdoor_pvp::for_map(key),
+            arena: Default::default(),
         }
     }
 
@@ -622,6 +626,7 @@ impl Map {
         combat::update_players(self);
         pvp::update(self);
         outdoor_pvp::update(self);
+        arena::update(self);
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);

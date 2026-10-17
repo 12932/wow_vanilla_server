@@ -54,7 +54,8 @@ pub fn populate(map: &mut Map) {
     }
     if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
+            if s.despawned
+                || !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
                 || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
             {
                 continue;

@@ -190,6 +190,10 @@ pub fn release(map: &mut Map, g: Guid) {
         map.teleport(g, map.key, at, facing);
         return;
     }
+    // A fighter fallen in Gurubashi Arena watches from the stands.
+    if crate::game::map::arena::release_to_stands(map, g) {
+        return;
+    }
     let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
     map.teleport(g, to, at, facing);
 }
@@ -228,6 +232,17 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
 
 /// Bring a player back, with `fraction` of their health and mana.
 pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
+    // A fighter fallen in Gurubashi Arena's battle stays fallen until it
+    // ends.
+    if crate::game::map::arena::blocks_resurrection(map, g) {
+        if let Some(p) = map.players.get(&g) {
+            crate::game::map::chat::send_system(
+                &p.outbound,
+                "You have fallen in the arena's battle: you rise when it ends.",
+            );
+        }
+        return;
+    }
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
