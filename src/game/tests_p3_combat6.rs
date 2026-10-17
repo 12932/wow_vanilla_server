@@ -396,3 +396,34 @@ async fn combo_points_go_with_a_new_target_with_their_targets_death_and_their_ho
     assert_eq!(target_died, (0, Guid::zero(), 0));
     assert_eq!(own, (0, Guid::zero(), 0));
 }
+
+#[tokio::test]
+async fn death_closes_a_players_reactive_windows_and_a_resurrection_doesnt_bring_them_back() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            // A hunter, for both windows.
+            m.players.get_mut(&ga).unwrap().row.class = 3;
+            let one = spawn(m, ga, BRUTE, 20, 1.0);
+            let two = spawn(m, ga, BRUTE, 20, 1.0);
+            combat::after_outcome(m, one, ga, Outcome::Dodge);
+            combat::after_outcome(m, two, ga, Outcome::Parry);
+            let state = |m: &Map| {
+                m.unit_fields(ga).unwrap().get_u32(UNIT_FIELD_AURASTATE)
+                    & (combat::AURA_STATE_DEFENSE | combat::AURA_STATE_HUNTER_PARRY)
+            };
+            let open = state(m);
+            combat::kill(m, one, ga);
+            let c = m.combat(ga).unwrap();
+            let dead = (state(m), c.defense_window, c.hunter_parry_window);
+            crate::game::map::death::resurrect(m, ga, 1.0);
+            combat::sync_aura_state(m, ga);
+            (open, dead, state(m))
+        })
+        .await
+        .unwrap();
+    let both = combat::AURA_STATE_DEFENSE | combat::AURA_STATE_HUNTER_PARRY;
+    assert_eq!(r.0, both);
+    assert_eq!(r.1, (0, None, None));
+    assert_eq!(r.2, 0);
+}
