@@ -490,13 +490,7 @@ pub fn arrived(map: &mut Map, g: Guid) {
     m.resurrect_queue.remove(&g);
     if m.phase == Phase::Waiting {
         m.phase = Phase::Starting { at: now + delay };
-        if let Some(b) = realm
-            .social
-            .battlegrounds
-            .lock()
-            .matches
-            .get(&key.instance)
-        {
+        if let Some(b) = realm.social.battlegrounds.lock().matches.get(&key.instance) {
             m.bracket = b.bracket;
         }
         m.weekend = realm.social.events.lock().contains(&weekend_event(m.bg));
@@ -695,7 +689,10 @@ fn resurrect_wave(map: &mut Map) {
     let mut ghosts: Vec<Guid> = map
         .players
         .values()
-        .filter(|p| matches!(p.death, Death::Ghost { .. }) || (queued.contains(&p.guid) && p.death != Death::Alive))
+        .filter(|p| {
+            matches!(p.death, Death::Ghost { .. })
+                || (queued.contains(&p.guid) && p.death != Death::Alive)
+        })
         .map(|p| p.guid)
         .collect();
     ghosts.sort();
@@ -1128,7 +1125,8 @@ pub enum Assault {
 
 impl ControlPoint {
     pub fn assault(&mut self, team: usize, now: Instant, capture: Duration) -> Assault {
-        if self.assaulting == Some(team) || (self.owner == Some(team) && self.assaulting.is_none()) {
+        if self.assaulting == Some(team) || (self.owner == Some(team) && self.assaulting.is_none())
+        {
             return Assault::Unchanged;
         }
         self.revision += 1;

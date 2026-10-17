@@ -144,7 +144,11 @@ impl Meter {
             position_state: t.data[3],
             neutral_state: t.data[13],
             neutral_percent: i64::from(t.data[12]).clamp(0, 100),
-            min_time: if t.data[16] > 0 { i64::from(t.data[16]) } else { 60 },
+            min_time: if t.data[16] > 0 {
+                i64::from(t.data[16])
+            } else {
+                60
+            },
             max_time: i64::from(t.data[17]),
             progress: 0,
             difference: 0,
@@ -262,8 +266,14 @@ impl Outdoor {
 /// World PvP for the continents.
 pub fn for_map(key: MapKey) -> Option<Outdoor> {
     match key {
-        MapKey { map: 0, instance: 0 } => Some(Outdoor::default()),
-        MapKey { map: 1, instance: 0 } => Some(Outdoor {
+        MapKey {
+            map: 0,
+            instance: 0,
+        } => Some(Outdoor::default()),
+        MapKey {
+            map: 1,
+            instance: 0,
+        } => Some(Outdoor {
             silithus: Some(Silithus::default()),
             ..Default::default()
         }),
@@ -275,7 +285,9 @@ pub fn for_map(key: MapKey) -> Option<Outdoor> {
 /// for PvP (or on a PvP realm), and seen.
 fn eligible(map: &Map, p: &crate::game::map::player::Player) -> bool {
     p.death == Death::Alive
-        && !p.fields.has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
+        && !p
+            .fields
+            .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
         && p.flight.is_none()
         && (map.realm.config.pvp_realm || p.pvp.desired)
         && !p.auras.has(crate::game::map::auras::AURA_MOD_STEALTH)
@@ -375,7 +387,12 @@ fn towers(map: &mut Map, elapsed: i64) {
         .filter(|p| p.zone == PLAGUELANDS)
         .map(|p| {
             let pos = p.position();
-            (p.guid, side(p.team), (pos.x, pos.y, pos.z), eligible(map, p))
+            (
+                p.guid,
+                side(p.team),
+                (pos.x, pos.y, pos.z),
+                eligible(map, p),
+            )
         })
         .collect();
     let mut members: AHashMap<Guid, usize> = AHashMap::new();
@@ -680,14 +697,27 @@ fn silithus_update(map: &mut Map) {
         .filter_map(|g| match map.players.get(g) {
             Some(p) if p.auras.has_spell(SPELL_CARRYING) => None,
             Some(p) => Some((*g, p.position())),
-            None => Some((*g, Vector3d { x: 0.0, y: 0.0, z: 0.0 })),
+            None => Some((
+                *g,
+                Vector3d {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            )),
         })
         .collect();
     let states = silithus_states(si);
     let entering: Vec<Guid> = map
         .players
         .values()
-        .filter(|p| p.zone == SILITHUS && !map.outdoor.as_ref().is_some_and(|o| o.watching.contains(&p.guid)))
+        .filter(|p| {
+            p.zone == SILITHUS
+                && !map
+                    .outdoor
+                    .as_ref()
+                    .is_some_and(|o| o.watching.contains(&p.guid))
+        })
         .map(|p| p.guid)
         .collect();
     let watching: AHashSet<Guid> = map
