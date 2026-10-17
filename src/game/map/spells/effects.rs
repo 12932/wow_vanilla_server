@@ -1409,7 +1409,8 @@ pub fn tick_areas(map: &mut Map) {
         let Some(area) = map.spells.areas.get(i).cloned() else {
             continue;
         };
-        map.spells.areas[i].next_tick = now + area.period;
+        // On its own cadence, so a late update doesn't lose its last.
+        map.spells.areas[i].next_tick = area.next_tick + area.period;
         let Some(s) = data.spells.get(area.spell) else {
             continue;
         };

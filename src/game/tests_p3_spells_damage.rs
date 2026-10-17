@@ -181,12 +181,17 @@ const CONSECRATION: u32 = 26573;
 /// The times (ms after the cast) `kobold` was hurt while `ms` pass in
 /// steps of 50.
 fn hurt_at(m: &mut Map, kobold: Guid, ms: u64) -> Vec<u64> {
+    hurt_by(m, kobold, ms, 50)
+}
+
+/// The times `kobold` was hurt while `ms` pass in steps of `step`.
+fn hurt_by(m: &mut Map, kobold: Guid, ms: u64, step: u64) -> Vec<u64> {
     let mut at = Vec::new();
     let mut gone = 0;
     while gone < ms {
         let before = health(m, kobold);
-        pass(m, 50);
-        gone += 50;
+        pass(m, step);
+        gone += step;
         if health(m, kobold) < before {
             at.push(gone);
         }
@@ -219,6 +224,13 @@ async fn a_ground_spell_ticks_a_period_in_and_has_its_last_tick_as_it_ends() {
                 hurt_at(m, kobold, 10_000)
             };
             let blizzard = ground(m, mage, BLIZZARD);
+            // Updates 55 ms apart: still eight.
+            let t = crate::game::map::spells::Targets {
+                dest: at,
+                ..Default::default()
+            };
+            assert!(cast_fresh(m, mage, BLIZZARD, t));
+            let late = hurt_by(m, kobold, 10_000, 55).len();
             let rain = ground(m, lock, RAIN_OF_FIRE);
             // Consecration is about the paladin.
             let p = m.position_of(kobold).unwrap();
@@ -232,11 +244,12 @@ async fn a_ground_spell_ticks_a_period_in_and_has_its_last_tick_as_it_ends() {
                 crate::game::map::spells::Targets::default()
             ));
             let consecration = hurt_at(m, kobold, 10_000);
-            (blizzard, rain, consecration)
+            (blizzard, late, rain, consecration)
         })
         .await
         .unwrap();
-    let (blizzard, rain, consecration) = out;
+    let (blizzard, late, rain, consecration) = out;
+    assert_eq!(late, 8, "eight on late updates too");
     assert_eq!(
         blizzard,
         (1..=8).map(|s| s * 1000).collect::<Vec<_>>(),
