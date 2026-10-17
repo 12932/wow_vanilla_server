@@ -1832,6 +1832,165 @@ async fn the_gizelton_caravan(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, SMEED, 5821).await;
 }
 
+/// The id of the option in `npc`'s menu that reads `text`.
+async fn option(c: &mut Client, npc: Guid, text: &'static str) -> u32 {
+    c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+    c.wait_for("the menu", |m| match m {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) if g.guid == npc => g
+            .gossips
+            .iter()
+            .find(|o| o.message.contains(text))
+            .map(|o| o.id),
+        _ => None,
+    })
+    .await
+}
+
+async fn choose(c: &Client, npc: Guid, option: u32) {
+    c.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: npc,
+        gossip_list_id: option,
+        unknown: None,
+    })
+    .await;
+}
+
+/// The Great Masquerade (6403): Squire Rowe signals Reginald Windsor, who
+/// rides in and takes the rendezvous; Windsor talks his way over the bridge
+/// and through Stormwind to the keep, waits for the player's word, and
+/// unmasks Lady Prestor as Onyxia; her elite guards put down, Bolvar
+/// credits the quest.
+async fn the_great_masquerade(realm: &Arc<Realm>) {
+    const RENDEZVOUS: u32 = 6402;
+    const QUEST: u32 = 6403;
+    const ROWE: u32 = 17804;
+    const WINDSOR: u32 = 12580;
+    const BOLVAR: u32 = 1748;
+    const ELITE: u32 = 12739;
+    let (mut c, g, map) = hero(realm, "UNMASKER", Race::Human, Class::Paladin, 60).await;
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.journal
+            .rewarded
+            .extend([RENDEZVOUS, 6401, 6391, 6392, 6261, 6285]);
+        hardy(m, g);
+    })
+    .await;
+    // Rowe sends the signal.
+    let (map, rowe, _) = visit(realm, &mut c, ROWE).await;
+    let id = option(&mut c, rowe, "Let Marshal Windsor know").await;
+    choose(&c, rowe, id).await;
+    // Windsor rides in to the gate and greets the player; they keep near
+    // him.
+    let near_windsor = move |m: &mut Map, by: Duration| -> Option<Guid> {
+        hardy(m, g);
+        let w = npc(m, WINDSOR).map(|(w, _)| w);
+        if let Some(w) = w {
+            if let Some(c) = m.creature_mut(w) {
+                c.speeds.walk = 20.0;
+                c.speeds.run = 20.0;
+                let max = c.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH);
+                c.fields
+                    .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
+            }
+            if let Some(at) = m.creature(w).map(|c| c.position) {
+                place(m, g, beside(at));
+            }
+        }
+        skip(m, by);
+        w
+    };
+    let questgiver = move |m: &Map, entry: u32| {
+        npc(m, entry).is_some_and(|(w, _)| {
+            m.creature(w)
+                .is_some_and(|c| c.fields.get_u32(crate::game::fields::UNIT_NPC_FLAGS) & 0x2 != 0)
+        })
+    };
+    let arrived = until_mut(&map, move |m| {
+        // Rowe's run to the road, and Windsor's ride.
+        if let Some((r, _)) = npc(m, ROWE)
+            && let Some(c) = m.creature_mut(r)
+        {
+            c.speeds.walk = 20.0;
+            c.speeds.run = 20.0;
+        }
+        near_windsor(m, Duration::from_millis(500));
+        questgiver(m, WINDSOR)
+    })
+    .await;
+    assert!(arrived, "Windsor rides in and greets");
+    let windsor = map
+        .query(|m| npc(m, WINDSOR).map(|(w, _)| w))
+        .await
+        .flatten()
+        .unwrap();
+    map.query(move |m| crate::game::map::quests::accept(m, g, windsor, QUEST))
+        .await;
+    assert!(
+        until(&map, move |m| logged(m, g, QUEST)).await,
+        "{QUEST} taken"
+    );
+    // Through the city to the keep's steps, where he waits for the word.
+    let mut waiting = false;
+    for i in 0..3000 {
+        let (gossip, at) = map
+            .query(move |m| {
+                near_windsor(m, Duration::from_secs(2));
+                (
+                    m.creature(windsor).is_some_and(|c| {
+                        c.fields.get_u32(crate::game::fields::UNIT_NPC_FLAGS) & 0x1 != 0
+                    }),
+                    m.creature(windsor).map(|c| c.position),
+                )
+            })
+            .await
+            .unwrap();
+        if debug() && i % 100 == 0 {
+            eprintln!("masquerade: Windsor at {at:?}");
+        }
+        if gossip {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(waiting, "Windsor waits for the player's word");
+    let id = option(&mut c, windsor, "I am ready, as are my forces").await;
+    choose(&c, windsor, id).await;
+    // The throne room: Onyxia unmasked, her guards fall on Bolvar and are
+    // put down.
+    let mut credited = false;
+    for i in 0..3000 {
+        let (yes, elites, event) = map
+            .query(move |m| {
+                near_windsor(m, Duration::from_secs(2));
+                let bolvar = npc(m, BOLVAR).map(|(b, _)| b);
+                let mut protected = vec![g];
+                protected.extend(bolvar);
+                protected.push(windsor);
+                defend(m, &protected);
+                let elites = alive_of(m, &[ELITE]);
+                (
+                    done(m, g, QUEST),
+                    elites.len(),
+                    crate::game::map::map_events::active(m, QUEST),
+                )
+            })
+            .await
+            .unwrap();
+        if debug() && i % 100 == 0 {
+            eprintln!("masquerade throne room: {elites} elite guards, event {event}");
+        }
+        if yes {
+            credited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(credited, "{QUEST} credited as the elite guards fall");
+    turn_in(realm, &mut c, BOLVAR, QUEST).await;
+}
+
 /// The event quests Thistle Tea builds in code, walked through on the real
 /// world: Freedom for All Creatures, the Gizelton Caravan, The Great
 /// Masquerade, The Balance of Light and Shadow.
@@ -1846,6 +2005,9 @@ async fn the_imported_event_quests_are_done_end_to_end() {
     }
     if wanted("caravan") {
         the_gizelton_caravan(&realm).await;
+    }
+    if wanted("masquerade") {
+        the_great_masquerade(&realm).await;
     }
 }
 
