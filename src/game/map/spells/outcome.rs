@@ -113,6 +113,11 @@ fn roll(map: &Map) -> i32 {
     }
 }
 
+/// Whether `e` puts on an aura of a kind the auras `a` keep off.
+pub fn state_immune(a: &auras::Auras, e: &crate::game::data::spells::SpellEffect) -> bool {
+    matches!(e.effect, 6 | 27 | 35) && a.state_immune(e.aura)
+}
+
 /// Whether a `chance` (in percent) comes up.
 pub fn chance(map: &Map, chance: f32) -> bool {
     if chance >= 100.0 {
@@ -319,14 +324,15 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
             )
             .filter(|m| *m != 0)
             .collect();
-        !mechanics.is_empty()
-            && s.effects.iter().filter(|e| e.effect != 0).all(|e| {
-                a.mechanic_immune(if e.mechanic != 0 {
-                    e.mechanic
-                } else {
-                    s.mechanic
-                })
-            })
+        // An aura of a kind the target is immune to counts as immune too.
+        let any = !mechanics.is_empty() || s.effects.iter().any(|e| state_immune(a, e));
+        any && s.effects.iter().filter(|e| e.effect != 0).all(|e| {
+            a.mechanic_immune(if e.mechanic != 0 {
+                e.mechanic
+            } else {
+                s.mechanic
+            }) || state_immune(a, e)
+        })
     };
     if all_mechanics_immune && !s.attr(0, sd::ATTR_NO_IMMUNITIES) {
         return Hit::Immune;

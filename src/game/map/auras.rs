@@ -626,6 +626,15 @@ impl Auras {
                     .any(|(_, a)| (a.misc as u32) & (1 << (mechanic - 1).min(31)) != 0))
     }
 
+    /// Whether auras of `kind` are kept off (`SPELL_AURA_STATE_IMMUNITY`:
+    /// Thickskull's stuns, Fearless's fears, a boss's taunts).
+    pub fn state_immune(&self, kind: u32) -> bool {
+        kind != 0
+            && self
+                .of(AURA_STATE_IMMUNITY)
+                .any(|(_, a)| a.misc as u32 == kind)
+    }
+
     pub fn dispel_immune(&self, dispel: u32) -> bool {
         dispel != 0
             && self

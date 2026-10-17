@@ -1229,6 +1229,12 @@ fn land(
             {
                 *on = false;
                 immune = true;
+            } else if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                && auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+            {
+                // An aura of a kind kept off (mangos's `IsImmuneToSpellEffect`).
+                *on = false;
+                immune = true;
             } else if outcome::effect_resisted(map, aim, s, i) {
                 *on = false;
             }
