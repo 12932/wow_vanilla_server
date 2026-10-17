@@ -33,6 +33,11 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **What wvs adds.** Persistence, accounts and GM levels, movement and rate checks (above); Gurubashi Arena's last
   man standing.
 - **The battleground scoreboard** shows each player's real honor rank; Thistle Tea always shows 4.
+- **Creatures' speed changes** go to those who see them as `SMSG_SPLINE_SET_RUN_SPEED`, as mangos-classic sends
+  them; Thistle Tea sends nothing for a creature no player moves. Both send its run again at the new speed, and tell
+  a possessed one's controller with `SMSG_FORCE_RUN_SPEED_CHANGE`.
+- **A creature running in to strike** swings once it has got there, half a yard inside its reach, not as it crosses
+  into reach: the client shows a creature on the move a little behind where it is. Thistle Tea swings at once.
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
@@ -54,7 +59,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 
 ### Combat, creatures and loot
 
-- Creatures send `SMSG_SPLINE_SET_RUN_SPEED` when their speed changes; Thistle Tea does only for possessed pets.
 - **Gathering, crafting, lockpicking, disenchanting, fishing and resurrection,** compared line by line (Phase 2i).
   What is left:
   - **Failed openings.** A failed gathering, lockpicking or opening is told after its spell went off, with a cast
@@ -93,15 +97,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   - A knockback moves a creature, as mangos-classic does; Thistle Tea only breaks its cast.
   - A monster move's intermediate point within about 0.7 yards of the destination is left out, as mangos-classic
     leaves it; Thistle Tea nudges its height instead.
-- **Creature combat:**
-  - harmful casts and stealth;
-  - melee range and the chase;
-  - emote and stand state in a fight;
-  - the leash's extension;
-  - facing packets, and `SMSG_ATTACKSTART`/`STOP`'s timing;
-  - creatures spreading round their target;
-  - victim selection's finer rules, and casters' line of sight;
-  - creatures charming players.
 - **Script commands:**
   - respawning a despawned object, and despawning one (9, 81);
   - activating traps and goobers (13);

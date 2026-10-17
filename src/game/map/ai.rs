@@ -13,16 +13,12 @@ use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::combat::{self, dist};
-use crate::game::map::creature::{Creature, Life, Motion};
+use crate::game::map::creature::{Life, Motion};
 use crate::game::map::death::Death;
 use crate::game::map::player::{PLAYER_FLAGS_GM, UNIT_FLAG_IN_COMBAT};
 
 /// How often an idle hostile creature looks for players.
 const AGGRO_SCAN_EVERY: Duration = Duration::from_millis(500);
-/// How far a creature follows from home before it gives up.
-const DEFAULT_LEASH: f32 = 60.0;
-/// A chasing creature paths again when its victim has moved this far.
-const REPATH_YARDS: f32 = 1.5;
 /// How long a corpse lies before it goes (Thistle Tea's `@corpse_decay_ms`):
 /// an elite's, ranks one to three, twice as long.
 const CORPSE_DECAY: Duration = Duration::from_secs(300);
@@ -57,6 +53,17 @@ pub fn face_packet(g: Guid, at: Vector3d, angle: f32, spline_id: u32) -> Arc<[u8
     b.frame(SMSG_MONSTER_MOVE)
 }
 
+/// A creature turning on the spot to face `target` (Thistle Tea's
+/// `set_facing({:target, _})`: a facing-target monster move of 100 ms).
+pub fn face_target_packet(g: Guid, at: Vector3d, target: Guid, spline_id: u32) -> Arc<[u8]> {
+    let mut b = Body::default();
+    crate::game::update::write_packed_guid(&mut b.0, g);
+    b.f32(at.x).f32(at.y).f32(at.z).u32(spline_id).u8(3);
+    b.u64(target.guid());
+    b.u32(0).u32(100).u32(1).f32(at.x).f32(at.y).f32(at.z);
+    b.frame(SMSG_MONSTER_MOVE)
+}
+
 /// The radius at which a creature notices a unit (vmangos's
 /// `GetAttackDistance`): its detection range at an even level, a yard less
 /// for each level the unit is above it (more for up to 25 below), at least
@@ -72,6 +79,33 @@ pub fn aggro_reach(detection: f32, creature_level: u32, unit_level: u32, modifie
     }
     let diff = (unit_level as i32 - creature_level as i32).max(-25);
     (detection - diff as f32 + modifier).max(detection.min(5.0))
+}
+
+/// How near `t` `g` notices it (Thistle Tea's `Acquisition.radius`): its
+/// aggro radius at `t`'s level (a pet's, its master's), with its own
+/// detect-range auras.
+pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
+    use crate::game::map::auras::AURA_MOD_DETECT_RANGE;
+    let Some(c) = map.creature(g) else {
+        return 0.0;
+    };
+    let detection = map
+        .realm
+        .data
+        .creature_template(c.entry)
+        .map_or(20.0, |t| t.detection_range);
+    let modifier = c.auras.sum(AURA_MOD_DETECT_RANGE) as f32;
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    let master = crate::game::map::pets::master(map, t);
+    let who = if map.players.contains_key(&master) {
+        master
+    } else {
+        t
+    };
+    let lv = map
+        .unit_fields(who)
+        .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
+    aggro_reach(detection, level, lv, modifier)
 }
 
 /// The unit flags that put a unit out of any fight: not attackable (both),
@@ -138,6 +172,8 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
         if first {
+            crate::game::map::creature_combat::leash_begins(map, creature);
+            crate::game::map::creature_combat::stand_up(map, creature);
             crate::game::map::event_ai::aggro(map, creature, attacker);
         }
         return;
@@ -151,17 +187,11 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     c.fields.set_guid(UNIT_FIELD_TARGET, attacker);
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
-    if let Some(frame) = crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_ATTACKSTART {
-        attacker: creature,
-        victim: attacker,
-    }) {
-        map.send_to_observers(creature, &frame, false);
-        if let Some(p) = map.players.get(&attacker)
-            && !p.known.contains(&creature)
-        {
-            p.outbound.send_frame(frame);
-        }
+    if first {
+        crate::game::map::creature_combat::leash_begins(map, creature);
+        crate::game::map::creature_combat::stand_up(map, creature);
     }
+    // Its SMSG_ATTACKSTART waits for its first swing in reach (`announce`).
     // A critter calls no one, and fights no one.
     if critter {
         return;
@@ -250,18 +280,14 @@ pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    c.taunted_by = Some(by);
     c.combat.victim = by;
     c.fields.set_guid(UNIT_FIELD_TARGET, by);
     attacked(map, creature, by);
 }
 
+/// A taunt ended: what it borrowed goes back, and the victim is the
+/// threat's choice again, or an older taunt's (`taunter`).
 pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
-    if let Some(c) = map.creature_mut(creature)
-        && c.taunted_by == Some(by)
-    {
-        c.taunted_by = None;
-    }
     crate::game::map::spells::threat_sync::taunt_ended(map, creature, by);
 }
 
@@ -391,8 +417,13 @@ pub fn update_dead(map: &mut Map) {
         }
         if corpse_until <= now && !c.despawned {
             c.despawned = true;
+            let (entry, summoner) = (c.entry, c.scripted.as_deref().and_then(|s| s.summoner));
             despawn_from_view(map, g);
             crate::game::map::scripts::stop_for(map, g);
+            // A summon's corpse gone, its summoner hears it has gone.
+            if let Some(s) = summoner {
+                crate::game::map::event_ai::summoned_despawned(map, s, g, entry);
+            }
         }
         still.push(g);
     }
@@ -423,6 +454,7 @@ fn respawn(map: &mut Map, g: Guid) {
     };
     let spawn_guid = old.spawn_guid;
     let despawned = old.despawned;
+    let (entry, summoner) = (old.entry, old.scripted.as_deref().and_then(|s| s.summoner));
     let data = map.realm.data.clone();
     let spawn = spawn_guid.and_then(|sg| {
         data.creature_spawns
@@ -431,6 +463,9 @@ fn respawn(map: &mut Map, g: Guid) {
     });
     if !despawned {
         despawn_from_view(map, g);
+        if let Some(s) = summoner {
+            crate::game::map::event_ai::summoned_despawned(map, s, g, entry);
+        }
     }
     crate::game::map::scripts::stop_for(map, g);
     if let Some(c) = map
@@ -574,6 +609,8 @@ pub fn update_creatures(map: &mut Map) {
 /// A creature's turn: its timed events, and its fight, its way home or
 /// its walk.
 fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
+    // Under control, its leash is kept.
+    crate::game::map::creature_combat::maintain_leash(map, g);
     // Its timed events wait while it walks home.
     if !map.creatures.get(key).is_some_and(|c| c.evading) {
         crate::game::map::event_ai::tick(map, g);
@@ -694,19 +731,6 @@ fn aggro_scan(map: &mut Map, g: Guid) {
     if search <= 0.0 {
         return;
     }
-    // Its reach of a unit, by that unit's level (a pet's, its master's).
-    let reach_of = |map: &Map, t: Guid| -> f32 {
-        let master = crate::game::map::pets::master(map, t);
-        let who = if map.players.contains_key(&master) {
-            master
-        } else {
-            t
-        };
-        let lv = map
-            .unit_fields(who)
-            .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
-        aggro_reach(detection, level, lv, modifier)
-    };
     let mut near: Vec<(Guid, f32)> = map
         .grid
         .around(pos.x, pos.y, search)
@@ -725,7 +749,7 @@ fn aggro_scan(map: &mut Map, g: Guid) {
             });
             player_ok
                 && map.unit_view(*t).is_some_and(|u| u.alive)
-                && *d <= reach_of(map, *t)
+                && *d <= attack_distance(map, g, *t)
                 && combat::hostile(map, g, *t)
                 && combat::can_attack(map, g, *t)
                 && crate::game::map::spells::stealth::sees(map, g, *t)
@@ -769,33 +793,67 @@ fn effective_threat(threat: f32) -> f32 {
     threat.max(0.0)
 }
 
+/// Whether `g` may fight `t`: alive, attackable, and seen through any
+/// stealth or invisibility (Thistle Tea's `valid_victim?`).
+fn valid_victim(map: &Map, g: Guid, t: Guid) -> bool {
+    map.unit_view(t).is_some_and(|u| u.alive)
+        && combat::can_attack(map, g, t)
+        && crate::game::map::spells::stealth::sees(map, g, t)
+}
+
+/// Those on `g`'s threat list it may no longer fight come off it, and
+/// what they held there (Thistle Tea's `Threat.reselect`).
+fn prune_threat(map: &mut Map, g: Guid) {
+    let gone: Vec<Guid> = map
+        .creature(g)
+        .map(|c| {
+            c.threat
+                .iter()
+                .map(|(t, _)| *t)
+                .filter(|t| !valid_victim(map, g, *t))
+                .collect()
+        })
+        .unwrap_or_default();
+    for t in gone {
+        crate::game::map::spells::threat_sync::removed(map, g, t);
+        if let Some(c) = map.creature_mut(g) {
+            c.threat.retain(|(x, _)| *x != t);
+        }
+    }
+}
+
 /// The highest threat still worth fighting, if any.
 fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
     let c = map.creature(g)?;
-    let home = c.home;
-    let leash = leash_of(map, c);
     c.threat
         .iter()
-        .filter(|(t, _)| {
-            map.unit_view(*t).is_some_and(|u| {
-                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
-            })
-        })
+        .filter(|(t, _)| valid_victim(map, g, *t))
         .max_by(|a, b| effective_threat(a.1).total_cmp(&effective_threat(b.1)))
         .map(|(t, _)| *t)
 }
 
+/// The caster of the newest taunt on `g` it may fight (Thistle Tea's
+/// `taunt_caster`): an older one holds when the newest can't.
+fn taunter(map: &Map, g: Guid) -> Option<Guid> {
+    map.creature(g)?
+        .auras
+        .holders
+        .iter()
+        .rev()
+        .filter(|h| h.has(crate::game::map::auras::AURA_MOD_TAUNT))
+        .map(|h| h.caster)
+        .find(|t| valid_victim(map, g, *t))
+}
+
 /// vmangos's `ThreatManager`: a taunter while the taunt lasts; otherwise
 /// the current victim, until another passes its threat by a tenth in
-/// melee range or three tenths beyond.
+/// melee range or three tenths beyond. Wherever they are: the leash, not
+/// the choice, keeps a creature near home.
 pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     let Some(c) = map.creature(g) else {
         return current;
     };
-    if let Some(t) = c.taunted_by
-        && map.unit_view(t).is_some_and(|u| u.alive)
-        && combat::can_attack(map, g, t)
-    {
+    if let Some(t) = taunter(map, g) {
         return t;
     }
     let Some(best) = pick_victim(map, g) else {
@@ -815,16 +873,10 @@ pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     };
     // Down the list from the top (Thistle Tea's `Threat.decide`): past a
     // tenth more, one in melee range takes over; past three tenths, anyone.
-    let home = c.home;
-    let leash = leash_of(map, c);
     let mut sorted: Vec<(Guid, f32)> = c
         .threat
         .iter()
-        .filter(|(t, _)| {
-            map.unit_view(*t).is_some_and(|u| {
-                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
-            })
-        })
+        .filter(|(t, _)| valid_victim(map, g, *t))
         .map(|(t, v)| (*t, effective_threat(*v)))
         .collect();
     sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -844,23 +896,6 @@ pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     current
 }
 
-/// How far a creature fights from home: its template's leash, or in the
-/// open world the default. In a dungeon or raid copy only a template's
-/// leash holds it, as Thistle Tea has it, so a boss may take its fight
-/// across its room.
-fn leash_of(map: &Map, c: &Creature) -> f32 {
-    map.realm
-        .data
-        .creature_template(c.entry)
-        .map(|t| t.leash_range)
-        .filter(|l| *l > 0.0)
-        .unwrap_or(if map.key.instance != 0 && map.battleground.is_none() {
-            f32::INFINITY
-        } else {
-            DEFAULT_LEASH
-        })
-}
-
 fn fight_step(map: &mut Map, g: Guid) {
     let now = map.now;
     if crate::game::map::creature_motion::critter_step(map, g) {
@@ -870,12 +905,12 @@ fn fight_step(map: &mut Map, g: Guid) {
     if crate::game::map::charge::step(map, g) {
         return;
     }
+    prune_threat(map, g);
     let Some(c) = map.creature(g) else {
         return;
     };
     let current = c.combat.victim;
-    let victim = if map.unit_view(current).is_some_and(|u| u.alive)
-        && combat::can_attack(map, g, current)
+    let victim = if valid_victim(map, g, current)
         && !crate::game::map::creature_combat::should_evade(map, g, current)
     {
         Some(overtake(map, g, current))
@@ -910,54 +945,110 @@ fn fight_step(map: &mut Map, g: Guid) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
-    // A caster with a chase distance stands off within it.
-    let stand_off = crate::game::map::event_ai::scripted(map, g)
-        .and_then(|s| s.caster_chase_distance)
-        .is_some_and(|d| dist(me.position, them.position) <= d);
+    // A caster with a chase distance stands off within it, where it sees
+    // its victim (Thistle Tea's `CasterChase.in_range?`).
+    let caster = crate::game::map::event_ai::scripted(map, g).and_then(|s| s.caster_chase_distance);
+    let sight = caster.is_some()
+        && crate::game::map::spells::checks::line_of_sight(map, me.position, them.position);
+    let stand_off = sight && caster.is_some_and(|d| dist(me.position, them.position) <= d + 0.01);
     let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off;
     let swing = crate::game::map::event_ai::melee(map, g);
-    if combat::in_melee_range(&me, &them) || !chase {
-        if combat::in_melee_range(&me, &them) {
+    let in_reach = combat::in_melee_range(&me, &them);
+    if in_reach || !chase {
+        if in_reach {
             crate::game::map::creature_combat::reach(map, g, true);
         }
-        let spline_id = map.next_spline_id;
-        let Some(c) = map.creature_mut(g) else {
-            return;
-        };
-        c.orientation = (them.position.y - me.position.y).atan2(them.position.x - me.position.x);
-        if matches!(c.motion, Motion::Moving(_)) {
-            c.motion = Motion::Idle { until: None };
-            map.next_spline_id = map.next_spline_id.wrapping_add(1);
-            let frame = stop_packet(g, me.position, spline_id);
-            map.send_to_observers(g, &frame, false);
+        // On its way in, a chaser runs on to where it aimed, inside its
+        // reach, until it touches its victim (Thistle Tea's
+        // `halt_at_contact`): it doesn't stop on the reach's edge. A step
+        // about its victim goes on to its end.
+        let (moving, spreading) = map.creature(g).map_or((false, false), |c| {
+            (
+                matches!(c.motion, Motion::Moving(_)),
+                c.engagement.spreading,
+            )
+        });
+        let runs_on = chase && moving && (spreading || !combat::in_contact(&me, &them));
+        if !runs_on && moving {
+            stop_moving(map, g);
+            face(map, g, victim);
         }
-        if swing && combat::in_melee_range(&me, &them) {
+        if !moving && let Some(c) = map.creature_mut(g) {
+            c.engagement.spreading = false;
+        }
+        if swing && in_reach && seen_in_reach(map, g, &me, &them) {
+            announce(map, g, victim);
+            let due = map
+                .creature(g)
+                .is_some_and(|c| c.combat.next_swing.is_none_or(|t| t <= now));
+            if !runs_on && (due || !faces(&me, &them)) {
+                face(map, g, victim);
+            }
             combat::try_swing(map, g);
+        } else if !runs_on && !faces(&me, &them) {
+            face(map, g, victim);
+        }
+        if in_reach && chase && !moving {
+            spread(map, g, victim);
         }
         return;
     }
-    // Chase: path again if the victim has moved since the last one.
+    // Chase: path again once the victim has gone far enough from where it
+    // aimed (Thistle Tea's re-chase distance), or it has stopped.
     let Some(c) = map.creature(g) else {
         return;
     };
-    let stale = c
-        .chase_target_at
-        .is_none_or(|at| dist(at, them.position) > REPATH_YARDS)
-        || !matches!(c.motion, Motion::Moving(_));
+    let reach = combat::melee_range(&me, &them);
+    let bounding = map
+        .unit_fields(victim)
+        .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0));
+    let flies = crate::game::map::creature_motion::habitat(map, g).fly;
+    let stale = c.chase_target_at.is_none_or(|at| {
+        let moved = if flies {
+            dist(at, them.position)
+        } else {
+            planar(at, them.position)
+        };
+        moved > combat::rechase_distance(reach, bounding)
+    }) || !matches!(c.motion, Motion::Moving(_));
     if !stale {
         return;
     }
-    let reach = combat::melee_range(&me, &them) * 0.8;
-    let to_me = Vector3d {
-        x: me.position.x - them.position.x,
-        y: me.position.y - them.position.y,
-        z: 0.0,
-    };
-    let len = (to_me.x * to_me.x + to_me.y * to_me.y).sqrt().max(0.01);
-    let goal = Vector3d {
-        x: them.position.x + to_me.x / len * reach.min(len),
-        y: them.position.y + to_me.y / len * reach.min(len),
-        z: them.position.z,
+    let goal = match caster.filter(|_| sight) {
+        // In sight, a caster closes only to its distance (Thistle Tea's
+        // `CasterChase.destination`); out of it, it comes on as any.
+        Some(d) => {
+            let from = if flies {
+                me.position
+            } else {
+                Vector3d {
+                    z: them.position.z,
+                    ..me.position
+                }
+            };
+            let apart = dist(from, them.position);
+            if apart > d {
+                let f = d / apart;
+                Vector3d {
+                    x: them.position.x + (from.x - them.position.x) * f,
+                    y: them.position.y + (from.y - them.position.y) * f,
+                    z: them.position.z + (from.z - them.position.z) * f,
+                }
+            } else {
+                from
+            }
+        }
+        None => {
+            // From the side it comes, turned aside by the others fighting
+            // its victim (Thistle Tea's `approach_angle_offset`).
+            let to = combat::chase_distance(reach);
+            let angle = side_of(me.position, them.position) + approach_offset(map, g, victim);
+            Vector3d {
+                x: them.position.x + to * angle.cos(),
+                y: them.position.y + to * angle.sin(),
+                z: them.position.z,
+            }
+        }
     };
     // As its habitat lets it: through the air, the water, or only to the
     // edge of what it can't enter.
@@ -974,9 +1065,251 @@ fn fight_step(map: &mut Map, g: Guid) {
         return;
     };
     c.chase_target_at = Some(them.position);
-    if let Some(frame) = c.walk_at(path, true, fly, None, now, spline_id) {
+    c.engagement.spread_tries = 0;
+    c.engagement.spreading = false;
+    if let Some(frame) = c.walk_facing(path, true, fly, victim, now, spline_id) {
         map.send_to_observers(g, &frame, false);
     }
+}
+
+/// How often a creature fighting in reach looks to step about its victim.
+const SPREAD_EVERY_MS: (u64, u64) = (2500, 3500);
+/// How often it steps aside from one of its kind before its victim moves.
+const SPREAD_TRIES: u8 = 3;
+/// The bounding radius of a unit with none.
+const DEFAULT_BOUNDING: f32 = 0.389;
+
+fn bounding(map: &Map, g: Guid) -> f32 {
+    map.unit_fields(g)
+        .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+        .filter(|r| *r > 0.0)
+        .unwrap_or(DEFAULT_BOUNDING)
+}
+
+/// The angle from `them` to `me`, any if they stand on each other.
+fn side_of(me: Vector3d, them: Vector3d) -> f32 {
+    let (dx, dy) = (me.x - them.x, me.y - them.y);
+    if dx.abs() < 1e-4 && dy.abs() < 1e-4 {
+        rand::rng().random_range(0.0..std::f32::consts::TAU)
+    } else {
+        dy.atan2(dx)
+    }
+}
+
+/// How many fight `t`.
+fn attackers(map: &Map, t: Guid) -> usize {
+    map.combat(t).map_or(0, |c| c.attackers.len())
+}
+
+/// Whether `t` is on the move.
+fn on_the_move(map: &Map, t: Guid) -> bool {
+    match map.players.get(&t) {
+        Some(p) => crate::game::map::spells::checks::moving(&p.movement.flags),
+        None => map
+            .creature(t)
+            .is_some_and(|c| matches!(c.motion, Motion::Moving(_))),
+    }
+}
+
+/// A chaser's turn aside as it comes at a victim others fight already, so
+/// they don't all stand in one place: none at a player on the move
+/// (Thistle Tea's `approach_angle_offset`).
+fn approach_offset(map: &Map, g: Guid, victim: Guid) -> f32 {
+    let moving_player = guid::is_player(victim) && on_the_move(map, victim);
+    let count = if moving_player {
+        0
+    } else {
+        attackers(map, victim).saturating_sub(1)
+    };
+    if count == 0 {
+        return 0.0;
+    }
+    let size = bounding(map, g) + bounding(map, victim);
+    let size = if size < 0.1 { DEFAULT_BOUNDING } else { size };
+    let spread = std::f32::consts::FRAC_PI_2 - std::f32::consts::PI * rand::rng().random::<f32>();
+    spread * count as f32 / size * 0.3
+}
+
+/// Standing in reach, a creature every three seconds or so steps back off
+/// a victim it stands in, or (three times, until its victim moves) aside
+/// from another standing on it, at a walk and facing its victim (Thistle
+/// Tea's `maybe_spread`).
+fn spread(map: &mut Map, g: Guid, victim: Guid) {
+    let now = map.now;
+    let mut rng = rand::rng();
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if c.engagement.spread_at.is_some_and(|t| t > now) {
+        return;
+    }
+    let wait = rng.random_range(SPREAD_EVERY_MS.0..=SPREAD_EVERY_MS.1);
+    c.engagement.spread_at = Some(now + Duration::from_millis(wait));
+    if on_the_move(map, victim) {
+        if let Some(c) = map.creature_mut(g) {
+            c.engagement.spread_tries = 0;
+            c.engagement.spreading = false;
+        }
+        return;
+    }
+    let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
+        return;
+    };
+    let reach = combat::melee_range(&me, &them);
+    let (mine, theirs) = (bounding(map, g), bounding(map, victim));
+    let apart = planar(me.position, them.position);
+    // Back off one it stands in.
+    if apart < (0.5 * mine.min(theirs) + 1.0).sqrt() {
+        let d = 1.0 + mine + theirs;
+        if d < reach {
+            let angle = side_of(me.position, them.position);
+            step_about(map, g, victim, them.position, angle, d, false);
+        }
+        return;
+    }
+    let tries = map.creature(g).map_or(0, |c| c.engagement.spread_tries);
+    if tries >= SPREAD_TRIES {
+        return;
+    }
+    // Aside from the nearest of its kind standing on it.
+    let neighbour = map
+        .grid
+        .around(me.position.x, me.position.y, 2.0)
+        .filter(|n| *n != g && *n != victim && guid::is_unit(*n))
+        .filter_map(|n| {
+            let c = map.creature(n).filter(|c| c.alive())?;
+            let d = planar(c.position, me.position);
+            let stacked = (mine.max(bounding(map, n)).min(0.25) + 1.0).sqrt();
+            (d < stacked).then_some((c.position, d))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let Some((at, _)) = neighbour else {
+        return;
+    };
+    let mine_angle = side_of(me.position, them.position);
+    let his = (at.y - them.position.y).atan2(at.x - them.position.x);
+    let delta = rng.random_range(0.4f32..1.0);
+    let turn = if (his - mine_angle).sin().atan2((his - mine_angle).cos()) > 0.0 {
+        -delta
+    } else {
+        delta
+    };
+    let widest = if attackers(map, victim) > 5 { 4.0 } else { 2.0 };
+    let d = mine + rng.random_range(0.8f32..widest);
+    if d < reach {
+        step_about(map, g, victim, them.position, mine_angle + turn, d, true);
+    }
+}
+
+/// `g` walks to `d` yards from its victim at `angle`, facing it.
+fn step_about(
+    map: &mut Map,
+    g: Guid,
+    victim: Guid,
+    them: Vector3d,
+    angle: f32,
+    d: f32,
+    aside: bool,
+) {
+    let now = map.now;
+    let Some(from) = map.position_of(g) else {
+        return;
+    };
+    let to = Vector3d {
+        x: them.x + d * angle.cos(),
+        y: them.y + d * angle.sin(),
+        z: them.z,
+    };
+    let (path, fly) = match crate::game::map::creature_motion::route(map, g, from, to) {
+        Some((path, true, fly)) => (path, fly),
+        _ if map.nav.is_some() => return,
+        _ => (vec![from, to], false),
+    };
+    let spline_id = map.next_spline_id;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let Some(frame) = c.walk_facing(path, false, fly, victim, now, spline_id) else {
+        return;
+    };
+    c.engagement.spreading = true;
+    if aside {
+        c.engagement.spread_tries += 1;
+    }
+    map.send_to_observers(g, &frame, false);
+}
+
+fn planar(a: Vector3d, b: Vector3d) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+/// Whether `me` faces `them` well enough to swing: within a third of a
+/// circle, or so near it doesn't matter (Thistle Tea's `facing_target?`).
+fn faces(me: &combat::UnitView, them: &combat::UnitView) -> bool {
+    planar(me.position, them.position) <= 1.4 || combat::facing(me, them)
+}
+
+/// Whether the client, which shows a creature on the move a little behind
+/// where it is, sees `me` in reach of `them`: one standing is where it is;
+/// one on the move is if the way it came is all in reach (a step about its
+/// victim), or both run (the leeway is for that). A creature running in
+/// swings once it is there.
+fn seen_in_reach(map: &Map, g: Guid, me: &combat::UnitView, them: &combat::UnitView) -> bool {
+    let Some(Motion::Moving(w)) = map.creature(g).map(|c| &c.motion) else {
+        return true;
+    };
+    if me.running && them.running {
+        return true;
+    }
+    let reach = combat::melee_range(me, them);
+    w.passed(map.now).all(|p| dist(p, them.position) <= reach)
+}
+
+/// The creature's `SMSG_ATTACKSTART` on `victim`, once for each victim, at
+/// its first swing in reach (Thistle Tea's `maybe_start_melee_attack`).
+fn announce(map: &mut Map, g: Guid, victim: Guid) {
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if c.combat.announced == Some(victim) {
+        return;
+    }
+    c.combat.announced = Some(victim);
+    if let Some(frame) = crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_ATTACKSTART {
+        attacker: g,
+        victim,
+    }) {
+        map.send_to_observers(g, &frame, false);
+        if let Some(p) = map.players.get(&victim)
+            && !p.known.contains(&g)
+        {
+            p.outbound.send_frame(frame);
+        }
+    }
+}
+
+/// A creature standing in a fight turns to face `target`, and tells its
+/// observers, if it doesn't already (Thistle Tea's `face_target`).
+fn face(map: &mut Map, g: Guid, target: Guid) {
+    let (Some(at), Some(to)) = (map.position_of(g), map.position_of(target)) else {
+        return;
+    };
+    if planar(at, to) < 0.01 {
+        return;
+    }
+    let angle = (to.y - at.y).atan2(to.x - at.x);
+    let spline_id = map.next_spline_id;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let off = (angle - c.orientation).sin().abs() > 0.01 || (angle - c.orientation).cos() < 0.0;
+    if !off {
+        return;
+    }
+    c.orientation = angle;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    map.send_to_observers(g, &face_target_packet(g, at, target, spline_id), false);
 }
 
 /// Whether a script's move is under way.
@@ -1155,11 +1488,12 @@ fn evade(map: &mut Map, g: Guid) {
         }
     }
     if map.creature(g).is_some_and(|c| !c.evading) {
+        crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
     }
 }
 
-/// An evading creature walks home.
+/// An evading creature walks home, and rests there as it did.
 fn evade_step(map: &mut Map, g: Guid) {
     let now = map.now;
     advance_motion(map, g);
@@ -1182,7 +1516,7 @@ fn evade_step(map: &mut Map, g: Guid) {
             }
             map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
         }
-        combat::sync_aura_state(map, g);
+        crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
@@ -1215,10 +1549,19 @@ pub fn advance_motion(map: &mut Map, g: Guid) {
         return;
     };
     let done = w.done(now);
+    let facing = w.face_target.filter(|_| done);
     let (pos, o) = if done {
         (w.destination(), w.face.unwrap_or(c.orientation))
     } else {
         w.position_at(now)
+    };
+    // A walk that faces a unit ends facing it.
+    let o = match facing.and_then(|t| map.position_of(t)) {
+        Some(t) if planar(t, pos) > 0.01 => (t.y - pos.y).atan2(t.x - pos.x),
+        _ => o,
+    };
+    let Some(c) = map.creature_mut(g) else {
+        return;
     };
     c.position = pos;
     c.orientation = o;

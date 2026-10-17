@@ -822,11 +822,35 @@ fn speed(map: &mut Map, g: Guid) {
     // Wounds slow it, past the auras.
     let speed = (base * (1.0 + pct as f32 / 100.0) * c.wounded).max(0.5);
     if (speed - c.speeds.run).abs() > 0.01 {
-        c.speeds.run = speed;
-        if let Some(frame) =
-            crate::game::conn::encode(&SMSG_SPLINE_SET_RUN_SPEED { guid: g, speed })
+        let was = std::mem::replace(&mut c.speeds.run, speed);
+        // Where it runs, it runs at its new speed (mangos's
+        // `propagateSpeedChange`, Thistle Tea's `retime`).
+        let (now, spline_id) = (map.now, map.next_spline_id);
+        if let Some(c) = map.creature_mut(g)
+            && let Some(frame) = c.retime(was, now, spline_id)
         {
+            map.next_spline_id = map.next_spline_id.wrapping_add(1);
             map.send_to_observers(g, &frame, false);
+        }
+        // A unit a player's client moves (Mind Control, Eyes of the
+        // Beast) hears it as a player does, and those who see it once that
+        // client has it; the rest by the spline's speed, as mangos-classic
+        // tells them (Thistle Tea tells only the possessed).
+        match map.players.values().find(|p| p.owned.mover == Some(g)) {
+            Some(p) => {
+                p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
+                    guid: g,
+                    move_event: 0,
+                    speed,
+                });
+            }
+            None => {
+                if let Some(frame) =
+                    crate::game::conn::encode(&SMSG_SPLINE_SET_RUN_SPEED { guid: g, speed })
+                {
+                    map.send_to_observers(g, &frame, false);
+                }
+            }
         }
     }
 }

@@ -57,6 +57,8 @@ pub struct Walk {
     pub falling: bool,
     /// The facing it takes on arriving, the packet says.
     pub face: Option<f32>,
+    /// The unit it turns to face as it goes (a chase's victim).
+    pub face_target: Option<Guid>,
 }
 
 impl Walk {
@@ -88,7 +90,18 @@ impl Walk {
             fly: false,
             falling: false,
             face: None,
+            face_target: None,
         }
+    }
+
+    /// The points it has passed by `now`, where it set off from first.
+    pub fn passed(&self, now: Instant) -> impl Iterator<Item = Vector3d> + '_ {
+        let travelled = now.duration_since(self.started).as_secs_f32() * self.speed;
+        self.points
+            .iter()
+            .zip(&self.lengths)
+            .filter(move |(_, l)| **l <= travelled)
+            .map(|(p, _)| *p)
     }
 
     /// The distance from the start to each point.
@@ -165,9 +178,10 @@ impl Walk {
         let mut b = crate::game::data::items::Body::default();
         crate::game::update::write_packed_guid(&mut b.0, guid);
         b.f32(from.x).f32(from.y).f32(from.z).u32(self.spline_id);
-        match self.face {
-            Some(angle) => b.u8(4).f32(angle),
-            None => b.u8(0),
+        match (self.face_target, self.face) {
+            (Some(target), _) => b.u8(3).u64(target.guid()),
+            (None, Some(angle)) => b.u8(4).f32(angle),
+            (None, None) => b.u8(0),
         };
         b.u32(self.monster_move_flags())
             .u32(self.duration.as_millis() as u32);
@@ -208,14 +222,20 @@ impl Walk {
                     SplineFlag::new(self.monster_move_flags()),
                     self.duration.as_millis() as u32,
                 );
-                match self.face {
-                    Some(angle) => SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle {
+                match (self.face_target, self.face) {
+                    (Some(target), _) => SMSG_MONSTER_MOVE_MonsterMoveType::FacingTarget {
+                        duration,
+                        spline_flags,
+                        splines,
+                        target,
+                    },
+                    (None, Some(angle)) => SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle {
                         angle,
                         duration,
                         spline_flags,
                         splines,
                     },
-                    None => SMSG_MONSTER_MOVE_MonsterMoveType::Normal {
+                    (None, None) => SMSG_MONSTER_MOVE_MonsterMoveType::Normal {
                         duration,
                         spline_flags,
                         splines,
@@ -276,7 +296,6 @@ pub struct Creature {
     /// Its values before auras.
     pub base: crate::game::map::derive::UnitBase,
     pub derived: crate::game::map::derive::Derived,
-    pub taunted_by: Option<Guid>,
     /// The unit that summoned or owns it: a pet's master, a totem's shaman.
     pub owner: Option<Guid>,
     /// What it is as a pet, guardian, totem or charmed unit.
@@ -294,6 +313,30 @@ pub struct Creature {
     /// The zone and area it stands in, once worked out: as it comes into
     /// view and as it moves.
     pub zone_area: Option<(u32, u32)>,
+    /// How it rests, as it came into the world.
+    pub rest: Rest,
+}
+
+/// A creature's resting posture as it came into the world (its spawn's
+/// addon, Thistle Tea's `Posture`): a fight stands it up and stops its
+/// emote, and it takes them back home.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rest {
+    pub stand: u8,
+    pub sheath: u8,
+    pub emote: u32,
+    pub mount: u32,
+}
+
+impl Rest {
+    pub fn of(f: &Fields) -> Self {
+        Rest {
+            stand: f.get_byte(UNIT_FIELD_BYTES_1, 0),
+            sheath: f.get_byte(UNIT_FIELD_BYTES_2, 0),
+            emote: f.get_u32(UNIT_NPC_EMOTESTATE),
+            mount: f.get_u32(UNIT_FIELD_MOUNTDISPLAYID),
+        }
+    }
 }
 
 /// Alive, or dead and waiting.
@@ -385,7 +428,6 @@ impl Creature {
             loot: None,
             base: Default::default(),
             derived: Default::default(),
-            taunted_by: None,
             owner: None,
             pet: None,
             scripted: None,
@@ -394,13 +436,16 @@ impl Creature {
             engagement: Default::default(),
             wounded: 1.0,
             zone_area: None,
+            rest: Rest::default(),
         }
         .with_base()
     }
 
-    /// Its values as they now are become its base.
+    /// Its values as they now are become its base, and its posture its
+    /// rest.
     pub fn with_base(mut self) -> Self {
         self.base = crate::game::map::derive::UnitBase::capture(&self.fields, self.speeds.run);
+        self.rest = Rest::of(&self.fields);
         crate::game::map::derive::creature(&mut self);
         self
     }
@@ -680,6 +725,60 @@ impl Creature {
         let mut walk = Walk::new(points, speed, now, spline_id, run);
         walk.fly = fly;
         let frame = walk.frame(self.guid, self.position);
+        self.motion = Motion::Moving(walk);
+        frame
+    }
+
+    /// Its run going on at its new run speed, from where it is, if it was
+    /// running at `was` (a timed move keeps its time): the packet.
+    pub fn retime(&mut self, was: f32, now: Instant, spline_id: u32) -> Option<Arc<[u8]>> {
+        let Motion::Moving(w) = &self.motion else {
+            return None;
+        };
+        if !w.run || w.falling || w.done(now) || (w.speed - was).abs() > 0.01 {
+            return None;
+        }
+        let (at, _) = w.position_at(now);
+        let mut points = vec![at];
+        points.extend(w.remaining(now));
+        if points.len() < 2 {
+            return None;
+        }
+        let mut walk = Walk::new(points, self.speeds.run, now, spline_id, true);
+        walk.fly = w.fly;
+        walk.face = w.face;
+        walk.face_target = w.face_target;
+        self.position = at;
+        let frame = encode(&walk.packet(self.guid, at));
+        self.motion = Motion::Moving(walk);
+        frame
+    }
+
+    /// A move in a fight: [`Self::walk_at`], facing `victim` as it goes
+    /// and at the end, as Thistle Tea's `Navigation.chase` and mangos's
+    /// chase (`SetFacing`) send it: a chase at a run, a step about its
+    /// victim at a walk.
+    pub fn walk_facing(
+        &mut self,
+        points: Vec<Vector3d>,
+        run: bool,
+        fly: bool,
+        victim: Guid,
+        now: Instant,
+        spline_id: u32,
+    ) -> Option<Arc<[u8]>> {
+        if points.len() < 2 {
+            return None;
+        }
+        let speed = if run {
+            self.speeds.run
+        } else {
+            self.speeds.walk
+        };
+        let mut walk = Walk::new(points, speed, now, spline_id, run);
+        walk.fly = fly;
+        walk.face_target = Some(victim);
+        let frame = encode(&walk.packet(self.guid, self.position));
         self.motion = Motion::Moving(walk);
         frame
     }

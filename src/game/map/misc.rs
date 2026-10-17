@@ -183,6 +183,25 @@ impl Map {
 pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     use ClientOpcodeMessage as C;
     match msg {
+        // A unit the player's client moves (Mind Control, Eyes of the
+        // Beast): those who see it hear of its new speed once that client
+        // has it, as mangos-classic tells them. Its own speed it hears at
+        // the change.
+        C::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(m)
+            if m.guid != g
+                && map
+                    .players
+                    .get(&g)
+                    .is_some_and(|p| p.owned.mover == Some(m.guid)) =>
+        {
+            relay(
+                map,
+                m.guid,
+                m.info,
+                MSG_MOVE_SET_RUN_SPEED,
+                &m.new_speed.to_le_bytes(),
+            )
+        }
         C::CMSG_MOVE_KNOCK_BACK_ACK(m) if m.guid == g => {
             // The jump's angle and speeds, as the client fell.
             let tail: Vec<u8> = match m.info.flags.get_jumping() {

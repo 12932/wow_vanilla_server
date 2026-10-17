@@ -112,6 +112,10 @@ pub struct Combat {
     pub hunter_parry_window: Option<(Guid, Instant)>,
     /// When the combo point a dodge gave a warrior (Overpower) runs out.
     pub dodge_combo_until: Option<Instant>,
+    /// The victim a creature's `SMSG_ATTACKSTART` went out for: it goes
+    /// out at its first swing in reach, and again for each new victim
+    /// (Thistle Tea's `attack_started`).
+    pub announced: Option<Guid>,
 }
 
 /// A repeating ranged attack.
@@ -873,6 +877,31 @@ pub fn in_melee_range(a: &UnitView, b: &UnitView) -> bool {
     dist(a.position, b.position) <= melee_range(a, b) + leeway
 }
 
+/// Whether `a` and `b` touch: their combat reaches meet, on the ground
+/// (Thistle Tea's `contact_distance`). A chasing creature halts there.
+pub fn in_contact(a: &UnitView, b: &UnitView) -> bool {
+    let (dx, dy) = (a.position.x - b.position.x, a.position.y - b.position.y);
+    (dx * dx + dy * dy).sqrt() <= a.combat_reach + b.combat_reach
+}
+
+/// How far inside its melee range a chasing creature aims to stop
+/// (Thistle Tea's `@chase_distance_inset`): there it is in reach as the
+/// client measures it, not on the edge.
+pub const CHASE_INSET: f32 = 0.5;
+
+/// How far from its victim a creature chases to, for a melee range of
+/// `reach` (Thistle Tea's `chase_target_distance`).
+pub fn chase_distance(reach: f32) -> f32 {
+    (reach - CHASE_INSET).max(0.0)
+}
+
+/// How far its victim may go from where a chaser last aimed before it
+/// paths again (Thistle Tea's `chase_rechase_distance`): three quarters of
+/// the reach, less the victim's bounding radius.
+pub fn rechase_distance(reach: f32, bounding: f32) -> f32 {
+    (reach * 0.75 - bounding).max(0.0)
+}
+
 /// Whether `a` faces `b` within `arc` radians.
 pub fn in_arc(a: &UnitView, b: &UnitView, arc: f32) -> bool {
     let angle = (b.position.y - a.position.y).atan2(b.position.x - a.position.x);
@@ -914,6 +943,9 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
     pvp_contact(map, mb, ma, Contact::Attacked);
     if guid::is_unit(b) {
         crate::game::map::ai::attacked(map, b, a);
+        // A blow, landed or not, keeps it on its leash (Thistle Tea's
+        // contact on `receive_attack`).
+        crate::game::map::creature_combat::hostile_act(map, b);
     }
 }
 
@@ -2048,6 +2080,31 @@ pub fn deal_damage_by(
     school: u32,
     spell: Option<u32>,
 ) {
+    deal_damage_with(map, attacker, victim, damage, school, spell, true);
+}
+
+/// A periodic aura's damage: [`deal_damage_by`], but only a channel's keeps
+/// a creature on its leash (Thistle Tea's `CombatLeash.on_damage`).
+pub fn deal_periodic_damage(
+    map: &mut Map,
+    attacker: Guid,
+    victim: Guid,
+    damage: u32,
+    spell: Option<u32>,
+    channel: bool,
+) {
+    deal_damage_with(map, attacker, victim, damage, 1, spell, channel);
+}
+
+fn deal_damage_with(
+    map: &mut Map,
+    attacker: Guid,
+    victim: Guid,
+    damage: u32,
+    school: u32,
+    spell: Option<u32>,
+    extends: bool,
+) {
     // A GM in god mode takes nothing.
     if crate::game::map::gm_dev::invulnerable(map, victim) {
         return;
@@ -2078,7 +2135,7 @@ pub fn deal_damage_by(
     auras::remove_where(map, victim, |h| {
         h.interrupt_flags & INTERRUPT_DAMAGE != 0 || (h.has(AURA_MOD_CONFUSE) && !h.positive)
     });
-    if attacker != victim {
+    if attacker != victim && extends {
         crate::game::map::creature_combat::hostile_act(map, victim);
     }
     let Some(f) = map.unit_fields_mut(victim) else {
