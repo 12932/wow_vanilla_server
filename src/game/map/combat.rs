@@ -2162,7 +2162,11 @@ fn deal_damage_with(
     if damage == 0 || crate::game::map::event_ai::feigning(map, victim) {
         return;
     }
-    gain_rage(map, victim, damage, true);
+    // No rage from one's own harm, the world's (mangos's `dealer !=
+    // victim`).
+    if attacker != victim {
+        gain_rage(map, victim, damage, true);
+    }
     crate::game::map::creature_combat::damaged(map, victim, attacker, damage);
     crate::game::map::vendor::wear_from_blow(map, attacker, victim);
     if guid::is_unit(victim) {

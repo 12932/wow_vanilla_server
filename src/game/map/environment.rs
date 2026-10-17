@@ -77,24 +77,63 @@ fn start_frame(timer: TimerType, m: &Mirror) -> Option<std::sync::Arc<[u8]>> {
     })
 }
 
-/// Environmental harm: logged, and dealt.
+/// Environmental harm, as Thistle Tea's `EnvironmentalDamage.apply` and
+/// mangos's `Player::EnvironmentalDamage` deal it: none to the dead, a
+/// ghost, a god or one immune to its school. Lava and fire are resisted by
+/// the victim's own fire resistance (less their own penetration), at their
+/// own level, in vmangos's buckets, and what is left is absorbed by fire
+/// shields and Mana Shield; slime the same by nature; a fall, drowning and
+/// exhaustion are physical, past both. No damage modifiers. It's logged as
+/// what is left, and breaks stealth and sitting even when all of it is
+/// absorbed.
 pub fn damage(map: &mut Map, g: Guid, kind: EnvironmentalDamageType, amount: u32) {
-    let resist_school = match kind {
-        EnvironmentalDamageType::Lava | EnvironmentalDamageType::Fire => Some(2u16),
-        EnvironmentalDamageType::Slime => Some(3),
-        _ => None,
+    let roll = if crate::game::map::spells::outcome::rolling(map) {
+        rand::rng().random_range(0..10_000)
+    } else {
+        // Fixed rolls resist nothing.
+        9_999
     };
-    let resist = resist_school
-        .and_then(|s| {
-            map.unit_fields(g)
-                .map(|f| f.get_u32(UNIT_FIELD_RESISTANCES + s))
-        })
-        .map(|r| (amount as f32 * (r as f32 / (r as f32 + 300.0)).min(0.75)) as u32)
-        .unwrap_or(0);
-    let (left, absorbed) = match resist_school {
-        Some(s) => crate::game::map::auras::absorb(map, g, amount - resist, 1 << s),
-        None => (amount, 0),
+    damage_rolled(map, g, kind, amount, roll);
+}
+
+/// [`damage`], its resistance rolled at `roll` (0 to 9,999).
+pub fn damage_rolled(
+    map: &mut Map,
+    g: Guid,
+    kind: EnvironmentalDamageType,
+    amount: u32,
+    roll: i32,
+) {
+    use crate::game::map::spells::outcome;
+    let school = match kind {
+        EnvironmentalDamageType::Lava | EnvironmentalDamageType::Fire => 2usize,
+        EnvironmentalDamageType::Slime => 3,
+        _ => 0,
     };
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let level = u32::from(p.level());
+    if p.death != Death::Alive
+        || p.misc.god
+        || crate::game::map::combat::school_immune(map, g, 1 << school)
+    {
+        return;
+    }
+    let (left, absorbed, resist) = if school == 0 {
+        (amount, 0, 0)
+    } else {
+        let r = outcome::resistance(map, g, g, school);
+        let chance = outcome::resist_chance(r, level, false, 0) * 100.0;
+        let resist = (amount as f32 * outcome::resist_fraction(chance, roll)) as u32;
+        let (left, absorbed) =
+            crate::game::map::auras::absorb(map, g, amount - resist, 1 << school);
+        (left, absorbed, resist)
+    };
+    crate::game::map::auras::remove_where(map, g, |h| {
+        h.has(crate::game::map::auras::AURA_MOD_STEALTH)
+    });
+    stand(map, g);
     if let Some(frame) = crate::game::conn::encode(&SMSG_ENVIRONMENTAL_DAMAGE_LOG {
         guid: g,
         damage_type: kind,
@@ -107,6 +146,26 @@ pub fn damage(map: &mut Map, g: Guid, kind: EnvironmentalDamageType, amount: u32
     if left > 0 {
         crate::game::map::combat::deal_damage(map, g, g, left);
     }
+}
+
+/// A sitting player hurt stands up (Thistle Tea's `Emote.on_damage`,
+/// mangos's `DealDamage` since 1.5), and what needs them seated, food and
+/// drink, ends; not one mounted.
+fn stand(map: &mut Map, g: Guid) {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.stand_state() == 0
+        || p.death != Death::Alive
+        || p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0
+    {
+        return;
+    }
+    p.set_stand_state(0);
+    p.outbound.send(&SMSG_STANDSTATE_UPDATE {
+        state: UnitStandState::Stand,
+    });
+    crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_NOT_SEATED);
 }
 
 /// The liquid at a point, as Thistle Tea's `terrain_liquid` has it: a
@@ -151,9 +210,22 @@ pub fn update(map: &mut Map) {
         let protected = p.misc.god
             || p.flight.is_some()
             || p.movement.flags.get_on_transport().is_some()
+            || p.auras
+                .has_spell(crate::game::map::spells::redemption::FORM)
             || !(alive || ghost);
         let at = p.position();
         let scale = p.fields.get_f32(OBJECT_FIELD_SCALE_X).max(0.1);
+        // The head is the model's height up, at its scale (Thistle Tea's
+        // `body_height`, mangos's `GetCollisionHeight`): two yards where the
+        // model's isn't known.
+        let height = map
+            .realm
+            .data
+            .display_info
+            .get(&p.fields.get_u32(UNIT_FIELD_DISPLAYID))
+            .map(|d| d.height)
+            .filter(|h| *h > 0.0)
+            .unwrap_or(BODY_HEIGHT);
         let breath_for = if p.auras.has(AURA_WATER_BREATHING) {
             Duration::ZERO
         } else {
@@ -179,7 +251,7 @@ pub fn update(map: &mut Map) {
             continue;
         }
         let depth = surface_at(map, at, liquid).map_or(0.0, |surface| surface - at.z);
-        let submerged = depth > BODY_HEIGHT * scale;
+        let submerged = depth > height * scale;
         breathe(
             map,
             g,
@@ -270,11 +342,21 @@ pub fn breathe(
         return;
     };
     let before = p.misc.breath;
+    let mut resized = false;
     let timer = match before {
         None if under => Some(Mirror::new(duration, now)),
         None => None,
         Some(mut m) => {
             m.advance(now);
+            // A longer or shorter breath (its aura come or gone) keeps the
+            // time already spent under, as mangos's `SetDuration` and
+            // Thistle Tea's `Breathing` have it.
+            if !duration.is_zero() && duration != m.duration {
+                let spent = m.duration.saturating_sub(m.remaining);
+                m.duration = duration;
+                m.remaining = duration.saturating_sub(spent);
+                resized = true;
+            }
             m.draining = under;
             if !under {
                 m.next_damage = None;
@@ -284,7 +366,7 @@ pub fn breathe(
     };
     p.misc.breath = timer;
     match (before, timer) {
-        (_, Some(m)) if before.is_none_or(|b| b.draining != m.draining) => {
+        (_, Some(m)) if resized || before.is_none_or(|b| b.draining != m.draining) => {
             if let Some(frame) = start_frame(TimerType::Breath, &m) {
                 p.outbound.send_frame(frame);
             }

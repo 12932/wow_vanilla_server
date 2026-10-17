@@ -217,16 +217,23 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
     }) {
         data.races.insert(id, r);
     }
-    for (id, scale) in rows(
+    // The model's collision height. dbc.sqlite names CreatureModelData's
+    // columns one off from 1.12's there: its `collision_width` holds an
+    // integer, `collision_height` the width (a human's 0.61) and
+    // `mount_height` the height (a human's 2.03), which is what
+    // mangos-classic's `GetCollisionHeight` reads.
+    for (id, scale, height) in rows(
         dbc,
-        "SELECT d.id AS id, d.creature_model_scale * COALESCE(m.model_scale, 1.0) AS scale \
+        "SELECT d.id AS id, d.creature_model_scale * COALESCE(m.model_scale, 1.0) AS scale, \
+         COALESCE(m.mount_height, 0.0) AS height \
          FROM CreatureDisplayInfo d LEFT JOIN CreatureModelData m ON m.id = d.model",
-        |c| (c.u32("id"), c.f32("scale")),
+        |c| (c.u32("id"), c.f32("scale"), c.f32("height")),
     ) {
         data.display_info.insert(
             id,
             DisplayInfo {
                 scale,
+                height,
                 ..Default::default()
             },
         );
