@@ -852,3 +852,37 @@ async fn mana_shield_absorbs_what_its_mana_pays_for_after_other_absorbs() {
         "the shield's {shield} first"
     );
 }
+
+#[tokio::test]
+async fn a_dots_threat_is_of_its_school() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "SILENTRES");
+    let priest = c.enter("Silentr", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            // Silent Resolve: a fifth less threat from shadow spells.
+            level(m, priest, 60, &[14787]);
+            let kobold = spawn(m, priest, 6, 60, 10.0);
+            apply(m, priest, kobold, 589);
+            m.now += Duration::from_millis(3100);
+            auras::update(m);
+            let damage = 1_000_000 - health(m, kobold);
+            let threat = m
+                .creature(kobold)
+                .and_then(|c| c.threat.iter().find(|(g, _)| *g == priest).map(|t| t.1))
+                .unwrap_or(0.0);
+            (damage, threat)
+        })
+        .await
+        .unwrap();
+    let (damage, threat) = out;
+    assert!(damage > 0);
+    assert!(
+        (threat - damage as f32 * 0.8).abs() < 0.5,
+        "{threat} threat of {damage} damage"
+    );
+}
