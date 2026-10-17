@@ -564,6 +564,59 @@ async fn triage(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, DOCTOR, QUEST).await;
 }
 
+/// An escort under way, hurried: the escortee walks fast, sets out at
+/// once, and its player keeps up, until `quest` is done and the escort
+/// over (leaving it sooner fails the quest).
+async fn hurry_escort(map: &MapHandle, g: Guid, escortee: u32, quest: u32) -> bool {
+    for _ in 0..600 {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let over = map
+            .query(move |m| {
+                let who = m
+                    .creatures
+                    .iter()
+                    .filter(|(_, c)| c.entry == escortee && c.alive())
+                    .map(|(_, c)| c.guid)
+                    .find(|c| m.escorts.iter().any(|e| e.creature == *c));
+                if let Some(c) = who.and_then(|w| m.creature_mut(w)) {
+                    c.speeds.walk = 60.0;
+                    c.speeds.run = 60.0;
+                    let at = c.position;
+                    if let Some(p) = m.players.get_mut(&g) {
+                        p.movement.position = at;
+                    }
+                }
+                for e in m.escorts.iter_mut() {
+                    e.skip_start();
+                }
+                done(m, g, quest) && !m.escorts.iter().any(|e| e.quest == quest)
+            })
+            .await
+            .unwrap_or(false);
+        if over {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stinky's Escape: "Stinky" Ignatz led out of the swamp.
+async fn stinkys_escape(realm: &Arc<Realm>) {
+    const STINKY: u32 = 4880;
+    for (account, race, quest, ender) in [
+        ("SWAMPER", Race::Orc, 1270, 3446),
+        ("BOGGER", Race::Human, 1222, 4794),
+    ] {
+        let (mut c, g, _) = hero(realm, account, race, Class::Warrior, 37).await;
+        let map = take(realm, &mut c, STINKY, quest, &[]).await;
+        assert!(
+            hurry_escort(&map, g, STINKY, quest).await,
+            "{quest} done at the credit point"
+        );
+        turn_in(realm, &mut c, ender, quest).await;
+    }
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -613,5 +666,8 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("triage") {
         triage(&realm).await;
+    }
+    if wanted("stinky") {
+        stinkys_escape(&realm).await;
     }
 }
