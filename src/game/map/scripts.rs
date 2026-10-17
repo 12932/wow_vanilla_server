@@ -2109,6 +2109,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         C_RELEASE_WAYPOINTS => {
+            // An escortee's await, or a scripted path's hold.
+            if crate::game::map::escorts::release(map, source) {
+                return true;
+            }
             if let Some(h) = event_ai::scripted_mut(map, source).and_then(|s| s.hold.as_mut()) {
                 h.signaled |= now < h.until;
                 h.until = h.until.min(now);

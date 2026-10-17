@@ -2,7 +2,9 @@
 //! `npc_escortAI` and `FollowerAI` scripts: data ([`catalog`]) run by an
 //! engine here. Accepting an escort's quest sets its escortee walking its
 //! `script_waypoint` path along the navmesh, acting at chosen points (by
-//! their point ids) and crediting the quest at its credit point; accepting
+//! their point ids) and crediting the quest at its credit point; it may
+//! hold at a point until what it summoned there is gone, or await a
+//! script's word (a tome read, say) and give up without it; accepting
 //! a follower's sets it trailing the player to its goal. Either fails the
 //! quest if the escortee dies or the player strays too far, and puts the
 //! escortee back where it stood at once. One that gets there goes after
@@ -86,6 +88,24 @@ pub enum Act {
     Face(u32),
     /// The quest credited to the player and their group near.
     Credit,
+    /// The nearest creature of an entry plays an emote.
+    EmoteBy(u32, u32),
+    /// The escort stops at its point until every creature it summoned
+    /// from this point on is gone, for at most 400 s, then these run
+    /// (Thistle Tea's `{:hold, actions}`).
+    Hold(&'static [Act]),
+    /// The escort stops at its point until a script lets it go
+    /// (`release_waypoints`), then the first run; if nothing does within
+    /// the time (ms), the second (Thistle Tea's `{:await, ...}`).
+    Await(u32, &'static [Act], &'static [Act]),
+    /// The nearest game object of an entry, within 40 yards, set to a
+    /// state.
+    ObjectState(u32, u32),
+    /// The escort ends well, and the escortee dies.
+    Die,
+    /// The escort ends badly: the quest fails and the escortee is put
+    /// back (vmangos's `ResetEscort`).
+    Abort,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,12 +165,32 @@ enum Kind {
         arrived: bool,
         waiting_until: Option<Instant>,
         start_at: Instant,
+        /// A hold or await at its point.
+        hold: Option<Hold>,
     },
     Follower {
         def: Follower,
         arrived: bool,
     },
 }
+
+/// An escort held at its point, as Thistle Tea's `WaypointHold` has it.
+#[derive(Debug, Clone, Copy)]
+struct Hold {
+    until: Instant,
+    /// Not let go before this: the summons beside it are counted first.
+    ready_at: Instant,
+    /// An await, let go by a script; else a hold, by its summons' going.
+    signal: bool,
+    signaled: bool,
+    /// The summons it waits on: the escort's, from this index.
+    from: usize,
+    release: &'static [Act],
+    expired: Option<&'static [Act]>,
+}
+
+/// How long a hold waits on its summons at most.
+const HOLD_MAX: Duration = Duration::from_secs(400);
 
 /// An escort or follower under way.
 #[derive(Debug, Clone)]
@@ -162,6 +202,8 @@ pub struct Active {
     run: bool,
     delayed: Vec<(Instant, &'static [Act])>,
     summons: Vec<(Guid, Instant)>,
+    /// Every creature it summoned, for its holds.
+    summoned: Vec<Guid>,
     /// When it ends (and the escortee goes home).
     ends_at: Option<Instant>,
     failed: bool,
@@ -176,6 +218,43 @@ impl Active {
         if let Kind::Escort { start_at, .. } = &mut self.kind {
             *start_at = Instant::now() - Duration::from_secs(1);
         }
+    }
+
+    /// Its clocks `by` on: what it waits for (its start, its waits, its
+    /// delayed acts, a hold's time) comes sooner.
+    pub fn hurry(&mut self, by: Duration) {
+        let sooner = |t: &mut Instant| {
+            if let Some(s) = t.checked_sub(by) {
+                *t = s;
+            }
+        };
+        for (t, _) in self.delayed.iter_mut() {
+            sooner(t);
+        }
+        if let Some(t) = self.ends_at.as_mut() {
+            sooner(t);
+        }
+        if let Kind::Escort {
+            start_at,
+            waiting_until,
+            hold,
+            ..
+        } = &mut self.kind
+        {
+            sooner(start_at);
+            if let Some(t) = waiting_until.as_mut() {
+                sooner(t);
+            }
+            if let Some(h) = hold.as_mut() {
+                sooner(&mut h.until);
+                sooner(&mut h.ready_at);
+            }
+        }
+    }
+
+    /// Whether it is held at its point, by a hold or an await.
+    pub fn held(&self) -> bool {
+        matches!(&self.kind, Kind::Escort { hold: Some(_), .. })
     }
 }
 
@@ -261,6 +340,7 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
                 arrived: false,
                 waiting_until: None,
                 start_at: now + Duration::from_millis(u64::from(def.start_delay_ms)),
+                hold: None,
             },
             def.accept,
         )
@@ -295,6 +375,7 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
         run: false,
         delayed: Vec::new(),
         summons: Vec::new(),
+        summoned: Vec::new(),
         ends_at: None,
         failed: false,
         done: false,
@@ -338,6 +419,8 @@ fn say(map: &Map, who: Guid, text: u32) {
 fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
     let now = map.now;
     let (creature, player) = (map.escorts[i].creature, map.escorts[i].player);
+    // A hold waits on what these acts summon, those before it too.
+    let batch = map.escorts[i].summoned.len();
     for act in acts {
         match *act {
             Act::Say(text) => say(map, creature, text),
@@ -505,8 +588,121 @@ fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
                     credit(map, player, quest, reach, at);
                 }
             }
+            Act::EmoteBy(entry, emote) => {
+                if let Some(at) = map.creature(creature).map(|c| c.position)
+                    && let Some(by) = nearest(map, entry, at, 150.0)
+                    && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
+                        emote: wow_world_messages::vanilla::Emote::try_from(emote)
+                            .unwrap_or_default(),
+                        guid: by,
+                    })
+                {
+                    map.send_to_observers(by, &frame, false);
+                }
+            }
+            Act::Hold(release) => hold(map, i, now, HOLD_MAX, false, batch, release, None),
+            Act::Await(ms, release, expired) => {
+                let wait = Duration::from_millis(u64::from(ms));
+                hold(map, i, now, wait, true, batch, release, Some(expired));
+            }
+            Act::ObjectState(entry, state) => {
+                if let Some(at) = map.creature(creature).map(|c| c.position)
+                    && let Some(o) = map
+                        .gameobjects
+                        .iter()
+                        .filter(|(_, o)| o.entry == entry && dist(o.position, at) <= 40.0)
+                        .min_by(|(_, a), (_, b)| {
+                            dist(a.position, at).total_cmp(&dist(b.position, at))
+                        })
+                        .map(|(_, o)| o.guid)
+                {
+                    crate::game::map::scripts::set_object_state(map, o, state);
+                }
+            }
+            Act::Die => {
+                map.escorts[i].done = true;
+                map.escorts[i].ends_at = Some(now);
+                if let Some(hp) = map
+                    .creature(creature)
+                    .filter(|c| c.alive())
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH))
+                {
+                    crate::game::map::combat::deal_damage(map, creature, creature, hp);
+                }
+                return;
+            }
+            Act::Abort => {
+                if !map.escorts[i].failed {
+                    fail(map, player, map.escorts[i].quest);
+                }
+                map.escorts[i].failed = true;
+                map.escorts[i].ends_at = Some(now);
+                return;
+            }
         }
     }
+}
+
+/// Escort `i` held at its point, as Thistle Tea's `WaypointHold.start`
+/// has it: until `wait` is up, or sooner, by a script for an await, or for
+/// a hold once the summons from `from` on are gone.
+#[allow(clippy::too_many_arguments)]
+fn hold(
+    map: &mut Map,
+    i: usize,
+    now: Instant,
+    wait: Duration,
+    signal: bool,
+    from: usize,
+    release: &'static [Act],
+    expired: Option<&'static [Act]>,
+) {
+    if let Kind::Escort { hold, .. } = &mut map.escorts[i].kind {
+        *hold = Some(Hold {
+            until: now + wait,
+            ready_at: now + Duration::from_millis(1),
+            signal,
+            signaled: false,
+            from,
+            release,
+            expired,
+        });
+    }
+}
+
+/// A script lets `creature`'s escort go from its await or hold
+/// (`release_waypoints`): whether it had one.
+pub fn release(map: &mut Map, creature: Guid) -> bool {
+    let now = map.now;
+    let Some(a) = map.escorts.iter_mut().find(|a| a.creature == creature) else {
+        return false;
+    };
+    let Kind::Escort { hold: Some(h), .. } = &mut a.kind else {
+        return false;
+    };
+    h.signaled |= now < h.until;
+    h.until = h.until.min(now);
+    true
+}
+
+/// Whether escort `i`'s hold lets it go now: the acts to run if so.
+fn held(map: &Map, i: usize, now: Instant) -> Option<Option<&'static [Act]>> {
+    let Kind::Escort { hold: Some(h), .. } = &map.escorts[i].kind else {
+        return Some(None);
+    };
+    if now >= h.until {
+        return Some(Some(match h.expired {
+            Some(expired) if h.signal && !h.signaled => expired,
+            _ => h.release,
+        }));
+    }
+    if h.signal || now < h.ready_at {
+        return None;
+    }
+    let gone = map.escorts[i].summoned[h.from.min(map.escorts[i].summoned.len())..]
+        .iter()
+        .all(|g| map.creature(*g).is_none_or(|c| !c.alive()));
+    gone.then_some(Some(h.release))
 }
 
 /// One script command from `source` on `target`.
@@ -536,6 +732,7 @@ fn summon_for(
     let Some(g) = summon(map, entry, pos, o) else {
         return;
     };
+    map.escorts[i].summoned.push(g);
     if despawn_ms != u32::MAX {
         map.escorts[i]
             .summons
@@ -781,7 +978,20 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
             arrived,
             waiting_until,
             start_at,
+            hold: _,
         } => {
+            // Held at its point: until it is let go, then what that runs.
+            match held(map, i, now) {
+                None => return true,
+                Some(Some(acts)) => {
+                    if let Kind::Escort { hold, .. } = &mut map.escorts[i].kind {
+                        *hold = None;
+                    }
+                    run_acts(map, i, acts);
+                    return true;
+                }
+                Some(None) => {}
+            }
             if now < start_at || waiting_until.is_some_and(|t| t > now) {
                 return true;
             }
