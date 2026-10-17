@@ -623,3 +623,80 @@ async fn an_active_mover_not_controlled_is_ignored() {
     assert_ne!(mover, Some(gb), "Bob isn't Alice's to move");
     assert_eq!(mover, None);
 }
+
+fn zlib(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(data).unwrap();
+    z.finish().unwrap()
+}
+
+fn upload(kind: u32, data: &[u8]) -> Vec<u8> {
+    let mut body = kind.to_le_bytes().to_vec();
+    body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    if !data.is_empty() {
+        body.extend_from_slice(&zlib(data));
+    }
+    body
+}
+
+async fn logout(c: &mut Client) {
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+}
+
+async fn digests(c: &mut Client) -> Vec<u8> {
+    c.wait_frame("SMSG_ACCOUNT_DATA_TIMES", 0x209, |_| true)
+        .await
+}
+
+/// Thistle Tea's cmsg_update_account_data_test: the caches a client uploads
+/// on the character screen, after its logout, are kept: the account's for
+/// the account, the character's under the character last logged in, and a
+/// size of zero erases one. A zero size is an erase, data that doesn't
+/// inflate is nothing, and an upload missing its checksum still inflates.
+#[tokio::test]
+async fn caches_uploaded_after_logout_are_kept_for_the_last_character() {
+    use crate::game::map::account_data::{digest, parse_update};
+    let bindings = b"bind W MOVEFORWARD\n";
+    let whole = zlib(bindings);
+    let mut body = upload(2, bindings);
+    assert_eq!(parse_update(&body), Some((2, bindings.to_vec())));
+    body.truncate(body.len() - 4);
+    assert_eq!(
+        parse_update(&body),
+        Some((2, bindings.to_vec())),
+        "no checksum: {} of {} bytes",
+        body.len() - 8,
+        whole.len()
+    );
+    assert_eq!(parse_update(&upload(4, b"")), Some((4, Vec::new())));
+    let mut junk = 4u32.to_le_bytes().to_vec();
+    junk.extend_from_slice(&10u32.to_le_bytes());
+    junk.extend_from_slice(b"not zlib");
+    assert_eq!(parse_update(&junk), None);
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    logout(&mut a).await;
+    // The chat settings (Alice's own) and macros (the account's).
+    a.send_raw(0x20B, &upload(7, b"chat")).await;
+    a.send_raw(0x20B, &upload(4, b"MACRO 1")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    a.login(g).await;
+    let times = digests(&mut a).await;
+    assert_eq!(&times[7 * 16..8 * 16], &digest(b"chat"));
+    assert_eq!(&times[4 * 16..5 * 16], &digest(b"MACRO 1"));
+    // Erased after another logout.
+    logout(&mut a).await;
+    a.send_raw(0x20B, &upload(7, b"")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    a.login(g).await;
+    let times = digests(&mut a).await;
+    assert_eq!(&times[7 * 16..8 * 16], &[0; 16]);
+    assert_eq!(&times[4 * 16..5 * 16], &digest(b"MACRO 1"));
+}
