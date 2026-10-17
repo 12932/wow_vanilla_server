@@ -555,6 +555,9 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
         }
         // A battleground's banner or beacon.
         _ if crate::game::map::battleground::opened(map, caster, object) => {}
+        // Disarm Trap: the trap is spent, with nothing to loot (mangos's
+        // `SendLoot` for a trap, Thistle Tea's `deplete_trap`).
+        crate::game::map::objects::GO_TRAP => crate::game::map::objects::disarm(map, object),
         _ => {
             loot::open_object(map, caster, object);
             crate::game::map::scripts::object_used(map, caster, object);

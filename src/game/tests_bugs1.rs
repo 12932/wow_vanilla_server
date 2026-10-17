@@ -563,3 +563,47 @@ async fn an_objects_gossip_options_show_and_are_chosen() {
         .await;
     assert_eq!(next, 101);
 }
+
+#[tokio::test]
+async fn disarm_trap_spends_the_trap_and_opens_no_loot() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGROGUE2");
+    let g = c.enter("Bugrogueb", Race::Human, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[1842]);
+            // Thieves' Tools.
+            crate::game::map::inventory::add_item(m, g, 5060, 1, false).unwrap();
+            let p = &m.players[&g];
+            let (at, o) = (p.position(), p.movement.orientation);
+            let spot = Vector3d {
+                x: at.x + 2.0 * o.cos(),
+                y: at.y + 2.0 * o.sin(),
+                z: at.z,
+            };
+            // A Freezing Trap nobody set.
+            let trap = crate::game::map::objects::summon(m, None, 2561, spot, o, 0, 0, 0, None)
+                .expect("the trap");
+            let cast = spells::cast_now(
+                m,
+                g,
+                1842,
+                spells::Targets {
+                    object: Some(trap),
+                    ..Default::default()
+                },
+            );
+            (cast, m.gameobject(trap).is_some(), m.players[&g].looting)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, false, None),
+        "cast, the trap gone, no loot window"
+    );
+}
