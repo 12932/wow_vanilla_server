@@ -75,6 +75,8 @@ pub struct Engagement {
     pub guard_call: Option<GuardCall>,
     /// When a civilian next looks about for enemies.
     pub watch_at: Option<Instant>,
+    /// When a frightened critter's escape ends.
+    pub escape_at: Option<Instant>,
 }
 
 /// A civilian's call for the guards, answered: it makes one at a time.
@@ -765,7 +767,7 @@ pub fn regenerate(map: &mut Map) {
         })
         .map(|(_, c)| c.guid)
         .collect();
-    for g in due {
+    for &g in &due {
         let regenerates =
             template(map, g).is_none_or(|t| t.static_flags1 & STATIC_NO_AUTOMATIC_REGEN == 0);
         let poly = polymorphed(map, g);
@@ -809,6 +811,10 @@ pub fn regenerate(map: &mut Map) {
             combat_mana
         };
         c.fields.set_u32(UNIT_FIELD_POWER1, (mana + gain).min(max));
+    }
+    // Health back: wounds slow it no more.
+    for g in due {
+        crate::game::map::combat::sync_aura_state(map, g);
     }
 }
 

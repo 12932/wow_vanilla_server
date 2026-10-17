@@ -72,6 +72,7 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
     let Some(entry) = npc_entry(map, player, npc, 0) else {
         return;
     };
+    crate::game::map::creature_motion::talk_pause(map, npc);
     let data = map.realm.data.clone();
     let flags = map
         .creature(npc)
@@ -199,6 +200,7 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
     let Some(entry) = npc_entry(map, player, npc, 0) else {
         return;
     };
+    crate::game::map::creature_motion::talk_pause(map, npc);
     let data = map.realm.data.clone();
     let flags = map
         .creature(npc)
