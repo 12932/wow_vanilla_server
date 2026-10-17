@@ -92,21 +92,26 @@ fn cast(map: &MapHandle, caster: Guid, spell: u32, target: Guid) {
     map.call(move |m| crate::game::map::spells::cast_triggered(m, caster, spell, Some(target)));
 }
 
-/// Golemagg's Trust strengthens only the Core Ragers near him, and only
-/// while he fights.
+/// Golemagg's Trust, his template's aura, strengthens only the Core
+/// Ragers near him, and only while he fights; home from evading, he has
+/// it back.
 async fn golemaggs_trust_and_separation_anxiety(realm: &Arc<Realm>) {
     let (_a, alice, map) = player(realm, "Gale").await;
     let golemagg = boss(&map, 11988, 5.0, 0.0).await;
     let near = boss(&map, 11672, 8.0, 0.0).await;
     let far = boss(&map, 11672, 45.0, 0.0).await;
-    cast(&map, golemagg, 20556, golemagg);
-    tokio::time::sleep(Duration::from_millis(1300)).await;
+    assert!(has(&map, golemagg, 20556).await, "his template's aura");
+    // The ragers' own (their template's two seconds of it) lapses.
+    tokio::time::sleep(Duration::from_millis(2300)).await;
     assert!(!has(&map, near, 20553).await, "not while he is at peace");
     map.call(move |m| crate::game::map::ai::attacked(m, golemagg, alice));
     tokio::time::sleep(Duration::from_millis(1300)).await;
     assert!(has(&map, near, 20553).await, "the rager near him");
     assert!(!has(&map, far, 20553).await, "not the one far off");
     assert!(!has(&map, alice, 20553).await, "nor his enemy");
+    map.call(move |m| crate::game::map::ai::enter_evade(m, golemagg));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(has(&map, golemagg, 20556).await, "back once home");
     // Separation Anxiety: Garr's Firesworn far from him grows stronger.
     let garr = boss(&map, 12057, -20.0, 0.0).await;
     let close = boss(&map, 12099, -22.0, 0.0).await;
@@ -291,12 +296,35 @@ async fn the_dragons_marks_and_vacuum(realm: &Arc<Realm>) {
     clear(&map, vec![dragon, azuregos, gandling]);
 }
 
+/// A spawn's addon's auras are on it from the first: Battle Stance on a
+/// warrior's whose addon names it.
+async fn spawn_addon_auras(realm: &Arc<Realm>) {
+    let (_a, _, map) = player(realm, "Stance").await;
+    let held = map
+        .query(|m| {
+            let data = m.realm.data.clone();
+            m.creatures
+                .iter()
+                .find(|(_, c)| {
+                    c.alive()
+                        && c.spawn_guid
+                            .and_then(|s| data.creature_addons.get(&s))
+                            .is_some_and(|a| a.auras == [7165])
+                })
+                .map(|(_, c)| c.auras.has_spell(7165))
+        })
+        .await
+        .unwrap();
+    assert_eq!(held, Some(true), "Battle Stance from its addon");
+}
+
 /// The mechanics on one load of the real world.
 #[tokio::test]
 async fn the_real_encounter_mechanics() {
     let Some(realm) = realm() else {
         return;
     };
+    spawn_addon_auras(&realm).await;
     geddons_inferno_ramps(&realm).await;
     kazzaks_whirl_turns(&realm).await;
     golemaggs_trust_and_separation_anxiety(&realm).await;

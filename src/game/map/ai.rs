@@ -944,6 +944,9 @@ fn evade(map: &mut Map, g: Guid) {
     }
     crate::game::map::scripts::stop_for(map, g);
     crate::game::map::event_ai::evade(map, g);
+    if map.creature(g).is_some_and(|c| !c.evading) {
+        crate::game::map::spawn_auras::restore(map, g);
+    }
 }
 
 /// An evading creature walks home, and is whole again when it gets there.
@@ -962,6 +965,7 @@ fn evade_step(map: &mut Map, g: Guid) {
             until: Some(now + Duration::from_secs(2)),
         };
         combat::sync_aura_state(map, g);
+        crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
 }
