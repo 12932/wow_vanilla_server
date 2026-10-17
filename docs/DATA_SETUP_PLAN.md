@@ -1,7 +1,7 @@
 # Making the world's data: a plan
 
 **Goal:** from a fresh clone, `cargo run --release` gives the whole world. When the navmesh or the terrain is
-missing, the server finds the player's WoW 1.12.1 client, asks once, builds what's missing with a progress bar, and
+missing, the server asks where the player's WoW 1.12.1 client is, builds what's missing with a progress bar, and
 starts. No Docker, no Nix, no C++ toolchain beyond what Rust already needs, on Windows, Linux and macOS alike.
 
 ## What the world needs, and where it comes from today
@@ -35,35 +35,33 @@ have, and the copy of the client in rustigator's LFS as the golden input. wvs's 
   current, and the previous bake stays usable.
 - A map that is already current (`map_files_exist`) is skipped, so a second run carries on where the first stopped.
 
-## Stage 3: finding the client
+## Stage 3: asking for the client
 
-A `setup` module in wvs (also `cargo run --release --bin wvs-setup` on its own):
+A `setup` module in wvs (also `cargo run --release --bin wvs-setup` on its own). It doesn't search the machine: it
+asks, and takes the answer in whatever form the player has it.
 
-- **Where to look, fastest first:**
-  1. a path given (`--client <dir>`) or `WOW_DIR`;
-  2. the Windows registry (`HKLM\SOFTWARE\WOW6432Node\Blizzard Entertainment\World of Warcraft`, `InstallPath`);
-  3. common folders: `Program Files (x86)`, `C:\Games`, `D:\Games` and other drives' `Games`, the user's Desktop,
-     Downloads and Documents; on Linux and macOS, `~/Games`, Wine, Lutris, Bottles and Proton prefixes,
-     `/Applications`.
-- **Then a full search,** if nothing is found or the user asks:
-  - every fixed drive, skipping system and package folders (`Windows`, `ProgramData`, `$Recycle.Bin`, `node_modules`,
-    `.git`, `target`);
-  - a spinner shows the folder being searched and the count so far;
-  - a time limit is offered, and Esc stops it.
+- **Where it comes from:** `--client <path>`, else `WOW_DIR`, else the question. The client the setup last built from
+  (noted in each directory it builds) is offered as the answer, so a second run is one Enter.
+- **What the answer may be:** the client's folder, its `WoW.exe` (or a renamed `.exe` beside `Data`, whose version is
+  then read), the `Data` folder, or a file in it. Typed, pasted, or dragged onto the window: the quotes, PowerShell's
+  `& '...'`, the spaces round it and a trailing separator are taken off, and `~` is the home folder.
 - **What counts as a client:**
   - a folder with `Data/` holding 1.12's MPQs (`dbc.MPQ`, `terrain.MPQ`, `model.MPQ`, `texture.MPQ`, `wmo.MPQ`,
     `patch.MPQ`);
-  - `WoW.exe`'s version 1.12.1.5875 read from its version resource, where `WoW.exe` is there.
-- **What is turned away, with the reason:** TBC and later (`common.MPQ`, `expansion.MPQ`, `lichking.MPQ`), and other
-  vanilla builds, which are offered with a warning.
+  - `WoW.exe`'s version 1.12.1.5875 read from its version resource, where there is one.
+- **What is turned away, with the reason:** TBC and later (`common.MPQ`, `expansion.MPQ`, `lichking.MPQ`), modern
+  clients (CASC), and one not patched to 1.12.1. Other vanilla builds are offered with a warning.
+- **A wrong answer** is told what is wrong (nothing there; no `Data` with 1.12's archives; why the client won't do)
+  and asked again. An empty line stops.
 - **Before trusting it:** rustigator's `preflight` (every map's files resolve) and the free disk space against the
   build's estimate.
 
 ## Stage 4: the interactive flow
 
 ```
-Found World of Warcraft 1.12.1 (5875) at C:\Games\WoW 1.12 (3.6 GB)
-Use it to build the navmesh and terrain? [Y/n] y
+The navmesh and terrain are made from your WoW 1.12.1 client.
+Where is it? Its folder, WoW.exe or Data folder (paste or drag it here): C:\Games\WoW 1.12
+Using World of Warcraft 1.12.1 (5875) at C:\Games\WoW 1.12 (5.0 GB).
 Build what?
 > Everything: 36 maps, about 9 GB
   Eastern Kingdoms only (Gurubashi Arena, Stormwind, the Undercity): about 3 GB
@@ -75,15 +73,16 @@ Start the server now? [Y/n]
 ```
 
 - `dialoguer` for the questions and `indicatif` for the bars: an overall bar, and one for each map.
-- Non-interactive, for scripts: `--yes --client <dir> --maps all|azeroth|<names>`.
-- Errors say what to do: no client found (where to point it), not 1.12.1, not enough disk, an unreadable MPQ (which
+- Non-interactive, for scripts: `--yes --client <path> --maps all|azeroth|<names>`; `--yes` without a client says to
+  give one.
+- Errors say what to do: not a client (what to name instead), not 1.12.1, not enough disk, an unreadable MPQ (which
   one).
 
 ## Stage 5: in the server
 
 - **At start-up, with a terminal:** if `data/nav` or `data/terrain` is missing, the server offers the setup and saying
-  no starts it without them, as now: "No navmesh: creatures will walk straight lines. Find your WoW client and build
-  it now? [Y/n]". Without a terminal (a service), it logs the hint and starts.
+  no starts it without them, as now: "No navmesh: creatures will walk straight lines. Build it now from your WoW
+  1.12.1 client? [Y/n]". Without a terminal (a service), it logs the hint and starts.
 - **`data/db` holding Git LFS pointers** (a clone without LFS) is caught by name: "data/db/vmangos.sqlite is a Git LFS
   pointer: run `git lfs pull`", rather than SQLite's error.
 - **The README's quick start becomes:** clone, `cargo run --release`, answer Y.
@@ -97,13 +96,14 @@ Start the server now? [Y/n]
 ## Order and size
 
 Stages 1 and 2 are in rustigator, and independent of each other; Stage 3 can start beside them. Stage 4 needs 2 and 3;
-Stage 5 needs 4; Stage 6 closes it. Stage 1 is the largest: a careful port with a golden
-comparison. The rest are small.
+Stage 5 needs 4; Stage 6 closes it. Stage 1 is the largest: a careful port with a golden comparison. The rest are
+small.
 
 ## Where it stands
 
-- **Stages 3 to 5** are in wvs: `src/setup/` and the `wvs-setup` binary, on rustigator at 31c83fa (Stages 1 and
-  2), its builds behind a `Builder` trait that the tests fake. On the 5875 client the setup's terrain is the 2,429
+- **Stages 3 to 5** are in wvs: `src/setup/` and the `wvs-setup` binary, on rustigator's Stages 1 and 2, its builds
+  behind a `Builder` trait that the tests fake. It first searched the machine for the client (the registry, the usual
+  folders, then every drive); that went in favour of asking, which is simpler and never guesses wrong. On the 5875 client the setup's terrain is the 2,429
   reference tiles byte for byte; Ctrl-C between tiles keeps what is finished, and the next run carries on.
 - **Another client's output:** "current" doesn't know which client made a map, so each directory the setup builds
   notes its client (`setup.json`: the archives' names and sizes). Another client's is built afresh only when the
