@@ -89,7 +89,9 @@ pub fn stock_left(map: &mut Map, npc: Guid, v: &VendorItem, buy_count: u32) -> u
     let Some(s) = map.vendor_stock.get_mut(&(npc, v.item)) else {
         return v.max_count;
     };
-    let intervals = (now.saturating_duration_since(s.last_increment_at).as_millis()
+    let intervals = (now
+        .saturating_duration_since(s.last_increment_at)
+        .as_millis()
         / s.restock.as_millis().max(1)) as u32;
     let count = s
         .count
@@ -153,8 +155,13 @@ pub fn list(map: &mut Map, player: Guid, npc: Guid) {
             item: v.item,
             item_display_id: t.display_id,
             max_items: left,
-            price: crate::game::map::reputation::price(map, player, npc, price(t, t.buy_count.max(1)))
-                .into(),
+            price: crate::game::map::reputation::price(
+                map,
+                player,
+                npc,
+                price(t, t.buy_count.max(1)),
+            )
+            .into(),
             max_durability: t.max_durability,
             durability: t.buy_count.max(1),
         });
@@ -185,7 +192,9 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
         return;
     };
-    if v.condition != 0 && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player)) {
+    if v.condition != 0
+        && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player))
+    {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
         return;
     }
@@ -356,7 +365,15 @@ pub fn sell(map: &mut Map, player: Guid, npc: Guid, item: Guid, amount: u8) {
             .realm
             .next_item
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let new = Item::new(&data, guid::item(counter), player, entry, BAG_PLAYER, slot, count);
+        let new = Item::new(
+            &data,
+            guid::item(counter),
+            player,
+            entry,
+            BAG_PLAYER,
+            slot,
+            count,
+        );
         let mut batch = crate::game::update::Batch::new();
         batch.push(&crate::game::update::create_block(
             &new.create(),
@@ -389,7 +406,9 @@ fn buyback_slot(p: &Player) -> u8 {
     if p.item_at(BAG_PLAYER, next).is_none() {
         return next;
     }
-    if let Some(free) = (BUYBACK_START + 1..BUYBACK_END).find(|s| p.item_at(BAG_PLAYER, *s).is_none()) {
+    if let Some(free) =
+        (BUYBACK_START + 1..BUYBACK_END).find(|s| p.item_at(BAG_PLAYER, *s).is_none())
+    {
         return free;
     }
     (BUYBACK_START..BUYBACK_END)
