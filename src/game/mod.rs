@@ -70,6 +70,8 @@ mod tests_p3_network;
 #[cfg(test)]
 mod tests_p3_network_auth;
 #[cfg(test)]
+mod tests_p3_network_messages;
+#[cfg(test)]
 mod tests_p3_network_npc;
 #[cfg(test)]
 mod tests_p3_network_real;

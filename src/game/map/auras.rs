@@ -1421,10 +1421,8 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
             if let Some(p) = map.players.get(&target) {
-                p.outbound.send(&SMSG_FORCE_MOVE_ROOT {
-                    guid: target,
-                    counter: 0,
-                });
+                p.outbound
+                    .send_frame(crate::game::map::movement::root_frame(target, true));
             }
             if kind == AURA_MOD_STUN {
                 crate::game::map::spells::interrupt(map, target);
@@ -1661,10 +1659,8 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
             if !rooted && let Some(p) = map.players.get(&target) {
-                p.outbound.send(&SMSG_FORCE_MOVE_UNROOT {
-                    guid: target,
-                    counter: 0,
-                });
+                p.outbound
+                    .send_frame(crate::game::map::movement::root_frame(target, false));
             }
         }
         AURA_MOD_FEAR if !still(map, AURA_MOD_FEAR) => {
