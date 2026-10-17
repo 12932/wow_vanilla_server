@@ -871,19 +871,38 @@ async fn a_skinner_skins_a_looted_corpse() {
         .await
         .unwrap();
     assert!(flagged, "a corpse with nothing on it can be skinned");
-    map.query(move |m| {
-        crate::game::map::spells::cast(
-            m,
-            g,
-            SKINNING,
-            Targets {
-                unit: Some(boar),
-                ..Default::default()
-            },
-            None,
-        )
-    })
-    .await;
+    // An attempt may fail (the skill rolled against the corpse's need):
+    // try until it takes.
+    for _ in 0..40 {
+        let skinned = map
+            .query(move |m| {
+                if let Some(c) = m.caster_mut(g) {
+                    c.gcd_until = None;
+                    c.cooldowns.clear();
+                }
+                crate::game::map::spells::cast(
+                    m,
+                    g,
+                    SKINNING,
+                    Targets {
+                        unit: Some(boar),
+                        ..Default::default()
+                    },
+                    None,
+                );
+                m.creature(boar).is_some_and(|c| {
+                    !c.fields.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::professions::UNIT_FLAG_SKINNABLE,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        if skinned {
+            break;
+        }
+    }
     tokio::time::sleep(Duration::from_millis(60)).await;
     a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
     a.wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {

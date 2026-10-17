@@ -87,6 +87,14 @@ and its state: **fixed**, or **left** with why.
     equipping an item with an on-use spell puts that spell on a 30-second
     cooldown, which wvs never started.
 
+## core/profession
+
+20. `skinning.ex`, `world/entity/mob/corpse.ex`: a skinning attempt rolls
+    the skill (with its bonuses) from 25 below to 37 above, and fails
+    ("try again") under the corpse's need unless the skill is 300; elites
+    of rank 3 double the skill-up chance too. wvs always skinned, and
+    doubled for ranks 1 and 2 only.
+
 ## core/death
 
 19. `world/entity/player/spirit_healer.ex`: a spirit healer's price is a

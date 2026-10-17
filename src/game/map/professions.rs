@@ -435,7 +435,7 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
             }
             EFFECT_SKINNING => {
                 if let Some(unit) = t.unit {
-                    skin(map, caster, unit);
+                    skin(map, caster, unit, s.id);
                 }
             }
             EFFECT_PICKPOCKET => {
@@ -566,7 +566,7 @@ fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, 
 }
 
 /// Skinning a corpse: its skins, and the skill.
-fn skin(map: &mut Map, caster: Guid, creature: Guid) {
+fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     let data = map.realm.data.clone();
     let Some((entry, level)) = map
         .creature(creature)
@@ -581,13 +581,24 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid) {
     let Some(table) = data.loot.skinning.get(&t.skinning_loot_id) else {
         return;
     };
+    // The attempt may fail: the skill rolled from 25 below to 37 above
+    // must reach the corpse's need (Thistle Tea's `Skinning.attempt?`).
+    let skill = map
+        .players
+        .get(&caster)
+        .map_or(0, |p| skill_value(p, SKILL_SKINNING));
+    let roll = skill as i32 - 25 + rand::rng().random_range(0..=62);
+    if skill < 300 && skinning_required(level, skill) as i32 > roll {
+        send_failure(map, caster, spell, FAIL_TRY_AGAIN);
+        return;
+    }
     let wanted = map
         .players
         .get(&caster)
         .map(|p| crate::game::map::quests::wanted_items(p, &data))
         .unwrap_or_default();
     let loot = loot::personal(&data, table, caster, &wanted, LootKind::Skinning);
-    let elite = matches!(t.rank, 1 | 2);
+    let elite = matches!(t.rank, 1..=3);
     // Skinning the Beast frees the hunter it swallowed.
     if entry == THE_BEAST {
         crate::game::map::spells::cast_triggered(map, caster, FINKLE_IS_EINHORN, Some(caster));
