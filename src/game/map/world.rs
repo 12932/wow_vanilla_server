@@ -42,7 +42,9 @@ pub fn populate(map: &mut Map) {
     let mut rng = rand::rng();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on) {
+            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
+                || !crate::game::map::battleground::spawn_allowed(map, true, s.guid)
+            {
                 continue;
             }
             if let Some(c) = Creature::from_spawn(&data, s, &mut rng) {
@@ -52,7 +54,9 @@ pub fn populate(map: &mut Map) {
     }
     if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on) {
+            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
+                || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
+            {
                 continue;
             }
             if let Some(t) = data.gameobject_templates.get(&s.entry) {

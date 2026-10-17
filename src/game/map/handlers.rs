@@ -25,6 +25,9 @@ impl Map {
         let Some(msg) = movement::handle(self, guid, msg) else {
             return;
         };
+        let Some(msg) = crate::game::map::pvp::handle(self, guid, msg) else {
+            return;
+        };
         let Some(msg) = crate::game::map::social::handle(self, guid, msg) else {
             return;
         };

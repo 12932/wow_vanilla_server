@@ -1,0 +1,1160 @@
+//! A battleground match, on its copy of the map. What every battleground
+//! shares lives here: the countdown and the doors, the events that put each
+//! spawn in or out of the match (vmangos's `creature_battleground` and
+//! `gameobject_battleground`), resurrection waves at the spirit guides,
+//! scores and the scoreboard, bonus honor, the end and the close. Each
+//! battleground's rules are its own: Warsong Gulch ([`wsg`]), Arathi Basin
+//! ([`ab`]) and Alterac Valley ([`av`]), as Thistle Tea models them.
+
+pub mod ab;
+pub mod av;
+pub mod wsg;
+
+use std::time::{Duration, Instant};
+
+use ahash::{AHashMap, AHashSet};
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::*;
+
+use crate::game::battlegrounds;
+use crate::game::data::items::Body;
+use crate::game::fields::*;
+use crate::game::guid;
+use crate::game::map::creature::Creature;
+use crate::game::map::death::Death;
+use crate::game::map::gameobject::GameObject;
+use crate::game::map::{Map, MapKey};
+use crate::game::registry::Team;
+
+pub use wsg::{
+    CAPTURE_TRIGGERS, CAPTURES_TO_WIN, FLAG_AT, FLAG_STANDS, FLAGS_DROPPED, Flag,
+    SPELL_FLAG_CARRIED, WS_CAPTURES, WS_CAPTURES_MAX, WS_FLAG_STATE,
+};
+
+pub const SPELL_DESERTER: u32 = 26013;
+pub const RESURRECT_EVERY: Duration = Duration::from_secs(30);
+pub const CLOSE_AFTER: Duration = Duration::from_secs(120);
+/// How near a kill a side's players must be to share its honorable kill.
+pub const KILL_SHARE_YARDS: f32 = 74.0;
+
+/// Battlegrounds, by `battleground_template` id.
+pub const BG_AV: u32 = 1;
+pub const BG_WSG: u32 = 2;
+pub const BG_AB: u32 = 3;
+
+/// The events every battleground has: its ghost gates and its doors.
+pub const EVENT_GHOST_GATES: u8 = 253;
+pub const EVENT_DOORS: u8 = 254;
+
+/// The map of the battleground a battlemaster sends players to.
+pub fn map_for_battlemaster(map: &Map, npc: Guid) -> u32 {
+    let bg = map
+        .realm
+        .data
+        .battlemasters
+        .get(&guid::entry(npc))
+        .copied()
+        .unwrap_or(BG_WSG);
+    battlegrounds::map_of(bg)
+}
+
+pub fn side(team: Team) -> usize {
+    match team {
+        Team::Alliance => 0,
+        Team::Horde => 1,
+    }
+}
+
+pub fn other(s: usize) -> usize {
+    1 - s
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Phase {
+    Waiting,
+    Starting { at: Instant },
+    Playing,
+    Ended { winner: usize, at: Instant },
+}
+
+/// A player's part in the match, for the scoreboard.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Score {
+    pub team: usize,
+    pub killing_blows: u32,
+    pub honorable_kills: u32,
+    pub deaths: u32,
+    pub bonus_honor: u32,
+    /// The battleground's own columns: Warsong Gulch's captures and
+    /// returns; Arathi Basin's bases assaulted and defended; Alterac
+    /// Valley's graveyards and towers assaulted and defended, mines
+    /// captured, leaders killed and secondary objectives.
+    pub objectives: [u32; 7],
+}
+
+/// Something the match does later.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Due {
+    /// A node's banner goes up in its new state.
+    Banner { node: u8, revision: u32 },
+    /// An assault on a node succeeds, if still under way.
+    Capture { node: u8, revision: u32 },
+    /// An Alterac mine goes back to its own.
+    MineReclaim { mine: u8, revision: u32 },
+    /// An Alterac captain rallies their side.
+    CaptainBuff(usize),
+    /// A pickup comes back.
+    Buff(usize),
+}
+
+/// A pickup's place: what's there now, and since when it's been gone.
+#[derive(Debug, Clone, Copy)]
+pub struct BuffSlot {
+    pub at: (f32, f32, f32, f32),
+    pub object: Option<Guid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Match {
+    pub bg: u32,
+    pub phase: Phase,
+    /// Each side's score: Warsong Gulch's captures, Arathi Basin's
+    /// resources.
+    pub score: [u32; 2],
+    /// Warsong Gulch: each side's flag.
+    pub flags: [Option<Flag>; 2],
+    pub scores: AHashMap<Guid, Score>,
+    pub resurrect_at: Instant,
+    /// Ghosts waiting for the next wave.
+    pub resurrect_queue: AHashSet<Guid>,
+    /// Each event's state; `None` for off.
+    pub events: AHashMap<u8, Option<u8>>,
+    pub timers: Vec<(Instant, Due)>,
+    pub started_at: Option<Instant>,
+    /// Countdown announcements made: a minute, half a minute.
+    pub countdown: u8,
+    pub bracket: u8,
+    /// A Call to Arms weekend for this battleground.
+    pub weekend: bool,
+    pub ab: Option<ab::Ab>,
+    pub av: Option<av::Av>,
+    pub buffs: Vec<BuffSlot>,
+}
+
+impl Match {
+    pub fn new(bg: u32, now: Instant) -> Self {
+        Self {
+            bg,
+            phase: Phase::Waiting,
+            score: [0, 0],
+            flags: [None, None],
+            scores: AHashMap::new(),
+            resurrect_at: now + RESURRECT_EVERY,
+            resurrect_queue: AHashSet::new(),
+            events: initial_events(bg),
+            timers: Vec::new(),
+            started_at: None,
+            countdown: 0,
+            bracket: 5,
+            weekend: false,
+            ab: (bg == BG_AB).then(ab::Ab::default),
+            av: (bg == BG_AV).then(av::Av::new),
+            buffs: Vec::new(),
+        }
+    }
+
+    pub fn world_states(&self) -> Vec<WorldState> {
+        let states: Vec<(u32, u32)> = match self.bg {
+            BG_AB => ab::world_states(self),
+            BG_AV => av::world_states(self),
+            _ => wsg::world_states(self),
+        };
+        states
+            .into_iter()
+            .map(|(state, value)| WorldState { state, value })
+            .collect()
+    }
+
+    pub fn playing(&self) -> bool {
+        self.phase == Phase::Playing
+    }
+
+    pub fn team_of(&self, g: Guid) -> Option<usize> {
+        self.scores.get(&g).map(|s| s.team)
+    }
+
+    pub fn schedule(&mut self, at: Instant, due: Due) {
+        self.timers.push((at, due));
+    }
+}
+
+/// The events a battleground starts with.
+pub fn initial_events(bg: u32) -> AHashMap<u8, Option<u8>> {
+    let mut e = AHashMap::new();
+    match bg {
+        BG_AB => {
+            for node in 0..5 {
+                e.insert(node, Some(0));
+            }
+        }
+        BG_AV => return av::initial_events(),
+        // Warsong Gulch's flags are the match's own; its spirit guides are
+        // event 2.
+        _ => {
+            e.insert(2, Some(0));
+        }
+    }
+    e.insert(EVENT_GHOST_GATES, Some(0));
+    e.insert(EVENT_DOORS, Some(0));
+    e
+}
+
+/// The Call to Arms holiday of each battleground, by `game_event`.
+fn weekend_event(bg: u32) -> u32 {
+    match bg {
+        BG_AV => 18,
+        BG_WSG => 19,
+        _ => 20,
+    }
+}
+
+/// The match a battleground copy plays.
+pub fn for_map(key: MapKey, now: Instant) -> Option<Match> {
+    if key.instance == 0 {
+        return None;
+    }
+    let bg = battlegrounds::bg_of_map(key.map)?;
+    Some(Match::new(bg, now))
+}
+
+/// Whether a spawn belongs in the match as its events stand: one with no
+/// events always does; one with events while any of them is on.
+pub fn spawn_allowed(map: &Map, creature: bool, spawn: u32) -> bool {
+    let Some(m) = map.battleground.as_ref() else {
+        return true;
+    };
+    let data = &map.realm.data;
+    let bindings = if creature {
+        data.bg_creature_events.get(&spawn)
+    } else {
+        data.bg_object_events.get(&spawn)
+    };
+    match bindings {
+        None => true,
+        Some(b) => b.iter().any(|(e, s)| m.events.get(e) == Some(&Some(*s))),
+    }
+}
+
+/// The events of a spawn.
+pub fn bindings(map: &Map, creature: bool, spawn: Option<u32>) -> Vec<(u8, u8)> {
+    let Some(spawn) = spawn else {
+        return Vec::new();
+    };
+    let data = &map.realm.data;
+    let b = if creature {
+        data.bg_creature_events.get(&spawn)
+    } else {
+        data.bg_object_events.get(&spawn)
+    };
+    b.cloned().unwrap_or_default()
+}
+
+/// `event` goes to `state` (`None`: off): the spawns of the event that
+/// now belong come, and those that don't go.
+pub fn set_event(map: &mut Map, event: u8, state: Option<u8>) {
+    let Some(m) = map.battleground.as_mut() else {
+        return;
+    };
+    m.events.insert(event, state);
+    let data = map.realm.data.clone();
+    if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
+        for s in spawns {
+            let Some(b) = data.bg_creature_events.get(&s.guid) else {
+                continue;
+            };
+            if !b.iter().any(|(e, _)| *e == event) {
+                continue;
+            }
+            let allowed = spawn_allowed(map, true, s.guid);
+            let present: Vec<Guid> = map
+                .creatures
+                .iter()
+                .filter(|(_, c)| c.spawn_guid == Some(s.guid))
+                .map(|(_, c)| c.guid)
+                .collect();
+            if allowed && present.is_empty() {
+                if let Some(c) = Creature::from_spawn(&data, s, &mut rand::rng()) {
+                    map.add_creature(c);
+                }
+            } else if !allowed {
+                for g in present {
+                    map.remove_creature(g);
+                }
+            }
+        }
+    }
+    if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
+        for s in spawns {
+            let Some(b) = data.bg_object_events.get(&s.guid) else {
+                continue;
+            };
+            if !b.iter().any(|(e, _)| *e == event) {
+                continue;
+            }
+            let allowed = spawn_allowed(map, false, s.guid);
+            let present: Vec<Guid> = map
+                .gameobjects
+                .iter()
+                .filter(|(_, g)| g.spawn_guid == Some(s.guid))
+                .map(|(_, g)| g.guid)
+                .collect();
+            if allowed && present.is_empty() {
+                if let Some(t) = data.gameobject_templates.get(&s.entry) {
+                    map.add_gameobject(GameObject::from_spawn(t, s));
+                }
+            } else if !allowed {
+                for g in present {
+                    map.remove_gameobject(g);
+                }
+            }
+        }
+    }
+}
+
+/// An event goes off without taking its spawns away: those alive stay, the
+/// dead don't come back.
+pub fn stop_respawns(map: &mut Map, event: u8) {
+    if let Some(m) = map.battleground.as_mut() {
+        m.events.insert(event, None);
+    }
+}
+
+/// A battleground message to everyone in the match, or one side.
+pub fn announce(map: &Map, s: Option<usize>, text: &str) {
+    let chat_type = match s {
+        Some(0) => SMSG_MESSAGECHAT_ChatType::BgSystemAlliance {
+            sender2: Guid::zero(),
+        },
+        Some(_) => SMSG_MESSAGECHAT_ChatType::BgSystemHorde {
+            sender2: Guid::zero(),
+        },
+        None => SMSG_MESSAGECHAT_ChatType::BgSystemNeutral {
+            sender2: Guid::zero(),
+        },
+    };
+    let Some(frame) = crate::game::conn::encode(&SMSG_MESSAGECHAT {
+        chat_type,
+        language: Language::Universal,
+        message: text.to_owned(),
+        tag: PlayerChatTag::None,
+    }) else {
+        return;
+    };
+    for p in map.players.values() {
+        p.outbound.send_frame(frame.clone());
+    }
+}
+
+/// A broadcast text as a battleground message, its `$1776W`-style world
+/// states filled in.
+pub fn announce_text(map: &Map, s: Option<usize>, id: u32) {
+    let Some(line) = map.realm.data.npc.broadcast_line(id, false) else {
+        return;
+    };
+    let text = fill_world_states(map, line);
+    announce(map, s, &text);
+}
+
+fn fill_world_states(map: &Map, line: &str) -> String {
+    let Some(m) = map.battleground.as_ref() else {
+        return line.to_owned();
+    };
+    let states = m.world_states();
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(i) = rest.find('$') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i + 1..];
+        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && tail[digits.len()..].starts_with('W') {
+            let id: u32 = digits.parse().unwrap_or(0);
+            let v = states.iter().find(|w| w.state == id).map_or(0, |w| w.value);
+            out.push_str(&v.to_string());
+            rest = &tail[digits.len() + 1..];
+        } else {
+            out.push('$');
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+pub fn world_state(map: &Map, state: u32, value: u32) {
+    let Some(frame) = crate::game::conn::encode(&SMSG_UPDATE_WORLD_STATE {
+        state: WorldState { state, value },
+    }) else {
+        return;
+    };
+    for p in map.players.values() {
+        p.outbound.send_frame(frame.clone());
+    }
+}
+
+/// Every world state the match shows, sent again.
+pub fn send_world_states(map: &Map) {
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    for w in m.world_states() {
+        world_state(map, w.state, w.value);
+    }
+}
+
+pub fn play_sound(map: &Map, sound: u32) {
+    let Some(frame) = crate::game::conn::encode(&SMSG_PLAY_SOUND { sound_id: sound }) else {
+        return;
+    };
+    for p in map.players.values() {
+        p.outbound.send_frame(frame.clone());
+    }
+}
+
+/// The players of a side in the match.
+pub fn players_of(map: &Map, s: usize) -> Vec<Guid> {
+    let Some(m) = map.battleground.as_ref() else {
+        return Vec::new();
+    };
+    let mut out: Vec<Guid> = map
+        .players
+        .keys()
+        .copied()
+        .filter(|g| m.team_of(*g) == Some(s))
+        .collect();
+    out.sort();
+    out
+}
+
+/// A spell cast on every player of a side.
+pub fn team_spell(map: &mut Map, s: usize, spell: u32) {
+    for g in players_of(map, s) {
+        crate::game::map::spells::cast_triggered(map, g, spell, Some(g));
+    }
+}
+
+/// Bonus honor for every player of a side.
+pub fn reward_team_honor(map: &mut Map, s: usize, amount: u32) {
+    if amount == 0 {
+        return;
+    }
+    for g in players_of(map, s) {
+        if let Some(m) = map.battleground.as_mut()
+            && let Some(score) = m.scores.get_mut(&g)
+        {
+            score.bonus_honor += amount;
+        }
+        crate::game::map::pvp::bonus_honor(map, g, amount);
+    }
+}
+
+/// Reputation for every player of a side: the battleground's faction.
+pub fn reward_team_reputation(map: &mut Map, s: usize, faction: u32, amount: i32) {
+    for g in players_of(map, s) {
+        crate::game::map::pvp::reputation(map, g, faction, amount);
+    }
+}
+
+/// Kill credit (for a quest) for every player of a side.
+pub fn team_kill_credit(map: &mut Map, s: usize, entry: u32) {
+    for g in players_of(map, s) {
+        crate::game::map::quests::killed(map, g, guid::unit(entry, 0));
+    }
+}
+
+/// A player in the match's map.
+pub fn arrived(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let delay = map.realm.config.bg_start_delay;
+    let key = map.key;
+    let realm = map.realm.clone();
+    let Some(team) = map.players.get(&g).map(|p| side(p.team)) else {
+        return;
+    };
+    let Some(m) = map.battleground.as_mut() else {
+        return;
+    };
+    m.scores.entry(g).or_insert(Score {
+        team,
+        ..Default::default()
+    });
+    m.resurrect_queue.remove(&g);
+    if m.phase == Phase::Waiting {
+        m.phase = Phase::Starting { at: now + delay };
+        if let Some(b) = realm
+            .social
+            .battlegrounds
+            .lock()
+            .matches
+            .get(&key.instance)
+        {
+            m.bracket = b.bracket;
+        }
+        m.weekend = realm.social.events.lock().contains(&weekend_event(m.bg));
+    }
+    let states = m.world_states();
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    p.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_PVP,
+        true,
+    );
+    p.outbound.send(&SMSG_INIT_WORLD_STATES {
+        map: crate::game::map::movement::map_enum(key.map),
+        area: Area::try_from(p.zone).unwrap_or_default(),
+        states,
+    });
+    if let Some(frame) = crate::game::conn::encode(&SMSG_BATTLEGROUND_PLAYER_JOINED { player: g }) {
+        for (o, other) in map.players.iter() {
+            if *o != g {
+                other.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+}
+
+/// A player leaving the match's map: a flag they carry goes home.
+pub fn departing(map: &mut Map, g: Guid) {
+    if map.battleground.is_none() {
+        return;
+    }
+    wsg::departing(map, g);
+    if let Some(m) = map.battleground.as_mut() {
+        m.resurrect_queue.remove(&g);
+    }
+    if let Some(frame) = crate::game::conn::encode(&SMSG_BATTLEGROUND_PLAYER_LEFT { guid: g }) {
+        for (o, other) in map.players.iter() {
+            if *o != g {
+                other.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+}
+
+/// The match's clock: the countdown and the start, its timers, the
+/// resurrection waves, and the close.
+pub fn update(map: &mut Map) {
+    let now = map.now;
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    match m.phase {
+        Phase::Starting { at } => {
+            let left = at.saturating_duration_since(now);
+            countdown(map, left);
+            if at <= now {
+                start(map);
+            }
+        }
+        Phase::Ended { at, .. } if now.duration_since(at) >= CLOSE_AFTER => {
+            let everyone: Vec<Guid> = map.players.keys().copied().collect();
+            for g in everyone {
+                battlegrounds::leave(map, g);
+            }
+        }
+        _ => {}
+    }
+    run_timers(map);
+    if map.battleground.as_ref().is_some_and(|m| m.playing()) {
+        match map.battleground.as_ref().map(|m| m.bg) {
+            Some(BG_AB) => ab::update(map),
+            Some(BG_AV) => av::update(map),
+            _ => {}
+        }
+        buffs(map);
+    }
+    resurrect_wave(map);
+}
+
+/// The countdown's announcements, a minute and half a minute before.
+fn countdown(map: &mut Map, left: Duration) {
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    let (minute, half) = match m.bg {
+        BG_AB => (10477, 10478),
+        BG_AV => (10638, 10639),
+        _ => return,
+    };
+    let done = m.countdown;
+    let say = if left <= Duration::from_secs(30) && done < 2 {
+        Some((half, 2))
+    } else if left <= Duration::from_secs(60) && left > Duration::from_secs(30) && done < 1 {
+        Some((minute, 1))
+    } else {
+        None
+    };
+    if let Some((text, step)) = say {
+        // A start too soon for either is announced only when it comes.
+        if left > Duration::ZERO {
+            announce_text(map, None, text);
+        }
+        if let Some(m) = map.battleground.as_mut() {
+            m.countdown = step;
+        }
+    }
+}
+
+fn run_timers(map: &mut Map) {
+    let now = map.now;
+    let due: Vec<Due> = {
+        let Some(m) = map.battleground.as_mut() else {
+            return;
+        };
+        if m.timers.iter().all(|(at, _)| *at > now) {
+            return;
+        }
+        let (due, later): (Vec<_>, Vec<_>) = m.timers.drain(..).partition(|(at, _)| *at <= now);
+        m.timers = later;
+        due.into_iter().map(|(_, d)| d).collect()
+    };
+    for d in due {
+        if !map.battleground.as_ref().is_some_and(|m| m.playing()) {
+            continue;
+        }
+        match d {
+            Due::Buff(slot) => spawn_buff(map, slot),
+            _ => match map.battleground.as_ref().map(|m| m.bg) {
+                Some(BG_AB) => ab::due(map, d),
+                Some(BG_AV) => av::due(map, d),
+                _ => {}
+            },
+        }
+    }
+}
+
+/// The doors open and the battle begins.
+fn start(map: &mut Map) {
+    let now = map.now;
+    // The doors of event 254 open; with none, every door does.
+    let doors: Vec<Guid> = map
+        .gameobjects
+        .iter()
+        .filter(|(_, g)| {
+            let b = bindings(map, false, g.spawn_guid);
+            if b.is_empty() {
+                g.kind == 0
+            } else {
+                b.iter().any(|(e, _)| *e == EVENT_DOORS)
+            }
+        })
+        .map(|(_, g)| g.guid)
+        .collect();
+    for d in doors {
+        if let Some(g) = map.gameobject_mut(d) {
+            g.fields.set_u32(GAMEOBJECT_STATE, 0);
+        }
+    }
+    set_event(map, EVENT_GHOST_GATES, None);
+    if let Some(m) = map.battleground.as_mut() {
+        m.phase = Phase::Playing;
+        m.started_at = Some(now);
+    }
+    match map.battleground.as_ref().map(|m| m.bg) {
+        Some(BG_AB) => ab::start(map),
+        Some(BG_AV) => av::start(map),
+        _ => wsg::start(map),
+    }
+    send_world_states(map);
+}
+
+/// Resurrection waves: every 30 seconds the dead waiting rise at their
+/// graveyard.
+fn resurrect_wave(map: &mut Map) {
+    let now = map.now;
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    if m.resurrect_at > now || matches!(m.phase, Phase::Ended { .. }) {
+        return;
+    }
+    let queued = m.resurrect_queue.clone();
+    if let Some(m) = map.battleground.as_mut() {
+        m.resurrect_at = now + RESURRECT_EVERY;
+        m.resurrect_queue.clear();
+    }
+    // Ghosts wait at a spirit guide, so every ghost rises; those queued
+    // by the spirit healer too, if dead.
+    let mut ghosts: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| matches!(p.death, Death::Ghost { .. }) || (queued.contains(&p.guid) && p.death != Death::Alive))
+        .map(|p| p.guid)
+        .collect();
+    ghosts.sort();
+    for g in ghosts {
+        let Some((at, o)) = graveyard(map, g) else {
+            continue;
+        };
+        crate::game::map::death::resurrect(map, g, 1.0);
+        map.teleport(g, map.key, at, o);
+    }
+}
+
+/// A player fell in the match: their death, the killing blow, and the
+/// honorable kill for the killer's side near them; a flag they carried
+/// drops.
+pub fn died(map: &mut Map, g: Guid, killer: Guid) {
+    let pos = map.position_of(g);
+    let Some(m) = map.battleground.as_mut() else {
+        return;
+    };
+    let victim_team = m.team_of(g);
+    m.scores.entry(g).or_default().deaths += 1;
+    if guid::is_player(killer) && killer != g {
+        let killer_team = m.team_of(killer);
+        if let Some(s) = m.scores.get_mut(&killer) {
+            s.killing_blows += 1;
+        }
+        if let (Some(kt), Some(vt), Some(at)) = (killer_team, victim_team, pos)
+            && kt != vt
+        {
+            let near: Vec<Guid> = map
+                .players
+                .values()
+                .filter(|p| {
+                    p.death == Death::Alive
+                        && (p.guid == killer
+                            || crate::game::map::combat::dist(p.position(), at) <= KILL_SHARE_YARDS)
+                })
+                .map(|p| p.guid)
+                .collect();
+            if let Some(m) = map.battleground.as_mut() {
+                for n in near {
+                    if let Some(s) = m.scores.get_mut(&n)
+                        && s.team == kt
+                    {
+                        s.honorable_kills += 1;
+                    }
+                }
+            }
+        }
+    }
+    if map.battleground.as_ref().is_some_and(|m| m.bg == BG_WSG) {
+        wsg::died(map, g);
+    }
+}
+
+/// A creature fell in the match.
+pub fn creature_died(map: &mut Map, creature: Guid, killer: Guid) {
+    if map.battleground.as_ref().is_some_and(|m| m.bg == BG_AV) {
+        av::creature_died(map, creature, killer);
+    }
+}
+
+/// An area trigger: Warsong Gulch's captures, and each battleground's way
+/// out.
+pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    let team = m.team_of(g);
+    let exit = matches!(
+        (m.bg, trigger, team),
+        (BG_AB, 3948, Some(0))
+            | (BG_AB, 3949, Some(1))
+            | (BG_AV, 2608, Some(0))
+            | (BG_AV, 2606, Some(1))
+    );
+    if exit {
+        battlegrounds::leave(map, g);
+        return;
+    }
+    if m.bg == BG_WSG {
+        wsg::area_trigger(map, g, trigger);
+    }
+}
+
+/// `CMSG_GAMEOBJ_USE` in the match: a flag or a banner. Returns whether it
+/// was one.
+pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
+    let Some(m) = map.battleground.as_ref() else {
+        return false;
+    };
+    let near = match (map.players.get(&g), map.gameobject(object)) {
+        (Some(p), Some(o)) => crate::game::map::combat::dist(p.position(), o.position) <= 10.0,
+        _ => false,
+    };
+    let alive = map.players.get(&g).is_some_and(|p| p.death == Death::Alive);
+    match m.bg {
+        BG_AB => near && alive && ab::use_object(map, g, object),
+        BG_AV => near && alive && av::use_object(map, g, object),
+        _ => wsg::use_object(map, g, object),
+    }
+}
+
+/// Where a ghost goes in a match: its side's start before the battle,
+/// then the battleground's graveyard for it.
+pub fn graveyard(map: &Map, g: Guid) -> Option<(Vector3d, f32)> {
+    let m = map.battleground.as_ref()?;
+    let team = map.players.get(&g)?.team;
+    if matches!(m.phase, Phase::Waiting | Phase::Starting { .. }) {
+        return Some(battlegrounds::start_of(&map.realm, m.bg, team));
+    }
+    let pos = map.position_of(g)?;
+    let near = match m.bg {
+        BG_AB => ab::graveyard(map, side(team), pos),
+        BG_AV => av::graveyard(map, side(team), pos),
+        _ => None,
+    };
+    near.or_else(|| team_graveyard(map, m.bg, side(team)))
+        .or_else(|| Some(battlegrounds::start_of(&map.realm, m.bg, team)))
+}
+
+/// A side's own graveyard in a battleground (`WorldSafeLocs`).
+pub fn team_graveyard(map: &Map, bg: u32, s: usize) -> Option<(Vector3d, f32)> {
+    let id = match (bg, s) {
+        (BG_AV, 0) => 611,
+        (BG_AV, _) => 610,
+        (BG_WSG, 0) => 771,
+        (BG_WSG, _) => 772,
+        (BG_AB, 0) => 898,
+        (BG_AB, _) => 899,
+        _ => return None,
+    };
+    safe_loc(map, id)
+}
+
+pub fn safe_loc(map: &Map, id: u32) -> Option<(Vector3d, f32)> {
+    map.realm
+        .data
+        .safe_locs
+        .get(&id)
+        .map(|&(_, x, y, z)| (Vector3d { x, y, z }, 0.0))
+}
+
+/// The nearest of `ids` to `pos`.
+pub fn nearest_safe_loc(map: &Map, ids: &[u32], pos: Vector3d) -> Option<(Vector3d, f32)> {
+    ids.iter()
+        .filter_map(|id| safe_loc(map, *id))
+        .min_by(|a, b| {
+            let d = |v: Vector3d| (v.x - pos.x).powi(2) + (v.y - pos.y).powi(2);
+            d(a.0).total_cmp(&d(b.0))
+        })
+}
+
+/// `MSG_PVP_LOG_DATA`: the scoreboard.
+pub fn scoreboard(map: &Map, g: Guid) {
+    let Some(frame) = scoreboard_frame(map) else {
+        return;
+    };
+    if let Some(p) = map.players.get(&g) {
+        p.outbound.send_frame(frame);
+    }
+}
+
+/// The scoreboard to everyone in the match.
+pub fn scoreboard_all(map: &Map) {
+    let Some(frame) = scoreboard_frame(map) else {
+        return;
+    };
+    for p in map.players.values() {
+        p.outbound.send_frame(frame.clone());
+    }
+}
+
+fn scoreboard_frame(map: &Map) -> Option<std::sync::Arc<[u8]>> {
+    let m = map.battleground.as_ref()?;
+    let columns = match m.bg {
+        BG_AV => 7,
+        _ => 2,
+    };
+    let status = match m.phase {
+        Phase::Ended { winner, .. } => MSG_PVP_LOG_DATA_Server_BattlegroundEndStatus::Ended {
+            winner: if winner == 0 {
+                BattlegroundWinner::Alliance
+            } else {
+                BattlegroundWinner::Horde
+            },
+        },
+        _ => MSG_PVP_LOG_DATA_Server_BattlegroundEndStatus::NotEnded,
+    };
+    let mut rows: Vec<(&Guid, &Score)> = m.scores.iter().collect();
+    rows.sort_by_key(|(g, _)| **g);
+    let honor = map.realm.social.honor.lock();
+    let players = rows
+        .into_iter()
+        .map(|(g, s)| BattlegroundPlayer {
+            player: *g,
+            rank: PvpRank::try_from(honor.rank(guid::counter(*g))).unwrap_or(PvpRank::NoRank),
+            killing_blows: s.killing_blows,
+            honorable_kills: s.honorable_kills,
+            deaths: s.deaths,
+            bonus_honor: s.bonus_honor,
+            fields: s.objectives[..columns].to_vec(),
+        })
+        .collect();
+    drop(honor);
+    crate::game::conn::encode(&MSG_PVP_LOG_DATA_Server { status, players })
+}
+
+/// The match is won: the end's announcement, the win and loss spells, the
+/// scoreboard, and two minutes until everyone goes home.
+pub fn finish(map: &mut Map, winner: usize) {
+    let now = map.now;
+    let bg = map.battleground.as_ref().map_or(BG_WSG, |m| m.bg);
+    if map
+        .battleground
+        .as_ref()
+        .is_none_or(|m| matches!(m.phase, Phase::Ended { .. }))
+    {
+        return;
+    }
+    if let Some(m) = map.battleground.as_mut() {
+        m.phase = Phase::Ended { winner, at: now };
+        m.timers.clear();
+        m.resurrect_queue.clear();
+    }
+    battlegrounds::ended(&map.realm, map.key);
+    let template = map.realm.data.battlegrounds.get(&bg).cloned();
+    let everyone: Vec<(Guid, usize)> = map
+        .players
+        .values()
+        .map(|p| (p.guid, side(p.team)))
+        .collect();
+    for (g, s) in &everyone {
+        if let Some(t) = &template {
+            let spell = if *s == winner {
+                t.win_spells[*s]
+            } else {
+                t.lose_spells[*s]
+            };
+            if spell != 0 {
+                crate::game::map::spells::cast_triggered(map, *g, spell, Some(*g));
+            }
+        }
+    }
+    clear_buffs(map);
+    scoreboard_all(map);
+}
+
+/// Arathi Basin's pickups: speed, restoration and berserking, one at each
+/// place, back three minutes after it's taken.
+pub const BUFF_ENTRIES: [u32; 3] = [179871, 179904, 179905];
+pub const BUFF_RESPAWN: Duration = Duration::from_secs(180);
+const BUFF_RADIUS: f32 = 3.0;
+
+pub fn start_buffs(map: &mut Map, places: &[(f32, f32, f32, f32)]) {
+    if let Some(m) = map.battleground.as_mut() {
+        m.buffs = places
+            .iter()
+            .map(|at| BuffSlot {
+                at: *at,
+                object: None,
+            })
+            .collect();
+    }
+    for i in 0..places.len() {
+        spawn_buff(map, i);
+    }
+}
+
+fn spawn_buff(map: &mut Map, slot: usize) {
+    use rand::RngExt;
+    let Some(at) = map
+        .battleground
+        .as_ref()
+        .and_then(|m| m.buffs.get(slot))
+        .filter(|b| b.object.is_none())
+        .map(|b| b.at)
+    else {
+        return;
+    };
+    let entry = BUFF_ENTRIES[rand::rng().random_range(0..BUFF_ENTRIES.len())];
+    let data = map.realm.data.clone();
+    let Some(t) = data.gameobject_templates.get(&entry) else {
+        return;
+    };
+    let counter = map.next_creature_counter;
+    map.next_creature_counter += 1;
+    let mut go = GameObject::from_spawn(
+        t,
+        &crate::game::data::GameObjectSpawn {
+            guid: counter | 0x80_0000,
+            entry,
+            map: map.key.map,
+            x: at.0,
+            y: at.1,
+            z: at.2,
+            orientation: at.3,
+            state: 1,
+            ..Default::default()
+        },
+    );
+    go.spawn_guid = None;
+    let g = map.add_gameobject(go);
+    if let Some(m) = map.battleground.as_mut()
+        && let Some(b) = m.buffs.get_mut(slot)
+    {
+        b.object = Some(g);
+    }
+}
+
+/// A living player on a pickup takes it: its spell, and it's gone for a
+/// while.
+fn buffs(map: &mut Map) {
+    let now = map.now;
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    if m.buffs.is_empty() {
+        return;
+    }
+    let slots: Vec<(usize, Guid, Vector3d)> = m
+        .buffs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| {
+            let g = b.object?;
+            map.gameobject(g).map(|o| (i, g, o.position))
+        })
+        .collect();
+    for (i, object, at) in slots {
+        let taker = map
+            .players
+            .values()
+            .filter(|p| p.death == Death::Alive)
+            .find(|p| crate::game::map::combat::dist(p.position(), at) <= BUFF_RADIUS)
+            .map(|p| p.guid);
+        let Some(taker) = taker else {
+            continue;
+        };
+        let spell = map
+            .gameobject(object)
+            .and_then(|o| map.realm.data.gameobject_templates.get(&o.entry))
+            .map(|t| t.data[3])
+            .unwrap_or(0);
+        map.remove_gameobject(object);
+        if let Some(m) = map.battleground.as_mut() {
+            m.buffs[i].object = None;
+            m.schedule(now + BUFF_RESPAWN, Due::Buff(i));
+        }
+        if spell != 0 {
+            crate::game::map::spells::cast_triggered(map, taker, spell, Some(taker));
+        }
+    }
+}
+
+fn clear_buffs(map: &mut Map) {
+    let objects: Vec<Guid> = map
+        .battleground
+        .as_mut()
+        .map(|m| m.buffs.drain(..).filter_map(|b| b.object).collect())
+        .unwrap_or_default();
+    for g in objects {
+        map.remove_gameobject(g);
+    }
+}
+
+/// `CMSG_AREA_SPIRIT_HEALER_QUEUE`: a ghost waits for the next wave.
+pub fn queue_resurrection(map: &mut Map, g: Guid) {
+    let dead = map.players.get(&g).is_some_and(|p| p.death != Death::Alive);
+    if let Some(m) = map.battleground.as_mut()
+        && dead
+        && m.scores.contains_key(&g)
+    {
+        m.resurrect_queue.insert(g);
+    }
+}
+
+/// `MSG_BATTLEGROUND_PLAYER_POSITIONS`: where the flag carriers are.
+pub fn positions(map: &Map, g: Guid) {
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    let carriers: Vec<Guid> = m
+        .flags
+        .iter()
+        .filter_map(|f| match f {
+            Some(Flag::Carried(c)) => Some(*c),
+            _ => None,
+        })
+        .collect();
+    let mut b = Body::default();
+    b.u32(0);
+    let shown: Vec<(Guid, Vector3d)> = carriers
+        .iter()
+        .filter_map(|c| map.players.get(c).map(|p| (*c, p.position())))
+        .collect();
+    b.u8(shown.len() as u8);
+    for (c, pos) in shown {
+        b.u64(c.guid()).f32(pos.x).f32(pos.y);
+    }
+    if let Some(p) = map.players.get(&g) {
+        p.outbound
+            .send_frame(b.frame(MSG_BATTLEGROUND_PLAYER_POSITIONS));
+    }
+}
+
+pub const MSG_BATTLEGROUND_PLAYER_POSITIONS: u16 = 0x2E9;
+
+/// A node's state, as both Arathi Basin and Alterac Valley keep it: who
+/// owns it, who is taking it, until when, and a revision that tells stale
+/// timers from current ones.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ControlPoint {
+    pub owner: Option<usize>,
+    pub assaulting: Option<usize>,
+    pub capture_at: Option<Instant>,
+    pub revision: u32,
+}
+
+/// What an assault did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Assault {
+    Unchanged,
+    /// Taken from its owner, or claimed from neutral: captured in time.
+    Assaulted,
+    /// Its owner took it back.
+    Defended,
+}
+
+impl ControlPoint {
+    pub fn assault(&mut self, team: usize, now: Instant, capture: Duration) -> Assault {
+        if self.assaulting == Some(team) || (self.owner == Some(team) && self.assaulting.is_none()) {
+            return Assault::Unchanged;
+        }
+        self.revision += 1;
+        if self.owner == Some(team) {
+            self.assaulting = None;
+            self.capture_at = None;
+            return Assault::Defended;
+        }
+        self.assaulting = Some(team);
+        self.capture_at = Some(now + capture);
+        Assault::Assaulted
+    }
+
+    /// The assault's time is up: the assaulter owns it.
+    pub fn capture(&mut self, revision: u32, now: Instant) -> bool {
+        match (self.assaulting, self.capture_at) {
+            (Some(team), Some(at)) if self.revision == revision && now >= at => {
+                self.owner = Some(team);
+                self.assaulting = None;
+                self.capture_at = None;
+                self.revision += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn controlled_by(&self) -> Option<usize> {
+        if self.assaulting.is_some() {
+            None
+        } else {
+            self.owner
+        }
+    }
+}

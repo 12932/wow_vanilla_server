@@ -1092,6 +1092,30 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         data.battlemasters.insert(entry, bg);
     }
+    for (guid, event) in rows(db, "SELECT * FROM creature_battleground", |c| {
+        (c.u32("guid"), (c.u8("event1"), c.u8("event2")))
+    }) {
+        data.bg_creature_events.entry(guid).or_default().push(event);
+    }
+    for (guid, event) in rows(db, "SELECT * FROM gameobject_battleground", |c| {
+        (c.u32("guid"), (c.u8("event1"), c.u8("event2")))
+    }) {
+        data.bg_object_events.entry(guid).or_default().push(event);
+    }
+    for e in rows(db, "SELECT * FROM areatrigger_bg_entrance", |c| BgEntrance {
+        trigger: c.u32("id"),
+        bg: c.u32("bg_template"),
+        team: c.u32("team"),
+        exit_map: c.u32("exit_map"),
+        exit: (
+            c.f32("exit_position_x"),
+            c.f32("exit_position_y"),
+            c.f32("exit_position_z"),
+            c.f32("exit_orientation"),
+        ),
+    }) {
+        data.bg_entrances.insert(e.trigger, e);
+    }
     let parse_time = |s: &str| {
         chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
             .ok()

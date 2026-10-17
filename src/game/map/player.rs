@@ -218,6 +218,9 @@ pub struct Player {
     pub chat_burst: u32,
     pub muted_until: Option<Instant>,
     pub derived: crate::game::map::derive::Derived,
+    pub pvp: crate::game::map::pvp::PvpState,
+    /// Damage from other players lately, to share a kill's honor.
+    pub honor_damage: crate::game::map::pvp::DamageHistory,
     /// The gear changed: its auras want bringing in line.
     pub gear_dirty: bool,
 }
@@ -289,6 +292,8 @@ impl Player {
             chat_burst: 0,
             muted_until: None,
             derived: Default::default(),
+            pvp: Default::default(),
+            honor_damage: Default::default(),
             gear_dirty: true,
             row,
         };
