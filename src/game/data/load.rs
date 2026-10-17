@@ -123,6 +123,7 @@ pub fn load(dir: &Path) -> GameData {
             load_npcs(&db, dbc.as_ref(), &mut data);
             load_spells(&db, dbc.as_ref(), &mut data);
             super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
+            load_pets(&db, dbc.as_ref(), &mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -1745,6 +1746,147 @@ fn load_players(db: &Connection, data: &mut GameData) {
     }) {
         data.xp_for_level.insert(level, xp);
     }
+}
+
+/// What pets are made of.
+fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
+    use super::pets::*;
+    let pets = &mut data.pets;
+    for (key, level) in rows(db, "SELECT * FROM pet_levelstats", |c| {
+        (
+            (c.u32("entry"), c.u8("level")),
+            PetLevel {
+                health: c.u32("health"),
+                mana: c.u32("mana"),
+                armor: c.u32("armor"),
+                damage: (c.f32("dmg_min"), c.f32("dmg_max")),
+                stats: [
+                    c.u32("strength"),
+                    c.u32("agility"),
+                    c.u32("stamina"),
+                    c.u32("intellect"),
+                    c.u32("spirit"),
+                ],
+            },
+        )
+    }) {
+        pets.levels.insert(key, level);
+    }
+    for (entry, word, half) in rows(db, "SELECT * FROM pet_name_generation", |c| {
+        (c.u32("entry"), c.string("word"), c.u8("half"))
+    }) {
+        pets.names.entry(entry).or_default().push((word, half));
+    }
+    for (entry, spells) in rows(
+        db,
+        "SELECT * FROM petcreateinfo_spell WHERE patch_min <= 10 AND patch_max >= 10",
+        |c| {
+            (
+                c.u32("entry"),
+                (1..=4)
+                    .map(|i| c.u32(&format!("spell{i}")))
+                    .filter(|s| *s != 0)
+                    .collect::<Vec<u32>>(),
+            )
+        },
+    ) {
+        pets.create_spells.insert(entry, spells);
+    }
+    for (list, build, spells) in rows(db, "SELECT * FROM pet_spell_data WHERE build <= 5875", |c| {
+        (
+            c.u32("entry"),
+            c.i64("build"),
+            (1..=4)
+                .map(|i| c.u32(&format!("spell_id{i}")))
+                .filter(|s| *s != 0)
+                .collect::<Vec<u32>>(),
+        )
+    }) {
+        let _ = build;
+        pets.spell_lists.insert(list, spells);
+    }
+    for (entry, list) in rows(
+        db,
+        "SELECT entry, pet_spell_list_id FROM creature_template WHERE pet_spell_list_id > 0",
+        |c| (c.u32("entry"), c.u32("pet_spell_list_id")),
+    ) {
+        pets.creature_spell_list.insert(entry, list);
+    }
+    for (entry, spell) in rows(
+        db,
+        "SELECT entry, totem_spell_id FROM creature_template WHERE totem_spell_id > 0",
+        |c| (c.u32("entry"), c.u32("totem_spell_id")),
+    ) {
+        pets.totem_spells.insert(entry, spell);
+    }
+    pets.owner_auras = rows(db, "SELECT * FROM spell_pet_auras", |c| {
+        (c.u32("spell"), c.u32("pet"), c.u32("aura"))
+    });
+    // The Grimoires: each teaches a demon a spell.
+    let mut grimoires: Vec<u32> = data
+        .items
+        .values()
+        .filter(|t| t.name.starts_with("Grimoire of "))
+        .filter_map(|t| t.spells.iter().find(|s| s.id != 0).map(|s| s.id))
+        .filter_map(|teach| {
+            data.spells.get(teach).and_then(|s| {
+                s.effects
+                    .iter()
+                    .find(|e| matches!(e.effect, 36 | 57) && e.trigger_spell != 0)
+                    .map(|e| e.trigger_spell)
+            })
+        })
+        .collect();
+    grimoires.sort_unstable();
+    grimoires.dedup();
+    pets.grimoire_spells = grimoires;
+    for t in data.spells.spells.values() {
+        // Grimoires' `LEARN_PET_SPELL`, and hunters' `LEARN_SPELL` at the
+        // pet.
+        let teaches = |e: &&super::spells::SpellEffect| {
+            e.trigger_spell != 0 && (e.effect == 57 || (e.effect == 36 && e.target_a == 5))
+        };
+        for e in t.effects.iter().filter(teaches) {
+            pets.teaching.insert(e.trigger_spell, t.id);
+        }
+    }
+    let Some(dbc) = dbc else {
+        return;
+    };
+    // The export's CreatureFamily columns run one off: its "pet_food_mask"
+    // and "pet_talent_type" hold the two skill lines, and its "category"
+    // the food mask.
+    for f in rows(dbc, "SELECT * FROM CreatureFamily", |c| Family {
+        id: c.u32("id"),
+        name: c.string("name_en_gb"),
+        skills: [c.u32("pet_food_mask"), c.u32("pet_talent_type")],
+        food_mask: c.u32("category"),
+        min_scale: c.f32("min_scale"),
+        max_scale: c.f32("max_scale"),
+    }) {
+        pets.families.insert(f.id, f);
+    }
+    let mut skills: Vec<u32> = pets.families.values().flat_map(|f| f.skills).collect();
+    skills.extend([261, 270]);
+    skills.retain(|s| *s != 0);
+    skills.sort_unstable();
+    skills.dedup();
+    for a in rows(dbc, "SELECT * FROM SkillLineAbility", |c| PetAbility {
+        spell: c.u32("spell"),
+        skill: c.u32("skill_line"),
+        acquire: c.u32("acquire_method"),
+        superseded_by: c.u32("superseded_by"),
+        cost: c.u32("num_skills_up"),
+    }) {
+        if skills.contains(&a.skill) {
+            pets.abilities.entry(a.skill).or_default().push(a);
+        }
+    }
+    let mut prices = rows(dbc, "SELECT * FROM StableSlotPrices", |c| {
+        (c.u32("id"), c.u32("cost"))
+    });
+    prices.sort_unstable();
+    pets.stable_prices = prices.into_iter().map(|(_, c)| c).collect();
 }
 
 #[cfg(test)]

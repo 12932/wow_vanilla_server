@@ -20,6 +20,8 @@ mod tests;
 mod tests_combat;
 #[cfg(test)]
 mod tests_loot;
+#[cfg(test)]
+mod tests_pets;
 pub mod transports;
 pub mod update;
 pub mod weather;

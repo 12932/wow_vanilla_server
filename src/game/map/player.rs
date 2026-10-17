@@ -224,6 +224,8 @@ pub struct Player {
     pub chat_burst: u32,
     pub muted_until: Option<Instant>,
     pub derived: crate::game::map::derive::Derived,
+    /// The pet, totems, guardians and charmed unit the player controls.
+    pub owned: crate::game::map::pets::Owned,
     /// The gear changed: its auras want bringing in line.
     pub gear_dirty: bool,
 }
@@ -295,6 +297,7 @@ impl Player {
             chat_burst: 0,
             muted_until: None,
             derived: Default::default(),
+            owned: Default::default(),
             gear_dirty: true,
             row,
         };

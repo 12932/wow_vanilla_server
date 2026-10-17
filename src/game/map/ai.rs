@@ -52,6 +52,9 @@ pub fn aggro_radius(detection: f32, creature_level: u32, player_level: u32) -> f
 
 /// `creature` was attacked by `attacker`: it fights back.
 pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
+    if crate::game::map::pets::on_attacked(map, creature, attacker) {
+        return;
+    }
     let now = map.now;
     let Some(c) = map.creature_mut(creature) else {
         return;
@@ -344,6 +347,7 @@ pub fn update_creatures(map: &mut Map) {
     let keys: Vec<usize> = map
         .creatures
         .iter()
+        .filter(|(_, c)| c.pet.is_none())
         .filter(|(_, c)| c.alive() && (!c.observers.is_empty() || c.combat.attacking || c.evading))
         .map(|(k, _)| k)
         .collect();
