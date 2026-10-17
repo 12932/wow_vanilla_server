@@ -304,6 +304,23 @@ pub(super) async fn cast_of(
     .await
 }
 
+/// A cast of `spell` by `caster` that `c` sees begin within `within` (a
+/// spell with a cast time): the unit it is aimed at (zero for none).
+pub(super) async fn cast_start_of(
+    c: &mut Client,
+    caster: Guid,
+    spell: u32,
+    within: Duration,
+) -> Option<Guid> {
+    c.gets(within, move |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == caster && s.spell == spell => {
+            Some(aimed_at(&s.targets))
+        }
+        _ => None,
+    })
+    .await
+}
+
 /// The casts by `caster` that `c` sees go over `within`: each spell and
 /// the unit it was aimed at.
 pub(super) async fn casts_by(c: &mut Client, caster: Guid, within: Duration) -> Vec<(u32, Guid)> {
@@ -1237,8 +1254,9 @@ async fn ancient_core_hound_bite(realm: &Arc<Realm>) {
     c.clear();
     map.query(move |m| {
         let now = m.now;
-        if let Some(cr) = m.creature_mut(hound) {
-            cr.caster.casting = Some(crate::game::map::spells::Casting {
+        // Through the map's caster, which notes a cast begun.
+        if let Some(cr) = m.caster_mut(hound) {
+            cr.casting = Some(crate::game::map::spells::Casting {
                 spell: 19630,
                 targets: Default::default(),
                 ends: now + Duration::from_secs(3),

@@ -120,6 +120,8 @@ mod tests_p3_scripts;
 #[cfg(test)]
 mod tests_p3_scripts_mc;
 #[cfg(test)]
+mod tests_p3_scripts_raids;
+#[cfg(test)]
 mod tests_p3_world_bg;
 #[cfg(test)]
 mod tests_p3_world_env;
