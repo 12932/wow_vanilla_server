@@ -1342,3 +1342,97 @@ async fn a_slow_takes_a_weaker_ones_place_never_a_strongers() {
         "Frostbolt hurts, its chill passed over"
     );
 }
+
+const CAT_FORM: u32 = 768;
+const BEAR_FORM: u32 = 5487;
+const TRAVEL_FORM: u32 = 783;
+const AQUATIC_FORM: u32 = 1066;
+const MOONKIN_FORM: u32 = 24858;
+const DIRE_BEAR_FORM: u32 = 9634;
+const GHOST_WOLF: u32 = 2645;
+const BATTLE_STANCE: u32 = 2457;
+const SHADOWFORM: u32 = 15473;
+const WATER_WALKING: u32 = 546;
+const DAZED: u32 = 1604;
+
+fn held_down(m: &Map, g: Guid) -> (bool, bool) {
+    auras::auras(m, g).map_or((false, false), |a| {
+        (
+            a.has(auras::AURA_MOD_ROOT),
+            a.has(auras::AURA_MOD_DECREASE_SPEED),
+        )
+    })
+}
+
+#[tokio::test]
+async fn a_shapeshift_frees_from_roots_and_snares_and_a_stance_doesnt() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, druid, map) = player(&realm, "P3A23", "Shiftone", Race::NightElf, Class::Druid).await;
+    let out = map
+        .query(move |m| {
+            ready(m, druid, 60, &[]);
+            let kobold = dummy(m, druid, 60, 5.0);
+            let held = |m: &mut Map, form: u32| {
+                clear(m, druid);
+                apply(m, kobold, druid, ENTANGLING_ROOTS);
+                spells::cast_triggered(m, kobold, FROSTBOLT, Some(druid));
+                apply(m, druid, druid, WATER_WALKING);
+                let before = held_down(m, druid);
+                spells::cast_triggered(m, druid, form, None);
+                (before, held_down(m, druid), has(m, druid, WATER_WALKING))
+            };
+            let forms: Vec<_> = [
+                CAT_FORM,
+                BEAR_FORM,
+                TRAVEL_FORM,
+                AQUATIC_FORM,
+                MOONKIN_FORM,
+                DIRE_BEAR_FORM,
+            ]
+            .into_iter()
+            .map(|f| held(m, f))
+            .collect();
+            let stances: Vec<_> = [GHOST_WOLF, BATTLE_STANCE, SHADOWFORM, STEALTH]
+                .into_iter()
+                .map(|f| held(m, f))
+                .collect();
+            // Rooted in cat form, the form again: still rooted.
+            clear(m, druid);
+            spells::cast_triggered(m, druid, CAT_FORM, None);
+            apply(m, kobold, druid, ENTANGLING_ROOTS);
+            spells::cast_triggered(m, druid, CAT_FORM, None);
+            let again = has(m, druid, ENTANGLING_ROOTS);
+            // A daze isn't one a form frees from.
+            clear(m, druid);
+            apply(m, kobold, druid, DAZED);
+            spells::cast_triggered(m, druid, BEAR_FORM, None);
+            let dazed = has(m, druid, DAZED);
+            (forms, stances, again, dazed)
+        })
+        .await
+        .unwrap();
+    let (forms, stances, again, dazed) = out;
+    // Moonkin's a stance to Water Walking, not to a root.
+    for (i, f) in forms.iter().enumerate() {
+        let walking = i == 4;
+        assert_eq!(
+            *f,
+            ((true, true), (false, false), walking),
+            "form {i} frees"
+        );
+    }
+    // Ghost Wolf's a shape to Water Walking, not to a root.
+    for (i, s) in stances.iter().enumerate() {
+        let walking = i != 0;
+        assert_eq!(
+            *s,
+            ((true, true), (true, true), walking),
+            "stance {i} keeps them"
+        );
+    }
+    assert!(again, "the form again keeps a root had in it");
+    assert!(dazed, "a daze stays");
+}
