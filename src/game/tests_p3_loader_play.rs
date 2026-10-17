@@ -1313,3 +1313,70 @@ async fn real_shields_food_and_periodic_cadence() {
         assert_eq!(ticks, vec![(three, three, 0)], "{id} starts over");
     }
 }
+
+/// How a spell put on after another stands with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Then {
+    Replaces,
+    Blocked,
+    Both,
+}
+
+/// Thistle Tea's spell groups on the real data (`spell_group_test.exs`,
+/// `spell_group_dbc_test.exs`): food replacing food; a greater elixir, a
+/// scroll and a stronger demoralizing shout or roar replacing a lesser, and
+/// a lesser blocked by the greater, by the group's order rather than the
+/// spells' ids (Demoralizing Shout's fifth rank and the Roar's sixth); Power
+/// Infusion and Arcane Power; Blessing of Might's ranks beside Greater
+/// Blessing of Might by its first rank's group; and an ordinary elixir
+/// beside a greater one.
+#[tokio::test]
+async fn real_spell_groups_replace_and_block_by_their_order() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_a, a, map) = enter(&realm, "P3JGRP1", "Groupa", Race::Human, Class::Warrior).await;
+    let (_b, b, _) = enter(&realm, "P3JGRP2", "Groupb", Race::Human, Class::Paladin).await;
+    let pairs: [(u32, u32, Then); 14] = [
+        (18_192, 19_710, Then::Replaces),
+        (19_710, 18_192, Then::Replaces),
+        (11_390, 17_539, Then::Replaces),
+        (17_539, 11_390, Then::Blocked),
+        (8118, 12_179, Then::Replaces),
+        (12_179, 8118, Then::Blocked),
+        (99, 1160, Then::Replaces),
+        (11_556, 9898, Then::Blocked),
+        (11_554, 9747, Then::Replaces),
+        (10_060, 12_042, Then::Replaces),
+        (12_042, 10_060, Then::Blocked),
+        (25_291, 25_782, Then::Replaces),
+        (19_836, 25_782, Then::Replaces),
+        (25_782, 19_836, Then::Replaces),
+    ];
+    let out = on(&map, move |m| {
+        ready(m, a, 60, &[]);
+        ready(m, b, 60, &[]);
+        let mut got = Vec::new();
+        for (first, then, _) in pairs.iter().chain([(2374, 17_539, Then::Both)].iter()) {
+            apply_real(m, b, a, *first);
+            apply_real(m, a, a, *then);
+            got.push(match (has(m, a, *first), has(m, a, *then)) {
+                (false, true) => Then::Replaces,
+                (true, false) => Then::Blocked,
+                _ => Then::Both,
+            });
+            auras::remove_spell(m, a, *first, None);
+            auras::remove_spell(m, a, *then, None);
+        }
+        got
+    })
+    .await;
+    for ((first, then, want), got) in pairs
+        .into_iter()
+        .chain([(2374, 17_539, Then::Both)])
+        .zip(out)
+    {
+        assert_eq!(got, want, "{then} after {first}");
+    }
+}

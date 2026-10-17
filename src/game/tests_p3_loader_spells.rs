@@ -467,3 +467,61 @@ fn the_real_aura_amounts_load_as_thistle_tea_reads_them() {
         assert_eq!(shields, vec![(1, 2.0)], "{id}");
     }
 }
+
+/// Thistle Tea's exclusive kinds on the real spells
+/// (`slow_exclusivity_dbc_test.exs`, `consumable_stacking_dbc_test.exs`,
+/// `spell_elixir_test.exs`): class snares one at a time and a melee speed
+/// penalty its own, but a daze or a spell with other auras none; foods,
+/// drinks, both, and Well Fed; flasks by their `spell_elixir` mask, and no
+/// rule for an ordinary elixir's 0.
+#[test]
+fn the_real_exclusive_kinds_are_thistle_teas() {
+    let Some(d) = real() else {
+        return;
+    };
+    for id in [116, 120, 1715, 2974, 3409, 3600, 8056, 11_201] {
+        assert_eq!(exclusive(d, id), Some(Exclusive::Snare), "{id}");
+    }
+    // vmangos's spell_mod gives Concussive Shot and Piercing Howl the daze
+    // attribute: as a daze, no snare's.
+    for id in [5116, 12_323] {
+        assert!(spell(d, id).attributes[1] & 0x4_0000 != 0, "{id}");
+        assert_eq!(exclusive(d, id), None, "{id}");
+    }
+    assert_eq!(exclusive(d, 6343), Some(Exclusive::NegativeHaste));
+    for id in [1604, 1098, 22_812] {
+        assert_eq!(exclusive(d, id), None, "{id}");
+    }
+    for (id, kind) in [
+        (5004, Exclusive::Food),
+        (434, Exclusive::Food),
+        (430, Exclusive::Drink),
+        (1137, Exclusive::Drink),
+        (24_707, Exclusive::FoodAndDrink),
+        (25_990, Exclusive::FoodAndDrink),
+        (19_705, Exclusive::WellFed),
+        (19_711, Exclusive::WellFed),
+        (24_799, Exclusive::WellFed),
+        (18_125, Exclusive::WellFed),
+    ] {
+        assert_eq!(exclusive(d, id), Some(kind), "{id}");
+    }
+    // vmangos's spell_mod lets Blessed Sunfruit Juice and Alterac Spring
+    // Water stack (no family, so not the Well Fed rule's).
+    for id in [18_141, 23_697] {
+        assert_eq!(
+            (spell(d, id).family_name, exclusive(d, id)),
+            (0, None),
+            "{id}"
+        );
+    }
+    assert_eq!(exclusive(d, 18_192), None);
+    for id in [17_624, 17_626, 17_627, 17_628, 17_629] {
+        assert_eq!(d.spells.elixirs.get(&id), Some(&3), "{id}");
+        assert_eq!(exclusive(d, id), Some(Exclusive::Flask), "{id}");
+    }
+    for id in [2374, 11_328, 17_538] {
+        assert_eq!(d.spells.elixirs.get(&id).copied().unwrap_or(0), 0, "{id}");
+        assert_eq!(auras::exclusive(spell(d, id), Some(0)), None, "{id}");
+    }
+}
