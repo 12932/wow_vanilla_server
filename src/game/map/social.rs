@@ -25,6 +25,8 @@ pub const SMSG_WHO: u16 = 0x063;
 pub const STATS_EVERY: Duration = Duration::from_secs(1);
 /// The most a `/who` lists.
 pub const WHO_LIMIT: usize = 49;
+/// Alterac Valley, Warsong Gulch and Arathi Basin.
+const BATTLEGROUND_ZONES: [u32; 3] = [2597, 3277, 3358];
 
 fn online(map: &Map, g: Guid) -> Option<Arc<Online>> {
     map.realm.registry.online(g)
@@ -166,6 +168,7 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
         u32::from(m.maximum_level.as_int()),
     );
     let name = m.player_name.to_lowercase();
+    let guild_filter = m.guild_name.to_lowercase();
     let words: Vec<String> = m
         .search_strings
         .iter()
@@ -177,7 +180,9 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     let mut b = Body::default();
     let mut listed = 0u32;
     let mut rows = Body::default();
-    for o in realm.registry.all_online() {
+    let everyone = realm.registry.all_online();
+    let here = me.map().key;
+    for o in everyone.iter().cloned() {
         if !same_side(&me, &o) || (o.gm && !me.gm) {
             continue;
         }
@@ -198,15 +203,32 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
         if !zones.is_empty() && !zones.contains(&o.zone()) {
             continue;
         }
+        // In a battleground, its players from the asker's own copy alone.
+        if !zones.is_empty()
+            && o.zone() == me.zone()
+            && BATTLEGROUND_ZONES.contains(&o.zone())
+            && o.map().key != here
+        {
+            continue;
+        }
+        let guild = realm.social.guilds.lock().name_of(o.guid);
+        let guild_lower = guild.to_lowercase();
+        if !guild_filter.is_empty() && !guild_lower.contains(&guild_filter) {
+            continue;
+        }
         let zone_name = realm
             .data
             .areas
             .get(&o.zone())
             .map(|a| a.name.to_lowercase())
             .unwrap_or_default();
-        if !words
-            .iter()
-            .all(|w| lower.contains(w) || zone_name.contains(w))
+        // Any word, in the name, the guild or the zone (Thistle Tea's
+        // `Who`).
+        let words: Vec<&String> = words.iter().filter(|w| !w.is_empty()).collect();
+        if !words.is_empty()
+            && !words
+                .iter()
+                .any(|w| lower.contains(w.as_str()) || guild_lower.contains(w.as_str()) || zone_name.contains(w.as_str()))
         {
             continue;
         }
@@ -215,7 +237,6 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
             continue;
         }
         listed += 1;
-        let guild = realm.social.guilds.lock().name_of(o.guid);
         rows.cstr(&o.name)
             .cstr(&guild)
             .u32(level)
@@ -223,7 +244,13 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
             .u32(u32::from(o.race))
             .u32(o.zone());
     }
-    b.u32(listed).u32(matched as u32);
+    // The count: everyone online past a full list, else those listed.
+    let online = if everyone.len() > WHO_LIMIT {
+        everyone.len() as u32
+    } else {
+        listed
+    };
+    b.u32(listed).u32(online);
     b.0.extend_from_slice(&rows.0);
     if let Some(p) = map.players.get(&g) {
         p.outbound.send_frame(b.frame(SMSG_WHO));

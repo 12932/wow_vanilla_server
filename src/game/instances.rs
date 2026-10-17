@@ -238,7 +238,16 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
         .iter()
         .filter(|o| o.guid != g && o.map().key == key)
         .count();
-    if inside >= limit(map, kind) && !gm {
+    // The copy's size: `map_template`'s, as Thistle Tea takes it.
+    let cap = realm
+        .data
+        .scripts
+        .map_templates
+        .get(&map)
+        .map(|t| t.player_limit as usize)
+        .filter(|l| *l > 0)
+        .unwrap_or_else(|| limit(map, kind));
+    if inside >= cap && !gm {
         return Err(Refused::Abort(TransferAbortReason::IsFull));
     }
     if !gm && !inst.admit(&account, key, now) {

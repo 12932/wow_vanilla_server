@@ -273,6 +273,9 @@ pub struct ScriptData {
     pub map_templates: AHashMap<u32, MapTemplate>,
     /// `areatrigger_template`'s scripts: trigger → generic script.
     pub areatrigger_script: AHashMap<u32, u32>,
+    /// `areatrigger_template.cooldown`: seconds a scripted trigger rests
+    /// after it runs, in each copy of its map.
+    pub areatrigger_cooldown: AHashMap<u32, u32>,
     /// `game_event.holiday`: event → holiday.
     pub event_holidays: AHashMap<u32, u32>,
     /// `quest_template.RequiredCondition`.
