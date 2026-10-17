@@ -450,6 +450,13 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         .into_iter()
         .filter(|s| data.spells.get(*s).is_some_and(|t| t.passive()))
         .collect();
+    // A hunter learns to teach the passives their pet came with (Thistle
+    // Tea's `PetTraining.discover_passives`).
+    if kind == Kind::Hunter {
+        for spell in &passives {
+            hunter::used(map, g, *spell);
+        }
+    }
     for spell in passives {
         if let Some(t) = data.spells.get(spell) {
             let effects: Vec<(usize, i32)> = (0..3)
