@@ -1351,14 +1351,20 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         stop_attack(map, attacker);
         return;
     }
-    // A spell being cast, or a stun, holds the swing; a pacified unit
-    // doesn't swing at all.
-    if map.caster(attacker).is_some_and(|c| c.casting.is_some())
-        || auras::held(map, attacker, false)
+    // A stun holds the swing; a pacified unit doesn't swing at all. A
+    // spell being cast holds the regular swings, but not the extra attacks
+    // a proc owes: they go, and the cast goes on (vmangos's
+    // `AttackerStateUpdate` skips the cast for an extra swing, and Thistle
+    // Tea's `extra_attacks_step` comes before its casting).
+    if auras::held(map, attacker, false)
         || auras::auras(map, attacker).is_some_and(|a| {
             a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE) || a.has(AURA_FEIGN_DEATH)
         })
     {
+        return;
+    }
+    let casting = map.caster(attacker).is_some_and(|c| c.casting.is_some());
+    if casting && !extra {
         return;
     }
     let error = if !va.standing {
@@ -1374,6 +1380,10 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         let Some(c) = map.combat_mut(attacker) else {
             return;
         };
+        // Casting, the attacks owed wait without a word.
+        if casting {
+            return;
+        }
         if c.swing_error_at
             .is_none_or(|t| now.duration_since(t) >= SWING_ERROR_EVERY)
         {
@@ -1397,6 +1407,9 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         if let Some(c) = map.combat_mut(attacker) {
             c.in_extra_attack = false;
         }
+    }
+    if casting {
+        return;
     }
     // A script's melee spell stands in for the blow.
     if main_due && let Some(spell) = crate::game::map::event_ai::melee_spell(map, attacker) {

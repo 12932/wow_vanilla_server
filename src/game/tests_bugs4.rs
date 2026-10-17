@@ -1,6 +1,6 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
 //! batch: the weather's seasons, sounds and changes; a scripted stay, a
-//! dead master's guardian.
+//! dead master's guardian, extra attacks in a cast.
 
 use std::time::Duration;
 
@@ -138,7 +138,7 @@ const GUARDIAN: u32 = 3030;
 const SUMMON_GUARDIAN: u32 = 9050;
 
 /// The pets' world, with a guardian a hunter summons for a minute.
-fn guardian_data() -> crate::game::data::GameData {
+fn pets_data() -> crate::game::data::GameData {
     let mut d = tests_pets::data();
     d.creature_templates.insert(
         GUARDIAN,
@@ -208,7 +208,7 @@ async fn a_scripts_stay_keeps_a_pet_in_its_fight() {
 /// Tea's `Guardian.lifetime` keeps it, and only then goes.
 #[tokio::test]
 async fn a_dead_masters_guardian_goes_when_its_fight_ends() {
-    let realm = harness::realm_with(guardian_data());
+    let realm = harness::realm_with(pets_data());
     let (h, gh, map) = tests_pets::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
     tests_pets::learn(&map, gh, &[SUMMON_GUARDIAN]);
     tests_pets::cast(&h, SUMMON_GUARDIAN, None).await;
@@ -249,4 +249,71 @@ async fn a_dead_masters_guardian_goes_when_its_fight_ends() {
         m.creature(guardian).is_none()
     })
     .await;
+}
+
+const LONG_CAST: u32 = 9200;
+
+/// Extra attacks a proc owes swing while a spell is cast, and the cast
+/// goes on, as vmangos's `AttackerStateUpdate` (no cast check for an extra
+/// swing) and Thistle Tea's `extra_attacks_step` (before its casting)
+/// have it; the regular swings wait for the cast.
+#[tokio::test]
+async fn extra_attacks_swing_through_a_cast() {
+    let mut d = tests_pets::data();
+    let none = crate::game::data::spells::SpellEffect::default();
+    let mut s = tests_pets::spell(
+        LONG_CAST,
+        "Long Cast",
+        [tests_pets::effect(3, 0, 1), none, none],
+    );
+    s.casting_time_index = 90;
+    d.spells.cast_times.insert(90, 10_000);
+    d.spells.spells.insert(LONG_CAST, s);
+    let realm = harness::realm_with(d);
+    let (mut a, ga, map) =
+        tests_pets::enter(&realm, "A", "Warrior", Race::Dwarf, Class::Warrior).await;
+    let wolf = tests_pets::place(&map, ga, tests_pets::WOLF, 0x70_0501, 1.5).await;
+    a.sees(wolf).await;
+    map.query(move |m| {
+        if let Some(c) = m.creature_mut(wolf) {
+            c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+        }
+    })
+    .await
+    .unwrap();
+    tests_pets::learn(&map, ga, &[LONG_CAST]);
+    a.send(CMSG_ATTACKSWING { guid: wolf }).await;
+    tests_pets::cast(&a, LONG_CAST, None).await;
+    until(&map, "the cast under way", move |m| {
+        m.caster(ga).is_some_and(|c| c.casting.is_some())
+    })
+    .await;
+    let swings_held = map
+        .query(move |m| {
+            let now = m.now;
+            let p = m.players.get_mut(&ga).unwrap();
+            p.combat.next_swing = Some(now);
+            p.combat.extra_attacks = 2;
+            fighting(m, ga, wolf)
+        })
+        .await
+        .unwrap();
+    assert!(swings_held, "attacking the wolf");
+    until(&map, "the extra attacks swung", move |m| {
+        m.players[&ga].combat.extra_attacks == 0
+    })
+    .await;
+    let (casting, swing_waits) = map
+        .query(move |m| {
+            let now = m.now;
+            (
+                m.caster(ga).is_some_and(|c| c.casting.is_some()),
+                m.players[&ga].combat.next_swing.is_some_and(|t| t <= now),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(casting, "the cast goes on");
+    assert!(swing_waits, "the regular swing waits for the cast");
 }
