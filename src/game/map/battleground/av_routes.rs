@@ -250,7 +250,7 @@ fn follow(map: &mut Map, leader: Guid, to: Vector3d) {
             crate::game::map::ai::advance_motion(map, m);
         }
     }
-    crate::game::map::creature_groups::leader_walked(map, leader, to, facing, run);
+    crate::game::map::creature_groups::leader_walked(map, leader);
     let places: Vec<(Guid, Place)> = extras(map)
         .map(|x| {
             x.routes

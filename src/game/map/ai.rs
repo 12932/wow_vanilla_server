@@ -358,8 +358,9 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
         let frame = stop_packet(creature, pos, spline_id);
         map.send_to_observers(creature, &frame, false);
     }
-    // A flyer falls to the ground.
+    // A flyer falls to the ground; a formation it led goes on without it.
     crate::game::map::creature_motion::fall_dead(map, creature);
+    crate::game::map::creature_groups::died(map, creature);
     crate::game::map::event_ai::death_heard(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
     crate::game::map::battleground::creature_died(map, creature, tapper);
@@ -1033,8 +1034,12 @@ fn evade(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    // A patroller goes back to the last point of its path it reached.
-    let (from, home) = (c.position, patrol_home(map, g).unwrap_or(c.home));
+    // A follower goes back to its place by its leader; a patroller to the
+    // last point of its path it reached.
+    let home = crate::game::map::creature_groups::formation_home(map, g)
+        .or_else(|| patrol_home(map, g))
+        .unwrap_or(c.home);
+    let from = c.position;
     let path = match map.nav.as_mut() {
         Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
         None => vec![from, home],
