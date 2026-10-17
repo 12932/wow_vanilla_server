@@ -120,12 +120,13 @@ the questions waiting for you.
 | Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
-| 2b: creature movement (all 11 items) | merged | |
+| 2b: creature movement (all 11 items) | merged | c2bb0e7 |
 | 2c: creature combat | running | |
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
 | 2g+2i: world, social, second pass | running | |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
+| Performance | running | |
 
 ## Left for later, and why
