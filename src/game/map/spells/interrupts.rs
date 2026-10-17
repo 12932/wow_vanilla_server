@@ -19,9 +19,6 @@ pub const INVULNERABLE: u32 = 0x20_0000;
 /// The Discombobulator Ray's transform.
 const DISCOMBOBULATE: u32 = 4060;
 
-/// Forms a flight keeps: none, the warrior's stances, and the rogue's
-/// stealth form and the like.
-const FLIGHT_FORMS: [u8; 6] = [0, 17, 18, 19, 28, 30];
 
 /// End `target`'s holders with any of `flags`, but `except`'s.
 fn end(map: &mut Map, target: Guid, flags: u32, except: u32) {
@@ -86,7 +83,7 @@ pub fn teleported(map: &mut Map, target: Guid) {
 /// the mount, and what mounting ends.
 pub fn taking_flight(map: &mut Map, target: Guid) {
     let form = auras::form(map, target);
-    let unfit = !FLIGHT_FORMS.contains(&form);
+    let unfit = !crate::game::map::npc::FLIGHT_FORMS.contains(&form);
     auras::remove_where(map, target, |h| {
         h.has(AURA_MOD_STEALTH)
             || h.has(AURA_MOUNTED)
