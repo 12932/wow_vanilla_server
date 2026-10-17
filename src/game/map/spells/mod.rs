@@ -1481,20 +1481,7 @@ pub fn heal_crit(
             p.outbound.send_frame(frame);
         }
     }
-    if gained > 0 && !caster.is_zero() {
-        let fighting: Vec<Guid> = map
-            .creatures
-            .iter()
-            .filter(|(_, c)| c.alive() && c.threat.iter().any(|(t, _)| *t == target))
-            .map(|(_, c)| c.guid)
-            .collect();
-        if !fighting.is_empty() {
-            let share = gained as f32 * 0.5 / fighting.len() as f32;
-            for c in fighting {
-                crate::game::map::ai::add_threat(map, c, caster, share);
-            }
-        }
-    }
+    combat::heal_threat(map, caster, target, spell, gained);
 }
 
 /// A unit's cast is interrupted.
