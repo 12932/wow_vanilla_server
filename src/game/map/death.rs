@@ -533,30 +533,8 @@ pub fn nearest_graveyard(
         Team::Alliance => 469,
         Team::Horde => 67,
     };
-    let data = &map.realm.data;
-    let on_map = |gy: &&crate::game::data::Graveyard| {
-        gy.map == map.key.map
-            && (gy.faction == 0 || gy.faction == faction)
-            && crate::game::map::outdoor_pvp::graveyard_open(map, gy.id, faction)
-    };
-    // From a dungeon, one outside is as far as it is from the entrance.
-    let dist = |gy: &crate::game::data::Graveyard| {
-        let from = crate::game::map::corpses::reckoned_from(data, map.key.map, gy.map, pos);
-        (gy.x - from.x).powi(2) + (gy.y - from.y).powi(2)
-    };
-    let best = data
-        .graveyards
-        .iter()
-        .filter(|gy| gy.zone == zone && (gy.faction == 0 || gy.faction == faction))
-        .filter(|gy| crate::game::map::outdoor_pvp::graveyard_open(map, gy.id, faction))
-        .min_by(|a, b| dist(a).total_cmp(&dist(b)))
-        .or_else(|| {
-            data.graveyards
-                .iter()
-                .filter(on_map)
-                .min_by(|a, b| dist(a).total_cmp(&dist(b)))
-        });
-    match best {
+    let open = |id| crate::game::map::outdoor_pvp::graveyard_open(map, id, faction);
+    match graveyard_for(&map.realm.data, map.key.map, zone, faction, pos, open) {
         Some(gy) => (
             MapKey::world(gy.map),
             Vector3d {
@@ -568,6 +546,54 @@ pub fn nearest_graveyard(
         ),
         None => (map.key, pos, 0.0),
     }
+}
+
+/// [`nearest_graveyard`]'s pick for `faction` (469 or 67) at `pos` on map
+/// `here`, of those `open` lets them use, as mangos's
+/// `GetClosestGraveyardHelper` and Thistle Tea's `Graveyard.closest_of`
+/// have it: of the zone's own, the nearest on `here`; else, from a
+/// dungeon, the nearest outside by horizontal distance from its entrance;
+/// else one on any map. With none of the zone's, the nearest on `here`.
+pub fn graveyard_for<'a>(
+    data: &'a crate::game::data::GameData,
+    here: u32,
+    zone: u32,
+    faction: u32,
+    pos: Vector3d,
+    open: impl Fn(u32) -> bool,
+) -> Option<&'a crate::game::data::Graveyard> {
+    use crate::game::data::Graveyard;
+    let allowed = |gy: &Graveyard| (gy.faction == 0 || gy.faction == faction) && open(gy.id);
+    let near =
+        |gy: &Graveyard| (gy.x - pos.x).powi(2) + (gy.y - pos.y).powi(2) + (gy.z - pos.z).powi(2);
+    let entrance = crate::game::map::corpses::dungeon(data, here)
+        .and_then(|d| d.ghost_entrance)
+        .filter(|(_, x, y)| *x != 0.0 || *y != 0.0);
+    let pick = |of: &dyn Fn(&Graveyard) -> bool| {
+        let linked: Vec<&Graveyard> = data
+            .graveyards
+            .iter()
+            .filter(|gy| of(gy) && allowed(gy))
+            .collect();
+        let here_best = linked
+            .iter()
+            .filter(|gy| gy.map == here)
+            .min_by(|a, b| near(a).total_cmp(&near(b)));
+        let outside = entrance.and_then(|(m, x, y)| {
+            linked
+                .iter()
+                .filter(|gy| gy.map == m && m != here)
+                .min_by(|a, b| {
+                    let d = |gy: &Graveyard| (gy.x - x).powi(2) + (gy.y - y).powi(2);
+                    d(a).total_cmp(&d(b))
+                })
+        });
+        here_best
+            .or(outside)
+            .or_else(|| linked.iter().find(|gy| gy.map != here))
+            .copied()
+    };
+    pick(&|gy| gy.zone == zone).or_else(|| pick(&|gy| gy.map == here))
 }
 
 /// How near its corpse a ghost sees the living (Thistle Tea's
