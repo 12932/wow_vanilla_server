@@ -243,6 +243,13 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
     }) {
         data.text_emote_anims.insert(id, emote);
     }
+    for (id, spec) in rows(dbc, "SELECT id, spec_proc FROM Emotes", |c| {
+        (c.u32("id"), c.u32("spec_proc"))
+    }) {
+        if spec != 0 {
+            data.emote_states.insert(id);
+        }
+    }
     for (id, loc) in rows(dbc, "SELECT * FROM WorldSafeLocs", |c| {
         (
             c.u32("id"),
