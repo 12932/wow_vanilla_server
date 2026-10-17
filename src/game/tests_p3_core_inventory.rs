@@ -1325,12 +1325,10 @@ async fn reagents_come_from_the_stacks_carried() {
         at(&realm, g, second).await,
         at(&realm, g, banked).await,
     );
-    let one_left = match left {
-        (None, Some((_, _, 2)), Some((_, _, 10))) | (Some((_, _, 2)), None, Some((_, _, 10))) => {
-            true
-        }
-        _ => false,
-    };
+    let one_left = matches!(
+        left,
+        (None, Some((_, _, 2)), Some((_, _, 10))) | (Some((_, _, 2)), None, Some((_, _, 10)))
+    );
     assert!(one_left, "a stack and two of the next: {left:?}");
     // Two carried, ten banked: refused, nothing taken.
     a.clear();

@@ -140,9 +140,7 @@ async fn handled(c: &mut Client) {
 /// The auction's command result: its id and what it says.
 async fn result(c: &mut Client) -> (u32, SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction) {
     c.wait_for("SMSG_AUCTION_COMMAND_RESULT", |m| match m {
-        ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => {
-            Some((r.auction_id, r.action.clone()))
-        }
+        ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => Some((r.auction_id, r.action)),
         _ => None,
     })
     .await

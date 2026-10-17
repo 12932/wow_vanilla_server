@@ -209,7 +209,7 @@ async fn an_edit_unaccepts_both_and_an_item_is_offered_once() {
     open(&mut a, &mut b).await;
     a.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
     handled(&mut a).await;
-    assert_eq!(trade_of(&realm, ga).await.unwrap().0, true);
+    assert!(trade_of(&realm, ga).await.unwrap().0);
     a.clear();
     b.send(CMSG_SET_TRADE_GOLD {
         gold: Gold::new(100),
@@ -222,17 +222,13 @@ async fn an_edit_unaccepts_both_and_an_item_is_offered_once() {
         _ => None,
     })
     .await;
-    assert_eq!(trade_of(&realm, ga).await.unwrap().0, false);
-    assert_eq!(trade_of(&realm, gb).await.unwrap().0, false);
+    assert!(!trade_of(&realm, ga).await.unwrap().0);
+    assert!(!trade_of(&realm, gb).await.unwrap().0);
     a.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
     handled(&mut a).await;
     offer(&b, 0, PACK).await;
     handled(&mut b).await;
-    assert_eq!(
-        trade_of(&realm, ga).await.unwrap().0,
-        false,
-        "an item edit too"
-    );
+    assert!(!trade_of(&realm, ga).await.unwrap().0, "an item edit too");
 
     offer(&a, 0, PACK).await;
     offer(&a, 1, PACK).await;
@@ -304,7 +300,7 @@ async fn what_goes_leaves_room_and_a_full_receiver_refuses() {
         at(&realm, ga, second).await,
         Some((BAG_PLAYER, PACK_START, 1))
     );
-    assert_eq!(trade_of(&realm, gb).await.unwrap().0, false);
+    assert!(!trade_of(&realm, gb).await.unwrap().0);
 }
 
 /// Thistle Tea's money: more offered than is there, or more than the

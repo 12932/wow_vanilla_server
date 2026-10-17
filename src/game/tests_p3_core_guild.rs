@@ -331,7 +331,7 @@ async fn the_leader_sets_the_emblem_and_the_last_to_leave_ends_it() {
         ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(r) => Some(r.result),
         _ => None,
     };
-    ally.send(emblem.clone()).await;
+    ally.send(emblem).await;
     assert_eq!(
         ally.wait_for("the emblem refused", saved).await,
         GuildEmblemResult::NotGuildMaster
