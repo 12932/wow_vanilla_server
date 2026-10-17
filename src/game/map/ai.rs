@@ -592,8 +592,8 @@ pub fn update_creatures(map: &mut Map) {
 /// creature or pet) within its reach of it that it sees and can get at.
 fn aggro_scan(map: &mut Map, g: Guid) {
     use crate::game::map::auras::{
-        AURA_FEIGN_DEATH, AURA_MOD_CONFUSE, AURA_MOD_DETECT_RANGE, AURA_MOD_FEAR,
-        AURA_MOD_PACIFY, AURA_MOD_PACIFY_SILENCE, AURA_MOD_STUN,
+        AURA_FEIGN_DEATH, AURA_MOD_CONFUSE, AURA_MOD_DETECT_RANGE, AURA_MOD_FEAR, AURA_MOD_PACIFY,
+        AURA_MOD_PACIFY_SILENCE, AURA_MOD_STUN,
     };
     let now = map.now;
     // A critter looks for no one.
@@ -642,8 +642,13 @@ fn aggro_scan(map: &mut Map, g: Guid) {
     // Its reach of a unit, by that unit's level (a pet's, its master's).
     let reach_of = |map: &Map, t: Guid| -> f32 {
         let master = crate::game::map::pets::master(map, t);
+        let who = if map.players.contains_key(&master) {
+            master
+        } else {
+            t
+        };
         let lv = map
-            .unit_fields(if map.players.contains_key(&master) { master } else { t })
+            .unit_fields(who)
             .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
         aggro_reach(detection, level, lv, modifier)
     };

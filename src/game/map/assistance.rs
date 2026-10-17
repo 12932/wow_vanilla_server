@@ -80,7 +80,14 @@ pub fn reaction(map: &Map, g: Guid) -> Reaction {
 /// the one looking, one for the one looked at.
 pub fn sees(map: &mut Map, from: Vector3d, to: Vector3d) -> bool {
     // `checks::line_of_sight` raises both ends two yards.
-    crate::game::map::spells::checks::line_of_sight(map, from, Vector3d { z: to.z - 1.0, ..to })
+    crate::game::map::spells::checks::line_of_sight(
+        map,
+        from,
+        Vector3d {
+            z: to.z - 1.0,
+            ..to
+        },
+    )
 }
 
 fn faction(map: &Map, g: Guid) -> Option<&FactionTemplate> {
@@ -274,7 +281,9 @@ fn flee_from_help(map: &mut Map, g: Guid, enemy: Guid) {
         && !fighting(map, g)
         && !c.evading
         && c.movement_type == crate::game::map::creature::MOVEMENT_RANDOM
-        && c.scripted.as_deref().is_none_or(|s| s.scripted_move.is_none());
+        && c.scripted
+            .as_deref()
+            .is_none_or(|s| s.scripted_move.is_none());
     let theirs = map
         .unit_fields(enemy)
         .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0));
@@ -295,9 +304,10 @@ pub fn update(map: &mut Map) {
         .filter(|(_, c)| c.engagement.assist.iter().any(|a| a.due <= now))
         .flat_map(|(_, c)| {
             let g = c.guid;
-            let (ready, wait): (Vec<Assist>, Vec<Assist>) = std::mem::take(&mut c.engagement.assist)
-                .into_iter()
-                .partition(|a| a.due <= now);
+            let (ready, wait): (Vec<Assist>, Vec<Assist>) =
+                std::mem::take(&mut c.engagement.assist)
+                    .into_iter()
+                    .partition(|a| a.due <= now);
             c.engagement.assist = wait;
             ready.into_iter().map(move |a| (g, a))
         })

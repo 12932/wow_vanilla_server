@@ -113,8 +113,10 @@ fn golemaggs_trust(map: &mut Map, golemagg: Guid) {
     };
     // In a fight: whether or not he has a victim.
     let fighting = c.combat.attacking
-        || c.fields
-            .has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT);
+        || c.fields.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        );
     if !c.alive() || !fighting {
         return;
     }
