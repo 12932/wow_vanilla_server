@@ -210,7 +210,22 @@ pub fn route(
             return Some((vec![from, to], true, false));
         }
     }
-    let path = map.nav.as_mut()?.path(from, to)?;
+    let path = match map.nav.as_mut()?.path(from, to) {
+        Some(p) => p,
+        // Off the navmesh (in open water): from the bottom under it, or
+        // straight where the way is clear.
+        None => {
+            let bottom = floor_under(map, from).map(|z| Vector3d { z, ..from });
+            match bottom.and_then(|b| map.nav.as_mut()?.path(b, to)) {
+                Some(mut p) => {
+                    p[0] = from;
+                    p
+                }
+                None if clear(map, from, to) => vec![from, to],
+                None => return None,
+            }
+        }
+    };
     // What it may not enter, it goes as far as the edge of.
     if hab.walk && hab.swim {
         return Some((path, true, false));
