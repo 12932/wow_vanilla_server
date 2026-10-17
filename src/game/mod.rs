@@ -104,6 +104,8 @@ mod tests_p3_loader_play;
 #[cfg(test)]
 mod tests_p3_loader_spells;
 #[cfg(test)]
+mod tests_p3_loader_world;
+#[cfg(test)]
 mod tests_p3_network;
 #[cfg(test)]
 mod tests_p3_network_auth;
