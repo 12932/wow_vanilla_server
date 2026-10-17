@@ -1219,8 +1219,27 @@ fn land(
     }
     let mut aim = target;
     if hit == Hit::Reflect {
-        // Back at the caster.
+        // Back at the caster; the reflector's procs see it reflected, and
+        // a reflection of charges spends one (Sheen of Zanza's first, as
+        // mangos's victim proc of `PROC_EX_REFLECT`).
         outcome::send_miss(map, caster, target, s.id, Hit::Reflect);
+        let (_, taken) = outcome::proc_flags(s);
+        crate::game::map::procs::trigger(
+            map,
+            crate::game::map::procs::Event {
+                actor: caster,
+                target,
+                actor_flags: 0,
+                target_flags: taken,
+                ex: crate::game::map::procs::EX_REFLECT,
+                spell: Some(s.id),
+                damage: 0,
+                school: s.school_mask(),
+                offhand: false,
+                ranged: false,
+                extra_attack: false,
+            },
+        );
         aim = caster;
         hit = Hit::Hit;
     }

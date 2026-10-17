@@ -165,6 +165,12 @@ pub fn binary(s: &SpellTemplate) -> bool {
         })
 }
 
+/// A spell a reflection may turn back: single-target magic whose
+/// attributes don't forbid it.
+pub fn reflectable(s: &SpellTemplate) -> bool {
+    !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION)
+}
+
 /// A spell that hits an area.
 pub fn area(s: &SpellTemplate) -> bool {
     s.effects.iter().any(|e| {
@@ -337,8 +343,7 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     if physical(s) {
         return melee_roll(map, caster, target, s, m).0;
     }
-    // Reflection of a single-target magic spell.
-    if !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION) {
+    if reflectable(s) {
         let reflect = a.sum(AURA_REFLECT_SPELLS)
             + a.sum_mask(AURA_REFLECT_SPELLS_SCHOOL, s.school_mask())
             + ward_reflect(map, target, s);
