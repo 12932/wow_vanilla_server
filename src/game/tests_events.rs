@@ -957,7 +957,7 @@ async fn the_databases_own(realm: &Arc<Realm>) {
     const SMITH: u32 = 2765;
     let (mut c, g, map) = hero(realm, "SMITH", Race::Dwarf, Class::Warrior, 40).await;
     map.query(move |m| skilled(m, g, 164, 225)).await;
-    let map = take(realm, &mut c, 7802, SMITH, &[]).await;
+    let map = take(realm, &mut c, 7802, SMITH, &[2761, 2762, 2763]).await;
     assert!(
         until_mut(&map, move |m| {
             skip(m, Duration::from_secs(5));
@@ -977,6 +977,7 @@ fn wanted(name: &str) -> bool {
     yes
 }
 
+/// Creatures, gossip, objects, spells and places.
 #[tokio::test]
 async fn event_quests_are_done_as_thistle_tea_does_them() {
     if !have_data() {
@@ -1016,12 +1017,6 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     if wanted("bartleby") {
         beat_bartleby(&realm).await;
     }
-    if wanted("triage") {
-        triage(&realm).await;
-    }
-    if wanted("stinky") {
-        stinkys_escape(&realm).await;
-    }
     if wanted("tribute") {
         honoring_a_hero(&realm).await;
     }
@@ -1030,6 +1025,21 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("children") {
         childrens_week(&realm).await;
+    }
+}
+
+/// Map events: a doctor's patients, an escort, defenses and a brawl.
+#[tokio::test]
+async fn event_quests_with_their_map_events_are_done() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    if wanted("triage") {
+        triage(&realm).await;
+    }
+    if wanted("stinky") {
+        stinkys_escape(&realm).await;
     }
     if wanted("defenses") {
         defenses(&realm).await;
