@@ -10,6 +10,7 @@ pub mod crafts;
 pub mod items;
 pub mod load;
 pub mod npc;
+pub mod pets;
 pub mod spells;
 
 use ahash::AHashMap;
@@ -422,6 +423,7 @@ pub struct GameData {
     pub text_emote_anims: AHashMap<u32, u32>,
     /// Locks, item sets, random properties and the like.
     pub crafts: crafts::CraftData,
+    pub pets: pets::PetData,
 }
 
 impl GameData {

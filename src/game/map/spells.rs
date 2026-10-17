@@ -386,6 +386,9 @@ fn check(
     if auras::held(map, caster, true) {
         return Some(SpellCastResult::Stunned.as_int());
     }
+    if let Some(r) = crate::game::map::pets::check(map, caster, s, t) {
+        return Some(r);
+    }
     let cost = power_cost(map, caster, s);
     if cost > 0 {
         let have = map
@@ -673,7 +676,9 @@ fn effect_targets(
             .collect()
     };
     match e.target_a {
-        0 | 1 | 5 | 20 | 27 | 30 | 31 | 32 | 33 | 34 | 35 | 37 | 39 | 41 | 42 | 43 | 44 | 61 => {
+        // The caster's pet.
+        5 => crate::game::map::pets::pet_of(map, caster).into_iter().collect(),
+        0 | 1 | 20 | 27 | 30 | 31 | 32 | 33 | 34 | 35 | 37 | 39 | 41 | 42 | 43 | 44 | 61 => {
             vec![caster]
         }
         6 | 21 | 25 | 45 | 53 | 55 | 57 => t.unit.into_iter().collect(),
@@ -708,6 +713,7 @@ fn effect_targets(
 }
 
 fn execute_effects(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) {
+    crate::game::map::pets::before_effects(map, caster, s, t);
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let professions = crate::game::map::professions::execute(map, caster, s, t);
     for index in 0..3 {
@@ -731,6 +737,9 @@ fn execute_effects(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) 
 fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: usize, amount: i32) {
     let e = s.effects[index];
     match e.effect {
+        _ if crate::game::map::pets::handles(s, index) => {
+            crate::game::map::pets::effect(map, caster, target, s, index, amount)
+        }
         EFFECT_INSTAKILL => {
             let health = map
                 .unit_fields(target)
