@@ -197,7 +197,7 @@ the questions waiting for you.
 | Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | merged | 25ecb91 |
 | Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | d2dd886 |
-| Bugs from the mapping, batch 3 (22 of 24; 2 kept) | merged | |
+| Bugs from the mapping, batch 3 (22 of 24; 2 kept) | merged | 65b7d7b |
 | Bugs from the mapping, batch 4 (equipment, weather, leftovers) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
