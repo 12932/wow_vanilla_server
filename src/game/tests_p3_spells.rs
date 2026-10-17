@@ -430,3 +430,207 @@ async fn a_cast_given_up_gives_back_its_global_cooldown_and_kick_stops_what_sile
         "the client told it was interrupted"
     );
 }
+
+const ARCANE_MISSILES: u32 = 5143;
+const EVOCATION: u32 = 12051;
+const HEALING_POTION: u32 = 439;
+const HEALING_POTION_2: u32 = 440;
+const FROST_NOVA: u32 = 122;
+
+/// The global cooldown `g` has left of the spells' category.
+fn gcd_left(m: &Map, g: wow_world_messages::Guid) -> Option<Duration> {
+    m.caster(g)
+        .and_then(|c| c.gcd_until)
+        .map(|t| t.saturating_duration_since(m.now))
+}
+
+/// Lasting modifiers of the global cooldown (op 21): -100, -20%, -2000
+/// and +200 to Fire Blast's flags, and -100 to others.
+fn gcd_spells(d: &mut crate::game::data::GameData) {
+    for (id, kind, amount, mask) in [
+        (
+            990_950,
+            crate::game::map::auras::AURA_ADD_FLAT_MODIFIER,
+            -100,
+            2u64,
+        ),
+        (
+            990_951,
+            crate::game::map::auras::AURA_ADD_PCT_MODIFIER,
+            -20,
+            2,
+        ),
+        (
+            990_952,
+            crate::game::map::auras::AURA_ADD_FLAT_MODIFIER,
+            -2000,
+            2,
+        ),
+        (
+            990_953,
+            crate::game::map::auras::AURA_ADD_FLAT_MODIFIER,
+            200,
+            2,
+        ),
+        (
+            990_954,
+            crate::game::map::auras::AURA_ADD_FLAT_MODIFIER,
+            -100,
+            4,
+        ),
+    ] {
+        let mut s = made_up(id, 6, kind, 21, amount);
+        s.duration_index = 21;
+        s.family_name = 3;
+        s.effects[0].item_type = mask;
+        d.spells.spells.insert(id, s);
+    }
+}
+
+#[tokio::test]
+async fn a_global_cooldown_takes_its_modifiers_not_haste_and_holds_what_it_should() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(gcd_spells);
+    let (_c, mage, map) = player(&realm, "P3P7", "Gcdthree", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(
+                m,
+                mage,
+                60,
+                &[FIRE_BLAST, ARCANE_MISSILES, FROST_NOVA, EVOCATION],
+            );
+            let kobold = dummy(m, mage, 60, 5.0);
+            let blast = |m: &mut Map| {
+                cast_fresh(m, mage, FIRE_BLAST, at(kobold));
+                gcd_left(m, mage)
+            };
+            let plain = blast(m);
+            // Casting speed doesn't touch it.
+            let mut haste = made_up(
+                990_960,
+                6,
+                crate::game::map::auras::AURA_MOD_CASTING_SPEED,
+                0,
+                -50,
+            );
+            haste.duration_index = 21;
+            apply_template(m, mage, mage, &haste);
+            let hasted = blast(m);
+            crate::game::map::auras::remove_spell(m, mage, 990_960, None);
+            // Its modifiers do: flat, then percent; none below nothing; one
+            // of other flags not at all.
+            let mut by_mods = Vec::new();
+            for set in [
+                &[990_950][..],
+                &[990_950, 990_951],
+                &[990_952],
+                &[990_953],
+                &[990_954],
+            ] {
+                for id in set {
+                    apply(m, mage, mage, *id);
+                }
+                by_mods.push(blast(m));
+                for id in set {
+                    crate::game::map::auras::remove_spell(m, mage, *id, None);
+                }
+            }
+            // An instant's isn't given back by a cancel, nor a channel's.
+            blast(m);
+            spells::cancel(m, mage);
+            let instant = gcd_left(m, mage);
+            cast_fresh(m, mage, ARCANE_MISSILES, at(kobold));
+            let channel = casting(m, mage);
+            spells::cancel(m, mage);
+            let channel_kept = gcd_left(m, mage);
+            // A triggered cast in it changes nothing.
+            blast(m);
+            let before = gcd_left(m, mage);
+            spells::cast_triggered(m, mage, FIRE_BLAST, Some(kobold));
+            let triggered = gcd_left(m, mage) == before;
+            (
+                plain,
+                hasted,
+                by_mods,
+                instant,
+                channel,
+                channel_kept,
+                triggered,
+            )
+        })
+        .await
+        .unwrap();
+    let (plain, hasted, by_mods, instant, channel, channel_kept, triggered) = out;
+    let ms = |n: u64| Some(Duration::from_millis(n));
+    assert_eq!(plain, ms(1500));
+    assert_eq!(hasted, ms(1500), "casting speed doesn't touch it");
+    assert_eq!(by_mods, vec![ms(1400), ms(1120), None, ms(1700), ms(1500)]);
+    assert_eq!(instant, ms(1500), "an instant's stays after a cancel");
+    assert_eq!(channel, Some(ARCANE_MISSILES));
+    assert_eq!(channel_kept, ms(1500), "and a channel's");
+    assert!(triggered, "a triggered cast changes nothing");
+}
+
+#[tokio::test]
+async fn cooldowns_hold_their_spell_and_category_for_the_longer() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, mage, map) = player(&realm, "P3P8", "Coolone", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(
+                m,
+                mage,
+                60,
+                &[FIREBALL, FROST_NOVA, HEALING_POTION, HEALING_POTION_2],
+            );
+            let kobold = dummy(m, mage, 60, 5.0);
+            let data = m.realm.data.clone();
+            let mods = spells::mods::Mods::default();
+            let check = |m: &mut Map, id: u32, t: spells::Targets| {
+                let s = data.spells.get(id).cloned().unwrap();
+                if let Some(c) = m.caster_mut(mage) {
+                    c.gcd_until = None;
+                }
+                spells::checks::check(m, mage, &s, &t, None, false, &mods)
+            };
+            // Fireball has none.
+            cast_fresh(m, mage, FIREBALL, at(kobold));
+            pass(m, 4_000);
+            let fireball = m
+                .caster(mage)
+                .map(|c| (c.cooldowns.len(), c.category_cooldowns.len()));
+            // A potion holds its category: another potion of it too.
+            cast_fresh(m, mage, HEALING_POTION, spells::Targets::default());
+            let other = check(m, HEALING_POTION_2, spells::Targets::default());
+            m.now += Duration::from_millis(10_001);
+            let later = check(m, HEALING_POTION_2, spells::Targets::default());
+            // Frost Nova's 25 seconds, by its category time.
+            cast_fresh(m, mage, FROST_NOVA, spells::Targets::default());
+            let nova = m
+                .caster(mage)
+                .and_then(|c| c.category_cooldowns.get(&35).copied())
+                .map(|t| t.saturating_duration_since(m.now));
+            (fireball, other, later, nova)
+        })
+        .await
+        .unwrap();
+    let (fireball, other, later, nova) = out;
+    assert_eq!(fireball, Some((0, 0)), "Fireball starts no cooldown");
+    assert_eq!(
+        other,
+        Some(spells::fail::NOT_READY),
+        "the potion's category holds the other"
+    );
+    assert_eq!(later, None, "until its time is up");
+    assert_eq!(
+        nova,
+        Some(Duration::from_secs(25)),
+        "Frost Nova's category time"
+    );
+}
