@@ -312,6 +312,20 @@ the questions waiting for you.
     - **Merge note:** the 3f, 3d and 3a tests that waited for a parsed unroot now look for its frame, since its
       packed guid is hand-encoded until the wow_messages repin.
 
+20. **Performance's hook rules** (docs/PERFORMANCE.md). The update now looks only at creatures a player sees or that
+    are fighting, and only at objects and auras that changed. New code must go through the hooks:
+    - `combat_mut` or `note_fighting` to put a creature in a fight;
+    - `map.rare.*` for charges, flights and calls for help;
+    - `caster_mut`, `auras_mut` and `gameobject_mut`.
+
+    Debug builds, and so every test, name a missed hook. Release builds would silently skip that creature.
+    - **Other choices:** dependencies build at opt-level 2 in dev, which costs one rebuild. An optional `pprof`
+      feature adds a profiler.
+    - **Left for later:** four looks through every creature remain (despawn timers, regeneration, pets, the
+      creature half of flushing values). So does the 2 KB `Creature` struct, whose split would make them cheap.
+    - **peon's release binary** was built before the appearance fix, which is why 11-19% of bots failed character
+      creation in these runs. Rebuild it.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -333,7 +347,7 @@ the questions waiting for you.
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
-| Performance | running | |
+| Performance (CPU −77% idle, −55% arena, −38% crowd; load ×10 faster) | merged | 8775d80 |
 | 3a: matrix gaps, spells and auras (195 rows) | merged | 5e26640 |
 | 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
 | 3f: matrix gaps, network and inbound (232 rows) | merged | |
