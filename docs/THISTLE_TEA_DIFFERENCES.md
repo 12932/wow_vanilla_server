@@ -33,6 +33,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **What wvs adds.** Persistence, accounts and GM levels, movement and rate checks (above); Gurubashi Arena's last
   man standing.
 - **The battleground scoreboard** shows each player's real honor rank; Thistle Tea always shows 4.
+- **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
+  the client's swimming flag, which is all Thistle Tea goes by.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
 
 ## Not yet matching
@@ -53,8 +55,34 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 ### Combat, creatures and loot
 
 - Creatures send `SMSG_SPLINE_SET_RUN_SPEED` when their speed changes; Thistle Tea does only for possessed pets.
-- Gathering, crafting, lockpicking, disenchanting, fishing, the corpse reclaim, self-resurrection and resurrection
-  sickness were compared and found matching, but not line by line.
+- **Gathering, crafting, lockpicking, disenchanting, fishing and resurrection,** compared line by line (Phase 2i).
+  What is left:
+  - **Failed openings.** A failed gathering, lockpicking or opening is told after its spell went off, with a cast
+    result only. Thistle Tea holds back `SMSG_SPELL_GO` and sends `SMSG_SPELL_FAILURE` and
+    `SMSG_SPELL_FAILED_OTHER`.
+  - **Lock spells:**
+    - their range is checked as the cast begins, without line of sight;
+    - a key or charge is spent when the attempt fails;
+    - a picked door doesn't close itself or spring its trap.
+  - **Locked objects by hand.** A locked door or button opens by hand without its key, and a locked chest never does.
+    Thistle Tea opens each with the key carried, and refuses without it.
+  - **Crafts.** A craft's focus, tools and reagents aren't checked again when it completes. A craft that doesn't fit
+    makes nothing and says nothing.
+  - **Disenchanting.** What's left on a disenchanted item is lost with its window; Thistle Tea stores it or shows it
+    again.
+  - **Unlearning a profession** doesn't check that it may be unlearned, nor drop the quests that need it.
+  - **The spirit healer** confirms at a ghost's hello, with no gossip menu. Ghosts don't see Thistle Tea's ghost-only
+    creatures, and the living see spirit healers.
+  - **Corpses.** A corpse in a dungeon copy is checked by map, not copy. Death doesn't root, nor set the stand flag
+    at release.
+- **Where Thistle Tea is wrong for 1.12, wvs keeps mangos's behaviour:**
+  - a missing tool is 0x78 (`TOTEMS`; Thistle Tea sends 0x26);
+  - fishing skill counts the poles' and hat's skill auras;
+  - quest items in node loot don't keep a node from despawning;
+  - the resurrection request carries the caster's name.
+
+  Bones, the spirit healer moving the player to a graveyard, a reclaim range that counts both bodies, Twisting
+  Nether and Poisons skill-ups are in mangos, and in neither Thistle Tea nor wvs.
 
 ### Creature AI, scripts and instances
 
@@ -123,15 +151,6 @@ Thistle Tea, with these exceptions:
 - Imported from Thistle Tea but not walked through end to end: Freedom for All Creatures (2969), the Gizelton
   Caravan (5821, 5943), The Great Masquerade (6403), The Balance of Light and Shadow (7622). About 176 world-database
   event quests rest on the generic area-trigger, script and escort paths, sampled rather than walked one by one.
-
-### The world and the social systems
-
-- Those watching a player may be told of a speed change twice: at the change and again at the client's
-  acknowledgement. Thistle Tea tells them once. The speeds set by a ghost's release, a revive and `.speed` reach
-  them only at the acknowledgement.
-- Going into or out of water ends what it breaks only by the client's swimming flag, not by the terrain's liquid.
-- An innkeeper's Hearthstone is given directly rather than by Bind's spell: in wvs a creature's create-item effect
-  gives the item to the caster.
 
 ## Tests and tooling
 

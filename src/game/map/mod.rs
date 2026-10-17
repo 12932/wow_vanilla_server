@@ -597,7 +597,8 @@ impl Map {
                                     y: c.y,
                                     z: c.z,
                                 };
-                                let corpse = death::Corpse::new(&p, at, c.orientation);
+                                let corpse =
+                                    death::Corpse::new(&self.realm.data, &p, at, c.orientation);
                                 self.add_corpse(corpse);
                             }
                         }

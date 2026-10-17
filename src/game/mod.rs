@@ -62,6 +62,8 @@ mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
+mod tests_parity_misc;
+#[cfg(test)]
 mod tests_parity_motion;
 #[cfg(test)]
 mod tests_parity_spells;

@@ -251,14 +251,7 @@ impl Player {
     pub fn carried_count_of(&self, entry: u32) -> u32 {
         self.items
             .iter()
-            .filter(|i| i.entry == entry)
-            .filter(|i| {
-                if i.bag == BAG_PLAYER {
-                    !(BANK_START..BUYBACK_END).contains(&i.slot)
-                } else {
-                    !(BANK_BAG_START..BANK_BAG_END).contains(&i.bag)
-                }
-            })
+            .filter(|i| i.entry == entry && i.carried())
             .map(|i| i.count())
             .sum()
     }
@@ -324,6 +317,16 @@ impl Item {
 
     pub fn set_count(&mut self, n: u32) {
         self.fields.set_u32(ITEM_FIELD_STACK_COUNT, n);
+    }
+
+    /// Whether it is carried: worn, in the pack and its bags, on the
+    /// keyring; not in the bank nor bought back.
+    pub fn carried(&self) -> bool {
+        if self.bag == BAG_PLAYER {
+            !(BANK_START..BUYBACK_END).contains(&self.slot)
+        } else {
+            !(BANK_BAG_START..BANK_BAG_END).contains(&self.bag)
+        }
     }
 }
 
@@ -430,6 +433,23 @@ pub fn add_item_with_property(
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
+    store(map, g, entry, count, alert, NewItemCreationType::Received)
+}
+
+/// [`add_item`] for what a player made: told as created ("You create"),
+/// as Thistle Tea and mangos tell a craft.
+pub fn add_created_item(map: &mut Map, g: Guid, entry: u32, count: u32) -> Result<(), Fail> {
+    store(map, g, entry, count, true, NewItemCreationType::Created)
+}
+
+fn store(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    alert: bool,
+    creation: NewItemCreationType,
+) -> Result<(), Fail> {
     let data = map.realm.data.clone();
     let Some(t) = data.item(entry).cloned() else {
         return Err(Fail::NotFound);
@@ -449,8 +469,10 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         if left == 0 {
             break;
         }
+        // Onto what is carried, never the bank (Thistle Tea's and mangos's
+        // stores).
         if item.entry == entry
-            && item.slot < BUYBACK_START
+            && item.carried()
             && item.count() < stack
             && !(item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END)
         {
@@ -476,11 +498,13 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
     if left > 0 {
         return Err(Fail::InventoryFull);
     }
+    // Where it went, for the push: a stack it joined is no one slot (-1,
+    // Thistle Tea's and mangos's).
     let mut last = None;
     for (i, add) in onto {
         let item = &mut p.items[i];
         item.set_count(item.count() + add);
-        last = Some((item.bag, item.slot));
+        last = Some((item.bag, u32::MAX));
     }
     let mut batch = update::Batch::new();
     for (bag, slot, n) in new_slots {
@@ -490,7 +514,7 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         let item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
         p.items.push(item);
-        last = Some((bag, slot));
+        last = Some((bag, u32::from(slot)));
     }
     for frame in batch.finish() {
         p.outbound.send_frame(frame);
@@ -507,10 +531,10 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
         p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
             guid: g,
             source: NewItemSource::Looted,
-            creation_type: NewItemCreationType::Received,
+            creation_type: creation,
             alert_chat: NewItemChatAlert::Show,
             bag_slot: bag,
-            item_slot: u32::from(slot),
+            item_slot: slot,
             item: entry,
             item_suffix_factor: 0,
             item_random_property_id: 0,
