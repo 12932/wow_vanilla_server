@@ -664,3 +664,37 @@ async fn an_area_spares_the_creature_types_its_spell_doesnt_name() {
         .unwrap();
     assert_eq!(hurt, (false, true));
 }
+
+#[tokio::test]
+async fn a_channel_on_the_pet_ends_on_the_pet() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "FUNNEL");
+    let w = c.enter("Funnelw", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            level(m, w, 60, &[688, HEALTH_FUNNEL]);
+            spells::cast_triggered(m, w, 688, None);
+            let imp = crate::game::map::pets::pet_of(m, w).expect("the imp");
+            // The client aims Health Funnel at the warlock.
+            let went = spells::cast(
+                m,
+                w,
+                HEALTH_FUNNEL,
+                Targets {
+                    unit: Some(w),
+                    ..Default::default()
+                },
+                None,
+            );
+            let on = has(m, imp, HEALTH_FUNNEL);
+            spells::interrupt(m, w);
+            (went, on, has(m, imp, HEALTH_FUNNEL))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, false), "the imp's funnel goes with it");
+}
