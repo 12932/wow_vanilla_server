@@ -578,11 +578,8 @@ async fn a_trap_springs_on_a_foe_as_its_charges_and_cooldown_allow() {
         };
         look(m);
         let idle = marks(m);
-        m.creature_mut(sheep).unwrap().fields.set_flag(
-            crate::game::fields::UNIT_FIELD_FLAGS,
-            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-            true,
-        );
+        // In a fight, with Alice.
+        crate::game::map::combat::engage(m, ga, sheep);
         look(m);
         let fighting = marks(m);
         crate::game::map::auras::remove_spell(m, sheep, MARK, None);

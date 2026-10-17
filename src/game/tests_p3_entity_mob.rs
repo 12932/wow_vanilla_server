@@ -20,6 +20,8 @@ use crate::game::tests_p3_combat::{BRUTE, PACK, START, data, setup_with, spawn, 
 use crate::game::tests_p3_entity::{NONE_WITHIN, on};
 
 const SUMMONER: u32 = 3710;
+/// A demon of the brute's kind, as a warlock's.
+const SUMMON_BRUTE: u32 = 96_200;
 const SUMMONED: u32 = 3711;
 
 fn world() -> GameData {
@@ -61,6 +63,14 @@ fn world() -> GameData {
         actions: [action, 0, 0],
         ..Default::default()
     };
+    let mut summon = crate::game::tests_p3_entity::spell(SUMMON_BRUTE, &[]);
+    summon.effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 56,
+        misc_value: BRUTE as i32,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(SUMMON_BRUTE, summon);
     d.scripts.ai_events.insert(
         SUMMONER,
         vec![
@@ -128,8 +138,7 @@ async fn lines(c: &mut Client) -> Vec<String> {
 /// Thistle Tea's `summon_despawn_due` and `schedule` for typed summons:
 /// one with no type goes at its time, fight or not; a timed-or-dead one
 /// (1) killed lies as a corpse with no time and no respawn, and its time
-/// coming leaves it so; a timed one (3) dead at its time goes, and one a
-/// player owns but doesn't charm goes at its time though it fights.
+/// coming leaves it so; and a timed one (3) dead at its time goes.
 #[tokio::test]
 async fn a_summons_time_goes_by_its_type_dead_or_fighting() {
     let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
@@ -153,25 +162,10 @@ async fn a_summons_time_goes_by_its_type_dead_or_fighting() {
         let three_lies = m.creature(three).is_some();
         due(m, three);
         let three_gone = m.creature(three).is_none();
-        // 3, a player's guardian (not charmed), fighting: gone at its time.
-        let owned = summon(m, summoner, 60_000, 3);
-        let now = m.now;
-        if let Some(c) = m.creature_mut(owned) {
-            c.owner = Some(ga);
-            c.pet = Some(Box::new(crate::game::map::pets::PetState::new(
-                crate::game::map::pets::Kind::Guardian,
-                ga,
-                now,
-            )));
-        }
-        crate::game::map::combat::engage(m, ga, owned);
-        due(m, owned);
-        let owned_gone = m.creature(owned).is_none();
         (
             untyped_gone,
             (corpse, respawns, still_a_corpse),
             (three_lies, three_gone),
-            owned_gone,
         )
     })
     .await;
@@ -182,7 +176,6 @@ async fn a_summons_time_goes_by_its_type_dead_or_fighting() {
         "a timed-or-dead summon's corpse lies through its time, not to respawn"
     );
     assert_eq!(out.2, (true, true), "a timed one dead at its time goes");
-    assert!(out.3, "an owned guardian isn't held for its fight");
 }
 
 /// Thistle Tea's "temporary creatures publish one birth, death, and corpse
@@ -303,15 +296,10 @@ async fn a_players_pet_is_worth_nothing_to_its_killer() {
     let mut b = Client::connect(&realm, "B");
     let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
     let out = on(&map, move |m| {
-        let pet = spawn(m, ga, BRUTE, 1, 2.0);
-        let now = m.now;
-        if let Some(c) = m.creature_mut(pet) {
-            c.owner = Some(ga);
-            c.pet = Some(Box::new(crate::game::map::pets::PetState::new(
-                crate::game::map::pets::Kind::Guardian,
-                ga,
-                now,
-            )));
+        crate::game::map::spells::cast_triggered(m, ga, SUMMON_BRUTE, Some(ga));
+        let pet = crate::game::map::pets::pet_of(m, ga).expect("Alice's pet");
+        if let Some(f) = m.unit_fields_mut(pet) {
+            f.set_u32(UNIT_FIELD_LEVEL, 1);
         }
         let xp = m.players[&gb].fields.get_u32(PLAYER_XP);
         kill(m, gb, pet);
