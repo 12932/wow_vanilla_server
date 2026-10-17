@@ -1502,9 +1502,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             event_ai::set_phase(map, source, rand::rng().random_range(lo..=hi));
             true
         }
-        // Flee: to the nearest friend for help, or in fear for a while.
+        // Flee: in fear for a while, or (datalong) to the nearest friend
+        // for help.
         47 => {
-            crate::game::map::creature_combat::flee_for_assistance(map, source);
+            crate::game::map::creature_combat::flee_for_assistance(map, source, d1 != 0);
             true
         }
         // Damage the target: an amount or a percentage of its health.
@@ -1587,7 +1588,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // React state: 0 passive, 1 defensive, 2 aggressive.
         59 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
+                use crate::game::map::assistance::Reaction;
                 s.passive = d1 == 0;
+                s.reaction = Some(match d1 {
+                    0 => Reaction::Passive,
+                    1 => Reaction::Defensive,
+                    _ => Reaction::Aggressive,
+                });
             }
             if let Some(c) = creature_mut(map, source) {
                 let template_hostile = data

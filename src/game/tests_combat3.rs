@@ -134,13 +134,15 @@ fn data() -> GameData {
     let mut peasant = creature(PEASANT.0, "Peon");
     peasant.faction = TOWN;
     peasant.civilian = true;
+    // It fights back, but starts no fight: it calls the guards.
+    peasant.flags_extra = 0x2;
     peasant.static_flags1 = 0x0800_0000;
     peasant.detection_range = 10.0;
     d.creature_templates.insert(PEASANT.0, peasant);
     let mut guard = creature(GUARD.0, "Grunt");
     guard.faction = TOWN;
-    guard.flags_extra = 0x400;
     // It waits to be called.
+    guard.flags_extra = 0x400 | 0x2;
     guard.civilian = true;
     d.creature_templates.insert(GUARD.0, guard);
     let mut mage = creature(MAGE.0, "Conjurer");

@@ -859,6 +859,7 @@ mod combat {
             damage_multiplier: 1.0,
             base_attack_time: 2000,
             xp_multiplier: 1.0,
+            detection_range: 20.0,
             ..Default::default()
         };
         d.creature_templates

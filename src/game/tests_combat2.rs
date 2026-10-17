@@ -104,10 +104,28 @@ fn data() -> GameData {
             ..Default::default()
         },
     );
-    // The dummies are of a faction of their own.
+    // The dummies are of a faction of their own, which answers calls for
+    // help, and call for it.
     let mut dummy = creature(DUMMY.0, "Dummy");
     dummy.faction = 8;
+    dummy.call_for_help_range = 5.0;
     d.creature_templates.insert(DUMMY.0, dummy);
+    d.faction_templates.insert(
+        8,
+        FactionTemplate {
+            id: 8,
+            flags: 0x01,
+            ..Default::default()
+        },
+    );
+    d.faction_templates.insert(
+        1,
+        FactionTemplate {
+            id: 1,
+            faction: 1,
+            ..Default::default()
+        },
+    );
     let mut brute = creature(BRUTE.0, "Brute");
     brute.equipment_id = 7;
     d.creature_templates.insert(BRUTE.0, brute);
@@ -546,7 +564,7 @@ async fn a_creature_flees_to_its_kind_who_come_to_fight() {
     let helper = map
         .query(move |m| {
             crate::game::map::ai::attacked(m, target, ga);
-            creature_combat::flee_for_assistance(m, target);
+            creature_combat::flee_for_assistance(m, target, true);
             m.creature(target)
                 .and_then(|c| c.engagement.flee)
                 .and_then(|f| f.helper)
@@ -563,8 +581,8 @@ async fn a_creature_flees_to_its_kind_who_come_to_fight() {
         _ => None,
     })
     .await;
-    // Arrived: its friend joins in.
-    let joined = map
+    // Arrived: it calls, and its friend comes a moment later.
+    let at_once = map
         .query(move |m| {
             let at = m.creature(buddy).unwrap().position;
             let c = m.creature_mut(target).unwrap();
@@ -572,6 +590,14 @@ async fn a_creature_flees_to_its_kind_who_come_to_fight() {
             c.motion = Motion::Idle { until: None };
             c.engagement.next_move_at = None;
             creature_combat::controlled_step(m, target);
+            m.creature(buddy).is_some_and(|c| c.combat.attacking)
+        })
+        .await
+        .unwrap();
+    assert!(!at_once, "not at once");
+    tokio::time::sleep(Duration::from_millis(1700)).await;
+    let joined = map
+        .query(move |m| {
             m.creature(buddy)
                 .is_some_and(|c| c.combat.attacking && c.combat.victim == ga)
         })

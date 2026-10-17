@@ -50,6 +50,8 @@ pub struct Scripted {
     pub run: bool,
     /// Passive: it doesn't look for enemies.
     pub passive: bool,
+    /// A reaction mode a script set, over its template's.
+    pub reaction: Option<crate::game::map::assistance::Reaction>,
     /// A spell list a script set, over its template's.
     pub spell_list: Option<u32>,
     /// A gossip menu a script set.

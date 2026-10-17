@@ -305,7 +305,7 @@ pub fn leader_walked(map: &mut Map, leader: Guid, to: Vector3d, facing: f32, run
         if !ok {
             continue;
         }
-        let angle = facing + m.angle.to_radians();
+        let angle = facing + m.angle;
         let place = Vector3d {
             x: to.x + m.distance * angle.cos(),
             y: to.y + m.distance * angle.sin(),

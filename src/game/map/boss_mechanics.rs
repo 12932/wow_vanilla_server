@@ -111,7 +111,11 @@ fn golemaggs_trust(map: &mut Map, golemagg: Guid) {
     let Some(c) = map.creature(golemagg) else {
         return;
     };
-    if !c.alive() || !c.combat.attacking {
+    // In a fight: whether or not he has a victim.
+    let fighting = c.combat.attacking
+        || c.fields
+            .has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT);
+    if !c.alive() || !fighting {
         return;
     }
     let at = c.position;
