@@ -1027,3 +1027,187 @@ async fn a_vendor_wont_sell_what_wants_more_reputation() {
     })
     .await;
 }
+
+const SWORD: u32 = 900_390;
+const POTIONS: u32 = 900_391;
+
+async fn trade_window(a: &mut Client, b: &mut Client, gb: Guid) {
+    a.send(CMSG_INITIATE_TRADE { guid: gb }).await;
+    b.wait_for("the trade asked", |m| match m {
+        ServerOpcodeMessage::SMSG_TRADE_STATUS(s) => {
+            matches!(s.status, SMSG_TRADE_STATUS_TradeStatus::BeginTrade { .. }).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    b.send(CMSG_BEGIN_TRADE {}).await;
+}
+
+async fn place(map: &MapHandle, g: Guid, entry: u32) -> (u8, u8) {
+    on(map, move |m| {
+        let p = &m.players[&g];
+        let it = p.items.iter().find(|i| i.entry == entry).unwrap();
+        (it.bag, it.slot)
+    })
+    .await
+}
+
+/// What the trade ends in, for `c`.
+async fn trade_end(c: &mut Client) -> SMSG_TRADE_STATUS_TradeStatus {
+    c.wait_for("the trade's end", |m| match m {
+        ServerOpcodeMessage::SMSG_TRADE_STATUS(s)
+            if matches!(
+                s.status,
+                SMSG_TRADE_STATUS_TradeStatus::TradeComplete
+                    | SMSG_TRADE_STATUS_TradeStatus::TradeCanceled
+            ) =>
+        {
+            Some(s.status.clone())
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// The offer is checked again as the trade goes through, as mangos's
+/// `CanBeTraded` and Thistle Tea's `validate_offers` check it: an item
+/// equipped after it was offered, or a stack split smaller than the
+/// partner was shown, calls the trade off.
+#[tokio::test]
+async fn a_trade_checks_its_offer_again_as_it_goes_through() {
+    let mut d = GameData::empty();
+    d.items.insert(
+        SWORD,
+        ItemTemplate {
+            entry: SWORD,
+            name: "Sword".into(),
+            class: 2,
+            subclass: 7,
+            display_id: 1000,
+            quality: 1,
+            inventory_type: 13,
+            allowable_class: -1,
+            allowable_race: -1,
+            stackable: 1,
+            ..Default::default()
+        },
+    );
+    d.items.insert(
+        POTIONS,
+        ItemTemplate {
+            entry: POTIONS,
+            name: "Potion".into(),
+            class: 0,
+            display_id: 1001,
+            quality: 1,
+            allowable_class: -1,
+            allowable_race: -1,
+            stackable: 20,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, ga, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Bea", Race::Human, Class::Warrior).await;
+    a.sees(gb).await;
+    on(&map, move |m| {
+        crate::game::map::inventory::add_item(m, ga, SWORD, 1, false).unwrap();
+        crate::game::map::inventory::add_item(m, ga, POTIONS, 20, false).unwrap();
+    })
+    .await;
+    // The sword offered, then worn.
+    trade_window(&mut a, &mut b, gb).await;
+    let (bag, slot) = place(&map, ga, SWORD).await;
+    a.send(CMSG_SET_TRADE_ITEM {
+        trade_slot: 0,
+        bag,
+        slot,
+    })
+    .await;
+    b.wait_for("the offer", |m| match m {
+        ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(t) => {
+            (t.trade_slots[0].item == SWORD).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    a.send(CMSG_AUTOEQUIP_ITEM {
+        source_bag: bag,
+        source_slot: slot,
+    })
+    .await;
+    let mut worn = place(&map, ga, SWORD).await;
+    for _ in 0..100 {
+        if worn != (bag, slot) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        worn = place(&map, ga, SWORD).await;
+    }
+    assert_eq!(
+        worn,
+        (crate::game::store::BAG_PLAYER, 15),
+        "in the main hand"
+    );
+    a.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
+    b.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
+    assert_eq!(
+        trade_end(&mut b).await,
+        SMSG_TRADE_STATUS_TradeStatus::TradeCanceled,
+        "the worn sword stays"
+    );
+    assert_eq!(place(&map, ga, SWORD).await, worn);
+    // A stack offered whole, then split.
+    trade_window(&mut a, &mut b, gb).await;
+    let (bag, slot) = place(&map, ga, POTIONS).await;
+    a.send(CMSG_SET_TRADE_ITEM {
+        trade_slot: 0,
+        bag,
+        slot,
+    })
+    .await;
+    b.wait_for("the offer", |m| match m {
+        ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(t) => {
+            (t.trade_slots[0].stack_count == 20).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    a.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
+    let free = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        m.players[&ga].free_carry_slot(&data).unwrap()
+    })
+    .await;
+    a.send(CMSG_SPLIT_ITEM {
+        source_bag: bag,
+        source_slot: slot,
+        destination_bag: free.0,
+        destination_slot: free.1,
+        amount: 19,
+    })
+    .await;
+    for _ in 0..100 {
+        if on(&map, move |m| {
+            m.players[&ga]
+                .items
+                .iter()
+                .filter(|i| i.entry == POTIONS)
+                .count()
+        })
+        .await
+            == 2
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    b.send(CMSG_ACCEPT_TRADE { unknown1: 0 }).await;
+    assert_eq!(
+        trade_end(&mut b).await,
+        SMSG_TRADE_STATUS_TradeStatus::TradeCanceled,
+        "not the one potion left of the twenty shown"
+    );
+    let theirs = on(&map, move |m| m.players[&gb].count_of(POTIONS)).await;
+    assert_eq!(theirs, 0);
+}
