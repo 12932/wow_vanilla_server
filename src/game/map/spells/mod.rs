@@ -5,12 +5,14 @@
 
 pub mod area;
 pub mod aura_rank;
+pub mod capacity;
 pub mod checks;
 pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 pub mod environment;
+pub mod heartbeat;
 mod holiday;
 pub mod log;
 pub mod mods;
@@ -860,8 +862,9 @@ fn execute(
         shared,
     };
     let travels = travels(map) && s.speed > 0.0;
+    let one_of = class_scripts::one_of(map, s);
     for (target, effects) in resolved {
-        let mut effects = class_scripts::effects_for(s, target, &launch.targets, effects);
+        let mut effects = class_scripts::effects_for(s, target, &launch.targets, effects, one_of);
         for (i, e) in effects.iter_mut().enumerate() {
             if professions & (1 << i) != 0 {
                 *e = false;
@@ -903,7 +906,11 @@ fn execute(
     effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
-    if !triggered && let Some(finish) = class_scripts::finish_trigger(s) {
+    // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however
+    // its spell comes.
+    if let Some(finish) = class_scripts::finish_trigger(s)
+        && (!triggered || s.script_name == "spell_wolfshead_helm")
+    {
         cast_triggered(map, caster, finish, None);
     }
     if combo > 0 && (landed_on_main || targets.unit.is_none()) {
@@ -911,16 +918,16 @@ fn execute(
     }
     if !triggered {
         mods::spend(map, caster, &m);
-        // Casting breaks what casting breaks, but the spell's own aura.
-        let breaks = auras::auras(map, caster).is_some_and(|a| {
-            a.holders
-                .iter()
-                .any(|h| h.spell != s.id && h.interrupt_flags & auras::INTERRUPT_CAST != 0)
-        });
-        if breaks {
-            auras::remove_where(map, caster, |h| {
-                h.spell != s.id && h.interrupt_flags & auras::INTERRUPT_CAST != 0
-            });
+        // Casting breaks what casting breaks, but the spell's own aura (and
+        // stealth, for what stealth allows and a lucky Improved Sap).
+        let stealthy = class_scripts::keeps_stealth(map, caster, s);
+        let breaks = |h: &auras::Holder| {
+            h.spell != s.id
+                && h.interrupt_flags & auras::INTERRUPT_CAST != 0
+                && !(stealthy && h.has(auras::AURA_MOD_STEALTH))
+        };
+        if auras::auras(map, caster).is_some_and(|a| a.holders.iter().any(breaks)) {
+            auras::remove_where(map, caster, breaks);
         }
     }
 }
