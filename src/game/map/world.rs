@@ -317,6 +317,7 @@ pub const GO_DOOR: u8 = 0;
 pub const GO_BUTTON: u8 = 1;
 pub const GO_CHEST: u8 = 3;
 pub const GO_CHAIR: u8 = 7;
+pub const GO_SPELLCASTER: u8 = 22;
 
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
@@ -336,6 +337,11 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::combat::dist(ppos, o.position) > 10.0 {
         return;
     }
+    // A launcher by Elune's lake counts its fireworks; it launches them too.
+    crate::game::omen::use_object(map, object);
+    let Some(o) = map.gameobject(object) else {
+        return;
+    };
     let (kind, position, orientation) = (o.kind, o.position, o.orientation);
     let lock = map
         .realm
@@ -360,6 +366,18 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
             let gm = map.players.get(&player).is_some_and(|p| p.gm);
             if lock == 0 || gm {
                 crate::game::map::loot::open_object(map, player, object);
+            }
+        }
+        // A spellcaster: its spell, on the one who uses it.
+        GO_SPELLCASTER => {
+            let spell = map
+                .realm
+                .data
+                .gameobject_templates
+                .get(&map.gameobject(object).map_or(0, |o| o.entry))
+                .map_or(0, |t| t.data[0]);
+            if spell != 0 {
+                crate::game::map::spells::cast_triggered(map, player, spell, Some(player));
             }
         }
         GO_CHAIR => {
