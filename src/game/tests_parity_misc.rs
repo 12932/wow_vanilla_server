@@ -2203,3 +2203,33 @@ async fn a_spell_focus_reaches_past_both_bodies() {
     .await;
     assert_eq!(failed(&mut a, BRAZIER_RECIPE).await, 0x5E);
 }
+
+#[tokio::test]
+async fn a_craft_is_told_as_created_and_a_stack_joined_as_no_one_slot() {
+    let realm = harness::realm_with(crafting_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let push = async |a: &mut Client| {
+        a.wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) if r.item == CRAFTED => {
+                Some((r.creation_type, r.item_slot))
+            }
+            _ => None,
+        })
+        .await
+    };
+    on_map(&realm, move |m| {
+        crate::game::map::skills::learn_skill(m.players.get_mut(&g).unwrap(), 164, 1);
+        cast(m, g, TWICE_LISTED, Default::default());
+    })
+    .await;
+    let (created, slot) = push(&mut a).await;
+    assert_eq!(created, NewItemCreationType::Created);
+    assert_ne!(slot, u32::MAX, "a slot of its own");
+    on_map(&realm, move |m| {
+        cast(m, g, TWICE_LISTED, Default::default())
+    })
+    .await;
+    let (_, slot) = push(&mut a).await;
+    assert_eq!(slot, u32::MAX, "onto the stack");
+}
