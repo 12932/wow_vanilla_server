@@ -126,7 +126,7 @@ pub fn load(dir: &Path) -> GameData {
             load_pets(&db, dbc.as_ref(), &mut data);
             load_misc(&db, dbc.as_ref(), &mut data);
             super::scripts_load::load(&db, &mut data);
-            super::tt_scripts::install(&mut data);
+            let _ = super::tt_scripts::install(&mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }

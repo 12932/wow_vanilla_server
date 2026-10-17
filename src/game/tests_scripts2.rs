@@ -447,3 +447,318 @@ async fn a_pooled_node_comes_back_as_one_of_its_pool() {
     }
     assert!(seen.len() > 1, "it came back elsewhere: {seen:?}");
 }
+
+/// The real data: Thistle Tea's creature scripts all come in, and the
+/// bosses' encounters with them.
+#[test]
+fn the_real_thistle_tea_scripts_come_in_whole() {
+    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let mut data = crate::game::data::load::load(dir);
+    // Onyxia, Ragnaros, Majordomo, Garr, Shazzrah, Omokk, Gandling.
+    for entry in [10184, 11502, 12018, 12057, 12264, 9196, 1853] {
+        assert!(
+            data.scripts
+                .ai_events
+                .get(&entry)
+                .is_some_and(|e| !e.is_empty()),
+            "{entry}"
+        );
+    }
+    // Every action names a script, and every step's sub-script one too.
+    let events: Vec<AiEvent> = data.scripts.ai_events.values().flatten().cloned().collect();
+    for e in events.iter().filter(|e| e.id > 100_000) {
+        for a in e.actions.iter().filter(|a| **a != 0) {
+            assert!(data.scripts.ai_scripts.contains_key(a), "{e:?}");
+        }
+    }
+    assert!(
+        data.scripts.routes.len() >= 40,
+        "{}",
+        data.scripts.routes.len()
+    );
+    let left = crate::game::data::tt_scripts::install(&mut data);
+    assert!(left.is_empty(), "left out: {left:?}");
+}
+
+/// A raid of `map` to send a player into.
+fn raid(d: &mut GameData, map: u32, name: &str) {
+    d.maps.insert(
+        map,
+        MapInfo {
+            id: map,
+            internal_name: name.into(),
+            name: name.into(),
+            instance_type: 2,
+            player_limit: 0,
+        },
+    );
+}
+
+/// Send `c` to `at` in `map`'s copy, and make them hard to kill.
+async fn go_to(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    c: &mut Client,
+    map: u32,
+    at: (f32, f32, f32),
+) {
+    let g = c.guid;
+    let from = realm.registry.online(g).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            g,
+            crate::game::map::MapKey::world(map),
+            Vector3d {
+                x: at.0,
+                y: at.1,
+                z: at.2,
+            },
+            0.0,
+        )
+    });
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+    let to = realm.registry.online(g).unwrap().map();
+    to.call(move |m| {
+        if let Some(p) = m.players.get_mut(&g) {
+            p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 10_000_000);
+            p.fields.set_u32(UNIT_FIELD_HEALTH, 10_000_000);
+        }
+    });
+}
+
+const ONYXIA: u32 = 10184;
+
+/// Onyxia's flight, as Thistle Tea scripts it: at 65 percent she flies to
+/// the middle of her lair, lifts off and circles to her first point; at 40
+/// she lands and fights on the ground again.
+#[tokio::test]
+async fn onyxia_takes_to_the_air_and_lands_again() {
+    let mut d = GameData::empty();
+    raid(&mut d, 249, "OnyxiaLairInstance");
+    let mut onyxia = template(ONYXIA, "Onyxia", 14);
+    onyxia.health_max = 100_000;
+    onyxia.level_min = 63;
+    onyxia.level_max = 63;
+    // Fast, so the flight is over in moments.
+    onyxia.speed_run = 12.0;
+    d.creature_templates.insert(ONYXIA, onyxia);
+    d.creature_templates
+        .insert(11262, template(11262, "Onyxian Whelp", 14));
+    d.creature_spawns.insert(
+        249,
+        vec![CreatureSpawn {
+            guid: 47572,
+            entries: vec![ONYXIA],
+            map: 249,
+            x: -4.8689,
+            y: -217.171,
+            z: -86.7104,
+            orientation: std::f32::consts::PI,
+            ..Default::default()
+        }],
+    );
+    // Here, without the world database's escort paths.
+    let left = crate::game::data::tt_scripts::install(&mut d);
+    assert!(left.keys().all(|k| k.starts_with("route of")), "{left:?}");
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 249, (-10.0, -217.0, -86.7)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    let onyxia = map
+        .query(|m| {
+            m.creatures
+                .iter()
+                .find(|(_, c)| c.entry == ONYXIA)
+                .map(|(_, c)| c.guid)
+        })
+        .await
+        .flatten()
+        .expect("Onyxia");
+    let state = |map: crate::game::map::MapHandle| async move {
+        map.query(move |m| {
+            let c = m.creature(onyxia).unwrap();
+            (
+                crate::game::map::event_ai::phase(m, onyxia),
+                c.position,
+                crate::game::map::event_ai::scripted(m, onyxia).is_some_and(|s| s.fly),
+                c.combat.attacking,
+            )
+        })
+        .await
+        .unwrap()
+    };
+    map.call(move |m| {
+        crate::game::map::ai::attacked(m, onyxia, me);
+        let f = m.unit_fields_mut(onyxia).unwrap();
+        let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+        f.set_u32(UNIT_FIELD_HEALTH, max * 64 / 100);
+    });
+    // Off to the middle, up, and round to her first point (7).
+    let mut circled = false;
+    for _ in 0..80 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (phase, _, fly, fighting) = state(map.clone()).await;
+        assert!(fighting, "she fights on in the air");
+        if phase == 17 {
+            assert!(fly, "flying");
+            circled = true;
+            break;
+        }
+    }
+    assert!(circled, "at point 7: {:?}", state(map.clone()).await);
+    let (_, at, _, _) = state(map.clone()).await;
+    assert!(
+        crate::game::map::combat::dist(
+            at,
+            Vector3d {
+                x: 22.8763,
+                y: -217.152,
+                z: -65.0548
+            }
+        ) < 3.0,
+        "{at:?}"
+    );
+    // At 40 percent she comes down, on the north side from point 7.
+    map.call(move |m| {
+        let f = m.unit_fields_mut(onyxia).unwrap();
+        let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+        f.set_u32(UNIT_FIELD_HEALTH, max * 39 / 100);
+    });
+    let mut landed = false;
+    for _ in 0..80 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (phase, _, fly, _) = state(map.clone()).await;
+        if phase == 5 {
+            assert!(!fly, "on the ground");
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "landed: {:?}", state(map.clone()).await);
+    assert!(
+        map.query(move |m| crate::game::map::event_ai::combat_movement(m, onyxia))
+            .await
+            .unwrap(),
+        "she chases again"
+    );
+}
+
+const MAJORDOMO: u32 = 12018;
+
+/// Majordomo Executus calls his guard when he comes; each of them that
+/// falls takes his fight a phase on, and when the last is down he yields,
+/// settles the encounter, and turns friendly.
+#[tokio::test]
+async fn majordomo_yields_when_his_guard_is_dead() {
+    let mut d = GameData::empty();
+    raid(&mut d, 409, "MoltenCore");
+    d.scripts.map_templates.insert(
+        409,
+        MapTemplate {
+            map: 409,
+            map_type: 2,
+            script_name: "instance_molten_core".into(),
+            ..Default::default()
+        },
+    );
+    let mut majordomo = template(MAJORDOMO, "Majordomo Executus", 14);
+    majordomo.health_max = 100_000;
+    d.creature_templates.insert(MAJORDOMO, majordomo);
+    for e in [11663, 11664] {
+        d.creature_templates
+            .insert(e, template(e, "Flamewaker", 14));
+    }
+    d.creature_spawns.insert(
+        409,
+        vec![CreatureSpawn {
+            guid: 56500,
+            entries: vec![MAJORDOMO],
+            map: 409,
+            x: 758.089,
+            y: -1176.71,
+            z: -118.64,
+            orientation: 3.12414,
+            ..Default::default()
+        }],
+    );
+    let _ = crate::game::data::tt_scripts::install(&mut d);
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 409, (750.0, -1176.0, -118.6)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    let guard = |map: crate::game::map::MapHandle| async move {
+        map.query(|m| {
+            m.creatures
+                .iter()
+                .filter(|(_, c)| matches!(c.entry, 11663 | 11664) && c.alive())
+                .map(|(_, c)| c.guid)
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap()
+    };
+    let mut guards = Vec::new();
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        guards = guard(map.clone()).await;
+        if guards.len() == 8 {
+            break;
+        }
+    }
+    assert_eq!(guards.len(), 8, "his guard comes with him");
+    let majordomo = map
+        .query(|m| {
+            m.creatures
+                .iter()
+                .find(|(_, c)| c.entry == MAJORDOMO)
+                .map(|(_, c)| c.guid)
+        })
+        .await
+        .flatten()
+        .unwrap();
+    // They fight as one.
+    let first = guards[0];
+    map.call(move |m| crate::game::map::ai::attacked(m, first, me));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let fighting = map
+        .query(move |m| m.creature(majordomo).unwrap().combat.attacking)
+        .await
+        .unwrap();
+    assert!(fighting, "Majordomo joins his guard's fight");
+    for (i, g) in guards.iter().copied().enumerate() {
+        map.call(move |m| crate::game::map::combat::deal_damage(m, me, g, 1_000_000));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let phase = map
+            .query(move |m| crate::game::map::event_ai::phase(m, majordomo))
+            .await
+            .unwrap();
+        assert_eq!(phase as usize, i + 1, "a phase for each that falls");
+    }
+    let settled = map
+        .query(|m| crate::game::map::instance_script::get_data(m, 8))
+        .await
+        .unwrap();
+    assert_eq!(settled, 3, "the encounter is done");
+    let mut friendly = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        friendly = map
+            .query(move |m| {
+                m.creature(majordomo)
+                    .is_some_and(|c| c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == 1080)
+            })
+            .await
+            .unwrap();
+        if friendly {
+            break;
+        }
+    }
+    assert!(friendly, "he yields");
+}

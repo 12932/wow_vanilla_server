@@ -518,6 +518,17 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
         {
             continue;
         }
+        if e.flags & EF_PAUSE_WHILE_STUNNED != 0 && crate::game::map::auras::held(map, g, false) {
+            continue;
+        }
+        if e.flags & EF_VICTIM_IN_MELEE != 0
+            && !victim(map, g).is_some_and(|v| {
+                matches!((map.unit_view(g), map.unit_view(v)), (Some(a), Some(b))
+                    if crate::game::map::combat::in_melee_range(&a, &b))
+            })
+        {
+            continue;
+        }
         let Some(target) = satisfy(map, g, e, invoker) else {
             continue;
         };
@@ -635,6 +646,32 @@ pub fn tick(map: &mut Map, g: Guid) {
         return;
     }
     s.next_tick = Some(now + TICK);
+    // A stunned creature's paused timers wait out the stun.
+    let paused: Vec<usize> = map
+        .creature(g)
+        .and_then(|c| events_of(map, c.entry))
+        .map(|events| {
+            events
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.flags & EF_PAUSE_WHILE_STUNNED != 0)
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .unwrap_or_default();
+    if !paused.is_empty()
+        && crate::game::map::auras::held(map, g, false)
+        && let Some(s) = scripted_mut(map, g)
+    {
+        for i in paused {
+            if let Some(Some(t)) = s.timers.get_mut(i) {
+                *t += TICK;
+            }
+        }
+    }
+    let Some(s) = scripted_mut(map, g) else {
+        return;
+    };
     let was = s.in_combat;
     s.in_combat = combat;
     if was && !combat {
@@ -931,6 +968,174 @@ pub fn follow_step(map: &mut Map, g: Guid) {
     }
     let run = dist(c.position, spot) > 10.0 || scripted(map, g).is_some_and(|s| s.run);
     scripts::move_to(map, g, spot, run);
+}
+
+/// The spell a script made its swings.
+pub fn melee_spell(map: &Map, g: Guid) -> Option<u32> {
+    scripted(map, g).and_then(|s| s.melee_spell)
+}
+
+/// Down in a linked feign death.
+pub fn feigning(map: &Map, g: Guid) -> bool {
+    scripted(map, g).is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+}
+
+/// A killing blow on a creature with a linked feign death: it goes down
+/// instead, at one health, and stops fighting.
+pub fn feign_death(map: &mut Map, g: Guid) -> bool {
+    let now = map.now;
+    let Some(f) = scripted(map, g).and_then(|s| s.feign) else {
+        return false;
+    };
+    if f.down_at.is_some() {
+        return true;
+    }
+    crate::game::map::spells::interrupt(map, g);
+    crate::game::map::combat::stop_attack(map, g);
+    let held: Vec<u32> = map
+        .creature(g)
+        .map(|c| c.auras.holders.iter().map(|a| a.spell).collect())
+        .unwrap_or_default();
+    for spell in held {
+        crate::game::map::auras::remove_spell(map, g, spell, None);
+    }
+    let at = map.position_of(g);
+    if let Some(c) = map.creature_mut(g) {
+        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+        c.fields.set_u32(UNIT_FIELD_HEALTH, 1);
+        c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, 7);
+        let dynamic = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
+        c.fields.set_u32(UNIT_DYNAMIC_FLAGS, dynamic | 0x20);
+        if let Some(s) = c.scripted.as_deref_mut()
+            && let Some(f) = s.feign.as_mut()
+        {
+            f.down_at = Some(now);
+        }
+    }
+    if let Some(at) = at {
+        let spline_id = map.next_spline_id;
+        map.next_spline_id = map.next_spline_id.wrapping_add(1);
+        let frame = crate::game::map::ai::stop_packet(g, at, spline_id);
+        map.send_to_observers(g, &frame, false);
+    }
+    scripts::start(map, ScriptTable::Generic, f.fall_script, g, g);
+    true
+}
+
+/// A creature down in a linked feign death: it gets up if a kin of its
+/// fights on near it when its time is up, and dies if none does.
+pub fn feign_tick(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let Some(f) = scripted(map, g).and_then(|s| s.feign) else {
+        return;
+    };
+    let Some(down) = f.down_at else {
+        return;
+    };
+    let foes: Vec<Guid> = map
+        .creature(g)
+        .map(|c| c.threat.iter().map(|(t, _)| *t).collect())
+        .unwrap_or_default();
+    if !foes
+        .iter()
+        .any(|t| map.unit_view(*t).is_some_and(|u| u.alive))
+    {
+        feign_reset(map, g, f, true);
+        return;
+    }
+    if now < down + f.delay {
+        return;
+    }
+    let me = map.position_of(g).unwrap_or_default();
+    let peer = map.creatures.iter().any(|(_, c)| {
+        c.guid != g
+            && c.entry == f.entry
+            && c.alive()
+            && c.combat.attacking
+            && c.fields.get_u32(UNIT_FIELD_HEALTH) > 1
+            && dist(c.position, me) <= f.radius
+    });
+    if peer {
+        feign_reset(map, g, f, true);
+        scripts::start(map, ScriptTable::Generic, f.revive_script, g, g);
+        return;
+    }
+    feign_reset(map, g, f, false);
+    if let Some(s) = scripted_mut(map, g) {
+        s.feign = None;
+    }
+    let killer = foes.first().copied().unwrap_or(g);
+    if let Some(c) = map.creature_mut(g) {
+        c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    }
+    crate::game::map::combat::kill(map, killer, g);
+}
+
+fn feign_reset(map: &mut Map, g: Guid, f: Feign, heal: bool) {
+    if f.pacify != 0 {
+        crate::game::map::auras::remove_spell(map, g, f.pacify, None);
+    }
+    let enemy = map
+        .creature(g)
+        .and_then(|c| c.threat.first().map(|(t, _)| *t));
+    if let Some(c) = map.creature_mut(g) {
+        c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, 0);
+        let dynamic = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
+        c.fields.set_u32(UNIT_DYNAMIC_FLAGS, dynamic & !0x20);
+        if heal {
+            let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, max);
+        }
+        if let Some(s) = c.scripted.as_deref_mut()
+            && let Some(f) = s.feign.as_mut()
+        {
+            f.down_at = None;
+        }
+    }
+    if heal && let Some(e) = enemy.filter(|e| map.unit_view(*e).is_some_and(|u| u.alive)) {
+        crate::game::map::ai::attacked(map, g, e);
+    }
+}
+
+/// A creature holding its path: let go when its summons since are gone,
+/// when a script lets it, or when its time runs out.
+pub fn hold_tick(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let Some(h) = scripted(map, g).and_then(|s| s.hold.clone()) else {
+        return;
+    };
+    let script = if now >= h.until {
+        if !h.signaled && h.expired_script != 0 {
+            h.expired_script
+        } else {
+            h.release_script
+        }
+    } else if h.signal || now < h.ready_at {
+        return;
+    } else {
+        let live: Vec<Guid> = scripted(map, g)
+            .map(|s| {
+                s.summoned
+                    .iter()
+                    .copied()
+                    .filter(|x| map.creature(*x).is_some_and(|c| c.alive()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !live.iter().all(|x| h.earlier.contains(x)) {
+            return;
+        }
+        h.release_script
+    };
+    if let Some(c) = map.creature_mut(g) {
+        if let Some(s) = c.scripted.as_deref_mut() {
+            s.hold = None;
+        }
+        if !matches!(c.motion, crate::game::map::creature::Motion::Moving(_)) {
+            c.motion = crate::game::map::creature::Motion::Idle { until: Some(now) };
+        }
+    }
+    scripts::start(map, ScriptTable::Generic, script, g, Guid::zero());
 }
 
 /// The phase scripts set.

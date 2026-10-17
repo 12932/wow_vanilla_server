@@ -1454,12 +1454,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             };
             map.remove_gameobject(o).is_some()
         }
+        // Melee on or off: off, it stays in the fight, but doesn't swing.
         42 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_melee = d1 == 0;
-            }
-            if d1 == 0 {
-                crate::game::map::combat::stop_attack(map, source);
             }
             true
         }

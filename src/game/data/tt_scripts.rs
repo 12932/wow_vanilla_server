@@ -40,21 +40,22 @@ struct Import<'a> {
     unknown: BTreeMap<String, u32>,
 }
 
-/// Thistle Tea's scripts, into the game data.
-pub fn install(data: &mut GameData) {
+/// Thistle Tea's scripts, into the game data; what of them has no
+/// meaning here, and how often.
+pub fn install(data: &mut GameData) -> BTreeMap<String, u32> {
     if !data.is_loaded() {
-        return;
+        return BTreeMap::new();
     }
     let mut json = String::new();
     if let Err(e) = flate2::read::GzDecoder::new(DUMP).read_to_string(&mut json) {
         warn!("Thistle Tea's scripts: {e}");
-        return;
+        return BTreeMap::new();
     }
     let root: Value = match serde_json::from_str(&json) {
         Ok(v) => v,
         Err(e) => {
             warn!("Thistle Tea's scripts: {e}");
-            return;
+            return BTreeMap::new();
         }
     };
     let mut im = Import {
@@ -66,6 +67,7 @@ pub fn install(data: &mut GameData) {
     if !im.unknown.is_empty() {
         info!("Thistle Tea's scripts: left out {:?}", im.unknown);
     }
+    im.unknown
 }
 
 impl Import<'_> {
