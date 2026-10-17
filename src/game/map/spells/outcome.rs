@@ -888,11 +888,42 @@ pub fn healing(
         h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
     }
     h = l.mods.apply(mods::OP_DAMAGE, h);
+    let chain = if l.chain > 0.0 { l.chain } else { 1.0 };
+    h = spell_healing_taken(map, target, h, s, index, Kind::Direct, 1, chain);
+    if l.crit {
+        h *= 1.5;
+    }
+    h.max(0.0) as u32
+}
+
+/// Healing of `amount` from effect `index` of `s` that `target` takes, as
+/// it lands (a heal over time's at each tick; Thistle Tea's
+/// `HealingReceived.spell_amount`). A spell of a damage class takes the
+/// target's flat healing taken for its school by its coefficient for
+/// `kind`, its `stacks` and its `chain` falloff, losing at most half, and
+/// Healing Way's gain on a Healing Wave; then, as for any heal, the
+/// strongest percentage cut and gain.
+#[allow(clippy::too_many_arguments)]
+pub fn spell_healing_taken(
+    map: &Map,
+    target: Guid,
+    amount: f32,
+    s: &SpellTemplate,
+    index: usize,
+    kind: Kind,
+    stacks: u32,
+    chain: f32,
+) -> f32 {
+    let amount = amount.max(0.0);
+    let Some(a) = auras::auras(map, target).filter(|_| matches!(s.dmg_class, 1..=3)) else {
+        return healing_taken(map, target, amount);
+    };
+    let benefit = a.sum_mask(AURA_MOD_HEALING, s.school_mask()) as f32;
+    let flat = (benefit * coefficient(map, s, index, kind) * stacks.max(1) as f32 * chain)
+        .max(-amount / 2.0);
     // Healing Way: more from each Healing Wave on the target.
-    if s.family_name == 11
-        && s.family_flags & 0x40 != 0
-        && let Some(a) = auras::auras(map, target)
-    {
+    let mut way = 1.0;
+    if s.family_name == 11 && s.family_flags & 0x40 != 0 {
         let pct: i32 = a
             .holders
             .iter()
@@ -903,26 +934,20 @@ pub fn healing(
                     .map(move |e| e.amount * x.stacks.max(1) as i32)
             })
             .sum();
-        h *= (100 + pct) as f32 / 100.0;
+        way = (100 + pct).max(0) as f32 / 100.0;
     }
-    h = healing_taken(map, target, h, s.school_mask());
-    if l.crit {
-        h *= 1.5;
-    }
-    h.max(0.0) as u32
+    healing_taken(map, target, (amount + flat) * way)
 }
 
-/// Healing of school mask `school` that `target` takes (Thistle Tea's
-/// `HealingReceived`): its flat modifiers for the school, taking at most
-/// half, then only its strongest percentage cut and strongest gain.
-pub fn healing_taken(map: &Map, target: Guid, amount: f32, school: u32) -> f32 {
+/// Healing of `amount` that `target` takes (Thistle Tea's
+/// `HealingReceived.amount`): only its strongest percentage cut and its
+/// strongest gain.
+pub fn healing_taken(map: &Map, target: Guid, amount: f32) -> f32 {
     match auras::auras(map, target) {
         Some(a) => {
-            let flat = (a.sum_mask(AURA_MOD_HEALING, school) as f32).max(-amount / 2.0);
             let cut = a.min(AURA_MOD_HEALING_PCT).min(0);
             let gain = a.max(AURA_MOD_HEALING_PCT).max(0);
-            ((amount + flat) * (100 + cut).max(0) as f32 / 100.0 * (100 + gain) as f32 / 100.0)
-                .max(0.0)
+            (amount * (100 + cut).max(0) as f32 / 100.0 * (100 + gain) as f32 / 100.0).max(0.0)
         }
         None => amount,
     }
@@ -1020,7 +1045,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     );
     let items = death_items(map, target, left);
     if left > 0 {
-        combat::deal_damage(map, caster, target, left);
+        combat::deal_damage_by(map, caster, target, left, 1, Some(s.id));
     }
     give_death_items(map, target, items);
     super::threat(map, caster, target, s, left as f32, &l.mods);

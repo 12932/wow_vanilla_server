@@ -11,7 +11,7 @@ pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
-pub use effects::dr_aura_gone;
+pub use effects::{dr_aura_gone, release_retained_combo_points, retained_combo_points_expired};
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
@@ -1269,8 +1269,9 @@ fn magnet(map: &mut Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Tar
     t
 }
 
-/// A rogue's or druid's combo points go.
+/// A rogue's or druid's combo points go, and any hold on them.
 pub fn clear_combo_points(map: &mut Map, caster: Guid) {
+    release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         c.combo_points = 0;
         c.combo_target = Guid::zero();
@@ -1376,7 +1377,7 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     let items = outcome::death_items(map, target, left);
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
-        combat::deal_damage(map, h.caster, target, left);
+        combat::deal_damage_by(map, h.caster, target, left, 1, Some(h.spell));
     }
     outcome::give_death_items(map, target, items);
     if leech {

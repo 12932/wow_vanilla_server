@@ -187,7 +187,8 @@ fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8
 }
 
 /// What an aura effect holds: for a periodic damage or heal, a tick's worth
-/// with spell power and the caster's modifiers.
+/// with spell power and the caster's modifiers. What the target takes of a
+/// heal's tick is worked out at each tick (`auras::tick`).
 fn aura_amount(
     map: &Map,
     caster: Guid,
@@ -214,8 +215,7 @@ fn aura_amount(
             if let Some(a) = auras::auras(map, caster) {
                 h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
             }
-            outcome::healing_taken(map, target, l.mods.apply(mods::OP_DOT, h), s.school_mask())
-                as i32
+            l.mods.apply(mods::OP_DOT, h).max(0.0) as i32
         }
         AURA_SCHOOL_ABSORB => base + absorb_bonus(map, caster, target, s, index),
         _ => base,
@@ -277,6 +277,9 @@ pub fn run(
         let mut here = l.clone();
         here.chain = chain[index];
         match e.effect {
+            // Premeditation's hold on its points goes on with them (see
+            // `retain_combo_points`).
+            EFFECT_APPLY_AURA if e.aura == AURA_RETAIN_COMBO_POINTS && awards_combo_points(s) => {}
             EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY if e.aura != 0 => {
                 let amount = aura_amount(map, caster, target, s, index, points, &here);
                 aura_effects.push((index, amount));
@@ -534,7 +537,7 @@ fn effect(
                 .unit_fields(target)
                 .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
                 .unwrap_or(0);
-            combat::deal_damage(map, caster, target, health);
+            combat::deal_damage_by(map, caster, target, health, 1, Some(s.id));
         }
         EFFECT_SCHOOL_DAMAGE | EFFECT_ENVIRONMENTAL_DAMAGE => {
             if super::scripts::school_damage(map, caster, target, s, index, amount, l) {
@@ -605,7 +608,9 @@ fn effect(
                 .unit_fields(caster)
                 .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
                 .unwrap_or(0);
-            let h = outcome::healing_taken(map, target, max as f32, s.school_mask()) as u32;
+            // Lay on Hands takes only the percentages, as Thistle Tea's
+            // `heal_max_health` does.
+            let h = outcome::healing_taken(map, target, max as f32) as u32;
             heal(map, caster, target, s.id, h, false);
         }
         EFFECT_ENERGIZE => {
@@ -841,7 +846,10 @@ fn effect(
                 c.motion = crate::game::map::creature::Motion::Idle { until: Some(until) };
             }
         }
-        EFFECT_ADD_COMBO_POINTS => add_combo_points(map, caster, target, amount.max(1) as u8),
+        EFFECT_ADD_COMBO_POINTS => {
+            add_combo_points(map, caster, target, amount.max(1) as u8);
+            retain_combo_points(map, caster, s, l);
+        }
         EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
         EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
             let name = map
@@ -924,7 +932,8 @@ fn effect(
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
             if !super::class_scripts::dummy(map, caster, target, s, index, amount)
                 && !super::holiday::effect(map, caster, target, s)
-                && !crate::game::map::boss_mechanics::dummy(map, caster, target, s) =>
+                && !crate::game::map::boss_mechanics::dummy(map, caster, target, s)
+                && !crate::game::map::outdoor_pvp::carrier_pulse(map, target, s) =>
         {
             super::scripts::dummy(map, caster, target, s, index, amount, l, item);
         }
@@ -936,7 +945,8 @@ fn effect(
 /// it: each try takes one stack of one of the auras it may take (picked at
 /// random), unless that aura's caster's talents hold it on; magic and
 /// poison only of the side the target is on to the dispeller, curses and
-/// diseases either way.
+/// diseases either way. A passive aura goes like any other, as in Thistle
+/// Tea and mangos (a creature's Fire Shield): its dispel type decides.
 fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i32, count: u32) {
     // An enemy's buffs, a friend's afflictions.
     let positive = combat::can_attack(map, caster, target);
@@ -952,7 +962,7 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
         .map(|a| {
             a.holders
                 .iter()
-                .filter(|h| !h.passive && h.dispel != 0 && matches(h.dispel, h.positive))
+                .filter(|h| h.dispel != 0 && matches(h.dispel, h.positive))
                 .map(|h| (h.spell, h.caster, h.stacks.max(1)))
                 .collect()
         })
@@ -1016,8 +1026,10 @@ fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
     })
 }
 
-/// Combo points on `target`: a new target starts them over.
+/// Combo points on `target`: a new target starts them over. Points held
+/// only for a while (`retain_combo_points`) are kept for good.
 pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
+    release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         if c.combo_target != target {
             c.combo_target = target;
@@ -1029,6 +1041,74 @@ pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
             p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, target);
             p.fields.set_byte(PLAYER_FIELD_BYTES, 1, points);
         }
+    }
+}
+
+/// Whether `s` gives combo points.
+fn awards_combo_points(s: &SpellTemplate) -> bool {
+    s.effects
+        .iter()
+        .any(|e| e.effect == EFFECT_ADD_COMBO_POINTS)
+}
+
+/// A builder whose points are held for a while (Premeditation's
+/// `retain_combo_points`, aura 148): the hold goes on its player with the
+/// points, as Thistle Tea's `ComboPoints.award` puts it; when it runs out
+/// its points come off again (`retained_combo_points_expired`).
+fn retain_combo_points(map: &mut Map, caster: Guid, s: &SpellTemplate, l: &Landing) {
+    if !map.players.contains_key(&caster) {
+        return;
+    }
+    let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    let held: Vec<(usize, i32)> = (0..3)
+        .filter(|i| {
+            s.effects[*i].effect == EFFECT_APPLY_AURA
+                && s.effects[*i].aura == AURA_RETAIN_COMBO_POINTS
+        })
+        .map(|i| (i, l.mods.points(i, points(s, i, level))))
+        .collect();
+    if held.is_empty() {
+        return;
+    }
+    let ctx = auras::Context {
+        duration: Some(aura_duration(map, caster, s, &l.mods, 0)),
+        ..Default::default()
+    };
+    let _ = auras::apply_spell(map, caster, caster, s, &held, ctx);
+}
+
+/// A builder or a finisher makes points held for a while the player's for
+/// good, or spends them: the holds come off, taking nothing back.
+pub fn release_retained_combo_points(map: &mut Map, caster: Guid) {
+    let held = auras::auras(map, caster)
+        .is_some_and(|a| a.holders.iter().any(|h| h.has(AURA_RETAIN_COMBO_POINTS)));
+    if held {
+        auras::remove_where(map, caster, |h| h.has(AURA_RETAIN_COMBO_POINTS));
+    }
+}
+
+/// A hold on combo points ran out (Thistle Tea's `ComboPoints.expire`):
+/// its points come off those on the target, if there still is one.
+pub fn retained_combo_points_expired(map: &mut Map, g: Guid, h: &auras::Holder) {
+    let amount: i32 = h
+        .effects
+        .iter()
+        .filter(|x| x.kind == AURA_RETAIN_COMBO_POINTS)
+        .map(|x| x.amount.max(0))
+        .sum();
+    if amount == 0 || !map.players.contains_key(&g) {
+        return;
+    }
+    let Some(c) = map.caster_mut(g) else {
+        return;
+    };
+    if c.combo_target.is_zero() {
+        return;
+    }
+    c.combo_points = c.combo_points.saturating_sub(amount.min(5) as u8);
+    let points = c.combo_points;
+    if let Some(p) = map.players.get_mut(&g) {
+        p.fields.set_byte(PLAYER_FIELD_BYTES, 1, points);
     }
 }
 
@@ -1277,14 +1357,17 @@ pub fn tick_areas(map: &mut Map) {
                     }
                 }
                 AURA_PERIODIC_HEAL => {
-                    heal(
+                    let h = outcome::spell_healing_taken(
                         map,
-                        area.caster,
                         g,
-                        area.spell,
-                        area.amount.max(0) as u32,
-                        true,
+                        area.amount as f32,
+                        s,
+                        area.index,
+                        Kind::Dot,
+                        1,
+                        1.0,
                     );
+                    heal(map, area.caster, g, area.spell, h as u32, true);
                 }
                 AURA_PERIODIC_TRIGGER_SPELL if e.trigger_spell != 0 => {
                     cast_triggered(map, area.caster, e.trigger_spell, Some(g));

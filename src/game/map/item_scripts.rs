@@ -55,6 +55,7 @@ const FETID_SKULL: u32 = 17271;
 const SIX_DEMON_BAG: u32 = 14537;
 const NET_O_MATIC: u32 = 13120;
 const NET_BACKFIRE: u32 = 13119;
+const NET_BACKFIRE_MARKER: u32 = 13139;
 const NET_BACKFIRE_SELF: u32 = 13138;
 const UNIVERSAL_REMOTE: u32 = 8344;
 const MIND_CONTROL_CAP: u32 = 13180;
@@ -161,11 +162,6 @@ pub fn effect(
             }
             _ => false,
         },
-        EFFECT_TRIGGER_SPELL if s.id == NET_BACKFIRE && index == 2 => {
-            // The net that backfires catches its thrower too.
-            trigger(map, caster, NET_BACKFIRE_SELF, caster);
-            false
-        }
         EFFECT_TRIGGER_SPELL => {
             // A rare bonus that, failing its roll, isn't.
             let chance = match (index, s.id) {
@@ -305,6 +301,18 @@ fn dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, item: Opt
         }
         _ => return false,
     }
+    true
+}
+
+/// An aura `s` from `caster` that, landing, does something else instead
+/// (Thistle Tea's `Aura.Script.instant_application`): the Net-o-Matic's
+/// backfire marker (13139), which the backfiring net (13119) puts on its
+/// thrower, nets the thrower (13138) and leaves no aura. Whether it did.
+pub fn instead_of_aura(map: &mut Map, caster: Guid, s: &SpellTemplate) -> bool {
+    if s.id != NET_BACKFIRE_MARKER {
+        return false;
+    }
+    trigger(map, caster, NET_BACKFIRE_SELF, caster);
     true
 }
 

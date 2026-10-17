@@ -467,7 +467,7 @@ pub fn spell_damage(
         }
     }
     if left > 0 {
-        combat::deal_damage_school(map, caster, target, left, school);
+        combat::deal_damage_by(map, caster, target, left, school, Some(spell));
     }
 }
 

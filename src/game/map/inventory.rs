@@ -879,12 +879,21 @@ pub fn sync_gear_all(map: &mut Map) {
 
 /// A player's gear auras in line with what they wear: each equipped,
 /// unbroken item's on-equip spells, and nothing from gear they took off.
+/// An item's or a set's spell that names forms (a weapon's feral attack
+/// power) holds only in them, as Thistle Tea's `EquipmentSpells.eligible?`
+/// has it; a form taken or left syncs again.
 pub fn sync_gear(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
     p.gear_dirty = false;
+    let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
+    let in_form = |spell: u32| {
+        data.spells
+            .get(spell)
+            .is_none_or(|s| crate::game::map::spells::checks::form_error(s, form).is_none())
+    };
     let mut wanted: Vec<(Guid, u32)> = Vec::new();
     for item in p
         .items
@@ -902,7 +911,7 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
         for s in t
             .spells
             .iter()
-            .filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_ON_EQUIP)
+            .filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_ON_EQUIP && in_form(s.id))
         {
             wanted.push((item.guid, s.id));
         }
@@ -910,7 +919,11 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
             wanted.push((item.guid, s));
         }
     }
-    wanted.extend(crate::game::map::enchant::set_spells(&data, p));
+    wanted.extend(
+        crate::game::map::enchant::set_spells(&data, p)
+            .into_iter()
+            .filter(|(_, s)| in_form(*s)),
+    );
     wanted.sort_unstable_by_key(|(g, s)| (g.guid(), *s));
     wanted.dedup();
     let have: Vec<(Guid, u32)> = p
