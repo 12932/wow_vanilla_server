@@ -663,6 +663,9 @@ pub fn quiet_death_for(map: &mut Map, g: Guid, respawn: Duration) {
     c.combat = Default::default();
     c.evading = false;
     c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    // Its selection goes with it, as at a death (mangos's
+    // `Creature::SetDeathState`, Thistle Tea's `Respawn.despawn`).
+    c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.despawned = true;
     map.dead_creatures.push(g);
     despawn_from_view(map, g);
