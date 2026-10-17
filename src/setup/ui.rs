@@ -374,9 +374,9 @@ impl Watch for Bars {
                     bar.finish_and_clear();
                     self.multi.remove(&bar);
                     self.line(format!(
-                        "{:<9} {} tiles in {}",
+                        "{:<9} {} in {}",
                         "Terrain",
-                        bar.position(),
+                        count(bar.position(), "tile"),
                         short(bar.elapsed())
                     ));
                 }
@@ -386,9 +386,9 @@ impl Watch for Bars {
                     bar.finish_and_clear();
                     self.multi.remove(&bar);
                     self.line(format!(
-                        "{:<9} {} models in {}",
+                        "{:<9} {} in {}",
                         "Models",
-                        bar.position(),
+                        count(bar.position(), "model"),
                         short(bar.elapsed())
                     ));
                 }
@@ -400,9 +400,10 @@ impl Watch for Bars {
                     bar.elapsed()
                 });
                 self.line(format!(
-                    "{:<9} {}: {steps} tiles in {}",
+                    "{:<9} {}: {} in {}",
                     "Navmesh",
                     title(name),
+                    count(steps, "tile"),
                     short(elapsed.unwrap_or_default())
                 ));
             }
@@ -429,10 +430,43 @@ impl Drop for Bars {
     }
 }
 
+/// "2,429 tiles", "1 tile".
+fn count(n: u64, what: &str) -> String {
+    let s = if n == 1 { "" } else { "s" };
+    format!("{} {what}{s}", indicatif::HumanCount(n))
+}
+
+/// dialoguer's plain look, but a question isn't followed by a colon.
+struct Plain;
+
+impl dialoguer::theme::Theme for Plain {
+    fn format_prompt(&self, f: &mut dyn std::fmt::Write, prompt: &str) -> std::fmt::Result {
+        f.write_str(prompt)
+    }
+
+    fn format_select_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        sel: &str,
+    ) -> std::fmt::Result {
+        write!(f, "{prompt} {sel}")
+    }
+
+    fn format_multi_select_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        selections: &[&str],
+    ) -> std::fmt::Result {
+        write!(f, "{prompt} {}", selections.join(", "))
+    }
+}
+
 /// The player's answer, or `None` if they backed out (Esc, Ctrl-C) or
 /// there is no terminal to ask on.
 pub fn confirm(prompt: &str, default: bool) -> Option<bool> {
-    let answer = dialoguer::Confirm::new()
+    let answer = dialoguer::Confirm::with_theme(&Plain)
         .with_prompt(prompt)
         .default(default)
         .interact_opt();
@@ -440,7 +474,7 @@ pub fn confirm(prompt: &str, default: bool) -> Option<bool> {
 }
 
 pub fn select(prompt: &str, items: &[String], default: usize) -> Option<usize> {
-    let answer = dialoguer::Select::new()
+    let answer = dialoguer::Select::with_theme(&Plain)
         .with_prompt(prompt)
         .items(items)
         .default(default)
@@ -449,7 +483,7 @@ pub fn select(prompt: &str, items: &[String], default: usize) -> Option<usize> {
 }
 
 pub fn pick(prompt: &str, items: &[String], checked: &[bool]) -> Option<Vec<usize>> {
-    let answer = dialoguer::MultiSelect::new()
+    let answer = dialoguer::MultiSelect::with_theme(&Plain)
         .with_prompt(prompt)
         .items(items)
         .defaults(checked)
@@ -478,6 +512,8 @@ mod tests {
         assert_eq!(short(Duration::from_secs(52)), "52s");
         assert_eq!(short(Duration::from_secs(250)), "4m 10s");
         assert_eq!(short(Duration::from_secs(3780)), "1h 03m");
+        assert_eq!(count(2429, "tile"), "2,429 tiles");
+        assert_eq!(count(1, "tile"), "1 tile");
     }
 
     #[test]

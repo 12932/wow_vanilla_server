@@ -133,8 +133,14 @@ fn entries(dir: &Path) -> Vec<(String, std::fs::DirEntry)> {
         .collect()
 }
 
+/// A folder, not a link to one (a search doesn't follow links).
 fn is_dir(e: &std::fs::DirEntry) -> bool {
     e.file_type().is_ok_and(|t| t.is_dir())
+}
+
+/// A folder, or a link to one: a client's `Data` may be either.
+fn leads_to_dir(e: &std::fs::DirEntry) -> bool {
+    e.path().is_dir()
 }
 
 /// What `dir` is: a client folder (holding `Data`), its `Data` itself, or
@@ -149,7 +155,7 @@ pub fn inspect(dir: &Path) -> Option<Verdict> {
     }
     let (root, data) = match entries(dir)
         .into_iter()
-        .find(|(n, e)| n == "data" && is_dir(e))
+        .find(|(n, e)| n == "data" && leads_to_dir(e))
     {
         Some((_, e)) => (dir.to_path_buf(), e.path()),
         None if named(dir, "data") => (dir.parent()?.to_path_buf(), dir.to_path_buf()),
@@ -187,7 +193,7 @@ pub fn inspect(dir: &Path) -> Option<Verdict> {
     }
     let exe = entries(&root)
         .into_iter()
-        .find(|(n, e)| n == "wow.exe" && !is_dir(e))
+        .find(|(n, e)| n == "wow.exe" && !leads_to_dir(e))
         .map(|(_, e)| e.path());
     let build = match exe {
         None => Build::ByArchives { exe: false },
@@ -289,7 +295,7 @@ pub fn search(
             return false;
         }
         let entries = entries(&dir);
-        if entries.iter().any(|(n, e)| n == "data" && is_dir(e))
+        if entries.iter().any(|(n, e)| n == "data" && leads_to_dir(e))
             && let Some(v) = inspect(&dir)
         {
             found.add(v);
@@ -365,6 +371,8 @@ pub fn usual_places() -> Vec<(PathBuf, usize)> {
     }
     if cfg!(target_os = "macos") {
         places.push((PathBuf::from("/Applications"), 2));
+    } else if cfg!(unix) {
+        places.push((PathBuf::from("/opt"), 2));
     }
     places.retain(|(p, _)| p.is_dir());
     places
@@ -503,6 +511,13 @@ pub(super) mod tests {
         // Given its Data, or its WoW.exe, it is the same client.
         assert_eq!(client(inspect(&t.0.join("Data"))), c);
         assert_eq!(client(inspect(&t.0.join("WoW.exe"))), c);
+        // A Data that is a link to the archives elsewhere.
+        #[cfg(unix)]
+        {
+            let linked = Temp::new("exact-linked");
+            std::os::unix::fs::symlink(t.0.join("Data"), linked.0.join("Data")).unwrap();
+            assert_eq!(client(inspect(&linked.0)).archives, c.archives);
+        }
     }
 
     #[test]
