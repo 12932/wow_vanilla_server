@@ -780,6 +780,11 @@ pub fn apply_spell(
             return Err(Refused::Immune);
         }
     }
+    // A shield, a bandage or a bubble too soon after the last: Weakened
+    // Soul, Recently Bandaged and Forbearance are immunities to its kind.
+    if pos && matches!(spell.mechanic, 16 | 19 | 25) && existing.mechanic_immune(spell.mechanic) {
+        return Err(Refused::Immune);
+    }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
     // A stronger rank of a helpful spell already there blocks a weaker.
     if pos && !passive {
@@ -811,7 +816,13 @@ pub fn apply_spell(
             trigger: e.trigger_spell,
             mask: e.item_type,
             period,
-            next_tick: period.map(|p| now + p),
+            next_tick: period.map(|p| {
+                if crate::game::map::spells::class_scripts::immediate_periodic(spell.id) {
+                    now
+                } else {
+                    now + p
+                }
+            }),
             ticks: 0,
             left: amount,
         });
@@ -883,8 +894,8 @@ pub fn apply_spell(
                 slot,
                 ..holder.clone()
             };
-            // A stacking aura keeps its ticks' rhythm.
-            if spell.stack_amount > 1 {
+            // A stacking aura keeps its ticks' rhythm (and some others).
+            if crate::game::map::spells::class_scripts::preserves_periodic_timer(spell) {
                 for x in old.effects.iter_mut() {
                     if let Some((_, next, n)) = ticks.iter().find(|t| t.0 == x.effect) {
                         x.next_tick = *next;
@@ -963,6 +974,7 @@ pub fn apply_spell(
             started(map, target, &h, x);
         }
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
+        crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
     }
     recalc(map, target);
     // Helping a flagged player flags the helper.
@@ -1625,6 +1637,7 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     }
     let expired = h.expires.is_some_and(|t| t <= map.now);
     crate::game::map::spells::redemption::aura_gone(map, target, h.spell, expired);
+    crate::game::map::spells::class_scripts::aura_gone(map, target, h);
     crate::game::map::trinkets::removed(map, target, h);
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
@@ -1821,6 +1834,12 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
     let stacks = h.stacks.max(1) as i32;
     match a.kind {
+        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_DAMAGE_PERCENT
+            if auras(map, target).is_some_and(|x| x.school_immune(h.school)) =>
+        {
+            // A tick on one immune to its school (Divine Shield, Ice Block).
+            crate::game::map::spells::log::immune(map, h.caster, target, h.spell);
+        }
         AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_DAMAGE_PERCENT => {
             let amount = if a.kind == AURA_PERIODIC_DAMAGE_PERCENT {
                 let max = map
