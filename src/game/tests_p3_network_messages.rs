@@ -406,3 +406,104 @@ async fn spell_log_executes_are_laid_out_as_1_12_has_them() {
         "everything worn"
     );
 }
+
+const RENEW: u32 = 900_321;
+const BURST: u32 = 900_322;
+const SPRING: u32 = 900_323;
+const LEECH: u32 = 900_324;
+
+fn periodic(aura: u32, points: i32, misc: i32, multiple: f32) -> SpellEffect {
+    SpellEffect {
+        effect: 6,
+        aura,
+        base_points: points - 1,
+        base_dice: 1,
+        misc_value: misc,
+        amplitude: 1_000,
+        multiple_value: multiple,
+        target_a: 1,
+        ..Default::default()
+    }
+}
+
+/// Thistle Tea's smsg_periodicauralog_test: a tick is logged with its
+/// aura's type and what it carries: a heal's amount (8); a periodic
+/// energize (24) and a percentage of mana (21) their power and amount; a
+/// mana leech (64) its power, what it took and the share the caster gets.
+#[tokio::test]
+async fn periodic_ticks_are_logged_as_1_12_has_them() {
+    use crate::game::map::auras::*;
+    let mut d = data();
+    for (id, e) in [
+        (RENEW, periodic(AURA_PERIODIC_HEAL, 25, 0, 0.0)),
+        (BURST, periodic(AURA_PERIODIC_ENERGIZE, 50, 0, 0.0)),
+        (SPRING, periodic(AURA_OBS_MOD_MANA, 5, 0, 0.0)),
+        (LEECH, periodic(AURA_PERIODIC_MANA_LEECH, 50, 0, 0.5)),
+    ] {
+        d.spells.spells.insert(id, spell(id, &[e]));
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Mage).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Mage).await;
+    a.sees(gb).await;
+    a.clear();
+    let spells = realm.data.clone();
+    on_map(&realm, move |m| {
+        for g in [ga, gb] {
+            let p = m.players.get_mut(&g).unwrap();
+            p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000);
+            p.fields.set_u32(UNIT_FIELD_HEALTH, 500);
+            p.fields.set_u32(UNIT_FIELD_MAXPOWER1, 1_000);
+            p.fields.set_u32(UNIT_FIELD_POWER1, 500);
+        }
+        for (id, target, amount) in [
+            (RENEW, ga, 25),
+            (BURST, ga, 50),
+            (SPRING, ga, 5),
+            (LEECH, gb, 50),
+        ] {
+            let s = spells.spells.get(id).cloned().unwrap();
+            apply(m, ga, target, &s, 0, amount);
+        }
+        let now = m.now;
+        for g in [ga, gb] {
+            for h in m.players.get_mut(&g).unwrap().auras.holders.iter_mut() {
+                for e in h.effects.iter_mut() {
+                    e.next_tick = Some(now);
+                }
+            }
+        }
+        update(m);
+    })
+    .await;
+    let log = |target: Guid, spell: u32, aura: u32, rest: &[u32]| {
+        let mut v = [packed(target), packed(ga)].concat();
+        for x in [spell, 1, aura].iter().chain(rest) {
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        v
+    };
+    // Both GUIDs pack to two bytes: the spell follows.
+    let tick = |spell: u32| move |f: &[u8]| f.len() > 8 && f[4..8] == spell.to_le_bytes();
+    let heal = a.wait_frame("the heal's tick", 0x24E, tick(RENEW)).await;
+    assert_eq!(heal, log(ga, RENEW, AURA_PERIODIC_HEAL, &[25]));
+    let energize = a
+        .wait_frame("the energize's tick", 0x24E, tick(BURST))
+        .await;
+    assert_eq!(energize, log(ga, BURST, AURA_PERIODIC_ENERGIZE, &[0, 50]));
+    let spring = a.wait_frame("the mana's tick", 0x24E, tick(SPRING)).await;
+    let max = on_map(&realm, move |m| {
+        m.players[&ga].fields.get_u32(UNIT_FIELD_MAXPOWER1)
+    })
+    .await;
+    assert_eq!(
+        spring,
+        log(ga, SPRING, AURA_OBS_MOD_MANA, &[0, max * 5 / 100])
+    );
+    let leech = a.wait_frame("the leech's tick", 0x24E, tick(LEECH)).await;
+    let mut want = log(gb, LEECH, AURA_PERIODIC_MANA_LEECH, &[0, 50]);
+    want.extend_from_slice(&0.5f32.to_le_bytes());
+    assert_eq!(leech, want);
+}
