@@ -12,6 +12,7 @@ pub mod creature;
 pub mod death;
 pub mod derive;
 pub mod duel;
+pub mod enchant;
 pub mod gameobject;
 pub mod gm;
 pub mod grid;
@@ -24,6 +25,7 @@ pub mod nav;
 pub mod npc;
 pub mod pets;
 pub mod player;
+pub mod professions;
 pub mod procs;
 pub mod query;
 pub mod quests;
@@ -244,6 +246,8 @@ pub struct Map {
     pub battleground: Option<battleground::Match>,
     /// Objects every player in the map knows: the boats and zeppelins.
     pub globals: Vec<Guid>,
+    /// Rolls under way and gathered nodes to bring back.
+    pub loot_state: loot::MapLoot,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -337,6 +341,7 @@ impl Map {
             stopping: false,
             battleground: battleground::for_map(key, Instant::now()),
             globals: Vec::new(),
+            loot_state: Default::default(),
         }
     }
 
@@ -597,6 +602,8 @@ impl Map {
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);
+        loot::update(self);
+        enchant::update(self);
         social::push_member_stats(self);
         duel::update(self);
         battleground::update(self);
