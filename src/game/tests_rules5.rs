@@ -886,3 +886,100 @@ async fn an_innkeeper_binds_to_the_area_and_gives_a_hearthstone_and_the_dead_are
             .is_none()
     );
 }
+
+const EXPLORE_QUEST: u32 = 9500;
+const EXPLORE_TRIGGER: u32 = 9600;
+
+#[tokio::test]
+async fn a_ghost_doesnt_explore_for_a_quest() {
+    let mut d = data();
+    d.area_triggers.insert(
+        EXPLORE_TRIGGER,
+        AreaTrigger {
+            id: EXPLORE_TRIGGER,
+            map: 0,
+            x: START.0,
+            y: START.1,
+            z: START.2,
+            radius: 10.0,
+            ..Default::default()
+        },
+    );
+    d.npc
+        .area_trigger_quests
+        .insert(EXPLORE_TRIGGER, EXPLORE_QUEST);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let explored = |realm: Arc<Realm>| async move {
+        on_map(&realm, move |m| {
+            m.players[&g]
+                .journal
+                .log
+                .first()
+                .is_some_and(|l| l.explored)
+        })
+        .await
+    };
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.journal.log.push(crate::game::store::Logged {
+            quest: EXPLORE_QUEST,
+            ..Default::default()
+        });
+        crate::game::map::death::kill(m, g);
+    })
+    .await;
+    a.send(CMSG_AREATRIGGER {
+        trigger_id: EXPLORE_TRIGGER,
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!explored(realm.clone()).await, "the dead explore nothing");
+    a.say(".revive").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    a.send(CMSG_AREATRIGGER {
+        trigger_id: EXPLORE_TRIGGER,
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(explored(realm.clone()).await);
+}
+
+#[tokio::test]
+async fn a_read_mail_goes_in_three_days() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let id = crate::game::social::mail::post(
+        &realm,
+        crate::game::social::mail::Mail {
+            receiver: crate::game::guid::counter(g),
+            subject: "Hello".into(),
+            deliver_at: crate::game::social::mail::now(),
+            expires_at: crate::game::social::mail::now() + 30 * 86_400,
+            ..Default::default()
+        },
+    );
+    let expiry = |realm: &Arc<Realm>| {
+        realm
+            .social
+            .mail
+            .lock()
+            .mails
+            .get(&id)
+            .map(|m| m.expires_at)
+    };
+    let before = expiry(&realm).unwrap();
+    on_map(&realm, move |m| {
+        crate::game::social::mail::mark_read(m, g, id)
+    })
+    .await;
+    let after = expiry(&realm).unwrap();
+    let now = crate::game::social::mail::now();
+    assert!(before > now + 20 * 86_400, "thirty days unread");
+    assert!(
+        after <= now + 3 * 86_400 + 1 && after > now + 3 * 86_400 - 5,
+        "three read"
+    );
+}

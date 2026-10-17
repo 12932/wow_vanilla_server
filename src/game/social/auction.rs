@@ -181,12 +181,11 @@ fn command_result(
     }
 }
 
-/// The house an auctioneer near the player is of.
+/// The house an auctioneer near the player is of, if they may use it now
+/// (the services' shared checks, as Thistle Tea checks each auction).
 fn house_at(map: &Map, g: Guid, auctioneer: Guid) -> Option<AuctionHouse> {
-    let c = map.creature(auctioneer)?;
-    let p = map.players.get(&g)?;
-    (crate::game::map::combat::dist(c.position, p.position()) <= 20.0)
-        .then(|| crate::game::map::auction::house_of(map, auctioneer))
+    crate::game::map::npc::npc_entry(map, g, auctioneer, crate::game::map::npc::NPC_FLAG_AUCTIONEER)?;
+    Some(crate::game::map::auction::house_of(map, auctioneer))
 }
 
 /// `CMSG_AUCTION_SELL_ITEM`.

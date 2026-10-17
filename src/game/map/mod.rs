@@ -326,6 +326,8 @@ pub struct Map {
     pub objects: objects::Objects,
     /// Frames for after this update's create blocks: (observer, frame).
     pub late_frames: Vec<(Guid, Arc<[u8]>)>,
+    /// Scripted area triggers resting from their cooldown, until when.
+    pub trigger_cooldowns: AHashMap<u32, Instant>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -438,6 +440,7 @@ impl Map {
             arena: Default::default(),
             objects: Default::default(),
             late_frames: Vec::new(),
+            trigger_cooldowns: AHashMap::new(),
         }
     }
 
