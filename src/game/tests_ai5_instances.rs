@@ -763,7 +763,7 @@ async fn an_escort_goes_by_its_point_ids() {
 #[tokio::test]
 #[ignore = "open: on the merged ai5 the Molten Core rune isn't doused by its Quintessence (AI5_GAPS I2)"]
 async fn the_real_instances() {
-    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }

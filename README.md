@@ -20,8 +20,16 @@ an unknown username gets an account at its first login, with the username as its
 made with `.account create` may log in. GM levels come from `.account gm` or the config's `[accounts] gm` table;
 `everyone_gm = true` makes every account an administrator, as peon's runs need.
 
-For the world, point `config.toml` at vmangos's database and the client's DBCs as SQLite (Thistle Tea's export:
-`vmangos.sqlite` and `dbc.sqlite` in one directory), and at a rustigator bake for the navmesh:
+The world comes from three directories under `data/`, beside where the server runs (`cargo run --release` from
+the checkout looks in the checkout's `data/`):
+
+| Directory | Holds | Without it |
+|---|---|---|
+| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export) | the world is empty: no creatures, objects, spells or quests |
+| `data/nav` | a rustigator bake (`Azeroth.map` and the rest) | creatures walk straight lines |
+| `data/terrain` | Thistle Tea's terrain tiles (`MMMMRRCC.map`, from its `nix run .#terrain-data`) | liquids outside WMOs have no kind (the deep sea doesn't tire swimmers, lava doesn't burn) |
+
+Elsewhere, say so in `config.toml`:
 
 ```toml
 [world]
@@ -30,9 +38,8 @@ nav_dir = "/path/to/bake"
 terrain_dir = "/path/to/terrain"
 ```
 
-Without them the world is empty and creatures walk straight lines. `terrain_dir` is Thistle Tea's terrain tiles
-(`MMMMRRCC.map`, from its `nix run .#terrain-data`): they give the liquids outside WMOs their kind (the deep sea
-tires swimmers, lava burns) and areas where the navmesh has none.
+The tests that read the real world find it the same way, or under `WVS_DATA` if it is set; without it they pass
+without running.
 
 ## Configuration
 

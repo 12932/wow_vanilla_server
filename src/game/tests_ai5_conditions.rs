@@ -737,14 +737,15 @@ fn a_conditioned_reference_rolls_only_when_its_condition_holds() {
     assert_eq!(items(out), vec![3]);
 }
 
-const DB: &str = "/local/home/wallenx/runs/tt-data/db";
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
 
 /// On the real world database: the Gordok Tribute's tiers, the
 /// Scourgestones' commission, the heads' turn-in gates, menu 4264's
 /// greeting, and the nearby-player failure conditions.
 #[tokio::test]
 async fn the_real_conditions() {
-    let dir = std::path::Path::new(DB);
+    let dir = DB.as_path();
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }

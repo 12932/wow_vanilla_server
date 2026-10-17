@@ -765,7 +765,7 @@ async fn an_enslaved_demon_serves_until_the_aura_ends() {
 /// wolf its Bite and Growl, and the families, levels and totems load.
 #[test]
 fn the_real_pets_know_their_spells() {
-    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }

@@ -29,19 +29,28 @@ pub fn install(cfg: ServerConfig) -> &'static ServerConfig {
 /// Read `path` as TOML. A missing file gives the defaults; one that doesn't
 /// parse is an error, so a typo isn't silently ignored.
 pub fn load(path: &Path) -> Result<ServerConfig, String> {
-    match std::fs::read_to_string(path) {
+    let mut cfg = match std::fs::read_to_string(path) {
         Ok(s) => {
             let cfg = toml::from_str::<ServerConfig>(&s)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             tracing::info!("loaded config from {}", path.display());
-            Ok(cfg)
+            cfg
         }
         Err(_) => {
             tracing::info!("no config file at {}; using defaults", path.display());
-            Ok(ServerConfig::default())
+            ServerConfig::default()
         }
-    }
+    };
+    cfg.world.default_dirs();
+    Ok(cfg)
 }
+
+/// Where the world's data is looked for when the config doesn't say: under
+/// `data/` in the working directory, so a server run beside its data needs
+/// no paths at all.
+pub const DEFAULT_DATA_DIR: &str = "data/db";
+pub const DEFAULT_NAV_DIR: &str = "data/nav";
+pub const DEFAULT_TERRAIN_DIR: &str = "data/terrain";
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -104,15 +113,17 @@ pub struct WorldConfig {
     pub save_interval_secs: u64,
     /// The character store.
     pub characters_db: PathBuf,
-    /// The directory with `vmangos.sqlite` and `dbc.sqlite`; without it the
-    /// world is empty.
+    /// The directory with `vmangos.sqlite` and `dbc.sqlite` (`data/db` if
+    /// unset and there); without it the world is empty.
     pub data_dir: Option<PathBuf>,
-    /// A rustigator bake (the directory with `Azeroth.map`); without it
-    /// creatures walk straight lines and zones come from the client.
+    /// A rustigator bake, the directory with `Azeroth.map` (`data/nav` if
+    /// unset and there); without it creatures walk straight lines and zones
+    /// come from the client.
     pub nav_dir: Option<PathBuf>,
-    /// Thistle Tea's terrain tiles (MaNGOS z1.5 `.map` files, from its
-    /// `nix run .#terrain-data`); without them liquids have no kind outside
-    /// WMOs: no deep-sea fatigue, no lava in the open.
+    /// Thistle Tea's terrain tiles, MaNGOS z1.5 `.map` files from its
+    /// `nix run .#terrain-data` (`data/terrain` if unset and there); without
+    /// them liquids have no kind outside WMOs: no deep-sea fatigue, no lava
+    /// in the open.
     pub terrain_dir: Option<PathBuf>,
     /// Shown to every player at login.
     pub motd: String,
@@ -127,6 +138,23 @@ pub struct WorldConfig {
     pub mail_delay_secs: u64,
     /// The weekday honor is ranked on, each week: 1 Monday to 7 Sunday.
     pub honor_reset_weekday: u8,
+}
+
+impl WorldConfig {
+    /// The data directories the config leaves out: the defaults under
+    /// `data/`, where they exist.
+    pub fn default_dirs(&mut self) {
+        for (dir, default) in [
+            (&mut self.data_dir, DEFAULT_DATA_DIR),
+            (&mut self.nav_dir, DEFAULT_NAV_DIR),
+            (&mut self.terrain_dir, DEFAULT_TERRAIN_DIR),
+        ] {
+            if dir.is_none() && Path::new(default).is_dir() {
+                tracing::info!("using {default}");
+                *dir = Some(PathBuf::from(default));
+            }
+        }
+    }
 }
 
 impl Default for WorldConfig {

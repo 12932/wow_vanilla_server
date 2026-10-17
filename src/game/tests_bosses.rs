@@ -13,11 +13,12 @@ use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::MapHandle;
 
-const DB: &str = "/local/home/wallenx/runs/tt-data/db";
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
 const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
 fn realm() -> Option<Arc<Realm>> {
-    let dir = std::path::Path::new(DB);
+    let dir = DB.as_path();
     if !dir.join("vmangos.sqlite").exists() {
         return None;
     }

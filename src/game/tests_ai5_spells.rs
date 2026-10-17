@@ -17,7 +17,8 @@ use crate::game::map::combat::dist;
 use crate::game::map::spells::lists;
 use crate::game::map::{Map, MapHandle, ai, auras, event_ai, scripts, spells};
 
-const DB: &str = "/local/home/wallenx/runs/tt-data/db";
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
 const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
 const PROTECTOR: u32 = 487;
@@ -32,7 +33,7 @@ const TAERAR: u32 = 14890;
 const SHADE: u32 = 15302;
 
 fn realm() -> Option<Arc<Realm>> {
-    let dir = std::path::Path::new(DB);
+    let dir = DB.as_path();
     if !dir.join("vmangos.sqlite").exists() {
         return None;
     }

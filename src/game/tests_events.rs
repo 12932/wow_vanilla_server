@@ -2,7 +2,6 @@
 //! here: each done by what Thistle Tea does for it, its creature, area
 //! trigger, gossip, object or escort script.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,14 +15,15 @@ use crate::game::harness::{self, Client};
 use crate::game::map::creature::Creature;
 use crate::game::map::{Map, MapHandle, MapKey, quests};
 
-const DB: &str = "/local/home/wallenx/runs/tt-data/db";
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
 
 fn have_data() -> bool {
-    Path::new(DB).join("vmangos.sqlite").exists()
+    DB.as_path().join("vmangos.sqlite").exists()
 }
 
 fn realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(Path::new(DB)))
+    harness::realm_with(crate::game::data::load::load(DB.as_path()))
 }
 
 /// A player of `race` and `class` at `level`, in the world.

@@ -648,7 +648,7 @@ async fn a_pool_spawns_its_limit_and_a_condition_gates_a_step() {
 /// the engine knows, and the boss scripts are in place.
 #[test]
 fn the_real_eventai_uses_known_event_types() {
-    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
@@ -694,7 +694,7 @@ fn the_real_eventai_uses_known_event_types() {
 /// EventAI creatures fight a player without trouble.
 #[tokio::test]
 async fn the_real_deadmines_opens_rhahkzors_door() {
-    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }

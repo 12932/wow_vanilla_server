@@ -6,7 +6,6 @@
 //! Pet. An event quest waits on its event; a hunter learns to teach the
 //! passives their pet came with.
 
-use std::path::Path;
 use std::time::Duration;
 
 use wow_world_messages::Guid;
@@ -20,10 +19,11 @@ use crate::game::map::creature::Creature;
 use crate::game::map::{Map, MapHandle, MapKey, auras, pets, quests, spells};
 use crate::game::tests_pets::at;
 
-const DB: &str = "/local/home/wallenx/runs/tt-data/db";
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
 
 fn have_data() -> bool {
-    Path::new(DB).join("vmangos.sqlite").exists()
+    DB.as_path().join("vmangos.sqlite").exists()
 }
 
 const GRIF: u32 = 1231;
@@ -198,7 +198,7 @@ async fn a_dwarf_hunter_tames_with_the_rods_and_learns_tame_beast() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
     let mut c = Client::connect(&realm, "HUNTER");
     let g = c.enter("Huntra", Race::Dwarf, Class::Hunter).await;
     let map = realm.maps.get(&realm, MapKey::world(0));

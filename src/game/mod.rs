@@ -261,7 +261,10 @@ pub async fn run(users: crate::auth::UserCache) {
     let data = match &cfg.world.data_dir {
         Some(dir) => data::load::load(dir),
         None => {
-            info!("no data_dir configured: the world is empty");
+            warn!(
+                "no world data: the world is empty. Put vmangos.sqlite and dbc.sqlite in {}, or set [world] data_dir",
+                crate::config::DEFAULT_DATA_DIR
+            );
             GameData::empty()
         }
     };
