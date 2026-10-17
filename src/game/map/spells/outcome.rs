@@ -93,6 +93,8 @@ pub struct Landing {
     pub reflected: bool,
     /// How many share its first effect's damage (a meteor's), if any do.
     pub shared: u32,
+    /// The spell was triggered.
+    pub triggered: bool,
 }
 
 /// Whether spell outcomes are rolled (production), or fixed: always a hit,

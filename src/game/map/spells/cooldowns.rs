@@ -294,6 +294,7 @@ pub fn restore(map: &mut Map, player: Guid) {
                 combo: a.combo,
                 duration: Some(a.left),
                 charges: Some(a.charges),
+                triggered: false,
             },
         );
         if let Some(h) = auras::auras_mut(map, player).and_then(|x| {

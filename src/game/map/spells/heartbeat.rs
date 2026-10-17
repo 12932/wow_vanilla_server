@@ -31,6 +31,10 @@ pub struct Heartbeat {
     /// percent).
     pub next_check: Option<Instant>,
     pub hit_chance: i32,
+    /// A player's drawn delay before diminishing returns, in milliseconds,
+    /// and the rate they cut it by: a refresh keeps the delay.
+    pub player_delay: Option<f64>,
+    pub rate: f64,
 }
 
 /// Whether `s` breaks early.
@@ -84,6 +88,8 @@ pub fn prepare(
             break_at: Some(now + Duration::from_millis((delay * rate) as u64)),
             next_check: None,
             hit_chance: 10_000,
+            player_delay: Some(delay),
+            rate,
         });
     }
     if !s.attr(0, ATTR_HEARTBEAT_RESIST)
@@ -98,7 +104,31 @@ pub fn prepare(
         break_at: None,
         next_check: Some(now + INTERVAL),
         hit_chance: super::outcome::spell_hit_chance(map, caster, target, s, &mods),
+        player_delay: None,
+        rate: 1.0,
     })
+}
+
+/// A holder refreshed: a player's keeps its drawn delay, started again
+/// from now at the new rate; a creature's keeps its next roll and chance.
+pub fn refreshed(
+    old: Option<Heartbeat>,
+    new: Option<Heartbeat>,
+    now: Instant,
+) -> Option<Heartbeat> {
+    let mut new = new?;
+    let Some(old) = old else {
+        return Some(new);
+    };
+    if let (Some(delay), Some(_)) = (old.player_delay, new.player_delay) {
+        new.player_delay = Some(delay);
+        new.break_at = Some(now + Duration::from_millis((delay * new.rate) as u64));
+    }
+    if old.next_check.is_some() && new.next_check.is_some() {
+        new.next_check = old.next_check;
+        new.hit_chance = old.hit_chance;
+    }
+    Some(new)
 }
 
 /// `g`'s crowd control that breaks now.

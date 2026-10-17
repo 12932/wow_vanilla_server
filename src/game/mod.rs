@@ -57,6 +57,8 @@ mod tests_spells3;
 #[cfg(test)]
 mod tests_spells4;
 #[cfg(test)]
+mod tests_spells5;
+#[cfg(test)]
 mod tests_pvp2;
 #[cfg(test)]
 mod tests_pvp3;
