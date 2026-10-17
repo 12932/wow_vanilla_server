@@ -489,7 +489,7 @@ fn setup_group(map: &mut Map, loot: &mut Loot, tapper: Guid, near: Vec<Guid>) {
                     .filter(|g| {
                         method != GroupLootSetting::NeedBeforeGreed
                             || match (map.players.get(g), item) {
-                                (Some(p), Some(t)) => usable(p, t),
+                                (Some(p), Some(t)) => usable(p, &data, t),
                                 _ => false,
                             }
                     })
@@ -514,11 +514,12 @@ fn quality(q: ItemQuality) -> u32 {
     u32::from(q.as_int())
 }
 
-/// Whether `p` could use an item: their class, race and proficiency.
-pub fn usable(p: &Player, t: &ItemTemplate) -> bool {
+/// Whether `p` could use an item: their class, race and proficiency, as
+/// they have learned it (Thistle Tea's `ItemEligibility`).
+pub fn usable(p: &Player, data: &GameData, t: &ItemTemplate) -> bool {
     let class_ok = t.allowable_class <= 0 || t.allowable_class & (1 << (p.row.class - 1)) != 0;
     let race_ok = t.allowable_race <= 0 || t.allowable_race & (1 << (p.row.race - 1)) != 0;
-    class_ok && race_ok && inventory::proficient(p.row.class, 60, t)
+    class_ok && race_ok && inventory::proficient(p, &inventory::Proficiency::of(p, data), t).is_ok()
 }
 
 fn send_to(map: &Map, players: &[Guid], frame: &Arc<[u8]>) {
