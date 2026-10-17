@@ -604,9 +604,12 @@ fn towers(map: &mut Map, elapsed: i64) {
             (_, Phase::Progress(_)) => Some(8213),
             _ => None,
         };
+        // Heard within 250 yards of the tower, as Thistle Tea plays it.
         if let Some(sound) = sound {
-            for g in &watching {
-                if let Some(p) = map.players.get(g) {
+            let at = TOWERS[i].at;
+            for p in map.players.values() {
+                let pos = p.position();
+                if dist(at, (pos.x, pos.y, pos.z)) <= 250.0 {
                     p.outbound.send(&SMSG_PLAY_SOUND { sound_id: sound });
                 }
             }
