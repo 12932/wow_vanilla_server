@@ -43,6 +43,7 @@ const LEVEL_FIVE: u32 = 1;
 /// Level at least 1: anyone meets it.
 const LEVEL_ONE: u32 = 2;
 const EVENT: u32 = 12;
+const BLESSING: u32 = 900_800;
 
 fn quest(id: u32) -> Quest {
     Quest {
@@ -155,6 +156,28 @@ fn data() -> GameData {
     q.reward_money = -100;
     q.rewards[0] = (PELT, 1);
     add(&mut d, q);
+    // Two scales for a pelt, a box and a blessing.
+    let mut q = quest(62);
+    q.required_items[0] = (SCALE, 2);
+    q.rewards[0] = (PELT, 1);
+    q.rewards[1] = (BOX, 1);
+    q.reward_spell_cast = BLESSING;
+    add(&mut d, q);
+    let mut bless = crate::game::data::spells::SpellTemplate {
+        id: BLESSING,
+        name: "Blessing".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    bless.effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 6,
+        aura: 29,
+        target_a: 1,
+        base_points: 4,
+        base_dice: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(BLESSING, bless);
     // Auto-complete: two scales for a pelt; and one that repeats.
     let mut q = quest(61);
     q.auto_complete = true;
@@ -1839,4 +1862,65 @@ async fn a_quest_giver_must_be_at_hand_and_alive() {
     );
     assert_eq!(split.1, vec![91], "not a failed turn-in");
     assert!(!split.2, "the object's quest isn't the creature's");
+}
+
+/// Thistle Tea's `choose_reward/4`: rewards that don't all fit give none,
+/// the quest kept; the reward's spell cast only once the items are taken,
+/// and not again on a second turn-in.
+#[tokio::test]
+async fn a_reward_is_all_or_nothing_and_cast_once() {
+    let (realm, mut a, g) = setup().await;
+    accept(&a, 62).await;
+    in_log(&realm, g, 62).await;
+    let blessed = move |m: &mut Map| m.players[&g].auras.has_spell(BLESSING);
+    assert!(!rewarded(&mut a, 62).await, "no scales");
+    assert!(!on_map(&realm, blessed).await, "nor its spell");
+    give(&realm, g, SCALE, 2).await;
+    // One slot left for two rewards.
+    on_map(&realm, move |m| {
+        let d = m.realm.data.clone();
+        let p = &m.players[&g];
+        let free = p
+            .carry_slots(&d)
+            .iter()
+            .filter(|(b, s)| p.item_at(*b, *s).is_none())
+            .count() as u32;
+        crate::game::map::inventory::add_item(m, g, FILLER, free - 1, false).unwrap();
+    })
+    .await;
+    a.clear();
+    assert!(!rewarded(&mut a, 62).await, "no room for both");
+    let kept = on_map(&realm, move |m| {
+        (
+            m.players[&g].journal.has(62),
+            count(m, g, SCALE),
+            count(m, g, PELT) + count(m, g, BOX),
+            m.players[&g].auras.has_spell(BLESSING),
+        )
+    })
+    .await;
+    assert_eq!(kept, (true, 2, 0, false));
+    on_map(&realm, move |m| {
+        let i = m.players[&g]
+            .items
+            .iter()
+            .position(|i| i.entry == FILLER)
+            .unwrap();
+        crate::game::map::inventory::take_item(m, g, i, 1);
+    })
+    .await;
+    assert!(rewarded(&mut a, 62).await);
+    let done = on_map(&realm, move |m| {
+        let had = m.players[&g].auras.has_spell(BLESSING);
+        crate::game::map::auras::remove_where(m, g, |h| h.spell == BLESSING);
+        (
+            had,
+            count(m, g, SCALE),
+            count(m, g, PELT) + count(m, g, BOX),
+        )
+    })
+    .await;
+    assert_eq!(done, (true, 0, 2));
+    assert!(!rewarded(&mut a, 62).await, "not twice");
+    assert!(!on_map(&realm, blessed).await, "nor its spell again");
 }
