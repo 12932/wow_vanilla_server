@@ -81,14 +81,13 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
-    "Win32_System_Registry",
 ] }
 
 [[bin]]
 name = "wow_vanilla_server"
 path = "src/main.rs"
 
-# Finds the WoW client and builds data/nav and data/terrain from it.
+# Builds data/nav and data/terrain from the player's WoW client.
 [[bin]]
 name = "wvs-setup"
 path = "src/bin/wvs-setup.rs"

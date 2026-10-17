@@ -1,7 +1,6 @@
-//! What the setup asks of the operating system: free disk space, and on
-//! Windows the fixed drives and the client's registry entry.
+//! What the setup asks of the operating system: the free disk space.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Bytes free to this user on the volume holding `path`, or the nearest
 /// folder above it that exists.
@@ -56,82 +55,6 @@ fn free_space_at(_: &Path) -> Option<u64> {
     None
 }
 
-/// The roots of the fixed drives (`C:\`, `D:\`), for the full search.
-#[cfg(windows)]
-pub fn fixed_drives() -> Vec<PathBuf> {
-    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
-    const DRIVE_FIXED: u32 = 3;
-    // SAFETY: no arguments.
-    let mask = unsafe { GetLogicalDrives() };
-    (0..26u8)
-        .filter(|i| mask & (1 << i) != 0)
-        .map(|i| format!("{}:\\", (b'A' + i) as char))
-        .filter(|root| {
-            let w = wide(std::ffi::OsStr::new(root));
-            // SAFETY: `w` is NUL-terminated.
-            unsafe { GetDriveTypeW(w.as_ptr()) == DRIVE_FIXED }
-        })
-        .map(PathBuf::from)
-        .collect()
-}
-
-/// Every drive's root: on Windows the fixed drives, elsewhere `/`.
-#[cfg(not(windows))]
-pub fn fixed_drives() -> Vec<PathBuf> {
-    vec![PathBuf::from("/")]
-}
-
-/// Where Blizzard's installer said it put the client: `InstallPath` under
-/// `Blizzard Entertainment\World of Warcraft`, for the machine or the user.
-#[cfg(windows)]
-pub fn registry_install_paths() -> Vec<PathBuf> {
-    use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW,
-    };
-    let mut found = Vec::new();
-    for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
-        for key in [
-            r"SOFTWARE\WOW6432Node\Blizzard Entertainment\World of Warcraft",
-            r"SOFTWARE\Blizzard Entertainment\World of Warcraft",
-        ] {
-            let key = wide(std::ffi::OsStr::new(key));
-            let value = wide(std::ffi::OsStr::new("InstallPath"));
-            let mut buf = vec![0u16; 1024];
-            let mut bytes = (buf.len() * 2) as u32;
-            // SAFETY: the strings are NUL-terminated and `bytes` is `buf`'s
-            // size in bytes.
-            let status = unsafe {
-                RegGetValueW(
-                    root,
-                    key.as_ptr(),
-                    value.as_ptr(),
-                    RRF_RT_REG_SZ,
-                    std::ptr::null_mut(),
-                    buf.as_mut_ptr().cast(),
-                    &mut bytes,
-                )
-            };
-            if status != 0 {
-                continue;
-            }
-            let len = (bytes as usize / 2).min(buf.len());
-            let s = &buf[..len];
-            let s = s.split(|&c| c == 0).next().unwrap_or(s);
-            let path = PathBuf::from(std::ffi::OsString::from_wide(s));
-            if !path.as_os_str().is_empty() && !found.contains(&path) {
-                found.push(path);
-            }
-        }
-    }
-    found
-}
-
-#[cfg(not(windows))]
-pub fn registry_install_paths() -> Vec<PathBuf> {
-    Vec::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +66,5 @@ mod tests {
         let below = free_space(&dir.join("wvs-setup-not-there/nav")).unwrap();
         // Another process may write in between: the same volume, roughly.
         assert!(here.abs_diff(below) < 1 << 30, "{here} {below}");
-        assert!(!fixed_drives().is_empty());
     }
 }

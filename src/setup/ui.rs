@@ -485,6 +485,19 @@ pub fn confirm(prompt: &str, default: bool) -> Option<bool> {
     restore(answer)
 }
 
+/// A line the player types (or pastes, or drops a file's path into),
+/// offering `default` (taken by Enter alone). `None` if they backed out or
+/// there is no terminal; an empty line with no default is `Some("")`.
+pub fn input(prompt: &str, default: Option<&str>) -> Option<String> {
+    let mut input = dialoguer::Input::<String>::with_theme(&Plain)
+        .with_prompt(prompt)
+        .allow_empty(true);
+    if let Some(d) = default {
+        input = input.default(d.to_owned()).show_default(true);
+    }
+    restore(input.interact_text().map(Some))
+}
+
 pub fn select(prompt: &str, items: &[String], default: usize) -> Option<usize> {
     let answer = dialoguer::Select::with_theme(&Plain)
         .with_prompt(prompt)
