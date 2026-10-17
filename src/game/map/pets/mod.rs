@@ -20,6 +20,7 @@ use crate::game::map::spells::Targets;
 
 mod ai;
 mod control;
+pub mod eyes;
 mod hunter;
 mod inherit;
 mod possess;
@@ -159,6 +160,8 @@ pub struct PetState {
     /// A charmed unit's own faction, to go back to.
     pub was_faction: u32,
     pub was_hostile: bool,
+    /// Under Eyes of the Beast: the react and command it had before.
+    pub eyes: Option<(u8, u8)>,
 }
 
 impl PetState {
@@ -193,6 +196,7 @@ impl PetState {
             inherit_at: now,
             was_faction: 0,
             was_hostile: false,
+            eyes: None,
         }
     }
 }

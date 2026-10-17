@@ -1775,6 +1775,10 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
         return;
     }
+    // A priest with Spirit of Redemption becomes a spirit instead.
+    if left == 0 && crate::game::map::spells::redemption::saves(map, victim) {
+        return;
+    }
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
     };

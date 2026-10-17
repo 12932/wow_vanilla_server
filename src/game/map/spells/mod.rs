@@ -3,12 +3,19 @@
 //! effects do when they land ([`outcome`]), with the caster's talents'
 //! modifiers ([`mods`]) and their targets ([`targets`]).
 
+pub mod area;
+pub mod aura_rank;
 pub mod checks;
 pub mod cooldowns;
+pub mod dynamic;
 mod effects;
+pub mod environment;
+mod holiday;
 pub mod mods;
 pub mod outcome;
+pub mod redemption;
 pub mod scripts;
+pub mod sight;
 pub mod stealth;
 pub mod targets;
 
@@ -68,6 +75,7 @@ pub const EFFECT_TELEPORT_UNITS_FACE_CASTER: u32 = 43;
 pub const EFFECT_SKILL_STEP: u32 = 44;
 pub const EFFECT_WEAPON_DAMAGE: u32 = 58;
 pub const EFFECT_PROFICIENCY: u32 = 60;
+pub const EFFECT_ADD_FARSIGHT: u32 = 72;
 pub const EFFECT_POWER_BURN: u32 = 62;
 pub const EFFECT_THREAT: u32 = 63;
 pub const EFFECT_TRIGGER_SPELL: u32 = 64;
@@ -95,8 +103,8 @@ pub const EFFECT_MODIFY_THREAT_PERCENT: u32 = 125;
 /// The effects this module runs.
 pub const RUN: &[u32] = &[
     1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 24, 25, 27, 29, 30, 31, 32, 33, 35, 36, 38, 43, 44,
-    58, 60, 62, 63, 64, 67, 68, 69, 75, 77, 78, 79, 80, 83, 84, 96, 98, 108, 111, 113, 114, 115,
-    118, 121, 125,
+    58, 60, 62, 63, 64, 67, 68, 69, 72, 75, 77, 78, 79, 80, 83, 84, 96, 98, 108, 111, 113, 114,
+    115, 118, 121, 125,
 ];
 
 /// Every effect the server knows: those with an effect here, and the
@@ -106,9 +114,9 @@ pub const RUN: &[u32] = &[
 pub fn effect_supported(effect: u32) -> bool {
     const KEPT: &[u32] = &[
         0, 4, 12, 13, 14, 15, 19, 20, 21, 22, 23, 26, 28, 34, 37, 39, 40, 41, 42, 45, 46, 47, 48,
-        49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 65, 66, 70, 71, 72, 73, 74, 76, 81, 82, 85, 86,
-        87, 88, 89, 90, 91, 92, 93, 94, 95, 97, 99, 100, 101, 102, 103, 104, 105, 106, 107, 109,
-        110, 112, 116, 117, 119, 120, 122, 123, 124, 126, 127, 128, 129,
+        49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 65, 66, 70, 71, 73, 74, 76, 81, 82, 85, 86, 87,
+        88, 89, 90, 91, 92, 93, 94, 95, 97, 99, 100, 101, 102, 103, 104, 105, 106, 107, 109, 110,
+        112, 116, 117, 119, 120, 122, 123, 124, 126, 127, 128, 129,
     ];
     RUN.contains(&effect) || KEPT.contains(&effect)
 }
@@ -171,6 +179,17 @@ pub struct MapSpells {
     /// Persistent area auras: Blizzard, Rain of Fire, Consecration.
     pub areas: Vec<Area>,
     pub area_auras_at: Option<Instant>,
+    /// Ground areas' and far sight's dynamic objects.
+    pub dynamic: AHashMap<Guid, dynamic::DynamicObject>,
+    pub next_dynamic: u32,
+    /// Who looks from where (far sight, bind sight): viewer to object.
+    pub viewpoints: AHashMap<Guid, Guid>,
+    /// When and where each player's surroundings were last looked at.
+    pub outdoor_checked: AHashMap<Guid, (Instant, Vector3d)>,
+    /// Indoors or out, by player, for tests without a navmesh.
+    pub outdoors_override: AHashMap<Guid, bool>,
+    /// Spirits of redemption dying, whom the talent doesn't save again.
+    pub redeemed: ahash::AHashSet<Guid>,
 }
 
 /// A persistent area aura on the ground.
@@ -185,6 +204,8 @@ pub struct Area {
     pub ends: Instant,
     pub next_tick: Instant,
     pub period: Duration,
+    /// The dynamic object clients see it by.
+    pub object: Guid,
 }
 
 /// The spell learning `spell` gives: a trainer's spell may be one whose
@@ -248,6 +269,9 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
         return;
     };
     if !s.passive() {
+        return;
+    }
+    if s.attr(0, sd::ATTR_ONLY_OUTDOORS) && environment::outdoors(map, player) == Some(false) {
         return;
     }
     let level = map.unit_view(player).map(|u| u.level).unwrap_or(1);
@@ -324,6 +348,10 @@ fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
                     .map_or(0, |s| s.requires_spell_focus);
                 b.u32(focus);
             }
+            // An area failure names the area.
+            if r == checks::fail::REQUIRES_AREA {
+                b.u32(area::required(&map.realm.data, spell));
+            }
         }
     }
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));
@@ -335,7 +363,7 @@ fn power_index(s: &SpellTemplate) -> u16 {
 
 /// What `s` costs `caster` before modifiers: its own cost, a share of base
 /// mana, or all its mana; with school cost auras.
-fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
+pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
     let mut cost = if s.attr(1, sd::ATTR_EX_USE_ALL_MANA) {
@@ -349,8 +377,24 @@ fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         };
         base * s.mana_cost_percentage / 100
     } else {
-        s.mana_cost + s.mana_cost_per_level * level.saturating_sub(s.base_level)
+        // The rank it is cast at goes no higher than its last level.
+        let rank = if s.max_level > 0 {
+            level.min(s.max_level)
+        } else {
+            level
+        };
+        s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level)
     } as i32;
+    // A spell that scales with its caster's level costs as much more, as
+    // vmangos's `CalculatePowerCost` (and Thistle Tea's `CostScaling`) has it.
+    if s.attr(0, sd::ATTR_LEVEL_DAMAGE_CALCULATION) && s.spell_level > 0 && level > 0 {
+        let divisor = 1.117 * s.spell_level as f32 / level as f32 - 0.1327;
+        cost = if divisor.abs() < f32::EPSILON {
+            0
+        } else {
+            (cost as f32 / divisor) as i32
+        };
+    }
     if let Some(a) = auras::auras(map, caster) {
         cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
         cost = (cost as f32
@@ -451,7 +495,25 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
     if s.passive() {
         return;
     }
+    // A buff too high for its target goes on at a rank that may.
+    if item.is_none() && map.players.contains_key(&caster) {
+        match aura_rank::chosen(map, caster, s, &targets) {
+            Some(id) if id != spell => return cast(map, caster, id, targets, item),
+            None => {
+                send_cast_result(map, caster, spell, Some(fail::LOWLEVEL));
+                return;
+            }
+            _ => {}
+        }
+    }
     let m = mods::for_spell(map, caster, s);
+    if map.players.contains_key(&caster)
+        && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
+        && !s.has_aura(auras::AURA_MOUNTED)
+        && auras::auras(map, caster).is_some_and(|a| a.has(auras::AURA_MOUNTED))
+    {
+        auras::remove_where(map, caster, |h| h.has(auras::AURA_MOUNTED));
+    }
     if let Some(r) = checks::check(map, caster, s, &targets, item, false, &m) {
         send_cast_result(map, caster, spell, Some(r));
         return;
@@ -646,7 +708,13 @@ fn execute(
         .caster(caster)
         .filter(|c| s.finisher() && targets.unit == Some(c.combo_target))
         .map_or(0, |c| c.combo_points);
+    let targets = magnet(map, caster, s, targets);
     let resolved = resolve(map, caster, s, &targets, &m);
+    let resolved = if !triggered && item.is_none() && map.players.contains_key(&caster) {
+        aura_rank::recipients(map, caster, s, &targets, resolved)
+    } else {
+        resolved
+    };
     let hits: Vec<Guid> = resolved.iter().map(|(g, _)| *g).collect();
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_GO {
         cast_item: item.unwrap_or_default(),
@@ -706,6 +774,13 @@ fn execute(
     // Each target: the hit, then the effects.
     let mut chain = [1.0f32; 3];
     let mut landed_on_main = false;
+    // A meteor's damage is shared among those it falls on (Thistle Tea's
+    // `SharedDamage`).
+    let shared = if s.script_name == "spell_meteor" {
+        resolved.iter().filter(|(_, e)| e[0]).count() as u32
+    } else {
+        0
+    };
     for (target, mut effects) in resolved {
         for (i, e) in effects.iter_mut().enumerate() {
             if professions & (1 << i) != 0 {
@@ -775,6 +850,7 @@ fn execute(
             combo,
             mods: m.clone(),
             reflected: aim != target,
+            shared,
         };
         effects::run(
             map, caster, aim, s, effects, &landing, &mut chain, item, &targets,
@@ -826,6 +902,61 @@ fn execute(
             });
         }
     }
+}
+
+/// Whether a spell can be pulled aside by a spell magnet (Grounding
+/// Totem), as Thistle Tea's `SpellMagnet.eligible?` says: a harmful magic
+/// spell at one target, not a poison, an ability or a passive.
+pub fn magnet_eligible(s: &SpellTemplate) -> bool {
+    (s.dmg_class == 1 || s.spell_visual == 7250)
+        && s.dispel != 4
+        && !auras::positive(s)
+        && !outcome::area(s)
+        && !s.ability()
+        && !s.passive()
+        && !s.attr(1, 0x8)
+        && !s.attr(3, sd::ATTR_EX3_SUPPRESS_TARGET_PROCS)
+}
+
+/// A spell at a unit under a spell magnet goes to the magnet's source
+/// instead, and the magnet's one charge is spent for everyone it covered.
+fn magnet(map: &mut Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Targets {
+    let Some(target) = t.unit else {
+        return t;
+    };
+    if target == caster || !magnet_eligible(s) {
+        return t;
+    }
+    let source = auras::auras(map, target).and_then(|a| {
+        a.holders
+            .iter()
+            .find(|h| h.has(auras::AURA_SPELL_MAGNET) && h.caster != caster)
+            .map(|h| (h.caster, h.spell))
+    });
+    let Some((source, spell)) = source else {
+        return t;
+    };
+    if map.unit_view(source).is_none_or(|u| !u.alive) {
+        return t;
+    }
+    let covered: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| {
+            p.auras
+                .holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == source)
+        })
+        .map(|p| p.guid)
+        .chain(std::iter::once(source))
+        .collect();
+    for g in covered {
+        auras::remove_spell(map, g, spell, Some(source));
+    }
+    t.unit = Some(source);
+    t.dest = map.position_of(source);
+    t
 }
 
 /// A rogue's or druid's combo points go.
@@ -1064,6 +1195,7 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     map.spells
         .areas
         .retain(|a| !(a.caster == g && a.spell == casting.spell));
+    dynamic::remove_spell(map, g, casting.spell);
     if let Some(f) = map.unit_fields_mut(g) {
         f.set_u32(UNIT_CHANNEL_SPELL, 0);
         f.set_guid(UNIT_FIELD_CHANNEL_OBJECT, Guid::zero());
@@ -1093,7 +1225,10 @@ pub fn pushback(map: &mut Map, g: Guid) {
         return;
     };
     let (delays, cancels) = if channel {
-        (s.channel_interrupt_flags & 0x4000 != 0, s.channel_interrupt_flags & 0x2 != 0)
+        (
+            s.channel_interrupt_flags & 0x4000 != 0,
+            s.channel_interrupt_flags & 0x2 != 0,
+        )
     } else {
         (s.interrupt_flags & 0x2 != 0, s.interrupt_flags & 0x10 != 0)
     };
@@ -1158,6 +1293,7 @@ pub fn cancel(map: &mut Map, g: Guid) {
 
 /// A player moved: a cast that movement interrupts stops.
 pub fn moved(map: &mut Map, g: Guid) {
+    environment::moved(map, g);
     let Some((spell, channel)) = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
@@ -1229,6 +1365,8 @@ pub fn update(map: &mut Map) {
     }
     effects::tick_areas(map);
     effects::refresh_area_auras(map);
+    dynamic::update(map);
+    sight::update(map);
     for p in map.players.values_mut() {
         p.caster.school_lockout.retain(|(_, until)| *until > now);
         p.caster

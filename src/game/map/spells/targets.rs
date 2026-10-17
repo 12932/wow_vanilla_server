@@ -279,7 +279,9 @@ pub fn effect_targets(
             }
         }
         (Caster, _) | (None, _) => vec![caster],
-        (Pet, _) => crate::game::map::pets::pet_of(map, caster).into_iter().collect(),
+        (Pet, _) => crate::game::map::pets::pet_of(map, caster)
+            .into_iter()
+            .collect(),
         (CasterMaster, _) => map
             .creature(caster)
             .and_then(|c| c.owner)
