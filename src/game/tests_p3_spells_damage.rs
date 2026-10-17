@@ -249,3 +249,39 @@ async fn a_ground_spell_ticks_a_period_in_and_has_its_last_tick_as_it_ends() {
         "Consecration's eight, the first a second in"
     );
 }
+
+const DRAIN_LIFE: u32 = 689;
+
+#[tokio::test]
+async fn a_leech_heals_no_more_than_the_health_it_took() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, lock, map) = player(&realm, "P3D6", "Leechone", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, lock, 60, &[]);
+            let kobold = dummy(m, lock, 60, 5.0);
+            crate::game::map::spells::cast_triggered(m, lock, DRAIN_LIFE, Some(kobold));
+            let tick = holder(m, kobold, DRAIN_LIFE)
+                .and_then(|h| h.effects.first().map(|x| x.amount))
+                .unwrap_or(0) as u32;
+            // A whole tick, healed whole.
+            set_health(m, lock, 100);
+            tick_now(m, kobold, DRAIN_LIFE);
+            let whole = health(m, lock) - 100;
+            // A kobold of two health gives two.
+            set_health(m, lock, 100);
+            set_health(m, kobold, 2);
+            tick_now(m, kobold, DRAIN_LIFE);
+            let little = health(m, lock) - 100;
+            (tick, whole, little)
+        })
+        .await
+        .unwrap();
+    let (tick, whole, little) = out;
+    assert!(tick > 2);
+    assert_eq!(whole, tick, "a whole tick healed whole");
+    assert_eq!(little, 2, "no more than the kobold had");
+}
