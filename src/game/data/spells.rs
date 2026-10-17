@@ -21,7 +21,9 @@ pub struct SpellEffect {
     pub amplitude: u32,
     pub multiple_value: f32,
     pub chain_target: u32,
-    pub item_type: u32,
+    /// `EffectItemType`: an item (one created, one a death gives), or the
+    /// family flags a modifier or trigger touches, all 64 bits of them.
+    pub item_type: u64,
     pub misc_value: i32,
     pub trigger_spell: u32,
     pub points_per_combo_point: f32,

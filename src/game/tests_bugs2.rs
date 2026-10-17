@@ -361,3 +361,29 @@ async fn a_teleport_within_a_copy_stays_in_it() {
         "at the orb's place: {at:?}"
     );
 }
+
+#[tokio::test]
+async fn a_modifier_touches_only_its_mask_past_32_bits() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "SHADOWMASTERY");
+    let w = c.enter("Shadowm", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let pct = map
+        .query(move |m| {
+            level(m, w, 60, &[18275]);
+            let data = m.realm.data.clone();
+            let all = |m: &Map, id: u32| {
+                spells::mods::for_spell(m, w, data.spells.get(id).unwrap()).pct
+                    [spells::mods::OP_ALL_EFFECTS]
+            };
+            // Shadow Mastery's 10%: its shadow spells' (Siphon Life's past
+            // the 32nd bit), not Immolate's.
+            (all(m, 18265), all(m, 348))
+        })
+        .await
+        .unwrap();
+    assert_eq!(pct, (10, 0));
+}

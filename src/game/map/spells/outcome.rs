@@ -1111,10 +1111,11 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
         .is_none_or(|c| c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none());
     let mut items: Vec<(Guid, u32, u32)> = Vec::new();
     for (h, x) in a.effects() {
-        if x.kind != AURA_CHANNEL_DEATH_ITEM || x.mask == 0 {
+        let item = u32::try_from(x.mask).unwrap_or(0);
+        if x.kind != AURA_CHANNEL_DEATH_ITEM || item == 0 {
             continue;
         }
-        if x.mask == SOUL_SHARD {
+        if item == SOUL_SHARD {
             let tapped = guid::is_player(target)
                 || creature.is_some_and(|c| c.tapped_by.is_none_or(|t| t == h.caster));
             if !shard_target || !tapped || target_level <= combat::gray_level(level(map, h.caster))
@@ -1124,10 +1125,10 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
         }
         // One shard a warlock, however many of their drains were on it.
         let warlock = data.spells.get(h.spell).is_some_and(|s| s.family_name == 5);
-        if warlock && items.iter().any(|(c, i, _)| *c == h.caster && *i == x.mask) {
+        if warlock && items.iter().any(|(c, i, _)| *c == h.caster && *i == item) {
             continue;
         }
-        items.push((h.caster, x.mask, x.amount.max(1) as u32));
+        items.push((h.caster, item, x.amount.max(1) as u32));
     }
     items
 }

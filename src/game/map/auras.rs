@@ -239,8 +239,9 @@ pub struct Aura {
     pub amount: i32,
     pub misc: i32,
     pub trigger: u32,
-    /// `EffectItemType`: the spells a modifier or trigger affects.
-    pub mask: u32,
+    /// `EffectItemType`: the spells a modifier or trigger affects (its
+    /// family flags), or an item.
+    pub mask: u64,
     pub period: Option<Duration>,
     pub next_tick: Option<Instant>,
     pub ticks: u32,
