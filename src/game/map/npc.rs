@@ -310,6 +310,9 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             },
         );
     }
+    // An option that closes a creature's gossip is talking to it, once the
+    // window is closed (mangos's GOSSIP_OPTION_GOSSIP with a menu below 0).
+    let talked = o.kind == 1 && o.action_menu < 0;
     if o.script != 0 {
         // An object's option runs on the player, at the object; a
         // creature's on the creature, at the player (Thistle Tea's
@@ -327,7 +330,11 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             target,
         );
         if o.kind == 1 && o.action_menu <= 0 {
-            return send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            if talked {
+                quests::talked(map, player, npc);
+            }
+            return;
         }
     }
     match o.kind {
@@ -348,6 +355,9 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         15 => vendor::list(map, player, npc),
         16 => crate::game::map::misc::talent_wipe_offer(map, player, npc),
         _ => send(map, player, &SMSG_GOSSIP_COMPLETE {}),
+    }
+    if talked {
+        quests::talked(map, player, npc);
     }
 }
 
@@ -514,7 +524,14 @@ pub fn trainer_list(map: &mut Map, player: Guid, npc: Guid) {
                 required_level: s.required_level,
                 required_skill: Skill::try_from(s.required_skill as u16).unwrap_or_default(),
                 required_skill_value: s.required_skill_value,
-                required_spells: [t.prev, t.req, 0],
+                // The rank before first, then the spell required; with no
+                // rank before, the required spell first, as mangos-zero's
+                // SendTrainerSpellHelper and Thistle Tea lay them out.
+                required_spells: if t.prev != 0 {
+                    [t.prev, t.req, 0]
+                } else {
+                    [t.req, 0, 0]
+                },
             }
         })
         .collect();

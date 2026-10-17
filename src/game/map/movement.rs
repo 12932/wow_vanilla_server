@@ -12,6 +12,23 @@ use crate::game::conn::encode;
 use crate::game::map::player::PendingTeleport;
 use crate::game::map::{Map, grid, visibility};
 
+pub const SMSG_FORCE_MOVE_ROOT: u16 = 0x0E8;
+pub const SMSG_FORCE_MOVE_UNROOT: u16 = 0x0EA;
+
+/// `SMSG_FORCE_MOVE_ROOT` or `SMSG_FORCE_MOVE_UNROOT`, by hand: 1.12's GUID
+/// is packed (mangos-zero's SetRoot, mangos-classic's and Thistle Tea's),
+/// where wow_messages writes it whole and the client reads another unit.
+pub fn root_frame(guid: Guid, root: bool) -> Arc<[u8]> {
+    let mut b = crate::game::data::items::Body::default();
+    crate::game::update::write_packed_guid(&mut b.0, guid);
+    b.u32(0);
+    b.frame(if root {
+        SMSG_FORCE_MOVE_ROOT
+    } else {
+        SMSG_FORCE_MOVE_UNROOT
+    })
+}
+
 /// The map enum for a map id; maps the protocol doesn't name are taken as
 /// Eastern Kingdoms rather than refused.
 pub fn map_enum(id: u32) -> wow_world_messages::vanilla::Map {
@@ -211,9 +228,13 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
         p.fields
             .set_u32(crate::game::fields::UNIT_NPC_EMOTESTATE, 0);
     }
-    // Sitting, sleeping or kneeling; not dead.
+    // Sitting, sleeping or kneeling; not dead: up, and told so, as mangos's
+    // SetStandState and Thistle Tea's `Emote.move` tell it.
     if !matches!(p.stand_state(), 0 | 7) && p.death == crate::game::map::death::Death::Alive {
         p.set_stand_state(0);
+        p.outbound.send(&SMSG_STANDSTATE_UPDATE {
+            state: UnitStandState::Stand,
+        });
     }
     let mask = if moved {
         INTERRUPT_MOVE | INTERRUPT_TURNING | INTERRUPT_NOT_SEATED
@@ -354,16 +375,24 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.cell = new_cell;
     map.grid.relocate(guid, old_cell, new_cell);
     map.visibility_dirty.insert(guid);
-    // Observers still in range see the player jump there.
+    // Observers still in range see the player there at once:
+    // `MSG_MOVE_TELEPORT`, the packed GUID and the movement, as mangos's
+    // SendTeleportPacket and Thistle Tea send it (a heartbeat would have
+    // them run there). wow_messages has no vanilla one; it is the
+    // heartbeat's body.
     if let Some(p) = map.players.get(&guid)
         && let Some(frame) = encode(&MSG_MOVE_HEARTBEAT_Server {
             guid,
             info: p.movement.clone(),
         })
     {
+        let frame = crate::game::update::frame(MSG_MOVE_TELEPORT, &frame[4..]);
         map.send_to_observers(guid, &frame, false);
     }
 }
+
+/// `MSG_MOVE_TELEPORT`, to those who see a player teleported in the map.
+pub const MSG_MOVE_TELEPORT: u16 = 0x0C5;
 
 /// `MSG_MOVE_TELEPORT_ACK`: the client is where it was sent.
 pub fn teleport_ack(map: &mut Map, guid: Guid) {

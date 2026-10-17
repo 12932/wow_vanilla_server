@@ -136,6 +136,25 @@ pub fn pay_ammunition(map: &mut Map, g: Guid) -> Result<Option<(u32, u32)>, u8> 
     Ok(None)
 }
 
+/// The projectile a player's ranged spell shows, as mangos's
+/// WriteAmmoToPacket picks it: a thrown weapon itself, else the ammunition
+/// set (its look and inventory type), else nothing of the weapon's kind.
+/// None for a caster with no ranged weapon, or not a player.
+pub fn ammo_shown(map: &Map, g: Guid) -> Option<(u32, u32)> {
+    let data = &map.realm.data;
+    let weapon = combat::hand_weapon(map, g, Hand::Ranged)?;
+    let t = data.item(weapon.entry)?;
+    if t.inventory_type == INVENTORY_THROWN {
+        return Some((t.display_id, t.inventory_type));
+    }
+    let ammo = map.players.get(&g)?.fields.get_u32(PLAYER_AMMO_ID);
+    Some(
+        data.item(ammo)
+            .filter(|_| ammo != 0)
+            .map_or((0, t.inventory_type), |a| (a.display_id, a.inventory_type)),
+    )
+}
+
 /// `CMSG_SET_AMMO`: the ammunition the ranged weapon uses.
 pub fn set_ammo(map: &mut Map, g: Guid, item: u32) {
     let data = map.realm.data.clone();

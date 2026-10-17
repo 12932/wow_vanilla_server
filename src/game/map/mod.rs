@@ -113,6 +113,9 @@ use crate::game::registry::Online;
 use crate::game::store::CharacterRow;
 use crate::game::update::{self, Batch};
 
+/// `SMSG_TRANSFER_ABORTED`, encoded by hand.
+pub const SMSG_TRANSFER_ABORTED: u16 = 0x040;
+
 /// A map, and which copy of it: 0 for the open world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MapKey {
@@ -780,13 +783,15 @@ impl Map {
                 Err(refused) => {
                     if let Some(p) = self.players.get(&guid) {
                         match refused {
-                            crate::game::instances::Refused::Abort(reason) => p.outbound.send(
-                                &wow_world_messages::vanilla::SMSG_TRANSFER_ABORTED {
-                                    map: movement::map_enum(key.map),
-                                    reason,
-                                    argument: 0,
-                                },
-                            ),
+                            // 1.12's is the reason's byte alone, as
+                            // mangos-zero's SendTransferAborted and Thistle
+                            // Tea write it, where wow_messages adds a map
+                            // and an argument.
+                            crate::game::instances::Refused::Abort(reason) => {
+                                let mut b = crate::game::data::items::Body::default();
+                                b.u8(reason.as_int());
+                                p.outbound.send_frame(b.frame(SMSG_TRANSFER_ABORTED))
+                            }
                             crate::game::instances::Refused::Message(message) => p.outbound.send(
                                 &wow_world_messages::vanilla::SMSG_AREA_TRIGGER_MESSAGE { message },
                             ),

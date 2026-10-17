@@ -131,9 +131,11 @@ impl From<ClientOpcodeMessage> for Inbound {
 
 /// The client opcodes read by hand: `CMSG_SET_FACTION_ATWAR`,
 /// `CMSG_SET_FACTION_INACTIVE` and `CMSG_SET_WATCHED_FACTION` carry a
-/// 32-bit reputation index where wow_messages reads a faction, and
-/// wow_messages's decompression of `CMSG_UPDATE_ACCOUNT_DATA` fails.
-pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318, 0x20B];
+/// 32-bit reputation index where wow_messages reads a faction,
+/// wow_messages's decompression of `CMSG_UPDATE_ACCOUNT_DATA` fails, and
+/// it wants ten answers in `CMSG_GMSURVEY_SUBMIT` where the client stops
+/// at a zero question.
+pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318, 0x20B, 0x32A];
 
 /// A started connection: its outbound queue, and the packets it reads.
 pub struct Connection {
@@ -162,7 +164,7 @@ pub fn start(stream: TcpStream, crypto: HeaderCrypto) -> Connection {
 
 /// Decode packets and pass them on. Pings are answered here, so their
 /// round trip measures the network and not the world.
-async fn run_reader<R: AsyncRead + Unpin + Send>(
+pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
     mut read: R,
     mut decrypter: DecrypterHalf,
     tx: mpsc::Sender<Inbound>,

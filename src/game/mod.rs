@@ -92,6 +92,22 @@ mod tests_p3_combat8;
 #[cfg(test)]
 mod tests_p3_combat9;
 #[cfg(test)]
+mod tests_p3_network;
+#[cfg(test)]
+mod tests_p3_network_auth;
+#[cfg(test)]
+mod tests_p3_network_codec;
+#[cfg(test)]
+mod tests_p3_network_messages;
+#[cfg(test)]
+mod tests_p3_network_npc;
+#[cfg(test)]
+mod tests_p3_network_pets;
+#[cfg(test)]
+mod tests_p3_network_real;
+#[cfg(test)]
+mod tests_p3_network_wire;
+#[cfg(test)]
 mod tests_p3_world_bg;
 #[cfg(test)]
 mod tests_p3_world_env;

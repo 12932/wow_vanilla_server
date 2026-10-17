@@ -1453,10 +1453,8 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
             if let Some(p) = map.players.get(&target) {
-                p.outbound.send(&SMSG_FORCE_MOVE_ROOT {
-                    guid: target,
-                    counter: 0,
-                });
+                p.outbound
+                    .send_frame(crate::game::map::movement::root_frame(target, true));
             }
             if kind == AURA_MOD_STUN {
                 crate::game::map::spells::interrupt(map, target);
@@ -1694,10 +1692,8 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
             if !rooted && let Some(p) = map.players.get(&target) {
-                p.outbound.send(&SMSG_FORCE_MOVE_UNROOT {
-                    guid: target,
-                    counter: 0,
-                });
+                p.outbound
+                    .send_frame(crate::game::map::movement::root_frame(target, false));
             }
         }
         AURA_MOD_FEAR if !still(map, AURA_MOD_FEAR) => {
@@ -2135,6 +2131,19 @@ pub fn update(map: &mut Map) {
     }
 }
 
+/// A periodic aura's tick, in the combat log: `SMSG_PERIODICAURALOG` to
+/// those who see its target.
+fn periodic_log(map: &mut Map, h: &Holder, target: Guid, aura_type: AuraLog_AuraType) {
+    if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
+        target,
+        caster: h.caster,
+        spell: h.spell,
+        auras: vec![AuraLog { aura_type }],
+    }) {
+        map.send_to_observers(target, &frame, true);
+    }
+}
+
 /// Run the ticks of `spell` from `caster` on `target` that are due now: a
 /// channel's last tick, as the channel ends.
 pub fn tick_due(map: &mut Map, target: Guid, spell: u32, caster: Guid) {
@@ -2248,16 +2257,34 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA | AURA_MOD_POWER_REGEN => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                let power = a.misc.clamp(0, 4) as u16;
-                let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
-                let add = if a.kind == AURA_OBS_MOD_MANA {
-                    max * (a.amount * stacks).max(0) as u32 / 100
-                } else {
-                    (a.amount * stacks).max(0) as u32
-                };
-                let now = f.get_u32(UNIT_FIELD_POWER1 + power);
-                f.set_u32(UNIT_FIELD_POWER1 + power, (now + add).min(max));
+            let power = a.misc.clamp(0, 4) as u16;
+            let Some(f) = map.unit_fields_mut(target) else {
+                return;
+            };
+            let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
+            let add = if a.kind == AURA_OBS_MOD_MANA {
+                max * (a.amount * stacks).max(0) as u32 / 100
+            } else {
+                (a.amount * stacks).max(0) as u32
+            };
+            let now = f.get_u32(UNIT_FIELD_POWER1 + power);
+            f.set_u32(UNIT_FIELD_POWER1 + power, (now + add).min(max));
+            // Logged as its own aura with its power, as mangos's
+            // SendPeriodicAuraLog and Thistle Tea log a tick; a regeneration
+            // isn't.
+            let logged = match a.kind {
+                AURA_PERIODIC_ENERGIZE => Some(AuraLog_AuraType::PeriodicEnergize {
+                    damage3: add,
+                    misc_value1: u32::from(power),
+                }),
+                AURA_OBS_MOD_MANA => Some(AuraLog_AuraType::ObsModMana {
+                    damage3: add,
+                    misc_value1: u32::from(power),
+                }),
+                _ => None,
+            };
+            if let Some(aura_type) = logged {
+                periodic_log(map, h, target, aura_type);
             }
         }
         AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA => {
@@ -2279,6 +2306,16 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 .get(h.spell)
                 .map_or(1.0, |s| s.effects[a.effect as usize].multiple_value);
             if a.kind == AURA_PERIODIC_MANA_LEECH {
+                periodic_log(
+                    map,
+                    h,
+                    target,
+                    AuraLog_AuraType::PeriodicManaLeech {
+                        damage: taken,
+                        gain_multiplier: mult,
+                        misc_value2: u32::from(power),
+                    },
+                );
                 let gain = (taken as f32 * mult.max(0.0)) as u32;
                 if let Some(f) = map.unit_fields_mut(h.caster) {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);

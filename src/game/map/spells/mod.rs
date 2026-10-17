@@ -448,6 +448,15 @@ pub fn points_with(s: &SpellTemplate, index: usize, level: u32, combo: u8) -> i3
     e.base_points + dice + per_level + (e.points_per_combo_point * f32::from(combo)) as i32
 }
 
+/// The projectile a player's spell of the ranged slot shows (Aimed Shot,
+/// a throw), for its start and its go.
+fn ranged_ammo(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<(u32, u32)> {
+    if !s.attr(0, crate::game::data::spells::ATTR_RANGED) {
+        return None;
+    }
+    crate::game::map::ranged::ammo_shown(map, caster)
+}
+
 pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
     let Some(p) = map.players.get(&caster) else {
         return;
@@ -749,11 +758,20 @@ pub fn cast(
     }
     let now = map.now;
     let time = cast_time(map, caster, s, &m);
+    // A spell of the ranged slot shows its projectile (mangos's
+    // CAST_FLAG_AMMO, set for `SPELL_ATTR_USES_RANGED_SLOT`).
+    let mut flags = SMSG_SPELL_START_CastFlags::empty();
+    if let Some((display, inventory_type)) = ranged_ammo(map, caster, s) {
+        flags = flags.set_ammo(SMSG_SPELL_START_CastFlags_Ammo {
+            ammo_display_id: display,
+            ammo_inventory_type: inventory_type,
+        });
+    }
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_START {
         cast_item: item.unwrap_or_default(),
         caster,
         spell,
-        flags: SMSG_SPELL_START_CastFlags::empty(),
+        flags,
         timer: time,
         targets: wire_targets(&targets),
     }) {
@@ -944,11 +962,18 @@ fn execute(
         resolved
     };
     let hits: Vec<Guid> = resolved.iter().map(|(g, _)| *g).collect();
+    let mut flags = SMSG_SPELL_GO_CastFlags::empty();
+    if let Some((display, inventory_type)) = ranged_ammo(map, caster, s) {
+        flags = flags.set_ammo(SMSG_SPELL_GO_CastFlags_Ammo {
+            ammo_display_id: display,
+            ammo_inventory_type: inventory_type,
+        });
+    }
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_GO {
         cast_item: item.unwrap_or_default(),
         caster,
         spell: s.id,
-        flags: SMSG_SPELL_GO_CastFlags::empty(),
+        flags,
         hits,
         misses: Vec::new(),
         targets: wire_targets(&targets),
@@ -1428,6 +1453,8 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
         c.combo_points = 0;
         c.combo_target = Guid::zero();
     }
+    // The field keeps the last target, its points none, as mangos's
+    // ClearComboPoints sends them and Thistle Tea encodes them.
     if let Some(p) = map.players.get_mut(&caster) {
         p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 0);
     }

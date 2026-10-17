@@ -929,18 +929,24 @@ fn effect(
         EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
             let pct = e.effect == EFFECT_DURABILITY_DAMAGE_PCT;
             let slot = e.misc_value;
-            // The combat log names the item a set loss is from.
-            let logged = map.players.get(&target).and_then(|p| {
-                p.items
-                    .iter()
-                    .find(|i| {
-                        i.bag == crate::game::store::BAG_PLAYER
-                            && i.slot < 19
-                            && (slot < 0 || i.slot as i32 == slot)
-                            && i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
-                    })
-                    .map(|i| i.entry)
-            });
+            // The combat log names the item a slot's loss is from; a loss
+            // to everything worn is all items' -1, as mangos's
+            // EffectDurabilityDamage and Thistle Tea log it.
+            let logged = if slot < 0 {
+                map.players.contains_key(&target).then_some(u32::MAX)
+            } else {
+                map.players.get(&target).and_then(|p| {
+                    p.items
+                        .iter()
+                        .find(|i| {
+                            i.bag == crate::game::store::BAG_PLAYER
+                                && i.slot < 19
+                                && i.slot as i32 == slot
+                                && i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+                        })
+                        .map(|i| i.entry)
+                })
+            };
             if !pct && let Some(entry) = logged {
                 super::log::durability(map, caster, s.id, target, entry);
             }
