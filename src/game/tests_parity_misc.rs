@@ -1235,3 +1235,460 @@ async fn a_disenchant_rolls_once_shows_as_an_items_loot_and_needs_something_to_g
     .await;
     assert_eq!(failed(&mut a, ENCHANT).await, 0x26);
 }
+
+// Locks: picking, gathering, keys and charges, line by line with Thistle
+// Tea.
+
+const PICK_LOCK: u32 = 1804;
+const HERB_GATHERING: u32 = 2366;
+const GOLDEN_KEY: u32 = 19_649;
+const KEY_OPENING: u32 = 900_120;
+const SMALL_CHARGE: u32 = 4056;
+const JUNKBOX: u32 = 900_600;
+const KEY: u32 = 900_601;
+const SKELETON_KEY: u32 = 900_602;
+const CHARGE: u32 = 900_603;
+const TRINKET: u32 = 900_604;
+/// Chests: one for a lockpicker of 80, one a key opens alone, one for a
+/// charge of 250, one with no lock, and a herb for 50.
+const CHEST: u32 = 900_700;
+const KEY_CHEST: u32 = 900_701;
+const BLAST_CHEST: u32 = 900_702;
+const OPEN_CHEST: u32 = 900_703;
+const HERB: u32 = 900_704;
+const CHEST_LOOT: u32 = 900_710;
+
+fn lock_data() -> GameData {
+    use crate::game::data::crafts::LockKey;
+    use crate::game::data::items::ItemSpell;
+    use crate::game::data::{GameObjectSpawn, GameObjectTemplate, LootEntry};
+    let mut d = crafting_data();
+    // The spells as the client's data has them: Pick Lock's five over the
+    // skill, Herb Gathering's none (its points by level aside), a key's and
+    // a charge's own.
+    let lock_spell = |id, kind: i32, base: i32| {
+        let mut s = create_item(id, 0, 0);
+        s.effects[0] = SpellEffect {
+            effect: 33,
+            misc_value: kind,
+            base_points: base,
+            base_dice: 1,
+            die_sides: 1,
+            ..Default::default()
+        };
+        s
+    };
+    d.spells
+        .spells
+        .insert(PICK_LOCK, lock_spell(PICK_LOCK, 1, 4));
+    let mut herbs = lock_spell(HERB_GATHERING, 2, -1);
+    herbs.effects[0].real_points_per_level = 5.0;
+    d.spells.spells.insert(HERB_GATHERING, herbs);
+    d.spells
+        .spells
+        .insert(GOLDEN_KEY, lock_spell(GOLDEN_KEY, 1, 124));
+    d.spells
+        .spells
+        .insert(KEY_OPENING, lock_spell(KEY_OPENING, 0, -1));
+    d.spells
+        .spells
+        .insert(SMALL_CHARGE, lock_spell(SMALL_CHARGE, 16, 149));
+    let usable = |entry, name: &str, spell| {
+        let mut t = ItemTemplate {
+            entry,
+            name: name.into(),
+            stackable: 1,
+            ..Default::default()
+        };
+        t.spells[0] = ItemSpell {
+            id: spell,
+            charges: 0,
+            cooldown: -1,
+            category_cooldown: -1,
+            ..Default::default()
+        };
+        t
+    };
+    d.items.insert(KEY, usable(KEY, "Key", KEY_OPENING));
+    d.items.insert(
+        SKELETON_KEY,
+        usable(SKELETON_KEY, "Golden Skeleton Key", GOLDEN_KEY),
+    );
+    d.items.insert(
+        CHARGE,
+        usable(CHARGE, "Small Seaforium Charge", SMALL_CHARGE),
+    );
+    d.items.insert(
+        JUNKBOX,
+        ItemTemplate {
+            entry: JUNKBOX,
+            name: "Junkbox".into(),
+            stackable: 1,
+            lock_id: 901,
+            ..Default::default()
+        },
+    );
+    d.items.insert(
+        TRINKET,
+        ItemTemplate {
+            entry: TRINKET,
+            name: "Trinket".into(),
+            stackable: 20,
+            ..Default::default()
+        },
+    );
+    let found = vec![LootEntry {
+        item: TRINKET,
+        chance: 100.0,
+        min: 1,
+        max: 1,
+        ..Default::default()
+    }];
+    d.loot.item.insert(JUNKBOX, found.clone());
+    d.loot.gameobject.insert(CHEST_LOOT, found);
+    let skill_key = |kind, skill| LockKey {
+        kind: 2,
+        index: kind,
+        skill,
+    };
+    d.crafts.locks.insert(900, vec![skill_key(1, 80)]);
+    d.crafts.locks.insert(901, vec![skill_key(1, 80)]);
+    d.crafts.locks.insert(
+        902,
+        vec![LockKey {
+            kind: 1,
+            index: KEY,
+            skill: 0,
+        }],
+    );
+    d.crafts.locks.insert(903, vec![skill_key(16, 250)]);
+    d.crafts.locks.insert(904, vec![skill_key(2, 50)]);
+    let mut spawns = Vec::new();
+    for (i, (entry, lock)) in [
+        (CHEST, 900),
+        (KEY_CHEST, 902),
+        (BLAST_CHEST, 903),
+        (OPEN_CHEST, 0),
+        (HERB, 904),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut t = GameObjectTemplate {
+            entry,
+            kind: 3,
+            display_id: 1,
+            name: format!("Chest {entry}"),
+            size: 1.0,
+            ..Default::default()
+        };
+        t.data[0] = lock;
+        t.data[1] = CHEST_LOOT;
+        d.gameobject_templates.insert(entry, t);
+        spawns.push(GameObjectSpawn {
+            guid: 80 + i as u32,
+            entry,
+            map: 0,
+            x: START.0 + 1.0,
+            y: START.1 + 1.0 + i as f32 * 0.5,
+            z: START.2,
+            state: 1,
+            respawn_min: 300,
+            ..Default::default()
+        });
+    }
+    d.gameobject_spawns.insert(0, spawns);
+    d
+}
+
+/// The object of `entry` in the map.
+fn object(m: &Map, entry: u32) -> Guid {
+    m.gameobjects
+        .iter()
+        .find(|(_, o)| o.entry == entry)
+        .map(|(_, o)| o.guid)
+        .expect("the object")
+}
+
+/// A rogue of thirty, lockpicking at 100.
+async fn rogue(realm: &Arc<Realm>) -> (Client, Guid) {
+    let mut a = Client::connect(realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Rogue).await;
+    a.say(".levelup 29").await;
+    a.wait_for("SMSG_LEVELUP_INFO", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LEVELUP_INFO(_)).then_some(())
+    })
+    .await;
+    on_map(realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.gm = false;
+        crate::game::map::skills::learn_skill(p, 633, 1);
+        crate::game::map::skills::set_value(p, 633, 100);
+        crate::game::map::skills::learn_skill(p, 182, 1);
+        crate::game::map::skills::set_value(p, 182, 45);
+    })
+    .await;
+    (a, g)
+}
+
+fn at_object(object: Guid) -> crate::game::map::spells::Targets {
+    crate::game::map::spells::Targets {
+        object: Some(object),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn pick_lock_opens_a_lockbox_in_the_bags_once() {
+    let realm = harness::realm_with(lock_data());
+    let (mut a, g) = rogue(&realm).await;
+    let (unlocked, skill_after) = on_map(&realm, move |m| {
+        let _ = crate::game::map::inventory::add_item(m, g, JUNKBOX, 1, false);
+        let junkbox = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == JUNKBOX)
+            .unwrap()
+            .guid;
+        cast(
+            m,
+            g,
+            PICK_LOCK,
+            crate::game::map::spells::Targets {
+                item: Some(junkbox),
+                ..Default::default()
+            },
+        );
+        let p = &m.players[&g];
+        let i = p.items.iter().find(|i| i.guid == junkbox).unwrap();
+        (
+            i.fields.get_u32(crate::game::fields::ITEM_FIELD_FLAGS) & 0x4 != 0,
+            skill(m, g, 633),
+        )
+    })
+    .await;
+    assert!(unlocked, "picked");
+    assert_eq!(skill_after, 101, "the skill rises");
+    // It opens at once, as a lock opened.
+    let window = a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await;
+    assert_eq!(window[8], 2);
+    // Picked already: it is open.
+    on_map(&realm, move |m| {
+        let junkbox = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == JUNKBOX)
+            .unwrap()
+            .guid;
+        cast(
+            m,
+            g,
+            PICK_LOCK,
+            crate::game::map::spells::Targets {
+                item: Some(junkbox),
+                ..Default::default()
+            },
+        );
+    })
+    .await;
+    assert_eq!(failed(&mut a, PICK_LOCK).await, 0x06);
+}
+
+#[tokio::test]
+async fn a_lockbox_can_be_missed_and_stays_locked_till_picked() {
+    let realm = harness::realm_with(lock_data());
+    let (mut a, g) = rogue(&realm).await;
+    // At 75, five over it reaches the need of 80 exactly: a roll may miss
+    // (25 in 63), and the box stays locked till one takes. Thirty times.
+    let casts = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::skills::set_value(p, 633, 75);
+        let _ = crate::game::map::inventory::add_item(m, g, JUNKBOX, 1, false);
+        let junkbox = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == JUNKBOX)
+            .unwrap()
+            .guid;
+        let flags = move |m: &mut Map| {
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .items
+                .iter_mut()
+                .find(|i| i.guid == junkbox)
+                .unwrap()
+                .fields
+                .get_u32(crate::game::fields::ITEM_FIELD_FLAGS)
+        };
+        let mut casts = 0;
+        for _ in 0..30 {
+            for _ in 0..100 {
+                casts += 1;
+                cast(
+                    m,
+                    g,
+                    PICK_LOCK,
+                    crate::game::map::spells::Targets {
+                        item: Some(junkbox),
+                        ..Default::default()
+                    },
+                );
+                if flags(m) & 0x4 != 0 {
+                    break;
+                }
+            }
+            // Locked again, and back at 75, for the next.
+            let p = m.players.get_mut(&g).unwrap();
+            crate::game::map::skills::set_value(p, 633, 75);
+            if let Some(i) = p.items.iter_mut().find(|i| i.guid == junkbox) {
+                let f = i.fields.get_u32(crate::game::fields::ITEM_FIELD_FLAGS);
+                i.fields
+                    .set_u32(crate::game::fields::ITEM_FIELD_FLAGS, f & !0x4);
+            }
+        }
+        casts
+    })
+    .await;
+    assert!(
+        (31..3000).contains(&casts),
+        "{casts} casts for thirty picks"
+    );
+    assert_eq!(
+        failed(&mut a, PICK_LOCK).await,
+        0x7A,
+        "a miss is tried again"
+    );
+}
+
+#[tokio::test]
+async fn a_lock_is_opened_by_the_skill_alone_the_key_cast_or_the_charges_strength() {
+    let realm = harness::realm_with(lock_data());
+    let (mut a, g) = rogue(&realm).await;
+    // Herb Gathering at 45 against 50: too low, with no five from its points.
+    on_map(&realm, move |m| {
+        let herb = object(m, HERB);
+        cast(m, g, HERB_GATHERING, at_object(herb));
+    })
+    .await;
+    assert_eq!(failed(&mut a, HERB_GATHERING).await, 0x2C);
+    // A key in the bags doesn't let Pick Lock at a lock only the key opens.
+    on_map(&realm, move |m| {
+        let _ = crate::game::map::inventory::add_item(m, g, KEY, 1, false);
+        let chest = object(m, KEY_CHEST);
+        cast(m, g, PICK_LOCK, at_object(chest));
+    })
+    .await;
+    assert_eq!(failed(&mut a, PICK_LOCK).await, 0x0A);
+    // The key's own spell, cast from it, does.
+    let opened = on_map(&realm, move |m| {
+        let chest = object(m, KEY_CHEST);
+        let key = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == KEY)
+            .unwrap()
+            .guid;
+        m.players.get_mut(&g).unwrap().caster.gcd_until = None;
+        crate::game::map::spells::cast(m, g, KEY_OPENING, at_object(chest), Some(key));
+        m.gameobject(chest).is_some_and(|o| o.loot.is_some())
+    })
+    .await;
+    assert!(opened, "the key opens its chest");
+    // A skeleton key is its own strength, not the rogue's: 125 against 80
+    // opens, but no skill comes of it.
+    let (opened, skill_after) = on_map(&realm, move |m| {
+        let _ = crate::game::map::inventory::add_item(m, g, SKELETON_KEY, 1, false);
+        let chest = object(m, CHEST);
+        let key = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == SKELETON_KEY)
+            .unwrap()
+            .guid;
+        m.players.get_mut(&g).unwrap().caster.gcd_until = None;
+        crate::game::map::skills::set_value(m.players.get_mut(&g).unwrap(), 633, 1);
+        crate::game::map::spells::cast(m, g, GOLDEN_KEY, at_object(chest), Some(key));
+        (
+            m.gameobject(chest).is_some_and(|o| o.loot.is_some()),
+            skill(m, g, 633),
+        )
+    })
+    .await;
+    assert_eq!((opened, skill_after), (true, 1));
+    // A charge of 150 doesn't blast a lock of 250.
+    on_map(&realm, move |m| {
+        let _ = crate::game::map::inventory::add_item(m, g, CHARGE, 1, false);
+        let chest = object(m, BLAST_CHEST);
+        let charge = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == CHARGE)
+            .unwrap()
+            .guid;
+        m.players.get_mut(&g).unwrap().caster.gcd_until = None;
+        crate::game::map::spells::cast(m, g, SMALL_CHARGE, at_object(chest), Some(charge));
+    })
+    .await;
+    assert_eq!(failed(&mut a, SMALL_CHARGE).await, 0x2C);
+    // No lock: already open.
+    on_map(&realm, move |m| {
+        let chest = object(m, OPEN_CHEST);
+        cast(m, g, PICK_LOCK, at_object(chest));
+    })
+    .await;
+    assert_eq!(failed(&mut a, PICK_LOCK).await, 0x06);
+    // Eight yards off: out of range.
+    on_map(&realm, move |m| {
+        let chest = object(m, CHEST);
+        let at = m.gameobject(chest).unwrap().position;
+        m.players.get_mut(&g).unwrap().movement.position = Vector3d {
+            x: at.x + 8.0,
+            ..at
+        };
+        cast(m, g, PICK_LOCK, at_object(chest));
+    })
+    .await;
+    assert_eq!(failed(&mut a, PICK_LOCK).await, 0x59);
+}
+
+#[tokio::test]
+async fn a_picked_chest_raises_the_skill_once_a_spawn_shows_as_opened_and_goes_when_emptied() {
+    let realm = harness::realm_with(lock_data());
+    let (mut a, g) = rogue(&realm).await;
+    let chest = on_map(&realm, move |m| object(m, CHEST)).await;
+    a.clear();
+    let first = on_map(&realm, move |m| {
+        cast(m, g, PICK_LOCK, at_object(chest));
+        skill(m, g, 633)
+    })
+    .await;
+    assert_eq!(first, 101);
+    let window = a
+        .wait_frame("SMSG_LOOT_RESPONSE", 0x160, |f| {
+            f[..8] == chest.guid().to_le_bytes()
+        })
+        .await;
+    assert_eq!(window[8], 2, "a lock opened");
+    // Closed with the trinket left, picked again: no more skill from it.
+    a.send(CMSG_LOOT_RELEASE { guid: chest }).await;
+    fence(&mut a).await;
+    let again = on_map(&realm, move |m| {
+        cast(m, g, PICK_LOCK, at_object(chest));
+        skill(m, g, 633)
+    })
+    .await;
+    assert_eq!(again, 101, "once a spawn");
+    // Emptied, it goes until its time.
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_RELEASE { guid: chest }).await;
+    fence(&mut a).await;
+    let gone = on_map(&realm, move |m| {
+        (
+            m.gameobject(chest).is_none(),
+            m.players[&g].count_of(TRINKET),
+        )
+    })
+    .await;
+    assert_eq!(gone, (true, 1));
+}

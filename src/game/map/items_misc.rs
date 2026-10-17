@@ -18,7 +18,7 @@ use crate::game::map::inventory::{
     self, BAG_END, BANK_BAG_END, BANK_BAG_START, BANK_END, BANK_START, EQUIPMENT_END,
 };
 use crate::game::map::items::ITEM_FLAG_SOULBOUND;
-use crate::game::map::loot::{self, Loot};
+use crate::game::map::loot::{self, Loot, LootKind};
 use crate::game::store::BAG_PLAYER;
 
 /// `ITEM_FIELD_FLAGS`: unlocked (a picked lockbox), and wrapped as a gift.
@@ -120,6 +120,12 @@ pub fn fail(p: &crate::game::map::player::Player, result: InventoryResult, item:
 /// `CMSG_OPEN_ITEM`: a gift unwraps; a lockbox (unlocked) or clam opens
 /// into its loot.
 pub fn open(map: &mut Map, g: Guid, bag: u8, slot: u8) {
+    open_as(map, g, bag, slot, LootKind::Corpse);
+}
+
+/// [`open`], its window shown as `kind`'s: a lockbox just unlocked opens
+/// as one opened (Thistle Tea's `open_guid(guid, 2)`).
+pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&g) else {
         return;
@@ -185,6 +191,7 @@ pub fn open(map: &mut Map, g: Guid, bag: u8, slot: u8) {
         gold,
         owner: Some(g),
         looters: AHashSet::from([g]),
+        kind,
         ..Default::default()
     };
     let met = loot::conditions_met(map, &l, item_guid, g);
