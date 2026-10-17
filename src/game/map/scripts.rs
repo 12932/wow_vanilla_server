@@ -700,6 +700,7 @@ pub fn summon(
         at,
         orientation,
     );
+    c.fit_model(&data, Some(template));
     if let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) {
         let health =
             crate::game::data::load::creature_health(stats.health, template.health_multiplier);

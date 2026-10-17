@@ -177,6 +177,7 @@ pub struct ClassLevelStats {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DisplayInfo {
+    /// The display's own size: CreatureDisplayInfo's scale by its model's.
     pub scale: f32,
     pub bounding_radius: f32,
     pub combat_reach: f32,

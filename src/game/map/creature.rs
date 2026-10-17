@@ -347,6 +347,45 @@ impl Creature {
         self
     }
 
+    /// Its size, reach and bounding radius for the model it shows, as
+    /// Thistle Tea's mob builder sets them. The size is the template's for
+    /// that display (`template`, where the display is the template's own),
+    /// else the display's own: CreatureDisplayInfo's scale by its model's.
+    /// The model's reach and radius are measured at the display's own
+    /// size, and grow and shrink from it (Onyxia's reach is 26 yards, not
+    /// 47 by her size twice over).
+    pub fn fit_model(&mut self, data: &GameData, template: Option<&CreatureTemplate>) {
+        let display = self.fields.get_u32(UNIT_FIELD_DISPLAYID);
+        let Some(d) = data.display_info.get(&display) else {
+            return;
+        };
+        let native = if d.scale > 0.0 { d.scale } else { 1.0 };
+        let scale = template
+            .and_then(|t| {
+                let i = t.display_ids.iter().position(|x| *x == display)?;
+                Some(t.display_scales[i])
+            })
+            .filter(|s| *s > 0.0)
+            .unwrap_or(native);
+        self.fields.set_f32(OBJECT_FIELD_SCALE_X, scale);
+        let grow = scale / native;
+        let (radius, reach) = (
+            if d.bounding_radius > 0.0 {
+                d.bounding_radius
+            } else {
+                0.5
+            },
+            if d.combat_reach > 0.0 {
+                d.combat_reach
+            } else {
+                1.5
+            },
+        );
+        self.fields
+            .set_f32(UNIT_FIELD_BOUNDINGRADIUS, radius * grow);
+        self.fields.set_f32(UNIT_FIELD_COMBATREACH, reach * grow);
+    }
+
     /// A creature for a spawn: its entry picked among the spawn's, its
     /// level in the template's range, and the spawn's look and gear.
     pub fn from_spawn(
@@ -421,24 +460,14 @@ impl Creature {
         }
         c.hostile_to_players =
             crate::game::map::ai::hostile_to_players(data, template.faction, template.civilian);
-        let display = c.fields.get_u32(UNIT_FIELD_DISPLAYID);
-        if let Some(d) = data.display_info.get(&display) {
-            let scale = c.fields.get_f32(OBJECT_FIELD_SCALE_X);
-            if d.bounding_radius > 0.0 {
-                c.fields
-                    .set_f32(UNIT_FIELD_BOUNDINGRADIUS, d.bounding_radius * scale);
-            }
-            if d.combat_reach > 0.0 {
-                c.fields
-                    .set_f32(UNIT_FIELD_COMBATREACH, d.combat_reach * scale);
-            }
-        }
         let mut equipment = template.equipment_id;
+        let mut own_display = true;
         if let Some(addon) = data.creature_addons.get(&spawn.guid) {
             if addon.display_id != 0 {
                 c.fields.set_u32(UNIT_FIELD_DISPLAYID, addon.display_id);
                 c.fields
                     .set_u32(UNIT_FIELD_NATIVEDISPLAYID, addon.display_id);
+                own_display = false;
             }
             if addon.mount_display_id != 0 {
                 c.fields
@@ -458,6 +487,7 @@ impl Creature {
         {
             c.set_equipment(data, *items);
         }
+        c.fit_model(data, own_display.then_some(template));
         c.movement_type = spawn.movement_type;
         c.wander_distance = spawn.wander_distance;
         // A flyer is in the air from the start.
@@ -650,6 +680,45 @@ pub fn wander_pause(rng: &mut impl rand::Rng) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A creature is the size its template gives its display, else the
+    /// display's own, and its reach grows from the display's own: Onyxia
+    /// (2.0 of a 1.8 display, 23.4 yards at 1.8) reaches 26 yards, not 47;
+    /// Hogger and a Kobold Miner are their displays' 1.15.
+    #[test]
+    fn a_creature_is_its_displays_size_and_reaches_from_it() {
+        let Some(data) = crate::game::data::load::real_data() else {
+            return;
+        };
+        let fitted = |entry: u32| {
+            let spawn = crate::game::data::CreatureSpawn {
+                guid: 0xF0_0000,
+                entries: vec![entry],
+                ..Default::default()
+            };
+            let c = Creature::from_spawn(data, &spawn, &mut rand::rng()).unwrap();
+            (
+                c.fields.get_f32(OBJECT_FIELD_SCALE_X),
+                c.fields.get_f32(UNIT_FIELD_COMBATREACH),
+            )
+        };
+        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let (scale, reach) = fitted(10184);
+        assert!(
+            near(scale, 2.0) && near(reach, 26.0),
+            "Onyxia {scale} {reach}"
+        );
+        let (scale, reach) = fitted(448);
+        assert!(
+            near(scale, 1.15) && near(reach, 1.725),
+            "Hogger {scale} {reach}"
+        );
+        let (scale, reach) = fitted(40);
+        assert!(
+            near(scale, 1.15) && near(reach, 1.4375),
+            "Kobold Miner {scale} {reach}"
+        );
+    }
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     #[test]
