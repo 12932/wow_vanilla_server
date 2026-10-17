@@ -302,6 +302,8 @@ pub fn run(
     }
     if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);
+        // The target's returns before, should the aura not go on.
+        let returns = map.caster(target).map(|c| c.diminishing.clone());
         let duration = if auras::positive(s) || target == caster {
             Some(duration)
         } else {
@@ -325,6 +327,19 @@ pub fn run(
             && caster != target
         {
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
+        }
+        // An aura that didn't go on (a full bar refused it) spends none of
+        // its target's returns, as Thistle Tea's refusal comes before them.
+        let on = auras::auras(map, target).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == s.id && h.caster == caster)
+        });
+        if !on
+            && let Some(before) = returns
+            && let Some(c) = map.caster_mut(target)
+        {
+            c.diminishing = before;
         }
         if !auras::positive(s) {
             let (done, taken) = outcome::proc_flags(s);
