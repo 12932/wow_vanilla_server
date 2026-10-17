@@ -26,6 +26,7 @@ pub mod environment;
 pub mod eviction;
 pub mod exploration;
 pub mod event_ai;
+pub mod event_quests;
 pub mod escorts;
 pub mod extra_effects;
 pub mod gameobject;

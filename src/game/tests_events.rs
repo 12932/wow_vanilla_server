@@ -617,6 +617,41 @@ async fn stinkys_escape(realm: &Arc<Realm>) {
     }
 }
 
+/// `quest` in `g`'s log, as though taken.
+fn logs(m: &mut Map, g: Guid, quest: u32) {
+    let data = m.realm.data.clone();
+    let p = m.players.get_mut(&g).unwrap();
+    p.journal.log.push(crate::game::store::Logged {
+        quest,
+        ..Default::default()
+    });
+    quests::refresh_log(p, &data);
+}
+
+/// Honoring a Hero: a tribute offered at Uther's tomb or Grom's monument,
+/// in the Harvest Festival, which brings its quest givers.
+async fn honoring_a_hero(realm: &Arc<Realm>) {
+    for (account, race, quest, tribute, statue) in [
+        ("DWARFY", Race::Dwarf, 8149, 19850, 180204),
+        ("TROLLY", Race::Troll, 8150, 19851, 180205),
+    ] {
+        let (mut c, g, map) = hero(realm, account, race, Class::Warrior, 30).await;
+        map.query(move |m| {
+            logs(m, g, quest);
+            crate::game::map::inventory::add_item(m, g, tribute, 1, false).expect("room");
+        })
+        .await;
+        let (map, _, _) = visit(realm, &mut c, statue).await;
+        use_on(&mut c, &map, tribute, g).await;
+        until(&map, move |m| m.players[&g].caster.casting.is_some()).await;
+        map.query(move |m| finish_cast(m, g)).await;
+        assert!(
+            until(&map, move |m| done(m, g, quest)).await,
+            "{quest} done"
+        );
+    }
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -669,5 +704,8 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("stinky") {
         stinkys_escape(&realm).await;
+    }
+    if wanted("tribute") {
+        honoring_a_hero(&realm).await;
     }
 }

@@ -475,6 +475,7 @@ fn effect(
         _ if crate::game::map::extra_effects::effect(
             map, caster, target, s, index, amount, item,
         ) => {}
+        _ if crate::game::map::event_quests::effect(map, caster, target, s, index) => {}
         19 => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
             super::log::extra_attacks(map, caster, s.id, caster, amount.max(1) as u32);
