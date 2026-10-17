@@ -185,3 +185,22 @@ async fn a_cast_refused_for_its_gear_names_the_gear() {
         SMSG_CAST_RESULT_SimpleSpellCastResult::Failure { .. }
     ));
 }
+
+/// A spawn's looks in an event are its latest patch's, whatever order
+/// the rows are stored in.
+#[test]
+fn an_event_creatures_looks_are_its_latest_patchs() {
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    db.execute_batch(
+        "CREATE TABLE game_event_creature_data (guid, patch, entry_id, display_id, \
+         equipment_id, spell_start, spell_end, event);
+         INSERT INTO game_event_creature_data VALUES (1, 7, 0, 200, 0, 0, 0, 5);
+         INSERT INTO game_event_creature_data VALUES (1, 3, 0, 100, 0, 0, 0, 5);",
+    )
+    .unwrap();
+    let mut d = crate::game::data::world::WorldData::default();
+    crate::game::data::world::load(&db, None, &mut d);
+    let looks = &d.event_creatures[&1];
+    assert_eq!(looks.len(), 1);
+    assert_eq!(looks[0].display, 200, "patch 7's, not patch 3's");
+}
