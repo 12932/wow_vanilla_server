@@ -9,7 +9,7 @@ use rustigator_mapbuild::progress::{NoProgress, Progress, Stage};
 
 use super::builder::Builder;
 use super::discover::Client;
-use super::maps::{MAPS, MODELS_BYTES, MapInfo, Selection};
+use super::maps::{MAPS, MODELS_BYTES, MODELS_WORK, MapInfo, Selection, TERRAIN_TILE_WORK};
 
 /// Where the setup writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,22 +176,23 @@ impl Todo {
     }
 
     /// Its stages, in the order they run, each with its share of the work
-    /// (for an overall bar): a navmesh's by its size, a terrain tile as 1 MB
-    /// of navmesh.
+    /// (for an overall bar), as the estimate table has it.
     pub fn stages(&self) -> Vec<(Stage<'static>, u64)> {
-        const MB: u64 = 1 << 20;
         let mut stages: Vec<(Stage<'static>, u64)> = self
             .terrain
             .iter()
-            .map(|m| (Stage::Terrain(m.name), m.terrain_tiles as u64))
+            .map(|m| {
+                let work = m.terrain_tiles as u64 * TERRAIN_TILE_WORK;
+                (Stage::Terrain(m.name), work)
+            })
             .collect();
         if self.models {
-            stages.push((Stage::Models, MODELS_BYTES / MB));
+            stages.push((Stage::Models, MODELS_WORK));
         }
         stages.extend(
             self.navmesh
                 .iter()
-                .map(|m| (Stage::Navmesh(m.name), (m.nav_bytes / MB).max(1))),
+                .map(|m| (Stage::Navmesh(m.name), (m.nav_bytes >> 10).max(1))),
         );
         stages
     }

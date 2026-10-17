@@ -883,7 +883,7 @@ dependencies = [
 [[package]]
 name = "landmark"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=3bc7a2c14cb7dc4324ac501a8070e8a7543dba73#3bc7a2c14cb7dc4324ac501a8070e8a7543dba73"
+source = "git+https://github.com/12932/rustigator?rev=0d91dcd86b49db2aeeb71d35b143df23fd209028#0d91dcd86b49db2aeeb71d35b143df23fd209028"
 dependencies = [
  "glam 0.34.1",
  "log",
@@ -1538,7 +1538,7 @@ dependencies = [
 [[package]]
 name = "rustigator"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=3bc7a2c14cb7dc4324ac501a8070e8a7543dba73#3bc7a2c14cb7dc4324ac501a8070e8a7543dba73"
+source = "git+https://github.com/12932/rustigator?rev=0d91dcd86b49db2aeeb71d35b143df23fd209028#0d91dcd86b49db2aeeb71d35b143df23fd209028"
 dependencies = [
  "glam 0.34.1",
  "rustigator-mapbuild",
@@ -1553,7 +1553,7 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=3bc7a2c14cb7dc4324ac501a8070e8a7543dba73#3bc7a2c14cb7dc4324ac501a8070e8a7543dba73"
+source = "git+https://github.com/12932/rustigator?rev=0d91dcd86b49db2aeeb71d35b143df23fd209028#0d91dcd86b49db2aeeb71d35b143df23fd209028"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1572,7 +1572,7 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=3bc7a2c14cb7dc4324ac501a8070e8a7543dba73#3bc7a2c14cb7dc4324ac501a8070e8a7543dba73"
+source = "git+https://github.com/12932/rustigator?rev=0d91dcd86b49db2aeeb71d35b143df23fd209028#0d91dcd86b49db2aeeb71d35b143df23fd209028"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1587,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=3bc7a2c14cb7dc4324ac501a8070e8a7543dba73#3bc7a2c14cb7dc4324ac501a8070e8a7543dba73"
+source = "git+https://github.com/12932/rustigator?rev=0d91dcd86b49db2aeeb71d35b143df23fd209028#0d91dcd86b49db2aeeb71d35b143df23fd209028"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1603,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=3bc7a2c14cb7dc4324ac501a8070e8a7543dba73#3bc7a2c14cb7dc4324ac501a8070e8a7543dba73"
+source = "git+https://github.com/12932/rustigator?rev=0d91dcd86b49db2aeeb71d35b143df23fd209028#0d91dcd86b49db2aeeb71d35b143df23fd209028"
 dependencies = [
  "byteorder",
  "glam 0.34.1",
