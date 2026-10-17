@@ -158,7 +158,7 @@ the questions waiting for you.
 | Bugs from the mapping, batch 1 (23) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
-| 2c: creature combat (all 15 items) | merged | |
+| 2c: creature combat (all 15 items) | merged | e557cf0 |
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
