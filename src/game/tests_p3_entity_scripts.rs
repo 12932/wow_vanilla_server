@@ -130,6 +130,19 @@ fn world() -> GameData {
             delayed(stand(2), 50),
         ],
     );
+    // Two face each other, and the other nods a moment later (in the
+    // order of their delays, as the loader sorts them).
+    g.insert(
+        10,
+        vec![
+            with_flags(step(35, [0, 0, 0, 0]), SF_SWAP_INITIAL_TARGETS),
+            step(35, [0, 0, 0, 0]),
+            delayed(
+                with_flags(step(1, [1, 0, 0, 0]), SF_SWAP_INITIAL_TARGETS),
+                30,
+            ),
+        ],
+    );
     // A group's script, and a player's: kneel.
     g.insert(8, vec![stand(8)]);
     g.insert(9, vec![delayed(stand(8), 150)]);
@@ -375,4 +388,56 @@ async fn a_players_waiting_step_stays_behind_when_they_leave() {
     let kalimdor = realm.registry.online(ga).unwrap().map();
     let state = on(&kalimdor, move |m| stand_state(m, ga)).await;
     assert_eq!(state, 0, "she doesn't kneel in Kalimdor");
+}
+
+/// Thistle Tea's "live creatures face each other and project a delayed
+/// swapped emote": a script's turn swapped to its target turns the target
+/// to its source, its own turns the source to the target, and an emote
+/// swapped and put off plays on the target alone, when it is due.
+#[tokio::test]
+async fn two_face_each_other_and_the_other_nods_when_it_is_due() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let (_realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let (x, y) = on(&map, move |m| {
+        (spawn(m, ga, BRUTE, 20, 3.0), spawn(m, ga, BRUTE, 20, 6.0))
+    })
+    .await;
+    a.sees(y).await;
+    a.clear();
+    let (ox, oy, toward_y, toward_x) = on(&map, move |m| {
+        // Y a little aside, so the two turns differ from their spawns'.
+        let at = m.position_of(x).unwrap();
+        m.creature_mut(y).unwrap().position = Vector3d {
+            x: at.x + 3.0,
+            y: at.y + 4.0,
+            z: at.z,
+        };
+        scripts::start(m, ScriptTable::Generic, 10, x, y);
+        let (px, py) = (m.position_of(x).unwrap(), m.position_of(y).unwrap());
+        (
+            m.creature(x).unwrap().orientation,
+            m.creature(y).unwrap().orientation,
+            (py.y - px.y).atan2(py.x - px.x),
+            (px.y - py.y).atan2(px.x - py.x),
+        )
+    })
+    .await;
+    assert!((ox - toward_y).abs() < 1e-4, "the source faces the target");
+    assert!((oy - toward_x).abs() < 1e-4, "the target faces the source");
+    let nod = a
+        .wait_for("the nod", |m| match m {
+            ServerOpcodeMessage::SMSG_EMOTE(e) => Some(e.guid),
+            _ => None,
+        })
+        .await;
+    assert_eq!(nod, y, "the target nods");
+    assert!(
+        a.gets(crate::game::tests_p3_entity::NONE_WITHIN, |m| match m {
+            ServerOpcodeMessage::SMSG_EMOTE(e) if e.guid == x => Some(()),
+            _ => None,
+        })
+        .await
+        .is_none(),
+        "the source doesn't"
+    );
 }
