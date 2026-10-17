@@ -315,6 +315,20 @@ fn data() -> GameData {
     q.required_kills[0] = (BOAR as i32, 2);
     q.required_spell_casts[0] = 10_292;
     d.npc.quests.insert(82, q);
+    // To share: timed, giving two bombs; one not shareable; one for level 5.
+    let share = crate::game::map::questshare::QUEST_FLAGS_SHARABLE;
+    for (id, flags, min_level) in [(90, share, 1), (91, 0, 1), (92, share, 5)] {
+        let mut q = quest(id);
+        q.flags = flags;
+        q.min_level = min_level;
+        q.required_items[0] = (SCALE, 1);
+        if id == 90 {
+            q.limit_time = 600;
+            q.source_item = BOMB;
+            q.source_item_count = 2;
+        }
+        d.npc.quests.insert(id, q);
+    }
     // Many, for a full log.
     for id in 100..120 {
         d.npc.quests.insert(id, quest(id));
@@ -1297,4 +1311,145 @@ async fn quest_dialogs_check_the_item_and_the_taker() {
     })
     .await;
     assert_eq!(on_map(&realm, move |m| count(m, g, ORDERS)).await, 1);
+}
+
+/// The results the sharer hears on sharing `quest`.
+async fn share(a: &mut Client, quest_id: u32) -> Vec<QuestPartyMessage> {
+    a.clear();
+    a.send(CMSG_PUSHQUESTTOPARTY { quest_id }).await;
+    handled(a).await;
+    let mut out = Vec::new();
+    for m in std::mem::take(&mut a.backlog) {
+        if let ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(r) = m {
+            out.push(r.message);
+        }
+    }
+    out
+}
+
+/// Thistle Tea's `QuestSharing` (and mangos's `HandlePushQuestToParty`):
+/// only a shareable quest under way is shared, the sharer told of each
+/// member first and then why not: too far, finished, on it or done with
+/// it, unable to take it, a full log, an offer already; taken, it has the
+/// items it gives and the sharer's time left, and taken from afar, it
+/// isn't.
+#[tokio::test]
+async fn a_quest_is_shared_as_mangos_shares_it() {
+    use QuestPartyMessage as R;
+    let (realm, mut a, ga) = setup().await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Priest).await;
+    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    until(&realm, "a group", move |m| {
+        m.realm.social.groups.lock().group_of(ga).map(|_| ())
+    })
+    .await;
+    let expires = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&ga).unwrap();
+        let expires = crate::game::social::mail::now() + 300;
+        for (quest, expires) in [(90, expires), (91, 0), (92, 0)] {
+            p.journal.add(crate::game::store::Logged {
+                quest,
+                expires,
+                ..Default::default()
+            });
+        }
+        expires
+    })
+    .await;
+    assert_eq!(share(&mut a, 91).await, vec![], "not shareable");
+    let set = |f: fn(&mut crate::game::map::player::Player)| {
+        let realm = realm.clone();
+        async move {
+            on_map(&realm, move |m| f(m.players.get_mut(&gb).unwrap())).await;
+        }
+    };
+    set(|p| p.movement.position.x += 15.0).await;
+    assert_eq!(share(&mut a, 90).await, vec![R::SharingQuest, R::TooFar]);
+    set(|p| p.movement.position.x -= 15.0).await;
+    give(&realm, gb, SCALE, 1).await;
+    set(|p| {
+        p.journal.add(crate::game::store::Logged {
+            quest: 90,
+            ..Default::default()
+        });
+    })
+    .await;
+    assert_eq!(
+        share(&mut a, 90).await,
+        vec![R::SharingQuest, R::FinishQuest]
+    );
+    set(|p| {
+        p.journal.clear(0);
+        p.journal.rewarded.insert(90);
+    })
+    .await;
+    assert_eq!(share(&mut a, 90).await, vec![R::SharingQuest, R::HaveQuest]);
+    set(|p| {
+        p.journal.rewarded.clear();
+    })
+    .await;
+    assert_eq!(
+        share(&mut a, 92).await,
+        vec![R::SharingQuest, R::CantTakeQuest]
+    );
+    set(|p| {
+        for q in 100..120 {
+            p.journal.add(crate::game::store::Logged {
+                quest: q,
+                ..Default::default()
+            });
+        }
+    })
+    .await;
+    assert_eq!(share(&mut a, 90).await, vec![R::SharingQuest, R::LogFull]);
+    set(|p| {
+        p.journal.log.clear();
+        p.misc.quest_shared = Some((Guid::new(1), 1));
+    })
+    .await;
+    assert_eq!(share(&mut a, 90).await, vec![R::SharingQuest, R::Busy]);
+    set(|p| p.misc.quest_shared = None).await;
+    assert_eq!(share(&mut a, 90).await, vec![R::SharingQuest]);
+    // Taken from afar, it isn't; the sharer hears.
+    set(|p| p.movement.position.x += 15.0).await;
+    b.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: ga,
+        quest_id: 90,
+    })
+    .await;
+    let why = a
+        .wait_for("MSG_QUEST_PUSH_RESULT", |m| match m {
+            ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(r) => Some(r.message),
+            _ => None,
+        })
+        .await;
+    assert_eq!(why, R::TooFar);
+    let gone = on_map(&realm, move |m| {
+        let p = &m.players[&gb];
+        (p.journal.has(90), p.misc.quest_shared)
+    })
+    .await;
+    assert_eq!(gone, (false, None));
+    // At hand: taken, with its bombs and Alice's time.
+    set(|p| p.movement.position.x -= 15.0).await;
+    assert_eq!(share(&mut a, 90).await, vec![R::SharingQuest]);
+    b.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: ga,
+        quest_id: 90,
+    })
+    .await;
+    in_log(&realm, gb, 90).await;
+    let taken = on_map(&realm, move |m| {
+        let p = &m.players[&gb];
+        let l = &p.journal.log[p.journal.slot_of(90).unwrap()];
+        (l.expires, count(m, gb, BOMB))
+    })
+    .await;
+    assert_eq!(taken, (expires, 2));
 }
