@@ -912,12 +912,33 @@ fn evade(map: &mut Map, g: Guid) {
         .unwrap_or_default();
     combat::stop_attack(map, g);
     crate::game::map::spells::interrupt(map, g);
-    let held: Vec<u32> = map
+    // What an evade takes, as Thistle Tea's `remove_on_evade` has it: all
+    // but what vmangos marks to stay, a player's timed buffs, and (for a
+    // creature whose template says so) its buffs.
+    let data = map.realm.data.clone();
+    let keeps_buffs = map
         .creature(g)
-        .map(|c| c.auras.holders.iter().map(|a| a.spell).collect())
+        .and_then(|c| data.creature_template(c.entry))
+        .is_some_and(|t| t.flags_extra & 0x1000 != 0);
+    let held: Vec<(u32, Guid)> = map
+        .creature(g)
+        .map(|c| {
+            c.auras
+                .holders
+                .iter()
+                .filter(|h| {
+                    let stays = data.spells.get(h.spell).is_some_and(|s| {
+                        s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
+                    }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
+                        || (keeps_buffs && h.positive);
+                    !stays
+                })
+                .map(|h| (h.spell, h.caster))
+                .collect()
+        })
         .unwrap_or_default();
-    for spell in held {
-        crate::game::map::auras::remove_spell(map, g, spell, None);
+    for (spell, caster) in held {
+        crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
     }
     let Some(c) = map.creature_mut(g) else {
         return;
@@ -949,6 +970,9 @@ fn evade(map: &mut Map, g: Guid) {
     }
     crate::game::map::scripts::stop_for(map, g);
     crate::game::map::event_ai::evade(map, g);
+    if map.creature(g).is_some_and(|c| !c.evading) {
+        crate::game::map::spawn_auras::restore(map, g);
+    }
 }
 
 /// An evading creature walks home, and is whole again when it gets there.
@@ -967,6 +991,7 @@ fn evade_step(map: &mut Map, g: Guid) {
             until: Some(now + Duration::from_secs(2)),
         };
         combat::sync_aura_state(map, g);
+        crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
 }

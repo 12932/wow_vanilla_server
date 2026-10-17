@@ -835,12 +835,13 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     }
 }
 
-/// A lock opened by a spell in the match (the client's Opening and
-/// Attacking casts): a banner assaulted, a beacon disarmed. Returns
-/// whether it was one.
+/// A lock opened by a spell (the client's Opening and Attacking casts):
+/// in the match, a banner assaulted, a beacon disarmed; out of one,
+/// silithyst picked up. Returns whether it was one.
 pub fn opened(map: &mut Map, g: Guid, object: Guid) -> bool {
     let Some(m) = map.battleground.as_ref() else {
-        return false;
+        // Out of a match: Silithus's silithyst.
+        return crate::game::map::outdoor_pvp::use_object(map, g, object);
     };
     if m.bg == BG_AV && av_quests::use_beacon(map, g, object) {
         return true;
