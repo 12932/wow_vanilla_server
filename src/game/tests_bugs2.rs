@@ -895,3 +895,37 @@ fn procs_a_minute_go_past_a_sure_chance_before_their_modifiers() {
     m.flat[spells::mods::OP_CHANCE_OF_SUCCESS] = -50;
     assert!(m.apply(spells::mods::OP_CHANCE_OF_SUCCESS, chance) >= 100.0);
 }
+
+#[tokio::test]
+async fn a_dots_threat_takes_its_spells_threat_modifiers() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "SHADOWAFF");
+    let priest = c.enter("Shadowaf", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            // Shadow Affinity: a quarter less threat from shadow spells.
+            level(m, priest, 60, &[15320]);
+            let kobold = spawn(m, priest, 6, 60, 10.0);
+            apply(m, priest, kobold, 10894);
+            m.now += Duration::from_millis(3100);
+            auras::update(m);
+            let damage = 1_000_000 - health(m, kobold);
+            let threat = m
+                .creature(kobold)
+                .and_then(|c| c.threat.iter().find(|(g, _)| *g == priest).map(|t| t.1))
+                .unwrap_or(0.0);
+            (damage, threat)
+        })
+        .await
+        .unwrap();
+    let (damage, threat) = out;
+    assert!(damage > 0);
+    assert!(
+        (threat - damage as f32 * 0.75).abs() < 0.5,
+        "{threat} threat of {damage} damage"
+    );
+}
