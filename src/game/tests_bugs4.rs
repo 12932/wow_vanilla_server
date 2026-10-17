@@ -1,7 +1,8 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
 //! batch: the weather's seasons, sounds and changes; a scripted stay, a
 //! dead master's guardian, extra attacks in a cast, pets and civilians, an
-//! event's looks in a fight.
+//! event's looks in a fight; a profession's skill as it is
+//! learned.
 
 use std::time::Duration;
 
@@ -428,4 +429,54 @@ async fn an_event_changes_no_creature_in_a_fight() {
         .await
         .unwrap();
     until(&map, "the event's looks", move |m| display(m) == Some(4321)).await;
+}
+
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
+
+fn have_data() -> bool {
+    DB.as_path().join("vmangos.sqlite").exists()
+}
+
+fn real_realm() -> std::sync::Arc<crate::game::Realm> {
+    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+}
+
+const FISHING: u32 = 7620;
+const ENGINEERING: u32 = 4036;
+
+/// `g` at `level`, knowing `learn` too.
+fn level(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
+    let data = m.realm.data.clone();
+    let p = m.players.get_mut(&g).unwrap();
+    crate::game::map::stats::set_level(p, &data, level);
+    crate::game::map::skills::level_up(p);
+    for s in learn {
+        crate::game::map::spells::learn(m, g, *s);
+    }
+}
+
+/// A profession's rank learned gives its skill at once, at the step its
+/// points say, as on login (mangos's `addSpell` learns a spell's skill
+/// with it): it is no passive, so it waited for the next login.
+#[tokio::test]
+async fn a_profession_learned_gives_its_skill_at_once() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (_a, g, map) = tests_pets::enter(&realm, "A", "Warrior", Race::Human, Class::Warrior).await;
+    let (engineering, fishing) = map
+        .query(move |m| {
+            level(m, g, 10, &[ENGINEERING, FISHING]);
+            let p = &m.players[&g];
+            let skill = |s| {
+                crate::game::map::skills::value(p, s).zip(crate::game::map::skills::max_value(p, s))
+            };
+            (skill(202), skill(356))
+        })
+        .await
+        .unwrap();
+    assert_eq!(engineering, Some((1, 75)));
+    assert_eq!(fishing, Some((1, 75)));
 }
