@@ -59,6 +59,8 @@ mod tests_world;
 #[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
+mod tests_rules;
+#[cfg(test)]
 mod tests_terrain;
 #[cfg(test)]
 mod tests_scripts2;

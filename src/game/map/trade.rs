@@ -1,6 +1,7 @@
 //! Trade between two players near each other, as mangos-zero runs it: six
-//! slots and money each (a seventh slot shows what isn't traded), both
-//! accept, and everything changes hands at once or nothing does.
+//! slots and money each (a seventh slot shows what isn't traded, for the
+//! partner to enchant or unlock), both accept, and everything changes
+//! hands at once or nothing does.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
@@ -24,6 +25,8 @@ pub struct Trade {
     pub items: [Option<Guid>; SLOTS],
     pub money: u32,
     pub accepted: bool,
+    /// A spell on the partner's item in the slot not traded.
+    pub spell: Option<crate::game::map::trade_spells::TradeCast>,
 }
 
 fn status(map: &Map, g: Guid, status: SMSG_TRADE_STATUS_TradeStatus) {
@@ -132,11 +135,11 @@ fn offer(map: &Map, g: Guid) -> Option<SMSG_TRADE_STATUS_EXTENDED> {
                 stack_count: item.count(),
                 wrapped: item.fields.get_u32(ITEM_FIELD_FLAGS) & 0x8 != 0,
                 gift_wrapper: item.fields.get_guid(ITEM_FIELD_GIFTCREATOR),
-                enchantment: 0,
+                enchantment: item.fields.get_u32(ITEM_FIELD_ENCHANTMENT),
                 item_creator: item.fields.get_guid(ITEM_FIELD_CREATOR),
-                spell_charges: 0,
-                item_suffix_factor: 0,
-                item_random_properties_id: 0,
+                spell_charges: item.fields.get_u32(ITEM_FIELD_SPELL_CHARGES),
+                item_suffix_factor: item.fields.get_u32(ITEM_FIELD_PROPERTY_SEED),
+                item_random_properties_id: item.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID),
                 lock_id: data.item(item.entry).map_or(0, |t| t.lock_id),
                 max_durability: item.fields.get_u32(ITEM_FIELD_MAXDURABILITY),
                 durability: item.fields.get_u32(ITEM_FIELD_DURABILITY),
@@ -152,14 +155,22 @@ fn offer(map: &Map, g: Guid) -> Option<SMSG_TRADE_STATUS_EXTENDED> {
         trade_slot_count1: SLOTS as u32,
         trade_slot_count2: SLOTS as u32,
         money_in_trade: Gold::new(t.money),
-        spell_on_lowest_slot: 0,
+        spell_on_lowest_slot: crate::game::map::trade_spells::shown_spell(map, g),
         trade_slots,
     })
 }
 
+/// `of`'s offer, sent to `to`: the partner's window, or their own.
+pub fn send_offer(map: &Map, of: Guid, to: Guid) {
+    if let (Some(mut o), Some(p)) = (offer(map, of), map.players.get(&to)) {
+        o.self_player = of != to;
+        p.outbound.send(&o);
+    }
+}
+
 /// A change to `g`'s offer: neither side has accepted it, and the partner
 /// sees it.
-fn changed(map: &mut Map, g: Guid) {
+pub fn changed(map: &mut Map, g: Guid) {
     let Some(with) = partner(map, g) else {
         return;
     };
@@ -178,6 +189,7 @@ fn changed(map: &mut Map, g: Guid) {
         status(map, g, SMSG_TRADE_STATUS_TradeStatus::BackToTrade);
         status(map, with, SMSG_TRADE_STATUS_TradeStatus::BackToTrade);
     }
+    crate::game::map::trade_spells::clear_stale(map, g, with);
     if let (Some(o), Some(p)) = (offer(map, g), map.players.get(&with)) {
         p.outbound.send(&o);
     }
@@ -304,6 +316,10 @@ pub fn accept(map: &mut Map, g: Guid) {
             return;
         }
     }
+    // The spells on the items not traded, checked again.
+    let Some(casts) = crate::game::map::trade_spells::ready(map, g, with) else {
+        return;
+    };
     // Take both sides' items out (highest index first), then hand them over.
     let take = |map: &mut Map, side: Guid, mut idx: Vec<usize>| {
         idx.sort_unstable_by(|a, b| b.cmp(a));
@@ -319,6 +335,7 @@ pub fn accept(map: &mut Map, g: Guid) {
     for row in &to_me {
         let _ = crate::game::map::inventory::attach_item(map, g, row);
     }
+    crate::game::map::trade_spells::perform(map, &casts);
     let money = |map: &Map, s: Guid| {
         map.players
             .get(&s)

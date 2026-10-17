@@ -21,7 +21,8 @@ use crate::game::update::{Create, Placement};
 pub const SPELL_GHOST: u32 = 8326;
 /// How far from their corpse a ghost may reclaim it.
 pub const RECLAIM_YARDS: f32 = 39.0;
-/// How long after release a ghost must wait to reclaim.
+/// How long after release a ghost must wait to reclaim, after a death
+/// alone (`corpses` lengthens it for deaths close together).
 pub const RECLAIM_DELAY: Duration = Duration::from_secs(30);
 /// How much faster a ghost runs: the ghost aura's 25%, a wisp's 50%.
 const GHOST_SPEED: f32 = 1.25;
@@ -160,6 +161,7 @@ pub fn kill(map: &mut Map, g: Guid) {
         return;
     }
     p.death = Death::Dead { since: now };
+    crate::game::map::corpses::died(p, crate::game::map::corpses::unix_ms());
     p.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     p.logout_at = None;
@@ -197,6 +199,7 @@ pub fn release(map: &mut Map, g: Guid) {
         z: corpse.position.z,
         orientation: corpse.orientation,
     });
+    p.row.state.released_at = crate::game::map::corpses::unix_ms();
     become_ghost(p, now);
     let (pos, zone, team) = (p.position(), p.zone, p.team);
     map.add_corpse(corpse);
@@ -209,13 +212,23 @@ pub fn release(map: &mut Map, g: Guid) {
     if crate::game::map::arena::release_to_stands(map, g) {
         return;
     }
+    let zone = crate::game::map::corpses::graveyard_zone(map, zone);
     let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
     map.teleport(g, to, at, facing);
 }
 
-/// Make a player a ghost: one health point, the ghost aura, and speed.
+/// Make a player a ghost: one health point, the ghost aura, and speed. A
+/// ghost logging back in is one since their release, and told the wait
+/// left to reclaim.
 pub fn become_ghost(p: &mut Player, now: Instant) {
-    p.death = Death::Ghost { since: now };
+    let unix = crate::game::map::corpses::unix_ms();
+    if p.row.state.released_at <= 0 {
+        p.row.state.released_at = unix;
+    }
+    let since = now
+        .checked_sub(crate::game::map::corpses::since_release(p, unix))
+        .unwrap_or(now);
+    p.death = Death::Ghost { since };
     p.row.state.dead = true;
     p.fields.set_u32(UNIT_FIELD_HEALTH, 1);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST, true);
@@ -240,9 +253,10 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
         move_event: 0,
         speed: p.speeds.swim,
     });
-    p.outbound.send(&SMSG_CORPSE_RECLAIM_DELAY {
-        delay: RECLAIM_DELAY,
-    });
+    let left = crate::game::map::corpses::remaining_ms(p, unix);
+    if left > 0 {
+        crate::game::map::corpses::send_delay(p, left as u32);
+    }
 }
 
 /// Bring a player back, with `fraction` of their health and mana.
@@ -272,6 +286,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
         false,
     );
     p.row.state.dead = false;
+    p.row.state.released_at = 0;
     let corpse = p.row.state.corpse.take();
     let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     p.fields
@@ -328,13 +343,13 @@ pub fn reclaim(map: &mut Map, g: Guid) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let Death::Ghost { since } = p.death else {
+    if !matches!(p.death, Death::Ghost { .. }) {
         return;
-    };
+    }
     let Some(c) = p.row.state.corpse else {
         return;
     };
-    if c.map != map.key.map || now.duration_since(since) < RECLAIM_DELAY {
+    if c.map != map.key.map || !crate::game::map::corpses::ready(p, now) {
         return;
     }
     let pos = p.position();
@@ -345,24 +360,31 @@ pub fn reclaim(map: &mut Map, g: Guid) {
     resurrect(map, g, 0.5);
 }
 
-/// `MSG_CORPSE_QUERY`: where a ghost's corpse is, for their map.
-pub fn corpse_query(map: &Map, g: Guid) {
-    let Some(p) = map.players.get(&g) else {
+/// `MSG_CORPSE_QUERY`: where a ghost's corpse is, for their map: in a
+/// dungeon they are outside, at its entrance.
+pub fn corpse_query(map: &mut Map, g: Guid) {
+    let Some(corpse) = map.players.get(&g).map(|p| p.row.state.corpse) else {
         return;
     };
-    let result = match p.row.state.corpse {
-        Some(c) => MSG_CORPSE_QUERY_Server_CorpseQueryResult::Found {
-            map: crate::game::map::movement::map_enum(c.map),
-            position: Vector3d {
+    let result = match corpse {
+        Some(c) => {
+            let at = Vector3d {
                 x: c.x,
                 y: c.y,
                 z: c.z,
-            },
-            corpse_map: crate::game::map::movement::map_enum(c.map),
-        },
+            };
+            let (shown, position) = crate::game::map::corpses::marker(map, c.map, at);
+            MSG_CORPSE_QUERY_Server_CorpseQueryResult::Found {
+                map: crate::game::map::movement::map_enum(shown),
+                position,
+                corpse_map: crate::game::map::movement::map_enum(c.map),
+            }
+        }
         None => MSG_CORPSE_QUERY_Server_CorpseQueryResult::NotFound,
     };
-    p.outbound.send(&MSG_CORPSE_QUERY_Server { result });
+    if let Some(p) = map.players.get(&g) {
+        p.outbound.send(&MSG_CORPSE_QUERY_Server { result });
+    }
 }
 
 /// A ghost talking to a spirit healer: it offers a resurrection.
@@ -451,7 +473,11 @@ pub fn nearest_graveyard(
             && (gy.faction == 0 || gy.faction == faction)
             && crate::game::map::outdoor_pvp::graveyard_open(map, gy.id, faction)
     };
-    let dist = |gy: &crate::game::data::Graveyard| (gy.x - pos.x).powi(2) + (gy.y - pos.y).powi(2);
+    // From a dungeon, one outside is as far as it is from the entrance.
+    let dist = |gy: &crate::game::data::Graveyard| {
+        let from = crate::game::map::corpses::reckoned_from(data, map.key.map, gy.map, pos);
+        (gy.x - from.x).powi(2) + (gy.y - from.y).powi(2)
+    };
     let best = data
         .graveyards
         .iter()

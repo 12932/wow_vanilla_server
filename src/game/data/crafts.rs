@@ -43,6 +43,11 @@ pub struct CraftData {
     pub enchant_charges: AHashMap<u32, u32>,
     /// `skill_fishing_base_level`: the skill a zone or area's fish need.
     pub fishing_skill: AHashMap<u32, i32>,
+    /// `SpellItemEnchantment` flags, where not 0 (1: it binds the item).
+    pub enchant_flags: AHashMap<u32, u32>,
+    /// `item_required_target`: the creatures an item is used on, each
+    /// alive (`true`) or dead.
+    pub item_targets: AHashMap<u32, Vec<(u32, bool)>>,
 }
 
 pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut CraftData) {
@@ -63,9 +68,26 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut CraftData) {
     }) {
         d.fishing_skill.insert(zone, skill);
     }
+    for (item, creature, kind) in rows(db, "SELECT * FROM item_required_target", |c| {
+        (c.u32("entry"), c.u32("target_entry"), c.u32("type"))
+    }) {
+        if matches!(kind, 1 | 2) {
+            let targets = d.item_targets.entry(item).or_default();
+            if !targets.contains(&(creature, kind == 1)) {
+                targets.push((creature, kind == 1));
+            }
+        }
+    }
     let Some(dbc) = dbc else {
         return;
     };
+    for (id, flags) in rows(dbc, "SELECT id, flags FROM SpellItemEnchantment", |c| {
+        (c.u32("id"), c.u32("flags"))
+    }) {
+        if flags != 0 {
+            d.enchant_flags.insert(id, flags);
+        }
+    }
     for (id, keys) in rows(dbc, "SELECT * FROM Lock", |c| {
         let keys: Vec<LockKey> = (0..8)
             .map(|i| LockKey {
