@@ -37,6 +37,8 @@ async fn hero(
     let mut c = Client::connect(realm, account);
     let name = format!("{}{}", &account[..1], account[1..].to_lowercase());
     let g = c.enter(&name, race, class).await;
+    // The intro's camera done with: they see from where they stand.
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
     let map = realm.registry.online(g).expect("online").map();
     map.query(move |m| {
         let data = m.realm.data.clone();
@@ -197,6 +199,17 @@ async fn visit(realm: &Arc<Realm>, c: &mut Client, entry: u32) -> (MapHandle, Gu
         .flatten()
         .expect("here");
     put(&map, c, beside(at)).await;
+    // In sight: a creature nobody sees doesn't run its timers.
+    let g = c.guid;
+    if guid::is_unit(who) {
+        assert!(
+            until(&map, move |m| m
+                .creature(who)
+                .is_some_and(|c| c.observers.contains(&g)))
+            .await,
+            "{entry} in sight"
+        );
+    }
     (map, who, at)
 }
 
@@ -470,6 +483,87 @@ async fn beat_bartleby(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, BARTLEBY, QUEST).await;
 }
 
+/// The cast under way ends now.
+fn finish_cast(m: &mut Map, g: Guid) {
+    let now = m.now;
+    if let Some(c) = m
+        .players
+        .get_mut(&g)
+        .and_then(|p| p.caster.casting.as_mut())
+    {
+        c.ends = now;
+    }
+    crate::game::map::spells::update(m);
+}
+
+/// `g` knows profession or secondary skill `skill` at `value`.
+fn skilled(m: &mut Map, g: Guid, skill: u32, value: u32) {
+    let p = m.players.get_mut(&g).unwrap();
+    crate::game::map::skills::learn_skill(p, skill, 4);
+    crate::game::map::skills::set_value(p, skill, value);
+}
+
+/// Every timer of creature `g`'s script due now.
+fn hurry(m: &mut Map, g: Guid) {
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
+        for t in s.timers.iter_mut() {
+            *t = None;
+        }
+    }
+}
+
+/// Triage: the doctor lays the wounded in his bunks; fifteen bandaged
+/// before six die do it.
+async fn triage(realm: &Arc<Realm>) {
+    const QUEST: u32 = 6624;
+    const DOCTOR: u32 = 12939;
+    const BANDAGE: u32 = 16991;
+    const WOUNDED: [u32; 3] = [12938, 12936, 12937];
+    let (mut c, g, map) = hero(realm, "MEDIC", Race::Human, Class::Priest, 45).await;
+    map.query(move |m| skilled(m, g, 129, 225)).await;
+    let map = take(realm, &mut c, DOCTOR, QUEST, &[]).await;
+    let doctor = map.query(|m| npc(m, DOCTOR)).await.flatten().unwrap().0;
+    let mut bandaged: Vec<Guid> = Vec::new();
+    for _ in 0..200 {
+        if map.query(move |m| done(m, g, QUEST)).await.unwrap() {
+            break;
+        }
+        let seen = bandaged.clone();
+        let next = map
+            .query(move |m| {
+                hurry(m, doctor);
+                m.creatures
+                    .iter()
+                    .filter(|(_, c)| WOUNDED.contains(&c.entry) && c.alive())
+                    .map(|(_, c)| c.guid)
+                    .find(|w| !seen.contains(w))
+            })
+            .await
+            .flatten();
+        let Some(wounded) = next else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        };
+        use_on(&mut c, &map, BANDAGE, wounded).await;
+        until(&map, move |m| {
+            m.players[&g]
+                .caster
+                .casting
+                .as_ref()
+                .is_some_and(|c| c.targets.unit == Some(wounded))
+        })
+        .await;
+        map.query(move |m| finish_cast(m, g)).await;
+        bandaged.push(wounded);
+    }
+    assert!(
+        map.query(move |m| done(m, g, QUEST)).await.unwrap(),
+        "{QUEST} done, {} bandaged",
+        bandaged.len()
+    );
+    turn_in(realm, &mut c, DOCTOR, QUEST).await;
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -516,5 +610,8 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("bartleby") {
         beat_bartleby(&realm).await;
+    }
+    if wanted("triage") {
+        triage(&realm).await;
     }
 }
