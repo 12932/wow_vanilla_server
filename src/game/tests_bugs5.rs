@@ -5,11 +5,13 @@
 //! cooldowns and charges spent on procs that came to nothing, and Nightfall
 //! on a killing tick.
 
+use std::time::Duration;
+
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
 use super::tests_p3_spells_kit::*;
-use crate::game::map::{Map, auras, procs};
+use crate::game::map::{Map, auras, procs, spells};
 
 const HOLY_SHIELD: u32 = 20925;
 const OBSIDIAN_ARMOR: u32 = 27539;
@@ -19,6 +21,9 @@ const FIREBALL: u32 = 133;
 const NIGHTFALL: u32 = 18094;
 const SHADOW_TRANCE: u32 = 17941;
 const CORRUPTION: u32 = 172;
+const FIRE_NOVA_TOTEM: u32 = 1535;
+const FIRE_NOVA_PULSE: u32 = 8443;
+const IMPROVED_FIRE_NOVA_TOTEM: u32 = 16544;
 
 /// A magic spell of the physical school, made up: Obsidian Armor has no
 /// answer to it.
@@ -204,5 +209,57 @@ async fn nightfall_gives_no_shadow_trance_for_a_killing_tick() {
         killed,
         (true, false, 2),
         "a killing tick doesn't, and spends nothing"
+    );
+}
+
+/// An activation-time modifier (op 19) changes a periodic aura's interval,
+/// as mangos's `Aura` takes `SPELLMOD_ACTIVATION_TIME` and Thistle Tea's
+/// `Modifiers.periodic_interval` has it: Improved Fire Nova Totem's two
+/// seconds off the totem's four-second pulse, its shaman's talent
+/// inherited by the totem as it is put down. Without it the pulse is four
+/// seconds.
+#[tokio::test]
+async fn an_activation_time_modifier_quickens_a_totems_pulse() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, shaman, map) = player(&realm, "B5FN", "Novaone", Race::Orc, Class::Shaman).await;
+    let out = map
+        .query(move |m| {
+            ready(m, shaman, 60, &[]);
+            let pulse = |m: &mut Map| {
+                spells::cast_triggered(m, shaman, FIRE_NOVA_TOTEM, None);
+                let totem = m.players[&shaman]
+                    .owned
+                    .totems
+                    .iter()
+                    .flatten()
+                    .next()
+                    .copied();
+                totem
+                    .and_then(|t| holder(m, t, FIRE_NOVA_PULSE))
+                    .and_then(|h| h.effects.first().and_then(|x| x.period))
+            };
+            apply(m, shaman, shaman, IMPROVED_FIRE_NOVA_TOTEM);
+            let talented = pulse(m);
+            // The shaman's own pulse, the talent theirs.
+            spells::cast_triggered(m, shaman, FIRE_NOVA_PULSE, Some(shaman));
+            let own = holder(m, shaman, FIRE_NOVA_PULSE)
+                .and_then(|h| h.effects.first().and_then(|x| x.period));
+            auras::remove_spell(m, shaman, FIRE_NOVA_PULSE, None);
+            auras::remove_spell(m, shaman, IMPROVED_FIRE_NOVA_TOTEM, None);
+            let untalented = pulse(m);
+            (talented, own, untalented)
+        })
+        .await
+        .unwrap();
+    let (talented, own, untalented) = out;
+    assert_eq!(talented, Some(Duration::from_secs(2)), "the totem's pulse");
+    assert_eq!(own, Some(Duration::from_secs(2)), "the shaman's own");
+    assert_eq!(
+        untalented,
+        Some(Duration::from_secs(4)),
+        "four seconds untalented"
     );
 }
