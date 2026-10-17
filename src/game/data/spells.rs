@@ -359,6 +359,30 @@ impl SpellData {
         a == b || self.first_rank(a) == self.first_rank(b)
     }
 
+    /// A higher rank with no `spell_proc_event` row of its own takes its
+    /// first rank's, by `spell_chain` or a talent's ranks (vmangos's
+    /// `LoadSpellProcEvents` over its chains, Thistle Tea's `proc_rule`):
+    /// Lightning Shield's, the seals', Flurry's and Enrage's higher ranks.
+    pub fn inherit_proc_events(&mut self) {
+        let mut firsts: Vec<(u32, u32)> = self.ranks.iter().map(|(id, r)| (*id, r.first)).collect();
+        for t in self.talents.values() {
+            firsts.extend(
+                t.ranks[1..]
+                    .iter()
+                    .filter(|r| **r != 0)
+                    .map(|r| (*r, t.ranks[0])),
+            );
+        }
+        for (id, first) in firsts {
+            if id != first
+                && !self.proc_events.contains_key(&id)
+                && let Some(p) = self.proc_events.get(&first).copied()
+            {
+                self.proc_events.insert(id, p);
+            }
+        }
+    }
+
     pub fn cast_time(&self, s: &SpellTemplate) -> u32 {
         self.cast_times
             .get(&s.casting_time_index)

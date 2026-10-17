@@ -1611,6 +1611,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         s.creature_spells.insert(list, spells);
     }
     let Some(dbc) = dbc else {
+        s.inherit_proc_events();
         return;
     };
     for (id, base) in rows(dbc, "SELECT * FROM SpellCastTimes", |c| {
@@ -1679,6 +1680,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         s.enchantments.insert(e.id, e);
     }
+    s.inherit_proc_events();
 }
 
 /// vmangos's corrections to `spell_template` (`spell_mod` and

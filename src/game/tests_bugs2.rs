@@ -469,6 +469,49 @@ async fn a_spell_with_no_global_cooldown_starts_none() {
 }
 
 #[tokio::test]
+async fn a_higher_rank_keeps_its_first_ranks_proc_rule() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "LSHIELD");
+    let s = c.enter("Lshield", Race::Orc, Class::Shaman).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let charges = map
+        .query(move |m| {
+            level(m, s, 60, &[]);
+            let kobold = spawn(m, s, 6, 60, 2.0);
+            // Lightning Shield's seventh rank, struck twice at once: its
+            // first rank's 3.5 seconds between strikes back hold.
+            apply(m, s, s, 10432);
+            for _ in 0..2 {
+                crate::game::map::procs::trigger(
+                    m,
+                    crate::game::map::procs::Event {
+                        actor: kobold,
+                        target: s,
+                        actor_flags: crate::game::map::procs::PROC_DONE_MELEE,
+                        target_flags: crate::game::map::procs::PROC_TAKEN_MELEE,
+                        ex: crate::game::map::procs::EX_NORMAL_HIT,
+                        damage: 10,
+                        school: 1,
+                        ..Default::default()
+                    },
+                );
+            }
+            auras::auras(m, s).and_then(|a| {
+                a.holders
+                    .iter()
+                    .find(|h| h.spell == 10432)
+                    .map(|h| h.charges)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(charges, Some(2), "one strike back");
+}
+
+#[tokio::test]
 async fn a_modifier_touches_only_its_mask_past_32_bits() {
     if !have_data() {
         return;
