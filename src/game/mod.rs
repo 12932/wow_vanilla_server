@@ -72,6 +72,8 @@ mod tests_p3_items;
 #[cfg(test)]
 mod tests_p3_items_loot;
 #[cfg(test)]
+mod tests_p3_items_professions;
+#[cfg(test)]
 mod tests_p3_items_quests;
 #[cfg(test)]
 mod tests_parity_combat;
