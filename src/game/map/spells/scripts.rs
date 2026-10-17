@@ -469,8 +469,10 @@ pub fn shapeshifted(map: &mut Map, g: Guid, before: u8, form: u8) {
         if knows(map, g, 17007) && !auras::auras(map, g).is_some_and(|a| a.has_spell(24932)) {
             cast_triggered(map, g, 24932, Some(g));
         }
+        super::class_scripts::heart_of_the_wild(map, g, form);
     } else if feral(before) {
         auras::remove_spell(map, g, 24932, Some(g));
+        super::class_scripts::heart_of_the_wild(map, g, form);
     }
 }
 

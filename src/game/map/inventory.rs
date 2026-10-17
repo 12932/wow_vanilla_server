@@ -63,6 +63,9 @@ pub enum Fail {
     Reputation,
     /// Not the honor rank the item asks for.
     Rank,
+    /// Not in a fight (armor), or not yet (a weapon's lock).
+    NotInCombat,
+    CantDoRightNow,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -160,6 +163,16 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::Reputation => R::CantEquipReputation {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::NotInCombat => R::NotInCombat {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::CantDoRightNow => R::CantDoRightNow {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -584,6 +597,7 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
 /// same item, or swapping with what is there.
 pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     let data = map.realm.data.clone();
+    let now = map.now;
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -609,6 +623,23 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         }
     }
     if let Err(f) = may_place(p, &data, &p.items[a].clone(), to.0, to.1) {
+        let ag = p.items[a].guid;
+        send_fail(p, f, ag);
+        return;
+    }
+    // In a fight only some things change, and weapons not too often.
+    let worn = |bag: u8, slot: u8| bag == BAG_PLAYER && slot < EQUIPMENT_END;
+    let change = if worn(to.0, to.1) {
+        Some((b.map(|i| p.items[i].entry), Some(p.items[a].entry)))
+    } else if worn(from.0, from.1) {
+        Some((Some(p.items[a].entry), b.map(|i| p.items[i].entry)))
+    } else {
+        None
+    };
+    if let Some((old, new)) = change
+        && let Some(f) =
+            crate::game::map::spells::class_scripts::combat_change_refused(p, &data, old, new, now)
+    {
         let ag = p.items[a].guid;
         send_fail(p, f, ag);
         return;
