@@ -516,7 +516,14 @@ pub fn trainer_list(map: &mut Map, player: Guid, npc: Guid) {
                 required_level: s.required_level,
                 required_skill: Skill::try_from(s.required_skill as u16).unwrap_or_default(),
                 required_skill_value: s.required_skill_value,
-                required_spells: [t.prev, t.req, 0],
+                // The rank before first, then the spell required; with no
+                // rank before, the required spell first, as mangos-zero's
+                // SendTrainerSpellHelper and Thistle Tea lay them out.
+                required_spells: if t.prev != 0 {
+                    [t.prev, t.req, 0]
+                } else {
+                    [t.req, 0, 0]
+                },
             }
         })
         .collect();
