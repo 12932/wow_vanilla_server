@@ -368,6 +368,13 @@ pub struct Map {
     pub spells: spells::MapSpells,
     /// Which of a fight's rarer states a creature here may be in.
     pub rare: creature_combat::RareStates,
+    /// Creatures that may be awake: seen by a player, or in a fight
+    /// (attacking, attacked, evading, or down in a feign death). Every
+    /// creature that is, and some that were: a player coming to know one
+    /// adds it, as does [`Map::note_fighting`], and [`Map::awake_where`]
+    /// lets go of those no longer awake. The update's looks for what only
+    /// an awake creature could be go through it, not every creature.
+    pub awake: ahash::AHashSet<Guid>,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
     /// The Elemental Invasion's rifts and their invaders.
@@ -386,6 +393,17 @@ pub struct Map {
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
+}
+
+/// Whether `c` is awake (see `Map::awake`): seen, or in a fight.
+pub fn awake(c: &Creature) -> bool {
+    !c.observers.is_empty()
+        || c.combat.attacking
+        || !c.combat.attackers.is_empty()
+        || c.evading
+        || c.scripted
+            .as_deref()
+            .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
 }
 
 /// Run `f` on the map; a panic in it is logged and the map goes on, so a
@@ -520,6 +538,7 @@ impl Map {
             map_events: Default::default(),
             spells: Default::default(),
             rare: Default::default(),
+            awake: ahash::AHashSet::new(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
@@ -1053,6 +1072,52 @@ impl Map {
         self.creatures.get_mut(k)
     }
 
+    /// `g`, if a creature, may be in a fight from now (see `awake`).
+    pub fn note_fighting(&mut self, g: Guid) {
+        if self.creature_by_guid.contains_key(&g) {
+            self.awake.insert(g);
+        }
+    }
+
+    /// What `out` makes of each awake creature `pred` takes, in the order
+    /// of a look through every creature, which is what debug builds check
+    /// it finds. Those no longer awake are let go.
+    pub fn awake_where<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        pred: impl Fn(&Creature) -> bool,
+        out: impl Fn(usize, &Creature) -> T,
+    ) -> Vec<T> {
+        let (creatures, by_guid) = (&self.creatures, &self.creature_by_guid);
+        let mut keys = Vec::with_capacity(self.awake.len());
+        self.awake.retain(
+            |g| match by_guid.get(g).and_then(|&k| Some((k, creatures.get(k)?))) {
+                Some((k, c)) if awake(c) => {
+                    keys.push(k);
+                    true
+                }
+                _ => false,
+            },
+        );
+        keys.sort_unstable();
+        let found: Vec<T> = keys
+            .into_iter()
+            .filter_map(|k| Some((k, self.creatures.get(k)?)))
+            .filter(|(_, c)| pred(c))
+            .map(|(k, c)| out(k, c))
+            .collect();
+        debug_assert_eq!(
+            found,
+            self.creatures
+                .iter()
+                .filter(|(_, c)| pred(c))
+                .map(|(k, c)| out(k, c))
+                .collect::<Vec<_>>(),
+            "{}: a creature is awake but not in Map::awake",
+            self.key
+        );
+        found
+    }
+
     pub fn gameobject(&self, guid: Guid) -> Option<&GameObject> {
         self.gameobject_by_guid
             .get(&guid)
@@ -1074,6 +1139,9 @@ impl Map {
             self.ai_spawned.push(guid);
         }
         self.rare.note(&c.engagement);
+        if awake(&c) {
+            self.awake.insert(guid);
+        }
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
