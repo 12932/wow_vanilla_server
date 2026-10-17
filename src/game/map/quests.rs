@@ -326,6 +326,7 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
         let _ = inventory::add_item(map, player, q.source_item, q.source_item_count.max(1), true);
     }
     check(map, player, quest);
+    crate::game::map::escorts::accepted(map, player, quest);
 }
 
 /// The log's update fields, from the journal.

@@ -9,6 +9,7 @@ pub mod guid;
 #[cfg(test)]
 pub mod harness;
 pub mod instances;
+pub mod invasion;
 pub mod map;
 pub mod registry;
 pub mod session;
@@ -18,6 +19,8 @@ pub mod store;
 mod tests;
 #[cfg(test)]
 mod tests_loot;
+#[cfg(test)]
+mod tests_world;
 pub mod transports;
 pub mod update;
 pub mod weather;

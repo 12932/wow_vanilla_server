@@ -116,6 +116,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             map.realm.registry.character_count()
         )),
         "maps" => Some(maps(map)),
+        "invasion" => Some(invasion(map, &args)),
         "save" => {
             map.save_player(guid);
             Some("Saved.".to_owned())
@@ -336,4 +337,35 @@ fn target_or_self(map: &Map, guid: Guid) -> Guid {
         .map(|p| p.fields.get_guid(crate::game::fields::UNIT_FIELD_TARGET))
         .filter(|t| map.players.contains_key(t))
         .unwrap_or(guid)
+}
+
+/// `.invasion [on|off|fell <zone>]`: drive the Scourge Invasion.
+fn invasion(map: &mut Map, args: &[&str]) -> String {
+    let realm = map.realm.clone();
+    match args {
+        ["on"] => {
+            crate::game::invasion::enable(&realm);
+            "The Scourge invade.".to_owned()
+        }
+        ["off"] => {
+            crate::game::invasion::disable(&realm);
+            "The Scourge are called off.".to_owned()
+        }
+        ["fell", zone] => match zone.parse() {
+            Ok(z) => {
+                crate::game::invasion::necropolis_fell(&realm, z);
+                format!("A necropolis over zone {z} falls.")
+            }
+            Err(_) => "Usage: .invasion fell <zone id>".to_owned(),
+        },
+        _ => {
+            let s = realm.social.invasion.lock();
+            format!(
+                "The invasion is {}: {} victories, {} zones under attack.",
+                if s.enabled { "on" } else { "off" },
+                s.victories,
+                s.active.len()
+            )
+        }
+    }
 }

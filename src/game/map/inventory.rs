@@ -523,12 +523,12 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
     }
     if bag == BAG_PLAYER
         && ((BAG_START..BAG_END).contains(&slot) || (BANK_BAG_START..BANK_BAG_END).contains(&slot))
-        && t.is_none_or(|t| t.class != 1)
+        && t.is_none_or(|t| !matches!(t.class, 1 | 11))
     {
         return Err(Fail::DoesntGoToSlot);
     }
     if bag != BAG_PLAYER
-        && t.is_some_and(|t| t.class == 1)
+        && t.is_some_and(|t| matches!(t.class, 1 | 11))
         && p.items
             .iter()
             .any(|i| i.bag == item.slot && item.bag == BAG_PLAYER)

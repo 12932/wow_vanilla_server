@@ -1856,7 +1856,7 @@ mod tests {
             .iter()
             .find(|r| r.entry == 20808)
             .expect("Ratchet to Booty Bay");
-        let maps: std::collections::BTreeSet<u32> = ratchet.legs.iter().map(|l| l.map).collect();
+        let maps = ratchet.maps();
         assert_eq!(maps.into_iter().collect::<Vec<_>>(), vec![0, 1]);
         assert!(data.events.len() > 20, "{}", data.events.len());
         assert!(data.event_creatures.len() > 1000);
