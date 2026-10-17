@@ -32,7 +32,12 @@ const STATE_NORMAL: u8 = 2;
 /// `AreaTable` flag: a capital city.
 pub const AREA_FLAG_CAPITAL: u32 = 0x100;
 
+/// The XP to the next level, the pool's measure: none at the top level,
+/// so nothing rests there (Thistle Tea's `Rest`, a 0 `next_level_xp`).
 fn next_level_xp(p: &Player) -> f32 {
+    if p.level() >= crate::game::map::stats::MAX_LEVEL {
+        return 0.0;
+    }
     p.fields.get_u32(PLAYER_NEXT_LEVEL_XP) as f32
 }
 
@@ -57,8 +62,10 @@ pub fn add_bonus(p: &mut Player, amount: f32) {
     set_bonus(p, bonus);
 }
 
-/// What resting since `since` has earned.
-fn accrue(p: &mut Player, now: Instant) {
+/// What resting since `since` has earned: counted every ten seconds, and
+/// at a save, so a logout keeps the rest since the last count (Thistle
+/// Tea's `Rest.logout` settles it).
+pub fn accrue(p: &mut Player, now: Instant) {
     if let (Some(_), Some(since)) = (p.row.state.rest_type, p.misc.rest_since) {
         let secs = now.saturating_duration_since(since).as_secs_f32();
         let gained = secs * next_level_xp(p) / ACCRUAL_DIVISOR;

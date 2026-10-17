@@ -238,6 +238,9 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
     crate::game::map::spells::refresh_talent_points(p, data);
     p.fields
         .set_u32(PLAYER_NEXT_LEVEL_XP, data.xp_to_level(level).max(1));
+    // The time played so far is the old level's; the new one's starts now
+    // (Thistle Tea's `PlayedTime.level_changed`).
+    p.count_played(Instant::now());
     p.row.played_level = 0;
     let max_health = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     let max_mana = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
