@@ -273,6 +273,14 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
 /// It died to `killer`, `tapper` holding its tap. Its scripts run on to
 /// its corpse's end, as Thistle Tea's do.
 pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
+    // Who a raid's bind is for, as Thistle Tea's `raid_killer` has it: the
+    // killer, or the player whose pet it is, or, for one that killed
+    // itself, who tapped it. Only a player binds.
+    let binder = if killer == creature {
+        tapper
+    } else {
+        crate::game::map::pets::master(map, killer)
+    };
     if guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
@@ -350,7 +358,7 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     if let Some(spawn) = spawn {
         crate::game::instances::spawn_died(&map.realm, map.key, spawn, (!boss).then_some(respawn));
     }
-    if locks_raid {
+    if locks_raid && guid::is_player(binder) {
         crate::game::instances::bind_raid(map);
     }
     if moving {
