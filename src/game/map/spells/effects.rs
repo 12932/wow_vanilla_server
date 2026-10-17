@@ -932,7 +932,8 @@ fn effect(
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
             if !super::class_scripts::dummy(map, caster, target, s, index, amount)
                 && !super::holiday::effect(map, caster, target, s)
-                && !crate::game::map::boss_mechanics::dummy(map, caster, target, s) =>
+                && !crate::game::map::boss_mechanics::dummy(map, caster, target, s)
+                && !crate::game::map::outdoor_pvp::carrier_pulse(map, target, s) =>
         {
             super::scripts::dummy(map, caster, target, s, index, amount, l, item);
         }

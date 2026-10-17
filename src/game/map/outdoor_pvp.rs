@@ -15,6 +15,7 @@ use ahash::{AHashMap, AHashSet};
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
+use crate::game::data::spells::SpellTemplate;
 use crate::game::data::{GameObjectSpawn, GameObjectTemplate};
 use crate::game::fields::*;
 use crate::game::map::battleground::side;
@@ -235,6 +236,8 @@ fn art_kit(owner: Option<usize>) -> (u32, u32) {
 pub const SILITHUS: u32 = 1377;
 const SILITHUS_BUFF_ZONES: [u32; 3] = [1377, 3428, 3429];
 pub const SPELL_CARRYING: u32 = 29519;
+/// The carrier's aura's pulse, which keeps them flagged.
+const SPELL_CARRIER_PVP: u32 = 30176;
 const SPELL_TEAM_CARRYING: [u32; 2] = [29894, 29895];
 const SPELL_FAVOR: u32 = 30754;
 const SILITHYST_MOUND: u32 = 181597;
@@ -1142,6 +1145,23 @@ fn silithus_update(map: &mut Map) {
     if let Some(o) = map.outdoor.as_mut() {
         o.watching = watching;
     }
+}
+
+/// The carrier's PvP flag refreshed (30176, which the silithyst's aura
+/// casts every fifteen seconds; Thistle Tea's `Silithyst.refresh_pvp`): one
+/// still carrying is contested again. Whether `s` was it.
+pub fn carrier_pulse(map: &mut Map, target: Guid, s: &SpellTemplate) -> bool {
+    if s.id != SPELL_CARRIER_PVP {
+        return false;
+    }
+    if map
+        .players
+        .get(&target)
+        .is_some_and(|p| p.auras.has_spell(SPELL_CARRYING))
+    {
+        crate::game::map::pvp::contest(map, target);
+    }
+    true
 }
 
 /// The silithyst's aura came off `g` (mounted, stealthed, flown, dead,
