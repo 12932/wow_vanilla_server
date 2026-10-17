@@ -201,6 +201,23 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         buy_failed(map, player, npc, item, BuyResult::RankRequire);
         return;
     }
+    // A standing the item asks for: with its faction, or the vendor's if
+    // it names a rank alone, as mangos's BuyItemFromVendor and Thistle
+    // Tea's `item_requirement_met?` have it.
+    let wanted = match t.required_reputation_faction {
+        0 if t.required_reputation_rank > 0 => {
+            crate::game::map::reputation::faction_of(map, npc).unwrap_or(0)
+        }
+        f => f,
+    };
+    if wanted != 0
+        && map.players.get(&player).is_some_and(|p| {
+            crate::game::map::reputation::rank(p, &data, wanted) < t.required_reputation_rank
+        })
+    {
+        buy_failed(map, player, npc, item, BuyResult::ReputationRequire);
+        return;
+    }
     let count = u32::from(amount.max(1)) * t.buy_count.max(1);
     let left = stock_left(map, npc, v, t.buy_count);
     if left != u32::MAX && left < count {
