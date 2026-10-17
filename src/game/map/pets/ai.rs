@@ -213,8 +213,47 @@ fn still_fights(map: &Map, g: Guid, owner: Guid, v: Guid) -> bool {
 }
 
 /// What a pet's stance makes it fight: whoever fights its master or it,
-/// and (aggressive) what hostile comes near.
+/// and (aggressive) what hostile comes near. A pet told to stay takes on
+/// of its own accord only what stands within its reach, as Thistle Tea's
+/// `Targeting.within_stay_range?` has it (mangos-classic's staying pet
+/// doesn't go to its master's aid at all).
 fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
+    let pick = acquire_any(map, g, owner, aggressive);
+    let stays = state(map, g).is_some_and(|s| s.command == COMMAND_STAY);
+    if !stays {
+        return pick;
+    }
+    let me = map.unit_view(g)?;
+    let within = |v: Guid| {
+        map.unit_view(v)
+            .is_some_and(|u| combat::in_melee_range(&me, &u))
+    };
+    match pick {
+        Some(v) if within(v) => Some(v),
+        // The nearest is out of reach; none nearer is in it.
+        _ => None,
+    }
+}
+
+/// Whether `v` is held by crowd control that damage would break
+/// (Polymorph, Sap, Gouge): a pet leaves it be of its own accord, but an
+/// aggressive guardian (Thistle Tea's `Targeting.crowd_control_allowed?`,
+/// mangos's `HasAuraPetShouldAvoidBreaking`).
+fn breakable_cc(map: &Map, v: Guid) -> bool {
+    use crate::game::map::auras::{
+        AURA_MOD_CONFUSE, AURA_MOD_STUN, AURA_TRANSFORM, INTERRUPT_DAMAGE,
+    };
+    crate::game::map::auras::auras(map, v).is_some_and(|a| {
+        a.holders.iter().any(|h| {
+            h.interrupt_flags & INTERRUPT_DAMAGE != 0
+                && (h.has(AURA_MOD_CONFUSE) || h.has(AURA_MOD_STUN) || h.has(AURA_TRANSFORM))
+        })
+    })
+}
+
+fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
+    let breaks_cc =
+        state(map, g).is_some_and(|s| s.kind == Kind::Guardian && s.react == REACT_AGGRESSIVE);
     let mut fighting: Vec<Guid> = map
         .combat(owner)
         .map(|c| c.attackers.iter().copied().collect())
@@ -230,6 +269,7 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
     let pick = fighting
         .into_iter()
         .filter(|v| *v != g && *v != owner && still_fights(map, g, owner, *v))
+        .filter(|v| breaks_cc || !breakable_cc(map, *v))
         .filter(|v| {
             map.combat(*v).is_some_and(|c| {
                 c.attackers.contains(&owner) || c.attackers.contains(&g) || c.attacking
@@ -264,6 +304,7 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
                 .position_of(*v)
                 .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
                 && combat::can_attack(map, g, *v)
+                && (breaks_cc || !breakable_cc(map, *v))
         })
         .min_by(|a, b| {
             let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, pos));
