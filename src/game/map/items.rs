@@ -172,6 +172,43 @@ pub fn send_failure(map: &Map, player: Guid, spell: u32, code: u8) {
     }
 }
 
+/// How long an on-use spell waits after its item is put on.
+pub const EQUIP_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// Item `item` was put on (Thistle Tea's `EquipmentTransitions`): each of
+/// its on-use spells waits thirty seconds, unless it already waits.
+pub fn equipped(map: &mut Map, player: Guid, item: Guid) {
+    let data = map.realm.data.clone();
+    let now = map.now;
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let Some(t) = p
+        .items
+        .iter()
+        .find(|i| i.guid == item)
+        .and_then(|i| data.item(i.entry))
+    else {
+        return;
+    };
+    if t.flags & 0x80 != 0 {
+        return;
+    }
+    for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == 0) {
+        let waiting = p.caster.cooldowns.get(&s.id).is_some_and(|t| *t > now)
+            || (s.category > 0
+                && p.caster
+                    .category_cooldowns
+                    .get(&s.category)
+                    .is_some_and(|t| *t > now));
+        if !waiting {
+            p.caster.cooldowns.insert(s.id, now + EQUIP_COOLDOWN);
+        }
+        p.outbound
+            .send(&SMSG_ITEM_COOLDOWN { guid: item, id: s.id });
+    }
+}
+
 /// A spell cast from an item went off: its cooldowns start, a charge goes
 /// (an item whose charges are spent and that is used up goes with it), and
 /// an item bound on use is bound.

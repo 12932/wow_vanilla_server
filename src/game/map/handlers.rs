@@ -262,10 +262,7 @@ impl Map {
                 }
             }
             ClientOpcodeMessage::CMSG_SETSHEATHED(m) => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    p.fields
-                        .set_byte(UNIT_FIELD_BYTES_2, 0, m.sheathed.as_int());
-                }
+                crate::game::map::combat::sheathe(self, guid, m.sheathed.as_int());
             }
             ClientOpcodeMessage::CMSG_TOGGLE_HELM => self.toggle_flag(guid, PLAYER_FLAGS_HIDE_HELM),
             ClientOpcodeMessage::CMSG_TOGGLE_CLOAK => {
