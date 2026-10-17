@@ -334,3 +334,63 @@ async fn a_leap_moves_a_creature_too_but_not_one_on_a_flight() {
         "and not sent anywhere"
     );
 }
+
+const TOWN_GUARD: u32 = 3_750;
+
+/// Thistle Tea's `LocalDefense.resolve`: a town guard felled by a Horde
+/// player's pet warns the Alliance its area is under attack, as by the
+/// player; a guard a creature kills, an ordinary creature, and a guard in
+/// an area not known warn no one.
+#[tokio::test]
+async fn a_fallen_guard_warns_its_side_of_a_pets_kill_and_not_otherwise() {
+    let mut d = world();
+    let mut guard = crate::game::tests_p3_combat::template(TOWN_GUARD, 7);
+    guard.flags_extra = 0x400;
+    d.creature_templates.insert(TOWN_GUARD, guard);
+    let realm = crate::game::harness::realm_with(d);
+    let mut a = crate::game::harness::Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut h = crate::game::harness::Client::connect(&realm, "H");
+    let gh = h.enter("Hordo", Race::Undead, Class::Warlock).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    assert_eq!(
+        realm.registry.online(gh).unwrap().map().key,
+        map.key,
+        "one map"
+    );
+    a.clear();
+    // His pet (a creature he charms) fells a guard, Hordo in area 40.
+    on(&map, move |m| {
+        m.players.get_mut(&gh).unwrap().area = 40;
+        let guard = spawn(m, ga, TOWN_GUARD, 20, 5.0);
+        let pet = spawn(m, ga, BRUTE, 20, 6.0);
+        crate::game::map::pets::charmed(m, gh, pet, false);
+        crate::game::map::combat::deal_damage(m, pet, guard, 10_000_000);
+    })
+    .await;
+    let raw = a
+        .wait_frame("SMSG_ZONE_UNDER_ATTACK", 0x254, |_| true)
+        .await;
+    assert_eq!(raw, 40u32.to_le_bytes(), "Alice hears of area 40");
+    // A creature's kill, an ordinary creature, a guard of no known area.
+    a.clear();
+    on(&map, move |m| {
+        m.players.get_mut(&gh).unwrap().area = 41;
+        let guard = spawn(m, ga, TOWN_GUARD, 20, 5.0);
+        let brute = spawn(m, ga, BRUTE, 20, 6.0);
+        crate::game::map::combat::deal_damage(m, brute, guard, 10_000_000);
+        m.players.get_mut(&gh).unwrap().area = 42;
+        let ordinary = spawn(m, ga, BRUTE, 20, 7.0);
+        crate::game::map::combat::deal_damage(m, gh, ordinary, 10_000_000);
+        let p = m.players.get_mut(&gh).unwrap();
+        p.area = 0;
+        p.zone = 0;
+        let lost = spawn(m, ga, TOWN_GUARD, 20, 8.0);
+        crate::game::map::combat::deal_damage(m, gh, lost, 10_000_000);
+    })
+    .await;
+    assert!(
+        !crate::game::tests_p3_entity::gets_frame(&mut a, 0x254, |_| true).await,
+        "no warning for any of those"
+    );
+}
