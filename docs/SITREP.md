@@ -334,11 +334,11 @@ the questions waiting for you.
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
 | Performance | running | |
-| 3a: matrix gaps, spells and auras (195 rows) | merged | |
+| 3a: matrix gaps, spells and auras (195 rows) | merged | 5e26640 |
 | 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
 | 3f: matrix gaps, network and inbound (232 rows) | merged | |
 | 3c: matrix gaps, items, quests, loot, professions (241 rows) | merged | |
-| 3d: matrix gaps, player systems (311 rows) | merged | |
+| 3d: matrix gaps, player systems (311 rows) | merged | 5e26640 |
 | 3e: matrix gaps, world systems (140 rows) | merged | |
 
 ## Left for later, and why
