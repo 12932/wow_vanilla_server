@@ -94,6 +94,8 @@ mod tests_p3_combat9;
 #[cfg(test)]
 mod tests_p3_core_auction;
 #[cfg(test)]
+mod tests_p3_core_aura;
+#[cfg(test)]
 mod tests_p3_core_condition;
 #[cfg(test)]
 mod tests_p3_core_death;
