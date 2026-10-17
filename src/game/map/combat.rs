@@ -1345,6 +1345,15 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
         send_to(map, attacker, encode(&SMSG_ATTACKSWING_CANT_ATTACK {}));
         return;
     }
+    // Another victim: the old one hears the attack stop, and a strike
+    // queued for it goes (mangos's `Unit::Attack`, Thistle Tea's
+    // `start_melee_attack`).
+    if map
+        .combat(attacker)
+        .is_some_and(|c| c.attacking && c.victim != victim && !c.victim.is_zero())
+    {
+        stop_attack(map, attacker);
+    }
     let Some(c) = map.combat_mut(attacker) else {
         return;
     };
@@ -1367,7 +1376,9 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
     try_swing(map, attacker);
 }
 
-/// `CMSG_ATTACKSTOP`, or a fight that ends.
+/// `CMSG_ATTACKSTOP`, or a fight that ends. A strike queued for the next
+/// swing is interrupted, and its caster told (mangos's `MeleeAttackStop`
+/// interrupting the melee spell, Thistle Tea's `stop_melee_attack`).
 pub fn stop_attack(map: &mut Map, attacker: Guid) {
     let Some(c) = map.combat_mut(attacker) else {
         return;
@@ -1376,8 +1387,16 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
         return;
     }
     c.attacking = false;
-    c.queued = None;
+    let queued = c.queued.take();
     let victim = c.victim;
+    if let Some(spell) = queued {
+        crate::game::map::spells::send_cast_result(
+            map,
+            attacker,
+            spell,
+            Some(crate::game::map::spells::checks::fail::INTERRUPTED),
+        );
+    }
     if let Some(frame) = encode(&SMSG_ATTACKSTOP {
         player: attacker,
         enemy: victim,
@@ -1608,7 +1627,10 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     if matches!(outcome, Outcome::Dodge | Outcome::Parry) {
         gain_rage(map, attacker, mitigated * 3 / 4, false);
     }
-    skill_gains(map, attacker, victim, hand);
+    // A blow on the immune trains nothing (Thistle Tea's `CombatSkills`).
+    if !immune {
+        skill_gains(map, attacker, victim, hand);
+    }
     if left > 0 {
         // A blow on a caster pushes its cast back.
         crate::game::map::spells::pushback(map, victim);
@@ -2067,22 +2089,55 @@ fn daze(map: &mut Map, attacker: Guid, victim: Guid, roll: &Roll) {
     if !map.creature(attacker).is_some_and(|c| c.owner.is_none()) {
         return;
     }
-    let level = roll.victim_level as f32;
+    // Not a blow that killed, nor one on the invulnerable.
+    if !map.unit_view(victim).is_some_and(|u| u.alive)
+        || crate::game::map::gm_dev::invulnerable(map, victim)
+    {
+        return;
+    }
+    let chance = daze_chance(roll.victim_level, roll.attacker_skill, roll.victim_defense);
+    if daze_roll() < chance {
+        crate::game::map::spells::cast_triggered(map, attacker, SPELL_DAZED, Some(victim));
+    }
+}
+
+/// The chance, in percent, a creature's blow from behind dazes a player of
+/// `level` with `defense` (mangos's `CalculateEffectiveDazeChance`): a
+/// fifth at 30 and up, less below; a fifth of a point for each point of
+/// skill over defense; no more than two fifths.
+pub fn daze_chance(level: i32, skill: i32, defense: i32) -> f32 {
+    let level = level as f32;
     let base = if level < 30.0 {
         0.65 * level + 0.5
     } else {
         20.0
     };
-    let chance = (base + (roll.attacker_skill - roll.victim_defense) as f32 * 0.2).clamp(0.0, 40.0);
-    if rand::rng().random_range(0.0f32..100.0) < chance {
-        crate::game::map::spells::cast_triggered(map, attacker, SPELL_DAZED, Some(victim));
+    (base + (skill - defense) as f32 * 0.2).clamp(0.0, 40.0)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's roll for a daze, in percent, in place of the dice.
+    pub static FORCED_DAZE_ROLL: std::cell::Cell<Option<f32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn daze_roll() -> f32 {
+    #[cfg(test)]
+    if let Some(r) = FORCED_DAZE_ROLL.with(|f| f.get()) {
+        return r;
     }
+    rand::rng().random_range(0.0f32..100.0)
 }
 
 /// A spell (Windfury, Sword Specialization, Hand of Justice) owes `count`
 /// main-hand attacks at once; Reckoning banks one for the next swing. An
 /// extra attack can't give more, nor can a batch stack.
 pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
+    // The dead are owed nothing.
+    if !map.unit_view(g).is_some_and(|u| u.alive) {
+        return;
+    }
     let Some(c) = map.combat_mut(g) else {
         return;
     };
@@ -2092,7 +2147,9 @@ pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
         }
         return;
     }
-    if c.in_extra_attack || c.extra_attacks > 0 || count == 0 {
+    // Reckoning's bank holds off another batch until a swing arms it
+    // (Thistle Tea's `ExtraAttacks.grant`).
+    if c.in_extra_attack || c.extra_attacks > 0 || c.held_extra_attacks > 0 || count == 0 {
         return;
     }
     c.extra_attacks = count;
@@ -2637,10 +2694,12 @@ pub fn update_players(map: &mut Map) {
         if threatened.contains(&p.guid) && p.combat.last_action.is_some() {
             p.combat.last_action = Some(now);
         }
-        if !p.combat.attacking
-            && p.combat
-                .last_action
-                .is_some_and(|t| now.duration_since(t) > COMBAT_TIMEOUT)
+        // Swinging at no one in reach, or meaning to, holds no one in a
+        // fight (Thistle Tea's `attack intent alone`, mangos's combat
+        // timer): only blows and threat do.
+        if p.combat
+            .last_action
+            .is_some_and(|t| now.duration_since(t) > COMBAT_TIMEOUT)
         {
             p.combat.last_action = None;
             p.combat.attackers.clear();
