@@ -563,6 +563,63 @@ fn flight_packet(g: Guid, from: Vector3d, walk: &Walk, spline_id: u32) -> Arc<[u
     b.frame(crate::game::map::ai::SMSG_MONSTER_MOVE)
 }
 
+/// A script sends `player` along taxi path `path`, free (`SCRIPT_COMMAND_SEND_TAXI_PATH`).
+pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
+    let data = map.realm.data.clone();
+    let nodes: Vec<TaxiPathNode> = data
+        .npc
+        .taxi_path_nodes
+        .get(&path)
+        .map(|n| n.iter().filter(|n| n.map == map.key.map).copied().collect())
+        .unwrap_or_default();
+    if nodes.len() < 2 {
+        return;
+    }
+    let (from, to) = data
+        .npc
+        .taxi_paths
+        .iter()
+        .find(|(_, (p, _))| *p == path)
+        .map(|((f, t), _)| (*f, *t))
+        .unwrap_or((0, 0));
+    let now = map.now;
+    let spline_id = map.next_spline_id;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let mount_creature = data
+        .npc
+        .taxi_nodes
+        .get(&from)
+        .map(|n| n.mounts[if p.team == Team::Alliance { 0 } else { 1 }])
+        .unwrap_or(0);
+    let mount = data
+        .creature_template(mount_creature)
+        .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
+        .unwrap_or(if p.team == Team::Alliance { 1149 } else { 295 });
+    p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, mount);
+    p.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        UNIT_FLAG_TAXI_FLIGHT | UNIT_FLAG_DISABLE_MOVE,
+        true,
+    );
+    let start = p.position();
+    let mut points = vec![start];
+    points.extend(nodes.iter().map(|n| Vector3d {
+        x: n.x,
+        y: n.y,
+        z: n.z,
+    }));
+    let walk = Walk::new(points, TAXI_SPEED, now, spline_id, true);
+    let frame = flight_packet(player, start, &walk, spline_id);
+    p.flight = Some(Flight {
+        walk,
+        destination: to,
+    });
+    map.send_to_observers(player, &frame, true);
+}
+
 /// `CMSG_ACTIVATETAXI`: pay, mount and fly.
 pub fn activate_taxi(map: &mut Map, player: Guid, npc: Guid, from: u32, to: u32) {
     activate_route(map, player, npc, &[from, to]);

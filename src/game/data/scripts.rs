@@ -148,6 +148,26 @@ pub struct Pool {
     pub mother: u32,
 }
 
+/// A `spell_area` row: `spell` belongs in `area` for players who match.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpellArea {
+    pub spell: u32,
+    pub area: u32,
+    /// A quest that must be taken (and, with `quest_start_active`, not yet
+    /// complete) or rewarded.
+    pub quest_start: u32,
+    pub quest_start_active: bool,
+    /// A quest that must not be rewarded yet.
+    pub quest_end: u32,
+    /// An aura the player must (positive) or mustn't (negative) have.
+    pub aura_spell: i32,
+    pub race_mask: u32,
+    /// 0 male, 1 female, 2 either.
+    pub gender: u32,
+    /// Cast on the player there; otherwise only allowed there.
+    pub autocast: bool,
+}
+
 /// `map_template`: a map's instance script and reset.
 #[derive(Debug, Clone, Default)]
 pub struct MapTemplate {
@@ -195,6 +215,14 @@ pub struct ScriptData {
     pub map_templates: AHashMap<u32, MapTemplate>,
     /// `areatrigger_template`'s scripts: trigger → generic script.
     pub areatrigger_script: AHashMap<u32, u32>,
+    /// `game_event.holiday`: event → holiday.
+    pub event_holidays: AHashMap<u32, u32>,
+    /// `quest_template.RequiredCondition`.
+    pub quest_condition: AHashMap<u32, u32>,
+    /// `areatrigger_teleport.required_condition`.
+    pub teleport_condition: AHashMap<u32, u32>,
+    /// `spell_area`: auras a place (and a quest, race or gender) brings.
+    pub spell_areas: Vec<SpellArea>,
 }
 
 impl ScriptData {

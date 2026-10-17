@@ -431,6 +431,40 @@ fn pick(
     }
 }
 
+/// A pooled object (an herb, a vein, a chest) comes back: the spawn may
+/// be another of its pool, one not up now nor waiting to be.
+pub fn object_respawn_choice(map: &Map, spawn: u32, waiting: &[u32]) -> u32 {
+    let s = &map.realm.data.scripts;
+    let Some(pool) = s.object_pool.get(&spawn).and_then(|p| s.pools.get(p)) else {
+        return spawn;
+    };
+    if pool.objects.len() < 2 || pool.objects.iter().any(|(_, c)| *c > 0.0) {
+        return spawn;
+    }
+    let on_map: ahash::AHashSet<u32> = map
+        .realm
+        .data
+        .gameobject_spawns
+        .get(&map.key.map)
+        .map(|v| v.iter().map(|o| o.guid).collect())
+        .unwrap_or_default();
+    let free: Vec<u32> = pool
+        .objects
+        .iter()
+        .map(|(g, _)| *g)
+        .filter(|g| on_map.contains(g))
+        .filter(|g| {
+            *g == spawn
+                || (crate::game::map::scripts::object_of_spawn(map, *g).is_none()
+                    && !waiting.contains(g))
+        })
+        .collect();
+    if free.is_empty() {
+        return spawn;
+    }
+    free[rand::rng().random_range(0..free.len())]
+}
+
 /// A pooled creature died: the spawn that comes back may be another of its
 /// pool, one not up now.
 pub fn respawn_choice(map: &Map, spawn: u32) -> u32 {

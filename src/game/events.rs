@@ -11,13 +11,34 @@ use crate::game::map::Map;
 use crate::game::map::creature::Creature;
 use crate::game::map::gameobject::GameObject;
 
+/// Events a script started (true) or stopped (false), over their
+/// schedule.
+static FORCED: std::sync::LazyLock<parking_lot::Mutex<ahash::AHashMap<u32, bool>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// The events on at `now` (Unix seconds).
 pub fn active(data: &GameData, now: i64) -> AHashSet<u32> {
-    data.events
+    let mut on: AHashSet<u32> = data
+        .events
         .values()
         .filter(|e| e.active(now))
         .map(|e| e.id)
-        .collect()
+        .collect();
+    for (id, forced) in FORCED.lock().iter() {
+        if *forced {
+            on.insert(*id);
+        } else {
+            on.remove(id);
+        }
+    }
+    on
+}
+
+/// A script starts or stops an event (`SCRIPT_COMMAND_GAME_EVENT`); with
+/// `overwrite` false, a start the schedule already has is left alone.
+pub fn force(realm: &Realm, id: u32, on: bool) {
+    FORCED.lock().insert(id, on);
+    sweep(realm);
 }
 
 /// Whether a spawn tied (or not) to an event is out with `active` on.

@@ -314,6 +314,7 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
         if zone != 0 && zone != area {
             crate::game::map::exploration::entered(map, guid, zone);
         }
+        crate::game::map::spell_areas::reconcile(map, guid);
     }
     let Some(p) = map.players.get_mut(&guid) else {
         return;
@@ -375,13 +376,18 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
             guid,
         );
     }
-    let Some(p) = map.players.get(&guid) else {
-        return;
-    };
     let Some(tp) = &t.teleport else {
         return;
     };
-    if p.level() < tp.required_level && !p.gm {
+    let barred = data
+        .scripts
+        .teleport_condition
+        .get(&id)
+        .is_some_and(|c| !crate::game::map::conditions::met(map, *c, None, Some(guid)));
+    let Some(p) = map.players.get(&guid) else {
+        return;
+    };
+    if (p.level() < tp.required_level || barred) && !p.gm {
         let text = if tp.message.is_empty() {
             format!("You must be level {} to enter.", tp.required_level)
         } else {

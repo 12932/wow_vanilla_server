@@ -50,6 +50,7 @@ pub mod rest;
 pub mod scripts;
 pub mod skills;
 pub mod social;
+pub mod spell_areas;
 pub mod spells;
 pub mod stats;
 pub mod tickets;
@@ -459,6 +460,7 @@ impl Map {
                 }
                 self.insert_player(p);
                 spells::apply_passives(self, guid);
+                spell_areas::reconcile(self, guid);
                 pets::owner_arrived(self, guid);
                 social::logged_in(self, guid);
                 self.visibility_dirty.insert(guid);

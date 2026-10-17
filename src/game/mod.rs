@@ -29,6 +29,8 @@ mod tests_misc;
 mod tests_pvp;
 #[cfg(test)]
 mod tests_scripts;
+#[cfg(test)]
+mod tests_scripts2;
 pub mod transports;
 pub mod update;
 pub mod weather;

@@ -113,6 +113,12 @@ impl Nav {
         self.map.line_of_sight(from, to).unwrap_or(true)
     }
 
+    /// Line of sight over the tiles already loaded (where units are), for
+    /// a reader that can't load more.
+    pub fn sight(&self, from: Vector3d, to: Vector3d) -> bool {
+        self.map.line_of_sight(from, to).unwrap_or(true)
+    }
+
     pub fn tiles_tried(&self) -> usize {
         self.tried.len()
     }
