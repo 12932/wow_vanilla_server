@@ -652,6 +652,138 @@ async fn honoring_a_hero(realm: &Arc<Realm>) {
     }
 }
 
+/// `c` steps into area trigger `id`: the map it is in.
+async fn step_in(realm: &Arc<Realm>, c: &mut Client, id: u32) -> MapHandle {
+    let t = realm
+        .data
+        .area_triggers
+        .get(&id)
+        .cloned()
+        .expect("the trigger");
+    let map = go(
+        realm,
+        c,
+        t.map,
+        Vector3d {
+            x: t.x,
+            y: t.y,
+            z: t.z,
+        },
+    )
+    .await;
+    c.send(CMSG_AREATRIGGER { trigger_id: id }).await;
+    map
+}
+
+/// Quests done by reaching a place, as Thistle Tea's area trigger scripts
+/// have them: Resupplying the Excavation, at Huldar and Miran's camp, and
+/// the Missing Diplomat's Sentry Point, where Tervosh comes to hear it.
+async fn reaching_a_place(realm: &Arc<Realm>) {
+    for (account, race, level, giver, quest, before, trigger, ender) in [
+        (
+            "SUPPLIER",
+            Race::Dwarf,
+            12,
+            1105,
+            273,
+            &[302u32][..],
+            171,
+            2057,
+        ),
+        (
+            "DIPLOMAT",
+            Race::Human,
+            30,
+            4964,
+            1265,
+            &[1264][..],
+            1667,
+            4967,
+        ),
+    ] {
+        let before: &'static [u32] = Box::leak(before.to_vec().into_boxed_slice());
+        let (mut c, g, _) = hero(realm, account, race, Class::Warrior, level).await;
+        take(realm, &mut c, giver, quest, before).await;
+        let map = step_in(realm, &mut c, trigger).await;
+        assert!(
+            until(&map, move |m| done(m, g, quest)).await,
+            "{quest} done"
+        );
+        turn_in(realm, &mut c, ender, quest).await;
+    }
+}
+
+/// Children's Week: an orphan taken to the sights it asks for.
+async fn childrens_week(realm: &Arc<Realm>) {
+    for (account, race, whistle, orphan, quest, trigger) in [
+        ("WARDEN", Race::Human, 18598, 14305, 1479, 3546),
+        ("MATRON", Race::Orc, 18597, 14444, 1800, 3547),
+    ] {
+        let before: &'static [u32] = if orphan == 14305 { &[1468] } else { &[172] };
+        let (mut c, g, map) = hero(realm, account, race, Class::Warrior, 10).await;
+        map.query(move |m| {
+            crate::game::map::inventory::add_item(m, g, whistle, 1, false).expect("room");
+        })
+        .await;
+        // At the sight, the orphan called.
+        let t = realm.data.area_triggers.get(&trigger).cloned().unwrap();
+        let map = go(
+            realm,
+            &mut c,
+            t.map,
+            Vector3d {
+                x: t.x,
+                y: t.y,
+                z: t.z,
+            },
+        )
+        .await;
+        use_on(&mut c, &map, whistle, g).await;
+        assert!(
+            until(&map, move |m| m.players[&g].owned.critter.is_some()).await,
+            "the orphan comes"
+        );
+        let child = map
+            .query(move |m| m.players[&g].owned.critter)
+            .await
+            .flatten()
+            .unwrap();
+        let entry = map
+            .query(move |m| m.creature(child).map(|c| c.entry))
+            .await
+            .flatten();
+        assert_eq!(entry, Some(orphan));
+        map.query(move |m| {
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .journal
+                .rewarded
+                .extend(before.iter().copied());
+            quests::accept(m, g, child, quest);
+        })
+        .await;
+        assert!(
+            until(&map, move |m| logged(m, g, quest)).await,
+            "{quest} taken"
+        );
+        c.send(CMSG_AREATRIGGER {
+            trigger_id: trigger,
+        })
+        .await;
+        assert!(
+            until(&map, move |m| done(m, g, quest)).await,
+            "{quest} done"
+        );
+        map.query(move |m| quests::choose_reward(m, g, child, quest, 0))
+            .await;
+        assert!(
+            until(&map, move |m| rewarded(m, g, quest)).await,
+            "{quest} rewarded"
+        );
+    }
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -707,5 +839,11 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("tribute") {
         honoring_a_hero(&realm).await;
+    }
+    if wanted("places") {
+        reaching_a_place(&realm).await;
+    }
+    if wanted("children") {
+        childrens_week(&realm).await;
     }
 }
