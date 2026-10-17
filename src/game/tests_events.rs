@@ -247,6 +247,19 @@ async fn take(
             .rewarded
             .extend(before.iter().copied());
         quests::accept(m, g, who, quest);
+        if std::env::var("EVENTS_DEBUG").is_ok() {
+            let data = m.realm.data.clone();
+            let p = &m.players[&g];
+            let q = data.npc.quests.get(&quest).unwrap();
+            eprintln!(
+                "take {quest}: can_take {}, condition {}, level {}, skill {:?}",
+                quests::can_take(p, q, &data),
+                quests::condition_ok(m, g, who, quest),
+                p.level(),
+                (q.required_skill != 0)
+                    .then(|| crate::game::map::skills::value_with_bonuses(p, q.required_skill)),
+            );
+        }
     })
     .await;
     assert!(
@@ -930,6 +943,32 @@ async fn dashels_brawl(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, DASHEL, QUEST).await;
 }
 
+/// Quests the world database does: The Fargodeep Mine, explored by its
+/// area trigger, and Expert Blacksmith!, whose start script ends in its
+/// event.
+async fn the_databases_own(realm: &Arc<Realm>) {
+    const MINE: u32 = 62;
+    let (mut c, g, _) = hero(realm, "DELVER", Race::Human, Class::Warrior, 5).await;
+    take(realm, &mut c, 240, MINE, &[]).await;
+    let map = step_in(realm, &mut c, 88).await;
+    assert!(until(&map, move |m| done(m, g, MINE)).await, "{MINE} done");
+    turn_in(realm, &mut c, 240, MINE).await;
+
+    const SMITH: u32 = 2765;
+    let (mut c, g, map) = hero(realm, "SMITH", Race::Dwarf, Class::Warrior, 40).await;
+    map.query(move |m| skilled(m, g, 164, 225)).await;
+    let map = take(realm, &mut c, 7802, SMITH, &[]).await;
+    assert!(
+        until_mut(&map, move |m| {
+            skip(m, Duration::from_secs(5));
+            done(m, g, SMITH)
+        })
+        .await,
+        "{SMITH} done"
+    );
+    turn_in(realm, &mut c, 7802, SMITH).await;
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -997,6 +1036,9 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("dashel") {
         dashels_brawl(&realm).await;
+    }
+    if wanted("database") {
+        the_databases_own(&realm).await;
     }
 }
 
