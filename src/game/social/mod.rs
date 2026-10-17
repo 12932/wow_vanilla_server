@@ -32,6 +32,7 @@ pub struct Social {
     pub weather: Mutex<ahash::AHashMap<u32, crate::game::weather::Weather>>,
     pub tickets: Mutex<crate::game::map::tickets::Tickets>,
     pub meeting_stones: Mutex<crate::game::map::meeting_stones::MeetingStones>,
+    pub honor: Mutex<crate::game::honor::Ledger>,
 }
 
 impl Social {
@@ -43,6 +44,11 @@ impl Social {
             auctions: Mutex::new(auction::Auctions::load(records)),
             instances: Mutex::new(crate::game::instances::Instances::load(records)),
             tickets: Mutex::new(crate::game::map::tickets::Tickets::load(records)),
+            honor: Mutex::new(crate::game::honor::Ledger::load(
+                records,
+                crate::game::honor::today(),
+                crate::game::honor::DEFAULT_RESET_WEEKDAY,
+            )),
             ..Default::default()
         }
     }
@@ -99,4 +105,5 @@ pub fn sweep(realm: &Realm) {
     crate::game::events::sweep(realm);
     crate::game::weather::sweep(realm);
     crate::game::map::meeting_stones::sweep(realm);
+    crate::game::map::pvp::sweep(realm);
 }

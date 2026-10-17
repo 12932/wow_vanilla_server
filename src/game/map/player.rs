@@ -227,6 +227,9 @@ pub struct Player {
     /// The pet, totems, guardians and charmed unit the player controls.
     pub owned: crate::game::map::pets::Owned,
     pub misc: crate::game::map::misc::PlayerMisc,
+    pub pvp: crate::game::map::pvp::PvpState,
+    /// Damage from other players lately, to share a kill's honor.
+    pub honor_damage: crate::game::map::pvp::DamageHistory,
     /// The gear changed: its auras want bringing in line.
     pub gear_dirty: bool,
 }
@@ -300,6 +303,8 @@ impl Player {
             derived: Default::default(),
             owned: Default::default(),
             misc: Default::default(),
+            pvp: Default::default(),
+            honor_damage: Default::default(),
             gear_dirty: true,
             row,
         };

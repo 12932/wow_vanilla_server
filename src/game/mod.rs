@@ -8,6 +8,7 @@ pub mod fields;
 pub mod guid;
 #[cfg(test)]
 pub mod harness;
+pub mod honor;
 pub mod instances;
 pub mod map;
 pub mod registry;
@@ -24,6 +25,8 @@ mod tests_loot;
 mod tests_pets;
 #[cfg(test)]
 mod tests_misc;
+#[cfg(test)]
+mod tests_pvp;
 pub mod transports;
 pub mod update;
 pub mod weather;
@@ -58,6 +61,8 @@ pub struct RealmConfig {
     pub pvp_realm: bool,
     /// Packets a client may send a second, sustained.
     pub max_packets_per_sec: u32,
+    /// The weekday honor's week turns over on: 1 Monday to 7 Sunday.
+    pub honor_reset_weekday: u8,
 }
 
 impl RealmConfig {
@@ -76,6 +81,7 @@ impl RealmConfig {
             bg_start_delay: Duration::from_secs(120),
             pvp_realm: c.world.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
+            honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
         }
     }
 }
@@ -104,6 +110,7 @@ impl Realm {
     ) -> Arc<Self> {
         let registry = Registry::new();
         let social = social::Social::load(&startup.records);
+        social.honor.lock().set_weekday(config.honor_reset_weekday);
         let max_mail_item = social
             .mail
             .lock()

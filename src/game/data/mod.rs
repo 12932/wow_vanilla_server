@@ -408,6 +408,13 @@ pub struct GameData {
     pub battlemasters: AHashMap<u32, u32>,
     /// `battleground_template`: 1 Alterac Valley, 2 Warsong Gulch, 3 Arathi Basin.
     pub battlegrounds: AHashMap<u32, BgTemplate>,
+    /// `creature_battleground` and `gameobject_battleground`: the events
+    /// (event and its state) each spawn in a battleground belongs to; it is
+    /// there while any of them is on.
+    pub bg_creature_events: AHashMap<u32, Vec<(u8, u8)>>,
+    pub bg_object_events: AHashMap<u32, Vec<(u8, u8)>>,
+    /// `areatrigger_bg_entrance`: a battleground's portal in the world.
+    pub bg_entrances: AHashMap<u32, BgEntrance>,
     /// `transports`: boats and zeppelins, with their cycles in milliseconds.
     pub transports: Vec<TransportRoute>,
     /// `game_event`: seasonal events, by id.
@@ -628,6 +635,18 @@ pub struct BgTemplate {
     pub lose_spells: [u32; 2],
     /// `WorldSafeLocs` where each team starts.
     pub starts: [u32; 2],
+}
+
+/// A battleground's portal in the world: the battleground, the team it
+/// admits, and where a player leaving the battleground comes out.
+#[derive(Debug, Clone, Default)]
+pub struct BgEntrance {
+    pub trigger: u32,
+    pub bg: u32,
+    /// 469 Alliance, 67 Horde.
+    pub team: u32,
+    pub exit_map: u32,
+    pub exit: (f32, f32, f32, f32),
 }
 
 /// A boat or zeppelin: its object, and how long its round takes.
