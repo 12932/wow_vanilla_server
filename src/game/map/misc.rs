@@ -106,6 +106,18 @@ pub fn handle_all(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Cl
     let msg = crate::game::map::items_misc::handle(map, g, msg)?;
     let msg = crate::game::map::meeting_stones::handle(map, g, msg)?;
     match msg {
+        ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
+            // Without a navmesh, the client's zone is the one explored.
+            if map.nav.is_none() {
+                crate::game::map::exploration::entered(map, g, m.area.as_int());
+            }
+            Some(ClientOpcodeMessage::CMSG_ZONEUPDATE(m))
+        }
+        ClientOpcodeMessage::CMSG_SET_SELECTION(m) => {
+            // Looked at here, then handled as before.
+            crate::game::map::reputation::reveal_target(map, g, m.target);
+            Some(ClientOpcodeMessage::CMSG_SET_SELECTION(m))
+        }
         ClientOpcodeMessage::CMSG_ACTIVATETAXIEXPRESS(m) => {
             crate::game::map::npc::activate_express(map, g, m.guid, &m.nodes);
             None

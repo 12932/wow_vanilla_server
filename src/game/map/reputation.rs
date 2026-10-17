@@ -418,6 +418,21 @@ pub fn set_visible(map: &mut Map, g: Guid, faction: u32) {
     p.outbound.send_frame(b.frame(SMSG_SET_FACTION_VISIBLE));
 }
 
+/// A player targets a unit: a friendly faction they have a standing with
+/// shows in their pane.
+pub fn reveal_target(map: &mut Map, g: Guid, target: Guid) {
+    if target.is_zero() || target == g {
+        return;
+    }
+    let Some(f) = faction_of(map, target) else {
+        return;
+    };
+    if crate::game::map::combat::hostile(map, target, g) {
+        return;
+    }
+    set_visible(map, g, f);
+}
+
 /// The reputation opcodes wow_messages reads.
 pub fn handle(_map: &mut Map, _g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     match msg {

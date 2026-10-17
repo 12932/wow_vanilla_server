@@ -117,6 +117,7 @@ impl Outbound {
 /// A packet a client sent: one wow_messages reads, or (for those it lays
 /// out differently from 1.12) its opcode and body.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Each packet moves through the channel once.
 pub enum Inbound {
     Msg(ClientOpcodeMessage),
     Raw(u16, Vec<u8>),
@@ -382,6 +383,36 @@ mod tests {
         }
         drop(tx);
         writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_reader_hands_on_packets_wow_messages_reads_and_raw_ones() {
+        let (server, client) = paired_crypto();
+        let (_, decrypter) = server.split();
+        let (mut encrypter, _) = client.split();
+        let (mut a, b) = duplex(64 * 1024);
+        let (tx, mut rx) = mpsc::channel(8);
+        let (out_tx, _out_rx) = kanal::unbounded_async::<Arc<[u8]>>();
+        let outbound = Outbound::new(out_tx, Arc::new(Semaphore::new(1 << 20)));
+        tokio::spawn(run_reader(b, decrypter, tx, outbound));
+        // CMSG_SET_WATCHED_FACTION, read by hand: index 3.
+        let body = 3u32.to_le_bytes();
+        a.write_all(&encrypter.encrypt_client_header(4 + 4, 0x318))
+            .await
+            .unwrap();
+        a.write_all(&body).await.unwrap();
+        // CMSG_LOGOUT_REQUEST, which wow_messages reads.
+        a.write_all(&encrypter.encrypt_client_header(4, 0x4B))
+            .await
+            .unwrap();
+        match rx.recv().await {
+            Some(Inbound::Raw(0x318, b)) => assert_eq!(b, body),
+            other => panic!("{other:?}"),
+        }
+        match rx.recv().await {
+            Some(Inbound::Msg(ClientOpcodeMessage::CMSG_LOGOUT_REQUEST)) => {}
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
