@@ -11,6 +11,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
+use crate::game::data::npc::{TaxiNode, TaxiPathNode};
 use crate::game::data::spells::{SpellEffect, SpellTemplate};
 use crate::game::data::*;
 use crate::game::fields::*;
@@ -556,4 +557,332 @@ async fn a_deleted_character_leaves_its_group_and_cod_comes_back() {
         .get(&id)
         .map(|m| (m.receiver, m.cod, m.item.is_some()));
     assert_eq!(back, Some((crate::game::guid::counter(ga), 0, true)));
+}
+
+const FLIGHTMASTER: u32 = 4100;
+const TRAINER: u32 = 4101;
+const INNKEEPER: u32 = 4102;
+const VENDOR: u32 = 4103;
+const RANK_1: u32 = 9400;
+const RANK_2: u32 = 9401;
+const BLACKSMITHING: u32 = 9402;
+const HEARTHSTONE: u32 = 6948;
+
+fn npc(entry: u32, flags: u32) -> CreatureTemplate {
+    CreatureTemplate {
+        entry,
+        name: format!("Npc {entry}"),
+        display_ids: [903, 0, 0, 0],
+        display_probabilities: [1, 0, 0, 0],
+        level_min: 30,
+        level_max: 30,
+        faction: 35,
+        npc_flags: flags,
+        unit_class: 1,
+        health_multiplier: 1.0,
+        health_max: 500,
+        ..Default::default()
+    }
+}
+
+fn services() -> GameData {
+    let mut d = data();
+    let mut spawns = Vec::new();
+    for (i, (entry, flags)) in [
+        (FLIGHTMASTER, 0x8),
+        (TRAINER, 0x10),
+        (INNKEEPER, 0x80),
+        (VENDOR, 0x4),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut t = npc(entry, flags);
+        if entry == TRAINER {
+            t.trainer_type = 2;
+        }
+        d.creature_templates.insert(entry, t);
+        spawns.push(CreatureSpawn {
+            guid: 50 + i as u32,
+            entries: vec![entry],
+            map: 0,
+            x: START.0 + 2.0,
+            y: START.1 + i as f32,
+            z: START.2,
+            respawn_min: 600,
+            respawn_max: 600,
+            ..Default::default()
+        });
+    }
+    d.creature_spawns.insert(0, spawns);
+    for (id, x) in [
+        (2, START.0 + 3.0),
+        (3, START.0 + 64.0),
+        (4, START.0 + 300.0),
+    ] {
+        d.npc.taxi_nodes.insert(
+            id,
+            TaxiNode {
+                id,
+                map: 0,
+                x,
+                y: START.1,
+                z: START.2,
+                name: format!("Node {id}"),
+                mounts: [0, 0],
+            },
+        );
+    }
+    let path = |x: f32| TaxiPathNode {
+        map: 0,
+        x,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    };
+    d.npc.taxi_paths.insert((2, 3), (9, 5));
+    d.npc.taxi_paths.insert((4, 3), (10, 5));
+    d.npc
+        .taxi_path_nodes
+        .insert(9, vec![path(START.0 + 3.0), path(START.0 + 64.0)]);
+    d.npc
+        .taxi_path_nodes
+        .insert(10, vec![path(START.0 + 300.0), path(START.0 + 64.0)]);
+    // Two ranks of a spell, and a profession's first rank.
+    for id in [RANK_1, RANK_2] {
+        d.spells.spells.insert(
+            id,
+            SpellTemplate {
+                id,
+                name: format!("Spell {id}"),
+                equipped_item_class: -1,
+                ..Default::default()
+            },
+        );
+    }
+    d.spells.ranks.insert(
+        RANK_2,
+        crate::game::data::spells::SpellRank {
+            prev: RANK_1,
+            first: RANK_1,
+            rank: 2,
+            req: 0,
+        },
+    );
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 44,
+        misc_value: 164,
+        base_points: 0,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        BLACKSMITHING,
+        SpellTemplate {
+            id: BLACKSMITHING,
+            name: "Blacksmithing".into(),
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    d.npc.trainers.insert(
+        TRAINER,
+        [RANK_2, BLACKSMITHING]
+            .into_iter()
+            .map(|spell| crate::game::data::npc::TrainerSpell {
+                spell,
+                cost: 100,
+                ..Default::default()
+            })
+            .collect(),
+    );
+    d.items.insert(
+        HEARTHSTONE,
+        ItemTemplate {
+            entry: HEARTHSTONE,
+            name: "Hearthstone".into(),
+            allowable_class: -1,
+            allowable_race: -1,
+            stackable: 1,
+            max_count: 1,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+async fn served(realm: &Arc<Realm>, a: &mut Client) {
+    for (entry, counter) in [
+        (FLIGHTMASTER, 50),
+        (TRAINER, 51),
+        (INNKEEPER, 52),
+        (VENDOR, 53),
+    ] {
+        a.sees(crate::game::guid::unit(entry, counter)).await;
+    }
+    let g = a.guid;
+    on_map(realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.set_money(100_000);
+        p.row.state.taxi_mask = vec![0b11100];
+    })
+    .await;
+}
+
+async fn taxi_reply(a: &mut Client, from: u32, to: u32) -> ActivateTaxiReply {
+    a.clear();
+    a.send(CMSG_ACTIVATETAXI {
+        guid: crate::game::guid::unit(FLIGHTMASTER, 50),
+        source_node: from,
+        destination_node: to,
+    })
+    .await;
+    a.wait_for("SMSG_ACTIVATETAXIREPLY", |m| match m {
+        ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(r) => Some(r.reply),
+        _ => None,
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_flight_waits_for_a_free_standing_rider_at_its_node() {
+    let realm = harness::realm_with(services());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    served(&realm, &mut a).await;
+    let set = |f: fn(&mut crate::game::map::player::Player)| {
+        let realm = realm.clone();
+        async move { on_map(&realm, move |m| f(m.players.get_mut(&g).unwrap())).await }
+    };
+    set(|p| p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 2402)).await;
+    assert_eq!(
+        taxi_reply(&mut a, 2, 3).await,
+        ActivateTaxiReply::PlayerAlreadyMounted
+    );
+    set(|p| {
+        p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 0);
+        p.set_stand_state(1);
+    })
+    .await;
+    assert_eq!(
+        taxi_reply(&mut a, 2, 3).await,
+        ActivateTaxiReply::NotStanding
+    );
+    set(|p| p.set_stand_state(0)).await;
+    assert_eq!(
+        taxi_reply(&mut a, 4, 3).await,
+        ActivateTaxiReply::TooFarAway
+    );
+    set(|p| p.row.state.taxi_mask = vec![0b00100]).await;
+    assert_eq!(
+        taxi_reply(&mut a, 2, 3).await,
+        ActivateTaxiReply::NotVisited
+    );
+    set(|p| p.row.state.taxi_mask = vec![0b11100]).await;
+    assert_eq!(taxi_reply(&mut a, 2, 3).await, ActivateTaxiReply::Ok);
+}
+
+async fn trainer_list(a: &mut Client) -> Vec<TrainerSpell> {
+    a.clear();
+    a.send(CMSG_TRAINER_LIST {
+        guid: crate::game::guid::unit(TRAINER, 51),
+    })
+    .await;
+    a.wait_for("SMSG_TRAINER_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(l) => Some(l.spells.clone()),
+        _ => None,
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_trainer_wants_the_rank_before_and_a_free_profession() {
+    let realm = harness::realm_with(services());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    served(&realm, &mut a).await;
+    let spells = trainer_list(&mut a).await;
+    let state = |list: &[TrainerSpell], id| {
+        list.iter()
+            .find(|s| s.spell == id)
+            .map(|s| (s.state, s.talent_point_cost, s.first_rank))
+    };
+    assert_eq!(
+        state(&spells, RANK_2),
+        Some((TrainerSpellState::Red, 0, 0)),
+        "rank 1 first"
+    );
+    assert_eq!(
+        state(&spells, BLACKSMITHING),
+        Some((TrainerSpellState::Green, 1, 1))
+    );
+    // Two professions already: the first rank of a third can't be learned.
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.spells.push(RANK_1);
+        crate::game::map::skills::learn_skill(p, 171, 1);
+        crate::game::map::skills::learn_skill(p, 182, 1);
+    })
+    .await;
+    let spells = trainer_list(&mut a).await;
+    assert_eq!(
+        state(&spells, RANK_2),
+        Some((TrainerSpellState::Green, 0, 0))
+    );
+    assert_eq!(
+        state(&spells, BLACKSMITHING),
+        Some((TrainerSpellState::Green, 0, 1))
+    );
+    a.send(CMSG_TRAINER_BUY_SPELL {
+        guid: crate::game::guid::unit(TRAINER, 51),
+        id: BLACKSMITHING,
+    })
+    .await;
+    a.wait_for("SMSG_TRAINER_BUY_FAILED", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(_)).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_innkeeper_binds_to_the_area_and_gives_a_hearthstone_and_the_dead_are_not_served() {
+    let realm = harness::realm_with(services());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    served(&realm, &mut a).await;
+    on_map(&realm, move |m| m.players.get_mut(&g).unwrap().area = 87).await;
+    a.send(CMSG_BINDER_ACTIVATE {
+        guid: crate::game::guid::unit(INNKEEPER, 52),
+    })
+    .await;
+    let area = a
+        .wait_for("SMSG_PLAYERBOUND", |m| match m {
+            ServerOpcodeMessage::SMSG_PLAYERBOUND(b) => Some(b.area),
+            _ => None,
+        })
+        .await;
+    assert_eq!(area.as_int(), 87);
+    let (bound, stones) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (p.row.state.bind.map(|b| b.zone), p.count_of(HEARTHSTONE))
+    })
+    .await;
+    assert_eq!((bound, stones), (Some(87), 1));
+    // Dead, no vendor will deal.
+    on_map(&realm, move |m| crate::game::map::death::kill(m, g)).await;
+    a.clear();
+    a.send(CMSG_LIST_INVENTORY {
+        guid: crate::game::guid::unit(VENDOR, 53),
+    })
+    .await;
+    assert!(
+        a.gets(NONE_WITHIN, |m| matches!(
+            m,
+            ServerOpcodeMessage::SMSG_LIST_INVENTORY(_)
+        )
+        .then_some(()))
+            .await
+            .is_none()
+    );
 }

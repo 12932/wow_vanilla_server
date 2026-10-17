@@ -12,7 +12,6 @@ use wow_world_messages::vanilla::{
 use crate::game::data::{GameData, ItemTemplate};
 use crate::game::fields::*;
 use crate::game::map::Map;
-use crate::game::map::combat::dist;
 use crate::game::map::inventory::{self, BUYBACK_END, BUYBACK_START, EQUIPMENT_END, Fail};
 use crate::game::store::BAG_PLAYER;
 
@@ -29,17 +28,10 @@ pub struct Stock {
     pub restock_at: Option<Instant>,
 }
 
-/// The vendor creature `npc`, if `player` may use it now.
+/// The vendor creature `npc`, if `player` may use it now (the services'
+/// shared checks).
 fn vendor_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
-    let p = map.players.get(&player)?;
-    let c = map.creature(npc)?;
-    if !c.alive() || c.fields.get_u32(UNIT_NPC_FLAGS) & flag == 0 {
-        return None;
-    }
-    if dist(p.position(), c.position) > NPC_YARDS {
-        return None;
-    }
-    Some(c.entry)
+    crate::game::map::npc::npc_entry(map, player, npc, flag)
 }
 
 /// The price of `count` of an item, from its template's price for its buy

@@ -1238,8 +1238,28 @@ pub fn petition_sign(realm: &Realm, me: &Online, item: Guid) {
             .name(guid::player(c))
             .is_some_and(|n| n.account == me.account)
     };
+    // The owner's side alone, and no more than the charter needs
+    // (Thistle Tea's `Petitions.sign`).
+    let other_side = realm
+        .registry
+        .name(owner)
+        .is_some_and(|n| Team::of_race(n.race) != Team::of_race(me.race));
+    if other_side {
+        drop(guilds);
+        command_result(
+            realm,
+            me.guid,
+            GuildCommand::Create,
+            "",
+            GuildCommandResult::GuildNotAllied,
+        );
+        return;
+    }
+    let full = p.signers.len() >= realm.config.petition_signatures as usize;
     let result = if p.owner == me_c {
         PetitionResult::CantSignOwn
+    } else if full {
+        PetitionResult::AlreadySigned
     } else if in_guild {
         PetitionResult::AlreadyInGuild
     } else if p.signers.contains(&me_c)

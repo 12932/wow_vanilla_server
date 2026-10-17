@@ -218,6 +218,8 @@ pub struct SpellRank {
     pub prev: u32,
     pub first: u32,
     pub rank: u32,
+    /// A spell needed before this one (`req_spell`).
+    pub req: u32,
 }
 
 /// `SpellItemEnchantment`: up to three effects an enchantment gives.
