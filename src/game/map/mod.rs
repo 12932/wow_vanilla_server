@@ -405,6 +405,7 @@ impl Map {
                 }
                 self.insert_player(p);
                 spells::apply_passives(self, guid);
+                pets::owner_arrived(self, guid);
                 social::logged_in(self, guid);
                 self.visibility_dirty.insert(guid);
             }
@@ -420,7 +421,9 @@ impl Map {
                         position: p.position(),
                         orientation: p.movement.orientation,
                     });
+                let guid = p.guid;
                 self.insert_player(*p);
+                pets::owner_arrived(self, guid);
             }
         }
     }
@@ -437,6 +440,7 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        pets::owner_leaving(self, guid);
         battleground::departing(self, guid);
         duel::left(self, guid, true);
         trade::cancel(
@@ -470,6 +474,7 @@ impl Map {
     }
 
     pub fn save_player(&mut self, guid: Guid) {
+        pets::sync_record(self, guid);
         let now = self.now;
         if let Some(p) = self.players.get_mut(&guid) {
             let row = p.to_row(now);
@@ -601,6 +606,7 @@ impl Map {
         duel::update(self);
         battleground::update(self);
         self.unload_if_empty();
+        pets::update(self);
         ai::update_creatures(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);

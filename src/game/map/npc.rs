@@ -100,6 +100,9 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
         if flags & NPC_FLAG_BATTLEMASTER != 0 {
             return battlemaster_hello(map, player, npc);
         }
+        if flags & crate::game::map::pets::NPC_FLAG_STABLEMASTER != 0 {
+            return crate::game::map::pets::list_stable(map, player, npc);
+        }
     }
     show_menu(map, player, npc, menu_id, flags);
 }
@@ -193,6 +196,8 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         9 => send(map, player, &SMSG_SHOW_BANK { guid: npc }),
         12 => battlemaster_hello(map, player, npc),
         13 => auction_hello(map, player, npc),
+        14 => crate::game::map::pets::list_stable(map, player, npc),
+        17 => crate::game::map::pets::untrain_offer(map, player),
         15 => vendor::list(map, player, npc),
         _ => send(map, player, &SMSG_GOSSIP_COMPLETE {}),
     }
