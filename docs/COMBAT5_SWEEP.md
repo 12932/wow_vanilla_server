@@ -83,6 +83,11 @@ and its state: **fixed**, or **left** with why.
     scaled 80-120% for items flagged so. wvs refilled everything at once.
 18. `equipment_transitions.ex`: in a fight only weapons, projectiles,
     shields, held-in-off-hand items and relics change, and weapons not
-    while the weapon lock holds; equipping an item with an on-use spell puts
-    that spell on a 30-second cooldown. wvs allowed any change and started
-    no cooldown.
+    while the weapon lock holds (spells5 had already brought this in);
+    equipping an item with an on-use spell puts that spell on a 30-second
+    cooldown, which wvs never started.
+
+## core/death
+
+19. `world/entity/player/spirit_healer.ex`: a spirit healer's price is a
+    quarter of the durability of everything carried, not only what's worn.

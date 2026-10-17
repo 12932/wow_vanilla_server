@@ -528,14 +528,21 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
 /// Wear on everything worn: `fraction` of each item's full durability, at
 /// least a point.
 pub fn wear(map: &mut Map, player: Guid, fraction: f32) {
+    wear_where(map, player, fraction, |i| {
+        i.bag == BAG_PLAYER && i.slot < WEAR_SLOTS
+    });
+}
+
+/// Wear on everything worn and carried (a spirit healer's price).
+pub fn wear_carried(map: &mut Map, player: Guid, fraction: f32) {
+    wear_where(map, player, fraction, mendable);
+}
+
+fn wear_where(map: &mut Map, player: Guid, fraction: f32, pick: impl Fn(&Item) -> bool) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    for it in p
-        .items
-        .iter_mut()
-        .filter(|i| i.bag == BAG_PLAYER && i.slot < WEAR_SLOTS)
-    {
+    for it in p.items.iter_mut().filter(|i| pick(i)) {
         let max = it.fields.get_u32(ITEM_FIELD_MAXDURABILITY);
         if max == 0 {
             continue;
