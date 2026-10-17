@@ -1780,3 +1780,63 @@ fn details_shown(a: &Client, quest: u32) -> bool {
         matches!(m, ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d) if d.quest_id == quest)
     })
 }
+
+/// Thistle Tea's quest giver checks (mangos's `CanInteractWithQuestGiver`):
+/// a quest is taken only beside a living giver; a creature's and an
+/// object's quests of the same entry are their own; an object's turn-ins
+/// list one under way or done, not one failed.
+#[tokio::test]
+async fn a_quest_giver_must_be_at_hand_and_alive() {
+    let mut d = data();
+    // An object of the giver's entry number, with its own quest.
+    d.npc.object_starts.insert(GIVER, vec![91]);
+    d.npc.object_ends.insert(GIVER, vec![30]);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(giver()).await;
+    let far = on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().movement.position.x += 10.0;
+        quests::accept(m, g, giver(), 1);
+        let far = m.players[&g].journal.has(1);
+        m.players.get_mut(&g).unwrap().movement.position.x -= 10.0;
+        far
+    })
+    .await;
+    assert!(!far, "ten yards off");
+    let dead = on_map(&realm, move |m| {
+        crate::game::map::combat::kill(m, g, giver());
+        quests::accept(m, g, giver(), 1);
+        m.players[&g].journal.has(1)
+    })
+    .await;
+    assert!(!dead, "a dead giver");
+    let split = on_map(&realm, move |m| {
+        let object = guid::game_object(GIVER, 9);
+        let ids = |m: &Map, at: Guid| {
+            quests::giver_quests(m, g, at)
+                .iter()
+                .map(|q| q.quest_id)
+                .collect::<Vec<_>>()
+        };
+        let creature = guid::unit(GIVER, 99);
+        let p = m.players.get_mut(&g).unwrap();
+        p.journal.add(crate::game::store::Logged {
+            quest: 30,
+            failed: true,
+            ..Default::default()
+        });
+        let failed = ids(m, object);
+        let p = m.players.get_mut(&g).unwrap();
+        p.journal.log[0].failed = false;
+        (ids(m, object), failed, ids(m, creature).contains(&91))
+    })
+    .await;
+    assert_eq!(
+        split.0,
+        vec![30, 91],
+        "the object's own: its turn-in, its quest"
+    );
+    assert_eq!(split.1, vec![91], "not a failed turn-in");
+    assert!(!split.2, "the object's quest isn't the creature's");
+}
