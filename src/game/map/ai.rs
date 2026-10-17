@@ -57,6 +57,21 @@ pub fn face_packet(g: Guid, at: Vector3d, angle: f32, spline_id: u32) -> Arc<[u8
     b.frame(SMSG_MONSTER_MOVE)
 }
 
+/// A creature turning on the spot to face `target` (a facing-target
+/// monster move of 100 ms, as Thistle Tea's `build_face`).
+pub fn face_target_packet(g: Guid, at: Vector3d, target: Guid, spline_id: u32) -> Arc<[u8]> {
+    let mut b = Body::default();
+    crate::game::update::write_packed_guid(&mut b.0, g);
+    b.f32(at.x)
+        .f32(at.y)
+        .f32(at.z)
+        .u32(spline_id)
+        .u8(3)
+        .u64(target.guid());
+    b.u32(0).u32(100).u32(1).f32(at.x).f32(at.y).f32(at.z);
+    b.frame(SMSG_MONSTER_MOVE)
+}
+
 /// The radius at which a creature notices a unit (vmangos's
 /// `GetAttackDistance`): its detection range at an even level, a yard less
 /// for each level the unit is above it (more for up to 25 below), at least
@@ -470,10 +485,23 @@ fn respawn(map: &mut Map, g: Guid) {
 /// A dead creature (or one never spawned, like a pooled spawn's other
 /// pick) comes back at once.
 pub fn respawn_now(map: &mut Map, g: Guid) {
-    if map.creature(g).is_some_and(|c| !c.alive()) {
-        map.dead_creatures.retain(|d| *d != g);
-        respawn(map, g);
+    respawn_forced(map, g, false);
+}
+
+/// A spawned creature comes back new at once: a dead one, or (`even_alive`)
+/// one alive too, as Thistle Tea's `Respawn.force`.
+pub fn respawn_forced(map: &mut Map, g: Guid, even_alive: bool) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    if c.alive() && !(even_alive && c.spawn_guid.is_some()) {
+        return;
     }
+    if c.alive() {
+        combat::leave_combat(map, g);
+    }
+    map.dead_creatures.retain(|d| *d != g);
+    respawn(map, g);
 }
 
 /// A creature goes as though it died, with no loot or credit, and comes

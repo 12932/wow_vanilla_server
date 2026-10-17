@@ -13,6 +13,7 @@ use wow_world_messages::vanilla::*;
 use crate::game::Realm;
 use crate::game::data::crafts::{LOCK_KEY_ITEM, LockKey};
 use crate::game::data::items::ItemSpell;
+use crate::game::data::scripts::*;
 use crate::game::data::spells::{SpellEffect, SpellTemplate};
 use crate::game::data::*;
 use crate::game::fields::*;
@@ -150,4 +151,569 @@ async fn an_object_opens_to_the_item_that_is_its_key() {
         (true, Some(0)),
         "the Quintessence spent, the rune open"
     );
+}
+
+const HOST: u32 = 3100;
+const BUDDY: u32 = 3101;
+const THIRD: u32 = 3102;
+const DOOR: u32 = 601;
+const HIDDEN: u32 = 602;
+const LEVER: u32 = 603;
+/// Spawns: the host and its buddies; the door, a lever and an object held
+/// back.
+const HOST_SPAWN: u32 = 10;
+const BUDDY_SPAWN: u32 = 11;
+const THIRD_SPAWN: u32 = 12;
+const DOOR_SPAWN: u32 = 20;
+const HIDDEN_SPAWN: u32 = 21;
+const LEVER_SPAWN: u32 = 22;
+
+fn creature(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
+    CreatureTemplate {
+        entry,
+        name: name.into(),
+        display_ids: [903, 0, 0, 0],
+        display_probabilities: [1, 0, 0, 0],
+        display_scales: [1.0, 0.0, 0.0, 0.0],
+        level_min: 10,
+        level_max: 10,
+        faction,
+        unit_class: 1,
+        health_max: 500,
+        speed_walk: 1.0,
+        speed_run: 1.0,
+        ..Default::default()
+    }
+}
+
+fn creature_spawn(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
+    CreatureSpawn {
+        guid,
+        entries: vec![entry],
+        map: 0,
+        x: START.0 + dx,
+        y: START.1,
+        z: START.2,
+        respawn_min: 60,
+        respawn_max: 60,
+        ..Default::default()
+    }
+}
+
+fn object(entry: u32, kind: u8, name: &str) -> GameObjectTemplate {
+    GameObjectTemplate {
+        entry,
+        kind,
+        display_id: 411,
+        name: name.into(),
+        size: 1.0,
+        ..Default::default()
+    }
+}
+
+fn object_spawn(guid: u32, entry: u32, dy: f32) -> GameObjectSpawn {
+    GameObjectSpawn {
+        guid,
+        entry,
+        map: 0,
+        x: START.0,
+        y: START.1 + dy,
+        z: START.2,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        state: 1,
+        respawn_min: 30,
+        respawn_max: 30,
+        ..Default::default()
+    }
+}
+
+/// Three friendly creatures in a row beside the start, a door and a lever
+/// on one side, and an object that only scripts bring out.
+fn world() -> GameData {
+    let mut d = GameData::empty();
+    for (entry, name) in [(HOST, "Host"), (BUDDY, "Buddy"), (THIRD, "Third")] {
+        d.creature_templates
+            .insert(entry, creature(entry, name, 35));
+    }
+    d.creature_spawns.insert(
+        0,
+        vec![
+            creature_spawn(HOST_SPAWN, HOST, 3.0),
+            creature_spawn(BUDDY_SPAWN, BUDDY, 6.0),
+            creature_spawn(THIRD_SPAWN, THIRD, 9.0),
+        ],
+    );
+    d.gameobject_templates.insert(DOOR, object(DOOR, 0, "Door"));
+    d.gameobject_templates
+        .insert(HIDDEN, object(HIDDEN, 3, "Hidden Chest"));
+    d.gameobject_templates
+        .insert(LEVER, object(LEVER, 1, "Lever"));
+    let mut hidden = object_spawn(HIDDEN_SPAWN, HIDDEN, 4.0);
+    hidden.despawned = true;
+    d.gameobject_spawns.insert(
+        0,
+        vec![
+            object_spawn(DOOR_SPAWN, DOOR, 2.0),
+            hidden,
+            object_spawn(LEVER_SPAWN, LEVER, -2.0),
+        ],
+    );
+    d
+}
+
+fn host() -> Guid {
+    guid::unit(HOST, HOST_SPAWN)
+}
+
+fn buddy() -> Guid {
+    guid::unit(BUDDY, BUDDY_SPAWN)
+}
+
+fn third() -> Guid {
+    guid::unit(THIRD, THIRD_SPAWN)
+}
+
+fn step(command: u32, datalong: [u32; 4]) -> ScriptStep {
+    ScriptStep {
+        command,
+        datalong,
+        ..Default::default()
+    }
+}
+
+fn stand_state(m: &crate::game::map::Map, g: Guid) -> u8 {
+    m.unit_fields(g)
+        .map_or(u8::MAX, |f| f.get_byte(UNIT_FIELD_BYTES_1, 0))
+}
+
+/// The self flag makes the target the one a final swap hands the step to;
+/// and an initial swap with no one to hand it to still finds the unit its
+/// target type names, which runs it on no one (S3, S7).
+#[tokio::test]
+async fn a_step_runs_from_the_unit_its_swaps_and_self_flag_name() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    a.sees(buddy()).await;
+    let (host, buddy) = (host(), buddy());
+    let states = map
+        .query(move |m| {
+            // Sit (28), at the nearest Buddy: swapped, the self flag
+            // makes both Buddy.
+            let sit = ScriptStep {
+                target_type: 10,
+                target_param1: BUDDY,
+                data_flags: SF_SWAP_FINAL_TARGETS | SF_TARGET_SELF,
+                ..step(28, [1, 0, 0, 0])
+            };
+            crate::game::map::scripts::execute(m, &sit, host, Guid::zero());
+            let first = (stand_state(m, host), stand_state(m, buddy));
+            // Kneel, the step handed on from no one: Buddy kneels.
+            let kneel = ScriptStep {
+                target_type: 10,
+                target_param1: BUDDY,
+                data_flags: SF_SWAP_INITIAL_TARGETS | SF_SWAP_FINAL_TARGETS,
+                ..step(28, [8, 0, 0, 0])
+            };
+            let ran = crate::game::map::scripts::execute(
+                m,
+                &ScriptStep {
+                    data_flags: kneel.data_flags | SF_ABORT_ON_FAILURE,
+                    ..kneel
+                },
+                host,
+                Guid::zero(),
+            );
+            (first, ran, stand_state(m, buddy))
+        })
+        .await
+        .unwrap();
+    assert_eq!(states.0, (0, 1), "Buddy sits, not the host");
+    assert!(states.1, "the step ran");
+    assert_eq!(states.2, 8, "Buddy kneels");
+}
+
+/// An object found by its spawn runs `activate_object` on the step's
+/// source: a door opens, and its scripts run on that source, at the door
+/// (S4).
+#[tokio::test]
+async fn activate_object_works_the_object_it_finds_for_the_source() {
+    let mut d = world();
+    // The door's own script: whoever used it sits.
+    d.scripts
+        .gameobject
+        .insert(DOOR_SPAWN, vec![step(28, [1, 0, 0, 0])]);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    a.sees(host()).await;
+    let host = host();
+    let (state, sat) = map
+        .query(move |m| {
+            let door = crate::game::map::scripts::object_of_spawn(m, DOOR_SPAWN).unwrap();
+            let activate = ScriptStep {
+                target_type: 14,
+                target_param1: DOOR_SPAWN,
+                ..step(13, [0; 4])
+            };
+            crate::game::map::scripts::execute(m, &activate, host, Guid::zero());
+            (
+                m.gameobject(door)
+                    .map(|o| o.fields.get_u32(GAMEOBJECT_STATE)),
+                stand_state(m, host),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(state, Some(0), "the door opens");
+    assert_eq!(sat, 1, "its script ran on the host");
+}
+
+/// `turn_to` shows the turn: a facing move to the target, or to the angle
+/// (S6).
+#[tokio::test]
+async fn turn_to_sends_a_facing_move() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    a.clear();
+    map.call(move |m| {
+        crate::game::map::scripts::execute(m, &step(35, [0; 4]), host, me);
+    });
+    let toward = a
+        .wait_for("a facing move", |m| match m {
+            ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == host => Some(mv.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        matches!(toward.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::FacingTarget { target } if target == me),
+        "{:?}",
+        toward.move_type
+    );
+    map.call(move |m| {
+        let turn = ScriptStep {
+            o: 1.5,
+            ..step(35, [1, 0, 0, 0])
+        };
+        crate::game::map::scripts::execute(m, &turn, host, me);
+    });
+    let angle = a
+        .wait_for("a facing move", |m| match m {
+            ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == host => Some(mv.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        matches!(angle.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle } if (angle - 1.5).abs() < 0.01),
+        "{:?}",
+        angle.move_type
+    );
+}
+
+/// An object plays its own animation, not an emote (S11).
+#[tokio::test]
+async fn an_object_plays_its_custom_animation() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let lever = guid::game_object(LEVER, LEVER_SPAWN);
+    a.sees(lever).await;
+    let host = host();
+    map.call(move |m| {
+        let anim = ScriptStep {
+            target_type: 14,
+            target_param1: LEVER_SPAWN,
+            ..step(89, [1, 0, 0, 0])
+        };
+        crate::game::map::scripts::execute(m, &anim, host, Guid::zero());
+    });
+    let id = a
+        .wait_for("SMSG_GAMEOBJECT_CUSTOM_ANIM", |m| match m {
+            ServerOpcodeMessage::SMSG_GAMEOBJECT_CUSTOM_ANIM(c) if c.guid == lever => {
+                Some(c.animation_id)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(id, 1);
+}
+
+/// `respawn_game_object` brings out an object held back, for its time (at
+/// least five seconds); `despawn_game_object` takes one in and brings it
+/// back after datalong2 seconds (S2, S8).
+#[tokio::test]
+async fn scripts_bring_objects_out_and_take_them_in() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let hidden = guid::game_object(HIDDEN, HIDDEN_SPAWN);
+    let door = guid::game_object(DOOR, DOOR_SPAWN);
+    a.sees(door).await;
+    let host = host();
+    let out = map
+        .query(move |m| {
+            let before = m.gameobject(hidden).is_some();
+            crate::game::map::scripts::execute(m, &step(9, [HIDDEN_SPAWN, 0, 0, 0]), host, host);
+            let goes_in = m
+                .object_resets
+                .iter()
+                .find(|(_, g, s)| *g == hidden && *s == u32::MAX)
+                .map(|(t, _, _)| t.duration_since(m.now));
+            // One already out stays as it is.
+            crate::game::map::scripts::execute(m, &step(9, [DOOR_SPAWN, 10, 0, 0]), host, host);
+            let door_kept = !m.object_resets.iter().any(|(_, g, _)| *g == door);
+            // The door taken in, back in 20 seconds.
+            crate::game::map::scripts::execute(m, &step(81, [DOOR_SPAWN, 20, 0, 0]), host, host);
+            let back = m
+                .objects
+                .respawns
+                .iter()
+                .find(|(_, s)| *s == DOOR_SPAWN)
+                .map(|(t, _)| t.duration_since(m.now));
+            (
+                before,
+                m.gameobject(hidden).is_some(),
+                goes_in,
+                door_kept,
+                m.gameobject(door).is_some(),
+                back,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(!out.0 && out.1, "brought out");
+    assert_eq!(out.2, Some(Duration::from_secs(5)), "for five seconds");
+    assert!(out.3, "the door, out already, is left");
+    assert!(!out.4, "the door taken in");
+    assert_eq!(out.5, Some(Duration::from_secs(20)), "back in twenty");
+    a.sees(hidden).await;
+    a.forgets(door).await;
+}
+
+/// `respawn_creature` respawns its source: dead, or with datalong alive
+/// too (S10).
+#[tokio::test]
+async fn respawn_creature_respawns_its_source() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    a.sees(buddy()).await;
+    let (host, buddy) = (host(), buddy());
+    let health = |m: &crate::game::map::Map, g| {
+        m.unit_fields(g)
+            .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
+            .unwrap_or(0)
+    };
+    let out = map
+        .query(move |m| {
+            for g in [host, buddy] {
+                if let Some(f) = m.unit_fields_mut(g) {
+                    f.set_u32(UNIT_FIELD_HEALTH, 100);
+                }
+            }
+            // At Buddy, but the host respawns: alive, only with datalong.
+            crate::game::map::scripts::execute(m, &step(71, [0; 4]), host, buddy);
+            let kept = health(m, host);
+            crate::game::map::scripts::execute(m, &step(71, [1, 0, 0, 0]), host, buddy);
+            (kept, health(m, host), health(m, buddy))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (100, 500, 100));
+}
+
+/// An object's gossip option runs its script on the player, at the object
+/// (S12).
+#[tokio::test]
+async fn an_objects_gossip_option_runs_on_the_player() {
+    let mut d = world();
+    d.npc.gossip_menus.insert(
+        500,
+        crate::game::data::npc::GossipMenu {
+            texts: vec![(1, 0)],
+            options: vec![crate::game::data::npc::GossipOption {
+                id: 0,
+                text: "Sit down.".into(),
+                kind: 1,
+                script: 900,
+                ..Default::default()
+            }],
+        },
+    );
+    // The script: its source sits.
+    d.scripts.gossip.insert(900, vec![step(28, [1, 0, 0, 0])]);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let lever = guid::game_object(LEVER, LEVER_SPAWN);
+    a.sees(lever).await;
+    map.query(move |m| {
+        if let Some(p) = m.players.get_mut(&me) {
+            p.gossip_menu = Some((lever, 500));
+        }
+    })
+    .await;
+    a.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: lever,
+        gossip_list_id: 0,
+        unknown: None,
+    })
+    .await;
+    let mut sat = false;
+    for _ in 0..50 {
+        sat = map.query(move |m| stand_state(m, me) == 1).await.unwrap();
+        if sat {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(sat, "Alice sits");
+}
+
+/// Each of the three creatures sets its phase to 1 on map event 7's script
+/// event with data 5.
+fn hear_event_seven(d: &mut GameData) {
+    for entry in [HOST, BUDDY, THIRD] {
+        d.scripts.ai_events.insert(
+            entry,
+            vec![AiEvent {
+                id: entry * 100,
+                creature: entry,
+                kind: EVENT_SCRIPT_EVENT,
+                chance: 100,
+                flags: EF_REPEATABLE,
+                params: [7, 5, 0, 0],
+                actions: [entry * 100, 0, 0],
+                ..Default::default()
+            }],
+        );
+        d.scripts
+            .ai_scripts
+            .insert(entry * 100, vec![step(44, [1, 0, 0, 0])]);
+    }
+}
+
+/// `send_map_event` sends the event's own id with datalong2's data, to
+/// its source and target (datalong3 0), its extra targets (1), or all
+/// (S9); `edit_map_event` clears what it is given a zero for and keeps
+/// what it is given less (S22).
+#[tokio::test]
+async fn map_events_send_their_id_and_edit_by_sign() {
+    let mut d = world();
+    hear_event_seven(&mut d);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    a.sees(third()).await;
+    let (host, buddy, third) = (host(), buddy(), third());
+    let phases = map
+        .query(move |m| {
+            let phase = |m: &crate::game::map::Map| {
+                [host, buddy, third].map(|g| crate::game::map::event_ai::phase(m, g))
+            };
+            let start = ScriptStep {
+                dataint: [11, 12, 13, 14],
+                ..step(61, [7, 600, 0, 0])
+            };
+            crate::game::map::scripts::execute(m, &start, host, buddy);
+            crate::game::map::scripts::execute(m, &step(63, [7, 0, 0, 0]), third, host);
+            crate::game::map::scripts::execute(m, &step(66, [7, 5, 1, 0]), host, host);
+            let extra = phase(m);
+            crate::game::map::scripts::execute(m, &step(66, [7, 5, 0, 0]), host, host);
+            let main = phase(m);
+            let edit = ScriptStep {
+                dataint: [0, -1, 0, -1],
+                ..step(69, [7, 0, 0, 0])
+            };
+            crate::game::map::scripts::execute(m, &edit, host, host);
+            let e = &m.map_events.active[&7];
+            let edited = (
+                e.success_condition,
+                e.success_script,
+                e.failure_condition,
+                e.failure_script,
+            );
+            (extra, main, edited)
+        })
+        .await
+        .unwrap();
+    assert_eq!(phases.0, [0, 0, 1], "the extra target alone");
+    assert_eq!(phases.1, [1, 1, 1], "then the source and target");
+    assert_eq!(phases.2, (0, 12, 0, 14), "zeros clear, less keeps");
+}
+
+/// A summon's attack target is chosen with the step's target parameters:
+/// players only finds none among creatures (D18).
+#[tokio::test]
+async fn a_summons_attack_target_keeps_the_steps_parameters() {
+    let mut d = world();
+    d.creature_templates
+        .insert(4000, creature(4000, "Druid of the Nightmare", 14));
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    a.sees(buddy()).await;
+    let (host, buddy) = (host(), buddy());
+    let victims = map
+        .query(move |m| {
+            // The host fights Buddy, a creature, and no player.
+            if let Some(c) = m.creature_mut(host) {
+                c.threat.push((buddy, 10.0));
+            }
+            let summon = |flags| ScriptStep {
+                dataint: [0, 0, 4, 0],
+                target_param1: flags,
+                x: START.0,
+                y: START.1 + 5.0,
+                z: START.2,
+                ..step(10, [4000, 0, 0, 0])
+            };
+            let mut out = Vec::new();
+            for flags in [0x2, 0] {
+                crate::game::map::scripts::execute(m, &summon(flags), host, Guid::zero());
+                let g = m
+                    .creatures
+                    .iter()
+                    .filter(|(_, c)| c.entry == 4000)
+                    .map(|(_, c)| c.guid)
+                    .max_by_key(|g| g.guid())
+                    .unwrap();
+                out.push(m.creature(g).map(|c| c.combat.victim).unwrap_or_default());
+            }
+            out
+        })
+        .await
+        .unwrap();
+    assert_eq!(victims, vec![Guid::zero(), buddy], "players only: none");
+}
+
+/// "Nearest player" with no radius looks 30 yards, as Thistle Tea's
+/// buddies do (D20).
+#[tokio::test]
+async fn the_nearest_player_with_no_radius_is_within_thirty_yards() {
+    let realm = harness::realm_with(world());
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    let out = map
+        .query(move |m| {
+            let kneel = ScriptStep {
+                target_type: 25,
+                ..step(28, [8, 1, 0, 0])
+            };
+            let at = m.position_of(host).unwrap();
+            let mut seen = Vec::new();
+            for off in [50.0, 20.0] {
+                if let Some(p) = m.players.get_mut(&me) {
+                    p.movement.position = Vector3d {
+                        x: at.x + off,
+                        ..at
+                    };
+                    p.set_stand_state(0);
+                }
+                crate::game::map::scripts::execute(m, &kneel, host, Guid::zero());
+                seen.push(stand_state(m, me));
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, vec![0, 8], "not at 50 yards; at 20");
 }

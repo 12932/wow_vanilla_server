@@ -245,7 +245,16 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
     if crate::game::map::battleground::gossip_select(map, player, npc, option) {
         return;
     }
-    let Some(entry) = npc_entry(map, player, npc, 0) else {
+    // An object's menu (a goober's, a quest giver's) answers too, in reach.
+    let object = crate::game::guid::is_game_object(npc);
+    let entry = if object {
+        map.gameobject(npc)
+            .map(|o| o.entry)
+            .filter(|_| crate::game::map::objects::in_use_range(map, player, npc))
+    } else {
+        npc_entry(map, player, npc, 0)
+    };
+    let Some(entry) = entry else {
         return;
     };
     crate::game::map::creature_motion::talk_pause(map, npc);
@@ -260,7 +269,11 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         .and_then(|p| p.gossip_menu)
         .filter(|(g, _)| *g == npc)
         .map(|(_, m)| m)
-        .or_else(|| data.creature_template(entry).map(|t| t.gossip_menu_id))
+        .or_else(|| {
+            (!object)
+                .then(|| data.creature_template(entry).map(|t| t.gossip_menu_id))
+                .flatten()
+        })
         .unwrap_or(0);
     let Some(o) = menu_options(map, menu_id, flags, player, npc)
         .into_iter()
@@ -285,12 +298,16 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         );
     }
     if o.script != 0 {
+        // An object's option runs on the player, at the object; a
+        // creature's on the creature, at the player (Thistle Tea's
+        // `dispatch`).
+        let (source, target) = if object { (player, npc) } else { (npc, player) };
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::Gossip,
             o.script,
-            npc,
-            player,
+            source,
+            target,
         );
         if o.kind == 1 && o.action_menu <= 0 {
             return send(map, player, &SMSG_GOSSIP_COMPLETE {});

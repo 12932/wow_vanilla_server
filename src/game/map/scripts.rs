@@ -194,24 +194,72 @@ fn alive(map: &Map, g: Guid) -> bool {
     map.unit_view(g).is_some_and(|u| u.alive)
 }
 
-/// Run one step from `source` on `target`. False ends the script.
-pub fn execute(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool {
+/// The target types that name their unit or object outright, so a step
+/// with no one to start from may still find it (Thistle Tea's
+/// `@null_source_target_types`).
+const NULL_SOURCE_TARGET_TYPES: [u32; 10] = [10, 11, 12, 13, 14, 22, 23, 24, 28, 29];
+
+/// The commands an object runs: an object found by target type 13 or 14
+/// runs them as their source, on the step's source.
+const OBJECT_COMMANDS: [u32; 5] = [13, 41, 80, 87, 89];
+
+/// Whether `g` is a unit, player or object in this map.
+fn present(map: &Map, g: Guid) -> bool {
+    !g.is_zero() && map.position_of(g).is_some()
+}
+
+/// The source and target a step runs with, as Thistle Tea dispatches it:
+/// an initial swap hands the step to its target (or, with nobody there and
+/// a final swap, to the unit its target type names); a final swap (or an
+/// object command at an object it found) hands it to the target it
+/// selected, on the old source; the self flag then makes the target the
+/// one that runs it. None if it can't run.
+fn resolve_targets(
+    map: &Map,
+    step: &ScriptStep,
+    source: Guid,
+    target: Guid,
+) -> Option<(Guid, Guid)> {
+    let flags = step.data_flags;
+    let selfish = flags & SF_TARGET_SELF != 0;
     let (mut source, mut target) = (source, target);
-    if step.data_flags & SF_SWAP_INITIAL_TARGETS != 0 {
-        std::mem::swap(&mut source, &mut target);
-    }
-    if step.target_type != 0 {
-        match find_target(map, step, source, target) {
-            Some(t) => target = t,
-            None => return step.data_flags & SF_ABORT_ON_FAILURE == 0,
+    let select = |source: Guid, target: Guid| {
+        if step.target_type == 0 {
+            Some(target)
+        } else {
+            find_target(map, step, source, target)
+        }
+    };
+    if flags & SF_SWAP_INITIAL_TARGETS != 0 && target != source {
+        if present(map, target) {
+            std::mem::swap(&mut source, &mut target);
+        } else if flags & SF_SWAP_FINAL_TARGETS != 0
+            && NULL_SOURCE_TARGET_TYPES.contains(&step.target_type)
+        {
+            let owner = find_target(map, step, source, target)?;
+            return Some((owner, if selfish { owner } else { Guid::zero() }));
+        } else {
+            return None;
         }
     }
-    if step.data_flags & SF_TARGET_SELF != 0 {
-        target = source;
+    let object_command =
+        OBJECT_COMMANDS.contains(&step.command) && matches!(step.target_type, 13 | 14);
+    if flags & SF_SWAP_FINAL_TARGETS != 0 || object_command {
+        let owner = select(source, target)?;
+        if !present(map, owner) {
+            return None;
+        }
+        return Some((owner, if selfish { owner } else { source }));
     }
-    if step.data_flags & SF_SWAP_FINAL_TARGETS != 0 {
-        std::mem::swap(&mut source, &mut target);
-    }
+    let selected = select(source, target)?;
+    Some((source, if selfish { source } else { selected }))
+}
+
+/// Run one step from `source` on `target`. False ends the script.
+pub fn execute(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool {
+    let Some((source, target)) = resolve_targets(map, step, source, target) else {
+        return step.data_flags & SF_ABORT_ON_FAILURE == 0;
+    };
     // With no target, a step's condition is judged on its source.
     let judged = if target.is_zero() { source } else { target };
     if step.condition != 0
@@ -370,6 +418,12 @@ fn hostile_allowed(map: &Map, step: &ScriptStep, source: Guid, g: Guid) -> bool 
     true
 }
 
+/// How far a target type looks: its parameter, or Thistle Tea's 30 yards
+/// (`@default_buddy_radius`).
+fn buddy_radius(param: u32) -> f32 {
+    if param > 0 { param as f32 } else { 30.0 }
+}
+
 /// The target a step's `target_type` names, from `source`.
 fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Option<Guid> {
     let at = map.position_of(source)?;
@@ -433,12 +487,14 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
         9 => map
             .creature(source)
             .and_then(|c| c.owner.or(c.scripted.as_deref().and_then(|s| s.summoner))),
-        10 => creatures_near(map, at, p1, p2 as f32, step.command != 71)
+        10 => creatures_near(map, at, p1, buddy_radius(p2), step.command != 71)
             .into_iter()
             .find(|g| *g != source),
         11 => creature_of_spawn(map, p1),
         12 => crate::game::map::instance_script::guid_data(map, p1),
-        13 => objects_near(map, at, p1, p2 as f32).into_iter().next(),
+        13 => objects_near(map, at, p1, buddy_radius(p2))
+            .into_iter()
+            .next(),
         14 => object_of_spawn(map, p1),
         16..=20 => {
             let radius = if p1 > 0 { p1 as f32 } else { 30.0 };
@@ -469,21 +525,21 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
             }
         }
         22..=24 => crate::game::map::map_events::target_of(map, step.target_type, p1, p2),
-        25 => players_near(map, at, p1 as f32).into_iter().next(),
-        26 => players_near(map, at, p1 as f32)
+        25 => players_near(map, at, buddy_radius(p1)).into_iter().next(),
+        26 => players_near(map, at, buddy_radius(p1))
             .into_iter()
             .find(|g| crate::game::map::combat::hostile(map, source, *g)),
-        27 => players_near(map, at, p1 as f32)
+        27 => players_near(map, at, buddy_radius(p1))
             .into_iter()
             .find(|g| !crate::game::map::combat::hostile(map, source, *g)),
         28 => pick(
-            creatures_near(map, at, p1, p2 as f32, true)
+            creatures_near(map, at, p1, buddy_radius(p2), true)
                 .into_iter()
                 .filter(|g| *g != source)
                 .collect(),
             &mut rng,
         ),
-        29 => pick(objects_near(map, at, p1, p2 as f32), &mut rng),
+        29 => pick(objects_near(map, at, p1, buddy_radius(p2)), &mut rng),
         _ => None,
     }
 }
@@ -760,6 +816,23 @@ pub fn despawn(map: &mut Map, g: Guid) {
             crate::game::map::ai::quiet_death(map, g);
         }
     }
+    if let Some(s) = summoner {
+        event_ai::summoned_despawned(map, s, g, entry);
+    }
+}
+
+/// A creature goes for good, spawned or summoned (Thistle Tea's
+/// `script_remove_object`): its spawn doesn't come back.
+pub fn remove_for_good(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let entry = c.entry;
+    let summoner = c.scripted.as_deref().and_then(|s| s.summoner);
+    crate::game::map::combat::leave_combat(map, g);
+    stop_for(map, g);
+    map.dead_creatures.retain(|d| *d != g);
+    map.remove_creature(g);
     if let Some(s) = summoner {
         event_ai::summoned_despawned(map, s, g, entry);
     }
@@ -1097,14 +1170,35 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Respawn an object.
+        // Bring out object spawn datalong (or the target's), one held back
+        // or used up, for datalong2 seconds (at least five); one already
+        // out stays as it is.
         9 => {
-            let o = object_of_spawn(map, d1).or(Some(target).filter(|t| guid::is_game_object(*t)));
-            if let Some(o) = o {
-                set_object_state(map, o, 1);
-                map.visibility_dirty.insert(o);
+            let spawn = if d1 != 0 {
+                Some(d1)
+            } else {
+                map.gameobject(target).and_then(|o| o.spawn_guid)
+            };
+            let Some(spawn) = spawn else {
+                return false;
+            };
+            if object_of_spawn(map, spawn).is_some() {
+                return true;
             }
-            o.is_some()
+            let Some(s) = data
+                .gameobject_spawns
+                .get(&map.key.map)
+                .and_then(|v| v.iter().find(|s| s.guid == spawn))
+            else {
+                return false;
+            };
+            let Some(t) = data.gameobject_templates.get(&s.entry) else {
+                return false;
+            };
+            let g = map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, s));
+            map.object_resets
+                .push((now + Duration::from_secs(u64::from(d2.max(5))), g, u32::MAX));
+            true
         }
         // Summon a creature: datalong the entry, datalong2 the despawn
         // delay, datalong3 and datalong4 how many may be near and how
@@ -1145,18 +1239,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Use an object.
+        // The source object is worked by the target, as Thistle Tea's
+        // `script_activate_object`: a trap springs on it, a door or button
+        // is used, a quest object goes off, anything else flips.
         13 => {
-            if guid::is_game_object(target) {
-                let state = map
-                    .gameobject(target)
-                    .map(|o| o.fields.get_u32(GAMEOBJECT_STATE))
-                    .unwrap_or(1);
-                set_object_state(map, target, if state == 0 { 1 } else { 0 });
-                true
-            } else {
-                false
+            if !guid::is_game_object(source) || map.gameobject(source).is_none() {
+                return false;
             }
+            crate::game::map::objects::used_by_script(map, target, source);
+            true
         }
         14 => {
             crate::game::map::auras::remove_spell(map, source, d1, None);
@@ -1414,20 +1505,31 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Turn to the target (datalong 0), or to the step's orientation.
+        // Turn to the target (datalong 0), or to the step's orientation,
+        // and show it: a facing move to the target, or to the angle.
         35 => {
-            let o = if d1 == 0 {
-                match (map.position_of(source), map.position_of(target)) {
-                    (Some(a), Some(b)) if target != source => (b.y - a.y).atan2(b.x - a.x),
+            let Some(at) = map.position_of(source).filter(|_| guid::is_unit(source)) else {
+                return false;
+            };
+            let (o, toward) = if d1 == 0 {
+                match map.position_of(target) {
+                    Some(b) if target != source => ((b.y - at.y).atan2(b.x - at.x), Some(target)),
                     _ => return false,
                 }
             } else {
-                step.o
+                (step.o, None)
             };
             if let Some(c) = creature_mut(map, source) {
                 c.orientation = o;
-                map.visibility_dirty.insert(source);
             }
+            let spline_id = map.next_spline_id;
+            map.next_spline_id = map.next_spline_id.wrapping_add(1);
+            let frame = match toward {
+                Some(t) => crate::game::map::ai::face_target_packet(source, at, t, spline_id),
+                None => crate::game::map::ai::face_packet(source, at, o, spline_id),
+            };
+            map.send_to_observers(source, &frame, false);
+            map.visibility_dirty.insert(source);
             true
         }
         // Instance data.
@@ -1461,13 +1563,31 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        41 | 81 => {
-            let o = if guid::is_game_object(target) {
-                target
+        // An object (the target, or the source) goes for good; or the
+        // source creature does, as Thistle Tea's `remove_self`.
+        41 => {
+            let object = [target, source]
+                .into_iter()
+                .find(|g| guid::is_game_object(*g) && map.gameobject(*g).is_some());
+            if let Some(o) = object {
+                crate::game::map::objects::despawn_then(map, o, None);
+                true
+            } else if map.creature(source).is_some() {
+                remove_for_good(map, source);
+                true
             } else {
-                source
+                false
+            }
+        }
+        // Object spawn datalong goes, and comes back after datalong2
+        // seconds (with none, not at all).
+        81 => {
+            let Some(o) = object_of_spawn(map, d1) else {
+                return false;
             };
-            map.remove_gameobject(o).is_some()
+            let back = (d2 > 0).then(|| Duration::from_secs(u64::from(d2)));
+            crate::game::map::objects::despawn_then(map, o, back);
+            true
         }
         // Melee on or off: off, it stays in the fight, but doesn't swing.
         42 => {
@@ -1732,13 +1852,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // The source creature respawns: if dead, or (datalong) even alive.
         71 => {
-            let g = if guid::is_unit(target) {
-                target
-            } else {
-                source
-            };
-            crate::game::map::ai::respawn_now(map, g);
+            if map.creature(source).is_none() {
+                return false;
+            }
+            crate::game::map::ai::respawn_forced(map, source, d1 != 0);
             true
         }
         73 => {
@@ -1845,19 +1964,33 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             event_ai::script_event(map, source, d1, d2, Some(target).filter(|t| !t.is_zero()));
             true
         }
+        // A door or button back as it rests: the source object, or spawn
+        // datalong's, or the target.
         87 => {
-            let o = object_of_spawn(map, d1).unwrap_or(target);
-            set_object_state(map, o, 1);
+            let o = Some(source)
+                .filter(|g| guid::is_game_object(*g))
+                .or_else(|| object_of_spawn(map, d1))
+                .or(Some(target).filter(|g| guid::is_game_object(*g)));
+            let Some(o) = o.filter(|o| map.gameobject(*o).is_some()) else {
+                return false;
+            };
+            crate::game::map::objects::reset(map, o);
             true
         }
+        // An object (the source, or the target) plays its animation
+        // datalong.
         89 => {
-            if let Ok(emote) = Emote::try_from(d1)
-                && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                    emote,
-                    guid: source,
-                })
-            {
-                map.send_to_observers(source, &frame, true);
+            let Some(o) = [source, target]
+                .into_iter()
+                .find(|g| guid::is_game_object(*g) && map.gameobject(*g).is_some())
+            else {
+                return false;
+            };
+            if let Some(frame) = crate::game::conn::encode(&SMSG_GAMEOBJECT_CUSTOM_ANIM {
+                guid: o,
+                animation_id: d1,
+            }) {
+                map.send_to_observers(o, &frame, false);
             }
             true
         }
@@ -2341,10 +2474,14 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
     if step.dataint[1] > 0 {
         start(map, ScriptTable::Generic, step.dataint[1] as u32, g, target);
     }
-    // An attack target by target type; -1 for none.
+    // An attack target by target type, with the step's target parameters
+    // (a player only, in sight); -1 for none.
     if step.dataint[2] >= 0 {
         let attack = ScriptStep {
+            command: step.command,
             target_type: step.dataint[2] as u32,
+            target_param1: step.target_param1,
+            target_param2: step.target_param2,
             ..Default::default()
         };
         if let Some(t) = find_target(map, &attack, source, target)
@@ -2693,25 +2830,35 @@ pub fn update_objects(map: &mut Map) {
     }
 }
 
-/// The scripts of a game object's use: `gameobject_scripts` for its spawn,
-/// and the event its template sends.
-pub fn object_used(map: &mut Map, player: Guid, object: Guid) {
+/// The scripts an object runs when it is used: its code-built script and
+/// `gameobject_scripts` for its spawn, on its user, at the object (as
+/// vmangos and Thistle Tea start them).
+pub fn object_scripts(map: &mut Map, user: Guid, object: Guid) {
     let Some(o) = map.gameobject(object) else {
         return;
     };
-    let (spawn, entry, kind) = (o.spawn_guid, o.entry, o.kind);
-    if let Some(s) = spawn {
-        start(map, ScriptTable::GameObject, s, object, player);
-    }
-    // A code-built script: on the player, at the object.
+    let (spawn, entry) = (o.spawn_guid, o.entry);
     let scripts = &map.realm.data.scripts;
     let hello = spawn
         .and_then(|s| scripts.object_hello.get(&s))
         .or_else(|| scripts.object_hello_entry.get(&entry))
         .copied();
     if let Some(id) = hello {
-        start(map, ScriptTable::Generic, id, player, object);
+        start(map, ScriptTable::Generic, id, user, object);
     }
+    if let Some(s) = spawn {
+        start(map, ScriptTable::GameObject, s, user, object);
+    }
+}
+
+/// The scripts of a game object's use: its own (`object_scripts`), and the
+/// event its template sends.
+pub fn object_used(map: &mut Map, player: Guid, object: Guid) {
+    let Some(o) = map.gameobject(object) else {
+        return;
+    };
+    let (entry, kind) = (o.entry, o.kind);
+    object_scripts(map, player, object);
     let event = map
         .realm
         .data
