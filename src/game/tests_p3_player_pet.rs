@@ -604,3 +604,78 @@ async fn a_hunters_pet_may_be_renamed_once_by_its_master_with_a_good_name_and_ke
     .await;
     assert_eq!(back, ("Fang".to_owned(), false));
 }
+
+#[tokio::test]
+async fn a_pet_earns_nothing_of_a_grey_kill_dead_or_put_away_and_three_quarters_of_an_npcs_pet() {
+    let realm = harness::realm_with(with_pet_levels(data()));
+    let mut a = Client::connect(&realm, "H");
+    let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&h).unwrap();
+        crate::game::map::stats::set_level(p, &data, 20);
+        let at = p.position();
+        let pet = hunter::spawn(m, h, WOLF, Kind::Hunter, 8, at, 0.0);
+        m.players.get_mut(&h).unwrap().owned.pet = Some(pet);
+        set_happiness(m, pet, 500_000);
+        set_loyalty(m, pet, 1, 1_000, 0);
+        let victim = |m: &mut Map, level: u8| {
+            let counter = m.next_creature_counter | 0x91_0000;
+            m.next_creature_counter += 1;
+            let t = data.creature_template(WOLF + 1).unwrap().clone();
+            let c = crate::game::map::creature::Creature::new(
+                crate::game::guid::unit(WOLF + 1, counter),
+                &t,
+                level,
+                at,
+                0.0,
+            );
+            m.add_creature(c.with_base())
+        };
+        let xp = |m: &Map| pet_level(m, pet).1;
+        let solo = crate::game::map::pets::KillShare::Solo;
+        // A grey kill (level 1 to the pet's 8): nothing.
+        let grey = victim(m, 1);
+        hunter::kill_xp(m, h, grey, solo);
+        let from_grey = xp(m);
+        // An NPC's pet: three quarters.
+        let npc_pet = victim(m, 8);
+        let npc = victim(m, 8);
+        let now = m.now;
+        let c = m.creature_mut(npc_pet).unwrap();
+        c.owner = Some(npc);
+        c.pet = Some(Box::new(crate::game::map::pets::PetState::new(
+            Kind::Demon,
+            npc,
+            now,
+        )));
+        hunter::kill_xp(m, h, npc_pet, solo);
+        let from_npc_pet = xp(m) - from_grey;
+        // Dead, nothing; put away, nothing.
+        let ordinary = victim(m, 8);
+        m.creature_mut(pet)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_HEALTH, 0);
+        if let Some(c) = m.creature_mut(pet) {
+            c.life = crate::game::map::creature::Life::Dead {
+                corpse_until: now,
+                respawn_at: now,
+            };
+        }
+        let before = xp(m);
+        hunter::kill_xp(m, h, ordinary, solo);
+        let dead = xp(m) - before;
+        m.players.get_mut(&h).unwrap().owned.pet = None;
+        hunter::kill_xp(m, h, ordinary, solo);
+        let away = xp(m) - before;
+        (from_grey, from_npc_pet, dead, away)
+    })
+    .await;
+    use crate::game::map::combat::{KillXp, kill_xp_with};
+    let pet_victim = KillXp {
+        pet_victim: true,
+        ..Default::default()
+    };
+    assert_eq!(got, (0, kill_xp_with(20, 8, 8, &pet_victim), 0, 0));
+}

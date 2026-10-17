@@ -1592,3 +1592,97 @@ async fn a_gain_shows_its_faction_honored_prices_round_to_the_copper_and_a_force
         .await;
     assert_eq!(reactions(&off), 0);
 }
+
+const PARENT_GUILD: u32 = 96_303;
+const HORDE_GUILD: u32 = 96_304;
+
+#[tokio::test]
+async fn a_kills_reputation_is_the_killers_sides_and_half_again_to_the_parent_past_the_cap() {
+    use crate::game::data::misc::{FactionDef, KillReputation, RANK_EXALTED, RANK_FRIENDLY};
+    use crate::game::map::reputation::{creature_killed, modify, standing};
+    let mut d = with_factions(data());
+    for (id, index) in [(PARENT_GUILD, 7), (HORDE_GUILD, 8)] {
+        d.misc.factions.insert(
+            id,
+            FactionDef {
+                id,
+                index,
+                name: format!("Faction {id}"),
+                variants: [(0xFF, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)],
+                ..Default::default()
+            },
+        );
+        d.misc.faction_by_index.insert(index, id);
+    }
+    d.misc.factions.get_mut(&GUILD).unwrap().parent = PARENT_GUILD;
+    d.misc.kill_reputation.insert(
+        PLAIN,
+        vec![
+            KillReputation {
+                faction: GUILD,
+                value: 100,
+                max_rank: RANK_EXALTED,
+                team: 1,
+                team_award: true,
+            },
+            KillReputation {
+                faction: HORDE_GUILD,
+                value: 50,
+                max_rank: RANK_EXALTED,
+                team: 2,
+                team_award: false,
+            },
+        ],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let victim = guid::unit(PLAIN, PLAIN_A);
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        let of = |m: &Map, f: u32| standing(&m.players[&ga], &data, f);
+        creature_killed(m, ga, victim);
+        (of(m, GUILD), of(m, PARENT_GUILD), of(m, HORDE_GUILD))
+    })
+    .await;
+    // The Alliance's reward, not the Horde's, and half to the parent.
+    assert_eq!(got, (100, 50, 0));
+    // A kill whose reward stops at friendly, for one honored: none to the
+    // guild, still half to its parent.
+    let mut d = with_factions(data());
+    for (id, index) in [(PARENT_GUILD, 7)] {
+        d.misc.factions.insert(
+            id,
+            FactionDef {
+                id,
+                index,
+                name: format!("Faction {id}"),
+                variants: [(0xFF, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)],
+                ..Default::default()
+            },
+        );
+    }
+    d.misc.factions.get_mut(&GUILD).unwrap().parent = PARENT_GUILD;
+    d.misc.kill_reputation.insert(
+        PLAIN,
+        vec![KillReputation {
+            faction: GUILD,
+            value: 100,
+            max_rank: RANK_FRIENDLY,
+            team: 0,
+            team_award: true,
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let capped = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        modify(m, gb, GUILD, 9_000, false);
+        creature_killed(m, gb, victim);
+        let p = &m.players[&gb];
+        (standing(p, &data, GUILD), standing(p, &data, PARENT_GUILD))
+    })
+    .await;
+    assert_eq!(capped, (9_000, 50));
+}
