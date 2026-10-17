@@ -34,6 +34,7 @@ pub fn test_config() -> RealmConfig {
         max_packets_per_sec: 200,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         spell_rolls: false,
+        arena: Default::default(),
     }
 }
 

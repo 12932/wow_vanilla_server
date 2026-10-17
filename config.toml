@@ -42,3 +42,22 @@ x = -13206.0
 y = 272.0
 z = 21.857
 orientation = 0.0
+
+# Gurubashi Arena's last man standing: `.arena start [countdown s] [max minutes]`
+# starts one with everyone alive on the pit's floor.
+[arena]
+# Minutes between scheduled battles; 0 for only those a GM starts.
+every_minutes = 0
+countdown_secs = 30
+# The ring of fire starts closing this long into the fight, a step at a time.
+ring_after_secs = 120
+ring_every_secs = 20
+ring_step_yards = 5.0
+ring_min_yards = 6.0
+max_minutes = 20
+# The champion's prize: copper, an item (Arena Grand Master) and a buff
+# (Spirit of Zandalar).
+reward_copper = 250000
+reward_item = 19024
+champion_spell = 24425
+min_fighters = 2

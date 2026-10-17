@@ -40,6 +40,8 @@ pub struct Social {
     pub invasion: Mutex<crate::game::invasion::State>,
     pub elemental: Mutex<crate::game::elemental::State>,
     pub omen: Mutex<crate::game::omen::Watch>,
+    /// Gurubashi Arena's champions.
+    pub arena: Mutex<crate::game::map::arena::History>,
 }
 
 impl Social {
@@ -51,6 +53,7 @@ impl Social {
             auctions: Mutex::new(auction::Auctions::load(records)),
             instances: Mutex::new(crate::game::instances::Instances::load(records)),
             tickets: Mutex::new(crate::game::map::tickets::Tickets::load(records)),
+            arena: Mutex::new(crate::game::map::arena::History::load(records)),
             honor: Mutex::new(crate::game::honor::Ledger::load(
                 records,
                 crate::game::honor::today(),

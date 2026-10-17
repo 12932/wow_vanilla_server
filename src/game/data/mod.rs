@@ -184,6 +184,8 @@ pub struct GameObjectSpawn {
     pub anim_progress: u8,
     pub state: u8,
     pub spawn_flags: u32,
+    /// A negative spawn time: out only when a script or event puts it out.
+    pub despawned: bool,
 }
 
 /// An area or zone, from `AreaTable`.

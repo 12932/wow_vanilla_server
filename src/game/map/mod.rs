@@ -5,6 +5,7 @@
 pub mod account_data;
 pub mod ai;
 pub mod auction;
+pub mod arena;
 pub mod auras;
 pub mod battleground;
 pub mod chat;
@@ -302,6 +303,8 @@ pub struct Map {
     /// The Elemental Invasion's rifts and their invaders.
     pub rifts: AHashMap<Guid, crate::game::elemental::Rift>,
     pub rifts_checked_at: Option<Instant>,
+    /// Gurubashi Arena's battles and Booty Run (on its continent).
+    pub arena: arena::Arena,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -410,6 +413,7 @@ impl Map {
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
+            arena: Default::default(),
         }
     }
 
@@ -679,6 +683,7 @@ impl Map {
         combat::update_players(self);
         pvp::update(self);
         outdoor_pvp::update(self);
+        arena::update(self);
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);
