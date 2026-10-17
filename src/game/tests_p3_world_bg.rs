@@ -313,12 +313,17 @@ async fn warsong_gulch_counts_down_behind_shut_gates_then_opens_them_and_says_wh
     assert!(!ghost, "the ghost gate gone");
     // A second in: the battle's status (in progress) and the scoreboard,
     // not ended.
-    a.wait_frame(
-        "the status in progress",
-        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
-        |f| f.len() >= 17 && f[13] == 3,
-    )
-    .await;
+    // In progress, for more than nothing (the battle's time since it
+    // began, after the time left to stay).
+    let status = a
+        .wait_frame(
+            "the status in progress",
+            crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+            |f| f.len() >= 25 && f[13] == 3,
+        )
+        .await;
+    let since = u32::from_le_bytes([status[21], status[22], status[23], status[24]]);
+    assert!(since > 0, "{since}");
     a.wait_for("the scoreboard", |m| match m {
         ServerOpcodeMessage::MSG_PVP_LOG_DATA(l) => matches!(
             l.status,
@@ -1888,4 +1893,86 @@ async fn a_generals_fall_pays_by_the_matchs_length_and_what_each_side_still_hold
         (198 * (6 + 3 * 3 + 2) + 1_980, 198 * (4 * 3 + 3 + 2) + 1_584)
     );
     assert_eq!(rep, 525 + 3 * 18 + 2 * 18);
+}
+
+#[tokio::test]
+async fn a_group_of_two_brackets_isnt_queued_and_a_copy_left_empty_closes() {
+    let realm = harness::realm_with(gulch());
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut c = player(&realm, "C", "Carl", Race::Human).await;
+    let (alice, carl) = (a.guid, c.guid);
+    // Alice at sixty and Carl at nineteen: their group joins nothing.
+    let home = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    home.query(move |m| {
+        m.players
+            .get_mut(&alice)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_LEVEL, 60);
+        m.players
+            .get_mut(&carl)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_LEVEL, 19);
+    })
+    .await;
+    a.send(CMSG_GROUP_INVITE {
+        name: "Carl".into(),
+    })
+    .await;
+    c.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    c.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+        _ => None,
+    })
+    .await;
+    a.send(CMSG_BATTLEMASTER_JOIN {
+        guid: Guid::zero(),
+        map: Map::WarsongGulch,
+        instance_id: 0,
+        join_as_group: true,
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let queued = {
+        let bgs = realm.social.battlegrounds.lock();
+        [alice, carl].map(|g| bgs.match_of(g).is_some())
+    };
+    assert_eq!(queued, [false, false], "neither in a match");
+    let heard = c
+        .gets(Duration::from_millis(200), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_JOINED_BATTLEGROUND(j) if j.id != BgTypeId::RemoveFromQueue)
+                .then_some(())
+        })
+        .await;
+    assert!(heard.is_none(), "Carl isn't queued");
+    // A match whose last player leaves closes its copy.
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let mut d = player(&realm, "D", "Dana", Race::Human).await;
+    let map = all_in(&realm, &mut [&mut d, &mut b]).await;
+    let key = map.key;
+    for cl in [&d, &b] {
+        cl.send(CMSG_LEAVE_BATTLEFIELD {
+            map: Map::WarsongGulch,
+        })
+        .await;
+    }
+    let mut closed = false;
+    for _ in 0..300 {
+        closed = !realm
+            .social
+            .battlegrounds
+            .lock()
+            .matches
+            .contains_key(&key.instance);
+        if closed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(closed, "the copy closed");
 }
