@@ -1958,8 +1958,10 @@ pub fn refresh_talent_points(p: &mut crate::game::map::player::Player, data: &Ga
     p.fields.set_u32(PLAYER_CHARACTER_POINTS1, free);
 }
 
-/// `CMSG_LEARN_TALENT`: the next rank of a talent, if the player has a
-/// point, the row is open and the talent it needs is learned.
+/// `CMSG_LEARN_TALENT`: a rank of a talent of the player's class above
+/// the one they have, if they have the points to reach it (a point a rank,
+/// as mangos's `LearnTalent` and Thistle Tea's `Talents.validate` count
+/// a jump), the row is open and the talent it needs is learned.
 pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     let data = map.realm.data.clone();
     let Some(t) = data.spells.talents.get(&talent) else {
@@ -1968,6 +1970,11 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
+    if let Some(classes) = data.spells.talent_tab_classes.get(&t.tab)
+        && classes & (1 << (p.row.class.max(1) - 1)) == 0
+    {
+        return;
+    }
     let have = t
         .ranks
         .iter()
@@ -1976,7 +1983,7 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     let Some(&spell) = t.ranks.get(rank as usize) else {
         return;
     };
-    if rank != have || spell == 0 || free_talent_points(p, &data) == 0 {
+    if rank < have || spell == 0 || free_talent_points(p, &data) < rank + 1 - have {
         return;
     }
     if spent_talent_points(p, &data, Some(t.tab)) < t.row * 5 {
@@ -1993,8 +2000,8 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
         return;
     }
     // A talent's new rank takes the old one's place.
-    if rank > 0 {
-        let old = t.ranks[rank as usize - 1];
+    if have > 0 {
+        let old = t.ranks[have as usize - 1];
         auras::remove_spell(map, player, old, Some(player));
     }
     learn(map, player, spell);
