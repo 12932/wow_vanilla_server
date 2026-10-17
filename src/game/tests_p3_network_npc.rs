@@ -885,3 +885,38 @@ async fn a_tower_taken_is_told_as_a_defense_message() {
     want.extend_from_slice(b"Tower captured!\0");
     assert_eq!(told, want);
 }
+
+/// Thistle Tea's cmsg_buy_item_in_slot_test: a purchase dropped on a
+/// backpack slot (the bag the player) goes to that slot. (One that stacks
+/// onto what the player has joins the stack, where mangos would start one
+/// in the slot.)
+#[tokio::test]
+async fn a_purchase_goes_where_it_is_dropped() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let vendor = guid::unit(VENDOR, 11);
+    a.sees(vendor).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1_000)
+    })
+    .await;
+    a.send(CMSG_BUY_ITEM_IN_SLOT {
+        vendor,
+        item: LIMITED,
+        bag: g,
+        bag_slot: 30,
+        amount: 1,
+    })
+    .await;
+    assert_eq!(bought(&mut a).await, Ok(1));
+    let at = on_map(&realm, move |m| {
+        m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == LIMITED)
+            .map(|i| (i.bag, i.slot))
+    })
+    .await;
+    assert_eq!(at, Some((255, 30)), "where it was dropped");
+}

@@ -108,9 +108,9 @@ impl Map {
             ClientOpcodeMessage::CMSG_BUY_ITEM(m) => {
                 crate::game::map::vendor::buy(self, guid, m.vendor, m.item, m.amount)
             }
-            ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(m) => {
-                crate::game::map::vendor::buy(self, guid, m.vendor, m.item, m.amount)
-            }
+            ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(m) => crate::game::map::vendor::buy_in_slot(
+                self, guid, m.vendor, m.item, m.amount, m.bag, m.bag_slot,
+            ),
             ClientOpcodeMessage::CMSG_SELL_ITEM(m) => {
                 crate::game::map::vendor::sell(self, guid, m.vendor, m.item, m.amount)
             }

@@ -259,6 +259,73 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
     }
 }
 
+/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, and a new item put
+/// where the client dropped it: a slot of the backpack (the bag is the
+/// player) or of a bag worn, or (slot 255) anywhere in that bag, as
+/// mangos's BuyItemFromVendor stores it at the position asked and Thistle
+/// Tea's `buy_in_slot` sends it.
+pub fn buy_in_slot(
+    map: &mut Map,
+    player: Guid,
+    npc: Guid,
+    item: u32,
+    amount: u8,
+    bag: Guid,
+    slot: u8,
+) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    let bag = if bag == player {
+        Some(BAG_PLAYER)
+    } else {
+        p.items
+            .iter()
+            .find(|i| {
+                i.guid == bag && i.bag == BAG_PLAYER && (BAG_START..BAG_END).contains(&i.slot)
+            })
+            .map(|i| i.slot)
+    };
+    let Some(bag) = bag else {
+        return;
+    };
+    let before: Vec<Guid> = p
+        .items
+        .iter()
+        .filter(|i| i.entry == item)
+        .map(|i| i.guid)
+        .collect();
+    buy(map, player, npc, item, amount);
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    let Some(new) = p
+        .items
+        .iter()
+        .find(|i| i.entry == item && !before.contains(&i.guid))
+        .map(|i| (i.bag, i.slot))
+    else {
+        return;
+    };
+    let (first, end) = if bag == BAG_PLAYER {
+        (inventory::PACK_START, inventory::PACK_END)
+    } else {
+        (0, p.bag_size(&data, bag))
+    };
+    let to = if slot == u8::MAX {
+        (first..end).find(|s| p.item_at(bag, *s).is_none())
+    } else {
+        Some(slot).filter(|s| (first..end).contains(s) && p.item_at(bag, *s).is_none())
+    };
+    if let Some(to) = to
+        && new != (bag, to)
+        && !(slot == u8::MAX && new.0 == bag)
+    {
+        inventory::move_item(map, player, new, (bag, to));
+    }
+}
+
 /// Whether an item is carried: in the backpack, a bag, or a bag slot.
 fn carried(it: &Item) -> bool {
     (it.bag == BAG_PLAYER && (BAG_START..BACKPACK_END).contains(&it.slot))
