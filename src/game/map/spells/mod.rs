@@ -467,23 +467,36 @@ pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Opti
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));
 }
 
-fn power_index(s: &SpellTemplate) -> u16 {
-    s.power_type.min(4) as u16
+/// Power type -2: a cost paid in health (Life Tap, Health Funnel,
+/// Bloodrage).
+pub const POWER_HEALTH: u32 = 0xFFFF_FFFE;
+
+/// The power `s` costs, as an offset from `UNIT_FIELD_POWER1`; none for a
+/// cost in health.
+fn power_index(s: &SpellTemplate) -> Option<u16> {
+    (s.power_type < 5).then_some(s.power_type as u16)
 }
 
 /// What `s` costs `caster` before modifiers: its own cost, a share of base
-/// mana, or all its mana; with school cost auras.
+/// mana (of base health, or of the power's maximum), or all it has; with
+/// school cost auras.
 pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
+    let field = |field: u16| f.map(|f| f.get_u32(field)).unwrap_or(0);
     let mut cost = if s.attr(1, sd::ATTR_EX_USE_ALL_MANA) {
-        f.map(|f| f.get_u32(UNIT_FIELD_POWER1 + power_index(s)))
-            .unwrap_or(0)
+        power_index(s).map_or_else(
+            || field(UNIT_FIELD_HEALTH),
+            |i| field(UNIT_FIELD_POWER1 + i),
+        )
     } else if s.mana_cost_percentage > 0 {
-        let base = if s.power_type == 0 {
-            f.map(|f| f.get_u32(UNIT_FIELD_BASE_MANA)).unwrap_or(0)
-        } else {
-            f.map(|f| f.get_u32(UNIT_FIELD_BASE_HEALTH)).unwrap_or(0)
+        let base = match power_index(s) {
+            Some(0) => field(UNIT_FIELD_BASE_MANA),
+            Some(i) => field(UNIT_FIELD_MAXPOWER1 + i),
+            None => match field(UNIT_FIELD_BASE_HEALTH) {
+                0 => field(UNIT_FIELD_MAXHEALTH),
+                base => base,
+            },
         };
         base * s.mana_cost_percentage / 100
     } else {
@@ -512,6 +525,58 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         cost = (cost as f32 * (1.0 + share as f32 / 100.0)) as i32;
     }
     cost.max(0) as u32
+}
+
+/// Why `caster` can't pay `cost` of `s`'s power, as Thistle Tea's
+/// `Resources.validate_cast_cost` and mangos's `Spell::CheckPower` have it:
+/// a cost in health needs more health than it takes (`CASTER_AURASTATE`),
+/// any other as much power (`NO_POWER`). An ordinary creature, not a pet,
+/// pays no rage, focus, energy or happiness, nor mana when it has none.
+pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
+    if cost == 0 {
+        return None;
+    }
+    let f = map.unit_fields(caster)?;
+    let Some(index) = power_index(s) else {
+        return (f.get_u32(UNIT_FIELD_HEALTH) <= cost).then_some(fail::CASTER_AURASTATE);
+    };
+    if let Some(c) = map.creature(caster)
+        && c.pet
+            .as_ref()
+            .is_none_or(|p| p.kind == crate::game::map::pets::Kind::Charmed)
+        && (index > 0 || c.base.max_mana == 0)
+    {
+        return None;
+    }
+    (f.get_u32(UNIT_FIELD_POWER1 + index) < cost).then_some(fail::NO_POWER)
+}
+
+/// `caster` pays `cost` of `s`'s power: health (never the last point), or
+/// the power, as much of it as there is.
+fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
+    let now = map.now;
+    let Some(index) = power_index(s) else {
+        if let Some(f) = map.unit_fields_mut(caster) {
+            let health = f.get_u32(UNIT_FIELD_HEALTH);
+            f.set_u32(UNIT_FIELD_HEALTH, health.saturating_sub(cost).max(1));
+        }
+        combat::sync_aura_state(map, caster);
+        return;
+    };
+    if let Some(f) = map.unit_fields_mut(caster) {
+        let have = f.get_u32(UNIT_FIELD_POWER1 + index);
+        f.set_u32(UNIT_FIELD_POWER1 + index, have.saturating_sub(cost));
+    }
+    if index == 0
+        && let Some(p) = map.players.get_mut(&caster)
+    {
+        p.mana_spent_at = Some(now);
+    }
+    if index == 0
+        && let Some(c) = map.creature_mut(caster)
+    {
+        c.engagement.mana_spent_at = Some(now);
+    }
 }
 
 fn targets_of(t: &SpellCastTargets) -> Targets {
@@ -806,21 +871,7 @@ fn execute(
             let _ = crate::game::map::ranged::pay_ammunition(map, caster);
         }
         if cost > 0 {
-            let index = power_index(s);
-            if let Some(f) = map.unit_fields_mut(caster) {
-                let have = f.get_u32(UNIT_FIELD_POWER1 + index);
-                f.set_u32(UNIT_FIELD_POWER1 + index, have.saturating_sub(cost));
-            }
-            if index == 0
-                && let Some(p) = map.players.get_mut(&caster)
-            {
-                p.mana_spent_at = Some(now);
-            }
-            if index == 0
-                && let Some(c) = map.creature_mut(caster)
-            {
-                c.engagement.mana_spent_at = Some(now);
-            }
+            pay(map, caster, s, cost);
         }
         let gm = map.players.get(&caster).is_some_and(|p| p.gm);
         for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
