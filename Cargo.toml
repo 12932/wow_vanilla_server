@@ -13,6 +13,10 @@ default = []
 # expanding the wow_messages crate's test corpus from a live session, but
 # walks `../wow_messages` per packet — never enable in a production build.
 wowm-capture = []
+# A sampling profiler (pprof, driven by SIGPROF, so it needs no perf-event
+# permissions): with `WVS_PPROF=<prefix>` the server profiles a window and
+# writes a flame graph and its top functions (`src/profile.rs`).
+pprof = ["dep:pprof"]
 
 [dependencies]
 tokio = { version = "1.52.3", features = [
@@ -72,6 +76,7 @@ serde_json = "1"
 dialoguer = { version = "0.12", default-features = false }
 indicatif = "0.18"
 clap = { version = "4.6", features = ["derive"] }
+pprof = { version = "0.15", features = ["flamegraph"], optional = true }
 
 # Free disk space, and on Windows the registry and the fixed drives.
 [target.'cfg(unix)'.dependencies]
