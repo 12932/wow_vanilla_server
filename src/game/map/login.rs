@@ -6,9 +6,9 @@ use tracing::debug;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
     Area, DateTime, InitialSpell, LogoutResult, LogoutSpeed, SMSG_ACTION_BUTTONS,
-    SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT, SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES,
-    SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK,
-    SMSG_LOGOUT_RESPONSE, SMSG_TUTORIAL_FLAGS, Vector3d,
+    SMSG_BINDPOINTUPDATE, SMSG_INIT_WORLD_STATES, SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED,
+    SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK, SMSG_LOGOUT_RESPONSE, SMSG_TUTORIAL_FLAGS,
+    Vector3d,
 };
 
 use crate::game::fields::*;
@@ -259,7 +259,8 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         p.set_stand_state(STAND_STATE_SIT);
     }
     p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, true);
-    p.outbound.send(&SMSG_FORCE_MOVE_ROOT { guid, counter: 0 });
+    p.outbound
+        .send_frame(crate::game::map::movement::root_frame(guid, true));
 }
 
 /// The logout's posture and root undone, as far as it made them.
@@ -282,10 +283,8 @@ fn undo_logout(p: &mut crate::game::map::player::Player) {
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
     }
     if !stunned && !p.auras.has(AURA_MOD_ROOT) {
-        p.outbound.send(&SMSG_FORCE_MOVE_UNROOT {
-            guid: p.guid,
-            counter: 0,
-        });
+        p.outbound
+            .send_frame(crate::game::map::movement::root_frame(p.guid, false));
     }
 }
 

@@ -208,9 +208,11 @@ async fn a_logout_waits_twenty_seconds_outside_an_inn_and_can_be_cancelled() {
         })
         .await;
     assert_eq!(speed, LogoutSpeed::Delayed);
-    a.wait_for("a root", |m| {
-        matches!(m, ServerOpcodeMessage::SMSG_FORCE_MOVE_ROOT(_)).then_some(())
-    })
+    a.wait_frame(
+        "a root",
+        crate::game::map::movement::SMSG_FORCE_MOVE_ROOT,
+        |_| true,
+    )
     .await;
     a.send(CMSG_LOGOUT_CANCEL {}).await;
     a.wait_for("SMSG_LOGOUT_CANCEL_ACK", |m| {

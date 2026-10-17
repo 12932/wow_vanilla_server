@@ -12,6 +12,23 @@ use crate::game::conn::encode;
 use crate::game::map::player::PendingTeleport;
 use crate::game::map::{Map, grid, visibility};
 
+pub const SMSG_FORCE_MOVE_ROOT: u16 = 0x0E8;
+pub const SMSG_FORCE_MOVE_UNROOT: u16 = 0x0EA;
+
+/// `SMSG_FORCE_MOVE_ROOT` or `SMSG_FORCE_MOVE_UNROOT`, by hand: 1.12's GUID
+/// is packed (mangos-zero's SetRoot, mangos-classic's and Thistle Tea's),
+/// where wow_messages writes it whole and the client reads another unit.
+pub fn root_frame(guid: Guid, root: bool) -> Arc<[u8]> {
+    let mut b = crate::game::data::items::Body::default();
+    crate::game::update::write_packed_guid(&mut b.0, guid);
+    b.u32(0);
+    b.frame(if root {
+        SMSG_FORCE_MOVE_ROOT
+    } else {
+        SMSG_FORCE_MOVE_UNROOT
+    })
+}
+
 /// The map enum for a map id; maps the protocol doesn't name are taken as
 /// Eastern Kingdoms rather than refused.
 pub fn map_enum(id: u32) -> wow_world_messages::vanilla::Map {
