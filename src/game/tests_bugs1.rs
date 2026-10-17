@@ -251,3 +251,37 @@ async fn a_part_looted_container_keeps_what_is_left() {
         .unwrap();
     assert_eq!(left, (0, 1, 1));
 }
+
+#[tokio::test]
+async fn a_druid_regenerates_mana_in_bear_and_cat_forms() {
+    let realm = harness::realm();
+    let mut c = Client::connect(&realm, "BUGDRUID");
+    let g = c.enter("Bugdruid", Race::NightElf, Class::Druid).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let out = map
+        .query(move |m| {
+            let mut gained = Vec::new();
+            // Rage in bear form, energy in cat form.
+            for power in [1u8, 3] {
+                let p = m.players.get_mut(&g).unwrap();
+                p.fields.set_byte(UNIT_FIELD_BYTES_0, 3, power);
+                p.fields.set_u32(UNIT_FIELD_MAXPOWER1, 1000);
+                p.fields.set_u32(UNIT_FIELD_POWER1, 100);
+                p.fields.set_u32(UNIT_FIELD_POWER1 + 3, 0);
+                p.mana_spent_at = None;
+                p.regen_at = m.now;
+                crate::game::map::stats::regen(m);
+                let p = &m.players[&g];
+                gained.push((
+                    p.fields.get_u32(UNIT_FIELD_POWER1),
+                    p.fields.get_u32(UNIT_FIELD_POWER1 + 3),
+                ));
+            }
+            gained
+        })
+        .await
+        .unwrap();
+    assert!(out[0].0 > 100, "mana in bear form: {out:?}");
+    assert!(out[1].0 > 100, "mana in cat form: {out:?}");
+    assert!(out[1].1 > 0, "and energy in cat form: {out:?}");
+}
