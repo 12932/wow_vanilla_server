@@ -378,6 +378,7 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                 if let Some(s) = state_mut(map, pet) {
                     s.command = COMMAND_FOLLOW;
                     s.stay_at = None;
+                    s.returning = true;
                 }
             }
             COMMAND_ATTACK => {

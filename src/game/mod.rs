@@ -74,6 +74,8 @@ mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
 #[cfg(test)]
+mod tests_p3_ai_pets;
+#[cfg(test)]
 mod tests_p3_ai_scripts;
 #[cfg(test)]
 mod tests_p3_combat;

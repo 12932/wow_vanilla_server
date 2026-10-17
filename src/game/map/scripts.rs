@@ -2529,10 +2529,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // A pet's command: stay (its fight goes on, as vmangos's
         // HandlePetCommand and Thistle Tea's have it), follow, attack the
         // target, dismiss.
+        // A companion's command state. A creature that isn't one, or a
+        // command there is none of, changes nothing, and fails no script
+        // (Thistle Tea's).
         88 => {
-            if crate::game::map::pets::state(map, source).is_none() {
-                return false;
-            }
+            let Some(kind) = crate::game::map::pets::state(map, source).map(|s| s.kind) else {
+                return true;
+            };
             match d1 as u8 {
                 crate::game::map::pets::COMMAND_STAY => {
                     let at = map.position_of(source);
@@ -2547,6 +2550,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     if let Some(s) = crate::game::map::pets::state_mut(map, source) {
                         s.command = crate::game::map::pets::COMMAND_FOLLOW;
                         s.stay_at = None;
+                        s.returning = true;
                     }
                 }
                 crate::game::map::pets::COMMAND_ATTACK => {
@@ -2555,10 +2559,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     }
                     crate::game::map::pets::attack_target(map, source, target);
                 }
-                crate::game::map::pets::COMMAND_DISMISS => {
+                // A hunter's pet isn't dismissed so (mangos's "no action
+                // for hunter pets").
+                crate::game::map::pets::COMMAND_DISMISS
+                    if kind != crate::game::map::pets::Kind::Hunter =>
+                {
                     crate::game::map::pets::dismiss(map, source)
                 }
-                _ => return false,
+                _ => {}
             }
             true
         }
