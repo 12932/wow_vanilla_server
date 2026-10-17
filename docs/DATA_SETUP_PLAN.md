@@ -75,7 +75,7 @@ Start the server now? [Y/n]
 ```
 
 - `dialoguer` for the questions and `indicatif` for the bars: an overall bar, and one for each map.
-- Non-interactive for scripts and CI: `--yes --client <dir> --maps all|azeroth|<names>`.
+- Non-interactive, for scripts: `--yes --client <dir> --maps all|azeroth|<names>`.
 - Errors say what to do: no client found (where to point it), not 1.12.1, not enough disk, an unreadable MPQ (which
   one).
 
@@ -88,19 +88,14 @@ Start the server now? [Y/n]
   pointer: run `git lfs pull`", rather than SQLite's error.
 - **The README's quick start becomes:** clone, `cargo run --release`, answer Y.
 
-## Stage 6: proof on every platform
+## Stage 6: the last of it
 
-- **CI** on Windows (MSVC), Linux and macOS:
-  - build;
-  - the setup end to end on namigator's `test_map.mpq` fixture (the real client can't be in a public CI), with a
-    terrain extraction and a bake;
-  - the server's start-up with them.
 - **`build.rs`** passes `user32.lib` by MSVC's name, which breaks the GNU target; it should pass it only for
   `target_env = "msvc"` (`-luser32` otherwise).
-- Timings for one map and for all 36, on a typical 8-core machine, go in the README.
+- Timings for one map and for all 36 go in the README.
 
 ## Order and size
 
 Stages 1 and 2 are in rustigator, and independent of each other; Stage 3 can start beside them. Stage 4 needs 2 and 3;
-Stage 5 needs 4; Stage 6 runs throughout and closes it. Stage 1 is the largest: a careful port with a golden
+Stage 5 needs 4; Stage 6 closes it. Stage 1 is the largest: a careful port with a golden
 comparison. The rest are small.
