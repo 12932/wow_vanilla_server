@@ -745,7 +745,10 @@ fn speed(map: &mut Map, g: Guid) {
                 speed: 2.5,
             });
         }
-        let swim = 4.722_222 * (1.0 + p.auras.sum(AURA_MOD_INCREASE_SWIM_SPEED) as f32 / 100.0);
+        // Forward swimming: the strongest swim bonus, and slows (Thistle
+        // Tea's swimming speeds, vmangos's `Unit::UpdateSpeed`).
+        let bonus = p.auras.max(AURA_MOD_INCREASE_SWIM_SPEED).max(0) as f32;
+        let swim = 4.722_222 * (1.0 + bonus / 100.0) * slow;
         if !ghost && (swim - p.speeds.swim).abs() > 0.01 {
             p.speeds.swim = swim;
             p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {

@@ -983,3 +983,57 @@ async fn a_read_mail_goes_in_three_days() {
         "three read"
     );
 }
+
+fn aura(id: u32, aura: u32, points: i32) -> SpellTemplate {
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura,
+        base_points: points - 1,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    SpellTemplate {
+        id,
+        name: format!("Spell {id}"),
+        effects,
+        equipped_item_class: -1,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn swimming_takes_the_strongest_bonus_and_slows() {
+    let mut d = data();
+    d.spells.spells.insert(9701, aura(9701, 58, 100));
+    d.spells.spells.insert(9702, aura(9702, 58, 50));
+    d.spells.spells.insert(9703, aura(9703, 33, -50));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let swim = |spells: &'static [u32]| {
+        let realm = realm.clone();
+        async move {
+            on_map(&realm, move |m| {
+                for s in spells {
+                    crate::game::map::spells::cast_triggered(m, g, *s, Some(g));
+                }
+                crate::game::map::auras::recalc(m, g);
+                (m.players[&g].speeds.swim, m.players[&g].speeds.swim_back)
+            })
+            .await
+        }
+    };
+    let (both, back) = swim(&[9701, 9702]).await;
+    assert!(
+        (both - 9.444_444).abs() < 0.01,
+        "the strongest, not the sum: {both}"
+    );
+    assert!((back - 2.5).abs() < 0.01);
+    let (slowed, _) = swim(&[9703]).await;
+    assert!(
+        (slowed - 4.722_222).abs() < 0.01,
+        "a slow halves it: {slowed}"
+    );
+}
