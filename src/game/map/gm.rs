@@ -302,13 +302,14 @@ fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
     let counter = map.next_creature_counter;
     map.next_creature_counter += 1;
     let level = template.level_min.max(1);
-    let c = Creature::new(
+    let mut c = Creature::new(
         guid::unit(entry, counter | 0x80_0000),
         &template,
         level,
         p.position(),
         p.movement.orientation,
     );
+    c.fit_model(&map.realm.data, Some(&template));
     let g = map.add_creature(c);
     Some(format!("Spawned {} ({g}).", template.name))
 }

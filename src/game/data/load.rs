@@ -218,8 +218,9 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
     }
     for (id, scale) in rows(
         dbc,
-        "SELECT id, creature_model_scale FROM CreatureDisplayInfo",
-        |c| (c.u32("id"), c.f32("creature_model_scale")),
+        "SELECT d.id AS id, d.creature_model_scale * COALESCE(m.model_scale, 1.0) AS scale \
+         FROM CreatureDisplayInfo d LEFT JOIN CreatureModelData m ON m.id = d.model",
+        |c| (c.u32("id"), c.f32("scale")),
     ) {
         data.display_info.insert(
             id,

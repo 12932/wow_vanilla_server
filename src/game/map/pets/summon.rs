@@ -80,6 +80,7 @@ pub fn spawn(
 
 /// A summoned creature's stats from its class at its level, as a spawn's.
 pub(super) fn creature_stats(data: &GameData, c: &mut Creature, t: &CreatureTemplate, level: u8) {
+    c.fit_model(data, Some(t));
     let Some(stats) = data.class_level_stats.get(&(t.unit_class.max(1), level)) else {
         return;
     };
