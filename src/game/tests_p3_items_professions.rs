@@ -473,3 +473,105 @@ async fn an_item_is_disenchanted_by_any_enchanter() {
     .await;
     assert_eq!(dust, 1);
 }
+
+const DRAIN: u32 = 900_710;
+const CAPTURE: u32 = 900_711;
+const SHARD: u32 = 6265;
+const CAUGHT: u32 = 9405;
+
+/// Drain Soul's shard, and a capture's item, on the creature's death: an
+/// aura of the caster's on it.
+fn drain_data() -> GameData {
+    let mut d = data();
+    for (id, item, family) in [(DRAIN, SHARD, 5), (CAPTURE, CAUGHT, 0)] {
+        let mut s = spell(
+            id,
+            &[(6, crate::game::map::auras::AURA_CHANNEL_DEATH_ITEM, 0, 1)],
+        );
+        s.effects[0].item_type = u64::from(item);
+        s.effects[0].target_a = 25;
+        s.family_name = family;
+        s.duration_index = 0;
+        d.spells.spells.insert(id, s);
+    }
+    for e in [SHARD, CAUGHT] {
+        d.items.insert(e, item(e));
+    }
+    d
+}
+
+fn drain(m: &mut Map, caster: Guid, target: Guid, spell: u32, amount: i32) {
+    let s = m.realm.data.spells.get(spell).cloned().unwrap();
+    crate::game::map::auras::apply_spell(m, caster, target, &s, &[(0, amount)], Default::default())
+        .unwrap();
+}
+
+/// Thistle Tea's `DeathItem`: a shard for a warlock whose tap the
+/// creature is, theirs or their group's; not for another's tap, a grey
+/// creature, nor a pet; one a warlock however many drains; a capture's
+/// item whatever the tap or level; none of a nonpositive amount.
+#[tokio::test]
+async fn a_soul_shard_is_for_the_tap_and_its_group() {
+    use crate::game::map::spells::outcome::death_items;
+    let realm = harness::realm_with(drain_data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warlock).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Cid", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GROUP_INVITE(_)
+        )
+        .then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while realm.social.groups.lock().group_of(ga).is_none() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let wolf = unit(1);
+    let got = on_map(&realm, move |m| {
+        let tap = |m: &mut Map, by: Option<Guid>| {
+            m.creature_mut(wolf).unwrap().tapped_by = by;
+        };
+        let shards = |m: &Map| death_items(m, wolf, 1_000_000);
+        drain(m, ga, wolf, DRAIN, 1);
+        drain(m, ga, wolf, DRAIN, 1);
+        tap(m, Some(gb));
+        let group = shards(m);
+        tap(m, Some(gc));
+        let other = shards(m);
+        tap(m, Some(ga));
+        let own = shards(m);
+        m.creature_mut(wolf)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_LEVEL, 1);
+        let p = m.players.get_mut(&ga).unwrap();
+        crate::game::map::stats::set_level(p, &m.realm.data.clone(), 60);
+        let grey = shards(m);
+        drain(m, ga, wolf, CAPTURE, 2);
+        tap(m, Some(gc));
+        let caught = shards(m);
+        (group, other, own, grey, caught)
+    })
+    .await;
+    assert_eq!(got.0, vec![(ga, SHARD, 1)], "Bob's tap, Alice's group");
+    assert_eq!(got.1, vec![], "Cid's tap");
+    assert_eq!(got.2, vec![(ga, SHARD, 1)], "one, of two drains");
+    assert_eq!(got.3, vec![], "grey");
+    assert_eq!(got.4, vec![(ga, CAUGHT, 2)], "the capture whatever");
+    let none = on_map(&realm, move |m| {
+        let wolf = unit(2);
+        drain(m, ga, wolf, DRAIN, 0);
+        death_items(m, wolf, 1_000_000)
+    })
+    .await;
+    assert_eq!(none, vec![], "none of nothing");
+}
