@@ -156,8 +156,8 @@ pub fn skill_value(p: &Player, skill: u32) -> u32 {
     (base as i32 + bonus).max(0) as u32
 }
 
-/// A game object's lock.
-fn object_lock(data: &GameData, entry: u32) -> u32 {
+/// A game object's lock, 0 for none.
+pub fn object_lock(data: &GameData, entry: u32) -> u32 {
     data.gameobject_templates
         .get(&entry)
         .map(|t| match t.kind {
