@@ -1044,3 +1044,57 @@ async fn honor_stats_are_inspected_only_near() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!ask(&mut a).await, "sixty yards off");
 }
+
+#[tokio::test]
+async fn a_cancelled_logout_keeps_a_stun() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const STUN: u32 = 21700;
+    let mut d = crate::game::data::GameData::empty();
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_MOD_STUN,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        STUN,
+        SpellTemplate {
+            id: STUN,
+            name: "Stun".into(),
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGLOGOUT");
+    let g = a.enter("Buglogout", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let stunned = map
+        .query(move |m| {
+            // Logging out, rooted for it; then stunned.
+            let now = m.now;
+            let p = m.players.get_mut(&g).unwrap();
+            p.logout_at = Some(now + Duration::from_secs(20));
+            p.misc.logout_rooted = true;
+            let s = m.realm.data.spells.get(STUN).unwrap().clone();
+            let _ = crate::game::map::auras::apply_spell(
+                m,
+                g,
+                g,
+                &s,
+                &[(0, 0)],
+                crate::game::map::auras::Context::default(),
+            );
+            crate::game::map::login::cancel_logout(m, g);
+            m.players[&g].fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_STUNNED,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(stunned, "the stun's flag stays");
+}
