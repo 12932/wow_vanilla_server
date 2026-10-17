@@ -764,7 +764,7 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
 
 /// Shapeshift forms a flight takes (Thistle Tea's `disallowed_form?`):
 /// none, the warrior's stances, Shadowform and Stealth.
-const FLIGHT_FORMS: [u8; 6] = [0, 17, 18, 19, 28, 30];
+pub const FLIGHT_FORMS: [u8; 6] = [0, 17, 18, 19, 28, 30];
 /// How near the flight's first node its flier must be.
 const TAXI_START_YARDS: f32 = 31.622_776;
 
