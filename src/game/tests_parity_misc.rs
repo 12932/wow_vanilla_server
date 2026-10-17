@@ -83,7 +83,7 @@ fn create_item(id: u32, target_a: u32, item: u32) -> SpellTemplate {
     effects[0] = SpellEffect {
         effect: 24,
         target_a,
-        item_type: item,
+        item_type: u64::from(item),
         base_points: 0,
         base_dice: 1,
         ..Default::default()

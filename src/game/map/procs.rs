@@ -185,9 +185,11 @@ fn weapon_speed(map: &Map, g: Guid, hand: Hand) -> u32 {
         })
 }
 
-/// A chance from procs a minute and a weapon's speed.
+/// A chance from procs a minute and a weapon's speed: past 100 when the
+/// weapon is slow enough, so a chance modifier takes from all of it before
+/// a roll counts 100 or more as sure (Thistle Tea's `Proc.chance`).
 pub fn ppm_chance(ppm: f32, speed_ms: u32) -> f32 {
-    (ppm * speed_ms as f32 / 600.0).min(100.0)
+    ppm * speed_ms as f32 / 600.0
 }
 
 /// The `procFlags` a holder procs on. A seal of righteousness strikes on
@@ -473,12 +475,18 @@ pub fn spell_damage(
 
 /// Target-trigger auras (Frostbite, Improved Scorch, Healing Way): their
 /// owner's spells of the family and mask they name may cast their spell on
-/// the target.
+/// the target. The chance is the aura's, and its effect's points a combo
+/// point for each a finisher spends (Relentless Strikes' 20%), as Thistle
+/// Tea's `TargetTrigger` rolls it.
 fn target_triggers(map: &mut Map, e: &Event) {
     let data = map.realm.data.clone();
     let Some(spell) = e.spell.and_then(|id| data.spells.get(id)) else {
         return;
     };
+    let combo = map
+        .caster(e.actor)
+        .filter(|c| spell.finisher() && c.combo_target == e.target)
+        .map_or(0, |c| c.combo_points);
     let Some(a) = auras::auras(map, e.actor) else {
         return;
     };
@@ -491,14 +499,22 @@ fn target_triggers(map: &mut Map, e: &Event) {
                 .is_some_and(|s| s.family_name == spell.family_name)
         })
         .flat_map(|h| {
+            let per_combo = |index: u8| {
+                data.spells.get(h.spell).map_or(0.0, |s| {
+                    s.effects[usize::from(index).min(2)].points_per_combo_point
+                })
+            };
             h.effects
                 .iter()
                 .filter(|x| {
                     x.kind == auras::AURA_ADD_TARGET_TRIGGER
                         && x.trigger != 0
-                        && u64::from(x.mask) & spell.family_flags != 0
+                        && x.mask & spell.family_flags != 0
                 })
-                .map(|x| (x.trigger, x.amount as f32))
+                .map(|x| {
+                    let chance = x.amount + (per_combo(x.effect) * f32::from(combo)) as i32;
+                    (x.trigger, chance as f32)
+                })
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -557,7 +573,7 @@ mod tests {
     fn procs_a_minute_scale_with_weapon_speed() {
         // Seal of Command's 7 a minute on a 3.6-second weapon: 42%.
         assert!((ppm_chance(7.0, 3600) - 42.0).abs() < 0.01);
-        assert_eq!(ppm_chance(60.0, 4000), 100.0);
+        assert_eq!(ppm_chance(60.0, 4000), 400.0);
     }
 
     #[test]

@@ -146,6 +146,15 @@ the questions waiting for you.
     - **Merge note:** 2c's chase-facing (a target) and 2b's arrival facing (an angle) are now two fields of a walk.
       A move facing a target is sent as such; otherwise it is sent with its final angle.
 
+12. **bugs2's choices:**
+    - **Creature costs:** creatures don't pay rage, energy or mana they don't have, as in Thistle Tea. mangos-classic
+      makes them pay, and refuses its rage and energy creatures.
+    - **Periodic triggers** (Hellfire, Plague) aim about the unit the aura is on, credited to the aura's caster, as
+      Thistle Tea does.
+    - **Immune flags:** both immune-to-player (0x100) and immune-to-NPC (0x200) are checked. 1,053 templates, mostly
+      town NPCs, can't be attacked by players now.
+    - **Health regeneration auras:** percentage ones work only out of combat, as both references have it.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -156,6 +165,8 @@ the questions waiting for you.
 | 1a: the matrix, mapped (core rest, world, network) | done: all 8,850 mapped, 1,781 of 8,429 applicable covered (21%) | f9bad00 |
 | Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | running | |
+| Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | |
+| Bugs from the mapping, batch 3 (24: visibility, spawns, wire layouts) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
 | 2c: creature combat (all 15 items) | merged | e557cf0 |

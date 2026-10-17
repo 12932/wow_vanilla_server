@@ -11,11 +11,13 @@ use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::map::Map;
 use crate::game::map::auras::{self, AURA_ADD_FLAT_MODIFIER, AURA_ADD_PCT_MODIFIER};
 
-// `SpellModOp`.
+// 1.12's `SpellModOp` (mangos-classic's numbers, Thistle Tea's
+// `Modifiers`): 3, 12 and 23 change an aura's attack power, speed and
+// haste, where TBC's change an effect's points by its index.
 pub const OP_DAMAGE: usize = 0;
 pub const OP_DURATION: usize = 1;
 pub const OP_THREAT: usize = 2;
-pub const OP_EFFECT1: usize = 3;
+pub const OP_ATTACK_POWER: usize = 3;
 pub const OP_CHARGES: usize = 4;
 pub const OP_RANGE: usize = 5;
 pub const OP_RADIUS: usize = 6;
@@ -24,7 +26,7 @@ pub const OP_ALL_EFFECTS: usize = 8;
 pub const OP_NOT_LOSE_CASTING_TIME: usize = 9;
 pub const OP_CASTING_TIME: usize = 10;
 pub const OP_COOLDOWN: usize = 11;
-pub const OP_EFFECT2: usize = 12;
+pub const OP_SPEED: usize = 12;
 pub const OP_COST: usize = 14;
 pub const OP_CRIT_DAMAGE_BONUS: usize = 15;
 pub const OP_RESIST_MISS_CHANCE: usize = 16;
@@ -34,7 +36,7 @@ pub const OP_ACTIVATION_TIME: usize = 19;
 pub const OP_EFFECT_PAST_FIRST: usize = 20;
 pub const OP_GLOBAL_COOLDOWN: usize = 21;
 pub const OP_DOT: usize = 22;
-pub const OP_EFFECT3: usize = 23;
+pub const OP_HASTE: usize = 23;
 pub const OP_SPELL_BONUS_DAMAGE: usize = 24;
 pub const OP_MULTIPLE_VALUE: usize = 27;
 pub const OP_RESIST_DISPEL_CHANCE: usize = 28;
@@ -71,21 +73,43 @@ impl Mods {
         self.flat[op] != 0 || self.pct[op] != 0
     }
 
-    /// An effect's points with the effect's and all effects' modifiers.
-    pub fn points(&self, index: usize, points: i32) -> i32 {
-        let op = match index {
-            0 => OP_EFFECT1,
-            1 => OP_EFFECT2,
-            _ => OP_EFFECT3,
-        };
-        let v = self.apply(op, points as f32);
-        self.apply(OP_ALL_EFFECTS, v).round() as i32
+    /// Effect `index`'s points with all effects' modifiers, then those to
+    /// its aura's speed, haste or attack power (mangos's
+    /// `CalculateAuraEffectValue`).
+    pub fn points(&self, s: &SpellTemplate, index: usize, points: i32) -> i32 {
+        let v = self.apply(OP_ALL_EFFECTS, points as f32);
+        match aura_op(s.effects[index].aura) {
+            Some(op) => self.apply(op, v),
+            None => v,
+        }
+        .round() as i32
+    }
+}
+
+/// The operation that changes an aura of `kind`'s amount: its speed, its
+/// haste or its attack power.
+fn aura_op(kind: u32) -> Option<usize> {
+    use crate::game::map::auras::*;
+    match kind {
+        AURA_MOD_INCREASE_SPEED | AURA_MOD_DECREASE_SPEED | AURA_MOD_INCREASE_SWIM_SPEED => {
+            Some(OP_SPEED)
+        }
+        AURA_MOD_ATTACKSPEED
+        | AURA_MOD_CASTING_SPEED
+        | AURA_MOD_HASTE
+        | AURA_MOD_RANGED_HASTE
+        | AURA_MOD_RANGED_AMMO_HASTE => Some(OP_HASTE),
+        AURA_MOD_ATTACK_POWER
+        | AURA_MOD_ATTACK_POWER_PCT
+        | AURA_MOD_RANGED_ATTACK_POWER
+        | AURA_MOD_RANGED_ATTACK_POWER_PCT => Some(OP_ATTACK_POWER),
+        _ => None,
     }
 }
 
 /// Whether a modifier with `mask` from a spell of `family` touches `s`.
-pub fn touches(family: u32, mask: u32, s: &SpellTemplate) -> bool {
-    family != 0 && family == s.family_name && u64::from(mask) & s.family_flags != 0
+pub fn touches(family: u32, mask: u64, s: &SpellTemplate) -> bool {
+    family != 0 && family == s.family_name && mask & s.family_flags != 0
 }
 
 /// The modifiers `caster`'s auras put on `s`.
@@ -136,6 +160,9 @@ fn used_by(op: usize, s: &SpellTemplate, data: &crate::game::data::GameData) -> 
             .iter()
             .any(|e| matches!(e.effect, 2 | 9 | 10 | 17 | 31 | 58 | 121)),
         OP_DOT | OP_ACTIVATION_TIME => s.effects.iter().any(|e| e.amplitude > 0),
+        OP_SPEED | OP_HASTE | OP_ATTACK_POWER => {
+            s.effects.iter().any(|e| aura_op(e.aura) == Some(op))
+        }
         _ => true,
     }
 }
@@ -147,20 +174,21 @@ pub fn spend(map: &mut Map, caster: Guid, mods: &Mods) {
     }
 }
 
-/// Tell a player's client the modifiers their auras give: for each bit of
-/// the family mask, the sum of each operation's flat and percent values.
+/// Tell a player's client the modifiers their auras give: for each of the
+/// family mask's 64 bits, the sum of each operation's flat and percent
+/// values.
 pub fn send(map: &Map, player: Guid) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let mut flat = [[0i32; OPS]; 32];
-    let mut pct = [[0i32; OPS]; 32];
+    let mut flat = [[0i32; OPS]; 64];
+    let mut pct = [[0i32; OPS]; 64];
     for (h, x) in p.auras.effects() {
         if !matches!(x.kind, AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER) {
             continue;
         }
         let op = x.misc.clamp(0, OPS as i32 - 1) as usize;
-        for bit in 0..32 {
+        for bit in 0..64 {
             if x.mask & (1 << bit) != 0 {
                 let v = x.amount * h.stacks.max(1) as i32;
                 if x.kind == AURA_ADD_FLAT_MODIFIER {
@@ -187,7 +215,7 @@ pub fn send(map: &Map, player: Guid) {
 
 /// A modifier aura came or went: the client hears every bit it covered
 /// again, with zeros where nothing is left.
-pub fn changed(map: &Map, player: Guid, mask: u32, op: usize, pct: bool) {
+pub fn changed(map: &Map, player: Guid, mask: u64, op: usize, pct: bool) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
@@ -196,7 +224,7 @@ pub fn changed(map: &Map, player: Guid, mask: u32, op: usize, pct: bool) {
     } else {
         AURA_ADD_FLAT_MODIFIER
     };
-    for bit in 0..32 {
+    for bit in 0..64 {
         if mask & (1 << bit) == 0 {
             continue;
         }
@@ -227,7 +255,7 @@ mod tests {
         m.pct[OP_CASTING_TIME] = -10;
         assert_eq!(m.apply_ms(OP_CASTING_TIME, 3500), 2700);
         m.pct[OP_ALL_EFFECTS] = 10;
-        assert_eq!(m.points(0, 100), 110);
+        assert_eq!(m.points(&SpellTemplate::default(), 0, 100), 110);
         let fireball = SpellTemplate {
             family_name: 3,
             family_flags: 0x4000_0001,

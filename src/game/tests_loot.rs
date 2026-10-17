@@ -252,7 +252,7 @@ fn data() -> GameData {
     d.crafts.fishing_skill.insert(0, -100);
     // Spells.
     let mut recipe = spell(RECIPE, &[(24, 0, 0, 1, 0)]);
-    recipe.effects[0].item_type = CRAFTED;
+    recipe.effects[0].item_type = u64::from(CRAFTED);
     let mut mining = spell(MINING, &[(33, 3, -1, 23, 0)]);
     mining.totems = [MINING_PICK, 0];
     let mut fishing = spell(FISHING, &[(50, BOBBER as i32, -1, 39, 0)]);

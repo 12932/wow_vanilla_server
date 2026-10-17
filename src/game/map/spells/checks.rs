@@ -16,7 +16,7 @@ use crate::game::map::combat::{self, dist};
 
 use super::mods::{self, Mods};
 use super::targets::{self, Implicit};
-use super::{Targets, power_cost, power_index};
+use super::{Targets, power_cost, unpayable};
 
 /// `SpellCastResult` codes.
 pub mod fail {
@@ -50,6 +50,7 @@ pub mod fail {
     pub const NOT_SHAPESHIFT: u8 = 0x3d;
     pub const NOT_STANDING: u8 = 0x3e;
     pub const NO_COMBO_POINTS: u8 = 0x46;
+    pub const NO_EDIBLE_CORPSES: u8 = 0x86;
     pub const NO_POWER: u8 = 0x4d;
     pub const NOTHING_TO_DISPEL: u8 = 0x4e;
     pub const ONLY_BATTLEGROUNDS: u8 = 0x87;
@@ -191,6 +192,23 @@ pub fn facing(map: &Map, a: Guid, b: Guid, arc: f32) -> bool {
 fn creature_type_allowed(s: &SpellTemplate, creature_type: u32) -> bool {
     s.target_creature_type == 0
         || (creature_type > 0 && s.target_creature_type & (1 << (creature_type - 1).min(31)) != 0)
+}
+
+/// Whether unit `g`'s type is one the spell may land on: a creature's
+/// template's, a player's humanoid.
+pub(crate) fn unit_type_allowed(map: &Map, s: &SpellTemplate, g: Guid) -> bool {
+    if s.target_creature_type == 0 {
+        return true;
+    }
+    let creature_type = match map.creature(g) {
+        Some(c) => map
+            .realm
+            .data
+            .creature_template(c.entry)
+            .map_or(0, |t| t.creature_type),
+        None => 7,
+    };
+    creature_type_allowed(s, creature_type)
 }
 
 /// Whether `caster` has the item `s` needs equipped.
@@ -417,14 +435,8 @@ pub fn check(
         }
         // Power, reagents, tools, focus, gear.
         let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
-        if cost > 0 {
-            let have = map
-                .unit_fields(caster)
-                .map(|f| f.get_u32(UNIT_FIELD_POWER1 + power_index(s)))
-                .unwrap_or(0);
-            if have < cost {
-                return Some(fail::NO_POWER);
-            }
+        if let Some(r) = unpayable(map, caster, s, cost) {
+            return Some(r);
         }
         if let Some(p) = map.players.get(&caster)
             && !p.gm
@@ -446,6 +458,10 @@ pub fn check(
             && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
         {
             return Some(fail::REQUIRES_SPELL_FOCUS);
+        }
+        // Cannibalize wants a body to eat before it costs anything.
+        if s.script_name == "spell_cannibalize" && !super::scripts::edible_corpse(map, caster, s) {
+            return Some(fail::NO_EDIBLE_CORPSES);
         }
         if !equipped_ok(map, caster, s) {
             return Some(if s.equipped_item_class == 2 {
@@ -522,6 +538,15 @@ fn check_target(
         }
     } else if !u.alive && !s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET) && !s.has_effect(95) {
         return Some(fail::TARGETS_DEAD);
+    }
+    // A party member's spell is for the caster's party and pets, not the
+    // caster (Thistle Tea's `validate_party_unit_query`).
+    if s.effects
+        .iter()
+        .any(|e| e.effect != 0 && targets::implicit(e.target_a) == Implicit::PartyMember)
+        && !targets::party_unit(map, caster, target)
+    {
+        return Some(fail::BAD_TARGETS);
     }
     if target != caster {
         let requires_enemy = s

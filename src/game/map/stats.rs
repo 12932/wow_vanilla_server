@@ -29,7 +29,8 @@ const CLASS_WARLOCK: u8 = 9;
 const CLASS_DRUID: u8 = 11;
 
 /// Health a player regenerates a tick out of combat, from spirit
-/// (vanilla's class formulas).
+/// (vanilla's class formulas); none, not less, when spirit falls short of
+/// the formula (Thistle Tea's and mangos's floor).
 pub fn health_regen(class: u8, spirit: f32) -> f32 {
     let v = match class {
         CLASS_DRUID | CLASS_MAGE => spirit * 0.11 + 1.0,
@@ -42,7 +43,7 @@ pub fn health_regen(class: u8, spirit: f32) -> f32 {
         CLASS_WARRIOR => spirit * 1.26 - 22.6,
         _ => spirit * 0.2,
     };
-    v.max(1.0)
+    v.max(0.0)
 }
 
 /// Mana a player regenerates a tick outside the five-second rule.
@@ -79,22 +80,28 @@ fn regen_player(p: &mut Player, now: Instant) {
     let health = p.fields.get_u32(UNIT_FIELD_HEALTH);
     let a = &p.auras;
     let stopped = a.has(AURA_INTERRUPT_REGEN);
-    // In combat, health comes back only as far as auras allow.
-    let combat_share = if in_combat {
-        (a.sum(AURA_MOD_REGEN_DURING_COMBAT) + a.sum(AURA_MOD_HEALTH_REGEN_IN_COMBAT)) as f32
-            / 100.0
-    } else {
-        1.0
-    };
-    if health < max && !stopped && combat_share > 0.0 {
-        let mut add = health_regen(class, spirit) * combat_share;
+    if health < max && !stopped {
+        // Spirit's share: out of combat by the regeneration percent auras,
+        // in combat only as far as auras allow. Then what the auras that
+        // give health in combat or out give a tick (Troll's Blood's, per
+        // five seconds), and the part of a point left from the last tick
+        // (Thistle Tea's `Regen.regen_health`; mangos's
+        // `Player::RegenerateHealth` adds those auras flat too).
+        let mut add = health_regen(class, spirit)
+            * if in_combat {
+                a.sum(AURA_MOD_REGEN_DURING_COMBAT) as f32 / 100.0
+            } else {
+                a.product(AURA_MOD_HEALTH_REGEN_PERCENT)
+            };
         if p.stand_state() != 0 {
             // Sitting regenerates faster.
             add *= 1.5;
         }
-        add *= a.product(AURA_MOD_HEALTH_REGEN_PERCENT);
+        add += a.sum(AURA_MOD_HEALTH_REGEN_IN_COMBAT) as f32 * REGEN_INTERVAL.as_secs_f32() / 5.0;
+        let carried = add.max(0.0) + p.health_regen_carry;
+        p.health_regen_carry = carried.fract();
         p.fields
-            .set_u32(UNIT_FIELD_HEALTH, (health + add as u32).min(max));
+            .set_u32(UNIT_FIELD_HEALTH, (health + carried as u32).min(max));
     }
     // Health and mana an aura gives every five seconds, with no tick of
     // its own (gear's).
@@ -261,9 +268,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn regen_follows_the_class_formulas_and_never_goes_below_one() {
+    fn regen_follows_the_class_formulas_and_never_goes_below_none() {
         assert!((health_regen(CLASS_WARRIOR, 40.0) - 27.8).abs() < 0.01);
-        assert_eq!(health_regen(CLASS_ROGUE, 5.0), 1.0);
+        assert_eq!(health_regen(CLASS_ROGUE, 5.0), 0.0);
         assert!((mana_regen(CLASS_MAGE, 30.0) - 20.0).abs() < 0.01);
     }
 }

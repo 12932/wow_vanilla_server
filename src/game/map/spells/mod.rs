@@ -146,6 +146,9 @@ pub struct Targets {
     pub object: Option<Guid>,
     pub item: Option<Guid>,
     pub dest: Option<Vector3d>,
+    /// Whom areas and groups about the caster are about, when not the
+    /// caster: the unit an aura that triggers the spell is on.
+    pub origin: Option<Guid>,
 }
 
 /// A cast under way.
@@ -470,23 +473,36 @@ pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Opti
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));
 }
 
-fn power_index(s: &SpellTemplate) -> u16 {
-    s.power_type.min(4) as u16
+/// Power type -2: a cost paid in health (Life Tap, Health Funnel,
+/// Bloodrage).
+pub const POWER_HEALTH: u32 = 0xFFFF_FFFE;
+
+/// The power `s` costs, as an offset from `UNIT_FIELD_POWER1`; none for a
+/// cost in health.
+fn power_index(s: &SpellTemplate) -> Option<u16> {
+    (s.power_type < 5).then_some(s.power_type as u16)
 }
 
 /// What `s` costs `caster` before modifiers: its own cost, a share of base
-/// mana, or all its mana; with school cost auras.
+/// mana (of base health, or of the power's maximum), or all it has; with
+/// school cost auras.
 pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
+    let field = |field: u16| f.map(|f| f.get_u32(field)).unwrap_or(0);
     let mut cost = if s.attr(1, sd::ATTR_EX_USE_ALL_MANA) {
-        f.map(|f| f.get_u32(UNIT_FIELD_POWER1 + power_index(s)))
-            .unwrap_or(0)
+        power_index(s).map_or_else(
+            || field(UNIT_FIELD_HEALTH),
+            |i| field(UNIT_FIELD_POWER1 + i),
+        )
     } else if s.mana_cost_percentage > 0 {
-        let base = if s.power_type == 0 {
-            f.map(|f| f.get_u32(UNIT_FIELD_BASE_MANA)).unwrap_or(0)
-        } else {
-            f.map(|f| f.get_u32(UNIT_FIELD_BASE_HEALTH)).unwrap_or(0)
+        let base = match power_index(s) {
+            Some(0) => field(UNIT_FIELD_BASE_MANA),
+            Some(i) => field(UNIT_FIELD_MAXPOWER1 + i),
+            None => match field(UNIT_FIELD_BASE_HEALTH) {
+                0 => field(UNIT_FIELD_MAXHEALTH),
+                base => base,
+            },
         };
         base * s.mana_cost_percentage / 100
     } else {
@@ -517,6 +533,58 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     cost.max(0) as u32
 }
 
+/// Why `caster` can't pay `cost` of `s`'s power, as Thistle Tea's
+/// `Resources.validate_cast_cost` and mangos's `Spell::CheckPower` have it:
+/// a cost in health needs more health than it takes (`CASTER_AURASTATE`),
+/// any other as much power (`NO_POWER`). An ordinary creature, not a pet,
+/// pays no rage, focus, energy or happiness, nor mana when it has none.
+pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
+    if cost == 0 {
+        return None;
+    }
+    let f = map.unit_fields(caster)?;
+    let Some(index) = power_index(s) else {
+        return (f.get_u32(UNIT_FIELD_HEALTH) <= cost).then_some(fail::CASTER_AURASTATE);
+    };
+    if let Some(c) = map.creature(caster)
+        && c.pet
+            .as_ref()
+            .is_none_or(|p| p.kind == crate::game::map::pets::Kind::Charmed)
+        && (index > 0 || c.base.max_mana == 0)
+    {
+        return None;
+    }
+    (f.get_u32(UNIT_FIELD_POWER1 + index) < cost).then_some(fail::NO_POWER)
+}
+
+/// `caster` pays `cost` of `s`'s power: health (never the last point), or
+/// the power, as much of it as there is.
+fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
+    let now = map.now;
+    let Some(index) = power_index(s) else {
+        if let Some(f) = map.unit_fields_mut(caster) {
+            let health = f.get_u32(UNIT_FIELD_HEALTH);
+            f.set_u32(UNIT_FIELD_HEALTH, health.saturating_sub(cost).max(1));
+        }
+        combat::sync_aura_state(map, caster);
+        return;
+    };
+    if let Some(f) = map.unit_fields_mut(caster) {
+        let have = f.get_u32(UNIT_FIELD_POWER1 + index);
+        f.set_u32(UNIT_FIELD_POWER1 + index, have.saturating_sub(cost));
+    }
+    if index == 0
+        && let Some(p) = map.players.get_mut(&caster)
+    {
+        p.mana_spent_at = Some(now);
+    }
+    if index == 0
+        && let Some(c) = map.creature_mut(caster)
+    {
+        c.engagement.mana_spent_at = Some(now);
+    }
+}
+
 fn targets_of(t: &SpellCastTargets) -> Targets {
     let f = &t.target_flags;
     Targets {
@@ -543,6 +611,7 @@ fn targets_of(t: &SpellCastTargets) -> Targets {
             | SpellCastTargets_SpellCastTargetFlags_Item::TradeItem { trade_item: item } => *item,
         }),
         dest: f.get_dest_location().map(|d| d.destination),
+        origin: None,
     }
 }
 
@@ -676,13 +745,15 @@ pub fn cast(
     }) {
         map.send_to_observers(caster, &frame, true);
     }
-    if s.start_recovery_category != 0 {
-        let gcd = m
-            .apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time.max(1000))
-            .max(1000);
-        if let Some(c) = map.caster_mut(caster) {
-            c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
-        }
+    // The global cooldown is the spell's start time with its modifiers:
+    // none for one without (vmangos, mangos's `Player::AddGCD`, Thistle
+    // Tea's `Cooldowns.gcd_duration`).
+    let gcd = m.apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time);
+    if s.start_recovery_category != 0
+        && gcd > 0
+        && let Some(c) = map.caster_mut(caster)
+    {
+        c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
     }
     if time == 0 {
         execute(map, caster, s, targets, item, false);
@@ -814,21 +885,7 @@ fn execute(
             let _ = crate::game::map::ranged::pay_ammunition(map, caster);
         }
         if cost > 0 {
-            let index = power_index(s);
-            if let Some(f) = map.unit_fields_mut(caster) {
-                let have = f.get_u32(UNIT_FIELD_POWER1 + index);
-                f.set_u32(UNIT_FIELD_POWER1 + index, have.saturating_sub(cost));
-            }
-            if index == 0
-                && let Some(p) = map.players.get_mut(&caster)
-            {
-                p.mana_spent_at = Some(now);
-            }
-            if index == 0
-                && let Some(c) = map.creature_mut(caster)
-            {
-                c.engagement.mana_spent_at = Some(now);
-            }
+            pay(map, caster, s, cost);
         }
         let gm = map.players.get(&caster).is_some_and(|p| p.gm);
         for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
@@ -1426,7 +1483,22 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     let items = outcome::death_items(map, target, left);
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
-        combat::deal_periodic_damage(map, h.caster, target, left, Some(h.spell), s.channeled());
+        // Its threat is of its school, and has the spell's threat
+        // modifiers (Shadow Affinity), as Thistle Tea's periodic damage's.
+        let by_mods = mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0;
+        let threat = left as f32 * combat::threat_multiplier(map, h.caster, h.school);
+        combat::deal_periodic_damage(
+            map,
+            h.caster,
+            target,
+            left,
+            h.school,
+            Some(h.spell),
+            s.channeled(),
+        );
+        if (by_mods - 1.0).abs() > f32::EPSILON && map.creature(target).is_some_and(|c| c.alive()) {
+            crate::game::map::ai::add_threat(map, target, h.caster, threat * (by_mods - 1.0));
+        }
     }
     outcome::give_death_items(map, target, items);
     if leech {
@@ -1551,6 +1623,19 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     auras::remove_spell(map, target, casting.spell, Some(g));
     if target != g {
         auras::remove_spell(map, g, casting.spell, Some(g));
+    }
+    // A channel at the pet (Mend Pet, Health Funnel) ends on the pet,
+    // whatever the client aimed it at.
+    let at_pet = map.realm.data.spells.get(casting.spell).is_some_and(|s| {
+        s.effects
+            .iter()
+            .any(|e| targets::implicit(e.target_a) == targets::Implicit::Pet)
+    });
+    if at_pet
+        && let Some(pet) = crate::game::map::pets::pet_of(map, g)
+        && pet != target
+    {
+        auras::remove_spell(map, pet, casting.spell, Some(g));
     }
     map.spells
         .areas

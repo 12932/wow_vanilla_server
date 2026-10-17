@@ -267,7 +267,9 @@ pub fn run(
             continue;
         }
         let e = s.effects[index];
-        let mut points = l.mods.points(index, points_with(s, index, level, l.combo));
+        let mut points = l
+            .mods
+            .points(s, index, points_with(s, index, level, l.combo));
         if index == 0 && l.shared > 1 {
             points /= l.shared as i32;
         }
@@ -737,7 +739,12 @@ fn effect(
         EFFECT_KNOCK_BACK => knock_back(map, caster, target, e.misc_value, amount),
         EFFECT_CREATE_ITEM if e.item_type != 0 => {
             if let Some(to) = created_for(map, caster, target, &e, t) {
-                let item = super::scripts::created_item(map, caster, s, e.item_type);
+                let item = super::scripts::created_item(
+                    map,
+                    caster,
+                    s,
+                    u32::try_from(e.item_type).unwrap_or(0),
+                );
                 // A player's own make is created; another's gift received.
                 let count = amount.max(1) as u32;
                 let made = if to == caster {
@@ -1119,7 +1126,7 @@ fn retain_combo_points(map: &mut Map, caster: Guid, s: &SpellTemplate, l: &Landi
             s.effects[*i].effect == EFFECT_APPLY_AURA
                 && s.effects[*i].aura == AURA_RETAIN_COMBO_POINTS
         })
-        .map(|i| (i, l.mods.points(i, points(s, i, level))))
+        .map(|i| (i, l.mods.points(s, i, points(s, i, level))))
         .collect();
     if held.is_empty() {
         return;
@@ -1290,7 +1297,7 @@ pub fn run_untargeted(
                     mods: m.clone(),
                     ..Default::default()
                 };
-                let base = m.points(index, points_with(s, index, level, combo));
+                let base = m.points(s, index, points_with(s, index, level, combo));
                 let amount = aura_amount(map, caster, caster, s, index, base, &l);
                 let now = map.now;
                 let object = super::dynamic::spawn(
@@ -1340,7 +1347,7 @@ pub fn run_untargeted(
             _ if crate::game::map::pets::handles(s, index)
                 && super::targets::implicit(e.target_a) == super::targets::Implicit::Location =>
             {
-                let amount = m.points(index, points_with(s, index, level, combo));
+                let amount = m.points(s, index, points_with(s, index, level, combo));
                 crate::game::map::pets::effect(map, caster, caster, s, index, amount);
             }
             _ => {}

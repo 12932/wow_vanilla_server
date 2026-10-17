@@ -51,6 +51,11 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - Gear's spells aren't held to the outdoors, as Thistle Tea's `EquipmentSpells.eligible?` also holds them.
 - Blessing of Light's bonus goes into Holy Light's and Flash of Light's base points. Thistle Tea adds it to the flat
   healing taken, so it goes by the coefficient.
+- A channel's cost per second (Health Funnel's health, others' mana) isn't charged; Thistle Tea charges it each tick.
+- The melee and ranged damage-taken auras' flat amount isn't scaled by an ability's coefficient, as Thistle Tea's
+  `AttackDamageTaken.spell_amount` scales it.
+- A damage over time's threat modifiers are read at each tick, not kept from the cast, and its `spell_threat`
+  multiplier isn't applied.
 - **Death's wear:**
   - Spirit of Redemption wears gear down when the spirit ends; Thistle Tea does at the fatal blow, and only if a
     player didn't strike it.
