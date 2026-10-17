@@ -852,18 +852,23 @@ fn trap_target(map: &Map, g: Guid, trap: &Trap) -> Option<Guid> {
         return None;
     }
     let at = map.gameobject(g)?.position;
-    let near = map
-        .grid
-        .around(at.x, at.y, trap.radius)
-        .filter(|u| guid::is_player(*u) || guid::is_unit(*u))
-        .filter(|u| {
-            map.position_of(*u)
-                .is_some_and(|p| dist(p, at) <= trap.radius)
-        })
-        .filter(|u| map.unit_view(*u).is_some_and(|v| v.alive));
+    // Living, within the radius. (Only whether it lives: a unit's view
+    // would read its fields too.)
+    let within = |u: &Guid| {
+        map.position_of(*u)
+            .is_some_and(|p| dist(p, at) <= trap.radius)
+            && match map.players.get(u) {
+                Some(p) => p.death == crate::game::map::death::Death::Alive,
+                None => map.creature(*u).is_some_and(|c| c.alive()),
+            }
+    };
+    let near = map.grid.around(at.x, at.y, trap.radius);
     match trap.owner {
-        None => near.filter(|u| guid::is_player(*u)).min(),
+        // Players only, so only players are looked at.
+        None => near.filter(|u| guid::is_player(*u)).filter(within).min(),
         Some(owner) => near
+            .filter(|u| guid::is_player(*u) || guid::is_unit(*u))
+            .filter(within)
             .filter(|u| *u != owner)
             .filter(|u| {
                 crate::game::map::combat::can_attack(map, owner, *u)

@@ -2077,6 +2077,11 @@ pub fn update(map: &mut Map) {
             .filter(|(_, x)| x.next_tick.is_some_and(|t| t <= now))
             .map(|(h, x)| (h.clone(), x.clone()))
             .collect();
+        // Nothing ticks or ends, so nothing changes before the crowd
+        // control's look, and that would find nothing due either.
+        if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
+            continue;
+        }
         for (h, t) in ticks {
             if let Some(a) = auras_mut(map, g)
                 && let Some(x) = a
