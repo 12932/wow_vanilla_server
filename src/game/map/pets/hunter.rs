@@ -10,8 +10,8 @@ use wow_world_messages::vanilla::*;
 
 use super::summon::{self, KIND_HUNTER};
 use super::*;
-use crate::game::map::Map;
 use crate::game::data::GameData;
+use crate::game::map::Map;
 use crate::game::store::PetRecord;
 
 pub const HAPPINESS_TICK: Duration = Duration::from_millis(7_500);
@@ -241,7 +241,11 @@ pub fn gain_xp(map: &mut Map, pet: Guid, amount: u32, owner_level: u8) {
         show_training_points(c);
         // Its spells' new ranks.
         let (entry, family) = (c.entry, c.pet.as_deref().map(|s| s.family).unwrap_or(0));
-        let known = c.pet.as_deref().map(|s| s.spells.clone()).unwrap_or_default();
+        let known = c
+            .pet
+            .as_deref()
+            .map(|s| s.spells.clone())
+            .unwrap_or_default();
         let ranks = summon::spellbook(&data, entry, level, true, family);
         for spell in ranks {
             if !known.contains(&spell) && known.iter().any(|k| data.spells.same_kind(*k, spell)) {
@@ -262,7 +266,10 @@ pub fn tick(map: &mut Map, pet: Guid, now: Instant) {
     let (happy_due, loyal_due) = (s.happiness_at <= now, s.loyalty_at <= now);
     if happy_due {
         let in_combat = map.unit_fields(pet).is_some_and(|f| {
-            f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT)
+            f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
         });
         let rank = map
             .creature(pet)
@@ -429,9 +436,10 @@ pub fn feed_check(map: &Map, hunter: Guid, item: Option<Guid>) -> Option<u8> {
     if !c.alive() {
         return Some(R::TargetsDead.as_int());
     }
-    if c.fields
-        .has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT)
-    {
+    if c.fields.has_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+    ) {
         return Some(R::AffectingCombat.as_int());
     }
     let p = map.players.get(&hunter)?;
@@ -515,7 +523,11 @@ pub fn untrain_offer(map: &mut Map, hunter: Guid) {
         return;
     };
     let now = chrono::Utc::now().timestamp();
-    let cost = untrain_cost(p.row.state.pets.untrain_cost, p.row.state.pets.untrain_at, now);
+    let cost = untrain_cost(
+        p.row.state.pets.untrain_cost,
+        p.row.state.pets.untrain_at,
+        now,
+    );
     p.outbound.send(&SMSG_PET_UNLEARN_CONFIRM {
         pet,
         talent_reset_cost: cost,
@@ -534,7 +546,11 @@ pub fn untrain(map: &mut Map, hunter: Guid, pet: Guid) {
     let Some(p) = map.players.get_mut(&hunter) else {
         return;
     };
-    let cost = untrain_cost(p.row.state.pets.untrain_cost, p.row.state.pets.untrain_at, now);
+    let cost = untrain_cost(
+        p.row.state.pets.untrain_cost,
+        p.row.state.pets.untrain_at,
+        now,
+    );
     if p.money() < cost {
         p.outbound.send(&SMSG_BUY_FAILED {
             guid: pet,
@@ -556,7 +572,12 @@ pub fn untrain(map: &mut Map, hunter: Guid, pet: Guid) {
         return;
     };
     let keep: Vec<u32> = s.family_spells.clone();
-    let gone: Vec<u32> = s.spells.iter().copied().filter(|x| !keep.contains(x)).collect();
+    let gone: Vec<u32> = s
+        .spells
+        .iter()
+        .copied()
+        .filter(|x| !keep.contains(x))
+        .collect();
     s.spells = keep;
     s.autocast.clear();
     s.bar = control::default_bar(&data, &s.spells, &[], false);
@@ -596,7 +617,11 @@ pub fn used(map: &mut Map, pet: Guid, spell: u32) {
     let Some(teaching) = map.realm.data.pets.teaching.get(&spell).copied() else {
         return;
     };
-    if map.players.get(&owner).is_some_and(|p| !p.spells.contains(&teaching)) {
+    if map
+        .players
+        .get(&owner)
+        .is_some_and(|p| !p.spells.contains(&teaching))
+    {
         crate::game::map::spells::learn(map, owner, teaching);
     }
 }
@@ -637,7 +662,10 @@ pub fn train_check(map: &Map, hunter: Guid, teaching: &SpellTemplate) -> Option<
     let Some(t) = data.spells.get(spell) else {
         return Some(R::NotKnown.as_int());
     };
-    let skills: Vec<u32> = ability_entries(data, spell).iter().map(|a| a.skill).collect();
+    let skills: Vec<u32> = ability_entries(data, spell)
+        .iter()
+        .map(|a| a.skill)
+        .collect();
     let family_skill = data.pets.families.get(&s.family).map_or(0, |f| f.skills[0]);
     if !skills.contains(&270) && !skills.contains(&family_skill) {
         return Some(R::BadTargets.as_int());
@@ -772,7 +800,11 @@ pub fn list_stable(map: &mut Map, player: Guid, npc: Guid) {
         slot,
     };
     let mut list = Vec::new();
-    if let Some(r) = pets.current.as_ref().filter(|r| r.kind == KIND_HUNTER && !r.dead) {
+    if let Some(r) = pets
+        .current
+        .as_ref()
+        .filter(|r| r.kind == KIND_HUNTER && !r.dead)
+    {
         list.push(entry(r, 1));
     }
     let mut stabled = pets.stable.clone();
@@ -803,7 +835,10 @@ pub fn stable(map: &mut Map, player: Guid, npc: Guid) {
     };
     let pets = &mut p.row.state.pets;
     let free = (1..=pets.stable_slots).find(|s| pets.stable.iter().all(|(x, _)| x != s));
-    let current = pets.current.clone().filter(|r| r.kind == KIND_HUNTER && !r.dead);
+    let current = pets
+        .current
+        .clone()
+        .filter(|r| r.kind == KIND_HUNTER && !r.dead);
     let (Some(slot), Some(r)) = (free, current) else {
         return stable_result(map, player, StableResult::ErrStable);
     };
@@ -857,7 +892,11 @@ pub fn swap(map: &mut Map, player: Guid, npc: Guid, number: u32) {
     let Some(i) = pets.stable.iter().position(|(_, r)| r.number == number) else {
         return stable_result(map, player, StableResult::ErrStable);
     };
-    let Some(current) = pets.current.clone().filter(|r| r.kind == KIND_HUNTER && !r.dead) else {
+    let Some(current) = pets
+        .current
+        .clone()
+        .filter(|r| r.kind == KIND_HUNTER && !r.dead)
+    else {
         return stable_result(map, player, StableResult::ErrStable);
     };
     let (slot, r) = pets.stable.remove(i);

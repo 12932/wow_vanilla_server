@@ -32,8 +32,8 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
     let (owner, kind, expires, dead_at) = (s.owner, s.kind, s.expires, s.dead_at);
     let alive = c.alive();
     // A player's pet goes when they have; a creature's when it has died.
-    let owner_here = map.players.contains_key(&owner)
-        || map.creature(owner).is_some_and(|o| o.alive());
+    let owner_here =
+        map.players.contains_key(&owner) || map.creature(owner).is_some_and(|o| o.alive());
     if !owner_here {
         summon::remove(map, g);
         return;
@@ -148,9 +148,7 @@ fn still_fights(map: &Map, g: Guid, owner: Guid, v: Guid) -> bool {
         (Some(a), Some(b)) => dist(a, b) <= LEASH_YARDS,
         _ => false,
     };
-    near_owner
-        && map.unit_view(v).is_some_and(|u| u.alive)
-        && combat::can_attack(map, g, v)
+    near_owner && map.unit_view(v).is_some_and(|u| u.alive) && combat::can_attack(map, g, v)
 }
 
 /// What a pet's stance makes it fight: whoever fights its master or it,
@@ -172,8 +170,9 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
         .into_iter()
         .filter(|v| *v != g && *v != owner && still_fights(map, g, owner, *v))
         .filter(|v| {
-            map.combat(*v)
-                .is_some_and(|c| c.attackers.contains(&owner) || c.attackers.contains(&g) || c.attacking)
+            map.combat(*v).is_some_and(|c| {
+                c.attackers.contains(&owner) || c.attackers.contains(&g) || c.attacking
+            })
         })
         .min_by(|a, b| {
             let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, pos));
@@ -187,8 +186,11 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
         .around(pos.x, pos.y, AGGRO_YARDS)
         .filter(|v| guid::is_unit(*v) && *v != g)
         .filter(|v| {
-            map.creature(*v).is_some_and(|c| c.alive() && c.owner.is_none())
-                && map.position_of(*v).is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
+            map.creature(*v)
+                .is_some_and(|c| c.alive() && c.owner.is_none())
+                && map
+                    .position_of(*v)
+                    .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
                 && combat::hostile(map, *v, owner)
                 && combat::can_attack(map, g, *v)
         })
@@ -207,7 +209,9 @@ pub fn defend(map: &mut Map, g: Guid, attacker: Guid) {
     if s.react == REACT_PASSIVE && s.kind != Kind::Guardian {
         return;
     }
-    if map.combat(g).is_some_and(|c| c.attacking && c.victim != attacker)
+    if map
+        .combat(g)
+        .is_some_and(|c| c.attacking && c.victim != attacker)
         && map
             .combat(g)
             .is_some_and(|c| map.unit_view(c.victim).is_some_and(|u| u.alive))
@@ -289,7 +293,10 @@ fn caster_range(map: &Map, g: Guid) -> Option<f32> {
 
 /// One step of a fight with `victim`.
 fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
-    if !map.combat(g).is_some_and(|c| c.attacking && c.victim == victim) {
+    if !map
+        .combat(g)
+        .is_some_and(|c| c.attacking && c.victim == victim)
+    {
         attack(map, g, victim);
     }
     let busy = map.caster(g).is_some_and(|c| c.casting.is_some())
@@ -378,7 +385,15 @@ fn calm(map: &mut Map, g: Guid, now: Instant) {
         .combat(g)
         .and_then(|c| c.last_action)
         .is_some_and(|t| now.duration_since(t) < combat::COMBAT_TIMEOUT);
-    if !fighting && !since && map.unit_fields(g).is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT)) {
+    if !fighting
+        && !since
+        && map.unit_fields(g).is_some_and(|f| {
+            f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+        })
+    {
         combat::leave_combat(map, g);
     }
 }
@@ -475,13 +490,13 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     // As fast as its master, or its own pace if faster.
-    let owner_speed = map
-        .players
-        .get(&owner)
-        .map(|p| p.speeds.run)
-        .unwrap_or(7.0);
+    let owner_speed = map.players.get(&owner).map(|p| p.speeds.run).unwrap_or(7.0);
     if let Some(c) = map.creature_mut(g) {
-        let own = if c.base.run_speed > 0.0 { c.base.run_speed } else { 7.0 };
+        let own = if c.base.run_speed > 0.0 {
+            c.base.run_speed
+        } else {
+            7.0
+        };
         c.speeds.run = own.max(owner_speed);
     }
     walk(map, g, spot, now);
@@ -514,9 +529,12 @@ fn regen(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     let kind = state(map, g).map(|s| s.kind);
-    let in_combat = map
-        .unit_fields(g)
-        .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT));
+    let in_combat = map.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+    });
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -530,7 +548,10 @@ fn regen(map: &mut Map, g: Guid, now: Instant) {
         f.set_u32(UNIT_FIELD_HEALTH, (h + (max / 20).max(1)).min(max));
         let mana_max = f.get_u32(UNIT_FIELD_MAXPOWER1);
         let mana = f.get_u32(UNIT_FIELD_POWER1);
-        f.set_u32(UNIT_FIELD_POWER1, (mana + (mana_max / 20).max(1)).min(mana_max));
+        f.set_u32(
+            UNIT_FIELD_POWER1,
+            (mana + (mana_max / 20).max(1)).min(mana_max),
+        );
     }
     if kind == Some(Kind::Hunter) {
         // vmangos's focus: 24 every four seconds.

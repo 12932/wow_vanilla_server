@@ -6,9 +6,9 @@ use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage as C;
 use wow_world_messages::vanilla::*;
 
 use super::*;
-use crate::game::map::Map;
 use crate::game::data::GameData;
 use crate::game::data::spells::SpellTemplate;
+use crate::game::map::Map;
 
 /// A button: the action in the low three bytes, its kind in the top.
 pub fn button(action: u32, kind: u32) -> u32 {
@@ -227,7 +227,11 @@ pub fn learn(map: &mut Map, pet: Guid, spell: u32) {
 /// Whether `pet` is `player`'s to command.
 fn commands(map: &Map, player: Guid, pet: Guid) -> bool {
     state(map, pet).is_some_and(|s| {
-        s.owner == player && matches!(s.kind, Kind::Hunter | Kind::Demon | Kind::Charmed | Kind::Possessed)
+        s.owner == player
+            && matches!(
+                s.kind,
+                Kind::Hunter | Kind::Demon | Kind::Charmed | Kind::Possessed
+            )
     })
 }
 
@@ -250,10 +254,7 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>
         return;
     };
     let helpful = crate::game::map::auras::positive(t);
-    let victim = map
-        .combat(pet)
-        .filter(|c| c.attacking)
-        .map(|c| c.victim);
+    let victim = map.combat(pet).filter(|c| c.attacking).map(|c| c.victim);
     let unit = target
         .filter(|g| !g.is_zero())
         .or(if helpful { Some(pet) } else { victim });
@@ -367,7 +368,8 @@ fn set_action(map: &mut Map, player: Guid, pet: Guid, slots: &[(u32, u32)]) {
         if fixed(*slot) != fixed(b) {
             continue;
         }
-        if !matches!(kind, ACT_COMMAND | ACT_REACTION) && action != 0 && !s.spells.contains(&action) {
+        if !matches!(kind, ACT_COMMAND | ACT_REACTION) && action != 0 && !s.spells.contains(&action)
+        {
             continue;
         }
         *slot = b;
@@ -411,7 +413,8 @@ fn good_name(name: &str) -> bool {
 
 /// `CMSG_PET_RENAME`: a hunter's pet may be named once.
 fn rename(map: &mut Map, player: Guid, pet: Guid, name: &str) {
-    let ok = state(map, pet).is_some_and(|s| s.owner == player && s.kind == Kind::Hunter && !s.renamed);
+    let ok =
+        state(map, pet).is_some_and(|s| s.owner == player && s.kind == Kind::Hunter && !s.renamed);
     if !ok {
         return;
     }
@@ -458,7 +461,10 @@ fn name_query(map: &Map, player: Guid, number: u32, g: Guid) {
 
 /// `CMSG_PET_ABANDON`: a hunter's pet is let go for good.
 fn abandon(map: &mut Map, player: Guid, pet: Guid) {
-    let Some(kind) = state(map, pet).filter(|s| s.owner == player).map(|s| s.kind) else {
+    let Some(kind) = state(map, pet)
+        .filter(|s| s.owner == player)
+        .map(|s| s.kind)
+    else {
         return;
     };
     summon::remove(map, pet);
@@ -502,8 +508,11 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_REQUEST_PET_INFO => send_spells(map, g),
         C::CMSG_PET_CANCEL_AURA(m) => {
             if commands(map, g, m.guid) {
-                let helpful = crate::game::map::auras::auras(map, m.guid)
-                    .is_some_and(|a| a.holders.iter().any(|h| h.spell == m.id && h.positive && !h.passive));
+                let helpful = crate::game::map::auras::auras(map, m.guid).is_some_and(|a| {
+                    a.holders
+                        .iter()
+                        .any(|h| h.spell == m.id && h.positive && !h.passive)
+                });
                 if helpful {
                     crate::game::map::auras::remove_spell(map, m.guid, m.id, None);
                 }

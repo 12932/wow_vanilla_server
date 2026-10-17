@@ -247,15 +247,16 @@ pub fn handles(s: &SpellTemplate, index: usize) -> bool {
             | EFFECT_LEARN_PET_SPELL
             | EFFECT_SUMMON_POSSESSED
             | EFFECT_SUMMON_TOTEM
-            | EFFECT_SUMMON_TOTEM_SLOT1..=EFFECT_SUMMON_TOTEM_SLOT4
-            | EFFECT_SUMMON_PHANTASM
-            | EFFECT_SUMMON_CRITTER
-            | EFFECT_FEED_PET
-            | EFFECT_DISMISS_PET
-            | EFFECT_SUMMON_DEAD_PET
-            | EFFECT_DESTROY_ALL_TOTEMS
-            | EFFECT_SUMMON_DEMON
-            | EFFECT_APPLY_AREA_AURA_PET
+            | EFFECT_SUMMON_TOTEM_SLOT1
+            ..=EFFECT_SUMMON_TOTEM_SLOT4
+                | EFFECT_SUMMON_PHANTASM
+                | EFFECT_SUMMON_CRITTER
+                | EFFECT_FEED_PET
+                | EFFECT_DISMISS_PET
+                | EFFECT_SUMMON_DEAD_PET
+                | EFFECT_DESTROY_ALL_TOTEMS
+                | EFFECT_SUMMON_DEMON
+                | EFFECT_APPLY_AREA_AURA_PET
     ) || (s.id == SPELL_TAME_BEAST_TICK && e == 3)
         || teaches_pet(s, index)
 }
@@ -265,7 +266,8 @@ pub fn handles(s: &SpellTemplate, index: usize) -> bool {
 pub fn teaches_pet(s: &SpellTemplate, index: usize) -> bool {
     let e = s.effects[index];
     e.trigger_spell != 0
-        && (e.effect == EFFECT_LEARN_PET_SPELL || (e.effect == EFFECT_LEARN_SPELL && e.target_a == 5))
+        && (e.effect == EFFECT_LEARN_PET_SPELL
+            || (e.effect == EFFECT_LEARN_SPELL && e.target_a == 5))
 }
 
 /// The spell `s` teaches a pet, if it teaches one.
@@ -299,7 +301,12 @@ pub fn effect(
     }
     match e.effect {
         3 if s.id == SPELL_TAME_BEAST_TICK => {
-            crate::game::map::spells::cast_triggered(map, caster, SPELL_TAME_BEAST_TAME, Some(target));
+            crate::game::map::spells::cast_triggered(
+                map,
+                caster,
+                SPELL_TAME_BEAST_TAME,
+                Some(target),
+            );
         }
         EFFECT_TAME_CREATURE => hunter::tame(map, caster, target, s.id),
         EFFECT_SUMMON_PET => {
@@ -384,7 +391,11 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
         .iter()
         .any(|e| e.effect == EFFECT_SUMMON_PET && e.misc_value == 0);
     if effects.contains(&EFFECT_SUMMON_PET) {
-        if map.players.get(&caster).is_some_and(|p| p.owned.charm.is_some()) {
+        if map
+            .players
+            .get(&caster)
+            .is_some_and(|p| p.owned.charm.is_some())
+        {
             return Some(R::AlreadyHaveCharm.as_int());
         }
         if call_pet {
@@ -398,17 +409,18 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
             }
         }
     }
-    if s.id == SPELL_TAME_BEAST || effects.contains(&EFFECT_TAME_CREATURE) {
-        if let Some(reason) = hunter::tame_check(map, caster, t.unit) {
-            if let Some(p) = map.players.get(&caster) {
-                p.outbound.send(&wow_world_messages::vanilla::SMSG_PET_TAME_FAILURE { reason });
-            }
-            return Some(R::DontReport.as_int());
+    if (s.id == SPELL_TAME_BEAST || effects.contains(&EFFECT_TAME_CREATURE))
+        && let Some(reason) = hunter::tame_check(map, caster, t.unit)
+    {
+        if let Some(p) = map.players.get(&caster) {
+            p.outbound
+                .send(&wow_world_messages::vanilla::SMSG_PET_TAME_FAILURE { reason });
         }
+        return Some(R::DontReport.as_int());
     }
     if effects.contains(&EFFECT_SUMMON_DEAD_PET) {
-        let dead_out = pet_of(map, caster)
-            .is_some_and(|g| map.unit_view(g).is_some_and(|u| !u.alive));
+        let dead_out =
+            pet_of(map, caster).is_some_and(|g| map.unit_view(g).is_some_and(|u| !u.alive));
         if !dead_out && !record.is_some_and(|r| r.dead) {
             return Some(R::TargetNotDead.as_int());
         }
@@ -599,7 +611,11 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     let Some(c) = map.creature_mut(unit) else {
         return;
     };
-    let kind = if possess { Kind::Possessed } else { Kind::Charmed };
+    let kind = if possess {
+        Kind::Possessed
+    } else {
+        Kind::Charmed
+    };
     let mut s = PetState::new(kind, master, now);
     s.was_faction = c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
     s.was_hostile = c.hostile_to_players;
@@ -609,7 +625,11 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
         .unwrap_or_default();
     s.spells = summon::charm_spells(&data, c.entry);
     s.bar = control::default_bar(&data, &s.spells, &[], possess);
-    s.react = if possess { REACT_PASSIVE } else { REACT_DEFENSIVE };
+    s.react = if possess {
+        REACT_PASSIVE
+    } else {
+        REACT_DEFENSIVE
+    };
     c.owner = Some(master);
     c.pet = Some(Box::new(s));
     c.threat.clear();
@@ -621,7 +641,8 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED, true);
     if possess {
-        c.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, true);
+        c.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, true);
     }
     // Whoever fought it forgets it.
     crate::game::map::ai::forget(map, unit);
@@ -642,9 +663,8 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
 
 /// The charm or possession of `unit` ended.
 pub fn uncharmed(map: &mut Map, master: Guid, unit: Guid) {
-    let charmed = state(map, unit).is_some_and(|s| {
-        matches!(s.kind, Kind::Charmed | Kind::Possessed) && s.owner == master
-    });
+    let charmed = state(map, unit)
+        .is_some_and(|s| matches!(s.kind, Kind::Charmed | Kind::Possessed) && s.owner == master);
     if charmed {
         release(map, master, unit);
     }
@@ -665,7 +685,8 @@ fn release(map: &mut Map, master: Guid, unit: Guid) {
         c.fields.set_guid(UNIT_FIELD_CHARMEDBY, Guid::zero());
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED, false);
-        c.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, false);
+        c.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, false);
     }
     crate::game::map::combat::leave_combat(map, unit);
     if let Some(p) = map.players.get_mut(&master) {
@@ -683,13 +704,18 @@ fn release(map: &mut Map, master: Guid, unit: Guid) {
         }
     }
     // The pet the master had, back again; or no bar.
-    if map.players.get(&master).is_some_and(|p| p.owned.pet.is_some()) {
+    if map
+        .players
+        .get(&master)
+        .is_some_and(|p| p.owned.pet.is_some())
+    {
         send_spells(map, master);
     } else if let Some(p) = map.players.get(&master) {
-        p.outbound.send(&wow_world_messages::vanilla::SMSG_PET_SPELLS {
-            pet: Guid::zero(),
-            action_bars: None,
-        });
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_PET_SPELLS {
+                pet: Guid::zero(),
+                action_bars: None,
+            });
     }
     // The aura that held it comes off, if it is still on.
     let holding = crate::game::map::auras::auras(map, unit).and_then(|a| {

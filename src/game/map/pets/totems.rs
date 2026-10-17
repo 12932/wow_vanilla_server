@@ -38,7 +38,12 @@ fn totem_spell(map: &Map, entry: u32, s: &SpellTemplate) -> u32 {
         .get(&entry)
         .and_then(|l| data.pets.spell_lists.get(l))
         .and_then(|l| l.first().copied())
-        .or_else(|| s.effects.iter().find(|e| e.trigger_spell != 0).map(|e| e.trigger_spell))
+        .or_else(|| {
+            s.effects
+                .iter()
+                .find(|e| e.trigger_spell != 0)
+                .map(|e| e.trigger_spell)
+        })
         .unwrap_or(0)
 }
 
@@ -48,7 +53,14 @@ fn before(map: &Map, owner: Guid, d: f32) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))
-        .unwrap_or((Vector3d { x: 0.0, y: 0.0, z: 0.0 }, 0.0));
+        .unwrap_or((
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        ));
     (
         Vector3d {
             x: pos.x + d * o.cos(),
@@ -64,14 +76,16 @@ fn level_of(map: &Map, g: Guid) -> u8 {
 }
 
 /// A totem of `entry` for `owner`, in `slot` (the one there goes).
-pub fn summon_totem(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate, slot: Option<usize>) {
+pub fn summon_totem(
+    map: &mut Map,
+    owner: Guid,
+    entry: u32,
+    s: &SpellTemplate,
+    slot: Option<usize>,
+) {
     let now = map.now;
     let slot = slot.unwrap_or(0).min(3);
-    if let Some(old) = map
-        .players
-        .get(&owner)
-        .and_then(|p| p.owned.totems[slot])
-    {
+    if let Some(old) = map.players.get(&owner).and_then(|p| p.owned.totems[slot]) {
         summon::remove(map, old);
     }
     let (at, o) = before(map, owner, 2.0);
@@ -86,7 +100,15 @@ pub fn summon_totem(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate, s
         c.base.run_speed = 0.0;
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
         // A totem has the few points of health its summon spell gives.
-        let health = (s.effects.iter().find(|e| (EFFECT_SUMMON_TOTEM_SLOT1..=EFFECT_SUMMON_TOTEM_SLOT4).contains(&e.effect) || e.effect == EFFECT_SUMMON_TOTEM).map_or(5, |e| e.base_points + e.base_dice)).max(1) as u32;
+        let health = (s
+            .effects
+            .iter()
+            .find(|e| {
+                (EFFECT_SUMMON_TOTEM_SLOT1..=EFFECT_SUMMON_TOTEM_SLOT4).contains(&e.effect)
+                    || e.effect == EFFECT_SUMMON_TOTEM
+            })
+            .map_or(5, |e| e.base_points + e.base_dice))
+        .max(1) as u32;
         c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
         c.fields.set_u32(UNIT_FIELD_HEALTH, health);
         c.base.max_health = health;
@@ -169,7 +191,11 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             s.next_think = now + AURA_EVERY;
         }
         let mut radius = 0.0f32;
-        for e in t.effects.iter().filter(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY) {
+        for e in t
+            .effects
+            .iter()
+            .filter(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
+        {
             radius = radius.max(data.spells.radius(e.radius_index));
         }
         let radius = if radius > 0.0 { radius } else { 30.0 };
@@ -178,7 +204,12 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         let had: Vec<Guid> = map
             .players
             .values()
-            .filter(|p| p.auras.holders.iter().any(|h| h.spell == spell && h.caster == g))
+            .filter(|p| {
+                p.auras
+                    .holders
+                    .iter()
+                    .any(|h| h.spell == spell && h.caster == g)
+            })
             .map(|p| p.guid)
             .collect();
         for p in had.iter().filter(|p| !near.contains(p)) {
@@ -186,7 +217,9 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         }
         let level = level_of(map, g);
         let effects: Vec<(usize, i32)> = (0..3)
-            .filter(|i| t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY && t.effects[*i].aura != 0)
+            .filter(|i| {
+                t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY && t.effects[*i].aura != 0
+            })
             .map(|i| (i, crate::game::map::spells::points(t, i, u32::from(level))))
             .collect();
         for p in near.into_iter().filter(|p| !had.contains(p)) {
@@ -224,9 +257,14 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         .filter(|c| c.attacking)
         .map(|c| c.victim)
         .into_iter()
-        .chain(map.combat(owner).map(|c| c.attackers.iter().copied().collect::<Vec<_>>()).unwrap_or_default())
+        .chain(
+            map.combat(owner)
+                .map(|c| c.attackers.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default(),
+        )
         .find(|v| {
-            map.unit_view(*v).is_some_and(|u| u.alive && dist(u.position, at) <= range)
+            map.unit_view(*v)
+                .is_some_and(|u| u.alive && dist(u.position, at) <= range)
                 && crate::game::map::combat::can_attack(map, g, *v)
         });
     if let Some(v) = target {
@@ -273,7 +311,8 @@ pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate
     let level = if guid::is_player(owner) {
         level_of(map, owner)
     } else {
-        data.creature_template(entry).map_or(1, |t| t.level_max.max(1))
+        data.creature_template(entry)
+            .map_or(1, |t| t.level_max.max(1))
     };
     let (at, o) = before(map, owner, 2.0);
     let g = summon::spawn(map, owner, entry, Kind::Guardian, level, at, o);

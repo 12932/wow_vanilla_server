@@ -83,8 +83,7 @@ fn creature_stats(data: &GameData, c: &mut Creature, t: &CreatureTemplate, level
     let Some(stats) = data.class_level_stats.get(&(t.unit_class.max(1), level)) else {
         return;
     };
-    let health = crate::game::data::load::creature_health(stats.health, t.health_multiplier)
-        .max(1);
+    let health = crate::game::data::load::creature_health(stats.health, t.health_multiplier).max(1);
     c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
     c.fields.set_u32(UNIT_FIELD_HEALTH, health);
     let mana = (stats.mana as f32 * t.mana_multiplier.max(0.0)).round() as u32;
@@ -92,11 +91,18 @@ fn creature_stats(data: &GameData, c: &mut Creature, t: &CreatureTemplate, level
         c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
         c.fields.set_u32(UNIT_FIELD_POWER1, mana);
     }
-    let mult = if t.damage_multiplier > 0.0 { t.damage_multiplier } else { 1.0 };
+    let mult = if t.damage_multiplier > 0.0 {
+        t.damage_multiplier
+    } else {
+        1.0
+    };
     let base = stats.melee_damage * mult;
-    c.fields.set_f32(UNIT_FIELD_MINDAMAGE, (base * 0.86).max(1.0));
-    c.fields.set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
-    c.fields.set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
+    c.fields
+        .set_f32(UNIT_FIELD_MINDAMAGE, (base * 0.86).max(1.0));
+    c.fields
+        .set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
+    c.fields
+        .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
     c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
 }
 
@@ -125,7 +131,10 @@ pub fn apply_level(data: &GameData, c: &mut Creature, level: u8) {
             // Thistle Tea's hunter pet damage: by level and attack speed.
             let speed = c.fields.get_u32(UNIT_FIELD_BASEATTACKTIME).max(1000) as f32 / 1000.0;
             let lvl = f32::from(level);
-            (lvl * 1.15 * 1.05 * speed / 2.0, lvl * 1.45 * 1.05 * speed / 2.0)
+            (
+                lvl * 1.15 * 1.05 * speed / 2.0,
+                lvl * 1.45 * 1.05 * speed / 2.0,
+            )
         } else {
             l.damage
         };
@@ -134,8 +143,10 @@ pub fn apply_level(data: &GameData, c: &mut Creature, level: u8) {
         } else {
             1.0
         };
-        c.fields.set_f32(UNIT_FIELD_MINDAMAGE, (min * mult).max(1.0));
-        c.fields.set_f32(UNIT_FIELD_MAXDAMAGE, (max * mult).max(1.0));
+        c.fields
+            .set_f32(UNIT_FIELD_MINDAMAGE, (min * mult).max(1.0));
+        c.fields
+            .set_f32(UNIT_FIELD_MAXDAMAGE, (max * mult).max(1.0));
     }
     if hunter {
         c.fields
@@ -164,7 +175,12 @@ pub fn spellbook(data: &GameData, entry: u32, level: u8, hunter: bool, family: u
         .unwrap_or_default();
     let mut grimoires = false;
     if first.is_empty() {
-        first = data.pets.create_spells.get(&entry).cloned().unwrap_or_default();
+        first = data
+            .pets
+            .create_spells
+            .get(&entry)
+            .cloned()
+            .unwrap_or_default();
         grimoires = !hunter;
     }
     if hunter {
@@ -217,7 +233,11 @@ pub fn spellbook(data: &GameData, entry: u32, level: u8, hunter: bool, family: u
             .skill_abilities
             .get(&s)
             .is_some_and(|v| v.iter().any(|a| skills.contains(&a.skill)));
-        if !lined && data.spells.get(s).is_some() && !spells.contains(&s) && !grimoire_only(data, s, grimoires) {
+        if !lined
+            && data.spells.get(s).is_some()
+            && !spells.contains(&s)
+            && !grimoire_only(data, s, grimoires)
+        {
             spells.push(s);
         }
     }
@@ -272,8 +292,16 @@ pub fn charm_spells(data: &GameData, entry: u32) -> Vec<u32> {
 fn demon_name(data: &GameData, entry: u32) -> Option<String> {
     let halves = data.pets.names.get(&entry)?;
     let mut rng = rand::rng();
-    let starts: Vec<&String> = halves.iter().filter(|(_, h)| *h == 0).map(|(w, _)| w).collect();
-    let ends: Vec<&String> = halves.iter().filter(|(_, h)| *h == 1).map(|(w, _)| w).collect();
+    let starts: Vec<&String> = halves
+        .iter()
+        .filter(|(_, h)| *h == 0)
+        .map(|(w, _)| w)
+        .collect();
+    let ends: Vec<&String> = halves
+        .iter()
+        .filter(|(_, h)| *h == 1)
+        .map(|(w, _)| w)
+        .collect();
     if starts.is_empty() || ends.is_empty() {
         return None;
     }
@@ -296,7 +324,14 @@ fn beside(map: &Map, owner: Guid) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))
-        .unwrap_or((Vector3d { x: 0.0, y: 0.0, z: 0.0 }, 0.0));
+        .unwrap_or((
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        ));
     let a = o + std::f32::consts::FRAC_PI_2 * 1.5;
     (
         Vector3d {
@@ -314,7 +349,11 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     if map.players.get(&owner)?.owned.pet.is_some() {
         return None;
     }
-    let kind = if r.kind == KIND_HUNTER { Kind::Hunter } else { Kind::Demon };
+    let kind = if r.kind == KIND_HUNTER {
+        Kind::Hunter
+    } else {
+        Kind::Demon
+    };
     let (at, o) = beside(map, owner);
     let level = r.level.max(1);
     let g = spawn(map, owner, r.entry, kind, level, at, o);
@@ -324,15 +363,21 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         c.fields.set_u32(UNIT_FIELD_DISPLAYID, r.display_id);
         c.fields.set_u32(UNIT_FIELD_NATIVEDISPLAYID, r.display_id);
     }
-    let class = if kind == Kind::Hunter { 1 } else { c.fields.get_byte(UNIT_FIELD_BYTES_0, 1).max(1) };
+    let class = if kind == Kind::Hunter {
+        1
+    } else {
+        c.fields.get_byte(UNIT_FIELD_BYTES_0, 1).max(1)
+    };
     let power = if kind == Kind::Hunter { 2 } else { 0 };
     c.fields.set_bytes(UNIT_FIELD_BYTES_0, 0, class, 0, power);
     c.fields.set_u32(UNIT_FIELD_PETNUMBER, r.number);
     c.fields.set_u32(UNIT_FIELD_PET_NAME_TIMESTAMP, unix);
     c.fields.set_u32(UNIT_CREATED_BY_SPELL, r.summon_spell);
     if kind == Kind::Hunter {
-        c.fields
-            .set_u32(UNIT_FIELD_POWER1 + POWER_HAPPINESS, r.happiness.min(HAPPINESS_MAX));
+        c.fields.set_u32(
+            UNIT_FIELD_POWER1 + POWER_HAPPINESS,
+            r.happiness.min(HAPPINESS_MAX),
+        );
         c.fields.set_byte(UNIT_FIELD_BYTES_1, 1, r.loyalty.max(1));
         c.fields.set_u32(UNIT_FIELD_PETEXPERIENCE, r.xp);
     }
@@ -359,13 +404,21 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     }
     apply_level(&data, c, level);
     let max_health = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
-    let health = if r.health == 0 { max_health } else { r.health.min(max_health) };
+    let health = if r.health == 0 {
+        max_health
+    } else {
+        r.health.min(max_health)
+    };
     c.fields.set_u32(UNIT_FIELD_HEALTH, health);
     let power_index = if kind == Kind::Hunter { POWER_FOCUS } else { 0 };
     let max_power = c.fields.get_u32(UNIT_FIELD_MAXPOWER1 + power_index);
     c.fields.set_u32(
         UNIT_FIELD_POWER1 + power_index,
-        if r.power == 0 { max_power } else { r.power.min(max_power) },
+        if r.power == 0 {
+            max_power
+        } else {
+            r.power.min(max_power)
+        },
     );
     if kind == Kind::Hunter {
         hunter::show_training_points(c);
@@ -411,7 +464,8 @@ fn owner_pet_auras(map: &mut Map, owner: Guid, pet: Guid) {
         .map(|p| p.auras.holders.iter().map(|h| h.spell).collect())
         .unwrap_or_default();
     for (spell, for_pet, aura) in data.pets.owner_auras.iter().copied() {
-        if (for_pet == 0 || for_pet == entry) && has.contains(&spell)
+        if (for_pet == 0 || for_pet == entry)
+            && has.contains(&spell)
             && let Some(t) = data.spells.get(aura)
         {
             let effects: Vec<(usize, i32)> = (0..3)
@@ -452,7 +506,11 @@ pub fn summon_demon(map: &mut Map, owner: Guid, entry: u32, spell: u32) {
     if let Some(old) = pet_of(map, owner) {
         dismiss(map, old);
     }
-    let level = map.unit_view(owner).map(|u| u.level).unwrap_or(1).clamp(1, 60) as u8;
+    let level = map
+        .unit_view(owner)
+        .map(|u| u.level)
+        .unwrap_or(1)
+        .clamp(1, 60) as u8;
     let t = template(&data, entry);
     let number = next_number(map, owner);
     let spells = spellbook(&data, entry, level, false, t.family);
@@ -562,10 +620,11 @@ pub fn remove(map: &mut Map, g: Guid) {
             }
         }
         if was_pet {
-            p.outbound.send(&wow_world_messages::vanilla::SMSG_PET_SPELLS {
-                pet: Guid::zero(),
-                action_bars: None,
-            });
+            p.outbound
+                .send(&wow_world_messages::vanilla::SMSG_PET_SPELLS {
+                    pet: Guid::zero(),
+                    action_bars: None,
+                });
         }
     }
     crate::game::map::combat::leave_combat(map, g);
