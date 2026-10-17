@@ -1172,6 +1172,23 @@ The battlegrounds share one layer, `map/battleground/{mod,wsg,ab,av}.rs`:
   - quests' reputation requirements, and equipping by reputation.
 - **A bug fixed:** wvs's quest query response was four bytes short (a 16-bit faction where 1.12 has 32).
 
+### Phase 14: Alterac Valley's NPCs (2026-10-17)
+
+- **Routes** (`battleground/av_routes.rs`): launched NPCs walk their `script_waypoint` routes whether watched or not.
+  They act at named points, rally, take up the route after a fight, and keep formation. Flyers fly.
+- **The summoners:** Thurloga and Renferal march with their escorts, set up at the altar and channel. Ten players of
+  their side complete the ritual, and Lokholar or Ivus rises, speaks and marches.
+- **The air:** a freed wing commander runs home, mounts and sends his war rider, which flies to the enemy keep and
+  circles it attacking.
+- **The cavalry and the ground assault:** a commander with eight riders, or ten troops of the side's armor tier, at
+  Thistle Tea's positions, rallying as it has them.
+- **Generals, captains, marshals:** leashes, Thistle Tea's lines on a pull or a wipe, linked guards, and Drek'Thar's
+  wolves.
+- **Beacons:** the plant spells place them for a match's side, and the enemy's Attacking disarms them.
+- **Battleground-only spells,** and Opening captures banners.
+- **The Plaguelands:** the Eastwall squad fights with its commander, and Crown Guard's spirit healer walks.
+- **Insignia:** Remove Insignia on a battleground's dead leaves bones and gold by level.
+
 ### The world (2026-10-17)
 
 - **Transports:** vmangos's keyframes, as Thistle Tea's `Travel.Transport`: splines with acceleration, stops and map
