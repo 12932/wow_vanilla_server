@@ -155,18 +155,13 @@ pub fn load(db: &Connection, data: &mut GameData) {
     }) {
         s.links.insert(guid, (master, flag));
     }
-    for (entry, t) in rows(db, "SELECT * FROM creature_linking_template", |c| {
+    for (key, t) in rows(db, "SELECT * FROM creature_linking_template", |c| {
         (
-            c.u32("entry"),
-            (
-                c.u32("map"),
-                c.u32("master_entry"),
-                c.u32("flag"),
-                c.f32("search_range"),
-            ),
+            (c.u32("entry"), c.u32("map")),
+            (c.u32("master_entry"), c.u32("flag"), c.f32("search_range")),
         )
     }) {
-        s.link_templates.insert(entry, t);
+        s.link_templates.insert(key, t);
     }
     // Pools, in the patch.
     let in_patch = "patch_min <= 10 AND patch_max >= 10";
@@ -331,4 +326,50 @@ pub fn load(db: &Connection, data: &mut GameData) {
         s.pools.len(),
         s.groups.len()
     );
+}
+
+/// `creature_linking_template`'s rows as links of their own, as vmangos
+/// and Thistle Tea's `CreatureLink` loader resolve them: each spawn of the
+/// entry on the map is tied to the nearest spawn of the master entry
+/// within the search range (in two dimensions, short of it), or with no
+/// range to the map's only one. A spawn's own `creature_linking` row
+/// stands.
+pub fn link_templates(data: &mut GameData) {
+    let templates: Vec<_> = data
+        .scripts
+        .link_templates
+        .iter()
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    for ((entry, map), (master_entry, flags, range)) in templates {
+        let Some(spawns) = data.creature_spawns.get(&map) else {
+            continue;
+        };
+        let of = |e: u32| -> Vec<(u32, f32, f32)> {
+            spawns
+                .iter()
+                .filter(|s| s.entries.first() == Some(&e))
+                .map(|s| (s.guid, s.x, s.y))
+                .collect()
+        };
+        let (masters, slaves) = (of(master_entry), of(entry));
+        for (slave, x, y) in slaves {
+            if data.scripts.links.contains_key(&slave) {
+                continue;
+            }
+            let master = if range <= 0.0 {
+                (masters.len() == 1).then(|| masters[0].0)
+            } else {
+                masters
+                    .iter()
+                    .map(|(g, mx, my)| (*g, (x - mx).powi(2) + (y - my).powi(2)))
+                    .filter(|(_, d)| *d < range * range)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(g, _)| g)
+            };
+            if let Some(master) = master {
+                data.scripts.links.insert(slave, (master, flags));
+            }
+        }
+    }
 }

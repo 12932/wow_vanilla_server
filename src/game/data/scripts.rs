@@ -266,9 +266,10 @@ pub struct ScriptData {
     pub group_of: AHashMap<u32, u32>,
     /// `creature_linking`: slave → (master, flags).
     pub links: AHashMap<u32, (u32, u32)>,
-    /// `creature_linking_template`: slave entry → (map, master entry,
-    /// flags, search range).
-    pub link_templates: AHashMap<u32, (u32, u32, u32, f32)>,
+    /// `creature_linking_template`: (slave entry, map) → (master entry,
+    /// flags, search range); resolved into `links` at load
+    /// (`scripts_load::link_templates`).
+    pub link_templates: AHashMap<(u32, u32), (u32, u32, f32)>,
     pub pools: AHashMap<u32, Pool>,
     /// A spawn's pool.
     pub creature_pool: AHashMap<u32, u32>,

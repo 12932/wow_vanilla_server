@@ -10,8 +10,8 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
-use crate::game::data::spells;
 use crate::game::data::*;
+use crate::game::data::{scripts, spells};
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::harness::{self, Client};
@@ -764,13 +764,20 @@ async fn a_linked_aura_holds_its_spell_while_it_lasts() {
     assert_eq!(off, (false, false), "and takes it away");
 }
 
-/// The real Barkskin (22812) links "Barkskin Effect (DND)" (22839) by
-/// `spell_effect_mod`, and the server knows the aura that does it.
+/// The real data, read once: Barkskin (22812) links "Barkskin Effect
+/// (DND)" (22839) by `spell_effect_mod`, and the server knows the aura
+/// that does it; Rajaxx's captains and Loatheb's maggots have their
+/// masters by `creature_linking_template`.
 #[test]
-fn the_real_barkskin_links_its_effect() {
+fn the_real_data_links_barkskin_and_the_masters() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
     };
+    // Colonel Zerran, by Rajaxx in the Ruins (the other Rajaxx is in
+    // Silithus, on another map).
+    assert_eq!(d.scripts.links.get(&301_170).map(|l| l.0), Some(90_871));
+    // A Diseased Maggot, Loatheb's in Naxxramas.
+    assert_eq!(d.scripts.links.get(&88_233).map(|l| l.0), Some(88_226));
     let bark = d.spells.get(22_812).expect("Barkskin");
     let e = bark.effects[1];
     assert_eq!(
@@ -1497,4 +1504,106 @@ async fn a_ghost_sees_only_the_creatures_by_its_corpse() {
     on(&map, move |m| crate::game::map::death::resurrect(m, g, 1.0)).await;
     a.sees(far).await;
     a.forgets(healer).await;
+}
+
+const RAJAXX: u32 = 900_420;
+const CAPTAIN: u32 = 900_421;
+
+/// `creature_linking_template` ties each spawn of its entry to the nearest
+/// spawn of its master's within the search range, or to the map's only one
+/// with no range, as vmangos and Thistle Tea's `CreatureLink` loader do: a
+/// captain joins Rajaxx's fight; one out of range has no master.
+#[tokio::test]
+async fn a_templated_link_ties_a_captain_to_its_general() {
+    let mut d = GameData::empty();
+    let mut general = plain_creature(RAJAXX, "General Rajaxx", 7);
+    general.detection_range = 0.1;
+    d.creature_templates.insert(RAJAXX, general);
+    let mut captain = plain_creature(CAPTAIN, "Captain", 7);
+    captain.detection_range = 0.1;
+    d.creature_templates.insert(CAPTAIN, captain);
+    let at = |guid, entry, dx: f32| CreatureSpawn {
+        guid,
+        entries: vec![entry],
+        map: 0,
+        x: START.0 + dx,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    };
+    d.creature_spawns.insert(
+        0,
+        vec![
+            at(52, RAJAXX, 10.0),
+            at(53, CAPTAIN, 20.0),
+            at(54, CAPTAIN, 90.0),
+        ],
+    );
+    d.scripts
+        .link_templates
+        .insert((CAPTAIN, 0), (RAJAXX, scripts::LINK_AGGRO_ON_AGGRO, 50.0));
+    crate::game::data::scripts_load::link_templates(&mut d);
+    assert_eq!(
+        d.scripts.links.get(&53),
+        Some(&(52, scripts::LINK_AGGRO_ON_AGGRO))
+    );
+    assert_eq!(d.scripts.links.get(&54), None, "out of the search range");
+    let realm = harness::realm_with(d);
+    let (_a, g, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let fighting = on(&map, move |m| {
+        let of = |spawn: u32| crate::game::map::scripts::creature_of_spawn(m, spawn).unwrap();
+        let (rajaxx, near, far) = (of(52), of(53), of(54));
+        crate::game::map::ai::attacked(m, rajaxx, g);
+        let at_it = |c| m.creature(c).is_some_and(|c| c.combat.attacking);
+        (at_it(rajaxx), at_it(near), at_it(far))
+    })
+    .await;
+    assert_eq!(fighting, (true, true, false), "the near captain joins in");
+}
+
+const LOATHEB: u32 = 900_422;
+const MAGGOT: u32 = 900_423;
+
+/// A slave flagged both not to spawn while its master is dead and while
+/// it is alive (Naxxramas's trash, 3072) spawns while its master lives:
+/// the first flag decides, as in mangos's `CanSpawn` and Thistle Tea's
+/// `spawn_allowed?`.
+#[tokio::test]
+async fn a_slave_barred_both_ways_spawns_while_its_master_lives() {
+    let mut d = GameData::empty();
+    d.creature_templates
+        .insert(LOATHEB, plain_creature(LOATHEB, "Loatheb", 7));
+    d.creature_templates
+        .insert(MAGGOT, plain_creature(MAGGOT, "Maggot", 7));
+    let at = |guid, entry, dx: f32| CreatureSpawn {
+        guid,
+        entries: vec![entry],
+        map: 0,
+        x: START.0 + dx,
+        y: START.1 + 40.0,
+        z: START.2,
+        respawn_min: 600,
+        respawn_max: 600,
+        ..Default::default()
+    };
+    d.creature_spawns
+        .insert(0, vec![at(55, LOATHEB, 0.0), at(56, MAGGOT, 5.0)]);
+    d.scripts.link_templates.insert(
+        (MAGGOT, 0),
+        (
+            LOATHEB,
+            scripts::LINK_CANT_SPAWN_IF_BOSS_DEAD | scripts::LINK_CANT_SPAWN_IF_BOSS_ALIVE,
+            0.0,
+        ),
+    );
+    crate::game::data::scripts_load::link_templates(&mut d);
+    assert!(d.scripts.links.contains_key(&56), "the map's only master");
+    let realm = harness::realm_with(d);
+    let (_a, _g, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let alive = on(&map, |m| {
+        let maggot = crate::game::map::scripts::creature_of_spawn(m, 56).unwrap();
+        m.creature(maggot).unwrap().alive()
+    })
+    .await;
+    assert!(alive, "up while Loatheb lives");
 }
