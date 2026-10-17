@@ -273,12 +273,20 @@ fn undo_logout(p: &mut crate::game::map::player::Player) {
     if p.stand_state() == STAND_STATE_SIT && p.death == crate::game::map::death::Death::Alive {
         p.set_stand_state(STAND_STATE_STAND);
     }
-    p.fields
-        .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
-    p.outbound.send(&SMSG_FORCE_MOVE_UNROOT {
-        guid: p.guid,
-        counter: 0,
-    });
+    // A stun or root come since stays (Thistle Tea's `MovementSync`, after
+    // the logout's own goes).
+    use crate::game::map::auras::{AURA_MOD_ROOT, AURA_MOD_STUN};
+    let stunned = p.auras.has(AURA_MOD_STUN);
+    if !stunned {
+        p.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
+    }
+    if !stunned && !p.auras.has(AURA_MOD_ROOT) {
+        p.outbound.send(&SMSG_FORCE_MOVE_UNROOT {
+            guid: p.guid,
+            counter: 0,
+        });
+    }
 }
 
 /// `CMSG_LOGOUT_CANCEL`.
