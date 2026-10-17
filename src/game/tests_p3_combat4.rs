@@ -101,10 +101,7 @@ fn turn(m: &mut Map, g: Guid) {
 async fn a_vanish_takes_a_creature_out_of_its_fight_and_home_whole_or_to_the_next_on_its_list() {
     let (_realm, mut a, ga, map) = setup_with(data(), Class::Rogue).await;
     let brute = map
-        .query(move |m| {
-            let brute = spawn_at(m, BRUTE, 20, east(3.0), 0.0);
-            brute
-        })
+        .query(move |m| spawn_at(m, BRUTE, 20, east(3.0), 0.0))
         .await
         .unwrap();
     a.sees(brute).await;
