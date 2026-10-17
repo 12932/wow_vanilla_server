@@ -381,6 +381,12 @@ pub struct Map {
     /// lets go of those no longer awake. The update's looks for what only
     /// an awake creature could be go through it, not every creature.
     pub awake: ahash::AHashSet<Guid>,
+    /// Creatures that may have auras: every creature that has, and some
+    /// that had. An aura is only ever added through `auras::auras_mut`,
+    /// which adds its creature, as `Map::add_creature` adds one that
+    /// arrives with auras; `Map::with_auras_where` lets go of those
+    /// without.
+    pub with_auras: ahash::AHashSet<Guid>,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
     /// The Elemental Invasion's rifts and their invaders.
@@ -399,6 +405,49 @@ pub struct Map {
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
+}
+
+/// What `out` makes of each creature of `set` that `pred` takes, in key
+/// order (as a look through every creature goes); members gone, or no
+/// longer `kept`, are let go.
+fn members_where<T>(
+    set: &mut ahash::AHashSet<Guid>,
+    creatures: &Slab<Creature>,
+    by_guid: &AHashMap<Guid, usize>,
+    kept: impl Fn(&Creature) -> bool,
+    pred: impl Fn(&Creature) -> bool,
+    out: impl Fn(usize, &Creature) -> T,
+) -> Vec<T> {
+    let mut keys = Vec::with_capacity(set.len());
+    set.retain(
+        |g| match by_guid.get(g).and_then(|&k| Some((k, creatures.get(k)?))) {
+            Some((k, c)) if kept(c) => {
+                keys.push(k);
+                true
+            }
+            _ => false,
+        },
+    );
+    keys.sort_unstable();
+    keys.into_iter()
+        .filter_map(|k| Some((k, creatures.get(k)?)))
+        .filter(|(_, c)| pred(c))
+        .map(|(k, c)| out(k, c))
+        .collect()
+}
+
+/// What `out` makes of each creature `pred` takes, looking at every one:
+/// what the shortcuts must find, for debug builds' checks.
+fn every_creature_where<T>(
+    creatures: &Slab<Creature>,
+    pred: impl Fn(&Creature) -> bool,
+    out: impl Fn(usize, &Creature) -> T,
+) -> Vec<T> {
+    creatures
+        .iter()
+        .filter(|(_, c)| pred(c))
+        .map(|(k, c)| out(k, c))
+        .collect()
 }
 
 /// Whether `c` is awake (see `Map::awake`): seen, or in a fight.
@@ -546,6 +595,7 @@ impl Map {
             spells: Default::default(),
             rare: Default::default(),
             awake: ahash::AHashSet::new(),
+            with_auras: ahash::AHashSet::new(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
@@ -1101,38 +1151,49 @@ impl Map {
 
     /// What `out` makes of each awake creature `pred` takes, in the order
     /// of a look through every creature, which is what debug builds check
-    /// it finds. Those no longer awake are let go.
+    /// it finds (so `pred` takes only creatures that are awake). Those no
+    /// longer awake are let go.
     pub fn awake_where<T: PartialEq + std::fmt::Debug>(
         &mut self,
         pred: impl Fn(&Creature) -> bool,
         out: impl Fn(usize, &Creature) -> T,
     ) -> Vec<T> {
-        let (creatures, by_guid) = (&self.creatures, &self.creature_by_guid);
-        let mut keys = Vec::with_capacity(self.awake.len());
-        self.awake.retain(
-            |g| match by_guid.get(g).and_then(|&k| Some((k, creatures.get(k)?))) {
-                Some((k, c)) if awake(c) => {
-                    keys.push(k);
-                    true
-                }
-                _ => false,
-            },
+        let found = members_where(
+            &mut self.awake,
+            &self.creatures,
+            &self.creature_by_guid,
+            awake,
+            &pred,
+            &out,
         );
-        keys.sort_unstable();
-        let found: Vec<T> = keys
-            .into_iter()
-            .filter_map(|k| Some((k, self.creatures.get(k)?)))
-            .filter(|(_, c)| pred(c))
-            .map(|(k, c)| out(k, c))
-            .collect();
         debug_assert_eq!(
             found,
-            self.creatures
-                .iter()
-                .filter(|(_, c)| pred(c))
-                .map(|(k, c)| out(k, c))
-                .collect::<Vec<_>>(),
+            every_creature_where(&self.creatures, &pred, &out),
             "{}: a creature is awake but not in Map::awake",
+            self.key
+        );
+        found
+    }
+
+    /// [`Map::awake_where`] for the creatures with auras (`with_auras`):
+    /// `pred` takes only creatures with auras.
+    pub fn with_auras_where<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        pred: impl Fn(&Creature) -> bool,
+        out: impl Fn(usize, &Creature) -> T,
+    ) -> Vec<T> {
+        let found = members_where(
+            &mut self.with_auras,
+            &self.creatures,
+            &self.creature_by_guid,
+            |c| !c.auras.is_empty(),
+            &pred,
+            &out,
+        );
+        debug_assert_eq!(
+            found,
+            every_creature_where(&self.creatures, &pred, &out),
+            "{}: a creature has auras but isn't in Map::with_auras",
             self.key
         );
         found
@@ -1162,6 +1223,9 @@ impl Map {
         self.rare.note(&c);
         if awake(&c) {
             self.awake.insert(guid);
+        }
+        if !c.auras.is_empty() {
+            self.with_auras.insert(guid);
         }
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);

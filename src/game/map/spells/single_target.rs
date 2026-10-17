@@ -28,12 +28,11 @@ fn kind_of(s: &SpellTemplate, h: &Holder, other: &SpellTemplate) -> bool {
         )
 }
 
-fn units(map: &Map) -> Vec<Guid> {
-    map.players
-        .keys()
-        .copied()
-        .chain(map.creatures.iter().map(|(_, c)| c.guid))
-        .collect()
+fn units(map: &mut Map) -> Vec<Guid> {
+    let mut units: Vec<Guid> = map.players.keys().copied().collect();
+    // Of the creatures, only those with auras can have one to end.
+    units.extend(map.with_auras_where(|c| !c.auras.is_empty(), |_, c| c.guid));
+    units
 }
 
 /// `caster` put `s` on `target`: its others of that kind elsewhere end.
