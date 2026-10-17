@@ -320,6 +320,7 @@ pub fn run(
             duration: Some(duration),
             charges,
             triggered: l.triggered,
+            linked: false,
         };
         if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
             && caster != target
@@ -712,20 +713,13 @@ fn effect(
         EFFECT_LEAP => {
             if let Some(me) = map.unit_view(caster) {
                 let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
-                let mut to = Vector3d {
-                    x: me.position.x + d * me.orientation.cos(),
-                    y: me.position.y + d * me.orientation.sin(),
+                let o = me.orientation + leap_angle(e.target_a, e.target_b);
+                let want = Vector3d {
+                    x: me.position.x + d * o.cos(),
+                    y: me.position.y + d * o.sin(),
                     z: me.position.z,
                 };
-                // Short of a wall, on the ground.
-                if !super::checks::line_of_sight(map, me.position, to) {
-                    to = me.position;
-                }
-                if let Some(nav) = map.nav.as_mut()
-                    && let Some(z) = nav.ground(to.x, to.y, to.z + 2.0)
-                {
-                    to.z = z;
-                }
+                let to = first_clear(map, me.position, want);
                 map.teleport(caster, map.key, to, me.orientation);
             }
         }
@@ -846,22 +840,21 @@ fn effect(
         }
         EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
         EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
-            let name = map
-                .players
-                .get(&caster)
-                .map(|p| p.name.to_string())
-                .or_else(|| {
-                    let c = map.creature(caster)?;
-                    Some(
-                        map.realm
-                            .data
-                            .creature_templates
-                            .get(&c.entry)?
-                            .name
-                            .clone(),
-                    )
-                })
-                .unwrap_or_default();
+            // A player's name the client knows; a creature's is sent.
+            let (name, spirit_healer) = map.creature(caster).map_or((String::new(), false), |c| {
+                let name = map
+                    .realm
+                    .data
+                    .creature_templates
+                    .get(&c.entry)
+                    .map(|t| t.name.to_string())
+                    .unwrap_or_default();
+                let flags = c.fields.get_u32(UNIT_NPC_FLAGS);
+                (
+                    name,
+                    flags & crate::game::map::npc::NPC_FLAG_SPIRITHEALER != 0,
+                )
+            });
             if let Some(p) = map.players.get_mut(&target)
                 && p.death != crate::game::map::death::Death::Alive
                 && p.resurrect_offer.is_none()
@@ -879,16 +872,12 @@ fn effect(
                     )
                 };
                 p.resurrect_offer = Some((caster, health, mana));
-                // As 1.12 lays it out: the name, not from a spirit healer,
-                // and whether the reclaim delay holds.
-                let mut b = crate::game::data::items::Body::default();
-                b.u64(caster.guid())
-                    .u32(name.len() as u32 + 1)
-                    .cstr(&name)
-                    .u8(0)
-                    .u8(u8::from(!s.attr(3, sd::ATTR_EX3_NO_RES_TIMER)));
-                p.outbound
-                    .send_frame(b.frame(SMSG_RESURRECT_REQUEST_OPCODE));
+                p.outbound.send_frame(resurrect_request(
+                    caster,
+                    &name,
+                    spirit_healer,
+                    !s.attr(3, sd::ATTR_EX3_NO_RES_TIMER),
+                ));
             }
         }
         EFFECT_SKILL | EFFECT_SKILL_STEP => {
@@ -1073,6 +1062,82 @@ fn lands_on(
 }
 
 /// Where a player's hearthstone goes.
+/// The way a leap goes off its caster's facing, by its implicit targets
+/// (mangos's caster-relative targets, Thistle Tea's `CasterLocation`):
+/// back (48), left (49), right (50), the four between (41 to 44); ahead
+/// for the rest (Blink's 55, 47).
+fn leap_angle(target_a: u32, target_b: u32) -> f32 {
+    use std::f32::consts::PI;
+    [target_b, target_a]
+        .iter()
+        .find_map(|t| match t {
+            48 => Some(PI),
+            49 => Some(PI / 2.0),
+            50 => Some(-PI / 2.0),
+            41 => Some(1.75 * PI),
+            42 => Some(1.25 * PI),
+            43 => Some(0.75 * PI),
+            44 => Some(0.25 * PI),
+            _ => None,
+        })
+        .unwrap_or(0.0)
+}
+
+/// Where a leap from `from` toward `to` ends, on the ground: `to` if it can
+/// be seen, else the farthest point toward it that can, found by halving
+/// the way ten times as Thistle Tea's `first_collision_position` does, and
+/// half a yard back from what stopped it (its `collision_position`).
+fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
+    let ground = |map: &mut Map, p: Vector3d| {
+        let z = map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z + 2.0));
+        Vector3d {
+            z: z.unwrap_or(p.z),
+            ..p
+        }
+    };
+    let along = |f: f32| Vector3d {
+        x: from.x + (to.x - from.x) * f,
+        y: from.y + (to.y - from.y) * f,
+        z: from.z + (to.z - from.z) * f,
+    };
+    let end = ground(map, to);
+    if super::checks::line_of_sight(map, from, end) {
+        return end;
+    }
+    let (mut clear, mut blocked) = (0.0f32, 1.0f32);
+    for _ in 0..10 {
+        let f = (clear + blocked) / 2.0;
+        let at = ground(map, along(f));
+        if super::checks::line_of_sight(map, from, at) {
+            clear = f;
+        } else {
+            blocked = f;
+        }
+    }
+    let length = ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt();
+    ground(map, along((clear - 0.5 / length.max(0.001)).max(0.0)))
+}
+
+/// `SMSG_RESURRECT_REQUEST`, as mangos-zero lays it out: the caster, its
+/// name (none for a player), whether it is a spirit healer, and whether
+/// the client holds the acceptance back by its resurrection timer.
+fn resurrect_request(
+    caster: Guid,
+    name: &str,
+    spirit_healer: bool,
+    timer: bool,
+) -> std::sync::Arc<[u8]> {
+    let mut b = Body::default();
+    b.u64(caster.guid())
+        .u32(name.len() as u32 + 1)
+        .cstr(name)
+        .u8(spirit_healer.into())
+        .u8(timer.into());
+    b.frame(SMSG_RESURRECT_REQUEST)
+}
+
+const SMSG_RESURRECT_REQUEST: u16 = 0x15B;
+
 fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
     map.players.get(&g).and_then(|p| p.row.state.bind).map(|b| {
         (
@@ -1194,13 +1259,17 @@ fn knockable(map: &Map, g: Guid) -> bool {
     !held && free && map.unit_view(g).is_some_and(|u| u.alive)
 }
 
+/// A knockback, as Thistle Tea's `Knockback.launch` has it: a unit free to
+/// move has its cast interrupted, and the client that moves it (a player's,
+/// or a possessed creature's master's) is told to launch it. A creature the
+/// server runs stays where it is (mangos: "no non player controlled
+/// pre-wotlk").
 fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertical: i32) {
     let (Some(me), Some(them)) = (map.unit_view(caster), map.unit_view(target)) else {
         return;
     };
-    // What it would move stops casting (Thistle Tea's `Knockback.launch`).
-    if knockable(map, target) {
-        super::interrupt(map, target);
+    if !knockable(map, target) {
+        return;
     }
     let angle = if caster == target {
         me.orientation + std::f32::consts::PI
@@ -1209,7 +1278,15 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
     };
     let speed_xy = horizontal as f32 / 10.0;
     let speed_z = -(vertical as f32) / 10.0;
-    if let Some(p) = map.players.get(&target) {
+    super::interrupt(map, target);
+    let mover = if map.players.contains_key(&target) {
+        Some(target)
+    } else {
+        crate::game::map::pets::state(map, target)
+            .filter(|s| s.kind == crate::game::map::pets::Kind::Possessed)
+            .map(|s| s.owner)
+    };
+    if let Some(p) = mover.and_then(|g| map.players.get(&g)) {
         let mut b = crate::game::data::items::Body::default();
         crate::game::update::write_packed_guid(&mut b.0, target);
         b.u32(0)
@@ -1218,14 +1295,7 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
             .f32(speed_xy)
             .f32(speed_z);
         p.outbound.send_frame(b.frame(0x0EF));
-        return;
     }
-    let to = Vector3d {
-        x: them.position.x + angle.cos() * speed_xy,
-        y: them.position.y + angle.sin() * speed_xy,
-        z: them.position.z,
-    };
-    map.teleport(target, map.key, to, them.orientation);
 }
 
 /// `SMSG_SET_PROFICIENCY`: the weapon or armor kinds a learned skill

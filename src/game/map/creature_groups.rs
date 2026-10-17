@@ -297,8 +297,10 @@ pub fn may_spawn(map: &Map, spawn: u32) -> bool {
     let dead_saved = map.key.instance != 0
         && crate::game::instances::save_of(&map.realm, map.key.instance)
             .is_some_and(|s| s.dead.contains_key(master));
-    if flags & LINK_CANT_SPAWN_IF_BOSS_DEAD != 0 && (alive == Some(false) || dead_saved) {
-        return false;
+    // The first flag decides, with both (Naxxramas's trash): mangos's
+    // `CanSpawn`, Thistle Tea's `spawn_allowed?`.
+    if flags & LINK_CANT_SPAWN_IF_BOSS_DEAD != 0 {
+        return !(alive == Some(false) || dead_saved);
     }
     if flags & LINK_CANT_SPAWN_IF_BOSS_ALIVE != 0 && alive == Some(true) {
         return false;

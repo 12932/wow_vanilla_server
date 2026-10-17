@@ -29,6 +29,7 @@ pub const UNIT_FLAG_PVP: u32 = 0x0000_1000;
 pub const UNIT_FLAG_STUNNED: u32 = 0x0004_0000;
 pub const UNIT_FLAG_IN_COMBAT: u32 = 0x0008_0000;
 
+pub const PLAYER_FLAGS_GROUP_LEADER: u32 = 0x0000_0001;
 pub const PLAYER_FLAGS_AFK: u32 = 0x0000_0002;
 pub const PLAYER_FLAGS_DND: u32 = 0x0000_0004;
 pub const PLAYER_FLAGS_GM: u32 = 0x0000_0008;
@@ -148,6 +149,20 @@ impl Item {
         }
     }
 
+    /// What the auction house and the mailbox show of an item kept as a
+    /// row: its permanent enchantment, random property, suffix factor and
+    /// its first spell's charges (mangos-zero's `BuildAuctionInfo` and mail
+    /// list).
+    pub fn shown(data: &GameData, row: &ItemRow) -> Shown {
+        let f = Self::from_row(data, row, Guid::zero()).fields;
+        Shown {
+            enchantment: f.get_u32(ITEM_FIELD_ENCHANTMENT),
+            random_property: f.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID),
+            suffix_factor: f.get_u32(ITEM_FIELD_PROPERTY_SEED),
+            charges: f.get_u32(ITEM_FIELD_SPELL_CHARGES),
+        }
+    }
+
     pub fn create(&self) -> Create<'_> {
         Create {
             guid: self.guid,
@@ -158,6 +173,15 @@ impl Item {
             melee_target: None,
         }
     }
+}
+
+/// What a list shows of an item: [`Item::shown`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Shown {
+    pub enchantment: u32,
+    pub random_property: u32,
+    pub suffix_factor: u32,
+    pub charges: u32,
 }
 
 /// A teleport the client has been told of and hasn't acknowledged.

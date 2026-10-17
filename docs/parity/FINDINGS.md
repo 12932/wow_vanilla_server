@@ -63,7 +63,10 @@ Phase 3. When something here is fixed, its line gets the commit.
   - `end_channel` leaves Mend Pet's aura on the pet;
   - the immune-to-player flag 0x100 is never checked.
 
-### From the world, network and loaders (to confirm)
+### From the world, network and loaders (fixed: fix/bugs3, but the two kept)
+
+Kept on purpose: update blocks go after the update's other packets (a general fix is an architectural change), and
+compression starts at 1,024 bytes.
 
 - **Creature reach and size** were scaled by the whole object scale (Onyxia's reach about 47 yards for Thistle
   Tea's 26), from the template's display before the addon's. Fixed on master: `Creature::fit_model`.

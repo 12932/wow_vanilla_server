@@ -1208,7 +1208,6 @@ async fn a_spirit_healer_leaves_sickness_and_a_wisp_runs_faster() {
     let mut n = Client::connect(&realm, "N");
     let gn = n.enter("Nyla", Race::NightElf, Class::Warrior).await;
     let healer = guid::unit(SPIRIT_HEALER, 15);
-    a.sees(healer).await;
     let die = move |g: Guid| {
         move |m: &mut Map| {
             m.players
@@ -1222,6 +1221,8 @@ async fn a_spirit_healer_leaves_sickness_and_a_wisp_runs_faster() {
         }
     };
     let human = on_map(&realm, die(ga)).await;
+    // Only a ghost sees a spirit healer.
+    a.sees(healer).await;
     // The night elf is in Teldrassil.
     let elf = realm
         .registry

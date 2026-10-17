@@ -414,20 +414,15 @@ pub fn add_item_with_property(
     alert: bool,
     property: u32,
 ) -> Result<(), Fail> {
-    let before = map.players.get(&g).map_or(0, |p| p.items.len());
-    add_item(map, g, entry, count, alert)?;
-    if property != 0 {
-        let data = map.realm.data.clone();
-        if let Some(p) = map.players.get_mut(&g)
-            && let Some(item) = p
-                .items
-                .get_mut(before..)
-                .and_then(|n| n.iter_mut().find(|i| i.entry == entry))
-        {
-            crate::game::map::enchant::set_random_property(&data, item, property);
-        }
-    }
-    Ok(())
+    store(
+        map,
+        g,
+        entry,
+        count,
+        alert,
+        NewItemCreationType::Received,
+        property,
+    )
 }
 
 /// Where `count` of `t` would go in `p`'s bags: onto its stacks first
@@ -493,13 +488,21 @@ pub fn room_for(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<(
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
-    store(map, g, entry, count, alert, NewItemCreationType::Received)
+    store(
+        map,
+        g,
+        entry,
+        count,
+        alert,
+        NewItemCreationType::Received,
+        0,
+    )
 }
 
 /// [`add_item`] for what a player made: told as created ("You create"),
 /// as Thistle Tea and mangos tell a craft.
 pub fn add_created_item(map: &mut Map, g: Guid, entry: u32, count: u32) -> Result<(), Fail> {
-    store(map, g, entry, count, true, NewItemCreationType::Created)
+    store(map, g, entry, count, true, NewItemCreationType::Created, 0)
 }
 
 fn store(
@@ -509,6 +512,7 @@ fn store(
     count: u32,
     alert: bool,
     creation: NewItemCreationType,
+    property: u32,
 ) -> Result<(), Fail> {
     let data = map.realm.data.clone();
     let Some(t) = data.item(entry).cloned() else {
@@ -519,23 +523,26 @@ fn store(
         return Err(Fail::NotFound);
     };
     let (onto, new_slots) = plan(p, &data, &t, count)?;
-    // Where it went, for the push: a stack it joined is no one slot (-1,
-    // Thistle Tea's and mangos's).
+    // Where it went, for the push: the item, and its slot; a stack it
+    // joined is no one slot (-1, Thistle Tea's and mangos's).
     let mut last = None;
     for (i, add) in onto {
         let item = &mut p.items[i];
         item.set_count(item.count() + add);
-        last = Some((item.bag, u32::MAX));
+        last = Some((i, u32::MAX));
     }
     let mut batch = update::Batch::new();
     for (bag, slot, n) in new_slots {
         let counter = realm
             .next_item
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
+        let mut item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
+        if property != 0 {
+            crate::game::map::enchant::set_random_property(&data, &mut item, property);
+        }
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
         p.items.push(item);
-        last = Some((bag, u32::from(slot)));
+        last = Some((p.items.len() - 1, u32::from(slot)));
     }
     for frame in batch.finish() {
         p.outbound.send_frame(frame);
@@ -548,19 +555,9 @@ fn store(
     }
     p.refresh_inventory(&data);
     let notify = alert;
-    if notify && let Some((bag, slot)) = last {
-        p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
-            guid: g,
-            source: NewItemSource::Looted,
-            creation_type: creation,
-            alert_chat: NewItemChatAlert::Show,
-            bag_slot: bag,
-            item_slot: slot,
-            item: entry,
-            item_suffix_factor: 0,
-            item_random_property_id: 0,
-            item_count: count,
-        });
+    if notify && let Some((i, slot)) = last {
+        p.outbound
+            .send(&push_result(g, &p.items[i], slot, count, creation));
     }
     crate::game::map::quests::items_changed(map, g, entry);
     Ok(())
@@ -1052,20 +1049,41 @@ pub fn attach_item(map: &mut Map, g: Guid, row: &crate::game::store::ItemRow) ->
         it.fields.clear_dirty();
     }
     p.refresh_inventory(&data);
-    p.outbound.send(&SMSG_ITEM_PUSH_RESULT {
-        guid: g,
-        source: NewItemSource::Looted,
-        creation_type: NewItemCreationType::Received,
-        alert_chat: NewItemChatAlert::Show,
-        bag_slot: bag,
-        item_slot: u32::from(slot),
-        item: entry,
-        item_suffix_factor: 0,
-        item_random_property_id: 0,
-        item_count: row.count,
-    });
+    if let Some(item) = p.items.last() {
+        p.outbound.send(&push_result(
+            g,
+            item,
+            u32::from(item.slot),
+            row.count,
+            NewItemCreationType::Received,
+        ));
+    }
     crate::game::map::quests::items_changed(map, g, entry);
     Ok(())
+}
+
+/// `SMSG_ITEM_PUSH_RESULT` for `count` of `item`, now in `slot`: with its
+/// suffix factor and random property, so the client names it with its
+/// suffix (mangos-zero's `SendNewItem`).
+fn push_result(
+    g: Guid,
+    item: &Item,
+    slot: u32,
+    count: u32,
+    creation: NewItemCreationType,
+) -> SMSG_ITEM_PUSH_RESULT {
+    SMSG_ITEM_PUSH_RESULT {
+        guid: g,
+        source: NewItemSource::Looted,
+        creation_type: creation,
+        alert_chat: NewItemChatAlert::Show,
+        bag_slot: item.bag,
+        item_slot: slot,
+        item: item.entry,
+        item_suffix_factor: item.fields.get_u32(ITEM_FIELD_PROPERTY_SEED),
+        item_random_property_id: item.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID),
+        item_count: count,
+    }
 }
 
 #[cfg(test)]

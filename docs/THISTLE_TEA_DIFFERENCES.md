@@ -41,6 +41,10 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Honor inspection** answers within 28 yards, as mangos and the client have it; Thistle Tea's reach is 10.
 - **Every teleport stops a player's cast.** Thistle Tea spares its "combat teleports", which wvs doesn't tell apart.
 - **A guild charter** is sold by any petitioner; Thistle Tea also wants the tabard designer's flag.
+- **Blink's forward form** stops at the farthest point in sight; Thistle Tea walks the navmesh.
+- **The tapped flag** follows the tapper's current group; Thistle Tea keeps the group as it was at the tap.
+- **Update packets are compressed above 1,024 bytes** (Thistle Tea above 128, mangos above 100). The client reads
+  either form at any size, so this only trades bandwidth against CPU.
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
@@ -90,8 +94,7 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Where Thistle Tea is wrong for 1.12, wvs keeps mangos's behaviour:**
   - a missing tool is 0x78 (`TOTEMS`; Thistle Tea sends 0x26);
   - fishing skill counts the poles' and hat's skill auras;
-  - quest items in node loot don't keep a node from despawning;
-  - the resurrection request carries the caster's name.
+  - quest items in node loot don't keep a node from despawning.
 
   Bones, the spirit healer moving the player to a graveyard, a reclaim range that counts both bodies, Twisting
   Nether and Poisons skill-ups are in mangos, and in neither Thistle Tea nor wvs.
@@ -102,7 +105,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 
 - **Movement:**
   - Distract stops and turns only creatures; Thistle Tea turns players too.
-  - A knockback moves a creature, as mangos-classic does; Thistle Tea only breaks its cast.
   - A monster move's intermediate point within about 0.7 yards of the destination is left out, as mangos-classic
     leaves it; Thistle Tea nudges its height instead.
 - **Script commands:**
@@ -160,6 +162,8 @@ Thistle Tea, with these exceptions:
 - **wow_messages** comes from 12932's fork (`12932/wow_messages`, branch `vanilla-1.12-layouts`), as it does for
   rustigator and peon: gtker's `e8dc643` with 1.12's own layouts for the game object query, who, loot, the cast
   result, quest details (reward items with their display id, strings past 256 bytes) and the battlefield status.
+- **Update blocks go at the end of an update,** after the packets sent during it. A packet naming an object made in
+  that update can reach the client before its create.
 - A flyer's `SMSG_MONSTER_MOVE` is laid out by hand, in whole points as the 1.12 client reads them; wow_messages
   (and so peon and the harness) can't read it.
 - wow_messages types the client's fall time as a float; it is a u32 of milliseconds, so wvs reads the raw bits.

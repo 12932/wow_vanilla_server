@@ -468,6 +468,14 @@ pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Opti
             if r == checks::fail::REQUIRES_AREA {
                 b.u32(area::required(&map.realm.data, spell));
             }
+            // A gear failure names the gear: its class, subclasses and
+            // inventory types (mangos-zero's `SendCastResult`).
+            if r == checks::fail::EQUIPPED_ITEM_CLASS {
+                let s = map.realm.data.spells.get(spell);
+                b.i32(s.map_or(-1, |s| s.equipped_item_class))
+                    .i32(s.map_or(0, |s| s.equipped_item_subclass_mask))
+                    .i32(s.map_or(0, |s| s.equipped_item_inventory_type_mask));
+            }
         }
     }
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));
@@ -1405,7 +1413,9 @@ fn magnet(map: &mut Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Tar
     t
 }
 
-/// A rogue's or druid's combo points go, and any hold on them.
+/// A rogue's or druid's combo points go, and any hold on them. The field
+/// still names the target they were on, its points at 0 (mangos's
+/// `ClearComboPoints`, Thistle Tea's `put_points`).
 pub fn clear_combo_points(map: &mut Map, caster: Guid) {
     release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
@@ -1413,7 +1423,6 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
         c.combo_target = Guid::zero();
     }
     if let Some(p) = map.players.get_mut(&caster) {
-        p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, Guid::zero());
         p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 0);
     }
 }
