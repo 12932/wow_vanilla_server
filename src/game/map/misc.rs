@@ -56,6 +56,11 @@ pub struct PlayerMisc {
     pub quest_shared: Option<(Guid, u32)>,
     /// When the self-resurrection last went off.
     pub self_res_at: Option<Instant>,
+    /// A GM's god mode: no damage taken.
+    pub god: bool,
+    /// The intro cinematic's camera, and where it has the player see from.
+    pub camera: Option<crate::game::map::cinematic::Camera>,
+    pub view: Option<Vector3d>,
     /// An opened item's loot: the item, and what is in it.
     pub item_loot: Option<(Guid, crate::game::map::loot::Loot)>,
 }
@@ -105,7 +110,12 @@ pub fn handle_all(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Cl
     let msg = crate::game::map::tickets::handle(map, g, msg)?;
     let msg = crate::game::map::items_misc::handle(map, g, msg)?;
     let msg = crate::game::map::meeting_stones::handle(map, g, msg)?;
+    let msg = crate::game::map::account_data::handle(map, g, msg)?;
     match msg {
+        ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC => {
+            crate::game::map::cinematic::finish(map, g);
+            None
+        }
         ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
             // Without a navmesh, the client's zone is the one explored.
             if map.nav.is_none() {
@@ -133,6 +143,10 @@ impl Map {
             return;
         }
         if crate::game::map::reputation::handle_raw(self, guid, opcode, body) {
+            return;
+        }
+        if opcode == crate::game::map::account_data::CMSG_UPDATE_ACCOUNT_DATA {
+            crate::game::map::account_data::update_raw(self, guid, body);
             return;
         }
         tracing::trace!("raw opcode 0x{opcode:03X} not handled");
@@ -208,6 +222,7 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
 /// lapsing.
 pub fn update(map: &mut Map) {
     crate::game::map::rest::update(map);
+    crate::game::map::cinematic::update(map);
     crate::game::map::environment::update(map);
     let now = map.now;
     for p in map.players.values_mut() {
@@ -421,7 +436,7 @@ pub fn talent_wipe_offer(map: &mut Map, g: Guid, npc: Guid) {
 }
 
 /// The talent spells a player knows, and those they taught.
-fn talent_spells(p: &crate::game::map::player::Player, data: &crate::game::data::GameData) -> Vec<u32> {
+pub fn talent_spells(p: &crate::game::map::player::Player, data: &crate::game::data::GameData) -> Vec<u32> {
     let mut out = Vec::new();
     for t in data.spells.talents.values() {
         for r in t.ranks.iter().filter(|r| **r != 0 && p.spells.contains(r)) {

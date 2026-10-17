@@ -1061,6 +1061,9 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     c.i32(&format!("RewRepValue{}", i + 1)),
                 )
             }),
+            required_min_rep: (c.u32("RequiredMinRepFaction"), c.i32("RequiredMinRepValue")),
+            required_max_rep: (c.u32("RequiredMaxRepFaction"), c.i32("RequiredMaxRepValue")),
+            rep_objective: (c.u32("RepObjectiveFaction"), c.i32("RepObjectiveValue")),
             reward_xp: c.u32("RewXP"),
             reward_money: c.i32("RewOrReqMoney"),
             reward_money_max_level: c.u32("RewMoneyMaxLevel"),
@@ -2080,6 +2083,22 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         },
     ) {
         m.meeting_stones.insert(entry, stone);
+    }
+    for (cinematic, point) in rows(db, "SELECT * FROM cinematic_waypoints", |c| {
+        (
+            c.u32("cinematic"),
+            (
+                c.u32("timer"),
+                c.f32("position_x"),
+                c.f32("position_y"),
+                c.f32("position_z"),
+            ),
+        )
+    }) {
+        m.cinematic_waypoints.entry(cinematic).or_default().push(point);
+    }
+    for points in m.cinematic_waypoints.values_mut() {
+        points.sort_by_key(|p| p.0);
     }
 }
 

@@ -48,6 +48,9 @@ pub fn complete(p: &Player, q: &Quest, l: &Logged) -> bool {
     if q.flags & crate::game::data::npc::QUEST_FLAGS_EXPLORATION != 0 && !l.explored {
         return false;
     }
+    if q.rep_objective.0 != 0 && !l.rep_met {
+        return false;
+    }
     true
 }
 
@@ -67,6 +70,15 @@ pub fn can_take(p: &Player, q: &Quest, data: &GameData) -> bool {
         return false;
     }
     if q.required_classes != 0 && q.required_classes & (1 << (p.row.class - 1)) == 0 {
+        return false;
+    }
+    // A standing at least, and below.
+    let (min_f, min_v) = q.required_min_rep;
+    if min_f != 0 && crate::game::map::reputation::standing(p, data, min_f) < min_v {
+        return false;
+    }
+    let (max_f, max_v) = q.required_max_rep;
+    if max_f != 0 && crate::game::map::reputation::standing(p, data, max_f) >= max_v {
         return false;
     }
     if q.prev_quest > 0 && !j.rewarded.contains(&(q.prev_quest as u32)) {
@@ -372,6 +384,10 @@ pub fn check(map: &mut Map, player: Guid, quest: u32) {
     let Some(slot) = p.journal.slot_of(quest) else {
         return;
     };
+    if q.rep_objective.0 != 0 {
+        let standing = crate::game::map::reputation::standing(p, &data, q.rep_objective.0);
+        p.journal.log[slot].rep_met = standing >= q.rep_objective.1;
+    }
     let was = p
         .fields
         .get_u32(PLAYER_QUEST_LOG_1_1 + slot as u16 * QUEST_LOG_ENTRY_SIZE + 1)
@@ -741,52 +757,66 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
     }
 }
 
+/// `SMSG_QUEST_QUERY_RESPONSE`'s opcode.
+pub const SMSG_QUEST_QUERY_RESPONSE_OPCODE: u16 = 0x5D;
+/// `QuestFlags`: the rewards aren't shown.
+const QUEST_FLAGS_HIDDEN_REWARDS: u32 = 0x200;
+
+/// `SMSG_QUEST_QUERY_RESPONSE` in 1.12's layout, as Thistle Tea and
+/// mangos-zero send it: wow_messages gives the reputation objective's
+/// faction 16 bits where 1.12 has 32, which moves everything after it.
+pub fn query_response(q: &Quest) -> std::sync::Arc<[u8]> {
+    let mut b = crate::game::data::items::Body::default();
+    let hidden = q.flags & QUEST_FLAGS_HIDDEN_REWARDS != 0;
+    b.u32(q.id)
+        .u32(q.method)
+        .u32(q.level.max(0) as u32)
+        .i32(q.zone_or_sort)
+        .u32(q.kind)
+        .u32(q.rep_objective.0)
+        .i32(q.rep_objective.1)
+        .u32(0)
+        .u32(0)
+        .u32(q.next_in_chain)
+        .i32(if hidden { 0 } else { q.reward_money })
+        .u32(q.reward_money_max_level)
+        .u32(q.reward_spell)
+        .u32(q.source_item)
+        .u32(q.flags);
+    for (item, n) in q.rewards.iter().chain(q.choice_rewards.iter()) {
+        let (item, n) = if hidden { (0, 0) } else { (*item, *n) };
+        b.u32(item).u32(n);
+    }
+    b.u32(q.point.0).f32(q.point.1).f32(q.point.2).u32(q.point.3);
+    b.cstr(&q.title)
+        .cstr(&q.objectives)
+        .cstr(&q.details)
+        .cstr(&q.end_text);
+    for i in 0..4 {
+        let (id, count) = q.required_kills[i];
+        // An object to use is sent with the top bit set.
+        let id = if id < 0 {
+            id.unsigned_abs() | 0x8000_0000
+        } else {
+            id as u32
+        };
+        b.u32(id)
+            .u32(count)
+            .u32(q.required_items[i].0)
+            .u32(q.required_items[i].1);
+    }
+    for text in &q.objective_texts {
+        b.cstr(text);
+    }
+    b.frame(SMSG_QUEST_QUERY_RESPONSE_OPCODE)
+}
+
 /// `CMSG_QUEST_QUERY`: a quest's text and objectives, for the log.
 pub fn query(map: &Map, player: Guid, quest: u32) {
     let Some(q) = map.realm.data.npc.quests.get(&quest) else {
         return;
     };
-    let reward = |(item, n): (u32, u32)| QuestItemReward {
-        item,
-        item_count: n,
-    };
-    let Some(p) = map.players.get(&player) else {
-        return;
-    };
-    p.outbound.send(&SMSG_QUEST_QUERY_RESPONSE {
-        quest_id: quest,
-        quest_method: q.method,
-        quest_level: Level::new(q.level.max(0) as u8),
-        zone_or_sort: q.zone_or_sort as u32,
-        quest_type: q.kind,
-        reputation_objective_faction: Default::default(),
-        reputation_objective_value: 0,
-        required_opposite_faction: Default::default(),
-        required_opposite_reputation_value: 0,
-        next_quest_in_chain: q.next_in_chain,
-        money_reward: (q.reward_money.max(0) as u32).into(),
-        max_level_money_reward: q.reward_money_max_level.into(),
-        reward_spell: q.reward_spell,
-        source_item_id: q.source_item,
-        quest_flags: q.flags,
-        rewards: q.rewards.map(reward),
-        choice_rewards: q.choice_rewards.map(reward),
-        point_map_id: q.point.0,
-        position: Vector2d {
-            x: q.point.1,
-            y: q.point.2,
-        },
-        point_opt: q.point.3,
-        title: q.title.clone(),
-        objective_text: q.objectives.clone(),
-        details: q.details.clone(),
-        end_text: q.end_text.clone(),
-        objectives: std::array::from_fn(|i| QuestObjective {
-            creature_id: q.required_kills[i].0 as u32,
-            kill_count: q.required_kills[i].1,
-            required_item_id: q.required_items[i].0,
-            required_item_count: q.required_items[i].1,
-        }),
-        objective_texts: q.objective_texts.clone(),
-    });
+    if let Some(p) = map.players.get(&player) {
+        p.outbound.send_frame(query_response(q));
+    }
 }
