@@ -114,6 +114,8 @@ pub struct RealmConfig {
     pub petition_signatures: u32,
     pub mail_delay: Duration,
     pub instance_unload: Duration,
+    /// How long a logout outside an inn or flight takes (tests shorten it).
+    pub logout_delay: Duration,
     /// Players a side needs for a match, over the template's.
     pub bg_min_players: Option<u32>,
     pub bg_start_delay: Duration,
@@ -143,6 +145,7 @@ impl RealmConfig {
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
             instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,
+            logout_delay: crate::game::map::login::LOGOUT_DELAY,
             bg_min_players: None,
             bg_start_delay: Duration::from_secs(120),
             pvp_realm: c.world.pvp_realm,
