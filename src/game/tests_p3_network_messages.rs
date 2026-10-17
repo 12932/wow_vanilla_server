@@ -265,3 +265,144 @@ async fn spell_logs_are_laid_out_as_1_12_has_them() {
     assert_eq!(pct, [&[30u8, 10][..], &(-100i32).to_le_bytes()].concat());
     settled(&mut a).await;
 }
+
+const WEAR: u32 = 900_311;
+const WEAR_ALL: u32 = 900_312;
+const VEST: u32 = 50_200;
+
+/// The rows of a `SMSG_SPELLLOGEXECUTE` with one effect logged: the
+/// caster packed, the spell, one effect, then the effect, one target and
+/// what follows.
+fn execute_log(caster: Guid, spell: u32, effect: u32, rest: &[u8]) -> Vec<u8> {
+    let mut v = packed(caster);
+    v.extend_from_slice(&spell.to_le_bytes());
+    v.extend_from_slice(&1u32.to_le_bytes());
+    v.extend_from_slice(&effect.to_le_bytes());
+    v.extend_from_slice(&1u32.to_le_bytes());
+    v.extend_from_slice(rest);
+    v
+}
+
+/// Thistle Tea's smsg_spelllogexecute_test: an interrupt logs the victim's
+/// GUID in full and the spell cut short; extra attacks the GUID and their
+/// count; a durability loss the GUID, the item's entry and -1, or -1 and
+/// -1 for everything worn.
+#[tokio::test]
+async fn spell_log_executes_are_laid_out_as_1_12_has_them() {
+    let mut d = data();
+    let wear = |id, slot| {
+        spell(
+            id,
+            &[SpellEffect {
+                effect: 111,
+                base_points: 9,
+                base_dice: 1,
+                misc_value: slot,
+                target_a: 1,
+                ..Default::default()
+            }],
+        )
+    };
+    d.spells.spells.insert(WEAR, wear(WEAR, 4));
+    d.spells.spells.insert(WEAR_ALL, wear(WEAR_ALL, -1));
+    d.items.insert(
+        VEST,
+        crate::game::data::ItemTemplate {
+            entry: VEST,
+            name: "Vest".into(),
+            class: 4,
+            subclass: 1,
+            inventory_type: 5,
+            max_durability: 50,
+            stackable: 1,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let victim = Guid::new(0xF130_0000_0000_0304);
+    on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, VEST, 1, false).unwrap();
+        let at = {
+            let i = m.players[&g]
+                .items
+                .iter()
+                .find(|i| i.entry == VEST)
+                .unwrap();
+            (i.bag, i.slot)
+        };
+        crate::game::map::inventory::auto_equip(m, g, at);
+    })
+    .await;
+    a.clear();
+    on_map(&realm, move |m| {
+        crate::game::map::spells::log::interrupt(m, g, 2139, victim, 133);
+        crate::game::map::spells::log::extra_attacks(m, g, 3391, g, 2);
+        crate::game::map::spells::cast_triggered(m, g, WEAR, Some(g));
+        crate::game::map::spells::cast_triggered(m, g, WEAR_ALL, Some(g));
+    })
+    .await;
+    let mut logs = Vec::new();
+    for spell in [2139u32, 3391, WEAR, WEAR_ALL] {
+        logs.push(
+            a.wait_frame("SMSG_SPELLLOGEXECUTE", 0x24C, move |f| {
+                f.len() > 6 && f[2..].windows(4).take(5).any(|w| w == spell.to_le_bytes())
+            })
+            .await,
+        );
+    }
+    let full = |g: Guid| g.guid().to_le_bytes().to_vec();
+    assert_eq!(
+        logs[0],
+        execute_log(
+            g,
+            2139,
+            68,
+            &[full(victim), 133u32.to_le_bytes().to_vec()].concat()
+        ),
+        "an interrupt"
+    );
+    assert_eq!(
+        logs[1],
+        execute_log(
+            g,
+            3391,
+            19,
+            &[full(g), 2u32.to_le_bytes().to_vec()].concat()
+        ),
+        "extra attacks"
+    );
+    assert_eq!(
+        logs[2],
+        execute_log(
+            g,
+            WEAR,
+            111,
+            &[
+                full(g),
+                VEST.to_le_bytes().to_vec(),
+                u32::MAX.to_le_bytes().to_vec()
+            ]
+            .concat()
+        ),
+        "a worn item's loss"
+    );
+    assert_eq!(
+        logs[3],
+        execute_log(
+            g,
+            WEAR_ALL,
+            111,
+            &[
+                full(g),
+                u32::MAX.to_le_bytes().to_vec(),
+                u32::MAX.to_le_bytes().to_vec()
+            ]
+            .concat()
+        ),
+        "everything worn"
+    );
+}
