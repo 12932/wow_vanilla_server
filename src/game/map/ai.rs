@@ -2,7 +2,7 @@
 //! leashing home, calling for help, death, corpse decay and respawn.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand::RngExt;
 use wow_world_messages::Guid;
@@ -542,70 +542,78 @@ pub fn update_creatures(map: &mut Map) {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
         };
-        // Its timed events wait while it walks home.
-        if !map.creatures.get(key).is_some_and(|c| c.evading) {
-            crate::game::map::event_ai::tick(map, g);
+        // Under its own guard: a creature that panics costs its turn, not
+        // the update.
+        crate::game::map::supervise::creature_turn(map, g, |map| turn(map, key, g, now));
+    }
+}
+
+/// A creature's turn: its timed events, and its fight, its way home or
+/// its walk.
+fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
+    // Its timed events wait while it walks home.
+    if !map.creatures.get(key).is_some_and(|c| c.evading) {
+        crate::game::map::event_ai::tick(map, g);
+    }
+    let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
+        return;
+    };
+    // Down in a linked feign death, or holding its path.
+    if c.scripted
+        .as_deref()
+        .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+    {
+        crate::game::map::event_ai::feign_tick(map, g);
+        return;
+    }
+    let (holding, evading) = (
+        c.scripted.as_deref().is_some_and(|s| s.hold.is_some()),
+        c.evading,
+    );
+    if holding {
+        crate::game::map::event_ai::hold_tick(map, g);
+    }
+    // Feared, confused or fleeing: it moves as that has it.
+    if !evading && crate::game::map::creature_combat::controlled_step(map, g) {
+        return;
+    }
+    let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
+        return;
+    };
+    if c.evading {
+        evade_step(map, g);
+    } else if c.combat.attacking {
+        fight_step(map, g);
+    } else {
+        if c.aggro_check_at <= now && !c.observers.is_empty() {
+            aggro_scan(map, g);
         }
-        let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
-            continue;
-        };
-        // Down in a linked feign death, or holding its path.
-        if c.scripted
-            .as_deref()
-            .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
-        {
-            crate::game::map::event_ai::feign_tick(map, g);
-            continue;
-        }
-        let (holding, evading) = (
-            c.scripted.as_deref().is_some_and(|s| s.hold.is_some()),
-            c.evading,
-        );
-        if holding {
-            crate::game::map::event_ai::hold_tick(map, g);
-        }
-        // Feared, confused or fleeing: it moves as that has it.
-        if !evading && crate::game::map::creature_combat::controlled_step(map, g) {
-            continue;
-        }
-        let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
-            continue;
-        };
-        if c.evading {
-            evade_step(map, g);
-        } else if c.combat.attacking {
-            fight_step(map, g);
-        } else {
-            if c.aggro_check_at <= now && !c.observers.is_empty() {
-                aggro_scan(map, g);
-            }
-            // Passive in a fight: it waits it out until no one it could
-            // fight is left.
-            passive_fight(map, g);
-            if !map
-                .creature(g)
-                .is_some_and(|c| c.combat.attacking || c.evading)
-            {
-                crate::game::map::world::step_creature_key(map, key);
-            }
-        }
-        let (moving, follows, fighting) = map
+        // Passive in a fight: it waits it out until no one it could
+        // fight is left.
+        passive_fight(map, g);
+        if !map
             .creature(g)
-            .map(|c| {
-                let s = c.scripted.as_deref();
-                (
-                    s.is_some_and(|s| s.scripted_move.is_some()),
-                    s.is_some_and(|s| s.follow.is_some()),
-                    c.combat.attacking || c.evading,
-                )
-            })
-            .unwrap_or_default();
-        if moving {
-            crate::game::map::event_ai::scripted_move_ended(map, g);
+            .is_some_and(|c| c.combat.attacking || c.evading)
+        {
+            crate::game::map::world::step_creature_key(map, key);
         }
-        if follows && !fighting {
-            crate::game::map::event_ai::follow_step(map, g);
-        }
+    }
+    let (moving, follows, fighting) = map
+        .creature(g)
+        .map(|c| {
+            let s = c.scripted.as_deref();
+            (
+                s.is_some_and(|s| s.scripted_move.is_some()),
+                s.is_some_and(|s| s.follow.is_some()),
+                c.combat.attacking || c.evading,
+            )
+        })
+        .unwrap_or_default();
+    if moving {
+        crate::game::map::event_ai::scripted_move_ended(map, g);
+    }
+    if follows && !fighting {
+        crate::game::map::event_ai::follow_step(map, g);
     }
 }
 

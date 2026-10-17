@@ -35,6 +35,9 @@ pub enum Control {
     LoggedOut,
     /// Disconnect the client.
     Kick,
+    /// Panic in the session's task, as a bug there would.
+    #[cfg(test)]
+    Panic,
 }
 
 enum State {
@@ -47,7 +50,29 @@ pub struct Session {
     account: Arc<str>,
     outbound: Outbound,
     control: mpsc::UnboundedSender<Control>,
+    control_rx: mpsc::UnboundedReceiver<Control>,
     state: State,
+}
+
+/// However a session ends (the client goes, the task panics or is
+/// aborted), its player leaves their map, which saves them: never a ghost
+/// in the world, holding the account's place.
+impl Drop for Session {
+    fn drop(&mut self) {
+        // At shutdown the maps have saved everyone; and with the runtime
+        // gone (a test's end) there is no map to go to.
+        if self.realm.maps.is_closed() || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        // A player handed over and not yet passed on goes on to their
+        // map, to be saved there.
+        while let Ok(ctl) = self.control_rx.try_recv() {
+            if let Control::Transfer { .. } = ctl {
+                self.control(ctl);
+            }
+        }
+        self.disconnect();
+    }
 }
 
 /// Run a connection from its first byte: the world handshake, then the
@@ -85,11 +110,11 @@ async fn handshake(
     }
     .tokio_write_unencrypted_server(&mut *stream)
     .await?;
-    let c = tokio_expect_client_message::<CMSG_AUTH_SESSION, _>(&mut *stream).await?;
+    let c = read_auth_session(stream).await?;
     let account = c.username;
     let session_key = {
         let users = realm.users.as_ref().ok_or("no auth server")?;
-        let mut users = users.lock().map_err(|_| "users mutex poisoned")?;
+        let mut users = crate::auth::users_lock(users);
         let srp = users
             .get_mut(&account)
             .ok_or_else(|| format!("unknown account {account}"))?;
@@ -115,40 +140,78 @@ async fn handshake(
     Ok((account, crypto))
 }
 
+/// Read the client's `CMSG_AUTH_SESSION`, refusing one too big, or whose
+/// addon data claims a size that would have wow_messages reserve
+/// gigabytes (an allocation that fails aborts the process), and catching a
+/// panic in wow_messages (on addon data that isn't zlib).
+async fn read_auth_session(
+    stream: &mut TcpStream,
+) -> Result<CMSG_AUTH_SESSION, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncReadExt;
+    let mut header = [0u8; 6];
+    stream.read_exact(&mut header).await?;
+    let size = usize::from(u16::from_be_bytes([header[0], header[1]]));
+    let opcode = u32::from_le_bytes([header[2], header[3], header[4], header[5]]);
+    if opcode != 0x1ED || !(4..=conn::MAX_AUTH_SESSION + 4).contains(&size) {
+        return Err(format!("expected an auth session, got 0x{opcode:X} of {size} bytes").into());
+    }
+    let mut plain = vec![0u8; 2 + size];
+    plain[..6].copy_from_slice(&header);
+    stream.read_exact(&mut plain[6..]).await?;
+    if !conn::fits(opcode, &plain[6..]) {
+        return Err("an auth session that asks for more than it holds".into());
+    }
+    match crate::game::supervisor::catch(|| ClientOpcodeMessage::read_unencrypted(&plain[..])) {
+        Ok(Ok(ClientOpcodeMessage::CMSG_AUTH_SESSION(c))) => Ok(c),
+        Ok(Ok(other)) => Err(format!("expected an auth session, got {other}").into()),
+        Ok(Err(e)) => Err(e.into()),
+        Err(e) => Err(format!("an auth session wow_messages panicked on: {e}").into()),
+    }
+}
+
 /// Run an authenticated session until the client goes.
 pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
     let Connection {
         outbound,
         mut inbound,
     } = connection;
-    let (control, mut control_rx) = mpsc::unbounded_channel();
+    let (control, control_rx) = mpsc::unbounded_channel();
     let mut rate = PacketRate::new(realm.config.max_packets_per_sec);
     let mut s = Session {
         realm,
         account: Arc::from(account),
         outbound,
         control,
+        control_rx,
         state: State::Screen,
     };
+    #[allow(clippy::large_enum_variant)] // Each packet goes through once.
+    enum Next {
+        Packet(Option<crate::game::conn::Inbound>),
+        Control(Option<Control>),
+    }
     loop {
-        tokio::select! {
-            msg = inbound.recv() => match msg {
-                Some(msg) => {
-                    if !rate.allow(std::time::Instant::now()) {
-                        warn!("{} sends packets too fast; disconnecting", s.account);
-                        break;
-                    }
-                    s.packet(msg).await
+        let next = tokio::select! {
+            msg = inbound.recv() => Next::Packet(msg),
+            ctl = s.control_rx.recv() => Next::Control(ctl),
+        };
+        match next {
+            Next::Packet(Some(msg)) => {
+                if !rate.allow(std::time::Instant::now()) {
+                    warn!("{} sends packets too fast; disconnecting", s.account);
+                    break;
                 }
-                None => break,
-            },
-            ctl = control_rx.recv() => match ctl {
-                Some(ctl) => if !s.control(ctl) { break },
-                None => break,
-            },
+                s.packet(msg).await
+            }
+            Next::Control(Some(ctl)) => {
+                if !s.control(ctl) {
+                    break;
+                }
+            }
+            Next::Packet(None) | Next::Control(None) => break,
         }
     }
-    s.disconnect();
+    // Dropping the session disconnects it.
 }
 
 impl Session {
@@ -199,14 +262,36 @@ impl Session {
                 true
             }
             Control::Kick => false,
+            #[cfg(test)]
+            Control::Panic => panic!("the session's test panic"),
         }
     }
 
+    /// The player, if in the world, leaves their map (which saves them),
+    /// and the connection closes. Run once whatever ends the session.
     fn disconnect(&mut self) {
-        if let State::InWorld { guid, map } = &self.state {
-            map.send(MapEvent::Disconnect(*guid));
+        match std::mem::replace(&mut self.state, State::Screen) {
+            State::InWorld { guid, map } => {
+                if !map.send(MapEvent::Disconnect(guid)) {
+                    // Their map is gone, and them with it: off the online
+                    // list, so the account can come back.
+                    warn!(
+                        "{}'s map has gone; {guid} is lost since their last save",
+                        self.account
+                    );
+                    self.realm.registry.go_offline(guid);
+                }
+            }
+            State::Screen => {
+                // Gone between going online and reaching a map (a panic
+                // in the login).
+                if let Some(o) = self.realm.registry.online_for_account(&self.account)
+                    && o.session.same_channel(&self.control)
+                {
+                    self.realm.registry.go_offline(o.guid);
+                }
+            }
         }
-        self.state = State::Screen;
         self.outbound.close();
     }
 
@@ -429,7 +514,9 @@ impl Session {
         if let Err(existing) = self.realm.registry.go_online(online.clone()) {
             // The account is still in the world from another connection:
             // that one goes, and this client can try again.
-            let _ = existing.session.send(Control::Kick);
+            if existing.session.send(Control::Kick).is_err() {
+                reap(&self.realm, existing);
+            }
             return fail(&self.outbound, WorldResult::CharLoginDuplicateCharacter);
         }
         // Logged out in a dungeon or raid: back into their copy, or, if it
@@ -461,11 +548,68 @@ impl Session {
                 }
             }
         }
-        map.send(MapEvent::Arrive(Box::new(Arrival {
+        if !map.send(MapEvent::Arrive(Box::new(Arrival {
             kind: ArrivalKind::Login(Box::new(row)),
             online,
-        })));
+        }))) {
+            self.realm.registry.go_offline(g);
+            return fail(&self.outbound, WorldResult::CharLoginNoWorld);
+        }
         self.state = State::InWorld { guid: g, map };
+    }
+}
+
+/// Pass a player a map has let go of to their session, to route to their
+/// new map. If the session has gone, they go on to that map anyway, and
+/// leave it at once, saved there: as though the client went on arrival.
+pub fn transfer(
+    realm: &Arc<Realm>,
+    session: &mpsc::UnboundedSender<Control>,
+    player: Player,
+    to: MapKey,
+) {
+    let Err(mpsc::error::SendError(Control::Transfer { player, to })) =
+        session.send(Control::Transfer {
+            player: Box::new(player),
+            to,
+        })
+    else {
+        return;
+    };
+    let guid = player.guid;
+    let map = realm.maps.get(realm, to);
+    let online = player.online.clone();
+    map.send(MapEvent::Arrive(Box::new(Arrival {
+        kind: ArrivalKind::Transfer(player),
+        online,
+    })));
+    map.send(MapEvent::Disconnect(guid));
+}
+
+/// An online entry whose session has gone (a ghost): its player, if their
+/// map still has them, leaves it saved; else the entry goes.
+fn reap(realm: &Arc<Realm>, ghost: Arc<Online>) {
+    warn!("{} was online with no session; letting them go", ghost.name);
+    let registry_realm = realm.clone();
+    let reaped = ghost.clone();
+    let delivered = ghost.map().call(move |m| {
+        if m.players.contains_key(&reaped.guid) {
+            m.handle_disconnect(reaped.guid);
+        } else if registry_realm
+            .registry
+            .online(reaped.guid)
+            .is_some_and(|o| Arc::ptr_eq(&o, &reaped))
+        {
+            registry_realm.registry.go_offline(reaped.guid);
+        }
+    });
+    if !delivered
+        && realm
+            .registry
+            .online(ghost.guid)
+            .is_some_and(|o| Arc::ptr_eq(&o, &ghost))
+    {
+        realm.registry.go_offline(ghost.guid);
     }
 }
 

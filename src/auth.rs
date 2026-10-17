@@ -29,6 +29,15 @@ use wow_srp::{GENERATOR, LARGE_SAFE_PRIME_LITTLE_ENDIAN, PublicKey};
 /// within `IDLE_TTL`.
 pub type UserCache = Arc<Mutex<UserCacheInner<SrpServer>>>;
 
+/// The session keys, locked. A panic while they were held leaves them as
+/// good as before (each change is one insert); a poisoned lock would
+/// instead refuse every login and world handshake until a restart.
+pub fn users_lock(users: &UserCache) -> std::sync::MutexGuard<'_, UserCacheInner<SrpServer>> {
+    users
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Maximum idle time before an `SrpServer` cache entry is evicted. Tuned
 /// so a typical "log in, play, disconnect, reconnect 10 min later" flow
 /// still uses the cached entry (cheaper than a full re-handshake), while
@@ -170,9 +179,17 @@ pub async fn auth(users: UserCache) {
         world_server_address()
     );
 
-    let listener = TcpListener::bind("0.0.0.0:3724")
-        .await
-        .expect("failed to bind auth listener on 0.0.0.0:3724");
+    // A port taken (another server still going) is waited out, rather than
+    // the world running on with no way in.
+    let listener = loop {
+        match TcpListener::bind("0.0.0.0:3724").await {
+            Ok(l) => break l,
+            Err(e) => {
+                tracing::error!("auth: can't listen on 0.0.0.0:3724 ({e}); trying again in 5 s");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    };
 
     // Every auth connection holds a permit while it lasts, so a flood of
     // idle sockets can't pile up without bound.
@@ -287,7 +304,7 @@ async fn reconnect_version_8(
     debug!("Reconnect version: {}", r.protocol_version);
 
     let server_reconnect_challenge_data = {
-        let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
+        let mut guard = users_lock(&users);
         let srp = or_return!(opt: guard.get(&r.account_name), "unknown account");
         *srp.reconnect_challenge_data()
     };
@@ -306,7 +323,7 @@ async fn reconnect_version_8(
     let l = or_return!(expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await);
 
     let success = {
-        let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
+        let mut guard = users_lock(&users);
         match guard.get_mut(&r.account_name) {
             None => false,
             Some(server) => server.verify_reconnection_attempt(l.proof_data, l.client_proof),
@@ -345,7 +362,7 @@ async fn reconnect_version_2(
     debug!("Reconnect version: {}", r.protocol_version);
 
     let server_reconnect_challenge_data = {
-        let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
+        let mut guard = users_lock(&users);
         let srp = or_return!(opt: guard.get(&r.account_name), "unknown account");
         *srp.reconnect_challenge_data()
     };
@@ -364,7 +381,7 @@ async fn reconnect_version_2(
     let l = or_return!(expect_step::<CMD_AUTH_RECONNECT_PROOF_Client>(&mut stream).await);
 
     let success = {
-        let mut guard = or_return!(users.lock().map_err(|_| "users mutex poisoned"));
+        let mut guard = users_lock(&users);
         match guard.get_mut(&r.account_name) {
             None => false,
             Some(server) => server.verify_reconnection_attempt(l.proof_data, l.client_proof),
@@ -458,7 +475,7 @@ async fn login_version_2(
     );
     debug!("Sent Logon Proof");
 
-    or_return!(users.lock().map_err(|_| "users mutex poisoned")).insert(username, p);
+    users_lock(&users).insert(username, p);
 
     print_version_2_3_realm_list(stream).await;
 }
@@ -549,7 +566,7 @@ async fn login_version_3(
     );
     debug!("Sent Logon Proof");
 
-    or_return!(users.lock().map_err(|_| "users mutex poisoned")).insert(username.to_string(), p);
+    users_lock(&users).insert(username.to_string(), p);
 
     print_version_2_3_realm_list(stream).await;
 }
@@ -620,7 +637,7 @@ async fn login_version_8(
     );
     debug!("Sent Logon Proof");
 
-    or_return!(users.lock().map_err(|_| "users mutex poisoned")).insert(username.to_string(), p);
+    users_lock(&users).insert(username.to_string(), p);
 
     print_version_8_realm_list(stream).await;
 }
