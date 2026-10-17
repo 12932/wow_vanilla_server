@@ -614,3 +614,310 @@ async fn a_group_adopts_its_leaders_copies_as_it_forms() {
     go(&realm, &mut a, DUNGEON).await;
     assert_ne!(key_of(&realm, a.guid), solo, "a copy of her own");
 }
+
+/// An escortee of `entry` for `quest`, its path's points `points` two
+/// yards apart east from `start`, spawned a step behind the first.
+fn escortee(
+    d: &mut GameData,
+    entry: u32,
+    quest: u32,
+    start: (f32, f32, f32),
+    points: std::ops::RangeInclusive<u32>,
+) {
+    let mut t = template(entry, "Escortee");
+    t.npc_flags = 0x2;
+    t.health_max = 100_000;
+    d.creature_templates.insert(entry, t);
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: entry,
+        entries: vec![entry],
+        map: 0,
+        x: start.0 - 1.5,
+        y: start.1,
+        z: start.2,
+        respawn_min: 600,
+        respawn_max: 600,
+        ..Default::default()
+    });
+    d.npc.quests.insert(
+        quest,
+        crate::game::data::npc::Quest {
+            id: quest,
+            title: format!("Quest {quest}"),
+            min_level: 1,
+            level: 1,
+            special_flags: 2,
+            ..Default::default()
+        },
+    );
+    d.npc.creature_starts.insert(entry, vec![quest]);
+    d.world.script_waypoints.insert(
+        entry,
+        points
+            .map(|i| crate::game::data::world::ScriptPoint {
+                point: i,
+                x: start.0 + 2.0 * i as f32,
+                y: start.1,
+                z: start.2,
+                wait_ms: 0,
+            })
+            .collect(),
+    );
+}
+
+/// Accept `quest` at the escortee of `entry`, and send it on at once, fast.
+async fn set_out(map: &crate::game::map::MapHandle, g: Guid, entry: u32, quest: u32) -> Guid {
+    let escortee = guid::unit(entry, entry);
+    map.query(move |m| {
+        if let Some(c) = m.creature_mut(escortee) {
+            c.speeds.walk = 200.0;
+            c.speeds.run = 200.0;
+        }
+        if let Some(at) = m.creature(escortee).map(|c| c.position)
+            && let Some(p) = m.players.get_mut(&g)
+        {
+            p.movement.position = at;
+        }
+        crate::game::map::quests::accept(m, g, escortee, quest);
+        for e in m.escorts.iter_mut() {
+            e.skip_start();
+        }
+    })
+    .await;
+    escortee
+}
+
+/// What an escort is doing as it goes: where its escortee is, whether it
+/// is held, whether the quest is explored (or failed), and whether it is
+/// over. The player keeps at the escortee's side.
+#[derive(Debug, Clone, Copy)]
+struct Going {
+    at: Vector3d,
+    held: bool,
+    explored: bool,
+    failed: bool,
+    over: bool,
+}
+
+async fn going(map: &crate::game::map::MapHandle, g: Guid, escortee: Guid, quest: u32) -> Going {
+    map.query(move |m| {
+        let at = m
+            .creature(escortee)
+            .map_or(Vector3d::default(), |c| c.position);
+        if let Some(p) = m.players.get_mut(&g) {
+            p.movement.position = at;
+        }
+        let log = m.players[&g].journal.log.iter().find(|l| l.quest == quest);
+        Going {
+            at,
+            held: m.escorts.iter().any(|e| e.quest == quest && e.held()),
+            explored: log.is_some_and(|l| l.explored),
+            failed: log.is_some_and(|l| l.failed),
+            over: !m.escorts.iter().any(|e| e.quest == quest),
+        }
+    })
+    .await
+    .unwrap()
+}
+
+/// Where a new human starts: escortees stand here, in her sight.
+const HUMAN_START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+
+const GRARK: u32 = 9520;
+const AMBUSHERS: [u32; 3] = [9522, 9605, 7042];
+
+/// Grark Lorkrub's escort (4121) holds at each ambush until the ambushers
+/// are gone, however long that takes, then says his line and goes on, as
+/// Thistle Tea's `{:hold, ...}` has it; at the end he is credited and dies
+/// as the scene ends.
+#[tokio::test]
+async fn an_escort_holds_at_an_ambush_until_its_ambushers_are_gone() {
+    let start = HUMAN_START;
+    let mut d = GameData::empty();
+    escortee(&mut d, GRARK, 4121, start, 1..=45);
+    for e in AMBUSHERS.into_iter().chain([7046, 9538, 9539]) {
+        d.creature_templates.insert(e, template(e, "Blackrock"));
+    }
+    let realm = harness::realm_with(d);
+    let a = player(&realm, "Alice").await;
+    let g = a.guid;
+    let map = realm.registry.online(g).unwrap().map();
+    let grark = set_out(&map, g, GRARK, 4121).await;
+    let ambushers = move |m: &crate::game::map::Map| -> Vec<Guid> {
+        m.creatures
+            .iter()
+            .filter(|(_, c)| AMBUSHERS.contains(&c.entry) && c.alive())
+            .map(|(_, c)| c.guid)
+            .collect()
+    };
+    // To the first ambush, where he holds.
+    let mut now = going(&map, g, grark, 4121).await;
+    for _ in 0..500 {
+        if now.held {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        now = going(&map, g, grark, 4121).await;
+    }
+    assert!(now.held, "held at the ambush: {now:?}");
+    let ambush_x = start.0 + 24.0;
+    assert!((now.at.x - ambush_x).abs() < 2.5, "at point 12: {now:?}");
+    let up = map.query(move |m| ambushers(m).len()).await.unwrap();
+    assert_eq!(up, 4, "four ambushers");
+    // Six minutes on, they still stand, and so does he.
+    for _ in 0..6 {
+        map.query(|m| {
+            for e in m.escorts.iter_mut() {
+                e.hurry(Duration::from_secs(60));
+            }
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    let now = going(&map, g, grark, 4121).await;
+    assert!(
+        now.held && (now.at.x - ambush_x).abs() < 2.5,
+        "still held: {now:?}"
+    );
+    // The ambushers dead as they come, he goes on to the end.
+    let mut end = now;
+    for _ in 0..1500 {
+        map.query(move |m| {
+            for f in ambushers(m) {
+                crate::game::map::combat::deal_damage(m, g, f, 1_000_000);
+            }
+            for e in m.escorts.iter_mut() {
+                e.hurry(Duration::from_secs(2));
+            }
+        })
+        .await;
+        end = going(&map, g, grark, 4121).await;
+        if end.over {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(end.over && end.explored, "credited at the end: {end:?}");
+    let dead = map
+        .query(move |m| m.creature(grark).is_some_and(|c| !c.alive()))
+        .await
+        .unwrap();
+    assert!(dead, "he dies as the scene ends");
+}
+
+const CELEBRAS: u32 = 13716;
+const INCANTATION: u32 = 178965;
+
+/// Celebras's escort (7046) waits at his altar for the tome he sets out to
+/// be read, as Thistle Tea's `{:await, ...}` has it: read, he goes on and
+/// the quest is done; left unread for 36 seconds, he gives up, and the
+/// quest fails.
+#[tokio::test]
+async fn an_escort_awaits_its_release_or_gives_up() {
+    let start = HUMAN_START;
+    let mut d = GameData::empty();
+    escortee(&mut d, CELEBRAS, 7046, start, 1..=13);
+    for (entry, name) in [(INCANTATION, "Incantation of Celebras"), (178964, "Aura")] {
+        d.gameobject_templates.insert(
+            entry,
+            GameObjectTemplate {
+                entry,
+                kind: 10,
+                display_id: 411,
+                name: name.into(),
+                size: 1.0,
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let a = player(&realm, "Alice").await;
+    let g = a.guid;
+    let map = realm.registry.online(g).unwrap().map();
+    let tome =
+        |m: &crate::game::map::Map| m.gameobjects.iter().any(|(_, o)| o.entry == INCANTATION);
+    for read in [true, false] {
+        let celebras = set_out(&map, g, CELEBRAS, 7046).await;
+        let mut now = going(&map, g, celebras, 7046).await;
+        for _ in 0..500 {
+            if now.held {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            now = going(&map, g, celebras, 7046).await;
+        }
+        assert!(now.held, "waiting at the altar: {now:?}");
+        assert!(
+            (now.at.x - (start.0 + 8.0)).abs() < 2.5,
+            "at point 4: {now:?}"
+        );
+        // The tome comes out; he waits on.
+        map.query(|m| {
+            for e in m.escorts.iter_mut() {
+                e.hurry(Duration::from_secs(6));
+            }
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            map.query(move |m| tome(m)).await.unwrap(),
+            "the tome set out"
+        );
+        assert!(going(&map, g, celebras, 7046).await.held, "still waiting");
+        if read {
+            // Read: its script lets him go.
+            map.query(move |m| {
+                let step = crate::game::data::scripts::ScriptStep {
+                    command: crate::game::map::scripts::C_RELEASE_WAYPOINTS,
+                    ..Default::default()
+                };
+                crate::game::map::scripts::execute(m, &step, celebras, g);
+            })
+            .await;
+        } else {
+            map.query(|m| {
+                for e in m.escorts.iter_mut() {
+                    e.hurry(Duration::from_secs(31));
+                }
+            })
+            .await;
+        }
+        let mut end = going(&map, g, celebras, 7046).await;
+        for _ in 0..500 {
+            map.query(|m| {
+                for e in m.escorts.iter_mut() {
+                    e.hurry(Duration::from_secs(4));
+                }
+            })
+            .await;
+            end = going(&map, g, celebras, 7046).await;
+            if end.over {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(end.over, "over: {end:?}");
+        if read {
+            assert!(end.explored && !end.failed, "done: {end:?}");
+            // Taken again, for the other way.
+            map.query(move |m| {
+                let p = m.players.get_mut(&g).unwrap();
+                p.journal.log.retain(|l| l.quest != 7046);
+                crate::game::map::ai::respawn_now(m, celebras);
+            })
+            .await;
+        } else {
+            assert!(end.failed && !end.explored, "failed: {end:?}");
+            let home = map
+                .query(move |m| {
+                    m.creatures
+                        .iter()
+                        .find(|(_, c)| c.entry == CELEBRAS && c.alive())
+                        .map(|(_, c)| c.position.x)
+                })
+                .await
+                .flatten();
+            assert_eq!(home, Some(start.0 - 1.5), "back at his spawn");
+        }
+    }
+}
