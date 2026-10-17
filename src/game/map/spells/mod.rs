@@ -6,11 +6,13 @@
 pub mod area;
 pub mod aura_rank;
 pub mod checks;
+pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 pub mod environment;
 mod holiday;
+pub mod log;
 pub mod mods;
 pub mod outcome;
 pub mod redemption;
@@ -42,7 +44,6 @@ use outcome::{Hit, Landing};
 pub const SMSG_CAST_RESULT: u16 = 0x130;
 /// `SPELL_FAILED_REAGENTS`, which wow_messages lacks.
 pub const SPELL_FAILED_REAGENTS: u8 = 0x5c;
-const SMSG_SPELL_DELAYED: u16 = 0x1E2;
 
 // Effects.
 pub const EFFECT_INSTAKILL: u32 = 1;
@@ -190,6 +191,10 @@ pub struct MapSpells {
     pub outdoors_override: AHashMap<Guid, bool>,
     /// Spirits of redemption dying, whom the talent doesn't save again.
     pub redeemed: ahash::AHashSet<Guid>,
+    /// Override for spells' travel time; `None` takes the realm's setting.
+    pub travel: Option<bool>,
+    /// Missiles and bolts on their way.
+    pub in_flight: Vec<InFlight>,
 }
 
 /// A persistent area aura on the ground.
@@ -231,7 +236,22 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     if spell == 0 || p.spells.contains(&spell) {
         return;
     }
+    // A higher rank takes the lower's place on the bars; a talent's rank
+    // takes it in the spellbook too.
+    let (old, talent) = supersedes(&map.realm.data, &p.spells, spell);
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    if talent && let Some(old) = old {
+        p.spells.retain(|s| *s != old);
+    }
     p.spells.push(spell);
+    if let Some(old) = old {
+        log::superceded(map, player, old, spell);
+    }
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
     p.outbound.send(&SMSG_LEARNED_SPELL { id: spell });
     apply_passive(map, player, spell);
     let with = map
@@ -245,6 +265,26 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     for s in with {
         learn(map, player, s);
     }
+}
+
+/// The known spell `spell` supersedes, as Thistle Tea's `SpellBook` finds
+/// it (the skill line's `superseded_by`, or a talent's ranks), and whether
+/// it is a talent's.
+fn supersedes(data: &GameData, known: &[u32], spell: u32) -> (Option<u32>, bool) {
+    let talent = data.spells.talents.values().find_map(|t| {
+        let i = t.ranks.iter().position(|r| *r == spell)?;
+        (i > 0 && known.contains(&t.ranks[i - 1])).then(|| t.ranks[i - 1])
+    });
+    if talent.is_some() {
+        return (talent, true);
+    }
+    let line = known.iter().copied().find(|k| {
+        data.spells
+            .skill_abilities
+            .get(k)
+            .is_some_and(|abilities| abilities.iter().any(|a| a.superseded_by == spell))
+    });
+    (line, false)
 }
 
 /// Every passive spell a player knows takes hold, as on login, and the
@@ -804,7 +844,18 @@ fn execute(
     } else {
         0
     };
-    for (target, mut effects) in resolved {
+    let launch = Launch {
+        m: m.clone(),
+        combo,
+        item,
+        targets,
+        triggered,
+        paid,
+        shared,
+    };
+    let travels = travels(map) && s.speed > 0.0;
+    for (target, effects) in resolved {
+        let mut effects = class_scripts::effects_for(s, target, &launch.targets, effects);
         for (i, e) in effects.iter_mut().enumerate() {
             if professions & (1 << i) != 0 {
                 *e = false;
@@ -813,101 +864,41 @@ fn execute(
         if !effects.iter().any(|e| *e) {
             continue;
         }
-        let mut hit = outcome::roll_hit(map, caster, target, s, &m);
-        // A creature immune to the spell (its template's masks).
-        if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
-            hit = Hit::Immune;
-        }
-        let mut aim = target;
-        if hit == Hit::Reflect {
-            // Back at the caster.
-            outcome::send_miss(map, caster, target, s.id, Hit::Reflect);
-            aim = caster;
-            hit = Hit::Hit;
-        }
-        if !hit.lands() {
-            outcome::send_miss(map, caster, aim, s.id, hit);
-            // An avoided ability gives back some of its rage or energy.
-            if !triggered && outcome::physical(s) {
-                crate::game::map::combat::ability_avoided(map, caster, s.id, hit.proc_ex(), paid);
+        // A missile or a bolt lands when it gets there (Thistle Tea's
+        // `SpellLaunch.delay`).
+        let delay = if travels && target != caster {
+            flight_ms(map, caster, target, s.speed)
+        } else {
+            0
+        };
+        if delay > 0 {
+            if Some(target) == launch.targets.unit {
+                landed_on_main = true;
             }
-            let (done, taken) = outcome::proc_flags(s);
-            crate::game::map::procs::trigger(
-                map,
-                crate::game::map::procs::Event {
-                    actor: caster,
-                    target: aim,
-                    actor_flags: done,
-                    target_flags: taken,
-                    ex: hit.proc_ex(),
-                    spell: Some(s.id),
-                    damage: 0,
-                    school: s.school_mask(),
-                    offhand: false,
-                    ranged: s.dmg_class == 3,
-                    extra_attack: false,
-                },
-            );
-            if guid::is_unit(aim) && !auras::positive(s) {
-                crate::game::map::ai::attacked(map, aim, caster);
-            }
+            map.spells.in_flight.push(InFlight {
+                lands: now + Duration::from_millis(u64::from(delay)),
+                caster,
+                spell: Box::new(s.clone()),
+                target,
+                effects,
+                chain,
+                launch: launch.clone(),
+            });
             continue;
         }
-        if Some(target) == targets.unit {
+        if land(map, caster, s, target, effects, &mut chain, &launch)
+            && Some(target) == launch.targets.unit
+        {
             landed_on_main = true;
         }
-        let deals = s
-            .effects
-            .iter()
-            .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
-        let crit = deals
-            && if outcome::physical(s) {
-                outcome::melee_roll(map, caster, aim, s, &m).1
-            } else {
-                outcome::roll_crit(map, caster, aim, s, &m)
-            };
-        let landing = Landing {
-            hit,
-            crit,
-            chain: 1.0,
-            combo,
-            mods: m.clone(),
-            reflected: aim != target,
-            shared,
-        };
-        effects::run(
-            map, caster, aim, s, effects, &landing, &mut chain, item, &targets,
-        );
-        crate::game::map::event_ai::spell_hit(map, aim, caster, s.id, s.school_mask());
-        // A script for the spell, and the events it sends.
-        for (i, e) in s.effects.iter().enumerate() {
-            if !effects[i] {
-                continue;
-            }
-            if matches!(e.effect, EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT)
-                && map.realm.data.scripts.spell.contains_key(&s.id)
-            {
-                crate::game::map::scripts::start(
-                    map,
-                    crate::game::data::scripts::ScriptTable::Spell,
-                    s.id,
-                    caster,
-                    aim,
-                );
-            }
-            if e.effect == 61 && e.misc_value > 0 {
-                crate::game::map::scripts::start(
-                    map,
-                    crate::game::data::scripts::ScriptTable::Event,
-                    e.misc_value as u32,
-                    caster,
-                    aim,
-                );
-            }
-        }
     }
+    let targets = launch.targets;
     // Effects with no unit: places, objects.
     effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
+    class_scripts::after_effects(map, caster, s);
+    if !triggered && let Some(finish) = class_scripts::finish_trigger(s) {
+        cast_triggered(map, caster, finish, None);
+    }
     if combo > 0 && (landed_on_main || targets.unit.is_none()) {
         clear_combo_points(map, caster);
     }
@@ -925,6 +916,177 @@ fn execute(
             });
         }
     }
+}
+
+/// What a spell carries to each target it lands on.
+#[derive(Debug, Clone)]
+pub struct Launch {
+    m: Mods,
+    combo: u8,
+    item: Option<Guid>,
+    targets: Targets,
+    triggered: bool,
+    paid: u32,
+    shared: u32,
+}
+
+/// A spell on its way to a target.
+#[derive(Debug, Clone)]
+pub struct InFlight {
+    pub lands: Instant,
+    pub caster: Guid,
+    pub spell: Box<SpellTemplate>,
+    pub target: Guid,
+    effects: [bool; 3],
+    chain: [f32; 3],
+    launch: Launch,
+}
+
+/// Whether spells take time to get where they go (tests land them at
+/// once).
+fn travels(map: &Map) -> bool {
+    map.spells.travel.unwrap_or(map.realm.config.spell_travel)
+}
+
+/// How long something at `speed` yards a second takes from `caster` to
+/// `target`: at least five yards' worth.
+fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
+    match (map.position_of(caster), map.position_of(target)) {
+        (Some(a), Some(b)) => {
+            let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
+            (d.max(5.0) / speed * 1000.0) as u32
+        }
+        _ => 0,
+    }
+}
+
+/// The spells in flight that have got there land.
+fn land_arrivals(map: &mut Map) {
+    let now = map.now;
+    if !map.spells.in_flight.iter().any(|f| f.lands <= now) {
+        return;
+    }
+    let (due, waiting): (Vec<InFlight>, Vec<InFlight>) = std::mem::take(&mut map.spells.in_flight)
+        .into_iter()
+        .partition(|f| f.lands <= now);
+    map.spells.in_flight = waiting;
+    for mut f in due {
+        if map.unit_view(f.target).is_none() {
+            continue;
+        }
+        land(
+            map,
+            f.caster,
+            &f.spell,
+            f.target,
+            f.effects,
+            &mut f.chain,
+            &f.launch,
+        );
+    }
+}
+
+/// `s` gets to `target`: the hit, then the effects. Whether it landed.
+fn land(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    target: Guid,
+    effects: [bool; 3],
+    chain: &mut [f32; 3],
+    l: &Launch,
+) -> bool {
+    let mut hit = outcome::roll_hit(map, caster, target, s, &l.m);
+    // A creature immune to the spell (its template's masks).
+    if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
+        hit = Hit::Immune;
+    }
+    let mut aim = target;
+    if hit == Hit::Reflect {
+        // Back at the caster.
+        outcome::send_miss(map, caster, target, s.id, Hit::Reflect);
+        aim = caster;
+        hit = Hit::Hit;
+    }
+    if !hit.lands() {
+        outcome::send_miss(map, caster, aim, s.id, hit);
+        // An avoided ability gives back some of its rage or energy.
+        if !l.triggered && outcome::physical(s) {
+            crate::game::map::combat::ability_avoided(map, caster, s.id, hit.proc_ex(), l.paid);
+        }
+        let (done, taken) = outcome::proc_flags(s);
+        crate::game::map::procs::trigger(
+            map,
+            crate::game::map::procs::Event {
+                actor: caster,
+                target: aim,
+                actor_flags: done,
+                target_flags: taken,
+                ex: hit.proc_ex(),
+                spell: Some(s.id),
+                damage: 0,
+                school: s.school_mask(),
+                offhand: false,
+                ranged: s.dmg_class == 3,
+                extra_attack: false,
+            },
+        );
+        if guid::is_unit(aim) && !auras::positive(s) {
+            crate::game::map::ai::attacked(map, aim, caster);
+        }
+        return false;
+    }
+    let deals = s
+        .effects
+        .iter()
+        .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
+    let crit = deals
+        && if outcome::physical(s) {
+            outcome::melee_roll(map, caster, aim, s, &l.m).1
+        } else {
+            outcome::roll_crit(map, caster, aim, s, &l.m)
+        };
+    let landing = Landing {
+        hit,
+        crit,
+        chain: 1.0,
+        combo: l.combo,
+        mods: l.m.clone(),
+        reflected: aim != target,
+        shared: l.shared,
+    };
+    effects::run(
+        map, caster, aim, s, effects, &landing, chain, l.item, &l.targets,
+    );
+    class_scripts::landed(map, caster, aim, s);
+    crate::game::map::event_ai::spell_hit(map, aim, caster, s.id, s.school_mask());
+    // A script for the spell, and the events it sends.
+    for (i, e) in s.effects.iter().enumerate() {
+        if !effects[i] {
+            continue;
+        }
+        if matches!(e.effect, EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT)
+            && map.realm.data.scripts.spell.contains_key(&s.id)
+        {
+            crate::game::map::scripts::start(
+                map,
+                crate::game::data::scripts::ScriptTable::Spell,
+                s.id,
+                caster,
+                aim,
+            );
+        }
+        if e.effect == 61 && e.misc_value > 0 {
+            crate::game::map::scripts::start(
+                map,
+                crate::game::data::scripts::ScriptTable::Event,
+                e.misc_value as u32,
+                caster,
+                aim,
+            );
+        }
+    }
+    true
 }
 
 /// Whether a spell can be pulled aside by a spell magnet (Grounding
@@ -1301,10 +1463,11 @@ pub fn pushback(map: &mut Map, g: Guid) {
             p.outbound.send(&MSG_CHANNEL_UPDATE_Server { time: left });
         }
         None => {
-            let mut b = Body::default();
-            crate::game::update::write_packed_guid(&mut b.0, g);
-            b.u32(500);
-            p.outbound.send_frame(b.frame(SMSG_SPELL_DELAYED));
+            p.outbound
+                .send(&wow_world_messages::vanilla::SMSG_SPELL_DELAYED {
+                    guid: g,
+                    delay_time: 500,
+                });
         }
     }
 }
@@ -1389,6 +1552,7 @@ pub fn update(map: &mut Map) {
     }
     effects::tick_areas(map);
     effects::refresh_area_auras(map);
+    land_arrivals(map);
     dynamic::update(map);
     sight::update(map);
     for p in map.players.values_mut() {
@@ -1535,8 +1699,9 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
         && let Some(d) = data.spells.talents.get(&t.depends_on)
         && !d
             .ranks
-            .get(t.depends_rank as usize)
-            .is_some_and(|r| p.spells.contains(r))
+            .iter()
+            .skip(t.depends_rank as usize)
+            .any(|r| *r != 0 && p.spells.contains(r))
     {
         return;
     }

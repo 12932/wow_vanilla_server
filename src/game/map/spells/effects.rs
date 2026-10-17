@@ -477,6 +477,7 @@ fn effect(
         ) => {}
         19 => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
+            super::log::extra_attacks(map, caster, s.id, caster, amount.max(1) as u32);
         }
         // The ritual's summons: for its target, by its owner.
         crate::game::map::objects::EFFECT_SUMMON_PLAYER => {
@@ -489,6 +490,10 @@ fn effect(
             crate::game::map::pvp::bonus_honor(map, target, amount.max(0) as u32)
         }
         EFFECT_INSTAKILL => {
+            super::class_scripts::sacrifice(map, caster, target, s);
+            if target == caster {
+                super::log::instakill(map, target, s.id);
+            }
             let health = map
                 .unit_fields(target)
                 .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
@@ -499,7 +504,13 @@ fn effect(
             if super::scripts::school_damage(map, caster, target, s, index, amount, l) {
                 return;
             }
-            let d = outcome::damage(map, caster, target, s, index, amount.max(0) as f32, l);
+            let base =
+                super::class_scripts::damage_base(map, caster, s, index, amount.max(0) as f32, l);
+            let mut d = outcome::damage(map, caster, target, s, index, base, l);
+            let scale = super::class_scripts::damage_multiplier(map, target, s);
+            if scale != 1.0 {
+                d.amount = (d.amount as f32 * scale) as u32;
+            }
             outcome::deal(map, caster, target, s, d, l);
         }
         EFFECT_HEALTH_LEECH => {
@@ -529,6 +540,7 @@ fn effect(
             );
         }
         EFFECT_HEAL | EFFECT_HEAL_MECHANICAL => {
+            let amount = amount + super::class_scripts::swiftmend(map, target, s);
             let h = outcome::healing(map, caster, target, s, index, amount.max(0) as f32, l);
             heal_crit(map, caster, target, s.id, h, false, l.crit);
             crate::game::map::procs::trigger(
@@ -598,6 +610,7 @@ fn effect(
                 1.0
             };
             if e.effect == EFFECT_POWER_DRAIN {
+                super::log::power_drain(map, caster, s.id, target, taken, power, mult);
                 if let Some(f) = map.unit_fields_mut(caster) {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
                     let now = f.get_u32(UNIT_FIELD_POWER1 + power);
@@ -713,13 +726,34 @@ fn effect(
         }
         EFFECT_DISPEL => {
             let friendly = !combat::can_attack(map, caster, target);
-            let gone: Vec<(u32, Guid)> =
+            let tries: Vec<(u32, Guid)> =
                 auras::dispellable(map, target, e.misc_value as u32, friendly)
                     .into_iter()
                     .take(amount.max(1) as usize)
                     .collect();
+            // An aura its caster's talents hold on may resist (Thistle
+            // Tea's `DispelResistance`).
+            let data = map.realm.data.clone();
+            let (mut gone, mut held) = (Vec::new(), Vec::new());
+            for (spell, by) in tries {
+                let resist = data.spells.get(spell).map_or(0, |t| {
+                    super::mods::for_spell(map, by, t).flat[super::mods::OP_RESIST_DISPEL_CHANCE]
+                });
+                if resist > 0 && outcome::chance(map, resist as f32) {
+                    held.push(spell);
+                } else {
+                    gone.push((spell, by));
+                }
+            }
+            let any = !gone.is_empty();
+            let ids: Vec<u32> = gone.iter().map(|(spell, _)| *spell).collect();
             for (spell, by) in gone {
                 auras::remove_spell(map, target, spell, Some(by));
+            }
+            super::log::dispelled(map, caster, target, ids);
+            super::log::dispel_failed(map, caster, target, held);
+            if any {
+                super::class_scripts::dispelled(map, caster, s);
             }
         }
         EFFECT_DISPEL_MECHANIC => {
@@ -743,6 +777,7 @@ fn effect(
                 .map(|c| c.spell);
             super::interrupt(map, target);
             if let Some(spell) = interrupted {
+                super::log::interrupt(map, caster, s.id, target, spell);
                 let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
                 let ms = map.realm.data.spells.duration(s, level).unwrap_or(0);
                 if ms > 0 {
@@ -837,6 +872,21 @@ fn effect(
         EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
             let pct = e.effect == EFFECT_DURABILITY_DAMAGE_PCT;
             let slot = e.misc_value;
+            // The combat log names the item a set loss is from.
+            let logged = map.players.get(&target).and_then(|p| {
+                p.items
+                    .iter()
+                    .find(|i| {
+                        i.bag == crate::game::store::BAG_PLAYER
+                            && i.slot < 19
+                            && (slot < 0 || i.slot as i32 == slot)
+                            && i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+                    })
+                    .map(|i| i.entry)
+            });
+            if !pct && let Some(entry) = logged {
+                super::log::durability(map, caster, s.id, target, entry);
+            }
             if let Some(p) = map.players.get_mut(&target) {
                 for it in p.items.iter_mut().filter(|i| {
                     i.bag == crate::game::store::BAG_PLAYER
@@ -856,7 +906,10 @@ fn effect(
                 p.gear_dirty = true;
             }
         }
-        EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT if !super::holiday::effect(map, caster, target, s) => {
+        EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
+            if !super::class_scripts::dummy(map, caster, target, s, index, amount)
+                && !super::holiday::effect(map, caster, target, s) =>
+        {
             super::scripts::dummy(map, caster, target, s, index, amount, l, item);
         }
         _ => {}
