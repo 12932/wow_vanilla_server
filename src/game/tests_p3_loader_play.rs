@@ -315,3 +315,142 @@ async fn real_reflection_detect_magic_and_invisibility() {
         "hidden, then seen by a detection as strong"
     );
 }
+
+const BATTLE_STANCE: u32 = 2457;
+const DEFENSIVE_STANCE: u32 = 71;
+const BATTLE_STANCE_PASSIVE: u32 = 21_156;
+const DEFENSIVE_STANCE_PASSIVE: u32 = 7376;
+const BLOODTHIRST: u32 = 23_881;
+const BLOODTHIRST_HEAL_BUFF: u32 = 23_885;
+const HEROIC_STRIKE: u32 = 78;
+const REVENGE: u32 = 6572;
+const SUNDER_ARMOR: u32 = 7386;
+
+/// What `g` has on `c`'s threat list.
+fn threat(m: &Map, c: Guid, g: Guid) -> f32 {
+    m.creature(c)
+        .and_then(|c| c.threat.iter().find(|(t, _)| *t == g).map(|(_, v)| *v))
+        .unwrap_or(0.0)
+}
+
+/// Thistle Tea's warrior spells (`spell_vmangos_test.exs`): Heroic
+/// Strike's flat 20 threat over its damage, Revenge's 2.25 times and 63,
+/// Fireball's damage alone with no `spell_threat` row; Sunder Armor's five
+/// stacks; Bloodthirst's heal buff on the warrior (vmangos's
+/// `spell_effect_mod`); and each stance's passives, the last's gone with
+/// it.
+#[tokio::test]
+async fn real_warrior_threat_stacks_and_stances() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_w, w, map) = enter(&realm, "P3JWAR1", "Threata", Race::Human, Class::Warrior).await;
+    let (_m, mage, _) = enter(&realm, "P3JWAR2", "Threatb", Race::Human, Class::Mage).await;
+    let out = on(&map, move |m| {
+        ready(m, w, 60, &[]);
+        ready(m, mage, 60, &[]);
+        let mut threats = Vec::new();
+        for (who, spell) in [(w, HEROIC_STRIKE), (w, REVENGE), (mage, 133)] {
+            let kobold = dummy(m, w, KOBOLD_VERMIN, 60, 2.0);
+            let before = health(m, kobold);
+            spells::cast_triggered(m, who, spell, Some(kobold));
+            let dealt = (before - health(m, kobold)) as f32;
+            threats.push((dealt > 0.0, threat(m, kobold, who) - dealt));
+        }
+        let kobold = dummy(m, w, KOBOLD_VERMIN, 60, 2.0);
+        for _ in 0..6 {
+            spells::cast_triggered(m, w, SUNDER_ARMOR, Some(kobold));
+        }
+        let sunder = auras::auras(m, kobold)
+            .and_then(|a| a.holders.iter().find(|h| h.spell == SUNDER_ARMOR))
+            .map(|h| h.stacks);
+        spells::cast_triggered(m, w, BLOODTHIRST, Some(kobold));
+        let buffed = has(m, w, BLOODTHIRST_HEAL_BUFF);
+        spells::cast_triggered(m, w, BATTLE_STANCE, None);
+        let battle = (
+            has(m, w, BATTLE_STANCE_PASSIVE),
+            has(m, w, DEFENSIVE_STANCE_PASSIVE),
+        );
+        spells::cast_triggered(m, w, DEFENSIVE_STANCE, None);
+        let defensive = (
+            has(m, w, BATTLE_STANCE_PASSIVE),
+            has(m, w, DEFENSIVE_STANCE_PASSIVE),
+        );
+        (threats, sunder, buffed, battle, defensive)
+    })
+    .await;
+    let (threats, sunder, buffed, battle, defensive) = out;
+    assert!(threats.iter().all(|(hit, _)| *hit), "{threats:?}");
+    let extra: Vec<f32> = threats.iter().map(|(_, x)| x.round()).collect();
+    assert_eq!(extra[0], 20.0, "Heroic Strike's 20");
+    assert!(extra[1] > 63.0, "Revenge's 2.25 times and 63: {}", extra[1]);
+    assert_eq!(extra[2], 0.0, "Fireball's damage alone");
+    assert_eq!(sunder, Some(5), "Sunder Armor stacks to five");
+    assert!(buffed, "Bloodthirst's heal buff");
+    assert_eq!(battle, (true, false), "Battle Stance's passive");
+    assert_eq!(
+        defensive,
+        (false, true),
+        "Defensive Stance's, and not Battle's"
+    );
+}
+
+const SUMMON_FRONT: u32 = 15_734;
+const SUMMON_PLAYER: u32 = 21_150;
+const BANISH: u32 = 24_466;
+
+/// Thistle Tea's caster-relative teleports (`spell_vmangos_test.exs`), as
+/// mangos's `EffectTeleUnitsFaceCaster`: a summons to the caster's front
+/// lands its radius (five yards) ahead of it, a summons to the caster on
+/// its spot, and a banishment to its `spell_target_position`; each turned
+/// to the caster's facing negated.
+#[tokio::test]
+async fn real_teleports_to_a_caster_land_where_their_targets_say() {
+    if !have_data() {
+        return;
+    }
+    let mut d = crate::game::data::load::load(DB.as_path());
+    let spot = Vector3d {
+        x: -8_949.95 + 30.0,
+        y: -132.493,
+        z: 83.5312,
+    };
+    d.spells
+        .target_positions
+        .insert(BANISH, (0, spot.x, spot.y, spot.z, 1.0));
+    let realm = harness::realm_with(d);
+    let (_w, w, map) = enter(&realm, "P3JTELE1", "Telea", Race::Human, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let kobold = dummy(m, w, KOBOLD_VERMIN, 20, 20.0);
+        let (from, o) = {
+            let c = m.creature(kobold).unwrap();
+            (c.position, c.orientation)
+        };
+        let where_now = |m: &Map| {
+            let p = &m.players[&w];
+            (p.position(), p.movement.orientation)
+        };
+        let mut landed = Vec::new();
+        for spell in [SUMMON_FRONT, SUMMON_PLAYER, BANISH] {
+            spells::cast_triggered(m, kobold, spell, Some(w));
+            landed.push(where_now(m));
+        }
+        (from, o, landed)
+    })
+    .await;
+    let (from, o, landed) = out;
+    let near = |a: Vector3d, b: Vector3d| (a.x - b.x).hypot(a.y - b.y) < 0.1;
+    let front = Vector3d {
+        x: from.x + 5.0 * o.cos(),
+        y: from.y + 5.0 * o.sin(),
+        z: from.z,
+    };
+    assert!(near(landed[0].0, front), "{:?} {front:?}", landed[0].0);
+    assert!(near(landed[1].0, from), "{:?} {from:?}", landed[1].0);
+    assert!(near(landed[2].0, spot), "{:?} {spot:?}", landed[2].0);
+    let facing = (-o).rem_euclid(std::f32::consts::TAU);
+    for (_, turned) in landed {
+        assert!((turned - facing).abs() < 0.01, "{turned} {facing}");
+    }
+}
