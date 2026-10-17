@@ -2309,6 +2309,9 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
         if despawn.is_none() && step.dataint[3] > 0 {
             s.despawn_type = step.dataint[3];
         }
+        if ext.is_some_and(|e| e.concealed) {
+            s.concealed = true;
+        }
     }
     if step.dataint[1] > 0 {
         start(map, ScriptTable::Generic, step.dataint[1] as u32, g, target);
@@ -2669,6 +2672,15 @@ pub fn object_used(map: &mut Map, player: Guid, object: Guid) {
     let (spawn, entry, kind) = (o.spawn_guid, o.entry, o.kind);
     if let Some(s) = spawn {
         start(map, ScriptTable::GameObject, s, object, player);
+    }
+    // A code-built script: on the player, at the object.
+    let scripts = &map.realm.data.scripts;
+    let hello = spawn
+        .and_then(|s| scripts.object_hello.get(&s))
+        .or_else(|| scripts.object_hello_entry.get(&entry))
+        .copied();
+    if let Some(id) = hello {
+        start(map, ScriptTable::Generic, id, player, object);
     }
     let event = map
         .realm

@@ -22,6 +22,7 @@ pub mod gameobject;
 pub mod gm;
 pub mod grid;
 pub mod handlers;
+mod instance_adapters;
 pub mod instance_script;
 pub mod inventory;
 pub mod items_misc;
