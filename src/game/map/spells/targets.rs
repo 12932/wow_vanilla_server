@@ -305,6 +305,12 @@ pub fn effect_targets(
         }
         (EnemyLocation, _) => t.unit.into_iter().collect(),
         (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, t, r),
+        // vmangos's script units about the source (7) or the destination
+        // (8): every one of them there, as Separation Anxiety and
+        // Golemagg's Trust name theirs.
+        (_, ScriptUnits) if matches!(e.target_b, 7 | 8) => {
+            script_area(map, center(map, caster, t, e.target_b == 8), s, r)
+        }
         (GameObject, _) | (Location, _) => Vec::new(),
         (Other(_), _) => t.unit.into_iter().collect(),
     };
@@ -385,6 +391,22 @@ fn chain(
 
 /// The units a scripted spell aims at: the creatures `spell_script_target`
 /// names, near the caster (or the target the client picked).
+/// Every creature a spell's script targets name within `radius` of `at`.
+fn script_area(map: &Map, at: Vector3d, s: &SpellTemplate, radius: f32) -> Vec<Guid> {
+    let Some(v) = map.realm.data.spells.script_targets.get(&s.id) else {
+        return Vec::new();
+    };
+    let entries: Vec<u32> = v
+        .iter()
+        .filter(|(k, _)| *k == 1 || *k == 2)
+        .map(|(_, e)| *e)
+        .collect();
+    units_around(map, at, radius, |g| {
+        map.creature(g)
+            .is_some_and(|c| c.alive() && entries.contains(&c.entry))
+    })
+}
+
 fn script_units(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, radius: f32) -> Vec<Guid> {
     let entries: Vec<u32> = map
         .realm

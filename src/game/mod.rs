@@ -78,6 +78,8 @@ mod tests_terrain;
 mod tests_scripts2;
 #[cfg(test)]
 mod tests_creatures4;
+#[cfg(test)]
+mod tests_bosses;
 pub mod transports;
 pub mod update;
 pub mod weather;
