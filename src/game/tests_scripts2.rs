@@ -762,3 +762,351 @@ async fn majordomo_yields_when_his_guard_is_dead() {
     }
     assert!(friendly, "he yields");
 }
+
+/// A dungeon of `map` run by instance script `script`.
+fn dungeon(d: &mut GameData, map: u32, script: &str) {
+    d.maps.insert(
+        map,
+        MapInfo {
+            id: map,
+            internal_name: script.into(),
+            name: script.into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    d.scripts.map_templates.insert(
+        map,
+        MapTemplate {
+            map,
+            map_type: 1,
+            script_name: script.into(),
+            ..Default::default()
+        },
+    );
+}
+
+fn door(entry: u32) -> GameObjectTemplate {
+    GameObjectTemplate {
+        entry,
+        kind: 0,
+        display_id: 411,
+        name: format!("Door {entry}"),
+        size: 1.0,
+        ..Default::default()
+    }
+}
+
+fn spawn_at(guid: u32, entry: u32, map: u32, x: f32) -> CreatureSpawn {
+    CreatureSpawn {
+        guid,
+        entries: vec![entry],
+        map,
+        x,
+        y: 0.0,
+        z: 0.0,
+        ..Default::default()
+    }
+}
+
+async fn state_of(map: &crate::game::map::MapHandle, entry: u32) -> Option<u32> {
+    map.query(move |m| {
+        m.gameobjects
+            .iter()
+            .find(|(_, o)| o.entry == entry)
+            .map(|(_, o)| o.fields.get_u32(GAMEOBJECT_STATE))
+    })
+    .await
+    .flatten()
+}
+
+async fn living(map: &crate::game::map::MapHandle, entry: u32) -> Vec<Guid> {
+    map.query(move |m| {
+        m.creatures
+            .iter()
+            .filter(|(_, c)| c.entry == entry && c.alive())
+            .map(|(_, c)| c.guid)
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap()
+}
+
+/// Scholomance: the six room bosses fallen bring Darkmaster Gandling; the
+/// Brazier of the Herald calls Kirtonos and shuts his gate until he dies.
+#[tokio::test]
+async fn scholomance_calls_gandling_and_kirtonos() {
+    let mut d = GameData::empty();
+    dungeon(&mut d, 289, "instance_scholomance");
+    let bosses = [11261, 10505, 10502, 10504, 10901, 10507];
+    for e in bosses.iter().copied().chain([1853, 10506]) {
+        d.creature_templates
+            .insert(e, template(e, "Scholomance", 14));
+    }
+    d.creature_spawns.insert(
+        289,
+        bosses
+            .iter()
+            .enumerate()
+            .map(|(i, e)| spawn_at(70_000 + i as u32, *e, 289, 4.0 + i as f32))
+            .collect(),
+    );
+    for e in [175570, 175564] {
+        d.gameobject_templates.insert(e, door(e));
+    }
+    d.gameobject_spawns.insert(
+        289,
+        [175570, 175564]
+            .iter()
+            .enumerate()
+            .map(|(i, e)| GameObjectSpawn {
+                guid: 80_000 + i as u32,
+                entry: *e,
+                map: 289,
+                x: 2.0,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                state: 1,
+                ..Default::default()
+            })
+            .collect(),
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 289, (0.0, 0.0, 0.0)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    assert_eq!(
+        state_of(&map, 175570).await,
+        Some(0),
+        "Kirtonos's gate stands open"
+    );
+    for e in bosses {
+        for g in living(&map, e).await {
+            map.call(move |m| crate::game::map::combat::deal_damage(m, me, g, 1_000_000));
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(living(&map, 1853).await.len(), 1, "Gandling comes");
+    map.call(|m| crate::game::map::instance_script::object_used(m, 175564));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let kirtonos = living(&map, 10506).await;
+    assert_eq!(kirtonos.len(), 1, "the Herald answers the brazier");
+    assert_eq!(state_of(&map, 175570).await, Some(1), "and his gate shuts");
+    let k = kirtonos[0];
+    map.call(move |m| crate::game::map::combat::deal_damage(m, me, k, 1_000_000));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(state_of(&map, 175570).await, Some(0), "his death opens it");
+    map.call(|m| crate::game::map::instance_script::object_used(m, 175564));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        living(&map, 10506).await.is_empty(),
+        "the brazier won't call him twice"
+    );
+}
+
+/// The Sunken Temple: Jammal'an's barrier falls with his six protectors.
+#[tokio::test]
+async fn the_sunken_temple_barrier_falls_with_the_protectors() {
+    let mut d = GameData::empty();
+    dungeon(&mut d, 109, "instance_sunken_temple");
+    let protectors = [5712, 5713, 5714, 5715, 5716, 5717];
+    for e in protectors.iter().copied().chain([5710]) {
+        d.creature_templates.insert(e, template(e, "Atal'ai", 14));
+    }
+    let mut spawns: Vec<CreatureSpawn> = protectors
+        .iter()
+        .enumerate()
+        .map(|(i, e)| spawn_at(71_000 + i as u32, *e, 109, 4.0 + i as f32))
+        .collect();
+    spawns.push(spawn_at(71_010, 5710, 109, 12.0));
+    d.creature_spawns.insert(109, spawns);
+    d.gameobject_templates.insert(149431, door(149431));
+    d.gameobject_spawns.insert(
+        109,
+        vec![GameObjectSpawn {
+            guid: 81_000,
+            entry: 149431,
+            map: 109,
+            x: 2.0,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 109, (0.0, 0.0, 0.0)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    for (i, e) in protectors.iter().enumerate() {
+        assert_eq!(state_of(&map, 149431).await, Some(1), "shut with {i} slain");
+        for g in living(&map, *e).await {
+            map.call(move |m| crate::game::map::combat::deal_damage(m, me, g, 1_000_000));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state_of(&map, 149431).await, Some(0), "open with all six");
+}
+
+/// Stratholme: three postboxes opened bring three postmen each, and the
+/// third Postmaster Malown; a fourth brings no one.
+#[tokio::test]
+async fn stratholme_postboxes_bring_the_postmaster() {
+    let mut d = GameData::empty();
+    dungeon(&mut d, 329, "instance_stratholme");
+    for e in [11142, 11143] {
+        d.creature_templates.insert(e, template(e, "Postal", 14));
+    }
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 329, (3690.0, -3405.0, 132.8)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    for (n, b) in [176346, 176349, 176350, 176351].into_iter().enumerate() {
+        map.call(move |m| crate::game::map::instance_script::object_used(m, b));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let postmen = living(&map, 11142).await.len();
+        assert_eq!(postmen, 3 * (n + 1).min(3), "after box {}", n + 1);
+    }
+    assert_eq!(living(&map, 11143).await.len(), 1, "Malown with the third");
+}
+
+/// Blackrock Depths: both Shadowforge Braziers open the Golem Room; Doom'rel
+/// challenged seals the tomb and calls the first of the Seven, and his
+/// death opens the way out.
+#[tokio::test]
+async fn blackrock_depths_lyceum_and_the_seven() {
+    let mut d = GameData::empty();
+    dungeon(&mut d, 230, "instance_blackrock_depths");
+    let seven = [9035, 9038, 9040, 9037, 9036, 9034, 9039];
+    for e in seven {
+        d.creature_templates
+            .insert(e, template(e, "Of the Seven", 35));
+    }
+    d.creature_spawns.insert(
+        230,
+        seven
+            .iter()
+            .enumerate()
+            .map(|(i, e)| spawn_at(72_000 + i as u32, *e, 230, 4.0 + i as f32))
+            .collect(),
+    );
+    let doors = [170573, 170574, 170576, 170577];
+    for e in doors {
+        d.gameobject_templates.insert(e, door(e));
+    }
+    d.gameobject_spawns.insert(
+        230,
+        doors
+            .iter()
+            .enumerate()
+            .map(|(i, e)| GameObjectSpawn {
+                guid: 82_000 + i as u32,
+                entry: *e,
+                map: 230,
+                x: 2.0,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                state: 1,
+                ..Default::default()
+            })
+            .collect(),
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 230, (0.0, 0.0, 0.0)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    assert_eq!(state_of(&map, 170573).await, Some(1));
+    map.call(|m| crate::game::map::instance_script::object_used(m, 174744));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        state_of(&map, 170573).await,
+        Some(1),
+        "one brazier isn't enough"
+    );
+    map.call(|m| crate::game::map::instance_script::object_used(m, 174745));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        state_of(&map, 170573).await,
+        Some(0),
+        "both open the Golem Room"
+    );
+    assert_eq!(state_of(&map, 170574).await, Some(0));
+    // The tomb.
+    map.call(|m| crate::game::map::instance_script::set_data(m, 3, 1, 0));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(state_of(&map, 170576).await, Some(1), "the tomb is sealed");
+    let anger = living(&map, 9035).await[0];
+    let called = map
+        .query(move |m| {
+            m.creature(anger)
+                .map(|c| c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+        })
+        .await
+        .flatten();
+    assert_eq!(called, Some(54), "the first of the Seven turns on them");
+    let doomrel = living(&map, 9039).await[0];
+    map.call(move |m| crate::game::map::combat::deal_damage(m, me, doomrel, 1_000_000));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        state_of(&map, 170577).await,
+        Some(0),
+        "Doom'rel's death opens the way out"
+    );
+    assert_eq!(state_of(&map, 170576).await, Some(0));
+}
+
+/// Blackfathom Deeps: with Kelris dead, each Fire of Aku'mai lit calls a
+/// wave; the four waves dead, the portal opens.
+#[tokio::test]
+async fn blackfathom_fires_call_waves_and_open_the_portal() {
+    let mut d = GameData::empty();
+    dungeon(&mut d, 48, "instance_blackfathom_deeps");
+    for e in [4825, 4978, 4815, 4977] {
+        d.creature_templates
+            .insert(e, template(e, "Servant of Aku'mai", 14));
+    }
+    d.gameobject_templates.insert(21117, door(21117));
+    d.gameobject_spawns.insert(
+        48,
+        vec![GameObjectSpawn {
+            guid: 83_000,
+            entry: 21117,
+            map: 48,
+            x: -820.0,
+            y: -165.0,
+            z: -25.0,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, me) = enter(&realm).await;
+    go_to(&realm, &mut a, 48, (-820.0, -165.0, -25.8)).await;
+    let map = realm.registry.online(me).unwrap().map();
+    // A fire lit while Kelris lives calls nothing.
+    map.call(|m| crate::game::map::instance_script::object_used(m, 21118));
+    tokio::time::sleep(Duration::from_millis(3300)).await;
+    let servants = |map: crate::game::map::MapHandle| async move {
+        map.query(|m| {
+            m.creatures
+                .iter()
+                .filter(|(_, c)| matches!(c.entry, 4825 | 4978 | 4815 | 4977) && c.alive())
+                .map(|(_, c)| c.guid)
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap()
+    };
+    assert!(servants(map.clone()).await.is_empty());
+    map.call(|m| crate::game::map::instance_script::set_data(m, 10, 3, 0));
+    for fire in [21118, 21119, 21120, 21121] {
+        map.call(move |m| crate::game::map::instance_script::object_used(m, fire));
+    }
+    tokio::time::sleep(Duration::from_millis(3300)).await;
+    let called = servants(map.clone()).await;
+    assert_eq!(called.len(), 4 + 2 + 4 + 8, "four waves");
+    assert_eq!(state_of(&map, 21117).await, Some(1));
+    for g in called {
+        map.call(move |m| crate::game::map::combat::deal_damage(m, me, g, 1_000_000));
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(state_of(&map, 21117).await, Some(0), "the portal opens");
+}

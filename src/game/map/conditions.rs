@@ -378,8 +378,18 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
                 .iter()
                 .any(|e| holidays.get(e).copied() == Some(v1 as u32))
         }
+        // Thistle Tea's: the target's companion is of entry value1 (or is
+        // any, for 0).
+        MINI_PET => player
+            .and_then(|p| p.owned.critter)
+            .and_then(|g| map.creature(g))
+            .is_some_and(|c| v1 <= 0 || c.entry == v1 as u32),
         // The instance scripts' own conditions, the reaction of one to the
         // other, and the like aren't judged.
         _ => false,
     }
 }
+
+/// Thistle Tea's condition with no vmangos number: the target's
+/// companion.
+pub const MINI_PET: i32 = 200;

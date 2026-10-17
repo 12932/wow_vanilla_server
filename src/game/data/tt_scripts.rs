@@ -113,6 +113,51 @@ impl Import<'_> {
                 }
             }
         }
+        // Area triggers' and events' scripts stand in for the database's.
+        if let Some(triggers) = root.get("area_triggers").and_then(Value::as_object) {
+            for (id, steps) in triggers {
+                if let Ok(id) = id.parse::<u32>() {
+                    let steps = self.steps(steps);
+                    self.data.scripts.areatrigger.insert(id, steps);
+                    self.data.scripts.areatrigger_script.remove(&id);
+                }
+            }
+        }
+        if let Some(events) = root.get("event_scripts").and_then(Value::as_object) {
+            for (id, steps) in events {
+                if let Ok(id) = id.parse::<u32>() {
+                    let steps = self.steps(steps);
+                    self.data.scripts.event.insert(id, steps);
+                }
+            }
+        }
+        if let Some(objects) = root.get("object_scripts").and_then(Value::as_object) {
+            for (entry, o) in objects {
+                let Ok(entry) = entry.parse::<u32>() else {
+                    continue;
+                };
+                if let Some(any) = o
+                    .get("any")
+                    .filter(|a| a.as_array().is_some_and(|a| !a.is_empty()))
+                {
+                    let id = self.generic(any);
+                    self.data.scripts.object_hello_entry.insert(entry, id);
+                }
+                for (spawn, steps) in o
+                    .get("spawns")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Ok(spawn) = spawn.parse::<u32>()
+                        && steps.as_array().is_some_and(|a| !a.is_empty())
+                    {
+                        let id = self.generic(steps);
+                        self.data.scripts.object_hello.insert(spawn, id);
+                    }
+                }
+            }
+        }
         for (key, start) in [("quest_start_steps", true), ("quest_end_steps", false)] {
             if let Some(quests) = root.get(key).and_then(Value::as_object) {
                 for (quest, steps) in quests {
@@ -353,12 +398,11 @@ impl Import<'_> {
             ext.min_target_distance_2d = Some(d as f32);
             extended = true;
         }
-        for key in [
-            "buddy_guid",
-            "game_object_spawn",
-            "concealed?",
-            "target_condition",
-        ] {
+        if boolean(v.get("concealed?")) {
+            ext.concealed = true;
+            extended = true;
+        }
+        for key in ["buddy_guid", "game_object_spawn", "target_condition"] {
             if v.get(key)
                 .is_some_and(|x| !x.is_null() && x != &Value::Bool(false))
             {
@@ -907,6 +951,7 @@ fn condition_type(a: &str) -> Option<i32> {
         ":not" => Some(-3),
         ":or" => Some(-2),
         ":and" => Some(-1),
+        ":mini_pet" => Some(crate::game::map::conditions::MINI_PET),
         _ => TYPES.iter().position(|t| *t == a).map(|i| i as i32),
     }
 }

@@ -48,6 +48,8 @@ pub struct StepExt {
     /// The target must be farther than this, flat, past both bounding
     /// radii.
     pub min_target_distance_2d: Option<f32>,
+    /// A summon comes hidden from players, until a script shows it.
+    pub concealed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +277,11 @@ pub struct ScriptData {
     /// Paths creature scripts walk (`start_waypoints` source 5): by entry
     /// and variant.
     pub routes: super::tt_scripts::Routes,
+    /// Code-built object scripts (Thistle Tea's `GOHello` ports): run on
+    /// the player who uses the object, at it. By spawn, and by entry for an
+    /// object of no spawn.
+    pub object_hello: AHashMap<u32, u32>,
+    pub object_hello_entry: AHashMap<u32, u32>,
 }
 
 impl ScriptData {
