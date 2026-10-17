@@ -317,3 +317,205 @@ async fn the_transports_clock_outlives_a_panic() {
     }
     assert!(realm.social.faults.checked("transport") > 1);
 }
+
+const WOLF: u32 = 3000;
+
+/// Two friendly wolves by the start, spawns 20 and 21.
+fn wolves() -> crate::game::data::GameData {
+    use crate::game::data::*;
+    let mut d = GameData::empty();
+    d.creature_templates.insert(
+        WOLF,
+        CreatureTemplate {
+            entry: WOLF,
+            name: "Wolf".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 2,
+            level_max: 2,
+            faction: 35,
+            unit_class: 1,
+            health_multiplier: 1.0,
+            health_max: 500,
+            ..Default::default()
+        },
+    );
+    let spawn = |guid, dx: f32| CreatureSpawn {
+        guid,
+        entries: vec![WOLF],
+        map: 0,
+        x: START.0 + dx,
+        y: START.1,
+        z: START.2,
+        respawn_min: 600,
+        respawn_max: 600,
+        ..Default::default()
+    };
+    d.creature_spawns
+        .insert(0, vec![spawn(20, 3.0), spawn(21, 6.0)]);
+    d
+}
+
+fn wolf(spawn: u32) -> Guid {
+    guid::unit(WOLF, spawn)
+}
+
+async fn panics(map: &MapHandle) -> u64 {
+    map.query(|m| m.stats.panics).await.unwrap()
+}
+
+/// A creature whose turn panics costs its turn, not the map's update: the
+/// first time it is let be, then restarted from its spawn, and at the
+/// fourth quarantined (despawned for good), so it stops panicking. Its
+/// neighbour, and the players, go on.
+#[tokio::test]
+async fn a_creature_that_keeps_panicking_is_restarted_then_quarantined() {
+    let realm = harness::realm_with(wolves());
+    let (mut a, _g, map) = in_world(&realm, "ALICE", "Alice").await;
+    a.sees(wolf(20)).await;
+    a.sees(wolf(21)).await;
+    let bad = wolf(20);
+    map.query(move |m| m.faults.arm(format!("creature {bad}"), u32::MAX))
+        .await
+        .unwrap();
+    // Restarted: gone from view, and back from its spawn.
+    a.forgets(bad).await;
+    a.sees(bad).await;
+    assert!(
+        until(&map, |m| m.stats.quarantined == 1).await,
+        "quarantined"
+    );
+    let (alive, panicked) = map
+        .query(move |m| (m.creature(bad).is_some_and(|c| c.alive()), m.stats.panics))
+        .await
+        .unwrap();
+    assert!(!alive, "it lies dead for good");
+    assert_eq!(panicked, 4);
+    // It panics no more, and the map still answers a newcomer.
+    let (mut b, _, _) = in_world(&realm, "BOB", "Bob").await;
+    b.sees(wolf(21)).await;
+    assert_eq!(panics(&map).await, 4);
+    assert!(
+        !b.sees_within(bad, Duration::from_millis(300)).await,
+        "the quarantined wolf is not shown"
+    );
+}
+
+/// A step of the update that panics every tick costs that step alone: the
+/// rest of the update (visibility, and the flushes) still runs, so a
+/// player who comes in sees the world.
+#[tokio::test]
+async fn an_update_step_that_panics_costs_only_itself() {
+    let realm = harness::realm_with(wolves());
+    let (_a, _, map) = in_world(&realm, "ALICE", "Alice").await;
+    map.query(|m| {
+        // Not so many that the map is restarted.
+        m.health.limits.map_restart = u32::MAX;
+        m.faults.arm("spells", u32::MAX);
+    })
+    .await
+    .unwrap();
+    let before = panics(&map).await;
+    let (mut b, _, _) = in_world(&realm, "BOB", "Bob").await;
+    b.sees(wolf(20)).await;
+    assert!(panics(&map).await > before, "the step went on panicking");
+}
+
+/// A map whose update keeps panicking is in a bad state: it is restarted.
+/// Its players are saved and sent to the character screen, the map is
+/// built afresh from the data (without the bad state), and they come back
+/// into it.
+#[tokio::test]
+async fn a_map_whose_update_keeps_panicking_is_restarted() {
+    let realm = harness::realm_with(wolves());
+    let (mut a, g, map) = in_world(&realm, "ALICE", "Alice").await;
+    a.sees(wolf(20)).await;
+    a.heartbeat(START.0 + 2.0, START.1 + 2.0, START.2).await;
+    assert!(
+        until(&map, move |m| m
+            .players
+            .get(&g)
+            .is_some_and(|p| p.position().y > START.1 + 1.0))
+        .await
+    );
+    map.query(|m| {
+        m.health.limits.map_restart = 20;
+        m.faults.arm("spells", u32::MAX);
+    })
+    .await
+    .unwrap();
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| match m {
+        ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE => Some(()),
+        _ => None,
+    })
+    .await;
+    assert!(realm.registry.online(g).is_none());
+    let row = realm.store.load(guid::counter(g)).await.unwrap();
+    assert!(row.y > START.1 + 1.0, "saved where she was: {}", row.y);
+    // The same handle, a fresh map.
+    let (restarts, wolves, faults) = map
+        .query(|m| (m.stats.restarts, m.creatures.len(), m.faults.any()))
+        .await
+        .unwrap();
+    assert_eq!((restarts, wolves, faults), (1, 2, false));
+    a.clear();
+    assert_eq!(try_login(&mut a, g).await, Ok(()));
+    a.sees(wolf(20)).await;
+    let p = realm.registry.online(g).unwrap().map();
+    assert_eq!(p.key, map.key);
+}
+
+/// A player whose packets keep panicking is saved and goes back to the
+/// character screen (as Thistle Tea's player process that crashes takes
+/// its client out); the map, and the others in it, go on.
+#[tokio::test]
+async fn a_player_whose_packets_keep_panicking_goes_back_to_the_screen() {
+    let realm = harness::realm_with(wolves());
+    let (mut a, ga, map) = in_world(&realm, "ALICE", "Alice").await;
+    let (mut b, _, _) = in_world(&realm, "BOB", "Bob").await;
+    map.query(move |m| m.faults.arm(format!("packets of {ga}"), u32::MAX))
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        a.say("hello").await;
+    }
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| match m {
+        ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE => Some(()),
+        _ => None,
+    })
+    .await;
+    eventually("Alice goes offline", || realm.registry.online(ga).is_none()).await;
+    assert_eq!(panics(&map).await, 10);
+    b.say("still here").await;
+    b.wait_for("Bob's own words", |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == "still here" => Some(()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(map.query(|m| m.stats.restarts).await, Some(0));
+}
+
+/// A map whose actor has gone (its channel closed) is started again by the
+/// next `maps.get`, rather than handing out a dead handle: a player logs
+/// in to it.
+#[tokio::test]
+async fn a_map_whose_actor_has_gone_is_started_again() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "ALICE");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| match m {
+        ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE => Some(()),
+        _ => None,
+    })
+    .await;
+    let key = MapKey::world(0);
+    let old = realm.maps.get(&realm, key);
+    // The actor ends; its handle stays where `maps.get` finds it.
+    old.send(crate::game::map::MapEvent::Stop);
+    eventually("the actor ends", || old.is_closed()).await;
+    let new = realm.maps.get(&realm, key);
+    assert!(!new.is_closed());
+    assert_eq!(new.query(|m| m.key).await, Some(key));
+    assert_eq!(try_login(&mut a, g).await, Ok(()));
+}

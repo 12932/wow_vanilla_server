@@ -518,10 +518,13 @@ impl Session {
                 }
             }
         }
-        map.send(MapEvent::Arrive(Box::new(Arrival {
+        if !map.send(MapEvent::Arrive(Box::new(Arrival {
             kind: ArrivalKind::Login(Box::new(row)),
             online,
-        })));
+        }))) {
+            self.realm.registry.go_offline(g);
+            return fail(&self.outbound, WorldResult::CharLoginNoWorld);
+        }
         self.state = State::InWorld { guid: g, map };
     }
 }

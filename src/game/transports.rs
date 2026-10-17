@@ -649,6 +649,27 @@ pub fn start(realm: &Arc<Realm>) {
     });
 }
 
+/// Put back the boats and zeppelins that are on a map built again (a
+/// restart after its update kept panicking): where each is now.
+pub fn restore(map: &mut crate::game::map::Map) {
+    if map.key.instance != 0 {
+        return;
+    }
+    let realm = map.realm.clone();
+    let now = crate::game::uptime_ms();
+    for r in routes(&realm) {
+        let (on, pos) = r.at(now);
+        if on != map.key.map || map.gameobject(r.guid).is_some() {
+            continue;
+        }
+        let Some(template) = realm.data.gameobject_templates.get(&r.entry) else {
+            continue;
+        };
+        map.add_gameobject(object(template, &r, on, pos));
+        map.globals.push(r.guid);
+    }
+}
+
 /// The transport goes from its map to the pose's, with those aboard.
 fn cross(realm: &Arc<Realm>, route: &Route, pose: Pose) {
     let (to, pos) = (pose.map, pose.position);
