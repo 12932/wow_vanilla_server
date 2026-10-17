@@ -132,15 +132,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
-name = "atomic-polyfill"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cf2bce30dfe09ef0bfaef228b9d414faaf7e563035494d7fe092dba54b300f4"
-dependencies = [
- "critical-section",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -154,9 +145,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "binrw"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d53195f985e88ab94d1cc87e80049dd2929fd39e4a772c5ae96a7e5c4aad3642"
+checksum = "6ad120d555272286c1017d25165ab8bd74806f13fc85b258484ec7e4ce75458f"
 dependencies = [
  "array-init",
  "binrw_derive",
@@ -165,9 +156,9 @@ dependencies = [
 
 [[package]]
 name = "binrw_derive"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5910da05ee556b789032c8ff5a61fb99239580aa3fd0bfaa8f4d094b2aee00ad"
+checksum = "6df92e0e9baae4dc82c7bad7715ca40c0a5c71539057bf2ea04a5c29c980410b"
 dependencies = [
  "either",
  "owo-colors",
@@ -397,12 +388,6 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "critical-section"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "crossbeam-deque"
@@ -689,15 +674,6 @@ dependencies = [
 
 [[package]]
 name = "hash32"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0c35f58762feb77d74ebe43bdbc3210f09be9fe6742234d573bacc26ed92b67"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
-name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
@@ -745,25 +721,11 @@ dependencies = [
 
 [[package]]
 name = "heapless"
-version = "0.7.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdc6457c0eb62c71aac4bc17216026d8410337c4126773b9c5daba343f17964f"
-dependencies = [
- "atomic-polyfill",
- "hash32 0.2.1",
- "rustc_version",
- "serde",
- "spin",
- "stable_deref_trait",
-]
-
-[[package]]
-name = "heapless"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
- "hash32 0.3.1",
+ "hash32",
  "stable_deref_trait",
 ]
 
@@ -886,7 +848,7 @@ dependencies = [
 [[package]]
 name = "landmark"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=1badba647ae1c08e6454f8917b99ffe71df232a5#1badba647ae1c08e6454f8917b99ffe71df232a5"
+source = "git+https://github.com/12932/rustigator?rev=6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9#6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9"
 dependencies = [
  "glam 0.34.1",
  "log",
@@ -1302,7 +1264,6 @@ dependencies = [
  "cobs",
  "embedded-io 0.4.0",
  "embedded-io 0.6.1",
- "heapless 0.7.17",
  "serde",
 ]
 
@@ -1519,7 +1480,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5912b862fa5ffb462607bfd1e35036c458c537921f508c8235a83d5f3987edfe"
 dependencies = [
- "heapless 0.8.0",
+ "heapless",
  "num-traits",
  "smallvec",
 ]
@@ -1540,18 +1501,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc_version"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
-dependencies = [
- "semver",
-]
-
-[[package]]
 name = "rustigator"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=1badba647ae1c08e6454f8917b99ffe71df232a5#1badba647ae1c08e6454f8917b99ffe71df232a5"
+source = "git+https://github.com/12932/rustigator?rev=6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9#6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9"
 dependencies = [
  "glam 0.34.1",
  "rustigator-mapbuild",
@@ -1566,7 +1518,7 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=1badba647ae1c08e6454f8917b99ffe71df232a5#1badba647ae1c08e6454f8917b99ffe71df232a5"
+source = "git+https://github.com/12932/rustigator?rev=6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9#6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1585,7 +1537,7 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=1badba647ae1c08e6454f8917b99ffe71df232a5#1badba647ae1c08e6454f8917b99ffe71df232a5"
+source = "git+https://github.com/12932/rustigator?rev=6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9#6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1593,7 +1545,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "wow-adt",
- "wow-cdbc",
  "wow-mpq",
  "wow-wdt",
 ]
@@ -1601,7 +1552,7 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=1badba647ae1c08e6454f8917b99ffe71df232a5#1badba647ae1c08e6454f8917b99ffe71df232a5"
+source = "git+https://github.com/12932/rustigator?rev=6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9#6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1617,7 +1568,7 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=1badba647ae1c08e6454f8917b99ffe71df232a5#1badba647ae1c08e6454f8917b99ffe71df232a5"
+source = "git+https://github.com/12932/rustigator?rev=6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9#6a90adfefb451a3c67310a8e9a96b66b2f3d2dc9"
 dependencies = [
  "byteorder",
  "glam 0.34.1",
@@ -1846,9 +1797,6 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
-]
 
 [[package]]
 name = "spki"
@@ -2554,17 +2502,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wow-cdbc"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9421d8e0f19411483e540feda777d185bf715a311d0c4ffb233c8758781357ea"
-dependencies = [
- "binrw",
- "log",
- "thiserror",
-]
-
-[[package]]
 name = "wow-mpq"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2645,7 +2582,6 @@ dependencies = [
  "md-5",
  "mimalloc",
  "parking_lot",
- "postcard",
  "rand 0.10.1",
  "rayon",
  "rusqlite",
