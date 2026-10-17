@@ -193,6 +193,10 @@ pub struct NpcData {
     /// `taxi_path_transitions`: (path in, path out) → the node of the one
     /// left at and of the other joined at.
     pub taxi_transitions: AHashMap<(u32, u32), (usize, usize)>,
+    /// The taxi nodes whose every path out is one a spell sends players
+    /// along (`SEND_TAXI`, 123): no flight master's (Thistle Tea's
+    /// `network_node?`).
+    pub spell_only_nodes: ahash::AHashSet<u32>,
     /// Bank bag slot → price.
     pub bank_slot_prices: AHashMap<u32, u32>,
     pub quests: AHashMap<u32, Quest>,

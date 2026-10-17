@@ -748,42 +748,68 @@ fn resurrect_wave(map: &mut Map) {
     }
 }
 
-/// A player fell in the match: their death, the killing blow, and the
-/// honorable kill for the killer's side near them; a flag they carried
-/// drops.
+/// A player fell in the match: their insignia to take, and [`defeated`].
 pub fn died(map: &mut Map, g: Guid, killer: Guid) {
     insignia::fallen(map, g);
+    defeated(map, g, killer, true);
+}
+
+/// A player of the match was defeated, while the battle is on: their death
+/// (`count_death`; not a priest's Spirit of Redemption, which dies later),
+/// the killing blow for an enemy of theirs in the match, and the honorable
+/// kill for that enemy and their side near: within 74 yards of the fall,
+/// themselves or, dead, their corpse (Thistle Tea's `Roster.
+/// update_death_scores` and `KillReward.in_range?`, mangos's
+/// `IsAtGroupRewardDistance`); a flag they carried drops. One not in the
+/// match, a fall before the gates open or after the win, counts for
+/// nothing.
+pub fn defeated(map: &mut Map, g: Guid, killer: Guid, count_death: bool) {
     let pos = map.position_of(g);
     let Some(m) = map.battleground.as_mut() else {
         return;
     };
-    let victim_team = m.team_of(g);
-    m.scores.entry(g).or_default().deaths += 1;
-    if guid::is_player(killer) && killer != g {
-        let killer_team = m.team_of(killer);
-        if let Some(s) = m.scores.get_mut(&killer) {
+    let Some(victim_team) = m.team_of(g).filter(|_| m.playing()) else {
+        return;
+    };
+    if count_death && let Some(s) = m.scores.get_mut(&g) {
+        s.deaths += 1;
+    }
+    let killer_team = m
+        .team_of(killer)
+        .filter(|t| *t != victim_team && guid::is_player(killer));
+    if let Some(kt) = killer_team
+        && map.players.contains_key(&killer)
+    {
+        if let Some(s) = map
+            .battleground
+            .as_mut()
+            .and_then(|m| m.scores.get_mut(&killer))
+        {
             s.killing_blows += 1;
         }
-        if let (Some(kt), Some(vt), Some(at)) = (killer_team, victim_team, pos)
-            && kt != vt
-        {
-            let near: Vec<Guid> = map
-                .players
-                .values()
-                .filter(|p| {
-                    p.death == Death::Alive
-                        && (p.guid == killer
-                            || crate::game::map::combat::dist(p.position(), at) <= KILL_SHARE_YARDS)
-                })
-                .map(|p| p.guid)
-                .collect();
-            if let Some(m) = map.battleground.as_mut() {
-                for n in near {
-                    if let Some(s) = m.scores.get_mut(&n)
-                        && s.team == kt
-                    {
-                        s.honorable_kills += 1;
-                    }
+        let near = |at: Vector3d| {
+            pos.is_some_and(|p| crate::game::map::combat::dist(p, at) <= KILL_SHARE_YARDS)
+        };
+        let credited: Vec<Guid> = map
+            .players
+            .values()
+            .filter(|p| {
+                p.guid == killer
+                    || near(p.position())
+                    || (p.death != Death::Alive
+                        && map
+                            .corpses
+                            .get(&guid::corpse(guid::counter(p.guid)))
+                            .is_some_and(|c| near(c.position)))
+            })
+            .map(|p| p.guid)
+            .collect();
+        if let Some(m) = map.battleground.as_mut() {
+            for n in credited {
+                if let Some(s) = m.scores.get_mut(&n)
+                    && s.team == kt
+                {
+                    s.honorable_kills += 1;
                 }
             }
         }

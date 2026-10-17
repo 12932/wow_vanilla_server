@@ -652,6 +652,9 @@ pub fn banker(map: &mut Map, player: Guid, npc: Guid) {
 }
 
 /// `CMSG_BUY_BANK_SLOT`: one more bank bag slot.
+/// The bank's bag slots.
+pub const MAX_BANK_BAG_SLOTS: u8 = 6;
+
 pub fn buy_bank_slot(map: &mut Map, player: Guid, npc: Guid) {
     let banker = npc_entry(map, player, npc, NPC_FLAG_BANKER).is_some();
     let data = map.realm.data.clone();
@@ -662,7 +665,14 @@ pub fn buy_bank_slot(map: &mut Map, player: Guid, npc: Guid) {
         BuyBankSlotResult::NotBanker
     } else {
         let slots = p.fields.get_byte(PLAYER_BYTES_2, 2);
-        match data.npc.bank_slot_prices.get(&(u32::from(slots) + 1)) {
+        // Six bag slots in the bank, however many prices the table has
+        // (its seventh, 999,999,999, a sentinel; Thistle Tea's six).
+        match data
+            .npc
+            .bank_slot_prices
+            .get(&(u32::from(slots) + 1))
+            .filter(|_| slots < MAX_BANK_BAG_SLOTS)
+        {
             None => BuyBankSlotResult::FailedTooMany,
             Some(price) if p.money() < *price => BuyBankSlotResult::InsufficientFunds,
             Some(price) => {
@@ -701,15 +711,20 @@ pub fn auction_hello(map: &mut Map, player: Guid, npc: Guid) {
     );
 }
 
-/// The taxi node nearest a flight master.
-fn node_at(map: &Map, npc: Guid) -> Option<u32> {
+/// The taxi node nearest a flight master, of those with a mount for
+/// `player`'s side (or none named for either) and flown from by more than
+/// spells (Thistle Tea's `Network.nearest_node`).
+fn node_at(map: &Map, npc: Guid, player: Guid) -> Option<u32> {
     let c = map.creature(npc)?;
-    map.realm
-        .data
-        .npc
-        .taxi_nodes
+    let side = usize::from(map.players.get(&player)?.team != Team::Alliance);
+    let data = &map.realm.data.npc;
+    data.taxi_nodes
         .values()
-        .filter(|n| n.map == map.key.map)
+        .filter(|n| {
+            n.map == map.key.map
+                && (n.mounts[side] != 0 || n.mounts == [0, 0])
+                && !data.spell_only_nodes.contains(&n.id)
+        })
         .map(|n| {
             (
                 n.id,
@@ -721,9 +736,42 @@ fn node_at(map: &Map, npc: Guid) -> Option<u32> {
         .map(|(id, _)| id)
 }
 
+/// Whether `mask` holds `node`. wvs keeps node N at bit N; the client
+/// counts from one, node N at bit N - 1 ([`client_mask`]).
 fn knows_node(mask: &[u32], node: u32) -> bool {
     mask.get((node / 32) as usize)
         .is_some_and(|w| w & (1 << (node % 32)) != 0)
+}
+
+/// The nodes `mask` holds as the client reads them, in eight words: node
+/// N at bit N - 1 (mangos's `SetTaximaskNode`, Thistle Tea's
+/// `Network.mask`), of the flight masters' nodes only.
+pub fn client_mask(data: &crate::game::data::GameData, mask: &[u32]) -> Vec<u32> {
+    let mut out = vec![0u32; 8];
+    for node in 1..=256u32 {
+        if knows_node(mask, node) && !data.npc.spell_only_nodes.contains(&node) {
+            out[((node - 1) / 32) as usize] |= 1 << ((node - 1) % 32);
+        }
+    }
+    out
+}
+
+/// A mask as the client counts it (`ChrRaces`' starting nodes), as wvs
+/// keeps it.
+pub fn mask_from_client(words: &[u32]) -> Vec<u32> {
+    let mut out = vec![0u32; words.len() + 1];
+    for (i, w) in words.iter().enumerate() {
+        for bit in 0..32 {
+            if w & (1 << bit) != 0 {
+                let node = i as u32 * 32 + bit + 1;
+                out[(node / 32) as usize] |= 1 << (node % 32);
+            }
+        }
+    }
+    while out.last() == Some(&0) {
+        out.pop();
+    }
+    out
 }
 
 fn learn_node(mask: &mut Vec<u32>, node: u32) -> bool {
@@ -739,7 +787,7 @@ fn learn_node(mask: &mut Vec<u32>, node: u32) -> bool {
 
 /// `CMSG_TAXINODE_STATUS_QUERY`.
 pub fn taxi_status(map: &mut Map, player: Guid, npc: Guid) {
-    let Some(node) = node_at(map, npc) else {
+    let Some(node) = node_at(map, npc, player) else {
         return;
     };
     if let Some(p) = map.players.get(&player) {
@@ -756,17 +804,17 @@ pub fn taxi_nodes(map: &mut Map, player: Guid, npc: Guid) {
     if npc_entry(map, player, npc, NPC_FLAG_FLIGHTMASTER).is_none() {
         return;
     }
-    let Some(node) = node_at(map, npc) else {
+    let Some(node) = node_at(map, npc, player) else {
         return;
     };
+    let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
     if learn_node(&mut p.row.state.taxi_mask, node) {
         p.outbound.send(&SMSG_NEW_TAXI_PATH {});
     }
-    let mut nodes = p.row.state.taxi_mask.clone();
-    nodes.resize(8, 0);
+    let nodes = client_mask(&data, &p.row.state.taxi_mask);
     p.outbound.send(&SMSG_SHOWTAXINODES {
         unknown1: 1,
         guid: npc,
@@ -1046,7 +1094,12 @@ pub fn resume_flight(map: &mut Map, player: Guid) {
     let Some(saved) = p.row.state.flight.take() else {
         return;
     };
-    if saved.map != map.key.map || saved.points.is_empty() {
+    // A dead passenger's flight is over where they are (Thistle Tea's
+    // `Taxi.resume`).
+    if saved.map != map.key.map
+        || saved.points.is_empty()
+        || p.death != crate::game::map::death::Death::Alive
+    {
         return;
     }
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
@@ -1072,6 +1125,23 @@ pub fn resume_flight(map: &mut Map, player: Guid) {
     });
     p.outbound.send_frame(frame.clone());
     map.send_to_observers(player, &frame, false);
+}
+
+/// A flight ended where its flier is (a teleport, Thistle Tea's
+/// `Taxi.cancel`): off the mount, theirs to move again.
+pub fn cancel_flight(map: &mut Map, player: Guid) {
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    if p.flight.take().is_none() {
+        return;
+    }
+    p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 0);
+    p.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        UNIT_FLAG_TAXI_FLIGHT | UNIT_FLAG_DISABLE_MOVE,
+        false,
+    );
 }
 
 /// Players in flight move along; one who lands is let go.

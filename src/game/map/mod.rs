@@ -803,7 +803,9 @@ impl Map {
             }
         }
         // What a teleport ends, and leaving the map: a player's cast under
-        // way too (Thistle Tea's `disengage_for_world_transition`).
+        // way too (Thistle Tea's `disengage_for_world_transition`), and a
+        // flight (its `cancel_authoritative_movement`).
+        npc::cancel_flight(self, guid);
         crate::game::map::spells::interrupts::teleported(self, guid);
         if self.players.contains_key(&guid)
             && self.caster(guid).is_some_and(|c| c.casting.is_some())
