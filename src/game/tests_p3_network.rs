@@ -1264,3 +1264,44 @@ async fn a_guild_master_saves_an_emblem_and_others_are_told_why_not() {
         "paid"
     );
 }
+
+fn status(chat_type: CMSG_MESSAGECHAT_ChatType, text: &str) -> CMSG_MESSAGECHAT {
+    CMSG_MESSAGECHAT {
+        chat_type,
+        language: Language::Universal,
+        message: text.into(),
+    }
+}
+
+/// Thistle Tea's chat_messages_test: `/afk` with a message sets it; again
+/// with another message only changes it; with none, it goes. `/dnd` with
+/// none sets it, and with none again it goes.
+#[tokio::test]
+async fn afk_and_dnd_go_on_change_and_go_off_as_the_client_says() {
+    use crate::game::map::player::{PLAYER_FLAGS_AFK, PLAYER_FLAGS_DND};
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let flags = move |m: &mut Map| {
+        m.players[&g].fields.get_u32(PLAYER_FLAGS) & (PLAYER_FLAGS_AFK | PLAYER_FLAGS_DND)
+    };
+    for (kind, text, want) in [
+        (
+            CMSG_MESSAGECHAT_ChatType::Afk,
+            "Café break",
+            PLAYER_FLAGS_AFK,
+        ),
+        (
+            CMSG_MESSAGECHAT_ChatType::Afk,
+            "back soon",
+            PLAYER_FLAGS_AFK,
+        ),
+        (CMSG_MESSAGECHAT_ChatType::Afk, "", 0),
+        (CMSG_MESSAGECHAT_ChatType::Dnd, "", PLAYER_FLAGS_DND),
+        (CMSG_MESSAGECHAT_ChatType::Dnd, "", 0),
+    ] {
+        a.send(status(kind, text)).await;
+        settled(&mut a).await;
+        assert_eq!(on_map(&realm, flags).await, want, "{text:?}");
+    }
+}

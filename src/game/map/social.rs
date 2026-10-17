@@ -127,11 +127,14 @@ fn whisper(map: &Map, me: &Online, to: &str, text: &str, language: Language, tag
 
 /// `/afk` and `/dnd`: on with a message, off again without one (or when
 /// already on).
+/// `/afk` and `/dnd`: on, with a message or the default; already on, an
+/// empty message turns it off and another only changes it, as mangos's
+/// HandleMessagechatOpcode and Thistle Tea's `ChatStatus.change` have it.
 fn away(map: &mut Map, g: Guid, flag: u32, text: &str) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let on = !p.fields.has_flag(PLAYER_FLAGS, flag);
+    let on = !p.fields.has_flag(PLAYER_FLAGS, flag) || !text.is_empty();
     p.fields.set_flag(PLAYER_FLAGS, flag, on);
     // AFK and DND are one or the other.
     let other = if flag == PLAYER_FLAGS_AFK {
