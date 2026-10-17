@@ -1,6 +1,9 @@
 // Generated from Thistle Tea's QuestEscort.Catalog and QuestFollower.Catalog
 // (runs/world/escorts.py); the actions this server runs.
 
+// Places as Thistle Tea has them, to the digit.
+#![allow(clippy::excessive_precision)]
+
 use super::{Act, Aim, Escort, Follower, Goal};
 
 pub const ESCORTS: &[Escort] = &[
@@ -226,7 +229,7 @@ pub const ESCORTS: &[Escort] = &[
                     },
                 ],
             ),
-            (25, &[Act::Say(8265)]),
+            (25, &[Act::RemoveAura(20514), Act::Say(8265)]),
         ],
         path: None,
     },
@@ -280,9 +283,30 @@ pub const ESCORTS: &[Escort] = &[
         instant_respawn: false,
         accept: &[Act::Say(5926), Act::Faction(33), Act::RemoveUnitFlags(512)],
         points: &[
-            (8, &[Act::Say(5927)]),
-            (14, &[Act::Say(5928)]),
-            (21, &[Act::Say(5929)]),
+            (
+                8,
+                &[
+                    Act::Say(5927),
+                    bandit((-4905.479f32, -2062.733f32, 84.352f32)),
+                    bandit((-4915.201f32, -2073.528f32, 84.733f32)),
+                ],
+            ),
+            (
+                14,
+                &[
+                    Act::Say(5928),
+                    bandit((-4878.883f32, -1986.948f32, 91.966f32)),
+                    bandit((-4877.504f32, -1966.113f32, 91.859f32)),
+                ],
+            ),
+            (
+                21,
+                &[
+                    Act::Say(5929),
+                    bandit((-4767.985f32, -1873.169f32, 90.192f32)),
+                    bandit((-4788.861f32, -1888.008f32, 89.888f32)),
+                ],
+            ),
             (45, &[Act::Say(5930)]),
         ],
         path: None,
@@ -1070,8 +1094,8 @@ pub const ESCORTS: &[Escort] = &[
         start_delay_ms: 750,
         credit_delay_ms: 0,
         instant_respawn: false,
-        accept: &[Act::Cast(6634)],
-        points: &[(3, &[Act::Run, Act::Faction(189)]), (9, &[])],
+        accept: &[Act::Invincible(20), Act::Cast(6634)],
+        points: &[(3, &[Act::Run, Act::Faction(189)]), (9, &[Act::Fail])],
         path: None,
     },
     Escort {
@@ -1085,9 +1109,28 @@ pub const ESCORTS: &[Escort] = &[
         instant_respawn: true,
         accept: &[Act::Say(2360), Act::Run],
         points: &[
-            (7, &[]),
-            (8, &[]),
-            (9, &[]),
+            (7, &[Act::EventPhase(1), raider(0), raider(1), raider(2)]),
+            (
+                8,
+                &[
+                    Act::EventPhase(2),
+                    raider(0),
+                    raider(1),
+                    raider(2),
+                    raider(3),
+                ],
+            ),
+            (
+                9,
+                &[
+                    Act::EventPhase(3),
+                    raider(0),
+                    raider(1),
+                    raider(2),
+                    raider(3),
+                    raider(4),
+                ],
+            ),
             (10, &[Act::Walk]),
             (11, &[Act::Say(3090)]),
         ],
@@ -1106,9 +1149,38 @@ pub const ESCORTS: &[Escort] = &[
         points: &[
             (1, &[Act::Say(4903)]),
             (7, &[Act::Say(4904)]),
-            (12, &[Act::Say(4905)]),
-            (24, &[Act::Say(4907)]),
-            (30, &[Act::Say(4909)]),
+            (
+                12,
+                &[
+                    Act::Say(4905),
+                    ambusher(9522, (-7844.3f32, -1521.6f32, 139.2f32, 0.0f32)),
+                    ambusher(9522, (-7860.4f32, -1507.8f32, 141.0f32, 6.0f32)),
+                    ambusher(9605, (-7845.6f32, -1508.1f32, 138.8f32, 6.1f32)),
+                    ambusher(9605, (-7859.8f32, -1521.8f32, 139.2f32, 6.2f32)),
+                    Act::Hold(&[Act::Say(4906)]),
+                ],
+            ),
+            (
+                24,
+                &[
+                    Act::Say(4907),
+                    ambusher(9522, (-8035.3f32, -1222.2f32, 135.5f32, 5.1f32)),
+                    ambusher(9522, (-8009.5f32, -1222.1f32, 139.2f32, 3.9f32)),
+                    ambusher(7042, (-8037.5f32, -1216.9f32, 135.8f32, 5.1f32)),
+                    ambusher(7042, (-8007.1f32, -1219.4f32, 140.1f32, 3.9f32)),
+                    Act::Hold(&[Act::Say(4908)]),
+                ],
+            ),
+            (
+                30,
+                &[
+                    Act::Say(4909),
+                    ambusher(7046, (-7900.1f32, -1133.14f32, 193.98f32, 3.0f32)),
+                    ambusher(7046, (-7898.8f32, -1125.1f32, 193.9f32, 3.0f32)),
+                    ambusher(7046, (-7895.6f32, -1119.5f32, 194.5f32, 3.1f32)),
+                    Act::Hold(&[Act::Say(4911)]),
+                ],
+            ),
             (36, &[Act::Say(4912)]),
             (
                 45,
@@ -1126,16 +1198,17 @@ pub const ESCORTS: &[Escort] = &[
                         aim: Aim::None,
                         despawn_ms: 40000,
                     },
+                    Act::Hold(&[]),
                     Act::After(3000, &[Act::SayBy(9539, 4928)]),
                     Act::After(3000, &[Act::Stand(8)]),
                     Act::After(8000, &[Act::SayBy(9539, 4929)]),
                     Act::After(12000, &[Act::SayBy(9538, 4930)]),
                     Act::After(15000, &[Act::SayBy(9539, 4932)]),
                     Act::After(18000, &[Act::SayBy(9539, 4931)]),
-                    Act::After(18000, &[]),
+                    Act::After(18000, &[Act::EmoteBy(9538, 37)]),
                     Act::After(23000, &[Act::Stand(7)]),
                     Act::After(23000, &[Act::SayBy(9539, 4933)]),
-                    Act::After(23500, &[]),
+                    Act::After(23500, &[Act::Die]),
                 ],
             ),
         ],
@@ -1154,10 +1227,23 @@ pub const ESCORTS: &[Escort] = &[
         points: &[
             (1, &[Act::Say(8953), Act::Walk]),
             (3, &[Act::Say(8954)]),
-            (4, &[]),
-            (5, &[Act::Say(8949)]),
-            (6, &[Act::Say(8955)]),
-            (13, &[Act::Pause(600000), Act::After(3000, &[])]),
+            (4, SCEPTER_RITUAL),
+            (
+                5,
+                &[
+                    Act::Say(8949),
+                    Act::SummonObject(
+                        178964,
+                        (652.463013f32, 74.085098f32, -85.335297f32, 3.054616f32),
+                        12000,
+                    ),
+                ],
+            ),
+            (6, &[Act::Say(8955), Act::ObjectState(178560, 0)]),
+            (
+                13,
+                &[Act::Pause(600000), Act::After(3000, &[Act::NpcFlags(0x3)])],
+            ),
         ],
         path: None,
     },
@@ -1228,6 +1314,64 @@ pub const ESCORTS: &[Escort] = &[
         ],
         path: None,
     },
+];
+
+/// The Defias raiders who fall on the Defias Traitor (1651), at their
+/// spots by the road, in order (Thistle Tea's `defias_raiders`).
+const fn raider(spot: usize) -> Act {
+    const SPOTS: [(f32, f32, f32, f32); 5] = [
+        (-11450.836, 1569.755, 54.267, 4.230),
+        (-11449.697, 1569.124, 54.421, 4.206),
+        (-11448.237, 1568.307, 54.620, 4.206),
+        (-11448.037, 1570.213, 54.961, 4.283),
+        (-11449.018, 1570.738, 54.828, 4.220),
+    ];
+    Act::Summon {
+        entry: 6180,
+        at: SPOTS[spot],
+        aim: Aim::Escort,
+        despawn_ms: 30000,
+    }
+}
+
+/// A Wastewander bandit by Gilthares Firebough's road (4904), who goes in
+/// 20 s (Thistle Tea's `bandits`).
+const fn bandit(at: (f32, f32, f32)) -> Act {
+    Act::Summon {
+        entry: 10758,
+        at: (at.0, at.1, at.2, 0.0),
+        aim: Aim::None,
+        despawn_ms: 20000,
+    }
+}
+
+/// A Blackrock ambusher for Grark Lorkrub's escort: it goes for the
+/// player, and goes itself after 200 s.
+const fn ambusher(entry: u32, at: (f32, f32, f32, f32)) -> Act {
+    Act::Summon {
+        entry,
+        at,
+        aim: Aim::Player,
+        despawn_ms: 200000,
+    }
+}
+
+/// Celebras the Redeemed waits at his altar for the player to read the
+/// tome he sets out (the Incantation of Celebras, whose script lets him
+/// go), and gives the escort up after 36 s (Thistle Tea's
+/// `scepter_ritual`).
+const SCEPTER_RITUAL: &[Act] = &[
+    Act::Await(36000, &[Act::Say(8948), Act::Pause(1000)], &[Act::Abort]),
+    Act::After(4000, &[Act::Say(8950)]),
+    Act::After(
+        5000,
+        &[Act::SummonObject(
+            178965,
+            (652.431f32, 74.7087f32, -85.3355f32, 6.16101f32),
+            40000,
+        )],
+    ),
+    Act::After(6000, &[Act::Say(8951)]),
 ];
 
 /// Belnistrasz chants the idol of Razorfen Downs quiet for four minutes,
@@ -1486,6 +1630,6 @@ pub const FOLLOWERS: &[Follower] = &[
         despawn_ms: 0,
         max_distance: 100.0f32,
         accept: &[Act::Say(3012)],
-        arrive: &[Act::SayBy(6667, 2704), Act::Faction(14)],
+        arrive: &[Act::SayBy(6667, 2704), Act::Faction(14), Act::Attack],
     },
 ];

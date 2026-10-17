@@ -78,6 +78,34 @@ pub struct InstanceSave {
     /// Its raid reset with players inside: it takes no one more, and goes
     /// once they have left.
     pub expired: bool,
+    /// The chests its script raised that have been opened, by spawn: what
+    /// is left in them, so one raised again after a reload keeps it.
+    pub chests: BTreeMap<u32, SavedChest>,
+}
+
+/// What a raised chest holds, as it was last left.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SavedChest {
+    pub items: Vec<SavedSlot>,
+    pub gold: u32,
+    /// Emptied and gone: when (Unix seconds) it comes back, filled anew.
+    pub back_at: Option<i64>,
+}
+
+/// A slot of a saved chest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SavedSlot {
+    pub item: u32,
+    pub count: u32,
+    pub taken: bool,
+    pub random_property: u32,
+    pub quest: bool,
+    /// For a quest item, who has taken theirs, by GUID counter.
+    pub taken_by: Vec<u32>,
+    pub quality: u32,
+    pub condition: u32,
 }
 
 #[derive(Debug, Default)]
@@ -265,9 +293,6 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     {
         inst.owned.remove(&(owner, map));
     }
-    if let Some((id, _, leader)) = group {
-        adopt(realm, &mut inst, id, leader, map);
-    }
     let owned = inst.owned.get(&(owner, map)).copied();
     let selected = group_bound.or(bound).or(owned);
     // A raid bind holds: into another copy of the raid, no.
@@ -392,49 +417,106 @@ pub fn resume(realm: &Realm, g: Guid, gm: bool, map: u32) -> Option<MapKey> {
         return None;
     }
     admit_copy(realm, g, gm, key).ok()?;
+    // The group first: the groups' lock is never taken under this one's,
+    // as a group's change takes this one under theirs.
+    let group = group_of(realm, g);
     let group_bound = {
         let inst = realm.social.instances.lock();
-        group_bind(&inst, group_of(realm, g), map) == Some(id)
+        group_bind(&inst, group, map) == Some(id)
     };
     entered(realm, g, key, kind, group_bound);
     Some(key)
 }
 
-/// A group takes over its leader's copy of `map`: the one they last went
-/// into, if it was theirs alone or was left without an owner, and is
-/// neither gone nor bound to a raid, as Thistle Tea's
-/// `Instance.group_changed` hands them over.
-fn adopt(realm: &Realm, inst: &mut Instances, group: u32, leader: Guid, map: u32) {
-    if inst.owned.contains_key(&(Owner::Group(group), map)) {
-        return;
+/// A group formed, went, or changed its leader: its copies follow, as
+/// Thistle Tea's `Instance.group_changed` hands them over. `before` and
+/// `after` are the group as it was and is (its id and leader), `None` for
+/// none. Called with the groups locked, so it takes their lock no more.
+pub fn group_changed(realm: &Realm, before: Option<(u32, Guid)>, after: Option<(u32, Guid)>) {
+    match (before, after) {
+        (None, Some((group, leader))) => adopt(realm, group, leader),
+        (Some((group, _)), None) => orphan(realm, group),
+        (Some((group, old)), Some((same, new))) if group == same && old != new => {
+            releader(realm, group, old, new)
+        }
+        _ => {}
     }
+}
+
+/// A group formed takes over its leader's copies, the one of each map
+/// they last went into, that were theirs alone or were left without an
+/// owner, and are neither gone nor bound to a raid. The leader alone has
+/// them no more.
+fn adopt(realm: &Realm, group: u32, leader: Guid) {
     let me = guid::counter(leader);
-    let Some(id) = inst.last_entered(me, map) else {
-        return;
+    let changed: Vec<InstanceSave> = {
+        let mut inst = realm.social.instances.lock();
+        let ids: Vec<u32> = inst
+            .saves
+            .values()
+            .filter(|s| s.entered.contains(&me))
+            .filter(|s| s.owner.is_none_or(|o| o == Owner::Player(me)))
+            .filter(|s| !s.expired)
+            .map(|s| s.id)
+            .collect();
+        let mut changed = Vec::new();
+        for id in ids {
+            if inst.saved(id) {
+                continue;
+            }
+            let Some(s) = inst.saves.get_mut(&id) else {
+                continue;
+            };
+            let (map, old) = (s.map, s.owner);
+            s.owner = Some(Owner::Group(group));
+            changed.push(s.clone());
+            if let Some(old) = old
+                && inst.owned.get(&(old, map)) == Some(&id)
+            {
+                inst.owned.remove(&(old, map));
+            }
+            inst.owned.insert((Owner::Group(group), map), id);
+        }
+        changed
     };
-    let Some(s) = inst.saves.get(&id) else {
-        return;
-    };
-    let orphaned = match s.owner {
-        None => true,
-        Some(Owner::Group(old)) => old != group && !realm.social.groups.lock().formed(old),
-        Some(Owner::Player(p)) => p == me,
-    };
-    if !orphaned || s.expired || inst.saved(id) {
-        return;
+    for s in changed {
+        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
     }
-    if let Some(old) = s.owner
-        && inst.owned.get(&(old, map)) == Some(&id)
-    {
-        inst.owned.remove(&(old, map));
+}
+
+/// A group gone leaves its copies without an owner, for its old leader's
+/// next group to take up.
+fn orphan(realm: &Realm, group: u32) {
+    let changed: Vec<InstanceSave> = {
+        let mut inst = realm.social.instances.lock();
+        inst.owned.retain(|(o, _), _| *o != Owner::Group(group));
+        inst.saves
+            .values_mut()
+            .filter(|s| s.owner == Some(Owner::Group(group)))
+            .map(|s| {
+                s.owner = None;
+                s.clone()
+            })
+            .collect()
+    };
+    for s in changed {
+        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
     }
-    inst.owned.insert((Owner::Group(group), map), id);
-    if let Some(s) = inst.saves.get_mut(&id) {
-        s.owner = Some(Owner::Group(group));
-        let record = s.clone();
-        realm
-            .store
-            .put_record(KIND_INSTANCE, u64::from(id), &record);
+}
+
+/// A group under a new leader lets go of its copies of the raids either
+/// leader is bound to: the new leader's binds hold it now.
+fn releader(realm: &Realm, group: u32, old: Guid, new: Guid) {
+    let leaders = [guid::counter(old), guid::counter(new)];
+    let mut inst = realm.social.instances.lock();
+    let maps: Vec<u32> = inst
+        .raids
+        .values()
+        .filter(|r| r.players.iter().any(|p| leaders.contains(p)))
+        .map(|r| r.map)
+        .collect();
+    for map in maps {
+        inst.owned.remove(&(Owner::Group(group), map));
     }
 }
 
@@ -453,10 +535,7 @@ pub fn belongs(realm: &Realm, g: Guid, key: MapKey) -> bool {
     }
     let me = guid::counter(g);
     let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
-    let mut inst = realm.social.instances.lock();
-    if let Some((id, _, leader)) = group {
-        adopt(realm, &mut inst, id, leader, key.map);
-    }
+    let inst = realm.social.instances.lock();
     if inst.saves.get(&key.instance).is_none_or(|s| s.expired) {
         return false;
     }
@@ -587,6 +666,28 @@ pub fn spawn_back(realm: &Realm, key: MapKey, spawn: u32) {
 pub fn data_changed(realm: &Realm, key: MapKey, data: &BTreeMap<u32, u32>) {
     let data = data.clone();
     change_save(realm, key, |s| s.data = data);
+}
+
+/// A raised chest's loot as it is now, saved with the copy; `None`
+/// forgets it.
+pub fn chest_changed(realm: &Realm, key: MapKey, spawn: u32, chest: Option<SavedChest>) {
+    let unchanged = realm
+        .social
+        .instances
+        .lock()
+        .saves
+        .get(&key.instance)
+        .is_some_and(|s| s.chests.get(&spawn) == chest.as_ref());
+    if !unchanged {
+        change_save(realm, key, |s| match chest {
+            Some(c) => {
+                s.chests.insert(spawn, c);
+            }
+            None => {
+                s.chests.remove(&spawn);
+            }
+        });
+    }
 }
 
 /// A boss that locks its raid died: everyone in the copy is bound to it

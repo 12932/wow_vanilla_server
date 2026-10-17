@@ -322,6 +322,14 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
 /// It died to `killer`, `tapper` holding its tap. Its scripts run on to
 /// its corpse's end, as Thistle Tea's do.
 pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
+    // Who a raid's bind is for, as Thistle Tea's `raid_killer` has it: the
+    // killer, or the player whose pet it is, or, for one that killed
+    // itself, who tapped it. Only a player binds.
+    let binder = if killer == creature {
+        tapper
+    } else {
+        crate::game::map::pets::master(map, killer)
+    };
     if guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
@@ -385,7 +393,7 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     if let Some(spawn) = spawn {
         crate::game::instances::spawn_died(&map.realm, map.key, spawn, (!boss).then_some(respawn));
     }
-    if locks_raid {
+    if locks_raid && guid::is_player(binder) {
         crate::game::instances::bind_raid(map);
     }
     if moving {
@@ -870,8 +878,28 @@ fn passive_fight(map: &mut Map, g: Guid) {
         .iter()
         .any(|(t, _)| map.unit_view(*t).is_some_and(|u| u.alive) && combat::can_attack(map, g, *t));
     if !left {
-        evade(map, g);
+        // One on a script's walk (a peasant fleeing for Eris Havenfire's
+        // light under the Scourge's arrows) leaves the fight where it is
+        // and walks on, rather than going home and losing its way.
+        if scripted_moving(map, g) {
+            stand_down(map, g);
+        } else {
+            evade(map, g);
+        }
     }
+}
+
+/// A passive creature's fight ends where it is: no threat, no combat, its
+/// walk kept.
+fn stand_down(map: &mut Map, g: Guid) {
+    crate::game::map::creature_combat::disengaged(map, g);
+    crate::game::map::event_ai::combat_stopped(map, g, false);
+    crate::game::map::spells::threat_sync::wiped(map, g);
+    if let Some(c) = map.creature_mut(g) {
+        c.threat.clear();
+        c.combat_start = None;
+    }
+    combat::leave_combat(map, g);
 }
 
 /// A unit's threat on a creature, never below none. Fade's share is in the
