@@ -900,8 +900,13 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
             c.last_action = Some(now);
             c.attackers.insert(y);
         }
-        if let Some(f) = map.unit_fields_mut(x) {
-            f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+        let Some(f) = map.unit_fields_mut(x) else {
+            continue;
+        };
+        let fresh = !f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+        f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+        if fresh {
+            crate::game::map::spells::combat_began(map, x);
         }
     }
     // A blow on a flagged unit flags the attacker; a flagged player's blow

@@ -898,3 +898,67 @@ async fn forced_reactions_are_sent_as_they_change() {
     let off = a.wait_frame("it gone", 0x2A5, |_| true).await;
     assert_eq!(reactions(&off), 0);
 }
+
+#[tokio::test]
+async fn a_fight_stops_a_cast_not_for_one() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const MOUNT: u32 = 21600;
+    const BOLT: u32 = 21601;
+    let mut d = crate::game::data::GameData::empty();
+    d.spells.cast_times.insert(14, 3000);
+    for (id, attr) in [(MOUNT, 0x1000_0000u32), (BOLT, 0)] {
+        let mut effects = [SpellEffect::default(); 3];
+        effects[0] = SpellEffect {
+            effect: 3,
+            target_a: 1,
+            ..Default::default()
+        };
+        d.spells.spells.insert(
+            id,
+            SpellTemplate {
+                id,
+                name: format!("Spell {id}"),
+                casting_time_index: 14,
+                attributes: [attr, 0, 0, 0, 0],
+                effects,
+                equipped_item_class: -1,
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGMOUNT");
+    let g = a.enter("Bugmount", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGFOE");
+    let foe = b.enter("Bugfoe", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            let casting = |m: &Map| {
+                m.caster(g)
+                    .and_then(|c| c.casting.as_ref())
+                    .map(|c| c.spell)
+            };
+            let mut seen = Vec::new();
+            for spell in [MOUNT, BOLT] {
+                for p in [g, foe] {
+                    crate::game::map::combat::leave_combat(m, p);
+                }
+                spells::learn(m, g, spell);
+                spells::cast(m, g, spell, Default::default(), None);
+                let began = casting(m);
+                crate::game::map::combat::engage(m, foe, g);
+                seen.push((began, casting(m)));
+                spells::cancel(m, g);
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out[0],
+        (Some(MOUNT), None),
+        "the fight stops the mount's cast"
+    );
+    assert_eq!(out[1], (Some(BOLT), Some(BOLT)), "not another");
+}
