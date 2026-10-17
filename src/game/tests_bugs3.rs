@@ -707,3 +707,74 @@ async fn a_creatures_totem_is_not_player_controlled() {
     );
     assert_ne!(flags[1].1 & 0x8, 0, "the player's is");
 }
+
+const BARK: u32 = 900_350;
+const BARK_EFFECT: u32 = 900_351;
+
+/// vmangos's linked aura (192, Barkskin's second effect by
+/// `spell_effect_mod`) puts its spell's auras on with it and takes them off
+/// with it, as Thistle Tea's `Aura.Linked` does: Barkskin's 20 percent less
+/// physical damage is "Barkskin Effect (DND)"'s.
+#[tokio::test]
+async fn a_linked_aura_holds_its_spell_while_it_lasts() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    let mut bark = unit_spell(BARK, 6);
+    bark.effects[0].target_a = 1;
+    bark.effects[0].aura = crate::game::map::auras::AURA_RESIST_PUSHBACK;
+    bark.effects[0].base_points = 99;
+    bark.effects[1] = spells::SpellEffect {
+        effect: 6,
+        target_a: 1,
+        aura: crate::game::map::auras::AURA_LINKED,
+        trigger_spell: BARK_EFFECT,
+        ..Default::default()
+    };
+    bark.duration_index = 0;
+    d.spells.spells.insert(BARK, bark);
+    let mut effect = unit_spell(BARK_EFFECT, 6);
+    effect.effects[0].target_a = 1;
+    effect.effects[0].aura = crate::game::map::auras::AURA_MOD_DAMAGE_PERCENT_TAKEN;
+    effect.effects[0].base_points = -21;
+    effect.effects[0].misc_value = 1;
+    d.spells.spells.insert(BARK_EFFECT, effect);
+    let realm = harness::realm_with(d);
+    let (_a, g, map) = enter(&realm, "A", "Druid", Race::NightElf, Class::Druid).await;
+    let has = move |m: &Map, spell: u32| {
+        crate::game::map::auras::auras(m, g)
+            .is_some_and(|a| a.holders.iter().any(|h| h.spell == spell))
+    };
+    let on_it = on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, BARK, None);
+        (has(m, BARK), has(m, BARK_EFFECT))
+    })
+    .await;
+    assert_eq!(on_it, (true, true), "Barkskin brings its effect");
+    let off = on(&map, move |m| {
+        crate::game::map::auras::remove_spell(m, g, BARK, None);
+        (has(m, BARK), has(m, BARK_EFFECT))
+    })
+    .await;
+    assert_eq!(off, (false, false), "and takes it away");
+}
+
+/// The real Barkskin (22812) links "Barkskin Effect (DND)" (22839) by
+/// `spell_effect_mod`, and the server knows the aura that does it.
+#[test]
+fn the_real_barkskin_links_its_effect() {
+    let Some(d) = crate::game::data::load::real_data() else {
+        return;
+    };
+    let bark = d.spells.get(22_812).expect("Barkskin");
+    let e = bark.effects[1];
+    assert_eq!(
+        (e.effect, e.aura, e.trigger_spell),
+        (6, crate::game::map::auras::AURA_LINKED, 22_839)
+    );
+    assert!(crate::game::map::auras::supported(e.aura));
+    let effect = d.spells.get(22_839).expect("Barkskin Effect");
+    assert_eq!(
+        effect.effects[1].aura,
+        crate::game::map::auras::AURA_MOD_DAMAGE_PERCENT_TAKEN
+    );
+}
