@@ -108,6 +108,9 @@ pub struct CharacterState {
     pub health: u32,
     pub powers: [u32; 5],
     pub tutorials: [u32; 8],
+    /// The client's caches, loaded at login (kept in `account_data`).
+    #[serde(skip)]
+    pub caches: Vec<(u8, Vec<u8>)>,
     pub action_bar_toggles: u8,
     pub explored_zones: Vec<u32>,
     pub taxi_mask: Vec<u32>,
