@@ -656,6 +656,9 @@ impl Map {
     }
 
     /// Send a player to `key` at `position`, within this map or to another.
+    /// A map named without its copy is this copy when it is this map (a
+    /// spell's place within a dungeon, BWL's orb), or the player's copy of
+    /// another.
     pub fn teleport(
         &mut self,
         guid: Guid,
@@ -664,6 +667,9 @@ impl Map {
         orientation: f32,
     ) {
         let mut key = key;
+        if key.instance == 0 && key.map == self.key.map {
+            key = self.key;
+        }
         if key.instance == 0 && key.map != self.key.map {
             let gm = self.players.get(&guid).is_some_and(|p| p.gm);
             match crate::game::instances::key_for(&self.realm, guid, gm, key.map) {
