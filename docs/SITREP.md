@@ -186,5 +186,8 @@ the questions waiting for you.
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
 | Performance | running | |
+| 3a: matrix gaps, spells and auras | running | |
+| 3b: matrix gaps, combat and creature AI | running | |
+| 3f: matrix gaps, network and inbound | running | |
 
 ## Left for later, and why
