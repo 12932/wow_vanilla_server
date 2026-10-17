@@ -252,6 +252,9 @@ pub fn check(
     if !triggered && let Some(code) = crate::game::map::battleground::spell_check(map, caster, s) {
         return Some(code);
     }
+    if !triggered && let Some(code) = crate::game::map::objects::ritual_check(map, caster, s) {
+        return Some(code);
+    }
     let player = map.players.get(&caster);
     if let Some(p) = player {
         if item.is_none() && !triggered && !p.spells.contains(&s.id) {
@@ -429,8 +432,8 @@ pub fn check(
                 }
             }
             for tool in s.totems.iter().filter(|t| **t != 0) {
-                if p.count_of(*tool) == 0 {
-                    return Some(fail::TOTEMS);
+                if let Some(code) = crate::game::map::professions::tool_missing(p, s, *tool) {
+                    return Some(code);
                 }
             }
         }

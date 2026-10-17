@@ -173,6 +173,9 @@ pub struct GameObjectTemplate {
     pub data: [u32; 24],
     pub gold_min: u32,
     pub gold_max: u32,
+    /// Its model's box (`gameobject_display_info_addon`): low and high
+    /// corners, before its scale.
+    pub bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 #[derive(Debug, Clone, Default)]

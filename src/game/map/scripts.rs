@@ -1165,6 +1165,17 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             let aim = if flags & 0x10 != 0 { caster } else { aim };
             cast(map, caster, aim, d1, flags)
         }
+        // A sound by its distance from the source (Thistle Tea's flag 2),
+        // or the same for all.
+        16 if d2 & 0x2 != 0 => {
+            if let Some(frame) = crate::game::conn::encode(&SMSG_PLAY_OBJECT_SOUND {
+                sound_id: d1,
+                guid: source,
+            }) {
+                map.send_to_observers(source, &frame, true);
+            }
+            true
+        }
         16 => {
             if let Some(frame) = crate::game::conn::encode(&SMSG_PLAY_SOUND { sound_id: d1 }) {
                 if d2 & 0x1 != 0 {

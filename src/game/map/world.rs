@@ -522,13 +522,8 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
         return;
     }
     crate::game::map::scripts::object_used(map, player, object);
-    let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {
-        return;
-    };
-    let Some(o) = map.gameobject(object) else {
-        return;
-    };
-    if crate::game::map::combat::dist(ppos, o.position) > 10.0 {
+    // Near enough: by its model, for the objects measured so.
+    if !crate::game::map::objects::in_use_range(map, player, object) {
         return;
     }
     // A launcher by Elune's lake counts its fireworks; it launches them too.
