@@ -2174,3 +2174,277 @@ async fn a_key_used_on_its_door_opens_it() {
         .unwrap();
     assert_eq!(kept, 0, "the key used up");
 }
+
+/// The event quests no source raises, in Thistle Tea either (vmangos does
+/// them in C++): The Glowing Shard, Jail Break!, Master Ryson's All Seeing
+/// Eye, A Pawn on the Eternal Board.
+const EVENTLESS: [u32; 5] = [3366, 4322, 6847, 6848, 8519];
+
+/// What raises each event quest's event (`SpecialFlags` 0x2), as far as
+/// something in the world reaches it: an area trigger, a script that
+/// credits it and what starts that script, a spell that completes it and
+/// what casts that spell, an escort or follower. By quest, each source
+/// named.
+fn event_sources(data: &GameData) -> std::collections::BTreeMap<u32, Vec<String>> {
+    use crate::game::data::scripts::ScriptTable as T;
+    use crate::game::map::scripts::{C_HOLD_WAYPOINTS, C_LINKED_FEIGN_DEATH};
+    let s = &data.scripts;
+    let tables = [
+        (T::CreatureAi, &s.ai_scripts),
+        (T::Generic, &s.generic),
+        (T::Event, &s.event),
+        (T::Spell, &s.spell),
+        (T::QuestStart, &s.quest_start),
+        (T::QuestEnd, &s.quest_end),
+        (T::Gossip, &s.gossip),
+        (T::Movement, &s.movement),
+        (T::GameObject, &s.gameobject),
+        (T::AreaTrigger, &s.areatrigger),
+        (T::CreatureSpells, &s.creature_spells),
+    ];
+    let steps = || {
+        tables.iter().flat_map(|(t, m)| {
+            m.iter()
+                .flat_map(move |(id, v)| v.iter().map(move |st| (*t, *id, st)))
+        })
+    };
+    // Generic scripts something starts.
+    let mut generic: ahash::AHashSet<u32> = s
+        .areatrigger_script
+        .values()
+        .chain(s.object_hello.values())
+        .chain(s.object_hello_entry.values())
+        .copied()
+        .collect();
+    for (_, _, st) in steps() {
+        let int = |i: usize| st.dataint[i].max(0) as u32;
+        match st.command {
+            39 | 90 => generic.extend(st.datalong),
+            68 | 92 => {
+                generic.insert(st.datalong[0]);
+            }
+            10 => {
+                generic.insert(int(1));
+            }
+            61 | 63 | 69 => generic.extend([int(1), int(3)]),
+            c if c == C_HOLD_WAYPOINTS || c == C_LINKED_FEIGN_DEATH => {
+                generic.extend([int(0), int(1)])
+            }
+            _ => {}
+        }
+    }
+    // Events something sends: a spell's, a goober's or a camera's.
+    let mut events: ahash::AHashSet<u32> = data
+        .spells
+        .spells
+        .values()
+        .flat_map(|sp| sp.effects.iter())
+        .filter(|e| e.effect == 61 && e.misc_value > 0)
+        .map(|e| e.misc_value as u32)
+        .collect();
+    for t in data.gameobject_templates.values() {
+        match t.kind {
+            10 => {
+                events.insert(t.data[2]);
+            }
+            13 => {
+                events.insert(t.data[1]);
+            }
+            _ => {}
+        }
+    }
+    // EventAI scripts some creature's events run.
+    let ai: ahash::AHashSet<u32> = s
+        .ai_events
+        .values()
+        .flatten()
+        .flat_map(|e| e.actions)
+        .collect();
+    // Waypoint scripts some path runs, the creature scripts' routes too.
+    let moves: ahash::AHashSet<u32> = data
+        .waypoints
+        .values()
+        .chain(data.waypoints_by_entry.values())
+        .chain(data.waypoints_special.values())
+        .chain(s.routes.values())
+        .flatten()
+        .map(|w| w.script_id)
+        .collect();
+    let object_spawns: ahash::AHashSet<u32> = data
+        .gameobject_spawns
+        .values()
+        .flatten()
+        .map(|o| o.guid)
+        .collect();
+    let gossip: ahash::AHashSet<u32> = s
+        .gossip_option_script
+        .iter()
+        .filter(|((menu, option), _)| {
+            data.npc
+                .gossip_menus
+                .get(menu)
+                .is_some_and(|m| m.options.iter().any(|o| o.id == *option))
+        })
+        .map(|(_, id)| *id)
+        .chain(s.gossip_menu_script.values().copied())
+        .chain(
+            data.npc
+                .gossip_menus
+                .values()
+                .flat_map(|m| m.options.iter().map(|o| o.script)),
+        )
+        .collect();
+    // Spells something casts: an item, a creature's list or script, an
+    // object, another spell, or this server's own code (the taming rods,
+    // the battlegrounds' team credit, the heroes' tributes).
+    let mut castable: ahash::AHashSet<u32> = data
+        .items
+        .values()
+        .flat_map(|i| i.spells.iter().map(|s| s.id))
+        .chain(
+            data.spells
+                .creature_spells
+                .values()
+                .flatten()
+                .map(|c| c.spell),
+        )
+        .chain(
+            data.spells
+                .spells
+                .values()
+                .flat_map(|sp| sp.effects.iter().map(|e| e.trigger_spell)),
+        )
+        .collect();
+    for (_, _, st) in steps() {
+        if st.command == 15 {
+            castable.insert(st.datalong[0]);
+        }
+    }
+    for t in data.gameobject_templates.values() {
+        match t.kind {
+            22 => {
+                castable.insert(t.data[0]);
+            }
+            6 => {
+                castable.insert(t.data[3]);
+            }
+            _ => {}
+        }
+    }
+    castable.extend((19597..=19597).chain(19676..=19686));
+    castable.extend([23658, 24061, 24064]);
+    castable.extend(24101..=24108);
+    castable.remove(&0);
+    let reached = |t: T, id: u32| match t {
+        T::Generic => generic.contains(&id),
+        T::Event => events.contains(&id),
+        T::CreatureAi => ai.contains(&id),
+        T::Movement => moves.contains(&id),
+        T::GameObject => object_spawns.contains(&id),
+        T::Spell => castable.contains(&id),
+        T::QuestStart => s.quest_start_script.values().any(|v| *v == id),
+        T::QuestEnd => s.quest_complete_script.values().any(|v| *v == id),
+        T::Gossip => gossip.contains(&id),
+        T::AreaTrigger => data.area_triggers.contains_key(&id),
+        T::CreatureSpells => data
+            .spells
+            .creature_spells
+            .values()
+            .flatten()
+            .any(|c| c.script == id),
+    };
+    let mut out: std::collections::BTreeMap<u32, Vec<String>> = data
+        .npc
+        .quests
+        .values()
+        .filter(|q| q.special_flags & 2 != 0)
+        .map(|q| (q.id, Vec::new()))
+        .collect();
+    for (trigger, quest) in &data.npc.area_trigger_quests {
+        if data.area_triggers.contains_key(trigger)
+            && let Some(v) = out.get_mut(quest)
+        {
+            v.push(format!("trigger {trigger}"));
+        }
+    }
+    for (t, id, st) in steps() {
+        if st.command == 7
+            && reached(t, id)
+            && let Some(v) = out.get_mut(&st.datalong[0])
+        {
+            v.push(format!("{t:?} script {id}"));
+        }
+    }
+    for sp in data.spells.spells.values() {
+        for e in &sp.effects {
+            if e.effect == 16
+                && castable.contains(&sp.id)
+                && let Some(v) = out.get_mut(&(e.misc_value.max(0) as u32))
+            {
+                v.push(format!("spell {}", sp.id));
+            }
+        }
+    }
+    for e in crate::game::map::escorts::catalog::ESCORTS {
+        let path: Vec<u32> = match e.path {
+            Some(p) => (0..p.len() as u32).collect(),
+            None => data
+                .world
+                .script_waypoints
+                .get(&e.entry)
+                .map(|v| v.iter().map(|p| p.point).collect())
+                .unwrap_or_default(),
+        };
+        let credits = match e.credit_point {
+            Some(c) => path.contains(&c),
+            // Credited by a script of its own (Eranikus's, Slim Jahn's),
+            // counted above.
+            None => false,
+        };
+        if credits && let Some(v) = out.get_mut(&e.quest) {
+            v.push(format!("escort of {}", e.entry));
+        }
+    }
+    for f in crate::game::map::escorts::catalog::FOLLOWERS {
+        if f.credit
+            && let Some(v) = out.get_mut(&f.quest)
+        {
+            v.push(format!("follower {}", f.entry));
+        }
+    }
+    for v in out.values_mut() {
+        v.sort();
+        v.dedup();
+    }
+    out
+}
+
+/// Every event quest on the real world has its event's source in reach,
+/// but the five no one raises: its area trigger, the script that credits
+/// it and what starts that, the spell and what casts it, its escort.
+#[test]
+fn every_real_event_quest_has_its_source() {
+    let Some(d) = crate::game::data::load::real_data() else {
+        return;
+    };
+    let sources = event_sources(&d);
+    assert!(sources.len() > 200, "{} event quests", sources.len());
+    let missing: Vec<u32> = sources
+        .iter()
+        .filter(|(q, v)| v.is_empty() && !EVENTLESS.contains(q))
+        .map(|(q, _)| *q)
+        .collect();
+    if debug() {
+        for (q, v) in &sources {
+            eprintln!("event quest {q}: {v:?}");
+        }
+    }
+    assert!(missing.is_empty(), "with no source in reach: {missing:?}");
+    for q in EVENTLESS {
+        assert!(
+            sources.get(&q).is_some_and(|v| v.is_empty()),
+            "{q} raised after all: {:?}",
+            sources.get(&q)
+        );
+    }
+}
