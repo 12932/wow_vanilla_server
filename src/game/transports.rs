@@ -710,10 +710,7 @@ impl Map {
         };
         p.logout_at = None;
         let session = p.online.session.clone();
-        let _ = session.send(crate::game::session::Control::Transfer {
-            player: Box::new(p),
-            to,
-        });
+        crate::game::session::transfer(&self.realm, &session, p, to);
     }
 }
 
