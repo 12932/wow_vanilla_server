@@ -415,7 +415,10 @@ fn check(
             .effects
             .iter()
             .any(|e| matches!(e.effect, EFFECT_RESURRECT | EFFECT_RESURRECT_NEW));
-        if !u.alive && !resurrects {
+        // Skinning is cast at a corpse.
+        let at_corpse = s.has_effect(crate::game::map::professions::EFFECT_SKINNING)
+            || s.attr(2, crate::game::data::spells::ATTR_EX2_ALLOW_DEAD_TARGET);
+        if !u.alive && !resurrects && !at_corpse {
             return Some(SpellCastResult::TargetsDead.as_int());
         }
         if harmful && target != caster && !combat::can_attack(map, caster, target) {
