@@ -106,7 +106,6 @@ use crate::game::map::gameobject::GameObject;
 use crate::game::map::grid::Grid;
 use crate::game::map::player::Player;
 use crate::game::registry::Online;
-use crate::game::session::Control;
 use crate::game::store::CharacterRow;
 use crate::game::update::{self, Batch};
 
@@ -199,6 +198,8 @@ impl MapHandle {
 #[derive(Default)]
 pub struct Maps {
     handles: RwLock<AHashMap<MapKey, MapHandle>>,
+    /// The server is shutting down: every map has saved its players.
+    closed: std::sync::atomic::AtomicBool,
 }
 
 impl Maps {
@@ -230,6 +231,16 @@ impl Maps {
 
     pub fn all(&self) -> Vec<MapHandle> {
         self.handles.read().values().cloned().collect()
+    }
+
+    /// The server is shutting down; the maps save everyone and stop.
+    pub fn close(&self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -463,12 +474,7 @@ impl Map {
         match event {
             MapEvent::Arrive(a) => self.arrive(*a),
             MapEvent::Packet(guid, msg) => self.handle_packet(guid, msg),
-            MapEvent::Disconnect(guid) => {
-                if let Some(p) = self.take_player(guid) {
-                    debug!("{} disconnected from {}", p.name, self.key);
-                    self.save_and_go_offline(p);
-                }
-            }
+            MapEvent::Disconnect(guid) => self.handle_disconnect(guid),
             MapEvent::Call(f) => f(self),
             MapEvent::Stop => return true,
             MapEvent::Shutdown(reply) => {
@@ -483,6 +489,14 @@ impl Map {
             }
         }
         false
+    }
+
+    /// A player's client has gone: they leave, saved.
+    pub fn handle_disconnect(&mut self, guid: Guid) {
+        if let Some(p) = self.take_player(guid) {
+            debug!("{} disconnected from {}", p.name, self.key);
+            self.save_and_go_offline(p);
+        }
     }
 
     fn arrive(&mut self, arrival: Arrival) {
@@ -716,10 +730,7 @@ impl Map {
         p.movement.flags = wow_world_messages::vanilla::MovementInfo_MovementFlags::empty();
         p.logout_at = None;
         let session = p.online.session.clone();
-        let _ = session.send(Control::Transfer {
-            player: Box::new(p),
-            to: key,
-        });
+        crate::game::session::transfer(&self.realm, &session, p, key);
     }
 
     /// The update: timers, visibility, and the changed fields of

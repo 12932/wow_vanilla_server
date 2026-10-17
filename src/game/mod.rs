@@ -75,6 +75,8 @@ mod tests_pvp4;
 #[cfg(test)]
 mod tests_pvp5;
 #[cfg(test)]
+mod tests_robust;
+#[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
 mod tests_rules5;
@@ -234,6 +236,7 @@ impl Realm {
 
     /// Save everyone in every map, and wait for the store to write it.
     pub async fn shutdown(&self) {
+        self.maps.close();
         let mut waits = Vec::new();
         for map in self.maps.all() {
             let (tx, rx) = tokio::sync::oneshot::channel();
