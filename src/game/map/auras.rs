@@ -1608,6 +1608,18 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     VIS_FLAG_CREEP | f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS),
                 );
             }
+            // A player's own client shows them stealthed, or glowing
+            // invisible (mangos's `PLAYER_FIELD_BYTE2_STEALTH` and
+            // `INVISIBILITY_GLOW`).
+            if let Some(p) = map.players.get_mut(&target) {
+                let flag = if kind == AURA_MOD_STEALTH {
+                    BYTE2_STEALTH
+                } else {
+                    BYTE2_INVISIBILITY_GLOW
+                };
+                let had = p.fields.get_byte(PLAYER_FIELD_BYTES2, 1);
+                p.fields.set_byte(PLAYER_FIELD_BYTES2, 1, had | flag);
+            }
             crate::game::map::visibility::stealth_changed(map, target);
             crate::game::map::spells::interrupts::concealed(map, target, h.spell);
         }
@@ -1807,6 +1819,17 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS) & !VIS_FLAG_CREEP,
                 );
             }
+            let flag = if a.kind == AURA_MOD_STEALTH {
+                BYTE2_STEALTH
+            } else {
+                BYTE2_INVISIBILITY_GLOW
+            };
+            if !still(map, a.kind)
+                && let Some(p) = map.players.get_mut(&target)
+            {
+                let had = p.fields.get_byte(PLAYER_FIELD_BYTES2, 1);
+                p.fields.set_byte(PLAYER_FIELD_BYTES2, 1, had & !flag);
+            }
             crate::game::map::visibility::stealth_changed(map, target);
         }
         AURA_UNTRACKABLE if !still(map, AURA_UNTRACKABLE) => {
@@ -1956,6 +1979,9 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
 const VIS_FLAGS: u8 = 3;
 const VIS_FLAG_CREEP: u8 = 0x02;
 const VIS_FLAG_UNTRACKABLE: u8 = 0x04;
+/// `PLAYER_FIELD_BYTES2`'s second byte: stealthed, and invisible.
+const BYTE2_STEALTH: u8 = 0x20;
+const BYTE2_INVISIBILITY_GLOW: u8 = 0x40;
 
 pub const UNIT_FLAG_SILENCED: u32 = 0x0000_2000;
 pub const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;

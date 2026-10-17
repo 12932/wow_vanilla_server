@@ -1479,11 +1479,34 @@ async fn stealth_marks_the_visibility_byte_not_the_form() {
             let untrackable = form_and_vis(m, druid);
             clear(m, druid);
             let plain = form_and_vis(m, druid);
-            (prowling, ravage_ok, after, melded, untrackable, plain)
+            // The player's own flags: stealthed, invisible, both, neither.
+            let bytes2 = |m: &Map| m.players[&druid].fields.get_byte(PLAYER_FIELD_BYTES2, 1) & 0x60;
+            spells::cast_triggered(m, druid, PROWL, None);
+            let stealthed = bytes2(m);
+            apply(m, druid, druid, LESSER_INVISIBILITY);
+            let both = bytes2(m);
+            auras::remove_spell(m, druid, PROWL, None);
+            let invisible = bytes2(m);
+            clear(m, druid);
+            let neither = bytes2(m);
+            (
+                prowling,
+                ravage_ok,
+                after,
+                melded,
+                untrackable,
+                plain,
+                (stealthed, both, invisible, neither),
+            )
         })
         .await
         .unwrap();
-    let (prowling, ravage_ok, after, melded, untrackable, plain) = out;
+    let (prowling, ravage_ok, after, melded, untrackable, plain, glows) = out;
+    assert_eq!(
+        glows,
+        (0x20, 0x60, 0x40, 0),
+        "stealthed, and invisible, to their own client"
+    );
     assert_eq!(prowling.0, auras::FORM_CAT, "still a cat, prowling");
     assert_eq!(prowling.1 & 0x02, 0x02, "creeping");
     assert_eq!(ravage_ok, None, "and Ravage is a cat's");
