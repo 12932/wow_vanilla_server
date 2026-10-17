@@ -181,8 +181,12 @@ fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
         return;
     };
     let template = map.realm.data.creature_template(c.entry);
-    let radius = template
-        .map(|t| t.call_for_help_range)
+    // A script's range stands over the template's.
+    let radius = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.call_for_help_range)
+        .or_else(|| template.map(|t| t.call_for_help_range))
         .filter(|r| *r > 0.0)
         .unwrap_or(0.0);
     if radius <= 0.0 {
@@ -449,7 +453,15 @@ pub fn update_creatures(map: &mut Map) {
         .creatures
         .iter()
         .filter(|(_, c)| c.pet.is_none())
-        .filter(|(_, c)| c.alive() && (!c.observers.is_empty() || c.combat.attacking || c.evading))
+        .filter(|(_, c)| {
+            c.alive()
+                && (!c.observers.is_empty()
+                    || c.combat.attacking
+                    || c.evading
+                    || c.scripted
+                        .as_deref()
+                        .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some())))
+        })
         .map(|(k, _)| k)
         .collect();
     for key in keys {
@@ -457,6 +469,20 @@ pub fn update_creatures(map: &mut Map) {
             continue;
         };
         crate::game::map::event_ai::tick(map, g);
+        let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
+            continue;
+        };
+        // Down in a linked feign death, or holding its path.
+        if c.scripted
+            .as_deref()
+            .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+        {
+            crate::game::map::event_ai::feign_tick(map, g);
+            continue;
+        }
+        if c.scripted.as_deref().is_some_and(|s| s.hold.is_some()) {
+            crate::game::map::event_ai::hold_tick(map, g);
+        }
         let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
             continue;
         };
@@ -615,13 +641,21 @@ fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     if theirs > mine * ratio { best } else { current }
 }
 
+/// How far a creature fights from home: its template's leash, or in the
+/// open world the default. In a dungeon or raid copy only a template's
+/// leash holds it, as Thistle Tea has it, so a boss may take its fight
+/// across its room.
 fn leash_of(map: &Map, c: &Creature) -> f32 {
     map.realm
         .data
         .creature_template(c.entry)
         .map(|t| t.leash_range)
         .filter(|l| *l > 0.0)
-        .unwrap_or(DEFAULT_LEASH)
+        .unwrap_or(if map.key.instance != 0 && map.battleground.is_none() {
+            f32::INFINITY
+        } else {
+            DEFAULT_LEASH
+        })
 }
 
 fn fight_step(map: &mut Map, g: Guid) {
@@ -668,7 +702,11 @@ fn fight_step(map: &mut Map, g: Guid) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
-    let chase = crate::game::map::event_ai::combat_movement(map, g);
+    // A caster with a chase distance stands off within it.
+    let stand_off = crate::game::map::event_ai::scripted(map, g)
+        .and_then(|s| s.caster_chase_distance)
+        .is_some_and(|d| dist(me.position, them.position) <= d);
+    let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off;
     let swing = crate::game::map::event_ai::melee(map, g);
     if combat::in_melee_range(&me, &them) || !chase {
         let spline_id = map.next_spline_id;
