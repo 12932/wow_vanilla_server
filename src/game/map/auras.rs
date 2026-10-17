@@ -486,7 +486,7 @@ impl Holder {
 
     /// Whether the holder applies whatever the unit wields.
     pub fn unrestricted(&self) -> bool {
-        self.item_class < 0 && self.item_inventory_mask <= 0
+        self.item_class <= 0 && self.item_inventory_mask <= 0
     }
 }
 
@@ -1387,6 +1387,15 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::charmed(map, h.caster, target, kind == AURA_MOD_POSSESS);
         }
+        AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
+            crate::game::map::spells::mods::changed(
+                map,
+                target,
+                a.mask,
+                a.misc.max(0) as usize,
+                kind == AURA_ADD_PCT_MODIFIER,
+            );
+        }
         AURA_GHOST => {}
         _ => {}
     }
@@ -1523,12 +1532,24 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::uncharmed(map, h.caster, target);
         }
+        AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
+            crate::game::map::spells::mods::changed(
+                map,
+                target,
+                a.mask,
+                a.misc.max(0) as usize,
+                a.kind == AURA_ADD_PCT_MODIFIER,
+            );
+        }
         _ => {}
     }
 }
 
 /// A holder came off: what its going does.
 fn removed(map: &mut Map, target: Guid, h: &Holder) {
+    if h.caster == target {
+        crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
+    }
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting

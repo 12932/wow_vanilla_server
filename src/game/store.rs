@@ -120,6 +120,9 @@ pub struct CharacterState {
     /// Friends and ignored characters, by GUID counter.
     pub friends: Vec<u32>,
     pub ignored: Vec<u32>,
+    /// Auras and cooldowns kept across a logout.
+    pub auras: Vec<crate::game::map::spells::cooldowns::SavedAura>,
+    pub cooldowns: Vec<(u32, u32)>,
 }
 
 /// A quest in a player's log.

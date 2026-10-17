@@ -508,6 +508,8 @@ impl Player {
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
         row.items = self.items.iter().map(Item::to_row).collect();
         row.state.quests = self.journal.clone();
+        row.state.auras = crate::game::map::spells::cooldowns::saved_auras(self, now);
+        row.state.cooldowns = crate::game::map::spells::cooldowns::saved_cooldowns(self, now);
         row.spells = self.spells.clone();
         row
     }

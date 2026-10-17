@@ -244,6 +244,7 @@ pub struct Map {
     pub battleground: Option<battleground::Match>,
     /// Objects every player in the map knows: the boats and zeppelins.
     pub globals: Vec<Guid>,
+    pub spells: spells::MapSpells,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -337,6 +338,7 @@ impl Map {
             stopping: false,
             battleground: battleground::for_map(key, Instant::now()),
             globals: Vec::new(),
+            spells: Default::default(),
         }
     }
 
