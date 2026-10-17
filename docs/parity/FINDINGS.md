@@ -35,6 +35,34 @@ Phase 3. When something here is fixed, its line gets the commit.
 - **A DoT's threat is physical.** `spells::periodic_damage` deals school 1.
 - **`procs::ppm_chance` caps at 100%** before the chance modifier is applied. Thistle Tea applies the modifier first.
 
+### From spells and power (to confirm)
+
+- **Health-cost spells are paid from power 5 (happiness).** `power_index` takes `power_type.min(4)`, and type -2
+  is stored as 4294967294. Life Tap, Health Funnel and Bloodrage are refused NO_POWER for real players. The tests'
+  `ready()` helper fills every power, which hides it.
+- **A creature's rage or energy spell-list entries never cast**: creatures have only mana.
+- **Dazed counts as an exclusive snare.** `auras.rs` tests attribute `0x0040_0000`, and Dazed (1604) carries
+  `0x0004_0000`.
+- **Hellfire lands round the warlock's target.** Its periodic trigger aims at `UNIT_FIELD_TARGET`.
+- **A same-map teleport in an instance goes to instance 0.** `EFFECT_TELEPORT_UNITS` passes `MapKey::world(m)`, as
+  in BWL's orb (23460).
+- **Relentless Strikes never fires.** It rolls the aura's amount (0), not 20 per combo point.
+- **Plague (26557) hits the Anubisath**, not the raid: the trigger's caster is the aura's caster, and
+  `RaidAroundCaster`'s radius has a 30-yard floor.
+- **Aura 161** (health regeneration in combat) is taken as a percentage in combat and ignored out of it.
+  mangos-classic adds it flat, which matters for Troll's Blood potions.
+- **665 spells get a global cooldown they shouldn't**: `start_recovery_time.max(1000)`.
+- **Higher ranks lose their proc rules.** `spell_proc_event` is looked up by exact id, which affects 49 ranks:
+  Lightning Shield, the seals, Flurry, Enrage.
+- **`effectItemType` loads through `c.u32`**, which clamps high-bit class masks to all ones.
+- **SpellModOp 3, 12 and 23 have TBC's numbers.**
+- **Targeting and casting:**
+  - `PartyMember` lands on the caster when the target is a stranger;
+  - Cannibalize spends its cost with no corpse;
+  - area spells ignore the creature-type mask;
+  - `end_channel` leaves Mend Pet's aura on the pet;
+  - the immune-to-player flag 0x100 is never checked.
+
 ### Reported, not yet confirmed
 
 **Object gossip:**
@@ -161,6 +189,45 @@ Phase 3. When something here is fixed, its line gets the commit.
   - overlapping taunts;
   - Fade;
   - crowd control that damage breaks.
+
+### Spells and power (`core/spell`, `world/spell`, `core/power`: 173 of 1,078 covered)
+
+- **Regeneration:**
+  - every pool regenerates, not only the active one;
+  - rage decays;
+  - fractions carry between ticks;
+  - regeneration while polymorphed;
+  - the `regenerate_stats` mask;
+  - pet focus is 25 every 4 s.
+- **Costs:**
+  - health costs;
+  - per-second channel costs;
+  - god mode;
+  - the order of costs.
+- **Rechecks at launch:** power, area, focus, posture, mount, school lockout, facing, range and line of sight.
+- **Casting under control:** Divine Shield and Ice Block while stunned; silence and pacify by prevention type.
+- **Cooldowns:**
+  - the global cooldown by category, released on cancel;
+  - an event cooldown holds its category;
+  - cooldowns in `SMSG_INITIAL_SPELLS`;
+  - school lockouts saved over a logout.
+- **Movement and pushback:** 0.5 yards per axis from where the cast began; turning and jumping break channels;
+  self-damage doesn't push back.
+- **Targeting:**
+  - location targets;
+  - pets in party and raid targets;
+  - script targets;
+  - range allowances;
+  - chains' line of sight;
+  - cones.
+- **Stacking and procs:**
+  - nested spell groups;
+  - cast-end procs;
+  - `NOT_A_PROC`;
+  - ranks inheriting their proc rules;
+  - heal-over-time ticks proccing;
+  - reflection charges.
+- **Threat:** modifiers multiplied, not added; crit threat; DoT tick threat.
 
 ### World entities (`world/entity`: 146 of 1,251 covered)
 
