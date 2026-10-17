@@ -622,7 +622,7 @@ async fn a_buff_too_high_for_its_target_goes_on_at_a_lower_rank() {
                 unit: Some(low),
                 ..Default::default()
             };
-            spells::cast(m, g, FORTITUDE[5], at_low.clone(), None);
+            spells::cast(m, g, FORTITUDE[5], at_low, None);
             let on = auras::auras(m, low)
                 .map(|a| {
                     FORTITUDE
