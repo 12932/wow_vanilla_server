@@ -321,3 +321,150 @@ async fn a_controlled_creature_let_go_is_itself_again() {
     assert!(calm, "a friend stays calm");
     let _ = NONE_WITHIN;
 }
+
+/// A sap: a stun that damage breaks.
+const SAP: u32 = 98_104;
+
+fn victim_of(m: &Map, g: Guid) -> Option<Guid> {
+    m.combat(g).filter(|c| c.attacking).map(|c| c.victim)
+}
+
+/// Thistle Tea's `PetTargeting`: a pet struck fights back, and keeps a
+/// living victim when another strikes it or its master; its victim dead,
+/// it takes the next of its master's foes; it leaves one held by crowd
+/// control that damage would break until it is free; and told to stay, it
+/// takes on of its own accord only what is within its reach, though a
+/// blow that lands nothing still sets it on one in reach.
+#[tokio::test]
+async fn a_pet_picks_its_fights_as_its_master_and_its_stay_allow() {
+    let mut d = world();
+    let mut sap = spell(
+        SAP,
+        "Sap",
+        [effect(6, 0, 6), effect(0, 0, 0), effect(0, 0, 0)],
+    );
+    sap.effects[0].aura = crate::game::map::auras::AURA_MOD_STUN;
+    sap.aura_interrupt_flags = crate::game::map::auras::INTERRUPT_DAMAGE;
+    sap.duration_index = 0;
+    d.spells.spells.insert(SAP, sap);
+    let realm = harness::realm_with(d);
+    let (mut w, gw, map) = enter(&realm, "W", "Wanda", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[SUMMON_IMP]);
+    cast(&w, SUMMON_IMP, None).await;
+    let imp = pet_bar(&mut w).await;
+    let wolves: Vec<Guid> = {
+        let mut v = Vec::new();
+        for (n, yards) in [(1u32, 3.0f32), (2, 3.5), (3, 4.0), (4, 4.5), (5, 5.0)] {
+            v.push(place(&map, gw, WOLF, 0x70_0100 + n, yards).await);
+        }
+        v
+    };
+    let (a, b, c, dd, e) = (wolves[0], wolves[1], wolves[2], wolves[3], wolves[4]);
+    // A strikes the imp: it fights back; B's blow keeps it on A.
+    on(&map, move |m| {
+        for wolf in [a, b, c, dd, e] {
+            if let Some(x) = m.creature_mut(wolf) {
+                x.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+                x.fields.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+            }
+        }
+        crate::game::map::combat::engage(m, a, imp);
+    })
+    .await;
+    crate::game::tests_p3_entity_objects::until(&map, "the imp on A", move |m| {
+        victim_of(m, imp) == Some(a)
+    })
+    .await;
+    on(&map, move |m| crate::game::map::combat::engage(m, b, imp)).await;
+    // C goes for Wanda: the imp stays on A.
+    on(&map, move |m| crate::game::map::ai::attacked(m, c, gw)).await;
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert_eq!(
+        on(&map, move |m| victim_of(m, imp)).await,
+        Some(a),
+        "kept on A"
+    );
+    // A and B dead: the imp takes C, its master's foe.
+    on(&map, move |m| {
+        for wolf in [a, b] {
+            crate::game::map::combat::deal_damage(m, gw, wolf, 10_000_000);
+        }
+    })
+    .await;
+    crate::game::tests_p3_entity_objects::until(&map, "the imp on C", move |m| {
+        victim_of(m, imp) == Some(c)
+    })
+    .await;
+    // C sapped: let be; free, taken again.
+    on(&map, move |m| {
+        crate::game::map::combat::stop_attack(m, imp);
+        let sap = m.realm.data.spells.get(SAP).cloned().unwrap();
+        crate::game::map::auras::apply(m, gw, c, &sap, 0, 1);
+        // Still in Wanda's fight, as a sapped foe is.
+        crate::game::map::combat::engage(m, c, gw);
+    })
+    .await;
+    for _ in 0..12 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (victim, sapped) = on(&map, move |m| {
+            (
+                victim_of(m, imp),
+                crate::game::map::auras::auras(m, c).is_some_and(|a| a.has_spell(SAP)),
+            )
+        })
+        .await;
+        assert_eq!(victim, None, "the sapped is let be");
+        assert!(sapped, "and stays sapped");
+    }
+    on(&map, move |m| {
+        crate::game::map::auras::remove_spell(m, c, SAP, None)
+    })
+    .await;
+    crate::game::tests_p3_entity_objects::until(&map, "the imp on C again", move |m| {
+        victim_of(m, imp) == Some(c)
+    })
+    .await;
+    // Told to stay where it is, beside Wanda; C dies.
+    w.send(CMSG_PET_ACTION {
+        pet: imp,
+        data: pets::button(u32::from(pets::COMMAND_STAY), pets::ACT_COMMAND),
+        target: Guid::zero(),
+    })
+    .await;
+    settled(&mut w).await;
+    let far = on(&map, move |m| {
+        crate::game::map::combat::deal_damage(m, gw, c, 10_000_000);
+        // The imp stays fifteen yards from Wanda; D goes for her.
+        let at = m.players[&gw].position();
+        let there = Vector3d {
+            x: at.x + 15.0,
+            ..at
+        };
+        m.creature_mut(imp).unwrap().position = there;
+        pets::state_mut(m, imp).unwrap().stay_at = Some(there);
+        crate::game::map::ai::attacked(m, dd, gw);
+        dd
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert_eq!(
+        on(&map, move |m| victim_of(m, imp)).await,
+        None,
+        "staying, it lets the far one be"
+    );
+    // E, in its reach, touches it for nothing: it takes E on.
+    on(&map, move |m| {
+        let at = m.position_of(imp).unwrap();
+        m.creature_mut(e).unwrap().position = Vector3d {
+            x: at.x + 1.0,
+            ..at
+        };
+        crate::game::map::combat::engage(m, e, imp);
+    })
+    .await;
+    crate::game::tests_p3_entity_objects::until(&map, "the imp on E", move |m| {
+        victim_of(m, imp) == Some(e)
+    })
+    .await;
+    let _ = far;
+}
