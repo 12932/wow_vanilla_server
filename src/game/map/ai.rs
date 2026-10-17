@@ -1200,6 +1200,13 @@ pub fn hostile_to_players(
             .any(|e| matches!(*e, 469 | 67 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 115 | 116))
 }
 
+/// A creature on the move stops where it is now along its walk, its
+/// watchers told.
+pub fn halt(map: &mut Map, g: Guid) {
+    advance_motion(map, g);
+    stop_moving(map, g);
+}
+
 /// A creature on the move stops where it is.
 fn stop_moving(map: &mut Map, g: Guid) {
     let spline_id = map.next_spline_id;

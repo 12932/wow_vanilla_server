@@ -21,8 +21,14 @@ use crate::game::map::auras::*;
 use crate::game::map::combat::{self, dist};
 use crate::game::map::creature::Walk;
 
-/// Confusion staggers within this of where it began.
+/// Confusion staggers within this of where it began, at most this far a
+/// walk; a fear run's path goes at most this far, to a point of the
+/// navmesh within this of where the run would end (Thistle Tea's
+/// `Confusion` and `FleeMovement`).
 pub const CONFUSION_RADIUS: f32 = 4.0;
+pub const CONFUSION_PATH: f32 = 8.0;
+pub const FEAR_PATH: f32 = 30.0;
+const FEAR_SEARCH: f32 = 5.0;
 /// A charmed player follows its charmer to this.
 const FOLLOW_DISTANCE: f32 = 3.0;
 /// How often a charmed player aims again at a foe on the move.
@@ -67,6 +73,90 @@ pub fn fear_destination(
         y: at.y + angle.sin() * length,
         z: at.z,
     }
+}
+
+/// Where a fear run from `at` goes, as Thistle Tea's `fear_point` finds
+/// it: [`fear_destination`], as far toward it as a walk over the navmesh
+/// gets, and a random point of the navmesh within five yards of there.
+/// `None` where the navmesh has none; with no navmesh, the destination.
+pub fn fear_point(
+    map: &mut Map,
+    at: Vector3d,
+    frightener_distance: f32,
+    rng: &mut impl rand::Rng,
+) -> Option<Vector3d> {
+    let to = fear_destination(at, frightener_distance, rng);
+    let Some(nav) = map.nav.as_mut() else {
+        return Some(to);
+    };
+    let reachable = nav.walk_hit(at, to).unwrap_or(to);
+    crate::game::map::world::wander_point(nav, reachable, FEAR_SEARCH, rng)
+}
+
+/// A confused unit's next point: one of the navmesh within four yards of
+/// where its confusion began, kept to them; with no navmesh, a random one.
+pub fn confusion_point(
+    map: &mut Map,
+    anchor: Vector3d,
+    rng: &mut impl rand::Rng,
+) -> Option<Vector3d> {
+    let p = match map.nav.as_mut() {
+        Some(nav) => crate::game::map::world::wander_point(nav, anchor, CONFUSION_RADIUS, rng)?,
+        None => {
+            let a = rng.random_range(0.0f32..std::f32::consts::TAU);
+            let r = rng.random_range(0.5f32..CONFUSION_RADIUS);
+            Vector3d {
+                x: anchor.x + r * a.cos(),
+                y: anchor.y + r * a.sin(),
+                z: anchor.z,
+            }
+        }
+    };
+    let d = dist(anchor, p);
+    if d <= CONFUSION_RADIUS {
+        return Some(p);
+    }
+    let f = CONFUSION_RADIUS / d;
+    Some(Vector3d {
+        x: anchor.x + (p.x - anchor.x) * f,
+        y: anchor.y + (p.y - anchor.y) * f,
+        z: anchor.z + (p.z - anchor.z) * f,
+    })
+}
+
+/// A controlled run's path from `from` to `to`: the navmesh's, cut at
+/// `max` yards along it (Thistle Tea's `limit_path`); straight with no
+/// navmesh. `None` where the navmesh has no way.
+pub fn control_path(
+    map: &mut Map,
+    from: Vector3d,
+    to: Vector3d,
+    max: f32,
+) -> Option<Vec<Vector3d>> {
+    let path = match map.nav.as_mut() {
+        Some(nav) => nav.path(from, to)?,
+        None => vec![from, to],
+    };
+    let mut out = vec![path[0]];
+    let mut left = max;
+    for w in path.windows(2) {
+        let d = dist(w[0], w[1]);
+        if d <= left {
+            out.push(w[1]);
+            left -= d;
+            continue;
+        }
+        if left > 0.0 {
+            let f = left / d;
+            out.push(Vector3d {
+                x: w[0].x + (w[1].x - w[0].x) * f,
+                y: w[0].y + (w[1].y - w[0].y) * f,
+                z: w[0].z + (w[1].z - w[0].z) * f,
+            });
+        }
+        break;
+    }
+    (out.len() >= 2).then_some(out)
 }
 
 /// How a player's auras and control would have them moved now.
@@ -222,6 +312,21 @@ fn walk(map: &mut Map, g: Guid, points: Vec<Vector3d>, run: bool, pause: Duratio
     }
 }
 
+/// A driven player stands a while before its next move.
+fn wait(map: &mut Map, g: Guid, pause: Duration) {
+    let now = map.now;
+    if let Some(d) = map.players.get_mut(&g).and_then(|p| p.driven.as_mut()) {
+        d.next_move_at = now + pause;
+    }
+}
+
+/// A driven player rooted or stunned: its walk stops where it is.
+pub fn immobilized(map: &mut Map, g: Guid) {
+    if driven(map, g) {
+        stop(map, g);
+    }
+}
+
 fn path(map: &mut Map, from: Vector3d, to: Vector3d) -> Vec<Vector3d> {
     match map.nav.as_mut() {
         Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
@@ -276,22 +381,29 @@ pub fn update(map: &mut Map) {
                 let distance = source
                     .and_then(|s| map.position_of(s))
                     .map_or(0.0, |s| dist(s, at));
-                let to = fear_destination(at, distance, &mut rng);
-                let route = path(map, at, to);
+                // No point for it, or no way there: a pause.
+                let Some(to) = fear_point(map, at, distance, &mut rng) else {
+                    wait(map, g, Duration::from_millis(rng.random_range(1000..1500)));
+                    continue;
+                };
                 let pause = Duration::from_millis(rng.random_range(800..1500));
-                walk(map, g, route, true, pause);
+                match control_path(map, at, to, FEAR_PATH) {
+                    Some(route) => walk(map, g, route, true, pause),
+                    None => wait(map, g, pause),
+                }
             }
             Mode::Confusion { anchor } => {
-                let a = rng.random_range(0.0f32..std::f32::consts::TAU);
-                let r = rng.random_range(0.5f32..CONFUSION_RADIUS);
-                let to = Vector3d {
-                    x: anchor.x + r * a.cos(),
-                    y: anchor.y + r * a.sin(),
-                    z: anchor.z,
-                };
-                let route = path(map, at, to);
                 let pause = Duration::from_millis(rng.random_range(500..1500));
-                walk(map, g, route, false, pause);
+                let route = confusion_point(map, anchor, &mut rng).and_then(|to| {
+                    control_path(map, at, to, CONFUSION_PATH).filter(|p| {
+                        p.iter()
+                            .all(|x| dist(*x, anchor) <= CONFUSION_RADIUS + 0.01)
+                    })
+                });
+                match route {
+                    Some(route) => walk(map, g, route, false, pause),
+                    None => wait(map, g, pause),
+                }
             }
             Mode::Charm => charm_step(map, g),
         }

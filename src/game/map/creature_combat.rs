@@ -67,6 +67,10 @@ pub struct Engagement {
     pub regen_at: Option<Instant>,
     /// When fear or confusion next moves it.
     pub next_move_at: Option<Instant>,
+    /// What moves it against its will, and the id of the walk it last
+    /// sent it on.
+    pub control: Option<Control>,
+    pub control_spline: Option<u32>,
     /// When it last spent mana, for the five-second rule.
     pub mana_spent_at: Option<Instant>,
     /// When it next draws its dungeon into the fight.
@@ -139,6 +143,8 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.damage_by_npcs = 0;
         c.engagement.assist.clear();
         c.engagement.pulse_at = None;
+        c.engagement.control = None;
+        c.engagement.control_spline = None;
     }
 }
 
@@ -407,6 +413,75 @@ fn emote(map: &Map, g: Guid, text: &str) {
     }
 }
 
+/// What moves a creature against its will, as Thistle Tea's
+/// `ControlMovement` has it: confusion (about where it began), fear, or a
+/// flight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Control {
+    Confusion { anchor: Vector3d },
+    Fear,
+    Flee,
+}
+
+fn same_kind(a: Option<Control>, b: Option<Control>) -> bool {
+    a.map(|x| std::mem::discriminant(&x)) == b.map(|x| std::mem::discriminant(&x))
+}
+
+/// What controls a creature now: confusion before fear (which an aura
+/// that prevents fleeing bars), then a flight.
+fn wanted_control(map: &Map, g: Guid) -> Option<Control> {
+    let c = map.creature(g)?;
+    if !c.alive() {
+        return None;
+    }
+    let a = &c.auras;
+    if a.has(AURA_MOD_CONFUSE) {
+        let anchor = match c.engagement.control {
+            Some(Control::Confusion { anchor }) => anchor,
+            _ => c.position,
+        };
+        return Some(Control::Confusion { anchor });
+    }
+    if a.has(AURA_MOD_FEAR) && !a.has(AURA_PREVENTS_FLEEING) {
+        return Some(Control::Fear);
+    }
+    c.engagement.flee.map(|_| Control::Flee)
+}
+
+/// Fear, confusion or a flight began or ended: the walk under way stops
+/// where the creature is, whatever it was, and the new mode moves it from
+/// there at once (Thistle Tea's `ControlMovement.transition`). Its mode now.
+pub fn control_changed(map: &mut Map, g: Guid) -> Option<Control> {
+    let now = map.now;
+    // Its walk home is its own.
+    if map.creature(g).is_none_or(|c| c.evading) {
+        return None;
+    }
+    let want = wanted_control(map, g);
+    let had = map.creature(g).and_then(|c| c.engagement.control);
+    if same_kind(had, want) {
+        return want;
+    }
+    crate::game::map::ai::halt(map, g);
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.control = want;
+        c.engagement.control_spline = None;
+        c.engagement.next_move_at = want.map(|_| now);
+    }
+    want
+}
+
+/// A creature rooted or stunned: a run under way (in fear, confusion or
+/// flight) stops where it is (Thistle Tea's `MovementSync`).
+pub fn immobilized(map: &mut Map, g: Guid) {
+    if map
+        .creature(g)
+        .is_some_and(|c| c.engagement.control.is_some())
+    {
+        crate::game::map::ai::halt(map, g);
+    }
+}
+
 /// Fear, confusion and fleeing move a creature themselves: the fight's own
 /// step waits. Whether it did.
 pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
@@ -416,33 +491,53 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     };
     let feared = c.auras.has(AURA_MOD_FEAR);
     let confused = c.auras.has(AURA_MOD_CONFUSE);
-    let flee = c.engagement.flee;
-    if let Some(f) = flee
+    if let Some(f) = c.engagement.flee
         && (f.until <= now || feared || confused)
     {
         end_flee(map, g);
-        return feared || confused;
     }
-    if !feared && !confused && flee.is_none() {
+    let Some(mode) = control_changed(map, g) else {
         return false;
-    }
+    };
+    // Where its run has taken it.
+    crate::game::map::ai::advance_motion(map, g);
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
     // Stunned or rooted: it stands, held.
     if c.auras.has(AURA_MOD_STUN) || c.auras.has(AURA_MOD_ROOT) {
+        crate::game::map::ai::halt(map, g);
         return true;
     }
-    if matches!(&c.motion, Motion::Moving(w) if !w.done(now)) {
-        return true;
+    match &c.motion {
+        Motion::Moving(w) if Some(w.spline_id) == c.engagement.control_spline => return true,
+        // A walk of something else's: it stops.
+        Motion::Moving(_) => crate::game::map::ai::halt(map, g),
+        Motion::Idle { .. } => {}
     }
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
     if c.engagement.next_move_at.is_some_and(|t| t > now) {
         return true;
     }
+    let flee = c.engagement.flee;
     let pos = c.position;
     let mut rng = rand::rng();
-    let (goal, run, pause) = if let Some(f) = flee
+    let between = |rng: &mut rand::rngs::ThreadRng, lo: u64, hi: u64| {
+        Duration::from_millis(rng.random_range(lo..hi))
+    };
+    let planned = if let Some(f) = flee
         && let Some(helper) = f.helper
     {
         match map.position_of(helper) {
-            Some(at) if dist(at, pos) > 3.0 => (at, true, Duration::from_millis(500)),
+            Some(at) if dist(at, pos) > 3.0 => {
+                let path = match map.nav.as_mut() {
+                    Some(nav) => nav.path(pos, at).unwrap_or_else(|| vec![pos, at]),
+                    None => vec![pos, at],
+                };
+                Ok((path, true, Duration::from_millis(500)))
+            }
             Some(_) => {
                 // Arrived: help is called, and given a moment.
                 if f.called_at.is_none() {
@@ -463,22 +558,26 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
                 return false;
             }
         }
-    } else if confused {
-        // Confusion: a stagger about where it stands.
-        let a = rng.random_range(0.0f32..std::f32::consts::TAU);
-        let r = rng.random_range(1.0f32..4.0);
-        (
-            Vector3d {
-                x: pos.x + r * a.cos(),
-                y: pos.y + r * a.sin(),
-                z: pos.z,
-            },
-            false,
-            Duration::from_millis(rng.random_range(500..1500)),
-        )
+    } else if let Control::Confusion { anchor } = mode {
+        // Confusion: a walk to a point of the navmesh within four yards of
+        // where it began, no further than eight yards, or a pause.
+        use crate::game::map::player_motion::{CONFUSION_PATH, CONFUSION_RADIUS};
+        let point = crate::game::map::player_motion::confusion_point(map, anchor, &mut rng);
+        match point.and_then(|to| {
+            crate::game::map::player_motion::control_path(map, pos, to, CONFUSION_PATH).filter(
+                |p| {
+                    p.iter()
+                        .all(|x| dist(*x, anchor) <= CONFUSION_RADIUS + 0.01)
+                },
+            )
+        }) {
+            Some(path) => Ok((path, false, between(&mut rng, 500, 1500))),
+            None => Err(between(&mut rng, 500, 1500)),
+        }
     } else {
         // Fear: Thistle Tea's run at a random angle, longer the nearer
-        // the one it fears.
+        // the one it fears, to a point the navmesh has near where the
+        // run would end.
         let source = flee.map(|f| f.from).or_else(|| {
             c.auras
                 .holders
@@ -489,15 +588,27 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
         let distance = source
             .and_then(|s| map.position_of(s))
             .map_or(0.0, |s| dist(s, pos));
-        (
-            crate::game::map::player_motion::fear_destination(pos, distance, &mut rng),
-            true,
-            Duration::from_millis(rng.random_range(800..1500)),
-        )
+        match crate::game::map::player_motion::fear_point(map, pos, distance, &mut rng) {
+            None => Err(between(&mut rng, 1000, 1500)),
+            Some(to) => match crate::game::map::player_motion::control_path(
+                map,
+                pos,
+                to,
+                crate::game::map::player_motion::FEAR_PATH,
+            ) {
+                Some(path) => Ok((path, true, between(&mut rng, 800, 1500))),
+                None => Err(between(&mut rng, 800, 1500)),
+            },
+        }
     };
-    let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(pos, goal).unwrap_or_else(|| vec![pos, goal]),
-        None => vec![pos, goal],
+    let (path, run, pause) = match planned {
+        Ok(p) => p,
+        Err(pause) => {
+            if let Some(c) = map.creature_mut(g) {
+                c.engagement.next_move_at = Some(now + pause);
+            }
+            return true;
+        }
     };
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
@@ -510,6 +621,7 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
         Motion::Moving(w) => w.duration,
         Motion::Idle { .. } => Duration::ZERO,
     };
+    c.engagement.control_spline = Some(spline_id);
     c.engagement.next_move_at = Some(now + run_for + pause);
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);

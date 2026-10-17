@@ -438,3 +438,315 @@ async fn a_wanderer_with_no_point_waits() {
         "two to six seconds: {waits:?}"
     );
 }
+
+const FEAR: u32 = 92_001;
+const CONFUSE: u32 = 92_002;
+const ROOT: u32 = 92_003;
+const STUN: u32 = 92_004;
+const DISTRACT: u32 = 92_005;
+
+/// The test spells: auras of fear, confusion, root and stun, ten seconds
+/// each, and a rogue's distract.
+fn with_spells(mut d: GameData) -> GameData {
+    use crate::game::data::spells::{SpellDuration, SpellEffect, SpellTemplate};
+    let s = &mut d.spells;
+    s.ranges.insert(1, (0.0, 30.0));
+    s.durations.insert(
+        9,
+        SpellDuration {
+            base: 10_000,
+            ..Default::default()
+        },
+    );
+    let aura = |kind: u32| SpellEffect {
+        effect: 6,
+        aura: kind,
+        base_dice: 1,
+        die_sides: 1,
+        target_a: 6,
+        ..Default::default()
+    };
+    let spell = |id: u32, name: &str, e: SpellEffect| SpellTemplate {
+        id,
+        name: name.into(),
+        range_index: 1,
+        duration_index: 9,
+        equipped_item_class: -1,
+        effects: [e, SpellEffect::default(), SpellEffect::default()],
+        ..Default::default()
+    };
+    for t in [
+        spell(FEAR, "Fear", aura(7)),
+        spell(CONFUSE, "Confuse", aura(5)),
+        spell(ROOT, "Root", aura(26)),
+        spell(STUN, "Stun", aura(12)),
+    ] {
+        s.spells.insert(t.id, t);
+    }
+    d
+}
+
+fn apply(m: &mut crate::game::map::Map, caster: Guid, target: Guid, spell: u32) {
+    let data = m.realm.data.clone();
+    crate::game::map::auras::apply_spell(
+        m,
+        caster,
+        target,
+        data.spells.get(spell).unwrap(),
+        &[(0, 0)],
+        Default::default(),
+    )
+    .expect("it takes");
+}
+
+/// A wolf ten yards east of the start, alone.
+fn wolf_world() -> GameData {
+    let mut d = with_spells(world());
+    d.creature_templates
+        .insert(WOLF, template(WOLF, "Wolf", PACK));
+    d.creature_spawns
+        .insert(0, vec![spawn(80, WOLF, at(10.0, 0.0))]);
+    d
+}
+
+fn wolf() -> Guid {
+    guid::unit(WOLF, 80)
+}
+
+/// Its walk under way: its spline id, if it is walking.
+fn walking(m: &crate::game::map::Map, g: Guid) -> Option<u32> {
+    match &m.creature(g)?.motion {
+        Motion::Moving(w) => Some(w.spline_id),
+        Motion::Idle { .. } => None,
+    }
+}
+
+/// `g` sets off on a walk to `to`, its watchers told; the walk's id.
+fn send_off(m: &mut crate::game::map::Map, g: Guid, to: Vector3d) -> u32 {
+    let now = m.now;
+    let id = m.next_spline_id;
+    m.next_spline_id += 1;
+    let c = m.creature_mut(g).unwrap();
+    let from = c.position;
+    let frame = c.walk(vec![from, to], true, now, id).unwrap();
+    m.send_to_observers(g, &frame, false);
+    id
+}
+
+/// A walk of `g`'s that is over, as though its time had passed, and its
+/// pause with it.
+fn finish_walk(m: &mut crate::game::map::Map, g: Guid) {
+    let c = m.creature_mut(g).unwrap();
+    if let Motion::Moving(w) = &mut c.motion {
+        w.started -= w.duration + Duration::from_secs(1);
+    }
+    c.engagement.next_move_at = None;
+}
+
+/// Fear stops the walk a creature is on at once, telling its watchers,
+/// rather than waiting it out (Thistle Tea's `ControlMovement.transition`).
+#[tokio::test]
+async fn fear_stops_the_walk_under_way_at_once() {
+    let (_realm, mut a, ga, map) = enter(wolf_world()).await;
+    let g = wolf();
+    a.sees(g).await;
+    let (old, still) = map
+        .query(move |m| {
+            let old = send_off(m, g, at(10.0, 30.0));
+            apply(m, ga, g, FEAR);
+            (old, walking(m, g) == Some(old))
+        })
+        .await
+        .unwrap();
+    assert!(!still, "the walk under way is over");
+    let stop = next_move(&mut a, g, |m| m.kind == 1).await;
+    assert_ne!(stop.id, old);
+    // Its fear runs it off at once.
+    let run = map
+        .query(move |m| {
+            crate::game::map::creature_combat::controlled_step(m, g);
+            walking(m, g)
+        })
+        .await
+        .unwrap();
+    assert!(run.is_some_and(|r| r != old), "a fear run: {run:?}");
+}
+
+/// A fleeing or feared creature rooted or stunned stops where it is, its
+/// watchers told, and runs no more until it is free.
+#[tokio::test]
+async fn a_rooted_runner_stops_where_it_is() {
+    let (_realm, mut a, ga, map) = enter(wolf_world()).await;
+    let g = wolf();
+    a.sees(g).await;
+    for hold in [ROOT, STUN] {
+        let (ran, stopped, still) = map
+            .query(move |m| {
+                apply(m, ga, g, FEAR);
+                crate::game::map::creature_combat::controlled_step(m, g);
+                let ran = walking(m, g);
+                apply(m, ga, g, hold);
+                let stopped = walking(m, g).is_none();
+                finish_walk(m, g);
+                crate::game::map::creature_combat::controlled_step(m, g);
+                let still = walking(m, g).is_none();
+                crate::game::map::auras::remove_spell(m, g, hold, None);
+                crate::game::map::auras::remove_spell(m, g, FEAR, None);
+                crate::game::map::creature_combat::controlled_step(m, g);
+                (ran, stopped, still)
+            })
+            .await
+            .unwrap();
+        let ran = ran.expect("it runs in fear");
+        assert!(stopped, "{hold}: it stops at once");
+        assert!(still, "{hold}: and runs no more");
+        let stop = next_move(&mut a, g, |m| m.kind == 1).await;
+        assert_ne!(stop.id, ran);
+    }
+}
+
+/// Confusion staggers a creature about where it began, not where each
+/// stagger left it.
+#[tokio::test]
+async fn confusion_keeps_about_where_it_began() {
+    let (_realm, _a, ga, map) = enter(wolf_world()).await;
+    let g = wolf();
+    let (begun, ends) = map
+        .query(move |m| {
+            let begun = m.creature(g).unwrap().position;
+            apply(m, ga, g, CONFUSE);
+            let mut ends = Vec::new();
+            for _ in 0..40 {
+                finish_walk(m, g);
+                // It is where its stagger took it.
+                crate::game::map::ai::advance_motion(m, g);
+                crate::game::map::creature_combat::controlled_step(m, g);
+                if let Motion::Moving(w) = &m.creature(g).unwrap().motion {
+                    ends.push(w.destination());
+                }
+            }
+            (begun, ends)
+        })
+        .await
+        .unwrap();
+    assert!(ends.len() > 20, "it staggers: {}", ends.len());
+    let far: Vec<f32> = ends
+        .iter()
+        .map(|p| dist(*p, begun))
+        .filter(|d| *d > 4.01)
+        .collect();
+    assert!(
+        far.is_empty(),
+        "beyond four yards of where it began: {far:?}"
+    );
+}
+
+/// The real navmesh: a feared creature runs to points the navmesh has,
+/// along its paths, no more than thirty yards.
+#[tokio::test]
+async fn fear_runs_where_the_navmesh_goes() {
+    let mut d = with_spells(world());
+    d.creature_templates
+        .insert(WOLF, template(WOLF, "Wolf", PACK));
+    d.creature_spawns
+        .insert(0, vec![spawn(80, WOLF, at(0.0, 0.0))]);
+    let Some(realm) = realm_with_nav(d) else {
+        return;
+    };
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let g = wolf();
+    let runs = map
+        .query(move |m| {
+            apply(m, ga, g, FEAR);
+            let mut runs = Vec::new();
+            for _ in 0..60 {
+                finish_walk(m, g);
+                crate::game::map::creature_combat::controlled_step(m, g);
+                if let Motion::Moving(w) = &m.creature(g).unwrap().motion {
+                    runs.push(w.points.clone());
+                }
+                // Back where it began, to run again.
+                let c = m.creature_mut(g).unwrap();
+                c.position = c.home;
+            }
+            let nav = m.nav.as_mut().unwrap();
+            runs.into_iter()
+                .map(|p| {
+                    let length: f32 = p.windows(2).map(|w| dist(w[0], w[1])).sum();
+                    let end = *p.last().unwrap();
+                    let on_mesh = nav
+                        .ground(end.x, end.y, end.z)
+                        .is_some_and(|z| (z - end.z).abs() < 1.0);
+                    let eye = |v: Vector3d| Vector3d { z: v.z + 1.0, ..v };
+                    let clear = p
+                        .windows(2)
+                        .all(|w| nav.line_of_sight(eye(w[0]), eye(w[1])));
+                    (length, on_mesh, clear)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap();
+    assert!(runs.len() > 30, "it runs: {}", runs.len());
+    for (length, on_mesh, clear) in runs {
+        assert!(length <= 30.01, "no further than thirty yards: {length}");
+        assert!(on_mesh, "to a point of the navmesh");
+        assert!(clear, "along the navmesh's path");
+    }
+}
+
+/// The real navmesh: a feared player is run to points the navmesh has, no
+/// more than thirty yards, as a creature is.
+#[tokio::test]
+async fn a_feared_players_runs_keep_to_the_navmesh() {
+    let mut d = with_spells(world());
+    d.creature_templates
+        .insert(WOLF, template(WOLF, "Wolf", PACK));
+    d.creature_spawns
+        .insert(0, vec![spawn(80, WOLF, at(10.0, 0.0))]);
+    let Some(realm) = realm_with_nav(d) else {
+        return;
+    };
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let runs = map
+        .query(move |m| {
+            apply(m, wolf(), ga, FEAR);
+            let mut runs = Vec::new();
+            for _ in 0..60 {
+                let now = m.now;
+                let p = m.players.get_mut(&ga).unwrap();
+                p.movement.position = at(0.0, 0.0);
+                if let Some(d) = p.driven.as_mut() {
+                    d.walk = None;
+                    d.next_move_at = now;
+                }
+                crate::game::map::player_motion::update(m);
+                if let Some(w) = m.players[&ga].driven.as_ref().and_then(|d| d.walk.as_ref()) {
+                    runs.push(w.points.clone());
+                }
+            }
+            let nav = m.nav.as_mut().unwrap();
+            runs.into_iter()
+                .map(|p| {
+                    let length: f32 = p.windows(2).map(|w| dist(w[0], w[1])).sum();
+                    let end = *p.last().unwrap();
+                    let on_mesh = nav
+                        .ground(end.x, end.y, end.z)
+                        .is_some_and(|z| (z - end.z).abs() < 1.0);
+                    (length, on_mesh)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap();
+    assert!(runs.len() > 30, "they run: {}", runs.len());
+    for (length, on_mesh) in runs {
+        assert!(length <= 30.01, "no further than thirty yards: {length}");
+        assert!(on_mesh, "to a point of the navmesh");
+    }
+}
