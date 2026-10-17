@@ -1220,13 +1220,16 @@ pub fn phase(map: &Map, g: Guid) -> u32 {
     scripted(map, g).map_or(0, |s| s.phase)
 }
 
-/// Whether a script stopped the creature chasing or swinging.
+/// Whether a script (or a main-ranged spell) stopped the creature chasing
+/// or swinging.
 pub fn combat_movement(map: &Map, g: Guid) -> bool {
     !scripted(map, g).is_some_and(|s| s.no_combat_movement)
+        && !crate::game::map::spells::lists::holding(map, g)
 }
 
 pub fn melee(map: &Map, g: Guid) -> bool {
     !scripted(map, g).is_some_and(|s| s.no_melee)
+        && !crate::game::map::spells::lists::holding(map, g)
 }
 
 /// Damage to a scripted-invincible creature leaves it its floor of

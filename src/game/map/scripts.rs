@@ -703,6 +703,12 @@ pub fn summon(
             crate::game::data::load::creature_health(stats.health, template.health_multiplier);
         c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
         c.fields.set_u32(UNIT_FIELD_HEALTH, health);
+        // Its mana, as a spawn's, for its list's spells.
+        let mana = (stats.mana as f32 * template.mana_multiplier.max(0.0)).round() as u32;
+        if mana > 0 {
+            c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
+            c.fields.set_u32(UNIT_FIELD_POWER1, mana);
+        }
         let mult = if template.damage_multiplier > 0.0 {
             template.damage_multiplier
         } else {
@@ -1154,17 +1160,8 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             crate::game::map::auras::remove_spell(map, source, d1, None);
             true
         }
-        // Cast.
-        15 => {
-            let flags = d2;
-            let (caster, aim) = if flags & 0x80 != 0 {
-                (target, source)
-            } else {
-                (source, target)
-            };
-            let aim = if flags & 0x10 != 0 { caster } else { aim };
-            cast(map, caster, aim, d1, flags)
-        }
+        // Cast, with vmangos's cast flags.
+        15 => cast(map, source, target, d1, d2),
         // A sound by its distance from the source (Thistle Tea's flag 2),
         // or the same for all.
         16 if d2 & 0x2 != 0 => {
@@ -1555,34 +1552,26 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // A creature spell list, from up to four by chance.
+        // A creature spell list, from up to four by their chances out of a
+        // hundred; none if the roll passes them all, as Thistle Tea has it.
         55 => {
-            let options: Vec<(u32, i32)> = (0..4)
+            let roll = rand::rng().random_range(1..=100);
+            let mut sum = 0;
+            let list = (0..4)
                 .map(|i| (step.datalong[i], step.dataint[i]))
                 .filter(|(_, c)| *c > 0)
-                .collect();
-            let list = if options.is_empty() {
-                d1
-            } else {
-                options[rand::rng().random_range(0..options.len())].0
-            };
-            if let Some(s) = event_ai::scripted_mut(map, source) {
-                s.spell_list = Some(list);
-            }
-            if let Some(c) = creature_mut(map, source) {
-                c.caster.next_spell_at = None;
-            }
+                .find(|(_, c)| {
+                    let hit = roll > sum && roll <= sum + c;
+                    sum += c;
+                    hit
+                })
+                .map_or(0, |(l, _)| l);
+            crate::game::map::spells::lists::set_list(map, source, list);
             true
         }
+        // The source's guardians (of entry datalong, or all) go.
         56 => {
-            let summoned = event_ai::scripted(map, source)
-                .map(|s| s.summoned.clone())
-                .unwrap_or_default();
-            for g in summoned {
-                if map.creature(g).is_some_and(|c| d1 == 0 || c.entry == d1) {
-                    despawn(map, g);
-                }
-            }
+            crate::game::map::pets::remove_guardians(map, source, d1);
             true
         }
         // React state: 0 passive, 1 defensive, 2 aggressive.
@@ -2635,15 +2624,15 @@ pub fn quest_explored(map: &mut Map, player: Guid, quest: u32) {
 }
 
 /// A script's cast, with vmangos's cast flags: 0x1 interrupts the cast
-/// under way, 0x2 is free and instant, 0x20 only if the aura isn't there.
+/// under way, 0x2 is free and instant, and the rest as a spell list's
+/// ([`crate::game::map::spells::lists::flags_allow`]). Whether it went: a
+/// creature's that its checks stopped didn't, as Thistle Tea has it.
 pub fn cast(map: &mut Map, caster: Guid, target: Guid, spell: u32, flags: u32) -> bool {
     if spell == 0 {
         return false;
     }
     let target = if target.is_zero() { caster } else { target };
-    if flags & 0x20 != 0
-        && crate::game::map::auras::auras(map, target).is_some_and(|a| a.has_spell(spell))
-    {
+    if !crate::game::map::spells::lists::flags_allow(map, caster, flags, spell, target) {
         return false;
     }
     let casting = map.caster(caster).is_some_and(|c| c.casting.is_some());
@@ -2655,19 +2644,19 @@ pub fn cast(map: &mut Map, caster: Guid, target: Guid, spell: u32, flags: u32) -
     }
     if flags & 0x2 != 0 || guid::is_game_object(caster) {
         crate::game::map::spells::cast_triggered(map, caster, spell, Some(target));
-    } else {
-        crate::game::map::spells::cast(
-            map,
-            caster,
-            spell,
-            crate::game::map::spells::Targets {
-                unit: Some(target),
-                ..Default::default()
-            },
-            None,
-        );
+        return true;
     }
-    true
+    let went = crate::game::map::spells::cast(
+        map,
+        caster,
+        spell,
+        crate::game::map::spells::Targets {
+            unit: Some(target),
+            ..Default::default()
+        },
+        None,
+    );
+    went || map.players.contains_key(&caster)
 }
 
 /// Objects whose state a script changed for a while go back.
