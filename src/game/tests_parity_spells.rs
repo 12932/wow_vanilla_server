@@ -1,11 +1,12 @@
 //! Stage 2a's spells and auras, against the real data when it is here: a
-//! dispel taking a passive aura, and weapons' feral attack power held to
-//! the forms.
+//! dispel taking a passive aura, weapons' feral attack power held to the
+//! forms, and healing taken by the spell's coefficient and at each tick.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
+use crate::game::data::spells::{SpellEffect, SpellTemplate};
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::harness::{self, Client};
@@ -76,6 +77,53 @@ fn apply(m: &mut Map, caster: Guid, target: Guid, id: u32) {
         .map(|i| (i, spells::points(&s, i, 60)))
         .collect();
     let _ = auras::apply_spell(m, caster, target, &s, &effects, auras::Context::default());
+}
+
+/// A test aura of `kind` and `misc`, holding `amount`, on `g`.
+fn aura_of(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32) {
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: kind,
+        misc_value: misc,
+        base_points: amount - 1,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    let s = SpellTemplate {
+        id,
+        name: "Test Aura".into(),
+        equipped_item_class: -1,
+        effects,
+        ..Default::default()
+    };
+    let _ = auras::apply_spell(m, g, g, &s, &[(0, amount)], auras::Context::default());
+}
+
+fn health(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
+}
+
+fn set_health(m: &mut Map, g: Guid, h: u32) {
+    if let Some(f) = m.unit_fields_mut(g) {
+        f.set_u32(UNIT_FIELD_HEALTH, h);
+    }
+}
+
+/// Run `g`'s ticks of `spell` now: what they healed.
+fn tick_now(m: &mut Map, g: Guid, spell: u32) -> u32 {
+    let now = m.now;
+    if let Some(a) = auras::auras_mut(m, g) {
+        for h in a.holders.iter_mut().filter(|h| h.spell == spell) {
+            for x in h.effects.iter_mut() {
+                x.next_tick = Some(now);
+            }
+        }
+    }
+    let before = health(m, g);
+    auras::update(m);
+    health(m, g) - before
 }
 
 const LIGHTNING_HIDE: u32 = 7273;
@@ -166,4 +214,68 @@ async fn a_weapons_feral_attack_power_holds_only_in_the_forms_it_names() {
         (false, true, false, true, true),
         "(caster form, cat, cat left, bear, bear synced)"
     );
+}
+
+const FLASH_HEAL: u32 = 2061;
+const RENEW: u32 = 6078;
+
+#[tokio::test]
+async fn flat_healing_taken_goes_by_the_spells_coefficient() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A3");
+    let priest = c.enter("Parthree", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, priest, 60);
+            // +100 healing taken, all schools (Amplify Magic's kind).
+            aura_of(m, priest, 990_901, auras::AURA_MOD_HEALING, 0x7e, 100);
+            // Flash Heal: 193 to 237, and 0.429 of the hundred.
+            set_health(m, priest, 1);
+            spells::cast_triggered(m, priest, FLASH_HEAL, Some(priest));
+            let flash = health(m, priest) - 1;
+            // Renew: 80 a tick, and 0.2 of the hundred.
+            set_health(m, priest, 1);
+            spells::cast_triggered(m, priest, RENEW, Some(priest));
+            (flash, tick_now(m, priest, RENEW))
+        })
+        .await
+        .unwrap();
+    let (flash, tick) = out;
+    assert!(
+        (193 + 42..=237 + 43).contains(&flash),
+        "the flat bonus by Flash Heal's coefficient: {flash}"
+    );
+    assert_eq!(tick, 100, "by Renew's tick's");
+}
+
+#[tokio::test]
+async fn a_heal_over_time_takes_healing_taken_at_each_tick() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A8");
+    let priest = c.enter("Pareight", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let ticks = map
+        .query(move |m| {
+            ready(m, priest, 60);
+            // Renew, 80 a tick; a half cut after it lands halves the next
+            // tick, and the cut gone, the one after is whole.
+            set_health(m, priest, 1);
+            spells::cast_triggered(m, priest, RENEW, Some(priest));
+            let first = tick_now(m, priest, RENEW);
+            aura_of(m, priest, 990_902, auras::AURA_MOD_HEALING_PCT, 0, -50);
+            let cut = tick_now(m, priest, RENEW);
+            auras::remove_spell(m, priest, 990_902, None);
+            let again = tick_now(m, priest, RENEW);
+            [first, cut, again]
+        })
+        .await
+        .unwrap();
+    assert_eq!(ticks, [80, 40, 80]);
 }

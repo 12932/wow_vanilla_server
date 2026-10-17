@@ -187,7 +187,8 @@ fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8
 }
 
 /// What an aura effect holds: for a periodic damage or heal, a tick's worth
-/// with spell power and the caster's modifiers.
+/// with spell power and the caster's modifiers. What the target takes of a
+/// heal's tick is worked out at each tick (`auras::tick`).
 fn aura_amount(
     map: &Map,
     caster: Guid,
@@ -214,8 +215,7 @@ fn aura_amount(
             if let Some(a) = auras::auras(map, caster) {
                 h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
             }
-            outcome::healing_taken(map, target, l.mods.apply(mods::OP_DOT, h), s.school_mask())
-                as i32
+            l.mods.apply(mods::OP_DOT, h).max(0.0) as i32
         }
         AURA_SCHOOL_ABSORB => base + absorb_bonus(map, caster, target, s, index),
         _ => base,
@@ -605,7 +605,9 @@ fn effect(
                 .unit_fields(caster)
                 .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
                 .unwrap_or(0);
-            let h = outcome::healing_taken(map, target, max as f32, s.school_mask()) as u32;
+            // Lay on Hands takes only the percentages, as Thistle Tea's
+            // `heal_max_health` does.
+            let h = outcome::healing_taken(map, target, max as f32) as u32;
             heal(map, caster, target, s.id, h, false);
         }
         EFFECT_ENERGIZE => {
@@ -1278,14 +1280,17 @@ pub fn tick_areas(map: &mut Map) {
                     }
                 }
                 AURA_PERIODIC_HEAL => {
-                    heal(
+                    let h = outcome::spell_healing_taken(
                         map,
-                        area.caster,
                         g,
-                        area.spell,
-                        area.amount.max(0) as u32,
-                        true,
+                        area.amount as f32,
+                        s,
+                        area.index,
+                        Kind::Dot,
+                        1,
+                        1.0,
                     );
+                    heal(map, area.caster, g, area.spell, h as u32, true);
                 }
                 AURA_PERIODIC_TRIGGER_SPELL if e.trigger_spell != 0 => {
                     cast_triggered(map, area.caster, e.trigger_spell, Some(g));
