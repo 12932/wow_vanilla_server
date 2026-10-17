@@ -222,6 +222,9 @@ pub struct MapSpells {
     /// Threat held for a while: (creature, unit) to its amount (taunts,
     /// Fade).
     pub temp_threat: AHashMap<(Guid, Guid), f32>,
+    /// When each channel's caster next pays its spell's cost a second
+    /// (Health Funnel's health).
+    pub channel_costs: AHashMap<Guid, Instant>,
 }
 
 /// A persistent area aura on the ground.
@@ -980,6 +983,11 @@ fn execute(
                 spell: s.id,
                 duration: ms,
             });
+        }
+        if s.mana_per_second > 0 || s.mana_per_second_per_level > 0 {
+            map.spells
+                .channel_costs
+                .insert(caster, now + Duration::from_secs(1));
         }
     }
     // A pet's feeding and abilities, and the professions' effects (which
@@ -1922,6 +1930,7 @@ pub fn update(map: &mut Map) {
     // Areas first: a channel's area has its last tick before the channel,
     // run out, takes it away.
     effects::tick_areas(map);
+    channel_costs(map);
     let mut done: Vec<Guid> = map
         .players
         .values()
@@ -1978,6 +1987,51 @@ pub fn update(map: &mut Map) {
         p.caster
             .diminishing
             .retain(|(_, _, reset)| reset.is_none_or(|r| r > now));
+    }
+}
+
+/// Channels that cost a second pay it, as mangos's `SpellAuraHolder`
+/// update has the caster pay its spell's per-second cost: Health Funnel's
+/// health, a channel without the health for it ending.
+fn channel_costs(map: &mut Map) {
+    let now = map.now;
+    let due: Vec<Guid> = map
+        .spells
+        .channel_costs
+        .iter()
+        .filter(|(_, t)| **t <= now)
+        .map(|(g, _)| *g)
+        .collect();
+    let data = map.realm.data.clone();
+    for g in due {
+        let spell = map
+            .caster(g)
+            .and_then(|c| c.casting.as_ref())
+            .filter(|c| c.channel_until.is_some())
+            .and_then(|c| data.spells.get(c.spell));
+        let Some(s) = spell else {
+            map.spells.channel_costs.remove(&g);
+            continue;
+        };
+        map.spells
+            .channel_costs
+            .insert(g, now + Duration::from_secs(1));
+        let level = map.unit_view(g).map(|u| u.level).unwrap_or(1);
+        let cost = s.mana_per_second + s.mana_per_second_per_level * level;
+        if cost == 0 {
+            continue;
+        }
+        let health = map
+            .unit_fields(g)
+            .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
+        if s.power_type == POWER_HEALTH && health <= cost {
+            map.spells.channel_costs.remove(&g);
+            if let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) {
+                end_channel(map, g, &casting);
+            }
+            continue;
+        }
+        pay(map, g, s, cost);
     }
 }
 
