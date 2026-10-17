@@ -17,7 +17,9 @@ use std::thread;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
+
+use crate::game::supervisor::catch;
 
 /// The schema's migrations, in order: migration `i` takes the schema from
 /// version `i` to `i + 1`.
@@ -345,6 +347,15 @@ enum Request {
     PutRecord(&'static str, u64, String),
     DeleteRecord(&'static str, u64),
     Flush(oneshot::Sender<()>),
+    /// The thread panics on it, as a bug would.
+    #[cfg(test)]
+    Panic,
+    /// The thread sleeps a while, so what comes next queues up.
+    #[cfg(test)]
+    Sleep(std::time::Duration),
+    /// A save whose writing panics.
+    #[cfg(test)]
+    BadSave,
 }
 
 /// A handle to the store's thread.
@@ -449,6 +460,30 @@ impl Store {
         let _ = self.tx.send(Request::Flush(tx));
         let _ = rx.await;
     }
+
+    #[cfg(test)]
+    fn send_test(&self, req: Request) {
+        let _ = self.tx.send(req);
+    }
+
+    /// Make the store's thread panic, as a bug would.
+    #[cfg(test)]
+    pub fn panic_for_test(&self) {
+        self.send_test(Request::Panic);
+    }
+
+    /// Hold the store's thread a while, so what is sent meanwhile is
+    /// batched.
+    #[cfg(test)]
+    pub fn hold_for_test(&self, hold: std::time::Duration) {
+        self.send_test(Request::Sleep(hold));
+    }
+
+    /// A save whose writing panics.
+    #[cfg(test)]
+    pub fn bad_save_for_test(&self) {
+        self.send_test(Request::BadSave);
+    }
 }
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -508,7 +543,18 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
     })
 }
 
+/// The store's thread. It outlives a panic in what it does: that request
+/// is lost (its caller hears nothing), not every save after it.
 fn run(mut conn: Connection, rx: std_mpsc::Receiver<Request>) {
+    loop {
+        match catch(|| serve_all(&mut conn, &rx)) {
+            Ok(()) => return,
+            Err(e) => error!("the store panicked: {e}; going on"),
+        }
+    }
+}
+
+fn serve_all(conn: &mut Connection, rx: &std_mpsc::Receiver<Request>) {
     while let Ok(first) = rx.recv() {
         // Saves queued together go in one transaction.
         let mut batch = vec![first];
@@ -520,30 +566,100 @@ fn run(mut conn: Connection, rx: std_mpsc::Receiver<Request>) {
         }
         let mut saves: Vec<Request> = Vec::new();
         for req in batch {
-            match req {
-                Request::Save(_)
-                | Request::SetAccountData(..)
-                | Request::PutRecord(..)
-                | Request::DeleteRecord(..) => saves.push(req),
-                other => {
-                    // Keep order: what was saved before a read is written
-                    // before it.
-                    write_saves(&mut conn, std::mem::take(&mut saves));
-                    serve(&conn, other);
-                }
+            if is_save(&req) {
+                saves.push(req);
+                continue;
+            }
+            // Keep order: what was saved before a read is written before
+            // it.
+            write_saves(conn, std::mem::take(&mut saves));
+            if let Err(e) = catch(|| serve(conn, req)) {
+                error!("a store request panicked: {e}; its caller hears nothing");
             }
         }
-        write_saves(&mut conn, saves);
+        write_saves(conn, saves);
     }
 }
 
+fn is_save(req: &Request) -> bool {
+    #[cfg(test)]
+    if matches!(req, Request::BadSave) {
+        return true;
+    }
+    matches!(
+        req,
+        Request::Save(_)
+            | Request::SetAccountData(..)
+            | Request::PutRecord(..)
+            | Request::DeleteRecord(..)
+    )
+}
+
+/// What a save is of, for the log.
+fn describe(req: &Request) -> String {
+    match req {
+        Request::Save(row) => format!("character {} ({})", row.name, row.guid),
+        Request::SetAccountData(account, kind, ..) => format!("{account}'s account data {kind}"),
+        Request::PutRecord(kind, id, _) => format!("{kind} {id}"),
+        Request::DeleteRecord(kind, id) => format!("deleting {kind} {id}"),
+        _ => "a request".to_owned(),
+    }
+}
+
+/// How many times a batch the database was too busy for is tried.
+const BUSY_TRIES: u32 = 3;
+
+/// Write saves in one transaction. If that fails (the database busy past
+/// its timeout, a bad row, a panic), the busy are tried again, and the
+/// rest each go alone: one bad save is lost, not those batched with it.
 fn write_saves(conn: &mut Connection, saves: Vec<Request>) {
     if saves.is_empty() {
         return;
     }
-    let result = (|| -> rusqlite::Result<()> {
+    let mut tries = 0;
+    let failed = loop {
+        tries += 1;
+        match catch(|| write_batch(conn, &saves)) {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) if busy(&e) && tries < BUSY_TRIES => {
+                warn!(
+                    "the character store is busy ({e}); trying {} saves again",
+                    saves.len()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Ok(Err(e)) => break e.to_string(),
+            Err(e) => break format!("it panicked: {e}"),
+        }
+    };
+    if saves.len() == 1 {
+        error!("lost a save ({}): {failed}", describe(&saves[0]));
+        return;
+    }
+    warn!(
+        "saving {} records together failed ({failed}); saving each alone",
+        saves.len()
+    );
+    for s in &saves {
+        match catch(|| write_batch(conn, std::slice::from_ref(s))) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => error!("lost a save ({}): {e}", describe(s)),
+            Err(e) => error!("lost a save ({}): it panicked: {e}", describe(s)),
+        }
+    }
+}
+
+fn busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()> {
+    {
         let tx = conn.transaction()?;
-        for s in &saves {
+        for s in saves {
             match s {
                 Request::Save(row) => save_row(&tx, row)?,
                 Request::SetAccountData(account, kind, time, data) => {
@@ -565,13 +681,12 @@ fn write_saves(conn: &mut Connection, saves: Vec<Request>) {
                         params![kind, *id as i64],
                     )?;
                 }
+                #[cfg(test)]
+                Request::BadSave => panic!("the store's test save panics"),
                 _ => {}
             }
         }
         tx.commit()
-    })();
-    if let Err(e) = result {
-        warn!("saving {} records failed: {e}", saves.len());
     }
 }
 
@@ -650,6 +765,12 @@ fn serve(conn: &Connection, req: Request) {
         Request::Flush(reply) => {
             let _ = reply.send(());
         }
+        #[cfg(test)]
+        Request::Panic => panic!("the store's test panic"),
+        #[cfg(test)]
+        Request::Sleep(d) => std::thread::sleep(d),
+        #[cfg(test)]
+        Request::BadSave => {}
         Request::Save(_)
         | Request::SetAccountData(..)
         | Request::PutRecord(..)
@@ -815,14 +936,17 @@ fn save_row(conn: &Connection, row: &CharacterRow) -> rusqlite::Result<()> {
     conn.prepare_cached("DELETE FROM character_spells WHERE owner = ?1")?
         .execute(params![row.guid])?;
     let mut insert =
-        conn.prepare_cached("INSERT INTO character_spells (owner, spell) VALUES (?1, ?2)")?;
+        // A spell twice, or a button twice, would fail the save (and the
+        // others in its transaction): the second is the same spell, or
+        // the button's latest.
+        conn.prepare_cached("INSERT OR IGNORE INTO character_spells (owner, spell) VALUES (?1, ?2)")?;
     for s in &row.spells {
         insert.execute(params![row.guid, s])?;
     }
     conn.prepare_cached("DELETE FROM character_actions WHERE owner = ?1")?
         .execute(params![row.guid])?;
     let mut insert = conn.prepare_cached(
-        "INSERT INTO character_actions (owner, button, action, type) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR REPLACE INTO character_actions (owner, button, action, type) VALUES (?1, ?2, ?3, ?4)",
     )?;
     for a in &row.actions {
         insert.execute(params![row.guid, a.button, a.action, a.kind])?;

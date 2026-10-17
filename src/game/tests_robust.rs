@@ -149,3 +149,66 @@ async fn a_transfer_to_a_session_that_has_gone_is_saved_there() {
     let row = realm.store.load(guid::counter(g)).await.unwrap();
     assert_eq!(row.map, 1, "saved where she was going");
 }
+
+/// A panic in the store's thread costs that request, not the thread: the
+/// saves and loads after it work. Before, the thread died, and with it
+/// every save after (silently), and every load.
+#[tokio::test]
+async fn the_store_outlives_a_panic() {
+    let realm = harness::realm();
+    let (c, g, _map) = in_world(&realm, "ALICE", "Alice").await;
+    realm.store.panic_for_test();
+    c.disconnect();
+    eventually("Alice goes offline", || realm.registry.online(g).is_none()).await;
+    realm.store.flush().await;
+    let row = realm.store.load(guid::counter(g)).await;
+    assert_eq!(row.map(|r| r.name), Some("Alice".to_owned()));
+    let mut again = Client::connect(&realm, "ALICE");
+    assert_eq!(try_login(&mut again, g).await, Ok(()));
+}
+
+/// A save that fails takes only itself: the others batched with it in one
+/// transaction are written each alone. Before, the batch's transaction
+/// failed and every save in it was lost.
+#[tokio::test]
+async fn a_bad_save_loses_only_itself() {
+    use crate::game::store::CharacterRow;
+    let realm = harness::realm();
+    let row = |guid: u32, name: &str| CharacterRow {
+        guid,
+        account: "ACC".into(),
+        name: name.into(),
+        race: 1,
+        class: 1,
+        level: 1,
+        ..Default::default()
+    };
+    realm
+        .store
+        .create(row(900, "Anna"))
+        .await
+        .expect("Anna made");
+    realm
+        .store
+        .create(row(901, "Beth"))
+        .await
+        .expect("Beth made");
+    // Held, so what comes next goes in one batch.
+    realm.store.hold_for_test(Duration::from_millis(300));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    realm.store.save(CharacterRow {
+        level: 7,
+        ..row(900, "Anna")
+    });
+    realm.store.bad_save_for_test();
+    realm.store.save(CharacterRow {
+        level: 9,
+        ..row(901, "Beth")
+    });
+    realm.store.flush().await;
+    let levels = (
+        realm.store.load(900).await.map(|r| r.level),
+        realm.store.load(901).await.map(|r| r.level),
+    );
+    assert_eq!(levels, (Some(7), Some(9)));
+}
