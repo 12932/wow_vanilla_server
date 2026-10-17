@@ -136,6 +136,23 @@ async fn afk_and_dnd_change_their_reply_go_off_when_empty_exclude_each_other_and
     .await;
     assert_eq!(set(&mut a, Afk, "Away").await, 0);
     assert_eq!(set(&mut a, Dnd, "Busy").await, PLAYER_FLAGS_DND);
+    // Out of the fight, and a new login is neither.
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            UNIT_FLAG_IN_COMBAT,
+            false,
+        );
+    })
+    .await;
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    a.login(ga).await;
+    assert_eq!(on_map(&realm, move |m| away_flags(m, ga)).await, 0);
+    assert_eq!(reply(&mut b, "Alice").await, None);
 }
 
 /// The status byte of a member's full stats, as `asker` requests them.
@@ -384,6 +401,49 @@ async fn a_curse_of_tongues_speaks_for_the_cursed_until_it_goes_the_next_taking_
     })
     .await;
     assert_eq!(heard(&a, &mut b).await.as_int(), 8);
+    // Whispers and away replies go in no language; an addon's line only
+    // where addons speak (a party, not a say).
+    b.clear();
+    a.send(chat(
+        CMSG_MESSAGECHAT_ChatType::Whisper {
+            target_player: "Bob".into(),
+        },
+        "psst",
+    ))
+    .await;
+    let whispered = b
+        .wait_for("the whisper", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c)
+                if matches!(c.chat_type, SMSG_MESSAGECHAT_ChatType::Whisper { .. }) =>
+            {
+                Some(c.language)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(whispered, Language::Universal);
+    a.send(chat(CMSG_MESSAGECHAT_ChatType::Afk, "Away")).await;
+    let reply = reply(&mut b, "Alice").await;
+    assert!(reply.is_some());
+    a.send(chat(CMSG_MESSAGECHAT_ChatType::Afk, "")).await;
+    b.clear();
+    a.send(CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+        language: Language::Addon,
+        message: "ADDON\tdata".into(),
+    })
+    .await;
+    synced(&mut a).await;
+    assert!(
+        b.gets(Duration::from_millis(200), |m| matches!(
+            m,
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(_)
+        )
+        .then_some(()))
+            .await
+            .is_none(),
+        "an addon's say is dropped"
+    );
     on_map(&realm, move |m| {
         crate::game::map::auras::remove_spell(m, ga, CURSE, None)
     })
