@@ -357,3 +357,42 @@ async fn a_creatures_blow_trains_a_players_defense_and_shows_at_once_in_their_av
     assert!(r.1.1 > r.0.1, "{r:?}");
     assert_eq!(r.2, r.1.0);
 }
+
+#[tokio::test]
+async fn combo_points_go_with_a_new_target_with_their_targets_death_and_their_holders() {
+    let (_realm, _a, ga, map) = setup(Class::Rogue).await;
+    let r = map
+        .query(move |m| {
+            use crate::game::map::spells::add_combo_points;
+            let one = spawn(m, ga, BRUTE, 20, 1.0);
+            let two = spawn(m, ga, BRUTE, 20, 1.0);
+            let points = |m: &Map| {
+                let p = &m.players[&ga];
+                (
+                    p.caster.combo_points,
+                    p.caster.combo_target,
+                    p.fields.get_byte(PLAYER_FIELD_BYTES, 1),
+                )
+            };
+            add_combo_points(m, ga, one, 2);
+            let first = points(m);
+            // Another target: the old points go.
+            add_combo_points(m, ga, two, 1);
+            let moved = points(m);
+            // The target dies: they go.
+            combat::kill(m, ga, two);
+            let target_died = points(m);
+            // The rogue dies: theirs go.
+            add_combo_points(m, ga, one, 3);
+            combat::kill(m, one, ga);
+            let own = points(m);
+            (first, moved, target_died, own, one, two)
+        })
+        .await
+        .unwrap();
+    let (first, moved, target_died, own, one, two) = r;
+    assert_eq!(first, (2, one, 2));
+    assert_eq!(moved, (1, two, 1));
+    assert_eq!(target_died, (0, Guid::zero(), 0));
+    assert_eq!(own, (0, Guid::zero(), 0));
+}

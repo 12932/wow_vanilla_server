@@ -11,7 +11,9 @@ pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
-pub use effects::{dr_aura_gone, release_retained_combo_points, retained_combo_points_expired};
+pub use effects::{
+    add_combo_points, dr_aura_gone, release_retained_combo_points, retained_combo_points_expired,
+};
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
