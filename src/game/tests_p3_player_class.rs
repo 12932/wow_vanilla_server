@@ -606,3 +606,246 @@ async fn levitate_floats_its_target_and_breaks_on_damage() {
         .unwrap();
     assert!(gone, "damage breaks it");
 }
+
+const LIFE_TAP: u32 = 1454;
+const DEATH_COIL: u32 = 6789;
+const CONFLAGRATE: u32 = 17962;
+const IMMOLATE: u32 = 348;
+const CURSE_OF_WEAKNESS: u32 = 702;
+const CURSE_OF_TONGUES: u32 = 1714;
+
+fn health(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
+}
+
+#[tokio::test]
+async fn a_warlocks_life_tap_death_coil_conflagrate_and_curses() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "L");
+    let w = c.enter("Warlock", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let got = map
+        .query(move |m| {
+            ready(
+                m,
+                w,
+                60,
+                &[
+                    LIFE_TAP,
+                    DEATH_COIL,
+                    CONFLAGRATE,
+                    IMMOLATE,
+                    CURSE_OF_WEAKNESS,
+                    CURSE_OF_TONGUES,
+                ],
+            );
+            let kobold = spawn(m, w, KOBOLD, 60, 3.0);
+            // Life Tap: health for mana, and refused when it would kill.
+            let max = m.players[&w].fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            let p = m.players.get_mut(&w).unwrap();
+            p.fields.set_u32(UNIT_FIELD_HEALTH, max);
+            p.fields.set_u32(UNIT_FIELD_POWER1, 0);
+            let s = m.realm.data.spells.get(LIFE_TAP).unwrap().clone();
+            let t = Targets {
+                unit: Some(w),
+                ..Default::default()
+            };
+            let mods = mods::for_spell(m, w, &s);
+            let ok = spells::checks::check(m, w, &s, &t, None, false, &mods);
+            spells::cast(m, w, LIFE_TAP, t, None);
+            let tapped = (
+                max - health(m, w),
+                m.players[&w].fields.get_u32(UNIT_FIELD_POWER1),
+            );
+            m.players
+                .get_mut(&w)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_HEALTH, 1);
+            let mods = mods::for_spell(m, w, &s);
+            let lethal = spells::checks::check(m, w, &s, &t, None, false, &mods);
+            let alive = health(m, w) > 0;
+            // Death Coil: the target hurt, the warlock healed.
+            m.players
+                .get_mut(&w)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_HEALTH, max / 2);
+            spells::cast_triggered(m, w, DEATH_COIL, Some(kobold));
+            let coil = (1_000_000 - health(m, kobold), health(m, w) - max / 2);
+            // Conflagrate: nothing without the warlock's Immolate (wvs
+            // doesn't refuse the cast, as mangos does); with it, it lands
+            // and takes the Immolate.
+            let other = spawn(m, w, KOBOLD, 60, 3.5);
+            cast(m, w, CONFLAGRATE, other);
+            let bare = 1_000_000 - health(m, other);
+            spells::cast_triggered(m, w, IMMOLATE, Some(other));
+            let immolated = check(m, w, CONFLAGRATE, other);
+            let before = health(m, other);
+            cast(m, w, CONFLAGRATE, other);
+            let conflagrated = (
+                before - health(m, other),
+                holder(m, other, IMMOLATE).is_none(),
+            );
+            // Curse of Weakness: less physical damage done; Curse of
+            // Tongues: slower casting.
+            spells::cast_triggered(m, w, CURSE_OF_WEAKNESS, Some(kobold));
+            let weakness = holder(m, kobold, CURSE_OF_WEAKNESS).map(|h| {
+                h.effects
+                    .iter()
+                    .map(|e| (e.kind, e.amount))
+                    .collect::<Vec<_>>()
+            });
+            spells::cast_triggered(m, w, CURSE_OF_TONGUES, Some(kobold));
+            let tongues = m
+                .creature(kobold)
+                .unwrap()
+                .fields
+                .get_f32(UNIT_MOD_CAST_SPEED);
+            (
+                (ok, tapped, lethal, alive),
+                coil,
+                (bare, immolated, conflagrated),
+                weakness,
+                tongues,
+            )
+        })
+        .await
+        .unwrap();
+    let ((ok, (lost, gained), lethal, alive), coil, conflag, weakness, tongues) = got;
+    assert_eq!(ok, None);
+    assert!(lost > 0 && gained > 0, "{lost} health for {gained} mana");
+    assert!(
+        lethal.is_some() && alive,
+        "a tap that would kill: {lethal:?}"
+    );
+    assert!(coil.0 > 0 && coil.1 > 0, "{coil:?}");
+    let (bare, immolated, (damage, consumed)) = conflag;
+    assert_eq!((bare, immolated), (0, None));
+    assert!(damage > 0 && consumed, "{damage} {consumed}");
+    let weakness = weakness.unwrap();
+    assert!(
+        weakness
+            .iter()
+            .any(|(k, a)| *k == auras::AURA_MOD_DAMAGE_DONE && *a < 0),
+        "{weakness:?}"
+    );
+    assert!(tongues > 1.0, "{tongues}");
+}
+
+const SEAL_OF_RIGHTEOUSNESS: u32 = 21084;
+const JUDGEMENT: u32 = 20271;
+const BLESSING_OF_PROTECTION: u32 = 1022;
+const DIVINE_SHIELD: u32 = 642;
+const BLESSING_OF_MIGHT: u32 = 19740;
+const BLESSING_OF_WISDOM: u32 = 19742;
+const BLESSING_OF_KINGS: u32 = 20217;
+
+#[tokio::test]
+async fn a_paladins_seal_goes_into_its_judgement_and_blessings_shield_kings_and_ownership() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "PA");
+    let pa = c.enter("Paladin", Race::Human, Class::Paladin).await;
+    let mut d = Client::connect(&realm, "PB");
+    let pb = d.enter("Paladinb", Race::Human, Class::Paladin).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let got = map
+        .query(move |m| {
+            let all = [
+                SEAL_OF_RIGHTEOUSNESS,
+                JUDGEMENT,
+                BLESSING_OF_PROTECTION,
+                DIVINE_SHIELD,
+                BLESSING_OF_MIGHT,
+                BLESSING_OF_WISDOM,
+                BLESSING_OF_KINGS,
+            ];
+            ready(m, pa, 60, &all);
+            ready(m, pb, 60, &all);
+            let pos = m.players[&pa].position();
+            m.players.get_mut(&pb).unwrap().movement.position = Vector3d {
+                x: pos.x + 1.0,
+                ..pos
+            };
+            let kobold = spawn(m, pa, KOBOLD, 60, 3.0);
+            // No seal, no Judgement; a seal, and the Judgement spends it.
+            let unsealed = check(m, pa, JUDGEMENT, kobold);
+            cast(m, pa, SEAL_OF_RIGHTEOUSNESS, pa);
+            let sealed = check(m, pa, JUDGEMENT, kobold);
+            let before = health(m, kobold);
+            cast(m, pa, JUDGEMENT, kobold);
+            let judged = (
+                holder(m, pa, SEAL_OF_RIGHTEOUSNESS).is_none(),
+                before > health(m, kobold),
+            );
+            // Another spell leaves the seal be.
+            cast(m, pa, SEAL_OF_RIGHTEOUSNESS, pa);
+            cast(m, pa, BLESSING_OF_MIGHT, pa);
+            let kept = holder(m, pa, SEAL_OF_RIGHTEOUSNESS).is_some();
+            // Blessing of Protection: physical damage stopped, fire not.
+            spells::cast_triggered(m, pa, BLESSING_OF_PROTECTION, Some(pb));
+            let immune =
+                |m: &Map, school: u32| auras::auras(m, pb).is_some_and(|a| a.school_immune(school));
+            let protection = (immune(m, 1), immune(m, 4));
+            auras::remove_spell(m, pb, BLESSING_OF_PROTECTION, None);
+            // Divine Shield: a harmful aura refused.
+            spells::cast_triggered(m, pa, DIVINE_SHIELD, Some(pa));
+            let s = m.realm.data.spells.get(CURSE_OF_WEAKNESS).unwrap().clone();
+            let refused =
+                auras::apply_spell(m, kobold, pa, &s, &[(0, -10)], Default::default()).is_err();
+            auras::remove_spell(m, pa, DIVINE_SHIELD, None);
+            // One paladin's blessing replaces their own, not another's:
+            // Might and then Kings from one, Wisdom from the other.
+            let stats = |m: &Map| -> Vec<u32> {
+                (0..5)
+                    .map(|i| m.players[&pb].fields.get_u32(UNIT_FIELD_STAT0 + i))
+                    .collect()
+            };
+            spells::cast_triggered(m, pa, BLESSING_OF_MIGHT, Some(pb));
+            spells::cast_triggered(m, pb, BLESSING_OF_WISDOM, Some(pb));
+            let both = (
+                holder(m, pb, BLESSING_OF_MIGHT).is_some(),
+                holder(m, pb, BLESSING_OF_WISDOM).is_some(),
+            );
+            let plain = stats(m);
+            spells::cast_triggered(m, pa, BLESSING_OF_KINGS, Some(pb));
+            let replaced = (
+                holder(m, pb, BLESSING_OF_MIGHT).is_none(),
+                holder(m, pb, BLESSING_OF_WISDOM).map(|h| h.caster) == Some(pb),
+            );
+            // Kings: a tenth more of every stat.
+            let kings = stats(m);
+            (
+                (unsealed, sealed, judged, kept),
+                protection,
+                refused,
+                (both, replaced),
+                (plain, kings),
+            )
+        })
+        .await
+        .unwrap();
+    let ((unsealed, sealed, judged, kept), protection, refused, blessings, (plain, kings)) = got;
+    assert!(
+        unsealed.is_some() && sealed.is_none(),
+        "{unsealed:?} {sealed:?}"
+    );
+    assert_eq!(judged, (true, true));
+    assert!(kept);
+    assert_eq!(protection, (true, false));
+    assert!(refused, "Divine Shield turns a curse away");
+    assert_eq!(blessings, ((true, true), (true, true)));
+    for (p, k) in plain.iter().zip(&kings) {
+        // A tenth more of the stat before its truncation.
+        assert!(
+            (*k as f32 - *p as f32 * 1.1).abs() <= 1.0,
+            "{plain:?} {kings:?}"
+        );
+    }
+}
