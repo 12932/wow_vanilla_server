@@ -100,6 +100,8 @@ mod tests_p3_core_death;
 #[cfg(test)]
 mod tests_p3_core_guild;
 #[cfg(test)]
+mod tests_p3_core_instance;
+#[cfg(test)]
 mod tests_p3_core_inventory;
 #[cfg(test)]
 mod tests_p3_core_misc;

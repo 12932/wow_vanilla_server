@@ -509,6 +509,18 @@ fn instance(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let Ok(id) = id.parse::<u32>() else {
                 return Some("Usage: .instance switch <id>".into());
             };
+            // Only into a copy of this map there is (Thistle Tea's
+            // `join_copy/3`).
+            let known = realm
+                .social
+                .instances
+                .lock()
+                .saves
+                .get(&id)
+                .is_some_and(|s| s.map == map.key.map);
+            if !known {
+                return Some(format!("No copy {id} of map {}.", map.key.map));
+            }
             let p = map.players.get(&g)?;
             let (at, o) = (p.position(), p.movement.orientation);
             let key = MapKey {
