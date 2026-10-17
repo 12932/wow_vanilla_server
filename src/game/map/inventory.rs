@@ -667,13 +667,30 @@ pub fn plan_change(
     removals: &[(u32, u32)],
     additions: &[(u32, u32)],
 ) -> Result<(), Fail> {
+    plan_change_freeing(p, data, &[], removals, additions)
+}
+
+/// [`plan_change`], the items at the indices `freed` taken first, whole:
+/// what a trade gives away.
+pub fn plan_change_freeing(
+    p: &Player,
+    data: &GameData,
+    freed: &[usize],
+    removals: &[(u32, u32)],
+    additions: &[(u32, u32)],
+) -> Result<(), Fail> {
     // What each slot would hold, and how many of each entry there would be.
     let mut slots: ahash::AHashMap<(u8, u8), (u32, u32)> = p
         .items
         .iter()
-        .map(|i| ((i.bag, i.slot), (i.entry, i.count())))
+        .enumerate()
+        .filter(|(k, _)| !freed.contains(k))
+        .map(|(_, i)| ((i.bag, i.slot), (i.entry, i.count())))
         .collect();
     let mut totals: ahash::AHashMap<u32, u32> = ahash::AHashMap::new();
+    for i in freed.iter().filter_map(|k| p.items.get(*k)) {
+        *totals.entry(i.entry).or_insert_with(|| p.count_of(i.entry)) -= i.count();
+    }
     for &(entry, count) in removals {
         let mut left = count;
         for i in p.items.iter().filter(|i| i.entry == entry && i.carried()) {
@@ -1458,12 +1475,61 @@ pub fn detach_item(map: &mut Map, g: Guid, i: usize) -> Option<crate::game::stor
     Some(row)
 }
 
-/// Put an item that was detached into a free slot of a player's bags.
+/// Put an item that was detached into a player's bags: onto their stacks
+/// of it first, the rest (still the item it was) into the first free slot
+/// that takes it, as mangos's `CanStoreItem` and Thistle Tea's traded and
+/// mailed items go; all of it, or nothing.
 pub fn attach_item(map: &mut Map, g: Guid, row: &crate::game::store::ItemRow) -> Result<(), Fail> {
     let data = map.realm.data.clone();
     let p = map.players.get_mut(&g).ok_or(Fail::NotFound)?;
-    let (bag, slot) = p.free_carry_slot(&data).ok_or(Fail::InventoryFull)?;
+    let t = data.item(row.entry);
+    let places = crate::game::map::items::carry_slots(&data, p, t);
+    let stack = t.map_or(1, |t| t.stackable.max(1));
+    let mut left = row.count.max(1);
+    let mut onto = Vec::new();
+    if stack > 1 && crate::game::map::items_misc::wrapped(&row.data).is_none() {
+        for at in &places {
+            if let Some(j) = p.item_at(at.0, at.1)
+                && p.items[j].entry == row.entry
+                && p.items[j].count() < stack
+                && left > 0
+            {
+                let n = (stack - p.items[j].count()).min(left);
+                onto.push((j, n));
+                left -= n;
+            }
+        }
+    }
+    let free = places
+        .iter()
+        .copied()
+        .find(|(b, s)| p.item_at(*b, *s).is_none());
+    if left > 0 && free.is_none() {
+        return Err(Fail::InventoryFull);
+    }
+    for (j, n) in &onto {
+        let c = p.items[*j].count() + n;
+        p.items[*j].set_count(c);
+    }
+    if left == 0 {
+        // All of it onto stacks: the item itself is no more, and the push
+        // names no one slot.
+        p.refresh_inventory(&data);
+        if let Some((j, _)) = onto.last() {
+            p.outbound.send(&push_result(
+                g,
+                &p.items[*j],
+                u32::MAX,
+                row.count,
+                NewItemCreationType::Received,
+            ));
+        }
+        crate::game::map::quests::items_added(map, g, row.entry, row.count.max(1));
+        return Ok(());
+    }
+    let (bag, slot) = free.expect("checked above");
     let mut row = row.clone();
+    row.count = left;
     row.bag = bag;
     row.slot = slot;
     let item = Item::from_row(&data, &row, g);

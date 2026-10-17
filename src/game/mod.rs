@@ -100,6 +100,8 @@ mod tests_p3_core_party;
 #[cfg(test)]
 mod tests_p3_core_social;
 #[cfg(test)]
+mod tests_p3_core_trade;
+#[cfg(test)]
 mod tests_p3_items;
 #[cfg(test)]
 mod tests_p3_items_loot;
