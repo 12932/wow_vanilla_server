@@ -4,14 +4,15 @@
 //! liquid; and Bind's Hearthstone given by the spell.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
-use crate::game::data::GameData;
 use crate::game::data::spells::{SpellEffect, SpellTemplate};
+use crate::game::data::{CreatureSpawn, CreatureTemplate, GameData, ItemTemplate};
 use crate::game::harness::{self, Client};
 use crate::game::map::misc::{MSG_MOVE_SET_RUN_SPEED, MSG_MOVE_SET_SWIM_SPEED};
 use crate::game::map::{Map, MapKey};
@@ -20,6 +21,17 @@ use crate::game::map::{Map, MapKey};
 const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
 const SPRINT: u32 = 900_100;
+const BIND: u32 = 3286;
+const HEARTHSTONE: u32 = 6948;
+const INNKEEPER: u32 = 900_200;
+/// A creature's gift: a create-item spell at any unit, and one naming no
+/// target.
+const GIFT: u32 = 900_101;
+const GIFT_UNTARGETED: u32 = 900_102;
+/// A player's own: a create-item spell on themselves.
+const CONJURE: u32 = 900_103;
+const TOKEN: u32 = 900_300;
+const INNKEEPER_COUNTER: u32 = 70;
 
 fn aura(id: u32, aura: u32, points: i32) -> SpellTemplate {
     let mut effects = [SpellEffect::default(); 3];
@@ -40,9 +52,88 @@ fn aura(id: u32, aura: u32, points: i32) -> SpellTemplate {
     }
 }
 
+fn create_item(id: u32, target_a: u32, item: u32) -> SpellTemplate {
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 24,
+        target_a,
+        item_type: item,
+        base_points: 0,
+        base_dice: 1,
+        ..Default::default()
+    };
+    SpellTemplate {
+        id,
+        name: format!("Spell {id}"),
+        effects,
+        equipped_item_class: -1,
+        ..Default::default()
+    }
+}
+
 fn data() -> GameData {
     let mut d = GameData::empty();
     d.spells.spells.insert(SPRINT, aura(SPRINT, 31, 50));
+    // Bind as the client's data has it: bind, then a Hearthstone, both
+    // naming no target.
+    let mut bind = create_item(BIND, 0, 0);
+    bind.name = "Bind".into();
+    bind.effects[0] = SpellEffect {
+        effect: 11,
+        ..Default::default()
+    };
+    bind.effects[1] = create_item(0, 0, HEARTHSTONE).effects[0];
+    d.spells.spells.insert(BIND, bind);
+    d.spells.spells.insert(GIFT, create_item(GIFT, 25, TOKEN));
+    d.spells
+        .spells
+        .insert(GIFT_UNTARGETED, create_item(GIFT_UNTARGETED, 0, TOKEN));
+    d.spells
+        .spells
+        .insert(CONJURE, create_item(CONJURE, 1, TOKEN));
+    for (entry, name, max_count) in [(HEARTHSTONE, "Hearthstone", 1), (TOKEN, "Token", 0)] {
+        d.items.insert(
+            entry,
+            ItemTemplate {
+                entry,
+                name: name.into(),
+                stackable: 20,
+                max_count,
+                ..Default::default()
+            },
+        );
+    }
+    d.creature_templates.insert(
+        INNKEEPER,
+        CreatureTemplate {
+            entry: INNKEEPER,
+            name: "Innkeeper".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 30,
+            level_max: 30,
+            faction: 35,
+            npc_flags: 0x80,
+            unit_class: 1,
+            health_multiplier: 1.0,
+            health_max: 500,
+            ..Default::default()
+        },
+    );
+    d.creature_spawns.insert(
+        0,
+        vec![CreatureSpawn {
+            guid: INNKEEPER_COUNTER,
+            entries: vec![INNKEEPER],
+            map: 0,
+            x: START.0 + 2.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 600,
+            respawn_max: 600,
+            ..Default::default()
+        }],
+    );
     d
 }
 
@@ -227,4 +318,82 @@ async fn the_speed_commands_tell_those_watching_at_the_change() {
     a.say(".modify speed 3").await;
     let run = told_speed(&mut b, ga, MSG_MOVE_SET_RUN_SPEED).await;
     assert!((run - 21.0).abs() < 0.01, "{run}");
+}
+
+/// How many of `entry` `g` carries, and where they are bound.
+async fn carried_and_bound(
+    realm: &Arc<Realm>,
+    g: Guid,
+    entry: u32,
+) -> (u32, Option<crate::game::store::Bind>) {
+    on_map(realm, move |m| {
+        let p = &m.players[&g];
+        (p.count_of(entry), p.row.state.bind)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn an_innkeepers_bind_binds_its_target_and_gives_the_hearthstone() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let innkeeper = crate::game::guid::unit(INNKEEPER, INNKEEPER_COUNTER);
+    a.sees(innkeeper).await;
+    on_map(&realm, move |m| m.players.get_mut(&g).unwrap().area = 87).await;
+    // Bind, cast by the innkeeper on her: both its effects are hers.
+    on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, innkeeper, BIND, Some(g))
+    })
+    .await;
+    let (by, area) = a
+        .wait_for("SMSG_PLAYERBOUND", |m| match m {
+            ServerOpcodeMessage::SMSG_PLAYERBOUND(b) => Some((b.guid, b.area)),
+            _ => None,
+        })
+        .await;
+    assert_eq!((by, area.as_int()), (innkeeper, 87));
+    let (stones, bind) = carried_and_bound(&realm, g, HEARTHSTONE).await;
+    assert_eq!(stones, 1, "the Hearthstone is the one bound's");
+    assert_eq!(bind.map(|b| b.zone), Some(87));
+    // At the innkeeper's, the same spell: bound again, and no second stone.
+    a.clear();
+    a.send(CMSG_BINDER_ACTIVATE { guid: innkeeper }).await;
+    a.wait_for("SMSG_PLAYERBOUND", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_PLAYERBOUND(_)).then_some(())
+    })
+    .await;
+    a.wait_for("SMSG_GOSSIP_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+    })
+    .await;
+    let twice = a
+        .gets(Duration::from_millis(200), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_PLAYERBOUND(_)).then_some(())
+        })
+        .await;
+    assert!(twice.is_none(), "one binding");
+    assert_eq!(carried_and_bound(&realm, g, HEARTHSTONE).await.0, 1);
+}
+
+#[tokio::test]
+async fn a_creatures_create_item_effect_gives_its_target_the_item() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let innkeeper = crate::game::guid::unit(INNKEEPER, INNKEEPER_COUNTER);
+    a.sees(innkeeper).await;
+    for spell in [GIFT, GIFT_UNTARGETED] {
+        on_map(&realm, move |m| {
+            crate::game::map::spells::cast_triggered(m, innkeeper, spell, Some(g))
+        })
+        .await;
+    }
+    assert_eq!(carried_and_bound(&realm, g, TOKEN).await.0, 2);
+    // Her own on herself is hers too.
+    on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, CONJURE, Some(g))
+    })
+    .await;
+    assert_eq!(carried_and_bound(&realm, g, TOKEN).await.0, 3);
 }
