@@ -190,3 +190,41 @@ so the gaps are in what the interpreters make of what comes in.
   outside a copy; escort (25) with no unit; map event targets gone; a
   missing script target is the owner; nearby object (21) around the
   target with the exact radius.
+
+## Script commands
+
+- S1. Flee (47) always seeks help (M7, C2).
+- S2. respawn_game_object (9) can't bring in a despawned object, nor for
+  its time.
+- S3. data_flags: TARGET_SELF applied before SWAP_FINAL.
+- S4. activate_object (13): traps fire, doors and buttons and goobers are
+  used, the object as source.
+- S5. Script casts always report success (E2), cast flags (E14).
+- S6. turn_to (35) sends no facing packet.
+- S7. Swap-initial with no target loses the buddy search.
+- S8. despawn_game_object (81) is remove_object; it should despawn the
+  spawn in datalong and bring it back after datalong2 s.
+- S9. send_map_event (66): the id is datalong, the data datalong2,
+  recipients by datalong3.
+- S10. respawn_creature (71): the source, and datalong forces it alive.
+- S11. play_custom_animation (89) sends an emote, not
+  SMSG_GAMEOBJECT_CUSTOM_ANIM.
+- S12. An object's gossip option scripts start (object, player); TT
+  (player, object).
+- S13. Scripts stop on the source's death and evade; TT's outlive both.
+- S14. set_faction (22) ignores datalong2's restore flags.
+- S15. zone_combat_pulse (49) bypasses the zone pulse (dungeons only,
+  every 3 s).
+- S16. Talk ignores the chat-type override; boss emote and zone yell
+  ranges; boss whisper and zone emote kinds.
+- S17. update_entry (27) is partial.
+- S18. despawn (18) ignores the respawn delay.
+- S19. remove_guardians (56) removes script summons, not guardians.
+- S20. C_SET_REGENERATION has no effect.
+- S21. set_equipment (19): 0 unequips.
+- S22. edit_map_event (69): 0 clears.
+- S23. Smaller: 92's map-wide and pets; 68's entry filter; 67's wander
+  radius; 74's permanent flag; 10's unique-summon range and order; 6's
+  who teleports; 20/19 distancing; 90 ungrouped; C_LOSE_HEALTH off by one;
+  extra target the newest; area trigger alive check and cooldown; nested
+  starts slipping a tick.
