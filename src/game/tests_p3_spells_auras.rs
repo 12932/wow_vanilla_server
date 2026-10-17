@@ -1726,3 +1726,65 @@ async fn a_taunt_borrows_threat_while_it_lasts_and_the_newest_holds() {
     assert_eq!(after, 75.0, "given back when both are gone");
     assert!(!corpse, "a dead creature lends nothing");
 }
+
+const SHADOW_WORD_PAIN: u32 = 589;
+const DISPEL_MAGIC_2: u32 = 988;
+const CURE_POISON: u32 = 526;
+
+fn dispel_resist(d: &mut crate::game::data::GameData) {
+    let mut s = made_up(990_990, 6, auras::AURA_ADD_FLAT_MODIFIER, 28, 100);
+    s.family_name = 8;
+    s.duration_index = 21;
+    s.effects[0].item_type = 0x1_0000;
+    d.spells.spells.insert(s.id, s);
+}
+
+#[tokio::test]
+async fn a_dispel_takes_its_kind_a_stack_a_try_unless_held_on() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(dispel_resist);
+    let (_c, w, map) = player(&realm, "P3A29", "Cureone", Race::Human, Class::Warrior).await;
+    let (_d, priest, _) = player(&realm, "P3A30", "Curetwo", Race::Human, Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            ready(m, priest, 60, &[]);
+            let k1 = dummy(m, w, 60, 5.0);
+            let k2 = dummy(m, w, 60, 6.0);
+            let stacks = |m: &Map| holder(m, w, DEADLY_POISON).map_or(0, |h| h.stacks);
+            // Two Shadow Word: Pains and three stacks of poison.
+            apply(m, k1, w, SHADOW_WORD_PAIN);
+            apply(m, k2, w, SHADOW_WORD_PAIN);
+            for _ in 0..3 {
+                apply(m, k1, w, DEADLY_POISON);
+            }
+            let before = (spells_on(m, w).len(), stacks(m));
+            // Dispel Magic's two tries take both pains, not the poison.
+            spells::cast_triggered(m, priest, DISPEL_MAGIC_2, Some(w));
+            let magic = (has(m, w, SHADOW_WORD_PAIN), stacks(m));
+            // A cure of poison: a stack a try.
+            spells::cast_triggered(m, priest, CURE_POISON, Some(w));
+            let cured = stacks(m);
+            // None of its kind: nothing.
+            auras::remove_spell(m, w, DEADLY_POISON, None);
+            apply(m, k1, w, SHADOW_WORD_PAIN);
+            spells::cast_triggered(m, priest, CURE_POISON, Some(w));
+            let wrong = has(m, w, SHADOW_WORD_PAIN);
+            // A poison its caster's talent holds on resists.
+            apply(m, k1, k1, 990_990);
+            apply(m, k1, w, DEADLY_POISON);
+            spells::cast_triggered(m, priest, CURE_POISON, Some(w));
+            let held = has(m, w, DEADLY_POISON);
+            (before, magic, cured, wrong, held)
+        })
+        .await
+        .unwrap();
+    let (before, magic, cured, wrong, held) = out;
+    assert_eq!(before, (3, 3), "two pains and a poison of three");
+    assert_eq!(magic, (false, 3), "both pains dispelled, the poison kept");
+    assert_eq!(cured, 2, "a stack cured");
+    assert!(wrong, "a cure of poison takes no magic");
+    assert!(held, "held on by its caster's talent");
+}
