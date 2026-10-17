@@ -1414,3 +1414,33 @@ async fn a_party_quest_starts_once_and_no_share_is_answered_unasked() {
     assert!(both, "both on the escort");
     assert_eq!(imps, 1, "its start script ran once");
 }
+
+#[tokio::test]
+async fn a_freed_creature_turns_on_its_master_in_earnest() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGCHARM");
+    let g = c.enter("Bugcharm", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let kobold = spawn(m, g, 6, 60, 4.0, 5_000);
+            crate::game::map::pets::charmed(m, g, kobold, false);
+            let held = m.creature(kobold).is_some_and(|c| c.pet.is_some());
+            // No aura holds it: it goes free at its next step.
+            crate::game::map::pets::update(m);
+            let c = m.creature(kobold).unwrap();
+            let threat = c.threat.iter().find(|(t, _)| *t == g).map(|(_, v)| *v);
+            (held, c.pet.is_none(), c.combat.victim == g, threat)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, true, true, Some(5_000.0)),
+        "free, on its master, with its health's threat"
+    );
+}
