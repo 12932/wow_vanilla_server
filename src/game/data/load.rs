@@ -2048,6 +2048,22 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     ) {
         m.meeting_stones.insert(entry, stone);
     }
+    for (cinematic, point) in rows(db, "SELECT * FROM cinematic_waypoints", |c| {
+        (
+            c.u32("cinematic"),
+            (
+                c.u32("timer"),
+                c.f32("position_x"),
+                c.f32("position_y"),
+                c.f32("position_z"),
+            ),
+        )
+    }) {
+        m.cinematic_waypoints.entry(cinematic).or_default().push(point);
+    }
+    for points in m.cinematic_waypoints.values_mut() {
+        points.sort_by_key(|p| p.0);
+    }
 }
 
 #[cfg(test)]

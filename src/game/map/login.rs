@@ -6,7 +6,7 @@ use tracing::debug;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
     Area, DateTime, InitialSpell, LogoutResult, LogoutSpeed,
-    SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT,
+    SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT,
     SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES, SMSG_INITIAL_SPELLS,
     SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK, SMSG_LOGOUT_RESPONSE,
     SMSG_TUTORIAL_FLAGS, Vector3d,
@@ -30,7 +30,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         position: p.position(),
         orientation: p.movement.orientation,
     });
-    out.send(&SMSG_ACCOUNT_DATA_TIMES { data: [0; 32] });
+    out.send_frame(crate::game::map::account_data::digests_frame(&p.row.state.caches));
     let bind = p.row.state.bind.unwrap_or(crate::game::store::Bind {
         map: p.row.map,
         zone: p.row.zone,
@@ -113,6 +113,8 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
             .send(&wow_world_messages::vanilla::SMSG_TRIGGER_CINEMATIC {
                 cinematic_sequence_id: id,
             });
+        let sequence = c.cinematic;
+        crate::game::map::cinematic::begin(map, p, sequence);
     }
     let motd = &map.realm.config.motd;
     if !motd.is_empty() {

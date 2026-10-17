@@ -347,11 +347,18 @@ impl Session {
         if !guid::is_player(g) {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
         }
-        let Some(row) = self.realm.store.load(guid::counter(g)).await else {
+        let Some(mut row) = self.realm.store.load(guid::counter(g)).await else {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
         };
         if *row.account != *self.account {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
+        }
+        // The client's caches, and the account's tutorials.
+        let (caches, tutorials) =
+            crate::game::map::account_data::load(&self.realm, &self.account, row.guid).await;
+        row.state.caches = caches;
+        if let Some(t) = tutorials {
+            row.state.tutorials = t;
         }
         let Some(name) = self.realm.registry.name(g) else {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);

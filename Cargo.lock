@@ -2642,6 +2642,7 @@ dependencies = [
  "dotenvy",
  "flate2",
  "kanal",
+ "md-5",
  "mimalloc",
  "parking_lot",
  "postcard",
