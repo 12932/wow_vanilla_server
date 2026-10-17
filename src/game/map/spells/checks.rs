@@ -419,7 +419,7 @@ pub fn check(
         if let Some(r) = crate::game::map::pets::check(map, caster, s, t) {
             return Some(r);
         }
-        if let Some(r) = crate::game::map::professions::check(map, caster, s, t) {
+        if let Some(r) = crate::game::map::professions::check(map, caster, s, t, item) {
             return Some(r);
         }
         // Power, reagents, tools, focus, gear.

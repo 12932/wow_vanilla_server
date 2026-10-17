@@ -798,6 +798,11 @@ fn execute(
 ) {
     let now = map.now;
     let m = mods::for_spell(map, caster, s);
+    // The item cast from, by its entry, before it is spent.
+    let cast_entry = item.and_then(|g| {
+        let p = map.players.get(&caster)?;
+        p.item_by_guid(g).map(|i| p.items[i].entry)
+    });
     // What the cast cost, for a refund if an ability is avoided.
     let mut paid = 0;
     if !triggered {
@@ -914,7 +919,7 @@ fn execute(
     // A pet's feeding and abilities, and the professions' effects (which
     // run on their own and are skipped below).
     crate::game::map::pets::before_effects(map, caster, s, &targets);
-    let professions = crate::game::map::professions::execute(map, caster, s, &targets, item);
+    let professions = crate::game::map::professions::execute(map, caster, s, &targets, cast_entry);
     // The objects the cast is at, for the quests asking for it there.
     let at_objects = if triggered || crate::game::map::objects::opens_lock(s) {
         Vec::new()

@@ -68,14 +68,17 @@ pub enum LootKind {
     Fishing,
     Disenchant,
     Skinning,
+    /// Behind a lock: a chest picked or gathered, a lockbox unlocked.
+    Opened,
 }
 
 impl LootKind {
     fn wire(self) -> u8 {
         match self {
             LootKind::Corpse => 1,
-            // The client has no skinning type: pickpocketing's window.
-            LootKind::Pickpocket | LootKind::Skinning => 2,
+            // The client has no skinning type: pickpocketing's window, as
+            // a lock opened shows too.
+            LootKind::Pickpocket | LootKind::Skinning | LootKind::Opened => 2,
             LootKind::Fishing => 3,
             // An item's loot shows as Thistle Tea and mangos show it.
             LootKind::Disenchant => 2,
@@ -168,6 +171,9 @@ pub struct MapLoot {
     pub items_tick_at: Option<Instant>,
     /// A node's successful gatherings since it spawned.
     pub node_uses: ahash::AHashMap<Guid, u32>,
+    /// Those whose skill an object's lock has raised since it spawned:
+    /// once each (Thistle Tea's `skilled_players`).
+    pub skilled: ahash::AHashMap<Guid, AHashSet<Guid>>,
     /// Creatures whose pockets are picked this life.
     pub picked: AHashSet<Guid>,
     pub bobbers: Vec<crate::game::map::professions::Bobber>,
@@ -1162,10 +1168,18 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         } else {
             t.gold_min
         };
+        // A chest behind a lock shows as one opened (Thistle Tea's
+        // `Gathering`, mangos's chests).
+        let kind = if t.kind == crate::game::map::professions::GO_CHEST && t.data[0] != 0 {
+            LootKind::Opened
+        } else {
+            LootKind::Corpse
+        };
         if let Some(o) = map.gameobject_mut(object) {
             o.loot = Some(Loot {
                 items,
                 gold,
+                kind,
                 ..Default::default()
             });
         }
