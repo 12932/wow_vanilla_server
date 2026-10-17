@@ -1291,3 +1291,126 @@ async fn a_teleport_stops_a_cast() {
         .unwrap();
     assert_eq!(out, (true, false), "teleported, the cast stops");
 }
+
+#[tokio::test]
+async fn a_party_quest_starts_once_and_no_share_is_answered_unasked() {
+    use crate::game::data::npc::Quest;
+    use crate::game::data::scripts::ScriptStep;
+    use crate::game::data::{CreatureSpawn, CreatureTemplate};
+    const GIVER: u32 = 3200;
+    const IMP: u32 = 3201;
+    const ESCORT: u32 = 900;
+    const SCRIPT: u32 = 9000;
+    let mut d = crate::game::data::GameData::empty();
+    for (entry, flags) in [(GIVER, 0x2), (IMP, 0)] {
+        d.creature_templates.insert(
+            entry,
+            CreatureTemplate {
+                entry,
+                name: format!("Npc {entry}"),
+                display_ids: [903, 0, 0, 0],
+                display_probabilities: [1, 0, 0, 0],
+                level_min: 10,
+                level_max: 10,
+                faction: 12,
+                npc_flags: flags,
+                unit_class: 1,
+                health_multiplier: 1.0,
+                health_max: 500,
+                ..Default::default()
+            },
+        );
+    }
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 60,
+        entries: vec![GIVER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1,
+        z: START.2,
+        respawn_min: 60,
+        respawn_max: 60,
+        ..Default::default()
+    });
+    d.npc.quests.insert(
+        ESCORT,
+        Quest {
+            id: ESCORT,
+            level: 1,
+            min_level: 1,
+            title: "Escort".into(),
+            flags: crate::game::map::questshare::QUEST_FLAGS_PARTY_ACCEPT,
+            ..Default::default()
+        },
+    );
+    d.npc.creature_starts.insert(GIVER, vec![ESCORT]);
+    d.scripts.quest_start_script.insert(ESCORT, SCRIPT);
+    d.scripts.quest_start.insert(
+        SCRIPT,
+        vec![ScriptStep {
+            id: SCRIPT,
+            command: 10,
+            datalong: [IMP, 60_000, 0, 0],
+            x: START.0 + 4.0,
+            y: START.1,
+            z: START.2,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGSHAREA");
+    let ga = a.enter("Bugsharea", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGSHAREB");
+    let gb = b.enter("Bugshareb", Race::Human, Class::Warrior).await;
+    // Unasked, a member's word that they took it reaches no one.
+    b.send(MSG_QUEST_PUSH_RESULT {
+        guid: ga,
+        message: QuestPartyMessage::AcceptQuest,
+    })
+    .await;
+    let faked = a
+        .gets(Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(r) if r.guid == gb => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(faked.is_none(), "an unasked answer");
+    a.send(CMSG_GROUP_INVITE {
+        name: "Bugshareb".into(),
+    })
+    .await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_LIST(_)).then_some(())
+    })
+    .await;
+    let giver = guid::unit(GIVER, 60);
+    a.sees(giver).await;
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: giver,
+        quest_id: ESCORT,
+    })
+    .await;
+    b.wait_for("SMSG_QUEST_CONFIRM_ACCEPT", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_QUEST_CONFIRM_ACCEPT(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_QUEST_CONFIRM_ACCEPT { quest_id: ESCORT }).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (imps, both) = map
+        .query(move |m| {
+            (
+                m.creatures.iter().filter(|(_, c)| c.entry == IMP).count(),
+                m.players[&ga].journal.has(ESCORT) && m.players[&gb].journal.has(ESCORT),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(both, "both on the escort");
+    assert_eq!(imps, 1, "its start script ran once");
+}
