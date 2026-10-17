@@ -55,6 +55,11 @@ the questions waiting for you.
 13. **Charged items** (found by bugs3). Spell charges aren't saved, so a part-used charged item comes back full after
     a relog, a mail or an auction. Fix it?
 
+14. **Summons of despawn type 0 with a time** (from 2d). wvs keeps vmangos's meaning, so the summon waits out a
+    fight. Thistle Tea despawns it at its time, even mid-fight. Follow Thistle Tea?
+15. **Script teleport (6) with a player source** (from 2d). wvs teleports the player, as vmangos does; Thistle Tea
+    does nothing. Keep vmangos's?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -186,6 +191,20 @@ the questions waiting for you.
     - **Merge note:** 2g's resurrection request sent a player caster's name. mangos-classic sends it empty (the
       client knows it), as bugs3 had it, so the name goes empty and 2g's test was corrected.
 
+15. **2d's choices:**
+    - **Object scripts:** `gameobject_scripts` start on the user, at the object, as vmangos and Thistle Tea do. For
+      example, the Blastenheimer cannon's self-cast lands on the player.
+    - **`update_entry`** keeps the level when it is in the new template's range, else rolls one.
+    - **Emotes and whispers:** monster emotes, boss emotes and whispers carry the target's guid. The raid boss
+      whisper is hand-encoded, since wow_messages lays it out without the speaker's name.
+    - **Searches:** a buddy search with no radius looks 30 yards.
+    - **Merge notes:**
+      - **Object menus:** 2d and bugs1 both made them selectable. I kept bugs1's selection, which needs a living
+        player in reach, and 2d's dispatch, which runs on the player.
+      - **The Molten Core rune:** 2d and 2g both fixed the lock check for the rune and its Quintessence, and I kept
+        2g's.
+      - **`update_entry`'s size:** it now uses the shared creature-size fix.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -202,7 +221,7 @@ the questions waiting for you.
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
 | 2c: creature combat (all 15 items) | merged | e557cf0 |
-| 2d: scripts, encounters | running | |
+| 2d: scripts, encounters, spell lists, the Molten Core rune | merged | |
 | 2e+2f: instances, quests, events | running | |
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |

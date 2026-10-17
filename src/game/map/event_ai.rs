@@ -40,12 +40,25 @@ pub struct Scripted {
     pub next_tick: Option<Instant>,
     pub no_melee: bool,
     pub no_combat_movement: bool,
-    /// Health it can't be brought below.
-    pub invincible_hp: u32,
+    /// Health it can't be brought below, as a script set it (None: its
+    /// template's, a floor of 1 for one that is unkillable).
+    pub invincible_hp: Option<u32>,
     pub summoner: Option<Guid>,
-    /// When a summoned creature goes, and how (vmangos's despawn types).
+    /// When a summoned creature goes, and how (vmangos's despawn types,
+    /// as Thistle Tea's `SummonDespawn` runs them), and the time it was
+    /// summoned for, which a fight's end or its death may start again.
     pub despawn_at: Option<Instant>,
     pub despawn_type: i32,
+    pub despawn_after: Option<Duration>,
+    /// The entry whose events it runs: the one it had before a script
+    /// changed it (`update_entry`), as vmangos and Thistle Tea keep them.
+    pub ai_entry: Option<u32>,
+    /// The spell list it keeps over its template's, from an entry it was
+    /// before that had one where its new one has none.
+    pub base_spell_list: Option<u32>,
+    /// A guardian a creature's spell summoned (effect 42): it follows
+    /// its summoner, goes when it goes, and drops no loot.
+    pub guardian: bool,
     pub summoned: Vec<Guid>,
     /// Script moves run rather than walk.
     pub run: bool,
@@ -83,7 +96,28 @@ pub struct Scripted {
     pub feign: Option<Feign>,
     /// A path a script set it walking, over its spawn's.
     pub route: Option<Route>,
+    /// A faction a script set (`SCRIPT_COMMAND_SET_FACTION`): the one it
+    /// had, the one set, and when the old one comes back (datalong2).
+    pub temp_faction: Option<TempFaction>,
+    /// A despawn a script put off (`SCRIPT_COMMAND_DESPAWN_SELF`): when,
+    /// and the respawn's delay over its spawn's.
+    pub script_despawn: Option<(Instant, Option<Duration>)>,
 }
+
+/// A script's faction for a while, as Thistle Tea's `TemporaryFaction`
+/// keeps it: the old one back at a respawn (0x1), when a fight stops
+/// (0x2) or home again (0x4), as its flags say; kept over a respawn
+/// without 0x1.
+#[derive(Debug, Clone, Copy)]
+pub struct TempFaction {
+    pub original: u32,
+    pub value: u32,
+    pub flags: u32,
+}
+
+pub const FACTION_RESTORE_RESPAWN: u32 = 0x1;
+pub const FACTION_RESTORE_COMBAT_STOP: u32 = 0x2;
+pub const FACTION_RESTORE_REACH_HOME: u32 = 0x4;
 
 /// A path held, as vmangos's escorts pause: until the summons made since
 /// are gone (or, `signal`, until a script lets it go), and at most until
@@ -132,10 +166,23 @@ pub struct ScriptedMove {
     pub to: wow_world_messages::vanilla::Vector3d,
     pub point: Option<u32>,
     pub face: Option<f32>,
+    /// A walk home (`SCRIPT_COMMAND_MOVEMENT` 7): home, it is as an
+    /// evade's arrival.
+    pub home: bool,
+    /// Distancing (movement 19): only force-cast spells go meanwhile.
+    pub distancing: bool,
 }
 
 /// The motion type of a script's point movement.
 pub const POINT_MOTION: u32 = 9;
+
+/// The entry whose events a creature runs.
+pub fn ai_entry(c: &crate::game::map::creature::Creature) -> u32 {
+    c.scripted
+        .as_deref()
+        .and_then(|s| s.ai_entry)
+        .unwrap_or(c.entry)
+}
 
 /// The events of creature `entry`.
 fn events_of(map: &Map, entry: u32) -> Option<&[AiEvent]> {
@@ -157,7 +204,7 @@ pub fn has_events_entry(data: &crate::game::data::GameData, entry: u32) -> bool 
 
 pub fn has_events(map: &Map, g: Guid) -> bool {
     map.creature(g)
-        .is_some_and(|c| events_of(map, c.entry).is_some())
+        .is_some_and(|c| events_of(map, ai_entry(c)).is_some())
 }
 
 /// The creature's scripted state, made if it has none.
@@ -199,7 +246,7 @@ fn victim(map: &Map, g: Guid) -> Option<Guid> {
 /// rolled.
 fn ensure_started(map: &mut Map, g: Guid) {
     let now = map.now;
-    let Some(entry) = map.creature(g).map(|c| c.entry) else {
+    let Some(entry) = map.creature(g).map(ai_entry) else {
         return;
     };
     let Some(events) = events_of(map, entry).map(<[AiEvent]>::to_vec) else {
@@ -535,11 +582,7 @@ fn ooc_los(map: &mut Map, g: Guid, e: &AiEvent) -> Option<Option<Guid>> {
 /// Try the events `matches` picks, with `invoker` as the one who caused
 /// them.
 fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Option<Guid>) {
-    let Some(entry) = map
-        .creature(g)
-        .filter(|c| c.owner.is_none())
-        .map(|c| c.entry)
-    else {
+    let Some(entry) = map.creature(g).filter(|c| c.owner.is_none()).map(ai_entry) else {
         return;
     };
     let Some(events) = events_of(map, entry).map(<[AiEvent]>::to_vec) else {
@@ -686,6 +729,18 @@ pub fn scripted_move_ended(map: &mut Map, g: Guid) {
     if let Some(point) = m.point {
         movement_inform(map, g, POINT_MOTION, point);
     }
+    if m.home {
+        home_reached(map, g);
+    }
+}
+
+/// A script's walk home done, as Thistle Tea's `wait_for_scripted_home`:
+/// a faction set until then gives way, its spawn's auras are back, and
+/// its reached-home events fire.
+pub fn home_reached(map: &mut Map, g: Guid) {
+    scripts::restore_faction(map, g, FACTION_RESTORE_REACH_HOME);
+    crate::game::map::spawn_auras::restore(map, g);
+    reached_home(map, g);
 }
 
 /// The timed events of an active creature, about twice a second.
@@ -710,7 +765,7 @@ pub fn tick(map: &mut Map, g: Guid) {
     // A stunned creature's paused timers wait out the stun.
     let paused: Vec<usize> = map
         .creature(g)
-        .and_then(|c| events_of(map, c.entry))
+        .and_then(|c| events_of(map, ai_entry(c)))
         .map(|events| {
             events
                 .iter()
@@ -744,9 +799,113 @@ pub fn tick(map: &mut Map, g: Guid) {
     fire(map, g, |e| timed(e.kind), None);
 }
 
-/// A creature's despawn timer, for those summoned with one.
+// vmangos's `TempSummonType`s, as Thistle Tea's `SummonDespawn` runs them:
+// which time from the summoning, run on after a death, wait out a fight
+// (and start again after it), vanish at death, or time from it.
+const TIMED_WHILE_ALIVE: [i32; 6] = [1, 2, 3, 4, 9, 10];
+const TIMED_WHILE_DEAD: [i32; 5] = [3, 4, 6, 9, 10];
+const WAITS_OUT_COMBAT: [i32; 3] = [1, 2, 4];
+const GONE_AT_DEATH: [i32; 3] = [2, 5, 10];
+const TIMER_FROM_DEATH: [i32; 2] = [4, 6];
+/// A summon whose time came in a fight looks again this much later.
+const DESPAWN_RECHECK: Duration = Duration::from_secs(10);
+/// Thistle Tea's own type for a creature's wild summon (spell effect 41)
+/// with a duration: at its time, out of a fight, it dies (`TemporarySummon`),
+/// its corpse left as any's.
+pub const TIMED_DEATH: i32 = 11;
+
+/// What a summon whose time has come does.
+enum Due {
+    Despawn,
+    Die,
+    Wait,
+    Ignore,
+}
+
+fn when_due(kind: i32, alive: bool, fighting: bool) -> Due {
+    if kind == TIMED_DEATH {
+        if !alive {
+            Due::Ignore
+        } else if fighting {
+            Due::Wait
+        } else {
+            Due::Die
+        }
+    } else if kind <= 0 {
+        Due::Despawn
+    } else if !alive {
+        if TIMED_WHILE_DEAD.contains(&kind) {
+            Due::Despawn
+        } else {
+            Due::Ignore
+        }
+    } else if !TIMED_WHILE_ALIVE.contains(&kind) {
+        Due::Ignore
+    } else if fighting && WAITS_OUT_COMBAT.contains(&kind) {
+        Due::Wait
+    } else {
+        Due::Despawn
+    }
+}
+
+/// Whether a summon of despawn type `kind` starts its time when it is
+/// summoned (the rest from their death, or never).
+pub fn timer_at_spawn(kind: i32) -> bool {
+    kind <= 0 || TIMED_WHILE_ALIVE.contains(&kind)
+}
+
+/// A summon died: one of a type that vanishes at death goes (the summoner
+/// told of that too), one that times from its death starts its time.
+pub fn summon_died(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let Some((kind, after)) = map
+        .creature(g)
+        .filter(|c| c.spawn_guid.is_none())
+        .and_then(|c| c.scripted.as_deref())
+        .map(|s| (s.despawn_type, s.despawn_after))
+    else {
+        return;
+    };
+    if GONE_AT_DEATH.contains(&kind) {
+        scripts::despawn(map, g);
+    } else if TIMER_FROM_DEATH.contains(&kind)
+        && let Some(after) = after
+        && let Some(s) = scripted_mut(map, g)
+    {
+        s.despawn_at = Some(now + after);
+    }
+}
+
+/// A creature's despawn timer, for those summoned with one, and the
+/// despawns scripts put off.
 pub fn update_despawns(map: &mut Map) {
     let now = map.now;
+    let put_off: Vec<(Guid, Option<Duration>)> = map
+        .creatures
+        .iter()
+        .filter_map(|(_, c)| {
+            let (at, respawn) = c.scripted.as_deref()?.script_despawn?;
+            (at <= now).then_some((c.guid, respawn))
+        })
+        .collect();
+    for (g, respawn) in put_off {
+        if let Some(s) = scripted_mut(map, g) {
+            s.script_despawn = None;
+        }
+        scripts::despawn_with(map, g, respawn);
+    }
+    // A creature's guardians go with it, as Thistle Tea's `owner_stopped`.
+    let orphans: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter_map(|(_, c)| {
+            let s = c.scripted.as_deref()?;
+            (s.guardian && s.summoner.is_some_and(|o| map.creature(o).is_none())).then_some(c.guid)
+        })
+        .collect();
+    for g in orphans {
+        scripts::despawn(map, g);
+    }
     let due: Vec<Guid> = map
         .creatures
         .iter()
@@ -761,18 +920,25 @@ pub fn update_despawns(map: &mut Map) {
     for g in due {
         let alive = map.creature(g).is_some_and(|c| c.alive());
         let kind = scripted(map, g).map_or(0, |s| s.despawn_type);
-        // Types: 1 timed or dead, 2 timed out of combat, 3 timed after
-        // death, 4 dead, ... A creature fighting with type 2 waits.
-        if kind == 2 && in_combat(map, g) {
-            continue;
-        }
-        if kind == 3 && alive {
-            if let Some(s) = scripted_mut(map, g) {
-                s.despawn_at = None;
+        let at = match when_due(kind, alive, in_combat(map, g)) {
+            Due::Despawn => {
+                scripts::despawn(map, g);
+                continue;
             }
-            continue;
+            Due::Die => {
+                if let Some(c) = map.creature_mut(g) {
+                    c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+                }
+                crate::game::map::ai::die(map, g, g);
+                None
+            }
+            // Fighting, it waits; the fight's end starts its time again.
+            Due::Wait => Some(now + DESPAWN_RECHECK),
+            Due::Ignore => None,
+        };
+        if let Some(s) = scripted_mut(map, g) {
+            s.despawn_at = at;
         }
-        scripts::despawn(map, g);
     }
     // Spawned events queued since the last update.
     let spawned = std::mem::take(&mut map.ai_spawned);
@@ -829,7 +995,7 @@ fn own_aggro(map: &mut Map, g: Guid, enemy: Guid) {
         return;
     }
     ensure_started(map, g);
-    let Some(entry) = map.creature(g).map(|c| c.entry) else {
+    let Some(entry) = map.creature(g).map(ai_entry) else {
         return;
     };
     let events = events_of(map, entry)
@@ -916,7 +1082,7 @@ pub fn evade(map: &mut Map, g: Guid) {
         fire(map, g, |e| e.kind == EVENT_LEAVE_COMBAT, None);
     }
     fire(map, g, |e| e.kind == EVENT_EVADE, None);
-    let Some(entry) = map.creature(g).map(|c| c.entry) else {
+    let Some(entry) = map.creature(g).map(ai_entry) else {
         return;
     };
     let events = events_of(map, entry)
@@ -929,6 +1095,25 @@ pub fn evade(map: &mut Map, g: Guid) {
         if s.timers.len() == events.len() {
             reset_ooc(s, &events, now);
         }
+    }
+}
+
+/// Its fight stopped (an evade, its death, a script's combat stop), as
+/// Thistle Tea's `Engagement.leave`: a faction a script set for the fight
+/// gives way, and a summon that waits out its fights (not dead) starts its
+/// time again.
+pub fn combat_stopped(map: &mut Map, g: Guid, died: bool) {
+    scripts::restore_faction(map, g, FACTION_RESTORE_COMBAT_STOP);
+    let now = map.now;
+    if !died
+        && let Some(s) = map
+            .creature_mut(g)
+            .filter(|c| c.spawn_guid.is_none())
+            .and_then(|c| c.scripted.as_deref_mut())
+        && WAITS_OUT_COMBAT.contains(&s.despawn_type)
+        && let Some(after) = s.despawn_after
+    {
+        s.despawn_at = Some(now + after);
     }
 }
 
@@ -1361,8 +1546,19 @@ pub fn melee(map: &Map, g: Guid) -> bool {
         && !crate::game::map::spells::lists::holding(map, g)
 }
 
-/// Damage to a scripted-invincible creature leaves it its floor of
-/// health.
+/// `static_flags1`: it can't be killed (a floor of 1 health).
+const STATIC_UNKILLABLE: u32 = 0x8;
+
+/// Damage to an invincible creature leaves it its floor of health: the
+/// one a script set (`SCRIPT_COMMAND_INVINCIBILITY`), else 1 for one its
+/// template makes unkillable, as Thistle Tea's `invincibility_threshold`.
 pub fn invincible_floor(map: &Map, g: Guid) -> u32 {
-    scripted(map, g).map_or(0, |s| s.invincible_hp)
+    if let Some(hp) = scripted(map, g).and_then(|s| s.invincible_hp) {
+        return hp;
+    }
+    let unkillable = map
+        .creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .is_some_and(|t| t.static_flags1 & STATIC_UNKILLABLE != 0);
+    u32::from(unkillable)
 }

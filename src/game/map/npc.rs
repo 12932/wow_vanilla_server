@@ -311,12 +311,20 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         );
     }
     if o.script != 0 {
+        // An object's option runs on the player, at the object; a
+        // creature's on the creature, at the player (Thistle Tea's
+        // `dispatch`).
+        let (source, target) = if crate::game::guid::is_game_object(npc) {
+            (player, npc)
+        } else {
+            (npc, player)
+        };
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::Gossip,
             o.script,
-            npc,
-            player,
+            source,
+            target,
         );
         if o.kind == 1 && o.action_menu <= 0 {
             return send(map, player, &SMSG_GOSSIP_COMPLETE {});

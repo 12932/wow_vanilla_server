@@ -167,7 +167,16 @@ fn raid_group(realm: &Arc<Realm>, leader: Guid, members: &[Guid]) {
     let l = realm.registry.online(leader).unwrap();
     for m in members {
         let m = realm.registry.online(*m).unwrap();
-        assert!(crate::game::social::groups::join_directly(realm, &l, &m));
+        // A raid takes no one directly: they are invited, and accept.
+        if !crate::game::social::groups::join_directly(realm, &l, &m) {
+            crate::game::social::groups::invite(realm, &l, &m.name);
+            crate::game::social::groups::accept(realm, &m);
+        }
+        let groups = realm.social.groups.lock();
+        assert_eq!(
+            groups.group_of(m.guid).map(|g| g.id),
+            groups.group_of(leader).map(|g| g.id)
+        );
     }
     crate::game::social::groups::convert_to_raid(realm, &l);
 }
@@ -761,7 +770,6 @@ async fn an_escort_goes_by_its_point_ids() {
 /// raid reset with a raid inside and the group's lockout, and the escort
 /// paths by point id.
 #[tokio::test]
-#[ignore = "open: on the merged ai5 the Molten Core rune isn't doused by its Quintessence (AI5_GAPS I2)"]
 async fn the_real_instances() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {

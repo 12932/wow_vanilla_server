@@ -676,7 +676,7 @@ fn open_lock(
     cast_item: Option<u32>,
 ) {
     let data = map.realm.data.clone();
-    let Some((entry, kind)) = map.gameobject(object).map(|o| (o.entry, o.kind)) else {
+    let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
         return;
     };
     // Another's window opened on it in the meantime (Thistle Tea's check
@@ -717,6 +717,15 @@ fn open_lock(
             .or_default()
             .insert(caster);
     }
+    opened(map, caster, object);
+}
+
+/// An object whose lock is open: a door opens, a chest or node shows its
+/// loot, and its scripts run.
+fn opened(map: &mut Map, caster: Guid, object: Guid) {
+    let Some(kind) = map.gameobject(object).map(|o| o.kind) else {
+        return;
+    };
     match kind {
         GO_DOOR | GO_BUTTON => {
             if let Some(o) = map.gameobject_mut(object) {

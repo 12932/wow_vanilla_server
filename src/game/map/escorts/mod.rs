@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
-    Language, PlayerChatTag, SMSG_EMOTE, SMSG_MESSAGECHAT, SMSG_MESSAGECHAT_ChatType,
-    SMSG_QUESTUPDATE_FAILED, Vector3d,
+    Language, PlayerChatTag, SMSG_MESSAGECHAT, SMSG_MESSAGECHAT_ChatType, SMSG_QUESTUPDATE_FAILED,
+    Vector3d,
 };
 
 use crate::game::data::CreatureSpawn;
@@ -348,14 +348,7 @@ fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
                     say(map, by, text);
                 }
             }
-            Act::Emote(emote) => {
-                if let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                    emote: wow_world_messages::vanilla::Emote::try_from(emote).unwrap_or_default(),
-                    guid: creature,
-                }) {
-                    map.send_to_observers(creature, &frame, false);
-                }
-            }
+            Act::Emote(emote) => crate::game::map::scripts::emote(map, creature, emote),
             Act::Faction(f) => {
                 if let Some(c) = map.creature_mut(creature) {
                     c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, f);

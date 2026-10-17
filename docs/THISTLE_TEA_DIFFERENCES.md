@@ -107,37 +107,14 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   - Distract stops and turns only creatures; Thistle Tea turns players too.
   - A monster move's intermediate point within about 0.7 yards of the destination is left out, as mangos-classic
     leaves it; Thistle Tea nudges its height instead.
-- **Script commands:**
-  - respawning a despawned object, and despawning one (9, 81);
-  - activating traps and goobers (13);
-  - the swap and self-target data flags;
-  - turning to face (35);
-  - map events' ids and their clearing (66, 69);
-  - respawning a creature (71), and a despawn's respawn delay (18);
-  - custom animations (89);
-  - object gossip scripts;
-  - a faction's restore flags (22);
-  - the zone pulse (49);
-  - the chat-type override for boss emotes and zone yells;
-  - `update_entry` (27), which is partial;
-  - regeneration;
-  - unequipping by 0 (19);
-  - a few smaller ones.
-- **Encounters:**
-  - summons' despawn types;
-  - the unkillable flag;
-  - emote states;
-  - The Nightmare's druids may attack pets;
-  - "nearest hostile player" with no radius reaching 100 yards, not 30;
-  - Mizzle's walk home never arriving.
-- **Spell lists:**
-  - the force-cast flag;
-  - the order of `creature_spells_scripts`;
-  - a timed-out summon despawns where Thistle Tea's dies;
-  - creature-owned guardians don't follow their owner or go with it, and keep their loot.
+- **Scripts:**
+  - A summon of despawn type 0 with a time is vmangos's timed-or-dead (it waits out a fight); Thistle Tea despawns
+    it at its time.
+  - Script teleport (6) moves a player source too; Thistle Tea's moves only creatures.
+  - Respawning a creature (71) with target type 10 still finds dead creatures; Thistle Tea's search finds only the
+    living, so it could never respawn a dead one.
+  - The Nightmare's druids may attack pets.
 - **Instances:**
-  - Molten Core's runes: the real-data check that Aqual Quintessence douses one fails after the merge and is
-    ignored (`tests_ai5_instances::the_real_instances`);
   - raid binds are given on any killer, where Thistle Tea wants a player;
   - chests raised again after a reload get fresh loot;
   - Razorfen Downs' gong is forgotten across a reload.

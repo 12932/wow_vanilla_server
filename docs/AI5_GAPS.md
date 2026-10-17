@@ -296,15 +296,14 @@ Open (not done):
 
 - (Movement's M2, M4, M5, M8, M9, M10, M11, M12, M14, M18 and M19 were
   done in Phase 2b, with tests in `tests_parity_motion.rs`.)
-- I2's real-data check (`tests_ai5_instances::the_real_instances`,
-  ignored): the Quintessence doesn't douse the rune on the merged branch.
+- (I2's real-data check passes again: Phase 2d.)
 - E16 (smaller EventAI ordering items).
 - (Combat's C6, C9 to C16, C18, C19, C21, C22 and E16 were done in Phase 2c,
   with tests in `tests_parity_combat.rs`; C17's event-driven cadence is
   left.)
-- S2-S4, S6-S12, S14-S18, S20-S23 (script commands), D-R1 summon despawn
-  types, D-R2 dying summons counted alive, D-R4 the unkillable flag, D-R6
-  update_entry, D-R7 zone pulse command, D-R8 emote states, D18, D20, D25.
+- (Scripts' S2 to S23, D-R1, D-R4, D-R6 to D-R8, D18, D20, D25 and the
+  spell lists' items were done in Phase 2d, with tests in
+  `tests_parity_scripts.rs`; D-R2 was already fixed.)
 - From the spell-list work: 0x04 force-cast, creature_spells_scripts'
   order, a timed-out 41 summon despawns rather than dies, creature-owned
   guardians don't follow or go with their owner and keep loot, the

@@ -407,8 +407,13 @@ async fn the_smaller_spell_scripts() {
                 m.creature(b).is_none(),
                 m.creatures.iter().any(|(_, c)| c.entry == 9621),
             );
-            // Symbol of Life brings a dead creature back.
+            // Symbol of Life brings a dead creature back. Henze Faulk is
+            // unkillable (static_flags1 0x8): a script's floor of 0 lets
+            // him die here.
             let corpse = spawn(m, r, 6172, 10, 9.0);
+            if let Some(s) = crate::game::map::event_ai::scripted_mut(m, corpse) {
+                s.invincible_hp = Some(0);
+            }
             crate::game::map::combat::deal_damage(m, r, corpse, 2_000_000);
             let died = !m.creature(corpse).unwrap().alive();
             spells::cast_triggered(m, r, 8593, Some(corpse));
