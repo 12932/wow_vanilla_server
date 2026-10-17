@@ -172,8 +172,7 @@ fn loot_state(map: &Map, o: &crate::game::map::gameobject::GameObject) -> i32 {
     let used = if o.kind == crate::game::map::objects::GO_CHEST {
         o.loot.is_some()
     } else {
-        o.fields.get_u32(GAMEOBJECT_STATE)
-            != crate::game::map::objects::resting_state(map, o.guid)
+        o.fields.get_u32(GAMEOBJECT_STATE) != crate::game::map::objects::resting_state(map, o.guid)
     };
     if used { 2 } else { 1 }
 }
@@ -298,9 +297,7 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             }
         }),
         10 => player(&|p| commissioned(map, p)),
-        22 => player(&|p| {
-            !p.journal.has(v1 as u32) && !p.journal.rewarded.contains(&(v1 as u32))
-        }),
+        22 => player(&|p| !p.journal.has(v1 as u32) && !p.journal.rewarded.contains(&(v1 as u32))),
         19 => match map.realm.data.npc.quests.get(&(v1 as u32)) {
             Some(q) => player(&|p| {
                 !p.journal.has(q.id)
@@ -342,10 +339,11 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             let Some(at) = position(target).or_else(|| position(source)) else {
                 return Truth::Unknown;
             };
-            let found = crate::game::map::scripts::creatures_near(map, at, v1 as u32, v2 as f32, false)
-                .into_iter()
-                .filter(|g| v4 == 0 || Some(*g) != target)
-                .any(|g| map.creature(g).is_some_and(|c| c.alive()) == (v3 == 0));
+            let found =
+                crate::game::map::scripts::creatures_near(map, at, v1 as u32, v2 as f32, false)
+                    .into_iter()
+                    .filter(|g| v4 == 0 || Some(*g) != target)
+                    .any(|g| map.creature(g).is_some_and(|c| c.alive()) == (v3 == 0));
             Truth::of(found)
         }
         // An object near the target (or the source).
@@ -453,12 +451,12 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             .filter(|t| map.unit_view(*t).is_some())
             .map(|t| crate::game::map::pets::pet_of(map, t).is_some())
             .into(),
-        41 => unit_fields(target).map_or(Truth::Unknown, |f| {
-            match f.get_u32(UNIT_FIELD_MAXHEALTH) {
+        41 => {
+            unit_fields(target).map_or(Truth::Unknown, |f| match f.get_u32(UNIT_FIELD_MAXHEALTH) {
                 0 => Truth::Unknown,
                 max => compare(pct_of(f.get_u32(UNIT_FIELD_HEALTH), max), i64::from(v1), v2),
-            }
-        }),
+            })
+        }
         42 => unit_fields(target).map_or(Truth::Unknown, |f| {
             let pct = match f.get_u32(UNIT_FIELD_MAXPOWER1) {
                 0 => 100,
@@ -488,7 +486,9 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
         // An object spawned; one of the map's spawns that is gone isn't.
         48 => match target {
             Some(t) if map.gameobject(t).is_some() => Truth::Met,
-            Some(t) if guid::is_game_object(t) && listed_object(map, guid::counter(t)).is_some() => {
+            Some(t)
+                if guid::is_game_object(t) && listed_object(map, guid::counter(t)).is_some() =>
+            {
                 Truth::Unmet
             }
             _ => Truth::Unknown,
@@ -569,14 +569,15 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             match v1 {
                 0 => Truth::of(near.next().is_some()),
                 1 | 2 => Truth::any(near.map(|p| {
-                    crate::game::map::reputation::reaction_rank(map, t, p.guid).map(|r| {
-                        if v1 == 1 {
-                            r <= crate::game::data::misc::RANK_HOSTILE
-                        } else {
-                            r >= crate::game::data::misc::RANK_FRIENDLY
-                        }
-                    })
-                    .into()
+                    crate::game::map::reputation::reaction_rank(map, t, p.guid)
+                        .map(|r| {
+                            if v1 == 1 {
+                                r <= crate::game::data::misc::RANK_HOSTILE
+                            } else {
+                                r >= crate::game::data::misc::RANK_FRIENDLY
+                            }
+                        })
+                        .into()
                 })),
                 _ => Truth::Unknown,
             }
