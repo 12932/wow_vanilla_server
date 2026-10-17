@@ -116,6 +116,14 @@ mod tests_p3_network_real;
 #[cfg(test)]
 mod tests_p3_network_wire;
 #[cfg(test)]
+mod tests_p3_spells;
+#[cfg(test)]
+mod tests_p3_spells_auras;
+#[cfg(test)]
+mod tests_p3_spells_damage;
+#[cfg(test)]
+mod tests_p3_spells_kit;
+#[cfg(test)]
 mod tests_p3_world_bg;
 #[cfg(test)]
 mod tests_p3_world_env;

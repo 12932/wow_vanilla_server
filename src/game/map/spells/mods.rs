@@ -163,6 +163,12 @@ fn used_by(op: usize, s: &SpellTemplate, data: &crate::game::data::GameData) -> 
         OP_SPEED | OP_HASTE | OP_ATTACK_POWER => {
             s.effects.iter().any(|e| aura_op(e.aura) == Some(op))
         }
+        // Charges are an aura's (mangos asks for them only as its holder is
+        // made).
+        OP_CHARGES => s
+            .effects
+            .iter()
+            .any(|e| matches!(e.effect, 6 | 35) && e.aura != 0),
         _ => true,
     }
 }

@@ -764,8 +764,7 @@ fn speed(map: &mut Map, g: Guid) {
     // `broadcast_speed`).
     let mut told: Vec<(u16, f32)> = Vec::new();
     if let Some(p) = map.players.get_mut(&g) {
-        let pct = p.auras.speed_percent(mounted);
-        let speed = (7.0 * p.speed_rate * (1.0 + pct as f32 / 100.0)).max(0.5);
+        let speed = (7.0 * p.speed_rate * p.auras.speed_multiplier(mounted)).max(0.5);
         let ghost = p.death != crate::game::map::death::Death::Alive;
         if !ghost && (speed - p.speeds.run).abs() > 0.01 {
             p.speeds.run = speed;
@@ -818,14 +817,14 @@ fn speed(map: &mut Map, g: Guid) {
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    let pct = c.auras.speed_percent(mounted);
+    let mult = c.auras.speed_multiplier(mounted);
     let base = if c.base.run_speed > 0.0 {
         c.base.run_speed
     } else {
         7.0
     };
     // Wounds slow it, past the auras.
-    let speed = (base * (1.0 + pct as f32 / 100.0) * c.wounded).max(0.5);
+    let speed = (base * mult * c.wounded).max(0.5);
     if (speed - c.speeds.run).abs() > 0.01 {
         let was = std::mem::replace(&mut c.speeds.run, speed);
         // Where it runs, it runs at its new speed (mangos's

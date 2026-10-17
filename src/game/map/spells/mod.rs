@@ -172,7 +172,10 @@ pub struct Caster {
     pub casting: Option<Casting>,
     pub cooldowns: AHashMap<u32, Instant>,
     pub category_cooldowns: AHashMap<u32, Instant>,
+    /// The global cooldown of the spells' category (133).
     pub gcd_until: Option<Instant>,
+    /// Global cooldowns of other categories: (category, until).
+    pub other_gcds: Vec<(u32, Instant)>,
     /// For a creature: its spell list's timers in the fight it is in.
     pub spell_list: Option<Box<lists::ListState>>,
     pub combo_target: Guid,
@@ -221,6 +224,9 @@ pub struct MapSpells {
     /// Threat held for a while: (creature, unit) to its amount (taunts,
     /// Fade).
     pub temp_threat: AHashMap<(Guid, Guid), f32>,
+    /// When each channel's caster next pays its spell's cost a second
+    /// (Health Funnel's health).
+    pub channel_costs: AHashMap<Guid, Instant>,
 }
 
 /// A persistent area aura on the ground.
@@ -785,7 +791,14 @@ pub fn cast(
         && gcd > 0
         && let Some(c) = map.caster_mut(caster)
     {
-        c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
+        let until = now + Duration::from_millis(u64::from(gcd));
+        if s.start_recovery_category == GCD_SPELLS {
+            c.gcd_until = Some(until);
+        } else {
+            c.other_gcds
+                .retain(|(cat, t)| *cat != s.start_recovery_category && *t > now);
+            c.other_gcds.push((s.start_recovery_category, until));
+        }
     }
     if time == 0 {
         execute(map, caster, s, targets, item, false);
@@ -1009,6 +1022,11 @@ fn execute(
                 spell: s.id,
                 duration: ms,
             });
+        }
+        if s.mana_per_second > 0 || s.mana_per_second_per_level > 0 {
+            map.spells
+                .channel_costs
+                .insert(caster, now + Duration::from_secs(1));
         }
     }
     // A pet's feeding and abilities, and the professions' effects (which
@@ -1268,6 +1286,12 @@ fn land(
             {
                 *on = false;
                 immune = true;
+            } else if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                && auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+            {
+                // An aura of a kind kept off (mangos's `IsImmuneToSpellEffect`).
+                *on = false;
+                immune = true;
             } else if outcome::effect_resisted(map, aim, s, i) {
                 *on = false;
             }
@@ -1283,7 +1307,12 @@ fn land(
         .effects
         .iter()
         .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
+    // Damage that ignores its caster's modifiers ignores their crit too
+    // (mangos's `CalculateCritAmount`); a heal's may still crit.
+    let unmodified = s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+        && !s.effects.iter().any(|e| matches!(e.effect, 10 | 67 | 75));
     let crit = deals
+        && !unmodified
         && if outcome::physical(s) {
             outcome::melee_roll(map, caster, aim, s, &l.m).1
         } else {
@@ -1516,7 +1545,27 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             school: h.school.trailing_zeros(),
             ..Default::default()
         });
-    let amount = outcome::taken(map, target, &s, amount as f32) as u32;
+    let index = s
+        .effects
+        .iter()
+        .position(|e| {
+            matches!(
+                e.aura,
+                auras::AURA_PERIODIC_DAMAGE
+                    | auras::AURA_PERIODIC_LEECH
+                    | auras::AURA_PERIODIC_DAMAGE_PERCENT
+            )
+        })
+        .unwrap_or(0);
+    let amount = outcome::taken_of(
+        map,
+        target,
+        &s,
+        index,
+        outcome::Kind::Dot,
+        h.stacks,
+        amount as f32,
+    ) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
     let (left, absorbed) = auras::absorb(map, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
@@ -1553,6 +1602,11 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         },
     );
     let items = outcome::death_items(map, target, left);
+    // A leech takes no more than the health there was (mangos's
+    // `PeriodicTick`: `min(pdamage, victim's health)`).
+    let had = map
+        .unit_fields(target)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
         // Its threat is of its school, and has the spell's threat
@@ -1586,7 +1640,7 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             h.caster,
             h.caster,
             h.spell,
-            (left as f32 * mult) as u32,
+            (left.min(had) as f32 * mult) as u32,
             true,
         );
     }
@@ -1648,7 +1702,25 @@ pub fn heal_crit(
     combat::heal_threat(map, caster, target, spell, gained);
 }
 
-/// A unit's cast is interrupted.
+/// The category most spells' global cooldown is of.
+pub const GCD_SPELLS: u32 = 133;
+
+/// Whether `c` is within the global cooldown of `category`.
+pub fn on_gcd(c: &Caster, category: u32, now: Instant) -> bool {
+    if category == 0 {
+        return false;
+    }
+    if category == GCD_SPELLS {
+        return c.gcd_until.is_some_and(|t| t > now);
+    }
+    c.other_gcds
+        .iter()
+        .any(|(cat, t)| *cat == category && *t > now)
+}
+
+/// A unit's cast is interrupted. One still being cast gives back its
+/// global cooldown and tells its caster it was interrupted (mangos's
+/// `Spell::cancel`: `ResetGCD`, `SendCastResult`).
 pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(c) = map.caster_mut(g) else {
         return;
@@ -1657,6 +1729,22 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(casting) = c.casting.take() else {
         return;
     };
+    if casting.channel_until.is_none() {
+        let category = map
+            .realm
+            .data
+            .spells
+            .get(casting.spell)
+            .map_or(0, |s| s.start_recovery_category);
+        if let Some(c) = map.caster_mut(g) {
+            if category == GCD_SPELLS {
+                c.gcd_until = None;
+            } else {
+                c.other_gcds.retain(|(cat, _)| *cat != category);
+            }
+        }
+        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
+    }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
             guid: g,
@@ -1711,11 +1799,19 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     crate::game::map::professions::line_ended(map, g);
 }
 
-/// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a
-/// player's cast whose interrupt flags say so is pushed back half a second
-/// (twice at most) or cancelled, and a channel cut short by a quarter or
-/// cancelled; talents and auras may resist the pushback.
+/// Damage taken while casting, from no one in particular: [`pushback_by`].
 pub fn pushback(map: &mut Map, g: Guid) {
+    pushback_by(map, g, Guid::zero());
+}
+
+/// Damage taken while casting, dealt by `from`, as Thistle Tea's
+/// `CastPushback` and mangos's `InterruptOrDelaySpell` have it: a player's
+/// cast whose interrupt flags say so is cancelled (a mount, the
+/// Hearthstone, gathering) or else pushed back, and a channel cut short or
+/// else cancelled (a bandage); talents and auras may resist the pushback.
+/// A channel isn't cut short by its caster's own harm, the world's
+/// included (falling, lava).
+pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
     let data = map.realm.data.clone();
     if !map.players.contains_key(&g) {
         return;
@@ -1730,20 +1826,28 @@ pub fn pushback(map: &mut Map, g: Guid) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    let (delays, cancels) = if channel {
-        (
-            s.channel_interrupt_flags & 0x4000 != 0,
-            s.channel_interrupt_flags & 0x2 != 0,
-        )
+    if channel {
+        // A channel cut short isn't cancelled too.
+        let delays = s.channel_interrupt_flags & 0x4000 != 0;
+        if delays && from == g {
+            return;
+        }
+        if !delays && s.channel_interrupt_flags & 0x2 != 0 {
+            interrupt(map, g);
+            return;
+        }
+        if !delays {
+            return;
+        }
     } else {
-        (s.interrupt_flags & 0x2 != 0, s.interrupt_flags & 0x10 != 0)
-    };
-    if cancels && !delays {
-        interrupt(map, g);
-        return;
-    }
-    if !delays {
-        return;
+        // A cast that damage cancels isn't pushed back too.
+        if s.interrupt_flags & 0x10 != 0 {
+            interrupt(map, g);
+            return;
+        }
+        if s.interrupt_flags & 0x2 == 0 {
+            return;
+        }
     }
     let m = mods::for_spell(map, g, s);
     let resist = auras::auras(map, g).map_or(0, |a| {
@@ -1870,6 +1974,10 @@ pub fn moved(map: &mut Map, g: Guid) {
 pub fn update(map: &mut Map) {
     let now = map.now;
     let data = map.realm.data.clone();
+    // Areas first: a channel's area has its last tick before the channel,
+    // run out, takes it away.
+    effects::tick_areas(map);
+    channel_costs(map);
     let mut done: Vec<Guid> = map
         .players
         .values()
@@ -1917,7 +2025,6 @@ pub fn update(map: &mut Map) {
         }
         execute(map, g, s, casting.targets, casting.item, false);
     }
-    effects::tick_areas(map);
     effects::refresh_area_auras(map);
     land_arrivals(map);
     dynamic::update(map);
@@ -1927,6 +2034,51 @@ pub fn update(map: &mut Map) {
         p.caster
             .diminishing
             .retain(|(_, _, reset)| reset.is_none_or(|r| r > now));
+    }
+}
+
+/// Channels that cost a second pay it, as mangos's `SpellAuraHolder`
+/// update has the caster pay its spell's per-second cost: Health Funnel's
+/// health, a channel without the health for it ending.
+fn channel_costs(map: &mut Map) {
+    let now = map.now;
+    let due: Vec<Guid> = map
+        .spells
+        .channel_costs
+        .iter()
+        .filter(|(_, t)| **t <= now)
+        .map(|(g, _)| *g)
+        .collect();
+    let data = map.realm.data.clone();
+    for g in due {
+        let spell = map
+            .caster(g)
+            .and_then(|c| c.casting.as_ref())
+            .filter(|c| c.channel_until.is_some())
+            .and_then(|c| data.spells.get(c.spell));
+        let Some(s) = spell else {
+            map.spells.channel_costs.remove(&g);
+            continue;
+        };
+        map.spells
+            .channel_costs
+            .insert(g, now + Duration::from_secs(1));
+        let level = map.unit_view(g).map(|u| u.level).unwrap_or(1);
+        let cost = s.mana_per_second + s.mana_per_second_per_level * level;
+        if cost == 0 {
+            continue;
+        }
+        let health = map
+            .unit_fields(g)
+            .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
+        if s.power_type == POWER_HEALTH && health <= cost {
+            map.spells.channel_costs.remove(&g);
+            if let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) {
+                end_channel(map, g, &casting);
+            }
+            continue;
+        }
+        pay(map, g, s, cost);
     }
 }
 
