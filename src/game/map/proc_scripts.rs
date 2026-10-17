@@ -4,7 +4,7 @@
 //! Magic Absorption, Mana Drain), Pyroclasm's stun, Blessed Recovery's and
 //! Persistent Shield's shares, Vampiric Embrace's healing, the judgements'
 //! gifts to attackers, Combustion's charges, Sweeping Strikes and
-//! Retaliation.
+//! Retaliation; and Lord Kazzak's Twisted Reflection and Mark of Kazzak.
 
 use rand::RngExt;
 use wow_world_messages::Guid;
@@ -81,6 +81,13 @@ const RETALIATION: u32 = 20230;
 const RETALIATION_STRIKE: u32 = 22858;
 const EYE_FOR_AN_EYE: &[u32] = &[9799, 25988];
 const EYE_FOR_AN_EYE_DAMAGE: u32 = 25997;
+
+/// Lord Kazzak's marks: blows on the reflected heal the one striking, and
+/// the marked drained dry explodes.
+const TWISTED_REFLECTION: u32 = 21063;
+const TWISTED_REFLECTION_HEAL: u32 = 21064;
+pub const MARK_OF_KAZZAK: u32 = 21056;
+const MARK_OF_KAZZAK_EXPLOSION: u32 = 21058;
 
 const SCHOOL_PHYSICAL: u32 = 1;
 const SCHOOL_HOLY: u32 = 2;
@@ -267,6 +274,17 @@ pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> O
         }
         return Outcome::DoneOwnCharges;
     }
+    if id == TWISTED_REFLECTION {
+        if other != owner {
+            crate::game::map::spells::cast_triggered(
+                map,
+                owner,
+                TWISTED_REFLECTION_HEAL,
+                Some(other),
+            );
+        }
+        return Outcome::Done;
+    }
     if EYE_FOR_AN_EYE.contains(&id) {
         if e.ex & procs::EX_CRITICAL_HIT != 0 {
             let max = map
@@ -286,6 +304,22 @@ pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> O
         return Outcome::Done;
     }
     Outcome::Unhandled
+}
+
+/// A mana leech of holder `h` drained `target`'s `power`: Mark of Kazzak
+/// explodes once there's none left, and is gone.
+pub fn leeched(map: &mut Map, target: Guid, h: &Holder, power: u16) {
+    if h.spell != MARK_OF_KAZZAK {
+        return;
+    }
+    let dry = map
+        .unit_fields(target)
+        .is_some_and(|f| f.get_u32(UNIT_FIELD_POWER1 + power) == 0);
+    if !dry {
+        return;
+    }
+    crate::game::map::spells::cast_triggered(map, target, MARK_OF_KAZZAK_EXPLOSION, Some(target));
+    auras::remove_spell(map, target, MARK_OF_KAZZAK, Some(h.caster));
 }
 
 /// Deep Wounds' trigger: the bleed, a share of the weapon's average blow

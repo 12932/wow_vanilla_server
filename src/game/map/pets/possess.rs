@@ -124,6 +124,8 @@ pub fn take(map: &mut Map, master: Guid, victim: Guid) {
     if manual {
         send_spells(map, master);
     }
+    // A creature's charm moves the player on the server.
+    crate::game::map::player_motion::control(map, victim);
 }
 
 /// The bar a possessor commands a player from: attack, and the player's
@@ -175,6 +177,7 @@ pub fn release(map: &mut Map, victim: Guid) {
     if pos.spell != 0 {
         crate::game::map::auras::remove_spell(map, victim, pos.spell, Some(pos.master));
     }
+    crate::game::map::player_motion::control(map, victim);
 }
 
 /// `CMSG_SET_ACTIVE_MOVER`: the client moves `mover` now (itself, or the

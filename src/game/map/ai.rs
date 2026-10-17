@@ -96,6 +96,7 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     call_for_help(map, creature, attacker);
     if first {
         crate::game::map::event_ai::aggro(map, creature, attacker);
+        crate::game::map::creature_combat::entered(map, creature, attacker);
     }
     crate::game::map::creature_combat::call_guards(map, creature, attacker);
 }

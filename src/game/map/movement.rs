@@ -81,6 +81,10 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if crate::game::map::pets::move_possessed(map, guid, &info, relay) {
         return;
     }
+    // Feared, confused or charmed: the server moves it, not its client.
+    if crate::game::map::player_motion::driven(map, guid) {
+        return;
+    }
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
