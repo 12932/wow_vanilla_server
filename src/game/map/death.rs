@@ -203,6 +203,7 @@ pub fn release(map: &mut Map, g: Guid) {
     become_ghost(p, now);
     let (pos, zone, team) = (p.position(), p.zone, p.team);
     map.add_corpse(corpse);
+    speeds_to_observers(map, g);
     // In a battleground, the fallen wait at their side's start.
     if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
         crate::game::map::battleground::released(map, g);
@@ -317,6 +318,9 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
             speed: p.speeds.swim,
         });
     }
+    if was_ghost {
+        speeds_to_observers(map, g);
+    }
     if corpse.is_some() {
         map.remove_corpse(guid::corpse(guid::counter(g)));
     }
@@ -343,6 +347,17 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     for o in observers {
         map.visibility_dirty.insert(o);
     }
+}
+
+/// A ghost's run and swim speeds, or the risen's, to those who see the
+/// player, at the change (Thistle Tea's ghost auras change them so).
+fn speeds_to_observers(map: &Map, g: Guid) {
+    use crate::game::map::misc::{MSG_MOVE_SET_RUN_SPEED, MSG_MOVE_SET_SWIM_SPEED};
+    let Some(speeds) = map.players.get(&g).map(|p| p.speeds) else {
+        return;
+    };
+    crate::game::map::misc::speed_to_observers(map, g, MSG_MOVE_SET_RUN_SPEED, speeds.run);
+    crate::game::map::misc::speed_to_observers(map, g, MSG_MOVE_SET_SWIM_SPEED, speeds.swim);
 }
 
 /// `CMSG_RECLAIM_CORPSE`: a ghost near their corpse, after the delay.

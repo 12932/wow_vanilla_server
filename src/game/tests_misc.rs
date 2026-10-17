@@ -1173,21 +1173,8 @@ async fn movement_acknowledgements_reach_those_who_watch() {
         orientation: 0.0,
         fall_time: 0.0,
     };
-    a.send(CMSG_FORCE_RUN_SPEED_CHANGE_ACK {
-        guid: ga,
-        counter: 0,
-        info: info.clone(),
-        new_speed: 9.0,
-    })
-    .await;
-    let speed = b
-        .wait_frame("MSG_MOVE_SET_RUN_SPEED", 0x0CD, |_| true)
-        .await;
-    let n = speed.len();
-    assert_eq!(
-        f32::from_le_bytes([speed[n - 4], speed[n - 3], speed[n - 2], speed[n - 1]]),
-        9.0
-    );
+    // (A speed's acknowledgement isn't passed on: those watching were told
+    // at the change, `tests_parity_misc`.)
     a.send(CMSG_MOVE_KNOCK_BACK_ACK {
         guid: ga,
         counter: 0,
