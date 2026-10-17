@@ -132,12 +132,8 @@ journey becomes a regression check run before every merge.
 
 ## Phase 5: data and the protocol library
 
-- **The wow_messages fork:**
-  - publish it on GitHub (`12932/wow_messages`, branch `vanilla-1.12-layouts`: the game object query, who, loot,
-    cast result, quest details, long strings, battlefield status);
-  - repin wvs and peon to it, with the two small wvs changes the clone's other commits need, and drop peon's sibling
-    path;
-  - then wvs's test client decodes everything the server sends.
+- **The wow_messages fork:** done. `12932/wow_messages`, branch `vanilla-1.12-layouts`, pinned by wvs, rustigator
+  and peon, and wvs's test client decodes what the server sends. New layout fixes go there.
 - **The data's provenance:** compare what Thistle Tea changes in code against `vmangos.sqlite` rows (its fixes and
   overrides), and carry them into wvs's loaders where they're missing.
 - **The setup:** [DATA_SETUP_PLAN.md](DATA_SETUP_PLAN.md), so every tester has the same navmesh and terrain.

@@ -139,9 +139,7 @@ impl Client {
     fn drain(&mut self) {
         while let Ok(Some(frame)) = self.rx.try_recv() {
             self.frames.push(frame.clone());
-            let parsed = quest_details_112(&frame)
-                .map(Ok)
-                .unwrap_or_else(|| ServerOpcodeMessage::read_unencrypted(&frame[..]));
+            let parsed = ServerOpcodeMessage::read_unencrypted(&frame[..]);
             match parsed {
                 Ok(m) => {
                     for g in creates(&m) {
@@ -418,68 +416,4 @@ pub fn values(m: &ServerOpcodeMessage) -> Vec<(Guid, UpdateMask)> {
             _ => None,
         })
         .collect()
-}
-
-/// A quest's details in 1.12's layout, which wow_messages' differs from
-/// (each reward item has a display id, and its strings run past 256
-/// bytes): read here into its message, the display ids dropped.
-pub(crate) fn quest_details_112(frame: &[u8]) -> Option<ServerOpcodeMessage> {
-    struct Cursor<'a>(&'a [u8]);
-    impl Cursor<'_> {
-        fn u32(&mut self) -> Option<u32> {
-            let (v, rest) = self.0.split_first_chunk::<4>()?;
-            self.0 = rest;
-            Some(u32::from_le_bytes(*v))
-        }
-        fn cstr(&mut self) -> Option<String> {
-            let end = self.0.iter().position(|b| *b == 0)?;
-            let s = String::from_utf8(self.0[..end].to_vec()).ok()?;
-            self.0 = &self.0[end + 1..];
-            Some(s)
-        }
-        fn items(&mut self) -> Option<Vec<QuestItemReward>> {
-            (0..self.u32()?)
-                .map(|_| {
-                    let (item, item_count, _display) = (self.u32()?, self.u32()?, self.u32()?);
-                    Some(QuestItemReward { item, item_count })
-                })
-                .collect()
-        }
-    }
-    let opcode = u16::from_le_bytes([*frame.get(2)?, *frame.get(3)?]);
-    if opcode != crate::game::map::quests::SMSG_QUESTGIVER_QUEST_DETAILS_OPCODE {
-        return None;
-    }
-    let mut r = Cursor(&frame[4..]);
-    let guid = Guid::new(u64::from(r.u32()?) | (u64::from(r.u32()?) << 32));
-    let quest_id = r.u32()?;
-    let (title, details, objectives) = (r.cstr()?, r.cstr()?, r.cstr()?);
-    let auto_finish = r.u32()? != 0;
-    let choice_item_rewards = r.items()?;
-    let item_rewards = r.items()?;
-    let money_reward = r.u32()?.into();
-    let reward_spell = r.u32()?;
-    let emotes = (0..r.u32()?)
-        .map(|_| {
-            Some(QuestDetailsEmote {
-                emote: r.u32()?,
-                emote_delay: Duration::from_millis(u64::from(r.u32()?)),
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(
-        SMSG_QUESTGIVER_QUEST_DETAILS {
-            guid,
-            quest_id,
-            title,
-            details,
-            objectives,
-            auto_finish,
-            choice_item_rewards,
-            item_rewards,
-            money_reward,
-            reward_spell,
-            emotes,
-        },
-    ))
 }

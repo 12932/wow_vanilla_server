@@ -2140,11 +2140,13 @@ mod spells {
             })
             .await;
         }
-        // wow_messages reads a failure's status but not its reason.
         a.wait_for("the second strike failing", |m| match m {
             ServerOpcodeMessage::SMSG_CAST_RESULT(r)
                 if r.spell == 103
-                    && r.result == SMSG_CAST_RESULT_SimpleSpellCastResult::Failure =>
+                    && matches!(
+                        r.result,
+                        SMSG_CAST_RESULT_SimpleSpellCastResult::Failure { .. }
+                    ) =>
             {
                 Some(())
             }

@@ -1109,12 +1109,18 @@ fn a_quests_details_are_laid_out_as_the_client_reads_them() {
         (1, 0, 1, 2589, 2, 7341)
     );
     assert_eq!((word(6) as i32, word(7), word(8)), (-50, 1579, 3));
-    let Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d)) =
-        harness::quest_details_112(&frame)
+    let Ok(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d)) =
+        ServerOpcodeMessage::read_unencrypted(&frame[..])
     else {
         panic!("read back");
     };
     assert_eq!((d.guid, d.quest_id, d.details.len()), (giver, 6084, 466));
-    assert_eq!(d.item_rewards.len(), 1);
+    assert_eq!(
+        d.item_rewards
+            .iter()
+            .map(|i| (i.item, i.item_count, i.item_display_id))
+            .collect::<Vec<_>>(),
+        [(2589, 2, 7341)]
+    );
     assert_eq!(d.emotes.len(), 3);
 }
