@@ -623,6 +623,10 @@ fn execute(
             }
         }
         cooldowns::start(map, caster, s, &m, item);
+        // The item cast with: its charge spent, its cooldown, binding on use.
+        if let Some(i) = item {
+            crate::game::map::items::used(map, caster, i, s.id);
+        }
     }
     // A finishing move's combo points, on the target they are on.
     let combo = map
@@ -1371,9 +1375,18 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
         return;
     };
     // Trigger 0: on use.
-    let Some(spell) = template.spells.iter().find(|s| s.id != 0 && s.trigger == 0) else {
+    let Some((index, spell)) = template
+        .spells
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.id != 0 && s.trigger == 0)
+    else {
         return;
     };
+    if let Some(code) = crate::game::map::items::check_use(map, player, item_guid, index) {
+        crate::game::map::items::send_failure(map, player, spell.id, code);
+        return;
+    }
     if cooldowns::item_on_cooldown(map, player, spell) {
         send_cast_result(map, player, spell.id, Some(fail::NOT_READY));
         return;

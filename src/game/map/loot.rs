@@ -158,6 +158,8 @@ pub struct MapLoot {
     pub respawns: Vec<(Instant, u32)>,
     /// When temporary enchantments last ran down.
     pub enchant_tick_at: Option<Instant>,
+    /// When timed items last ran down.
+    pub items_tick_at: Option<Instant>,
     /// A node's successful gatherings since it spawned.
     pub node_uses: ahash::AHashMap<Guid, u32>,
     /// Creatures whose pockets are picked this life.

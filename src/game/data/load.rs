@@ -102,6 +102,18 @@ fn latest_patch<K: std::hash::Hash + Eq, T>(items: Vec<(K, i64, T)>) -> AHashMap
 
 const IN_PATCH: &str = "patch_min <= 10 AND patch_max >= 10";
 
+/// The real world's data, loaded once for the tests that only read it;
+/// `None` where the databases aren't (CI).
+#[cfg(test)]
+pub fn real_data() -> Option<&'static GameData> {
+    static DATA: std::sync::OnceLock<Option<GameData>> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let dir = Path::new("/local/home/wallenx/runs/tt-data/db");
+        dir.join("vmangos.sqlite").exists().then(|| load(dir))
+    })
+    .as_ref()
+}
+
 /// Load the game data from `dir`, which holds `vmangos.sqlite` and
 /// `dbc.sqlite`. A missing database gives the empty world, with a warning.
 pub fn load(dir: &Path) -> GameData {
@@ -127,6 +139,7 @@ pub fn load(dir: &Path) -> GameData {
             load_misc(&db, dbc.as_ref(), &mut data);
             super::scripts_load::load(&db, &mut data);
             crate::game::map::creature_scripts::install(&mut data);
+            super::world::load(&db, dbc.as_ref(), &mut data.world);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -1179,6 +1192,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     end: parse_time(&c.string("end_time")).unwrap_or(0),
                     occurence: c.i64("occurence"),
                     length: c.i64("length"),
+                    hardcoded: c.u32("hardcoded") != 0,
                 },
                 c.u32("disabled"),
                 c.u32("hardcoded"),
@@ -1187,8 +1201,9 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             )
         })
     {
-        // Hard-coded events are run by scripts this server hasn't got.
-        if disabled == 0 && hardcoded == 0 && patch_min <= PATCH && patch_max >= PATCH {
+        // Hard-coded events follow their own rules (`events::rules`).
+        let _ = hardcoded;
+        if disabled == 0 && patch_min <= PATCH && patch_max >= PATCH {
             data.events.insert(e.id, e);
         }
     }
@@ -2128,11 +2143,9 @@ mod tests {
     /// Against the real databases, when they are here (they aren't in CI).
     #[test]
     fn vmangos_loads_with_patch_ten_spawns() {
-        let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
-        if !dir.join("vmangos.sqlite").exists() {
+        let Some(data) = real_data() else {
             return;
-        }
-        let data = load(dir);
+        };
         let creatures: usize = data.creature_spawns.values().map(Vec::len).sum();
         let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();
         assert!(creatures > 60_000, "{creatures}");
@@ -2157,11 +2170,9 @@ mod tests {
     #[test]
     fn trainers_teach_only_what_the_server_can_cast_to_twenty() {
         use crate::game::map::{auras, spells};
-        let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
-        if !dir.join("vmangos.sqlite").exists() {
+        let Some(data) = real_data() else {
             return;
-        }
-        let data = load(dir);
+        };
         assert!(
             data.spells.spells.len() > 20_000,
             "{}",
@@ -2205,11 +2216,9 @@ mod tests {
     /// The boats, events and weather of the real data.
     #[test]
     fn boats_events_and_weather_load() {
-        let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
-        if !dir.join("vmangos.sqlite").exists() {
+        let Some(data) = real_data() else {
             return;
-        }
-        let data = load(dir);
+        };
         let routes: Vec<_> = data
             .transports
             .iter()
@@ -2227,7 +2236,7 @@ mod tests {
             .iter()
             .find(|r| r.entry == 20808)
             .expect("Ratchet to Booty Bay");
-        let maps: std::collections::BTreeSet<u32> = ratchet.legs.iter().map(|l| l.map).collect();
+        let maps = ratchet.maps();
         assert_eq!(maps.into_iter().collect::<Vec<_>>(), vec![0, 1]);
         assert!(data.events.len() > 20, "{}", data.events.len());
         assert!(data.event_creatures.len() > 1000);

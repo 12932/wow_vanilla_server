@@ -11,7 +11,7 @@ use wow_world_messages::vanilla::Vector3d;
 use crate::game::data::{AREA_FLAG_ARENA, AreaTrigger};
 use crate::game::fields::PLAYER_FLAGS;
 use crate::game::map::creature::{
-    Creature, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause,
+    MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause,
 };
 use crate::game::map::gameobject::GameObject;
 use crate::game::map::grid::cell_of;
@@ -59,7 +59,7 @@ pub fn populate(map: &mut Map) {
             {
                 continue;
             }
-            if let Some(c) = Creature::from_spawn(&data, s, &mut rng) {
+            if let Some(c) = crate::game::events::spawn_creature(&data, s, &on, &mut rng) {
                 let g = map.add_creature(c);
                 if let Some(back) = save.as_ref().and_then(|v| v.dead.get(&s.guid)).copied()
                     && back > unix
@@ -301,7 +301,8 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
         return;
     };
     let zone = if zone != 0 { zone } else { data.zone_of(area) };
-    if zone != 0 && zone != p.zone {
+    let new_zone = zone != 0 && zone != p.zone;
+    if new_zone {
         p.zone = zone;
         p.online
             .zone
@@ -322,6 +323,9 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
         .area(area)
         .is_some_and(|a| a.flags & AREA_FLAG_ARENA != 0);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP, ffa);
+    if new_zone {
+        crate::game::map::world_states::send_init(map, guid);
+    }
 }
 
 /// Whether a player at `p` is inside a trigger, with some slack for the
@@ -416,6 +420,7 @@ pub const GO_DOOR: u8 = 0;
 pub const GO_BUTTON: u8 = 1;
 pub const GO_CHEST: u8 = 3;
 pub const GO_CHAIR: u8 = 7;
+pub const GO_SPELLCASTER: u8 = 22;
 
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
@@ -438,6 +443,11 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::combat::dist(ppos, o.position) > 10.0 {
         return;
     }
+    // A launcher by Elune's lake counts its fireworks; it launches them too.
+    crate::game::omen::use_object(map, object);
+    let Some(o) = map.gameobject(object) else {
+        return;
+    };
     let (kind, position, orientation) = (o.kind, o.position, o.orientation);
     let lock = map
         .realm
@@ -462,6 +472,18 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
             let gm = map.players.get(&player).is_some_and(|p| p.gm);
             if lock == 0 || gm {
                 crate::game::map::loot::open_object(map, player, object);
+            }
+        }
+        // A spellcaster: its spell, on the one who uses it.
+        GO_SPELLCASTER => {
+            let spell = map
+                .realm
+                .data
+                .gameobject_templates
+                .get(&map.gameobject(object).map_or(0, |o| o.entry))
+                .map_or(0, |t| t.data[0]);
+            if spell != 0 {
+                crate::game::map::spells::cast_triggered(map, player, spell, Some(player));
             }
         }
         GO_CHAIR => {

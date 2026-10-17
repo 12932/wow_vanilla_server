@@ -79,6 +79,17 @@ impl Walk {
         *self.points.last().expect("a walk has points")
     }
 
+    /// The points still ahead at `now`.
+    pub fn remaining(&self, now: Instant) -> Vec<Vector3d> {
+        let travelled = now.duration_since(self.started).as_secs_f32() * self.speed;
+        self.points
+            .iter()
+            .zip(&self.lengths)
+            .filter(|(_, l)| **l > travelled)
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
     pub fn done(&self, now: Instant) -> bool {
         now.duration_since(self.started) >= self.duration
     }
@@ -190,6 +201,10 @@ pub struct Creature {
     pub pet: Option<Box<crate::game::map::pets::PetState>>,
     /// What scripts keep on it: EventAI's state, its phase, a summoner.
     pub scripted: Option<Box<crate::game::map::event_ai::Scripted>>,
+    /// The event whose looks it wears; 0 for its own.
+    pub event_looks: u32,
+    /// When something summoned it, for a summons that lasts a while.
+    pub summoned_at: Option<Instant>,
 }
 
 /// Alive, or dead and waiting.
@@ -284,6 +299,8 @@ impl Creature {
             owner: None,
             pet: None,
             scripted: None,
+            event_looks: 0,
+            summoned_at: None,
         }
         .with_base()
     }

@@ -15,6 +15,7 @@ pub mod pets;
 pub mod scripts;
 mod scripts_load;
 pub mod spells;
+pub mod world;
 
 use ahash::AHashMap;
 use wow_world_base::vanilla::{Class, Gender, PlayerGender, PlayerRace, Race, RaceClass};
@@ -444,6 +445,9 @@ pub struct GameData {
     pub crafts: crafts::CraftData,
     pub pets: pets::PetData,
     pub misc: misc::MiscData,
+    /// Points of interest, events' quests and looks, escorts' paths, moving
+    /// objects' animations.
+    pub world: world::WorldData,
 }
 
 impl GameData {
@@ -678,11 +682,14 @@ pub struct GameEvent {
     pub end: i64,
     pub occurence: i64,
     pub length: i64,
+    /// Run by its own rules (a calendar, or what happens in the world),
+    /// not its recurrence.
+    pub hardcoded: bool,
 }
 
 impl GameEvent {
     pub fn active(&self, now: i64) -> bool {
-        if self.occurence <= 0 || now < self.start || now >= self.end {
+        if self.hardcoded || self.occurence <= 0 || now < self.start || now >= self.end {
             return false;
         }
         (now - self.start) % (self.occurence * 60) < self.length * 60

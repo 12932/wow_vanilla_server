@@ -105,22 +105,24 @@ fn soon(p: &Player, q: &Quest) -> bool {
     p.level() < q.min_level && p.level() + 4 >= q.min_level
 }
 
-/// The quests `giver` (a creature or object) starts and ends.
+/// The quests `giver` (a creature or object) starts and ends; an event's
+/// quests are started only while it runs.
 fn relations(map: &Map, giver: Guid) -> (Vec<u32>, Vec<u32>) {
     let npc = &map.realm.data.npc;
-    if guid::is_unit(giver) {
-        let entry = guid::entry(giver);
+    let entry = guid::entry(giver);
+    let (mut starts, ends) = if guid::is_unit(giver) {
         (
             npc.creature_starts.get(&entry).cloned().unwrap_or_default(),
             npc.creature_ends.get(&entry).cloned().unwrap_or_default(),
         )
     } else {
-        let entry = guid::entry(giver);
         (
             npc.object_starts.get(&entry).cloned().unwrap_or_default(),
             npc.object_ends.get(&entry).cloned().unwrap_or_default(),
         )
-    }
+    };
+    starts.retain(|q| crate::game::events::quest_offered(&map.realm, *q));
+    (starts, ends)
 }
 
 /// The icon a quest giver shows `player`.
@@ -326,6 +328,11 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     }
     p.journal.log.push(Logged {
         quest,
+        expires: if q.limit_time > 0 {
+            crate::game::social::mail::now() + i64::from(q.limit_time)
+        } else {
+            0
+        },
         ..Default::default()
     });
     refresh_log(p, &data);
@@ -343,6 +350,7 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
             player,
         );
     }
+    crate::game::map::escorts::accepted(map, player, quest);
 }
 
 /// The log's update fields, from the journal.
@@ -369,6 +377,33 @@ pub fn refresh_log(p: &mut Player, data: &GameData) {
         }
         p.fields.set_u32(base, l.quest);
         p.fields.set_u32(base + 1, state);
+        p.fields.set_u32(base + 2, l.expires.max(0) as u32);
+    }
+}
+
+/// Timed quests whose time is up fail.
+pub fn update_timers(map: &mut Map) {
+    let now = crate::game::social::mail::now();
+    let data = map.realm.data.clone();
+    for p in map.players.values_mut() {
+        let failed: Vec<u32> = p
+            .journal
+            .log
+            .iter_mut()
+            .filter(|l| l.expires != 0 && l.expires <= now && !l.failed)
+            .map(|l| {
+                l.failed = true;
+                l.quest
+            })
+            .collect();
+        if failed.is_empty() {
+            continue;
+        }
+        for quest in failed {
+            p.outbound
+                .send(&SMSG_QUESTUPDATE_FAILEDTIMER { quest_id: quest });
+        }
+        refresh_log(p, &data);
     }
 }
 

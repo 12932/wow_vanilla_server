@@ -38,6 +38,7 @@ const DEFAULT_TEXT: u32 = 1;
 pub struct Flight {
     pub walk: Walk,
     pub destination: u32,
+    pub mount: u32,
 }
 
 /// The creature `npc`, if `player` may talk to it and it has `flag`: its
@@ -217,6 +218,22 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
     else {
         return;
     };
+    // An option may mark a spot on the map, besides what it does.
+    if o.action_poi != 0
+        && let Some(poi) = data.world.pois.get(&o.action_poi)
+    {
+        send(
+            map,
+            player,
+            &SMSG_GOSSIP_POI {
+                flags: poi.flags,
+                position: Vector2d { x: poi.x, y: poi.y },
+                icon: poi.icon,
+                data: poi.data,
+                location_name: poi.name.clone(),
+            },
+        );
+    }
     if o.script != 0 {
         crate::game::map::scripts::start(
             map,
@@ -659,8 +676,47 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     p.flight = Some(Flight {
         walk,
         destination: to,
+        mount,
     });
     map.send_to_observers(player, &frame, true);
+}
+
+/// A flight under way at logout goes on from where the player is.
+pub fn resume_flight(map: &mut Map, player: Guid) {
+    let now = map.now;
+    let spline_id = map.next_spline_id;
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let Some(saved) = p.row.state.flight.take() else {
+        return;
+    };
+    if saved.map != map.key.map || saved.points.is_empty() {
+        return;
+    }
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let start = p.position();
+    let mut points = vec![start];
+    points.extend(saved.points.iter().map(|(x, y, z)| Vector3d {
+        x: *x,
+        y: *y,
+        z: *z,
+    }));
+    p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, saved.mount);
+    p.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        UNIT_FLAG_TAXI_FLIGHT | UNIT_FLAG_DISABLE_MOVE,
+        true,
+    );
+    let walk = Walk::new(points, TAXI_SPEED, now, spline_id, true);
+    let frame = flight_packet(player, start, &walk, spline_id);
+    p.flight = Some(Flight {
+        walk,
+        destination: saved.destination,
+        mount: saved.mount,
+    });
+    p.outbound.send_frame(frame.clone());
+    map.send_to_observers(player, &frame, false);
 }
 
 /// Players in flight move along; one who lands is let go.
