@@ -14,6 +14,7 @@ pub mod combat;
 pub mod conditions;
 pub mod creature;
 pub mod creature_groups;
+pub mod creature_motion;
 pub mod creature_combat;
 
 pub mod death;
@@ -39,6 +40,7 @@ pub mod inventory;
 pub mod item_scripts;
 pub mod items_misc;
 pub mod items;
+pub mod local_defense;
 pub mod login;
 pub mod loot;
 pub mod meeting_stones;

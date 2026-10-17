@@ -378,6 +378,7 @@ pub fn hello(map: &mut Map, player: Guid, giver: Guid) {
     if !near_giver(map, player, giver) {
         return;
     }
+    crate::game::map::creature_motion::talk_pause(map, giver);
     let quests = giver_quests(map, player, giver);
     if quests.len() == 1 {
         let q = quests[0].quest_id;

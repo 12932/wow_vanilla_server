@@ -48,6 +48,8 @@ pub struct Walk {
     pub run: bool,
     /// Through the air, not along the ground.
     pub fly: bool,
+    /// Falling (a flyer's corpse).
+    pub falling: bool,
 }
 
 impl Walk {
@@ -75,7 +77,13 @@ impl Walk {
             spline_id,
             run,
             fly: false,
+            falling: false,
         }
+    }
+
+    /// The distance from the start to each point.
+    pub fn lengths(&self) -> &[f32] {
+        &self.lengths
     }
 
     pub fn destination(&self) -> Vector3d {
@@ -119,8 +127,11 @@ impl Walk {
         (b, (b.y - a.y).atan2(b.x - a.x))
     }
 
-    /// Run mode (0x100) and flying (0x200).
+    /// Run mode (0x100) and flying (0x200); a fall's only falling (0x2).
     pub fn spline_flags(&self) -> u32 {
+        if self.falling {
+            return 0x2;
+        }
         (if self.run { 0x100 } else { 0 }) | (if self.fly { 0x200 } else { 0 })
     }
 
@@ -215,6 +226,8 @@ pub struct Creature {
     pub summoned_at: Option<Instant>,
     /// Its fight's leash, reach, flight and regeneration.
     pub engagement: crate::game::map::creature_combat::Engagement,
+    /// What its wounds leave of its run speed.
+    pub wounded: f32,
 }
 
 /// Alive, or dead and waiting.
@@ -312,6 +325,7 @@ impl Creature {
             event_looks: 0,
             summoned_at: None,
             engagement: Default::default(),
+            wounded: 1.0,
         }
         .with_base()
     }
@@ -436,6 +450,10 @@ impl Creature {
         }
         c.movement_type = spawn.movement_type;
         c.wander_distance = spawn.wander_distance;
+        // A flyer is in the air from the start.
+        if crate::game::map::creature_motion::template_flies(template) {
+            c.move_flags |= crate::game::map::creature_motion::FLIGHT_FLAGS;
+        }
         if spawn.movement_type == MOVEMENT_WAYPOINT && !data.waypoints.contains_key(&spawn.guid) {
             c.movement_type = MOVEMENT_IDLE;
         }

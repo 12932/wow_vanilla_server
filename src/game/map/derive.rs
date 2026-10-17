@@ -742,7 +742,8 @@ fn speed(map: &mut Map, g: Guid) {
     };
     let pct = c.auras.speed_percent(mounted);
     let base = if c.base.run_speed > 0.0 { c.base.run_speed } else { 7.0 };
-    let speed = (base * (1.0 + pct as f32 / 100.0)).max(0.5);
+    // Wounds slow it, past the auras.
+    let speed = (base * (1.0 + pct as f32 / 100.0) * c.wounded).max(0.5);
     if (speed - c.speeds.run).abs() > 0.01 {
         c.speeds.run = speed;
         if let Some(frame) = crate::game::conn::encode(&SMSG_SPLINE_SET_RUN_SPEED { guid: g, speed }) {
