@@ -1650,18 +1650,16 @@ async fn a_kills_reputation_is_the_killers_sides_and_half_again_to_the_parent_pa
     // A kill whose reward stops at friendly, for one honored: none to the
     // guild, still half to its parent.
     let mut d = with_factions(data());
-    for (id, index) in [(PARENT_GUILD, 7)] {
-        d.misc.factions.insert(
-            id,
-            FactionDef {
-                id,
-                index,
-                name: format!("Faction {id}"),
-                variants: [(0xFF, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)],
-                ..Default::default()
-            },
-        );
-    }
+    d.misc.factions.insert(
+        PARENT_GUILD,
+        FactionDef {
+            id: PARENT_GUILD,
+            index: 7,
+            name: format!("Faction {PARENT_GUILD}"),
+            variants: [(0xFF, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)],
+            ..Default::default()
+        },
+    );
     d.misc.factions.get_mut(&GUILD).unwrap().parent = PARENT_GUILD;
     d.misc.kill_reputation.insert(
         PLAIN,
