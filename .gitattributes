@@ -1,0 +1,2 @@
+# The world's databases, too large for plain git (vmangos.sqlite is over GitHub's 100 MB).
+data/db/*.sqlite filter=lfs diff=lfs merge=lfs -text

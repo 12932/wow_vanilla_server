@@ -25,7 +25,7 @@ the checkout looks in the checkout's `data/`):
 
 | Directory | Holds | Without it |
 |---|---|---|
-| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export) | the world is empty: no creatures, objects, spells or quests |
+| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export). They ship with the repository, in Git LFS: install it before cloning, or run `git lfs pull` after | the world is empty: no creatures, objects, spells or quests |
 | `data/nav` | a rustigator bake (`Azeroth.map` and the rest) | creatures walk straight lines |
 | `data/terrain` | Thistle Tea's terrain tiles (`MMMMRRCC.map`, from its `nix run .#terrain-data`) | liquids outside WMOs have no kind (the deep sea doesn't tire swimmers, lava doesn't burn) |
 
