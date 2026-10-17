@@ -1691,6 +1691,11 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         s.talents.insert(t.id, t);
     }
+    for (tab, classes) in rows(dbc, "SELECT * FROM TalentTab", |c| {
+        (c.u32("id"), c.u32("class_mask"))
+    }) {
+        s.talent_tabs.insert(tab, classes);
+    }
     for a in rows(dbc, "SELECT * FROM SkillLineAbility", |c| SkillAbility {
         skill: c.u32("skill_line"),
         spell: c.u32("spell"),
@@ -1729,6 +1734,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     s.inherit_proc_events();
     s.inherit_groups();
+    s.index_talent_lines();
 }
 
 /// vmangos's corrections to `spell_template` (`spell_mod` and

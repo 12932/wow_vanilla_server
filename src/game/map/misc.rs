@@ -490,7 +490,18 @@ pub fn talent_spells(
     p: &crate::game::map::player::Player,
     data: &crate::game::data::GameData,
 ) -> Vec<u32> {
-    let mut out = Vec::new();
+    // A talent's ranks, and those a trainer taught after them (Mortal
+    // Strike's), as mangos's `resetTalents` takes every rank of a talent's
+    // chain.
+    let mut out: Vec<u32> = p
+        .spells
+        .iter()
+        .copied()
+        .filter(|s| {
+            data.spells.talent_of(*s).is_some()
+                && !data.spells.talents.values().any(|t| t.ranks.contains(s))
+        })
+        .collect();
     for t in data.spells.talents.values() {
         for r in t.ranks.iter().filter(|r| **r != 0 && p.spells.contains(r)) {
             out.push(*r);

@@ -275,6 +275,11 @@ pub struct SpellData {
     pub target_positions: AHashMap<u32, (u32, f32, f32, f32, f32)>,
     /// `Talent`: talent id → its ranks' spells.
     pub talents: AHashMap<u32, TalentInfo>,
+    /// `TalentTab`: a talent tab → the classes (a mask) it is for.
+    pub talent_tabs: AHashMap<u32, u32>,
+    /// A talent's rank or a rank trained after it (Mortal Strike's from the
+    /// trainer, by the skill line's `superseded_by`) → the talent.
+    pub talent_lines: AHashMap<u32, u32>,
     /// `creature_spells`: list → its spells.
     pub creature_spells: AHashMap<u32, Vec<CreatureSpell>>,
     /// Spells by the skill line they teach (`SkillLineAbility`): spell → skill.
@@ -426,6 +431,36 @@ impl SpellData {
             }
             self.groups.insert(id, groups);
         }
+    }
+
+    /// Index each talent's ranks, and the ranks a trainer teaches after
+    /// them, by talent (Thistle Tea's `Talent.by_spell` through the chain;
+    /// what mangos's `resetTalents` takes with the talent).
+    pub fn index_talent_lines(&mut self) {
+        let mut lines = AHashMap::new();
+        for t in self.talents.values() {
+            for r in t.ranks.iter().filter(|r| **r != 0) {
+                let mut at = *r;
+                for _ in 0..16 {
+                    lines.insert(at, t.id);
+                    let next = self
+                        .skill_abilities
+                        .get(&at)
+                        .and_then(|a| a.iter().find(|a| a.superseded_by != 0))
+                        .map(|a| a.superseded_by);
+                    match next {
+                        Some(n) if !lines.contains_key(&n) => at = n,
+                        _ => break,
+                    }
+                }
+            }
+        }
+        self.talent_lines = lines;
+    }
+
+    /// The talent `spell` is a rank of, or was trained after.
+    pub fn talent_of(&self, spell: u32) -> Option<u32> {
+        self.talent_lines.get(&spell).copied()
     }
 
     pub fn cast_time(&self, s: &SpellTemplate) -> u32 {

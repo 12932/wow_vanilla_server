@@ -842,36 +842,7 @@ fn trainer_spells(map: &Map, g: Guid) -> Vec<u32> {
         .flat_map(|(_, spells)| spells.iter())
         .filter(|(_, at)| *at <= level)
         .map(|(spell, _)| *spell);
-    // A talent's spell, or a later rank of one (Mortal Strike's trained
-    // ranks), back along its ranks: `spell_chain`'s, else the skill line's
-    // `superseded_by`.
-    let prev: ahash::AHashMap<u32, u32> = data
-        .spells
-        .skill_abilities
-        .values()
-        .flatten()
-        .filter(|a| a.superseded_by != 0)
-        .map(|a| (a.superseded_by, a.spell))
-        .collect();
-    let talent_of = |spell: u32| {
-        let mut at = spell;
-        for _ in 0..16 {
-            if let Some(t) = data.spells.talents.values().find(|t| t.ranks.contains(&at)) {
-                return Some(t.id);
-            }
-            at = match data
-                .spells
-                .ranks
-                .get(&at)
-                .map(|r| r.prev)
-                .filter(|p| *p != 0)
-            {
-                Some(p) => p,
-                None => *prev.get(&at)?,
-            };
-        }
-        None
-    };
+    let talent_of = |spell: u32| data.spells.talent_of(spell);
     let known_talents: Vec<u32> = p.spells.iter().filter_map(|s| talent_of(*s)).collect();
     let mut out: Vec<u32> = data
         .creature_templates

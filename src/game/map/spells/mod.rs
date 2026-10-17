@@ -2042,6 +2042,12 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     if rank != have || spell == 0 || free_talent_points(p, &data) == 0 {
         return;
     }
+    // Only the class's own tabs (mangos's `TalentTab` class mask).
+    if let Some(classes) = data.spells.talent_tabs.get(&t.tab)
+        && classes & (1u32 << (p.row.class.max(1) - 1)) == 0
+    {
+        return;
+    }
     if spent_talent_points(p, &data, Some(t.tab)) < t.row * 5 {
         return;
     }
