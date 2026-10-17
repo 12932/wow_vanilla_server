@@ -5,7 +5,7 @@ Phase 3. When something here is fixed, its line gets the commit.
 
 ## Bugs found while mapping
 
-### Read and confirmed in the code
+### Read and confirmed in the code (fixed: fix/bugs1)
 
 - **A dead unit can be killed again.** `combat::deal_damage_school` and the spell landing path (`spells/mod.rs`
   `land`, `land_arrivals`) never check that the victim is alive. A missile landing on a corpse runs `kill` again:
@@ -115,7 +115,17 @@ Phase 3. When something here is fixed, its line gets the commit.
   - its sound tier is grade times 3, not vanilla's thresholds;
   - it never changes gradually or suddenly.
 
-### Reported, not yet confirmed
+### Reported (fix/bugs1 fixed the rest)
+
+Not taken up yet:
+- Script command 88 stopping the fight.
+- A dead player's fighting guardian removed at once.
+- Extra attacks waiting out a cast.
+- Pets attacking civilians.
+- A game event replacing a creature mid-fight.
+- The two tests that claim more than they assert.
+- An object's gossip scripts starting as (object, player) (S12).
+
 
 **Object gossip:**
 - `quests::object_hello` and `objects::show_readable` pass NPC flags 0, which hides every option.

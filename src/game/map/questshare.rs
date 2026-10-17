@@ -101,14 +101,23 @@ pub fn push(map: &mut Map, g: Guid, quest: u32) {
     }
 }
 
-/// `MSG_QUEST_PUSH_RESULT` from a member: told to the sharer.
+/// `MSG_QUEST_PUSH_RESULT` from a member: told to the one sharing with
+/// them, and only what a member may answer; that they took it the server
+/// says (mangos's `HandleQuestPushResult`, Thistle Tea's
+/// `QuestSharing.result`).
 fn answer(map: &mut Map, g: Guid, sharer: Guid, message: QuestPartyMessage) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    if p.misc.quest_shared.is_some_and(|(by, _)| by == sharer) {
-        p.misc.quest_shared = None;
+    if !p.misc.quest_shared.is_some_and(|(by, _)| by == sharer)
+        || matches!(
+            message,
+            QuestPartyMessage::SharingQuest | QuestPartyMessage::AcceptQuest
+        )
+    {
+        return;
     }
+    p.misc.quest_shared = None;
     result(map, sharer, g, message);
 }
 
@@ -169,7 +178,7 @@ fn confirm(map: &mut Map, g: Guid, quest: u32) {
     else {
         return;
     };
-    quests::accept(map, g, by, quest);
+    quests::accept_asked(map, g, by, quest);
 }
 
 /// `CMSG_QUESTLOG_SWAP_QUEST`: two of the log's slots trade places.

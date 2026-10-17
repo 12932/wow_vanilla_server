@@ -541,6 +541,31 @@ fn talent_wipe(map: &mut Map, g: Guid, npc: Guid) {
     crate::game::map::spells::cast_triggered(map, g, SPELL_UNTALENT_VISUAL, Some(g));
 }
 
+/// `SkillRaceClassInfo`'s flag: the skill may be unlearned.
+const SKILL_FLAG_CAN_UNLEARN: u32 = 0x20;
+/// The primary professions, unlearnable without the client's data.
+const PRIMARY_PROFESSIONS: [u32; 9] = [164, 165, 171, 182, 186, 197, 202, 333, 393];
+
+/// Whether a player of `race` and `class` may unlearn `skill`: its
+/// `SkillRaceClassInfo` says so (mangos's `SKILL_FLAG_CAN_UNLEARN`,
+/// Thistle Tea's `unlearnable?`), the primary professions alone.
+pub fn unlearnable(data: &crate::game::data::GameData, skill: u32, race: u8, class: u8) -> bool {
+    if data.spells.skill_race_class.is_empty() {
+        return PRIMARY_PROFESSIONS.contains(&skill);
+    }
+    let (race_bit, class_bit) = (1u32 << (race.max(1) - 1), 1u32 << (class.max(1) - 1));
+    data.spells
+        .skill_race_class
+        .get(&skill)
+        .and_then(|rows| {
+            rows.iter().find(|(races, classes, _)| {
+                (*races == 0 || races & race_bit != 0)
+                    && (*classes == 0 || classes & class_bit != 0)
+            })
+        })
+        .is_some_and(|(_, _, flags)| flags & SKILL_FLAG_CAN_UNLEARN != 0)
+}
+
 /// `CMSG_UNLEARN_SKILL`: a profession (or other skill the player may drop)
 /// and its spells are forgotten.
 fn unlearn_skill(map: &mut Map, g: Guid, skill: u32) {
@@ -548,7 +573,9 @@ fn unlearn_skill(map: &mut Map, g: Guid, skill: u32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    if crate::game::map::skills::value(p, skill).is_none() {
+    if crate::game::map::skills::value(p, skill).is_none()
+        || !unlearnable(&data, skill, p.row.race, p.row.class)
+    {
         return;
     }
     let spells: Vec<u32> = p

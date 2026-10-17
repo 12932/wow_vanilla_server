@@ -430,6 +430,66 @@ pub fn add_item_with_property(
     Ok(())
 }
 
+/// Where `count` of `t` would go in `p`'s bags: onto its stacks first
+/// (an index and how many), then into free slots (a bag, slot and how
+/// many); or why it won't all fit.
+#[allow(clippy::type_complexity)]
+fn plan(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+) -> Result<(Vec<(usize, u32)>, Vec<(u8, u8, u32)>), Fail> {
+    let entry = t.entry;
+    let stack = t.stackable.max(1);
+    if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
+        return Err(Fail::CantCarryMore);
+    }
+    let mut left = count;
+    let mut onto: Vec<(usize, u32)> = Vec::new();
+    for (i, item) in p.items.iter().enumerate() {
+        if left == 0 {
+            break;
+        }
+        // Onto what is carried, never the bank (Thistle Tea's and mangos's
+        // stores).
+        if item.entry == entry
+            && item.carried()
+            && item.count() < stack
+            && !(item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END)
+        {
+            let add = (stack - item.count()).min(left);
+            onto.push((i, add));
+            left -= add;
+        }
+    }
+    let mut new_slots = Vec::new();
+    if left > 0 {
+        for (bag, slot) in crate::game::map::items::carry_slots(data, p, Some(t)) {
+            if left == 0 {
+                break;
+            }
+            if p.item_at(bag, slot).is_some() {
+                continue;
+            }
+            let n = left.min(stack);
+            new_slots.push((bag, slot, n));
+            left -= n;
+        }
+    }
+    if left > 0 {
+        return Err(Fail::InventoryFull);
+    }
+    Ok((onto, new_slots))
+}
+
+/// Whether `count` of item `entry` fits in `p`'s bags, as [`add_item`]
+/// would put it.
+pub fn room_for(p: &Player, data: &GameData, entry: u32, count: u32) -> Result<(), Fail> {
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    plan(p, data, t, count).map(|_| ())
+}
+
 /// Give `p` `count` of item `entry`: onto stacks first, then new items in
 /// free slots. Nothing changes unless all of it fits.
 pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> Result<(), Fail> {
@@ -458,46 +518,7 @@ fn store(
     let Some(p) = map.players.get_mut(&g) else {
         return Err(Fail::NotFound);
     };
-    let stack = t.stackable.max(1);
-    if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
-        return Err(Fail::CantCarryMore);
-    }
-    // Plan: room on stacks, then free slots.
-    let mut left = count;
-    let mut onto: Vec<(usize, u32)> = Vec::new();
-    for (i, item) in p.items.iter().enumerate() {
-        if left == 0 {
-            break;
-        }
-        // Onto what is carried, never the bank (Thistle Tea's and mangos's
-        // stores).
-        if item.entry == entry
-            && item.carried()
-            && item.count() < stack
-            && !(item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END)
-        {
-            let add = (stack - item.count()).min(left);
-            onto.push((i, add));
-            left -= add;
-        }
-    }
-    let mut new_slots = Vec::new();
-    if left > 0 {
-        for (bag, slot) in crate::game::map::items::carry_slots(&data, p, Some(&t)) {
-            if left == 0 {
-                break;
-            }
-            if p.item_at(bag, slot).is_some() {
-                continue;
-            }
-            let n = left.min(stack);
-            new_slots.push((bag, slot, n));
-            left -= n;
-        }
-    }
-    if left > 0 {
-        return Err(Fail::InventoryFull);
-    }
+    let (onto, new_slots) = plan(p, &data, &t, count)?;
     // Where it went, for the push: a stack it joined is no one slot (-1,
     // Thistle Tea's and mangos's).
     let mut last = None;

@@ -453,6 +453,9 @@ pub fn check(
                 }
             }
         }
+        if let Some(code) = room_for_made(map, caster, s) {
+            return Some(code);
+        }
         if s.requires_spell_focus != 0
             && map.players.contains_key(&caster)
             && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
@@ -486,6 +489,61 @@ pub fn check(
         }
     }
     check_target(map, caster, s, t, triggered, m)
+}
+
+/// What a cast pays for, checked again as it goes off (mangos's
+/// `CheckCast` at the cast, Thistle Tea's launch): the power it costs (a
+/// caster drained while casting has none to pay), its reagents, and room
+/// for what it makes. Why it fails, if it does.
+pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
+    if let Some(why) = super::unpayable(map, caster, s, cost) {
+        return Some(why);
+    }
+    if let Some(p) = map.players.get(&caster)
+        && !p.gm
+        && s.reagents
+            .iter()
+            .any(|(r, n)| *r != 0 && p.count_of(*r) < *n)
+    {
+        return Some(fail::REAGENTS);
+    }
+    room_for_made(map, caster, s)
+}
+
+/// Whether what `s` makes fits in its caster's bags (mangos's
+/// `CheckItems`): if not, they are told why, and the cast fails before it
+/// costs anything.
+fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    let p = map.players.get(&caster)?;
+    let data = &map.realm.data;
+    let level = u32::from(p.level());
+    for (i, e) in s.effects.iter().enumerate() {
+        if e.effect != super::EFFECT_CREATE_ITEM || e.item_type == 0 {
+            continue;
+        }
+        let item =
+            super::scripts::created_item(map, caster, s, u32::try_from(e.item_type).unwrap_or(0));
+        let Some(t) = data.item(item) else {
+            continue;
+        };
+        let count = (super::points(s, i, level).max(1) as u32).min(t.stackable.max(1));
+        if let Err(why) = crate::game::map::inventory::room_for(p, data, item, count) {
+            crate::game::map::inventory::send_fail(p, why, Guid::zero());
+            return Some(fail::DONT_REPORT);
+        }
+    }
+    None
+}
+
+/// Whether `s` brings back the dead.
+fn resurrects(s: &SpellTemplate) -> bool {
+    s.effects.iter().any(|e| matches!(e.effect, 18 | 113))
+}
+
+/// Whether `s` may land on the dead: a resurrection, a spell that allows
+/// a dead target, or skinning.
+pub fn for_the_dead(s: &SpellTemplate) -> bool {
+    resurrects(s) || s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET) || s.has_effect(95)
 }
 
 /// The target's checks.
@@ -531,12 +589,11 @@ fn check_target(
     let Some(u) = map.unit_view(target) else {
         return Some(fail::BAD_TARGETS);
     };
-    let resurrects = s.effects.iter().any(|e| matches!(e.effect, 18 | 113));
-    if resurrects {
+    if resurrects(s) {
         if u.alive {
             return Some(fail::TARGET_NOT_DEAD);
         }
-    } else if !u.alive && !s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET) && !s.has_effect(95) {
+    } else if !u.alive && !for_the_dead(s) {
         return Some(fail::TARGETS_DEAD);
     }
     // A party member's spell is for the caster's party and pets, not the
@@ -559,7 +616,7 @@ fn check_target(
                 Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
             )
         });
-        if (requires_enemy || harmful && !resurrects)
+        if (requires_enemy || harmful && !resurrects(s))
             && !combat::can_attack(map, caster, target)
             && !s.has_effect(95)
         {

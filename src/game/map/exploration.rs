@@ -39,7 +39,9 @@ pub fn xp(data: &GameData, level: u32, area_level: u32) -> u32 {
     }
 }
 
-/// A player is in `area`: explored, with XP the first time.
+/// A player is in `area`: explored, with XP the first time. Not by the
+/// dead or a ghost, nor from a flight (mangos's
+/// `CheckAreaExploreAndOutdoor`, Thistle Tea's `discover_area`).
 pub fn entered(map: &mut Map, g: Guid, area: u32) {
     let data = map.realm.data.clone();
     let Some(info) = data.area(area) else {
@@ -53,6 +55,9 @@ pub fn entered(map: &mut Map, g: Guid, area: u32) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if p.death != crate::game::map::death::Death::Alive || p.flight.is_some() {
+        return;
+    }
     p.row.state.explored_zones.resize(WORDS, 0);
     if p.row.state.explored_zones[word] & mask != 0 {
         return;

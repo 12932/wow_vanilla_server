@@ -1667,6 +1667,14 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         s.spell_skills.insert(a.spell, a.skill);
         s.skill_abilities.entry(a.spell).or_default().push(a);
     }
+    for (skill, info) in rows(dbc, "SELECT * FROM SkillRaceClassInfo", |c| {
+        (
+            c.u32("skill_line"),
+            (c.u32("race_mask"), c.u32("class_mask"), c.u32("flags")),
+        )
+    }) {
+        s.skill_race_class.entry(skill).or_default().push(info);
+    }
     for e in rows(dbc, "SELECT * FROM SpellItemEnchantment", |c| Enchantment {
         id: c.u32("id"),
         effects: std::array::from_fn(|i| {

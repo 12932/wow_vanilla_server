@@ -957,8 +957,13 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
             c.last_action = Some(now);
             c.attackers.insert(y);
         }
-        if let Some(f) = map.unit_fields_mut(x) {
-            f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+        let Some(f) = map.unit_fields_mut(x) else {
+            continue;
+        };
+        let fresh = !f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+        f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+        if fresh {
+            crate::game::map::spells::combat_began(map, x);
         }
     }
     // A blow on a flagged unit flags the attacker; a flagged player's blow
@@ -2053,11 +2058,12 @@ pub fn cancel_queued(map: &mut Map, g: Guid) {
     }
 }
 
-/// A heal makes threat for the healer on every creature fighting the
-/// healed: half the health it gave back.
+/// A heal makes threat for the healer on the creatures fighting the
+/// healed that may fight the healer: half the health it gave back, by the
+/// healer's threat, split among them (mangos's `threatAssist`, Thistle
+/// Tea's `heal_threat`).
 pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained: u32) {
-    pvp_contact(map, healer, healed, Contact::Assist);
-    if gained == 0 {
+    if gained == 0 || healer.is_zero() {
         return;
     }
     let school = map
@@ -2066,19 +2072,20 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
         .spells
         .get(spell)
         .map_or(2, |s| s.school_mask());
-    let threat = gained as f32 * 0.5 * threat_multiplier(map, healer, school);
     let fighting: Vec<Guid> = map
         .creatures
         .iter()
-        .filter(|(_, c)| {
-            c.alive() && c.combat.attacking && c.threat.iter().any(|(t, _)| *t == healed)
-        })
+        .filter(|(_, c)| c.alive() && c.threat.iter().any(|(t, _)| *t == healed))
         .map(|(_, c)| c.guid)
+        .filter(|c| can_attack(map, *c, healer))
         .collect();
+    if fighting.is_empty() {
+        return;
+    }
+    let threat =
+        gained as f32 * 0.5 * threat_multiplier(map, healer, school) / fighting.len() as f32;
     for c in fighting {
-        if can_attack(map, c, healer) {
-            crate::game::map::ai::add_threat(map, c, healer, threat);
-        }
+        crate::game::map::ai::add_threat(map, c, healer, threat);
     }
 }
 
@@ -2134,8 +2141,12 @@ fn deal_damage_with(
     spell: Option<u32>,
     extends: bool,
 ) {
-    // A GM in god mode takes nothing.
-    if crate::game::map::gm_dev::invulnerable(map, victim) {
+    // A GM in god mode takes nothing, and the dead nothing more (mangos's
+    // `DealMeleeDamage` and `DealSpellDamage`): a blow or a tick that gets
+    // to a corpse doesn't kill it again.
+    if crate::game::map::gm_dev::invulnerable(map, victim)
+        || map.unit_view(victim).is_none_or(|u| !u.alive)
+    {
         return;
     }
     // A pet's blows count as its master's for duels and honor.
@@ -2199,7 +2210,8 @@ fn deal_damage_with(
     }
 }
 
-/// `victim` dies at `killer`'s hand.
+/// `victim` dies at `killer`'s hand, once: the dead aren't killed again
+/// (Thistle Tea's `Entity.kill`).
 pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
     kill_by(map, killer, victim, None);
 }
@@ -2209,6 +2221,9 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
 /// Suicide (27965), wears nothing down (Thistle Tea's
 /// `Durability.death_loss?`).
 pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
+    if map.unit_view(victim).is_none_or(|u| !u.alive) {
+        return;
+    }
     let attackers: Vec<Guid> = map
         .combat(victim)
         .map(|c| c.attackers.iter().copied().collect())

@@ -39,6 +39,8 @@ const WRAPPINGS: [(u32, u32); 6] = [
 ];
 /// What an item's stored data says it wraps.
 const GIFT_PREFIX: &str = "gift:";
+/// What an opened item's stored data says is left in it.
+pub const LOOT_PREFIX: &str = "loot:";
 
 /// What a gift holds (mangos' `character_gifts`): the wrapped item's entry
 /// and flags, and who wrapped it. The rest of the item (its GUID, wear,
@@ -65,6 +67,67 @@ pub fn wrapped(data: &str) -> Option<Wrapped> {
 }
 
 /// `data` with its gift token replaced by `gift` (or dropped).
+/// What is left in an opened item, from its stored data: its gold, and
+/// each item left as `item,count,random property,quest,condition` (as
+/// mangos' `item_loot` keeps it, and Thistle Tea its item's loot).
+pub fn kept_loot(data: &str) -> Option<(u32, Vec<loot::LootSlot>)> {
+    let rest = data.split(';').find_map(|t| t.strip_prefix(LOOT_PREFIX))?;
+    let mut parts = rest.split('/');
+    let gold = parts.next()?.parse().ok()?;
+    let items = parts
+        .filter_map(|x| {
+            let v: Vec<u32> = x.split(',').filter_map(|n| n.parse().ok()).collect();
+            let [item, count, random_property, quest, condition] = v[..] else {
+                return None;
+            };
+            Some(loot::LootSlot {
+                item,
+                count,
+                random_property,
+                quest: quest != 0,
+                condition,
+                ..Default::default()
+            })
+        })
+        .collect();
+    Some((gold, items))
+}
+
+/// `data` with what is left of `l` kept in it, or none.
+fn with_loot(data: &str, l: Option<&Loot>) -> String {
+    let mut out: Vec<String> = data
+        .split(';')
+        .filter(|t| !t.is_empty() && !t.starts_with(LOOT_PREFIX))
+        .map(str::to_owned)
+        .collect();
+    if let Some(l) = l {
+        let mut token = format!("{LOOT_PREFIX}{}", l.gold);
+        for s in l.items.iter().filter(|s| !s.taken) {
+            token.push_str(&format!(
+                "/{},{},{},{},{}",
+                s.item,
+                s.count,
+                s.random_property,
+                u8::from(s.quest),
+                s.condition
+            ));
+        }
+        out.push(token);
+    }
+    out.join(";")
+}
+
+/// The opened item keeps what is left in its loot window, so it opens
+/// again to that, after a logout too.
+fn keep_loot(p: &mut crate::game::map::player::Player) {
+    let Some((item, l)) = p.misc.item_loot.as_ref() else {
+        return;
+    };
+    if let Some(i) = p.item_by_guid(*item) {
+        p.items[i].data = with_loot(&p.items[i].data, Some(l));
+    }
+}
+
 fn with_gift(data: &str, gift: Option<Wrapped>) -> String {
     let mut out: Vec<String> = data
         .split(';')
@@ -175,16 +238,28 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
         fail(p, InventoryResult::CantDoRightNow, item_guid);
         return;
     }
-    let mut rng = rand::rng();
-    let mut items = Vec::new();
     let wanted = crate::game::map::quests::wanted_items(p, &data);
-    if let Some(table) = data.loot.item.get(&t.entry) {
-        loot::roll(&data, table, &wanted, &mut rng, &mut items, 0);
-    }
-    let gold = if t.max_money_loot > t.min_money_loot {
-        rand::RngExt::random_range(&mut rng, t.min_money_loot..=t.max_money_loot)
-    } else {
-        t.min_money_loot
+    // Opened before: what was left in it, not a fresh roll.
+    let (gold, items) = match kept_loot(&item.data) {
+        Some((gold, mut items)) => {
+            for s in &mut items {
+                s.quality = data.item(s.item).map_or(0, |t| t.quality);
+            }
+            (gold, items)
+        }
+        None => {
+            let mut rng = rand::rng();
+            let mut items = Vec::new();
+            if let Some(table) = data.loot.item.get(&t.entry) {
+                loot::roll(&data, table, &wanted, &mut rng, &mut items, 0);
+            }
+            let gold = if t.max_money_loot > t.min_money_loot {
+                rand::RngExt::random_range(&mut rng, t.min_money_loot..=t.max_money_loot)
+            } else {
+                t.min_money_loot
+            };
+            (gold, items)
+        }
     };
     let l = Loot {
         items,
@@ -200,6 +275,7 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
         return;
     };
     p.misc.item_loot = Some((item_guid, l));
+    keep_loot(p);
     p.looting = Some(item_guid);
     p.outbound.send_frame(frame);
 }
@@ -222,6 +298,7 @@ fn take(map: &mut Map, g: Guid, slot: u8) {
                 {
                     x.taken = true;
                 }
+                keep_loot(p);
                 p.outbound.send(&SMSG_LOOT_REMOVED { slot });
             }
         }
@@ -246,6 +323,7 @@ fn take_money(map: &mut Map, g: Guid) {
     }
     let money = p.money().saturating_add(gold);
     p.set_money(money);
+    keep_loot(p);
     p.outbound.send(&SMSG_LOOT_CLEAR_MONEY {});
 }
 
@@ -269,6 +347,8 @@ fn release(map: &mut Map, g: Guid, target: Guid) {
     }
     p.misc.item_loot = None;
     if let Some(i) = p.item_by_guid(item) {
+        // One of a stack goes; the rest are unopened.
+        p.items[i].data = with_loot(&p.items[i].data, None);
         inventory::take_item(map, g, i, 1);
     }
 }
@@ -374,11 +454,11 @@ fn wrap(map: &mut Map, g: Guid, paper: (u8, u8), what: (u8, u8)) {
         Some(InventoryResult::StackableCantBeWrapped)
     } else if template.is_some_and(|t| t.max_count > 0) {
         Some(InventoryResult::UniqueCantBeWrapped)
-    } else if p
-        .misc
-        .item_loot
-        .as_ref()
-        .is_some_and(|(x, _)| *x == item.guid)
+    } else if kept_loot(&item.data).is_some()
+        || p.misc
+            .item_loot
+            .as_ref()
+            .is_some_and(|(x, _)| *x == item.guid)
     {
         // Opened, with its loot still in it.
         Some(InventoryResult::ItemLocked)

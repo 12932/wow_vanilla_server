@@ -1,7 +1,8 @@
 //! Cooldowns: a spell's own and its category's, with talents' modifiers;
 //! those an item's spell carries; the ones that start only when the spell's
-//! aura goes (Stealth); schools an interrupt locks; and keeping auras and
-//! cooldowns across a logout.
+//! aura goes (Stealth) or its object does (the Ritual of Doom's portal);
+//! schools an interrupt locks; and keeping auras and cooldowns across a
+//! logout.
 
 use std::time::{Duration, Instant};
 
@@ -106,6 +107,13 @@ pub fn send_clear(map: &Map, player: Guid, spell: u32) {
 
 /// A holder came off: a cooldown that waited for it starts now.
 pub fn aura_gone(map: &mut Map, target: Guid, spell: u32) {
+    release(map, target, spell, true);
+}
+
+/// A cooldown that waited for an event is let go (Thistle Tea's
+/// `ActivateCooldown`): it starts now, or, `start` false (a ritual that
+/// was never done), there is none and the spell may be cast again.
+pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
     let now = map.now;
     let data = map.realm.data.clone();
     let Some(c) = map.caster_mut(target) else {
@@ -115,6 +123,10 @@ pub fn aura_gone(map: &mut Map, target: Guid, spell: u32) {
         return;
     };
     c.pending_cooldowns.remove(i);
+    if !start {
+        send_clear(map, target, spell);
+        return;
+    }
     let Some(s) = data.spells.get(spell) else {
         return;
     };

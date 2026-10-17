@@ -121,47 +121,45 @@ fn regen_player(p: &mut Player, now: Instant) {
         p.fields
             .set_u32(UNIT_FIELD_HEALTH, (health + gear_health as u32).min(max));
     }
-    match p.power_type() {
-        0 => {
-            let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
-            let mana = p.fields.get_u32(UNIT_FIELD_POWER1);
-            let casting = p
-                .mana_spent_at
-                .is_some_and(|t| now.duration_since(t) < FIVE_SECOND_RULE);
-            // Within the five-second rule, only what auras let through.
-            let share = if casting {
-                a.sum(AURA_MOD_MANA_REGEN_INTERRUPT) as f32 / 100.0
-            } else {
-                1.0
-            };
-            let mut add = if stopped {
-                0.0
-            } else {
-                mana_regen(class, spirit) * share
-            };
-            add *= a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 0);
-            add += per_five(AURA_MOD_POWER_REGEN, Some(0));
-            if mana < max && add > 0.0 {
-                p.fields
-                    .set_u32(UNIT_FIELD_POWER1, (mana + add as u32).min(max));
-            }
-        }
-        1 => {
-            // Rage decays out of combat.
-            let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
-            if !in_combat && rage > 0 {
-                p.fields
-                    .set_u32(UNIT_FIELD_POWER1 + 1, rage.saturating_sub(20));
-            }
-        }
-        3 => {
-            let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 3);
-            let energy = p.fields.get_u32(UNIT_FIELD_POWER1 + 3);
-            let add = 20.0 * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 3);
+    // Each pool regenerates whichever power is shown, as mangos's
+    // `Player::RegenerateAll` and Thistle Tea's `Regen.tick` have it: a
+    // druid's mana comes back in bear and cat forms.
+    let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
+    if max > 0 {
+        let mana = p.fields.get_u32(UNIT_FIELD_POWER1);
+        let casting = p
+            .mana_spent_at
+            .is_some_and(|t| now.duration_since(t) < FIVE_SECOND_RULE);
+        // Within the five-second rule, only what auras let through.
+        let share = if casting {
+            a.sum(AURA_MOD_MANA_REGEN_INTERRUPT) as f32 / 100.0
+        } else {
+            1.0
+        };
+        let mut add = if stopped {
+            0.0
+        } else {
+            mana_regen(class, spirit) * share
+        };
+        add *= a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 0);
+        add += per_five(AURA_MOD_POWER_REGEN, Some(0));
+        if mana < max && add > 0.0 {
             p.fields
-                .set_u32(UNIT_FIELD_POWER1 + 3, (energy + add as u32).min(max));
+                .set_u32(UNIT_FIELD_POWER1, (mana + add as u32).min(max));
         }
-        _ => {}
+    }
+    // Rage decays out of combat.
+    let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
+    if !in_combat && rage > 0 {
+        p.fields
+            .set_u32(UNIT_FIELD_POWER1 + 1, rage.saturating_sub(20));
+    }
+    let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 3);
+    let energy = p.fields.get_u32(UNIT_FIELD_POWER1 + 3);
+    if max > 0 && energy < max {
+        let add = 20.0 * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 3);
+        p.fields
+            .set_u32(UNIT_FIELD_POWER1 + 3, (energy + add as u32).min(max));
     }
 }
 

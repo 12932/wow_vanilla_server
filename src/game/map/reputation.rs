@@ -160,6 +160,15 @@ pub fn forced_reactions_frame(p: &Player) -> Arc<[u8]> {
     b.frame(SMSG_SET_FORCED_REACTIONS)
 }
 
+/// A forced reaction came or went: the player is told them all again
+/// (mangos's `HandleForceReaction`, Thistle Tea's
+/// `forced_reaction_events`).
+pub fn send_forced_reactions(map: &Map, g: Guid) {
+    if let Some(p) = map.players.get(&g) {
+        p.outbound.send_frame(forced_reactions_frame(p));
+    }
+}
+
 /// The reputation packets a client gets at login.
 pub fn send_login(p: &mut Player, data: &GameData) {
     init(p, data);
