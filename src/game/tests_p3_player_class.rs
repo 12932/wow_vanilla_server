@@ -408,3 +408,201 @@ async fn a_warriors_execute_bloodrage_sunder_shouts_and_cooldowns_do_what_they_s
     assert_eq!(max2, max + max * 3 / 10);
     assert_eq!(health2, health + max * 3 / 10);
 }
+
+const POWER_WORD_SHIELD: u32 = 17;
+const FEAR_WARD: u32 = 6346;
+const FEAR: u32 = 5782;
+const SHACKLE_UNDEAD: u32 = 9484;
+const MANA_BURN: u32 = 8129;
+const LEVITATE: u32 = 1706;
+const SHADOW_PROTECTION: u32 = 976;
+const DISPEL_MAGIC: u32 = 527;
+const MIND_SOOTHE: u32 = 453;
+const SHADOW_WORD_PAIN: u32 = 589;
+const FORTITUDE: u32 = 1243;
+const ZOMBIE: u32 = 1501;
+
+fn feared(m: &Map, g: Guid) -> bool {
+    m.unit_fields(g)
+        .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::auras::UNIT_FLAG_FLEEING))
+}
+
+#[tokio::test]
+async fn a_priests_shield_wards_shackle_mana_burn_levitate_protection_and_dispels() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P");
+    let p = c.enter("Priest", Race::Human, Class::Priest).await;
+    let mut d = Client::connect(&realm, "F");
+    let friend = d.enter("Friend", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let got = map
+        .query(move |m| {
+            ready(
+                m,
+                p,
+                60,
+                &[
+                    POWER_WORD_SHIELD,
+                    FEAR_WARD,
+                    SHACKLE_UNDEAD,
+                    MANA_BURN,
+                    LEVITATE,
+                    SHADOW_PROTECTION,
+                    DISPEL_MAGIC,
+                    MIND_SOOTHE,
+                    SHADOW_WORD_PAIN,
+                    FORTITUDE,
+                ],
+            );
+            let kobold = spawn(m, p, KOBOLD, 60, 3.0);
+            // The shield takes any school's damage.
+            spells::cast_triggered(m, p, POWER_WORD_SHIELD, Some(p));
+            let shield: Vec<(u32, u32)> = [1, 4, 32]
+                .into_iter()
+                .map(|school| auras::absorb(m, p, 10, school))
+                .collect();
+            // Fear Ward: a fear blocked (wvs keeps the ward on: its charge
+            // isn't spent); a fear already on stays when a ward comes.
+            spells::cast_triggered(m, p, FEAR_WARD, Some(p));
+            spells::cast_triggered(m, kobold, FEAR, Some(p));
+            let warded = feared(m, p);
+            let pos = m.players[&p].position();
+            m.players.get_mut(&friend).unwrap().movement.position = Vector3d {
+                x: pos.x + 1.0,
+                ..pos
+            };
+            spells::cast_triggered(m, kobold, FEAR, Some(friend));
+            let then_feared = feared(m, friend);
+            spells::cast_triggered(m, p, FEAR_WARD, Some(friend));
+            let still = feared(m, friend);
+            auras::remove_spell(m, friend, FEAR, None);
+            auras::remove_spell(m, friend, FEAR_WARD, None);
+            // Shackle: stunned and rooted, and free of both after.
+            let zombie = spawn(m, p, ZOMBIE, 60, 4.0);
+            spells::cast_triggered(m, p, SHACKLE_UNDEAD, Some(zombie));
+            let stun_flag = |m: &Map| {
+                m.unit_fields(zombie).is_some_and(|f| {
+                    f.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_STUNNED,
+                    )
+                })
+            };
+            let shackled = stun_flag(m);
+            auras::remove_spell(m, zombie, SHACKLE_UNDEAD, None);
+            let freed = !stun_flag(m);
+            // Mana Burn: half the mana burnt, as damage; only what is
+            // there; nothing from one without.
+            let burn = |m: &mut Map, mana: u32| {
+                let target = spawn(m, p, KOBOLD, 60, 3.0);
+                let f = &mut m.creature_mut(target).unwrap().fields;
+                f.set_u32(UNIT_FIELD_MAXPOWER1, 5_000);
+                f.set_u32(UNIT_FIELD_POWER1, mana);
+                spells::cast_triggered(m, p, MANA_BURN, Some(target));
+                let f = &m.creature(target).unwrap().fields;
+                (
+                    mana - f.get_u32(UNIT_FIELD_POWER1),
+                    1_000_000 - f.get_u32(UNIT_FIELD_HEALTH),
+                )
+            };
+            let burns = [burn(m, 5_000), burn(m, 50), burn(m, 0)];
+            // Shadow Protection: shadow resistance.
+            let shadow = m.players[&p].fields.get_u32(UNIT_FIELD_RESISTANCES + 5);
+            spells::cast_triggered(m, p, SHADOW_PROTECTION, Some(p));
+            let protected = m.players[&p].fields.get_u32(UNIT_FIELD_RESISTANCES + 5) - shadow;
+            // Dispel Magic on a foe takes its buff, not the caster's own
+            // debuff; on a friend, the debuff, not the buff.
+            spells::cast_triggered(m, kobold, FORTITUDE, Some(kobold));
+            spells::cast_triggered(m, p, SHADOW_WORD_PAIN, Some(kobold));
+            spells::cast_triggered(m, p, DISPEL_MAGIC, Some(kobold));
+            let offensive = (
+                holder(m, kobold, FORTITUDE).is_none(),
+                holder(m, kobold, SHADOW_WORD_PAIN).is_some(),
+            );
+            spells::cast_triggered(m, p, FORTITUDE, Some(friend));
+            spells::cast_triggered(m, kobold, SHADOW_WORD_PAIN, Some(friend));
+            spells::cast_triggered(m, p, DISPEL_MAGIC, Some(friend));
+            let defensive = (
+                holder(m, friend, FORTITUDE).is_some(),
+                holder(m, friend, SHADOW_WORD_PAIN).is_none(),
+            );
+            // Mind Soothe: a harmful aura shortening the detection range.
+            spells::cast_triggered(m, p, MIND_SOOTHE, Some(kobold));
+            let soothe = holder(m, kobold, MIND_SOOTHE).map(|h| {
+                (
+                    h.positive,
+                    h.effects
+                        .iter()
+                        .any(|e| e.kind == auras::AURA_MOD_DETECT_RANGE && e.amount < 0),
+                )
+            });
+            (
+                shield,
+                (warded, then_feared, still),
+                (shackled, freed),
+                burns,
+                protected,
+                (offensive, defensive),
+                soothe,
+            )
+        })
+        .await
+        .unwrap();
+    let (shield, fear, shackle, burns, protected, dispels, soothe) = got;
+    assert_eq!(
+        shield,
+        vec![(0, 10), (0, 10), (0, 10)],
+        "every school absorbed"
+    );
+    assert_eq!(fear, (false, true, true));
+    assert_eq!(shackle, (true, true));
+    let (all, some, none) = (burns[0], burns[1], burns[2]);
+    assert!(all.0 > 0 && all.1 == all.0 / 2, "{all:?}");
+    assert_eq!(some, (50, 25));
+    assert_eq!(none, (0, 0));
+    assert!(protected > 0);
+    assert_eq!(dispels, ((true, true), (true, true)));
+    assert_eq!(soothe, Some((false, true)));
+}
+
+#[tokio::test]
+async fn levitate_floats_its_target_and_breaks_on_damage() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P");
+    let p = c.enter("Priest", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    map.query(move |m| {
+        ready(m, p, 60, &[LEVITATE]);
+        spells::cast_triggered(m, p, LEVITATE, Some(p));
+    })
+    .await
+    .unwrap();
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage as S;
+    c.wait_for("SMSG_MOVE_FEATHER_FALL", |m| {
+        matches!(m, S::SMSG_MOVE_FEATHER_FALL(_)).then_some(())
+    })
+    .await;
+    c.wait_for("SMSG_MOVE_SET_HOVER", |m| {
+        matches!(m, S::SMSG_MOVE_SET_HOVER(_)).then_some(())
+    })
+    .await;
+    c.wait_for("SMSG_MOVE_WATER_WALK", |m| {
+        matches!(m, S::SMSG_MOVE_WATER_WALK(_)).then_some(())
+    })
+    .await;
+    let gone = map
+        .query(move |m| {
+            let kobold = spawn(m, p, KOBOLD, 60, 3.0);
+            crate::game::map::combat::deal_damage(m, kobold, p, 5);
+            holder(m, p, LEVITATE).is_none()
+        })
+        .await
+        .unwrap();
+    assert!(gone, "damage breaks it");
+}
