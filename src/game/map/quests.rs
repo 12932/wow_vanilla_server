@@ -486,6 +486,16 @@ fn invalid(p: &Player, msg: QuestFailedReason) {
 
 /// `CMSG_QUESTGIVER_ACCEPT_QUEST`: into the log.
 pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
+    accept_with(map, player, giver, quest, true);
+}
+
+/// A quest every member must accept, taken by one asked to (mangos's
+/// `AddQuest` with no giver): its start script has already run.
+pub fn accept_asked(map: &mut Map, player: Guid, asker: Guid, quest: u32) {
+    accept_with(map, player, asker, quest, false);
+}
+
+fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: bool) {
     let data = map.realm.data.clone();
     let Some(q) = data.npc.quests.get(&quest) else {
         return;
@@ -539,7 +549,13 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     check(map, player, quest);
     crate::game::map::questshare::accepted(map, player, giver, quest);
     crate::game::map::spell_areas::reconcile(map, player);
-    if let Some(script) = data.scripts.quest_start_script.get(&quest).copied() {
+    if let Some(script) = data
+        .scripts
+        .quest_start_script
+        .get(&quest)
+        .copied()
+        .filter(|_| script)
+    {
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::QuestStart,
