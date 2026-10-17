@@ -366,7 +366,8 @@ fn search_drives(limit: Option<Duration>, ctrl_c: &ui::CtrlC, found: &mut Found)
         let finished = discover::search(&root, None, found, &mut |dir, found| {
             folders += 1;
             spinner.set_message(format!(
-                "{folders} folders searched (Ctrl-C stops): {}",
+                "{} folders searched (Ctrl-C stops): {}",
+                indicatif::HumanCount(folders),
                 dir.display()
             ));
             timed_out = limit.is_some_and(|l| started.elapsed() >= l);
@@ -383,7 +384,8 @@ fn search_drives(limit: Option<Duration>, ctrl_c: &ui::CtrlC, found: &mut Found)
     }
     spinner.finish_and_clear();
     say(format!(
-        "Searched {folders} folders in {}{}.",
+        "Searched {} folders in {}{}.",
+        indicatif::HumanCount(folders),
         ui::short(started.elapsed()),
         if ctrl_c.pressed() {
             ", and stopped"
