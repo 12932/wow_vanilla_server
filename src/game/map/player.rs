@@ -222,8 +222,8 @@ pub struct Player {
     pub journal: crate::game::map::quests::Journal,
     pub auras: crate::game::map::auras::Auras,
     pub caster: crate::game::map::spells::Caster,
-    /// A resurrection offered: by whom, and with what share of health.
-    pub resurrect_offer: Option<(Guid, u32)>,
+    /// A resurrection offered: by whom, and with what health and mana.
+    pub resurrect_offer: Option<(Guid, u32, u32)>,
     pub trade: Option<crate::game::map::trade::Trade>,
     pub duel: Option<crate::game::map::duel::Duel>,
     /// Where a player in a battleground came from.

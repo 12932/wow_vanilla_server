@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{Power, SMSG_RESURRECT_REQUEST, SMSG_SPELLENERGIZELOG, Vector3d};
+use wow_world_messages::vanilla::{Power, SMSG_SPELLENERGIZELOG, Vector3d};
 
 use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::fields::*;
@@ -833,16 +833,45 @@ fn effect(
                 .players
                 .get(&caster)
                 .map(|p| p.name.to_string())
+                .or_else(|| {
+                    let c = map.creature(caster)?;
+                    Some(
+                        map.realm
+                            .data
+                            .creature_templates
+                            .get(&c.entry)?
+                            .name
+                            .clone(),
+                    )
+                })
                 .unwrap_or_default();
             if let Some(p) = map.players.get_mut(&target)
                 && p.death != crate::game::map::death::Death::Alive
+                && p.resurrect_offer.is_none()
             {
-                p.resurrect_offer = Some((caster, amount.clamp(1, 100) as u32));
-                p.outbound.send(&SMSG_RESURRECT_REQUEST {
-                    guid: caster,
-                    name,
-                    player: true,
-                });
+                // `RESURRECT` gives a share of health and mana; the newer
+                // effect, health and the misc value's mana (Thistle Tea's,
+                // mangos's).
+                let (health, mana) = if e.effect == EFFECT_RESURRECT_NEW {
+                    (amount.max(1) as u32, e.misc_value.max(0) as u32)
+                } else {
+                    let share = amount.max(0) as f32 / 100.0;
+                    (
+                        ((p.fields.get_u32(UNIT_FIELD_MAXHEALTH) as f32 * share) as u32).max(1),
+                        (p.fields.get_u32(UNIT_FIELD_MAXPOWER1) as f32 * share) as u32,
+                    )
+                };
+                p.resurrect_offer = Some((caster, health, mana));
+                // As 1.12 lays it out: the name, not from a spirit healer,
+                // and whether the reclaim delay holds.
+                let mut b = crate::game::data::items::Body::default();
+                b.u64(caster.guid())
+                    .u32(name.len() as u32 + 1)
+                    .cstr(&name)
+                    .u8(0)
+                    .u8(u8::from(!s.attr(3, sd::ATTR_EX3_NO_RES_TIMER)));
+                p.outbound
+                    .send_frame(b.frame(SMSG_RESURRECT_REQUEST_OPCODE));
             }
         }
         EFFECT_SKILL | EFFECT_SKILL_STEP => {
