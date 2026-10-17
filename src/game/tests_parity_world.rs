@@ -1347,7 +1347,7 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
         if strike && let Some(e) = eranikus {
             let (hp, max) = health(m, e);
             if hp > max / 5 {
-                crate::game::map::combat::deal_damage(m, g, e, (max / 20).max(1));
+                crate::game::map::combat::deal_damage(m, g, e, (max / 8).max(1));
             }
         }
         skip(m, by);
@@ -1405,10 +1405,10 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
     assert!(s.event, "the quest's map event under way: {s:?}");
     // Beaten to a fifth, he is redeemed; Remulos credits the quest.
     for i in 0..3000 {
-        s = map
-            .query(move |m| look(m, Duration::from_secs(2), true))
-            .await
-            .unwrap();
+        // Struck down to a fifth at once, before anything else can come
+        // of the fight (his leash, his evade); then the redemption hurried.
+        let by = Duration::from_secs(if s.phase == Some(1) { 2 } else { 0 });
+        s = map.query(move |m| look(m, by, true)).await.unwrap();
         if debug() && i % 25 == 0 {
             eprintln!("nightmare fight: {s:?}");
         }
@@ -2468,6 +2468,19 @@ fn every_real_event_quest_has_its_source() {
     }
 }
 
+/// The sides to try a hero of, for a quest from creature `entry`: the
+/// Horde first for one of the Horde's, else the Alliance first.
+fn sides_for(data: &GameData, entry: u32) -> [bool; 2] {
+    let horde = data
+        .creature_template(entry)
+        .and_then(|t| data.faction_templates.get(&t.faction))
+        .is_some_and(|f| {
+            let mask = f.ours | f.friend_mask;
+            mask & 0x4 != 0 && mask & 0x2 == 0
+        });
+    [horde, !horde]
+}
+
 /// `g` fit to take `q`: the skill and the standing it asks for.
 fn fit_for(m: &mut Map, g: Guid, q: &crate::game::data::npc::Quest) {
     if q.required_skill != 0
@@ -2740,7 +2753,7 @@ async fn walk_gossip(realm: &Arc<Realm>, quest: u32, script: u32) -> Result<(), 
         );
     }
     let mut last = String::new();
-    for horde in [false, true] {
+    for horde in sides_for(&data, entry) {
         match gossip_once(realm, quest, entry, &path, (menu, option), horde).await {
             Ok(()) => return Ok(()),
             Err(why) => last = why,
@@ -2791,8 +2804,15 @@ async fn gossip_once(
 
 /// A quest whose start script credits it: taken from its giver, explored.
 async fn walk_quest_start(realm: &Arc<Realm>, quest: u32) -> Result<(), String> {
+    let giver = realm
+        .data
+        .npc
+        .creature_starts
+        .iter()
+        .find(|(_, qs)| qs.contains(&quest))
+        .map_or(0, |(e, _)| *e);
     let mut last = String::new();
-    for horde in [false, true] {
+    for horde in sides_for(&realm.data, giver) {
         match quest_start_once(realm, quest, horde).await {
             Ok(()) => return Ok(()),
             Err(why) => last = why,
@@ -3087,7 +3107,7 @@ async fn walk_escort(
     goal: Option<Vector3d>,
 ) -> Result<(), String> {
     let mut taken = Err(String::new());
-    for horde in [false, true] {
+    for horde in sides_for(&realm.data, escortee) {
         taken = take_escort(realm, quest, escortee, horde).await;
         if taken.is_ok() {
             break;
