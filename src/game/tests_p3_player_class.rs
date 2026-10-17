@@ -849,3 +849,199 @@ async fn a_paladins_seal_goes_into_its_judgement_and_blessings_shield_kings_and_
         );
     }
 }
+
+const SINISTER_STRIKE: u32 = 1752;
+const BACKSTAB: u32 = 53;
+const STEALTH: u32 = 1784;
+const VANISH: u32 = 1856;
+const PREPARATION: u32 = 14185;
+const EVASION: u32 = 5277;
+const SLICE_AND_DICE: u32 = 5171;
+const SPRINT: u32 = 2983;
+const COLD_SNAP: u32 = 12472;
+const FROST_NOVA: u32 = 122;
+const CONE_OF_COLD: u32 = 120;
+const FIRE_BLAST: u32 = 2136;
+/// A Worn Dagger.
+const DAGGER: u32 = 2092;
+
+/// Cast with power to spare and no global cooldown, other cooldowns kept.
+fn cast_keeping(m: &mut Map, g: Guid, spell: u32, target: Guid) -> bool {
+    let p = m.players.get_mut(&g).unwrap();
+    for i in 0..5 {
+        p.fields.set_u32(UNIT_FIELD_POWER1 + i, 100_000);
+    }
+    p.caster.gcd_until = None;
+    spells::cast(
+        m,
+        g,
+        spell,
+        Targets {
+            unit: Some(target),
+            ..Default::default()
+        },
+        None,
+    )
+}
+
+/// Whether `spell` is cooling down for `g`, by its own or its category.
+fn cooling(m: &Map, g: Guid, spell: u32) -> bool {
+    let now = m.now;
+    let s = m.realm.data.spells.get(spell).unwrap();
+    let c = &m.players[&g].caster;
+    c.cooldowns.get(&spell).is_some_and(|t| *t > now)
+        || (s.category != 0
+            && c.category_cooldowns
+                .get(&s.category)
+                .is_some_and(|t| *t > now))
+}
+
+#[tokio::test]
+async fn a_rogues_combo_points_backstab_stealth_vanish_preparation_and_buffs() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "R");
+    let r = c.enter("Rogue", Race::Human, Class::Rogue).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let got = map
+        .query(move |m| {
+            ready(
+                m,
+                r,
+                60,
+                &[
+                    SINISTER_STRIKE,
+                    BACKSTAB,
+                    STEALTH,
+                    VANISH,
+                    PREPARATION,
+                    EVASION,
+                    SLICE_AND_DICE,
+                    SPRINT,
+                ],
+            );
+            equip(m, r, DAGGER, 15);
+            let a = spawn(m, r, KOBOLD, 60, 2.0);
+            let b = spawn(m, r, KOBOLD, 60, 2.2);
+            let combo = |m: &Map| {
+                let c = &m.players[&r].caster;
+                (c.combo_target, c.combo_points)
+            };
+            // Six on one: five at most; one on another: that one's one.
+            for _ in 0..6 {
+                cast(m, r, SINISTER_STRIKE, a);
+            }
+            let on_a = combo(m);
+            cast(m, r, SINISTER_STRIKE, b);
+            let on_b = combo(m);
+            // Backstab: not from the front; from behind.
+            let front = check(m, r, BACKSTAB, a);
+            let at = m.creature(a).unwrap().position;
+            let me = m.players[&r].position();
+            let behind = Vector3d {
+                x: at.x + (at.x - me.x),
+                y: at.y + (at.y - me.y),
+                z: at.z,
+            };
+            let p = m.players.get_mut(&r).unwrap();
+            p.movement.position = behind;
+            p.movement.orientation = (at.y - behind.y).atan2(at.x - behind.x);
+            let back = check(m, r, BACKSTAB, a);
+            // In a fight: no Stealth, but Vanish; and Vanish ends the fight
+            // and the creature's memory of the rogue.
+            crate::game::map::ai::add_threat(m, a, r, 100.0);
+            m.players.get_mut(&r).unwrap().fields.set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                true,
+            );
+            let stealth = check(m, r, STEALTH, r);
+            let vanish = check(m, r, VANISH, r);
+            cast_keeping(m, r, VANISH, r);
+            let vanished = (
+                m.players[&r].fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                ),
+                m.creature(a).unwrap().threat.iter().any(|(g, _)| *g == r),
+            );
+            // Preparation: Vanish, Evasion and Sprint ready again; itself
+            // not.
+            cast_keeping(m, r, EVASION, r);
+            cast_keeping(m, r, SPRINT, r);
+            let cooled = [VANISH, EVASION, SPRINT].map(|s| cooling(m, r, s));
+            cast_keeping(m, r, PREPARATION, r);
+            let prepared = (
+                [VANISH, EVASION, SPRINT].map(|s| cooling(m, r, s)),
+                cooling(m, r, PREPARATION),
+            );
+            // Evasion's dodge, Slice and Dice's swing.
+            auras::remove_spell(m, r, EVASION, None);
+            let dodge = m.players[&r].fields.get_f32(PLAYER_DODGE_PERCENTAGE);
+            cast(m, r, EVASION, r);
+            let evading = m.players[&r].fields.get_f32(PLAYER_DODGE_PERCENTAGE) - dodge;
+            // Slice and Dice, cast as the client casts a finisher (at the
+            // combo target), is refused TARGET_FRIENDLY: see the report.
+            // Its haste, put on: a fifth faster.
+            let swing = m.players[&r].fields.get_u32(UNIT_FIELD_BASEATTACKTIME);
+            let s = m.realm.data.spells.get(SLICE_AND_DICE).unwrap().clone();
+            let points = spells::points(&s, 1, 60);
+            auras::apply_spell(m, r, r, &s, &[(1, points)], Default::default()).unwrap();
+            let sliced = m.players[&r].fields.get_u32(UNIT_FIELD_BASEATTACKTIME);
+            (
+                (on_a, on_b, a, b),
+                (front, back),
+                (stealth, vanish, vanished),
+                (cooled, prepared),
+                (evading, swing, sliced),
+            )
+        })
+        .await
+        .unwrap();
+    let ((on_a, on_b, a, b), positional, stealth, prep, buffs) = got;
+    assert_eq!((on_a, on_b), ((a, 5), (b, 1)));
+    assert_eq!(positional, (Some(fail::NOT_BEHIND), None));
+    assert_eq!(
+        stealth,
+        (Some(fail::AFFECTING_COMBAT), None, (false, false))
+    );
+    let (cooled, (after, own)) = prep;
+    assert_eq!(cooled, [true; 3]);
+    assert_eq!((after, own), ([false; 3], true));
+    let (evading, swing, sliced) = buffs;
+    assert!((evading - 50.0).abs() < 0.01, "{evading}");
+    assert_eq!(sliced, (swing as f32 / 1.2) as u32);
+}
+
+#[tokio::test]
+async fn cold_snap_readies_the_frost_spells_alone() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "M");
+    let mage = c.enter("Mage", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let got = map
+        .query(move |m| {
+            ready(
+                m,
+                mage,
+                60,
+                &[COLD_SNAP, FROST_NOVA, CONE_OF_COLD, FIRE_BLAST],
+            );
+            let kobold = spawn(m, mage, KOBOLD, 60, 3.0);
+            cast_keeping(m, mage, FROST_NOVA, mage);
+            cast_keeping(m, mage, CONE_OF_COLD, kobold);
+            cast_keeping(m, mage, FIRE_BLAST, kobold);
+            let before = [FROST_NOVA, CONE_OF_COLD, FIRE_BLAST].map(|s| cooling(m, mage, s));
+            cast_keeping(m, mage, COLD_SNAP, mage);
+            let after = [FROST_NOVA, CONE_OF_COLD, FIRE_BLAST].map(|s| cooling(m, mage, s));
+            (before, after)
+        })
+        .await
+        .unwrap();
+    assert_eq!(got, ([true; 3], [false, false, true]));
+}
