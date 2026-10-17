@@ -125,6 +125,14 @@ impl Client {
             .expect("the session is running");
     }
 
+    /// [`Client::send_raw`], or false if the session has gone.
+    pub async fn try_send_raw(&self, opcode: u16, body: &[u8]) -> bool {
+        self.tx
+            .send(crate::game::conn::Inbound::Raw(opcode, body.to_vec()))
+            .await
+            .is_ok()
+    }
+
     /// Send, or false if the session has gone.
     pub async fn try_send(&self, msg: impl Into<ClientOpcodeMessage>) -> bool {
         self.tx

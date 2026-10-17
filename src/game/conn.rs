@@ -177,8 +177,16 @@ async fn run_reader<R: AsyncRead + Unpin + Send>(
             break;
         };
         let msg = match msg {
-            Ok(Inbound::Msg(m)) => m,
-            Ok(raw) => {
+            Ok(Some(Inbound::Msg(m))) => m,
+            // Refused before wow_messages read it, or it panicked reading
+            // it.
+            Ok(None) => {
+                if bad.exceeded() {
+                    break;
+                }
+                continue;
+            }
+            Ok(Some(raw)) => {
                 PACKETS_IN.fetch_add(1, Ordering::Relaxed);
                 if tx.send(raw).await.is_err() {
                     break;
@@ -222,11 +230,12 @@ async fn run_reader<R: AsyncRead + Unpin + Send>(
 }
 
 /// Read one packet: its header decrypted, its body whole; those read by
-/// hand stay raw, the rest go to wow_messages.
+/// hand stay raw, the rest go to wow_messages. `None` for a packet refused
+/// before it is read ([`fits`]), or that wow_messages panicked on.
 async fn read_packet<R: AsyncRead + Unpin + Send>(
     read: &mut R,
     decrypter: &mut DecrypterHalf,
-) -> Result<Inbound, ExpectedOpcodeError> {
+) -> Result<Option<Inbound>, ExpectedOpcodeError> {
     let mut header = [0u8; 6];
     read.read_exact(&mut header).await?;
     let header = decrypter.decrypt_client_header(header);
@@ -234,13 +243,140 @@ async fn read_packet<R: AsyncRead + Unpin + Send>(
     let mut body = vec![0u8; size];
     read.read_exact(&mut body).await?;
     if RAW_OPCODES.contains(&header.opcode) {
-        return Ok(Inbound::Raw(header.opcode as u16, body));
+        return Ok(Some(Inbound::Raw(header.opcode as u16, body)));
+    }
+    if !fits(header.opcode, &body) {
+        debug!(
+            "client packet 0x{:X} ({size} bytes) asks for more than it holds; dropped",
+            header.opcode
+        );
+        return Ok(None);
     }
     let mut plain = Vec::with_capacity(6 + size);
     plain.extend_from_slice(&header.size.to_be_bytes());
     plain.extend_from_slice(&header.opcode.to_le_bytes());
     plain.extend_from_slice(&body);
-    ClientOpcodeMessage::read_unencrypted(&plain[..]).map(Inbound::Msg)
+    match crate::game::supervisor::catch(|| ClientOpcodeMessage::read_unencrypted(&plain[..])) {
+        Ok(m) => m.map(|m| Some(Inbound::Msg(m))),
+        Err(e) => {
+            debug!(
+                "wow_messages panicked reading client packet 0x{:X}: {e}; dropped",
+                header.opcode
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// The largest a client's compressed data may say it is uncompressed, as
+/// mangos allows an auth session's addon data.
+const MAX_DECOMPRESSED: u32 = 0xFFFFF;
+
+/// The largest auth session the world handshake reads.
+pub const MAX_AUTH_SESSION: usize = 8 * 1024;
+
+/// Whether wow_messages can read a client's packet without asking for more
+/// memory than the packet could fill. Some of its readers reserve a count
+/// read from the packet before reading what it counts (a `/who`'s zones
+/// and strings, an express flight's nodes, a bidder's items, a bug
+/// report's text, compressed data's size), and an absurd count asks for
+/// gigabytes: the allocation fails and the process aborts, which no guard
+/// can catch. Such a packet is dropped unread.
+pub fn fits(opcode: u32, body: &[u8]) -> bool {
+    let mut r = Reader { body, at: 0 };
+    let ok = match opcode {
+        // CMSG_WHO: levels, two names, masks, zones, then search strings.
+        0x062 => (|| {
+            r.skip(8)?;
+            r.c_string()?;
+            r.c_string()?;
+            r.skip(8)?;
+            let zones = r.u32()?;
+            r.skip(zones.checked_mul(4)?)?;
+            let strings = r.u32()?;
+            // Each string is a byte at least.
+            (strings as usize <= r.left()).then_some(())
+        })(),
+        // CMSG_BUG: a suggestion flag, then two strings, each with its
+        // length (its terminator counted) before it.
+        0x1CA => (|| {
+            r.skip(4)?;
+            for _ in 0..2 {
+                let n = r.u32()?;
+                (n >= 1).then_some(())?;
+                r.skip(n)?;
+            }
+            Some(())
+        })(),
+        // CMSG_AUTH_SESSION: build, server, account, seed, proof, then the
+        // addon data's size uncompressed.
+        0x1ED => (|| {
+            (body.len() <= MAX_AUTH_SESSION).then_some(())?;
+            r.skip(8)?;
+            r.c_string()?;
+            r.skip(24)?;
+            (r.u32()? <= MAX_DECOMPRESSED).then_some(())
+        })(),
+        // CMSG_GMTICKET_CREATE: category, map, position, two strings, and
+        // for harassment, a line count and the chat's size uncompressed.
+        0x205 => (|| {
+            let category = r.u8()?;
+            r.skip(16)?;
+            r.c_string()?;
+            r.c_string()?;
+            if category == 2 {
+                r.skip(4)?;
+                (r.u32()? <= MAX_DECOMPRESSED).then_some(())?;
+            }
+            Some(())
+        })(),
+        // CMSG_AUCTION_LIST_BIDDER_ITEMS: auctioneer, page, then items.
+        // CMSG_ACTIVATETAXIEXPRESS: flight master, cost, then nodes.
+        0x264 | 0x312 => (|| {
+            r.skip(12)?;
+            let n = r.u32()?;
+            (n.checked_mul(4)? as usize <= r.left()).then_some(())
+        })(),
+        // CMSG_WARDEN_DATA: its reader takes four bytes off the body.
+        0x2E7 => (body.len() >= 4).then_some(()),
+        _ => Some(()),
+    };
+    ok.is_some()
+}
+
+/// A cursor over a packet's body, for [`fits`].
+struct Reader<'a> {
+    body: &'a [u8],
+    at: usize,
+}
+
+impl Reader<'_> {
+    fn left(&self) -> usize {
+        self.body.len() - self.at
+    }
+
+    fn skip(&mut self, n: u32) -> Option<()> {
+        let n = n as usize;
+        (n <= self.left()).then(|| self.at += n)
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        let v = *self.body.get(self.at)?;
+        self.at += 1;
+        Some(v)
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        let b = self.body.get(self.at..self.at + 4)?;
+        self.at += 4;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn c_string(&mut self) -> Option<()> {
+        let n = self.body[self.at..].iter().position(|b| *b == 0)?;
+        self.at += n + 1;
+        Some(())
+    }
 }
 
 /// Drain queued frames, encrypt each header in order (ARC4 is a stream

@@ -69,7 +69,9 @@ impl Walk {
         }
         let speed = speed.max(0.1);
         Self {
-            duration: Duration::from_secs_f32(total / speed),
+            // A walk of no finite length (to a place out of the world)
+            // takes no time, rather than panic.
+            duration: Duration::try_from_secs_f32(total / speed).unwrap_or(Duration::ZERO),
             points,
             lengths,
             started,

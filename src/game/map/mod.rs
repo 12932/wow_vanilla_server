@@ -77,6 +77,7 @@ pub mod spawn_auras;
 pub mod spell_areas;
 pub mod spells;
 pub mod stats;
+pub mod supervise;
 pub mod terrain;
 pub mod tickets;
 pub mod trade;
@@ -106,7 +107,6 @@ use crate::game::map::gameobject::GameObject;
 use crate::game::map::grid::Grid;
 use crate::game::map::player::Player;
 use crate::game::registry::Online;
-use crate::game::session::Control;
 use crate::game::store::CharacterRow;
 use crate::game::update::{self, Batch};
 
@@ -165,6 +165,8 @@ pub enum ArrivalKind {
 pub struct MapHandle {
     pub key: MapKey,
     tx: mpsc::UnboundedSender<MapEvent>,
+    /// What the actor tells the watchdog.
+    pulse: Arc<crate::game::supervisor::Pulse>,
 }
 
 impl std::fmt::Debug for MapHandle {
@@ -176,6 +178,15 @@ impl std::fmt::Debug for MapHandle {
 impl MapHandle {
     pub fn send(&self, event: MapEvent) -> bool {
         self.tx.send(event).is_ok()
+    }
+
+    /// Whether the actor has gone: what is sent is lost.
+    pub fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
+
+    pub fn pulse(&self) -> &crate::game::supervisor::Pulse {
+        &self.pulse
     }
 
     pub fn call(&self, f: impl FnOnce(&mut Map) + Send + 'static) -> bool {
@@ -199,20 +210,32 @@ impl MapHandle {
 #[derive(Default)]
 pub struct Maps {
     handles: RwLock<AHashMap<MapKey, MapHandle>>,
+    /// The server is shutting down: every map has saved its players.
+    closed: std::sync::atomic::AtomicBool,
 }
 
 impl Maps {
-    /// The map's handle, starting its actor if it isn't running.
+    /// The map's handle, starting its actor if it isn't running, or has
+    /// gone (a supervisor's restart of a child that died).
     pub fn get(&self, realm: &Arc<Realm>, key: MapKey) -> MapHandle {
-        if let Some(h) = self.handles.read().get(&key) {
+        if let Some(h) = self.handles.read().get(&key)
+            && !h.is_closed()
+        {
             return h.clone();
         }
         let mut handles = self.handles.write();
         if let Some(h) = handles.get(&key) {
-            return h.clone();
+            if !h.is_closed() {
+                return h.clone();
+            }
+            tracing::error!("{key}'s actor has gone; starting it again");
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let handle = MapHandle { key, tx };
+        let handle = MapHandle {
+            key,
+            tx,
+            pulse: Default::default(),
+        };
         let map = Map::new(key, realm.clone(), handle.clone());
         tokio::spawn(run(map, rx));
         handles.insert(key, handle.clone());
@@ -230,6 +253,16 @@ impl Maps {
 
     pub fn all(&self) -> Vec<MapHandle> {
         self.handles.read().values().cloned().collect()
+    }
+
+    /// The server is shutting down; the maps save everyone and stop.
+    pub fn close(&self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -253,8 +286,13 @@ pub struct MapStats {
     pub window_updates: u32,
     pub window_total: Duration,
     pub window_max: Duration,
-    /// Events and updates that panicked and were let go.
+    /// Events, update steps and creatures' turns that panicked and were
+    /// let go.
     pub panics: u64,
+    /// Creatures that kept panicking, despawned for good.
+    pub quarantined: u32,
+    /// Times the map was built again after its update kept panicking.
+    pub restarts: u32,
 }
 
 pub struct Map {
@@ -334,48 +372,71 @@ pub struct Map {
     pub late_frames: Vec<(Guid, Arc<[u8]>)>,
     /// Scripted area triggers resting from their cooldown, until when.
     pub trigger_cooldowns: AHashMap<u32, Instant>,
+    /// Who has panicked lately, and when the map has had enough.
+    pub health: supervise::Health,
+    /// Panics a test arms.
+    #[cfg(test)]
+    pub faults: crate::game::supervisor::Faults,
 }
 
-/// Run a map's actor until it is told to stop.
 /// Run `f` on the map; a panic in it is logged and the map goes on, so a
 /// bad packet or a bug costs one event or one update, not the map.
-fn guarded<T>(map: &mut Map, f: impl FnOnce(&mut Map) -> T) -> Option<T> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(map))) {
+fn guarded<T>(map: &mut Map, what: &str, f: impl FnOnce(&mut Map) -> T) -> Option<T> {
+    match crate::game::supervisor::catch(|| f(map)) {
         Ok(v) => Some(v),
         Err(e) => {
-            let what = e
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| e.downcast_ref::<String>().cloned())
-                .unwrap_or_default();
-            tracing::error!("{} panicked: {what}; going on", map.key);
             map.stats.panics += 1;
+            if crate::game::supervisor::worth_logging(map.stats.panics) {
+                tracing::error!(
+                    "{}: {what} panicked: {e}; going on ({} panics)",
+                    map.key,
+                    map.stats.panics
+                );
+            }
             None
         }
     }
 }
 
+/// Handle one event, under guard: true to stop the actor. A player's
+/// packet that panics counts against them.
+fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
+    let from = match &event {
+        MapEvent::Packet(g, _) => Some(*g),
+        _ => None,
+    };
+    match guarded(map, "an event", |m| m.handle_event(event)) {
+        Some(stop) => stop,
+        None => {
+            if let Some(g) = from {
+                supervise::packet_panicked(map, g);
+            }
+            false
+        }
+    }
+}
+
+/// Run a map's actor until it is told to stop.
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
-    world::populate(&mut map);
+    guarded(&mut map, "populating", world::populate);
     let mut report_at = Instant::now() + REPORT_EVERY;
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        map.handle.pulse.beat(rx.len());
         tokio::select! {
             event = rx.recv() => {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
-                match guarded(&mut map, |m| m.handle_event(event)) {
-                    Some(true) => break,
-                    Some(false) => {}
-                    None => continue,
+                if handle_guarded(&mut map, event) {
+                    break;
                 }
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved.
                 for _ in 0..512 {
                     match rx.try_recv() {
                         Ok(event) => {
-                            if guarded(&mut map, |m| m.handle_event(event)) == Some(true) {
+                            if handle_guarded(&mut map, event) {
                                 return;
                             }
                         }
@@ -384,9 +445,15 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
             }
             _ = ticker.tick() => {
-                guarded(&mut map, Map::update);
+                guarded(&mut map, "the update", Map::update);
                 if map.stopping {
                     break;
+                }
+                // An update that keeps panicking: a bad state, that a fresh
+                // map from the data won't have.
+                if supervise::escalated(&map) {
+                    map = supervise::restart(map);
+                    continue;
                 }
                 if map.now >= report_at {
                     report_at = map.now + REPORT_EVERY;
@@ -448,6 +515,9 @@ impl Map {
             objects: Default::default(),
             late_frames: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
+            health: Default::default(),
+            #[cfg(test)]
+            faults: Default::default(),
         }
     }
 
@@ -462,13 +532,14 @@ impl Map {
         self.stats.events += 1;
         match event {
             MapEvent::Arrive(a) => self.arrive(*a),
-            MapEvent::Packet(guid, msg) => self.handle_packet(guid, msg),
-            MapEvent::Disconnect(guid) => {
-                if let Some(p) = self.take_player(guid) {
-                    debug!("{} disconnected from {}", p.name, self.key);
-                    self.save_and_go_offline(p);
+            MapEvent::Packet(guid, msg) => {
+                #[cfg(test)]
+                if self.faults.any() {
+                    self.faults.check(&format!("packets of {guid}"));
                 }
+                self.handle_packet(guid, msg)
             }
+            MapEvent::Disconnect(guid) => self.handle_disconnect(guid),
             MapEvent::Call(f) => f(self),
             MapEvent::Stop => return true,
             MapEvent::Shutdown(reply) => {
@@ -483,6 +554,14 @@ impl Map {
             }
         }
         false
+    }
+
+    /// A player's client has gone: they leave, saved.
+    pub fn handle_disconnect(&mut self, guid: Guid) {
+        if let Some(p) = self.take_player(guid) {
+            debug!("{} disconnected from {}", p.name, self.key);
+            self.save_and_go_offline(p);
+        }
     }
 
     fn arrive(&mut self, arrival: Arrival) {
@@ -614,6 +693,8 @@ impl Map {
                 last_update: s.last_update,
                 max_update: s.max_update,
                 panics: s.panics,
+                quarantined: s.quarantined,
+                restarts: s.restarts,
                 ..Default::default()
             };
             return;
@@ -716,10 +797,7 @@ impl Map {
         p.movement.flags = wow_world_messages::vanilla::MovementInfo_MovementFlags::empty();
         p.logout_at = None;
         let session = p.online.session.clone();
-        let _ = session.send(Control::Transfer {
-            player: Box::new(p),
-            to: key,
-        });
+        crate::game::session::transfer(&self.realm, &session, p, key);
     }
 
     /// The update: timers, visibility, and the changed fields of
@@ -729,51 +807,49 @@ impl Map {
         self.now = started;
         self.stats.updates += 1;
 
-        self.update_players();
-        inventory::sync_gear_all(self);
-        misc::update(self);
-        combat::update_players(self);
-        player_motion::update(self);
-        intoxication::update(self);
-        item_scripts::update(self);
-        pvp::update(self);
-        outdoor_pvp::update(self);
-        arena::update(self);
-        npc::update_flights(self);
-        spells::update(self);
-        auras::update(self);
-        boss_mechanics::update(self);
-        loot::update(self);
-        quests::update_timers(self);
-        items::update(self);
-        enchant::update(self);
-        scripts::update(self);
-        event_ai::update_despawns(self);
-        instance_script::update(self);
-        map_events::update(self);
-        scripts::update_objects(self);
-        objects::update(self);
-        social::push_member_stats(self);
-        duel::update(self);
-        battleground::update(self);
-        eviction::update(self);
-        self.unload_if_empty();
-        pets::update(self);
-        ai::update_creatures(self);
-        combat::update_creatures(self);
-        escorts::update(self);
-        crate::game::elemental::update(self);
-        ai::update_dead(self);
-        visibility::refresh_dirty(self);
-        quests::update_objects(self);
-        self.flush_forgets();
-        self.flush_values();
-        self.flush_batches();
-        for (g, frame) in std::mem::take(&mut self.late_frames) {
-            if let Some(p) = self.players.get(&g) {
-                p.outbound.send_frame(frame);
-            }
-        }
+        // Each step under its own guard: one that panics costs itself,
+        // this once, and the rest (the flushes most of all) go on.
+        self.step("players", Map::update_players);
+        self.step("gear", inventory::sync_gear_all);
+        self.step("misc", misc::update);
+        self.step("players' combat", combat::update_players);
+        self.step("players' motion", player_motion::update);
+        self.step("intoxication", intoxication::update);
+        self.step("item scripts", item_scripts::update);
+        self.step("pvp", pvp::update);
+        self.step("outdoor pvp", outdoor_pvp::update);
+        self.step("arena", arena::update);
+        self.step("flights", npc::update_flights);
+        self.step("spells", spells::update);
+        self.step("auras", auras::update);
+        self.step("boss mechanics", boss_mechanics::update);
+        self.step("loot", loot::update);
+        self.step("quest timers", quests::update_timers);
+        self.step("items", items::update);
+        self.step("enchantments", enchant::update);
+        self.step("scripts", scripts::update);
+        self.step("despawns", event_ai::update_despawns);
+        self.step("instance script", instance_script::update);
+        self.step("map events", map_events::update);
+        self.step("object scripts", scripts::update_objects);
+        self.step("objects", objects::update);
+        self.step("member stats", social::push_member_stats);
+        self.step("duels", duel::update);
+        self.step("battleground", battleground::update);
+        self.step("eviction", eviction::update);
+        self.step("unloading", Map::unload_if_empty);
+        self.step("pets", pets::update);
+        self.step("creatures", ai::update_creatures);
+        self.step("creatures' combat", combat::update_creatures);
+        self.step("escorts", escorts::update);
+        self.step("elemental invasion", crate::game::elemental::update);
+        self.step("the dead", ai::update_dead);
+        self.step("visibility", visibility::refresh_dirty);
+        self.step("quest objects", quests::update_objects);
+        self.step("forgets", Map::flush_forgets);
+        self.step("values", Map::flush_values);
+        self.step("batches", Map::flush_batches);
+        self.step("late frames", Map::flush_late_frames);
         self.create_cache.clear();
 
         let took = started.elapsed();
@@ -902,6 +978,14 @@ impl Map {
                 }
             }
             c.fields.clear_dirty();
+        }
+    }
+
+    fn flush_late_frames(&mut self) {
+        for (g, frame) in std::mem::take(&mut self.late_frames) {
+            if let Some(p) = self.players.get(&g) {
+                p.outbound.send_frame(frame);
+            }
         }
     }
 

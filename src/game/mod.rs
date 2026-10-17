@@ -18,6 +18,7 @@ pub mod registry;
 pub mod session;
 pub mod social;
 pub mod store;
+pub mod supervisor;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -76,6 +77,8 @@ mod tests_pvp3;
 mod tests_pvp4;
 #[cfg(test)]
 mod tests_pvp5;
+#[cfg(test)]
+mod tests_robust;
 #[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
@@ -176,6 +179,9 @@ impl RealmConfig {
     }
 }
 
+/// How long the shutdown waits for the maps to save their players.
+pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
+
 /// What every map and session shares.
 pub struct Realm {
     pub config: RealmConfig,
@@ -236,17 +242,39 @@ impl Realm {
 
     /// Save everyone in every map, and wait for the store to write it.
     pub async fn shutdown(&self) {
+        self.shutdown_within(SHUTDOWN_WAIT).await;
+    }
+
+    /// [`Realm::shutdown`], waiting at most `limit` for the maps, and as
+    /// long again for the store: a hung map is left behind, and what the
+    /// others saved is still written.
+    pub async fn shutdown_within(&self, limit: Duration) {
+        self.maps.close();
         let mut waits = Vec::new();
         for map in self.maps.all() {
             let (tx, rx) = tokio::sync::oneshot::channel();
             if map.send(MapEvent::Shutdown(tx)) {
-                waits.push(rx);
+                waits.push((map.key, rx));
             }
         }
-        for w in waits {
-            let _ = w.await;
+        let deadline = tokio::time::Instant::now() + limit;
+        for (key, w) in waits {
+            if tokio::time::timeout_at(deadline, w).await.is_err() {
+                tracing::error!(
+                    "{key} didn't save its players within {} s (hung?); shutting down without them",
+                    limit.as_secs()
+                );
+            }
         }
-        self.store.flush().await;
+        if tokio::time::timeout(limit, self.store.flush())
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                "the character store didn't finish writing within {} s",
+                limit.as_secs()
+            );
+        }
     }
 }
 

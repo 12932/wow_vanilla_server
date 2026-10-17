@@ -624,21 +624,50 @@ pub fn start(realm: &Arc<Realm>) {
     let weak = Arc::downgrade(realm);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
+        // Each route under its own watch: one that panics rests while the
+        // rest sail on. Before, a panic stopped them all.
+        let mut watch: Vec<crate::game::supervisor::Backoff> =
+            routes.iter().map(|_| Default::default()).collect();
         loop {
             tick.tick().await;
             let Some(realm) = weak.upgrade() else {
                 return;
             };
-            let now = crate::game::uptime_ms();
-            for r in &mut routes {
-                let pose = r.pose_at(now);
-                if pose.map != r.map {
-                    cross(&realm, r, pose);
-                    r.map = pose.map;
-                }
+            let (now, at) = (crate::game::uptime_ms(), std::time::Instant::now());
+            for (r, b) in routes.iter_mut().zip(&mut watch) {
+                b.run("a transport's clock", at, || {
+                    #[cfg(test)]
+                    realm.social.faults.check("transport");
+                    let pose = r.pose_at(now);
+                    if pose.map != r.map {
+                        cross(&realm, r, pose);
+                        r.map = pose.map;
+                    }
+                });
             }
         }
     });
+}
+
+/// Put back the boats and zeppelins that are on a map built again (a
+/// restart after its update kept panicking): where each is now.
+pub fn restore(map: &mut crate::game::map::Map) {
+    if map.key.instance != 0 {
+        return;
+    }
+    let realm = map.realm.clone();
+    let now = crate::game::uptime_ms();
+    for r in routes(&realm) {
+        let (on, pos) = r.at(now);
+        if on != map.key.map || map.gameobject(r.guid).is_some() {
+            continue;
+        }
+        let Some(template) = realm.data.gameobject_templates.get(&r.entry) else {
+            continue;
+        };
+        map.add_gameobject(object(template, &r, on, pos));
+        map.globals.push(r.guid);
+    }
 }
 
 /// The transport goes from its map to the pose's, with those aboard.
@@ -710,10 +739,7 @@ impl Map {
         };
         p.logout_at = None;
         let session = p.online.session.clone();
-        let _ = session.send(crate::game::session::Control::Transfer {
-            player: Box::new(p),
-            to,
-        });
+        crate::game::session::transfer(&self.realm, &session, p, to);
     }
 }
 
