@@ -140,6 +140,9 @@ pub fn load(dir: &Path) -> GameData {
             super::scripts_load::load(&db, &mut data);
             super::world::load(&db, dbc.as_ref(), &mut data.world);
             let _ = super::tt_scripts::install(&mut data);
+            // Alterac Valley's NPCs as the battleground drives them, over the
+            // general import.
+            crate::game::map::battleground::av_scripts::install(&mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }

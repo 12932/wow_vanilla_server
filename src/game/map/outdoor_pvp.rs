@@ -681,10 +681,57 @@ fn reconcile_services(map: &mut Map) {
         if s.aura != 0 {
             crate::game::map::spells::cast_triggered(map, g, s.aura, Some(g));
         }
+        if s.entry == SPIRIT_OF_VICTORY {
+            walk_waypoints(map, g);
+        }
         if let Some(o) = map.outdoor.as_mut() {
             o.services.insert((i, s.slot), (s.entry, g));
         }
+        if i == EASTWALL && s.slot > 0 {
+            link_soldier(map, g, usize::from(s.slot));
+        }
     }
+}
+
+const EASTWALL: usize = 1;
+const SPIRIT_OF_VICTORY: u32 = 18039;
+
+/// The spirit healer walks its entry's waypoints, a second after it
+/// comes, as Thistle Tea starts them.
+fn walk_waypoints(map: &mut Map, g: Guid) {
+    let now = map.now;
+    if let Some(c) = map.creature_mut(g) {
+        c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
+        c.waypoint = 0;
+        c.motion = crate::game::map::creature::Motion::Idle {
+            until: Some(now + std::time::Duration::from_secs(1)),
+        };
+    }
+}
+
+/// An Eastwall soldier joins its commander's squad, at its place beside
+/// it: they fight together and give up together.
+fn link_soldier(map: &mut Map, g: Guid, slot: usize) {
+    let Some(leader) = map
+        .outdoor
+        .as_ref()
+        .and_then(|o| o.services.get(&(EASTWALL, 0)))
+        .map(|(_, l)| *l)
+    else {
+        return;
+    };
+    let (lx, ly, _, _) = SQUAD[0];
+    let (x, y, _, o) = SQUAD[slot];
+    let angle = (y - ly).atan2(x - lx) - o;
+    // In formation, fighting and evading together.
+    crate::game::map::creature_groups::join_with(
+        map,
+        g,
+        leader,
+        5.0,
+        angle,
+        crate::game::data::scripts::GROUP_FORMATION | crate::game::data::scripts::GROUP_AGGRO_TOGETHER | crate::game::data::scripts::GROUP_EVADE_TOGETHER,
+    );
 }
 
 /// A creature put in the world by world PvP, of its template (with a

@@ -408,12 +408,23 @@ fn targets_of(t: &SpellCastTargets) -> Targets {
     let f = &t.target_flags;
     Targets {
         unit: f.get_unit().map(|u| u.unit_target),
-        object: f.get_gameobject().map(|g| match g {
-            SpellCastTargets_SpellCastTargetFlags_Gameobject::Gameobject { gameobject }
-            | SpellCastTargets_SpellCastTargetFlags_Gameobject::ObjectUnk {
-                object_unk: gameobject,
-            } => *gameobject,
-        }),
+        // A corpse (Remove Insignia's) goes with the objects.
+        object: f
+            .get_gameobject()
+            .map(|g| match g {
+                SpellCastTargets_SpellCastTargetFlags_Gameobject::Gameobject { gameobject }
+                | SpellCastTargets_SpellCastTargetFlags_Gameobject::ObjectUnk {
+                    object_unk: gameobject,
+                } => *gameobject,
+            })
+            .or_else(|| {
+                f.get_corpse().map(|c| match c {
+                    SpellCastTargets_SpellCastTargetFlags_Corpse::Corpse { corpse }
+                    | SpellCastTargets_SpellCastTargetFlags_Corpse::PvpCorpse {
+                        pvp_corpse: corpse,
+                    } => *corpse,
+                })
+            }),
         item: f.get_item().map(|i| match i {
             SpellCastTargets_SpellCastTargetFlags_Item::Item { item }
             | SpellCastTargets_SpellCastTargetFlags_Item::TradeItem { trade_item: item } => *item,
