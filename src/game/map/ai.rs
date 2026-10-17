@@ -217,6 +217,7 @@ fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
         .filter(|g| {
             map.creature(*g).is_some_and(|h| {
                 h.alive()
+                    && !crate::game::map::creature_motion::critter(map, *g)
                     && !h.combat.attacking
                     && h.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction
                     && dist(h.position, pos) <= radius
@@ -562,6 +563,10 @@ pub fn update_creatures(map: &mut Map) {
 /// Look for a player to attack.
 fn aggro_scan(map: &mut Map, g: Guid) {
     let now = map.now;
+    // A critter looks for no one.
+    if crate::game::map::creature_motion::critter(map, g) {
+        return;
+    }
     let data = map.realm.data.clone();
     let Some(c) = map.creature_mut(g) else {
         return;
