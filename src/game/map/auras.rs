@@ -733,6 +733,10 @@ pub struct Context {
     pub charges: Option<u32>,
     /// From a triggered spell.
     pub triggered: bool,
+    /// A linked aura's spell: held unseen and as a passive, with no slot
+    /// of its own, going with the aura that holds it (Thistle Tea's linked
+    /// holders).
+    pub linked: bool,
 }
 
 /// Why an aura couldn't be applied.
@@ -782,7 +786,7 @@ pub fn apply_spell(
         .duration
         .unwrap_or_else(|| data.spells.duration(spell, level));
     let pos = positive(spell);
-    let passive = spell.passive();
+    let passive = spell.passive() || ctx.linked;
     let Some(existing) = auras(map, target) else {
         return Ok(());
     };
@@ -882,7 +886,7 @@ pub fn apply_spell(
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
-    let visible = visible(spell, caster == target);
+    let visible = visible(spell, caster == target) && !ctx.linked;
     // What the new holder replaces.
     let replaced: Vec<usize> = existing
         .holders
@@ -1422,6 +1426,7 @@ fn linked(map: &mut Map, target: Guid, h: &Holder, spell: u32) {
         item: h.item,
         duration: Some(left),
         triggered: true,
+        linked: true,
         ..Default::default()
     };
     let _ = apply_spell(map, h.caster, target, s, &effects, ctx);

@@ -298,6 +298,7 @@ pub fn restore(map: &mut Map, player: Guid) {
                 duration: Some(a.left),
                 charges: Some(a.charges),
                 triggered: a.triggered,
+                linked: false,
             },
         );
         if let Some(h) = auras::auras_mut(map, player).and_then(|x| {

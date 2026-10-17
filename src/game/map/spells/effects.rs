@@ -320,6 +320,7 @@ pub fn run(
             duration: Some(duration),
             charges,
             triggered: l.triggered,
+            linked: false,
         };
         if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
             && caster != target

@@ -744,12 +744,18 @@ async fn a_linked_aura_holds_its_spell_while_it_lasts() {
         crate::game::map::auras::auras(m, g)
             .is_some_and(|a| a.holders.iter().any(|h| h.spell == spell))
     };
-    let on_it = on(&map, move |m| {
+    let (on_it, unseen) = on(&map, move |m| {
         crate::game::map::spells::cast_triggered(m, g, BARK, None);
-        (has(m, BARK), has(m, BARK_EFFECT))
+        let unseen = crate::game::map::auras::auras(m, g).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == BARK_EFFECT && h.slot.is_none() && h.passive)
+        });
+        ((has(m, BARK), has(m, BARK_EFFECT)), unseen)
     })
     .await;
     assert_eq!(on_it, (true, true), "Barkskin brings its effect");
+    assert!(unseen, "held unseen, with no slot of its own");
     let off = on(&map, move |m| {
         crate::game::map::auras::remove_spell(m, g, BARK, None);
         (has(m, BARK), has(m, BARK_EFFECT))
