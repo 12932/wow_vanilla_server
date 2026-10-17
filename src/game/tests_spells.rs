@@ -167,10 +167,25 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
             let blocked = spells::checks::check(m, g, &s, &at(kobold), None, false, &mods);
             m.spells.walls.clear();
             let clear = spells::checks::check(m, g, &s, &at(kobold), None, false, &mods);
+            // A hundred spell damage of fire: Fireball's coefficient is 1.
+            let mut power = sure_crit();
+            power.id = 990_002;
+            power.effects[0].aura = auras::AURA_MOD_DAMAGE_DONE;
+            power.effects[0].misc_value = 0x4;
+            let _ = auras::apply_spell(m, g, g, &power, &[(0, 100)], auras::Context::default());
+            let fireball = m.realm.data.spells.get(FIREBALL).unwrap().clone();
+            let bonus = outcome::bonus(
+                m,
+                g,
+                kobold,
+                &fireball,
+                0,
+                outcome::Kind::Direct,
+                &spells::mods::Mods::default(),
+            );
             // A level 60 caster at even level hits 96 in 100; a level 1
             // caster against level 60, 22.
             m.spells.rolls = Some(true);
-            let fireball = m.realm.data.spells.get(FIREBALL).unwrap().clone();
             let none = spells::mods::Mods::default();
             let even = (0..2000)
                 .filter(|_| {
@@ -185,11 +200,14 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
                     outcome::roll_hit(m, g, kobold, &fireball, &none) == outcome::Hit::Resist
                 })
                 .count();
-            (plain, improved, dealt, ignite, blocked, clear, even, low)
+            (
+                plain, improved, dealt, ignite, blocked, clear, even, low, bonus,
+            )
         })
         .await
         .unwrap();
-    let (plain, improved, dealt, ignite, blocked, clear, even, low) = out;
+    let (plain, improved, dealt, ignite, blocked, clear, even, low, bonus) = out;
+    assert!((bonus - 100.0).abs() < 0.5, "spell power's bonus: {bonus}");
     assert_eq!(plain, Some(3500), "Fireball's cast");
     assert_eq!(improved, Some(3000), "with Improved Fireball");
     // Rank 12 does 596 to 760, and half again on a crit.

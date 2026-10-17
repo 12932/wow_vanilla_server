@@ -787,7 +787,7 @@ pub fn damage(
     d *= if l.chain > 0.0 { l.chain } else { 1.0 };
     d *= done_multiplier(map, caster, target, s);
     d = l.mods.apply(mods::OP_DAMAGE, d);
-    if s.school == 0 && !s.attr(0, 0x4_0000) {
+    if s.school == 0 {
         let armor = resistance(map, caster, target, 0);
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
