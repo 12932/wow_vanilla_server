@@ -71,6 +71,7 @@ pub mod rest;
 pub mod scripts;
 pub mod skills;
 pub mod social;
+pub mod spawn_auras;
 pub mod spell_areas;
 pub mod spells;
 pub mod stats;
@@ -942,6 +943,7 @@ impl Map {
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
+        spawn_auras::apply(self, guid);
         guid
     }
 
