@@ -643,3 +643,155 @@ async fn a_locked_objects_loot_is_for_those_who_opened_it() {
         .unwrap();
     assert_eq!(out, (true, true, None), "only the herbalist looks in it");
 }
+
+/// Fill `g`'s bags with Worn Shortbows.
+fn fill_bags(m: &mut Map, g: Guid) {
+    while crate::game::map::inventory::add_item(m, g, 2504, 1, false).is_ok() {}
+}
+
+#[tokio::test]
+async fn crafting_into_full_bags_fails_before_it_costs_anything() {
+    if !have_data() {
+        return;
+    }
+    const CLOTH: u32 = 2589;
+    const BANDAGE: u32 = 1251;
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGCRAFT");
+    let g = c.enter("Bugcraft", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[3273, 3275]);
+            crate::game::map::inventory::add_item(m, g, CLOTH, 2, false).unwrap();
+            let skill = |m: &Map| crate::game::map::skills::value(&m.players[&g], 129);
+            let before = skill(m);
+            // Bags full as it begins: refused.
+            let m2 = |m: &mut Map| {
+                let p = &m.players[&g];
+                (p.count_of(CLOTH), p.count_of(BANDAGE))
+            };
+            fill_bags(m, g);
+            let begun = spells::cast(m, g, 3275, Default::default(), None);
+            let refused = m2(m);
+            // Bags filled while it is cast: it fails as it ends.
+            let bows: Vec<usize> = m.players[&g]
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| i.entry == 2504)
+                .map(|(i, _)| i)
+                .take(1)
+                .collect();
+            for i in bows {
+                let n = m.players[&g].items[i].count();
+                crate::game::map::inventory::take_item(m, g, i, n);
+            }
+            let again = spells::cast(m, g, 3275, Default::default(), None);
+            fill_bags(m, g);
+            m.now += Duration::from_secs(10);
+            spells::update(m);
+            (begun, refused, again, m2(m), skill(m) == before)
+        })
+        .await
+        .unwrap();
+    let (begun, refused, again, ended, same_skill) = out;
+    assert!(!begun, "no room, no cast");
+    assert_eq!(refused, (2, 0), "the cloth kept");
+    assert!(again, "with room it begins");
+    assert_eq!(ended, (2, 0), "and filled meanwhile, keeps its cloth");
+    assert!(same_skill, "and no skill for it");
+    c.wait_for("the full inventory", |m| match m {
+        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(f) => matches!(
+            f.result,
+            SMSG_INVENTORY_CHANGE_FAILURE_InventoryResult::InventoryFull { .. }
+        )
+        .then_some(()),
+        _ => None,
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_cast_with_nothing_left_to_pay_with_fails() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGHUNT");
+    let hunter = c.enter("Bughunt", Race::NightElf, Class::Hunter).await;
+    let mut d = Client::connect(&realm, "BUGMAGE2");
+    let mage = d.enter("Bugmageb", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let map0 = realm.maps.get(&realm, MapKey::world(0));
+    let shot = map
+        .query(move |m| {
+            ready(m, hunter, 60, &[3044]);
+            // A bow, and not an arrow.
+            let projectiles: Vec<usize> = m.players[&hunter]
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| m.realm.data.item(i.entry).is_some_and(|t| t.class == 6))
+                .map(|(i, _)| i)
+                .rev()
+                .collect();
+            for i in projectiles {
+                let n = m.players[&hunter].items[i].count();
+                crate::game::map::inventory::take_item(m, hunter, i, n);
+            }
+            let ranged = m.players[&hunter]
+                .items
+                .iter()
+                .any(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == 17);
+            let boar = spawn(m, hunter, 6, 60, 15.0, 100_000);
+            let mana = |m: &Map| m.players[&hunter].fields.get_u32(UNIT_FIELD_POWER1);
+            let before = (mana(m), health(m, boar));
+            spells::cast(
+                m,
+                hunter,
+                3044,
+                spells::Targets {
+                    unit: Some(boar),
+                    ..Default::default()
+                },
+                None,
+            );
+            m.now += Duration::from_secs(1);
+            spells::update(m);
+            (ranged, before, (mana(m), health(m, boar)))
+        })
+        .await
+        .unwrap();
+    let drained = map0
+        .query(move |m| {
+            ready(m, mage, 60, &[116]);
+            let kobold = spawn(m, mage, 6, 60, 20.0, 100_000);
+            let began = spells::cast(
+                m,
+                mage,
+                116,
+                spells::Targets {
+                    unit: Some(kobold),
+                    ..Default::default()
+                },
+                None,
+            );
+            // Drained while casting.
+            if let Some(f) = m.unit_fields_mut(mage) {
+                f.set_u32(UNIT_FIELD_POWER1, 0);
+            }
+            m.now += Duration::from_secs(4);
+            spells::update(m);
+            let cooling = m
+                .caster(mage)
+                .is_some_and(|c| c.gcd_until.is_some() && c.cooldowns.contains_key(&116));
+            (began, health(m, kobold), cooling)
+        })
+        .await
+        .unwrap();
+    let (ranged, before, after) = shot;
+    assert!(ranged, "a bow in the ranged slot");
+    assert_eq!(after, before, "no arrows: no shot, no mana spent");
+    assert_eq!(drained, (true, 100_000, false), "drained: no Frostbolt");
+}

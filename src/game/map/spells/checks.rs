@@ -447,6 +447,9 @@ pub fn check(
                 }
             }
         }
+        if let Some(code) = room_for_made(map, caster, s) {
+            return Some(code);
+        }
         if s.requires_spell_focus != 0
             && map.players.contains_key(&caster)
             && !near_focus(map, me.position, s.requires_spell_focus)
@@ -476,6 +479,52 @@ pub fn check(
         }
     }
     check_target(map, caster, s, t, triggered, m)
+}
+
+/// What a cast pays for, checked again as it goes off (mangos's
+/// `CheckCast` at the cast, Thistle Tea's launch): the power it costs (a
+/// caster drained while casting has none to pay), its reagents, and room
+/// for what it makes. Why it fails, if it does.
+pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
+    let have = map
+        .unit_fields(caster)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_POWER1 + power_index(s)));
+    if cost > have {
+        return Some(fail::NO_POWER);
+    }
+    if let Some(p) = map.players.get(&caster)
+        && !p.gm
+        && s.reagents
+            .iter()
+            .any(|(r, n)| *r != 0 && p.count_of(*r) < *n)
+    {
+        return Some(fail::REAGENTS);
+    }
+    room_for_made(map, caster, s)
+}
+
+/// Whether what `s` makes fits in its caster's bags (mangos's
+/// `CheckItems`): if not, they are told why, and the cast fails before it
+/// costs anything.
+fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    let p = map.players.get(&caster)?;
+    let data = &map.realm.data;
+    let level = u32::from(p.level());
+    for (i, e) in s.effects.iter().enumerate() {
+        if e.effect != super::EFFECT_CREATE_ITEM || e.item_type == 0 {
+            continue;
+        }
+        let item = super::scripts::created_item(map, caster, s, e.item_type);
+        let Some(t) = data.item(item) else {
+            continue;
+        };
+        let count = (super::points(s, i, level).max(1) as u32).min(t.stackable.max(1));
+        if let Err(why) = crate::game::map::inventory::room_for(p, data, item, count) {
+            crate::game::map::inventory::send_fail(p, why, Guid::zero());
+            return Some(fail::DONT_REPORT);
+        }
+    }
+    None
 }
 
 /// Whether `s` brings back the dead.
