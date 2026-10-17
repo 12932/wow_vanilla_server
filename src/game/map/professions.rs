@@ -358,7 +358,7 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
                 let pockets = data
                     .creature_template(c.entry)
                     .is_some_and(|t| t.pickpocket_loot_id != 0);
-                if !pockets || map.loot_state.picked.contains(&c.guid) {
+                if !pockets {
                     return Some(FAIL_TARGET_NO_POCKETS);
                 }
             }
@@ -633,9 +633,9 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     else {
         return;
     };
-    if !map.loot_state.picked.insert(creature) {
-        return;
-    }
+    // Picked already this life, a pocket holds only the rogue's own quest
+    // drops (Thistle Tea's `Pickpocket.session`).
+    let picked_before = !map.loot_state.picked.insert(creature);
     let Some(t) = data.creature_template(entry) else {
         return;
     };
@@ -655,6 +655,13 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     };
     let mut rng = rand::rng();
     loot.gold = 10 * (rng.random_range(0..=level / 2) + rng.random_range(0..=player_level / 2));
+    if picked_before {
+        loot.gold = 0;
+        loot.items.retain(|s| s.quest);
+        if loot.items.is_empty() {
+            return;
+        }
+    }
     if let Some(c) = map.creature_mut(creature) {
         c.loot = Some(loot);
     }
