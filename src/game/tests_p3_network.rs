@@ -1003,3 +1003,106 @@ async fn an_item_that_changes_into_another_is_not_spent_as_well() {
     assert_eq!(source, 0);
     assert_eq!(changed, Some((bag, slot)), "the new item where the old lay");
 }
+
+/// Thistle Tea's social_messages_test: the friend list asked for gives an
+/// offline friend's GUID and status alone, an AFK or DND friend's status
+/// with their zone, level and class; the ignore list the GUIDs; and a
+/// line the client hid as ignored tells its speaker they are ignored.
+#[tokio::test]
+async fn the_friend_list_shows_who_is_away_and_the_ignored_are_told() {
+    let realm = harness::realm();
+    let mut dave = Client::connect(&realm, "D");
+    let gd = dave.enter("Dave", Race::Human, Class::Warrior).await;
+    logout(&mut dave).await;
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Mage).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Priest).await;
+    for (who, status) in [
+        (&b, CMSG_MESSAGECHAT_ChatType::Afk),
+        (&c, CMSG_MESSAGECHAT_ChatType::Dnd),
+    ] {
+        who.send(CMSG_MESSAGECHAT {
+            chat_type: status,
+            language: Language::Universal,
+            message: "away".into(),
+        })
+        .await;
+    }
+    settled(&mut b).await;
+    settled(&mut c).await;
+    for name in ["Bob", "Carol", "Dave"] {
+        a.send(CMSG_ADD_FRIEND { name: name.into() }).await;
+    }
+    a.send(CMSG_ADD_IGNORE { name: "Bob".into() }).await;
+    settled(&mut a).await;
+    a.clear();
+    a.send(CMSG_FRIEND_LIST {}).await;
+    let list = a.wait_frame("SMSG_FRIEND_LIST", 0x067, |_| true).await;
+    assert_eq!(list[0], 3, "three friends");
+    let mut rows = std::collections::HashMap::new();
+    let mut at = 1;
+    while at < list.len() {
+        let g = u64_at(&list, at);
+        let status = list[at + 8];
+        at += 9;
+        let details = (status != 0).then(|| {
+            let d = (
+                u32_at(&list, at),
+                u32_at(&list, at + 4),
+                u32_at(&list, at + 8),
+            );
+            at += 12;
+            d
+        });
+        rows.insert(g, (status, details));
+    }
+    assert_eq!(rows[&gd.guid()], (0, None), "Dave, offline: no details");
+    let (bob, carol) = (rows[&gb.guid()], rows[&gc.guid()]);
+    assert_eq!(bob.0, 2, "Bob AFK");
+    assert_eq!(carol.0, 4, "Carol DND");
+    assert_eq!(
+        bob.1.map(|d| (d.1, d.2)),
+        Some((1, Class::Mage.as_int() as u32))
+    );
+    assert_eq!(
+        carol.1.map(|d| (d.1, d.2)),
+        Some((1, Class::Priest.as_int() as u32))
+    );
+    let ignored = a.wait_frame("SMSG_IGNORE_LIST", 0x06B, |_| true).await;
+    assert_eq!(ignored, [&[1u8][..], &gb.guid().to_le_bytes()].concat());
+    // Alice's client hid lines from Bob, whom she ignores, and from Carol,
+    // whom she doesn't: only Bob is told.
+    b.clear();
+    c.clear();
+    a.send(CMSG_CHAT_IGNORED { guid: gc }).await;
+    a.send(CMSG_CHAT_IGNORED { guid: gb }).await;
+    let (by, name) = b
+        .wait_for("an ignored notice", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match c.chat_type {
+                SMSG_MESSAGECHAT_ChatType::Ignored { sender2 } => {
+                    Some((sender2, c.message.clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .await;
+    assert_eq!((by, name.as_str()), (a.guid, "Alice"));
+    settled(&mut c).await;
+    assert!(
+        c.gets(Duration::ZERO, |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c)
+                if matches!(c.chat_type, SMSG_MESSAGECHAT_ChatType::Ignored { .. }) =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await
+        .is_none(),
+        "Carol isn't ignored"
+    );
+}

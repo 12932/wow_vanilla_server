@@ -343,6 +343,8 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_DEL_FRIEND(m) => friends::del_friend(map, g, m.guid),
         C::CMSG_ADD_IGNORE(m) => friends::add_ignore(map, g, &m.name),
         C::CMSG_DEL_IGNORE(m) => friends::del_ignore(map, g, m.guid),
+        C::CMSG_FRIEND_LIST => friends::send_lists(map, g),
+        C::CMSG_CHAT_IGNORED(m) => friends::chat_ignored(map, g, m.guid),
         C::CMSG_WHO(m) => who(map, g, &m),
         C::CMSG_INSPECT(m) => inspect(map, g, m.guid),
         C::CMSG_GROUP_INVITE(m) => groups::invite(&realm, &me, &m.name),
