@@ -1,8 +1,9 @@
-//! Stage 2a's spells and auras, against the real data when it is here: a
-//! dispel taking a passive aura, weapons' feral attack power held to the
-//! forms, healing taken by the spell's coefficient and at each tick, a
-//! killing spell that spares the gear, the Net-o-Matic's backfire, and
-//! Premeditation's points taken back.
+//! Stage 2a's spells and auras, and 2h's silithyst, against the real data
+//! when it is here: a dispel taking a passive aura, weapons' feral attack
+//! power held to the forms, healing taken by the spell's coefficient and at
+//! each tick, a killing spell that spares the gear, the Net-o-Matic's
+//! backfire, Premeditation's points taken back, and the carrier's PvP
+//! pulse.
 
 use std::time::Duration;
 
@@ -425,4 +426,46 @@ async fn premeditations_points_come_off_when_it_runs_out_unless_a_builder_kept_t
     assert_eq!(ran_out, ((1, 1), false), "the two held go with the hold");
     assert_eq!(built, ((4, 4), false), "a builder keeps them for good");
     assert_eq!(kept, (4, 4));
+}
+
+const SILITHYST: u32 = 29519;
+
+#[tokio::test]
+async fn the_silithyst_carriers_pulse_keeps_them_contested() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P2A7");
+    let carrier = c.enter("Parseven", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, carrier, 60);
+            spells::cast_triggered(m, carrier, SILITHYST, Some(carrier));
+            let carrying = has(m, carrier, SILITHYST);
+            // The contest from the pickup has lapsed.
+            let p = m.players.get_mut(&carrier).unwrap();
+            p.pvp.contested_until = None;
+            p.fields.set_flag(
+                PLAYER_FLAGS,
+                crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+                false,
+            );
+            m.now += Duration::from_secs(15);
+            auras::update(m);
+            let now = m.now;
+            let p = &m.players[&carrier];
+            (
+                carrying,
+                p.fields.has_flag(
+                    PLAYER_FLAGS,
+                    crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+                ),
+                p.pvp.contested_until.is_some_and(|t| t > now),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, true), "(carrying, flagged, contested)");
 }
