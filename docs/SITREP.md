@@ -165,7 +165,7 @@ the questions waiting for you.
 | 1a: the matrix, mapped (core rest, world, network) | done: all 8,850 mapped, 1,781 of 8,429 applicable covered (21%) | f9bad00 |
 | Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | running | |
-| Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | |
+| Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | d2dd886 |
 | Bugs from the mapping, batch 3 (24: visibility, spawns, wire layouts) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
