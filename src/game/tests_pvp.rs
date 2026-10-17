@@ -682,3 +682,181 @@ fn a_week_of_kills_ranks_by_standing() {
     let again = Ledger::load(&records, start + 14, 3);
     assert_eq!(again.entries[&1], l.entries[&1]);
 }
+
+/// A spell that only marks its target with a dummy aura.
+fn marker(d: &mut GameData, id: u32) {
+    let mut s = crate::game::data::spells::SpellTemplate {
+        id,
+        name: format!("Marker {id}"),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0].effect = 6;
+    s.effects[0].aura = crate::game::map::auras::AURA_DUMMY;
+    s.effects[0].target_a = 1;
+    d.spells.spells.insert(id, s);
+}
+
+#[tokio::test]
+async fn silithyst_carried_home_counts_for_the_side() {
+    let mut d = GameData::empty();
+    banner(&mut d, 181598, 10);
+    marker(&mut d, crate::game::map::outdoor_pvp::SPELL_CARRYING);
+    marker(&mut d, 29894);
+    let realm = harness::realm_with(d);
+    // Alice is a night elf: Kalimdor.
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::NightElf, Class::Warrior).await;
+    let key = realm.registry.online(g).unwrap().map().key;
+    assert_eq!(key.map, 1);
+    let map = realm.maps.get(&realm, key);
+    let pos = map
+        .query(move |m| m.players[&g].position())
+        .await
+        .unwrap();
+    let geyser = map
+        .query(move |m| {
+            let t = m.realm.data.gameobject_templates[&181598].clone();
+            let mut go = crate::game::map::gameobject::GameObject::from_spawn(
+                &t,
+                &GameObjectSpawn {
+                    guid: 49336,
+                    entry: 181598,
+                    map: 1,
+                    x: pos.x + 1.0,
+                    y: pos.y,
+                    z: pos.z,
+                    state: 1,
+                    ..Default::default()
+                },
+            );
+            go.spawn_guid = Some(49336);
+            m.add_gameobject(go)
+        })
+        .await
+        .unwrap();
+    a.send(CMSG_GAMEOBJ_USE { guid: geyser }).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let carrying = map
+        .query(move |m| {
+            m.players[&g]
+                .auras
+                .has_spell(crate::game::map::outdoor_pvp::SPELL_CARRYING)
+        })
+        .await
+        .unwrap();
+    assert!(carrying, "silithyst picked up");
+    // Home at the Alliance's camp (trigger 4162), in Silithus.
+    map.query(move |m| {
+        m.players.get_mut(&g).unwrap().zone = crate::game::map::outdoor_pvp::SILITHUS;
+        crate::game::map::outdoor_pvp::area_trigger(m, g, 4162);
+    })
+    .await;
+    world_state(&mut a, "one brought home", 2313, 1).await;
+    let still = map
+        .query(move |m| {
+            m.players[&g]
+                .auras
+                .has_spell(crate::game::map::outdoor_pvp::SPELL_CARRYING)
+        })
+        .await
+        .unwrap();
+    assert!(!still, "handed in");
+}
+
+#[tokio::test]
+async fn a_plaguelands_tower_falls_to_those_standing_at_it() {
+    let mut d = GameData::empty();
+    let mut t = GameObjectTemplate {
+        entry: 182096,
+        kind: 29,
+        display_id: 1,
+        size: 1.0,
+        name: "Crown Guard".into(),
+        ..Default::default()
+    };
+    for (i, v) in [(0, 80), (2, 2426), (3, 2427), (12, 20), (13, 2428), (16, 480), (17, 1200)] {
+        t.data[i] = v;
+    }
+    d.gameobject_templates.insert(182096, t);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let key = realm.registry.online(g).unwrap().map().key;
+    assert_eq!(key.map, 0);
+    let map = realm.maps.get(&realm, key);
+    a.send(CMSG_TOGGLE_PVP {
+        set: Some(CMSG_TOGGLE_PVP_set { enable_pvp: true }),
+    })
+    .await;
+    // Alice at Crown Guard Tower, in the Eastern Plaguelands.
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.movement.position = Vector3d {
+            x: 1860.0,
+            y: -3730.0,
+            z: 196.7,
+        };
+        p.zone = crate::game::map::outdoor_pvp::PLAGUELANDS;
+    })
+    .await;
+    // The tower goes up, and Alice watches its slider.
+    a.wait_for("the slider", |m| match m {
+        ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => (w.state.state == 2426 && w.state.value == 1).then_some(()),
+        _ => None,
+    })
+    .await;
+    // Ten minutes alone at the tower: the Alliance's.
+    map.query(|m| {
+        let o = m.outdoor.as_mut().unwrap();
+        o.last_tick = Some(Instant::now() - Duration::from_secs(600));
+        o.next_tick = Some(Instant::now());
+    })
+    .await;
+    world_state(&mut a, "a tower held", 2327, 1).await;
+}
+
+/// With vmangos's data, each battleground starts with the spawns of its
+/// first events only: Arathi Basin's five neutral banners, every Alterac
+/// Valley node's banner in its first state, its generals but not their
+/// captains' graves.
+#[test]
+fn the_real_battlegrounds_start_with_their_first_events() {
+    use crate::game::map::battleground::{ab, av, initial_events};
+    let dir = std::path::Path::new("<runs>/tt-data/db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let data = crate::game::data::load::load(dir);
+    let on = |bg: u32, bindings: Option<&Vec<(u8, u8)>>| {
+        let ev = initial_events(bg);
+        bindings.is_none_or(|b| b.iter().any(|(e, s)| ev.get(e) == Some(&Some(*s))))
+    };
+    let mut ab_banners: Vec<u32> = data.gameobject_spawns[&529]
+        .iter()
+        .filter(|s| ab::BANNERS.contains(&s.entry) && on(3, data.bg_object_events.get(&s.guid)))
+        .map(|s| s.entry)
+        .collect();
+    ab_banners.sort_unstable();
+    assert_eq!(ab_banners, vec![180087, 180088, 180089, 180090, 180091]);
+    let av_banners = data.gameobject_spawns[&30]
+        .iter()
+        .filter(|s| av::BANNERS.contains(&s.entry) && on(1, data.bg_object_events.get(&s.guid)))
+        .count();
+    assert_eq!(av_banners, 15, "one banner a node");
+    let bound_to = |events: &[u8]| {
+        data.creature_spawns[&30]
+            .iter()
+            .filter(|s| {
+                data.bg_creature_events
+                    .get(&s.guid)
+                    .is_some_and(|b| b.iter().any(|(e, _)| events.contains(e)))
+            })
+            .map(|s| on(1, data.bg_creature_events.get(&s.guid)))
+            .collect::<Vec<bool>>()
+    };
+    let generals = bound_to(&[61, 62]);
+    assert!(!generals.is_empty() && generals.iter().all(|b| *b));
+    let captain_dead = bound_to(&[63, 64]);
+    assert!(captain_dead.iter().all(|b| !*b));
+}
