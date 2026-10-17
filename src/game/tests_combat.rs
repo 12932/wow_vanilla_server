@@ -451,6 +451,11 @@ async fn auto_shot_repeats_and_spends_arrows() {
             p.spells.push(AUTO_SHOT);
             p.derived.ranged_hit = 100.0;
         }
+        // It stands where it is: closing to melee, it would be too near to
+        // shoot.
+        if let Some(s) = crate::game::map::event_ai::scripted_mut(m, target) {
+            s.no_combat_movement = true;
+        }
     })
     .await;
     let speed = map

@@ -796,3 +796,57 @@ async fn a_creature_calls_its_kind_near_and_they_come_a_moment_later() {
     assert!(!at_once, "not at once");
     assert!(later, "a moment later");
 }
+
+/// A creature swings only from within its melee range, as the client
+/// measures it: one a yard beyond doesn't hit from there (it did, the
+/// player out of reach of their own swing), but closes in first. Two
+/// running units have the leeway.
+#[tokio::test]
+async fn a_creature_swings_only_from_within_its_reach() {
+    let (_realm, _a, ga, map) = setup().await;
+    let wolf = guid::unit(WOLF, WOLF_A);
+    let (from_beyond, closed, swung, leeway) = map
+        .query(move |m| {
+            let at = m.creature(wolf).unwrap().position;
+            crate::game::map::ai::attacked(m, wolf, ga);
+            let reach = combat::melee_range(&m.unit_view(wolf).unwrap(), &m.unit_view(ga).unwrap());
+            m.players.get_mut(&ga).unwrap().movement.position = Vector3d {
+                x: at.x + reach + 0.6,
+                ..at
+            };
+            let swung = |m: &Map| {
+                let now = m.now;
+                m.creature(wolf)
+                    .unwrap()
+                    .combat
+                    .next_swing
+                    .is_some_and(|t| t > now)
+            };
+            crate::game::map::ai::update_creatures(m);
+            let from_beyond = swung(m);
+            for _ in 0..40 {
+                m.now += Duration::from_millis(100);
+                crate::game::map::ai::update_creatures(m);
+                if swung(m) {
+                    break;
+                }
+            }
+            let (w, p) = (m.unit_view(wolf).unwrap(), m.unit_view(ga).unwrap());
+            let closed = combat::dist(w.position, p.position) <= combat::melee_range(&w, &p);
+            let (mut w, mut p) = (w, p);
+            p.position.x = w.position.x + combat::melee_range(&w, &p) + 2.0;
+            let still = combat::in_melee_range(&w, &p);
+            (w.running, p.running) = (true, true);
+            (
+                from_beyond,
+                closed,
+                swung(m),
+                (still, combat::in_melee_range(&w, &p)),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(!from_beyond, "no swing from beyond its reach");
+    assert!(closed && swung, "it closes in and swings");
+    assert_eq!(leeway, (false, true), "the leeway is for two running");
+}
