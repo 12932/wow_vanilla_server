@@ -131,6 +131,9 @@ pub struct State {
     pub seen: ahash::AHashMap<u32, Vec<u32>>,
     /// Timed steps for one creature each: (when, what, whom).
     pub creature_timers: Vec<(Instant, u32, Guid)>,
+    /// The spawns the script raised (chests, mostly), whose loot is saved
+    /// with the copy.
+    pub raised: ahash::AHashSet<u32>,
 }
 
 impl State {
@@ -1054,4 +1057,100 @@ pub fn run_event(map: &mut Map, event: u32, target: Guid) {
         .map(|(_, c)| c.guid)
         .unwrap_or(target);
     crate::game::map::scripts::start(map, ScriptTable::Event, event, source, target);
+}
+
+/// A chest the copy's script raised: what it holds now is saved with the
+/// copy, so one raised again after a reload keeps what was left in it.
+/// One whose loot is gone (an ordinary chest that fills again) is
+/// forgotten, to fill anew.
+pub fn chest_changed(map: &Map, object: Guid) {
+    if map.key.instance == 0 {
+        return;
+    }
+    let Some(o) = map.gameobject(object) else {
+        return;
+    };
+    let Some(spawn) = o.spawn_guid.filter(|s| map.instance.raised.contains(s)) else {
+        return;
+    };
+    let chest = o.loot.as_ref().map(|l| crate::game::instances::SavedChest {
+        items: l
+            .items
+            .iter()
+            .map(|s| crate::game::instances::SavedSlot {
+                item: s.item,
+                count: s.count,
+                taken: s.taken,
+                random_property: s.random_property,
+                quest: s.quest,
+                taken_by: s
+                    .taken_by
+                    .iter()
+                    .map(|g| crate::game::guid::counter(*g))
+                    .collect(),
+                quality: s.quality,
+                condition: s.condition,
+            })
+            .collect(),
+        gold: l.gold,
+        back_at: None,
+    });
+    crate::game::instances::chest_changed(&map.realm, map.key, spawn, chest);
+}
+
+/// A raised chest emptied and gone, back (filled anew) after `after`.
+pub fn chest_gone(map: &Map, spawn: u32, after: Duration) {
+    if map.key.instance == 0 || !map.instance.raised.contains(&spawn) {
+        return;
+    }
+    let chest = crate::game::instances::SavedChest {
+        back_at: Some(crate::game::social::mail::now() + after.as_secs() as i64),
+        ..Default::default()
+    };
+    crate::game::instances::chest_changed(&map.realm, map.key, spawn, Some(chest));
+}
+
+/// How a raised chest was left before the copy went: its loot, or, emptied
+/// and not yet back, how long until it is.
+pub enum Left {
+    Fresh,
+    Loot(crate::game::map::loot::Loot),
+    Gone(Duration),
+}
+
+/// What the save says of raised chest `spawn`.
+pub fn chest_left(map: &Map, spawn: u32) -> Left {
+    let Some(chest) = crate::game::instances::save_of(&map.realm, map.key.instance)
+        .and_then(|s| s.chests.get(&spawn).cloned())
+    else {
+        return Left::Fresh;
+    };
+    if let Some(back) = chest.back_at {
+        let left = back - crate::game::social::mail::now();
+        return if left > 0 {
+            Left::Gone(Duration::from_secs(left as u64))
+        } else {
+            Left::Fresh
+        };
+    }
+    let player = |c: u32| crate::game::guid::player(c);
+    Left::Loot(crate::game::map::loot::Loot {
+        items: chest
+            .items
+            .into_iter()
+            .map(|s| crate::game::map::loot::LootSlot {
+                item: s.item,
+                count: s.count,
+                taken: s.taken,
+                random_property: s.random_property,
+                quest: s.quest,
+                taken_by: s.taken_by.into_iter().map(player).collect(),
+                quality: s.quality,
+                condition: s.condition,
+                ..Default::default()
+            })
+            .collect(),
+        gold: chest.gold,
+        ..Default::default()
+    })
 }

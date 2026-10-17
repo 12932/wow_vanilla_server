@@ -18,6 +18,7 @@ use crate::game::guid;
 use crate::game::harness::{self, Client};
 use crate::game::instances;
 use crate::game::map::MapKey;
+use crate::game::map::instance_script::DONE;
 
 const RAID: u32 = 409;
 const LORD: u32 = 12118;
@@ -380,4 +381,158 @@ async fn razorfen_downs_gong_is_kept_across_a_reload() {
     .await;
     let (realm, _a) = restart(&realm, &path, razorfen_downs(), me).await;
     assert_eq!(gong(&realm, me, TUTENKASH).await, (15, false, 0), "done");
+}
+
+const DIRE_MAUL: u32 = 429;
+const TRIBUTE: u32 = 396409;
+const SHARD: u32 = 44726;
+
+/// Dire Maul with its tribute chest (three things and a little gold) and a
+/// Felvine Shard (one thing), both kept back until their fights are won,
+/// and taken when emptied.
+fn dire_maul() -> GameData {
+    let mut d = GameData::empty();
+    map_info(&mut d, DIRE_MAUL, 1, 5, "instance_dire_maul");
+    for (entry, name, loot, gold) in [
+        (179564, "Gordok Tribute", 16577, 100),
+        (179559, "Felvine Shard", 16594, 0),
+    ] {
+        let mut t = GameObjectTemplate {
+            entry,
+            kind: 3,
+            display_id: 411,
+            name: name.into(),
+            size: 1.0,
+            gold_min: gold,
+            gold_max: gold,
+            ..Default::default()
+        };
+        t.data[1] = loot;
+        t.data[3] = 1;
+        d.gameobject_templates.insert(entry, t);
+    }
+    d.gameobject_spawns.insert(
+        DIRE_MAUL,
+        [(TRIBUTE, 179564), (SHARD, 179559)]
+            .into_iter()
+            .map(|(guid, entry)| GameObjectSpawn {
+                guid,
+                entry,
+                map: DIRE_MAUL,
+                x: 2.0,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                respawn_min: 7200,
+                respawn_max: 7200,
+                state: 1,
+                despawned: true,
+                ..Default::default()
+            })
+            .collect(),
+    );
+    for (table, items) in [
+        (16577, &[18_000u32, 18_001, 18_002][..]),
+        (16594, &[18_501]),
+    ] {
+        d.loot.gameobject.insert(
+            table,
+            items
+                .iter()
+                .map(|item| LootEntry {
+                    item: *item,
+                    chance: 100.0,
+                    min: 1,
+                    max: 1,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        for item in items {
+            d.items.insert(
+                *item,
+                ItemTemplate {
+                    entry: *item,
+                    class: 15,
+                    name: format!("Thing {item}"),
+                    quality: 2,
+                    stackable: 1,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    d
+}
+
+/// The raised object of `spawn`, and what is left in it: each slot's item
+/// and whether it is taken, and the gold.
+type Chest = Option<(Vec<(u32, bool)>, u32)>;
+
+async fn chest(realm: &Arc<Realm>, g: Guid, spawn: u32) -> Option<Chest> {
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        crate::game::map::scripts::object_of_spawn(m, spawn).map(|o| {
+            m.gameobject(o)
+                .and_then(|o| o.loot.as_ref())
+                .map(|l| (l.items.iter().map(|s| (s.item, s.taken)).collect(), l.gold))
+        })
+    })
+    .await
+    .flatten()
+}
+
+/// `g` opens the raised object of `spawn`, takes the first `take` of what
+/// is in it and the gold, and closes it.
+async fn loot_chest(realm: &Arc<Realm>, g: Guid, spawn: u32, take: u8) {
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let o = crate::game::map::scripts::object_of_spawn(m, spawn).unwrap();
+        let at = m.gameobject(o).unwrap().position;
+        m.players.get_mut(&g).unwrap().movement.position = at;
+        crate::game::map::loot::open_object(m, g, o);
+        for slot in 0..take {
+            crate::game::map::loot::take_item(m, g, slot);
+        }
+        crate::game::map::loot::take_money(m, g);
+        crate::game::map::loot::release(m, g, o);
+    })
+    .await;
+}
+
+/// The chests a copy's script raises keep what is in them across a
+/// reload: the tribute, opened and part taken, comes back with the rest;
+/// the shard, emptied and gone, doesn't come back before its time.
+#[tokio::test]
+async fn raised_chests_keep_their_loot_across_a_reload() {
+    let path = store_file("chests");
+    let realm = server(&path, dire_maul());
+    let mut a = Client::connect(&realm, "A");
+    let me = a.enter("Alice", Race::Human, Class::Warrior).await;
+    go(&realm, &mut a, DIRE_MAUL).await;
+    let map = realm.registry.online(me).unwrap().map();
+    map.query(|m| {
+        crate::game::map::instance_script::set_data(m, 6, DONE, 0);
+        crate::game::map::instance_script::set_data(m, 11, DONE, 0);
+    })
+    .await;
+    assert_eq!(chest(&realm, me, TRIBUTE).await, Some(None), "raised, shut");
+    loot_chest(&realm, me, TRIBUTE, 1).await;
+    let left = chest(&realm, me, TRIBUTE).await.flatten().expect("opened");
+    assert_eq!(
+        left,
+        (vec![(18_000, true), (18_001, false), (18_002, false)], 0),
+        "the first thing and the gold taken"
+    );
+    loot_chest(&realm, me, SHARD, 1).await;
+    assert_eq!(chest(&realm, me, SHARD).await, None, "emptied, it goes");
+    let (realm, _a) = restart(&realm, &path, dire_maul(), me).await;
+    assert_eq!(
+        chest(&realm, me, TRIBUTE).await,
+        Some(Some(left)),
+        "the tribute as it was left"
+    );
+    assert_eq!(
+        chest(&realm, me, SHARD).await,
+        None,
+        "the shard not back before its time"
+    );
 }

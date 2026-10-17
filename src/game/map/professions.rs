@@ -1042,8 +1042,9 @@ fn despawn(map: &mut Map, object: Guid) {
         .get(&map.key.map)
         .and_then(|l| l.iter().find(|s| s.guid == spawn))
         .map_or(300, |s| s.respawn_min.max(1));
-    let at = map.now + Duration::from_secs(u64::from(secs));
-    map.loot_state.respawns.push((at, spawn));
+    let after = Duration::from_secs(u64::from(secs));
+    map.loot_state.respawns.push((map.now + after, spawn));
+    crate::game::map::instance_script::chest_gone(map, spawn, after);
 }
 
 /// Bobbers bite and come out; gathered objects come back.
