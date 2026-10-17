@@ -262,7 +262,7 @@ fn speed(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
 fn maps(map: &Map) -> String {
     let s = map.stats;
     format!(
-        "{}: {} players, {} creatures, {} grid cells; {} updates, last {} us, max {} us; {} events.",
+        "{}: {} players, {} creatures, {} grid cells; {} updates, last {} us, max {} us; {} events; panics {}, quarantined {}, restarts {}.",
         map.key,
         map.players.len(),
         map.creatures.len(),
@@ -270,7 +270,10 @@ fn maps(map: &Map) -> String {
         s.updates,
         s.last_update.as_micros(),
         s.max_update.as_micros(),
-        s.events
+        s.events,
+        s.panics,
+        s.quarantined,
+        s.restarts
     )
 }
 
