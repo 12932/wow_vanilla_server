@@ -110,6 +110,14 @@ impl CreatureTemplate {
     }
 }
 
+/// vmangos's `spawn_flags`, as Thistle Tea reads them: a spawn not put out
+/// (a script may still call it by its guid), a creature out but hidden
+/// until a script shows it, and one that lies dead. (0x1, kept running
+/// unseen, is how every spawn here is kept.)
+pub const SPAWN_FLAG_DISABLED: u32 = 0x02;
+pub const SPAWN_FLAG_NOT_VISIBLE: u32 = 0x40;
+pub const SPAWN_FLAG_DEAD: u32 = 0x80;
+
 /// A creature spawn.
 #[derive(Debug, Clone, Default)]
 pub struct CreatureSpawn {
