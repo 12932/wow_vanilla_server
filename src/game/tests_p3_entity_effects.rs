@@ -198,3 +198,79 @@ async fn a_meteor_on_its_way_keeps_its_count() {
     assert!(out.0 >= 1, "it flies");
     assert_eq!(out.1, [100, 100], "still a third each");
 }
+
+const DRAIN: u32 = 99_010;
+const SOUL_SHARD: u32 = 6265;
+const WORTHLESS: u32 = 3_740;
+
+fn drain_world() -> GameData {
+    let mut d = world();
+    let mut drain = spell(
+        DRAIN,
+        &[aura_effect(
+            crate::game::map::auras::AURA_CHANNEL_DEATH_ITEM,
+            1,
+            0,
+            25,
+        )],
+    );
+    drain.effects[0].item_type = u64::from(SOUL_SHARD);
+    drain.family_name = 5;
+    d.spells.spells.insert(DRAIN, drain);
+    d.items.insert(
+        SOUL_SHARD,
+        crate::game::data::items::ItemTemplate {
+            entry: SOUL_SHARD,
+            name: "Soul Shard".into(),
+            stackable: 20,
+            ..Default::default()
+        },
+    );
+    let mut worthless = crate::game::tests_p3_combat::template(WORTHLESS, 7);
+    worthless.xp_multiplier = Some(0.0);
+    d.creature_templates.insert(WORTHLESS, worthless);
+    d
+}
+
+/// Thistle Tea's `DeathItem` for soul shards: none from a creature worth
+/// no experience, though it is its drainer's own; one from a player not
+/// grey to the warlock, who has no tap; and none to a creature's own
+/// drain.
+#[tokio::test]
+async fn a_soul_shard_is_of_a_death_worth_something_to_a_warlock() {
+    use crate::game::map::spells::outcome::death_items;
+    let realm = crate::game::harness::realm_with(drain_world());
+    let mut w = crate::game::harness::Client::connect(&realm, "W");
+    let gw = w.enter("Wanda", Race::Human, Class::Warlock).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let map = realm.registry.online(gw).unwrap().map();
+    let out = on(&map, move |m| {
+        let s = m.realm.data.spells.get(DRAIN).cloned().unwrap();
+        let drain = |m: &mut Map, caster: Guid, target: Guid| {
+            auras::apply_spell(m, caster, target, &s, &[(0, 1)], Default::default()).unwrap();
+        };
+        let brute = spawn(m, gw, BRUTE, 20, 3.0);
+        let worthless = spawn(m, gw, WORTHLESS, 20, 4.0);
+        for g in [brute, worthless] {
+            m.creature_mut(g).unwrap().tapped_by = Some(gw);
+            drain(m, gw, g);
+        }
+        let worth = death_items(m, brute, 10_000_000);
+        let none = death_items(m, worthless, 10_000_000);
+        // Bob, level 1 as she is: no tap to ask for.
+        drain(m, gw, gb);
+        let bob = death_items(m, gb, 10_000_000);
+        // A creature's own drain on another: nothing for it.
+        let other = spawn(m, gw, BRUTE, 20, 5.0);
+        drain(m, brute, other);
+        let given = death_items(m, other, 10_000_000);
+        crate::game::map::spells::outcome::give_death_items(m, other, given);
+        (worth, none, bob)
+    })
+    .await;
+    assert_eq!(out.0, vec![(gw, SOUL_SHARD, 1)], "an ordinary creature's");
+    assert_eq!(out.1, vec![], "none from one worth no experience");
+    assert_eq!(out.2, vec![(gw, SOUL_SHARD, 1)], "Bob's, with no tap");
+    let _ = &mut b;
+}
