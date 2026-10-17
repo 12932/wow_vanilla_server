@@ -503,3 +503,37 @@ async fn a_trainers_list_greets_and_names_what_a_spell_needs() {
     let needs = |at: usize| u32::from_le_bytes(entry[at..at + 4].try_into().unwrap());
     assert_eq!((needs(26), needs(30), needs(34)), (NEEDED, 0, 0));
 }
+
+/// Thistle Tea's taxi_messages_test: a flight master's node status is its
+/// GUID and whether the node is known; its map is a 1, the GUID, the
+/// nearest node, and the eight words of the nodes known.
+#[tokio::test]
+async fn a_flight_masters_node_and_map_are_laid_out_as_1_12_has_them() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let npc = guid::unit(GOSSIPER, 12);
+    a.sees(npc).await;
+    a.send(CMSG_TAXINODE_STATUS_QUERY { guid: npc }).await;
+    let status = a.wait_frame("SMSG_TAXINODE_STATUS", 0x1AB, |_| true).await;
+    assert_eq!(
+        status,
+        [&npc.guid().to_le_bytes()[..], &[0]].concat(),
+        "not known yet"
+    );
+    a.send(CMSG_TAXIQUERYAVAILABLENODES { guid: npc }).await;
+    let map = a.wait_frame("SMSG_SHOWTAXINODES", 0x1A9, |_| true).await;
+    let mut want = 1u32.to_le_bytes().to_vec();
+    want.extend_from_slice(&npc.guid().to_le_bytes());
+    want.extend_from_slice(&2u32.to_le_bytes());
+    let mut mask = [0u32; 8];
+    mask[0] = 1 << 2;
+    for w in mask {
+        want.extend_from_slice(&w.to_le_bytes());
+    }
+    assert_eq!(&map[..want.len()], &want[..]);
+    assert_eq!(map.len(), want.len(), "the fixed eight words");
+    a.send(CMSG_TAXINODE_STATUS_QUERY { guid: npc }).await;
+    let status = a.wait_frame("SMSG_TAXINODE_STATUS", 0x1AB, |_| true).await;
+    assert_eq!(status[8], 1, "known now");
+}
