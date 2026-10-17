@@ -646,6 +646,7 @@ pub fn creature_event(map: &mut Map, g: Guid, event: Event) {
             schedule(map, T_RAGNAROS_ROARS, Duration::from_secs(7));
             // A summon's corpse that goes ten seconds after the death.
             let at = map.now + Duration::from_secs(10);
+            map.rare.despawn = true;
             if spawn.is_none()
                 && let Some(s) = crate::game::map::event_ai::scripted_mut(map, g)
             {
