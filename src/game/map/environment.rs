@@ -1,7 +1,8 @@
 //! The environment's harm, as Thistle Tea's `Core.Environment` has it:
 //! breath under water (a minute, then a fifth of health every two
 //! seconds), fatigue in the deep sea, lava burning after a second in it,
-//! and the spells liquids put on (Naxxramas's slime). The liquid's kind
+//! and the spells liquids put on (Naxxramas's slime); and going into deep
+//! enough water, or out of it, ends what water breaks. The liquid's kind
 //! comes from a WMO where one holds it, else from the terrain tiles; the
 //! surface breath is held under, from the navmesh.
 
@@ -160,6 +161,9 @@ pub fn update(map: &mut Map) {
         };
         let liquid = liquid_at(map, at);
         liquid_spell(map, g, liquid.filter(|_| alive).and_then(|l| l.spell(at.z)));
+        if alive {
+            water(map, g, liquid.is_some_and(|l| swimmable(&l, at.z, scale)));
+        }
         if protected {
             stop(map, g);
             continue;
@@ -185,6 +189,33 @@ pub fn update(map: &mut Map) {
         );
         lava(map, g, liquid.map(|l| l.magma() && l.touching(at.z)), now);
     }
+}
+
+/// Whether someone at `z` is in `l` deep enough to swim, as mangos-classic
+/// has it (`ENVIRONMENT_FLAG_HIGH_LIQUID`): under its surface, where it is
+/// over three quarters of their height deep.
+pub fn swimmable(l: &Liquid, z: f32, scale: f32) -> bool {
+    z < l.surface && l.surface - l.floor > 0.75 * BODY_HEIGHT * scale
+}
+
+/// Into the water or out of it by the terrain's liquid: what water breaks
+/// ends, as when the client's swimming flag changes (Thistle Tea's
+/// `interrupt_water_auras`), for a client that doesn't say it swims.
+fn water(map: &mut Map, g: Guid, in_water: bool) {
+    use crate::game::map::auras::{INTERRUPT_ABOVE_WATER, INTERRUPT_UNDER_WATER};
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.misc.in_water == in_water {
+        return;
+    }
+    p.misc.in_water = in_water;
+    let mask = if in_water {
+        INTERRUPT_UNDER_WATER
+    } else {
+        INTERRUPT_ABOVE_WATER
+    };
+    crate::game::map::auras::interrupt(map, g, mask);
 }
 
 fn stop(map: &mut Map, g: Guid) {
