@@ -2,7 +2,6 @@
 //! environment's harm from them. The tests with the real tiles (and the
 //! navmesh bake, for WMO liquid) pass over where those are missing.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,8 +17,10 @@ use crate::game::map::nav::Nav;
 use crate::game::map::terrain::*;
 use crate::game::map::{Map, MapKey, environment};
 
-const TERRAIN: &str = "<runs>/tt-data/terrain";
-const BAKE: &str = "<runs>/tt-maps/rustigator";
+static TERRAIN: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("terrain"));
+static BAKE: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("nav"));
 
 /// Out at sea west of Stranglethorn, over three hundred yards of it.
 const HIGH_SEA: (f32, f32, f32) = (-15000.0, 1024.0, -5.0);
@@ -45,7 +46,7 @@ fn v((x, y, z): (f32, f32, f32)) -> Vector3d {
 }
 
 fn tiles() -> Option<Terrain> {
-    Terrain::open(Path::new(TERRAIN), 0)
+    Terrain::open(TERRAIN.as_path(), 0)
 }
 
 fn data() -> GameData {
@@ -97,13 +98,13 @@ fn data() -> GameData {
 /// A realm with the tiles (and the navmesh, with `nav`); `None` without
 /// them.
 fn realm(nav: bool) -> Option<Arc<Realm>> {
-    if tiles().is_none() || (nav && !Path::new(BAKE).join("Azeroth.map").exists()) {
+    if tiles().is_none() || (nav && !BAKE.as_path().join("Azeroth.map").exists()) {
         return None;
     }
     let mut cfg = harness::test_config();
-    cfg.terrain_dir = Some(TERRAIN.into());
+    cfg.terrain_dir = Some(TERRAIN.clone());
     if nav {
-        cfg.nav_dir = Some(BAKE.into());
+        cfg.nav_dir = Some(BAKE.clone());
     }
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     Some(Realm::new(cfg, store, startup, data(), None))
@@ -174,7 +175,7 @@ fn the_tiles_know_the_deep_sea_lava_water_and_dry_ground() {
 
 #[test]
 fn a_wmo_names_its_liquid() {
-    let dir = Path::new(BAKE);
+    let dir = BAKE.as_path();
     let Some(mut nav) = Nav::open(dir, "MoltenCore") else {
         return;
     };
@@ -363,7 +364,7 @@ async fn naxxramas_slime_puts_its_spell_on_while_in_it() {
 #[test]
 #[ignore]
 fn probe_the_tiles() {
-    let Some(mut t) = Terrain::open(Path::new(TERRAIN), 0) else {
+    let Some(mut t) = Terrain::open(TERRAIN.as_path(), 0) else {
         return;
     };
     let scan = |t: &mut Terrain, x0: f32, x1: f32, y0: f32, y1: f32, step: f32| {
@@ -403,7 +404,7 @@ fn probe_the_tiles() {
     println!("Goldshire area bit {:?}", t.area_bit(-9460.0, 62.0));
     println!("{t:?}");
 
-    let Some(mut nav) = Nav::open(Path::new(BAKE), "MoltenCore") else {
+    let Some(mut nav) = Nav::open(BAKE.as_path(), "MoltenCore") else {
         return;
     };
     let mut hits = 0;
@@ -421,7 +422,7 @@ fn probe_the_tiles() {
             }
         }
     }
-    let Some(mut nav) = Nav::open(Path::new(BAKE), "Azeroth") else {
+    let Some(mut nav) = Nav::open(BAKE.as_path(), "Azeroth") else {
         return;
     };
     let mut hits = 0;

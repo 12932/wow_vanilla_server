@@ -819,7 +819,7 @@ async fn a_plaguelands_tower_falls_to_those_standing_at_it() {
 #[test]
 fn the_real_battlegrounds_start_with_their_first_events() {
     use crate::game::map::battleground::{ab, av, initial_events};
-    let dir = std::path::Path::new("<runs>/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }

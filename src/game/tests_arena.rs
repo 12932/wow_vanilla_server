@@ -313,7 +313,7 @@ async fn the_booty_runs_chest_falls_with_its_event_and_not_before() {
 #[test]
 #[ignore]
 fn probe_the_pit() {
-    let dir = std::path::Path::new("<runs>/tt-maps/rustigator");
+    let dir = &crate::game::harness::real_data("nav");
     let Some(mut nav) = crate::game::map::nav::Nav::open(dir, "Azeroth") else {
         return;
     };

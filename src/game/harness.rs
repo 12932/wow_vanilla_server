@@ -20,6 +20,20 @@ use crate::game::{Realm, RealmConfig, session};
 /// once) can take seconds over a character creation.
 pub const WAIT: Duration = Duration::from_secs(20);
 
+/// The real world's data for the tests that read it, laid out as the server
+/// looks for it under `data/`: `db` (`vmangos.sqlite` and `dbc.sqlite`),
+/// `nav` (a rustigator bake) and `terrain` (Thistle Tea's tiles). From
+/// `WVS_DATA` if it is set, else `data/` in the checkout. A test whose data
+/// isn't there passes without running.
+pub fn real_data(what: &str) -> std::path::PathBuf {
+    std::env::var_os("WVS_DATA")
+        .map_or_else(
+            || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data"),
+            std::path::PathBuf::from,
+        )
+        .join(what)
+}
+
 pub fn test_config() -> RealmConfig {
     RealmConfig {
         visibility_yards: 100.0,

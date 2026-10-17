@@ -108,7 +108,7 @@ const IN_PATCH: &str = "patch_min <= 10 AND patch_max >= 10";
 pub fn real_data() -> Option<&'static GameData> {
     static DATA: std::sync::OnceLock<Option<GameData>> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
-        let dir = Path::new("<runs>/tt-data/db");
+        let dir = &crate::game::harness::real_data("db");
         dir.join("vmangos.sqlite").exists().then(|| load(dir))
     })
     .as_ref()

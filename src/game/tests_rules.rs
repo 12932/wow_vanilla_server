@@ -730,8 +730,8 @@ fn a_zone_bound_item_is_allowed_only_in_its_zone() {
 
 #[tokio::test]
 async fn a_zone_bound_item_goes_outside_its_zone_by_the_terrain() {
-    let dir = "<runs>/tt-data/terrain";
-    if !std::path::Path::new(dir).is_dir() {
+    let dir = crate::game::harness::real_data("terrain");
+    if !dir.is_dir() {
         return;
     }
     let mut d = data();
@@ -751,7 +751,7 @@ async fn a_zone_bound_item_goes_outside_its_zone_by_the_terrain() {
     charm_elsewhere.area_bound = 1;
     d.items.insert(charm_elsewhere.entry, charm_elsewhere);
     let mut cfg = harness::test_config();
-    cfg.terrain_dir = Some(dir.into());
+    cfg.terrain_dir = Some(dir);
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = Realm::new(cfg, store, startup, d, None);
     let mut a = Client::connect(&realm, "A");

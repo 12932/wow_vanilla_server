@@ -2,7 +2,6 @@
 //! and a rogue's spells at 60, talents, crits, resists and line of sight,
 //! and how many of the spells players can have wvs runs.
 
-use std::path::Path;
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
@@ -15,10 +14,11 @@ use crate::game::map::creature::Creature;
 use crate::game::map::spells::{self, Targets, fail, outcome};
 use crate::game::map::{Map, MapKey, auras};
 
-const DB: &str = "<runs>/tt-data/db";
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
 
 fn have_data() -> bool {
-    Path::new(DB).join("vmangos.sqlite").exists()
+    DB.as_path().join("vmangos.sqlite").exists()
 }
 
 /// A training dummy: a Kobold Vermin at `level`, `yards` in front of `g`,
@@ -115,7 +115,7 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
     let mut c = Client::connect(&realm, "MAGE");
     let g = c.enter("Maga", Race::Human, Class::Mage).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -233,7 +233,7 @@ async fn a_rogues_eviscerate_scales_with_combo_points_and_spends_them() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
     let mut c = Client::connect(&realm, "ROGUE");
     let g = c.enter("Rogua", Race::Human, Class::Rogue).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -427,7 +427,7 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
     if !have_data() {
         return;
     }
-    let data = crate::game::data::load::load(Path::new(DB));
+    let data = crate::game::data::load::load(DB.as_path());
     let all = player_spells(&data);
     assert!(all.len() > 3000, "{}", all.len());
     // Effects other modules run, and the passives that need nothing.
@@ -500,7 +500,7 @@ async fn auras_cooldowns_and_crowd_control_hold_as_they_should() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
     let mut c = Client::connect(&realm, "PALA");
     let g = c.enter("Pala", Race::Human, Class::Paladin).await;
     let map = realm.maps.get(&realm, MapKey::world(0));

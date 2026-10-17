@@ -423,15 +423,17 @@ const LOCH_FRENZY: u32 = 1193;
 const LOCH_HOME: (f32, f32, f32) = (-4798.74, -3383.09, 290.05);
 /// The loch's bank, where Thistle Tea's mage climbed out.
 const LOCH_BANK: (f32, f32, f32) = (-4850.95, -3374.76, 302.37);
-const TERRAIN: &str = "<runs>/tt-data/terrain";
-const BAKE: &str = "<runs>/tt-maps/rustigator";
+static TERRAIN: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("terrain"));
+static BAKE: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("nav"));
 
 /// The real navmesh and terrain: a Loch Frenzy keeps to its loch, at its
 /// depth, and after a target on the bank swims only to the water's edge.
 #[tokio::test]
 async fn a_fish_keeps_to_its_water() {
-    let bake = std::path::Path::new(BAKE);
-    if !bake.join("Azeroth.map").exists() || !std::path::Path::new(TERRAIN).exists() {
+    let bake = BAKE.as_path();
+    if !bake.join("Azeroth.map").exists() || !TERRAIN.as_path().exists() {
         return;
     }
     let mut d = GameData::empty();
@@ -444,8 +446,8 @@ async fn a_fish_keeps_to_its_water() {
     s.wander_distance = 5.0;
     d.creature_spawns.insert(0, vec![s]);
     let mut cfg = harness::test_config();
-    cfg.terrain_dir = Some(TERRAIN.into());
-    cfg.nav_dir = Some(BAKE.into());
+    cfg.terrain_dir = Some(TERRAIN.clone());
+    cfg.nav_dir = Some(BAKE.clone());
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = crate::game::Realm::new(cfg, store, startup, d, None);
     let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
@@ -515,7 +517,7 @@ async fn a_fish_keeps_to_its_water() {
 /// it.
 #[tokio::test]
 async fn a_flyer_killed_in_the_air_falls() {
-    let bake = std::path::Path::new(BAKE);
+    let bake = BAKE.as_path();
     if !bake.join("Azeroth.map").exists() {
         return;
     }
@@ -526,7 +528,7 @@ async fn a_flyer_killed_in_the_air_falls() {
     d.creature_spawns
         .insert(0, vec![spawn(9, BAT, (-9460.0, 62.0, 80.0))]);
     let mut cfg = harness::test_config();
-    cfg.nav_dir = Some(BAKE.into());
+    cfg.nav_dir = Some(BAKE.clone());
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = crate::game::Realm::new(cfg, store, startup, d, None);
     let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));

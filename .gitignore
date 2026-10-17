@@ -13,6 +13,10 @@ characters.sqlite*
 # vmangos and DBC exports, pointed at by [world] data_dir.
 *.sqlite
 
+# The world's data where the server and the tests look for it: data/db,
+# data/nav and data/terrain. Everyone brings their own.
+/data/
+
 # Per-user the orchestrator state (scheduled tasks, locks, plans, etc.).
 .claude/
 

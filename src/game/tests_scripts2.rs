@@ -454,7 +454,7 @@ async fn a_pooled_node_comes_back_as_one_of_its_pool() {
 /// bosses' encounters with them.
 #[test]
 fn the_real_thistle_tea_scripts_come_in_whole() {
-    let dir = std::path::Path::new("<runs>/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
@@ -1118,7 +1118,7 @@ async fn blackfathom_fires_call_waves_and_open_the_portal() {
 /// a player for a while without trouble, and Onyxia takes to the air.
 #[tokio::test]
 async fn the_real_scripted_bosses_fight_without_trouble() {
-    let dir = std::path::Path::new("<runs>/tt-data/db");
+    let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }

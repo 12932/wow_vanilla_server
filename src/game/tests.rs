@@ -2381,7 +2381,7 @@ mod real {
 
     #[tokio::test]
     async fn every_class_fights_with_its_starting_spells() {
-        let dir = std::path::Path::new("<runs>/tt-data/db");
+        let dir = &crate::game::harness::real_data("db");
         if !dir.join("vmangos.sqlite").exists() {
             return;
         }
