@@ -191,6 +191,15 @@ fn parse_f32(s: Option<&&str>) -> Option<f32> {
         .filter(|v| v.is_finite())
 }
 
+/// The farthest from a map's middle a place can be: past every map's
+/// edge (64 tiles of 533 yards), short of where distances overflow.
+pub const MAX_COORDINATE: f32 = 100_000.0;
+
+/// A coordinate: a finite number, in the world.
+pub fn parse_coordinate(s: Option<&&str>) -> Option<f32> {
+    parse_f32(s).filter(|v| v.abs() <= MAX_COORDINATE)
+}
+
 /// `.go <x> <y> <z> [map]`, or `.go xyz <x> <y> <z> [map]` as the mangos
 /// family spells it.
 fn go(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
@@ -200,9 +209,9 @@ fn go(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         args
     };
     let (Some(x), Some(y), Some(z)) = (
-        parse_f32(args.first()),
-        parse_f32(args.get(1)),
-        parse_f32(args.get(2)),
+        parse_coordinate(args.first()),
+        parse_coordinate(args.get(1)),
+        parse_coordinate(args.get(2)),
     ) else {
         return Some("Usage: .go [xyz] <x> <y> <z> [map]".to_owned());
     };

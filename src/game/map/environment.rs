@@ -156,7 +156,8 @@ pub fn update(map: &mut Map) {
         let breath_for = if p.auras.has(AURA_WATER_BREATHING) {
             Duration::ZERO
         } else {
-            BREATH.mul_f32(p.auras.product(AURA_MOD_WATER_BREATHING))
+            let factor = p.auras.product(AURA_MOD_WATER_BREATHING);
+            Duration::try_from_secs_f32(BREATH.as_secs_f32() * factor).unwrap_or(BREATH)
         };
         let liquid = liquid_at(map, at);
         liquid_spell(map, g, liquid.filter(|_| alive).and_then(|l| l.spell(at.z)));

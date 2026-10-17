@@ -150,6 +150,12 @@ fn num<T: std::str::FromStr>(s: Option<&&str>) -> Option<T> {
     s.and_then(|s| s.parse().ok())
 }
 
+/// A number with a fraction: finite (`nan` and `inf` parse, and would
+/// spread through what they touch, to a save that won't load).
+fn float(s: Option<&&str>) -> Option<f32> {
+    num::<f32>(s).filter(|v| v.is_finite())
+}
+
 fn additem(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     let Some(entry) = num::<u32>(args.first()) else {
         return Some("Usage: .additem <item_id> [count]".into());
@@ -292,9 +298,9 @@ fn respawn(map: &mut Map, g: Guid) -> Option<String> {
 fn move_target(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     let t = selected(map, g);
     let to = match (
-        num::<f32>(args.first()),
-        num::<f32>(args.get(1)),
-        num::<f32>(args.get(2)),
+        crate::game::map::gm::parse_coordinate(args.first()),
+        crate::game::map::gm::parse_coordinate(args.get(1)),
+        crate::game::map::gm::parse_coordinate(args.get(2)),
     ) {
         (Some(x), Some(y), Some(z)) => Vector3d { x, y, z },
         _ => map.players.get(&g)?.position(),
@@ -353,7 +359,7 @@ fn pos(map: &Map, g: Guid) -> Option<String> {
 }
 
 fn modify(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
-    let (Some(what), Some(value)) = (args.first(), num::<f32>(args.get(1))) else {
+    let (Some(what), Some(value)) = (args.first(), float(args.get(1))) else {
         return Some("Usage: .modify hp|mana|rage|energy|money|speed <value>".into());
     };
     let to = player_target(map, g);
@@ -397,7 +403,7 @@ fn rested(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     let to = player_target(map, g);
     let p = map.players.get_mut(&to)?;
     let amount =
-        num::<f32>(args.first()).unwrap_or_else(|| p.fields.get_u32(PLAYER_NEXT_LEVEL_XP) as f32);
+        float(args.first()).unwrap_or_else(|| p.fields.get_u32(PLAYER_NEXT_LEVEL_XP) as f32);
     crate::game::map::rest::add_bonus(p, amount);
     Some(format!("Rested XP: {:.0}.", p.row.state.rest_bonus))
 }
@@ -463,7 +469,7 @@ fn weather(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
         }
         _ => return Some("Usage: .weather fine|rain|snow|storm [0..1] [permanent]|auto".into()),
     };
-    let grade = num::<f32>(args.get(1)).unwrap_or(0.5);
+    let grade = float(args.get(1)).unwrap_or(0.5);
     let permanent = args.contains(&"permanent");
     crate::game::weather::set(&realm, zone, kind, grade, permanent);
     None

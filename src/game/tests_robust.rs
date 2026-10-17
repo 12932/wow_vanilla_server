@@ -960,3 +960,112 @@ async fn the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one() {
     );
     serving.abort();
 }
+
+/// A walk to a place of no finite distance (out of the world, or NaN)
+/// takes no time. Before, working out its duration panicked, every turn
+/// of the creature that walked it.
+#[test]
+fn a_walk_to_nowhere_finite_takes_no_time() {
+    use crate::game::map::creature::Walk;
+    let here = Vector3d {
+        x: START.0,
+        y: START.1,
+        z: START.2,
+    };
+    for there in [
+        Vector3d {
+            x: 1e30,
+            y: 1e30,
+            z: 0.0,
+        },
+        Vector3d {
+            x: f32::NAN,
+            y: 0.0,
+            z: 0.0,
+        },
+    ] {
+        let walk = Walk::new(vec![here, there], 7.0, std::time::Instant::now(), 1, true);
+        assert_eq!(walk.duration, Duration::ZERO);
+    }
+    let walk = Walk::new(
+        vec![
+            here,
+            Vector3d {
+                x: START.0 + 7.0,
+                ..here
+            },
+        ],
+        7.0,
+        std::time::Instant::now(),
+        1,
+        true,
+    );
+    assert_eq!(
+        walk.duration,
+        Duration::from_secs(1),
+        "a real walk is as before"
+    );
+}
+
+/// A GM's numbers that aren't finite, or a place out of the world, are
+/// refused: a creature moved to `nan` panicked each turn, and a rested
+/// bonus of `nan` lost the character's state at the next login.
+#[tokio::test]
+async fn a_gms_numbers_must_be_finite_and_in_the_world() {
+    let realm = harness::realm_with(wolves());
+    let (mut a, g, map) = in_world(&realm, "ALICE", "Alice").await;
+    a.sees(wolf(20)).await;
+    a.send(CMSG_SET_SELECTION { target: wolf(20) }).await;
+    a.say(".move nan nan nan").await;
+    a.system_message("Moved to").await;
+    a.say(".go 1e30 1e30 1e30").await;
+    a.system_message("Usage: .go").await;
+    a.say(".rested nan").await;
+    a.system_message("Rested XP").await;
+    let bad = wolf(20);
+    let (wolf_at, me_at, rested) = map
+        .query(move |m| {
+            (
+                m.creature(bad).unwrap().position,
+                m.players[&g].position(),
+                m.players[&g].row.state.rest_bonus,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(
+        wolf_at.x.is_finite() && wolf_at.y.is_finite(),
+        "{wolf_at:?}"
+    );
+    assert!(me_at.x.abs() < 20_000.0, "{me_at:?}");
+    assert!(rested.is_finite(), "{rested}");
+}
+
+/// A field of a character's state that won't parse goes back to its
+/// default, alone. A NaN is saved as `null`, which an `f32` won't take;
+/// before, that one field cost the whole state.
+#[tokio::test]
+async fn a_saved_field_that_wont_parse_costs_only_itself() {
+    use crate::game::store::{CharacterRow, CharacterState};
+    let realm = harness::realm();
+    let row = CharacterRow {
+        guid: 77,
+        account: "ACC".into(),
+        name: "Nan".into(),
+        race: 1,
+        class: 1,
+        level: 1,
+        state: CharacterState {
+            rest_bonus: f32::NAN,
+            explored_zones: vec![12, 40],
+            talent_wipes: 3,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    realm.store.create(row).await.unwrap();
+    let back = realm.store.load(77).await.unwrap().state;
+    assert_eq!(back.explored_zones, [12, 40]);
+    assert_eq!(back.talent_wipes, 3);
+    assert_eq!(back.rest_bonus, 0.0);
+}
