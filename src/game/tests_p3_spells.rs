@@ -634,3 +634,41 @@ async fn cooldowns_hold_their_spell_and_category_for_the_longer() {
         "Frost Nova's category time"
     );
 }
+
+const SUMMON_IMP: u32 = 688;
+const HEALTH_FUNNEL: u32 = 755;
+
+#[tokio::test]
+async fn health_funnel_takes_its_health_a_second_and_ends_without_it() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, lock, map) = player(&realm, "P3P9", "Funnelone", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, lock, 60, &[HEALTH_FUNNEL]);
+            spells::cast_triggered(m, lock, SUMMON_IMP, None);
+            let pet = crate::game::map::pets::pet_of(m, lock).expect("the imp");
+            set_health(m, lock, 1_000);
+            assert!(cast_fresh(m, lock, HEALTH_FUNNEL, at(pet)), "the funnel");
+            let paid = 1_000 - health(m, lock);
+            let mut each = Vec::new();
+            for _ in 0..3 {
+                let before = health(m, lock);
+                pass(m, 1_000);
+                each.push(before - health(m, lock));
+            }
+            // Too little health for the next second: it ends.
+            set_health(m, lock, 5);
+            pass(m, 1_000);
+            (paid, each, casting(m, lock), health(m, lock))
+        })
+        .await
+        .unwrap();
+    let (paid, each, after, left) = out;
+    assert_eq!(paid, 11, "its cost at the start");
+    assert_eq!(each, vec![5, 5, 5], "and five a second");
+    assert_eq!(after, None, "without five to pay, it ends");
+    assert_eq!(left, 5, "taking none");
+}
