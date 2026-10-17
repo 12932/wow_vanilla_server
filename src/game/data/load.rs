@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OpenFlags, Row};
 use tracing::{error, info, warn};
@@ -122,6 +122,28 @@ fn latest_patch<K: std::hash::Hash + Eq, T>(items: Vec<(K, i64, T)>) -> AHashMap
 
 const IN_PATCH: &str = "patch_min <= 10 AND patch_max >= 10";
 
+/// The taxi nodes whose every path out is a spell's (`SEND_TAXI`).
+fn spell_only_nodes(data: &mut GameData) {
+    let spell_paths: AHashSet<u32> = data
+        .spells
+        .spells
+        .values()
+        .flat_map(|s| s.effects.iter())
+        .filter(|e| e.effect == 123 && e.misc_value > 0)
+        .map(|e| e.misc_value as u32)
+        .collect();
+    let mut out: AHashMap<u32, bool> = AHashMap::new();
+    for ((from, _), (path, _)) in &data.npc.taxi_paths {
+        let only = out.entry(*from).or_insert(true);
+        *only &= spell_paths.contains(path);
+    }
+    data.npc.spell_only_nodes = out
+        .into_iter()
+        .filter(|(_, only)| *only)
+        .map(|(n, _)| n)
+        .collect();
+}
+
 /// The real world's data, loaded once for the tests that only read it;
 /// `None` where the databases aren't (CI).
 #[cfg(test)]
@@ -154,6 +176,7 @@ pub fn load(dir: &Path) -> GameData {
         load_misc(&db, dbc.as_ref(), &mut data);
         super::scripts_load::load(&db, &mut data);
         super::world::load(&db, dbc.as_ref(), &mut data.world);
+        spell_only_nodes(&mut data);
         let _ = super::tt_scripts::install(&mut data);
         // Alterac Valley's NPCs as the battleground drives them, over the
         // general import.
@@ -212,6 +235,8 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
                 female_display: c.u32("female_display"),
                 faction: c.u32("faction"),
                 cinematic: c.u32("cinematic_sequence"),
+                // dbc.sqlite names the starting taxi mask `unknown2`.
+                starting_taxi_mask: c.u32("unknown2"),
             },
         )
     }) {
@@ -1104,7 +1129,9 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             y: c.f32("y"),
             z: c.f32("z"),
             name: c.string("name"),
-            mounts: [c.u32("mount_creature_id1"), c.u32("mount_creature_id2")],
+            // The first is the Horde's (a wind rider), the second the
+            // Alliance's (a gryphon), as mangos's `GetTaxiMountDisplayId`.
+            mounts: [c.u32("mount_creature_id2"), c.u32("mount_creature_id1")],
         },
     ) {
         npc.taxi_nodes.insert(n.id, n);

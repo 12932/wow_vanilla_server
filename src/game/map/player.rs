@@ -577,7 +577,14 @@ impl Player {
     /// The character as it now is, to store.
     pub fn to_row(&mut self, now: Instant) -> CharacterRow {
         self.count_played(now);
-        let pos = self.position();
+        // A flight already flown is a landing at its end (Thistle Tea's
+        // `Taxi.pause` of an elapsed flight), not a flight to take up.
+        let landed = self
+            .flight
+            .as_ref()
+            .filter(|f| f.walk.done(now))
+            .map(|f| f.walk.destination());
+        let pos = landed.unwrap_or_else(|| self.position());
         let f = &self.fields;
         let mut row = self.row.clone();
         row.level = self.level();
@@ -612,10 +619,8 @@ impl Player {
                 t.transport.orientation,
             )
         });
-        row.state.flight = self
-            .flight
-            .as_ref()
-            .map(|f| crate::game::store::SavedFlight {
+        row.state.flight = self.flight.as_ref().filter(|_| landed.is_none()).map(|f| {
+            crate::game::store::SavedFlight {
                 map: self.row.map,
                 points: f
                     .walk
@@ -625,7 +630,8 @@ impl Player {
                     .collect(),
                 destination: f.destination,
                 mount: f.mount,
-            });
+            }
+        });
         row.state.quests = self.journal.clone();
         row.state.auras = crate::game::map::spells::cooldowns::saved_auras(self, now);
         row.state.cooldowns = crate::game::map::spells::cooldowns::saved_cooldowns(self, now);

@@ -74,6 +74,8 @@ mod tests_p3_world_env;
 #[cfg(test)]
 mod tests_p3_world_pvp;
 #[cfg(test)]
+mod tests_p3_world_travel;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
