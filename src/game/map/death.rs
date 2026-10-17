@@ -497,6 +497,10 @@ pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
     if !crate::game::map::spells::stealth::sees(map, observer, object) {
         return false;
     }
+    // A stealthed trap, from its owner's enemies.
+    if guid::is_game_object(object) && !crate::game::map::objects::seen_by(map, observer, object) {
+        return false;
+    }
     if !guid::is_player(object) || observer == object {
         return true;
     }

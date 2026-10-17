@@ -454,6 +454,13 @@ fn effect(
         19 => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
         }
+        // The ritual's summons: for its target, by its owner.
+        crate::game::map::objects::EFFECT_SUMMON_PLAYER => {
+            let who = t.unit.filter(|u| *u != caster).unwrap_or(target);
+            if crate::game::guid::is_player(who) && who != caster {
+                crate::game::map::misc::offer_summon(map, caster, who);
+            }
+        }
         EFFECT_ADD_HONOR if crate::game::guid::is_player(target) => {
             crate::game::map::pvp::bonus_honor(map, target, amount.max(0) as u32)
         }
@@ -931,6 +938,18 @@ pub fn run_untargeted(
     done: u8,
 ) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    // A quest's spell to cast at an object (effect 86 credits its own).
+    if let Some(o) = t.object
+        && crate::game::guid::is_game_object(o)
+        && !s.effects.iter().any(|e| {
+            matches!(
+                e.effect,
+                33 | 59 | crate::game::map::objects::EFFECT_ACTIVATE_OBJECT
+            )
+        })
+    {
+        crate::game::map::quests::cast_on_object(map, caster, o, s.id);
+    }
     for index in 0..3 {
         if done & (1 << index) != 0 {
             continue;
@@ -942,6 +961,9 @@ pub fn run_untargeted(
                     crate::game::map::battleground::plant(map, caster, e.misc_value.max(0) as u32);
                 }
             }
+            // Objects summoned and worked: portals, campfires, traps,
+            // rituals.
+            _ if crate::game::map::objects::effect(map, caster, s, index, t) => {}
             crate::game::map::battleground::insignia::EFFECT_SKIN_PLAYER_CORPSE => {
                 crate::game::map::battleground::insignia::remove(map, caster, t.object.or(t.unit));
             }
