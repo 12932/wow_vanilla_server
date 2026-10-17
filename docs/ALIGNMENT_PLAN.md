@@ -1364,6 +1364,30 @@ Six agents took these on, each on its own branch.
   as Thistle Tea has it.
 - **A pet's failed cast** tells its owner with `SMSG_PET_CAST_FAILED`.
 
+### The last rules sweep (2026-10-17)
+
+- **Logout:** refused in the air or frozen by a GM, at once on a flight; trade and loot close; only a free,
+  standing, unmounted, dry player is sat and rooted, with the logging-out field bit.
+- **Emotes and postures:** text emotes play their animation (a dance stays until the dancer moves); the client
+  plays only none and wave; the dead don't emote; postures are stand, sit, sleep and kneel; standing ends a meal;
+  moving or turning stands a player up and ends what moving or turning breaks.
+- **Falls** hurt only after a long fall (the falling-far flag and 1,229 ms), measured on a transport's deck, by
+  physical damage taken, capped at maximum health. Forward swimming takes the strongest swim bonus, and slows.
+- **Social:** `/who` by guild and any word, with the online count; ready checks hear offline members; markers come
+  back at a reconnect; charters take no signature from the other side or past the ones needed; mailboxes list 254,
+  and a read mail goes in three days.
+- **The character screen:** the guild, the hidden helm and cloak (kept across a relog), a ghost and the pet; a
+  deleted character leaves their group and their cash-on-delivery items go back.
+- **Services:** the dead (but at spirit healers and guides), fliers and those not in control are refused, as are
+  creatures hostile to them, at vendors, trainers, auctioneers and the rest. Flights check the rider (busy,
+  mounted, in a form, seated) and the node, with the honored discount. Trainers want the rank before, the
+  required spell and skill and a free profession, and list only their class's and race's spells. Innkeepers bind
+  to the area, outside dungeons, with Bind and a Hearthstone.
+- **Elsewhere:** area triggers explore and script for the living, with cooldowns; temporary enchantments' time at
+  login; copies sized by `map_template`.
+- Kept as mangos has them rather than Thistle Tea: the auction deposit's threefold rate, a GM's instant logout,
+  and services' 8-yard reach from centres.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:

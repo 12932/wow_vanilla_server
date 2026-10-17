@@ -202,8 +202,75 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
     None
 }
 
-/// `CMSG_TEXT_EMOTE`: everyone near hears it, with the target's name.
+/// `UNIT_FIELD_FLAGS`: animations are held (a stun's, a cinematic's).
+const UNIT_FLAG_PREVENT_ANIM: u32 = 0x2000_0000;
+/// Text emotes whose animation is a posture the client asks for itself
+/// (Thistle Tea's `@text_only_animations`): none, sleep, sit, kneel.
+const TEXT_ONLY_ANIMATIONS: [u32; 4] = [0, 12, 13, 68];
+/// The emotes a client may play itself (vmangos's `HandleEmoteOpcode`):
+/// none, and a wave.
+const CLIENT_EMOTES: [u32; 2] = [0, 3];
+
+/// Whether `g` may emote: alive, and not held from moving its body.
+fn may_emote(map: &Map, g: Guid) -> bool {
+    map.players.get(&g).is_some_and(|p| {
+        p.death == crate::game::map::death::Death::Alive
+            && !p
+                .fields
+                .has_flag(crate::game::fields::UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM)
+    })
+}
+
+/// An emote's animation: a state the player stays in, or played once to
+/// everyone who sees them; and the auras an animation ends.
+pub fn play_animation(map: &mut Map, g: Guid, emote: u32) {
+    crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_ENTER_COMBAT);
+    if emote == 0 || map.realm.data.emote_states.contains(&emote) {
+        if let Some(p) = map.players.get_mut(&g) {
+            p.fields
+                .set_u32(crate::game::fields::UNIT_NPC_EMOTESTATE, emote);
+        }
+        if emote != 0 {
+            return;
+        }
+    }
+    let Ok(id) = wow_world_messages::vanilla::Emote::try_from(emote) else {
+        return;
+    };
+    if let Some(frame) = encode(&SMSG_EMOTE { emote: id, guid: g }) {
+        map.send_to_observers(g, &frame, true);
+    }
+}
+
+/// `CMSG_STANDSTATECHANGE`: the postures a client may take (stand, sit,
+/// sleep, kneel), as Thistle Tea's `Emote.stand`; standing ends what
+/// needs one seated (food, drink).
+pub fn stand_state(map: &mut Map, g: Guid, state: wow_world_messages::vanilla::UnitStandState) {
+    let posture = state.as_int();
+    if !matches!(posture, 0 | 1 | 3 | 8) || !may_emote(map, g) {
+        return;
+    }
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.logout_at.is_some() {
+        return;
+    }
+    p.set_stand_state(posture);
+    p.outbound
+        .send(&wow_world_messages::vanilla::SMSG_STANDSTATE_UPDATE { state });
+    crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_ENTER_COMBAT);
+    if posture == 0 {
+        crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_NOT_SEATED);
+    }
+}
+
+/// `CMSG_TEXT_EMOTE`: everyone near hears it, with the target's name, and
+/// the player plays its animation.
 pub fn text_emote(map: &mut Map, guid: Guid, m: CMSG_TEXT_EMOTE) {
+    if !may_emote(map, guid) {
+        return;
+    }
     let Some(pos) = map.players.get(&guid).map(|p| p.position()) else {
         return;
     };
@@ -221,19 +288,29 @@ pub fn text_emote(map: &mut Map, guid: Guid, m: CMSG_TEXT_EMOTE) {
             p.outbound.send_frame(frame.clone());
         }
     }
+    let animation = map
+        .realm
+        .data
+        .text_emote_anims
+        .get(&m.text_emote.as_int())
+        .copied()
+        .filter(|a| !TEXT_ONLY_ANIMATIONS.contains(a));
+    if let Some(a) = animation {
+        play_animation(map, guid, a);
+    }
     if crate::game::guid::is_unit(m.target) {
         crate::game::map::event_ai::receive_emote(map, m.target, guid, m.text_emote.as_int());
     }
 }
 
-/// `CMSG_EMOTE`: an animation, seen by everyone who sees the player.
+/// `CMSG_EMOTE`: the two animations a client plays itself, seen by
+/// everyone who sees the player; none stops a state.
 pub fn emote(map: &mut Map, guid: Guid, m: CMSG_EMOTE) {
-    if let Some(frame) = encode(&SMSG_EMOTE {
-        emote: m.emote,
-        guid,
-    }) {
-        map.send_to_observers(guid, &frame, true);
+    let id = m.emote.as_int();
+    if !CLIENT_EMOTES.contains(&id) || !may_emote(map, guid) {
+        return;
     }
+    play_animation(map, guid, id);
 }
 
 /// The name of a player or creature, for a text emote.

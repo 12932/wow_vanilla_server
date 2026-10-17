@@ -643,6 +643,15 @@ pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
     }
 }
 
+/// A character deleted leaves their group, and an invitation to one.
+pub fn character_deleted(realm: &Realm, g: Guid) {
+    let mut groups = realm.social.groups.lock();
+    groups.drop_invite(g);
+    if groups.group_of(g).is_some() {
+        groups.remove(realm, g, false);
+    }
+}
+
 /// `CMSG_GROUP_DISBAND`: leave.
 pub fn leave(realm: &Realm, me: &Online) {
     let mut groups = realm.social.groups.lock();
@@ -830,6 +839,17 @@ pub fn ready_check(realm: &Realm, me: &Online, answer: Option<u8>) {
             if let Some(frame) = encode(&MSG_RAID_READY_CHECK_Server { state_check: None }) {
                 gr.broadcast(realm, &frame, Some(me.guid));
             }
+            // Those offline can't answer: not ready, the leader hears.
+            for m in gr.members.iter().filter(|m| realm.registry.online(m.guid).is_none()) {
+                if let Some(frame) = encode(&MSG_RAID_READY_CHECK_Server {
+                    state_check: Some(MSG_RAID_READY_CHECK_Server_state_check {
+                        guid: m.guid,
+                        state: 0,
+                    }),
+                }) {
+                    send_frame(realm, gr.leader, &frame);
+                }
+            }
         }
         Some(state) => {
             let Some(frame) = encode(&MSG_RAID_READY_CHECK_Server {
@@ -974,6 +994,15 @@ pub fn logged_in(realm: &Realm, g: Guid) {
     let groups = realm.social.groups.lock();
     if let Some(gr) = groups.group_of(g) {
         gr.send_update(realm);
+        // And the target markers (Thistle Tea resends them).
+        if gr.icons.iter().any(|i| !i.is_zero()) {
+            let mut b = Body::default();
+            b.u8(1);
+            for (i, t) in gr.icons.iter().enumerate().filter(|(_, t)| !t.is_zero()) {
+                b.u8(i as u8).u64(t.guid());
+            }
+            send_frame(realm, g, &b.frame(MSG_RAID_TARGET_UPDATE));
+        }
     }
 }
 

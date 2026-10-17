@@ -4383,7 +4383,9 @@ mod security {
                     z,
                 },
                 orientation: 0.0,
-                fall_time: 0.0,
+                // The client's fall time, in ms (a u32 wow_messages reads as a
+                // float): long enough to hurt.
+                fall_time: f32::from_bits(2000),
             },
         };
         a.send(at(START.2 + 30.0, true)).await;
