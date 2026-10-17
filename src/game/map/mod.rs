@@ -22,6 +22,7 @@ pub mod enchant;
 pub mod environment;
 pub mod exploration;
 pub mod event_ai;
+pub mod escorts;
 pub mod gameobject;
 pub mod gm;
 pub mod gm_dev;
@@ -30,6 +31,7 @@ pub mod handlers;
 pub mod instance_script;
 pub mod inventory;
 pub mod items_misc;
+pub mod items;
 pub mod login;
 pub mod loot;
 pub mod meeting_stones;
@@ -61,6 +63,7 @@ pub mod trinkets;
 pub mod vendor;
 pub mod visibility;
 pub mod world;
+pub mod world_states;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -292,6 +295,11 @@ pub struct Map {
     /// Scripted map events under way.
     pub map_events: map_events::Events,
     pub spells: spells::MapSpells,
+    /// Escort and follower quests under way.
+    pub escorts: Vec<escorts::Active>,
+    /// The Elemental Invasion's rifts and their invaders.
+    pub rifts: AHashMap<Guid, crate::game::elemental::Rift>,
+    pub rifts_checked_at: Option<Instant>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -397,6 +405,9 @@ impl Map {
             script_groups: AHashMap::new(),
             map_events: Default::default(),
             spells: Default::default(),
+            escorts: Vec::new(),
+            rifts: AHashMap::new(),
+            rifts_checked_at: None,
         }
     }
 
@@ -442,6 +453,8 @@ impl Map {
                 let mut p = Player::from_row(&self.realm.data.clone(), *row, online, self.now);
                 p.row.map = self.key.map;
                 let guid = p.guid;
+                items::on_login(&mut p, &self.realm.data.clone());
+                crate::game::transports::place_aboard(&self.realm, &mut p);
                 login::send_login(self, &mut p);
                 let corpse = p.row.state.corpse;
                 if p.row.state.dead {
@@ -466,6 +479,7 @@ impl Map {
                 self.insert_player(p);
                 spells::apply_passives(self, guid);
                 pets::owner_arrived(self, guid);
+                npc::resume_flight(self, guid);
                 social::logged_in(self, guid);
                 self.visibility_dirty.insert(guid);
             }
@@ -667,6 +681,8 @@ impl Map {
         spells::update(self);
         auras::update(self);
         loot::update(self);
+        quests::update_timers(self);
+        items::update(self);
         enchant::update(self);
         scripts::update(self);
         event_ai::update_despawns(self);
@@ -680,6 +696,8 @@ impl Map {
         pets::update(self);
         ai::update_creatures(self);
         combat::update_creatures(self);
+        escorts::update(self);
+        crate::game::elemental::update(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);
         self.flush_forgets();

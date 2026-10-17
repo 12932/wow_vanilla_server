@@ -830,11 +830,9 @@ fn a_random_property_rolls_and_is_kept() {
 /// a copper vein needs mining.
 #[test]
 fn the_real_crafting_data_loads() {
-    let dir = std::path::Path::new("<runs>/tt-data/db");
-    if !dir.join("vmangos.sqlite").exists() {
+    let Some(d) = crate::game::data::load::real_data() else {
         return;
-    }
-    let d = crate::game::data::load::load(dir);
+    };
     let vein = d.gameobject_templates.get(&1731).expect("Copper Vein");
     let keys = d.crafts.locks.get(&vein.data[0]).expect("its lock");
     assert!(keys.iter().any(|k| k.kind == 2 && k.index == 3), "{keys:?}");

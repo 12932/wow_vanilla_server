@@ -33,6 +33,13 @@ pub struct Social {
     pub tickets: Mutex<crate::game::map::tickets::Tickets>,
     pub meeting_stones: Mutex<crate::game::map::meeting_stones::MeetingStones>,
     pub honor: Mutex<crate::game::honor::Ledger>,
+    /// Server-wide world states events publish: state → value.
+    pub world_states: Mutex<ahash::AHashMap<u32, u32>>,
+    /// Events the world starts and stops, not the calendar.
+    pub driven_events: Mutex<ahash::AHashMap<u32, bool>>,
+    pub invasion: Mutex<crate::game::invasion::State>,
+    pub elemental: Mutex<crate::game::elemental::State>,
+    pub omen: Mutex<crate::game::omen::Watch>,
 }
 
 impl Social {
@@ -103,6 +110,8 @@ pub fn sweep(realm: &Realm) {
     crate::game::instances::sweep(realm);
     crate::game::battlegrounds::sweep(realm);
     crate::game::events::sweep(realm);
+    crate::game::invasion::sweep(realm);
+    crate::game::elemental::sweep(realm);
     crate::game::weather::sweep(realm);
     crate::game::map::meeting_stones::sweep(realm);
     crate::game::map::pvp::sweep(realm);

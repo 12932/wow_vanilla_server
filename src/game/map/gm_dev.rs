@@ -59,7 +59,6 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "instance" => instance(map, g, args),
         "bg" | "battleground" => battleground(map, g, args),
         "mail" => mail(map, g, args),
-        "invasion" => Some("There is no Scourge Invasion on this realm.".into()),
         "debug" => debug(map, g, args),
         _ => return None,
     })
@@ -714,7 +713,7 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let routes = crate::game::transports::routes(&map.realm);
             let here: Vec<String> = routes
                 .iter()
-                .filter(|r| r.legs.iter().any(|l| l.map == map.key.map))
+                .filter(|r| r.maps().contains(&map.key.map))
                 .map(|r| format!("{} ({} s)", r.entry, r.period / 1000))
                 .collect();
             Some(format!("Transports here: {}", if here.is_empty() { "none".into() } else { here.join(", ") }))

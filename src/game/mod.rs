@@ -3,6 +3,7 @@
 pub mod battlegrounds;
 pub mod conn;
 pub mod data;
+pub mod elemental;
 pub mod events;
 pub mod fields;
 pub mod guid;
@@ -10,7 +11,9 @@ pub mod guid;
 pub mod harness;
 pub mod honor;
 pub mod instances;
+pub mod invasion;
 pub mod map;
+pub mod omen;
 pub mod registry;
 pub mod session;
 pub mod social;
@@ -37,6 +40,8 @@ mod tests_scripts;
 mod tests_spells;
 #[cfg(test)]
 mod tests_pvp2;
+#[cfg(test)]
+mod tests_world;
 pub mod transports;
 pub mod update;
 pub mod weather;

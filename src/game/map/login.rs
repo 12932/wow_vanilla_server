@@ -81,7 +81,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     out.send(&SMSG_INIT_WORLD_STATES {
         map: map_enum(map.key.map),
         area: Area::try_from(p.zone).unwrap_or_default(),
-        states: Vec::new(),
+        states: crate::game::map::world_states::states_for(map, p.zone),
     });
     let guid = p.guid;
     // The player's own create block, and their items'.

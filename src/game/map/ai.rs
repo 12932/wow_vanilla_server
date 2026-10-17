@@ -220,6 +220,11 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         creature,
         crate::game::map::instance_script::Event::Death,
     );
+    if let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) {
+        crate::game::invasion::creature_died(map, entry, at);
+        crate::game::elemental::creature_died(map, creature, entry);
+        crate::game::omen::creature_died(map, entry);
+    }
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
@@ -384,7 +389,8 @@ fn respawn(map: &mut Map, g: Guid) {
     if !crate::game::map::creature_groups::may_spawn(map, spawn.guid) {
         return;
     }
-    if let Some(c) = Creature::from_spawn(&data, spawn, &mut rand::rng()) {
+    let on = crate::game::events::current(&map.realm);
+    if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
         crate::game::map::creature_groups::respawned(map, g);
     }

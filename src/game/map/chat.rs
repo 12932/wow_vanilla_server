@@ -1,5 +1,8 @@
 //! Chat heard nearby (say, yell, emote) and emotes. A line starting with
-//! `.` is a GM command.
+//! `.` is a GM command. A player speaks only the languages they know
+//! (Thistle Tea's `Chat.Language`); the client garbles what its own player
+//! doesn't. Whispers and emotes go out in the universal language, and a
+//! curse of tongues speaks for its victim.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
@@ -50,9 +53,96 @@ pub fn tag_of(map: &Map, guid: Guid) -> PlayerChatTag {
 
 /// `CMSG_MESSAGECHAT`. Returns the message if it is a kind this module
 /// doesn't serve (party, whisper, channel, ...).
-pub fn message(map: &mut Map, guid: Guid, m: CMSG_MESSAGECHAT) -> Option<CMSG_MESSAGECHAT> {
+/// The spells that teach each language, should their templates be
+/// missing.
+const LANGUAGE_SPELLS: &[(u32, u32)] = &[
+    (668, 7),
+    (669, 1),
+    (670, 3),
+    (671, 2),
+    (672, 6),
+    (813, 10),
+    (814, 11),
+    (815, 8),
+    (816, 9),
+    (817, 12),
+    (7340, 13),
+    (7341, 14),
+    (17737, 33),
+];
+
+const EFFECT_LANGUAGE: u32 = 39;
+const ADDON: u32 = 0xFFFF_FFFF;
+
+/// Whether `g` speaks `language`: a spell that teaches it.
+pub fn knows_language(map: &Map, g: Guid, language: u32) -> bool {
+    let Some(p) = map.players.get(&g) else {
+        return false;
+    };
+    if p.gm_level > 0 {
+        return true;
+    }
+    let data = &map.realm.data;
+    p.spells.iter().any(|s| match data.spells.get(*s) {
+        Some(t) => t
+            .effects
+            .iter()
+            .any(|e| e.effect == EFFECT_LANGUAGE && e.misc_value as u32 == language),
+        None => LANGUAGE_SPELLS.contains(&(*s, language)),
+    })
+}
+
+/// The language a line goes out in, or `None` if the speaker can't use
+/// the one they chose.
+pub fn resolve_language(map: &Map, g: Guid, kind: &CMSG_MESSAGECHAT_ChatType, language: Language) -> Option<Language> {
+    use CMSG_MESSAGECHAT_ChatType as T;
+    let id = language.as_int();
+    // Addon messages keep their marker on the chats addons use.
+    if id == ADDON {
+        return matches!(
+            kind,
+            T::Party | T::Raid | T::Guild | T::Officer | T::Channel { .. } | T::RaidLeader | T::RaidWarning
+        )
+        .then_some(language);
+    }
+    if matches!(kind, T::Afk | T::Dnd) {
+        return Some(Language::Universal);
+    }
+    // Without the spells' data (a bare test world) every language is known.
+    let checked = !map.realm.data.spells.spells.is_empty();
+    let speakable = if id == 0 {
+        // Only GMs speak the universal language; an emote is in it anyway.
+        matches!(kind, T::Emote) || map.players.get(&g).is_some_and(|p| p.gm_level > 0)
+    } else {
+        knows_language(map, g, id)
+    };
+    if checked && !speakable {
+        return None;
+    }
+    if matches!(kind, T::Whisper { .. } | T::Emote) {
+        return Some(Language::Universal);
+    }
+    // A curse of tongues: the victim speaks the curse's language.
+    let cursed = crate::game::map::auras::auras(map, g).and_then(|a| {
+        a.effects()
+            .find(|(_, x)| x.kind == crate::game::map::auras::AURA_MOD_LANGUAGE)
+            .map(|(_, x)| x.misc as u32)
+    });
+    Some(
+        cursed
+            .and_then(|c| Language::try_from(c).ok())
+            .unwrap_or(language),
+    )
+}
+
+pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMSG_MESSAGECHAT> {
     if m.message.len() > MAX_MESSAGE {
         return None;
+    }
+    let gm_line = m.message.starts_with('.')
+        && map.players.get(&guid).is_some_and(|p| p.gm_level > 0);
+    if !gm_line {
+        m.language = resolve_language(map, guid, &m.chat_type, m.language)?;
     }
     // A player's "." line is chat; a GM's, a command.
     let gm = map.players.get(&guid).is_some_and(|p| p.gm_level > 0);

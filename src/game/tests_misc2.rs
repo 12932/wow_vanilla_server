@@ -450,7 +450,7 @@ async fn gm_commands_for_weather_mail_battlegrounds_and_instances() {
     gm(&mut a, ".instance info").await;
     a.system_message("raid binds").await;
     gm(&mut a, ".invasion").await;
-    a.system_message("Scourge").await;
+    a.system_message("The invasion is off").await;
 }
 
 #[tokio::test]
