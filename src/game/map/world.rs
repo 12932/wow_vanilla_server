@@ -367,6 +367,12 @@ pub fn zone_and_area(map: &mut Map, pos: Vector3d) -> Option<(u32, u32)> {
         })
 }
 
+/// Whether `area` is free-for-all PvP (an arena's, as Gurubashi's).
+pub fn area_is_ffa(data: &crate::game::data::GameData, area: u32) -> bool {
+    data.area(area)
+        .is_some_and(|a| a.flags & AREA_FLAG_ARENA != 0)
+}
+
 /// Work out the zone and area a player is in, from the navmesh or the
 /// terrain, and the free-for-all flag that goes with an arena.
 pub fn update_zone(map: &mut Map, guid: Guid) {
@@ -396,12 +402,10 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
         }
         crate::game::map::spell_areas::reconcile(map, guid);
     }
+    let ffa = area_is_ffa(&data, area) || crate::game::map::arena::fighting(map, guid);
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
-    let ffa = data
-        .area(area)
-        .is_some_and(|a| a.flags & AREA_FLAG_ARENA != 0);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP, ffa);
     if new_zone {
         crate::game::map::world_states::send_init(map, guid);
