@@ -841,7 +841,15 @@ pub fn apply_spell(
     let mut aura_effects = Vec::new();
     for &(index, amount) in effects {
         let e = spell.effects[index];
-        let period = (e.amplitude > 0).then(|| Duration::from_millis(u64::from(e.amplitude)));
+        // A share of mana a tick with no period of its own ticks each
+        // second (mangos's `HandleAuraModTotalManaPercentRegen`): the food
+        // that is drink too.
+        let amplitude = if e.amplitude == 0 && e.aura == AURA_OBS_MOD_MANA {
+            1000
+        } else {
+            e.amplitude
+        };
+        let period = (amplitude > 0).then(|| Duration::from_millis(u64::from(amplitude)));
         aura_effects.push(Aura {
             effect: index as u8,
             kind: e.aura,
