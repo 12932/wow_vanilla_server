@@ -719,20 +719,13 @@ fn effect(
         EFFECT_LEAP => {
             if let Some(me) = map.unit_view(caster) {
                 let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
-                let mut to = Vector3d {
-                    x: me.position.x + d * me.orientation.cos(),
-                    y: me.position.y + d * me.orientation.sin(),
+                let o = me.orientation + leap_angle(e.target_a, e.target_b);
+                let want = Vector3d {
+                    x: me.position.x + d * o.cos(),
+                    y: me.position.y + d * o.sin(),
                     z: me.position.z,
                 };
-                // Short of a wall, on the ground.
-                if !super::checks::line_of_sight(map, me.position, to) {
-                    to = me.position;
-                }
-                if let Some(nav) = map.nav.as_mut()
-                    && let Some(z) = nav.ground(to.x, to.y, to.z + 2.0)
-                {
-                    to.z = z;
-                }
+                let to = first_clear(map, me.position, want);
                 map.teleport(caster, map.key, to, me.orientation);
             }
         }
@@ -1023,6 +1016,62 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
 }
 
 /// Where a player's hearthstone goes.
+/// The way a leap goes off its caster's facing, by its implicit targets
+/// (mangos's caster-relative targets, Thistle Tea's `CasterLocation`):
+/// back (48), left (49), right (50), the four between (41 to 44); ahead
+/// for the rest (Blink's 55, 47).
+fn leap_angle(target_a: u32, target_b: u32) -> f32 {
+    use std::f32::consts::PI;
+    [target_b, target_a]
+        .iter()
+        .find_map(|t| match t {
+            48 => Some(PI),
+            49 => Some(PI / 2.0),
+            50 => Some(-PI / 2.0),
+            41 => Some(1.75 * PI),
+            42 => Some(1.25 * PI),
+            43 => Some(0.75 * PI),
+            44 => Some(0.25 * PI),
+            _ => None,
+        })
+        .unwrap_or(0.0)
+}
+
+/// Where a leap from `from` toward `to` ends, on the ground: `to` if it can
+/// be seen, else the farthest point toward it that can, found by halving
+/// the way ten times as Thistle Tea's `first_collision_position` does, and
+/// half a yard back from what stopped it (its `collision_position`).
+fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
+    let ground = |map: &mut Map, p: Vector3d| {
+        let z = map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z + 2.0));
+        Vector3d {
+            z: z.unwrap_or(p.z),
+            ..p
+        }
+    };
+    let along = |f: f32| Vector3d {
+        x: from.x + (to.x - from.x) * f,
+        y: from.y + (to.y - from.y) * f,
+        z: from.z + (to.z - from.z) * f,
+    };
+    let end = ground(map, to);
+    if super::checks::line_of_sight(map, from, end) {
+        return end;
+    }
+    let (mut clear, mut blocked) = (0.0f32, 1.0f32);
+    for _ in 0..10 {
+        let f = (clear + blocked) / 2.0;
+        let at = ground(map, along(f));
+        if super::checks::line_of_sight(map, from, at) {
+            clear = f;
+        } else {
+            blocked = f;
+        }
+    }
+    let length = ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt();
+    ground(map, along((clear - 0.5 / length.max(0.001)).max(0.0)))
+}
+
 /// `SMSG_RESURRECT_REQUEST`, as mangos-zero lays it out: the caster, its
 /// name (none for a player), whether it is a spirit healer, and whether
 /// the client holds the acceptance back by its resurrection timer.
