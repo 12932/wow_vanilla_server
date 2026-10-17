@@ -323,6 +323,10 @@ pub fn update(map: &mut Map) {
         for h in a.helpers {
             if eligible(map, h, caller, a.enemy, false) {
                 join(map, h, a.enemy);
+                // Its own kind called it: it keeps the caller's leash.
+                if map.creature(h).is_some_and(|c| c.combat.attacking) {
+                    crate::game::map::creature_combat::share_leash(map, h, caller);
+                }
             }
         }
     }

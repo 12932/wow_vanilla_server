@@ -1376,7 +1376,7 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     let items = outcome::death_items(map, target, left);
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
-        combat::deal_damage(map, h.caster, target, left);
+        combat::deal_periodic_damage(map, h.caster, target, left, s.channeled());
     }
     outcome::give_death_items(map, target, items);
     if leech {

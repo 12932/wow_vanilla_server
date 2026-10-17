@@ -334,6 +334,8 @@ pub struct Map {
     pub late_frames: Vec<(Guid, Arc<[u8]>)>,
     /// Scripted area triggers resting from their cooldown, until when.
     pub trigger_cooldowns: AHashMap<u32, Instant>,
+    /// The leash clocks creatures in one fight share.
+    pub leashes: creature_combat::Leashes,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -448,6 +450,7 @@ impl Map {
             objects: Default::default(),
             late_frames: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
+            leashes: Default::default(),
         }
     }
 

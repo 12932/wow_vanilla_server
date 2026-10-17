@@ -84,6 +84,138 @@ pub struct Engagement {
     pub assist: Vec<crate::game::map::assistance::Assist>,
     /// When it next calls its friends, fighting away from its spawn.
     pub pulse_at: Option<Instant>,
+    /// The leash clock it shares with those it was drawn into the fight
+    /// with ([`Leashes`]).
+    pub clock: Option<u32>,
+    /// When its leash is next extended while it is under control.
+    pub control_extend_at: Option<Instant>,
+}
+
+/// How often a creature under control has its leash extended (Thistle
+/// Tea's `CombatLeash.maintain`).
+const CONTROL_EXTEND_EVERY: Duration = Duration::from_secs(3);
+/// How often the clocks no creature holds any more are swept away.
+const LEASH_SWEEP_EVERY: Duration = Duration::from_secs(10);
+
+/// The leash clocks creatures drawn into one fight share (Thistle Tea's
+/// `CombatLeashes`): a creature called to help, a group's members pulled
+/// together, a creature's summons. A hostile act on any of them extends
+/// every one's leash; a clock lasts while any of them holds it.
+#[derive(Debug, Default)]
+pub struct Leashes {
+    clocks: ahash::AHashMap<u32, Instant>,
+    next: u32,
+    swept_at: Option<Instant>,
+}
+
+/// `g`'s leash runs on `with`'s clock from now on (`with` gets one if it
+/// has none).
+pub fn share_leash(map: &mut Map, g: Guid, with: Guid) {
+    if g == with {
+        return;
+    }
+    let now = map.now;
+    let Some(w) = map.creature(with) else {
+        return;
+    };
+    if w.engagement.origin.is_none() {
+        return;
+    }
+    let clock = match w.engagement.clock {
+        Some(id) => id,
+        None => {
+            let since = w.engagement.last_hostile.unwrap_or(now);
+            let l = &mut map.leashes;
+            l.next = l.next.wrapping_add(1);
+            let id = l.next;
+            l.clocks.insert(id, since);
+            if let Some(w) = map.creature_mut(with) {
+                w.engagement.clock = Some(id);
+            }
+            id
+        }
+    };
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.clock = Some(clock);
+    }
+}
+
+/// A fight begins for `g`: its leash is its own, unless a creature that
+/// summoned it is fighting, whose clock it runs on (Thistle Tea's summon
+/// source).
+pub fn leash_begins(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.engagement.clock = None;
+    c.engagement.control_extend_at = Some(now + CONTROL_EXTEND_EVERY);
+    let summoner = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.summoner)
+        .or(c.owner)
+        .filter(|s| guid::is_unit(*s));
+    if let Some(s) = summoner {
+        share_leash(map, g, s);
+    }
+}
+
+/// The last time `g`'s leash was extended: by a hostile act on it, or on
+/// any it shares its clock with.
+fn extended_at(map: &Map, c: &crate::game::map::creature::Creature) -> Option<Instant> {
+    let shared = c
+        .engagement
+        .clock
+        .and_then(|id| map.leashes.clocks.get(&id).copied());
+    c.engagement.last_hostile.max(shared)
+}
+
+/// A creature under control (stunned, confused, fleeing, rooted) has its
+/// leash extended every three seconds, so it doesn't go home the moment it
+/// is free (Thistle Tea's `CombatLeash.maintain`).
+pub fn maintain_leash(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    if c.engagement.origin.is_none() || !controlled(c) {
+        return;
+    }
+    if c.engagement.control_extend_at.is_some_and(|t| t > now) {
+        return;
+    }
+    hostile_act(map, g);
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.control_extend_at = Some(now + CONTROL_EXTEND_EVERY);
+    }
+}
+
+/// Stunned, confused, fleeing or rooted.
+fn controlled(c: &crate::game::map::creature::Creature) -> bool {
+    c.fields.get_u32(UNIT_FIELD_FLAGS) & CONTROLLED != 0 || c.auras.has(AURA_MOD_ROOT)
+}
+
+/// The clocks no creature holds any more go.
+fn sweep_leashes(map: &mut Map) {
+    let now = map.now;
+    if map
+        .leashes
+        .swept_at
+        .is_some_and(|t| now.duration_since(t) < LEASH_SWEEP_EVERY)
+    {
+        return;
+    }
+    map.leashes.swept_at = Some(now);
+    if map.leashes.clocks.is_empty() {
+        return;
+    }
+    let held: ahash::AHashSet<u32> = map
+        .creatures
+        .iter()
+        .filter_map(|(_, c)| c.engagement.clock)
+        .collect();
+    map.leashes.clocks.retain(|id, _| held.contains(id));
 }
 
 /// A civilian's call for the guards, answered: it makes one at a time.
@@ -156,11 +288,18 @@ pub fn rest(map: &mut Map, g: Guid) {
     }
 }
 
-/// A blow on or by the creature extends its leash.
+/// A hostile act on the creature, a blow landed or not, extends its leash,
+/// and theirs it shares its clock with.
 pub fn hostile_act(map: &mut Map, g: Guid) {
     let now = map.now;
-    if let Some(c) = map.creature_mut(g) {
-        c.engagement.last_hostile = Some(now);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.engagement.last_hostile = Some(now);
+    if let Some(id) = c.engagement.clock
+        && let Some(t) = map.leashes.clocks.get_mut(&id)
+    {
+        *t = now;
     }
 }
 
@@ -175,6 +314,8 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.damage_by_npcs = 0;
         c.engagement.assist.clear();
         c.engagement.pulse_at = None;
+        c.engagement.clock = None;
+        c.engagement.control_extend_at = None;
     }
 }
 
@@ -313,9 +454,7 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
         return true;
     }
     // A victim out of reach too long.
-    let controlled = c.fields.get_u32(UNIT_FIELD_FLAGS) & CONTROLLED != 0
-        || c.auras.has(AURA_MOD_ROOT)
-        || c.owner.is_some();
+    let controlled = controlled(c) || c.owner.is_some();
     if extra & EXTRA_NO_UNREACHABLE_EVADE == 0
         && !controlled
         && c.engagement
@@ -328,18 +467,18 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     if map.key.instance != 0 || extra & EXTRA_NO_LEASH != 0 || controlled {
         return false;
     }
-    if d <= THREAT_RADIUS {
+    // The threat radius, or half again its reach of the victim if more.
+    let radius = THREAT_RADIUS.max(1.5 * crate::game::map::ai::attack_distance(map, g, victim));
+    if d <= radius {
         return false;
     }
     if map
         .position_of(victim)
-        .is_some_and(|p| dist(p, origin) <= THREAT_RADIUS)
+        .is_some_and(|p| dist(p, origin) <= radius)
     {
         return false;
     }
-    c.engagement
-        .last_hostile
-        .is_none_or(|t| now.duration_since(t) > LEASH_TIMEOUT)
+    extended_at(map, c).is_none_or(|t| now.duration_since(t) > LEASH_TIMEOUT)
 }
 
 /// The template's mechanic immunity: `mechanic` (1 to 31) is in its mask.
@@ -912,6 +1051,7 @@ pub fn regenerate(map: &mut Map) {
 /// The creatures' flight timers, and their regeneration.
 pub fn update(map: &mut Map) {
     regenerate(map);
+    sweep_leashes(map);
     watch_for_enemies(map);
     crate::game::map::assistance::update(map);
     let now = map.now;

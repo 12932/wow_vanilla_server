@@ -943,6 +943,9 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
     pvp_contact(map, mb, ma, Contact::Attacked);
     if guid::is_unit(b) {
         crate::game::map::ai::attacked(map, b, a);
+        // A blow, landed or not, keeps it on its leash (Thistle Tea's
+        // contact on `receive_attack`).
+        crate::game::map::creature_combat::hostile_act(map, b);
     }
 }
 
@@ -2064,6 +2067,29 @@ pub fn threat_multiplier(map: &Map, g: Guid, school: u32) -> f32 {
 /// Damage of `school` (a mask) on a unit: the rage it gives, threat, the
 /// auras damage breaks, health, death.
 pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u32, school: u32) {
+    deal_damage_with(map, attacker, victim, damage, school, true);
+}
+
+/// A periodic aura's damage: [`deal_damage`], but only a channel's keeps
+/// a creature on its leash (Thistle Tea's `CombatLeash.on_damage`).
+pub fn deal_periodic_damage(
+    map: &mut Map,
+    attacker: Guid,
+    victim: Guid,
+    damage: u32,
+    channel: bool,
+) {
+    deal_damage_with(map, attacker, victim, damage, 1, channel);
+}
+
+fn deal_damage_with(
+    map: &mut Map,
+    attacker: Guid,
+    victim: Guid,
+    damage: u32,
+    school: u32,
+    extends: bool,
+) {
     // A GM in god mode takes nothing.
     if crate::game::map::gm_dev::invulnerable(map, victim) {
         return;
@@ -2094,7 +2120,7 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     auras::remove_where(map, victim, |h| {
         h.interrupt_flags & INTERRUPT_DAMAGE != 0 || (h.has(AURA_MOD_CONFUSE) && !h.positive)
     });
-    if attacker != victim {
+    if attacker != victim && extends {
         crate::game::map::creature_combat::hostile_act(map, victim);
     }
     let Some(f) = map.unit_fields_mut(victim) else {
