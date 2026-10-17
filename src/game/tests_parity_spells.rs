@@ -238,7 +238,8 @@ async fn flat_healing_taken_goes_by_the_spells_coefficient() {
             ready(m, priest, 60);
             // +100 healing taken, all schools (Amplify Magic's kind).
             aura_of(m, priest, 990_901, auras::AURA_MOD_HEALING, 0x7e, 100);
-            // Flash Heal: 193 to 237, and 0.429 of the hundred.
+            // Flash Heal: 193 to 237 and 1.9 a level from 20 to 25, and
+            // 0.429 of the hundred.
             set_health(m, priest, 1);
             spells::cast_triggered(m, priest, FLASH_HEAL, Some(priest));
             let flash = health(m, priest) - 1;
@@ -251,7 +252,7 @@ async fn flat_healing_taken_goes_by_the_spells_coefficient() {
         .unwrap();
     let (flash, tick) = out;
     assert!(
-        (193 + 42..=237 + 43).contains(&flash),
+        (193 + 9 + 42..=237 + 10 + 43).contains(&flash),
         "the flat bonus by Flash Heal's coefficient: {flash}"
     );
     assert_eq!(tick, 100, "by Renew's tick's");

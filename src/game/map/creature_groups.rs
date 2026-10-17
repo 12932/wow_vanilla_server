@@ -128,7 +128,7 @@ pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
         || script_flags(map, g) & GROUP_AGGRO_TOGETHER != 0
     {
         let members = members_of(map, g);
-        join_all(map, members, enemy, false);
+        join_all(map, g, members, enemy, false);
     }
     let mut join: Vec<Guid> = Vec::new();
     let Some(spawn) = spawn_of(map, g) else {
@@ -151,16 +151,16 @@ pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
     {
         join.push(m);
     }
-    attack_all(map, join, enemy);
+    attack_all(map, g, join, enemy);
 }
 
-fn attack_all(map: &mut Map, who: Vec<Guid>, enemy: Guid) {
-    join_all(map, who, enemy, true);
+fn attack_all(map: &mut Map, g: Guid, who: Vec<Guid>, enemy: Guid) {
+    join_all(map, g, who, enemy, true);
 }
 
-/// Those of `who` free to join the fight against `enemy` do; `call`, and
-/// each calls for help as one attacked does.
-fn join_all(map: &mut Map, who: Vec<Guid>, enemy: Guid, call: bool) {
+/// Those of `who` free to join `g`'s fight against `enemy` do, on `g`'s
+/// leash; `call`, and each calls for help as one attacked does.
+fn join_all(map: &mut Map, g: Guid, who: Vec<Guid>, enemy: Guid, call: bool) {
     for c in who {
         if map
             .creature(c)
@@ -172,6 +172,7 @@ fn join_all(map: &mut Map, who: Vec<Guid>, enemy: Guid, call: bool) {
             } else {
                 crate::game::map::ai::assist(map, c, enemy);
             }
+            crate::game::map::creature_combat::share_leash(map, c, g);
         }
     }
 }

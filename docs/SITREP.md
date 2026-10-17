@@ -38,6 +38,13 @@ the questions waiting for you.
 8. **Failed openings.** Thistle Tea holds back `SMSG_SPELL_GO` for a failed opening, which changes the cast
    pipeline. Should wvs do the same?
 
+9. **Battleground creatures' home guard** (from 2c). wvs used to keep battleground creatures within 60 yards of
+   home when choosing a victim. Thistle Tea has no such guard, so it's gone. Should battleground creatures keep one?
+10. **A creature swings only once it has arrived** (from 2c). This goes beyond Thistle Tea, which swings as soon as
+    it is in reach. The client shows a moving creature slightly behind where the server has it, so swinging on
+    arrival keeps a creature from hitting from where the client still shows it out of reach: your kobold report.
+    Keep it?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -127,6 +134,18 @@ the questions waiting for you.
     - **Speed acknowledgements** are no longer relayed to watchers, and no longer set the player's movement.
     - **Resurrection offers:** a second offer is ignored while one is pending.
 
+11. **2c's choices:**
+    - **Facing packets** go out only at a halt, a due swing, or bad facing, not every tick.
+    - **A harmful spell** starts a fight as it lands on each target, so bolts start it on landing, and areas put
+      every creature hit into the fight. Script-triggered casts start none.
+    - **Evade and healing:** creatures that don't regenerate stay hurt after an evade.
+    - **Leashes:** a summon shares its summoner's leash clock only if the summoner is already fighting.
+    - **Charmed players:** whether one may cast goes by wvs's full cast check.
+    - **Speed changes:** a possessed creature's speed acknowledgement is relayed to those who see it, as
+      mangos-classic does. A player's own isn't (2g, as Thistle Tea).
+    - **Merge note:** 2c's chase-facing (a target) and 2b's arrival facing (an angle) are now two fields of a walk.
+      A move facing a target is sent as such; otherwise it is sent with its final angle.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -139,7 +158,7 @@ the questions waiting for you.
 | Bugs from the mapping, batch 1 (23) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
-| 2c: creature combat | running | |
+| 2c: creature combat (all 15 items) | merged | |
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use rand::RngExt;
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{SMSG_ATTACKSTART, SMSG_ATTACKSTOP};
+use wow_world_messages::vanilla::SMSG_ATTACKSTOP;
 
 use super::Targets;
 use crate::game::data::scripts::ScriptTable;
@@ -176,7 +176,7 @@ fn attempt(map: &mut Map, g: Guid, victim: Guid, i: usize, e: &CreatureSpell) ->
     };
     let m = super::mods::for_spell(map, g, s);
     if super::checks::check(map, g, s, &targets, None, false, &m).is_some() {
-        resume(map, g, e, victim);
+        resume(map, g, e);
         return false;
     }
     let chance = e.probability == 0
@@ -190,7 +190,7 @@ fn attempt(map: &mut Map, g: Guid, victim: Guid, i: usize, e: &CreatureSpell) ->
         *t = now + roll(e.delay_repeat);
     }
     if !chance {
-        resume(map, g, e, victim);
+        resume(map, g, e);
         return false;
     }
     if e.flags & CF_MAIN_RANGED != 0 {
@@ -202,13 +202,15 @@ fn attempt(map: &mut Map, g: Guid, victim: Guid, i: usize, e: &CreatureSpell) ->
     true
 }
 
-/// A main-ranged spell went: it stands, and stops swinging.
+/// A main-ranged spell went: it stands, and stops swinging (its next
+/// swing in reach starts its attack again, as Thistle Tea's
+/// `maybe_hold_ranged` clears `attack_started`).
 fn hold(map: &mut Map, g: Guid, victim: Guid) {
-    if let Some(s) = map
-        .creature_mut(g)
-        .and_then(|c| c.caster.spell_list.as_deref_mut())
-    {
-        s.holding = true;
+    if let Some(c) = map.creature_mut(g) {
+        c.combat.announced = None;
+        if let Some(s) = c.caster.spell_list.as_deref_mut() {
+            s.holding = true;
+        }
     }
     if victim.is_zero() {
         return;
@@ -222,25 +224,17 @@ fn hold(map: &mut Map, g: Guid, victim: Guid) {
     }
 }
 
-/// A main-ranged spell failed: it chases and swings again.
-fn resume(map: &mut Map, g: Guid, e: &CreatureSpell, victim: Guid) {
+/// A main-ranged spell failed: it chases and swings again, its
+/// `SMSG_ATTACKSTART` going out at its first swing in reach.
+fn resume(map: &mut Map, g: Guid, e: &CreatureSpell) {
     if e.flags & CF_MAIN_RANGED == 0 {
         return;
     }
-    let Some(s) = map
+    if let Some(s) = map
         .creature_mut(g)
         .and_then(|c| c.caster.spell_list.as_deref_mut())
-    else {
-        return;
-    };
-    if !std::mem::take(&mut s.holding) || victim.is_zero() {
-        return;
-    }
-    if let Some(frame) = crate::game::conn::encode(&SMSG_ATTACKSTART {
-        attacker: g,
-        victim,
-    }) {
-        map.send_to_observers(g, &frame, false);
+    {
+        s.holding = false;
     }
 }
 

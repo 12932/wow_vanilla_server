@@ -299,11 +299,9 @@ Open (not done):
 - I2's real-data check (`tests_ai5_instances::the_real_instances`,
   ignored): the Quintessence doesn't douse the rune on the merged branch.
 - E16 (smaller EventAI ordering items).
-- C6 harmful casts and stealth; C9 melee range and chase; C10 emote and
-  stand state; C11 heal on leashing; C12 combat facing packets; C13
-  ATTACKSTART/STOP timing; C14 spreading; C15 leash extension; C16 taunt
-  auras; C17's event-driven cadence; C18 victim selection; C19 caster LOS;
-  C21 creature charm of players; C22 auras kept on evade.
+- (Combat's C6, C9 to C16, C18, C19, C21, C22 and E16 were done in Phase 2c,
+  with tests in `tests_parity_combat.rs`; C17's event-driven cadence is
+  left.)
 - S2-S4, S6-S12, S14-S18, S20-S23 (script commands), D-R1 summon despawn
   types, D-R2 dying summons counted alive, D-R4 the unkillable flag, D-R6
   update_entry, D-R7 zone pulse command, D-R8 emote states, D18, D20, D25.

@@ -379,6 +379,8 @@ pub struct Map {
     pub late_frames: Vec<(Guid, Arc<[u8]>)>,
     /// Scripted area triggers resting from their cooldown, until when.
     pub trigger_cooldowns: AHashMap<u32, Instant>,
+    /// The leash clocks creatures in one fight share.
+    pub leashes: creature_combat::Leashes,
     /// Who has panicked lately, and when the map has had enough.
     pub health: supervise::Health,
     /// Panics a test arms.
@@ -524,6 +526,7 @@ impl Map {
             objects: Default::default(),
             late_frames: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
+            leashes: Default::default(),
             health: Default::default(),
             #[cfg(test)]
             faults: Default::default(),
@@ -1068,7 +1071,12 @@ impl Map {
         if let Some(s) = c.spawn_guid {
             self.by_spawn.insert(s, guid);
         }
-        if event_ai::has_events_entry(&self.realm.data, c.entry) || self.instance.script.is_some() {
+        // Its spawned events, and its summoner's hearing of it.
+        let summoned = c.scripted.as_deref().is_some_and(|s| s.summoner.is_some());
+        if event_ai::has_events_entry(&self.realm.data, c.entry)
+            || self.instance.script.is_some()
+            || summoned
+        {
             self.ai_spawned.push(guid);
         }
         let key = self.creatures.insert(c);
@@ -1102,7 +1110,21 @@ impl Map {
         Some(g)
     }
 
+    /// A creature leaves the map for good; its summoner hears of it, if it
+    /// hasn't already (its corpse gone), as Thistle Tea's summons tell
+    /// theirs as their process ends.
     pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {
+        let c = self.take_creature(guid)?;
+        if !c.despawned
+            && let Some(s) = c.scripted.as_deref().and_then(|s| s.summoner)
+        {
+            event_ai::summoned_despawned(self, s, guid, c.entry);
+        }
+        Some(c)
+    }
+
+    /// A creature out of the map, telling no one.
+    fn take_creature(&mut self, guid: Guid) -> Option<Creature> {
         let key = self.creature_by_guid.remove(&guid)?;
         let mut c = self.creatures.try_remove(key)?;
         if let Some(s) = c.spawn_guid
