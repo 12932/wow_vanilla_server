@@ -1548,7 +1548,16 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         if let Some(c) = map.combat_mut(attacker) {
             let next = Some(now + Duration::from_millis(u64::from(period)));
             match hand {
-                Hand::Off => c.next_offhand = next,
+                // The hands keep a moment apart, the main one waiting too
+                // (mangos's `ATTACK_DISPLAY_DELAY`).
+                Hand::Off => {
+                    c.next_offhand = next;
+                    if c.next_swing
+                        .is_some_and(|t| t < now + Duration::from_millis(200))
+                    {
+                        c.next_swing = Some(now + Duration::from_millis(200));
+                    }
+                }
                 _ => {
                     c.next_swing = next;
                     // Reckoning's banked attacks arm on a regular swing.
