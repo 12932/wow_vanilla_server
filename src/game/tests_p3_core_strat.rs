@@ -2,7 +2,7 @@
 //! Baron and the ziggurats: the Baron's gates shut in his fight and open
 //! after it; the timed run started once from the gauntlet's gate, its
 //! milestones while it runs, won with the Baron's death or lost at its
-//! end; and each ziggurat opened by its boss.
+//! end; each ziggurat opened by its boss; Timmy, and Willey's gate.
 
 use std::sync::Arc;
 
@@ -34,6 +34,10 @@ const BARON: u32 = 10_440;
 const YSIDA: u32 = 16_031;
 /// The run's first spell, and its ten-minute milestone's.
 const RUN_SPELL: u32 = 27_861;
+const GUARDSMAN: u32 = 10_418;
+const TIMMY: u32 = 10_808;
+const WILLEY: u32 = 10_997;
+const WILLEYS_GATE: u32 = 175_969;
 const TEN_MINUTES: u32 = 27_863;
 
 fn data() -> GameData {
@@ -112,6 +116,53 @@ fn data() -> GameData {
                 ..Default::default()
             });
     }
+    // Timmy's guardsmen, Willey and his gate.
+    for (entry, name) in [
+        (GUARDSMAN, "Guardsman"),
+        (TIMMY, "Timmy"),
+        (WILLEY, "Willey"),
+    ] {
+        d.creature_templates.insert(entry, creature(entry, name));
+    }
+    for (spawn, entry) in [(54_069, GUARDSMAN), (54_070, GUARDSMAN), (300, WILLEY)] {
+        d.creature_spawns
+            .entry(STRATHOLME)
+            .or_default()
+            .push(CreatureSpawn {
+                guid: spawn,
+                entries: vec![entry],
+                map: STRATHOLME,
+                x: AT.0,
+                y: AT.1 + 3.0,
+                z: AT.2,
+                ..Default::default()
+            });
+    }
+    d.gameobject_templates.insert(
+        WILLEYS_GATE,
+        GameObjectTemplate {
+            entry: WILLEYS_GATE,
+            kind: 0,
+            display_id: 1,
+            name: "Willey's Gate".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    d.gameobject_spawns
+        .entry(STRATHOLME)
+        .or_default()
+        .push(GameObjectSpawn {
+            guid: 150,
+            entry: WILLEYS_GATE,
+            map: STRATHOLME,
+            x: AT.0,
+            y: AT.1 - 3.0,
+            z: AT.2,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            state: 0,
+            ..Default::default()
+        });
     for id in [RUN_SPELL, TEN_MINUTES] {
         let mut s = SpellTemplate {
             id,
@@ -307,4 +358,39 @@ async fn each_ziggurat_opens_at_its_bosss_death() {
     })
     .await;
     assert_eq!(seen, vec![(DONE, true); 3]);
+}
+
+fn of_spawn(m: &Map, spawn: u32) -> Guid {
+    m.creatures
+        .iter()
+        .map(|(_, c)| c)
+        .find(|c| c.spawn_guid == Some(spawn))
+        .map(|c| c.guid)
+        .expect("spawned")
+}
+
+/// Thistle Tea's live side: Timmy comes once, for the fall of his own
+/// guardsman, not another's; Willey shuts his courtyard's gate when fought
+/// and opens it when he goes home or dies.
+#[tokio::test]
+async fn timmy_comes_once_and_willey_shuts_his_gate() {
+    let (realm, _a, key) = inside().await;
+    let seen = on(&realm, key, |m| {
+        let other = of_spawn(m, 54_069);
+        let his = of_spawn(m, 54_070);
+        instance_script::creature_event(m, other, Event::Death);
+        let before = count(m, TIMMY);
+        instance_script::creature_event(m, his, Event::Death);
+        instance_script::creature_event(m, his, Event::Death);
+        let timmy = (before, count(m, TIMMY));
+        let willey = of_spawn(m, 300);
+        let mut gate = Vec::new();
+        for event in [Event::Aggro, Event::Evade, Event::Aggro, Event::Death] {
+            instance_script::creature_event(m, willey, event);
+            gate.push(open(m, &[WILLEYS_GATE])[0]);
+        }
+        (timmy, gate)
+    })
+    .await;
+    assert_eq!(seen, ((0, 1), vec![false, true, false, true]));
 }
