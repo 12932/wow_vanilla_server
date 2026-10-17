@@ -205,7 +205,7 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
         message: m.message,
         tag,
     })?;
-    for g in map.players_near(pos.x, pos.y, radius) {
+    for g in map.players_near(pos, radius) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }
@@ -313,7 +313,7 @@ pub fn text_emote(map: &mut Map, guid: Guid, m: CMSG_TEXT_EMOTE) {
     }) else {
         return;
     };
-    for g in map.players_near(pos.x, pos.y, TEXT_EMOTE_YARDS) {
+    for g in map.players_near(pos, TEXT_EMOTE_YARDS) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }

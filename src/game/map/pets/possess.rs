@@ -304,7 +304,7 @@ fn fight(map: &mut Map, victim: Guid, master: Guid) {
         .map(|c| c.victim)
         .filter(|t| crate::game::map::combat::can_attack(map, victim, *t));
     let target = current.or_else(|| {
-        map.players_near(at.x, at.y, CHARM_YARDS)
+        map.players_near(at, CHARM_YARDS)
             .into_iter()
             .filter(|g| *g != victim && *g != master)
             .filter(|g| crate::game::map::combat::can_attack(map, victim, *g))
