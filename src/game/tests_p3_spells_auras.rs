@@ -1438,3 +1438,61 @@ async fn a_shapeshift_frees_from_roots_and_snares_and_a_stance_doesnt() {
     assert!(again, "the form again keeps a root had in it");
     assert!(dazed, "a daze stays");
 }
+
+const PROWL: u32 = 5215;
+const SHADOWMELD: u32 = 20580;
+const RAVAGE: u32 = 6785;
+const ASPECT_OF_THE_BEAST: u32 = 13161;
+
+/// `g`'s form byte and visibility byte.
+fn form_and_vis(m: &Map, g: Guid) -> (u8, u8) {
+    m.unit_fields(g).map_or((0, 0), |f| {
+        (
+            f.get_byte(UNIT_FIELD_BYTES_1, 2),
+            f.get_byte(UNIT_FIELD_BYTES_1, 3),
+        )
+    })
+}
+
+#[tokio::test]
+async fn stealth_marks_the_visibility_byte_not_the_form() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, druid, map) = player(&realm, "P3A24", "Prowlone", Race::NightElf, Class::Druid).await;
+    let out = map
+        .query(move |m| {
+            ready(m, druid, 60, &[]);
+            spells::cast_triggered(m, druid, CAT_FORM, None);
+            spells::cast_triggered(m, druid, PROWL, None);
+            let prowling = form_and_vis(m, druid);
+            let ravage = m.realm.data.spells.get(RAVAGE).cloned().unwrap();
+            let ravage_ok = spells::checks::form_error(&ravage, auras::form(m, druid));
+            auras::remove_spell(m, druid, PROWL, None);
+            let after = form_and_vis(m, druid);
+            clear(m, druid);
+            spells::cast_triggered(m, druid, SHADOWMELD, None);
+            let melded = form_and_vis(m, druid);
+            clear(m, druid);
+            apply(m, druid, druid, ASPECT_OF_THE_BEAST);
+            let untrackable = form_and_vis(m, druid);
+            clear(m, druid);
+            let plain = form_and_vis(m, druid);
+            (prowling, ravage_ok, after, melded, untrackable, plain)
+        })
+        .await
+        .unwrap();
+    let (prowling, ravage_ok, after, melded, untrackable, plain) = out;
+    assert_eq!(prowling.0, auras::FORM_CAT, "still a cat, prowling");
+    assert_eq!(prowling.1 & 0x02, 0x02, "creeping");
+    assert_eq!(ravage_ok, None, "and Ravage is a cat's");
+    assert_eq!(after, (auras::FORM_CAT, plain.1), "no longer creeping");
+    assert_eq!(melded, (0, plain.1 | 0x02), "Shadowmeld creeps in no form");
+    assert_eq!(
+        untrackable.1 & 0x04,
+        0x04,
+        "Aspect of the Beast's untrackable"
+    );
+    assert_eq!(plain.1 & 0x06, 0, "and none of it after");
+}

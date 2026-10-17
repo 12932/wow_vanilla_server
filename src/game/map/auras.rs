@@ -1597,17 +1597,28 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_MOD_STEALTH | AURA_MOD_INVISIBILITY => {
             crate::game::map::combat::stop_attack(map, target);
+            // Stealth's creep flag is of the visibility byte (3), not the
+            // form's (2): mangos's `UNIT_VIS_FLAG_CREEP`.
             if kind == AURA_MOD_STEALTH
                 && let Some(f) = map.unit_fields_mut(target)
             {
                 f.set_byte(
                     UNIT_FIELD_BYTES_1,
-                    2,
-                    0x02 | f.get_byte(UNIT_FIELD_BYTES_1, 2),
+                    VIS_FLAGS,
+                    VIS_FLAG_CREEP | f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS),
                 );
             }
             crate::game::map::visibility::stealth_changed(map, target);
             crate::game::map::spells::interrupts::concealed(map, target, h.spell);
+        }
+        AURA_UNTRACKABLE => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_byte(
+                    UNIT_FIELD_BYTES_1,
+                    VIS_FLAGS,
+                    VIS_FLAG_UNTRACKABLE | f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS),
+                );
+            }
         }
         AURA_WATER_WALK | AURA_FEATHER_FALL | AURA_HOVER => {
             if let Some(p) = map.players.get(&target) {
@@ -1792,11 +1803,20 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             {
                 f.set_byte(
                     UNIT_FIELD_BYTES_1,
-                    2,
-                    f.get_byte(UNIT_FIELD_BYTES_1, 2) & !0x02,
+                    VIS_FLAGS,
+                    f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS) & !VIS_FLAG_CREEP,
                 );
             }
             crate::game::map::visibility::stealth_changed(map, target);
+        }
+        AURA_UNTRACKABLE if !still(map, AURA_UNTRACKABLE) => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_byte(
+                    UNIT_FIELD_BYTES_1,
+                    VIS_FLAGS,
+                    f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS) & !VIS_FLAG_UNTRACKABLE,
+                );
+            }
         }
         AURA_WATER_WALK if !still(map, AURA_WATER_WALK) => {
             if let Some(p) = map.players.get(&target) {
@@ -1931,6 +1951,11 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
         crate::game::map::spells::interrupt(map, caster);
     }
 }
+
+/// `UNIT_FIELD_BYTES_1`'s visibility byte, and its flags.
+const VIS_FLAGS: u8 = 3;
+const VIS_FLAG_CREEP: u8 = 0x02;
+const VIS_FLAG_UNTRACKABLE: u8 = 0x04;
 
 pub const UNIT_FLAG_SILENCED: u32 = 0x0000_2000;
 pub const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
