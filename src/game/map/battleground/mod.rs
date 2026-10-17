@@ -515,6 +515,13 @@ pub fn arrived(map: &mut Map, g: Guid) {
         area: Area::try_from(p.zone).unwrap_or_default(),
         states,
     });
+    // Just arrived: worth no honor for a moment.
+    crate::game::map::spells::cast_triggered(
+        map,
+        g,
+        crate::game::map::pvp::SPELL_HONORLESS_TARGET,
+        Some(g),
+    );
     if let Some(frame) = crate::game::conn::encode(&SMSG_BATTLEGROUND_PLAYER_JOINED { player: g }) {
         for (o, other) in map.players.iter() {
             if *o != g {

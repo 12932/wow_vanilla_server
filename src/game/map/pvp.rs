@@ -30,6 +30,8 @@ pub const DAMAGE_MEMORY: Duration = Duration::from_secs(60);
 pub const SHARE_YARDS: f32 = 74.0;
 
 pub const PLAYER_FLAGS_PVP_DESIRED: u32 = 0x200;
+/// Honorless Target: one just arrived in PvP territory is worth no honor.
+pub const SPELL_HONORLESS_TARGET: u32 = 2479;
 
 /// A player's PvP flag: wanted (`/pvp`), required where they are, or
 /// lingering for a while after.
@@ -105,6 +107,11 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
             m.action == BattlefieldPortAction::EnterBattle,
         ),
         C::CMSG_LEAVE_BATTLEFIELD(_) => crate::game::battlegrounds::leave(map, g),
+        C::CMSG_BATTLEFIELD_STATUS => {
+            if let Some(me) = map.realm.registry.online(g) {
+                crate::game::battlegrounds::send_status(&map.realm, &me);
+            }
+        }
         C::MSG_PVP_LOG_DATA => crate::game::map::battleground::scoreboard(map, g),
         other => return Some(other),
     }
@@ -394,7 +401,11 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
     let (Some(v), Some(k)) = (map.players.get(&victim), map.players.get(&killer)) else {
         return;
     };
-    if k.team == v.team {
+    if k.team == v.team
+        || v
+            .auras
+            .has(crate::game::map::auras::AURA_NO_PVP_CREDIT)
+    {
         return;
     }
     let victim_team = v.team;

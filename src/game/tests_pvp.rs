@@ -860,3 +860,28 @@ fn the_real_battlegrounds_start_with_their_first_events() {
     let captain_dead = bound_to(&[63, 64]);
     assert!(captain_dead.iter().all(|b| !*b));
 }
+
+#[tokio::test]
+async fn the_battlefield_status_tells_a_queued_player_where_they_stand() {
+    let realm = harness::realm_with(arathi());
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    // Nothing yet.
+    a.send(CMSG_BATTLEFIELD_STATUS {}).await;
+    a.wait_frame(
+        "no status",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() == 8 && f[4..8] == [0, 0, 0, 0],
+    )
+    .await;
+    queue(&a, Map::ArathiBasin).await;
+    a.send(CMSG_BATTLEFIELD_STATUS {}).await;
+    for _ in 0..2 {
+        a.wait_frame(
+            "queued",
+            crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+            |f| f.len() >= 17 && u32::from_le_bytes([f[4], f[5], f[6], f[7]]) == AB && f[13] == 1,
+        )
+        .await;
+    }
+}
