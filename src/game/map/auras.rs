@@ -2415,18 +2415,30 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA | AURA_MOD_POWER_REGEN => {
-            let power = a.misc.clamp(0, 4) as u16;
+            // A percentage of mana is of mana, and does nothing for one with
+            // none (mangos's `PeriodicTick`, Thistle Tea's
+            // `restore_percent_mana`).
+            let percent = a.kind == AURA_OBS_MOD_MANA;
+            let power = if percent {
+                0
+            } else {
+                a.misc.clamp(0, 4) as u16
+            };
             let Some(f) = map.unit_fields_mut(target) else {
                 return;
             };
             let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
-            let add = if a.kind == AURA_OBS_MOD_MANA {
+            if percent && max == 0 {
+                return;
+            }
+            let add = if percent {
                 max * (a.amount * stacks).max(0) as u32 / 100
             } else {
                 (a.amount * stacks).max(0) as u32
             };
             let now = f.get_u32(UNIT_FIELD_POWER1 + power);
-            f.set_u32(UNIT_FIELD_POWER1 + power, (now + add).min(max));
+            let after = now.saturating_add(add).min(max);
+            f.set_u32(UNIT_FIELD_POWER1 + power, after);
             // Logged as its own aura with its power, as mangos's
             // SendPeriodicAuraLog and Thistle Tea log a tick; a regeneration
             // isn't.
@@ -2443,6 +2455,17 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             };
             if let Some(aura_type) = logged {
                 periodic_log(map, h, target, aura_type);
+            }
+            // Half of what it gave is its caster's threat on those fighting
+            // the target, as a heal's is (mangos's `threatAssist`).
+            if percent {
+                crate::game::map::combat::heal_threat(
+                    map,
+                    h.caster,
+                    target,
+                    h.spell,
+                    after.saturating_sub(now),
+                );
             }
         }
         AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA => {
