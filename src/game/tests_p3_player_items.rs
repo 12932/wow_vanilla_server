@@ -268,3 +268,89 @@ async fn a_repair_mends_the_one_item_asked_from_a_living_armorer_near_and_none_f
     synced(&mut a).await;
     assert_eq!(state(&realm).await, (50, 50, 800));
 }
+
+const RING: u32 = 964_020;
+const STONES: u32 = 964_021;
+const TRINKET: u32 = 964_022;
+
+fn with_goods(mut d: GameData) -> GameData {
+    let good = |entry, stackable, max_count| ItemTemplate {
+        entry,
+        class: 15,
+        name: format!("Good {entry}"),
+        display_id: 1000,
+        stackable,
+        max_count,
+        ..Default::default()
+    };
+    d.items.insert(RING, good(RING, 1, 0));
+    d.items.insert(STONES, good(STONES, 20, 0));
+    d.items.insert(TRINKET, good(TRINKET, 1, 1));
+    d
+}
+
+/// How many of `entry` `g` holds, and in how many pieces.
+fn holding(m: &Map, g: Guid, entry: u32) -> (u32, usize) {
+    let p = &m.players[&g];
+    let pieces: Vec<u32> = p
+        .items
+        .iter()
+        .filter(|i| i.entry == entry)
+        .map(|i| i.count())
+        .collect();
+    (pieces.iter().sum(), pieces.len())
+}
+
+#[tokio::test]
+async fn a_grant_goes_one_a_piece_or_in_legal_stacks_whole_or_not_at_all_and_a_unique_one_in_the_bank_counts()
+ {
+    use crate::game::map::inventory::{Fail, add_item};
+    let realm = harness::realm_with(with_goods(data()));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let got = on_map(&realm, move |m| {
+        // Three rings, each its own; forty-five stones, in twenties.
+        let rings = (add_item(m, g, RING, 3, false), holding(m, g, RING));
+        let stones = (add_item(m, g, STONES, 45, false), holding(m, g, STONES));
+        // The backpack filled but for a slot: twenty-one stones more want
+        // two, and none are given.
+        let free = m.players[&g]
+            .items
+            .iter()
+            .filter(|i| i.bag == BAG_PLAYER && (23..39).contains(&i.slot))
+            .count();
+        let fill = 16 - free - 1;
+        if fill > 0 {
+            add_item(m, g, RING, fill as u32, false).unwrap();
+        }
+        let before = holding(m, g, STONES);
+        let too_many = add_item(m, g, STONES, 41, false);
+        let after = holding(m, g, STONES);
+        // A unique trinket in the bank: no second one.
+        let data = m.realm.data.clone();
+        let counter = m
+            .realm
+            .next_item
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = m.players.get_mut(&g).unwrap();
+        p.items.push(Item::new(
+            &data,
+            guid::item(counter),
+            g,
+            TRINKET,
+            BAG_PLAYER,
+            crate::game::map::inventory::BANK_START,
+            1,
+        ));
+        let unique = (add_item(m, g, TRINKET, 1, false), holding(m, g, TRINKET));
+        (rings, stones, (before, too_many, after), unique)
+    })
+    .await;
+    let (rings, stones, (before, too_many, after), unique) = got;
+    assert_eq!(rings, (Ok(()), (3, 3)));
+    assert_eq!(stones, (Ok(()), (45, 3)));
+    assert!(matches!(too_many, Err(Fail::InventoryFull)), "{too_many:?}");
+    assert_eq!(before, after);
+    assert!(matches!(unique.0, Err(Fail::CantCarryMore)), "{unique:?}");
+    assert_eq!(unique.1, (1, 1));
+}
