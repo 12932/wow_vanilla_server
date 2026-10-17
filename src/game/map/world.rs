@@ -478,13 +478,11 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     let Some(p) = map.players.get(&guid) else {
         return;
     };
+    // Refused: the trigger's own message, if it has one.
     if (p.level() < tp.required_level || barred) && !p.gm {
-        let text = if tp.message.is_empty() {
-            format!("You must be level {} to enter.", tp.required_level)
-        } else {
-            tp.message.clone()
-        };
-        map.system_message(guid, &text);
+        if !tp.message.is_empty() {
+            crate::game::map::corpses::refuse(map, guid, tp.message.clone());
+        }
         return;
     }
     crate::game::map::corpses::revive_for_map(map, guid, tp.map);
@@ -524,6 +522,15 @@ pub const GO_SPELLCASTER: u8 = 22;
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
 pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
+    // Not one flagged against use, nor a door a copy's script works.
+    let inert = map.gameobject(object).is_some_and(|o| {
+        o.fields.get_u32(crate::game::fields::GAMEOBJECT_FLAGS)
+            & crate::game::map::objects::GO_FLAG_NO_INTERACT
+            != 0
+    });
+    if inert || crate::game::map::instance_script::scripted_door(map, object) {
+        return;
+    }
     if crate::game::map::battleground::use_object(map, player, object)
         || crate::game::map::outdoor_pvp::use_object(map, player, object)
     {
@@ -536,11 +543,25 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::objects::use_goober(map, player, object) {
         return;
     }
-    crate::game::map::scripts::object_used(map, player, object);
     // Near enough: by its model, for the objects measured so.
     if !crate::game::map::objects::in_use_range(map, player, object) {
         return;
     }
+    // A locked chest opens by its spell, not by a hand.
+    let gm = map.players.get(&player).is_some_and(|p| p.gm);
+    let locked_chest = map.gameobject(object).is_some_and(|o| {
+        o.kind == GO_CHEST
+            && map
+                .realm
+                .data
+                .gameobject_templates
+                .get(&o.entry)
+                .is_some_and(|t| t.data[0] != 0)
+    });
+    if locked_chest && !gm {
+        return;
+    }
+    crate::game::map::scripts::object_used(map, player, object);
     // A launcher by Elune's lake counts its fireworks; it launches them too.
     crate::game::omen::use_object(map, object);
     // Doors, traps, pages, rituals, spell casters; quest credit for a use.
@@ -572,7 +593,6 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
         GO_CHEST => {
             // A locked chest needs its key or skill (Phase 7); an open one
             // just opens.
-            let gm = map.players.get(&player).is_some_and(|p| p.gm);
             if lock == 0 || gm {
                 crate::game::map::loot::open_object(map, player, object);
             }
