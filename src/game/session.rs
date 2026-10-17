@@ -388,7 +388,13 @@ impl Session {
         let mended = self.realm.data.appearances.mend(row.race, row.gender, look);
         if mended != look {
             tracing::info!("{}'s look mended: {look:?} to {mended:?}", row.name);
-            (row.skin, row.face, row.hair_style, row.hair_color, row.facial_hair) = (
+            (
+                row.skin,
+                row.face,
+                row.hair_style,
+                row.hair_color,
+                row.facial_hair,
+            ) = (
                 mended.skin,
                 mended.face,
                 mended.hair_style,
