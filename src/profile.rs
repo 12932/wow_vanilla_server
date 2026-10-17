@@ -4,8 +4,11 @@
 //!
 //! `WVS_PPROF=<prefix>` profiles `WVS_PPROF_SECS` seconds (60), starting
 //! `WVS_PPROF_DELAY` seconds (0) after start-up, at `WVS_PPROF_HZ` (999),
-//! then writes `<prefix>.svg`, a flame graph, and `<prefix>.txt`, the
-//! functions with the most samples by self and by inclusive time.
+//! then writes `<prefix>.svg`, a flame graph, and `<prefix>.txt`: the
+//! samples by function and by line, by self time and charged to the
+//! server's own innermost line, and by inclusive time. SIGPROF comes at the
+//! kernel's tick, so a process gets about 100 samples a CPU-second,
+//! whatever the rate asked. See docs/PERFORMANCE.md.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
