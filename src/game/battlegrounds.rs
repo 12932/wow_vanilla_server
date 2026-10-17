@@ -132,7 +132,14 @@ impl Match {
         let since = self
             .began
             .map_or(0, |t| now.saturating_duration_since(t).as_millis() as u32);
-        status_frame_in(self.bracket, map_of(self.bg), self.id, IN_PROGRESS, leave, since)
+        status_frame_in(
+            self.bracket,
+            map_of(self.bg),
+            self.id,
+            IN_PROGRESS,
+            leave,
+            since,
+        )
     }
 
     fn count(&self, team: Team) -> usize {
@@ -266,9 +273,7 @@ pub fn instances(realm: &Realm, bg: u32, bracket: u8) -> Vec<u32> {
         .matches
         .values()
         .filter(|m| m.bg == bg && m.bracket == bracket && !m.ended)
-        .filter(|m| {
-            m.count(Team::Alliance) < max as usize || m.count(Team::Horde) < max as usize
-        })
+        .filter(|m| m.count(Team::Alliance) < max as usize || m.count(Team::Horde) < max as usize)
         .map(|m| m.id)
         .collect();
     out.sort_unstable();
@@ -372,13 +377,13 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
                 realm,
                 e.guid,
                 &status_frame_in(
-                bracket,
-                map_of(bg),
-                id,
-                WAIT_JOIN,
-                INVITE_FOR.as_millis() as u32,
-                0,
-            ),
+                    bracket,
+                    map_of(bg),
+                    id,
+                    WAIT_JOIN,
+                    INVITE_FOR.as_millis() as u32,
+                    0,
+                ),
             );
         }
     } else {
@@ -528,7 +533,11 @@ pub fn port(map: &mut Map, g: Guid, enter: bool) {
         if enter {
             m.members.insert(g, team);
         }
-        (m.key(), team, (m.bg, m.bracket, m.in_progress_frame(Instant::now())))
+        (
+            m.key(),
+            team,
+            (m.bg, m.bracket, m.in_progress_frame(Instant::now())),
+        )
     };
     if !enter {
         send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
@@ -605,6 +614,21 @@ pub fn leave(map: &mut Map, g: Guid) {
             Some(g),
         );
     }
+    // The dead and the ghosts go home alive and whole, their corpse gone
+    // (Thistle Tea's exit, as vmangos does it).
+    if map
+        .players
+        .get(&g)
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
+    {
+        crate::game::map::death::resurrect(map, g, 1.0);
+    }
+    crate::game::map::auras::remove_spell(
+        map,
+        g,
+        crate::game::map::battleground::SPELL_WAITING_TO_RESURRECT,
+        None,
+    );
     let back = map.players.get_mut(&g).and_then(|p| p.bg_return.take());
     if let Some((key, pos, o)) = back {
         map.teleport(g, key, pos, o);
@@ -618,6 +642,34 @@ pub fn leave(map: &mut Map, g: Guid) {
                 z: b.z,
             },
             0.0,
+        );
+    }
+}
+
+/// `g` arrived on `map` while still in a match elsewhere (a hearthstone,
+/// a teleport): they've left it, a deserter if it was still on (Thistle
+/// Tea's `world_left`).
+pub fn strayed(map: &mut Map, g: Guid) {
+    let realm = map.realm.clone();
+    let ended = {
+        let mut bgs = realm.social.battlegrounds.lock();
+        let Some(m) = bgs
+            .matches
+            .values_mut()
+            .find(|m| m.members.contains_key(&g) && m.key() != map.key)
+        else {
+            return;
+        };
+        m.members.remove(&g);
+        m.ended
+    };
+    send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
+    if !ended {
+        crate::game::map::spells::cast_triggered(
+            map,
+            g,
+            crate::game::map::battleground::SPELL_DESERTER,
+            Some(g),
         );
     }
 }

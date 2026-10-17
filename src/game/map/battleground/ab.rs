@@ -256,7 +256,7 @@ fn changed(map: &mut Map, node: usize, change: Change, by: Option<Guid>) {
         Change::Defended => format!("{actor} has defended the {name}!"),
         Change::Captured => format!("The {faction} has taken the {name}!"),
     };
-    bg::announce(map, Some(team), &text);
+    bg::announce_by(map, Some(team), &text, by.unwrap_or_default());
     let sound = match (change, point.assaulting, point.owner) {
         (Change::Claimed, _, _) => 8192,
         (Change::Assaulted, Some(0), _) => 8212,

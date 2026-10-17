@@ -263,3 +263,181 @@ async fn a_carrier_who_loses_the_flags_aura_or_leaves_drops_it() {
         Some(Flag::Dropped(_))
     ));
 }
+
+#[tokio::test]
+async fn one_who_leaves_dead_goes_home_alive_and_a_stray_from_the_match_is_a_deserter() {
+    let mut d = gulch();
+    marker(
+        &mut d,
+        crate::game::map::battleground::SPELL_WAITING_TO_RESURRECT,
+    );
+    marker(&mut d, crate::game::map::battleground::SPELL_DESERTER);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let grom = b.enter("Grom", Race::Orc, Class::Warrior).await;
+    let map = both_into(&realm, &mut a, &mut b, Map::WarsongGulch).await;
+    // Alice falls and releases: Waiting to Resurrect.
+    map.query(move |m| {
+        crate::game::map::death::kill(m, alice);
+        crate::game::map::death::release(m, alice);
+    })
+    .await;
+    let waiting = map
+        .query(move |m| {
+            m.players[&alice]
+                .auras
+                .has_spell(crate::game::map::battleground::SPELL_WAITING_TO_RESURRECT)
+        })
+        .await
+        .unwrap();
+    assert!(waiting);
+    // She leaves a ghost: home alive and whole, no corpse.
+    a.send(CMSG_LEAVE_BATTLEFIELD {
+        map: Map::WarsongGulch,
+    })
+    .await;
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(alice).await;
+    let home = realm.registry.online(alice).unwrap().map();
+    let (alive, corpse, full) = home
+        .query(move |m| {
+            let p = &m.players[&alice];
+            (
+                p.death == crate::game::map::death::Death::Alive,
+                p.row.state.corpse.is_some(),
+                p.fields.get_u32(crate::game::fields::UNIT_FIELD_HEALTH)
+                    == p.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!((alive, corpse, full), (true, false, true));
+    // Grom is sent out another way (a hearthstone, say): no longer in it,
+    // and a deserter.
+    map.query(move |m| {
+        m.teleport(
+            grom,
+            crate::game::map::MapKey::world(1),
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    })
+    .await;
+    b.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    b.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    b.sees(grom).await;
+    let mut member = true;
+    for _ in 0..100 {
+        member = realm.social.battlegrounds.lock().match_of(grom).is_some();
+        if !member {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!member);
+    let there = realm.registry.online(grom).unwrap().map();
+    let deserter = there
+        .query(move |m| {
+            m.players[&grom]
+                .auras
+                .has_spell(crate::game::map::battleground::SPELL_DESERTER)
+        })
+        .await
+        .unwrap();
+    assert!(deserter);
+}
+
+#[tokio::test]
+async fn alteracs_base_graveyard_is_a_choice_and_its_mines_supplies_are_their_holders() {
+    let mut d = super::tests_pvp::alterac();
+    // Stormpike Aid Station's graveyard, far off; the Alliance's own, near.
+    d.safe_locs.insert(751, (30, 500.0, 500.0, 0.0));
+    super::tests_pvp::banner(&mut d, 178785, 3);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Grom", Race::Orc, Class::Warrior).await;
+    let map = both_into(&realm, &mut a, &mut b, Map::AlteracValley).await;
+    let (grave, supplies) = map
+        .query(move |m| {
+            let grave = crate::game::map::battleground::av::graveyard(
+                m,
+                0,
+                Vector3d {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 0.0,
+                },
+            );
+            let t = m.realm.data.gameobject_templates[&178785].clone();
+            let at = m.players[&alice].position();
+            let mut go = crate::game::map::gameobject::GameObject::from_spawn(
+                &t,
+                &GameObjectSpawn {
+                    guid: 0x80_0201,
+                    entry: 178785,
+                    map: 30,
+                    x: at.x + 1.0,
+                    y: at.y,
+                    z: at.z,
+                    state: 1,
+                    ..Default::default()
+                },
+            );
+            go.spawn_guid = None;
+            (grave.map(|g| g.0), m.add_gameobject(go))
+        })
+        .await
+        .unwrap();
+    let grave = grave.expect("a graveyard");
+    assert!(grave.x.abs() < 0.01 && grave.y.abs() < 0.01, "{grave:?}");
+    // Irondeep is no one's: its supplies aren't Alice's.
+    let barred = map
+        .query(move |m| crate::game::map::battleground::av::supplies_barred(m, Some(0), supplies))
+        .await
+        .unwrap();
+    assert!(barred);
+    map.query(|m| {
+        m.battleground.as_mut().unwrap().av.as_mut().unwrap().mines[0].owner = Some(0);
+    })
+    .await;
+    let (alliance, horde) = map
+        .query(move |m| {
+            (
+                crate::game::map::battleground::av::supplies_barred(m, Some(0), supplies),
+                crate::game::map::battleground::av::supplies_barred(m, Some(1), supplies),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!((alliance, horde), (false, true));
+}
+
+#[test]
+fn alterac_has_one_bracket_and_the_status_says_which() {
+    use crate::game::battlegrounds::{bracket_for, status_frame_in};
+    assert_eq!(bracket_for(1, 51), 0);
+    assert_eq!(bracket_for(1, 60), 0);
+    assert_eq!(bracket_for(2, 60), 5);
+    assert_eq!(bracket_for(2, 25), 1);
+    // The bracket byte, after the queue slot and the map.
+    let frame = status_frame_in(3, 489, 7, 1, 0, 1234);
+    let body = &frame[4..];
+    assert_eq!(body[8], 3);
+    assert_eq!(&body[13..17], &1u32.to_le_bytes(), "waiting in the queue");
+    assert_eq!(&body[17..21], &0u32.to_le_bytes(), "no average wait");
+}
