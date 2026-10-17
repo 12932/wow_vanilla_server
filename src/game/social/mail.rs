@@ -679,3 +679,18 @@ pub fn sweep(realm: &Realm) {
         }
     }
 }
+
+/// A character deleted: the mail waiting for them goes.
+pub fn character_deleted(realm: &Realm, counter: u32) {
+    let mut mails = realm.social.mail.lock();
+    let gone: Vec<u32> = mails
+        .mails
+        .values()
+        .filter(|m| m.receiver == counter)
+        .map(|m| m.id)
+        .collect();
+    for id in gone {
+        mails.mails.remove(&id);
+        realm.store.delete_record(KIND_MAIL, u64::from(id));
+    }
+}
