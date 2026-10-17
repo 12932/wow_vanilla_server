@@ -1296,3 +1296,95 @@ async fn world_pvp_buffs_reach_their_dungeons() {
     realm.social.outdoor.lock().favor = None;
     assert!(comes_to(&ruins, g, FAVOR, false).await, "gone with it");
 }
+
+const RAPTOR: u32 = 900_400;
+
+/// The next dynamic flags `c` is told for `of`.
+async fn dynamic_flags(c: &mut Client, of: Guid) -> u32 {
+    c.wait_for("the creature's dynamic flags", |m| {
+        harness::values(m)
+            .into_iter()
+            .filter_map(|(g, mask)| match mask {
+                UpdateMask::Unit(u) if g == of => u.unit_dynamic_flags(),
+                _ => None,
+            })
+            .last()
+    })
+    .await as u32
+}
+
+/// A tapped creature is grey to all but its tapper and the tapper's group,
+/// each viewer's own (mangos-classic's per-viewer `UNIT_DYNAMIC_FLAGS`,
+/// Thistle Tea's `Visibility.Tap`); one who comes later sees it grey too,
+/// and it's no one's again when it evades.
+#[tokio::test]
+async fn a_tapped_creature_is_grey_to_all_but_its_tappers() {
+    const TAPPED: u32 = 0x4;
+    let mut d = GameData::empty();
+    let mut raptor = plain_creature(RAPTOR, "Raptor", 7);
+    raptor.speed_walk = 0.01;
+    raptor.speed_run = 0.01;
+    raptor.detection_range = 0.1;
+    d.creature_templates.insert(RAPTOR, raptor);
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 47,
+        entries: vec![RAPTOR],
+        map: 0,
+        x: START.0 + 8.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let (mut a, ga, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let (mut b, _gb, _) = enter(&realm, "B", "Bea", Race::Human, Class::Warrior).await;
+    let (mut c, _gc, _) = enter(&realm, "C", "Cid", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut c, "Cid").await;
+    let raptor = on(&map, |m| {
+        m.creatures
+            .iter()
+            .find(|(_, c)| c.entry == RAPTOR)
+            .map(|(_, c)| c.guid)
+    })
+    .await
+    .expect("the raptor");
+    for x in [&mut a, &mut b, &mut c] {
+        x.sees(raptor).await;
+        x.clear();
+    }
+    let tapped = on(&map, move |m| {
+        crate::game::map::ai::attacked(m, raptor, ga);
+        m.creature(raptor).and_then(|c| c.tapped_by)
+    })
+    .await;
+    assert_eq!(tapped, Some(ga), "tapped");
+    assert_ne!(
+        dynamic_flags(&mut b, raptor).await & TAPPED,
+        0,
+        "grey to another"
+    );
+    assert_eq!(
+        dynamic_flags(&mut a, raptor).await & TAPPED,
+        0,
+        "not to its tapper"
+    );
+    assert_eq!(
+        dynamic_flags(&mut c, raptor).await & TAPPED,
+        0,
+        "nor the tapper's group"
+    );
+    // One who comes later.
+    let (mut d, _gd, _) = enter(&realm, "D", "Dax", Race::Human, Class::Warrior).await;
+    d.sees(raptor).await;
+    assert_ne!(
+        dynamic_flags(&mut d, raptor).await & TAPPED,
+        0,
+        "grey to one who comes later"
+    );
+    on(&map, move |m| crate::game::map::ai::enter_evade(m, raptor)).await;
+    assert_eq!(
+        dynamic_flags(&mut b, raptor).await & TAPPED,
+        0,
+        "no one's when it evades"
+    );
+}
