@@ -161,6 +161,35 @@ fn data() -> GameData {
     q.required_items[0] = (SCALE, 2);
     q.rewards[0] = (PELT, 1);
     add(&mut d, q);
+    // A condition there is no row for; chains to a quest whose condition
+    // fails, to one that may be had, and to one given elsewhere.
+    add(&mut d, quest(85));
+    add(
+        &mut d,
+        Quest {
+            next_in_chain: 87,
+            ..quest(86)
+        },
+    );
+    add(&mut d, quest(87));
+    add(
+        &mut d,
+        Quest {
+            next_in_chain: 89,
+            ..quest(88)
+        },
+    );
+    add(&mut d, quest(89));
+    add(
+        &mut d,
+        Quest {
+            next_in_chain: 96,
+            ..quest(95)
+        },
+    );
+    d.npc.quests.insert(96, quest(96));
+    d.scripts.quest_condition.insert(85, 999);
+    d.scripts.quest_condition.insert(87, LEVEL_FIVE);
     // Starters and the items quests give.
     let mut q = quest(70);
     q.source_item = MAP;
@@ -1698,4 +1727,56 @@ async fn quests_wait_on_what_they_depend_on() {
         skill,
         vec![[false, true], [false, true], [true, true], [true, true]]
     );
+}
+
+/// Thistle Tea's `RequiredCondition` at acceptance: a quest's details from
+/// its giver whatever its condition, but not taken (DontHaveReq, then the
+/// dialog closes) unless forced; once in the log, turned in whatever it;
+/// a chain's next offered only if its condition holds and the giver gives
+/// it.
+#[tokio::test]
+async fn a_quests_condition_gates_taking_it_not_turning_it_in() {
+    let (realm, mut a, g) = setup().await;
+    assert_eq!(details(&mut a, giver(), 85).await, (1, false), "details");
+    a.clear();
+    accept(&a, 85).await;
+    let why = a
+        .wait_for("SMSG_QUESTGIVER_QUEST_INVALID", |m| match m {
+            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(i) => Some(i.msg),
+            _ => None,
+        })
+        .await;
+    assert_eq!(why, QuestFailedReason::DontHaveReq);
+    a.wait_for("SMSG_GOSSIP_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+    })
+    .await;
+    assert!(!on_map(&realm, move |m| m.players[&g].journal.has(85)).await);
+    a.say(".addquest 85").await;
+    in_log(&realm, g, 85).await;
+    assert!(offered(&mut a, 85).await, "turned in all the same");
+    assert!(rewarded(&mut a, 85).await);
+    // The chains.
+    let mut next = Vec::new();
+    for (first, then) in [(86, 87), (88, 89), (95, 96)] {
+        accept(&a, first).await;
+        in_log(&realm, g, first).await;
+        a.clear();
+        a.raw.clear();
+        assert!(rewarded(&mut a, first).await);
+        next.push((then, details_shown(&a, then)));
+    }
+    assert_eq!(next, vec![(87, false), (89, true), (96, false)]);
+}
+
+/// Whether `quest`'s details are among what `a` has had and not looked
+/// at, parsed or not.
+fn details_shown(a: &Client, quest: u32) -> bool {
+    let opcode = quests::SMSG_QUESTGIVER_QUEST_DETAILS_OPCODE;
+    a.raw.iter().any(|f| {
+        u16::from_le_bytes([f[2], f[3]]) == opcode
+            && u32::from_le_bytes(f[12..16].try_into().unwrap()) == quest
+    }) || a.backlog.iter().any(|m| {
+        matches!(m, ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d) if d.quest_id == quest)
+    })
 }
