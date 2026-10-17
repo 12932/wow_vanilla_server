@@ -1849,6 +1849,7 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
                 prev: c.u32("prev_spell"),
                 first: c.u32("first_spell"),
                 rank: c.u32("rank"),
+                req: c.u32("req_spell"),
             },
         )
     }) {
