@@ -1434,8 +1434,14 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     let items = outcome::death_items(map, target, left);
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
-        // Its threat is of its school (Thistle Tea's periodic damage's).
+        // Its threat is of its school, and has the spell's threat
+        // modifiers (Shadow Affinity), as Thistle Tea's periodic damage's.
+        let by_mods = mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0;
+        let threat = left as f32 * combat::threat_multiplier(map, h.caster, h.school);
         combat::deal_damage_by(map, h.caster, target, left, h.school, Some(h.spell));
+        if (by_mods - 1.0).abs() > f32::EPSILON && map.creature(target).is_some_and(|c| c.alive()) {
+            crate::game::map::ai::add_threat(map, target, h.caster, threat * (by_mods - 1.0));
+        }
     }
     outcome::give_death_items(map, target, items);
     if leech {
