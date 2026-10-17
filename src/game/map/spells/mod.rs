@@ -613,6 +613,11 @@ fn execute(
             {
                 p.mana_spent_at = Some(now);
             }
+            if index == 0
+                && let Some(c) = map.creature_mut(caster)
+            {
+                c.engagement.mana_spent_at = Some(now);
+            }
         }
         let gm = map.players.get(&caster).is_some_and(|p| p.gm);
         for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
