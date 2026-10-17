@@ -421,8 +421,9 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
 }
 
 /// A proc aura's damage, as Thistle Tea's `ProcDamage` makes it: a school
-/// damage spell of its own effect's points with its spell power share, its
-/// hit rolled, never a crit or reflected.
+/// damage spell of its own effect's points with its spell power share,
+/// never a crit or reflected. Its hit is rolled only for a harmful magic
+/// aura's.
 fn proc_damage(map: &mut Map, owner: Guid, other: Guid, h: &Holder, index: usize, amount: i32) {
     let data = map.realm.data.clone();
     let Some(t) = data.spells.get(h.spell).filter(|_| index < 3) else {
@@ -441,6 +442,13 @@ fn proc_damage(map: &mut Map, owner: Guid, other: Guid, h: &Holder, index: usize
     s.attributes[0] &= !sd::ATTR_PASSIVE;
     s.attributes[1] |= sd::ATTR_EX_NO_REFLECTION;
     s.attributes[2] |= sd::ATTR_EX2_CANT_CRIT;
+    // A helpful aura's damage (Holy Shield's, Blessing of Sanctuary's), or
+    // one not of magic (a shield spike's), can't miss, though immunities
+    // still keep it off: Thistle Tea's `ProcDamage.hit?`, and mangos's
+    // `SpellHitResult` with the aura's own spell.
+    if t.dmg_class != 1 || auras::positive(t) {
+        s.attributes[3] |= sd::ATTR_EX3_ALWAYS_HIT;
+    }
     s.speed = 0.0;
     crate::game::map::spells::scripts::cast_template_with_points(
         map,
