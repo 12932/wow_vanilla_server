@@ -813,3 +813,75 @@ async fn bank_slots_are_bought_and_refused_with_their_results() {
         "not a banker"
     );
 }
+
+/// Thistle Tea's smsg_defense_message_test: a Plaguelands tower taken is
+/// told to the continent as its zone, its text's length with the
+/// terminator, and the text.
+#[tokio::test]
+async fn a_tower_taken_is_told_as_a_defense_message() {
+    use std::time::{Duration, Instant};
+    let mut d = GameData::empty();
+    let mut t = GameObjectTemplate {
+        entry: 182096,
+        kind: 29,
+        display_id: 1,
+        size: 1.0,
+        name: "Crown Guard".into(),
+        ..Default::default()
+    };
+    for (i, v) in [
+        (0, 80),
+        (2, 2426),
+        (3, 2427),
+        (12, 20),
+        (13, 2428),
+        (16, 480),
+        (17, 1200),
+    ] {
+        t.data[i] = v;
+    }
+    d.gameobject_templates.insert(182096, t);
+    d.npc.broadcast_texts.insert(
+        13632,
+        crate::game::data::npc::BroadcastText {
+            male: "Tower captured!".into(),
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    a.send(CMSG_TOGGLE_PVP {
+        set: Some(CMSG_TOGGLE_PVP_set { enable_pvp: true }),
+    })
+    .await;
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.movement.position = Vector3d {
+            x: 1860.0,
+            y: -3730.0,
+            z: 196.7,
+        };
+        p.zone = crate::game::map::outdoor_pvp::PLAGUELANDS;
+    })
+    .await;
+    a.wait_for("the slider", |m| match m {
+        ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => {
+            (w.state.state == 2426 && w.state.value == 1).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    map.query(|m| {
+        let o = m.outdoor.as_mut().unwrap();
+        o.last_tick = Some(Instant::now() - Duration::from_secs(600));
+        o.next_tick = Some(Instant::now());
+    })
+    .await;
+    let told = a.wait_frame("SMSG_DEFENSE_MESSAGE", 0x33B, |_| true).await;
+    let mut want = 139u32.to_le_bytes().to_vec();
+    want.extend_from_slice(&16u32.to_le_bytes());
+    want.extend_from_slice(b"Tower captured!\0");
+    assert_eq!(told, want);
+}

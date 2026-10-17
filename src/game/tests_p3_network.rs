@@ -1305,3 +1305,18 @@ async fn afk_and_dnd_go_on_change_and_go_off_as_the_client_says() {
         assert_eq!(on_map(&realm, flags).await, want, "{text:?}");
     }
 }
+
+/// Thistle Tea's cmsg_gmticket_create_test: asked for a ticket with none
+/// open, the help frame is told the bare default status, 10.
+#[tokio::test]
+async fn no_ticket_is_the_bare_default_status() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.clear();
+    a.send(CMSG_GMTICKET_GETTICKET {}).await;
+    let status = a
+        .wait_frame("SMSG_GMTICKET_GETTICKET", 0x212, |_| true)
+        .await;
+    assert_eq!(status, 0x0Au32.to_le_bytes().to_vec());
+}
