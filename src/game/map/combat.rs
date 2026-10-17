@@ -1759,6 +1759,13 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     } else {
         left
     };
+    // A priest with Spirit of Redemption becomes a spirit instead.
+    if left == 0 && crate::game::map::spells::redemption::saves(map, victim) {
+        return;
+    }
+    let Some(f) = map.unit_fields_mut(victim) else {
+        return;
+    };
     f.set_u32(UNIT_FIELD_HEALTH, left);
     sync_aura_state(map, victim);
     if left == 0 {
