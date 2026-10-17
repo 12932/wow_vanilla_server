@@ -422,6 +422,9 @@ pub fn check(
         if let Some(r) = crate::game::map::professions::check(map, caster, s, t, item) {
             return Some(r);
         }
+        if let Some(r) = crate::game::map::professions::fishing_spot(map, caster, s) {
+            return Some(r);
+        }
         // Power, reagents, tools, focus, gear.
         let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
         if cost > 0 {

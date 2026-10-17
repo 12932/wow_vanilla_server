@@ -1522,6 +1522,7 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
         p.outbound.send(&MSG_CHANNEL_UPDATE_Server { time: 0 });
     }
     crate::game::map::objects::channel_ended(map, g, casting.spell);
+    crate::game::map::professions::line_ended(map, g);
 }
 
 /// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a

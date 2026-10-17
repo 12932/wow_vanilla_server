@@ -1692,3 +1692,294 @@ async fn a_picked_chest_raises_the_skill_once_a_spawn_shows_as_opened_and_goes_w
     .await;
     assert_eq!(gone, (true, 1));
 }
+
+// Fishing, line by line with Thistle Tea.
+
+const FISHING: u32 = 7620;
+const BOBBER: u32 = 35_591;
+const SCHOOL: u32 = 900_800;
+const SCHOOL_LOOT: u32 = 900_801;
+const FISH: u32 = 900_802;
+static NAV: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| harness::real_data("nav"));
+/// Open water, ten yards deep, west of Elwynn.
+const LAKE: (f32, f32, f32) = (-10_100.0, 460.0, 21.0);
+
+fn fishing_data() -> GameData {
+    use crate::game::data::{GameObjectSpawn, GameObjectTemplate, LootEntry};
+    let mut d = data();
+    let mut fishing = create_item(FISHING, 0, 0);
+    fishing.attributes[1] = 0x4;
+    fishing.effects[0] = SpellEffect {
+        effect: 50,
+        misc_value: BOBBER as i32,
+        target_a: 39,
+        ..Default::default()
+    };
+    d.spells.spells.insert(FISHING, fishing);
+    for (entry, kind) in [(BOBBER, 17u8), (SCHOOL, 25)] {
+        let mut t = GameObjectTemplate {
+            entry,
+            kind,
+            display_id: 668,
+            name: format!("Object {entry}"),
+            size: 1.0,
+            ..Default::default()
+        };
+        if entry == SCHOOL {
+            // Thirty yards about it, two to four catches.
+            t.data[0] = 30;
+            t.data[1] = SCHOOL_LOOT;
+            t.data[2] = 2;
+            t.data[3] = 4;
+        }
+        d.gameobject_templates.insert(entry, t);
+    }
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 90,
+            entry: SCHOOL,
+            map: 0,
+            x: START.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            respawn_min: 300,
+            ..Default::default()
+        }],
+    );
+    let fish = vec![LootEntry {
+        item: FISH,
+        chance: 100.0,
+        min: 1,
+        max: 1,
+        ..Default::default()
+    }];
+    d.loot.gameobject.insert(SCHOOL_LOOT, fish.clone());
+    d.loot.fishing.insert(0, fish);
+    d.crafts.fishing_skill.insert(0, -100);
+    d.items.insert(
+        FISH,
+        ItemTemplate {
+            entry: FISH,
+            name: "Fish".into(),
+            stackable: 20,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// A fisher, and their first line's bobber.
+fn cast_a_line(m: &mut Map, g: Guid) -> Option<Guid> {
+    if let Some(p) = m.players.get_mut(&g) {
+        crate::game::map::skills::learn_skill(p, 356, 1);
+    }
+    cast(m, g, FISHING, Default::default());
+    m.loot_state
+        .bobbers
+        .iter()
+        .find(|b| b.owner == g)
+        .map(|b| b.guid)
+}
+
+#[tokio::test]
+async fn a_line_lasts_its_bite_and_comes_out_with_its_channel() {
+    let realm = harness::realm_with(fishing_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.clear();
+    let bobber = on_map(&realm, move |m| cast_a_line(m, g)).await.unwrap();
+    // The channel is the bite's time and the catch's five seconds.
+    let lasts = a
+        .wait_for("MSG_CHANNEL_UPDATE", |m| match m {
+            ServerOpcodeMessage::MSG_CHANNEL_UPDATE(u) if u.time != 0 => Some(u.time),
+            _ => None,
+        })
+        .await;
+    assert!([18_000, 22_000, 28_000, 32_000].contains(&lasts), "{lasts}");
+    // Cancelled: the line comes out, nothing said of a fish.
+    a.send(CMSG_CANCEL_CHANNELLING { id: FISHING }).await;
+    fence(&mut a).await;
+    let out = on_map(&realm, move |m| {
+        m.gameobject(bobber).is_none() && m.loot_state.bobbers.is_empty()
+    })
+    .await;
+    assert!(out, "the bobber goes with the channel");
+    assert!(
+        a.gets(Duration::ZERO, |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_FISH_NOT_HOOKED).then_some(())
+        })
+        .await
+        .is_none()
+    );
+    // Left till its time: not hooked.
+    on_map(&realm, move |m| {
+        cast_a_line(m, g);
+        for b in m.loot_state.bobbers.iter_mut() {
+            b.bitten = true;
+            b.gone_at = m.now;
+        }
+        crate::game::map::professions::respawn_nodes(m);
+    })
+    .await;
+    a.wait_for("SMSG_FISH_NOT_HOOKED", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_FISH_NOT_HOOKED).then_some(())
+    })
+    .await;
+    // Caught, the window closed with the fish left: the bobber goes.
+    let bobber = on_map(&realm, move |m| {
+        let bobber = cast_a_line(m, g).unwrap();
+        for b in m.loot_state.bobbers.iter_mut() {
+            b.bitten = true;
+        }
+        bobber
+    })
+    .await;
+    a.send(CMSG_GAMEOBJ_USE { guid: bobber }).await;
+    a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await;
+    a.send(CMSG_LOOT_RELEASE { guid: bobber }).await;
+    fence(&mut a).await;
+    assert!(on_map(&realm, move |m| m.gameobject(bobber).is_none()).await);
+}
+
+#[tokio::test]
+async fn a_school_of_fish_holds_between_its_least_and_most_catches() {
+    let realm = harness::realm_with(fishing_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let rounds = on_map(&realm, move |m| {
+        let mut rounds = Vec::new();
+        for _ in 0..12 {
+            let mut catches = 0;
+            while m.gameobjects.iter().any(|(_, o)| o.entry == SCHOOL) && catches < 10 {
+                let bobber = cast_a_line(m, g).unwrap();
+                for b in m.loot_state.bobbers.iter_mut() {
+                    b.bitten = true;
+                }
+                crate::game::map::professions::use_object(m, g, bobber);
+                crate::game::map::loot::release(m, g, bobber);
+                catches += 1;
+            }
+            rounds.push(catches);
+            // Back at once, for the next round.
+            for r in m.loot_state.respawns.iter_mut() {
+                r.0 = m.now;
+            }
+            crate::game::map::professions::respawn_nodes(m);
+        }
+        rounds
+    })
+    .await;
+    assert!(rounds.iter().all(|n| (2..=4).contains(n)), "{rounds:?}");
+    assert!(
+        rounds.iter().any(|n| *n != 4),
+        "not always the most: {rounds:?}"
+    );
+}
+
+/// A realm with the real navmesh; `None` without it.
+fn nav_realm() -> Option<Arc<Realm>> {
+    if !NAV.as_path().join("Azeroth.map").exists() {
+        return None;
+    }
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(NAV.clone());
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Some(Realm::new(cfg, store, startup, fishing_data(), None))
+}
+
+#[tokio::test]
+async fn a_line_lands_only_in_water_and_fishes_the_waters_zone() {
+    let Some(realm) = nav_realm() else {
+        return;
+    };
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // Where on the lake every cast lands in water: a spot with deep water
+    // all round, to twenty-five yards.
+    let found = on_map(&realm, move |m| {
+        let nav = m.nav.as_mut().unwrap();
+        let (x, y, z) = LAKE;
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                let at = (x + dx as f32 * 10.0, y + dy as f32 * 10.0);
+                let deep = (0..16).all(|k| {
+                    let a = k as f32 * std::f32::consts::PI / 8.0;
+                    [0.0f32, 10.0, 15.0, 20.0, 25.0].iter().all(|r| {
+                        let p = Vector3d {
+                            x: at.0 + r * a.cos(),
+                            y: at.1 + r * a.sin(),
+                            z: z + 30.0,
+                        };
+                        nav.liquid_surface(p).is_some_and(|s| {
+                            nav.floor_under(p.x, p.y, s).is_some_and(|f| s - f >= 2.0)
+                        })
+                    })
+                });
+                if deep {
+                    let surface = nav
+                        .liquid_surface(Vector3d {
+                            x: at.0,
+                            y: at.1,
+                            z: z + 30.0,
+                        })
+                        .unwrap();
+                    return Some(Vector3d {
+                        x: at.0,
+                        y: at.1,
+                        z: surface,
+                    });
+                }
+            }
+        }
+        None
+    })
+    .await;
+    let Some(spot) = found else {
+        panic!("no open water on the lake");
+    };
+    // In the lake, standing off in the wrong zone: the line lands on the
+    // water, and the water's zone is fished.
+    let landed = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.movement.position = spot;
+        p.zone = 1;
+        p.area = 1;
+        let bobber = cast_a_line(m, g)?;
+        let b = m
+            .loot_state
+            .bobbers
+            .iter()
+            .find(|b| b.guid == bobber)?
+            .clone();
+        let at = m.gameobject(bobber)?.position;
+        let water = crate::game::map::world::zone_and_area(m, at);
+        Some((at.z, b.zone, b.area, water))
+    })
+    .await
+    .expect("a line in the lake");
+    let (z, zone, area, water) = landed;
+    assert!((z - spot.z).abs() < 1.0, "on the surface: {z} {}", spot.z);
+    assert_eq!(Some((zone, area)), water);
+    assert_ne!(zone, 1);
+    // On Goldshire's dry road: not fishable.
+    a.clear();
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.movement.position = Vector3d {
+            x: -9460.0,
+            y: 62.0,
+            z: 56.0,
+        };
+        for b in m.loot_state.bobbers.clone() {
+            m.remove_gameobject(b.guid);
+        }
+        m.loot_state.bobbers.clear();
+        m.players.get_mut(&g).unwrap().caster.casting = None;
+        cast(m, g, FISHING, Default::default());
+    })
+    .await;
+    assert_eq!(failed(&mut a, FISHING).await, 0x34);
+}

@@ -109,6 +109,17 @@ impl Nav {
             .min_by(|a, b| (a - z_hint).abs().total_cmp(&(b - z_hint).abs()))
     }
 
+    /// The highest ground at `(x, y)` no higher than `z`.
+    pub fn floor_under(&mut self, x: f32, y: f32, z: f32) -> Option<f32> {
+        self.ensure(x, y);
+        let heights = self.map.find_heights(x, y).ok()?;
+        heights
+            .iter()
+            .copied()
+            .filter(|h| *h <= z)
+            .max_by(|a, b| a.total_cmp(b))
+    }
+
     /// The liquid a WMO holds at a point: its entry (1 water, 2 ocean, 3
     /// magma, 4 slime, 21 Naxxramas slime), its surface and the floor under
     /// it.

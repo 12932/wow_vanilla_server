@@ -177,6 +177,11 @@ pub struct MapLoot {
     /// Creatures whose pockets are picked this life.
     pub picked: AHashSet<Guid>,
     pub bobbers: Vec<crate::game::map::professions::Bobber>,
+    /// Where each player's line will land, chosen as the cast began.
+    pub fishing_spots: ahash::AHashMap<Guid, wow_world_messages::vanilla::Vector3d>,
+    /// How many catches a school of fish holds this spawn, rolled at its
+    /// first.
+    pub hole_uses: ahash::AHashMap<Guid, u32>,
     /// Loot on an item: a disenchanted one, an opened container.
     pub item_loot: ahash::AHashMap<Guid, Loot>,
 }
@@ -1127,7 +1132,12 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
         if empty && kind == LootKind::Corpse {
             crate::game::map::professions::corpse_looted(map, target);
         }
-    } else if empty {
+    } else if empty
+        || map
+            .gameobject(target)
+            .is_some_and(|o| o.kind == crate::game::map::professions::GO_FISHING_NODE)
+    {
+        // A bobber goes with its window, caught or left (Thistle Tea's).
         crate::game::map::professions::object_looted(map, player, target);
     }
 }
