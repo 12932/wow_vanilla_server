@@ -1244,3 +1244,200 @@ async fn bank_slots_are_bought_for_their_prices() {
     );
     assert_eq!(on_map(&realm, state).await, (6, 139_000));
 }
+
+const CLAM: u32 = 9330;
+const MEAT: u32 = 9331;
+const LOCKBOX: u32 = 9332;
+const SACK: u32 = 9333;
+const FEAR: u32 = 900_620;
+
+fn container_data() -> GameData {
+    let mut d = data();
+    for (entry, lock, slots) in [(CLAM, 0, 0), (LOCKBOX, 5, 0), (SACK, 0, 6)] {
+        let mut t = item(entry);
+        t.flags = crate::game::map::items_misc::ITEM_FLAG_LOOTABLE;
+        t.lock_id = lock;
+        t.container_slots = slots;
+        t.min_money_loot = 25;
+        t.max_money_loot = 25;
+        d.items.insert(entry, t);
+    }
+    d.items.get_mut(&SACK).unwrap().class = 1;
+    let mut meat = item(MEAT);
+    meat.stackable = 20;
+    d.items.insert(MEAT, meat);
+    for entry in [CLAM, LOCKBOX] {
+        d.loot.item.insert(
+            entry,
+            vec![LootEntry {
+                item: MEAT,
+                chance: 100.0,
+                min: 2,
+                max: 2,
+                ..Default::default()
+            }],
+        );
+    }
+    let mut fear = crate::game::data::spells::SpellTemplate {
+        id: FEAR,
+        name: "Fear".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    fear.effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_MOD_FEAR,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(FEAR, fear);
+    d
+}
+
+/// Where an item of the player's is.
+async fn place_of(realm: &Arc<Realm>, g: Guid, item: Guid) -> (u8, u8) {
+    on_map(realm, move |m| at(m, g, item).map(|(b, s, _)| (b, s)))
+        .await
+        .unwrap()
+}
+
+/// `CMSG_OPEN_ITEM` on `item`: the window's gold and items, or the
+/// inventory failure.
+async fn open(a: &mut Client, realm: &Arc<Realm>, item: Guid) -> Result<(u32, Vec<u32>), u8> {
+    let (bag, slot) = place_of(realm, a.guid, item).await;
+    a.clear();
+    a.send(CMSG_OPEN_ITEM {
+        bag_index: bag,
+        slot,
+    })
+    .await;
+    let b = a
+        .wait_frame_of(
+            "a window or a failure",
+            &[crate::game::map::loot::SMSG_LOOT_RESPONSE, 0x112],
+            |_| true,
+        )
+        .await;
+    if b.len() == 18 {
+        return Err(b[0]);
+    }
+    let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+    let items = (0..usize::from(b[13]))
+        .map(|n| u32_at(14 + n * 22 + 1))
+        .collect();
+    Ok((u32_at(9), items))
+}
+
+/// Thistle Tea's `ItemOpening`: not an item with nothing in it, a bag, a
+/// lockbox not unlocked; not by the dead or the feared; what doesn't fit
+/// stays in it, its gold too till taken, and it opens again with what was
+/// left; gone, its window takes nothing.
+#[tokio::test]
+async fn a_container_keeps_what_is_left_in_it() {
+    use InventoryResult as R;
+    let realm = harness::realm_with(container_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let plain = give(&realm, g, TRINKET, 1).await;
+    assert_eq!(
+        open(&mut a, &realm, plain).await,
+        Err(R::CantDoRightNow.as_int())
+    );
+    let sack = give(&realm, g, SACK, 1).await;
+    assert_eq!(
+        open(&mut a, &realm, sack).await,
+        Err(R::CantDoRightNow.as_int()),
+        "a bag"
+    );
+    let lockbox = give(&realm, g, LOCKBOX, 1).await;
+    assert_eq!(
+        open(&mut a, &realm, lockbox).await,
+        Err(R::ItemLocked.as_int())
+    );
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.item_by_guid(lockbox).unwrap();
+        p.items[i].fields.set_u32(
+            ITEM_FIELD_FLAGS,
+            crate::game::map::items_misc::ITEM_DYNFLAG_UNLOCKED,
+        );
+    })
+    .await;
+    assert_eq!(
+        open(&mut a, &realm, lockbox).await,
+        Ok((25, vec![MEAT])),
+        "unlocked"
+    );
+    let clam = give(&realm, g, CLAM, 1).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().death = crate::game::map::death::Death::Dead {
+            since: std::time::Instant::now(),
+        };
+    })
+    .await;
+    assert_eq!(
+        open(&mut a, &realm, clam).await,
+        Err(R::YouAreDead.as_int())
+    );
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().death = crate::game::map::death::Death::Alive;
+        let fear = m.realm.data.spells.get(FEAR).cloned().unwrap();
+        crate::game::map::auras::apply_spell(m, g, g, &fear, &[(0, 0)], Default::default())
+            .unwrap();
+    })
+    .await;
+    assert_eq!(
+        open(&mut a, &realm, clam).await,
+        Err(R::CantDoRightNow.as_int()),
+        "feared"
+    );
+    on_map(&realm, move |m| {
+        crate::game::map::auras::remove_where(m, g, |h| h.spell == FEAR);
+    })
+    .await;
+    // Full bags: the meat stays; the gold is taken; opened again, the meat
+    // is there still, and no gold.
+    fill(&realm, g).await;
+    assert_eq!(open(&mut a, &realm, clam).await, Ok((25, vec![MEAT])));
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_MONEY {}).await;
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    handled(&mut a).await;
+    assert_eq!(
+        open(&mut a, &realm, clam).await,
+        Ok((0, vec![MEAT])),
+        "what was left"
+    );
+    on_map(&realm, move |m| {
+        let i = m.players[&g]
+            .items
+            .iter()
+            .position(|i| i.entry == FILLER)
+            .unwrap();
+        crate::game::map::inventory::take_item(m, g, i, 1);
+    })
+    .await;
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    handled(&mut a).await;
+    let emptied = on_map(&realm, move |m| {
+        (at(m, g, clam), m.players[&g].count_of(MEAT))
+    })
+    .await;
+    assert_eq!(emptied, (None, 2), "the meat, and the clam used up");
+    // A clam gone while open gives nothing.
+    let other = give(&realm, g, CLAM, 1).await;
+    assert!(open(&mut a, &realm, other).await.is_ok());
+    on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        let i = p.item_by_guid(other).unwrap();
+        crate::game::map::inventory::take_item(m, g, i, 1);
+    })
+    .await;
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    handled(&mut a).await;
+    assert_eq!(
+        on_map(&realm, move |m| m.players[&g].count_of(MEAT)).await,
+        2
+    );
+}
