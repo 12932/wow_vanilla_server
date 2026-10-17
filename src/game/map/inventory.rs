@@ -552,6 +552,14 @@ fn store(
             .next_item
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut item = Item::new(&data, guid::item(counter), g, entry, bag, slot, n);
+        // Each new item its random property: the loot's, else one rolled
+        // for it, a quest's reward or a purchase too (mangos's
+        // `GenerateItemRandomPropertyId` at `StoreNewItem`).
+        let property = if property != 0 {
+            property
+        } else {
+            crate::game::map::enchant::roll_random_property(&data, entry, &mut rand::rng())
+        };
         if property != 0 {
             crate::game::map::enchant::set_random_property(&data, &mut item, property);
         }

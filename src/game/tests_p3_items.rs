@@ -1753,3 +1753,59 @@ fn a_random_property_is_picked_by_its_share() {
     assert_eq!(select_property(&[], 0.5), None);
     assert_eq!(select_property(&[(1, 0.0)], 0.5), None);
 }
+
+const SUFFIXED: u32 = 9350;
+
+/// Thistle Tea's `Items.give/3` and vendor purchases (mangos's
+/// `StoreNewItem` with `GenerateItemRandomPropertyId`): each new item of a
+/// template with random properties has one rolled, bought or given, and
+/// the push says which.
+#[tokio::test]
+async fn every_new_item_has_its_random_property_rolled() {
+    let mut d = data();
+    let mut t = item(SUFFIXED);
+    t.random_property = 77;
+    d.items.insert(SUFFIXED, t);
+    d.crafts.random_pools.insert(77, vec![(1182, 100.0)]);
+    d.vendors.get_mut(&VENDOR).unwrap().push(VendorItem {
+        slot: 2,
+        item: SUFFIXED,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(vendor_guid()).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1000)
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_BUY_ITEM {
+        vendor: vendor_guid(),
+        item: SUFFIXED,
+        amount: 1,
+        unknown1: 0,
+    })
+    .await;
+    let pushed = a
+        .wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) if r.item == SUFFIXED => {
+                Some(r.item_random_property_id)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(pushed, 1182, "the purchase's");
+    let given = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, SUFFIXED, 2, false).unwrap();
+        m.players[&g]
+            .items
+            .iter()
+            .filter(|i| i.entry == SUFFIXED)
+            .map(|i| i.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID))
+            .collect::<Vec<_>>()
+    })
+    .await;
+    assert_eq!(given, vec![1182, 1182, 1182], "each one");
+}
