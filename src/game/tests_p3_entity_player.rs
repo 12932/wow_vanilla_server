@@ -584,3 +584,76 @@ async fn a_dead_passenger_rises_as_the_ship_crosses() {
     assert!(alive, "she rose with the crossing");
     assert!(whole, "whole");
 }
+
+/// Thistle Tea's "moves global ship visibility between maps" and
+/// "validates boarding, derives world coordinates, and tracks departure":
+/// everyone on a ship's map knows it, and as it crosses those it leaves
+/// forget it and those it comes to are told of it; a passenger who stepped
+/// off before isn't carried.
+#[tokio::test]
+async fn a_ship_is_known_on_its_map_and_carries_only_who_is_aboard() {
+    let realm = harness::realm_with(boat_world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let boat = crate::game::guid::make(crate::game::guid::HighGuid::MoTransport, 0, BOAT);
+    b.say(".go xyz 1629 -4373 31 1").await;
+    b.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    b.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    b.sees(gb).await;
+    // Alice steps aboard, then off again.
+    let deck = |on: bool| MSG_MOVE_HEARTBEAT_Client {
+        info: MovementInfo {
+            flags: if on {
+                MovementInfo_MovementFlags::empty().set_on_transport(
+                    MovementInfo_MovementFlags_OnTransport {
+                        transport: TransportInfo {
+                            guid: boat,
+                            position: Vector3d {
+                                x: 1.0,
+                                y: 0.0,
+                                z: 0.0,
+                            },
+                            orientation: 0.0,
+                            timestamp: 0,
+                        },
+                    },
+                )
+            } else {
+                MovementInfo_MovementFlags::empty()
+            },
+            timestamp: 0,
+            position: Vector3d {
+                x: START.0 + 1.0,
+                y: START.1,
+                z: START.2,
+            },
+            orientation: 0.0,
+            fall_time: 0.0,
+        },
+    };
+    a.sees(boat).await;
+    a.send(deck(true)).await;
+    a.send(deck(false)).await;
+    a.send(CMSG_QUERY_TIME {}).await;
+    a.wait_for("SMSG_QUERY_TIME_RESPONSE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(_)).then_some(())
+    })
+    .await;
+    // The boat goes to Kalimdor: Alice forgets it, Bob is told of it.
+    b.sees(boat).await;
+    a.forgets(boat).await;
+    assert!(
+        a.gets(NONE_WITHIN, |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+        })
+        .await
+        .is_none(),
+        "off the deck, she stays behind"
+    );
+    assert_eq!(realm.registry.online(ga).unwrap().map().key.map, 0);
+}
