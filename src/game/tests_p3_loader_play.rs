@@ -462,7 +462,8 @@ async fn real_teleports_to_a_caster_land_where_their_targets_say() {
 /// teaches a sixtieth-level character their trainers' spells and their
 /// class quests' (the warlock's demons, the hunter's pet spells, the
 /// shaman's totems, the druid's forms), but no talent nor a talent's
-/// trained rank (Mortal Strike's) to one without the talent.
+/// trained rank (Mortal Strike's) to one without the talent, and those
+/// ranks to one with it.
 #[tokio::test]
 async fn debug_spells_teach_trainers_and_class_quests_but_no_talents() {
     if !have_data() {
@@ -519,6 +520,22 @@ async fn debug_spells_teach_trainers_and_class_quests_but_no_talents() {
         for s in hasnt {
             assert!(!known.contains(s), "{class:?} learns no talent's {s}");
         }
+    }
+    // With the talent, its trained ranks come too.
+    let (mut c, g, map) = enter(
+        &realm,
+        "P3JDEBUGT",
+        "Debugmortal",
+        Race::Human,
+        Class::Warrior,
+    )
+    .await;
+    on(&map, move |m| ready(m, g, 60, &[12_294])).await;
+    c.say(".debug spells").await;
+    c.system_message("Learned").await;
+    let known = on(&map, move |m| m.players[&g].spells.clone()).await;
+    for s in [21_551, 21_552, 21_553] {
+        assert!(known.contains(&s), "Mortal Strike's {s} with the talent");
     }
 }
 
@@ -1379,4 +1396,134 @@ async fn real_spell_groups_replace_and_block_by_their_order() {
     {
         assert_eq!(got, want, "{then} after {first}");
     }
+}
+
+const MINING: u32 = 186;
+const APPRENTICE_MINING: u32 = 2575;
+const MINING_REWARDS: [u32; 3] = [2580, 2656, 2657];
+const SMELT_SILVER: u32 = 2658;
+const PICK_LOCK: u32 = 1804;
+const LOCKPICKING: u32 = 633;
+const POISONS_SPELL: u32 = 2842;
+const POISONS: u32 = 40;
+const INSTANT_POISON: u32 = 2835;
+const MORTAL_STRIKE: u32 = 12_294;
+const MORTAL_STRIKE_TRAINED: [u32; 2] = [21_551, 21_552];
+const ARMS_TIER_ONE: u32 = 124;
+const ARCANE_TIER_ONE: u32 = 74;
+
+/// A skill's value and cap, if `g` has it.
+fn skill(m: &Map, g: Guid, id: u32) -> Option<(u32, u32)> {
+    let p = &m.players[&g];
+    Some((
+        crate::game::map::skills::value(p, id)?,
+        crate::game::map::skills::max_value(p, id)?,
+    ))
+}
+
+/// Thistle Tea's skills and talents on the real data (`skill_test.exs`,
+/// `rogue_skills_dbc_test.exs`, `talent_test.exs`): Mining brings Find
+/// Minerals, Smelting and Smelt Copper with it, and unlearned takes them
+/// and its recipes away, as only a skill flagged so may be; a rogue's Pick
+/// Lock and Poisons bring Lockpicking and Poisons from 1, a recipe or a
+/// warrior's none; a trained rank of a talent (Mortal Strike's) is the
+/// talent's, to wipe with it; and a class learns only its own tabs'
+/// talents.
+#[tokio::test]
+async fn real_skills_bring_their_spells_and_talents_their_ranks() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (w_client, w, map) =
+        enter(&realm, "P3JSKILL1", "Skilla", Race::Human, Class::Warrior).await;
+    let (_r, r, _) = enter(&realm, "P3JSKILL2", "Skillb", Race::Human, Class::Rogue).await;
+    let mined = on(&map, move |m| {
+        ready(m, w, 60, &[APPRENTICE_MINING, SMELT_SILVER]);
+        let known = |m: &Map, s: &u32| m.players[&w].spells.contains(s);
+        let data = m.realm.data.clone();
+        (
+            skill(m, w, MINING).is_some(),
+            MINING_REWARDS.iter().all(|s| known(m, s)),
+            [
+                crate::game::map::misc::unlearnable(&data, MINING, 1, 1),
+                crate::game::map::misc::unlearnable(&data, MINING, 2, 1),
+                crate::game::map::misc::unlearnable(&data, 43, 1, 1),
+                crate::game::map::misc::unlearnable(&data, 999, 1, 1),
+            ],
+        )
+    })
+    .await;
+    assert_eq!(
+        mined,
+        (true, true, [true, true, false, false]),
+        "mining and its rewards"
+    );
+    w_client
+        .send(CMSG_UNLEARN_SKILL {
+            skill: Skill::Mining,
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let gone = on(&map, move |m| {
+        let p = &m.players[&w];
+        (
+            skill(m, w, MINING),
+            [APPRENTICE_MINING, SMELT_SILVER]
+                .iter()
+                .chain(MINING_REWARDS.iter())
+                .any(|s| p.spells.contains(s)),
+        )
+    })
+    .await;
+    assert_eq!(
+        gone,
+        (None, false),
+        "the skill, its rewards and recipes gone"
+    );
+    let rogue = on(&map, move |m| {
+        ready(m, r, 20, &[INSTANT_POISON]);
+        let recipe_alone = skill(m, r, POISONS);
+        ready(m, r, 20, &[PICK_LOCK, POISONS_SPELL]);
+        ready(m, w, 60, &[PICK_LOCK]);
+        (
+            recipe_alone,
+            skill(m, r, LOCKPICKING),
+            skill(m, r, POISONS),
+            skill(m, w, LOCKPICKING),
+        )
+    })
+    .await;
+    assert_eq!(
+        rogue,
+        (None, Some((1, 100)), Some((1, 100)), None),
+        "a rogue's, from 1; a recipe's or a warrior's none"
+    );
+    let talents = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        spells::learn(m, w, MORTAL_STRIKE);
+        for s in MORTAL_STRIKE_TRAINED {
+            spells::learn(m, w, s);
+        }
+        let wiped = crate::game::map::misc::talent_spells(&m.players[&w], &data);
+        let mortal = [MORTAL_STRIKE]
+            .iter()
+            .chain(MORTAL_STRIKE_TRAINED.iter())
+            .all(|s| wiped.contains(s));
+        let first = |id: u32| data.spells.talents[&id].ranks[0];
+        spells::learn_talent(m, w, ARCANE_TIER_ONE, 0);
+        spells::learn_talent(m, w, ARMS_TIER_ONE, 0);
+        let p = &m.players[&w];
+        (
+            mortal,
+            p.spells.contains(&first(ARCANE_TIER_ONE)),
+            p.spells.contains(&first(ARMS_TIER_ONE)),
+        )
+    })
+    .await;
+    assert_eq!(
+        talents,
+        (true, false, true),
+        "Mortal Strike's ranks are the talent's; a mage's talent isn't a warrior's"
+    );
 }

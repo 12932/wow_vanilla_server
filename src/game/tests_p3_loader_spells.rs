@@ -525,3 +525,67 @@ fn the_real_exclusive_kinds_are_thistle_teas() {
         assert_eq!(auras::exclusive(spell(d, id), Some(0)), None, "{id}");
     }
 }
+
+/// Thistle Tea's talents and chains on the real data (`talent_test.exs`,
+/// `spell_chain_test.exs`, `spell_chain_dbc_test.exs`,
+/// `spell_rank_replacement_dbc_test.exs`): three tabs a class, none for
+/// the unused class 6; Mortal Strike deep in Arms with one rank, found
+/// back from its spell and from the ranks a trainer teaches after it; the
+/// spells a talent teaches (Parry, the axes and maces) and those it
+/// triggers (Nature's Grace's, Intimidation's); a multi-rank talent's ranks
+/// in order; Chain Lightning's and Chain Heal's jumps and falloff; and
+/// every Flamestrike rank kept, none superseding another.
+#[test]
+fn the_real_talents_and_chains_load_as_thistle_tea_reads_them() {
+    let Some(d) = real() else {
+        return;
+    };
+    let tabs = |class: u32| {
+        d.spells
+            .talent_tabs
+            .values()
+            .filter(|mask| **mask & (1 << (class - 1)) != 0)
+            .count()
+    };
+    assert_eq!((tabs(1), tabs(8), tabs(6)), (3, 3, 0));
+    let mortal = &d.spells.talents[&135];
+    assert_eq!(
+        (mortal.row, mortal.tab, mortal.ranks),
+        (6, 161, [12_294, 0, 0, 0, 0])
+    );
+    for spell in [12_294, 21_551, 21_552, 21_553] {
+        assert_eq!(d.spells.talent_of(spell), Some(135), "{spell}");
+    }
+    let teaches = |id: u32| -> Vec<u32> {
+        spell(d, id)
+            .effects
+            .iter()
+            .filter(|e| e.effect == spells::EFFECT_LEARN_SPELL)
+            .map(|e| e.trigger_spell)
+            .collect()
+    };
+    assert_eq!(teaches(16_268), vec![18_848]);
+    assert_eq!(teaches(16_269), vec![197, 199]);
+    let triggers = |id: u32| -> Vec<u32> {
+        spell(d, id)
+            .effects
+            .iter()
+            .filter(|e| e.aura == AURA_PROC_TRIGGER_SPELL)
+            .map(|e| e.trigger_spell)
+            .collect()
+    };
+    assert_eq!(triggers(16_880), vec![16_886]);
+    assert!(teaches(16_880).is_empty());
+    assert_eq!(triggers(19_577), vec![24_394]);
+    assert_eq!(d.spells.talents[&126].ranks[..2], [12_285, 12_697]);
+    for (id, target, falloff) in [(421, 6, 0.7), (1064, 45, 0.5)] {
+        let s = spell(d, id);
+        let e = s.effects[0];
+        assert_eq!((e.chain_target, e.target_a), (3, target), "{id}");
+        assert!((s.dmg_multiplier[0] - falloff).abs() < 1e-4, "{id}");
+    }
+    for id in [2120, 2121, 8422, 8423, 10_215, 10_216] {
+        let lines = d.spells.skill_abilities.get(&id).unwrap();
+        assert!(lines.iter().all(|a| a.superseded_by == 0), "{id}");
+    }
+}
