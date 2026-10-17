@@ -61,6 +61,27 @@ pub const EFFECT_OPEN_LOCK: u32 = 33;
 pub const EFFECT_OPEN_LOCK_ITEM: u32 = 59;
 pub const EFFECT_PICKPOCKET: u32 = 71;
 pub const EFFECT_SKINNING: u32 = 95;
+/// A bite's splash.
+const BITE_SOUND: u32 = 3355;
+/// Skinning's knives: any of them serves (Thistle Tea's `check_tool`).
+pub const SKINNING_TOOLS: [u32; 3] = [7005, 12_709, 19_901];
+/// The Beast of Blackrock Spire, and the spell skinning it frees Finkle
+/// Einhorn with (vmangos' `boss_the_beast`).
+pub const THE_BEAST: u32 = 10_430;
+pub const FINKLE_IS_EINHORN: u32 = 16_710;
+
+/// Why a spell's tool is missing: a skinning knife may be any of the
+/// knives that skin.
+pub fn tool_missing(p: &Player, s: &SpellTemplate, tool: u32) -> Option<u8> {
+    use crate::game::map::spells::checks::fail;
+    if p.count_of(tool) > 0 {
+        return None;
+    }
+    if SKINNING_TOOLS.contains(&tool) && s.has_effect(EFFECT_SKINNING) {
+        return (!SKINNING_TOOLS.iter().any(|t| p.count_of(*t) > 0)).then_some(fail::EQUIPPED_ITEM);
+    }
+    Some(fail::TOTEMS)
+}
 pub const EFFECT_DISENCHANT: u32 = 99;
 
 // Game object types.
@@ -98,7 +119,6 @@ const FAIL_TARGET_NOT_DEAD: u8 = 0x6e;
 const FAIL_TARGET_NOT_LOOTED: u8 = 0x70;
 const FAIL_TARGET_NO_POCKETS: u8 = 0x72;
 const FAIL_TARGET_UNSKINNABLE: u8 = 0x74;
-const FAIL_TOTEMS: u8 = 0x78;
 const FAIL_TRY_AGAIN: u8 = 0x7a;
 
 /// A bobber in the water.
@@ -266,8 +286,13 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
     if s.requires_spell_focus != 0 && !focus_near(map, p.position(), s.requires_spell_focus) {
         return Some(FAIL_REQUIRES_SPELL_FOCUS);
     }
-    if s.totems.iter().any(|t| *t != 0 && p.count_of(*t) == 0) {
-        return Some(FAIL_TOTEMS);
+    if let Some(code) = s
+        .totems
+        .iter()
+        .filter(|t| **t != 0)
+        .find_map(|t| tool_missing(p, s, *t))
+    {
+        return Some(code);
     }
     for (index, e) in s.effects.iter().enumerate() {
         match e.effect {
@@ -563,6 +588,10 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid) {
         .unwrap_or_default();
     let loot = loot::personal(&data, table, caster, &wanted, LootKind::Skinning);
     let elite = matches!(t.rank, 1 | 2);
+    // Skinning the Beast frees the hunter it swallowed.
+    if entry == THE_BEAST {
+        crate::game::map::spells::cast_triggered(map, caster, FINKLE_IS_EINHORN, Some(caster));
+    }
     if let Some(c) = map.creature_mut(creature) {
         c.loot = Some(loot);
         c.fields
@@ -974,6 +1003,15 @@ pub fn respawn_nodes(map: &mut Map) {
             if let Some(p) = map.players.get(&owner) {
                 p.outbound.send_frame(frame);
             }
+        }
+        // The splash (Thistle Tea's bite, sound 3355).
+        if let Some(frame) =
+            crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_PLAY_OBJECT_SOUND {
+                sound_id: BITE_SOUND,
+                guid: g,
+            })
+        {
+            map.send_to_observers(g, &frame, false);
         }
     }
     let gone: Vec<(Guid, Guid)> = map

@@ -180,6 +180,9 @@ pub struct NpcData {
     /// (from, to) → (path, cost).
     pub taxi_paths: AHashMap<(u32, u32), (u32, u32)>,
     pub taxi_path_nodes: AHashMap<u32, Vec<TaxiPathNode>>,
+    /// `taxi_path_transitions`: (path in, path out) → the node of the one
+    /// left at and of the other joined at.
+    pub taxi_transitions: AHashMap<(u32, u32), (usize, usize)>,
     /// Bank bag slot → price.
     pub bank_slot_prices: AHashMap<u32, u32>,
     pub quests: AHashMap<u32, Quest>,

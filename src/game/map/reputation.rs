@@ -250,18 +250,47 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
     }
 }
 
+/// What a gain is for: its `reputation_reward_rate` column.
+#[derive(Debug, Clone, Copy)]
+pub enum Source {
+    Quest,
+    Kill,
+    Spell,
+}
+
+/// A faction's rate for gains of `source` (`reputation_reward_rate`; 1 if
+/// none).
+pub fn reward_rate(data: &GameData, faction: u32, source: Source) -> f32 {
+    data.misc
+        .reward_rates
+        .get(&faction)
+        .map_or(1.0, |r| match source {
+            Source::Quest => r.0,
+            Source::Kill => r.1,
+            Source::Spell => r.2,
+        })
+}
+
 /// A gain's size after its rate, the level rate and auras' bonuses,
-/// dithered to a whole point.
-fn gain(p: &Player, value: i32, level_rate: f32, _faction: u32) -> i32 {
+/// dithered to a whole point (Thistle Tea's `calculate_gain`).
+fn gain(
+    p: &Player,
+    data: &GameData,
+    value: i32,
+    level_rate: f32,
+    faction: u32,
+    source: Source,
+) -> i32 {
+    let rate = reward_rate(data, faction, source);
     let bonus = if value > 0 {
         p.auras.sum(AURA_MOD_REPUTATION_GAIN)
     } else {
         0
     };
-    if 100 + bonus <= 0 {
+    if rate <= 0.0 || 100 + bonus <= 0 {
         return 0;
     }
-    let v = value as f32 * level_rate * (100 + bonus) as f32 / 100.0;
+    let v = value as f32 * rate * level_rate * (100 + bonus) as f32 / 100.0;
     let dither: f32 = rand::random();
     if v < 0.0 {
         -((v.abs() + dither).floor() as i32)
@@ -302,7 +331,14 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
         let plevel = u32::from(p.level());
         let mut grants = Vec::new();
         for r in rewards.iter().filter(|r| r.team == 0 || r.team == team) {
-            let delta = gain(p, r.value, level_rate(true, r.value, plevel, level), r.faction);
+            let delta = gain(
+                p,
+                &data,
+                r.value,
+                level_rate(true, r.value, plevel, level),
+                r.faction,
+                Source::Kill,
+            );
             if rank(p, &data, r.faction) <= r.max_rank {
                 grants.push((r.faction, delta, true));
             }
@@ -318,8 +354,19 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
     }
 }
 
+/// A spell's reputation (effect 103), at its faction's spell rate.
+pub fn spell_reward(map: &mut Map, g: Guid, faction: u32, value: i32) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let delta = gain(p, &data, value, 1.0, faction, Source::Spell);
+    modify(map, g, faction, delta, true);
+}
+
 /// A quest rewarded: its reputation.
 pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest) {
+    let data = map.realm.data.clone();
     let Some(p) = map.players.get(&g) else {
         return;
     };
@@ -329,10 +376,67 @@ pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest)
         .reputation_rewards
         .iter()
         .filter(|(f, v)| *f != 0 && *v != 0)
-        .map(|(f, v)| (*f, gain(p, *v, level_rate(false, *v, plevel, level), *f)))
+        .map(|(f, v)| {
+            let rate = level_rate(false, *v, plevel, level);
+            (*f, gain(p, &data, *v, rate, *f, Source::Quest))
+        })
         .collect();
     for (faction, delta) in grants {
         modify(map, g, faction, delta, true);
+    }
+}
+
+/// `SMSG_SET_FACTION_ATWAR`: a faction's at-war flag, by its list index.
+const SMSG_SET_FACTION_ATWAR: u16 = 0x313;
+
+fn at_war_frame(index: u32, war: bool) -> Arc<[u8]> {
+    let mut b = Body::default();
+    b.u32(index).u8(if war { FLAG_AT_WAR as u8 } else { 0 });
+    b.frame(SMSG_SET_FACTION_ATWAR)
+}
+
+/// A creature took up a fight with a player: its faction, unless hidden,
+/// forced to peace (and not hated) or at war already, is at war with them
+/// for the fight (Thistle Tea's `set_temporary_at_war`).
+pub fn temporary_war(map: &mut Map, player: Guid, creature: Guid) {
+    if !crate::game::guid::is_unit(creature) {
+        return;
+    }
+    let Some(faction) = faction_of(map, creature) else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    let Some(def) = data.misc.faction(faction) else {
+        return;
+    };
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let hated = rank(p, &data, faction) == misc::RANK_HATED;
+    let s = entry(p, def);
+    if s.flags & (FLAG_AT_WAR | FLAG_HIDDEN | FLAG_INVISIBLE_FORCED) != 0
+        || (s.flags & FLAG_PEACE_FORCED != 0 && !hated)
+    {
+        return;
+    }
+    s.flags |= FLAG_AT_WAR;
+    p.temporary_war.push(faction);
+    p.outbound.send_frame(at_war_frame(def.index, true));
+}
+
+/// Out of the fight: the factions at war only for it are at peace again,
+/// but for those now hated or hostile.
+pub fn end_temporary_war(p: &mut Player, data: &GameData) {
+    for faction in std::mem::take(&mut p.temporary_war) {
+        let Some(def) = data.misc.faction(faction) else {
+            continue;
+        };
+        let hostile = rank(p, data, faction) <= misc::RANK_HOSTILE;
+        let s = entry(p, def);
+        if s.flags & FLAG_AT_WAR != 0 && !hostile {
+            s.flags &= !FLAG_AT_WAR;
+            p.outbound.send_frame(at_war_frame(def.index, false));
+        }
     }
 }
 

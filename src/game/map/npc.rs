@@ -667,7 +667,7 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     }
     let data = map.realm.data.clone();
     let mut cost = 0u32;
-    let mut nodes: Vec<TaxiPathNode> = Vec::new();
+    let mut hops: Vec<(u32, Vec<TaxiPathNode>)> = Vec::new();
     for hop in route.windows(2) {
         let Some(&(path, hop_cost)) = data.npc.taxi_paths.get(&(hop[0], hop[1])) else {
             return reply(map, ActivateTaxiReply::NoSuchPath);
@@ -677,13 +677,17 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
             .npc
             .taxi_path_nodes
             .get(&path)
-            .map(|n| n.iter().filter(|n| n.map == map.key.map).copied().collect::<Vec<_>>())
+            .cloned()
             .unwrap_or_default();
-        if hop_nodes.len() < 2 {
+        if hop_nodes.iter().filter(|n| n.map == map.key.map).count() < 2 {
             return reply(map, ActivateTaxiReply::NoSuchPath);
         }
-        nodes.extend(hop_nodes);
+        hops.push((path, hop_nodes));
     }
+    let nodes: Vec<TaxiPathNode> = stitch(&data.npc.taxi_transitions, &hops)
+        .into_iter()
+        .filter(|n| n.map == map.key.map)
+        .collect();
     let (from, to) = (route[0], route[route.len() - 1]);
     let now = map.now;
     let spline_id = map.next_spline_id;
@@ -739,6 +743,33 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
         mount,
     });
     map.send_to_observers(player, &frame, true);
+}
+
+/// A route's hops as one path (Thistle Tea's `stitch_paths`): each hop is
+/// left at the node `taxi_path_transitions` names (else its next to last)
+/// and the next joined at its (else its second).
+pub fn stitch(
+    transitions: &ahash::AHashMap<(u32, u32), (usize, usize)>,
+    hops: &[(u32, Vec<TaxiPathNode>)],
+) -> Vec<TaxiPathNode> {
+    let Some((first, rest)) = hops.split_first() else {
+        return Vec::new();
+    };
+    let mut nodes = first.1.clone();
+    let mut previous = first;
+    for hop in rest {
+        let (in_node, out_node) = transitions.get(&(previous.0, hop.0)).copied().unwrap_or((
+            previous.1.len().saturating_sub(2),
+            1.min(hop.1.len().saturating_sub(1)),
+        ));
+        let keep = (nodes.len() + in_node + 1)
+            .saturating_sub(previous.1.len())
+            .min(nodes.len());
+        nodes.truncate(keep);
+        nodes.extend(hop.1.iter().skip(out_node).copied());
+        previous = hop;
+    }
+    nodes
 }
 
 /// A flight under way at logout goes on from where the player is.

@@ -324,6 +324,8 @@ pub struct Map {
     pub arena: arena::Arena,
     /// Objects spells summoned, traps, rituals and quest objects.
     pub objects: objects::Objects,
+    /// Frames for after this update's create blocks: (observer, frame).
+    pub late_frames: Vec<(Guid, Arc<[u8]>)>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -435,6 +437,7 @@ impl Map {
             rifts_checked_at: None,
             arena: Default::default(),
             objects: Default::default(),
+            late_frames: Vec::new(),
         }
     }
 
@@ -749,6 +752,11 @@ impl Map {
         self.flush_forgets();
         self.flush_values();
         self.flush_batches();
+        for (g, frame) in std::mem::take(&mut self.late_frames) {
+            if let Some(p) = self.players.get(&g) {
+                p.outbound.send_frame(frame);
+            }
+        }
         self.create_cache.clear();
 
         let took = started.elapsed();

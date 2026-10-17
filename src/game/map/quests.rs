@@ -268,6 +268,10 @@ pub fn giver_quests(map: &Map, player: Guid, giver: Guid) -> Vec<QuestItem> {
 }
 
 fn near_giver(map: &Map, player: Guid, giver: Guid) -> bool {
+    // An object: within reach of its model (Thistle Tea's `QuestGiver`).
+    if guid::is_game_object(giver) {
+        return crate::game::map::objects::within_reach(map, player, giver);
+    }
     let (Some(p), Some(pos)) = (map.players.get(&player), map.position_of(giver)) else {
         return false;
     };
@@ -618,34 +622,33 @@ pub fn check(map: &mut Map, player: Guid, quest: u32) {
 }
 
 /// A creature died: kill credit for the quests of the player it is
-/// credited to.
+/// credited to, for the objectives that ask for no spell (Thistle Tea's
+/// `increment_kill`); in a raid, only for raid quests.
 pub fn killed(map: &mut Map, player: Guid, creature: Guid) {
-    let entry = guid::entry(creature);
-    let data = map.realm.data.clone();
-    let Some(p) = map.players.get_mut(&player) else {
-        return;
+    let raid = {
+        let groups = map.realm.social.groups.lock();
+        groups.group_of(player).is_some_and(|g| g.raid)
     };
-    let mut touched = Vec::new();
-    for l in p.journal.log.iter_mut() {
-        let Some(q) = data.npc.quests.get(&l.quest) else {
-            continue;
-        };
-        for (i, (id, count)) in q.required_kills.iter().enumerate() {
-            if *id > 0 && *id as u32 == entry && l.kills[i] < *count {
-                l.kills[i] += 1;
-                p.outbound.send(&SMSG_QUESTUPDATE_ADD_KILL {
-                    quest_id: q.id,
-                    creature_id: entry,
-                    kill_count: l.kills[i],
-                    required_kill_count: *count,
-                    guid: creature,
-                });
-                touched.push(q.id);
-            }
-        }
+    let allowed = |q: &Quest| !raid || q.kind == QUEST_TYPE_RAID || q.flags & QUEST_FLAGS_RAID != 0;
+    credit(map, player, creature, 0, &allowed);
+}
+
+/// A raid quest, by its type or its flags: killing counts in a raid.
+const QUEST_TYPE_RAID: u32 = 62;
+const QUEST_FLAGS_RAID: u32 = 0x40;
+
+/// A finished cast: the quests asking for its spell cast at the
+/// creatures and objects it hit (Thistle Tea's `credit_cast`).
+pub fn cast_credit(map: &mut Map, player: Guid, targets: &[Guid], spell: u32) {
+    if spell == 0 || !map.players.contains_key(&player) {
+        return;
     }
-    for q in touched {
-        check(map, player, q);
+    let mut seen = Vec::new();
+    for t in targets {
+        if !seen.contains(t) && (guid::is_unit(*t) || guid::is_game_object(*t)) {
+            seen.push(*t);
+            credit(map, player, *t, spell, &|_| true);
+        }
     }
 }
 
@@ -683,14 +686,29 @@ pub fn object_used(map: &mut Map, player: Guid, object: Guid, group: bool) {
 /// A spell cast at a game object: the quests asking for it cast there.
 pub fn cast_on_object(map: &mut Map, player: Guid, object: Guid, spell: u32) {
     if spell != 0 {
-        credit_object(map, player, object, spell, false);
+        credit(map, player, object, spell, &|_| true);
     }
 }
 
-/// One objective of the player's quests under way that asks for `object`
-/// (by `spell`, or used), a step on.
 fn credit_object(map: &mut Map, player: Guid, object: Guid, spell: u32, shareable: bool) {
-    let entry = guid::entry(object);
+    let share =
+        |q: &Quest| !shareable || q.flags & crate::game::map::questshare::QUEST_FLAGS_SHARABLE != 0;
+    credit(map, player, object, spell, &share);
+}
+
+/// The first objective of each of the player's quests under way (that
+/// `eligible` lets count) asking for `target`, a creature (a positive id)
+/// or an object (a negative one), by `spell` (0: killed or used), a step
+/// on (Thistle Tea's `increment_entity_objective`).
+fn credit(
+    map: &mut Map,
+    player: Guid,
+    target: Guid,
+    spell: u32,
+    eligible: &dyn Fn(&Quest) -> bool,
+) {
+    let entry = guid::entry(target);
+    let object = guid::is_game_object(target);
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -700,32 +718,36 @@ fn credit_object(map: &mut Map, player: Guid, object: Guid, spell: u32, shareabl
         let Some(q) = data.npc.quests.get(&p.journal.log[i].quest) else {
             continue;
         };
-        if (shareable && q.flags & crate::game::map::questshare::QUEST_FLAGS_SHARABLE == 0)
-            || complete(p, q, &p.journal.log[i])
-        {
+        if !eligible(q) || complete(p, q, &p.journal.log[i]) {
             continue;
         }
-        let l = &mut p.journal.log[i];
         let Some(k) = q
             .required_kills
             .iter()
             .enumerate()
-            .position(|(k, (id, count))| {
-                *id < 0
-                    && id.unsigned_abs() == entry
-                    && q.required_spell_casts[k] == spell
-                    && l.kills[k] < *count
+            .position(|(k, (id, _))| {
+                let named = if object {
+                    *id < 0 && id.unsigned_abs() == entry
+                } else {
+                    *id > 0 && *id as u32 == entry
+                };
+                named && q.required_spell_casts[k] == spell
             })
         else {
             continue;
         };
+        let l = &mut p.journal.log[i];
+        let required = q.required_kills[k].1;
+        if l.kills[k] >= required {
+            continue;
+        }
         l.kills[k] += 1;
         p.outbound.send(&SMSG_QUESTUPDATE_ADD_KILL {
             quest_id: q.id,
-            creature_id: entry | 0x8000_0000,
+            creature_id: if object { entry | 0x8000_0000 } else { entry },
             kill_count: l.kills[k],
-            required_kill_count: q.required_kills[k].1,
-            guid: object,
+            required_kill_count: required,
+            guid: target,
         });
         touched.push(q.id);
     }

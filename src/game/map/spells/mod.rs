@@ -834,6 +834,12 @@ fn execute(
     // run on their own and are skipped below).
     crate::game::map::pets::before_effects(map, caster, s, &targets);
     let professions = crate::game::map::professions::execute(map, caster, s, &targets);
+    // The objects the cast is at, for the quests asking for it there.
+    let at_objects = if triggered || crate::game::map::objects::opens_lock(s) {
+        Vec::new()
+    } else {
+        crate::game::map::objects::cast_at(map, caster, s, &targets)
+    };
     // Each target: the hit, then the effects.
     let mut chain = [1.0f32; 3];
     let mut landed_on_main = false;
@@ -895,6 +901,7 @@ fn execute(
     let targets = launch.targets;
     // Effects with no unit: places, objects.
     effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
+    crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     if !triggered && let Some(finish) = class_scripts::finish_trigger(s) {
         cast_triggered(map, caster, finish, None);
@@ -1055,6 +1062,11 @@ fn land(
         reflected: aim != target,
         shared: l.shared,
     };
+    // A quest's spell cast at what it hit (Thistle Tea's
+    // `queue_quest_cast_credit`).
+    if !l.triggered && !crate::game::map::objects::opens_lock(s) {
+        crate::game::map::quests::cast_credit(map, caster, &[aim], s.id);
+    }
     effects::run(
         map, caster, aim, s, effects, &landing, chain, l.item, &l.targets,
     );

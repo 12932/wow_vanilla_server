@@ -1015,18 +1015,6 @@ pub fn run_untargeted(
     done: u8,
 ) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
-    // A quest's spell to cast at an object (effect 86 credits its own).
-    if let Some(o) = t.object
-        && crate::game::guid::is_game_object(o)
-        && !s.effects.iter().any(|e| {
-            matches!(
-                e.effect,
-                33 | 59 | crate::game::map::objects::EFFECT_ACTIVATE_OBJECT
-            )
-        })
-    {
-        crate::game::map::quests::cast_on_object(map, caster, o, s.id);
-    }
     for index in 0..3 {
         if done & (1 << index) != 0 {
             continue;

@@ -47,7 +47,13 @@ pub struct Queued {
     /// A party's leader, queued for their party.
     pub leader: bool,
     pub since: Instant,
+    /// When a queued party is next told the search goes on.
+    pub progress_at: Instant,
 }
+
+/// How often a queued party hears the search goes on (Thistle Tea's
+/// `MeetingStone`).
+pub const PROGRESS_EVERY: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Default)]
 pub struct MeetingStones {
@@ -122,8 +128,17 @@ fn join(map: &mut Map, g: Guid, stone: Guid) {
     };
     let leader = match party {
         Some((leader, raid, size)) => {
-            if leader != g || raid || size >= PARTY {
-                status(&map.realm, g, 0, MeetingStoneStatus::None);
+            let failure = if leader != g {
+                Some(MeetingStoneFailure::MeetingstoneFailPartyleader)
+            } else if raid {
+                Some(MeetingStoneFailure::MeetingstoneFailRaidGroup)
+            } else if size >= PARTY {
+                Some(MeetingStoneFailure::MeetingstoneFailFullGroup)
+            } else {
+                None
+            };
+            if let Some(reason) = failure {
+                send_to(&map.realm, g, &SMSG_MEETINGSTONE_JOINFAILED { reason });
                 return;
             }
             true
@@ -140,6 +155,7 @@ fn join(map: &mut Map, g: Guid, stone: Guid) {
             class,
             leader,
             since: Instant::now(),
+            progress_at: Instant::now() + PROGRESS_EVERY,
         });
     }
     status(&map.realm, g, info.area, MeetingStoneStatus::JoinedQueue);
@@ -167,6 +183,7 @@ pub fn queue(map: &mut Map, g: Guid, area: u32) {
             class,
             leader: false,
             since: Instant::now(),
+            progress_at: Instant::now() + PROGRESS_EVERY,
         });
     }
     status(&map.realm, g, area, MeetingStoneStatus::JoinedQueue);
@@ -210,6 +227,32 @@ fn best_for(have: &[Role], solos: &[&Queued]) -> Option<Guid> {
 /// Match each dungeon's queue: parties take who they lack, and players
 /// alone make parties of their own.
 pub fn sweep(realm: &Realm) {
+    // A party still searching hears so, every five minutes.
+    let now = Instant::now();
+    let searching: Vec<Guid> = {
+        let mut stones = realm.social.meeting_stones.lock();
+        stones
+            .queue
+            .iter_mut()
+            .filter(|q| q.leader && q.progress_at <= now)
+            .map(|q| {
+                q.progress_at = now + PROGRESS_EVERY;
+                q.guid
+            })
+            .collect()
+    };
+    for leader in searching {
+        let members: Vec<Guid> = {
+            let groups = realm.social.groups.lock();
+            groups
+                .group_of(leader)
+                .map(|g| g.members.iter().map(|m| m.guid).collect())
+                .unwrap_or_else(|| vec![leader])
+        };
+        for m in members {
+            send_to(realm, m, &SMSG_MEETINGSTONE_IN_PROGRESS {});
+        }
+    }
     let queue: Vec<Queued> = realm.social.meeting_stones.lock().queue.clone();
     let mut areas: Vec<(u32, Team)> = queue.iter().map(|q| (q.area, q.team)).collect();
     areas.sort_by_key(|(a, t)| (*a, *t as u8));
