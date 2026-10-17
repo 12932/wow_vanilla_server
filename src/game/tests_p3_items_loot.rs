@@ -739,3 +739,84 @@ async fn a_corpse_mostly_others_kill_has_nothing() {
     assert_eq!(corpses[0], (vec![], 0, false), "35% is too little");
     assert_eq!(corpses[1], (vec![BLADE], 30, true), "36% is enough");
 }
+
+const NOTE: u32 = 9206;
+
+/// Thistle Tea's quest-only corpses: one with a quest drop alone isn't
+/// lootable to a killer who doesn't want it, is to one who does, and is no
+/// longer once the drop is taken.
+#[tokio::test]
+async fn a_quest_drop_alone_is_for_those_on_the_quest() {
+    let mut d = data();
+    d.items.insert(NOTE, item(NOTE, 1));
+    d.loot.creature.insert(
+        5,
+        vec![LootEntry {
+            item: NOTE,
+            chance: -100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }],
+    );
+    let mut t = d.creature_templates[&KOBOLD].clone();
+    t.entry = KOBOLD + 9;
+    t.loot_id = 5;
+    (t.gold_min, t.gold_max) = (0, 0);
+    d.creature_templates.insert(KOBOLD + 9, t);
+    for n in [41, 42] {
+        d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+            guid: n,
+            entries: vec![KOBOLD + 9],
+            map: 0,
+            x: START.0 + 2.5,
+            y: START.1 + (n as f32 - 41.5),
+            z: START.2,
+            ..Default::default()
+        });
+    }
+    d.npc.quests.insert(
+        60,
+        crate::game::data::npc::Quest {
+            id: 60,
+            title: "Notes".into(),
+            min_level: 1,
+            level: 1,
+            required_items: [(NOTE, 1), (0, 0), (0, 0), (0, 0)],
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let (first, second) = (guid::unit(KOBOLD + 9, 41), guid::unit(KOBOLD + 9, 42));
+    a.sees(first).await;
+    let lootable = |m: &Map, c: Guid| {
+        m.creature(c).unwrap().fields.get_u32(UNIT_DYNAMIC_FLAGS) & loot::DYNFLAG_LOOTABLE != 0
+    };
+    let got = on_map(&realm, move |m| {
+        crate::game::map::combat::kill(m, ga, first);
+        let unwanted = lootable(m, first);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .journal
+            .add(crate::game::store::Logged {
+                quest: 60,
+                ..Default::default()
+            });
+        crate::game::map::combat::kill(m, ga, second);
+        let wanted = lootable(m, second);
+        loot::show(m, ga, second);
+        loot::take_item(m, ga, 0);
+        loot::release(m, ga, second);
+        (
+            unwanted,
+            wanted,
+            lootable(m, second),
+            m.players[&ga].count_of(NOTE),
+        )
+    })
+    .await;
+    assert_eq!(got, (false, true, false, 1));
+}
