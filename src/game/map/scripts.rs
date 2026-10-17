@@ -1638,7 +1638,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             let Some(points) = points.filter(|p| !p.is_empty()).cloned() else {
                 return false;
             };
-            let start = (d2 as usize).min(points.len() - 1);
+            // From the point numbered datalong2 if it has one, else its
+            // first.
+            let start = points
+                .iter()
+                .position(|p| d2 > 0 && p.point == d2)
+                .unwrap_or(0);
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.route = Some(event_ai::Route {
                     points: std::sync::Arc::new(points),
@@ -1648,7 +1653,8 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
-                c.waypoint = start.wrapping_sub(1);
+                c.waypoint = start;
+                c.last_waypoint = None;
                 c.motion = Motion::Idle {
                     until: Some(now + Duration::from_millis(u64::from(d3))),
                 };
@@ -2487,12 +2493,17 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 c.motion = Motion::Idle { until: Some(now) };
             }
         }
+        // Its path (the spawn's, else the entry's), as START_WAYPOINTS
+        // with the start point datalong3 and round again with datalong2.
         2 => {
-            if let Some(c) = creature_mut(map, source) {
-                c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
-                c.waypoint = usize::MAX;
-                c.motion = Motion::Idle { until: Some(now) };
-            }
+            let walk = ScriptStep {
+                command: 60,
+                datalong: [0, d3, 0, d2],
+                dataint: [0, 0, step.dataint[2], step.dataint[3]],
+                ext: None,
+                ..step.clone()
+            };
+            return command(map, &walk, source, target);
         }
         7 => {
             let Some((home, o)) = map.creature(source).map(|c| (c.home, c.home_orientation)) else {

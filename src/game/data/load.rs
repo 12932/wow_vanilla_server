@@ -561,10 +561,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("id"),
                 Waypoint {
+                    point: c.u32("point"),
                     x: c.f32("position_x"),
                     y: c.f32("position_y"),
                     z: c.f32("position_z"),
-                    orientation: c.f32("orientation"),
+                    orientation: super::waypoint_facing(c.f32("orientation")),
                     wait_ms: c.u32("waittime"),
                     script_id: c.u32("script_id"),
                 },
@@ -580,10 +581,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("entry"),
                 Waypoint {
+                    point: c.u32("point"),
                     x: c.f32("position_x"),
                     y: c.f32("position_y"),
                     z: c.f32("position_z"),
-                    orientation: c.f32("orientation"),
+                    orientation: super::waypoint_facing(c.f32("orientation")),
                     wait_ms: c.u32("waittime"),
                     script_id: c.u32("script_id"),
                 },
@@ -599,10 +601,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("id"),
                 Waypoint {
+                    point: c.u32("point"),
                     x: c.f32("position_x"),
                     y: c.f32("position_y"),
                     z: c.f32("position_z"),
-                    orientation: c.f32("orientation"),
+                    orientation: super::waypoint_facing(c.f32("orientation")),
                     wait_ms: c.u32("waittime"),
                     script_id: c.u32("script_id"),
                 },
@@ -618,10 +621,11 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             (
                 c.u32("entry"),
                 Waypoint {
+                    point: c.u32("pointid"),
                     x: c.f32("location_x"),
                     y: c.f32("location_y"),
                     z: c.f32("location_z"),
-                    orientation: 0.0,
+                    orientation: None,
                     wait_ms: c.u32("waittime"),
                     script_id: 0,
                 },

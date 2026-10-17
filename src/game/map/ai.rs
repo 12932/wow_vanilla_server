@@ -41,6 +41,21 @@ pub fn stop_packet(g: Guid, at: Vector3d, spline_id: u32) -> Arc<[u8]> {
     b.frame(SMSG_MONSTER_MOVE)
 }
 
+/// A creature turning on the spot to `angle` (a facing-angle monster
+/// move of 100 ms, as Thistle Tea turns one).
+pub fn face_packet(g: Guid, at: Vector3d, angle: f32, spline_id: u32) -> Arc<[u8]> {
+    let mut b = Body::default();
+    crate::game::update::write_packed_guid(&mut b.0, g);
+    b.f32(at.x)
+        .f32(at.y)
+        .f32(at.z)
+        .u32(spline_id)
+        .u8(4)
+        .f32(angle);
+    b.u32(0).u32(100).u32(1).f32(at.x).f32(at.y).f32(at.z);
+    b.frame(SMSG_MONSTER_MOVE)
+}
+
 /// The radius at which a creature notices a player (vmangos's
 /// `GetAttackDistance`): about 20 yards at an even level, a yard less for
 /// each level the player is above it, at least 5.
@@ -904,7 +919,8 @@ fn evade(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let (from, home) = (c.position, c.home);
+    // A patroller goes back to the last point of its path it reached.
+    let (from, home) = (c.position, patrol_home(map, g).unwrap_or(c.home));
     let path = match map.nav.as_mut() {
         Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
         None => vec![from, home],
@@ -969,14 +985,40 @@ fn evade_step(map: &mut Map, g: Guid) {
         c.evading = false;
         let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
         c.fields.set_u32(UNIT_FIELD_HEALTH, max);
-        c.orientation = c.home_orientation;
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
+        // Home, it turns to its spawn's facing (a patroller as it is).
+        let (at, o) = (c.position, c.home_orientation);
+        let turned = c.orientation != o;
+        if turned && patrol_home(map, g).is_none() {
+            let spline_id = map.next_spline_id;
+            map.next_spline_id = map.next_spline_id.wrapping_add(1);
+            if let Some(c) = map.creature_mut(g) {
+                c.orientation = o;
+            }
+            map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
+        }
         combat::sync_aura_state(map, g);
         crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
+}
+
+/// Where a creature walking a path goes back to after a fight: the last
+/// point it reached (none until it reaches one).
+fn patrol_home(map: &Map, g: Guid) -> Option<Vector3d> {
+    let c = map.creature(g)?;
+    if c.movement_type != crate::game::map::creature::MOVEMENT_WAYPOINT {
+        return None;
+    }
+    let i = c.last_waypoint?;
+    let w = *crate::game::map::creature_motion::waypoints(map, g)?.get(i)?;
+    Some(Vector3d {
+        x: w.x,
+        y: w.y,
+        z: w.z,
+    })
 }
 
 /// Bring a moving creature's position up to now, and its grid cell and
