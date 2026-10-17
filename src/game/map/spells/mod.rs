@@ -1437,8 +1437,9 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
         c.combo_points = 0;
         c.combo_target = Guid::zero();
     }
+    // The field keeps the last target, its points none, as mangos's
+    // ClearComboPoints sends them and Thistle Tea encodes them.
     if let Some(p) = map.players.get_mut(&caster) {
-        p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, Guid::zero());
         p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 0);
     }
 }
