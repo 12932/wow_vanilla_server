@@ -11,11 +11,13 @@ use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::map::Map;
 use crate::game::map::auras::{self, AURA_ADD_FLAT_MODIFIER, AURA_ADD_PCT_MODIFIER};
 
-// `SpellModOp`.
+// 1.12's `SpellModOp` (mangos-classic's numbers, Thistle Tea's
+// `Modifiers`): 3, 12 and 23 change an aura's attack power, speed and
+// haste, where TBC's change an effect's points by its index.
 pub const OP_DAMAGE: usize = 0;
 pub const OP_DURATION: usize = 1;
 pub const OP_THREAT: usize = 2;
-pub const OP_EFFECT1: usize = 3;
+pub const OP_ATTACK_POWER: usize = 3;
 pub const OP_CHARGES: usize = 4;
 pub const OP_RANGE: usize = 5;
 pub const OP_RADIUS: usize = 6;
@@ -24,7 +26,7 @@ pub const OP_ALL_EFFECTS: usize = 8;
 pub const OP_NOT_LOSE_CASTING_TIME: usize = 9;
 pub const OP_CASTING_TIME: usize = 10;
 pub const OP_COOLDOWN: usize = 11;
-pub const OP_EFFECT2: usize = 12;
+pub const OP_SPEED: usize = 12;
 pub const OP_COST: usize = 14;
 pub const OP_CRIT_DAMAGE_BONUS: usize = 15;
 pub const OP_RESIST_MISS_CHANCE: usize = 16;
@@ -34,7 +36,7 @@ pub const OP_ACTIVATION_TIME: usize = 19;
 pub const OP_EFFECT_PAST_FIRST: usize = 20;
 pub const OP_GLOBAL_COOLDOWN: usize = 21;
 pub const OP_DOT: usize = 22;
-pub const OP_EFFECT3: usize = 23;
+pub const OP_HASTE: usize = 23;
 pub const OP_SPELL_BONUS_DAMAGE: usize = 24;
 pub const OP_MULTIPLE_VALUE: usize = 27;
 pub const OP_RESIST_DISPEL_CHANCE: usize = 28;
@@ -71,15 +73,37 @@ impl Mods {
         self.flat[op] != 0 || self.pct[op] != 0
     }
 
-    /// An effect's points with the effect's and all effects' modifiers.
-    pub fn points(&self, index: usize, points: i32) -> i32 {
-        let op = match index {
-            0 => OP_EFFECT1,
-            1 => OP_EFFECT2,
-            _ => OP_EFFECT3,
-        };
-        let v = self.apply(op, points as f32);
-        self.apply(OP_ALL_EFFECTS, v).round() as i32
+    /// Effect `index`'s points with all effects' modifiers, then those to
+    /// its aura's speed, haste or attack power (mangos's
+    /// `CalculateAuraEffectValue`).
+    pub fn points(&self, s: &SpellTemplate, index: usize, points: i32) -> i32 {
+        let v = self.apply(OP_ALL_EFFECTS, points as f32);
+        match aura_op(s.effects[index].aura) {
+            Some(op) => self.apply(op, v),
+            None => v,
+        }
+        .round() as i32
+    }
+}
+
+/// The operation that changes an aura of `kind`'s amount: its speed, its
+/// haste or its attack power.
+fn aura_op(kind: u32) -> Option<usize> {
+    use crate::game::map::auras::*;
+    match kind {
+        AURA_MOD_INCREASE_SPEED | AURA_MOD_DECREASE_SPEED | AURA_MOD_INCREASE_SWIM_SPEED => {
+            Some(OP_SPEED)
+        }
+        AURA_MOD_ATTACKSPEED
+        | AURA_MOD_CASTING_SPEED
+        | AURA_MOD_HASTE
+        | AURA_MOD_RANGED_HASTE
+        | AURA_MOD_RANGED_AMMO_HASTE => Some(OP_HASTE),
+        AURA_MOD_ATTACK_POWER
+        | AURA_MOD_ATTACK_POWER_PCT
+        | AURA_MOD_RANGED_ATTACK_POWER
+        | AURA_MOD_RANGED_ATTACK_POWER_PCT => Some(OP_ATTACK_POWER),
+        _ => None,
     }
 }
 
@@ -136,6 +160,9 @@ fn used_by(op: usize, s: &SpellTemplate, data: &crate::game::data::GameData) -> 
             .iter()
             .any(|e| matches!(e.effect, 2 | 9 | 10 | 17 | 31 | 58 | 121)),
         OP_DOT | OP_ACTIVATION_TIME => s.effects.iter().any(|e| e.amplitude > 0),
+        OP_SPEED | OP_HASTE | OP_ATTACK_POWER => {
+            s.effects.iter().any(|e| aura_op(e.aura) == Some(op))
+        }
         _ => true,
     }
 }
@@ -228,7 +255,7 @@ mod tests {
         m.pct[OP_CASTING_TIME] = -10;
         assert_eq!(m.apply_ms(OP_CASTING_TIME, 3500), 2700);
         m.pct[OP_ALL_EFFECTS] = 10;
-        assert_eq!(m.points(0, 100), 110);
+        assert_eq!(m.points(&SpellTemplate::default(), 0, 100), 110);
         let fireball = SpellTemplate {
             family_name: 3,
             family_flags: 0x4000_0001,

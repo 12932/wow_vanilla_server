@@ -387,3 +387,31 @@ async fn a_modifier_touches_only_its_mask_past_32_bits() {
         .unwrap();
     assert_eq!(pct, (10, 0));
 }
+
+#[tokio::test]
+async fn permafrost_slows_frostbolt_more() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "PERMAFROST");
+    let mage = c.enter("Permaf", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let slow = map
+        .query(move |m| {
+            level(m, mage, 60, &[11175]);
+            let kobold = spawn(m, mage, 6, 60, 10.0);
+            spells::cast_triggered(m, mage, 116, Some(kobold));
+            auras::auras(m, kobold).and_then(|a| {
+                a.holders
+                    .iter()
+                    .find(|h| h.spell == 116)
+                    .and_then(|h| h.effects.iter().find(|x| x.kind == 33))
+                    .map(|x| x.amount)
+            })
+        })
+        .await
+        .unwrap();
+    // Frostbolt's 40%, and Permafrost's 4 more.
+    assert_eq!(slow, Some(-44));
+}
