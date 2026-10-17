@@ -371,7 +371,6 @@ fn later(map: &mut Map, after: Duration, g: Guid, what: Later) {
 
 fn despawn_in(map: &mut Map, g: Guid, after: Duration) {
     let at = map.now + after;
-    map.rare.despawn = true;
     if let Some(s) = event_ai::scripted_mut(map, g) {
         s.despawn_at = Some(at);
         s.despawn_type = 1;

@@ -454,7 +454,6 @@ fn id_dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> boo
         }
         // A dead creature lives again, for two minutes.
         RESTORE_TO_LIFE if dead => {
-            map.rare.despawn = true;
             if let Some(c) = map.creature_mut(target) {
                 let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
                 c.life = crate::game::map::creature::Life::Alive;

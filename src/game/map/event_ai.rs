@@ -747,28 +747,17 @@ pub fn tick(map: &mut Map, g: Guid) {
 /// A creature's despawn timer, for those summoned with one.
 pub fn update_despawns(map: &mut Map) {
     let now = map.now;
-    let mut due: Vec<Guid> = Vec::new();
-    if map.rare.despawn {
-        let mut any = false;
-        due = map
-            .creatures
-            .iter()
-            .filter(|(_, c)| {
-                let at = c.scripted.as_deref().and_then(|s| s.despawn_at);
-                any |= at.is_some();
-                at.is_some_and(|t| t <= now)
-            })
-            .map(|(_, c)| c.guid)
-            .collect();
-        map.rare.despawn = any;
-    } else {
-        debug_assert!(
-            map.creatures
-                .iter()
-                .all(|(_, c)| c.scripted.as_deref().is_none_or(|s| s.despawn_at.is_none())),
-            "a creature's despawn timer unnoted (RareStates)"
-        );
-    }
+    let due: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| {
+            c.scripted
+                .as_deref()
+                .and_then(|s| s.despawn_at)
+                .is_some_and(|t| t <= now)
+        })
+        .map(|(_, c)| c.guid)
+        .collect();
     for g in due {
         let alive = map.creature(g).is_some_and(|c| c.alive());
         let kind = scripted(map, g).map_or(0, |s| s.despawn_type);
