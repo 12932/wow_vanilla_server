@@ -229,7 +229,7 @@ pub const ESCORTS: &[Escort] = &[
                     },
                 ],
             ),
-            (25, &[Act::Say(8265)]),
+            (25, &[Act::RemoveAura(20514), Act::Say(8265)]),
         ],
         path: None,
     },
@@ -283,9 +283,30 @@ pub const ESCORTS: &[Escort] = &[
         instant_respawn: false,
         accept: &[Act::Say(5926), Act::Faction(33), Act::RemoveUnitFlags(512)],
         points: &[
-            (8, &[Act::Say(5927)]),
-            (14, &[Act::Say(5928)]),
-            (21, &[Act::Say(5929)]),
+            (
+                8,
+                &[
+                    Act::Say(5927),
+                    bandit((-4905.479f32, -2062.733f32, 84.352f32)),
+                    bandit((-4915.201f32, -2073.528f32, 84.733f32)),
+                ],
+            ),
+            (
+                14,
+                &[
+                    Act::Say(5928),
+                    bandit((-4878.883f32, -1986.948f32, 91.966f32)),
+                    bandit((-4877.504f32, -1966.113f32, 91.859f32)),
+                ],
+            ),
+            (
+                21,
+                &[
+                    Act::Say(5929),
+                    bandit((-4767.985f32, -1873.169f32, 90.192f32)),
+                    bandit((-4788.861f32, -1888.008f32, 89.888f32)),
+                ],
+            ),
             (45, &[Act::Say(5930)]),
         ],
         path: None,
@@ -1073,8 +1094,8 @@ pub const ESCORTS: &[Escort] = &[
         start_delay_ms: 750,
         credit_delay_ms: 0,
         instant_respawn: false,
-        accept: &[Act::Cast(6634)],
-        points: &[(3, &[Act::Run, Act::Faction(189)]), (9, &[])],
+        accept: &[Act::Invincible(20), Act::Cast(6634)],
+        points: &[(3, &[Act::Run, Act::Faction(189)]), (9, &[Act::Fail])],
         path: None,
     },
     Escort {
@@ -1088,9 +1109,28 @@ pub const ESCORTS: &[Escort] = &[
         instant_respawn: true,
         accept: &[Act::Say(2360), Act::Run],
         points: &[
-            (7, &[]),
-            (8, &[]),
-            (9, &[]),
+            (7, &[Act::EventPhase(1), raider(0), raider(1), raider(2)]),
+            (
+                8,
+                &[
+                    Act::EventPhase(2),
+                    raider(0),
+                    raider(1),
+                    raider(2),
+                    raider(3),
+                ],
+            ),
+            (
+                9,
+                &[
+                    Act::EventPhase(3),
+                    raider(0),
+                    raider(1),
+                    raider(2),
+                    raider(3),
+                    raider(4),
+                ],
+            ),
             (10, &[Act::Walk]),
             (11, &[Act::Say(3090)]),
         ],
@@ -1275,6 +1315,35 @@ pub const ESCORTS: &[Escort] = &[
         path: None,
     },
 ];
+
+/// The Defias raiders who fall on the Defias Traitor (1651), at their
+/// spots by the road, in order (Thistle Tea's `defias_raiders`).
+const fn raider(spot: usize) -> Act {
+    const SPOTS: [(f32, f32, f32, f32); 5] = [
+        (-11450.836, 1569.755, 54.267, 4.230),
+        (-11449.697, 1569.124, 54.421, 4.206),
+        (-11448.237, 1568.307, 54.620, 4.206),
+        (-11448.037, 1570.213, 54.961, 4.283),
+        (-11449.018, 1570.738, 54.828, 4.220),
+    ];
+    Act::Summon {
+        entry: 6180,
+        at: SPOTS[spot],
+        aim: Aim::Escort,
+        despawn_ms: 30000,
+    }
+}
+
+/// A Wastewander bandit by Gilthares Firebough's road (4904), who goes in
+/// 20 s (Thistle Tea's `bandits`).
+const fn bandit(at: (f32, f32, f32)) -> Act {
+    Act::Summon {
+        entry: 10758,
+        at: (at.0, at.1, at.2, 0.0),
+        aim: Aim::None,
+        despawn_ms: 20000,
+    }
+}
 
 /// A Blackrock ambusher for Grark Lorkrub's escort: it goes for the
 /// player, and goes itself after 200 s.
@@ -1561,6 +1630,6 @@ pub const FOLLOWERS: &[Follower] = &[
         despawn_ms: 0,
         max_distance: 100.0f32,
         accept: &[Act::Say(3012)],
-        arrive: &[Act::SayBy(6667, 2704), Act::Faction(14)],
+        arrive: &[Act::SayBy(6667, 2704), Act::Faction(14), Act::Attack],
     },
 ];

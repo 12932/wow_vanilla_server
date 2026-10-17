@@ -10,6 +10,14 @@
 //! escortee back where it stood at once. One that gets there goes after
 //! its last wait and comes back on its spawn's own time, or in a second
 //! for one that respawns at once.
+//!
+//! Each runs under its quest's map event, as Thistle Tea's do: the
+//! escortee its source and the player its target, for half an hour.
+//! Scripts reach the player through it (Remulos's credit for The Nightmare
+//! Manifests), join it to go when it fails (Eranikus and his helpers), and
+//! end it: badly, and the escort fails; well, and nothing fails it after.
+//! A script that stops the escortee where it stands holds the escort there
+//! until one sets it walking again.
 
 pub mod catalog;
 
@@ -106,6 +114,14 @@ pub enum Act {
     /// The escort ends badly: the quest fails and the escortee is put
     /// back (vmangos's `ResetEscort`).
     Abort,
+    /// The quest fails for the player and their group; the escort goes on.
+    Fail,
+    /// It never falls below this share of its health (percent).
+    Invincible(u32),
+    /// An aura of its own, gone.
+    RemoveAura(u32),
+    /// It turns on the player.
+    Attack,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -483,11 +499,8 @@ fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
                     map.send_to_observers(creature, &frame, false);
                 }
             }
-            Act::Faction(f) => {
-                if let Some(c) = map.creature_mut(creature) {
-                    c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, f);
-                }
-            }
+            // As a script sets it, so whom it is hostile to follows.
+            Act::Faction(f) => script_step(map, creature, creature, 22, [f, 0, 0, 0]),
             Act::Stand(s) => {
                 if let Some(c) = map.creature_mut(creature) {
                     c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, s);
@@ -683,6 +696,16 @@ fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
                 map.escorts[i].ends_at = Some(now);
                 return;
             }
+            Act::Fail => {
+                let quest = map.escorts[i].quest;
+                script_step(map, creature, player, 70, [quest, 0, 0, 0]);
+                map.escorts[i].failed = true;
+            }
+            Act::Invincible(pct) => script_step(map, creature, creature, 52, [pct, 1, 0, 0]),
+            Act::RemoveAura(spell) => {
+                crate::game::map::auras::remove_spell(map, creature, spell, None);
+            }
+            Act::Attack => script_step(map, creature, player, 26, [0; 4]),
         }
     }
 }
@@ -711,6 +734,28 @@ fn hold(
             release,
             expired,
         });
+    }
+}
+
+/// A script stops `creature` where it stands (movement idle), as Thistle
+/// Tea's idle motion takes an escortee off its path: its escort waits
+/// there until a script sets it walking again ([`resume`]), or its map
+/// event ends.
+pub fn halt(map: &mut Map, creature: Guid) {
+    let now = map.now;
+    if let Some(i) = map.escorts.iter().position(|a| a.creature == creature) {
+        hold(map, i, now, EVENT_LASTS, true, 0, &[], None);
+    }
+}
+
+/// A script sets `creature` walking its path again: a halted escort goes
+/// on.
+pub fn resume(map: &mut Map, creature: Guid) {
+    if let Some(a) = map.escorts.iter_mut().find(|a| a.creature == creature)
+        && let Kind::Escort { hold, .. } = &mut a.kind
+        && hold.is_some_and(|h| h.signal && h.release.is_empty() && h.expired.is_none())
+    {
+        *hold = None;
     }
 }
 

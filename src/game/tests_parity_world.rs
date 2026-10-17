@@ -1129,25 +1129,36 @@ async fn travel(realm: &Arc<Realm>, c: &mut Client, id: u32, at: Vector3d) -> Ma
 /// `c` beside the spawn of `entry`: the map, the creature or object, and
 /// where it stands.
 async fn visit(realm: &Arc<Realm>, c: &mut Client, entry: u32) -> (MapHandle, Guid, Vector3d) {
-    let (id, at) = spawn_of(realm, entry).expect("spawned");
+    match try_visit(realm, c, entry).await {
+        Ok(v) => v,
+        Err(why) => panic!("{why}"),
+    }
+}
+
+/// [`visit`], or why not.
+async fn try_visit(
+    realm: &Arc<Realm>,
+    c: &mut Client,
+    entry: u32,
+) -> Result<(MapHandle, Guid, Vector3d), String> {
+    let (id, at) = spawn_of(realm, entry).ok_or(format!("{entry} not spawned"))?;
     let map = travel(realm, c, id, beside(at)).await;
     let (who, at) = map
         .query(move |m| npc(m, entry).or_else(|| object(m, entry)))
         .await
         .flatten()
-        .unwrap_or_else(|| panic!("{entry} here"));
+        .ok_or(format!("{entry} not here"))?;
     put(&map, c, beside(at)).await;
     let g = c.guid;
-    if guid::is_unit(who) {
-        assert!(
-            until(&map, move |m| m
-                .creature(who)
-                .is_some_and(|c| c.observers.contains(&g)))
-            .await,
-            "{entry} in sight"
-        );
+    if guid::is_unit(who)
+        && !until(&map, move |m| {
+            m.creature(who).is_some_and(|c| c.observers.contains(&g))
+        })
+        .await
+    {
+        return Err(format!("{entry} not in sight"));
     }
-    (map, who, at)
+    Ok((map, who, at))
 }
 
 /// Take `quest` from `giver`, beside it, `before` done: the map it is in.
@@ -1748,8 +1759,8 @@ async fn the_gizelton_caravan(realm: &Arc<Realm>) {
         let members = caravan(m);
         for c in &members {
             if let Some(c) = m.creature_mut(*c) {
-                c.speeds.walk = 30.0;
-                c.speeds.run = 30.0;
+                c.speeds.walk = 60.0;
+                c.speeds.run = 60.0;
             }
         }
         if let Some(at) = m.creature(cork).map(|c| c.position) {
@@ -1773,7 +1784,7 @@ async fn the_gizelton_caravan(realm: &Arc<Realm>) {
         for i in 0..3000 {
             let (yes, at) = map
                 .query(move |m| {
-                    ride(m, Duration::from_secs(2));
+                    ride(m, Duration::from_secs(4));
                     (offering(m, giver), m.creature(cork).map(|c| c.position))
                 })
                 .await
@@ -1808,7 +1819,7 @@ async fn the_gizelton_caravan(realm: &Arc<Realm>) {
         for i in 0..3000 {
             let (yes, at, event) = map
                 .query(move |m| {
-                    ride(m, Duration::from_secs(2));
+                    ride(m, Duration::from_secs(4));
                     (
                         done(m, g, quest),
                         m.creature(cork).map(|c| c.position),
@@ -2053,9 +2064,20 @@ async fn the_balance_of_light_and_shadow(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, ERIS, QUEST).await;
 }
 
+/// The Gizelton Caravan's two quests, walked on the real world (on its
+/// own, for its long road).
+#[tokio::test]
+async fn the_gizelton_caravan_is_done_end_to_end() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    the_gizelton_caravan(&realm).await;
+}
+
 /// The event quests Thistle Tea builds in code, walked through on the real
-/// world: Freedom for All Creatures, the Gizelton Caravan, The Great
-/// Masquerade, The Balance of Light and Shadow.
+/// world: Freedom for All Creatures, The Great Masquerade, The Balance of
+/// Light and Shadow (and the Gizelton Caravan, on its own).
 #[tokio::test]
 async fn the_imported_event_quests_are_done_end_to_end() {
     if !have_data() {
@@ -2064,9 +2086,6 @@ async fn the_imported_event_quests_are_done_end_to_end() {
     let realm = real_realm();
     if wanted("freedom") {
         freedom_for_all_creatures(&realm).await;
-    }
-    if wanted("caravan") {
-        the_gizelton_caravan(&realm).await;
     }
     if wanted("masquerade") {
         the_great_masquerade(&realm).await;
@@ -2427,7 +2446,7 @@ fn every_real_event_quest_has_its_source() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
     };
-    let sources = event_sources(&d);
+    let sources = event_sources(d);
     assert!(sources.len() > 200, "{} event quests", sources.len());
     let missing: Vec<u32> = sources
         .iter()
@@ -2447,4 +2466,982 @@ fn every_real_event_quest_has_its_source() {
             sources.get(&q)
         );
     }
+}
+
+/// `g` fit to take `q`: the skill and the standing it asks for.
+fn fit_for(m: &mut Map, g: Guid, q: &crate::game::data::npc::Quest) {
+    if q.required_skill != 0
+        && let Some(p) = m.players.get_mut(&g)
+    {
+        crate::game::map::skills::learn_skill(p, q.required_skill, 4);
+        crate::game::map::skills::set_value(p, q.required_skill, q.required_skill_value.max(1));
+    }
+    let (faction, _) = q.required_min_rep;
+    if faction != 0 {
+        crate::game::map::reputation::modify(m, g, faction, 45_000, false);
+    }
+}
+
+/// How many walks go at once.
+const WALKERS: usize = 4;
+
+/// `quest` in `g`'s log, as though taken.
+fn logs(m: &mut Map, g: Guid, quest: u32) {
+    let data = m.realm.data.clone();
+    let p = m.players.get_mut(&g).unwrap();
+    p.journal.log.push(crate::game::store::Logged {
+        quest,
+        ..Default::default()
+    });
+    crate::game::map::quests::refresh_log(p, &data);
+}
+
+fn explored(m: &Map, g: Guid, quest: u32) -> bool {
+    m.players[&g]
+        .journal
+        .log
+        .iter()
+        .any(|l| l.quest == quest && l.explored)
+}
+
+/// A race and class who may take `q`: its class, else a warrior, of its
+/// race if it names one, of the Alliance (`horde` false) or the Horde if
+/// it can.
+fn hero_for(q: &crate::game::data::npc::Quest, horde: bool) -> (Race, Class) {
+    let classes: [(u32, Class, &[u32]); 9] = [
+        (1, Class::Warrior, &[1, 2, 3, 4, 5, 6, 7, 8]),
+        (2, Class::Paladin, &[1, 3]),
+        (3, Class::Hunter, &[2, 3, 4, 6, 8]),
+        (4, Class::Rogue, &[1, 2, 3, 4, 5, 7, 8]),
+        (5, Class::Priest, &[1, 3, 4, 5, 8]),
+        (7, Class::Shaman, &[2, 6, 8]),
+        (8, Class::Mage, &[1, 5, 7, 8]),
+        (9, Class::Warlock, &[1, 2, 5, 7]),
+        (11, Class::Druid, &[4, 6]),
+    ];
+    let (_, class, races) = classes
+        .iter()
+        .find(|(id, _, _)| {
+            q.required_classes == 0 && *id == 1 || q.required_classes & (1 << (id - 1)) != 0
+        })
+        .copied()
+        .unwrap_or(classes[0]);
+    let allowed = |r: &u32| q.required_races == 0 || q.required_races & (1 << (r - 1)) != 0;
+    let side = |r: &u32| matches!(r, 2 | 5 | 6 | 8) == horde;
+    let race = races
+        .iter()
+        .copied()
+        .find(|r| allowed(r) && side(r))
+        .or_else(|| races.iter().copied().find(allowed))
+        .unwrap_or(races[0]);
+    let race = match race {
+        1 => Race::Human,
+        2 => Race::Orc,
+        3 => Race::Dwarf,
+        4 => Race::NightElf,
+        5 => Race::Undead,
+        6 => Race::Tauren,
+        7 => Race::Gnome,
+        _ => Race::Troll,
+    };
+    (race, class)
+}
+
+/// An account (and character) name of letters alone, a new one each time.
+fn walker_name(kind: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let letters: String = n
+        .to_string()
+        .chars()
+        .map(|d| (b'A' + d.to_digit(10).unwrap() as u8) as char)
+        .collect();
+    format!("{kind}{letters}")
+}
+
+/// A hero for `quest`, at its level, with it in their log.
+async fn walker(
+    realm: &Arc<Realm>,
+    kind: &str,
+    quest: u32,
+    horde: bool,
+) -> (Client, Guid, MapHandle) {
+    let q = realm.data.npc.quests[&quest].clone();
+    let (race, class) = hero_for(&q, horde);
+    let level = (q.level.max(i32::from(q.min_level))).clamp(1, 60) as u8;
+    let (c, g, map) = hero(realm, &walker_name(kind), race, class, level).await;
+    map.query(move |m| {
+        hardy(m, g);
+        logs(m, g, quest);
+    })
+    .await;
+    (c, g, map)
+}
+
+/// Until `quest` is explored for `g`, hurrying what waits on time, in
+/// whatever map they are (a trigger may take them through a portal):
+/// whether it was.
+async fn credited(realm: &Arc<Realm>, g: Guid, quest: u32) -> bool {
+    for _ in 0..150 {
+        let Some(map) = realm.registry.online(g).map(|o| o.map()) else {
+            return false;
+        };
+        let yes = map
+            .query(move |m| {
+                if !m.players.contains_key(&g) {
+                    return false;
+                }
+                hardy(m, g);
+                skip(m, Duration::from_secs(1));
+                explored(m, g, quest)
+            })
+            .await
+            .unwrap_or(false);
+        if yes {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// An area trigger's quest: stepped into, explored.
+async fn walk_trigger(realm: &Arc<Realm>, quest: u32, trigger: u32) -> Result<(), String> {
+    let (mut c, g, _) = walker(realm, "Trig", quest, false).await;
+    let t = realm.data.area_triggers[&trigger].clone();
+    let map = travel(
+        realm,
+        &mut c,
+        t.map,
+        Vector3d {
+            x: t.x,
+            y: t.y,
+            z: t.z,
+        },
+    )
+    .await;
+    c.send(CMSG_AREATRIGGER {
+        trigger_id: trigger,
+    })
+    .await;
+    // A portal: through it.
+    if c.gets(Duration::from_millis(500), |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await
+    .is_some()
+    {
+        c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+        c.sees(g).await;
+    }
+    let _ = map;
+    if credited(realm, g, quest).await {
+        Ok(())
+    } else {
+        Err(format!("trigger {trigger} stepped into, not explored"))
+    }
+}
+
+/// The menus, and the option of each, that lead from `root` to `menu`.
+fn gossip_path(data: &GameData, root: u32, menu: u32) -> Option<Vec<(u32, u32)>> {
+    let mut seen = ahash::AHashSet::new();
+    let mut queue = std::collections::VecDeque::from([(root, Vec::new())]);
+    while let Some((at, path)) = queue.pop_front() {
+        if at == menu {
+            return Some(path);
+        }
+        if !seen.insert(at) {
+            continue;
+        }
+        for o in data
+            .npc
+            .gossip_menus
+            .get(&at)
+            .map(|m| m.options.clone())
+            .unwrap_or_default()
+        {
+            if o.action_menu > 0 {
+                let mut p = path.clone();
+                p.push((at, o.id));
+                queue.push_back((o.action_menu as u32, p));
+            }
+        }
+    }
+    None
+}
+
+/// A gossip option's quest: the option chosen at a creature that has its
+/// menu, explored.
+async fn walk_gossip(realm: &Arc<Realm>, quest: u32, script: u32) -> Result<(), String> {
+    let data = realm.data.clone();
+    // The option: by the menus' script table, or a code-built menu's own.
+    let mut option = data
+        .scripts
+        .gossip_option_script
+        .iter()
+        .find(|(_, s)| **s == script)
+        .map(|((menu, option), _)| (*menu, *option));
+    if option.is_none() {
+        option = data.npc.gossip_menus.iter().find_map(|(menu, m)| {
+            m.options
+                .iter()
+                .find(|o| o.script == script)
+                .map(|o| (*menu, o.id))
+        });
+    }
+    let Some((menu, option)) = option else {
+        return Err(format!("no option runs gossip script {script}"));
+    };
+    // A creature in the world whose menu leads to it.
+    let mut found = None;
+    let mut entries: Vec<&CreatureTemplate> = data
+        .creature_templates
+        .values()
+        .filter(|t| t.gossip_menu_id != 0)
+        .collect();
+    entries.sort_by_key(|t| t.entry);
+    for t in entries {
+        if let Some(path) = gossip_path(&data, t.gossip_menu_id, menu)
+            && spawn_of(realm, t.entry).is_some()
+        {
+            found = Some((t.entry, path));
+            break;
+        }
+    }
+    let Some((entry, path)) = found else {
+        return Err(format!("no creature in the world has menu {menu}"));
+    };
+    if debug() {
+        let steps: Vec<String> = data
+            .scripts
+            .gossip
+            .get(&script)
+            .into_iter()
+            .flatten()
+            .map(|s| {
+                format!(
+                    "{}:{:?} t{} c{}",
+                    s.command, s.datalong, s.target_type, s.condition
+                )
+            })
+            .collect();
+        let opt = data
+            .npc
+            .gossip_menus
+            .get(&menu)
+            .and_then(|m| m.options.iter().find(|o| o.id == option).cloned());
+        eprintln!(
+            "walk gossip {quest}: script {script} steps {steps:?}, option {:?} condition {:?}",
+            opt.as_ref().map(|o| o.text.clone()),
+            opt.map(|o| (
+                o.condition,
+                data.scripts.conditions.get(&o.condition).cloned()
+            ))
+        );
+    }
+    let mut last = String::new();
+    for horde in [false, true] {
+        match gossip_once(realm, quest, entry, &path, (menu, option), horde).await {
+            Ok(()) => return Ok(()),
+            Err(why) => last = why,
+        }
+    }
+    Err(last)
+}
+
+/// [`walk_gossip`] by a hero of one side.
+async fn gossip_once(
+    realm: &Arc<Realm>,
+    quest: u32,
+    entry: u32,
+    path: &[(u32, u32)],
+    (menu, option): (u32, u32),
+    horde: bool,
+) -> Result<(), String> {
+    let (mut c, g, _) = walker(realm, "Goss", quest, horde).await;
+    let (map, who, _) = try_visit(realm, &mut c, entry).await?;
+    c.send(CMSG_GOSSIP_HELLO { guid: who }).await;
+    for (_, o) in path.iter().copied().chain([(menu, option)]) {
+        let shown = c
+            .gets(Duration::from_secs(5), |m| match m {
+                ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(gm) if gm.guid == who => Some(
+                    gm.gossips
+                        .iter()
+                        .map(|x| (x.id, x.message.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .await;
+        if debug() {
+            eprintln!("walk gossip {quest}: at {entry}, shown {shown:?}, choosing {o}");
+        }
+        choose(&c, who, o).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = map;
+    if credited(realm, g, quest).await {
+        Ok(())
+    } else {
+        Err(format!(
+            "option {option} of menu {menu} at {entry} chosen, not explored"
+        ))
+    }
+}
+
+/// A quest whose start script credits it: taken from its giver, explored.
+async fn walk_quest_start(realm: &Arc<Realm>, quest: u32) -> Result<(), String> {
+    let mut last = String::new();
+    for horde in [false, true] {
+        match quest_start_once(realm, quest, horde).await {
+            Ok(()) => return Ok(()),
+            Err(why) => last = why,
+        }
+    }
+    Err(last)
+}
+
+/// [`walk_quest_start`] by a hero of one side.
+async fn quest_start_once(realm: &Arc<Realm>, quest: u32, horde: bool) -> Result<(), String> {
+    let data = realm.data.clone();
+    let giver = data
+        .npc
+        .creature_starts
+        .iter()
+        .chain(data.npc.object_starts.iter())
+        .filter(|(_, qs)| qs.contains(&quest))
+        .map(|(e, _)| *e)
+        .find(|e| spawn_of(realm, *e).is_some());
+    let Some(giver) = giver else {
+        return Err("no giver in the world".into());
+    };
+    let q = data.npc.quests[&quest].clone();
+    let (race, class) = hero_for(&q, horde);
+    let level = (q.level.max(i32::from(q.min_level))).clamp(1, 60) as u8;
+    let (mut c, g, _) = hero(realm, &walker_name("Strt"), race, class, level).await;
+    // What it follows, done.
+    let before: Vec<u32> = data
+        .npc
+        .quest_graph()
+        .prerequisites
+        .get(&quest)
+        .map(|v| v.iter().map(|p| p.quest).collect())
+        .unwrap_or_default();
+    let (map, who, _) = try_visit(realm, &mut c, giver).await?;
+    map.query(move |m| {
+        hardy(m, g);
+        fit_for(m, g, &q);
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .journal
+            .rewarded
+            .extend(before.iter().copied());
+        crate::game::map::quests::accept(m, g, who, quest);
+    })
+    .await;
+    if !until(&map, move |m| logged(m, g, quest)).await {
+        return Err(format!("not taken from {giver}"));
+    }
+    if credited(realm, g, quest).await {
+        Ok(())
+    } else {
+        Err(format!("taken from {giver}, not explored"))
+    }
+}
+
+/// The event quests the world database raises by an area trigger, a
+/// gossip option or a quest's start script, walked one by one on the real
+/// world: each in a fresh hero's log, its source set off, its credit seen.
+#[tokio::test]
+async fn the_real_database_event_quests_are_walked() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let data = realm.data.clone();
+    let mut walks: Vec<(u32, &'static str, u32)> = Vec::new();
+    let quests: ahash::AHashSet<u32> = data
+        .npc
+        .quests
+        .values()
+        .filter(|q| q.special_flags & 2 != 0)
+        .map(|q| q.id)
+        .collect();
+    let mut triggers: Vec<(u32, u32)> = data
+        .npc
+        .area_trigger_quests
+        .iter()
+        .filter(|(t, q)| quests.contains(q) && data.area_triggers.contains_key(t))
+        .map(|(t, q)| (*q, *t))
+        .collect();
+    triggers.sort();
+    walks.extend(triggers.iter().map(|(q, t)| (*q, "trigger", *t)));
+    let mut gossip: Vec<(u32, u32)> = data
+        .scripts
+        .gossip
+        .iter()
+        .flat_map(|(id, v)| v.iter().map(move |s| (s, *id)))
+        .filter(|(s, _)| s.command == 7 && quests.contains(&s.datalong[0]))
+        .map(|(s, id)| (s.datalong[0], id))
+        .collect();
+    gossip.sort();
+    gossip.dedup_by_key(|(q, _)| *q);
+    walks.extend(gossip.iter().map(|(q, id)| (*q, "gossip", *id)));
+    let mut starts: Vec<u32> = data
+        .scripts
+        .quest_start_script
+        .iter()
+        .filter(|(q, id)| {
+            quests.contains(q)
+                && data
+                    .scripts
+                    .quest_start
+                    .get(id)
+                    .is_some_and(|v| v.iter().any(|s| s.command == 7 && s.datalong[0] == **q))
+        })
+        .map(|(q, _)| *q)
+        .collect();
+    starts.sort();
+    walks.extend(starts.iter().map(|q| (*q, "start", 0)));
+    if let Ok(only) = std::env::var("WALK_ONLY") {
+        let only: Vec<u32> = only.split(',').filter_map(|q| q.parse().ok()).collect();
+        walks.retain(|(q, _, _)| only.contains(q));
+    }
+    // A few at a time, each its own hero.
+    let mut broken = Vec::new();
+    let mut running = tokio::task::JoinSet::new();
+    for (quest, kind, id) in walks.iter().copied() {
+        if running.len() >= WALKERS
+            && let Some(Ok((q, Err(why)))) = running.join_next().await
+        {
+            broken.push((q, why));
+        }
+        let realm = realm.clone();
+        running.spawn(async move {
+            let r = match kind {
+                "trigger" => walk_trigger(&realm, quest, id).await,
+                "gossip" => walk_gossip(&realm, quest, id).await,
+                _ => walk_quest_start(&realm, quest).await,
+            };
+            if debug() {
+                eprintln!("walk {quest} ({kind} {id}): {r:?}");
+            }
+            (quest, r)
+        });
+    }
+    while let Some(done) = running.join_next().await {
+        if let Ok((q, Err(why))) = done {
+            broken.push((q, why));
+        }
+    }
+    broken.sort();
+    eprintln!(
+        "database event quests walked: {} of {}; broken: {broken:?}",
+        walks.len() - broken.len(),
+        walks.len()
+    );
+    let unexpected: Vec<&(u32, String)> = broken
+        .iter()
+        .filter(|(q, _)| !UNWALKED.iter().any(|(k, _)| k == q))
+        .collect();
+    assert!(unexpected.is_empty(), "{unexpected:?}");
+}
+
+/// The database's event quests these walks can't do yet, and why: what
+/// their source needs that a walk doesn't set up, or what is still to be
+/// found. Each is reported, not failed.
+const UNWALKED: &[(u32, &str)] = &[
+    (2278, "an object's gossip (the Discs of Norgannon)"),
+    (2954, "an object's gossip (the Stone Watcher of Norgannon)"),
+    (3821, "a menu's own script, not an option's"),
+    (4285, "an object's gossip (the Northern Crystal Pylon)"),
+    (4287, "an object's gossip (the Eastern Crystal Pylon)"),
+    (4288, "an object's gossip (the Western Crystal Pylon)"),
+    (4506, "a menu no spawned creature has"),
+    (7481, "a menu no spawned creature has (Dire Maul)"),
+    (7482, "a menu no spawned creature has (Dire Maul)"),
+    (
+        8746,
+        "Metzen the Reindeer is out only in the Feast of Winter Veil",
+    ),
+    (
+        8762,
+        "Metzen the Reindeer is out only in the Feast of Winter Veil",
+    ),
+    (7001, "the Stable Master's option wants a tamed ram's aura"),
+    (7027, "the Stable Master's option wants a tamed wolf's aura"),
+    (
+        4964,
+        "the warlock's orb quest wants what the walk doesn't give",
+    ),
+    (
+        4975,
+        "the warlock's orb quest wants what the walk doesn't give",
+    ),
+    (
+        4001,
+        "Kharan's menus by the player's side: still broken or unmet",
+    ),
+    (4866, "Ragged John's option: still broken or unmet"),
+    (
+        6001,
+        "the Lunaclaw spirit shows no menu: still broken or unmet",
+    ),
+    (
+        6002,
+        "the Lunaclaw spirit shows no menu: still broken or unmet",
+    ),
+];
+
+/// Where an escort's escortee is, for the walks: its creature and place.
+fn escortee_of(m: &Map, quest: u32) -> Option<(Guid, Vector3d)> {
+    m.escorts
+        .iter()
+        .find(|e| e.quest == quest)
+        .and_then(|e| m.creature(e.creature))
+        .map(|c| (c.guid, c.position))
+}
+
+/// Take `quest` from the giver nearest its escortee (or any in the world),
+/// what it follows done: the map, or why not.
+async fn take_escort(
+    realm: &Arc<Realm>,
+    quest: u32,
+    escortee: u32,
+    horde: bool,
+) -> Result<(Client, Guid, MapHandle), String> {
+    let data = realm.data.clone();
+    let mut givers: Vec<u32> = data
+        .npc
+        .creature_starts
+        .iter()
+        .filter(|(_, qs)| qs.contains(&quest))
+        .map(|(e, _)| *e)
+        .filter(|e| spawn_of(realm, *e).is_some())
+        .collect();
+    givers.sort_by_key(|e| (*e != escortee, *e));
+    let Some(giver) = givers.first().copied() else {
+        return Err("no giver in the world".into());
+    };
+    let q = data.npc.quests[&quest].clone();
+    let (race, class) = hero_for(&q, horde);
+    let level = (q.level.max(i32::from(q.min_level))).clamp(1, 60) as u8;
+    let (mut c, g, _) = hero(realm, &walker_name("Esco"), race, class, level).await;
+    // The escortee and giver back if an earlier walk sent them off.
+    for entry in [escortee, giver] {
+        if let Some((id, _)) = spawn_of(realm, entry)
+            && realm
+                .data
+                .maps
+                .get(&id)
+                .is_none_or(|m| m.instance_type == 0)
+        {
+            realm
+                .maps
+                .get(realm, MapKey::world(id))
+                .query(move |m| {
+                    let dead: Vec<Guid> = m
+                        .creatures
+                        .iter()
+                        .filter(|(_, c)| c.entry == entry && !c.alive())
+                        .map(|(_, c)| c.guid)
+                        .collect();
+                    for g in dead {
+                        crate::game::map::ai::respawn_now(m, g);
+                    }
+                })
+                .await;
+        }
+    }
+    let before: Vec<u32> = data
+        .npc
+        .quest_graph()
+        .prerequisites
+        .get(&quest)
+        .map(|v| v.iter().map(|p| p.quest).collect())
+        .unwrap_or_default();
+    let (map, who, _) = try_visit(realm, &mut c, giver).await?;
+    map.query(move |m| {
+        hardy(m, g);
+        let p = m.players.get_mut(&g).unwrap();
+        p.journal.rewarded.extend(before.iter().copied());
+        fit_for(m, g, &q);
+        crate::game::map::quests::accept(m, g, who, quest);
+    })
+    .await;
+    if !until(&map, move |m| logged(m, g, quest)).await {
+        return Err(format!("not taken from {giver}"));
+    }
+    Ok((c, g, map))
+}
+
+/// An escort or follower quest: taken, the escortee hurried along (out of
+/// its fights, which it waits out, and kept whole), the player at its
+/// side, or, for a follower, the player leading it to its goal: whether
+/// it was credited.
+async fn walk_escort(
+    realm: &Arc<Realm>,
+    quest: u32,
+    escortee: u32,
+    goal: Option<Vector3d>,
+) -> Result<(), String> {
+    let mut taken = Err(String::new());
+    for horde in [false, true] {
+        taken = take_escort(realm, quest, escortee, horde).await;
+        if taken.is_ok() {
+            break;
+        }
+    }
+    let (_c, g, map) = taken?;
+    let mut last = String::new();
+    for _ in 0..1500 {
+        let state = map
+            .query(move |m| {
+                let Some((e, at)) = escortee_of(m, quest) else {
+                    return (explored(m, g, quest), true, String::from("no escort"));
+                };
+                // Not so fast it outruns the player between looks.
+                if let Some(c) = m.creature_mut(e) {
+                    c.speeds.walk = 30.0;
+                    c.speeds.run = 30.0;
+                }
+                let fighting = m
+                    .creature(e)
+                    .filter(|c| c.combat.attacking)
+                    .map(|c| c.combat.victim);
+                // One that turns on the player, or that may be fought and
+                // not killed (Slim Jahn's brawl), is fought.
+                let floor =
+                    crate::game::map::event_ai::scripted(m, e).is_some_and(|s| s.invincible_hp > 0);
+                let turned =
+                    crate::game::map::combat::can_attack(m, g, e) && (floor || fighting == Some(g));
+                if turned {
+                    let (_, max) = health(m, e);
+                    crate::game::map::ai::attacked(m, e, g);
+                    crate::game::map::combat::deal_damage(m, g, e, (max / 10).max(1));
+                } else if fighting.is_some()
+                    && !m.escorts.iter().any(|x| x.quest == quest && x.held())
+                {
+                    crate::game::map::ai::forget(m, e);
+                    crate::game::map::combat::leave_combat(m, e);
+                }
+                if turned {
+                    hardy(m, g);
+                } else {
+                    defend(m, &[g, e]);
+                }
+                match goal {
+                    // A follower: led a little nearer its goal each time.
+                    Some(to) => {
+                        let d = crate::game::map::combat::dist(at, to);
+                        let step = if d > 8.0 { 8.0 / d } else { 1.0 };
+                        let next = Vector3d {
+                            x: at.x + (to.x - at.x) * step,
+                            y: at.y + (to.y - at.y) * step,
+                            z: at.z + (to.z - at.z) * step,
+                        };
+                        place(m, g, next);
+                    }
+                    None => place(m, g, beside(at)),
+                }
+                for x in m.escorts.iter_mut() {
+                    x.skip_start();
+                }
+                skip(m, Duration::from_secs(2));
+                let log = m.players[&g].journal.log.iter().find(|l| l.quest == quest);
+                (
+                    log.is_some_and(|l| l.explored),
+                    log.is_none_or(|l| l.failed),
+                    format!(
+                        "point {:?} at {at:?}, health {:?}, fighting {:?}, faction {:?}, event {}",
+                        m.escorts
+                            .iter()
+                            .find(|x| x.quest == quest)
+                            .and_then(|x| x.point()),
+                        health(m, e),
+                        m.creature(e)
+                            .map(|c| (c.combat.attacking, c.combat.victim == g)),
+                        m.creature(e).map(|c| c
+                            .fields
+                            .get_u32(crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE)),
+                        crate::game::map::map_events::active(m, quest),
+                    ),
+                )
+            })
+            .await
+            .unwrap();
+        last = state.2;
+        if std::env::var("ESCORT_TRACE").is_ok() {
+            eprintln!("escort {quest}: {last}");
+        }
+        if state.0 {
+            return Ok(());
+        }
+        if state.1 {
+            return Err(format!("failed, or gone: {last}"));
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Err(format!("not credited: {last}"))
+}
+
+/// The escort and follower quests, walked one by one on the real world.
+#[tokio::test]
+async fn the_real_escort_quests_are_walked() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let data = realm.data.clone();
+    let mut walks: Vec<(u32, u32, Option<Vector3d>)> = Vec::new();
+    let event = |q: u32| {
+        data.npc
+            .quests
+            .get(&q)
+            .is_some_and(|q| q.special_flags & 2 != 0)
+    };
+    for e in crate::game::map::escorts::catalog::ESCORTS {
+        // The Nightmare Manifests is walked on its own.
+        if e.quest != 8736 && event(e.quest) {
+            walks.push((e.quest, e.entry, None));
+        }
+    }
+    for f in crate::game::map::escorts::catalog::FOLLOWERS
+        .iter()
+        .filter(|f| event(f.quest))
+    {
+        let goal = match f.goal {
+            crate::game::map::escorts::Goal::Creature(entry, _) => {
+                spawn_of(&realm, entry).map(|(_, at)| at)
+            }
+            crate::game::map::escorts::Goal::Point(x, y, z, _) => Some(Vector3d { x, y, z }),
+        };
+        if let Some(goal) = goal {
+            walks.push((f.quest, f.entry, Some(goal)));
+        }
+    }
+    if let Ok(only) = std::env::var("WALK_ONLY") {
+        let only: Vec<u32> = only.split(',').filter_map(|q| q.parse().ok()).collect();
+        walks.retain(|(q, _, _)| only.contains(q));
+    }
+    let _ = &data;
+    // A few at a time, each its own hero, but never two of an escortee.
+    let mut broken = Vec::new();
+    let mut running: tokio::task::JoinSet<(u32, u32, Result<(), String>)> =
+        tokio::task::JoinSet::new();
+    let mut busy: Vec<u32> = Vec::new();
+    for (quest, entry, goal) in walks.iter().copied() {
+        while running.len() >= WALKERS || busy.contains(&entry) {
+            if let Some(Ok((q, e, r))) = running.join_next().await {
+                busy.retain(|b| *b != e);
+                if let Err(why) = r {
+                    broken.push((q, why));
+                }
+            }
+        }
+        busy.push(entry);
+        let realm = realm.clone();
+        running.spawn(async move {
+            let r = walk_escort(&realm, quest, entry, goal).await;
+            if debug() {
+                eprintln!("walk escort {quest} ({entry}): {r:?}");
+            }
+            (quest, entry, r)
+        });
+    }
+    while let Some(done) = running.join_next().await {
+        if let Ok((q, _, Err(why))) = done {
+            broken.push((q, why));
+        }
+    }
+    broken.sort();
+    eprintln!(
+        "escort quests walked: {} of {}; broken: {broken:?}",
+        walks.len() - broken.len(),
+        walks.len()
+    );
+    // Celebras the Redeemed shows once the Cursed is dead; Arei, who gives
+    // Ancient Spirit, has no spawn in the world database.
+    let unexpected: Vec<&(u32, String)> = broken
+        .iter()
+        .filter(|(q, _)| ![7046, 4261].contains(q))
+        .collect();
+    assert!(unexpected.is_empty(), "{unexpected:?}");
+}
+
+/// The escorts' steps the catalog's first import left out are there, as
+/// Thistle Tea's catalog has them: the Defias Traitor's raiders (1651),
+/// Gilthares's bandits (4904), Ringo's aura taken off (6482), Slim Jahn's
+/// floor of health and the gate that fails him (1249), the
+/// Threshwackonator turning on its player (2078).
+#[test]
+fn the_escort_catalog_has_thistle_teas_steps() {
+    use crate::game::map::escorts::{Act, escort, follower};
+    let at = |quest: u32, point: u32| -> &'static [Act] {
+        escort(quest)
+            .and_then(|e| e.points.iter().find(|(p, _)| *p == point))
+            .map(|(_, a)| *a)
+            .unwrap_or(&[])
+    };
+    let summons = |acts: &[Act], entry: u32| {
+        acts.iter()
+            .filter(|a| matches!(a, Act::Summon { entry: e, .. } if *e == entry))
+            .count()
+    };
+    for (point, raiders) in [(7, 3), (8, 4), (9, 5)] {
+        assert_eq!(summons(at(1651, point), 6180), raiders, "1651 at {point}");
+    }
+    for point in [8, 14, 21] {
+        assert_eq!(summons(at(4904, point), 10758), 2, "4904 at {point}");
+    }
+    assert!(
+        at(6482, 25)
+            .iter()
+            .any(|a| matches!(a, Act::RemoveAura(20514)))
+    );
+    let jahn = escort(1249).unwrap();
+    assert!(jahn.accept.iter().any(|a| matches!(a, Act::Invincible(20))));
+    assert!(at(1249, 9).iter().any(|a| matches!(a, Act::Fail)));
+    assert!(
+        follower(2078)
+            .unwrap()
+            .arrive
+            .iter()
+            .any(|a| matches!(a, Act::Attack))
+    );
+}
+
+/// An escortee a script stops where it stands (movement idle) waits there,
+/// as Thistle Tea's idle motion takes it off its path, until a script sets
+/// it walking again; and a faction an escort sets makes it hostile as a
+/// script's does.
+#[tokio::test]
+async fn a_script_halts_an_escort_and_sets_it_walking() {
+    let mut d = GameData::empty();
+    escortee(&mut d, GRARK, 4121, HUMAN_START, 1..=45);
+    for e in AMBUSHERS.into_iter().chain([7046, 9538, 9539]) {
+        d.creature_templates.insert(e, template(e, "Blackrock"));
+    }
+    let realm = harness::realm_with(d);
+    let a = player(&realm, "Alice").await;
+    let g = a.guid;
+    let map = realm.registry.online(g).unwrap().map();
+    let grark = set_out(&map, g, GRARK, 4121).await;
+    let movement = |kind: u32| crate::game::data::scripts::ScriptStep {
+        command: 20,
+        datalong: [kind, 0, 0, 0],
+        ..Default::default()
+    };
+    let mut now = going(&map, g, grark, 4121).await;
+    for _ in 0..200 {
+        if now.at.x > HUMAN_START.0 + 6.0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        now = going(&map, g, grark, 4121).await;
+    }
+    let idle = movement(0);
+    map.query(move |m| {
+        crate::game::map::scripts::execute(m, &idle, grark, g);
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let halted = going(&map, g, grark, 4121).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let still = going(&map, g, grark, 4121).await;
+    assert!(halted.held && still.held, "halted: {still:?}");
+    assert!(
+        (still.at.x - halted.at.x).abs() < 0.5,
+        "where it stood: {halted:?} {still:?}"
+    );
+    let walk = movement(2);
+    map.query(move |m| {
+        crate::game::map::scripts::execute(m, &walk, grark, g);
+    })
+    .await;
+    let mut on = going(&map, g, grark, 4121).await;
+    for _ in 0..200 {
+        if on.at.x > still.at.x + 4.0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        on = going(&map, g, grark, 4121).await;
+    }
+    assert!(!on.held && on.at.x > still.at.x + 4.0, "on its way: {on:?}");
+}
+
+/// The Threshwackonator 4100 (2078), led to Gelkak, turns: the faction
+/// its arrival sets makes it hostile to players, as a script's would, and
+/// it goes for the player.
+#[tokio::test]
+async fn a_follower_turns_on_its_player_at_its_goal() {
+    const THRESH: u32 = 6669;
+    const GELKAK: u32 = 6667;
+    let mut d = GameData::empty();
+    let mut t = template(THRESH, "The Threshwackonator 4100");
+    t.npc_flags = 0x2;
+    d.creature_templates.insert(THRESH, t);
+    d.creature_templates
+        .insert(GELKAK, template(GELKAK, "Gelkak Gyromast"));
+    // Monster: everyone's enemy.
+    d.faction_templates.insert(
+        14,
+        crate::game::data::FactionTemplate {
+            id: 14,
+            enemy_mask: 0x7,
+            ..Default::default()
+        },
+    );
+    for (guid, entry, dx) in [(THRESH, THRESH, -1.5), (GELKAK, GELKAK, 6.0)] {
+        d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+            guid,
+            entries: vec![entry],
+            map: 0,
+            x: HUMAN_START.0 + dx,
+            y: HUMAN_START.1,
+            z: HUMAN_START.2,
+            ..Default::default()
+        });
+    }
+    d.npc.quests.insert(
+        2078,
+        crate::game::data::npc::Quest {
+            id: 2078,
+            title: "Gyromast's Revenge".into(),
+            min_level: 1,
+            level: 1,
+            ..Default::default()
+        },
+    );
+    d.npc.creature_starts.insert(THRESH, vec![2078]);
+    let realm = harness::realm_with(d);
+    let a = player(&realm, "Alice").await;
+    let g = a.guid;
+    let map = realm.registry.online(g).unwrap().map();
+    let thresh = guid::unit(THRESH, THRESH);
+    map.query(move |m| {
+        if let Some(c) = m.creature_mut(thresh) {
+            c.speeds.walk = 20.0;
+            c.speeds.run = 20.0;
+        }
+        crate::game::map::quests::accept(m, g, thresh, 2078);
+    })
+    .await;
+    // Led to Gelkak.
+    let turned = until_mut(&map, move |m| {
+        place(
+            m,
+            g,
+            Vector3d {
+                x: HUMAN_START.0 + 4.0,
+                y: HUMAN_START.1,
+                z: HUMAN_START.2,
+            },
+        );
+        m.creature(thresh)
+            .is_some_and(|c| c.hostile_to_players && c.combat.victim == g)
+    })
+    .await;
+    assert!(turned, "hostile, and at the player");
 }
