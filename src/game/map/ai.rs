@@ -13,14 +13,12 @@ use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::combat::{self, dist};
-use crate::game::map::creature::{Creature, Life, Motion};
+use crate::game::map::creature::{Life, Motion};
 use crate::game::map::death::Death;
 use crate::game::map::player::{PLAYER_FLAGS_GM, UNIT_FLAG_IN_COMBAT};
 
 /// How often an idle hostile creature looks for players.
 const AGGRO_SCAN_EVERY: Duration = Duration::from_millis(500);
-/// How far a creature follows from home before it gives up.
-const DEFAULT_LEASH: f32 = 60.0;
 /// How long a corpse lies before it goes (Thistle Tea's `@corpse_decay_ms`):
 /// an elite's, ranks one to three, twice as long.
 const CORPSE_DECAY: Duration = Duration::from_secs(300);
@@ -282,18 +280,14 @@ pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    c.taunted_by = Some(by);
     c.combat.victim = by;
     c.fields.set_guid(UNIT_FIELD_TARGET, by);
     attacked(map, creature, by);
 }
 
+/// A taunt ended: what it borrowed goes back, and the victim is the
+/// threat's choice again, or an older taunt's (`taunter`).
 pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
-    if let Some(c) = map.creature_mut(creature)
-        && c.taunted_by == Some(by)
-    {
-        c.taunted_by = None;
-    }
     crate::game::map::spells::threat_sync::taunt_ended(map, creature, by);
 }
 
@@ -757,33 +751,67 @@ fn effective_threat(threat: f32) -> f32 {
     threat.max(0.0)
 }
 
+/// Whether `g` may fight `t`: alive, attackable, and seen through any
+/// stealth or invisibility (Thistle Tea's `valid_victim?`).
+fn valid_victim(map: &Map, g: Guid, t: Guid) -> bool {
+    map.unit_view(t).is_some_and(|u| u.alive)
+        && combat::can_attack(map, g, t)
+        && crate::game::map::spells::stealth::sees(map, g, t)
+}
+
+/// Those on `g`'s threat list it may no longer fight come off it, and
+/// what they held there (Thistle Tea's `Threat.reselect`).
+fn prune_threat(map: &mut Map, g: Guid) {
+    let gone: Vec<Guid> = map
+        .creature(g)
+        .map(|c| {
+            c.threat
+                .iter()
+                .map(|(t, _)| *t)
+                .filter(|t| !valid_victim(map, g, *t))
+                .collect()
+        })
+        .unwrap_or_default();
+    for t in gone {
+        crate::game::map::spells::threat_sync::removed(map, g, t);
+        if let Some(c) = map.creature_mut(g) {
+            c.threat.retain(|(x, _)| *x != t);
+        }
+    }
+}
+
 /// The highest threat still worth fighting, if any.
 fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
     let c = map.creature(g)?;
-    let home = c.home;
-    let leash = leash_of(map, c);
     c.threat
         .iter()
-        .filter(|(t, _)| {
-            map.unit_view(*t).is_some_and(|u| {
-                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
-            })
-        })
+        .filter(|(t, _)| valid_victim(map, g, *t))
         .max_by(|a, b| effective_threat(a.1).total_cmp(&effective_threat(b.1)))
         .map(|(t, _)| *t)
 }
 
+/// The caster of the newest taunt on `g` it may fight (Thistle Tea's
+/// `taunt_caster`): an older one holds when the newest can't.
+fn taunter(map: &Map, g: Guid) -> Option<Guid> {
+    map.creature(g)?
+        .auras
+        .holders
+        .iter()
+        .rev()
+        .filter(|h| h.has(crate::game::map::auras::AURA_MOD_TAUNT))
+        .map(|h| h.caster)
+        .find(|t| valid_victim(map, g, *t))
+}
+
 /// vmangos's `ThreatManager`: a taunter while the taunt lasts; otherwise
 /// the current victim, until another passes its threat by a tenth in
-/// melee range or three tenths beyond.
+/// melee range or three tenths beyond. Wherever they are: the leash, not
+/// the choice, keeps a creature near home.
 pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     let Some(c) = map.creature(g) else {
         return current;
     };
-    if let Some(t) = c.taunted_by
-        && map.unit_view(t).is_some_and(|u| u.alive)
-        && combat::can_attack(map, g, t)
-    {
+    if let Some(t) = taunter(map, g) {
         return t;
     }
     let Some(best) = pick_victim(map, g) else {
@@ -803,16 +831,10 @@ pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     };
     // Down the list from the top (Thistle Tea's `Threat.decide`): past a
     // tenth more, one in melee range takes over; past three tenths, anyone.
-    let home = c.home;
-    let leash = leash_of(map, c);
     let mut sorted: Vec<(Guid, f32)> = c
         .threat
         .iter()
-        .filter(|(t, _)| {
-            map.unit_view(*t).is_some_and(|u| {
-                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
-            })
-        })
+        .filter(|(t, _)| valid_victim(map, g, *t))
         .map(|(t, v)| (*t, effective_threat(*v)))
         .collect();
     sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -832,34 +854,17 @@ pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     current
 }
 
-/// How far a creature fights from home: its template's leash, or in the
-/// open world the default. In a dungeon or raid copy only a template's
-/// leash holds it, as Thistle Tea has it, so a boss may take its fight
-/// across its room.
-fn leash_of(map: &Map, c: &Creature) -> f32 {
-    map.realm
-        .data
-        .creature_template(c.entry)
-        .map(|t| t.leash_range)
-        .filter(|l| *l > 0.0)
-        .unwrap_or(if map.key.instance != 0 && map.battleground.is_none() {
-            f32::INFINITY
-        } else {
-            DEFAULT_LEASH
-        })
-}
-
 fn fight_step(map: &mut Map, g: Guid) {
     let now = map.now;
     if crate::game::map::creature_motion::critter_step(map, g) {
         return;
     }
+    prune_threat(map, g);
     let Some(c) = map.creature(g) else {
         return;
     };
     let current = c.combat.victim;
-    let victim = if map.unit_view(current).is_some_and(|u| u.alive)
-        && combat::can_attack(map, g, current)
+    let victim = if valid_victim(map, g, current)
         && !crate::game::map::creature_combat::should_evade(map, g, current)
     {
         Some(overtake(map, g, current))

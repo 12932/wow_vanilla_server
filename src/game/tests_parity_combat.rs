@@ -35,6 +35,10 @@ const CALLER: u32 = 4103;
 /// A burn over time, and a drain channelled.
 const BURN: u32 = 95_001;
 const DRAIN: u32 = 95_002;
+/// Stealth, and two taunts.
+const HIDE: u32 = 95_003;
+const GOAD: u32 = 95_004;
+const MOCK: u32 = 95_005;
 
 /// The spawns: (guid, entry, east, north).
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
@@ -181,6 +185,26 @@ fn data() -> GameData {
         if channeled {
             t.attributes[1] = crate::game::data::spells::ATTR_EX_CHANNELED;
         }
+        s.spells.insert(id, t);
+    }
+    for (id, aura) in [(HIDE, 16), (GOAD, 11), (MOCK, 11)] {
+        let mut t = crate::game::data::spells::SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            range_index: 1,
+            equipped_item_class: -1,
+            duration_index: 9,
+            ..Default::default()
+        };
+        t.effects[0] = crate::game::data::spells::SpellEffect {
+            effect: 6,
+            aura,
+            base_points: 100,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            ..Default::default()
+        };
         s.spells.insert(id, t);
     }
     d
@@ -815,4 +839,71 @@ async fn the_leash_holds_as_thistle_tea_holds_it() {
     assert!(came, "its kind came");
     assert!(!shared, "on its caller's leash");
     assert!(!keen_held, "half again its reach");
+}
+
+/// `spell` from `caster` on `target`, as its aura.
+fn aura_on(m: &mut Map, caster: Guid, target: Guid, spell: u32, amount: i32) {
+    let data = m.realm.data.clone();
+    crate::game::map::auras::apply_spell(
+        m,
+        caster,
+        target,
+        data.spells.get(spell).unwrap(),
+        &[(0, amount)],
+        Default::default(),
+    )
+    .unwrap();
+}
+
+/// Whom a creature fights, as Thistle Tea's `Threat.reselect` chooses: one
+/// far from its home as well as one near (the leash keeps it near home,
+/// not the choice); not one it can't see, who comes off its list; and an
+/// older taunt holds when the newest has gone.
+#[tokio::test]
+async fn a_creature_chooses_its_victim_as_thistle_tea_does() {
+    let (realm, _a, ga, map) = setup(Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Cid", Race::Human, Class::Warrior).await;
+    let k = kobold(11);
+    let out = map
+        .query(move |m| {
+            let place = |m: &mut Map, g: Guid, dx: f32| {
+                m.players.get_mut(&g).unwrap().movement.position = at(dx, 0.0);
+            };
+            let choose = |m: &mut Map, current: Guid| {
+                m.creature_mut(k).unwrap().combat.victim = current;
+                step(m, 1);
+                m.creature(k).unwrap().combat.victim
+            };
+            place(m, ga, 28.0);
+            crate::game::map::ai::attacked(m, k, ga);
+            // Bob, far beyond its home, three times Alice's threat.
+            place(m, gb, -40.0);
+            m.creature_mut(k).unwrap().threat = vec![(ga, 10.0), (gb, 30.0)];
+            let far = choose(m, ga);
+            // Bob hidden from it: off its list, and Alice it is.
+            aura_on(m, gb, gb, HIDE, 100);
+            let hidden = choose(m, gb);
+            let listed = m.creature(k).unwrap().threat.iter().any(|(t, _)| *t == gb);
+            // Alice and Cid taunt it in turn, Bob holding the most threat:
+            // with Cid's taunt gone, Alice's holds.
+            place(m, gb, 28.0);
+            place(m, gc, 28.0);
+            crate::game::map::auras::remove_spell(m, gb, HIDE, None);
+            m.creature_mut(k).unwrap().threat = vec![(ga, 10.0), (gb, 1000.0), (gc, 10.0)];
+            aura_on(m, ga, k, GOAD, 1);
+            aura_on(m, gc, k, MOCK, 1);
+            crate::game::map::auras::remove_spell(m, k, MOCK, Some(gc));
+            let taunted = choose(m, gb);
+            (far, hidden, listed, taunted)
+        })
+        .await
+        .unwrap();
+    let (far, hidden, listed, taunted) = out;
+    assert_eq!(far, gb, "far from home, still the one");
+    assert_eq!(hidden, ga, "not one it can't see");
+    assert!(!listed, "who comes off its list");
+    assert_eq!(taunted, ga, "the older taunt holds");
 }

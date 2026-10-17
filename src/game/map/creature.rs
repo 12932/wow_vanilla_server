@@ -233,7 +233,6 @@ pub struct Creature {
     /// Its values before auras.
     pub base: crate::game::map::derive::UnitBase,
     pub derived: crate::game::map::derive::Derived,
-    pub taunted_by: Option<Guid>,
     /// The unit that summoned or owns it: a pet's master, a totem's shaman.
     pub owner: Option<Guid>,
     /// What it is as a pet, guardian, totem or charmed unit.
@@ -366,7 +365,6 @@ impl Creature {
             loot: None,
             base: Default::default(),
             derived: Default::default(),
-            taunted_by: None,
             owner: None,
             pet: None,
             scripted: None,
