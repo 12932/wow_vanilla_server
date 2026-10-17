@@ -62,7 +62,10 @@ pub struct DamageHistory {
 
 impl DamageHistory {
     pub fn current(&self, now: Instant) -> &[(Guid, u32)] {
-        if self.last.is_some_and(|t| now.duration_since(t) <= DAMAGE_MEMORY) {
+        if self
+            .last
+            .is_some_and(|t| now.duration_since(t) <= DAMAGE_MEMORY)
+        {
             &self.by
         } else {
             &[]
@@ -97,15 +100,11 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
                 });
             }
         }
-        C::MSG_BATTLEGROUND_PLAYER_POSITIONS => {
-            crate::game::map::battleground::positions(map, g)
-        }
+        C::MSG_BATTLEGROUND_PLAYER_POSITIONS => crate::game::map::battleground::positions(map, g),
         C::CMSG_BATTLEMASTER_JOIN(m) => battlemaster_join(map, g, m.guid, m.map.as_int()),
-        C::CMSG_BATTLEFIELD_PORT(m) => crate::game::battlegrounds::port(
-            map,
-            g,
-            m.action == BattlefieldPortAction::EnterBattle,
-        ),
+        C::CMSG_BATTLEFIELD_PORT(m) => {
+            crate::game::battlegrounds::port(map, g, m.action == BattlefieldPortAction::EnterBattle)
+        }
         C::CMSG_LEAVE_BATTLEFIELD(_) => crate::game::battlegrounds::leave(map, g),
         C::CMSG_BATTLEFIELD_STATUS => {
             if let Some(me) = map.realm.registry.online(g) {
@@ -123,12 +122,13 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
 fn battlemaster_join(map: &mut Map, g: Guid, npc: Guid, map_id: u32) {
     let realm = map.realm.clone();
     let gm = map.players.get(&g).is_some_and(|p| p.gm);
-    let bg = crate::game::map::npc::npc_entry(map, g, npc, crate::game::map::npc::NPC_FLAG_BATTLEMASTER)
-        .and_then(|e| realm.data.battlemasters.get(&e).copied())
-        .or_else(|| {
-            gm.then(|| crate::game::battlegrounds::bg_of_map(map_id))
-                .flatten()
-        });
+    let bg =
+        crate::game::map::npc::npc_entry(map, g, npc, crate::game::map::npc::NPC_FLAG_BATTLEMASTER)
+            .and_then(|e| realm.data.battlemasters.get(&e).copied())
+            .or_else(|| {
+                gm.then(|| crate::game::battlegrounds::bg_of_map(map_id))
+                    .flatten()
+            });
     let (Some(bg), Some(me)) = (bg, realm.registry.online(g)) else {
         return;
     };
@@ -203,7 +203,12 @@ pub fn entrance(map: &mut Map, g: Guid, trigger: u32) {
         .get(&e.bg)
         .is_none_or(|t| level >= t.min_level && level <= t.max_level);
     if team_ok && levels_ok {
-        battlefield_list(map, g, Guid::zero(), crate::game::battlegrounds::map_of(e.bg));
+        battlefield_list(
+            map,
+            g,
+            Guid::zero(),
+            crate::game::battlegrounds::map_of(e.bg),
+        );
     } else {
         let side = if e.team == 469 { "Alliance" } else { "Horde" };
         let min = data.battlegrounds.get(&e.bg).map_or(10, |t| t.min_level);
@@ -236,7 +241,10 @@ pub fn toggle(map: &mut Map, g: Guid, set: Option<bool>) {
 }
 
 fn refresh_flag(p: &mut Player, now: Instant) {
-    let holds = p.pvp.holds(now) || p.combat.last_pvp.is_some_and(|t| now.duration_since(t) <= PVP_LINGER);
+    let holds = p.pvp.holds(now)
+        || p.combat
+            .last_pvp
+            .is_some_and(|t| now.duration_since(t) <= PVP_LINGER);
     p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, holds);
 }
 
@@ -324,14 +332,38 @@ pub fn apply(p: &mut Player, h: &Projection) {
         h.today_honorable.min(0xFFFF) as u16,
         h.today_dishonorable.min(0xFFFF) as u16,
     );
-    f.set_shorts(PLAYER_FIELD_YESTERDAY_KILLS, h.yesterday_kills.min(0xFFFF) as u16, 0);
-    f.set_shorts(PLAYER_FIELD_LAST_WEEK_KILLS, h.last_week_kills.min(0xFFFF) as u16, 0);
-    f.set_shorts(PLAYER_FIELD_THIS_WEEK_KILLS, h.this_week_kills.min(0xFFFF) as u16, 0);
-    f.set_u32(PLAYER_FIELD_THIS_WEEK_CONTRIBUTION, h.this_week_contribution);
+    f.set_shorts(
+        PLAYER_FIELD_YESTERDAY_KILLS,
+        h.yesterday_kills.min(0xFFFF) as u16,
+        0,
+    );
+    f.set_shorts(
+        PLAYER_FIELD_LAST_WEEK_KILLS,
+        h.last_week_kills.min(0xFFFF) as u16,
+        0,
+    );
+    f.set_shorts(
+        PLAYER_FIELD_THIS_WEEK_KILLS,
+        h.this_week_kills.min(0xFFFF) as u16,
+        0,
+    );
+    f.set_u32(
+        PLAYER_FIELD_THIS_WEEK_CONTRIBUTION,
+        h.this_week_contribution,
+    );
     f.set_u32(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS, h.lifetime_honorable);
-    f.set_u32(PLAYER_FIELD_LIFETIME_DISHONORABLE_KILLS, h.lifetime_dishonorable);
-    f.set_u32(PLAYER_FIELD_YESTERDAY_CONTRIBUTION, h.yesterday_contribution);
-    f.set_u32(PLAYER_FIELD_LAST_WEEK_CONTRIBUTION, h.last_week_contribution);
+    f.set_u32(
+        PLAYER_FIELD_LIFETIME_DISHONORABLE_KILLS,
+        h.lifetime_dishonorable,
+    );
+    f.set_u32(
+        PLAYER_FIELD_YESTERDAY_CONTRIBUTION,
+        h.yesterday_contribution,
+    );
+    f.set_u32(
+        PLAYER_FIELD_LAST_WEEK_CONTRIBUTION,
+        h.last_week_contribution,
+    );
     f.set_u32(PLAYER_FIELD_LAST_WEEK_RANK, h.last_week_standing);
     // The rank, as a title: PLAYER_BYTES_3's last byte.
     f.set_byte(PLAYER_BYTES_3, 3, h.rank);
@@ -383,7 +415,9 @@ pub fn damaged(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
         return;
     };
     let h = &mut p.honor_damage;
-    if h.last.is_some_and(|t| now.duration_since(t) > DAMAGE_MEMORY) {
+    if h.last
+        .is_some_and(|t| now.duration_since(t) > DAMAGE_MEMORY)
+    {
         h.by.clear();
     }
     h.last = Some(now);
@@ -401,11 +435,7 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
     let (Some(v), Some(k)) = (map.players.get(&victim), map.players.get(&killer)) else {
         return;
     };
-    if k.team == v.team
-        || v
-            .auras
-            .has(crate::game::map::auras::AURA_NO_PVP_CREDIT)
-    {
+    if k.team == v.team || v.auras.has(crate::game::map::auras::AURA_NO_PVP_CREDIT) {
         return;
     }
     let victim_team = v.team;
@@ -514,7 +544,11 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
         return;
     };
     register(map, killer);
-    map.realm.social.honor.lock().award(guid::counter(killer), a);
+    map.realm
+        .social
+        .honor
+        .lock()
+        .award(guid::counter(killer), a);
     let shown = if a.kind == AwardKind::Dishonorable {
         -(a.points as i32)
     } else {

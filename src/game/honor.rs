@@ -287,7 +287,9 @@ impl Ledger {
     }
 
     pub fn rank(&self, guid: u32) -> u8 {
-        self.entries.get(&guid).map_or(0, |e| rank_number(e.rank_points))
+        self.entries
+            .get(&guid)
+            .map_or(0, |e| rank_number(e.rank_points))
     }
 
     /// What `guid`'s fields show.
@@ -503,7 +505,9 @@ pub fn weekly(candidates: &[Candidate]) -> Vec<(u32, Standing)> {
     for team in [0u8, 1] {
         let mut ranked: Vec<&Candidate> = candidates
             .iter()
-            .filter(|c| c.team == team && c.honorable_kills >= MINIMUM_KILLS && c.contribution > 0.0)
+            .filter(|c| {
+                c.team == team && c.honorable_kills >= MINIMUM_KILLS && c.contribution > 0.0
+            })
             .collect();
         ranked.sort_by(|a, b| {
             b.contribution

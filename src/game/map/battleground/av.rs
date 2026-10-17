@@ -43,21 +43,96 @@ pub enum Kind {
 
 /// The nodes: name, kind, home side, and world-state fields.
 const NODES: [(&str, Kind, Option<usize>, [u32; 4]); 15] = [
-    ("Stormpike Aid Station", Kind::Graveyard, Some(0), [1326, 1325, 1328, 1327]),
-    ("Stormpike Graveyard", Kind::Graveyard, Some(0), [1335, 1333, 1336, 1334]),
-    ("Stonehearth Graveyard", Kind::Graveyard, Some(0), [1304, 1302, 1303, 1301]),
-    ("Snowfall Graveyard", Kind::Graveyard, None, [1343, 1341, 1344, 1342]),
-    ("Iceblood Graveyard", Kind::Graveyard, Some(1), [1348, 1346, 1349, 1347]),
-    ("Frostwolf Graveyard", Kind::Graveyard, Some(1), [1339, 1337, 1340, 1338]),
-    ("Frostwolf Relief Hut", Kind::Graveyard, Some(1), [1331, 1329, 1332, 1330]),
-    ("Dun Baldar South Bunker", Kind::Tower, Some(0), [1375, 1361, 1378, 1370]),
-    ("Dun Baldar North Bunker", Kind::Tower, Some(0), [1374, 1362, 1379, 1371]),
-    ("Icewing Bunker", Kind::Tower, Some(0), [1376, 1363, 1380, 1372]),
-    ("Stonehearth Bunker", Kind::Tower, Some(0), [1377, 1364, 1381, 1373]),
-    ("Iceblood Tower", Kind::Tower, Some(1), [1390, 1368, 1395, 1385]),
-    ("Tower Point", Kind::Tower, Some(1), [1389, 1367, 1394, 1384]),
-    ("East Frostwolf Tower", Kind::Tower, Some(1), [1388, 1366, 1393, 1383]),
-    ("West Frostwolf Tower", Kind::Tower, Some(1), [1387, 1365, 1392, 1382]),
+    (
+        "Stormpike Aid Station",
+        Kind::Graveyard,
+        Some(0),
+        [1326, 1325, 1328, 1327],
+    ),
+    (
+        "Stormpike Graveyard",
+        Kind::Graveyard,
+        Some(0),
+        [1335, 1333, 1336, 1334],
+    ),
+    (
+        "Stonehearth Graveyard",
+        Kind::Graveyard,
+        Some(0),
+        [1304, 1302, 1303, 1301],
+    ),
+    (
+        "Snowfall Graveyard",
+        Kind::Graveyard,
+        None,
+        [1343, 1341, 1344, 1342],
+    ),
+    (
+        "Iceblood Graveyard",
+        Kind::Graveyard,
+        Some(1),
+        [1348, 1346, 1349, 1347],
+    ),
+    (
+        "Frostwolf Graveyard",
+        Kind::Graveyard,
+        Some(1),
+        [1339, 1337, 1340, 1338],
+    ),
+    (
+        "Frostwolf Relief Hut",
+        Kind::Graveyard,
+        Some(1),
+        [1331, 1329, 1332, 1330],
+    ),
+    (
+        "Dun Baldar South Bunker",
+        Kind::Tower,
+        Some(0),
+        [1375, 1361, 1378, 1370],
+    ),
+    (
+        "Dun Baldar North Bunker",
+        Kind::Tower,
+        Some(0),
+        [1374, 1362, 1379, 1371],
+    ),
+    (
+        "Icewing Bunker",
+        Kind::Tower,
+        Some(0),
+        [1376, 1363, 1380, 1372],
+    ),
+    (
+        "Stonehearth Bunker",
+        Kind::Tower,
+        Some(0),
+        [1377, 1364, 1381, 1373],
+    ),
+    (
+        "Iceblood Tower",
+        Kind::Tower,
+        Some(1),
+        [1390, 1368, 1395, 1385],
+    ),
+    (
+        "Tower Point",
+        Kind::Tower,
+        Some(1),
+        [1389, 1367, 1394, 1384],
+    ),
+    (
+        "East Frostwolf Tower",
+        Kind::Tower,
+        Some(1),
+        [1388, 1366, 1393, 1383],
+    ),
+    (
+        "West Frostwolf Tower",
+        Kind::Tower,
+        Some(1),
+        [1387, 1365, 1392, 1382],
+    ),
 ];
 
 /// The events whose creatures' deaths are objectives: the mines'
@@ -184,12 +259,12 @@ pub fn initial_events() -> AHashMap<u8, Option<u8>> {
         e.insert(46 + id, Some(2));
         e.insert(50 + id, Some(2));
     }
-    for ev in [48u8, 49]
-        .into_iter()
-        .chain(52..=62)
-        .chain(65..=69)
-        .chain([100, 101, bg::EVENT_GHOST_GATES, bg::EVENT_DOORS])
-    {
+    for ev in [48u8, 49].into_iter().chain(52..=62).chain(65..=69).chain([
+        100,
+        101,
+        bg::EVENT_GHOST_GATES,
+        bg::EVENT_DOORS,
+    ]) {
         e.insert(ev, Some(0));
     }
     for ev in (80u8..=87).chain(90..=97) {
@@ -324,7 +399,11 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     };
     m.scores.entry(g).or_default().objectives[column] += 1;
     if action == Assault::Assaulted && previous_owner.is_some() {
-        let entry = if NODES[id].1 == Kind::Tower { 13778 } else { 13756 };
+        let entry = if NODES[id].1 == Kind::Tower {
+            13778
+        } else {
+            13756
+        };
         crate::game::map::quests::killed(map, g, crate::game::guid::unit(entry, 0));
     }
     changed(map, id, action, Some(g));
@@ -448,9 +527,9 @@ fn objective(map: &mut Map, s: usize, kind: Reward, count: u32) {
         Reward::General | Reward::SurvivingTower | Reward::Graveyard | Reward::Mine
     );
     let multiplier = if scaled {
-        let hours = m
-            .started_at
-            .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32() / 3600.0);
+        let hours = m.started_at.map_or(0.0, |t| {
+            now.saturating_duration_since(t).as_secs_f32() / 3600.0
+        });
         60f32.powf(hours.min(1.0) - 1.0)
     } else {
         1.0
@@ -588,7 +667,9 @@ fn survivors(map: &mut Map) {
     let weekend = m.weekend;
     let mut rewards = Vec::new();
     for s in 0..2 {
-        let towers = (7..15).filter(|id| av.controlled_by(*id) == Some(s)).count() as u32;
+        let towers = (7..15)
+            .filter(|id| av.controlled_by(*id) == Some(s))
+            .count() as u32;
         let graves = (1..6).filter(|id| av.controlled_by(*id) == Some(s)).count() as u32;
         let mines = av.mines.iter().filter(|mine| mine.owner == Some(s)).count() as u32;
         let captain = u32::from(!av.defeated.contains(&[48u8, 49][s]));
@@ -627,11 +708,19 @@ fn mine_changed(map: &mut Map, id: usize) {
     for (s, v) in states {
         bg::world_state(map, s, v);
     }
-    let name = if id == 0 { "Irondeep Mine" } else { "Coldtooth Mine" };
+    let name = if id == 0 {
+        "Irondeep Mine"
+    } else {
+        "Coldtooth Mine"
+    };
     match owner {
         Some(t) => {
             bg::play_sound(map, if t == 0 { 8173 } else { 8213 });
-            bg::announce(map, Some(t), &format!("The {} has taken {name}!", faction(t)));
+            bg::announce(
+                map,
+                Some(t),
+                &format!("The {} has taken {name}!", faction(t)),
+            );
             bg::team_kill_credit(map, t, 13796);
         }
         None => bg::announce(
@@ -658,7 +747,11 @@ fn captain_buff(map: &mut Map, s: usize) {
         ("Galvangar", 22751, 8333)
     };
     bg::team_spell(map, s, spell);
-    bg::announce(map, Some(s), &format!("{name} rallies the {} troops!", faction(s)));
+    bg::announce(
+        map,
+        Some(s),
+        &format!("{name} rallies the {} troops!", faction(s)),
+    );
     bg::play_sound(map, sound);
     if let Some(m) = map.battleground.as_mut() {
         let delay = CAPTAIN_DELAYS[rand::rng().random_range(0..CAPTAIN_DELAYS.len())];
@@ -691,14 +784,21 @@ mod tests {
         assert_eq!(av.event_state(0), 1);
         assert_eq!(av.event_state(11), 3);
         // The Alliance assaults Iceblood Tower.
-        assert_eq!(av.nodes[11].point.assault(0, now, CAPTURE), Assault::Assaulted);
+        assert_eq!(
+            av.nodes[11].point.assault(0, now, CAPTURE),
+            Assault::Assaulted
+        );
         assert_eq!(av.event_state(11), 0);
         assert_eq!(av.controlled_by(11), None);
         let rev = av.nodes[11].point.revision;
         assert!(av.nodes[11].point.capture(rev, now + CAPTURE));
         av.nodes[11].destroyed = true;
         assert_eq!(av.event_state(11), 1);
-        assert_eq!(av.controlled_by(11), None, "a burnt tower counts for no one");
+        assert_eq!(
+            av.controlled_by(11),
+            None,
+            "a burnt tower counts for no one"
+        );
         // Defenders: a tower's own event, and its defender quest's.
         assert_eq!(av.defender_events(7), vec![(22, 1), (30, 0)]);
         assert_eq!(av.defender_events(3), vec![(18, 8)]);

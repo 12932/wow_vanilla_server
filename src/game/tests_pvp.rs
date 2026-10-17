@@ -141,11 +141,7 @@ async fn both_into(
     panic!("the battle never began");
 }
 
-async fn into(
-    realm: &std::sync::Arc<crate::game::Realm>,
-    c: &mut Client,
-    map: Map,
-) -> MapHandle {
+async fn into(realm: &std::sync::Arc<crate::game::Realm>, c: &mut Client, map: Map) -> MapHandle {
     c.wait_frame(
         "the invitation",
         crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
@@ -194,11 +190,10 @@ async fn hurry(map: &MapHandle) {
             for t in b.timers.iter_mut() {
                 t.0 = now;
             }
-            let points = b
-                .ab
-                .iter_mut()
-                .flat_map(|ab| ab.nodes.iter_mut())
-                .chain(b.av.iter_mut().flat_map(|av| av.nodes.iter_mut().map(|n| &mut n.point)));
+            let points = b.ab.iter_mut().flat_map(|ab| ab.nodes.iter_mut()).chain(
+                b.av.iter_mut()
+                    .flat_map(|av| av.nodes.iter_mut().map(|n| &mut n.point)),
+            );
             for p in points {
                 if p.capture_at.is_some() {
                     p.capture_at = Some(now);
@@ -428,16 +423,7 @@ async fn alterac_valley_ends_when_a_general_falls() {
     hurry(&map).await;
     said(&mut a, "the tower burns", "destroyed Iceblood Tower").await;
     let destroyed = map
-        .query(|m| {
-            m.battleground
-                .as_ref()
-                .unwrap()
-                .av
-                .as_ref()
-                .unwrap()
-                .nodes[11]
-                .destroyed
-        })
+        .query(|m| m.battleground.as_ref().unwrap().av.as_ref().unwrap().nodes[11].destroyed)
         .await
         .unwrap();
     assert!(destroyed);
@@ -486,18 +472,15 @@ fn with_battlemaster() -> GameData {
             ..Default::default()
         },
     );
-    d.creature_spawns
-        .entry(0)
-        .or_default()
-        .push(CreatureSpawn {
-            guid: 77,
-            entries: vec![857],
-            map: 0,
-            x: -8948.0,
-            y: -132.5,
-            z: 83.5,
-            ..Default::default()
-        });
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 77,
+        entries: vec![857],
+        map: 0,
+        x: -8948.0,
+        y: -132.5,
+        z: 83.5,
+        ..Default::default()
+    });
     d.battlemasters.insert(857, 3);
     d
 }
@@ -567,7 +550,9 @@ async fn an_honorable_kill_is_worth_less_each_time_today() {
                 |_| true,
             )
             .await;
-        worth.push(u32::from_le_bytes([credit[0], credit[1], credit[2], credit[3]]));
+        worth.push(u32::from_le_bytes([
+            credit[0], credit[1], credit[2], credit[3],
+        ]));
     }
     // Level 1s: 0.1212 of 188.3, then a tenth less.
     assert_eq!(worth, vec![22, 20]);
@@ -710,10 +695,7 @@ async fn silithyst_carried_home_counts_for_the_side() {
     let key = realm.registry.online(g).unwrap().map().key;
     assert_eq!(key.map, 1);
     let map = realm.maps.get(&realm, key);
-    let pos = map
-        .query(move |m| m.players[&g].position())
-        .await
-        .unwrap();
+    let pos = map.query(move |m| m.players[&g].position()).await.unwrap();
     let geyser = map
         .query(move |m| {
             let t = m.realm.data.gameobject_templates[&181598].clone();
@@ -775,7 +757,15 @@ async fn a_plaguelands_tower_falls_to_those_standing_at_it() {
         name: "Crown Guard".into(),
         ..Default::default()
     };
-    for (i, v) in [(0, 80), (2, 2426), (3, 2427), (12, 20), (13, 2428), (16, 480), (17, 1200)] {
+    for (i, v) in [
+        (0, 80),
+        (2, 2426),
+        (3, 2427),
+        (12, 20),
+        (13, 2428),
+        (16, 480),
+        (17, 1200),
+    ] {
         t.data[i] = v;
     }
     d.gameobject_templates.insert(182096, t);
@@ -802,7 +792,9 @@ async fn a_plaguelands_tower_falls_to_those_standing_at_it() {
     .await;
     // The tower goes up, and Alice watches its slider.
     a.wait_for("the slider", |m| match m {
-        ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => (w.state.state == 2426 && w.state.value == 1).then_some(()),
+        ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => {
+            (w.state.state == 2426 && w.state.value == 1).then_some(())
+        }
         _ => None,
     })
     .await;
@@ -884,4 +876,27 @@ async fn the_battlefield_status_tells_a_queued_player_where_they_stand() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn a_gm_sets_rank_points_and_the_rank_shows_as_a_title() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.say(".honor points 5000").await;
+    a.system_message("Rank points set").await;
+    let key = realm.registry.online(g).unwrap().map().key;
+    let map = realm.maps.get(&realm, key);
+    let (rank, highest) = map
+        .query(move |m| {
+            let f = &m.players[&g].fields;
+            (
+                f.get_byte(PLAYER_BYTES_3, 3),
+                f.get_byte(PLAYER_FIELD_BYTES, 3),
+            )
+        })
+        .await
+        .unwrap();
+    // 5,000 points: rank 7, Sergeant.
+    assert_eq!((rank, highest), (7, 7));
 }
