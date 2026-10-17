@@ -512,6 +512,8 @@ impl Player {
         row.state.quests = self.journal.clone();
         row.state.auras = crate::game::map::spells::cooldowns::saved_auras(self, now);
         row.state.cooldowns = crate::game::map::spells::cooldowns::saved_cooldowns(self, now);
+        row.state.category_cooldowns =
+            crate::game::map::spells::cooldowns::saved_category_cooldowns(self, now);
         row.spells = self.spells.clone();
         row
     }

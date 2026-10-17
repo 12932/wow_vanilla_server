@@ -34,7 +34,11 @@ pub fn detection_distance(
         creature
     };
     let per_level = if player { 1.5 } else { creature };
-    let scale = if level as i32 - target_level as i32 > 3 { 2.0 } else { 1.0 };
+    let scale = if level as i32 - target_level as i32 > 3 {
+        2.0
+    } else {
+        1.0
+    };
     let skill = (level * 5) as i32 + detection_bonus - stealth_skill;
     let d = (base + skill as f32 * per_level * scale / 5.0).clamp(0.0, MAX_YARDS);
     d - if behind { 9.0 } else { 0.0 }
@@ -67,16 +71,18 @@ pub fn sees(map: &Map, viewer: Guid, target: Guid) -> bool {
     if friendly(map, viewer, target) {
         return true;
     }
-    if map
-        .players
-        .get(&viewer)
-        .is_some_and(|p| p.fields.has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM))
-    {
+    if map.players.get(&viewer).is_some_and(|p| {
+        p.fields
+            .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
+    }) {
         return true;
     }
     let va = auras::auras(map, viewer);
     // Hunter's Mark and the like: the marker sees the marked.
-    if a.holders.iter().any(|h| h.caster == viewer && h.has(AURA_MOD_STALKED)) {
+    if a.holders
+        .iter()
+        .any(|h| h.caster == viewer && h.has(AURA_MOD_STALKED))
+    {
         return true;
     }
     if invisible {
@@ -116,7 +122,8 @@ pub fn sees(map: &Map, viewer: Guid, target: Guid) -> bool {
         return true;
     }
     let target_level = level(map, target);
-    let skill = a.max(AURA_MOD_STEALTH).max((target_level * 5) as i32) + a.sum(AURA_MOD_STEALTH_LEVEL);
+    let skill =
+        a.max(AURA_MOD_STEALTH).max((target_level * 5) as i32) + a.sum(AURA_MOD_STEALTH_LEVEL);
     let bonus = va.map_or(0, |v| v.sum_misc(AURA_MOD_STEALTH_DETECT, 0));
     let behind = map.unit_view(viewer).is_some_and(|u| {
         let angle = (pt.y - u.position.y).atan2(pt.x - u.position.x);

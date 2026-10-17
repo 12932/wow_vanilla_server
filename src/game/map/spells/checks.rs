@@ -135,11 +135,19 @@ pub fn form_error(s: &SpellTemplate, form: u8) -> Option<u8> {
 /// Whether `from` sees `to`: the navmesh's line of sight, and a test's
 /// walls.
 pub fn line_of_sight(map: &mut Map, from: Vector3d, to: Vector3d) -> bool {
-    let blocked = map.spells.walls.iter().any(|(a, b)| crosses(from, to, *a, *b));
+    let blocked = map
+        .spells
+        .walls
+        .iter()
+        .any(|(a, b)| crosses(from, to, *a, *b));
     if blocked {
         return false;
     }
-    let eye = |p: Vector3d| Vector3d { x: p.x, y: p.y, z: p.z + 2.0 };
+    let eye = |p: Vector3d| Vector3d {
+        x: p.x,
+        y: p.y,
+        z: p.z + 2.0,
+    };
     match map.nav.as_mut() {
         Some(nav) => nav.line_of_sight(eye(from), eye(to)),
         None => true,
@@ -148,7 +156,9 @@ pub fn line_of_sight(map: &mut Map, from: Vector3d, to: Vector3d) -> bool {
 
 /// Whether segment p-q crosses segment a-b, on the ground.
 fn crosses(p: Vector3d, q: Vector3d, a: Vector3d, b: Vector3d) -> bool {
-    let side = |o: Vector3d, x: Vector3d, y: Vector3d| (x.x - o.x) * (y.y - o.y) - (x.y - o.y) * (y.x - o.x);
+    let side = |o: Vector3d, x: Vector3d, y: Vector3d| {
+        (x.x - o.x) * (y.y - o.y) - (x.y - o.y) * (y.x - o.x)
+    };
     let (d1, d2) = (side(a, b, p), side(a, b, q));
     let (d3, d4) = (side(p, q, a), side(p, q, b));
     d1 * d2 < 0.0 && d3 * d4 < 0.0
@@ -183,12 +193,15 @@ fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
         return true;
     };
     let data = &map.realm.data;
-    let fits = |subclass: u32| s.equipped_item_subclass_mask <= 0 || s.equipped_item_subclass_mask & (1 << subclass) != 0;
+    let fits = |subclass: u32| {
+        s.equipped_item_subclass_mask <= 0 || s.equipped_item_subclass_mask & (1 << subclass) != 0
+    };
     p.items
         .iter()
         .filter(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot < 19)
         .filter(|i| {
-            i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) == 0 || i.fields.get_u32(ITEM_FIELD_DURABILITY) > 0
+            i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) == 0
+                || i.fields.get_u32(ITEM_FIELD_DURABILITY) > 0
         })
         .filter_map(|i| data.item(i.entry))
         .any(|t| t.class as i32 == s.equipped_item_class && fits(t.subclass))
@@ -244,20 +257,32 @@ pub fn check(
     if let Some(c) = map.caster(caster)
         && !triggered
     {
-        if c.casting.as_ref().is_some_and(|x| x.channel_until.is_none() || x.spell == s.id) {
+        if c.casting
+            .as_ref()
+            .is_some_and(|x| x.channel_until.is_none() || x.spell == s.id)
+        {
             return Some(fail::SPELL_IN_PROGRESS);
         }
         if c.cooldowns.get(&s.id).is_some_and(|t| *t > now)
-            || (s.category != 0 && c.category_cooldowns.get(&s.category).is_some_and(|t| *t > now))
+            || (s.category != 0
+                && c.category_cooldowns
+                    .get(&s.category)
+                    .is_some_and(|t| *t > now))
             || c.pending_cooldowns.contains(&s.id)
         {
-            return Some(if s.attr(0, 0x200_0000) { fail::DONT_REPORT } else { fail::NOT_READY });
+            return Some(if s.attr(0, 0x200_0000) {
+                fail::DONT_REPORT
+            } else {
+                fail::NOT_READY
+            });
         }
         if s.start_recovery_category != 0 && c.gcd_until.is_some_and(|t| t > now) {
             return Some(fail::NOT_READY);
         }
         // A school locked out by an interrupt.
-        if c.school_lockout.iter().any(|(mask, until)| *until > now && mask & s.school_mask() != 0)
+        if c.school_lockout
+            .iter()
+            .any(|(mask, until)| *until > now && mask & s.school_mask() != 0)
             && !s.melee_or_ranged()
         {
             return Some(fail::SILENCED);
@@ -265,10 +290,11 @@ pub fn check(
     }
     // The caster's state.
     // Breaking free (a trinket, Will of the Forsaken) works under control.
-    let frees = s
-        .effects
-        .iter()
-        .any(|e| e.effect == 108 || (e.effect == 6 && matches!(e.aura, AURA_MECHANIC_IMMUNITY | AURA_MECHANIC_IMMUNITY_MASK)));
+    let frees = s.effects.iter().any(|e| {
+        e.effect == 108
+            || (e.effect == 6
+                && matches!(e.aura, AURA_MECHANIC_IMMUNITY | AURA_MECHANIC_IMMUNITY_MASK))
+    });
     if !triggered && let Some(a) = auras::auras(map, caster) {
         if a.has(AURA_MOD_STUN) && !frees {
             return Some(fail::STUNNED);
@@ -294,13 +320,18 @@ pub fn check(
     }
     if !triggered {
         if s.attr(0, sd::ATTR_NOT_IN_COMBAT)
-            && map
-                .unit_fields(caster)
-                .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT))
+            && map.unit_fields(caster).is_some_and(|f| {
+                f.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                )
+            })
         {
             return Some(fail::AFFECTING_COMBAT);
         }
-        if s.attr(0, sd::ATTR_ONLY_STEALTHED) && !auras::auras(map, caster).is_some_and(|a| a.has(AURA_MOD_STEALTH)) {
+        if s.attr(0, sd::ATTR_ONLY_STEALTHED)
+            && !auras::auras(map, caster).is_some_and(|a| a.has(AURA_MOD_STEALTH))
+        {
             return Some(fail::ONLY_STEALTHED);
         }
         if let Some(e) = form_error(s, auras::form(map, caster)) {
@@ -321,7 +352,11 @@ pub fn check(
                 h.spell != s.id
                     && !h.passive
                     && data.spells.same_kind(h.spell, s.id)
-                    && data.spells.ranks.get(&h.spell).is_some_and(|r| r.rank > mine)
+                    && data
+                        .spells
+                        .ranks
+                        .get(&h.spell)
+                        .is_some_and(|r| r.rank > mine)
             }) {
                 return Some(fail::AURA_BOUNCED);
             }
@@ -351,11 +386,18 @@ pub fn check(
                 }
             }
         }
-        if s.requires_spell_focus != 0 && map.players.contains_key(&caster) && !near_focus(map, me.position, s.requires_spell_focus) {
+        if s.requires_spell_focus != 0
+            && map.players.contains_key(&caster)
+            && !near_focus(map, me.position, s.requires_spell_focus)
+        {
             return Some(fail::REQUIRES_SPELL_FOCUS);
         }
         if !equipped_ok(map, caster, s) {
-            return Some(if s.equipped_item_class == 2 { fail::MAINHAND_EMPTY } else { fail::EQUIPPED_ITEM_CLASS });
+            return Some(if s.equipped_item_class == 2 {
+                fail::MAINHAND_EMPTY
+            } else {
+                fail::EQUIPPED_ITEM_CLASS
+            });
         }
         if s.equipped_item_class == 2
             && auras::auras(map, caster).is_some_and(|a| a.has(AURA_MOD_DISARM))
@@ -376,7 +418,14 @@ pub fn check(
 }
 
 /// The target's checks.
-fn check_target(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets, triggered: bool, m: &Mods) -> Option<u8> {
+fn check_target(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    triggered: bool,
+    m: &Mods,
+) -> Option<u8> {
     let harmful = !auras::positive(s);
     let wants_unit = s
         .effects
@@ -386,7 +435,12 @@ fn check_target(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets, tri
     if !wants_unit {
         // A destination's range.
         if let (Some(d), Some(me)) = (t.dest, map.unit_view(caster))
-            && s.effects.iter().any(|e| matches!(targets::implicit(e.target_a), Implicit::AoeEnemyAtDest | Implicit::AoeAllyAtDest | Implicit::Location))
+            && s.effects.iter().any(|e| {
+                matches!(
+                    targets::implicit(e.target_a),
+                    Implicit::AoeEnemyAtDest | Implicit::AoeAllyAtDest | Implicit::Location
+                )
+            })
             && !triggered
         {
             let (_, max) = map.realm.data.spells.range(s);
@@ -397,7 +451,9 @@ fn check_target(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets, tri
         }
         return None;
     }
-    let target = t.unit.unwrap_or(if harmful { Guid::zero() } else { caster });
+    let target = t
+        .unit
+        .unwrap_or(if harmful { Guid::zero() } else { caster });
     if target.is_zero() {
         return Some(fail::BAD_IMPLICIT_TARGETS);
     }
@@ -417,11 +473,16 @@ fn check_target(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets, tri
             .effects
             .iter()
             .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy) || e.target_a == 53);
-        let requires_friend = s
-            .effects
-            .iter()
-            .any(|e| matches!(targets::implicit(e.target_a), Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember));
-        if (requires_enemy || harmful && !resurrects) && !combat::can_attack(map, caster, target) && !s.has_effect(95) {
+        let requires_friend = s.effects.iter().any(|e| {
+            matches!(
+                targets::implicit(e.target_a),
+                Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
+            )
+        });
+        if (requires_enemy || harmful && !resurrects)
+            && !combat::can_attack(map, caster, target)
+            && !s.has_effect(95)
+        {
             return Some(fail::TARGET_FRIENDLY);
         }
         if requires_friend && combat::can_attack(map, caster, target) {

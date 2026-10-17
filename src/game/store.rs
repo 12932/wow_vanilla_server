@@ -123,6 +123,7 @@ pub struct CharacterState {
     /// Auras and cooldowns kept across a logout.
     pub auras: Vec<crate::game::map::spells::cooldowns::SavedAura>,
     pub cooldowns: Vec<(u32, u32)>,
+    pub category_cooldowns: Vec<(u32, u32)>,
 }
 
 /// A quest in a player's log.

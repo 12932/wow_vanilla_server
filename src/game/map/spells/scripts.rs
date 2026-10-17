@@ -35,7 +35,13 @@ const FAMILY_ROGUE: u32 = 8;
 const FAMILY_PALADIN: u32 = 10;
 
 /// The Ignite talent's ranks and their share of a fire crit.
-const IGNITE_RANKS: [(u32, u32); 5] = [(11119, 8), (11120, 16), (12846, 24), (12847, 32), (12848, 40)];
+const IGNITE_RANKS: [(u32, u32); 5] = [
+    (11119, 8),
+    (11120, 16),
+    (12846, 24),
+    (12847, 32),
+    (12848, 40),
+];
 
 /// Holy Shock: its damage and heal spells.
 fn holy_shock(id: u32) -> Option<(u32, u32)> {
@@ -61,7 +67,9 @@ fn healthstone(id: u32) -> Option<[u32; 3]> {
 }
 
 fn knows(map: &Map, g: Guid, spell: u32) -> bool {
-    map.players.get(&g).is_some_and(|p| p.spells.contains(&spell))
+    map.players
+        .get(&g)
+        .is_some_and(|p| p.spells.contains(&spell))
         || auras::auras(map, g).is_some_and(|a| a.has_spell(spell))
 }
 
@@ -70,7 +78,13 @@ fn script(s: &SpellTemplate, name: &str) -> bool {
 }
 
 /// Cast `spell` from `caster` at `target` with its effects' points fixed.
-pub fn cast_with_points(map: &mut Map, caster: Guid, spell: u32, target: Guid, points: [Option<i32>; 3]) {
+pub fn cast_with_points(
+    map: &mut Map,
+    caster: Guid,
+    spell: u32,
+    target: Guid,
+    points: [Option<i32>; 3],
+) {
     let data = map.realm.data.clone();
     let Some(s) = data.spells.get(spell) else {
         return;
@@ -95,18 +109,23 @@ pub fn cast_with_points(map: &mut Map, caster: Guid, spell: u32, target: Guid, p
 }
 
 /// A school damage effect a script owns. Returns whether it did it.
-pub fn school_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: usize, amount: i32, l: &Landing) -> bool {
+pub fn school_damage(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    amount: i32,
+    l: &Landing,
+) -> bool {
     // Conflagrate needs and spends the caster's Immolate.
     if script(s, "spell_warlock_conflagrate") {
         let immolate = auras::auras(map, target).and_then(|a| {
             a.holders.iter().find(|h| {
                 h.caster == caster
-                    && map
-                        .realm
-                        .data
-                        .spells
-                        .get(h.spell)
-                        .is_some_and(|t| t.family_name == FAMILY_WARLOCK && t.family_flags & 0x4 != 0)
+                    && map.realm.data.spells.get(h.spell).is_some_and(|t| {
+                        t.family_name == FAMILY_WARLOCK && t.family_flags & 0x4 != 0
+                    })
             })
         });
         let Some(spell) = immolate.map(|h| h.spell) else {
@@ -119,9 +138,20 @@ pub fn school_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplat
     }
     // Eviscerate: 3% of attack power a combo point more.
     if script(s, "spell_rogue_eviscerate") {
-        let ap = map.players.get(&caster).map_or(0, |p| p.derived.attack_power) as f32;
+        let ap = map
+            .players
+            .get(&caster)
+            .map_or(0, |p| p.derived.attack_power) as f32;
         let extra = ap * f32::from(l.combo) * 0.03;
-        let d = outcome::damage(map, caster, target, s, index, amount.max(0) as f32 + extra, l);
+        let d = outcome::damage(
+            map,
+            caster,
+            target,
+            s,
+            index,
+            amount.max(0) as f32 + extra,
+            l,
+        );
         outcome::deal(map, caster, target, s, d, l);
         return true;
     }
@@ -130,7 +160,14 @@ pub fn school_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplat
 
 /// What a fire spell's crit leaves: Ignite, a share of the crit over four
 /// seconds, adding up to five crits' worth.
-pub fn after_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dealt: u32, crit: bool) {
+pub fn after_damage(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    dealt: u32,
+    crit: bool,
+) {
     vampiric_embrace(map, caster, target, s, dealt);
     combustion(map, caster, s, crit);
     master_of_elements(map, caster, s, crit);
@@ -149,7 +186,9 @@ pub fn after_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
     let Some(ignite) = data.spells.get(SPELL_IGNITE) else {
         return;
     };
-    let ticks = (data.spells.duration(ignite, 1).unwrap_or(4000) / ignite.effects[0].amplitude.max(1)).max(1);
+    let ticks = (data.spells.duration(ignite, 1).unwrap_or(4000)
+        / ignite.effects[0].amplitude.max(1))
+    .max(1);
     let add = (dealt * pct / 100 / ticks) as i32;
     let now = map.now;
     let rolled = auras::auras_mut(map, target).and_then(|a| {
@@ -160,7 +199,9 @@ pub fn after_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
             }
             h.combo += 1;
         }
-        h.expires = h.duration.map(|ms| now + Duration::from_millis(u64::from(ms)));
+        h.expires = h
+            .duration
+            .map(|ms| now + Duration::from_millis(u64::from(ms)));
         Some(())
     });
     if rolled.is_none() {
@@ -184,8 +225,11 @@ fn vampiric_embrace(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
     if dealt == 0 || s.school != 5 {
         return;
     }
-    let embraced = auras::auras(map, target)
-        .is_some_and(|a| a.holders.iter().any(|h| h.spell == 15286 && h.caster == caster));
+    let embraced = auras::auras(map, target).is_some_and(|a| {
+        a.holders
+            .iter()
+            .any(|h| h.spell == 15286 && h.caster == caster)
+    });
     if !embraced {
         return;
     }
@@ -202,7 +246,11 @@ fn vampiric_embrace(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
         groups
             .group_of(caster)
             .map(|g| {
-                let sub = g.members.iter().find(|m| m.guid == caster).map(|m| m.subgroup);
+                let sub = g
+                    .members
+                    .iter()
+                    .find(|m| m.guid == caster)
+                    .map(|m| m.subgroup);
                 g.members
                     .iter()
                     .filter(|m| !g.raid || Some(m.subgroup) == sub)
@@ -252,7 +300,7 @@ fn master_of_elements(map: &mut Map, caster: Guid, s: &SpellTemplate, crit: bool
     }
     let pct = auras::auras(map, caster).map_or(0, |a| {
         a.effects()
-            .filter(|(h, x)| matches!(h.spell, 29074 | 29075 | 29076) && x.kind == AURA_DUMMY)
+            .filter(|(h, x)| (29074..=29076).contains(&h.spell) && x.kind == AURA_DUMMY)
             .map(|(_, x)| x.amount)
             .max()
             .unwrap_or(0)
@@ -311,7 +359,13 @@ pub fn dummy(
         let holy_light = s.family_flags & 0x8000_0000 != 0;
         let bonus = blessing_of_light(map, target, if holy_light { 0 } else { 1 });
         let heal = if holy_light { 19968 } else { 19993 };
-        cast_with_points(map, caster, heal, target, [Some(amount + bonus), None, None]);
+        cast_with_points(
+            map,
+            caster,
+            heal,
+            target,
+            [Some(amount + bonus), None, None],
+        );
         return;
     }
     match s.script_name.as_str() {
@@ -325,14 +379,26 @@ pub fn dummy(
             if let Some(f) = map.unit_fields_mut(caster) {
                 f.set_u32(UNIT_FIELD_POWER1 + 1, 0);
             }
-            let mut strike = data.spells.get(SPELL_EXECUTE_DAMAGE).cloned().unwrap_or_else(|| s.clone());
+            let mut strike = data
+                .spells
+                .get(SPELL_EXECUTE_DAMAGE)
+                .cloned()
+                .unwrap_or_else(|| s.clone());
             strike.dmg_class = 2;
             let d = outcome::damage(map, caster, target, &strike, 0, damage.max(0) as f32, l);
             outcome::deal(map, caster, target, s, d, l);
             return;
         }
         "spell_warlock_life_tap" => {
-            let bonus = outcome::bonus(map, caster, caster, s, index, outcome::Kind::Direct, &l.mods);
+            let bonus = outcome::bonus(
+                map,
+                caster,
+                caster,
+                s,
+                index,
+                outcome::Kind::Direct,
+                &l.mods,
+            );
             let cost = l.mods.apply(mods::OP_COST, amount as f32) + bonus;
             let health = map
                 .unit_fields(caster)
@@ -349,7 +415,13 @@ pub fn dummy(
                 .position(|id| knows(map, caster, *id))
                 .map_or(0, |i| (i as i32 + 1) * 10);
             let gain = cost as i32 * (100 + improved) / 100;
-            cast_with_points(map, caster, SPELL_LIFE_TAP_ENERGIZE, caster, [Some(gain), None, None]);
+            cast_with_points(
+                map,
+                caster,
+                SPELL_LIFE_TAP_ENERGIZE,
+                caster,
+                [Some(gain), None, None],
+            );
             return;
         }
         "spell_mage_cold_snap" => {
@@ -360,7 +432,11 @@ pub fn dummy(
         }
         "spell_paladin_holy_shock" => {
             if let Some((damage, heal)) = holy_shock(s.id) {
-                let spell = if combat::can_attack(map, caster, target) { damage } else { heal };
+                let spell = if combat::can_attack(map, caster, target) {
+                    damage
+                } else {
+                    heal
+                };
                 cast_triggered(map, caster, spell, Some(target));
             }
             return;
@@ -402,17 +478,32 @@ pub fn dummy(
                 .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
                 .unwrap_or(0);
             let amount = (max as f32 * 0.3) as i32;
-            cast_with_points(map, caster, SPELL_LAST_STAND_HEALTH, caster, [Some(amount), None, None]);
+            cast_with_points(
+                map,
+                caster,
+                SPELL_LAST_STAND_HEALTH,
+                caster,
+                [Some(amount), None, None],
+            );
         }
         // Preparation: the rogue's cooldowns are done.
         14185 => reset_cooldowns(map, caster, s.id, |t| t.family_name == FAMILY_ROGUE),
         // Blood Fury: a share of attack power, and the healing penalty.
         20572 if index == 0 || s.effects[0].effect != EFFECT_DUMMY => {
-            let ap = map.players.get(&caster).map_or(0, |p| p.derived.attack_power) as f32;
+            let ap = map
+                .players
+                .get(&caster)
+                .map_or(0, |p| p.derived.attack_power) as f32;
             let bonus = (ap * amount.max(0) as f32 / 100.0) as i32;
             cast_triggered(map, caster, SPELL_BLOOD_FURY_PENALTY, Some(caster));
             if bonus > 0 {
-                cast_with_points(map, caster, SPELL_BLOOD_FURY_BUFF, caster, [Some(bonus), None, None]);
+                cast_with_points(
+                    map,
+                    caster,
+                    SPELL_BLOOD_FURY_BUFF,
+                    caster,
+                    [Some(bonus), None, None],
+                );
             }
         }
         _ if s.family_name == 0 && s.spell_icon == 1661 => {
@@ -425,10 +516,17 @@ pub fn dummy(
                     10 + (100 - h.clamp(40, 100)) as i32 / 3
                 })
                 .unwrap_or(10);
-            cast_with_points(map, caster, SPELL_BERSERKING_BUFF, caster, [Some(pct), Some(pct), Some(pct)]);
+            cast_with_points(
+                map,
+                caster,
+                SPELL_BERSERKING_BUFF,
+                caster,
+                [Some(pct), Some(pct), Some(pct)],
+            );
         }
         _ => {
-            if s.effects[index].effect == EFFECT_SCRIPT_EFFECT && judgement(map, caster, target, s) {
+            if s.effects[index].effect == EFFECT_SCRIPT_EFFECT && judgement(map, caster, target, s)
+            {
                 return;
             }
             // A dummy that names a spell to trigger.
@@ -450,7 +548,9 @@ fn blessing_of_light(map: &Map, target: Guid, index: u8) -> i32 {
                 x.kind == AURA_DUMMY
                     && x.effect == index
                     && data.spells.get(h.spell).is_some_and(|t| {
-                        t.family_name == FAMILY_PALADIN && t.family_flags & 0x1000_0000 != 0 && t.spell_visual == 300
+                        t.family_name == FAMILY_PALADIN
+                            && t.family_flags & 0x1000_0000 != 0
+                            && t.spell_visual == 300
                     })
             })
             .map(|(h, x)| x.amount * h.stacks.max(1) as i32)
@@ -489,7 +589,12 @@ fn judgement(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> bo
 
 /// The cooldowns of `caster`'s spells that `which` picks end now, but
 /// `except`'s.
-pub fn reset_cooldowns(map: &mut Map, caster: Guid, except: u32, which: impl Fn(&SpellTemplate) -> bool) {
+pub fn reset_cooldowns(
+    map: &mut Map,
+    caster: Guid,
+    except: u32,
+    which: impl Fn(&SpellTemplate) -> bool,
+) {
     let data = map.realm.data.clone();
     let spells: Vec<u32> = map
         .caster(caster)
@@ -521,13 +626,19 @@ pub fn shapeshifted(map: &mut Map, g: Guid, before: u8, form: u8) {
     if feral(form) {
         let furor = auras::auras(map, g).map_or(0, |a| {
             a.effects()
-                .filter(|(h, x)| matches!(h.spell, 17056 | 17058 | 17059 | 17060 | 17061) && x.kind == AURA_DUMMY)
+                .filter(|(h, x)| {
+                    matches!(h.spell, 17056 | 17058 | 17059 | 17060 | 17061) && x.kind == AURA_DUMMY
+                })
                 .map(|(_, x)| x.amount)
                 .max()
                 .unwrap_or(0)
         });
         if furor > 0 && outcome::chance(map, furor as f32) {
-            let (power, gain) = if form == FORM_CAT { (3u16, 40u32) } else { (1, 100) };
+            let (power, gain) = if form == FORM_CAT {
+                (3u16, 40u32)
+            } else {
+                (1, 100)
+            };
             if let Some(f) = map.unit_fields_mut(g) {
                 let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
                 let now = f.get_u32(UNIT_FIELD_POWER1 + power);

@@ -93,8 +93,8 @@ pub const EFFECT_MODIFY_THREAT_PERCENT: u32 = 125;
 /// The effects this module runs.
 pub const RUN: &[u32] = &[
     1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 24, 25, 27, 29, 30, 31, 32, 33, 35, 36, 38, 43, 44,
-    58, 60, 62, 63, 64, 67, 68, 69, 75, 77, 78, 79, 80, 83, 84, 96, 98, 108, 111, 113, 114, 115, 118,
-    121, 125,
+    58, 60, 62, 63, 64, 67, 68, 69, 75, 77, 78, 79, 80, 83, 84, 96, 98, 108, 111, 113, 114, 115,
+    118, 121, 125,
 ];
 
 /// Every effect the server knows: those with an effect here, and the
@@ -103,10 +103,10 @@ pub const RUN: &[u32] = &[
 /// enchantments, gathering) or keep for later.
 pub fn effect_supported(effect: u32) -> bool {
     const KEPT: &[u32] = &[
-        0, 4, 12, 13, 14, 15, 19, 20, 21, 22, 23, 26, 28, 34, 37, 39, 40, 41, 42, 45, 46, 47, 48, 49,
-        50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 65, 66, 70, 71, 72, 73, 74, 76, 81, 82, 85, 86, 87, 88,
-        89, 90, 91, 92, 93, 94, 95, 97, 99, 100, 101, 102, 103, 104, 105, 106, 107, 109, 110, 112, 116,
-        117, 119, 120, 122, 123, 124, 126, 127, 128, 129,
+        0, 4, 12, 13, 14, 15, 19, 20, 21, 22, 23, 26, 28, 34, 37, 39, 40, 41, 42, 45, 46, 47, 48,
+        49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 65, 66, 70, 71, 72, 73, 74, 76, 81, 82, 85, 86,
+        87, 88, 89, 90, 91, 92, 93, 94, 95, 97, 99, 100, 101, 102, 103, 104, 105, 106, 107, 109,
+        110, 112, 116, 117, 119, 120, 122, 123, 124, 126, 127, 128, 129,
     ];
     RUN.contains(&effect) || KEPT.contains(&effect)
 }
@@ -251,8 +251,10 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
     let level = map.unit_view(player).map(|u| u.level).unwrap_or(1);
     let effects: Vec<(usize, i32)> = (0..3)
         .filter(|i| {
-            matches!(s.effects[*i].effect, EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY)
-                && s.effects[*i].aura != 0
+            matches!(
+                s.effects[*i].effect,
+                EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY
+            ) && s.effects[*i].aura != 0
         })
         .map(|i| (i, points(s, i, level)))
         .collect();
@@ -280,7 +282,11 @@ pub fn points(s: &SpellTemplate, index: usize, level: u32) -> i32 {
 pub fn points_with(s: &SpellTemplate, index: usize, level: u32, combo: u8) -> i32 {
     let e = &s.effects[index];
     let level = level
-        .min(if s.max_level > 0 { s.max_level } else { u32::MAX })
+        .min(if s.max_level > 0 {
+            s.max_level
+        } else {
+            u32::MAX
+        })
         .max(s.base_level);
     let units = level.saturating_sub(s.spell_level) as f32;
     let per_level = (e.real_points_per_level * units) as i32;
@@ -335,7 +341,8 @@ fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     } as i32;
     if let Some(a) = auras::auras(map, caster) {
         cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
-        cost = (cost as f32 * a.product_mask(auras::AURA_MOD_POWER_COST_SCHOOL_PCT, s.school_mask()))
+        cost = (cost as f32
+            * a.product_mask(auras::AURA_MOD_POWER_COST_SCHOOL_PCT, s.school_mask()))
             as i32;
     }
     cost.max(0) as u32
@@ -702,7 +709,9 @@ fn execute(
             mods: m.clone(),
             reflected: aim != target,
         };
-        effects::run(map, caster, aim, s, effects, &landing, &mut chain, item, &targets);
+        effects::run(
+            map, caster, aim, s, effects, &landing, &mut chain, item, &targets,
+        );
     }
     // Effects with no unit: places, objects.
     effects::run_untargeted(map, caster, s, &targets, &m, combo);
@@ -760,9 +769,8 @@ pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dama
         .copied()
         .unwrap_or((0, 1.0));
     let pct = m.pct[mods::OP_THREAT]
-        + auras::auras(map, caster).map_or(0, |a| {
-            a.sum_mask(auras::AURA_MOD_THREAT, s.school_mask())
-        });
+        + auras::auras(map, caster)
+            .map_or(0, |a| a.sum_mask(auras::AURA_MOD_THREAT, s.school_mask()));
     let total = (damage * mult.max(0.0) + flat as f32) * (100 + pct).max(0) as f32 / 100.0;
     let extra = total - damage;
     if extra.abs() > 0.01 {
@@ -850,7 +858,14 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             .map(|e| e.multiple_value)
             .filter(|v| *v > 0.0)
             .unwrap_or(1.0);
-        heal(map, h.caster, h.caster, h.spell, (left as f32 * mult) as u32, true);
+        heal(
+            map,
+            h.caster,
+            h.caster,
+            h.spell,
+            (left as f32 * mult) as u32,
+            true,
+        );
     }
 }
 

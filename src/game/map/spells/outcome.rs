@@ -164,8 +164,10 @@ pub fn binary(s: &SpellTemplate) -> bool {
 /// A spell that hits an area.
 pub fn area(s: &SpellTemplate) -> bool {
     s.effects.iter().any(|e| {
-        matches!(e.target_a, 2 | 15 | 16 | 20 | 22 | 24 | 28 | 30 | 31 | 33 | 34 | 54)
-            || matches!(e.target_b, 15 | 16 | 24 | 28 | 30 | 31 | 54)
+        matches!(
+            e.target_a,
+            2 | 15 | 16 | 20 | 22 | 24 | 28 | 30 | 31 | 33 | 34 | 54
+        ) || matches!(e.target_b, 15 | 16 | 24 | 28 | 30 | 31 | 54)
     })
 }
 
@@ -182,13 +184,19 @@ pub fn resistance(map: &Map, caster: Guid, target: Guid, school: usize) -> i32 {
         .unit_fields(target)
         .map(|f| f.get_u32(UNIT_FIELD_RESISTANCES + school as u16) as i32)
         .unwrap_or(0);
-    let pen = auras::auras(map, caster).map_or(0, |a| a.sum_mask(AURA_MOD_TARGET_RESISTANCE, 1 << school));
+    let pen = auras::auras(map, caster)
+        .map_or(0, |a| a.sum_mask(AURA_MOD_TARGET_RESISTANCE, 1 << school));
     (base + pen).max(0)
 }
 
 /// vmangos's chance (0 to 0.75) that a resistance resists, against a
 /// caster of `caster_level`; a creature resists more the higher it is.
-pub fn resist_chance(resistance: i32, caster_level: u32, target_creature: bool, level_diff: i32) -> f32 {
+pub fn resist_chance(
+    resistance: i32,
+    caster_level: u32,
+    target_creature: bool,
+    level_diff: i32,
+) -> f32 {
     let caster_level = caster_level.max(1) as f32;
     let mut r = resistance.max(0) as f32;
     if target_creature && level_diff > 0 {
@@ -237,7 +245,12 @@ pub fn resist_fraction(chance_pct: f32, roll: i32) -> f32 {
     let (p, n) = (TABLE[i - 1], TABLE[i]);
     let k = (c - p.0) / (n.0 - p.0).max(1.0);
     let lerp = |a: f32, b: f32| a + (b - a) * k;
-    let (r100, r75, r50, r25) = (lerp(p.1, n.1), lerp(p.2, n.2), lerp(p.3, n.3), lerp(p.4, n.4));
+    let (r100, r75, r50, r25) = (
+        lerp(p.1, n.1),
+        lerp(p.2, n.2),
+        lerp(p.3, n.3),
+        lerp(p.4, n.4),
+    );
     let roll = roll as f32 / 100.0;
     if roll < r100 + r75 {
         0.75
@@ -264,8 +277,14 @@ pub fn magic_hit_chance(
 ) -> i32 {
     let diff = target_level as i32 - caster_level as i32;
     let per = if target_player { 7 } else { 11 };
-    let level = if diff < 3 { 96 - diff } else { 94 - (diff - 2) * per }.max(22);
-    let v = ((level as f32 * 100.0 + hit_bonus * 100.0 - mechanic_resistance * 100.0) * (1.0 - binary_resist)) as i32;
+    let level = if diff < 3 {
+        96 - diff
+    } else {
+        94 - (diff - 2) * per
+    }
+    .max(22);
+    let v = ((level as f32 * 100.0 + hit_bonus * 100.0 - mechanic_resistance * 100.0)
+        * (1.0 - binary_resist)) as i32;
     v.clamp(100, 9_900)
 }
 
@@ -288,14 +307,22 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     }
     let all_mechanics_immune = {
         let mechanics: Vec<u32> = std::iter::once(s.mechanic)
-            .chain(s.effects.iter().filter(|e| e.effect != 0).map(|e| e.mechanic))
+            .chain(
+                s.effects
+                    .iter()
+                    .filter(|e| e.effect != 0)
+                    .map(|e| e.mechanic),
+            )
             .filter(|m| *m != 0)
             .collect();
         !mechanics.is_empty()
-            && s.effects
-                .iter()
-                .filter(|e| e.effect != 0)
-                .all(|e| a.mechanic_immune(if e.mechanic != 0 { e.mechanic } else { s.mechanic }))
+            && s.effects.iter().filter(|e| e.effect != 0).all(|e| {
+                a.mechanic_immune(if e.mechanic != 0 {
+                    e.mechanic
+                } else {
+                    s.mechanic
+                })
+            })
     };
     if all_mechanics_immune && !s.attr(0, sd::ATTR_NO_IMMUNITIES) {
         return Hit::Immune;
@@ -335,8 +362,11 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     } else {
         0.0
     };
-    let aoe = if area(s) { a.sum(AURA_MOD_AOE_AVOIDANCE) as f32 } else { 0.0 }
-        + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
+    let aoe = if area(s) {
+        a.sum(AURA_MOD_AOE_AVOIDANCE) as f32
+    } else {
+        0.0
+    } + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
     let chance = magic_hit_chance(
         caster_level,
         target_level,
@@ -378,10 +408,12 @@ fn ward_reflect(map: &Map, target: Guid, s: &SpellTemplate) -> i32 {
         .iter()
         .filter(|(_, mask)| mask & ward != 0)
         .filter_map(|(id, _)| {
-            a.holders
-                .iter()
-                .find(|h| h.spell == *id)
-                .and_then(|h| h.effects.iter().find(|x| x.kind == AURA_DUMMY).map(|x| x.amount))
+            a.holders.iter().find(|h| h.spell == *id).and_then(|h| {
+                h.effects
+                    .iter()
+                    .find(|x| x.kind == AURA_DUMMY)
+                    .map(|x| x.amount)
+            })
         })
         .max()
         .unwrap_or(0)
@@ -397,11 +429,21 @@ fn roll_strict(map: &Map, chance_bp: i32) -> bool {
 
 /// The special attack table for a melee or ranged ability: miss, dodge,
 /// parry, block (which still hits), then whether it crits.
-pub fn melee_roll(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mods) -> (Hit, bool) {
+pub fn melee_roll(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    m: &Mods,
+) -> (Hit, bool) {
     let a = derived(map, caster);
     let v = derived(map, target);
     let ranged = s.dmg_class == 3;
-    let skill = if ranged { a.ranged_skill } else { a.weapon_skill } as i32;
+    let skill = if ranged {
+        a.ranged_skill
+    } else {
+        a.weapon_skill
+    } as i32;
     let diff = skill - v.defense as i32;
     let hit = if ranged { a.ranged_hit } else { a.hit };
     let mut miss = 500 - diff * if diff < -10 { 20 } else { 4 };
@@ -424,7 +466,10 @@ pub fn melee_roll(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &
         return (h, false);
     }
     if avoidable && !ranged {
-        let standing = map.players.get(&target).is_none_or(|p| p.stand_state() == 0);
+        let standing = map
+            .players
+            .get(&target)
+            .is_none_or(|p| p.stand_state() == 0);
         if standing {
             if let Some(h) = table((v.dodge * 100.0) as i32 - diff * 4, Hit::Dodge) {
                 return (h, false);
@@ -440,7 +485,8 @@ pub fn melee_roll(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &
         + diff as f32 * 0.04;
     let crit = !s.attr(2, sd::ATTR_EX2_CANT_CRIT) && chance(map, crit_chance);
     // A block is its own roll and still lands.
-    if avoidable && !behind && v.block > 0.0 && !ranged && chance(map, v.block - diff as f32 * 0.04) {
+    if avoidable && !behind && v.block > 0.0 && !ranged && chance(map, v.block - diff as f32 * 0.04)
+    {
         return (Hit::Block, crit);
     }
     (Hit::Hit, crit)
@@ -462,7 +508,11 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
     }
     let d = derived(map, caster);
     let mut c = if physical(s) {
-        if s.dmg_class == 3 { d.ranged_crit } else { d.crit }
+        if s.dmg_class == 3 {
+            d.ranged_crit
+        } else {
+            d.crit
+        }
     } else {
         d.spell_crit[school_index(s)]
     } + m.flat[mods::OP_CRITICAL_CHANCE] as f32;
@@ -485,7 +535,9 @@ pub fn crit_versus(map: &Map, caster: Guid, target: Guid) -> f32 {
         return 0.0;
     }
     let bit = 1u32 << (creature_type - 1).min(31);
-    auras::auras(map, caster).map_or(0.0, |a| a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, bit) as f32)
+    auras::auras(map, caster).map_or(0.0, |a| {
+        a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, bit) as f32
+    })
 }
 
 /// Whether a unit is held by a frost spell (rooted or stunned by frost).
@@ -505,7 +557,10 @@ fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
         a.effects()
             .filter(|(h, x)| {
                 x.kind == AURA_OVERRIDE_CLASS_SCRIPTS
-                    && data.spells.get(h.spell).is_some_and(|t| t.family_name == s.family_name)
+                    && data
+                        .spells
+                        .get(h.spell)
+                        .is_some_and(|t| t.family_name == s.family_name)
             })
             .map(|(_, x)| match x.misc {
                 849 => 10.0,
@@ -537,14 +592,23 @@ pub fn coefficient(map: &Map, s: &SpellTemplate, index: usize, kind: Kind) -> f3
     let data = &map.realm.data;
     let cast = data.spells.cast_time(s);
     let duration = data.spells.duration(s, 60).unwrap_or(0);
-    let periodic = s
+    let periodic = s.effects.iter().any(|x| {
+        matches!(
+            x.aura,
+            AURA_PERIODIC_DAMAGE | AURA_PERIODIC_HEAL | AURA_PERIODIC_LEECH
+        )
+    });
+    let direct = s
         .effects
         .iter()
-        .any(|x| matches!(x.aura, AURA_PERIODIC_DAMAGE | AURA_PERIODIC_HEAL | AURA_PERIODIC_LEECH));
-    let direct = s.effects.iter().any(|x| matches!(x.effect, 2 | 8 | 9 | 10 | 62));
+        .any(|x| matches!(x.effect, 2 | 8 | 9 | 10 | 62));
     let channeled = s.channeled();
     let clamp = |ms: u32| (ms as f32).clamp(1500.0, 7000.0);
-    let mut time = if channeled { clamp(duration) } else { clamp(cast) };
+    let mut time = if channeled {
+        clamp(duration)
+    } else {
+        clamp(cast)
+    };
     if kind == Kind::Dot && !channeled {
         time = 3500.0;
     }
@@ -561,7 +625,10 @@ pub fn coefficient(map: &Map, s: &SpellTemplate, index: usize, kind: Kind) -> f3
     if area(s) {
         time /= 2.0;
     }
-    if s.effects.iter().any(|x| x.effect == 9 || x.aura == AURA_PERIODIC_LEECH) {
+    if s.effects
+        .iter()
+        .any(|x| x.effect == 9 || x.aura == AURA_PERIODIC_LEECH)
+    {
         time /= 2.0;
     }
     let extra = s.effects.iter().fold(0, |n, x| match x.aura {
@@ -572,7 +639,11 @@ pub fn coefficient(map: &Map, s: &SpellTemplate, index: usize, kind: Kind) -> f3
     time *= 0.95f32.powi(extra);
     let mut c = time / 3500.0;
     if kind == Kind::Dot {
-        let base = if channeled { 1.0 } else { duration as f32 / 15000.0 };
+        let base = if channeled {
+            1.0
+        } else {
+            duration as f32 / 15000.0
+        };
         let ticks = s
             .effects
             .iter()
@@ -600,7 +671,9 @@ fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: bool) -
             .unwrap_or(0);
         let a = auras::auras(map, caster);
         let done = a.map_or(0, |a| a.sum(AURA_MOD_HEALING_DONE));
-        let from_spirit = a.map_or(0, |a| spirit * a.sum(AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT) / 100);
+        let from_spirit = a.map_or(0, |a| {
+            spirit * a.sum(AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT) / 100
+        });
         return (done + from_spirit.max(0)) as f32;
     }
     let mut p = d.spell_power[school_index(s)] as f32;
@@ -625,7 +698,15 @@ fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: bool) -
 }
 
 /// What spell power (or healing power) adds to effect `index`.
-pub fn bonus(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: usize, kind: Kind, m: &Mods) -> f32 {
+pub fn bonus(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    kind: Kind,
+    m: &Mods,
+) -> f32 {
     if physical(s) || s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS) {
         return 0.0;
     }
@@ -634,7 +715,8 @@ pub fn bonus(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: us
     if p <= 0.0 {
         return 0.0;
     }
-    let c = coefficient(map, s, index, kind) * (100 + m.pct[mods::OP_SPELL_BONUS_DAMAGE]) as f32 / 100.0;
+    let c = coefficient(map, s, index, kind) * (100 + m.pct[mods::OP_SPELL_BONUS_DAMAGE]) as f32
+        / 100.0;
     p * c + m.flat[mods::OP_SPELL_BONUS_DAMAGE] as f32
 }
 
@@ -713,7 +795,8 @@ pub fn damage(
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
         let bonus = if physical(s) {
-            let melee = auras::auras(map, caster).map_or(0, |a| a.sum(AURA_MOD_CRIT_DAMAGE_BONUS_MELEE));
+            let melee =
+                auras::auras(map, caster).map_or(0, |a| a.sum(AURA_MOD_CRIT_DAMAGE_BONUS_MELEE));
             d * (1.0 + pct) * (100 + melee) as f32 / 100.0
         } else {
             d * 0.5 * (1.0 + pct)
@@ -736,7 +819,14 @@ pub fn damage(
 
 /// Damage of a magic school resisted in part: none for physical or binary
 /// spells, a tenth as often for a tick.
-pub fn partial_resist(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: u32, tick: bool) -> u32 {
+pub fn partial_resist(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    damage: u32,
+    tick: bool,
+) -> u32 {
     if damage == 0 || s.school == 0 || binary(s) || !rolling(map) {
         return 0;
     }
@@ -753,7 +843,15 @@ pub fn partial_resist(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, 
 
 /// Healing of `base` from `s` to `target`: the healing bonus, done and
 /// taken modifiers, and the crit.
-pub fn healing(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: usize, base: f32, l: &Landing) -> u32 {
+pub fn healing(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    base: f32,
+    l: &Landing,
+) -> u32 {
     let mut h = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
     h *= if l.chain > 0.0 { l.chain } else { 1.0 };
     if let Some(a) = auras::auras(map, caster) {
@@ -761,14 +859,19 @@ pub fn healing(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: 
     }
     h = l.mods.apply(mods::OP_DAMAGE, h);
     // Healing Way: more from each Healing Wave on the target.
-    if s.family_name == 11 && s.family_flags & 0x40 != 0
+    if s.family_name == 11
+        && s.family_flags & 0x40 != 0
         && let Some(a) = auras::auras(map, target)
     {
         let pct: i32 = a
             .holders
             .iter()
             .filter(|x| x.spell == 29203)
-            .flat_map(|x| x.effects.iter().map(move |e| e.amount * x.stacks.max(1) as i32))
+            .flat_map(|x| {
+                x.effects
+                    .iter()
+                    .map(move |e| e.amount * x.stacks.max(1) as i32)
+            })
             .sum();
         h *= (100 + pct) as f32 / 100.0;
     }
@@ -782,18 +885,23 @@ pub fn healing(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: 
 /// Healing `target` takes: its flat and percent modifiers.
 pub fn healing_taken(map: &Map, target: Guid, amount: f32) -> f32 {
     match auras::auras(map, target) {
-        Some(a) => ((amount + a.sum(AURA_MOD_HEALING) as f32) * a.product(AURA_MOD_HEALING_PCT)).max(0.0),
+        Some(a) => {
+            ((amount + a.sum(AURA_MOD_HEALING) as f32) * a.product(AURA_MOD_HEALING_PCT)).max(0.0)
+        }
         None => amount,
     }
 }
 
-/// `SMSG_SPELLLOGMISS`: `s` missed `target`, and how.
+/// `SMSG_SPELLLOGMISS`: `s` missed `target`, and how, as Thistle Tea
+/// writes it for the 1.12 client.
 pub fn send_miss(map: &Map, caster: Guid, target: Guid, spell: u32, hit: Hit) {
     let mut b = Body::default();
-    b.u32(spell).u64(caster.guid()).u8(0).u32(1).u64(target.guid()).u8(hit.wire());
-    if hit != Hit::Hit {
-        b.f32(0.0).f32(0.0);
-    }
+    b.u32(spell)
+        .u64(caster.guid())
+        .u8(0)
+        .u32(1)
+        .u64(target.guid())
+        .u8(hit.wire());
     let frame = b.frame(SMSG_SPELLLOGMISS);
     map.send_to_observers(caster, &frame, true);
     if let Some(p) = map.players.get(&target)
@@ -804,6 +912,7 @@ pub fn send_miss(map: &Map, caster: Guid, target: Guid, spell: u32, hit: Hit) {
 }
 
 /// `SMSG_SPELLNONMELEEDAMAGELOG`, in 1.12's layout.
+#[allow(clippy::too_many_arguments)]
 pub fn damage_log(
     caster: Guid,
     target: Guid,
@@ -836,7 +945,9 @@ pub fn damage_log(
 pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Damage, l: &Landing) {
     let amount = split(map, caster, target, s, d.amount);
     let (left, absorbed) = auras::absorb(map, target, amount, s.school_mask());
-    let frame = damage_log(caster, target, s.id, s.school, left, absorbed, d.resisted, d.blocked, l.crit);
+    let frame = damage_log(
+        caster, target, s.id, s.school, left, absorbed, d.resisted, d.blocked, l.crit,
+    );
     map.send_to_observers(caster, &frame, true);
     if let Some(p) = map.players.get(&target)
         && !p.known.contains(&caster)
@@ -950,7 +1061,9 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32)> {
         return Vec::new();
     };
     a.effects()
-        .filter(|(h, x)| x.kind == AURA_CHANNEL_DEATH_ITEM && x.mask != 0 && guid::is_player(h.caster))
+        .filter(|(h, x)| {
+            x.kind == AURA_CHANNEL_DEATH_ITEM && x.mask != 0 && guid::is_player(h.caster)
+        })
         .filter(|(h, _)| {
             let caster_level = level(map, h.caster);
             let target_level = level(map, target);
@@ -973,20 +1086,38 @@ pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32)>) {
 pub fn proc_flags(s: &SpellTemplate) -> (u32, u32) {
     if auras::positive(s) {
         if area(s) {
-            return (procs::PROC_DONE_POSITIVE_AOE, procs::PROC_TAKEN_POSITIVE_AOE);
+            return (
+                procs::PROC_DONE_POSITIVE_AOE,
+                procs::PROC_TAKEN_POSITIVE_AOE,
+            );
         }
-        return (procs::PROC_DONE_POSITIVE_SPELL, procs::PROC_TAKEN_POSITIVE_SPELL);
+        return (
+            procs::PROC_DONE_POSITIVE_SPELL,
+            procs::PROC_TAKEN_POSITIVE_SPELL,
+        );
     }
     match s.dmg_class {
         2 => (procs::PROC_DONE_MELEE_SPELL, procs::PROC_TAKEN_MELEE_SPELL),
-        3 => (procs::PROC_DONE_RANGED_SPELL, procs::PROC_TAKEN_RANGED_SPELL),
+        3 => (
+            procs::PROC_DONE_RANGED_SPELL,
+            procs::PROC_TAKEN_RANGED_SPELL,
+        ),
         _ if area(s) => (procs::PROC_DONE_AOE, procs::PROC_TAKEN_AOE),
-        _ => (procs::PROC_DONE_NEGATIVE_SPELL, procs::PROC_TAKEN_NEGATIVE_SPELL),
+        _ => (
+            procs::PROC_DONE_NEGATIVE_SPELL,
+            procs::PROC_TAKEN_NEGATIVE_SPELL,
+        ),
     }
 }
 
 /// `SMSG_SPELLHEALLOG`, with its crit flag.
-pub fn heal_log(caster: Guid, target: Guid, spell: u32, amount: u32, crit: bool) -> std::sync::Arc<[u8]> {
+pub fn heal_log(
+    caster: Guid,
+    target: Guid,
+    spell: u32,
+    amount: u32,
+    crit: bool,
+) -> std::sync::Arc<[u8]> {
     let mut b = Body::default();
     crate::game::update::write_packed_guid(&mut b.0, target);
     crate::game::update::write_packed_guid(&mut b.0, caster);

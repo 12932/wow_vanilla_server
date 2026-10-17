@@ -80,14 +80,18 @@ pub fn implicit(t: u32) -> Implicit {
 
 /// The targets wvs resolves.
 pub fn supported(t: u32) -> bool {
-    !matches!(implicit(t), Implicit::Other(_)) || matches!(t, 2 | 3 | 4)
+    !matches!(implicit(t), Implicit::Other(_)) || (2..=4).contains(&t)
 }
 
 /// Whether a target wants a unit picked by the client.
 pub fn wants_unit(t: u32) -> bool {
     matches!(
         implicit(t),
-        Implicit::Enemy | Implicit::Ally | Implicit::AnyUnit | Implicit::ChainHeal | Implicit::PartyMember
+        Implicit::Enemy
+            | Implicit::Ally
+            | Implicit::AnyUnit
+            | Implicit::ChainHeal
+            | Implicit::PartyMember
     ) || t == 53
 }
 
@@ -117,7 +121,12 @@ fn alive(map: &Map, g: Guid) -> bool {
 }
 
 /// Units around `at` within `radius`, that `pick` keeps.
-fn units_around(map: &Map, at: Vector3d, radius: f32, mut pick: impl FnMut(Guid) -> bool) -> Vec<Guid> {
+fn units_around(
+    map: &Map,
+    at: Vector3d,
+    radius: f32,
+    mut pick: impl FnMut(Guid) -> bool,
+) -> Vec<Guid> {
     let mut v: Vec<(Guid, f32)> = map
         .grid
         .around(at.x, at.y, radius)
@@ -142,7 +151,11 @@ fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
 
 /// The point an effect's area is at.
 fn center(map: &Map, caster: Guid, t: &Targets, at_dest: bool) -> Vector3d {
-    let caster_at = map.position_of(caster).unwrap_or(Vector3d { x: 0.0, y: 0.0, z: 0.0 });
+    let caster_at = map.position_of(caster).unwrap_or(Vector3d {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    });
     if !at_dest {
         return caster_at;
     }
@@ -152,7 +165,14 @@ fn center(map: &Map, caster: Guid, t: &Targets, at_dest: bool) -> Vector3d {
 }
 
 /// The units effect `index` of `s` lands on.
-pub fn effect_targets(map: &Map, caster: Guid, s: &SpellTemplate, index: usize, t: &Targets, m: &Mods) -> Vec<Guid> {
+pub fn effect_targets(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    t: &Targets,
+    m: &Mods,
+) -> Vec<Guid> {
     use Implicit::*;
     let e = &s.effects[index];
     let (a, b) = (implicit(e.target_a), implicit(e.target_b));
@@ -160,33 +180,53 @@ pub fn effect_targets(map: &Map, caster: Guid, s: &SpellTemplate, index: usize, 
     let enemy = |g: Guid| alive(map, g) && combat::can_attack(map, caster, g);
     let ally = |g: Guid| {
         alive(map, g)
-            && (g == caster || (!combat::can_attack(map, caster, g) && !combat::hostile(map, caster, g)))
+            && (g == caster
+                || (!combat::can_attack(map, caster, g) && !combat::hostile(map, caster, g)))
     };
     let mut out = match (a, b) {
         // An area named by the second target.
         (_, AoeEnemyAtCaster) | (AoeEnemyAtCaster, _) => {
-            units_around(map, center(map, caster, t, false), r, |g| g != caster && enemy(g))
+            units_around(map, center(map, caster, t, false), r, |g| {
+                g != caster && enemy(g)
+            })
         }
-        (_, AoeEnemyAtDest) | (AoeEnemyAtDest, _) | (_, AoeEnemyAtChannel) | (AoeEnemyAtChannel, _) => {
-            units_around(map, center(map, caster, t, true), r, |g| g != caster && enemy(g))
-        }
+        (_, AoeEnemyAtDest)
+        | (AoeEnemyAtDest, _)
+        | (_, AoeEnemyAtChannel)
+        | (AoeEnemyAtChannel, _) => units_around(map, center(map, caster, t, true), r, |g| {
+            g != caster && enemy(g)
+        }),
         (_, AoeEnemyInCone) | (AoeEnemyInCone, _) => {
-            let degrees = map.realm.data.spells.cones.get(&s.id).copied().unwrap_or(60);
+            let degrees = map
+                .realm
+                .data
+                .spells
+                .cones
+                .get(&s.id)
+                .copied()
+                .unwrap_or(60);
             units_around(map, center(map, caster, t, false), r, |g| {
                 g != caster && enemy(g) && in_cone(map, caster, g, degrees)
             })
         }
         (_, AoeAllyAtSource) | (AoeAllyAtSource, _) => {
-            units_around(map, center(map, caster, t, false), r, |g| ally(g))
+            units_around(map, center(map, caster, t, false), r, ally)
         }
-        (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => units_around(map, center(map, caster, t, true), r, |g| ally(g)),
+        (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => {
+            units_around(map, center(map, caster, t, true), r, ally)
+        }
         (PartyAroundCaster, _) | (_, PartyAroundCaster) => {
             let at = center(map, caster, t, e.target_a == 34);
             let party = members(map, caster, false);
             party
                 .into_iter()
                 .filter(|g| alive(map, *g))
-                .filter(|g| r <= 0.0 || map.position_of(*g).is_some_and(|p| dist(p, at) <= r.max(30.0)))
+                .filter(|g| {
+                    r <= 0.0
+                        || map
+                            .position_of(*g)
+                            .is_some_and(|p| dist(p, at) <= r.max(30.0))
+                })
                 .collect()
         }
         (RaidAroundCaster, _) => {
@@ -194,27 +234,40 @@ pub fn effect_targets(map: &Map, caster: Guid, s: &SpellTemplate, index: usize, 
             members(map, caster, true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
-                .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= r.max(30.0)))
+                .filter(|g| {
+                    map.position_of(*g)
+                        .is_some_and(|p| dist(p, at) <= r.max(30.0))
+                })
                 .collect()
         }
         (PartyAroundTarget, _) => {
             let target = t.unit.unwrap_or(caster);
-            let at = map.position_of(target).unwrap_or(center(map, caster, t, false));
+            let at = map
+                .position_of(target)
+                .unwrap_or(center(map, caster, t, false));
             members(map, target, false)
                 .into_iter()
                 .filter(|g| alive(map, *g))
-                .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= r.max(30.0)))
+                .filter(|g| {
+                    map.position_of(*g)
+                        .is_some_and(|p| dist(p, at) <= r.max(30.0))
+                })
                 .collect()
         }
         (RaidAndClass, _) => {
             let target = t.unit.unwrap_or(caster);
             let class = map.players.get(&target).map(|p| p.row.class);
-            let at = map.position_of(caster).unwrap_or(center(map, caster, t, false));
+            let at = map
+                .position_of(caster)
+                .unwrap_or(center(map, caster, t, false));
             members(map, target, true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
                 .filter(|g| map.players.get(g).map(|p| p.row.class) == class)
-                .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= r.max(100.0)))
+                .filter(|g| {
+                    map.position_of(*g)
+                        .is_some_and(|p| dist(p, at) <= r.max(100.0))
+                })
                 .collect()
         }
         (PartyMember, _) => {
@@ -249,7 +302,9 @@ pub fn effect_targets(map: &Map, caster: Guid, s: &SpellTemplate, index: usize, 
             chain(map, caster, s, index, first, m, true)
         }
         (Enemy, _) | (AnyUnit, _) | (Ally, _) => {
-            let first = t.unit.unwrap_or(if a == Ally { caster } else { Guid::zero() });
+            let first = t
+                .unit
+                .unwrap_or(if a == Ally { caster } else { Guid::zero() });
             if first.is_zero() {
                 Vec::new()
             } else if e.chain_target > 1 {
@@ -271,7 +326,15 @@ pub fn effect_targets(map: &Map, caster: Guid, s: &SpellTemplate, index: usize, 
 
 /// A chain: the first target, then the nearest (or, for heals, the most
 /// hurt) within a jump of the last, up to the effect's count.
-fn chain(map: &Map, caster: Guid, s: &SpellTemplate, index: usize, first: Guid, m: &Mods, heal: bool) -> Vec<Guid> {
+fn chain(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    first: Guid,
+    m: &Mods,
+    heal: bool,
+) -> Vec<Guid> {
     let count = m
         .apply(mods::OP_JUMP_TARGETS, s.effects[index].chain_target as f32)
         .max(1.0) as usize;
@@ -318,7 +381,12 @@ fn script_units(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, radius:
         .spells
         .script_targets
         .get(&s.id)
-        .map(|v| v.iter().filter(|(k, _)| *k == 1 || *k == 2).map(|(_, e)| *e).collect())
+        .map(|v| {
+            v.iter()
+                .filter(|(k, _)| *k == 1 || *k == 2)
+                .map(|(_, e)| *e)
+                .collect()
+        })
         .unwrap_or_default();
     if entries.is_empty() {
         return t.unit.into_iter().collect();
