@@ -68,7 +68,7 @@ fn creature(entry: u32, name: &str, faction: u32, npc_flags: u32) -> CreatureTem
         unit_class: 1,
         health_multiplier: 1.0,
         health_max: 40,
-        xp_multiplier: 1.0,
+        xp_multiplier: Some(1.0),
         ..Default::default()
     }
 }

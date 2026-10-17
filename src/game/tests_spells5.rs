@@ -795,7 +795,7 @@ async fn honorless_target_keeps_a_kill_from_counting() {
             faction: 35,
             health_max: 10,
             civilian: true,
-            xp_multiplier: 0.0,
+            xp_multiplier: Some(0.0),
             ..Default::default()
         },
     );
