@@ -9,6 +9,7 @@ mod effects;
 pub mod mods;
 pub mod outcome;
 pub mod scripts;
+pub mod stealth;
 pub mod targets;
 
 use std::time::{Duration, Instant};
@@ -657,6 +658,9 @@ fn execute(
         }
         if !hit.lands() {
             outcome::send_miss(map, caster, aim, s.id, hit);
+            if hit == Hit::Resist {
+                scripts::magic_absorption(map, aim);
+            }
             let (done, taken) = outcome::proc_flags(s);
             crate::game::map::procs::trigger(
                 map,
@@ -718,6 +722,14 @@ fn execute(
                 h.spell != s.id && h.interrupt_flags & auras::INTERRUPT_CAST != 0
             });
         }
+    }
+}
+
+/// Whether `b` is within `yards` of `a`.
+fn outcome_near(map: &Map, a: Guid, b: Guid, yards: f32) -> bool {
+    match (map.position_of(a), map.position_of(b)) {
+        (Some(x), Some(y)) => combat::dist(x, y) <= yards,
+        _ => false,
     }
 }
 
@@ -824,10 +836,12 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             offhand: false,
         },
     );
+    let items = outcome::death_items(map, target, left);
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
         combat::deal_damage(map, h.caster, target, left);
     }
+    outcome::give_death_items(map, target, items);
     if leech {
         let mult = s
             .effects

@@ -389,6 +389,9 @@ pub fn nearest_graveyard(
 
 /// Whether `observer` may see `object`: the living don't see ghosts.
 pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
+    if !crate::game::map::spells::stealth::sees(map, observer, object) {
+        return false;
+    }
     if !guid::is_player(object) || observer == object {
         return true;
     }
