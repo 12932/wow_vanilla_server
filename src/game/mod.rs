@@ -74,6 +74,8 @@ mod tests_parity_misc;
 #[cfg(test)]
 mod tests_parity_motion;
 #[cfg(test)]
+mod tests_parity_scripts;
+#[cfg(test)]
 mod tests_parity_spells;
 #[cfg(test)]
 mod tests_pets;

@@ -633,27 +633,49 @@ impl Creature {
     /// The weapons a creature holds.
     pub fn set_equipment(&mut self, data: &GameData, items: [u32; 3]) {
         for (slot, entry) in items.iter().enumerate() {
-            let slot = slot as u16;
-            let Some(t) = data.item(*entry) else {
-                continue;
-            };
-            self.fields
-                .set_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + slot, t.display_id);
-            self.fields.set_bytes(
-                UNIT_VIRTUAL_ITEM_INFO + slot * 2,
-                t.class as u8,
-                t.subclass as u8,
-                t.material as u8,
-                t.inventory_type as u8,
-            );
-            self.fields.set_bytes(
-                UNIT_VIRTUAL_ITEM_INFO + slot * 2 + 1,
-                t.sheath as u8,
-                0,
-                0,
-                0,
-            );
+            if data.item(*entry).is_some() {
+                self.put_weapon(data, slot as u16, *entry);
+            }
         }
+    }
+
+    /// The weapons a script hands it, slot by slot: `None` leaves a slot
+    /// as it is; an entry no item has (0 among them) empties it, as
+    /// Thistle Tea's `ScriptEquipment` has it.
+    pub fn set_equipment_slots(&mut self, data: &GameData, slots: [Option<u32>; 3]) {
+        for (slot, entry) in slots.iter().enumerate() {
+            if let Some(entry) = *entry {
+                self.put_weapon(data, slot as u16, entry);
+            }
+        }
+    }
+
+    /// Item `entry` in weapon slot `slot`; none if no item has it.
+    fn put_weapon(&mut self, data: &GameData, slot: u16, entry: u32) {
+        let Some(t) = data.item(entry) else {
+            self.fields
+                .set_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + slot, 0);
+            self.fields.set_u32(UNIT_VIRTUAL_ITEM_INFO + slot * 2, 0);
+            self.fields
+                .set_u32(UNIT_VIRTUAL_ITEM_INFO + slot * 2 + 1, 0);
+            return;
+        };
+        self.fields
+            .set_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + slot, t.display_id);
+        self.fields.set_bytes(
+            UNIT_VIRTUAL_ITEM_INFO + slot * 2,
+            t.class as u8,
+            t.subclass as u8,
+            t.material as u8,
+            t.inventory_type as u8,
+        );
+        self.fields.set_bytes(
+            UNIT_VIRTUAL_ITEM_INFO + slot * 2 + 1,
+            t.sheath as u8,
+            0,
+            0,
+            0,
+        );
     }
 
     pub fn create(&self, now: Instant) -> Create<'_> {

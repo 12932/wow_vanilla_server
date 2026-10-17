@@ -390,6 +390,27 @@ fn register(
 /// An object goes: summoned, its linked trap with it and its ritual's
 /// helpers' channels ended; spawned, until its respawn.
 pub fn despawn(map: &mut Map, g: Guid) {
+    let respawn = map
+        .gameobject(g)
+        .and_then(|o| o.spawn_guid)
+        .and_then(|s| {
+            map.realm
+                .data
+                .gameobject_spawns
+                .get(&map.key.map)
+                .and_then(|v| v.iter().find(|x| x.guid == s))
+        })
+        .map_or(0, |x| x.respawn_min);
+    despawn_then(
+        map,
+        g,
+        (respawn > 0).then(|| Duration::from_secs(u64::from(respawn))),
+    );
+}
+
+/// An object goes as [`despawn`] has it, and a spawned one comes back
+/// after `back` (with none, not until its map starts again).
+pub fn despawn_then(map: &mut Map, g: Guid, back: Option<Duration>) {
     let Some(o) = map.gameobject(g) else {
         forget(map, g);
         return;
@@ -424,19 +445,8 @@ pub fn despawn(map: &mut Map, g: Guid) {
     for l in linked {
         despawn(map, l);
     }
-    // A spawned object used up comes back at its spawn's time.
-    if let Some(s) = spawn {
-        let respawn = map
-            .realm
-            .data
-            .gameobject_spawns
-            .get(&map.key.map)
-            .and_then(|v| v.iter().find(|x| x.guid == s))
-            .map_or(0, |x| x.respawn_min);
-        if respawn > 0 {
-            let at = map.now + Duration::from_secs(u64::from(respawn));
-            map.objects.respawns.push((at, s));
-        }
+    if let (Some(s), Some(back)) = (spawn, back) {
+        map.objects.respawns.push((map.now + back, s));
     }
 }
 
@@ -665,18 +675,22 @@ pub fn activate(map: &mut Map, user: Guid, object: Guid, action: u32) {
 }
 
 /// A script (or a spell) works an object: a trap springs on the one who
-/// did, a door or button is used, a quest object goes off, anything else
-/// flips.
-fn used_by_script(map: &mut Map, user: Guid, object: Guid) {
+/// did, a door or button is used (its scripts run on its user), a quest
+/// object goes off, anything else flips.
+pub fn used_by_script(map: &mut Map, user: Guid, object: Guid) {
     let Some(t) = template(map, object) else {
         return;
     };
     match t.kind {
-        GO_TRAP => {
+        GO_TRAP if map.position_of(user).is_some() => {
             ensure_trap(map, object, &t);
             spring(map, object, user);
         }
-        GO_DOOR | GO_BUTTON => door(map, user, object, &t),
+        GO_TRAP => {}
+        GO_DOOR | GO_BUTTON => {
+            door(map, user, object, &t);
+            crate::game::map::scripts::object_scripts(map, user, object);
+        }
         GO_GOOBER if map.players.contains_key(&user) => {
             use_goober(map, user, object);
         }
@@ -752,7 +766,8 @@ fn open(map: &mut Map, object: Guid, alternative: bool, close_ms: u32) {
     }
 }
 
-fn reset(map: &mut Map, object: Guid) {
+/// An object back as it rests, no longer in use, its close forgotten.
+pub fn reset(map: &mut Map, object: Guid) {
     let back = resting_state(map, object);
     set_state(map, object, back);
     set_flag(map, object, GO_FLAG_IN_USE, false);
@@ -1500,6 +1515,10 @@ pub fn update(map: &mut Map) {
         map.objects.respawns.retain(|(t, _)| *t > now);
         let data = map.realm.data.clone();
         for s in due {
+            // A script may have brought it out already.
+            if crate::game::map::scripts::object_of_spawn(map, s).is_some() {
+                continue;
+            }
             if let Some(spawn) = data
                 .gameobject_spawns
                 .get(&map.key.map)

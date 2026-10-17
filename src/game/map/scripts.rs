@@ -89,6 +89,19 @@ pub struct Run {
 #[derive(Debug, Default)]
 pub struct Runner {
     pub runs: Vec<Run>,
+    /// How deep in running steps the map is: finished runs are swept out
+    /// only at the top, so a script a step starts doesn't move the runs
+    /// under way from under their indices (and slip their next steps a
+    /// tick).
+    depth: u32,
+}
+
+impl Runner {
+    fn sweep(&mut self) {
+        if self.depth == 0 {
+            self.runs.retain(|r| r.next != usize::MAX);
+        }
+    }
 }
 
 /// Start script `id` of `table` from `source` on `target`; its first
@@ -120,8 +133,10 @@ pub fn start_checked(
         checked,
     });
     let i = map.scripts.runs.len() - 1;
+    map.scripts.depth += 1;
     advance(map, i);
-    map.scripts.runs.retain(|r| r.next != usize::MAX);
+    map.scripts.depth -= 1;
+    map.scripts.sweep();
 }
 
 /// Run what is due of every script.
@@ -129,12 +144,16 @@ pub fn update(map: &mut Map) {
     if map.scripts.runs.is_empty() {
         return;
     }
+    // The top of the map's update: no step is under way (one a panic cut
+    // short is over).
+    map.scripts.depth = 1;
     let mut i = 0;
     while i < map.scripts.runs.len() {
         advance(map, i);
         i += 1;
     }
-    map.scripts.runs.retain(|r| r.next != usize::MAX);
+    map.scripts.depth = 0;
+    map.scripts.sweep();
 }
 
 /// Run the due steps of run `i`; a finished run's `next` becomes
@@ -194,24 +213,72 @@ fn alive(map: &Map, g: Guid) -> bool {
     map.unit_view(g).is_some_and(|u| u.alive)
 }
 
-/// Run one step from `source` on `target`. False ends the script.
-pub fn execute(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool {
+/// The target types that name their unit or object outright, so a step
+/// with no one to start from may still find it (Thistle Tea's
+/// `@null_source_target_types`).
+const NULL_SOURCE_TARGET_TYPES: [u32; 10] = [10, 11, 12, 13, 14, 22, 23, 24, 28, 29];
+
+/// The commands an object runs: an object found by target type 13 or 14
+/// runs them as their source, on the step's source.
+const OBJECT_COMMANDS: [u32; 5] = [13, 41, 80, 87, 89];
+
+/// Whether `g` is a unit, player or object in this map.
+fn present(map: &Map, g: Guid) -> bool {
+    !g.is_zero() && map.position_of(g).is_some()
+}
+
+/// The source and target a step runs with, as Thistle Tea dispatches it:
+/// an initial swap hands the step to its target (or, with nobody there and
+/// a final swap, to the unit its target type names); a final swap (or an
+/// object command at an object it found) hands it to the target it
+/// selected, on the old source; the self flag then makes the target the
+/// one that runs it. None if it can't run.
+fn resolve_targets(
+    map: &Map,
+    step: &ScriptStep,
+    source: Guid,
+    target: Guid,
+) -> Option<(Guid, Guid)> {
+    let flags = step.data_flags;
+    let selfish = flags & SF_TARGET_SELF != 0;
     let (mut source, mut target) = (source, target);
-    if step.data_flags & SF_SWAP_INITIAL_TARGETS != 0 {
-        std::mem::swap(&mut source, &mut target);
-    }
-    if step.target_type != 0 {
-        match find_target(map, step, source, target) {
-            Some(t) => target = t,
-            None => return step.data_flags & SF_ABORT_ON_FAILURE == 0,
+    let select = |source: Guid, target: Guid| {
+        if step.target_type == 0 {
+            Some(target)
+        } else {
+            find_target(map, step, source, target)
+        }
+    };
+    if flags & SF_SWAP_INITIAL_TARGETS != 0 && target != source {
+        if present(map, target) {
+            std::mem::swap(&mut source, &mut target);
+        } else if flags & SF_SWAP_FINAL_TARGETS != 0
+            && NULL_SOURCE_TARGET_TYPES.contains(&step.target_type)
+        {
+            let owner = find_target(map, step, source, target)?;
+            return Some((owner, if selfish { owner } else { Guid::zero() }));
+        } else {
+            return None;
         }
     }
-    if step.data_flags & SF_TARGET_SELF != 0 {
-        target = source;
+    let object_command =
+        OBJECT_COMMANDS.contains(&step.command) && matches!(step.target_type, 13 | 14);
+    if flags & SF_SWAP_FINAL_TARGETS != 0 || object_command {
+        let owner = select(source, target)?;
+        if !present(map, owner) {
+            return None;
+        }
+        return Some((owner, if selfish { owner } else { source }));
     }
-    if step.data_flags & SF_SWAP_FINAL_TARGETS != 0 {
-        std::mem::swap(&mut source, &mut target);
-    }
+    let selected = select(source, target)?;
+    Some((source, if selfish { source } else { selected }))
+}
+
+/// Run one step from `source` on `target`. False ends the script.
+pub fn execute(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool {
+    let Some((source, target)) = resolve_targets(map, step, source, target) else {
+        return step.data_flags & SF_ABORT_ON_FAILURE == 0;
+    };
     // With no target, a step's condition is judged on its source.
     let judged = if target.is_zero() { source } else { target };
     if step.condition != 0
@@ -370,6 +437,12 @@ fn hostile_allowed(map: &Map, step: &ScriptStep, source: Guid, g: Guid) -> bool 
     true
 }
 
+/// How far a target type looks: its parameter, or Thistle Tea's 30 yards
+/// (`@default_buddy_radius`).
+fn buddy_radius(param: u32) -> f32 {
+    if param > 0 { param as f32 } else { 30.0 }
+}
+
 /// The target a step's `target_type` names, from `source`.
 fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Option<Guid> {
     let at = map.position_of(source)?;
@@ -433,12 +506,14 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
         9 => map
             .creature(source)
             .and_then(|c| c.owner.or(c.scripted.as_deref().and_then(|s| s.summoner))),
-        10 => creatures_near(map, at, p1, p2 as f32, step.command != 71)
+        10 => creatures_near(map, at, p1, buddy_radius(p2), step.command != 71)
             .into_iter()
             .find(|g| *g != source),
         11 => creature_of_spawn(map, p1),
         12 => crate::game::map::instance_script::guid_data(map, p1),
-        13 => objects_near(map, at, p1, p2 as f32).into_iter().next(),
+        13 => objects_near(map, at, p1, buddy_radius(p2))
+            .into_iter()
+            .next(),
         14 => object_of_spawn(map, p1),
         16..=20 => {
             let radius = if p1 > 0 { p1 as f32 } else { 30.0 };
@@ -469,21 +544,21 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
             }
         }
         22..=24 => crate::game::map::map_events::target_of(map, step.target_type, p1, p2),
-        25 => players_near(map, at, p1 as f32).into_iter().next(),
-        26 => players_near(map, at, p1 as f32)
+        25 => players_near(map, at, buddy_radius(p1)).into_iter().next(),
+        26 => players_near(map, at, buddy_radius(p1))
             .into_iter()
             .find(|g| crate::game::map::combat::hostile(map, source, *g)),
-        27 => players_near(map, at, p1 as f32)
+        27 => players_near(map, at, buddy_radius(p1))
             .into_iter()
             .find(|g| !crate::game::map::combat::hostile(map, source, *g)),
         28 => pick(
-            creatures_near(map, at, p1, p2 as f32, true)
+            creatures_near(map, at, p1, buddy_radius(p2), true)
                 .into_iter()
                 .filter(|g| *g != source)
                 .collect(),
             &mut rng,
         ),
-        29 => pick(objects_near(map, at, p1, p2 as f32), &mut rng),
+        29 => pick(objects_near(map, at, p1, buddy_radius(p2)), &mut rng),
         _ => None,
     }
 }
@@ -560,6 +635,29 @@ pub const CHAT_BOSS_EMOTE: u32 = 3;
 pub const CHAT_WHISPER: u32 = 4;
 pub const CHAT_BOSS_WHISPER: u32 = 5;
 pub const CHAT_ZONE_YELL: u32 = 6;
+pub const CHAT_ZONE_EMOTE: u32 = 7;
+
+/// How far a creature's say and its yell carry (Thistle Tea's
+/// `@listen_range_say` and `@listen_range_yell`).
+const SAY_YARDS: f32 = 25.0;
+const YELL_YARDS: f32 = 300.0;
+
+/// A script's emote, as Thistle Tea resolves one by `Emotes.dbc`: one the
+/// unit stays in (or 0, none) becomes its emote state; any other plays
+/// once.
+pub fn emote(map: &mut Map, g: Guid, emote: u32) {
+    if emote == 0 || map.realm.data.emote_states.contains(&emote) {
+        if let Some(f) = map.unit_fields_mut(g) {
+            f.set_u32(UNIT_NPC_EMOTESTATE, emote);
+        }
+        return;
+    }
+    if let Ok(emote) = Emote::try_from(emote)
+        && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE { emote, guid: g })
+    {
+        map.send_to_observers(g, &frame, true);
+    }
+}
 
 /// `speaker` says broadcast text `text` (to `target`, for a whisper or a
 /// name), with the text's emote and sound.
@@ -578,28 +676,21 @@ pub fn talk(map: &mut Map, speaker: Guid, text: u32, target: Guid, chat_type: Op
     } else {
         &b.female
     };
+    let chat_type = chat_type.unwrap_or(b.chat_type);
+    // A whisper is for a player, or for no one.
+    if matches!(chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER) && !guid::is_player(target) {
+        return;
+    }
     let line = fill(map, line, target);
-    say(
-        map,
-        speaker,
-        &line,
-        chat_type.unwrap_or(b.chat_type),
-        b.language,
-        target,
-    );
-    if b.emotes[0].1 != 0
-        && let Ok(emote) = Emote::try_from(b.emotes[0].1)
-        && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-            emote,
-            guid: speaker,
-        })
-    {
-        map.send_to_observers(speaker, &frame, false);
+    say(map, speaker, &line, chat_type, b.language, target);
+    if b.emotes[0].1 != 0 {
+        emote(map, speaker, b.emotes[0].1);
     }
     if b.sound != 0
         && let Some(frame) = crate::game::conn::encode(&SMSG_PLAY_SOUND { sound_id: b.sound })
     {
-        hearers(map, speaker, chat_type.unwrap_or(b.chat_type), target)
+        let zone = speaker_zone(map, speaker);
+        hearers(map, speaker, chat_type, target, zone)
             .into_iter()
             .for_each(|g| {
                 if let Some(p) = map.players.get(&g) {
@@ -609,50 +700,103 @@ pub fn talk(map: &mut Map, speaker: Guid, text: u32, target: Guid, chat_type: Op
     }
 }
 
-/// Who hears a creature's line of `chat_type`.
-fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid) -> Vec<Guid> {
+/// The zone a speaker stands in, if it is known.
+fn speaker_zone(map: &mut Map, speaker: Guid) -> Option<u32> {
+    if let Some(p) = map.players.get(&speaker) {
+        return Some(p.zone).filter(|z| *z != 0);
+    }
+    if let Some(z) = map.creature(speaker).and_then(|c| c.zone_area) {
+        return Some(z.0).filter(|z| *z != 0);
+    }
+    let at = map.position_of(speaker)?;
+    crate::game::map::world::zone_and_area(map, at)
+        .map(|(z, _)| z)
+        .filter(|z| *z != 0)
+}
+
+/// Who hears a creature's line of `chat_type`, as Thistle Tea's
+/// `MonsterTalk` reaches them: a whisper its target alone; a zone yell
+/// everyone in the speaker's zone (or, that unknown, as far as a yell); a
+/// yell or boss emote 300 yards; the rest 25.
+fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid, zone: Option<u32>) -> Vec<Guid> {
     let Some(at) = map.position_of(speaker) else {
         return Vec::new();
     };
+    let within = |yards: f32| {
+        map.players
+            .values()
+            .filter(|p| dist(p.position(), at) <= yards)
+            .map(|p| p.guid)
+            .collect()
+    };
     match chat_type {
         CHAT_WHISPER | CHAT_BOSS_WHISPER => vec![target],
-        CHAT_BOSS_EMOTE | CHAT_ZONE_YELL => map.players.keys().copied().collect(),
-        CHAT_YELL => map
-            .players
-            .values()
-            .filter(|p| dist(p.position(), at) <= 300.0)
-            .map(|p| p.guid)
-            .collect(),
-        _ => map
-            .players
-            .values()
-            .filter(|p| dist(p.position(), at) <= 25.0)
-            .map(|p| p.guid)
-            .collect(),
+        CHAT_ZONE_YELL => match zone {
+            Some(z) => map
+                .players
+                .values()
+                .filter(|p| p.zone == z)
+                .map(|p| p.guid)
+                .collect(),
+            None => within(YELL_YARDS),
+        },
+        CHAT_YELL | CHAT_BOSS_EMOTE => within(YELL_YARDS),
+        _ => within(SAY_YARDS),
     }
 }
 
-/// `speaker` says `line`.
+/// `SMSG_MESSAGECHAT`'s raid boss whisper, as 1.12 lays it out (mangos-zero's
+/// `BuildChatPacket`): the speaker's name, the one it whispers to, then the
+/// line. wow_messages has it without the name.
+fn boss_whisper(name: &str, target: Guid, line: &str, language: u32) -> std::sync::Arc<[u8]> {
+    const SMSG_MESSAGECHAT: u16 = 0x096;
+    const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x59;
+    let mut b = crate::game::data::items::Body::default();
+    b.u8(CHAT_MSG_RAID_BOSS_WHISPER)
+        .u32(language)
+        .u32(name.len() as u32 + 1)
+        .cstr(name)
+        .u64(target.guid())
+        .u32(line.len() as u32 + 1)
+        .cstr(line)
+        .u8(0);
+    b.frame(SMSG_MESSAGECHAT)
+}
+
+/// `speaker` says `line`, in the kind of message its chat type is: a yell
+/// (or zone yell), an emote (or zone emote), a boss emote or whisper, a
+/// whisper, or a say. Those with no sender's own guid carry the target's,
+/// as mangos and Thistle Tea write them.
 pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u32, target: Guid) {
     let name = speaker_name(map, speaker);
+    let zone = (chat_type == CHAT_ZONE_YELL)
+        .then(|| speaker_zone(map, speaker))
+        .flatten();
     let kind = match chat_type {
         CHAT_YELL | CHAT_ZONE_YELL => SMSG_MESSAGECHAT_ChatType::MonsterYell {
             sender1: speaker,
             sender_name: name,
             target,
         },
-        CHAT_TEXT_EMOTE => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-            monster: speaker,
+        CHAT_TEXT_EMOTE | CHAT_ZONE_EMOTE => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+            monster: target,
             monster_name: name,
         },
         CHAT_BOSS_EMOTE => SMSG_MESSAGECHAT_ChatType::RaidBossEmote {
-            monster: speaker,
+            monster: target,
             monster_name: name,
         },
-        CHAT_WHISPER | CHAT_BOSS_WHISPER => SMSG_MESSAGECHAT_ChatType::MonsterWhisper {
-            monster: speaker,
+        CHAT_WHISPER => SMSG_MESSAGECHAT_ChatType::MonsterWhisper {
+            monster: target,
             monster_name: name,
         },
+        CHAT_BOSS_WHISPER => {
+            let frame = boss_whisper(&name, target, line, language);
+            if let Some(p) = map.players.get(&target) {
+                p.outbound.send_frame(frame);
+            }
+            return;
+        }
         _ => SMSG_MESSAGECHAT_ChatType::MonsterSay {
             sender1: speaker,
             sender_name: name,
@@ -667,11 +811,170 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
     }) else {
         return;
     };
-    for g in hearers(map, speaker, chat_type, target) {
+    for g in hearers(map, speaker, chat_type, target, zone) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }
     }
+}
+
+/// A creature's stats from its class at its level, as a spawn's: health,
+/// mana for its list's spells, damage, attack power and armour.
+fn template_stats(
+    data: &crate::game::data::GameData,
+    c: &mut Creature,
+    template: &crate::game::data::CreatureTemplate,
+    level: u8,
+) {
+    let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) else {
+        return;
+    };
+    let health = crate::game::data::load::creature_health(stats.health, template.health_multiplier);
+    c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
+    c.fields.set_u32(UNIT_FIELD_HEALTH, health);
+    let mana = (stats.mana as f32 * template.mana_multiplier.max(0.0)).round() as u32;
+    if mana > 0 {
+        c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
+        c.fields.set_u32(UNIT_FIELD_POWER1, mana);
+    }
+    let mult = if template.damage_multiplier > 0.0 {
+        template.damage_multiplier
+    } else {
+        1.0
+    };
+    let base = stats.melee_damage * mult;
+    c.fields
+        .set_f32(UNIT_FIELD_MINDAMAGE, (base * 0.86).max(1.0));
+    c.fields
+        .set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
+    c.fields
+        .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
+    c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
+}
+
+/// `SCRIPT_COMMAND_UPDATE_ENTRY`, as Thistle Tea's `CreatureEntry.apply`:
+/// the creature becomes another entry, its identity, fight, auras, target
+/// and posture kept. It takes the new template's look and size, faction,
+/// NPC and unit flags (its old template's own given up), level (in the new
+/// range), stats (health and mana kept in proportion), speeds, weapons,
+/// and unkillable floor; its EventAI stays its old entry's, and a spell
+/// list stays where the new template has none. A respawn brings the old
+/// entry back.
+pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
+    let data = map.realm.data.clone();
+    let Some(t) = data.creature_template(entry) else {
+        return false;
+    };
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
+    if c.entry == entry {
+        return true;
+    }
+    let old = data.creature_template(c.entry);
+    let old_list = crate::game::map::spells::lists::base_list(map, g);
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL) as u8;
+    let level = if (t.level_min..=t.level_max.max(t.level_min)).contains(&level) {
+        level
+    } else if t.level_max > t.level_min {
+        rand::rng().random_range(t.level_min..=t.level_max)
+    } else {
+        t.level_min.max(1)
+    };
+    let mut fresh = Creature::new(c.guid, t, level, c.position, c.orientation);
+    template_stats(&data, &mut fresh, t, level);
+    fresh.fit_model(&data, Some(t));
+    let scale = fresh.fields.get_f32(OBJECT_FIELD_SCALE_X);
+    for (i, r) in t.resistances.iter().enumerate() {
+        fresh
+            .fields
+            .set_u32(UNIT_FIELD_RESISTANCES + 1 + i as u16, (*r).max(0) as u32);
+    }
+    let base = crate::game::map::derive::UnitBase::capture(&fresh.fields, fresh.speeds.run);
+    let ai = crate::game::map::event_ai::ai_entry(c);
+    let Some(c) = map.creature_mut(g) else {
+        return false;
+    };
+    let (health, max_health) = (
+        c.fields.get_u32(UNIT_FIELD_HEALTH),
+        c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+    );
+    let (mana, max_mana) = (
+        c.fields.get_u32(UNIT_FIELD_POWER1),
+        c.fields.get_u32(UNIT_FIELD_MAXPOWER1),
+    );
+    c.entry = entry;
+    c.fields.set_u32(OBJECT_FIELD_ENTRY, entry);
+    for field in [
+        UNIT_FIELD_DISPLAYID,
+        UNIT_FIELD_NATIVEDISPLAYID,
+        UNIT_FIELD_LEVEL,
+        UNIT_FIELD_FACTIONTEMPLATE,
+        UNIT_NPC_FLAGS,
+        UNIT_FIELD_BASEATTACKTIME,
+        UNIT_FIELD_BASEATTACKTIME + 1,
+        UNIT_FIELD_RANGEDATTACKTIME,
+    ] {
+        c.fields.set_u32(field, fresh.fields.get_u32(field));
+    }
+    c.fields.set_f32(OBJECT_FIELD_SCALE_X, scale);
+    for field in [UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_COMBATREACH] {
+        c.fields.set_f32(field, fresh.fields.get_f32(field));
+    }
+    c.fields.set_byte(
+        UNIT_FIELD_BYTES_0,
+        1,
+        fresh.fields.get_byte(UNIT_FIELD_BYTES_0, 1),
+    );
+    // Its old template's unit flags give way to the new one's; dynamic
+    // flags add up.
+    let flags = c.fields.get_u32(UNIT_FIELD_FLAGS) & !old.map_or(0, |o| o.unit_flags);
+    c.fields.set_u32(UNIT_FIELD_FLAGS, flags | t.unit_flags);
+    let dynamic = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
+    c.fields
+        .set_u32(UNIT_DYNAMIC_FLAGS, dynamic | t.dynamic_flags);
+    c.speeds.walk = fresh.speeds.walk;
+    c.speeds.run = fresh.speeds.run;
+    if crate::game::map::creature_motion::template_flies(t) {
+        c.move_flags |= FLIGHT_FLAGS;
+    }
+    c.base = base;
+    crate::game::map::derive::creature(c);
+    // Health and mana kept in proportion; alive, it keeps one at least.
+    let scaled = |now: u32, max: u32, new_max: u32| {
+        if max == 0 {
+            new_max
+        } else {
+            ((u64::from(now) * u64::from(new_max)) / u64::from(max)) as u32
+        }
+    };
+    let new_max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+    let new_health = scaled(health, max_health, new_max);
+    c.fields.set_u32(
+        UNIT_FIELD_HEALTH,
+        if health > 0 { new_health.max(1) } else { 0 },
+    );
+    let new_mana = c.fields.get_u32(UNIT_FIELD_MAXPOWER1);
+    c.fields
+        .set_u32(UNIT_FIELD_POWER1, scaled(mana, max_mana, new_mana));
+    c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, t.faction, t.civilian);
+    let weapons = data
+        .creature_equipment
+        .get(&t.equipment_id)
+        .copied()
+        .unwrap_or([0; 3]);
+    c.set_equipment_slots(&data, weapons.map(Some));
+    let new_list = t.spell_list_id != 0;
+    if new_list {
+        c.caster.spell_list = None;
+    }
+    let s = c.scripted.get_or_insert_with(Default::default);
+    s.ai_entry = Some(ai);
+    s.temp_faction = None;
+    s.invincible_hp = None;
+    s.base_spell_list = (!new_list && old_list != 0).then_some(old_list);
+    map.visibility_dirty.insert(g);
+    true
 }
 
 /// A creature summoned by `summoner` at `at`.
@@ -701,39 +1004,20 @@ pub fn summon(
         orientation,
     );
     c.fit_model(&data, Some(template));
-    if let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) {
-        let health =
-            crate::game::data::load::creature_health(stats.health, template.health_multiplier);
-        c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
-        c.fields.set_u32(UNIT_FIELD_HEALTH, health);
-        // Its mana, as a spawn's, for its list's spells.
-        let mana = (stats.mana as f32 * template.mana_multiplier.max(0.0)).round() as u32;
-        if mana > 0 {
-            c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
-            c.fields.set_u32(UNIT_FIELD_POWER1, mana);
-        }
-        let mult = if template.damage_multiplier > 0.0 {
-            template.damage_multiplier
-        } else {
-            1.0
-        };
-        let base = stats.melee_damage * mult;
-        c.fields
-            .set_f32(UNIT_FIELD_MINDAMAGE, (base * 0.86).max(1.0));
-        c.fields
-            .set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
-        c.fields
-            .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
-        c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
-    }
+    template_stats(&data, &mut c, template, level);
     c.hostile_to_players =
         crate::game::map::ai::hostile_to_players(&data, template.faction, template.civilian);
     let mut c = c.with_base();
     let s = c.scripted.get_or_insert_with(Default::default);
     s.summoner = Some(summoner);
+    // Its time runs from now, from its death, or not at all, as its type
+    // has it.
     if let Some((after, kind)) = despawn {
-        s.despawn_at = Some(map.now + after);
+        s.despawn_after = Some(after);
         s.despawn_type = kind;
+        if event_ai::timer_at_spawn(kind) {
+            s.despawn_at = Some(map.now + after);
+        }
     }
     let g = map.add_creature(c);
     if let Some(s) = event_ai::scripted_mut(map, summoner) {
@@ -743,8 +1027,14 @@ pub fn summon(
 }
 
 /// A creature goes: a summoned one for good, a spawned one until it
-/// respawns.
+/// respawns, on its spawn's time.
 pub fn despawn(map: &mut Map, g: Guid) {
+    despawn_with(map, g, None);
+}
+
+/// A creature goes, as [`despawn`]; a spawned one comes back after
+/// `respawn` if given, else on its spawn's time.
+pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
     let Some(c) = map.creature(g) else {
         return;
     };
@@ -758,12 +1048,75 @@ pub fn despawn(map: &mut Map, g: Guid) {
             map.remove_creature(g);
         }
         Some(_) => {
-            crate::game::map::ai::quiet_death(map, g);
+            let respawn = respawn
+                .unwrap_or_else(|| crate::game::map::ai::respawn_delay(&map.realm.data, spawn));
+            crate::game::map::ai::quiet_death_for(map, g, respawn);
             if let Some(s) = summoner {
                 event_ai::summoned_despawned(map, s, g, entry);
             }
         }
     }
+}
+
+/// A creature goes for good, spawned or summoned (Thistle Tea's
+/// `script_remove_object`): its spawn doesn't come back.
+pub fn remove_for_good(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let entry = c.entry;
+    let summoner = c.scripted.as_deref().and_then(|s| s.summoner);
+    crate::game::map::combat::leave_combat(map, g);
+    stop_for(map, g);
+    map.dead_creatures.retain(|d| *d != g);
+    map.remove_creature(g);
+    if let Some(s) = summoner {
+        event_ai::summoned_despawned(map, s, g, entry);
+    }
+}
+
+/// The weapons a creature came with: its spawn's (its addon's, over its
+/// template's), as it spawned.
+fn default_equipment(data: &crate::game::data::GameData, c: &Creature) -> [u32; 3] {
+    let template = data
+        .creature_template(c.entry)
+        .map_or(0, |t| t.equipment_id);
+    let equipment = match c.spawn_guid.and_then(|s| data.creature_addons.get(&s)) {
+        Some(a) if a.equipment_id > 0 => a.equipment_id as u32,
+        Some(a) if a.equipment_id < 0 => 0,
+        _ => template,
+    };
+    data.creature_equipment
+        .get(&equipment)
+        .copied()
+        .unwrap_or([0; 3])
+}
+
+/// A creature's faction, and whether players are its enemies.
+pub fn set_faction(map: &mut Map, g: Guid, faction: u32) {
+    let data = map.realm.data.clone();
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
+    let civilian = data.creature_template(c.entry).is_some_and(|t| t.civilian);
+    c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, faction, civilian);
+}
+
+/// The faction a script set gives way to the old one, if its flags say so
+/// for `why` ([`event_ai::FACTION_RESTORE_COMBAT_STOP`] or
+/// [`event_ai::FACTION_RESTORE_REACH_HOME`]).
+pub fn restore_faction(map: &mut Map, g: Guid, why: u32) {
+    let Some(t) = event_ai::scripted(map, g).and_then(|s| s.temp_faction) else {
+        return;
+    };
+    if t.flags & why == 0 {
+        return;
+    }
+    if let Some(s) = event_ai::scripted_mut(map, g) {
+        s.temp_faction = None;
+    }
+    set_faction(map, g, t.original);
 }
 
 fn creature_mut(map: &mut Map, g: Guid) -> Option<&mut Creature> {
@@ -797,6 +1150,11 @@ pub struct Move {
     pub face: Option<f32>,
     /// The point its arrival tells of.
     pub point: Option<u32>,
+    /// A walk home: its arrival is as an evade's (`reached_home`).
+    pub home: bool,
+    /// Distancing from its target (movement 19): while it runs, only a
+    /// spell cast with 0x04 (force) goes.
+    pub distancing: bool,
 }
 
 /// Move a creature as `how` says, remembering the move so its arrival
@@ -829,6 +1187,8 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
             to,
             point: how.point,
             face: how.face,
+            home: how.home,
+            distancing: how.distancing,
         });
     } else {
         // Already there.
@@ -838,6 +1198,9 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
         }
         if let Some(point) = how.point {
             event_ai::movement_inform(map, g, event_ai::POINT_MOTION, point);
+        }
+        if how.home {
+            event_ai::home_reached(map, g);
         }
     }
     if let Some(frame) = frame {
@@ -871,8 +1234,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         z: step.z,
     };
     match step.command {
-        // Talk: one of up to four broadcast texts.
+        // Talk: one of up to four broadcast texts, in the chat type
+        // datalong names (if any) over the text's own.
         0 => {
+            let chat_type = (d1 > 0).then_some(d1);
             if let Some(lines) = step
                 .ext
                 .as_ref()
@@ -880,21 +1245,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 .filter(|t| !t.is_empty())
             {
                 let line = &lines[rand::rng().random_range(0..lines.len())];
-                if matches!(line.chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER)
-                    && !guid::is_player(target)
+                let chat_type = chat_type.unwrap_or(line.chat_type);
+                if matches!(chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER) && !guid::is_player(target)
                 {
                     return true;
                 }
                 let text = fill(map, &line.text, target);
-                say(map, source, &text, line.chat_type, line.language, target);
-                if line.emote != 0
-                    && let Ok(emote) = Emote::try_from(line.emote)
-                    && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                        emote,
-                        guid: source,
-                    })
-                {
-                    map.send_to_observers(source, &frame, false);
+                say(map, source, &text, chat_type, line.language, target);
+                if line.emote != 0 {
+                    emote(map, source, line.emote);
                 }
                 return true;
             }
@@ -908,7 +1267,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 return false;
             }
             let text = texts[rand::rng().random_range(0..texts.len())];
-            talk(map, source, text, target, None);
+            talk(map, source, text, target, chat_type);
             true
         }
         // Emote: one of up to four.
@@ -917,15 +1276,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 .chain([d2, d3, d4].into_iter().take_while(|e| *e > 0))
                 .collect();
             let e = emotes[rand::rng().random_range(0..emotes.len())];
-            let Ok(emote) = Emote::try_from(e) else {
-                return false;
-            };
-            if let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                emote,
-                guid: source,
-            }) {
-                map.send_to_observers(source, &frame, true);
-            }
+            emote(map, source, e);
             true
         }
         // Move: to a point (datalong 0), offset from the target (1), at a
@@ -1010,6 +1361,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     time: (d2 > 0).then(|| Duration::from_millis(u64::from(d2))),
                     face: (face > 0.0).then_some(face),
                     point: (d4 & 0x2 != 0).then_some(step.dataint[0].max(0) as u32),
+                    ..Default::default()
                 },
             )
         }
@@ -1045,13 +1397,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Teleport the player of the two, or the creature.
+        // The source teleports: a player to map datalong, a creature where
+        // it is (a creature's script that wants its player sent swaps).
         6 => {
-            if let Some(p) = script_player(source, target) {
-                map.teleport(p, MapKey::world(d1), pos, step.o);
+            if guid::is_player(source) && map.players.contains_key(&source) {
+                map.teleport(source, MapKey::world(d1), pos, step.o);
                 return true;
             }
-            if !guid::is_unit(source) {
+            if map.creature(source).is_none() {
                 return false;
             }
             place(map, source, pos, step.o);
@@ -1097,14 +1450,35 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Respawn an object.
+        // Bring out object spawn datalong (or the target's), one held back
+        // or used up, for datalong2 seconds (at least five); one already
+        // out stays as it is.
         9 => {
-            let o = object_of_spawn(map, d1).or(Some(target).filter(|t| guid::is_game_object(*t)));
-            if let Some(o) = o {
-                set_object_state(map, o, 1);
-                map.visibility_dirty.insert(o);
+            let spawn = if d1 != 0 {
+                Some(d1)
+            } else {
+                map.gameobject(target).and_then(|o| o.spawn_guid)
+            };
+            let Some(spawn) = spawn else {
+                return false;
+            };
+            if object_of_spawn(map, spawn).is_some() {
+                return true;
             }
-            o.is_some()
+            let Some(s) = data
+                .gameobject_spawns
+                .get(&map.key.map)
+                .and_then(|v| v.iter().find(|s| s.guid == spawn))
+            else {
+                return false;
+            };
+            let Some(t) = data.gameobject_templates.get(&s.entry) else {
+                return false;
+            };
+            let g = map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, s));
+            map.object_resets
+                .push((now + Duration::from_secs(u64::from(d2.max(5))), g, u32::MAX));
+            true
         }
         // Summon a creature: datalong the entry, datalong2 the despawn
         // delay, datalong3 and datalong4 how many may be near and how
@@ -1145,18 +1519,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Use an object.
+        // The source object is worked by the target, as Thistle Tea's
+        // `script_activate_object`: a trap springs on it, a door or button
+        // is used, a quest object goes off, anything else flips.
         13 => {
-            if guid::is_game_object(target) {
-                let state = map
-                    .gameobject(target)
-                    .map(|o| o.fields.get_u32(GAMEOBJECT_STATE))
-                    .unwrap_or(1);
-                set_object_state(map, target, if state == 0 { 1 } else { 0 });
-                true
-            } else {
-                false
+            if !guid::is_game_object(source) || map.gameobject(source).is_none() {
+                return false;
             }
+            crate::game::map::objects::used_by_script(map, target, source);
+            true
         }
         14 => {
             crate::game::map::auras::remove_spell(map, source, d1, None);
@@ -1190,35 +1561,38 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         17 => script_player(source, target).is_some_and(|p| {
             crate::game::map::inventory::add_item(map, p, d1, d2.max(1), true).is_ok()
         }),
-        // Despawn, after datalong ms.
+        // Despawn, after datalong ms; a spawn comes back after datalong2
+        // seconds, or (with none) on its own time.
         18 => {
             let g = source;
-            if !guid::is_unit(g) {
+            if map.creature(g).is_none() {
                 return false;
             }
+            let respawn = (d2 > 0).then(|| Duration::from_secs(u64::from(d2)));
             if d1 > 0 {
                 if let Some(s) = event_ai::scripted_mut(map, g) {
-                    s.despawn_at = Some(now + Duration::from_millis(u64::from(d1)));
-                    s.despawn_type = 1;
+                    s.script_despawn = Some((now + Duration::from_millis(u64::from(d1)), respawn));
                 }
             } else {
-                despawn(map, g);
+                despawn_with(map, g, respawn);
             }
             true
         }
+        // Weapons: with datalong, the ones it spawned with; else each of
+        // dataint's three, its slot left as it is below zero and emptied
+        // at zero.
         19 => {
-            let items =
-                [step.dataint[0], step.dataint[1], step.dataint[2]].map(|i| i.max(0) as u32);
-            let items = if d1 != 0 {
-                data.creature_template(map.creature(source).map_or(0, |c| c.entry))
-                    .and_then(|t| data.creature_equipment.get(&t.equipment_id))
-                    .copied()
-                    .unwrap_or([0; 3])
+            let Some(c) = map.creature(source) else {
+                return false;
+            };
+            let slots = if d1 != 0 {
+                default_equipment(&data, c).map(Some)
             } else {
-                items
+                [step.dataint[0], step.dataint[1], step.dataint[2]]
+                    .map(|i| (i >= 0).then_some(i as u32))
             };
             if let Some(c) = creature_mut(map, source) {
-                c.set_equipment(&data, items);
+                c.set_equipment_slots(&data, slots);
             }
             true
         }
@@ -1226,22 +1600,33 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // datalong2 where it is), 2 waypoints, 7 home, 10 flee, 15 follow
         // the target at x yards and angle o, 19 keep x yards from it.
         20 => movement(map, step, source, target),
-        // Faction: set, or (0) the template's.
+        // Faction: set for a while, the old one back as datalong2's flags
+        // say; or (0) the one it had before (with none set, its
+        // template's).
         22 => {
-            let faction = if d1 == 0 {
-                map.creature(source)
-                    .and_then(|c| data.creature_template(c.entry))
-                    .map_or(0, |t| t.faction)
-            } else {
-                d1
-            };
-            let Some(c) = creature_mut(map, source) else {
+            let Some(c) = map.creature(source) else {
                 return false;
             };
-            c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
-            let civilian = data.creature_template(c.entry).is_some_and(|t| t.civilian);
-            c.hostile_to_players =
-                crate::game::map::ai::hostile_to_players(&data, faction, civilian);
+            let now_faction = c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
+            let tracked = c.scripted.as_deref().and_then(|s| s.temp_faction);
+            if d1 == 0 {
+                let back = tracked
+                    .map(|t| t.original)
+                    .unwrap_or_else(|| data.creature_template(c.entry).map_or(0, |t| t.faction));
+                if let Some(s) = event_ai::scripted_mut(map, source) {
+                    s.temp_faction = None;
+                }
+                set_faction(map, source, back);
+                return true;
+            }
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.temp_faction = Some(event_ai::TempFaction {
+                    original: tracked.map_or(now_faction, |t| t.original),
+                    value: d1,
+                    flags: d2,
+                });
+            }
+            set_faction(map, source, d1);
             true
         }
         // Morph to an entry's look (datalong2 0) or a display (1); 0 back.
@@ -1283,27 +1668,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 false
             }
         }
-        // Become another entry: its look and faction.
-        27 => {
-            let Some(t) = data.creature_template(d1) else {
-                return false;
-            };
-            let display = t.display_ids.iter().copied().find(|d| *d != 0).unwrap_or(0);
-            let Some(c) = creature_mut(map, source) else {
-                return false;
-            };
-            c.entry = d1;
-            c.fields.set_u32(OBJECT_FIELD_ENTRY, d1);
-            if display != 0 {
-                c.fields.set_u32(UNIT_FIELD_DISPLAYID, display);
-                c.fields.set_u32(UNIT_FIELD_NATIVEDISPLAYID, display);
-            }
-            if d2 == 0 {
-                c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, t.faction);
-            }
-            c.fields.set_u32(UNIT_NPC_FLAGS, t.npc_flags);
-            true
-        }
+        // Become another entry (datalong2, the team for its look, plays no
+        // part in 1.12).
+        27 => update_entry(map, source, d1),
         28 => {
             let g = if d2 != 0 { target } else { source };
             if let Some(p) = map.players.get_mut(&g) {
@@ -1414,20 +1781,31 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Turn to the target (datalong 0), or to the step's orientation.
+        // Turn to the target (datalong 0), or to the step's orientation,
+        // and show it: a facing move to the target, or to the angle.
         35 => {
-            let o = if d1 == 0 {
-                match (map.position_of(source), map.position_of(target)) {
-                    (Some(a), Some(b)) if target != source => (b.y - a.y).atan2(b.x - a.x),
+            let Some(at) = map.position_of(source).filter(|_| guid::is_unit(source)) else {
+                return false;
+            };
+            let (o, toward) = if d1 == 0 {
+                match map.position_of(target) {
+                    Some(b) if target != source => ((b.y - at.y).atan2(b.x - at.x), Some(target)),
                     _ => return false,
                 }
             } else {
-                step.o
+                (step.o, None)
             };
             if let Some(c) = creature_mut(map, source) {
                 c.orientation = o;
-                map.visibility_dirty.insert(source);
             }
+            let spline_id = map.next_spline_id;
+            map.next_spline_id = map.next_spline_id.wrapping_add(1);
+            let frame = match toward {
+                Some(t) => crate::game::map::ai::face_target_packet(source, at, t, spline_id),
+                None => crate::game::map::ai::face_packet(source, at, o, spline_id),
+            };
+            map.send_to_observers(source, &frame, false);
+            map.visibility_dirty.insert(source);
             true
         }
         // Instance data.
@@ -1461,13 +1839,31 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        41 | 81 => {
-            let o = if guid::is_game_object(target) {
-                target
+        // An object (the target, or the source) goes for good; or the
+        // source creature does, as Thistle Tea's `remove_self`.
+        41 => {
+            let object = [target, source]
+                .into_iter()
+                .find(|g| guid::is_game_object(*g) && map.gameobject(*g).is_some());
+            if let Some(o) = object {
+                crate::game::map::objects::despawn_then(map, o, None);
+                true
+            } else if map.creature(source).is_some() {
+                remove_for_good(map, source);
+                true
             } else {
-                source
+                false
+            }
+        }
+        // Object spawn datalong goes, and comes back after datalong2
+        // seconds (with none, not at all).
+        81 => {
+            let Some(o) = object_of_spawn(map, d1) else {
+                return false;
             };
-            map.remove_gameobject(o).is_some()
+            let back = (d2 > 0).then(|| Duration::from_secs(u64::from(d2)));
+            crate::game::map::objects::despawn_then(map, o, back);
+            true
         }
         // Melee on or off: off, it stays in the fight, but doesn't swing.
         42 => {
@@ -1523,19 +1919,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             crate::game::map::combat::deal_damage(map, source, target, amount);
             true
         }
-        // Everyone in the zone (here: the map) fights.
-        49 => {
-            let players: Vec<Guid> = map
-                .players
-                .values()
-                .filter(|p| p.death == crate::game::map::death::Death::Alive)
-                .map(|p| p.guid)
-                .collect();
-            for p in players {
-                crate::game::map::ai::attacked(map, source, p);
-            }
-            true
-        }
+        // Its dungeon fights it, at once (datalong: those fighting
+        // already too) and every three seconds while it fights.
+        49 => crate::game::map::creature_combat::script_zone_pulse(map, source, d1 != 0),
         // Call for help within x yards.
         50 => {
             let radius = if step.x > 0.0 { step.x } else { d1 as f32 };
@@ -1560,7 +1946,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 d1
             };
             if let Some(s) = event_ai::scripted_mut(map, source) {
-                s.invincible_hp = floor;
+                s.invincible_hp = Some(floor);
             }
             true
         }
@@ -1669,10 +2055,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Default movement.
+        // Default movement: wandering (1) datalong3 yards about.
         67 => {
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = d1 as u8;
+                if d1 == 1 {
+                    c.wander_distance = d3 as f32;
+                }
                 c.motion = Motion::Idle { until: Some(now) };
             }
             true
@@ -1698,7 +2087,8 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                         }),
                 );
             }
-            if matches!(d2, 1 | 3) {
+            // A player has no entry: an entry asked for leaves them out.
+            if matches!(d2, 1 | 3) && d3 == 0 {
                 found.extend(
                     map.players
                         .values()
@@ -1732,13 +2122,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
+        // The source creature respawns: if dead, or (datalong) even alive.
         71 => {
-            let g = if guid::is_unit(target) {
-                target
-            } else {
-                source
-            };
-            crate::game::map::ai::respawn_now(map, g);
+            if map.creature(source).is_none() {
+                return false;
+            }
+            crate::game::map::ai::respawn_forced(map, source, d1 != 0);
             true
         }
         73 => {
@@ -1746,10 +2135,22 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             if let Some(c) = creature_mut(map, source) {
                 c.threat.clear();
             }
+            if map.creature(source).is_some() {
+                event_ai::combat_stopped(map, source, false);
+            }
             true
         }
+        // An aura on the source; with datalong2's 0x8, for good.
         74 => {
             crate::game::map::spells::cast_triggered(map, source, d1, Some(source));
+            if d2 & 0x8 != 0
+                && let Some(a) = crate::game::map::auras::auras_mut(map, source)
+            {
+                for h in a.holders.iter_mut().filter(|h| h.spell == d1) {
+                    h.expires = None;
+                    h.duration = None;
+                }
+            }
             true
         }
         // Summon an object.
@@ -1845,43 +2246,68 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             event_ai::script_event(map, source, d1, d2, Some(target).filter(|t| !t.is_zero()));
             true
         }
+        // A door or button back as it rests: the source object, or spawn
+        // datalong's, or the target.
         87 => {
-            let o = object_of_spawn(map, d1).unwrap_or(target);
-            set_object_state(map, o, 1);
+            let o = Some(source)
+                .filter(|g| guid::is_game_object(*g))
+                .or_else(|| object_of_spawn(map, d1))
+                .or(Some(target).filter(|g| guid::is_game_object(*g)));
+            let Some(o) = o.filter(|o| map.gameobject(*o).is_some()) else {
+                return false;
+            };
+            crate::game::map::objects::reset(map, o);
             true
         }
+        // An object (the source, or the target) plays its animation
+        // datalong.
         89 => {
-            if let Ok(emote) = Emote::try_from(d1)
-                && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                    emote,
-                    guid: source,
-                })
-            {
-                map.send_to_observers(source, &frame, true);
+            let Some(o) = [source, target]
+                .into_iter()
+                .find(|g| guid::is_game_object(*g) && map.gameobject(*g).is_some())
+            else {
+                return false;
+            };
+            if let Some(frame) = crate::game::conn::encode(&SMSG_GAMEOBJECT_CUSTOM_ANIM {
+                guid: o,
+                animation_id: d1,
+            }) {
+                map.send_to_observers(o, &frame, false);
             }
             true
         }
-        // One of up to four scripts, by chance, for each of a creature
-        // group.
+        // One of up to four scripts, by chance, for the source and each of
+        // its group (grouped or not; a player's group is its party).
         90 => {
             let Some(script) = choose_script(step) else {
                 return false;
             };
-            let members = crate::game::map::creature_groups::members_of(map, source);
-            for m in members {
+            let members = if guid::is_player(source) {
+                group_here(map, source)
+            } else {
+                crate::game::map::creature_groups::members_of(map, source)
+            };
+            start(map, ScriptTable::Generic, script, source, target);
+            for m in members.into_iter().filter(|m| *m != source) {
                 start(map, ScriptTable::Generic, script, m, target);
             }
             true
         }
-        // Script datalong for everyone in zone datalong2.
+        // Script datalong for everyone in zone datalong2 here, and with
+        // datalong3 1 their pets.
         92 => {
-            let players: Vec<Guid> = map
+            let players: Vec<(Guid, Option<Guid>)> = map
                 .players
                 .values()
-                .filter(|p| d2 == 0 || p.zone == d2)
-                .map(|p| p.guid)
+                .filter(|p| p.zone == d2)
+                .map(|p| (p.guid, p.owned.pet))
                 .collect();
-            for p in players {
+            for (p, pet) in players {
+                if d3 == 1
+                    && let Some(pet) = pet.filter(|pet| map.creature(*pet).is_some())
+                {
+                    start(map, ScriptTable::Generic, d1, pet, target);
+                }
                 start(map, ScriptTable::Generic, d1, p, target);
             }
             true
@@ -2297,6 +2723,18 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
         };
         at = here;
     }
+    let flags = step.dataint[0] as u32;
+    // Unique: not if as many as allowed are within datalong4 yards (50
+    // with none) of its place, before its scatter, as Thistle Tea's
+    // `summon_allowed?`; the dead count for a type whose corpse keeps
+    // its time (3, 4, 8).
+    if flags & 0xC != 0 {
+        let radius = if d4 > 0 { d4 as f32 } else { 50.0 };
+        let living = !matches!(step.dataint[3], 3 | 4 | 8);
+        if creatures_near(map, at, d1, radius, living).len() >= d3.max(1) as usize {
+            return false;
+        }
+    }
     if let Some(e) = ext
         && e.scatter > 0.0
     {
@@ -2305,14 +2743,6 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             .as_mut()
             .and_then(|n| n.random_point(at, e.scatter))
             .unwrap_or(at);
-    }
-    let flags = step.dataint[0] as u32;
-    // Unique: not if as many as allowed are near already.
-    if flags & 0xC != 0
-        && creatures_near(map, at, d1, if d4 > 0 { d4 as f32 } else { 100.0 }, true).len()
-            >= d3.max(1) as usize
-    {
-        return false;
     }
     let despawn = (d2 > 0).then(|| {
         (
@@ -2341,10 +2771,14 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
     if step.dataint[1] > 0 {
         start(map, ScriptTable::Generic, step.dataint[1] as u32, g, target);
     }
-    // An attack target by target type; -1 for none.
+    // An attack target by target type, with the step's target parameters
+    // (a player only, in sight); -1 for none.
     if step.dataint[2] >= 0 {
         let attack = ScriptStep {
+            command: step.command,
             target_type: step.dataint[2] as u32,
+            target_param1: step.target_param1,
+            target_param2: step.target_param2,
             ..Default::default()
         };
         if let Some(t) = find_target(map, &attack, source, target)
@@ -2524,6 +2958,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 Move {
                     pathfind: true,
                     face: Some(o),
+                    home: true,
                     ..Default::default()
                 },
             );
@@ -2561,26 +2996,44 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
             }
             event_ai::follow_step(map, source);
         }
+        // Distancing, as Thistle Tea's `Distancing.start`: from the step's
+        // target, to x yards past its edge, running, the cast under way
+        // given up (with datalong3, only at that share of mana or more; a
+        // unit with none has none). Held or feigning, it stays.
         19 => {
             let mana_ok = d3 == 0
                 || map.unit_fields(source).is_some_and(|f| {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1);
-                    max == 0 || f.get_u32(UNIT_FIELD_POWER1) * 100 >= d3 * max
+                    max > 0 && f.get_u32(UNIT_FIELD_POWER1) * 100 >= d3 * max
                 });
-            let victim = map.combat(source).map(|c| c.victim).unwrap_or_default();
-            let from = if victim.is_zero() { target } else { victim };
-            if !mana_ok || from.is_zero() || from == source {
+            let from = target;
+            if !mana_ok
+                || step.x <= 0.0
+                || from.is_zero()
+                || from == source
+                || !alive(map, from)
+                || crate::game::map::auras::held(map, source, false)
+                || crate::game::map::auras::auras(map, source)
+                    .is_some_and(|a| a.has(crate::game::map::auras::AURA_FEIGN_DEATH))
+            {
                 return true;
             }
             let (Some(here), Some(them)) = (map.position_of(source), map.position_of(from)) else {
                 return false;
             };
+            let radius = step.x
+                + map
+                    .unit_fields(from)
+                    .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+                    .filter(|r| *r > 0.0)
+                    .unwrap_or(DEFAULT_BOUNDING_RADIUS);
             let angle = (here.y - them.y).atan2(here.x - them.x);
             let to = Vector3d {
-                x: them.x + step.x * angle.cos(),
-                y: them.y + step.x * angle.sin(),
+                x: them.x + radius * angle.cos(),
+                y: them.y + radius * angle.sin(),
                 z: them.z,
             };
+            crate::game::map::spells::interrupt(map, source);
             move_with(
                 map,
                 source,
@@ -2588,6 +3041,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 Move {
                     run: true,
                     pathfind: true,
+                    distancing: true,
                     ..Default::default()
                 },
             );
@@ -2693,25 +3147,35 @@ pub fn update_objects(map: &mut Map) {
     }
 }
 
-/// The scripts of a game object's use: `gameobject_scripts` for its spawn,
-/// and the event its template sends.
-pub fn object_used(map: &mut Map, player: Guid, object: Guid) {
+/// The scripts an object runs when it is used: its code-built script and
+/// `gameobject_scripts` for its spawn, on its user, at the object (as
+/// vmangos and Thistle Tea start them).
+pub fn object_scripts(map: &mut Map, user: Guid, object: Guid) {
     let Some(o) = map.gameobject(object) else {
         return;
     };
-    let (spawn, entry, kind) = (o.spawn_guid, o.entry, o.kind);
-    if let Some(s) = spawn {
-        start(map, ScriptTable::GameObject, s, object, player);
-    }
-    // A code-built script: on the player, at the object.
+    let (spawn, entry) = (o.spawn_guid, o.entry);
     let scripts = &map.realm.data.scripts;
     let hello = spawn
         .and_then(|s| scripts.object_hello.get(&s))
         .or_else(|| scripts.object_hello_entry.get(&entry))
         .copied();
     if let Some(id) = hello {
-        start(map, ScriptTable::Generic, id, player, object);
+        start(map, ScriptTable::Generic, id, user, object);
     }
+    if let Some(s) = spawn {
+        start(map, ScriptTable::GameObject, s, user, object);
+    }
+}
+
+/// The scripts of a game object's use: its own (`object_scripts`), and the
+/// event its template sends.
+pub fn object_used(map: &mut Map, player: Guid, object: Guid) {
+    let Some(o) = map.gameobject(object) else {
+        return;
+    };
+    let (entry, kind) = (o.entry, o.kind);
+    object_scripts(map, player, object);
     let event = map
         .realm
         .data

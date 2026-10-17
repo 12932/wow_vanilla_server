@@ -119,22 +119,31 @@ pub fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             let Some(e) = map.map_events.active.get_mut(&id) else {
                 return false;
             };
+            // The newest first, as Thistle Tea's list has them: an extra
+            // target looked for is the newest of its entry.
             e.targets.retain(|t| t.guid != source);
-            e.targets.push(EventTarget {
-                guid: source,
-                success_condition: int(step.dataint[0]),
-                success_script: int(step.dataint[1]),
-                failure_condition: int(step.dataint[2]),
-                failure_script: int(step.dataint[3]),
-            });
+            e.targets.insert(
+                0,
+                EventTarget {
+                    guid: source,
+                    success_condition: int(step.dataint[0]),
+                    success_script: int(step.dataint[1]),
+                    failure_condition: int(step.dataint[2]),
+                    failure_script: int(step.dataint[3]),
+                },
+            );
             true
         }
         64 => {
             let Some(e) = map.map_events.active.get(&id).cloned() else {
                 return false;
             };
+            // By condition (1, 2) takes a condition.
+            if matches!(d3, 1 | 2) && d2 == 0 {
+                return false;
+            }
             let met = |map: &Map, t: Guid| {
-                d2 == 0 || crate::game::map::conditions::met(map, d2, Some(t), Some(source))
+                crate::game::map::conditions::met(map, d2, Some(t), Some(source))
             };
             let kept: Vec<EventTarget> = match d3 {
                 0 => e
@@ -185,33 +194,44 @@ pub fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             e.data.insert(d2, value);
             true
         }
+        // Script event `id`, with data datalong2, for the event's source
+        // and target (datalong3 0), its extra targets (1), or all of them.
         66 => {
             let Some(e) = map.map_events.active.get(&id).cloned() else {
                 return false;
             };
-            for g in std::iter::once(e.source).chain(e.targets.iter().map(|t| t.guid)) {
-                if crate::game::guid::is_unit(g) {
-                    crate::game::map::event_ai::script_event(map, g, d2, d3, Some(source));
-                }
+            let main = [e.source, e.target];
+            let extra = e.targets.iter().map(|t| t.guid);
+            let mut recipients: Vec<Guid> = match d3 {
+                0 => main.to_vec(),
+                1 => extra.collect(),
+                _ => main.into_iter().chain(extra).collect(),
+            };
+            let mut seen = ahash::AHashSet::new();
+            recipients.retain(|g| crate::game::guid::is_unit(*g) && seen.insert(*g));
+            for g in recipients {
+                crate::game::map::event_ai::script_event(map, g, id, d2, None);
             }
             true
         }
+        // Each new value (none below zero) replaces its old one; a zero
+        // clears it.
         69 => {
             let Some(e) = map.map_events.active.get_mut(&id) else {
                 return false;
             };
-            // Each new value replaces its old one where given.
-            if step.dataint[0] != 0 {
-                e.success_condition = int(step.dataint[0]);
+            let [success, success_script, failure, failure_script] = step.dataint;
+            if success >= 0 {
+                e.success_condition = int(success);
             }
-            if step.dataint[1] != 0 {
-                e.success_script = int(step.dataint[1]);
+            if success_script >= 0 {
+                e.success_script = int(success_script);
             }
-            if step.dataint[2] != 0 {
-                e.failure_condition = int(step.dataint[2]);
+            if failure >= 0 {
+                e.failure_condition = int(failure);
             }
-            if step.dataint[3] != 0 {
-                e.failure_script = int(step.dataint[3]);
+            if failure_script >= 0 {
+                e.failure_script = int(failure_script);
             }
             true
         }

@@ -75,6 +75,9 @@ pub struct Engagement {
     pub mana_spent_at: Option<Instant>,
     /// When it next draws its dungeon into the fight.
     pub zone_pulse_at: Option<Instant>,
+    /// A script set it drawing its dungeon in (`zone_combat_pulse`), for
+    /// this fight.
+    pub zone_scripted: bool,
     /// Its call for the guards, answered.
     pub guard_call: Option<GuardCall>,
     /// When a civilian next looks about for enemies.
@@ -324,6 +327,7 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.unreachable_since = None;
         c.engagement.flee = None;
         c.engagement.zone_pulse_at = None;
+        c.engagement.zone_scripted = false;
         c.engagement.damage_by_players = 0;
         c.engagement.damage_by_npcs = 0;
         c.engagement.assist.clear();
@@ -415,6 +419,57 @@ pub fn entered(map: &mut Map, g: Guid, source: Guid) {
     if guid::is_player(crate::game::map::pets::master(map, source)) {
         zone_pulse(map, g, true);
     }
+}
+
+/// How far the first pulse of a script's draws its nearest enemy in.
+const ZONE_FIRST_YARDS: f32 = 533.333_3;
+
+/// `SCRIPT_COMMAND_ZONE_COMBAT_PULSE`, as Thistle Tea's `ZoneCombat.pulse`:
+/// in a dungeon, a creature that keeps a threat list and no player owns
+/// draws everyone there into its fight (with `initial`, those fighting
+/// already too, and first the nearest enemy if it has none), and goes on
+/// every three seconds while it fights. False for a dead one.
+pub fn script_zone_pulse(map: &mut Map, g: Guid, initial: bool) -> bool {
+    let now = map.now;
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
+    if !c.alive() {
+        return false;
+    }
+    let eligible = template(map, g).is_none_or(|t| t.flags_extra & EXTRA_NO_THREAT_LIST == 0)
+        && !c.owner.is_some_and(guid::is_player)
+        && matches!(
+            crate::game::instances::instance_type(&map.realm, map.key.map),
+            1 | 2
+        );
+    if !eligible {
+        return true;
+    }
+    let first = c.engagement.zone_pulse_at.is_none();
+    let quiet = c.combat.victim.is_zero();
+    let at = c.position;
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.zone_scripted = true;
+        c.engagement.zone_pulse_at = Some(now + ZONE_PULSE);
+    }
+    if first && initial && quiet {
+        let nearest = map
+            .players
+            .values()
+            .filter(|p| {
+                dist(p.position(), at) <= ZONE_FIRST_YARDS
+                    && crate::game::map::combat::can_attack(map, g, p.guid)
+                    && crate::game::map::combat::hostile(map, g, p.guid)
+            })
+            .min_by(|a, b| dist(a.position(), at).total_cmp(&dist(b.position(), at)))
+            .map(|p| p.guid);
+        if let Some(p) = nearest {
+            crate::game::map::combat::engage(map, p, g);
+        }
+    }
+    zone_pulse(map, g, initial);
+    true
 }
 
 /// Everyone in the dungeon, and their pets, fight `g`: at first all of
@@ -1100,17 +1155,27 @@ pub fn combat_mana_per_tick(map: &Map, g: Guid) -> u32 {
 }
 
 /// Whether a creature's health comes back by itself (Thistle Tea's
-/// `Regen.regenerates_health?`): as a script set it (bit 0x1), else
-/// unless its template says it doesn't.
+/// `Regen.regenerates_health?`).
 pub fn regenerates_health(map: &Map, g: Guid) -> bool {
-    match map
-        .creature(g)
-        .and_then(|c| c.scripted.as_deref())
+    regenerated_stats(map, g) & REGEN_HEALTH != 0
+}
+
+/// What a creature regenerates (Thistle Tea's `regenerate_stats`): health
+/// and its power, by a script's say (`C_SET_REGENERATION`) over its
+/// template's (none with the no-regeneration flag, else both).
+pub const REGEN_HEALTH: u32 = 0x1;
+pub const REGEN_POWER: u32 = 0x2;
+
+fn regenerated_stats(map: &Map, g: Guid) -> u32 {
+    crate::game::map::event_ai::scripted(map, g)
         .and_then(|s| s.regenerate)
-    {
-        Some(mask) => mask & 0x1 != 0,
-        None => template(map, g).is_none_or(|t| t.static_flags1 & STATIC_NO_AUTOMATIC_REGEN == 0),
-    }
+        .unwrap_or_else(|| {
+            if template(map, g).is_none_or(|t| t.static_flags1 & STATIC_NO_AUTOMATIC_REGEN == 0) {
+                REGEN_HEALTH | REGEN_POWER
+            } else {
+                0
+            }
+        })
 }
 
 /// Creatures regenerate: a third of health and mana each tick out of a
@@ -1130,8 +1195,7 @@ pub fn regenerate(map: &mut Map) {
         .map(|(_, c)| c.guid)
         .collect();
     for &g in &due {
-        let regenerates =
-            template(map, g).is_none_or(|t| t.static_flags1 & STATIC_NO_AUTOMATIC_REGEN == 0);
+        let stats = regenerated_stats(map, g);
         let poly = polymorphed(map, g);
         let combat_mana = combat_mana_per_tick(map, g);
         let Some(c) = map.creature_mut(g) else {
@@ -1142,12 +1206,9 @@ pub fn regenerate(map: &mut Map) {
             continue;
         }
         c.engagement.regen_at = Some(now + REGEN_EVERY);
-        if !regenerates {
-            continue;
-        }
         let fighting = c.combat.attacking || !c.combat.attackers.is_empty();
         let f = &mut c.fields;
-        if !fighting || poly {
+        if stats & REGEN_HEALTH != 0 && (!fighting || poly) {
             let (health, max) = (
                 f.get_u32(UNIT_FIELD_HEALTH),
                 f.get_u32(UNIT_FIELD_MAXHEALTH),
@@ -1163,7 +1224,7 @@ pub fn regenerate(map: &mut Map) {
             .engagement
             .mana_spent_at
             .is_some_and(|t| now.duration_since(t) < crate::game::map::stats::FIVE_SECOND_RULE);
-        let gain = if max == 0 {
+        let gain = if max == 0 || stats & REGEN_POWER == 0 {
             0
         } else if !fighting {
             (max / 3).max(1)
@@ -1198,7 +1259,8 @@ pub fn update(map: &mut Map) {
         if let Some(c) = map.creature_mut(g) {
             c.engagement.zone_pulse_at = fighting.then_some(now + ZONE_PULSE);
         }
-        if fighting && zone_fighter(map, g) && !should_evade(map, g, victim) {
+        let scripted = map.creature(g).is_some_and(|c| c.engagement.zone_scripted);
+        if fighting && (zone_fighter(map, g) || scripted) && !should_evade(map, g, victim) {
             zone_pulse(map, g, false);
         }
     }
