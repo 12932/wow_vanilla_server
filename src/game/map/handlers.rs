@@ -31,6 +31,9 @@ impl Map {
         let Some(msg) = crate::game::map::loot::handle(self, guid, msg) else {
             return;
         };
+        let Some(msg) = crate::game::map::ranged::handle(self, guid, msg) else {
+            return;
+        };
         match msg {
             ClientOpcodeMessage::CMSG_NAME_QUERY(m) => query::name(self, &out, m),
             ClientOpcodeMessage::CMSG_CREATURE_QUERY(m) => query::creature(self, &out, m),

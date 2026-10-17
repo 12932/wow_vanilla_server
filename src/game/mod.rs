@@ -17,6 +17,8 @@ pub mod store;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_combat;
+#[cfg(test)]
 mod tests_loot;
 pub mod transports;
 pub mod update;

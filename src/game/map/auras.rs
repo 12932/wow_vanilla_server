@@ -360,8 +360,8 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
     {
         return Some(Exclusive::MagePolymorph);
     }
-    if s.family_name == FAMILY_WARRIOR && (flags & 0x0001_0000 != 0 || flags_hi & 0x0 != 0) {
-        // Battle Shout.
+    if s.family_name == FAMILY_WARRIOR && (flags & 0x0001_0000 != 0 || flags_hi & 0x8000 != 0) {
+        // The helpful shouts (Battle Shout), by Thistle Tea's family masks.
         return Some(Exclusive::PositiveShout);
     }
     if s.family_name == FAMILY_MAGE {

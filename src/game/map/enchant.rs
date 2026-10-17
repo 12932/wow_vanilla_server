@@ -361,16 +361,30 @@ pub fn update(map: &mut Map) {
 /// goes.
 pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     use crate::game::map::procs::*;
-    if e.spell.is_some()
-        || e.actor_flags & (PROC_DONE_MELEE | PROC_DONE_OFFHAND | PROC_DONE_RANGED) == 0
-        || e.ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT) == 0
+    const EFFECT_ADD_EXTRA_ATTACKS: u32 = 19;
+    let data = map.realm.data.clone();
+    if e.actor_flags
+        & (PROC_DONE_MELEE
+            | PROC_DONE_OFFHAND
+            | PROC_DONE_RANGED
+            | PROC_DONE_MELEE_SPELL
+            | PROC_DONE_RANGED_SPELL)
+        == 0
+        || e.ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT | EX_BLOCK) == 0
+        || e.actor == e.target
+        || !map.unit_view(e.target).is_some_and(|u| u.alive)
     {
         return;
     }
-    let data = map.realm.data.clone();
+    // Abilities with the weapon proc it too; spells don't.
+    if let Some(s) = e.spell.and_then(|id| data.spells.get(id))
+        && s.equipped_item_class != 2
+    {
+        return;
+    }
     let slot = if e.offhand {
         16
-    } else if e.actor_flags & PROC_DONE_RANGED != 0 {
+    } else if e.ranged || e.actor_flags & (PROC_DONE_RANGED | PROC_DONE_RANGED_SPELL) != 0 {
         17
     } else {
         15
@@ -383,6 +397,14 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     };
     let item_guid = item.guid;
     let delay = data.item(item.entry).map_or(2000, |t| t.delay.max(1));
+    // An extra attack doesn't bring more extra attacks.
+    let wanted = |spell: u32| {
+        !(e.extra_attack
+            && data
+                .spells
+                .get(spell)
+                .is_some_and(|s| s.has_effect(EFFECT_ADD_EXTRA_ATTACKS)))
+    };
     let mut rng = rand::rng();
     let mut casts: Vec<(u32, Option<usize>)> = Vec::new();
     for (s, en) in active(item) {
@@ -390,13 +412,15 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
             continue;
         };
         for (kind, amount, _, spell) in def.effects {
-            if kind != TYPE_COMBAT_SPELL || spell == 0 {
+            if kind != TYPE_COMBAT_SPELL || spell == 0 || !wanted(spell) {
                 continue;
             }
+            // vmangos: procs a minute if the spell has a rate, else the
+            // enchantment's chance, else the weapon's speed's.
             let chance = match data.spells.enchant_ppm.get(&spell) {
-                Some(ppm) if *ppm > 0.0 => delay as f32 * ppm / 600.0,
+                Some(ppm) if *ppm > 0.0 => ppm_chance(*ppm, delay),
                 _ if amount > 0 => amount as f32,
-                _ => 0.0,
+                _ => delay as f32 * 1.8 / 1000.0,
             };
             if rng.random_range(0.0f32..100.0) < chance {
                 casts.push((spell, (s == TEMP_SLOT && en.charges > 0).then_some(s)));
@@ -404,18 +428,25 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
         }
     }
     if let Some(t) = data.item(item.entry) {
-        for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == 2) {
+        for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == 2 && wanted(s.id)) {
             let chance = if s.ppm_rate > 0.0 {
-                delay as f32 * s.ppm_rate / 600.0
+                ppm_chance(s.ppm_rate, delay)
             } else {
-                data.spells.get(s.id).map_or(0.0, |x| x.proc_chance as f32)
+                match data.spells.get(s.id) {
+                    Some(x) if x.proc_chance > 100 => ppm_chance(1.0, delay),
+                    Some(x) => x.proc_chance as f32,
+                    None => 0.0,
+                }
             };
-            if rng.random_range(0.0f32..100.0) < chance {
+            if chance >= 100.0 || rng.random_range(0.0f32..100.0) < chance {
                 casts.push((s.id, None));
             }
         }
     }
     for (spell, charge) in casts {
+        if !map.unit_view(e.target).is_some_and(|u| u.alive) {
+            break;
+        }
         let helpful = data
             .spells
             .get(spell)
