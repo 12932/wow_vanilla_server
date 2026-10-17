@@ -423,6 +423,9 @@ pub struct RaceInfo {
     pub female_display: u32,
     pub faction: u32,
     pub cinematic: u32,
+    /// The flight points a new character of the race knows, as the client
+    /// counts them: node N is bit N - 1 (`ChrRaces`' starting taxi mask).
+    pub starting_taxi_mask: u32,
 }
 
 #[derive(Debug, Default)]

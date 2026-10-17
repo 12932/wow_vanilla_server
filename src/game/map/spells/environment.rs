@@ -28,8 +28,42 @@ pub fn outdoors(map: &mut Map, g: Guid) -> Option<bool> {
     if let Some(v) = map.spells.outdoors_override.get(&g) {
         return Some(*v);
     }
+    // On a boat or a zeppelin: only its open deck's spots.
+    if let Some(t) = map
+        .players
+        .get(&g)
+        .and_then(|p| p.movement.flags.get_on_transport())
+    {
+        let display = map
+            .realm
+            .data
+            .gameobject_templates
+            .get(&crate::game::guid::entry(t.transport.guid))
+            .map_or(0, |o| o.display_id);
+        return Some(on_open_deck(display, t.transport.position));
+    }
     let at = map.position_of(g)?;
     map.nav.as_mut()?.outdoors(at)
+}
+
+/// Whether a passenger at `at` on a transport of `display` is under the
+/// sky: a ship's (3015) three spots on deck, a zeppelin's (3031) one
+/// (Thistle Tea's `Transport.outdoors?`).
+pub fn on_open_deck(display: u32, at: wow_world_messages::vanilla::Vector3d) -> bool {
+    let near = |(x, y, z, r): (f32, f32, f32, f32)| {
+        ((at.x - x).powi(2) + (at.y - y).powi(2) + (at.z - z).powi(2)).sqrt() < r
+    };
+    match display {
+        3015 => [
+            (6.21, 0.12, 14.05, 1.1),
+            (-10.46, 6.62, 17.77, 1.0),
+            (1.55, -4.51, 11.30, 0.5),
+        ]
+        .into_iter()
+        .any(near),
+        3031 => near((-21.77, -7.90, -13.27, 1.1)),
+        _ => false,
+    }
 }
 
 /// Why a player can't cast `s` where they stand, if they can't.

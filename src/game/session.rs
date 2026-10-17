@@ -380,6 +380,10 @@ impl Session {
             spells: start.spells.clone(),
             ..Default::default()
         };
+        // The flight points the race knows from the first.
+        if let Some(r) = self.realm.data.races.get(&race) {
+            row.state.taxi_mask = crate::game::map::npc::mask_from_client(&[r.starting_taxi_mask]);
+        }
         let spawn = &crate::config::config().spawn;
         if spawn.enabled {
             row.map = spawn.map;
