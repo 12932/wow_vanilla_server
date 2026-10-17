@@ -1689,12 +1689,12 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
         let threat = damage as f32 * threat_multiplier(map, attacker, school);
         crate::game::map::ai::add_threat(map, victim, attacker, threat);
     }
+    // Thistle Tea's `break_on_damage`, whatever the source (a fall too):
+    // confusion (Polymorph, Blind) and what damage interrupts (Sap, Gouge).
+    auras::remove_where(map, victim, |h| {
+        h.interrupt_flags & INTERRUPT_DAMAGE != 0 || (h.has(AURA_MOD_CONFUSE) && !h.positive)
+    });
     if attacker != victim {
-        // Thistle Tea's `break_on_damage`: confusion (Polymorph, Blind) and
-        // what damage interrupts (Sap, Gouge).
-        auras::remove_where(map, victim, |h| {
-            h.interrupt_flags & INTERRUPT_DAMAGE != 0 || (h.has(AURA_MOD_CONFUSE) && !h.positive)
-        });
         crate::game::map::creature_combat::hostile_act(map, victim);
     }
     let Some(f) = map.unit_fields_mut(victim) else {
