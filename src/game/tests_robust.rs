@@ -395,6 +395,9 @@ async fn a_creature_that_keeps_panicking_is_restarted_then_quarantined() {
     let (mut b, _, _) = in_world(&realm, "BOB", "Bob").await;
     b.sees(wolf(21)).await;
     assert_eq!(panics(&map).await, 4);
+    b.say(".maps").await;
+    b.system_message("panics 4, quarantined 1, restarts 0")
+        .await;
     assert!(
         !b.sees_within(bad, Duration::from_millis(300)).await,
         "the quarantined wolf is not shown"
@@ -961,6 +964,94 @@ async fn the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one() {
     serving.abort();
 }
 
+/// Every GM command, with arguments out of range, not numbers, NaN and
+/// infinities, never panics its map.
+#[tokio::test]
+async fn gm_commands_with_odd_arguments_never_panic() {
+    let realm = {
+        let mut config = harness::test_config();
+        config.max_packets_per_sec = 1_000_000;
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        Realm::new(config, store, startup, wolves(), None)
+    };
+    let (mut a, _, _) = in_world(&realm, "ALICE", "Alice").await;
+    let (_b, gb, _) = in_world(&realm, "BOB", "Bob").await;
+    let args = [
+        "",
+        "nan",
+        "inf",
+        "-inf",
+        "-1",
+        "0",
+        "1e30",
+        "-1e30",
+        "4294967295",
+        "99999999999999999999",
+        "x",
+        "nan nan nan",
+        "inf inf inf",
+        "1e30 1e30 1e30 1",
+        "-1 -1 -1",
+        "0 0 0 0",
+        "on",
+        "off",
+        "start",
+        "stop",
+        "start nan",
+        "start 1e30 1e30",
+        "list",
+        "close -1",
+        "respond -1 x",
+        "points nan",
+        "points -1",
+        "week",
+        "hp nan",
+        "hp -1",
+        "money -1",
+        "money 1e30",
+        "speed nan",
+        "speed inf",
+        "mana 99999999999999999999",
+        "Bob",
+        "Bob nan",
+        "xyz nan nan nan",
+        "xyz 1e30 1e30 1e30 0",
+        "alterac",
+        "warsong start",
+        "reset",
+        "all",
+    ];
+    for command in chaos::GM_COMMANDS {
+        if ["kick", "die"].contains(command) {
+            continue;
+        }
+        for arg in args {
+            // Bob's the target, where the command takes one.
+            a.send(CMSG_SET_SELECTION { target: gb }).await;
+            a.say(&format!(".{command} {arg}")).await;
+            // As a client does, sent elsewhere.
+            a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+        }
+        // A round trip: what was said has been handled.
+        a.send(CMSG_NAME_QUERY { guid: a.guid }).await;
+        let me = a.guid;
+        a.wait_for("the name", |m| match m {
+            ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(r) if r.guid == me => Some(()),
+            _ => None,
+        })
+        .await;
+        a.clear();
+        if realm.registry.online(me).is_none() {
+            assert_eq!(try_login(&mut a, me).await, Ok(()));
+        }
+        let mut total = 0;
+        for m in realm.maps.all() {
+            total += m.query(|m| m.stats.panics).await.unwrap_or(0);
+        }
+        assert_eq!(total, 0, "after .{command}");
+    }
+}
+
 /// A walk to a place of no finite distance (out of the world, or NaN)
 /// takes no time. Before, working out its duration panicked, every turn
 /// of the creature that walked it.
@@ -1068,4 +1159,613 @@ async fn a_saved_field_that_wont_parse_costs_only_itself() {
     assert_eq!(back.explored_zones, [12, 40]);
     assert_eq!(back.talent_wipes, 3);
     assert_eq!(back.rest_bonus, 0.0);
+}
+
+/// Chaos: random, well-typed client messages in random orders, from
+/// players among the real world's creatures, NPCs and objects.
+mod chaos {
+    use std::collections::HashMap;
+
+    use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
+    use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
+
+    use super::*;
+    use crate::game::supervisor::catch;
+
+    /// The kinds of value a body is built of.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum Kind {
+        U8,
+        U16,
+        U32,
+        Guid,
+        F32,
+        Str,
+    }
+
+    const KINDS: [Kind; 6] = [
+        Kind::U8,
+        Kind::U16,
+        Kind::U32,
+        Kind::Guid,
+        Kind::F32,
+        Kind::Str,
+    ];
+
+    /// What the players might name: the objects around them, their
+    /// items, and the ids of the world's spells, items, quests and the
+    /// rest.
+    struct Vocabulary {
+        guids: Vec<u64>,
+        ids: Vec<u32>,
+        floats: Vec<f32>,
+        words: Vec<&'static str>,
+    }
+
+    impl Vocabulary {
+        fn fill(&self, rng: &mut StdRng, kind: Kind, out: &mut Vec<u8>) {
+            match kind {
+                Kind::U8 => {
+                    let v: u8 = match rng.random_range(0..4) {
+                        0 => rng.random_range(0..4),
+                        1 => rng.random_range(0..40),
+                        2 => 0xFF,
+                        _ => rng.random(),
+                    };
+                    out.push(v);
+                }
+                Kind::U16 => {
+                    let v: u16 = match rng.random_range(0..3) {
+                        0 => rng.random_range(0..64),
+                        1 => self.ids[rng.random_range(0..self.ids.len())] as u16,
+                        _ => rng.random(),
+                    };
+                    out.extend(v.to_le_bytes());
+                }
+                Kind::U32 => {
+                    let v: u32 = match rng.random_range(0..6) {
+                        0 => rng.random_range(0..8),
+                        1 => rng.random_range(0..64),
+                        2 | 3 => self.ids[rng.random_range(0..self.ids.len())],
+                        4 => u32::MAX,
+                        _ => rng.random(),
+                    };
+                    out.extend(v.to_le_bytes());
+                }
+                Kind::Guid => {
+                    let v: u64 = match rng.random_range(0..8) {
+                        0 => 0,
+                        1 => rng.random(),
+                        _ => self.guids[rng.random_range(0..self.guids.len())],
+                    };
+                    out.extend(v.to_le_bytes());
+                }
+                Kind::F32 => {
+                    let v = self.floats[rng.random_range(0..self.floats.len())]
+                        + if rng.random_range(0..2) == 0 {
+                            rng.random_range(-20.0..20.0)
+                        } else {
+                            0.0
+                        };
+                    out.extend(v.to_le_bytes());
+                }
+                Kind::Str => {
+                    let w = self.words[rng.random_range(0..self.words.len())];
+                    out.extend(w.as_bytes());
+                    out.push(0);
+                }
+            }
+        }
+    }
+
+    fn parse(opcode: u32, body: &[u8]) -> Result<Option<ClientOpcodeMessage>, String> {
+        let mut plain = Vec::with_capacity(6 + body.len());
+        plain.extend(((body.len() + 4) as u16).to_be_bytes());
+        plain.extend(opcode.to_le_bytes());
+        plain.extend(body);
+        catch(|| ClientOpcodeMessage::read_unencrypted(&plain[..]).ok())
+    }
+
+    /// The opcodes wow_messages reads from a client.
+    fn client_opcodes() -> Vec<u32> {
+        use wow_world_messages::errors::ExpectedOpcodeError;
+        (0..0x400u32)
+            .filter(|op| {
+                let plain = [0, 4, *op as u8, (*op >> 8) as u8, 0, 0];
+                let read = catch(|| {
+                    !matches!(
+                        ClientOpcodeMessage::read_unencrypted(&plain[..]),
+                        Err(ExpectedOpcodeError::Opcode { .. })
+                    )
+                });
+                read.unwrap_or(true)
+            })
+            .collect()
+    }
+
+    /// A random message of `opcode`: a shape it parsed with before, filled
+    /// afresh, or (now and then, or while it has none) a new shape tried.
+    struct Generator {
+        vocabulary: Vocabulary,
+        shapes: HashMap<u32, Vec<Vec<Kind>>>,
+        /// Bodies that made wow_messages panic, by opcode.
+        parse_panics: HashMap<u32, (u32, String)>,
+    }
+
+    impl Generator {
+        fn body(&self, rng: &mut StdRng, shape: &[Kind]) -> Vec<u8> {
+            let mut b = Vec::new();
+            for k in shape {
+                self.vocabulary.fill(rng, *k, &mut b);
+            }
+            b
+        }
+
+        fn message(
+            &mut self,
+            rng: &mut StdRng,
+            opcode: u32,
+        ) -> Option<(Vec<u8>, ClientOpcodeMessage)> {
+            let known = self.shapes.get(&opcode).filter(|s| !s.is_empty()).cloned();
+            for attempt in 0..48 {
+                let shape: Vec<Kind> = match &known {
+                    Some(shapes) if attempt < 40 && rng.random_range(0..10) < 8 => {
+                        shapes[rng.random_range(0..shapes.len())].clone()
+                    }
+                    _ => (0..rng.random_range(0..10))
+                        .map(|_| KINDS[rng.random_range(0..KINDS.len())])
+                        .collect(),
+                };
+                let body = self.body(rng, &shape);
+                // What the connection's reader would drop unread.
+                if !crate::game::conn::fits(opcode, &body) {
+                    continue;
+                }
+                match parse(opcode, &body) {
+                    Ok(Some(m)) => {
+                        let shapes = self.shapes.entry(opcode).or_default();
+                        if !shapes.contains(&shape) && shapes.len() < 8 {
+                            shapes.push(shape);
+                        }
+                        return Some((body, m));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        self.parse_panics.entry(opcode).or_insert((0, e)).0 += 1;
+                    }
+                }
+            }
+            None
+        }
+    }
+
+    /// Players, at the start of the real world, sending random messages:
+    /// thousands, in random orders. No map ever panics, and every player's
+    /// map still answers them.
+    #[tokio::test]
+    async fn random_client_messages_never_panic_a_map() {
+        chaos(false).await;
+    }
+
+    /// The same, as GMs, a quarter of it GM commands with random
+    /// arguments.
+    #[tokio::test]
+    async fn random_gm_commands_never_panic_a_map() {
+        chaos(true).await;
+    }
+
+    pub(super) const GM_COMMANDS: &[&str] = &[
+        "go",
+        "tele",
+        "gps",
+        "die",
+        "revive",
+        "levelup",
+        "gm",
+        "speed",
+        "online",
+        "maps",
+        "save",
+        "announce",
+        "kick",
+        "spawn",
+        "ticket",
+        "honor",
+        "arena",
+        "help",
+        "additem",
+        "addquest",
+        "learn",
+        "unlearn",
+        "character",
+        "damage",
+        "kill",
+        "respawn",
+        "move",
+        "threat",
+        "guid",
+        "pos",
+        "modify",
+        "rested",
+        "start",
+        "talents",
+        "tgm",
+        "weather",
+        "instance",
+        "bg",
+        "mail",
+        "debug",
+        "invasion",
+        "event",
+    ];
+
+    const GM_WORDS: &[&str] = &[
+        "on",
+        "off",
+        "all",
+        "start",
+        "stop",
+        "status",
+        "history",
+        "list",
+        "close",
+        "respond",
+        "week",
+        "points",
+        "hp",
+        "mana",
+        "rage",
+        "energy",
+        "money",
+        "speed",
+        "xyz",
+        "reset",
+        "alterac",
+        "warsong",
+        "arathi",
+        "Chaosa",
+        "Chaosb",
+        "Chaosc",
+        "Stormwind",
+        "goldshire",
+        "-1",
+        "0",
+        "1",
+        "2",
+        "60",
+        "255",
+        "65535",
+        "4294967295",
+        "99999999999999999999",
+        "1.5",
+        "nan",
+        "inf",
+        "-0",
+        "1e30",
+        "x",
+        "",
+    ];
+
+    /// A GM command with random arguments.
+    fn gm_line(rng: &mut StdRng, v: &Vocabulary) -> String {
+        let mut line = format!(".{}", GM_COMMANDS[rng.random_range(0..GM_COMMANDS.len())]);
+        for _ in 0..rng.random_range(0..4) {
+            let arg = match rng.random_range(0..4) {
+                0 => v.ids[rng.random_range(0..v.ids.len())].to_string(),
+                1 => format!("{:.1}", v.floats[rng.random_range(0..v.floats.len())]),
+                _ => GM_WORDS[rng.random_range(0..GM_WORDS.len())].to_owned(),
+            };
+            line.push(' ');
+            line.push_str(&arg);
+        }
+        line
+    }
+
+    /// A player out of the world (sent to the character screen, kicked,
+    /// or their session gone) logs back in.
+    async fn back_in(realm: &Arc<Realm>, c: &mut Client, account: &str, g: Guid) {
+        for _ in 0..10 {
+            if realm.registry.online(g).is_some() {
+                return;
+            }
+            if !c.try_send(CMSG_PLAYER_LOGIN { guid: g }).await {
+                *c = Client::connect(realm, account);
+                continue;
+            }
+            let entered = c
+                .gets(WAIT, |m| match m {
+                    ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => Some(true),
+                    ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(_) => Some(false),
+                    _ => None,
+                })
+                .await;
+            if entered == Some(true) {
+                c.guid = g;
+                let _ = c.try_send(CMSG_SET_ACTIVE_MOVER { guid: g }).await;
+                return;
+            }
+            // Still going from where it was: a moment, and again.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("{g} can't get back into the world");
+    }
+
+    async fn chaos(gm: bool) {
+        let dir = harness::real_data("db");
+        let db = dir.join("vmangos.sqlite");
+        if !db.exists() || crate::game::data::load::lfs_pointer(&db) {
+            return;
+        }
+        let data = crate::game::data::load::load(&dir);
+        let mut config = harness::test_config();
+        // Players or GMs; and a flood is what this is.
+        config.everyone_gm = gm;
+        config.max_packets_per_sec = 1_000_000;
+        let realm = {
+            let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+            Realm::new(config, store, startup, data, None)
+        };
+        let seed: u64 = std::env::var("WVS_CHAOS_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let rounds: usize = std::env::var("WVS_CHAOS_ROUNDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(40);
+        let mut rng = StdRng::seed_from_u64(seed + u64::from(gm));
+        let classes = [Class::Warrior, Class::Mage, Class::Priest];
+        let mut players = Vec::new();
+        for (i, class) in classes.into_iter().enumerate() {
+            let account = format!("CHAOS{i}");
+            let mut c = Client::connect(&realm, &account);
+            let g = c
+                .enter(&format!("Chaos{}", ["a", "b", "c"][i]), Race::Human, class)
+                .await;
+            c.send(CMSG_COMPLETE_CINEMATIC {}).await;
+            players.push((account, c, g));
+        }
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        let mine: Vec<Guid> = players.iter().map(|p| p.2).collect();
+        let (near, items, spells, entries) = map
+            .query(move |m| {
+                let near: Vec<u64> = m
+                    .grid
+                    .around(START.0, START.1, 80.0)
+                    .map(|g| g.guid())
+                    .collect();
+                let mut items = Vec::new();
+                let mut spells = Vec::new();
+                for g in &mine {
+                    let p = &m.players[g];
+                    items.extend(p.items.iter().map(|i| i.guid.guid()));
+                    spells.extend(p.spells.iter().copied());
+                }
+                let mut entries: Vec<u32> = m.creatures.iter().map(|(_, c)| c.entry).collect();
+                entries.extend(m.gameobjects.iter().map(|(_, o)| o.entry));
+                (near, items, spells, entries)
+            })
+            .await
+            .unwrap();
+        let d = &realm.data;
+        let mut ids: Vec<u32> = spells;
+        ids.extend(entries);
+        ids.extend(d.spells.spells.keys().step_by(97).copied());
+        ids.extend(d.items.keys().step_by(53).copied());
+        ids.extend(d.npc.quests.keys().step_by(17).copied());
+        ids.extend(d.area_triggers.keys().copied());
+        ids.extend(d.maps.keys().copied());
+        ids.extend(0..40);
+        let mut guids: Vec<u64> = near;
+        guids.extend(items);
+        guids.extend(players.iter().map(|p| p.2.guid()));
+        let vocabulary = Vocabulary {
+            guids,
+            ids,
+            floats: vec![
+                START.0,
+                START.1,
+                START.2,
+                0.0,
+                1.0,
+                std::f32::consts::PI,
+                -1.0,
+                1e9,
+                f32::NAN,
+                f32::INFINITY,
+            ],
+            words: vec![
+                "",
+                "hello",
+                "Chaosa",
+                "Chaosb",
+                "General",
+                "x",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "Stormwind",
+                "%s%n",
+            ],
+        };
+        let mut generator = Generator {
+            vocabulary,
+            shapes: HashMap::new(),
+            parse_panics: HashMap::new(),
+        };
+        // Logging out ends the chaos for that player; the rest are fair.
+        let skip = [0x4A, 0x4B];
+        let opcodes: Vec<u32> = client_opcodes()
+            .into_iter()
+            .filter(|o| !skip.contains(o) && !crate::game::conn::RAW_OPCODES.contains(o))
+            .collect();
+        let raw: Vec<u16> = crate::game::conn::RAW_OPCODES
+            .iter()
+            .map(|o| *o as u16)
+            .collect();
+        let total_panics = |realm: &Arc<Realm>| {
+            let maps = realm.maps.all();
+            async move {
+                let mut n = 0;
+                for m in maps {
+                    n += m.query(|m| m.stats.panics).await.unwrap_or(0);
+                }
+                n
+            }
+        };
+        let mut failures = Vec::new();
+        let mut sent_total = 0;
+        // What was sent and heard, and where the players were, to see what
+        // the chaos reached.
+        let mut sent_by: HashMap<u32, u32> = HashMap::new();
+        let mut heard: HashMap<String, u32> = HashMap::new();
+        let mut whereabouts: HashMap<String, u32> = HashMap::new();
+        let started = std::time::Instant::now();
+        for round in 0..rounds {
+            let mut sent: Vec<String> = Vec::new();
+            for _ in 0..250 {
+                let who = rng.random_range(0..players.len());
+                if rng.random_range(0..50) == 0 {
+                    let op = raw[rng.random_range(0..raw.len())];
+                    let n = rng.random_range(0..6);
+                    let shape: Vec<Kind> = (0..n)
+                        .map(|_| KINDS[rng.random_range(0..KINDS.len())])
+                        .collect();
+                    let body = generator.body(&mut rng, &shape);
+                    sent.push(format!("{who}: raw 0x{op:X} {body:?}"));
+                    if !players[who].1.try_send_raw(op, &body).await {
+                        let account = players[who].0.clone();
+                        players[who].1 = Client::connect(&realm, &account);
+                    }
+                    continue;
+                }
+                if gm && rng.random_range(0..4) == 0 {
+                    let line = gm_line(&mut rng, &generator.vocabulary);
+                    sent.push(format!("{who}: {line}"));
+                    let said = CMSG_MESSAGECHAT {
+                        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+                        language: Language::Universal,
+                        message: line,
+                    };
+                    if !players[who].1.try_send(said).await {
+                        let account = players[who].0.clone();
+                        players[who].1 = Client::connect(&realm, &account);
+                    }
+                    continue;
+                }
+                let op = opcodes[rng.random_range(0..opcodes.len())];
+                let Some((body, msg)) = generator.message(&mut rng, op) else {
+                    continue;
+                };
+                sent.push(format!("{who}: 0x{op:03X} {body:?} {msg:?}"));
+                *sent_by.entry(op).or_default() += 1;
+                if !players[who].1.try_send(msg).await {
+                    // Its session went: a new connection.
+                    let account = players[who].0.clone();
+                    players[who].1 = Client::connect(&realm, &account);
+                }
+            }
+            sent_total += sent.len();
+            // Every player in the world again, and answered by their map:
+            // what each sent before has been handled.
+            for (account, c, g) in players.iter_mut() {
+                back_in(&realm, c, account, *g).await;
+                c.gets(Duration::ZERO, |_| None::<()>).await;
+                for m in c.backlog.drain(..) {
+                    let name = m.to_string();
+                    let name = name.split([' ', '{', '(']).next().unwrap_or("").to_owned();
+                    *heard.entry(name).or_default() += 1;
+                }
+                c.clear();
+                if let Some(o) = realm.registry.online(*g) {
+                    let me = *g;
+                    let state =
+                        o.map()
+                            .query(move |m| {
+                                // Up again, so the next round can do more than
+                                // a ghost may.
+                                if m.players.get(&me).is_some_and(|p| {
+                                    p.death != crate::game::map::death::Death::Alive
+                                }) {
+                                    crate::game::map::death::resurrect(m, me, 1.0);
+                                }
+                                m.players.get(&me).map(|p| {
+                                    format!(
+                                        "{} {:?}{}",
+                                        m.key,
+                                        p.death,
+                                        if p.awaiting_worldport {
+                                            " (in transit)"
+                                        } else {
+                                            ""
+                                        }
+                                    )
+                                })
+                            })
+                            .await
+                            .flatten()
+                            .unwrap_or_else(|| "between maps".to_owned());
+                    *whereabouts.entry(state).or_default() += 1;
+                }
+                let me = *g;
+                let mut answered = false;
+                for _ in 0..3 {
+                    back_in(&realm, c, account, me).await;
+                    // Sent to another map, it arrives, as a client does.
+                    let _ = c.try_send(MSG_MOVE_WORLDPORT_ACK {}).await;
+                    if !c.try_send(CMSG_NAME_QUERY { guid: me }).await {
+                        continue;
+                    }
+                    let heard = c
+                        .gets(WAIT, |m| match m {
+                            ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(r) if r.guid == me => {
+                                Some(())
+                            }
+                            _ => None,
+                        })
+                        .await;
+                    if heard.is_some() {
+                        answered = true;
+                        break;
+                    }
+                }
+                assert!(answered, "round {round}: {g}'s map doesn't answer");
+                c.clear();
+            }
+            let panics = total_panics(&realm).await;
+            if panics > failures.len() as u64 {
+                failures.push(format!(
+                    "round {round}: {panics} panics after\n{}",
+                    sent.join("\n")
+                ));
+                // One report a panic: the count is what is asserted.
+                while (failures.len() as u64) < panics {
+                    failures.push(String::new());
+                }
+            }
+        }
+        eprintln!(
+            "chaos: {sent_total} messages over {rounds} rounds in {:.1} s; {} opcodes with a shape that parses; wow_messages panicked reading {:?}",
+            started.elapsed().as_secs_f32(),
+            generator.shapes.len(),
+            generator.parse_panics
+        );
+        let mut heard: Vec<_> = heard.into_iter().collect();
+        heard.sort_by_key(|h| std::cmp::Reverse(h.1));
+        eprintln!("chaos: {} kinds of answer heard: {heard:?}", heard.len());
+        let mut sent_by: Vec<_> = sent_by.into_iter().collect();
+        sent_by.sort();
+        eprintln!("chaos: sent by opcode: {sent_by:X?}");
+        eprintln!("chaos: where the players were, each round: {whereabouts:?}");
+        let reports: Vec<&String> = failures.iter().filter(|f| !f.is_empty()).collect();
+        assert!(
+            reports.is_empty(),
+            "{} panics:\n{}",
+            failures.len(),
+            reports
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        );
+    }
 }
