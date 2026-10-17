@@ -315,6 +315,9 @@ fn run(
             Some(p) if p.chance > 0.0 => p.chance,
             _ => s.proc_chance as f32,
         };
+        // The bearer's modifiers to its chance (Thistle Tea's `ProcChance`).
+        let chance = crate::game::map::spells::mods::for_spell(map, owner, s)
+            .apply(crate::game::map::spells::mods::OP_CHANCE_OF_SUCCESS, chance);
         if chance <= 0.0 || (chance < 100.0 && rng.random_range(0.0f32..100.0) >= chance) {
             continue;
         }
@@ -391,12 +394,43 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
                 }
             }
             auras::AURA_PROC_TRIGGER_DAMAGE => {
-                let amount = (x.amount * h.stacks.max(1) as i32).max(0) as u32;
-                spell_damage(map, owner, other, h.spell, amount, h.school);
+                let amount = (x.amount * h.stacks.max(1) as i32).max(0);
+                proc_damage(map, owner, other, h, x.effect as usize, amount);
             }
             _ => {}
         }
     }
+}
+
+/// A proc aura's damage, as Thistle Tea's `ProcDamage` makes it: a school
+/// damage spell of its own effect's points with its spell power share, its
+/// hit rolled, never a crit or reflected.
+fn proc_damage(map: &mut Map, owner: Guid, other: Guid, h: &Holder, index: usize, amount: i32) {
+    let data = map.realm.data.clone();
+    let Some(t) = data.spells.get(h.spell).filter(|_| index < 3) else {
+        spell_damage(map, owner, other, h.spell, amount.max(0) as u32, h.school);
+        return;
+    };
+    let mut s = t.clone();
+    let mut e = s.effects[index];
+    e.effect = crate::game::map::spells::EFFECT_SCHOOL_DAMAGE;
+    e.aura = 0;
+    e.trigger_spell = 0;
+    e.target_a = 6;
+    e.target_b = 0;
+    s.effects = [Default::default(); 3];
+    s.effects[0] = e;
+    s.attributes[0] &= !sd::ATTR_PASSIVE;
+    s.attributes[1] |= sd::ATTR_EX_NO_REFLECTION;
+    s.attributes[2] |= sd::ATTR_EX2_CANT_CRIT;
+    s.speed = 0.0;
+    crate::game::map::spells::scripts::cast_template_with_points(
+        map,
+        owner,
+        s,
+        other,
+        [Some(amount.max(1)), None, None],
+    );
 }
 
 /// Spell damage a proc deals: logged, absorbed, dealt.

@@ -787,15 +787,26 @@ pub fn damage(
     base: f32,
     l: &Landing,
 ) -> Damage {
-    let mut d = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
+    // A fixed amount takes no bonus or modifier, done or taken (vmangos's
+    // custom flag).
+    let fixed = s.custom(sd::CUSTOM_FIXED_DAMAGE);
+    let mut d = if fixed {
+        base
+    } else {
+        base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods)
+    };
     d *= if l.chain > 0.0 { l.chain } else { 1.0 };
-    d *= done_multiplier(map, caster, target, s);
-    d = l.mods.apply(mods::OP_DAMAGE, d);
-    if s.school == 0 {
+    if !fixed {
+        d *= done_multiplier(map, caster, target, s);
+        d = l.mods.apply(mods::OP_DAMAGE, d);
+    }
+    if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
         let armor = resistance(map, caster, target, 0);
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
-    d = taken(map, target, s, d);
+    if !fixed {
+        d = taken(map, target, s, d);
+    }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
         let bonus = if physical(s) {
@@ -1039,7 +1050,7 @@ pub fn split(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damag
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
 /// casters (Drain Soul's and Shadowburn's soul shards), if `damage` kills
 /// it: only for a death that gives experience or honor.
-pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32)> {
+pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)> {
     let health = map
         .unit_fields(target)
         .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
@@ -1050,25 +1061,51 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32)> {
     let Some(a) = auras::auras(map, target) else {
         return Vec::new();
     };
-    a.effects()
-        .filter(|(h, x)| {
-            x.kind == AURA_CHANNEL_DEATH_ITEM && x.mask != 0 && guid::is_player(h.caster)
-        })
-        .filter(|(h, _)| {
-            let caster_level = level(map, h.caster);
-            let target_level = level(map, target);
-            guid::is_player(target) || target_level > combat::gray_level(caster_level)
-        })
-        .map(|(h, x)| (h.caster, x.mask))
-        .collect()
+    let data = &map.realm.data;
+    let target_level = level(map, target);
+    let creature = map.creature(target);
+    // A soul shard only from a death worth something to its caster (Thistle
+    // Tea's `DeathItem.eligible?`): not grey, a player or tapped, not a
+    // pet or a totem.
+    let shard_target = creature.is_none_or(|c| {
+        c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none()
+    });
+    let mut items: Vec<(Guid, u32, u32)> = Vec::new();
+    for (h, x) in a.effects() {
+        if x.kind != AURA_CHANNEL_DEATH_ITEM || x.mask == 0 {
+            continue;
+        }
+        if x.mask == SOUL_SHARD {
+            let tapped = guid::is_player(target)
+                || creature.is_some_and(|c| c.tapped_by.is_none_or(|t| t == h.caster));
+            if !shard_target
+                || !tapped
+                || target_level <= combat::gray_level(level(map, h.caster))
+            {
+                continue;
+            }
+        }
+        // One shard a warlock, however many of their drains were on it.
+        let warlock = data.spells.get(h.spell).is_some_and(|s| s.family_name == 5);
+        if warlock && items.iter().any(|(c, i, _)| *c == h.caster && *i == x.mask) {
+            continue;
+        }
+        items.push((h.caster, x.mask, x.amount.max(1) as u32));
+    }
+    items
 }
 
-pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32)>) {
+/// Soul Shard.
+const SOUL_SHARD: u32 = 6265;
+
+pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32, u32)>) {
     if items.is_empty() || map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }
-    for (caster, item) in items {
-        let _ = crate::game::map::inventory::add_item(map, caster, item, 1, true);
+    for (caster, item, count) in items {
+        if guid::is_player(caster) {
+            let _ = crate::game::map::inventory::add_item(map, caster, item, count, true);
+        }
     }
 }
 
