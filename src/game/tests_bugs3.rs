@@ -784,3 +784,79 @@ fn the_real_barkskin_links_its_effect() {
         crate::game::map::auras::AURA_MOD_DAMAGE_PERCENT_TAKEN
     );
 }
+
+const SHEEP: u32 = 900_360;
+const MARK: u32 = 900_361;
+const BOAR: u32 = 900_362;
+
+/// A caster's single-target auras outlive the caster's death but for
+/// Hunter's Mark, as in mangos (which removes none) and Thistle Tea
+/// (`SingleTargetAuras.caster_died`, only the stalked); all of them end
+/// when the caster leaves the world (mangos's `RemoveNotOwnTrackedTargetAuras`,
+/// Thistle Tea's `SingleTarget.detach`).
+#[tokio::test]
+async fn single_target_auras_outlive_their_casters_death_but_not_its_going() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    for (id, aura) in [
+        (SHEEP, crate::game::map::auras::AURA_MOD_CONFUSE),
+        (MARK, crate::game::map::auras::AURA_MOD_STALKED),
+    ] {
+        let mut s = unit_spell(id, 6);
+        s.effects[0].aura = aura;
+        s.custom_flags = spells::CUSTOM_SINGLE_TARGET_AURA;
+        s.duration_index = 0;
+        d.spells.spells.insert(id, s);
+    }
+    d.creature_templates
+        .insert(BOAR, plain_creature(BOAR, "Boar", 7));
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 44,
+        entries: vec![BOAR],
+        map: 0,
+        x: START.0 + 6.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let (mut a, g, map) = enter(&realm, "A", "Mage", Race::Human, Class::Mage).await;
+    let boar = on(&map, |m| {
+        m.creatures
+            .iter()
+            .find(|(_, c)| c.entry == BOAR)
+            .map(|(_, c)| c.guid)
+    })
+    .await
+    .expect("the boar");
+    let held = move |m: &Map| {
+        let on_boar = |s: u32| {
+            crate::game::map::auras::auras(m, boar)
+                .is_some_and(|a| a.holders.iter().any(|h| h.spell == s && h.caster == g))
+        };
+        (on_boar(SHEEP), on_boar(MARK))
+    };
+    let after_death = on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, SHEEP, Some(boar));
+        crate::game::map::spells::cast_triggered(m, g, MARK, Some(boar));
+        assert_eq!(held(m), (true, true), "both on");
+        crate::game::map::combat::deal_damage(m, boar, g, 1_000_000);
+        held(m)
+    })
+    .await;
+    assert_eq!(
+        after_death,
+        (true, false),
+        "only the mark ends with its caster"
+    );
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    assert_eq!(
+        on(&map, move |m| held(m)).await,
+        (false, false),
+        "its caster gone"
+    );
+}

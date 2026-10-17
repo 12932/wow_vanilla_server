@@ -2,7 +2,8 @@
 //! `SingleTarget` (vmangos's single-target aura flag) keeps them: a
 //! Polymorph, Sap, Banish, Hunter's Mark, Fear or Shackle on a new target
 //! ends the caster's last one of its kind (the same family and icon, or
-//! both judgements, or both polymorphs), and they end with their caster.
+//! both judgements, or both polymorphs), and they end when their caster
+//! leaves the world. Its death ends only Hunter's Mark.
 
 use wow_world_messages::Guid;
 
@@ -67,8 +68,21 @@ pub fn applied(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) {
     }
 }
 
-/// `caster` died: its single-target auras on others end.
+/// `caster` left the world: its single-target auras on others end
+/// (mangos's `RemoveNotOwnTrackedTargetAuras`, Thistle Tea's
+/// `SingleTarget.detach`).
 pub fn caster_gone(map: &mut Map, caster: Guid) {
+    end_held(map, caster, false);
+}
+
+/// `caster` died: of its single-target auras on others only Hunter's Mark
+/// (a stalking aura) ends, as Thistle Tea's `SingleTargetAuras.caster_died`
+/// has it; mangos ends none. A Polymorph, Fear or Sap runs its course.
+pub fn caster_died(map: &mut Map, caster: Guid) {
+    end_held(map, caster, true);
+}
+
+fn end_held(map: &mut Map, caster: Guid, stalking_only: bool) {
     let data = map.realm.data.clone();
     let gone: Vec<(Guid, u32)> = units(map)
         .into_iter()
@@ -79,7 +93,9 @@ pub fn caster_gone(map: &mut Map, caster: Guid) {
                     a.holders
                         .iter()
                         .filter(|h| {
-                            h.caster == caster && data.spells.get(h.spell).is_some_and(limited)
+                            h.caster == caster
+                                && data.spells.get(h.spell).is_some_and(limited)
+                                && (!stalking_only || h.has(auras::AURA_MOD_STALKED))
                         })
                         .map(|h| (g, h.spell))
                         .collect::<Vec<_>>()

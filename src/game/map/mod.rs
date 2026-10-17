@@ -561,6 +561,7 @@ impl Map {
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
         pets::owner_leaving(self, guid);
+        spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);
         duel::left(self, guid, true);
         trade::cancel(
