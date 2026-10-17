@@ -502,9 +502,40 @@ impl Player {
                 Guid::zero(),
             );
         }
+        // What others see of each worn item (mangos's `SetVisibleItemSlot`):
+        // its maker, its entry, its permanent and temporary enchantments
+        // (the glow), its random property and suffix factor (its name).
+        let visible = |f: &mut Fields, slot: u8, item: Option<&Item>| {
+            let at = u16::from(slot) * VISIBLE_ITEM_SIZE;
+            let field = |i: Option<&Item>, field: u16| i.map_or(0, |i| i.fields.get_u32(field));
+            f.set_guid(
+                PLAYER_VISIBLE_ITEM_1_CREATOR + at,
+                item.map_or(Guid::zero(), |i| i.fields.get_guid(ITEM_FIELD_CREATOR)),
+            );
+            f.set_u32(PLAYER_VISIBLE_ITEM_1_0 + at, item.map_or(0, |i| i.entry));
+            f.set_u32(
+                PLAYER_VISIBLE_ITEM_1_0 + at + 1,
+                field(item, ITEM_FIELD_ENCHANTMENT),
+            );
+            f.set_u32(
+                PLAYER_VISIBLE_ITEM_1_0 + at + 2,
+                field(item, ITEM_FIELD_ENCHANTMENT + 3),
+            );
+            f.set_u32(
+                PLAYER_VISIBLE_ITEM_1_PROPERTIES + at,
+                field(item, ITEM_FIELD_RANDOM_PROPERTIES_ID) & 0xFFFF,
+            );
+            f.set_u32(
+                PLAYER_VISIBLE_ITEM_1_PROPERTIES + at + 1,
+                field(item, ITEM_FIELD_PROPERTY_SEED),
+            );
+        };
         for slot in 0..EQUIPMENT_SLOTS {
-            let base = PLAYER_VISIBLE_ITEM_1_0 + u16::from(slot) * VISIBLE_ITEM_SIZE;
-            self.fields.set_u32(base, 0);
+            let item = self
+                .items
+                .iter()
+                .find(|i| i.bag == BAG_PLAYER && i.slot == slot);
+            visible(&mut self.fields, slot, item);
         }
         for item in &self.items {
             if item.bag != BAG_PLAYER || item.slot >= INVENTORY_SLOTS {
@@ -514,10 +545,6 @@ impl Player {
                 PLAYER_FIELD_INV_SLOT_HEAD + u16::from(item.slot) * 2,
                 item.guid,
             );
-            if item.slot < EQUIPMENT_SLOTS {
-                let base = PLAYER_VISIBLE_ITEM_1_0 + u16::from(item.slot) * VISIBLE_ITEM_SIZE;
-                self.fields.set_u32(base, item.entry);
-            }
         }
     }
 

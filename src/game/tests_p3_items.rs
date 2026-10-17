@@ -1809,3 +1809,43 @@ async fn every_new_item_has_its_random_property_rolled() {
     .await;
     assert_eq!(given, vec![1182, 1182, 1182], "each one");
 }
+
+/// Thistle Tea's `sync_visible_item` and enchantment projection (mangos's
+/// `SetVisibleItemSlot`): a worn item shows others its entry, its
+/// permanent and temporary enchantments and its random property; taken
+/// off, nothing.
+#[tokio::test]
+async fn a_worn_item_shows_its_enchantments_and_suffix() {
+    let mut d = data();
+    let mut t = item(SUFFIXED);
+    t.random_property = 77;
+    t.inventory_type = 1;
+    t.class = 4;
+    d.items.insert(SUFFIXED, t);
+    d.crafts.random_pools.insert(77, vec![(1182, 100.0)]);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let helm = give(&realm, g, SUFFIXED, 1).await;
+    put(&realm, g, helm, (BAG_PLAYER, 0)).await;
+    let shown = move |m: &mut Map| {
+        let f = &m.players[&g].fields;
+        (
+            f.get_u32(PLAYER_VISIBLE_ITEM_1_0),
+            f.get_u32(PLAYER_VISIBLE_ITEM_1_0 + 1),
+            f.get_u32(PLAYER_VISIBLE_ITEM_1_0 + 2),
+            f.get_u32(PLAYER_VISIBLE_ITEM_1_PROPERTIES),
+        )
+    };
+    let worn = on_map(&realm, move |m| {
+        let plain = shown(m);
+        crate::game::map::enchant::enchant_item(m, g, helm, 107, None);
+        crate::game::map::enchant::enchant_item(m, g, helm, 900, Some((60_000, 3)));
+        (plain, shown(m))
+    })
+    .await;
+    assert_eq!(worn.0, (SUFFIXED, 0, 0, 1182), "its suffix");
+    assert_eq!(worn.1, (SUFFIXED, 107, 900, 1182), "and its enchantments");
+    put(&realm, g, helm, (BAG_PLAYER, 23)).await;
+    assert_eq!(on_map(&realm, shown).await, (0, 0, 0, 0), "taken off");
+}
