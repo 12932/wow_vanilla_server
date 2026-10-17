@@ -613,6 +613,9 @@ pub struct UnitView {
     pub alive: bool,
     pub is_player: bool,
     pub standing: bool,
+    /// Going somewhere at a run (not walking): two running units swing at
+    /// each other with a leeway.
+    pub running: bool,
 }
 
 impl Map {
@@ -628,6 +631,8 @@ impl Map {
                 alive: p.death == Death::Alive,
                 is_player: true,
                 standing: p.stand_state() == 0,
+                running: crate::game::map::spells::checks::moving(&p.movement.flags)
+                    && !p.movement.flags.get_walk_mode(),
             });
         }
         let c = self.creature(g)?;
@@ -641,6 +646,7 @@ impl Map {
             alive: c.alive(),
             is_player: false,
             standing: true,
+            running: matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if w.run),
         })
     }
 
@@ -850,8 +856,21 @@ pub fn melee_range(a: &UnitView, b: &UnitView) -> f32 {
     (a.combat_reach + b.combat_reach + 4.0 / 3.0).max(5.0)
 }
 
+/// What two units both running may swing from beyond their reach, as
+/// mangos (`MELEE_LEEWAY`) and the client have it.
+pub const MELEE_LEEWAY: f32 = 8.0 / 3.0;
+
+/// Whether `a` reaches `b` with a swing: within their melee range, as the
+/// client measures it (Thistle Tea's `in_melee_range?`), and a leeway when
+/// both run. A creature swinging from further than that hits a player
+/// whose own swing the client says is out of range.
 pub fn in_melee_range(a: &UnitView, b: &UnitView) -> bool {
-    dist(a.position, b.position) <= melee_range(a, b) + 1.0
+    let leeway = if a.running && b.running {
+        MELEE_LEEWAY
+    } else {
+        0.0
+    };
+    dist(a.position, b.position) <= melee_range(a, b) + leeway
 }
 
 /// Whether `a` faces `b` within `arc` radians.
