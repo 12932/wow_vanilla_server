@@ -1106,3 +1106,93 @@ async fn the_friend_list_shows_who_is_away_and_the_ignored_are_told() {
         "Carol isn't ignored"
     );
 }
+
+async fn next_mail(c: &mut Client) -> f32 {
+    let f = c
+        .wait_frame("MSG_QUERY_NEXT_MAIL_TIME", 0x284, |_| true)
+        .await;
+    f32::from_le_bytes(f[..4].try_into().unwrap())
+}
+
+/// Thistle Tea's mail_messages_test: with nothing unread the next mail is
+/// a day back, -86400; with mail unread, 0. An item taken from a mail is
+/// told with the mail, the action, the result, the item's entry and how
+/// many.
+#[tokio::test]
+async fn mail_says_when_it_waits_and_what_was_taken() {
+    const STONES: u32 = 9_030;
+    let mut d = crate::game::data::GameData::empty();
+    d.items.insert(
+        STONES,
+        crate::game::data::ItemTemplate {
+            entry: STONES,
+            name: "Pretty Stones".into(),
+            stackable: 20,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.send(MSG_QUERY_NEXT_MAIL_TIME_Client {}).await;
+    assert_eq!(next_mail(&mut b).await, -86_400.0, "nothing unread");
+    let stones = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, ga, STONES, 7, false).unwrap();
+        // The postage.
+        m.players.get_mut(&ga).unwrap().set_money(1_000);
+        m.players[&ga]
+            .items
+            .iter()
+            .find(|i| i.entry == STONES)
+            .unwrap()
+            .guid
+    })
+    .await;
+    a.send(CMSG_SEND_MAIL {
+        mailbox: Guid::zero(),
+        receiver: "Bob".into(),
+        subject: "Stones".into(),
+        body: String::new(),
+        unknown1: 0,
+        unknown2: 0,
+        item: stones,
+        money: Gold::new(0),
+        cash_on_delivery_amount: 0,
+        unknown3: 0,
+        unknown4: 0,
+    })
+    .await;
+    b.wait_for("SMSG_RECEIVED_MAIL", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_RECEIVED_MAIL(_)).then_some(())
+    })
+    .await;
+    b.send(MSG_QUERY_NEXT_MAIL_TIME_Client {}).await;
+    assert_eq!(next_mail(&mut b).await, 0.0, "mail unread");
+    b.send(CMSG_GET_MAIL_LIST {
+        mailbox: Guid::zero(),
+    })
+    .await;
+    let id = b
+        .wait_for("SMSG_MAIL_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(l) => l.mails.first().map(|m| m.message_id),
+            _ => None,
+        })
+        .await;
+    b.send(CMSG_MAIL_TAKE_ITEM {
+        mailbox: Guid::zero(),
+        mail_id: id,
+    })
+    .await;
+    let taken = b
+        .wait_frame("SMSG_SEND_MAIL_RESULT", 0x239, |f| u32_at(f, 4) == 2)
+        .await;
+    let mut want = Vec::new();
+    for v in [id, 2, 0, STONES, 7] {
+        want.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(taken, want);
+}
