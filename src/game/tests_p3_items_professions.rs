@@ -806,3 +806,132 @@ async fn a_lock_is_opened_by_one_and_gains_once() {
     .await;
     assert_eq!(gate_gains, (3, 3), "a gate's point once too");
 }
+
+const LINE: u32 = 900_770;
+const BOBBER: u32 = 35_591;
+const SCHOOL: u32 = 180_902;
+const FISH: u32 = 9407;
+const POOL_FISH: u32 = 9408;
+
+/// A line to cast, its bobber, a fish anywhere, and a school by the start
+/// with its own fish, two catches to it.
+fn fishing_data() -> GameData {
+    let mut d = data();
+    let mut line = spell(LINE, &[(50, 0, BOBBER as i32, 0)]);
+    line.effects[0].target_a = 39;
+    line.attributes[1] = 0x4;
+    d.spells.spells.insert(LINE, line);
+    for (entry, kind, data) in [
+        (BOBBER, professions::GO_FISHING_NODE, [0u32; 24]),
+        (SCHOOL, professions::GO_FISHING_HOLE, {
+            let mut x = [0u32; 24];
+            (x[0], x[1], x[2], x[3]) = (30, 70, 2, 2);
+            x
+        }),
+    ] {
+        d.gameobject_templates.insert(
+            entry,
+            GameObjectTemplate {
+                entry,
+                kind,
+                display_id: 668,
+                name: format!("Object {entry}"),
+                size: 1.0,
+                data,
+                ..Default::default()
+            },
+        );
+    }
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 700,
+            entry: SCHOOL,
+            map: 0,
+            x: START.0 + 10.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            respawn_min: 60,
+            ..Default::default()
+        }],
+    );
+    for e in [FISH, POOL_FISH] {
+        d.items.insert(e, item(e));
+    }
+    let catch = |item| {
+        vec![LootEntry {
+            item,
+            chance: 100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }]
+    };
+    d.loot.fishing.insert(0, catch(FISH));
+    d.loot.gameobject.insert(70, catch(POOL_FISH));
+    d.crafts.fishing_skill.insert(0, -100);
+    d
+}
+
+/// Thistle Tea's `Fishing`: only its fisher uses a bobber; clicked before
+/// a bite, it's gone with nothing; a catch by a school is the school's
+/// fish, a use of it each.
+#[tokio::test]
+async fn a_bobber_is_its_fishers_and_a_school_gives_its_own() {
+    let realm = harness::realm_with(fishing_data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    drop(b);
+    let cast = move |m: &mut Map| {
+        m.players.get_mut(&ga).unwrap().spells.push(LINE);
+        learn_skill(m, ga, FISHING, 1);
+        crate::game::map::spells::cast(m, ga, LINE, Targets::default(), None);
+        m.loot_state.bobbers.last().map(|x| x.guid)
+    };
+    let bobber = on_map(&realm, cast).await.expect("a bobber");
+    // Bob's use of it does nothing.
+    let after_bob = on_map(&realm, move |m| {
+        professions::use_object(m, gb, bobber);
+        m.loot_state.bobbers.iter().any(|x| x.guid == bobber)
+    })
+    .await;
+    assert!(after_bob, "still Alice's");
+    // Too soon: gone, with nothing.
+    a.clear();
+    let gone = on_map(&realm, move |m| {
+        professions::use_object(m, ga, bobber);
+        (
+            m.loot_state.bobbers.iter().any(|x| x.guid == bobber),
+            m.gameobject(bobber).is_some(),
+        )
+    })
+    .await;
+    assert_eq!(gone, (false, false));
+    // A bite by the school: the school's fish, and one of its two uses.
+    let school = guid::game_object(SCHOOL, 700);
+    let caught = on_map(&realm, move |m| {
+        m.now = std::time::Instant::now();
+        let bobber = cast(m).unwrap();
+        for x in m.loot_state.bobbers.iter_mut() {
+            x.bite_at = m.now;
+            x.bitten = true;
+        }
+        let at = m.players[&ga].position();
+        if let Some(o) = m.gameobject_mut(bobber) {
+            o.position = wow_world_messages::vanilla::Vector3d {
+                x: at.x + 9.0,
+                ..at
+            };
+        }
+        professions::use_object(m, ga, bobber);
+        (
+            loot::loot_ref(m, bobber).map(|l| l.items.iter().map(|s| s.item).collect::<Vec<_>>()),
+            m.loot_state.node_uses.get(&school).copied(),
+        )
+    })
+    .await;
+    assert_eq!(caught, (Some(vec![POOL_FISH]), Some(1)));
+}
