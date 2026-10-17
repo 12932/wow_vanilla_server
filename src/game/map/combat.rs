@@ -1401,9 +1401,14 @@ pub fn sync_aura_state(map: &mut Map, g: Guid) {
     if health > 0 && (health as u64) * 5 < max as u64 {
         bits |= AURA_STATE_HEALTHLESS_20;
     }
+    // A creature's health bands under 15, 10 and 5 percent.
+    if guid::is_unit(g) {
+        bits = (bits & !0x700) | crate::game::map::creature_motion::band(health, max).1;
+    }
     if bits != old {
         f.set_u32(UNIT_FIELD_AURASTATE, bits);
     }
+    crate::game::map::creature_motion::health_changed(map, g);
 }
 
 /// Windows that closed, and a warrior's Overpower point that ran out.
