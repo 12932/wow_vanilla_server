@@ -131,6 +131,9 @@ pub fn school_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplat
 /// What a fire spell's crit leaves: Ignite, a share of the crit over four
 /// seconds, adding up to five crits' worth.
 pub fn after_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dealt: u32, crit: bool) {
+    vampiric_embrace(map, caster, target, s, dealt);
+    combustion(map, caster, s, crit);
+    master_of_elements(map, caster, s, crit);
     if !crit || dealt == 0 || s.school != 2 || s.id == SPELL_IGNITE {
         return;
     }
@@ -175,6 +178,116 @@ pub fn after_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
     }
 }
 
+/// Vampiric Embrace: shadow damage to its target heals the priest's party
+/// by a fifth of it.
+fn vampiric_embrace(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dealt: u32) {
+    if dealt == 0 || s.school != 5 {
+        return;
+    }
+    let embraced = auras::auras(map, target)
+        .is_some_and(|a| a.holders.iter().any(|h| h.spell == 15286 && h.caster == caster));
+    if !embraced {
+        return;
+    }
+    let improved = [27839u32, 27840]
+        .iter()
+        .position(|id| knows(map, caster, *id))
+        .map_or(0, |i| (i as u32 + 1) * 5);
+    let heal = dealt * (20 + improved) / 100;
+    if heal == 0 {
+        return;
+    }
+    let party: Vec<Guid> = {
+        let groups = map.realm.social.groups.lock();
+        groups
+            .group_of(caster)
+            .map(|g| {
+                let sub = g.members.iter().find(|m| m.guid == caster).map(|m| m.subgroup);
+                g.members
+                    .iter()
+                    .filter(|m| !g.raid || Some(m.subgroup) == sub)
+                    .map(|m| m.guid)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![caster])
+    };
+    for member in party {
+        if member == caster || super::outcome_near(map, caster, member, 30.0) {
+            heal_crit(map, caster, member, 15290, heal, false, false);
+        }
+    }
+}
+
+/// Combustion: each fire spell adds to the mage's crit until three have
+/// crit.
+fn combustion(map: &mut Map, caster: Guid, s: &SpellTemplate, crit: bool) {
+    if s.school != 2 || s.family_name != FAMILY_MAGE {
+        return;
+    }
+    let Some(crits) = auras::auras(map, caster)
+        .and_then(|a| a.holders.iter().find(|h| h.spell == 11129))
+        .map(|h| h.combo)
+    else {
+        return;
+    };
+    if crit {
+        if crits + 1 >= 3 {
+            auras::remove_spell(map, caster, 11129, None);
+            auras::remove_spell(map, caster, 28682, None);
+        } else if let Some(h) = auras::auras_mut(map, caster)
+            .and_then(|a| a.holders.iter_mut().find(|h| h.spell == 11129))
+        {
+            h.combo += 1;
+        }
+    } else {
+        cast_triggered(map, caster, 28682, Some(caster));
+    }
+}
+
+/// Master of Elements: a fire or frost crit gives back a share of the
+/// spell's mana.
+fn master_of_elements(map: &mut Map, caster: Guid, s: &SpellTemplate, crit: bool) {
+    if !crit || !matches!(s.school, 2 | 4) {
+        return;
+    }
+    let pct = auras::auras(map, caster).map_or(0, |a| {
+        a.effects()
+            .filter(|(h, x)| matches!(h.spell, 29074 | 29075 | 29076) && x.kind == AURA_DUMMY)
+            .map(|(_, x)| x.amount)
+            .max()
+            .unwrap_or(0)
+    });
+    if pct <= 0 {
+        return;
+    }
+    let refund = super::power_cost(map, caster, s) * pct as u32 / 100;
+    if let Some(f) = map.unit_fields_mut(caster) {
+        let max = f.get_u32(UNIT_FIELD_MAXPOWER1);
+        let now = f.get_u32(UNIT_FIELD_POWER1);
+        f.set_u32(UNIT_FIELD_POWER1, (now + refund).min(max));
+    }
+}
+
+/// Magic Absorption: a resisted spell gives back a share of the mage's
+/// mana.
+pub fn magic_absorption(map: &mut Map, g: Guid) {
+    let pct = auras::auras(map, g).map_or(0, |a| {
+        a.effects()
+            .filter(|(h, x)| (29441..=29447).contains(&h.spell) && x.kind == AURA_DUMMY)
+            .map(|(_, x)| x.amount)
+            .max()
+            .unwrap_or(0)
+    });
+    if pct <= 0 {
+        return;
+    }
+    if let Some(f) = map.unit_fields_mut(g) {
+        let max = f.get_u32(UNIT_FIELD_MAXPOWER1);
+        let now = f.get_u32(UNIT_FIELD_POWER1);
+        f.set_u32(UNIT_FIELD_POWER1, (now + max * pct as u32 / 100).min(max));
+    }
+}
+
 /// A dummy or script effect.
 #[allow(clippy::too_many_arguments)]
 pub fn dummy(
@@ -189,6 +302,18 @@ pub fn dummy(
 ) {
     let data = map.realm.data.clone();
     let _ = item;
+    // Holy Light and Flash of Light: the heal, with Blessing of Light's
+    // bonus on the target.
+    if s.family_name == FAMILY_PALADIN
+        && s.family_flags & 0xC000_0000 != 0
+        && s.effects[index].effect == EFFECT_SCRIPT_EFFECT
+    {
+        let holy_light = s.family_flags & 0x8000_0000 != 0;
+        let bonus = blessing_of_light(map, target, if holy_light { 0 } else { 1 });
+        let heal = if holy_light { 19968 } else { 19993 };
+        cast_with_points(map, caster, heal, target, [Some(amount + bonus), None, None]);
+        return;
+    }
     match s.script_name.as_str() {
         "spell_warrior_execute_dummy" => {
             // The rage left is damage.
@@ -315,6 +440,24 @@ pub fn dummy(
     }
 }
 
+/// Blessing of Light's bonus to Holy Light (effect 0) or Flash of Light
+/// (effect 1) on `target`.
+fn blessing_of_light(map: &Map, target: Guid, index: u8) -> i32 {
+    let data = &map.realm.data;
+    auras::auras(map, target).map_or(0, |a| {
+        a.effects()
+            .filter(|(h, x)| {
+                x.kind == AURA_DUMMY
+                    && x.effect == index
+                    && data.spells.get(h.spell).is_some_and(|t| {
+                        t.family_name == FAMILY_PALADIN && t.family_flags & 0x1000_0000 != 0 && t.spell_visual == 300
+                    })
+            })
+            .map(|(h, x)| x.amount * h.stacks.max(1) as i32)
+            .sum()
+    })
+}
+
 /// Judgement: the paladin's seal is spent for its judgement at the target.
 fn judgement(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> bool {
     if s.family_name != FAMILY_PALADIN || s.family_flags & 0x80_0000 == 0 {
@@ -367,6 +510,35 @@ pub fn reset_cooldowns(map: &mut Map, caster: Guid, except: u32, which: impl Fn(
             }
         }
         super::cooldowns::send_clear(map, caster, id);
+    }
+}
+
+/// A druid changed form: Furor's chance of rage or energy, and Leader of
+/// the Pack's aura in cat and bear form.
+pub fn shapeshifted(map: &mut Map, g: Guid, before: u8, form: u8) {
+    use crate::game::map::auras::{FORM_BEAR, FORM_CAT, FORM_DIREBEAR};
+    let feral = |f: u8| matches!(f, FORM_CAT | FORM_BEAR | FORM_DIREBEAR);
+    if feral(form) {
+        let furor = auras::auras(map, g).map_or(0, |a| {
+            a.effects()
+                .filter(|(h, x)| matches!(h.spell, 17056 | 17058 | 17059 | 17060 | 17061) && x.kind == AURA_DUMMY)
+                .map(|(_, x)| x.amount)
+                .max()
+                .unwrap_or(0)
+        });
+        if furor > 0 && outcome::chance(map, furor as f32) {
+            let (power, gain) = if form == FORM_CAT { (3u16, 40u32) } else { (1, 100) };
+            if let Some(f) = map.unit_fields_mut(g) {
+                let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
+                let now = f.get_u32(UNIT_FIELD_POWER1 + power);
+                f.set_u32(UNIT_FIELD_POWER1 + power, (now + gain).min(max));
+            }
+        }
+        if knows(map, g, 17007) && !auras::auras(map, g).is_some_and(|a| a.has_spell(24932)) {
+            cast_triggered(map, g, 24932, Some(g));
+        }
+    } else if feral(before) {
+        auras::remove_spell(map, g, 24932, Some(g));
     }
 }
 

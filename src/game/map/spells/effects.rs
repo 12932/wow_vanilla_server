@@ -283,6 +283,15 @@ fn weapon_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, e
         })
         .unwrap_or((1.0, 2.0));
     let mut base = roll_between(map, min, max);
+    // Hunter's Mark: ranged attack power against its target.
+    if ranged {
+        let bonus = auras::auras(map, target).map_or(0, |a| a.sum(AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
+        let speed = map
+            .unit_fields(caster)
+            .map(|f| f.get_u32(UNIT_FIELD_RANGEDATTACKTIME))
+            .unwrap_or(2000);
+        base += bonus.max(0) as f32 / 14.0 * speed as f32 / 1000.0;
+    }
     if normalized && let Some(p) = map.players.get(&caster) {
         let g = crate::game::map::derive::gear(p, &data);
         let w = if ranged { g.ranged } else if offhand { g.off } else { g.main };

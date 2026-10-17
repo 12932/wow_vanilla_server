@@ -389,7 +389,10 @@ fn aggro_scan(map: &mut Map, g: Guid) {
                     && !pl.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_GM)
                     && !pl.awaiting_worldport
                     && dist(pl.position(), pos)
-                        <= aggro_radius(detection, level, u32::from(pl.level()))
+                        <= (aggro_radius(detection, level, u32::from(pl.level()))
+                            + pl.auras.sum(crate::game::map::auras::AURA_MOD_DETECT_RANGE) as f32)
+                            .max(0.0)
+                    && crate::game::map::spells::stealth::sees(map, g, *p)
             })
         })
         .collect();

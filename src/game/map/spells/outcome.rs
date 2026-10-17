@@ -308,7 +308,9 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     }
     // Reflection of a single-target magic spell.
     if !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION) {
-        let reflect = a.sum(AURA_REFLECT_SPELLS) + a.sum_mask(AURA_REFLECT_SPELLS_SCHOOL, s.school_mask());
+        let reflect = a.sum(AURA_REFLECT_SPELLS)
+            + a.sum_mask(AURA_REFLECT_SPELLS_SCHOOL, s.school_mask())
+            + ward_reflect(map, target, s);
         if reflect > 0 && chance(map, reflect as f32) {
             return Hit::Reflect;
         }
@@ -333,7 +335,8 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     } else {
         0.0
     };
-    let aoe = if area(s) { a.sum(AURA_MOD_AOE_AVOIDANCE) as f32 } else { 0.0 };
+    let aoe = if area(s) { a.sum(AURA_MOD_AOE_AVOIDANCE) as f32 } else { 0.0 }
+        + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
     let chance = magic_hit_chance(
         caster_level,
         target_level,
@@ -347,6 +350,41 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     } else {
         Hit::Resist
     }
+}
+
+/// Improved Fire Ward and Frost Warding: a ward up against its school may
+/// throw the spell back.
+fn ward_reflect(map: &Map, target: Guid, s: &SpellTemplate) -> i32 {
+    let data = &map.realm.data;
+    let Some(a) = auras::auras(map, target) else {
+        return 0;
+    };
+    // The ward on the target: Fire Ward's family flag 0x8, Frost Ward's
+    // 0x100.
+    let ward = a.holders.iter().find_map(|h| {
+        let t = data.spells.get(h.spell)?;
+        let flags = t.family_flags as u32 & 0x108;
+        let guards = h
+            .effects
+            .iter()
+            .any(|x| x.kind == AURA_SCHOOL_ABSORB && (x.misc as u32) & s.school_mask() != 0);
+        (t.family_name == 3 && flags != 0 && guards).then_some(flags)
+    });
+    let Some(ward) = ward else {
+        return 0;
+    };
+    let talents: [(u32, u32); 4] = [(11094, 0x8), (13043, 0x8), (11189, 0x100), (28332, 0x100)];
+    talents
+        .iter()
+        .filter(|(_, mask)| mask & ward != 0)
+        .filter_map(|(id, _)| {
+            a.holders
+                .iter()
+                .find(|h| h.spell == *id)
+                .and_then(|h| h.effects.iter().find(|x| x.kind == AURA_DUMMY).map(|x| x.amount))
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// A hit roll: in the fixed rolls of tests, anything above 1% hits.
@@ -398,6 +436,7 @@ pub fn melee_roll(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &
     }
     let crit_chance = if ranged { a.ranged_crit } else { a.crit }
         + m.flat[mods::OP_CRITICAL_CHANCE] as f32
+        + crit_versus(map, caster, target)
         + diff as f32 * 0.04;
     let crit = !s.attr(2, sd::ATTR_EX2_CANT_CRIT) && chance(map, crit_chance);
     // A block is its own roll and still lands.
@@ -431,7 +470,22 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
     if !physical(s) && frozen(map, target) {
         c += shatter(map, caster, s);
     }
+    c += crit_versus(map, caster, target);
     chance(map, c)
+}
+
+/// More crit against a creature type (Monster Slaying, Humanoid Slaying).
+pub fn crit_versus(map: &Map, caster: Guid, target: Guid) -> f32 {
+    let creature_type = map
+        .creature(target)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .map(|t| t.creature_type)
+        .unwrap_or(7);
+    if creature_type == 0 {
+        return 0.0;
+    }
+    let bit = 1u32 << (creature_type - 1).min(31);
+    auras::auras(map, caster).map_or(0.0, |a| a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, bit) as f32)
 }
 
 /// Whether a unit is held by a frost spell (rooted or stunned by frost).
@@ -706,6 +760,18 @@ pub fn healing(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index: 
         h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
     }
     h = l.mods.apply(mods::OP_DAMAGE, h);
+    // Healing Way: more from each Healing Wave on the target.
+    if s.family_name == 11 && s.family_flags & 0x40 != 0
+        && let Some(a) = auras::auras(map, target)
+    {
+        let pct: i32 = a
+            .holders
+            .iter()
+            .filter(|x| x.spell == 29203)
+            .flat_map(|x| x.effects.iter().map(move |e| e.amount * x.stacks.max(1) as i32))
+            .sum();
+        h *= (100 + pct) as f32 / 100.0;
+    }
     h = healing_taken(map, target, h);
     if l.crit {
         h *= 1.5;
@@ -768,7 +834,8 @@ pub fn damage_log(
 /// Deal `d` of `s` to `target`: absorbs, the log, pushback, the damage,
 /// the procs and the threat.
 pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Damage, l: &Landing) {
-    let (left, absorbed) = auras::absorb(map, target, d.amount, s.school_mask());
+    let amount = split(map, caster, target, s, d.amount);
+    let (left, absorbed) = auras::absorb(map, target, amount, s.school_mask());
     let frame = damage_log(caster, target, s.id, s.school, left, absorbed, d.resisted, d.blocked, l.crit);
     map.send_to_observers(caster, &frame, true);
     if let Some(p) = map.players.get(&target)
@@ -802,11 +869,104 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
             offhand: false,
         },
     );
+    let items = death_items(map, target, left);
     if left > 0 {
         combat::deal_damage(map, caster, target, left);
     }
+    give_death_items(map, target, items);
+    if l.crit && left > 0 {
+        eye_for_an_eye(map, target, caster, left);
+    }
     super::scripts::after_damage(map, caster, target, s, left, l.crit);
     super::threat(map, caster, target, s, left as f32, &l.mods);
+}
+
+/// Blessing of Sacrifice and its kind: a share of the damage (or a flat
+/// amount of each hit) goes to the aura's caster instead.
+pub fn split(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: u32) -> u32 {
+    let shares: Vec<(Guid, u32)> = auras::auras(map, target)
+        .map(|a| {
+            a.effects()
+                .filter(|(h, x)| {
+                    matches!(x.kind, AURA_SPLIT_DAMAGE_PCT | AURA_SPLIT_DAMAGE_FLAT)
+                        && h.caster != target
+                        && (x.misc as u32) & s.school_mask() != 0
+                })
+                .map(|(h, x)| {
+                    let v = if x.kind == AURA_SPLIT_DAMAGE_PCT {
+                        damage * x.amount.max(0) as u32 / 100
+                    } else {
+                        (x.amount.max(0) as u32).min(damage)
+                    };
+                    (h.caster, v)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut left = damage;
+    for (to, share) in shares {
+        let share = share.min(left);
+        if share == 0 || map.unit_view(to).is_none_or(|u| !u.alive) {
+            continue;
+        }
+        left -= share;
+        let frame = damage_log(caster, to, s.id, s.school, share, 0, 0, 0, false);
+        map.send_to_observers(to, &frame, true);
+        combat::deal_damage(map, caster, to, share);
+    }
+    left
+}
+
+/// Eye for an Eye: a crit taken is dealt back in part.
+fn eye_for_an_eye(map: &mut Map, victim: Guid, attacker: Guid, damage: u32) {
+    let pct = auras::auras(map, victim).map_or(0, |a| {
+        a.effects()
+            .filter(|(h, x)| matches!(h.spell, 9799 | 25988) && x.kind == AURA_DUMMY)
+            .map(|(_, x)| x.amount)
+            .max()
+            .unwrap_or(0)
+    });
+    if pct <= 0 || attacker == victim {
+        return;
+    }
+    let back = (damage * pct as u32 / 100) as i32;
+    if back > 0 {
+        super::scripts::cast_with_points(map, victim, 25997, attacker, [Some(back), None, None]);
+    }
+}
+
+/// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
+/// casters (Drain Soul's and Shadowburn's soul shards), if `damage` kills
+/// it: only for a death that gives experience or honor.
+pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32)> {
+    let health = map
+        .unit_fields(target)
+        .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
+        .unwrap_or(0);
+    if damage < health || health == 0 {
+        return Vec::new();
+    }
+    let Some(a) = auras::auras(map, target) else {
+        return Vec::new();
+    };
+    a.effects()
+        .filter(|(h, x)| x.kind == AURA_CHANNEL_DEATH_ITEM && x.mask != 0 && guid::is_player(h.caster))
+        .filter(|(h, _)| {
+            let caster_level = level(map, h.caster);
+            let target_level = level(map, target);
+            guid::is_player(target) || target_level > combat::gray_level(caster_level)
+        })
+        .map(|(h, x)| (h.caster, x.mask))
+        .collect()
+}
+
+pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32)>) {
+    if items.is_empty() || map.unit_view(target).is_some_and(|u| u.alive) {
+        return;
+    }
+    for (caster, item) in items {
+        let _ = crate::game::map::inventory::add_item(map, caster, item, 1, true);
+    }
 }
 
 /// The proc flags of a spell's hit, for its caster and its target.

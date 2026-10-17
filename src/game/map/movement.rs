@@ -167,6 +167,12 @@ fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
+    use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER, AURA_SAFE_FALL};
+    if p.auras.has(AURA_FEATHER_FALL) || p.auras.has(AURA_HOVER) {
+        return;
+    }
+    // Safe Fall takes yards off the drop.
+    let drop = drop - p.auras.sum(AURA_SAFE_FALL).max(0) as f32;
     if drop < SAFE_FALL || p.gm || p.death != crate::game::map::death::Death::Alive {
         return;
     }

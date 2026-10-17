@@ -310,11 +310,13 @@ impl Player {
         self.fields.get_u32(UNIT_FIELD_LEVEL) as u8
     }
 
+    /// The power the player uses now: rage, energy or mana by class, and
+    /// for a druid by form.
     pub fn power_type(&self) -> u8 {
-        match self.row.class {
-            1 => 1, // warrior: rage
-            4 => 3, // rogue: energy
-            _ => 0, // mana
+        match self.fields.get_byte(UNIT_FIELD_BYTES_0, 3) {
+            0 if self.row.class == 1 => 1,
+            0 if self.row.class == 4 => 3,
+            p => p,
         }
     }
 
