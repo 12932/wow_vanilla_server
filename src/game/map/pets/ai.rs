@@ -247,12 +247,19 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
         .around(pos.x, pos.y, AGGRO_YARDS)
         .filter(|v| (guid::is_unit(*v) || guid::is_player(*v)) && *v != g && *v != owner)
         .filter(|v| {
-            // Hostile creatures, and enemy players the rules let it fight.
+            // Hostile creatures, and enemy players the rules let it fight;
+            // never a civilian, whose death is a dishonorable kill
+            // (Thistle Tea's `Acquisition.civilian_allowed?`).
             let foe = guid::is_player(*v)
-                || (map
-                    .creature(*v)
-                    .is_some_and(|c| c.alive() && c.owner.is_none())
-                    && combat::hostile(map, *v, owner));
+                || (map.creature(*v).is_some_and(|c| {
+                    c.alive()
+                        && c.owner.is_none()
+                        && !map
+                            .realm
+                            .data
+                            .creature_template(c.entry)
+                            .is_some_and(|t| t.civilian)
+                }) && combat::hostile(map, *v, owner));
             foe && map
                 .position_of(*v)
                 .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)

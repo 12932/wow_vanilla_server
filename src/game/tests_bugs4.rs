@@ -1,6 +1,6 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
 //! batch: the weather's seasons, sounds and changes; a scripted stay, a
-//! dead master's guardian, extra attacks in a cast.
+//! dead master's guardian, extra attacks in a cast, pets and civilians.
 
 use std::time::Duration;
 
@@ -137,13 +137,19 @@ fn the_weather_changes_gradually_and_suddenly() {
 const GUARDIAN: u32 = 3030;
 const SUMMON_GUARDIAN: u32 = 9050;
 
-/// The pets' world, with a guardian a hunter summons for a minute.
+const PEASANT: u32 = 3040;
+
+/// The pets' world, with a guardian a hunter summons for a minute, and a
+/// civilian of the wolves' faction.
 fn pets_data() -> crate::game::data::GameData {
     let mut d = tests_pets::data();
     d.creature_templates.insert(
         GUARDIAN,
         tests_pets::template(GUARDIAN, "Dragonling", 35, 1),
     );
+    let mut peasant = tests_pets::template(PEASANT, "Peasant", 14, 1);
+    peasant.civilian = true;
+    d.creature_templates.insert(PEASANT, peasant);
     let mut e = tests_pets::effect(42, 0, 32);
     e.misc_value = GUARDIAN as i32;
     let none = crate::game::data::spells::SpellEffect::default();
@@ -316,4 +322,40 @@ async fn extra_attacks_swing_through_a_cast() {
         .unwrap();
     assert!(casting, "the cast goes on");
     assert!(swing_waits, "the regular swing waits for the cast");
+}
+
+/// An aggressive pet looking for a fight passes over a civilian, whose
+/// death would be a dishonorable kill, as Thistle Tea's
+/// `Acquisition.civilian_allowed?` has it; it takes on a wolf of the same
+/// faction.
+#[tokio::test]
+async fn a_pet_spares_civilians() {
+    let realm = harness::realm_with(pets_data());
+    let (mut h, gh, map) =
+        tests_pets::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    tests_pets::learn(&map, gh, &[tests_pets::TAME_BEAST]);
+    let boar = tests_pets::place(&map, gh, tests_pets::BOAR, 0x70_0601, 4.0).await;
+    h.sees(boar).await;
+    tests_pets::cast(&h, tests_pets::TAME_BEAST, Some(boar)).await;
+    let pet = tests_pets::pet_bar(&mut h).await;
+    assert!(!pet.is_zero(), "the tamed boar");
+    map.query(move |m| {
+        if let Some(s) = pets::state_mut(m, pet) {
+            s.react = pets::REACT_AGGRESSIVE;
+        }
+    })
+    .await
+    .unwrap();
+    let peasant = tests_pets::place(&map, gh, PEASANT, 0x70_0602, 8.0).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let spared = map
+        .query(move |m| !m.combat(pet).is_some_and(|c| c.attacking))
+        .await
+        .unwrap();
+    assert!(spared, "the pet leaves the peasant be");
+    map.query(move |m| m.remove_creature(peasant))
+        .await
+        .unwrap();
+    let wolf = tests_pets::place(&map, gh, tests_pets::WOLF, 0x70_0603, 8.0).await;
+    until(&map, "the pet at the wolf", move |m| fighting(m, pet, wolf)).await;
 }
