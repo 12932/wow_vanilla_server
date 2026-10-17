@@ -451,6 +451,80 @@ pub fn faction_of(map: &Map, unit: Guid) -> Option<u32> {
         .filter(|f| *f != 0)
 }
 
+/// How `a` regards `b`, as a reputation rank (hated 0 to exalted 7), as
+/// Thistle Tea's `reaction_rank` has it: friendly to its own side and its
+/// group, hostile to a duel's opponent; a player as their standing with a
+/// creature's faction says, and a creature as its faction's standing with
+/// a player says; else as their faction templates have it. `None` when
+/// either has no faction template.
+pub fn reaction_rank(map: &Map, a: Guid, b: Guid) -> Option<u32> {
+    let data = &map.realm.data;
+    let template = |g: Guid| {
+        let id = match map.unit_fields(g) {
+            Some(f) => f.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+            None => map.gameobject(g)?.fields.get_u32(GAMEOBJECT_FACTION),
+        };
+        data.faction_templates.get(&id)
+    };
+    let (ta, tb) = (template(a)?, template(b)?);
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    if ma == mb {
+        return Some(misc::RANK_FRIENDLY);
+    }
+    let (pa, pb) = (map.players.get(&ma), map.players.get(&mb));
+    if pa.is_some() && pb.is_some() {
+        if crate::game::map::duel::dueling(map, ma, mb) {
+            return Some(misc::RANK_HOSTILE);
+        }
+        let groups = map.realm.social.groups.lock();
+        if let (Some(x), Some(y)) = (groups.group_of(ma), groups.group_of(mb))
+            && x.id == y.id
+        {
+            return Some(misc::RANK_FRIENDLY);
+        }
+    }
+    let by_standing = match (pa, pb) {
+        (Some(p), None) => standing_reaction(p, data, tb.faction, false),
+        (None, Some(p)) => standing_reaction(p, data, ta.faction, true),
+        _ => None,
+    };
+    Some(by_standing.unwrap_or(if ta.hostile_to(tb) {
+        misc::RANK_HOSTILE
+    } else if ta.friendly_to(tb) || tb.friendly_to(ta) {
+        misc::RANK_FRIENDLY
+    } else {
+        misc::RANK_NEUTRAL
+    }))
+}
+
+/// A player's standing with `faction` as a reaction: as an aura forces it;
+/// else hostile at war and friendly not, or, for the faction's view of the
+/// player, their rank, no better than neutral at war. `None` for a faction
+/// with no standing.
+fn standing_reaction(p: &Player, data: &GameData, faction: u32, of_faction: bool) -> Option<u32> {
+    let forced = p
+        .auras
+        .effects()
+        .find(|(_, a)| a.kind == AURA_FORCE_REACTION && a.misc > 0 && a.misc as u32 == faction)
+        .map(|(_, a)| a.amount.clamp(0, 7) as u32);
+    if forced.is_some() {
+        return forced;
+    }
+    if faction == 0 || data.misc.faction(faction).is_none() {
+        return None;
+    }
+    let war = at_war(p, data, faction);
+    Some(match (of_faction, war) {
+        (false, true) => misc::RANK_HOSTILE,
+        (false, false) => misc::RANK_FRIENDLY,
+        (true, true) => rank(p, data, faction).min(misc::RANK_NEUTRAL),
+        (true, false) => rank(p, data, faction),
+    })
+}
+
 /// A vendor's price for a player: a tenth off from honored up.
 pub fn price(map: &Map, player: Guid, vendor: Guid, amount: u32) -> u32 {
     let (Some(p), Some(f)) = (map.players.get(&player), faction_of(map, vendor)) else {

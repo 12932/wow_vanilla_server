@@ -232,6 +232,9 @@ pub struct Creature {
     pub engagement: crate::game::map::creature_combat::Engagement,
     /// What its wounds leave of its run speed.
     pub wounded: f32,
+    /// The zone and area it stands in, once worked out: as it comes into
+    /// view and as it moves.
+    pub zone_area: Option<(u32, u32)>,
 }
 
 /// Alive, or dead and waiting.
@@ -331,6 +334,7 @@ impl Creature {
             summoned_at: None,
             engagement: Default::default(),
             wounded: 1.0,
+            zone_area: None,
         }
         .with_base()
     }

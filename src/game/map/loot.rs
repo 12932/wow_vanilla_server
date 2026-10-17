@@ -190,6 +190,7 @@ fn is_quest_item(e: &LootEntry) -> bool {
     e.chance < 0.0 && e.min >= 0
 }
 
+/// A reference rolled into, if its condition holds for the looter.
 fn reference(
     data: &GameData,
     e: &LootEntry,
@@ -197,10 +198,14 @@ fn reference(
     rng: &mut impl rand::Rng,
     out: &mut Vec<LootSlot>,
     depth: u32,
+    allowed: &dyn Fn(u32) -> bool,
 ) {
+    if e.condition != 0 && !allowed(e.condition) {
+        return;
+    }
     if let Some(r) = data.loot.reference.get(&(e.min.unsigned_abs())) {
         for _ in 0..e.max.max(1) {
-            roll(data, r, wanted, rng, out, depth + 1);
+            roll_for(data, r, wanted, rng, out, depth + 1, allowed);
         }
     }
 }
@@ -220,7 +225,8 @@ fn slot_for(data: &GameData, e: &LootEntry, rng: &mut impl rand::Rng) -> LootSlo
 /// Roll a table, vmangos's way: each ungrouped entry on its own chance;
 /// one entry per group (the explicitly chanced in order, else one of the
 /// equally chanced); references rolled into as many times as they say.
-/// Quest items drop only if they are `wanted`.
+/// Quest items drop only if they are `wanted`. A reference with a
+/// condition isn't rolled with no looter to judge it, as in Thistle Tea.
 pub fn roll(
     data: &GameData,
     entries: &[LootEntry],
@@ -228,6 +234,20 @@ pub fn roll(
     rng: &mut impl rand::Rng,
     out: &mut Vec<LootSlot>,
     depth: u32,
+) {
+    roll_for(data, entries, wanted, rng, out, depth, &|_| false);
+}
+
+/// [`roll`], a reference with a condition rolled if `allowed` says the
+/// condition holds.
+pub fn roll_for(
+    data: &GameData,
+    entries: &[LootEntry],
+    wanted: &[u32],
+    rng: &mut impl rand::Rng,
+    out: &mut Vec<LootSlot>,
+    depth: u32,
+    allowed: &dyn Fn(u32) -> bool,
 ) {
     let skip = |e: &LootEntry| is_quest_item(e) && !wanted.contains(&e.item);
     if depth > MAX_DEPTH {
@@ -245,7 +265,7 @@ pub fn roll(
             continue;
         }
         if e.min < 0 {
-            reference(data, e, wanted, rng, out, depth);
+            reference(data, e, wanted, rng, out, depth, allowed);
         } else {
             out.push(slot_for(data, e, rng));
         }
@@ -274,7 +294,7 @@ pub fn roll(
             continue;
         };
         if e.min < 0 {
-            reference(data, &e, wanted, rng, out, depth);
+            reference(data, &e, wanted, rng, out, depth, allowed);
         } else {
             out.push(slot_for(data, &e, rng));
         }
@@ -1055,7 +1075,7 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         .get(&player)
         .map(|p| crate::game::map::quests::wanted_items(p, &data))
         .unwrap_or_default();
-    let Some(o) = map.gameobject_mut(object) else {
+    let Some(o) = map.gameobject(object) else {
         return;
     };
     if o.loot.is_none() {
@@ -1066,18 +1086,23 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         let loot_id = t.data[1];
         let mut items = Vec::new();
         if let Some(table) = data.loot.gameobject.get(&loot_id) {
-            roll(&data, table, &wanted, &mut rand::rng(), &mut items, 0);
+            let allowed = |c: u32| {
+                crate::game::map::conditions::met(map, c, Some(object), Some(player))
+            };
+            roll_for(&data, table, &wanted, &mut rand::rng(), &mut items, 0, &allowed);
         }
         let gold = if t.gold_max > t.gold_min {
             rand::rng().random_range(t.gold_min..=t.gold_max)
         } else {
             t.gold_min
         };
-        o.loot = Some(Loot {
-            items,
-            gold,
-            ..Default::default()
-        });
+        if let Some(o) = map.gameobject_mut(object) {
+            o.loot = Some(Loot {
+                items,
+                gold,
+                ..Default::default()
+            });
+        }
     }
     open(map, player, object);
 }

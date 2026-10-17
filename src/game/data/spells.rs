@@ -288,6 +288,9 @@ pub struct SpellData {
     /// `spell_script_target`: the creatures (type 1) or objects (type 0)
     /// a scripted spell aims at.
     pub script_targets: AHashMap<u32, Vec<(u32, u32)>>,
+    /// The condition a script target must meet, by (spell, type, entry):
+    /// the caster the source, the candidate the target.
+    pub script_target_conditions: AHashMap<(u32, u32, u32), u32>,
 }
 
 /// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.

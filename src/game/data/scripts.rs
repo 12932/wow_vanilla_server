@@ -252,6 +252,9 @@ pub struct ScriptData {
     pub areatrigger: AHashMap<u32, Vec<ScriptStep>>,
     pub creature_spells: AHashMap<u32, Vec<ScriptStep>>,
     pub conditions: AHashMap<u32, Condition>,
+    /// The values of a code-built condition that has fractions (a point and
+    /// a radius), as they are; `values` has them cut to whole numbers.
+    pub condition_floats: AHashMap<u32, [f32; 4]>,
     /// Quests' `StartScript` and `CompleteScript`.
     pub quest_start_script: AHashMap<u32, u32>,
     pub quest_complete_script: AHashMap<u32, u32>,
