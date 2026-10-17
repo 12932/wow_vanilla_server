@@ -1100,3 +1100,56 @@ async fn a_harmful_spell_starts_a_fight_as_thistle_tea_decides() {
     assert!(!quiet.2, "one with no threat doesn't");
     assert!(bolt.2, "damage does, seen or not");
 }
+
+/// Creature `g` put at `p`, its grid cell with it.
+fn put(m: &mut Map, g: Guid, p: Vector3d) {
+    let c = m.creature_mut(g).unwrap();
+    let old = c.cell;
+    c.position = p;
+    c.home = p;
+    c.cell = crate::game::map::grid::cell_of(p.x, p.y);
+    let new = c.cell;
+    m.grid.relocate(g, old, new);
+}
+
+/// Creatures fighting one victim spread round it (Thistle Tea's
+/// `maybe_spread`): one standing on another steps aside, one standing in
+/// its victim steps back, each at a walk and still in reach.
+#[tokio::test]
+async fn creatures_spread_round_their_victim() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let (k1, k2, k3) = (kobold(20), kobold(21), kobold(22));
+    let out = map
+        .query(move |m| {
+            m.players.get_mut(&ga).unwrap().movement.position = at(40.0, 40.0);
+            let me = at(40.0, 40.0);
+            // Two on one spot, three yards off; one in the player.
+            put(m, k1, at(43.0, 40.0));
+            put(m, k2, at(43.0, 40.0));
+            put(m, k3, at(40.3, 40.0));
+            for k in [k1, k2, k3] {
+                crate::game::map::ai::attacked(m, k, ga);
+            }
+            let mut walked = false;
+            for _ in 0..200 {
+                step(m, 1);
+                walked |= [k1, k2, k3].iter().any(
+                    |k| matches!(&m.creature(*k).unwrap().motion, Motion::Moving(w) if !w.run),
+                );
+            }
+            let p = |g: Guid| m.creature(g).unwrap().position;
+            let in_reach = [k1, k2, k3].iter().all(|k| {
+                combat::in_melee_range(&m.unit_view(*k).unwrap(), &m.unit_view(ga).unwrap())
+            });
+            (walked, dist(p(k1), p(k2)), dist(p(k3), me), in_reach)
+        })
+        .await
+        .unwrap();
+    let (walked, apart, off, in_reach) = out;
+    assert!(walked, "at a walk");
+    // Apart past where Thistle Tea has them stacked, and the one in its
+    // victim out of it.
+    assert!(apart > 1.118, "the two step apart: {apart}");
+    assert!(off > 1.25, "the one in its victim steps back: {off}");
+    assert!(in_reach, "all still in reach");
+}

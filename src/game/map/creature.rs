@@ -636,12 +636,14 @@ impl Creature {
         frame
     }
 
-    /// A chase: [`Self::walk_at`] at a run, facing `victim` as it goes and
-    /// at the end, as Thistle Tea's `Navigation.chase` and mangos's chase
-    /// (`SetFacing`) send it.
-    pub fn chase(
+    /// A move in a fight: [`Self::walk_at`], facing `victim` as it goes
+    /// and at the end, as Thistle Tea's `Navigation.chase` and mangos's
+    /// chase (`SetFacing`) send it: a chase at a run, a step about its
+    /// victim at a walk.
+    pub fn walk_facing(
         &mut self,
         points: Vec<Vector3d>,
+        run: bool,
         fly: bool,
         victim: Guid,
         now: Instant,
@@ -650,7 +652,12 @@ impl Creature {
         if points.len() < 2 {
             return None;
         }
-        let mut walk = Walk::new(points, self.speeds.run, now, spline_id, true);
+        let speed = if run {
+            self.speeds.run
+        } else {
+            self.speeds.walk
+        };
+        let mut walk = Walk::new(points, speed, now, spline_id, run);
         walk.fly = fly;
         walk.face = Some(victim);
         let frame = encode(&walk.packet(self.guid, self.position));
