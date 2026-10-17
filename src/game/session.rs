@@ -244,6 +244,17 @@ impl Session {
         let Some(start) = self.realm.data.start_info(race, class) else {
             return WorldResult::CharCreateFailed;
         };
+        // A look the client has no texture for crashes whoever draws it.
+        let look = crate::game::data::appearance::Look {
+            skin: c.skin_color,
+            face: c.face,
+            hair_style: c.hair_style,
+            hair_color: c.hair_color,
+            facial_hair: c.facial_hair,
+        };
+        if !self.realm.data.appearances.valid(race, gender, look) {
+            return WorldResult::CharCreateFailed;
+        }
         if self.realm.registry.name_in_use(&name) {
             return WorldResult::CharCreateNameInUse;
         }
@@ -364,6 +375,26 @@ impl Session {
         };
         if *row.account != *self.account {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
+        }
+        // A look made before it was checked, which would crash whoever saw
+        // them: what the client has no texture for, back to what it has.
+        let look = crate::game::data::appearance::Look {
+            skin: row.skin,
+            face: row.face,
+            hair_style: row.hair_style,
+            hair_color: row.hair_color,
+            facial_hair: row.facial_hair,
+        };
+        let mended = self.realm.data.appearances.mend(row.race, row.gender, look);
+        if mended != look {
+            tracing::info!("{}'s look mended: {look:?} to {mended:?}", row.name);
+            (row.skin, row.face, row.hair_style, row.hair_color, row.facial_hair) = (
+                mended.skin,
+                mended.face,
+                mended.hair_style,
+                mended.hair_color,
+                mended.facial_hair,
+            );
         }
         // The client's caches, and the account's tutorials.
         let (caches, tutorials) =

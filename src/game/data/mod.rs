@@ -6,6 +6,7 @@
 //! what `wow_world_base` and `wow_items` carry: races, classes, starting
 //! positions and gear, and items.
 
+pub mod appearance;
 pub mod crafts;
 pub mod items;
 pub mod load;
@@ -414,6 +415,8 @@ pub struct RaceInfo {
 
 #[derive(Debug, Default)]
 pub struct GameData {
+    /// The looks the client has textures for.
+    pub appearances: appearance::Appearances,
     pub creature_templates: AHashMap<u32, CreatureTemplate>,
     pub creature_spawns: AHashMap<u32, Vec<CreatureSpawn>>,
     pub creature_addons: AHashMap<u32, CreatureAddon>,

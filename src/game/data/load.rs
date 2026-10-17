@@ -2148,6 +2148,20 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
 /// and meeting stones.
 fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     use super::misc::*;
+    if let Some(dbc) = dbc {
+        for (race, gender, kind, variation, colour) in rows(
+            dbc,
+            "SELECT * FROM CharSections WHERE npc_only = 0",
+            |c| (c.u8("race"), c.u8("gender"), c.u8("ty"), c.u8("variation_index"), c.u8("colour_index")),
+        ) {
+            data.appearances.add_section(race, gender, kind, variation, colour);
+        }
+        for (race, gender, variation) in rows(dbc, "SELECT * FROM CharacterFacialHairStyles", |c| {
+            (c.u8("race"), c.u8("gender"), c.u8("variation_id"))
+        }) {
+            data.appearances.add_facial_hair(race, gender, variation);
+        }
+    }
     let m = &mut data.misc;
     if let Some(dbc) = dbc {
         for f in rows(dbc, "SELECT * FROM Faction", |c| FactionDef {
@@ -2308,6 +2322,34 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The client's own tables: the looks the bots that crashed a watching
+    /// client had are refused, and the one the tests make every character
+    /// with is good for every race.
+    #[test]
+    fn the_looks_the_client_has_textures_for() {
+        use crate::game::data::appearance::Look;
+        let Some(d) = real_data() else {
+            return;
+        };
+        let a = &d.appearances;
+        assert!(a.is_loaded());
+        let look = |skin, face, hair_style, hair_color, facial_hair| Look {
+            skin,
+            face,
+            hair_style,
+            hair_color,
+            facial_hair,
+        };
+        assert!(!a.valid(7, 0, look(5, 2, 4, 2, 0)), "a gnome's sixth skin");
+        assert!(!a.valid(6, 0, look(3, 3, 5, 4, 4)), "a tauren's fourth hair colour");
+        for race in [1, 2, 3, 4, 5, 6, 7, 8] {
+            for gender in [0, 1] {
+                assert!(a.valid(race, gender, look(1, 1, 1, 1, 1)), "{race} {gender}");
+                assert!(a.valid(race, gender, look(4, 3, 4, 2, 4)), "everyone's range, {race} {gender}");
+            }
+        }
+    }
 
     /// A clone made without Git LFS has pointers for databases: they are
     /// named as such (not "file is not a database" a query at a time), and
