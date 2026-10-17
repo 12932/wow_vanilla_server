@@ -66,6 +66,10 @@ mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
+mod tests_p3_spells;
+#[cfg(test)]
+mod tests_p3_spells_kit;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

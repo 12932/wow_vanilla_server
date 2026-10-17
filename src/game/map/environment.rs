@@ -105,6 +105,9 @@ pub fn damage(map: &mut Map, g: Guid, kind: EnvironmentalDamageType, amount: u32
         map.send_to_observers(g, &frame, true);
     }
     if left > 0 {
+        // The world's harm is the player's own: it pushes a cast back, not
+        // a channel (mangos's `EnvironmentalDamage`, as `SELF_DAMAGE`).
+        crate::game::map::spells::pushback_by(map, g, g);
         crate::game::map::combat::deal_damage(map, g, g, left);
     }
 }

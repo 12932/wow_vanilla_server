@@ -1669,11 +1669,19 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     crate::game::map::professions::line_ended(map, g);
 }
 
-/// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a
-/// player's cast whose interrupt flags say so is pushed back half a second
-/// (twice at most) or cancelled, and a channel cut short by a quarter or
-/// cancelled; talents and auras may resist the pushback.
+/// Damage taken while casting, from no one in particular: [`pushback_by`].
 pub fn pushback(map: &mut Map, g: Guid) {
+    pushback_by(map, g, Guid::zero());
+}
+
+/// Damage taken while casting, dealt by `from`, as Thistle Tea's
+/// `CastPushback` and mangos's `InterruptOrDelaySpell` have it: a player's
+/// cast whose interrupt flags say so is cancelled (a mount, the
+/// Hearthstone, gathering) or else pushed back, and a channel cut short or
+/// else cancelled (a bandage); talents and auras may resist the pushback.
+/// A channel isn't cut short by its caster's own harm, the world's
+/// included (falling, lava).
+pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
     let data = map.realm.data.clone();
     if !map.players.contains_key(&g) {
         return;
@@ -1688,20 +1696,28 @@ pub fn pushback(map: &mut Map, g: Guid) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    let (delays, cancels) = if channel {
-        (
-            s.channel_interrupt_flags & 0x4000 != 0,
-            s.channel_interrupt_flags & 0x2 != 0,
-        )
+    if channel {
+        // A channel cut short isn't cancelled too.
+        let delays = s.channel_interrupt_flags & 0x4000 != 0;
+        if delays && from == g {
+            return;
+        }
+        if !delays && s.channel_interrupt_flags & 0x2 != 0 {
+            interrupt(map, g);
+            return;
+        }
+        if !delays {
+            return;
+        }
     } else {
-        (s.interrupt_flags & 0x2 != 0, s.interrupt_flags & 0x10 != 0)
-    };
-    if cancels && !delays {
-        interrupt(map, g);
-        return;
-    }
-    if !delays {
-        return;
+        // A cast that damage cancels isn't pushed back too.
+        if s.interrupt_flags & 0x10 != 0 {
+            interrupt(map, g);
+            return;
+        }
+        if s.interrupt_flags & 0x2 == 0 {
+            return;
+        }
     }
     let m = mods::for_spell(map, g, s);
     let resist = auras::auras(map, g).map_or(0, |a| {

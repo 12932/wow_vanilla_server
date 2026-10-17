@@ -1023,8 +1023,10 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     {
         p.outbound.send_frame(frame);
     }
-    super::pushback(map, target);
     if left > 0 {
+        // What an absorb took pushes nothing back (Thistle Tea's
+        // `take_unblocked_damage`, mangos's `DealDamage`).
+        super::pushback_by(map, target, caster);
         auras::interrupt(map, target, INTERRUPT_DAMAGE | INTERRUPT_DIRECT_DAMAGE);
     }
     let mut ex = l.hit.proc_ex();
