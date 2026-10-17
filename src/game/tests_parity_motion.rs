@@ -830,3 +830,55 @@ async fn distract_stops_and_turns_a_creature_for_its_seconds() {
         .unwrap();
     assert!(still, "it stands");
 }
+
+const SLUGGISH: u32 = 5002;
+
+/// A creature that leashes is whole again as it turns for home, not when
+/// it gets there (Thistle Tea's `heal_to_full`); one whose template says
+/// it doesn't regenerate isn't, then or at home.
+#[tokio::test]
+async fn a_leashing_creature_is_healed_as_it_turns_for_home() {
+    use crate::game::fields::{UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH};
+    let mut d = wolf_world();
+    let mut sluggish = template(SLUGGISH, "Sluggish Wolf", PACK);
+    sluggish.static_flags1 = 0x400;
+    d.creature_templates.insert(SLUGGISH, sluggish);
+    d.creature_spawns
+        .get_mut(&0)
+        .unwrap()
+        .push(spawn(82, SLUGGISH, at(12.0, 0.0)));
+    let (_realm, _a, ga, map) = enter(d).await;
+    let health = |m: &crate::game::map::Map, g: Guid| {
+        let f = &m.creature(g).unwrap().fields;
+        (
+            f.get_u32(UNIT_FIELD_HEALTH),
+            f.get_u32(UNIT_FIELD_MAXHEALTH),
+        )
+    };
+    for (g, regenerates) in [(wolf(), true), (guid::unit(SLUGGISH, 82), false)] {
+        let (leashing, home) = map
+            .query(move |m| {
+                crate::game::map::ai::attacked(m, g, ga);
+                let c = m.creature_mut(g).unwrap();
+                c.motion = Motion::Idle { until: None };
+                c.position = at(10.0, 25.0);
+                let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+                c.fields.set_u32(UNIT_FIELD_HEALTH, max / 2);
+                crate::game::map::ai::enter_evade(m, g);
+                assert!(m.creature(g).unwrap().evading, "on its way home");
+                let leashing = health(m, g);
+                finish_walk(m, g);
+                crate::game::map::ai::update_creatures(m);
+                assert!(!m.creature(g).unwrap().evading, "home");
+                (leashing, health(m, g))
+            })
+            .await
+            .unwrap();
+        if regenerates {
+            assert_eq!(leashing.0, leashing.1, "whole as it leashes");
+        } else {
+            assert_eq!(leashing.0, leashing.1 / 2, "not healed as it leashes");
+            assert_eq!(home.0, home.1 / 2, "nor at home");
+        }
+    }
+}

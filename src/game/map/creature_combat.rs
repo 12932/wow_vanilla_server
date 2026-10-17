@@ -913,6 +913,20 @@ pub fn combat_mana_per_tick(map: &Map, g: Guid) -> u32 {
     ((per_tick / 2.0 + 0.6 * intellect.sqrt() / 5.0) * 5.0).max(0.0) as u32
 }
 
+/// Whether a creature's health comes back by itself (Thistle Tea's
+/// `Regen.regenerates_health?`): as a script set it (bit 0x1), else
+/// unless its template says it doesn't.
+pub fn regenerates_health(map: &Map, g: Guid) -> bool {
+    match map
+        .creature(g)
+        .and_then(|c| c.scripted.as_deref())
+        .and_then(|s| s.regenerate)
+    {
+        Some(mask) => mask & 0x1 != 0,
+        None => template(map, g).is_none_or(|t| t.static_flags1 & STATIC_NO_AUTOMATIC_REGEN == 0),
+    }
+}
+
 /// Creatures regenerate: a third of health and mana each tick out of a
 /// fight, health in one while polymorphed, and mana in one by spirit and
 /// intellect outside the five-second rule.
