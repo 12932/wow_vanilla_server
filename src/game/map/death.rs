@@ -417,7 +417,8 @@ pub fn spirit_healer_activate(map: &mut Map, g: Guid, healer: Guid) {
     };
     if near {
         resurrect(map, g, 0.5);
-        crate::game::map::vendor::wear(map, g, 0.25);
+        // Everything carried wears a quarter (Thistle Tea's `SpiritHealer`).
+        crate::game::map::vendor::wear_carried(map, g, 0.25);
         resurrection_sickness(map, g);
     }
 }
