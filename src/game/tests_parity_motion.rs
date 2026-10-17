@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ahash::AHashSet;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
@@ -338,11 +339,6 @@ async fn a_circling_flyers_lap_reaches_the_client_whole() {
             "on the circle: {p:?}"
         );
     }
-    let _ = (
-        Duration::ZERO,
-        dist(home, home),
-        Motion::Idle { until: None },
-    );
 }
 
 static BAKE: std::sync::LazyLock<std::path::PathBuf> =
@@ -1329,7 +1325,10 @@ const POOLED: u32 = 5004;
 
 /// Pooled wolves (spawns 100 on) east of the start, in `pools` (entry,
 /// limit, creatures with their chances, child pools).
-fn pool_world(pools: &[(u32, u32, &[(u32, f32)], &[u32])]) -> GameData {
+/// A pool: its entry, limit, creatures with their chances, child pools.
+type PoolRow<'a> = (u32, u32, &'a [(u32, f32)], &'a [u32]);
+
+fn pool_world(pools: &[PoolRow]) -> GameData {
     use crate::game::data::scripts::Pool;
     let mut d = world();
     d.creature_templates
@@ -1397,8 +1396,6 @@ async fn reroll(map: &MapHandle, times: usize) -> AHashSet<u32> {
     .await
     .unwrap()
 }
-
-use ahash::AHashSet;
 
 /// Pools as Thistle Tea's `SpawnPool.Selection` picks them: a limit of
 /// four with four chanced members spawns all four; a chanced pool, and a
