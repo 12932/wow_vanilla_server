@@ -740,7 +740,21 @@ fn effect(
                     u32::try_from(e.item_type).unwrap_or(0),
                 );
                 // A player's own make is created; another's gift received.
-                let count = amount.max(1) as u32;
+                // What doesn't fit, of room or of a unique allowance, isn't
+                // made (mangos's `DoCreateItem`, Thistle Tea's clamp).
+                let count = map
+                    .players
+                    .get(&to)
+                    .and_then(|p| {
+                        crate::game::map::inventory::fitting(
+                            p,
+                            &map.realm.data,
+                            item,
+                            amount.max(1) as u32,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(amount.max(1) as u32);
                 let made = if to == caster {
                     crate::game::map::inventory::add_created_item(map, to, item, count)
                 } else {
