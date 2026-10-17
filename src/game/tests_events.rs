@@ -999,3 +999,57 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
         dashels_brawl(&realm).await;
     }
 }
+
+/// A quest's details go out as 1.12 has them: its long details whole, its
+/// Accept button on, each reward item with its display id, the money it
+/// asks for, its emotes up to the last.
+#[test]
+fn a_quests_details_are_laid_out_as_the_client_reads_them() {
+    use crate::game::data::GameData;
+    use crate::game::data::items::ItemTemplate;
+    use crate::game::data::npc::Quest;
+    let mut data = GameData::empty();
+    data.items.insert(
+        2589,
+        ItemTemplate {
+            entry: 2589,
+            display_id: 7341,
+            ..Default::default()
+        },
+    );
+    let mut q = Quest {
+        id: 6084,
+        title: "Taming the Beast".into(),
+        details: "x".repeat(466),
+        objectives: "o".repeat(107),
+        reward_money: -50,
+        reward_spell: 1579,
+        ..Default::default()
+    };
+    q.rewards[0] = (2589, 2);
+    q.details_emotes = [(1, 0), (0, 0), (5, 500), (0, 0)];
+    let giver = Guid::new(0xF130_0004_CF00_0001);
+    let frame = quests::details_frame(&data, giver, &q);
+    let body = &frame[4..];
+    let strings = 17 + 467 + 108;
+    assert_eq!(
+        body.len(),
+        8 + 4 + strings + 4 + 4 + 4 + 12 + 4 + 4 + 4 + 3 * 8
+    );
+    let at = 12 + strings;
+    let word = |i: usize| u32::from_le_bytes(body[at + i * 4..at + i * 4 + 4].try_into().unwrap());
+    // Accept on, no choices, one item: 2589, two of them, its display.
+    assert_eq!(
+        (word(0), word(1), word(2), word(3), word(4), word(5)),
+        (1, 0, 1, 2589, 2, 7341)
+    );
+    assert_eq!((word(6) as i32, word(7), word(8)), (-50, 1579, 3));
+    let Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d)) =
+        harness::quest_details_112(&frame)
+    else {
+        panic!("read back");
+    };
+    assert_eq!((d.guid, d.quest_id, d.details.len()), (giver, 6084, 466));
+    assert_eq!(d.item_rewards.len(), 1);
+    assert_eq!(d.emotes.len(), 3);
+}
