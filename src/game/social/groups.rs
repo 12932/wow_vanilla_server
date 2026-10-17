@@ -65,6 +65,8 @@ pub struct Group {
     pub looter: Guid,
     pub threshold: ItemQuality,
     pub icons: [Guid; 8],
+    /// Round robin's last looter.
+    pub round_robin: Guid,
 }
 
 impl Group {
@@ -85,6 +87,7 @@ impl Group {
             looter: Guid::zero(),
             threshold: ItemQuality::Uncommon,
             icons: [Guid::zero(); 8],
+            round_robin: Guid::zero(),
         }
     }
 
@@ -304,6 +307,11 @@ impl Groups {
             .get(&g)
             .and_then(|id| self.groups.get(id))
             .filter(|gr| gr.formed)
+    }
+
+    pub fn group_of_mut(&mut self, g: Guid) -> Option<&mut Group> {
+        let id = *self.of.get(&g)?;
+        self.groups.get_mut(&id).filter(|gr| gr.formed)
     }
 
     /// The other members of `g`'s group.

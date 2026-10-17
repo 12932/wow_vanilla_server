@@ -66,5 +66,6 @@ pub struct Event {
 
 /// Run the procs of both units for `e`.
 pub fn trigger(map: &mut Map, e: Event) {
-    let _ = (map, e);
+    // Weapons' enchantments and chance-on-hit spells.
+    crate::game::map::enchant::weapon_procs(map, &e);
 }

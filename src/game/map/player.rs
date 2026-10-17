@@ -116,9 +116,15 @@ impl Item {
         item.fields.set_u32(ITEM_FIELD_DURABILITY, row.durability);
         item.fields.set_u32(ITEM_FIELD_FLAGS, row.flags);
         item.data = row.data.clone();
-        if let Some(text) = row.data.strip_prefix("text:").and_then(|t| t.parse().ok()) {
+        if let Some(text) = row
+            .data
+            .split(';')
+            .find_map(|t| t.strip_prefix("text:"))
+            .and_then(|t| t.parse().ok())
+        {
             item.fields.set_u32(ITEM_FIELD_ITEM_TEXT_ID, text);
         }
+        crate::game::map::enchant::decode(data, &mut item);
         item
     }
 
@@ -131,7 +137,7 @@ impl Item {
             count: self.fields.get_u32(ITEM_FIELD_STACK_COUNT),
             durability: self.fields.get_u32(ITEM_FIELD_DURABILITY),
             flags: self.fields.get_u32(ITEM_FIELD_FLAGS),
-            data: self.data.clone(),
+            data: crate::game::map::enchant::encode(self),
         }
     }
 
