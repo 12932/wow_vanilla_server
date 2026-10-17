@@ -2124,3 +2124,82 @@ async fn an_opening_finds_the_chest_in_use_when_it_completes() {
     .await;
     assert_eq!(failed(&mut b, PICK_LOCK).await, 0x15);
 }
+
+// A spell focus's reach.
+
+const ANVIL_RECIPE: u32 = 900_130;
+const BRAZIER_RECIPE: u32 = 900_131;
+const ANVIL: u32 = 900_910;
+const BRAZIER: u32 = 900_911;
+
+fn focus_data() -> GameData {
+    use crate::game::data::{GameObjectSpawn, GameObjectTemplate};
+    let mut d = crafting_data();
+    // An anvil reached from five yards, a brazier from two.
+    for (recipe, focus, object, radius, dy) in [
+        (ANVIL_RECIPE, 1, ANVIL, 5, 10.0),
+        (BRAZIER_RECIPE, 2, BRAZIER, 2, 30.0),
+    ] {
+        let mut s = create_item(recipe, 1, CRAFTED);
+        s.effects[0].base_points = 0;
+        s.requires_spell_focus = focus;
+        d.spells.spells.insert(recipe, s);
+        let mut t = GameObjectTemplate {
+            entry: object,
+            kind: 8,
+            display_id: 1,
+            name: format!("Focus {object}"),
+            size: 1.0,
+            ..Default::default()
+        };
+        t.data[0] = focus;
+        t.data[1] = radius;
+        d.gameobject_templates.insert(object, t);
+        d.gameobject_spawns
+            .entry(0)
+            .or_default()
+            .push(GameObjectSpawn {
+                guid: 98 + focus,
+                entry: object,
+                map: 0,
+                x: START.0,
+                y: START.1 + dy,
+                z: START.2,
+                state: 1,
+                ..Default::default()
+            });
+    }
+    d
+}
+
+#[tokio::test]
+async fn a_spell_focus_reaches_past_both_bodies() {
+    let realm = harness::realm_with(focus_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // 5.6 yards from the anvil: within its five and both bodies'.
+    let made = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.movement.position = Vector3d {
+            x: START.0,
+            y: START.1 + 10.0 - 5.6,
+            z: START.2,
+        };
+        cast(m, g, ANVIL_RECIPE, Default::default());
+        m.players[&g].count_of(CRAFTED)
+    })
+    .await;
+    assert_eq!(made, 1, "at the anvil");
+    // 4.9 yards from the brazier: beyond its two and the bodies'.
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.movement.position = Vector3d {
+            x: START.0,
+            y: START.1 + 30.0 - 4.9,
+            z: START.2,
+        };
+        cast(m, g, BRAZIER_RECIPE, Default::default());
+    })
+    .await;
+    assert_eq!(failed(&mut a, BRAZIER_RECIPE).await, 0x5E);
+}

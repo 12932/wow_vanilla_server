@@ -229,16 +229,6 @@ pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bo
         || f.get_fallingfar()
 }
 
-fn near_focus(map: &Map, at: Vector3d, focus: u32) -> bool {
-    let data = &map.realm.data;
-    map.gameobjects.iter().any(|(_, g)| {
-        g.kind == 8
-            && data.gameobject_templates.get(&g.entry).is_some_and(|t| {
-                t.data[0] == focus && dist(g.position, at) <= (t.data[1] as f32).max(10.0)
-            })
-    })
-}
-
 /// Why `caster` can't cast `s` at `t` now, if it can't.
 pub fn check(
     map: &mut Map,
@@ -453,7 +443,7 @@ pub fn check(
         }
         if s.requires_spell_focus != 0
             && map.players.contains_key(&caster)
-            && !near_focus(map, me.position, s.requires_spell_focus)
+            && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
         {
             return Some(fail::REQUIRES_SPELL_FOCUS);
         }

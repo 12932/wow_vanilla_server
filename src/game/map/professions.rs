@@ -403,7 +403,7 @@ pub fn check(
     {
         return Some(code);
     }
-    if s.requires_spell_focus != 0 && !focus_near(map, p.position(), s.requires_spell_focus) {
+    if s.requires_spell_focus != 0 && !focus_near(map, caster, s.requires_spell_focus) {
         return Some(FAIL_REQUIRES_SPELL_FOCUS);
     }
     if let Some(code) = s
@@ -545,18 +545,31 @@ fn skinning_fails(map: &Map, p: &Player, t: &Targets) -> Option<u8> {
     None
 }
 
-/// A spell focus of `focus` within its reach of `at`.
-fn focus_near(map: &Map, at: Vector3d, focus: u32) -> bool {
+/// A spell focus of `focus` within its reach of `caster`: closer than its
+/// radius and both bodies' (Thistle Tea's `Focus.range`, mangos's
+/// `IsWithinDistInMap`).
+pub fn focus_near(map: &Map, caster: Guid, focus: u32) -> bool {
+    const OBJECT_RADIUS: f32 = 0.389;
     let data = &map.realm.data;
+    let Some((at, own)) = map
+        .unit_fields(caster)
+        .zip(map.position_of(caster))
+        .map(|(f, at)| {
+            let r = f.get_f32(UNIT_FIELD_BOUNDINGRADIUS);
+            (at, if r > 0.0 { r } else { OBJECT_RADIUS })
+        })
+    else {
+        return false;
+    };
     map.grid
-        .around(at.x, at.y, 30.0)
+        .around(at.x, at.y, 50.0)
         .filter(|g| guid::is_game_object(*g))
         .filter_map(|g| map.gameobject(g))
         .any(|o| {
             data.gameobject_templates.get(&o.entry).is_some_and(|t| {
                 t.kind == GO_SPELL_FOCUS
                     && t.data[0] == focus
-                    && dist(o.position, at) <= (t.data[1] as f32).max(5.0)
+                    && dist(o.position, at) < t.data[1] as f32 + own + OBJECT_RADIUS
             })
         })
 }
