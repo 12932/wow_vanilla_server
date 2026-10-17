@@ -130,6 +130,10 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             if kind == Kind::Hunter {
                 hunter::tick(map, g, now);
             }
+            // Its master moves it (Eyes of the Beast): nothing of its own.
+            if state(map, g).is_some_and(|s| s.eyes.is_some()) {
+                return;
+            }
             act(map, g, now);
         }
     }

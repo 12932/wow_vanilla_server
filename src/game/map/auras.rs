@@ -1406,6 +1406,9 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::charmed(map, h.caster, target, kind == AURA_MOD_POSSESS);
         }
+        AURA_MOD_POSSESS_PET => {
+            crate::game::map::pets::eyes::look(map, h.caster, target);
+        }
         AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
             crate::game::map::spells::mods::changed(
                 map,
@@ -1565,6 +1568,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::uncharmed(map, h.caster, target);
+        }
+        AURA_MOD_POSSESS_PET => {
+            crate::game::map::pets::eyes::look_away(map, h.caster, target);
         }
         AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
             crate::game::map::spells::mods::changed(

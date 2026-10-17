@@ -193,7 +193,10 @@ fn absorb_bonus(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index:
     let power = if s.family_name == 6 && flags & 0x1 != 0 {
         outcome::power(map, caster, target, s, true)
     } else if (s.family_name == 3 && flags & 0x108 != 0)
-        || (matches!(s.family_name, 0 | 5) && s.school == 5 && s.spell_icon == 207 && s.category == 56)
+        || (matches!(s.family_name, 0 | 5)
+            && s.school == 5
+            && s.spell_icon == 207
+            && s.category == 56)
     {
         outcome::power(map, caster, target, s, false)
     } else {
@@ -228,7 +231,10 @@ pub fn run(
             continue;
         }
         let e = s.effects[index];
-        let points = l.mods.points(index, points_with(s, index, level, l.combo));
+        let mut points = l.mods.points(index, points_with(s, index, level, l.combo));
+        if index == 0 && l.shared > 1 {
+            points /= l.shared as i32;
+        }
         let mut here = l.clone();
         here.chain = chain[index];
         match e.effect {
@@ -1151,7 +1157,9 @@ pub fn refresh_area_auras(map: &mut Map) {
         .filter(|g| crate::game::map::pets::owner_of(map, *g).is_some())
         .collect();
     let holders_of = |g: Guid| -> Vec<auras::Holder> {
-        auras::auras(map, g).map(|a| a.holders.clone()).unwrap_or_default()
+        auras::auras(map, g)
+            .map(|a| a.holders.clone())
+            .unwrap_or_default()
     };
     let units: Vec<(Guid, Vec<auras::Holder>)> = map
         .players
@@ -1280,8 +1288,11 @@ pub fn refresh_area_auras(map: &mut Map) {
         })
         .collect();
     for (member, spell, caster) in orphans {
-        let source = auras::auras(map, caster)
-            .is_some_and(|a| a.holders.iter().any(|h| h.spell == spell && h.caster == caster));
+        let source = auras::auras(map, caster).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == caster)
+        });
         if !source {
             auras::remove_spell(map, member, spell, Some(caster));
         }

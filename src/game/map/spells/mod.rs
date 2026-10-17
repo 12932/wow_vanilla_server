@@ -3,16 +3,17 @@
 //! effects do when they land ([`outcome`]), with the caster's talents'
 //! modifiers ([`mods`]) and their targets ([`targets`]).
 
+pub mod area;
 pub mod checks;
 pub mod cooldowns;
 pub mod dynamic;
-pub mod environment;
-pub mod redemption;
-pub mod sight;
 mod effects;
+pub mod environment;
 pub mod mods;
 pub mod outcome;
+pub mod redemption;
 pub mod scripts;
+pub mod sight;
 pub mod stealth;
 pub mod targets;
 
@@ -100,8 +101,8 @@ pub const EFFECT_MODIFY_THREAT_PERCENT: u32 = 125;
 /// The effects this module runs.
 pub const RUN: &[u32] = &[
     1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 24, 25, 27, 29, 30, 31, 32, 33, 35, 36, 38, 43, 44,
-    58, 60, 62, 63, 64, 67, 68, 69, 72, 75, 77, 78, 79, 80, 83, 84, 96, 98, 108, 111, 113, 114, 115,
-    118, 121, 125,
+    58, 60, 62, 63, 64, 67, 68, 69, 72, 75, 77, 78, 79, 80, 83, 84, 96, 98, 108, 111, 113, 114,
+    115, 118, 121, 125,
 ];
 
 /// Every effect the server knows: those with an effect here, and the
@@ -111,9 +112,9 @@ pub const RUN: &[u32] = &[
 pub fn effect_supported(effect: u32) -> bool {
     const KEPT: &[u32] = &[
         0, 4, 12, 13, 14, 15, 19, 20, 21, 22, 23, 26, 28, 34, 37, 39, 40, 41, 42, 45, 46, 47, 48,
-        49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 65, 66, 70, 71, 73, 74, 76, 81, 82, 85, 86,
-        87, 88, 89, 90, 91, 92, 93, 94, 95, 97, 99, 100, 101, 102, 103, 104, 105, 106, 107, 109,
-        110, 112, 116, 117, 119, 120, 122, 123, 124, 126, 127, 128, 129,
+        49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 65, 66, 70, 71, 73, 74, 76, 81, 82, 85, 86, 87,
+        88, 89, 90, 91, 92, 93, 94, 95, 97, 99, 100, 101, 102, 103, 104, 105, 106, 107, 109, 110,
+        112, 116, 117, 119, 120, 122, 123, 124, 126, 127, 128, 129,
     ];
     RUN.contains(&effect) || KEPT.contains(&effect)
 }
@@ -345,6 +346,10 @@ fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
                     .map_or(0, |s| s.requires_spell_focus);
                 b.u32(focus);
             }
+            // An area failure names the area.
+            if r == checks::fail::REQUIRES_AREA {
+                b.u32(area::required(&map.realm.data, spell));
+            }
         }
     }
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));
@@ -356,7 +361,7 @@ fn power_index(s: &SpellTemplate) -> u16 {
 
 /// What `s` costs `caster` before modifiers: its own cost, a share of base
 /// mana, or all its mana; with school cost auras.
-fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
+pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
     let mut cost = if s.attr(1, sd::ATTR_EX_USE_ALL_MANA) {
@@ -370,8 +375,24 @@ fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         };
         base * s.mana_cost_percentage / 100
     } else {
-        s.mana_cost + s.mana_cost_per_level * level.saturating_sub(s.base_level)
+        // The rank it is cast at goes no higher than its last level.
+        let rank = if s.max_level > 0 {
+            level.min(s.max_level)
+        } else {
+            level
+        };
+        s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level)
     } as i32;
+    // A spell that scales with its caster's level costs as much more, as
+    // vmangos's `CalculatePowerCost` (and Thistle Tea's `CostScaling`) has it.
+    if s.attr(0, sd::ATTR_LEVEL_DAMAGE_CALCULATION) && s.spell_level > 0 && level > 0 {
+        let divisor = 1.117 * s.spell_level as f32 / level as f32 - 0.1327;
+        cost = if divisor.abs() < f32::EPSILON {
+            0
+        } else {
+            (cost as f32 / divisor) as i32
+        };
+    }
     if let Some(a) = auras::auras(map, caster) {
         cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
         cost = (cost as f32
@@ -730,6 +751,13 @@ fn execute(
     // Each target: the hit, then the effects.
     let mut chain = [1.0f32; 3];
     let mut landed_on_main = false;
+    // A meteor's damage is shared among those it falls on (Thistle Tea's
+    // `SharedDamage`).
+    let shared = if s.script_name == "spell_meteor" {
+        resolved.iter().filter(|(_, e)| e[0]).count() as u32
+    } else {
+        0
+    };
     for (target, mut effects) in resolved {
         for (i, e) in effects.iter_mut().enumerate() {
             if professions & (1 << i) != 0 {
@@ -799,6 +827,7 @@ fn execute(
             combo,
             mods: m.clone(),
             reflected: aim != target,
+            shared,
         };
         effects::run(
             map, caster, aim, s, effects, &landing, &mut chain, item, &targets,
@@ -890,7 +919,12 @@ fn magnet(map: &mut Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Tar
     let covered: Vec<Guid> = map
         .players
         .values()
-        .filter(|p| p.auras.holders.iter().any(|h| h.spell == spell && h.caster == source))
+        .filter(|p| {
+            p.auras
+                .holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == source)
+        })
         .map(|p| p.guid)
         .chain(std::iter::once(source))
         .collect();
@@ -1168,7 +1202,10 @@ pub fn pushback(map: &mut Map, g: Guid) {
         return;
     };
     let (delays, cancels) = if channel {
-        (s.channel_interrupt_flags & 0x4000 != 0, s.channel_interrupt_flags & 0x2 != 0)
+        (
+            s.channel_interrupt_flags & 0x4000 != 0,
+            s.channel_interrupt_flags & 0x2 != 0,
+        )
     } else {
         (s.interrupt_flags & 0x2 != 0, s.interrupt_flags & 0x10 != 0)
     };

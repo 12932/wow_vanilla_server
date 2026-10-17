@@ -1768,6 +1768,19 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     }) {
         s.learn_with.entry(spell).or_default().push(learns);
     }
+    for a in rows(db, "SELECT * FROM spell_area", |c| SpellArea {
+        spell: c.u32("spell"),
+        area: c.u32("area"),
+        quest_start: c.u32("quest_start"),
+        quest_start_active: c.u32("quest_start_active") != 0,
+        quest_end: c.u32("quest_end"),
+        aura_spell: c.i32("aura_spell"),
+        race_mask: c.u32("racemask"),
+        gender: c.u8("gender"),
+        autocast: c.u32("autocast") != 0,
+    }) {
+        s.areas.entry(a.spell).or_default().push(a);
+    }
 }
 
 fn load_players(db: &Connection, data: &mut GameData) {

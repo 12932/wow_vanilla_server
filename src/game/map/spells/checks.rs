@@ -56,6 +56,7 @@ pub mod fail {
     pub const OUT_OF_RANGE: u8 = 0x59;
     pub const PACIFIED: u8 = 0x5a;
     pub const REAGENTS: u8 = 0x5c;
+    pub const REQUIRES_AREA: u8 = 0x5d;
     pub const REQUIRES_SPELL_FOCUS: u8 = 0x5e;
     pub const SILENCED: u8 = 0x60;
     pub const SPELL_IN_PROGRESS: u8 = 0x61;
@@ -208,6 +209,17 @@ fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
 }
 
 /// Whether a spell focus object of `focus` is near `at`.
+/// Whether a client's movement flags say it is going somewhere: walking,
+/// strafing, jumping or falling.
+pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bool {
+    f.get_forward()
+        || f.get_backward()
+        || f.get_strafe_left()
+        || f.get_strafe_right()
+        || f.get_jumping().is_some()
+        || f.get_fallingfar()
+}
+
 fn near_focus(map: &Map, at: Vector3d, focus: u32) -> bool {
     let data = &map.realm.data;
     map.gameobjects.iter().any(|(_, g)| {
@@ -242,6 +254,11 @@ pub fn check(
         }
         if !triggered && p.stand_state() != 0 && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
             return Some(fail::NOT_STANDING);
+        }
+        // Food and drink, which standing up ends, aren't had on the move
+        // (Thistle Tea's `Posture`).
+        if s.aura_interrupt_flags & INTERRUPT_NOT_SEATED != 0 && moving(&p.movement.flags) {
+            return Some(fail::MOVING);
         }
         if p.flight.is_some() {
             return Some(fail::NOT_ON_TAXI);
@@ -339,6 +356,9 @@ pub fn check(
         }
         if let Some(e) = super::environment::check(map, caster, s) {
             return Some(e);
+        }
+        if !super::area::allows(map, caster, s.id) {
+            return Some(fail::REQUIRES_AREA);
         }
         // A spirit of redemption only heals.
         if !super::redemption::allows(map, caster, s) {
