@@ -344,3 +344,97 @@ async fn a_circling_flyers_lap_reaches_the_client_whole() {
         Motion::Idle { until: None },
     );
 }
+
+static BAKE: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| harness::real_data("nav"));
+
+/// A realm on `d` with the real navmesh, or `None` without one.
+fn realm_with_nav(d: GameData) -> Option<Arc<Realm>> {
+    if !BAKE.join("Azeroth.map").exists() {
+        return None;
+    }
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Some(Realm::new(cfg, store, startup, d, None))
+}
+
+const WOLF: u32 = 5001;
+
+/// The walks a wanderer at rest sets out on, `tries` times from its home.
+async fn wanders(map: &MapHandle, g: Guid, tries: usize) -> (Vec<Vector3d>, Vec<Duration>) {
+    map.query(move |m| {
+        let key = m.creature_by_guid[&g];
+        let (mut walks, mut waits) = (Vec::new(), Vec::new());
+        for _ in 0..tries {
+            let now = m.now;
+            let c = m.creature_mut(g).unwrap();
+            c.position = c.home;
+            c.motion = Motion::Idle { until: Some(now) };
+            crate::game::map::world::step_creature_key(m, key);
+            match &m.creature(g).unwrap().motion {
+                Motion::Moving(w) => walks.push(w.destination()),
+                Motion::Idle { until: Some(t) } => waits.push(t.duration_since(now)),
+                Motion::Idle { until: None } => {}
+            }
+        }
+        (walks, waits)
+    })
+    .await
+    .unwrap()
+}
+
+/// The real navmesh: a wanderer's points are kept within its radius of its
+/// spawn, as Thistle Tea pulls in the navmesh's random point
+/// (`Pathfinding.find_random_point_around_circle`).
+#[tokio::test]
+async fn a_wanderer_keeps_within_its_radius() {
+    let mut d = world();
+    d.creature_templates
+        .insert(WOLF, template(WOLF, "Wolf", NEUTRAL));
+    let home = at(0.0, 0.0);
+    let mut s = spawn(70, WOLF, home);
+    s.movement_type = 1;
+    s.wander_distance = 5.0;
+    d.creature_spawns.insert(0, vec![s]);
+    let Some(realm) = realm_with_nav(d) else {
+        return;
+    };
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (walks, _) = wanders(&map, guid::unit(WOLF, 70), 300).await;
+    assert!(walks.len() > 100, "it wanders: {}", walks.len());
+    let far: Vec<f32> = walks
+        .iter()
+        .map(|p| ((p.x - home.x).powi(2) + (p.y - home.y).powi(2)).sqrt())
+        .filter(|d| *d > 5.05)
+        .collect();
+    assert!(far.is_empty(), "beyond its radius: {far:?}");
+}
+
+/// The real navmesh: a wanderer the navmesh has no point for waits two to
+/// six seconds, rather than walking to a spot in the air.
+#[tokio::test]
+async fn a_wanderer_with_no_point_waits() {
+    let mut d = world();
+    d.creature_templates
+        .insert(WOLF, template(WOLF, "Wolf", NEUTRAL));
+    // High over the abbey, far from any floor.
+    let home = v(START.0, START.1, 600.0);
+    let mut s = spawn(71, WOLF, home);
+    s.movement_type = 1;
+    s.wander_distance = 5.0;
+    d.creature_spawns.insert(0, vec![s]);
+    let Some(realm) = realm_with_nav(d) else {
+        return;
+    };
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (walks, waits) = wanders(&map, guid::unit(WOLF, 71), 50).await;
+    assert!(walks.is_empty(), "nowhere to go: {walks:?}");
+    assert_eq!(waits.len(), 50);
+    assert!(
+        waits
+            .iter()
+            .all(|w| *w >= Duration::from_secs(2) && *w <= Duration::from_secs(6)),
+        "two to six seconds: {waits:?}"
+    );
+}
