@@ -1285,6 +1285,11 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         data.event_objects.insert(guid, event);
     }
+    for (guid, req) in rows(db, "SELECT * FROM gameobject_requirement", |c| {
+        (c.u32("guid"), (c.u8("reqType"), c.u32("reqGuid")))
+    }) {
+        data.object_requirements.insert(guid, req);
+    }
     for (zone, chances) in rows(db, "SELECT * FROM game_weather", |c| {
         let season = |s: &str| {
             [

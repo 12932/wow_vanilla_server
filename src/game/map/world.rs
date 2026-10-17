@@ -517,6 +517,10 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::professions::use_object(map, player, object) {
         return;
     }
+    // A quest object runs its scripts only when it goes off.
+    if crate::game::map::objects::use_goober(map, player, object) {
+        return;
+    }
     crate::game::map::scripts::object_used(map, player, object);
     let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {
         return;
@@ -529,6 +533,10 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     }
     // A launcher by Elune's lake counts its fireworks; it launches them too.
     crate::game::omen::use_object(map, object);
+    // Doors, traps, pages, rituals, spell casters; quest credit for a use.
+    if crate::game::map::objects::use_object(map, player, object) {
+        return;
+    }
     let Some(o) = map.gameobject(object) else {
         return;
     };
