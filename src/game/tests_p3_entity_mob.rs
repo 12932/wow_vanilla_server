@@ -322,3 +322,142 @@ async fn a_players_pet_is_worth_nothing_to_its_killer() {
             .is_none()
     );
 }
+
+const HOUND: u32 = 3_770;
+
+fn hound_world() -> GameData {
+    let mut d = world();
+    let mut hound = template(HOUND, 1);
+    hound.name = "Core Hound".into();
+    d.creature_templates.insert(HOUND, hound);
+    for (guid, dx) in [(81, 3.0), (82, 4.0)] {
+        d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+            guid,
+            entries: vec![HOUND],
+            map: 0,
+            x: START.0 + dx,
+            y: START.1,
+            z: START.2,
+            respawn_min: 300,
+            respawn_max: 300,
+            ..Default::default()
+        });
+    }
+    d
+}
+
+/// The hounds' linked feign death: down for a third of a second, gotten up
+/// by a hound fighting on within thirty yards.
+fn link(m: &mut Map, g: Guid) {
+    let feign = ScriptStep {
+        dataint: [0, 0, 0, 0],
+        ..crate::game::tests_p3_entity::step(scripts::C_LINKED_FEIGN_DEATH, [300, HOUND, 30, 0])
+    };
+    scripts::execute(m, &feign, g, Guid::zero());
+}
+
+fn hound(m: &Map, g: Guid) -> (bool, u32, u8, bool) {
+    let c = m.creature(g).unwrap();
+    (
+        c.alive(),
+        c.fields.get_u32(UNIT_FIELD_HEALTH),
+        c.fields.get_byte(UNIT_FIELD_BYTES_1, 0),
+        event_ai::feigning(m, g),
+    )
+}
+
+/// Thistle Tea's linked feigned-death lifecycle: a hound's killing blow
+/// leaves it down at one health in the fallen pose, and a hound fighting on
+/// near gets it up, whole and back in the fight; the whole pack down, they
+/// die and come back clean; and a wipe gets the fallen up, out of the
+/// fight, for another pull.
+#[tokio::test]
+async fn a_fallen_hound_rises_while_its_pack_fights_and_the_pack_dies_together() {
+    let (_realm, mut a, ga, map) = setup_with(hound_world(), Class::Warrior).await;
+    let (h1, h2) = (
+        crate::game::guid::unit(HOUND, 81),
+        crate::game::guid::unit(HOUND, 82),
+    );
+    a.sees(h2).await;
+    let pull = move |m: &mut Map| {
+        let f = &mut m.players.get_mut(&ga).unwrap().fields;
+        f.set_u32(UNIT_FIELD_MAXHEALTH, 100_000_000);
+        f.set_u32(UNIT_FIELD_HEALTH, 100_000_000);
+        for h in [h1, h2] {
+            link(m, h);
+            crate::game::map::ai::attacked(m, h, ga);
+        }
+    };
+    let down = on(&map, move |m| {
+        pull(m);
+        crate::game::map::combat::deal_damage(m, ga, h1, 10_000_000);
+        hound(m, h1)
+    })
+    .await;
+    assert_eq!(
+        down,
+        (true, 1, 7, true),
+        "down at one health, in the fallen pose"
+    );
+    crate::game::tests_p3_entity_objects::until(&map, "up again", move |m| {
+        !event_ai::feigning(m, h1)
+    })
+    .await;
+    let up = on(&map, move |m| {
+        let c = m.creature(h1).unwrap();
+        (
+            hound(m, h1),
+            c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+            c.combat.victim == ga && c.threat.iter().any(|(t, _)| *t == ga),
+        )
+    })
+    .await;
+    assert_eq!(
+        (up.0.0, up.0.1, up.0.2),
+        (true, up.1, 0),
+        "up, whole and standing"
+    );
+    assert!(up.2, "and back at Alice");
+    // Both down: they die, then come back clean.
+    on(&map, move |m| {
+        for h in [h1, h2] {
+            crate::game::map::combat::deal_damage(m, ga, h, 10_000_000);
+        }
+    })
+    .await;
+    crate::game::tests_p3_entity_objects::until(&map, "the pack dead", move |m| {
+        [h1, h2]
+            .iter()
+            .all(|h| m.creature(*h).is_some_and(|c| !c.alive()))
+    })
+    .await;
+    let back = on(&map, move |m| {
+        for h in [h1, h2] {
+            crate::game::map::ai::respawn_now(m, h);
+        }
+        [h1, h2].map(|h| {
+            let s = hound(m, h);
+            (s.0, s.2, s.3)
+        })
+    })
+    .await;
+    assert_eq!(back, [(true, 0, false); 2], "back, standing, not down");
+    // One down, then Alice falls: it gets up, out of the fight.
+    on(&map, move |m| {
+        pull(m);
+        crate::game::map::combat::deal_damage(m, ga, h1, 10_000_000);
+        crate::game::map::death::kill(m, ga);
+    })
+    .await;
+    crate::game::tests_p3_entity_objects::until(&map, "up after the wipe", move |m| {
+        let c = m.creature(h1).unwrap();
+        !event_ai::feigning(m, h1) && c.threat.is_empty() && !c.combat.attacking
+    })
+    .await;
+    let after = on(&map, move |m| hound(m, h1)).await;
+    assert_eq!(
+        (after.0, after.2),
+        (true, 0),
+        "alive and standing for another pull"
+    );
+}
