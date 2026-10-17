@@ -343,7 +343,7 @@ fn step_creature(
 /// a random point of the navmesh around `anchor`; one the navmesh gives
 /// beyond `radius` is pulled back toward the anchor, to a random distance
 /// within it, as far as a walk over the navmesh gets.
-fn wander_point(
+pub fn wander_point(
     nav: &mut Nav,
     anchor: Vector3d,
     radius: f32,

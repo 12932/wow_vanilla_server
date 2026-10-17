@@ -1423,6 +1423,9 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if kind == AURA_MOD_STUN {
                 crate::game::map::spells::interrupt(map, target);
             }
+            // A run the unit is driven on stops where it is.
+            crate::game::map::creature_combat::immobilized(map, target);
+            crate::game::map::player_motion::immobilized(map, target);
         }
         AURA_MOD_FEAR | AURA_MOD_CONFUSE => {
             crate::game::map::combat::stop_attack(map, target);
@@ -1438,8 +1441,12 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     true,
                 );
             }
-            // A player is moved by the server while it lasts.
+            // A player is moved by the server while it lasts; a creature's
+            // walk under way stops for it.
             crate::game::map::player_motion::control(map, target);
+            if crate::game::guid::is_unit(target) {
+                crate::game::map::creature_combat::control_changed(map, target);
+            }
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
             crate::game::map::spells::interrupt(map, target);
