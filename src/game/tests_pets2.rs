@@ -608,6 +608,8 @@ async fn a_creature_charmed_player_turns_on_their_own() {
     a.sees(gb).await;
     let wolf = place(&map, ga, WOLF, 0x70_0401, 12.0).await;
     map.query(move |m| {
+        // The wolf fights the friend; its charm lasts while it does.
+        crate::game::map::ai::attacked(m, wolf, gb);
         crate::game::map::spells::cast_triggered(m, wolf, CHARM_PLAYER, Some(ga));
     })
     .await;

@@ -16,12 +16,13 @@ use wow_world_messages::vanilla::*;
 use super::*;
 use crate::game::map::Map;
 use crate::game::map::auras::{AURA_MOD_CHARM, AURA_MOD_POSSESS};
-use crate::game::map::combat::dist;
+use rand::RngExt;
 
 /// How often a charmed player looks for a fight.
 const CHARM_THINK: Duration = Duration::from_millis(500);
-/// How far a charmed player looks.
-const CHARM_YARDS: f32 = 30.0;
+/// How often a creature-charmed player tries a spell (Thistle Tea's
+/// `BT.Charm.try_spell`).
+const CHARM_CAST_EVERY: Duration = Duration::from_millis(1500);
 
 /// Who controls a player, and what they were before.
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +34,10 @@ pub struct Possession {
     /// (a creature's charm).
     pub manual: bool,
     pub next_think: Instant,
+    /// When a creature-charmed player next tries a spell, and whether it
+    /// fights by blade till then, its last try having nothing to cast.
+    pub next_cast_at: Instant,
+    pub melee_fallback: bool,
 }
 
 /// The spell of the aura by which `master` holds `unit`.
@@ -102,6 +107,8 @@ pub fn take(map: &mut Map, master: Guid, victim: Guid) {
         was_faction: p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
         manual,
         next_think: now,
+        next_cast_at: now,
+        melee_fallback: false,
     });
     p.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
     p.fields.set_guid(UNIT_FIELD_CHARMEDBY, master);
@@ -277,7 +284,16 @@ pub fn update(map: &mut Map) {
         let master_alive = map.unit_view(pos.master).is_some_and(|u| u.alive);
         let victim_alive = map.unit_view(victim).is_some_and(|u| u.alive);
         let aura = pos.spell == 0 || holding_spell(map, pos.master, victim) == Some(pos.spell);
-        if !master_alive || !victim_alive || !aura {
+        // A creature's charm lasts while it fights (Thistle Tea's
+        // `PlayerCharm.controller_active?`).
+        let fighting = pos.manual
+            || map.creature(pos.master).is_some_and(|c| {
+                c.fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                )
+            });
+        if !master_alive || !victim_alive || !aura || !fighting {
             release(map, victim);
             continue;
         }
@@ -292,56 +308,83 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// A charmed player's turn: the nearest of its charmer's foes, by spell or
-/// by blade.
+/// Whether a charmed player may fight `t` for `master`: not itself, its
+/// charmer or one its charmer owns; alive, seen and attackable.
+fn charm_target(map: &Map, victim: Guid, master: Guid, t: Guid) -> bool {
+    t != victim
+        && t != master
+        && crate::game::map::pets::master(map, t) != master
+        && map.unit_view(t).is_some_and(|u| u.alive)
+        && crate::game::map::spells::stealth::sees(map, victim, t)
+        && crate::game::map::combat::can_attack(map, victim, t)
+}
+
+/// A charmed player's turn (Thistle Tea's `BT.Charm`): the foe it fights
+/// while it may, else one of its charmer's foes at random; every second
+/// and a half a spell of its own at random, if it can cast it there, else
+/// its blade till the next try. With no foe it follows.
 fn fight(map: &mut Map, victim: Guid, master: Guid) {
-    let Some(at) = map.position_of(victim) else {
-        return;
-    };
+    let now = map.now;
     let current = map
         .combat(victim)
         .filter(|c| c.attacking)
         .map(|c| c.victim)
-        .filter(|t| crate::game::map::combat::can_attack(map, victim, *t));
+        .filter(|t| charm_target(map, victim, master, *t));
     let target = current.or_else(|| {
-        map.players_near(at.x, at.y, CHARM_YARDS)
+        let foes: Vec<Guid> = map
+            .creature(master)
+            .map(|c| c.threat.iter().map(|(t, _)| *t).collect())
+            .unwrap_or_default();
+        let foes: Vec<Guid> = foes
             .into_iter()
-            .filter(|g| *g != victim && *g != master)
-            .filter(|g| crate::game::map::combat::can_attack(map, victim, *g))
-            .min_by(|a, b| {
-                let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, at));
-                let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, at));
-                da.total_cmp(&db)
-            })
+            .filter(|t| charm_target(map, victim, master, *t))
+            .collect();
+        (!foes.is_empty()).then(|| foes[rand::rng().random_range(0..foes.len())])
     });
     let Some(target) = target else {
+        crate::game::map::combat::stop_attack(map, victim);
         return;
     };
-    let melee = map
-        .players
-        .get(&victim)
-        .is_some_and(|p| matches!(p.row.class, 1 | 2 | 4 | 11));
-    if !melee && map.caster(victim).is_some_and(|c| c.casting.is_none()) {
+    if map.caster(victim).is_some_and(|c| c.casting.is_some()) {
+        return;
+    }
+    let Some(pos) = map.players.get(&victim).and_then(|p| p.owned.possessed_by) else {
+        return;
+    };
+    if pos.next_cast_at <= now {
+        let spells = charm_spells(map, victim);
+        let spell = (!spells.is_empty()).then(|| spells[rand::rng().random_range(0..spells.len())]);
+        let targets = crate::game::map::spells::Targets {
+            unit: Some(target),
+            ..Default::default()
+        };
         let data = map.realm.data.clone();
-        let d = map.position_of(target).map_or(f32::MAX, |p| dist(p, at));
-        let spell = charm_spells(map, victim).into_iter().find(|s| {
-            data.spells
-                .get(*s)
-                .is_some_and(|t| d <= data.spells.range(t).1)
+        let castable = spell.and_then(|s| data.spells.get(s)).is_some_and(|s| {
+            let m = crate::game::map::spells::mods::for_spell(map, victim, s);
+            crate::game::map::spells::checks::check(map, victim, s, &targets, None, false, &m)
+                .is_none()
         });
-        if let Some(spell) = spell {
-            crate::game::map::spells::cast(
-                map,
-                victim,
-                spell,
-                crate::game::map::spells::Targets {
-                    unit: Some(target),
-                    ..Default::default()
-                },
-                None,
-            );
+        if let Some(p) = map.players.get_mut(&victim)
+            && let Some(x) = p.owned.possessed_by.as_mut()
+        {
+            x.next_cast_at = now + CHARM_CAST_EVERY;
+            x.melee_fallback = !castable;
+        }
+        if castable && let Some(spell) = spell {
+            crate::game::map::spells::cast(map, victim, spell, targets, None);
             return;
         }
     }
-    crate::game::map::combat::start_attack(map, victim, target);
+    let melee = map.players.get(&victim).is_some_and(|p| {
+        matches!(p.row.class, 1 | 2 | 4 | 11)
+            || p.owned.possessed_by.is_some_and(|x| x.melee_fallback)
+    });
+    let near = match (map.unit_view(victim), map.unit_view(target)) {
+        (Some(a), Some(b)) => crate::game::map::combat::in_melee_range(&a, &b),
+        _ => false,
+    };
+    // A caster with a spell to cast stands off, but strikes one in reach.
+    if melee || near {
+        crate::game::map::combat::start_attack(map, victim, target);
+    }
 }
