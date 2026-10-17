@@ -883,7 +883,7 @@ dependencies = [
 [[package]]
 name = "landmark"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=a1c3a82d4ad170852d9658a36fb80e74e92c3a72#a1c3a82d4ad170852d9658a36fb80e74e92c3a72"
+source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
 dependencies = [
  "glam 0.34.1",
  "log",
@@ -1538,7 +1538,7 @@ dependencies = [
 [[package]]
 name = "rustigator"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=a1c3a82d4ad170852d9658a36fb80e74e92c3a72#a1c3a82d4ad170852d9658a36fb80e74e92c3a72"
+source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
 dependencies = [
  "glam 0.34.1",
  "rustigator-mapbuild",
@@ -1553,7 +1553,7 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=a1c3a82d4ad170852d9658a36fb80e74e92c3a72#a1c3a82d4ad170852d9658a36fb80e74e92c3a72"
+source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1572,7 +1572,7 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=a1c3a82d4ad170852d9658a36fb80e74e92c3a72#a1c3a82d4ad170852d9658a36fb80e74e92c3a72"
+source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1587,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=a1c3a82d4ad170852d9658a36fb80e74e92c3a72#a1c3a82d4ad170852d9658a36fb80e74e92c3a72"
+source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1603,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=a1c3a82d4ad170852d9658a36fb80e74e92c3a72#a1c3a82d4ad170852d9658a36fb80e74e92c3a72"
+source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
 dependencies = [
  "byteorder",
  "glam 0.34.1",
@@ -2592,7 +2592,7 @@ dependencies = [
 [[package]]
 name = "wow_items"
 version = "0.1.0"
-source = "git+https://github.com/12932/wow_messages?rev=e904e8e190891b0e12e5a23534a9e1743d4720c7#e904e8e190891b0e12e5a23534a9e1743d4720c7"
+source = "git+https://github.com/12932/wow_messages?rev=5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3#5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3"
 dependencies = [
  "wow_world_base",
 ]
@@ -2600,7 +2600,7 @@ dependencies = [
 [[package]]
 name = "wow_login_messages"
 version = "0.3.0"
-source = "git+https://github.com/12932/wow_messages?rev=e904e8e190891b0e12e5a23534a9e1743d4720c7#e904e8e190891b0e12e5a23534a9e1743d4720c7"
+source = "git+https://github.com/12932/wow_messages?rev=5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3#5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3"
 dependencies = [
  "tokio",
 ]
@@ -2660,7 +2660,7 @@ dependencies = [
 [[package]]
 name = "wow_world_base"
 version = "0.1.1"
-source = "git+https://github.com/12932/wow_messages?rev=e904e8e190891b0e12e5a23534a9e1743d4720c7#e904e8e190891b0e12e5a23534a9e1743d4720c7"
+source = "git+https://github.com/12932/wow_messages?rev=5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3#5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3"
 dependencies = [
  "serde",
 ]
@@ -2668,7 +2668,7 @@ dependencies = [
 [[package]]
 name = "wow_world_messages"
 version = "0.1.0"
-source = "git+https://github.com/12932/wow_messages?rev=e904e8e190891b0e12e5a23534a9e1743d4720c7#e904e8e190891b0e12e5a23534a9e1743d4720c7"
+source = "git+https://github.com/12932/wow_messages?rev=5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3#5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3"
 dependencies = [
  "flate2",
  "tokio",
