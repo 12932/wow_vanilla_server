@@ -427,3 +427,55 @@ async fn the_ritual_of_dooms_cooldown_waits_for_its_portal() {
     assert!(second && again, "so it can be cast again");
     assert_eq!(done, (false, true), "done, the hour starts");
 }
+
+#[tokio::test]
+async fn a_pet_autocasts_its_positive_spells() {
+    if !have_data() {
+        return;
+    }
+    const FIRE_SHIELD: u32 = 2947;
+    const PARANOIA: u32 = 19480;
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGIMP");
+    let g = c.enter("Bugimp", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            spells::cast_triggered(m, g, 688, None);
+            let imp = crate::game::map::pets::pet_of(m, g).expect("the imp");
+            let think = |m: &mut Map| {
+                for _ in 0..3 {
+                    m.now += Duration::from_secs(2);
+                    if let Some(c) = m.caster_mut(imp) {
+                        c.casting = None;
+                        c.gcd_until = None;
+                    }
+                    if let Some(f) = m.unit_fields_mut(imp) {
+                        f.set_u32(UNIT_FIELD_POWER1, 10_000);
+                    }
+                    crate::game::map::pets::update(m);
+                }
+            };
+            let has = |m: &Map, who: Guid, spell: u32| {
+                crate::game::map::auras::auras(m, who).is_some_and(|a| a.has_spell(spell))
+            };
+            // Out of a fight: its own buff, and no shield for one not
+            // under attack.
+            crate::game::map::pets::state_mut(m, imp).unwrap().autocast =
+                vec![FIRE_SHIELD, PARANOIA];
+            think(m);
+            let calm = (has(m, imp, PARANOIA), has(m, g, FIRE_SHIELD));
+            // Its master attacked: a shield on them.
+            let kobold = spawn(m, g, 6, 60, 4.0, 100_000);
+            crate::game::map::combat::start_attack(m, kobold, g);
+            crate::game::map::combat::engage(m, kobold, g);
+            think(m);
+            let attacked = has(m, g, FIRE_SHIELD);
+            (calm, attacked)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (true, false), "Paranoia out of a fight, no shield");
+    assert!(out.1, "Fire Shield on its master under attack");
+}

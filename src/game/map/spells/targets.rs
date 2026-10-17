@@ -272,7 +272,10 @@ pub fn effect_targets(
         }
         (PartyMember, _) => {
             let target = t.unit.unwrap_or(caster);
-            if members(map, caster, true).contains(&target) {
+            // A pet is in its master's party (mangos's `IsInPartyWith`):
+            // an imp's Fire Shield goes on its warlock.
+            let master = |g| crate::game::map::pets::master(map, g);
+            if members(map, master(caster), true).contains(&master(target)) {
                 vec![target]
             } else {
                 vec![caster]
