@@ -119,6 +119,9 @@ pub fn text_emote(map: &mut Map, guid: Guid, m: CMSG_TEXT_EMOTE) {
             p.outbound.send_frame(frame.clone());
         }
     }
+    if crate::game::guid::is_unit(m.target) {
+        crate::game::map::event_ai::receive_emote(map, m.target, guid, m.text_emote.as_int());
+    }
 }
 
 /// `CMSG_EMOTE`: an animation, seen by everyone who sees the player.

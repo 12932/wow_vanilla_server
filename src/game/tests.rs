@@ -3735,7 +3735,7 @@ mod instances {
     }
 
     #[tokio::test]
-    async fn a_raid_needs_a_raid_group_and_binds_those_in_it() {
+    async fn a_raid_needs_a_raid_group_and_going_in_binds_no_one() {
         let mut cfg = harness::test_config();
         cfg.everyone_gm = false;
         let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
@@ -3776,7 +3776,9 @@ mod instances {
         })
         .await;
         go(&realm, &mut a, 409).await;
-        let k = key_of(&realm, ga);
+        assert!(key_of(&realm, ga).instance > 0);
+        // A raid binds when a boss that locks it dies (tests_scripts), not
+        // on the way in.
         a.send(CMSG_REQUEST_RAID_INFO {}).await;
         let infos = a
             .wait_for("SMSG_RAID_INSTANCE_INFO", |m| match m {
@@ -3789,7 +3791,7 @@ mod instances {
                 _ => None,
             })
             .await;
-        assert_eq!(infos, vec![k.instance]);
+        assert!(infos.is_empty());
     }
 }
 

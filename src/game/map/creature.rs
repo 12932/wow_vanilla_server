@@ -188,6 +188,8 @@ pub struct Creature {
     pub owner: Option<Guid>,
     /// What it is as a pet, guardian, totem or charmed unit.
     pub pet: Option<Box<crate::game::map::pets::PetState>>,
+    /// What scripts keep on it: EventAI's state, its phase, a summoner.
+    pub scripted: Option<Box<crate::game::map::event_ai::Scripted>>,
 }
 
 /// Alive, or dead and waiting.
@@ -281,6 +283,7 @@ impl Creature {
             taunted_by: None,
             owner: None,
             pet: None,
+            scripted: None,
         }
         .with_base()
     }

@@ -1,9 +1,16 @@
 //! Dungeon and raid copies. Each copy is a map actor of its own, keyed by
 //! the map and an instance id. A group shares its copies; a player alone
-//! has theirs. A dungeon copy goes when it has been empty half an hour (or
-//! its owner resets it); a raid binds those who enter until its reset day,
-//! and the binds are kept as records.
+//! has theirs. Every copy is saved: its dead and when they come back, its
+//! instance script's data, and who owns it, so a restart finds it as it
+//! was. A dungeon copy goes when it has been empty a while (or its owner
+//! resets it); a raid binds those in it for good when a boss that locks it
+//! dies, until its reset day, and the binds are kept as records.
+//!
+//! Entry follows Thistle Tea's admission: a raid needs a raid group, a copy
+//! holds its map's limit, and an account may enter at most five copies an
+//! hour.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use ahash::AHashMap;
@@ -16,14 +23,21 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const KIND_RAID: &str = "raid";
+pub const KIND_INSTANCE: &str = "instance";
 /// How long an empty copy lasts.
 pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(30 * 60);
 /// Raid resets count from a Tuesday, 04:00 UTC.
 const RESET_EPOCH: i64 = 1_101_182_400;
 const DAY: i64 = 86_400;
+/// An account's copies an hour.
+pub const ENTRIES_AN_HOUR: usize = 5;
+/// `static_flags2`: killing the creature binds the raid.
+pub const STATIC_FLAG2_LOCKS_RAID: u32 = 0x4;
+/// A spawn that never comes back on its own.
+pub const NEVER: i64 = i64::MAX;
 
 /// Who a copy belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Owner {
     Group(u32),
     Player(u32),
@@ -40,37 +54,84 @@ pub struct RaidSave {
     pub players: Vec<u32>,
 }
 
+/// What a copy keeps across a restart.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct InstanceSave {
+    pub id: u32,
+    pub map: u32,
+    pub owner: Option<Owner>,
+    /// Unix seconds it was last in use.
+    pub touched_at: i64,
+    /// Dead spawns, and when (Unix seconds) each comes back.
+    pub dead: BTreeMap<u32, i64>,
+    /// The instance script's data.
+    pub data: BTreeMap<u32, u32>,
+}
+
 #[derive(Debug, Default)]
 pub struct Instances {
     next_id: u32,
     owned: AHashMap<(Owner, u32), u32>,
     pub raids: AHashMap<u32, RaidSave>,
+    pub saves: AHashMap<u32, InstanceSave>,
+    /// Each account's copies entered in the last hour: (copy, Unix seconds).
+    entries: AHashMap<String, Vec<(MapKey, i64)>>,
 }
 
 impl Instances {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut i = Self::default();
-        for (_, _, data) in records.iter().filter(|r| r.0 == KIND_RAID) {
-            if let Ok(save) = serde_json::from_str::<RaidSave>(data) {
-                i.next_id = i.next_id.max(save.id);
-                i.raids.insert(save.id, save);
+        for (kind, _, data) in records {
+            match kind.as_str() {
+                KIND_RAID => {
+                    if let Ok(save) = serde_json::from_str::<RaidSave>(data) {
+                        i.next_id = i.next_id.max(save.id);
+                        i.raids.insert(save.id, save);
+                    }
+                }
+                KIND_INSTANCE => {
+                    if let Ok(save) = serde_json::from_str::<InstanceSave>(data) {
+                        i.next_id = i.next_id.max(save.id);
+                        if let Some(owner) = save.owner {
+                            i.owned.insert((owner, save.map), save.id);
+                        }
+                        i.saves.insert(save.id, save);
+                    }
+                }
+                _ => {}
             }
         }
         i
     }
 
-    /// The raid copy of `map` that `player` is bound to.
     /// A new copy's id.
     pub fn new_id(&mut self) -> u32 {
         self.next_id += 1;
         self.next_id
     }
 
+    /// The raid copy of `map` that `player` is bound to.
     pub fn raid_bind(&self, player: u32, map: u32) -> Option<u32> {
         self.raids
             .values()
             .find(|r| r.map == map && r.players.contains(&player))
             .map(|r| r.id)
+    }
+
+    /// Whether `account` may enter `key` now: a copy it entered in the
+    /// hour, or a sixth.
+    fn admit(&mut self, account: &str, key: MapKey, now: i64) -> bool {
+        let entries = self.entries.entry(account.to_owned()).or_default();
+        entries.retain(|(_, at)| *at + 3600 > now);
+        if entries.iter().any(|(k, _)| *k == key) {
+            return true;
+        }
+        if entries.len() >= ENTRIES_AN_HOUR {
+            return false;
+        }
+        entries.push((key, now));
+        true
     }
 }
 
@@ -112,6 +173,10 @@ pub enum Refused {
     Message(String),
 }
 
+fn now() -> i64 {
+    crate::game::social::mail::now()
+}
+
 /// The copy of `map` `g` goes into: the raid they are bound to, their
 /// group's, or their own, made if there is none.
 pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Refused> {
@@ -129,22 +194,34 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
             "You must be in a raid group to enter this instance.".into(),
         ));
     }
+    let account = realm
+        .registry
+        .online(g)
+        .map(|o| o.account.to_string())
+        .unwrap_or_default();
+    let now = now();
     let mut inst = realm.social.instances.lock();
     let owner = match group {
         Some((id, _)) => Owner::Group(id),
         None => Owner::Player(me),
     };
-    let id = match inst.raid_bind(me, map) {
+    let bound = inst.raid_bind(me, map);
+    let owned = inst.owned.get(&(owner, map)).copied();
+    // A raid bind holds: into another copy of the raid, no.
+    if let (Some(b), Some(o)) = (bound, owned)
+        && b != o
+        && !gm
+    {
+        return Err(Refused::Message(
+            "You are already saved to another copy of this instance.".into(),
+        ));
+    }
+    let id = match bound.or(owned) {
         Some(id) => id,
-        None => match inst.owned.get(&(owner, map)) {
-            Some(id) => *id,
-            None => {
-                inst.next_id += 1;
-                let id = inst.next_id;
-                inst.owned.insert((owner, map), id);
-                id
-            }
-        },
+        None => {
+            inst.next_id += 1;
+            inst.next_id
+        }
     };
     let key = MapKey { map, instance: id };
     let inside = realm
@@ -156,29 +233,155 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     if inside >= limit(map, kind) && !gm {
         return Err(Refused::Abort(TransferAbortReason::IsFull));
     }
+    if !gm && !inst.admit(&account, key, now) {
+        return Err(Refused::Abort(TransferAbortReason::TooManyInstances));
+    }
+    inst.owned.entry((owner, map)).or_insert(id);
+    let save = inst.saves.entry(id).or_insert_with(|| InstanceSave {
+        id,
+        map,
+        owner: Some(owner),
+        ..Default::default()
+    });
+    save.touched_at = now;
+    let record = save.clone();
     if kind == 2 {
-        let now = crate::game::social::mail::now();
-        let save = inst.raids.entry(id).or_insert_with(|| RaidSave {
+        inst.raids.entry(id).or_insert_with(|| RaidSave {
             id,
             map,
             reset_at: next_reset(map, now),
             players: Vec::new(),
         });
-        if !save.players.contains(&me) {
-            save.players.push(me);
-            realm.store.put_record(KIND_RAID, u64::from(id), save);
-        }
     }
+    drop(inst);
+    realm
+        .store
+        .put_record(KIND_INSTANCE, u64::from(id), &record);
     Ok(key)
 }
 
+/// A copy's save, as it stands.
+pub fn save_of(realm: &Realm, id: u32) -> Option<InstanceSave> {
+    realm.social.instances.lock().saves.get(&id).cloned()
+}
+
+fn change_save(realm: &Realm, key: MapKey, f: impl FnOnce(&mut InstanceSave)) {
+    if key.instance == 0 {
+        return;
+    }
+    let record = {
+        let mut inst = realm.social.instances.lock();
+        let save = inst
+            .saves
+            .entry(key.instance)
+            .or_insert_with(|| InstanceSave {
+                id: key.instance,
+                map: key.map,
+                ..Default::default()
+            });
+        f(save);
+        save.touched_at = now();
+        save.clone()
+    };
+    realm
+        .store
+        .put_record(KIND_INSTANCE, u64::from(key.instance), &record);
+}
+
+/// A spawn in a copy died; it comes back after `respawn` (`None`: never,
+/// a boss).
+pub fn spawn_died(realm: &Realm, key: MapKey, spawn: u32, respawn: Option<Duration>) {
+    let back = respawn.map_or(NEVER, |d| now() + d.as_secs() as i64);
+    change_save(realm, key, |s| {
+        s.dead.insert(spawn, back);
+    });
+}
+
+/// A spawn in a copy is back.
+pub fn spawn_back(realm: &Realm, key: MapKey, spawn: u32) {
+    if key.instance == 0 {
+        return;
+    }
+    let had = realm
+        .social
+        .instances
+        .lock()
+        .saves
+        .get(&key.instance)
+        .is_some_and(|s| s.dead.contains_key(&spawn));
+    if had {
+        change_save(realm, key, |s| {
+            s.dead.remove(&spawn);
+        });
+    }
+}
+
+/// The instance script's data, saved with the copy.
+pub fn data_changed(realm: &Realm, key: MapKey, data: &BTreeMap<u32, u32>) {
+    let data = data.clone();
+    change_save(realm, key, |s| s.data = data);
+}
+
+/// A boss that locks its raid died: everyone in the copy is bound to it
+/// for good.
+pub fn bind_raid(map: &Map) {
+    let key = map.key;
+    if key.instance == 0 || instance_type(&map.realm, key.map) != 2 {
+        return;
+    }
+    let realm = &map.realm;
+    let players: Vec<(Guid, u32)> = map
+        .players
+        .keys()
+        .map(|g| (*g, guid::counter(*g)))
+        .collect();
+    let (record, newly) = {
+        let mut inst = realm.social.instances.lock();
+        let save = inst.raids.entry(key.instance).or_insert_with(|| RaidSave {
+            id: key.instance,
+            map: key.map,
+            reset_at: next_reset(key.map, now()),
+            players: Vec::new(),
+        });
+        let mut newly = Vec::new();
+        for (g, p) in &players {
+            if !save.players.contains(p) {
+                save.players.push(*p);
+                newly.push(*g);
+            }
+        }
+        (save.clone(), newly)
+    };
+    if newly.is_empty() {
+        return;
+    }
+    realm
+        .store
+        .put_record(KIND_RAID, u64::from(key.instance), &record);
+    for g in newly {
+        if let Some(p) = map.players.get(&g) {
+            p.outbound.send(&SMSG_INSTANCE_SAVE_CREATED { unknown: 0 });
+        }
+    }
+}
+
 /// A copy unloaded: a dungeon's owners forget it, so the next visit gets a
-/// fresh one.
+/// fresh one; its save goes with it.
 pub fn unloaded(realm: &Realm, key: MapKey) {
     let mut inst = realm.social.instances.lock();
-    if !inst.raids.contains_key(&key.instance) {
+    let bound = inst
+        .raids
+        .get(&key.instance)
+        .is_some_and(|r| !r.players.is_empty());
+    if !bound {
+        inst.raids.remove(&key.instance);
         inst.owned
             .retain(|(_, map), id| !(*map == key.map && *id == key.instance));
+        if inst.saves.remove(&key.instance).is_some() {
+            realm
+                .store
+                .delete_record(KIND_INSTANCE, u64::from(key.instance));
+        }
     }
 }
 
@@ -194,15 +397,14 @@ pub fn reset(map: &Map, g: Guid) {
             None => Owner::Player(guid::counter(g)),
         }
     };
-    let mine: Vec<(u32, u32)> = realm
-        .social
-        .instances
-        .lock()
-        .owned
-        .iter()
-        .filter(|((o, _), _)| *o == owner)
-        .map(|((_, m), id)| (*m, *id))
-        .collect();
+    let mine: Vec<(u32, u32)> = {
+        let inst = realm.social.instances.lock();
+        inst.owned
+            .iter()
+            .filter(|((o, _), id)| *o == owner && !inst.raids.contains_key(id))
+            .map(|((_, m), id)| (*m, *id))
+            .collect()
+    };
     let Some(p) = map.players.get(&g) else {
         return;
     };
@@ -221,7 +423,12 @@ pub fn reset(map: &Map, g: Guid) {
             });
             continue;
         }
-        realm.social.instances.lock().owned.remove(&(owner, m));
+        {
+            let mut inst = realm.social.instances.lock();
+            inst.owned.remove(&(owner, m));
+            inst.saves.remove(&id);
+        }
+        realm.store.delete_record(KIND_INSTANCE, u64::from(id));
         realm.maps.stop(key);
         p.outbound.send(&SMSG_INSTANCE_RESET { map: map_enum });
     }
@@ -230,7 +437,7 @@ pub fn reset(map: &Map, g: Guid) {
 /// `CMSG_REQUEST_RAID_INFO`: the raids the player is bound to.
 pub fn raid_info(map: &Map, g: Guid) {
     let me = guid::counter(g);
-    let now = crate::game::social::mail::now();
+    let now = now();
     let raid_infos = map
         .realm
         .social
@@ -250,9 +457,10 @@ pub fn raid_info(map: &Map, g: Guid) {
     }
 }
 
-/// Raid copies past their reset day go, binds and all.
+/// Raid copies past their reset day go, binds and all; dungeon saves of
+/// copies empty long enough (as after a restart) go too.
 pub fn sweep(realm: &Realm) {
-    let now = crate::game::social::mail::now();
+    let now = now();
     let expired: Vec<RaidSave> = {
         let mut inst = realm.social.instances.lock();
         let ids: Vec<u32> = inst
@@ -265,16 +473,46 @@ pub fn sweep(realm: &Realm) {
     };
     for r in expired {
         realm.store.delete_record(KIND_RAID, u64::from(r.id));
+        realm.store.delete_record(KIND_INSTANCE, u64::from(r.id));
         realm.maps.stop(MapKey {
             map: r.map,
             instance: r.id,
         });
-        realm
-            .social
-            .instances
-            .lock()
-            .owned
-            .retain(|_, id| *id != r.id);
+        let mut inst = realm.social.instances.lock();
+        inst.owned.retain(|_, id| *id != r.id);
+        inst.saves.remove(&r.id);
+    }
+    let unload =
+        (realm.config.instance_unload.as_secs() as i64).max(UNLOAD_EMPTY_AFTER.as_secs() as i64);
+    let online = realm.registry.all_online();
+    let stale: Vec<u32> = {
+        let inst = realm.social.instances.lock();
+        inst.saves
+            .values()
+            .filter(|s| !inst.raids.contains_key(&s.id))
+            .filter(|s| s.touched_at + unload < now)
+            .filter(|s| !online.iter().any(|o| o.map().key.instance == s.id))
+            .map(|s| s.id)
+            .collect()
+    };
+    for id in stale {
+        {
+            let mut inst = realm.social.instances.lock();
+            inst.saves.remove(&id);
+            inst.owned.retain(|_, i| *i != id);
+        }
+        realm.store.delete_record(KIND_INSTANCE, u64::from(id));
+    }
+}
+
+/// A copy in use: its save is touched, so the sweep leaves it.
+pub fn touch(realm: &Realm, key: MapKey) {
+    if key.instance == 0 {
+        return;
+    }
+    let mut inst = realm.social.instances.lock();
+    if let Some(s) = inst.saves.get_mut(&key.instance) {
+        s.touched_at = now();
     }
 }
 
@@ -291,5 +529,21 @@ mod tests {
         assert_eq!(limit(36, 1), 5);
         assert_eq!(limit(409, 2), 40);
         assert_eq!(limit(309, 2), 20);
+    }
+
+    #[test]
+    fn an_account_enters_five_copies_an_hour() {
+        let mut i = Instances::default();
+        let key = |n| MapKey {
+            map: 36,
+            instance: n,
+        };
+        for n in 1..=5 {
+            assert!(i.admit("A", key(n), 1000));
+        }
+        assert!(!i.admit("A", key(6), 1000), "a sixth is refused");
+        assert!(i.admit("A", key(3), 1500), "one already entered isn't");
+        assert!(i.admit("B", key(6), 1000), "another account has its own");
+        assert!(i.admit("A", key(6), 1000 + 3601), "an hour on, it may");
     }
 }

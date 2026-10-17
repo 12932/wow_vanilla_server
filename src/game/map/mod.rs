@@ -8,23 +8,30 @@ pub mod auras;
 pub mod battleground;
 pub mod chat;
 pub mod combat;
+pub mod conditions;
 pub mod creature;
+pub mod creature_groups;
+pub mod creature_scripts;
+mod creature_scripts_ported;
 pub mod death;
 pub mod derive;
 pub mod duel;
 pub mod enchant;
 pub mod environment;
 pub mod exploration;
+pub mod event_ai;
 pub mod gameobject;
 pub mod gm;
 pub mod grid;
 pub mod handlers;
+pub mod instance_script;
 pub mod inventory;
 pub mod items_misc;
 pub mod login;
 pub mod loot;
 pub mod meeting_stones;
 pub mod misc;
+pub mod map_events;
 pub mod movement;
 pub mod nav;
 pub mod npc;
@@ -40,6 +47,7 @@ pub mod ranged;
 pub mod questshare;
 pub mod reputation;
 pub mod rest;
+pub mod scripts;
 pub mod skills;
 pub mod social;
 pub mod spells;
@@ -216,6 +224,8 @@ pub struct MapStats {
     pub window_updates: u32,
     pub window_total: Duration,
     pub window_max: Duration,
+    /// Events and updates that panicked and were let go.
+    pub panics: u64,
 }
 
 pub struct Map {
@@ -262,6 +272,21 @@ pub struct Map {
     pub loot_state: loot::MapLoot,
     /// A continent's world PvP: the Plaguelands' towers, Silithus.
     pub outdoor: Option<outdoor_pvp::Outdoor>,
+    /// The DB scripts running.
+    pub scripts: scripts::Runner,
+    /// A copy's instance script and its data.
+    pub instance: instance_script::State,
+    /// Creatures whose spawned events run at the next update.
+    pub ai_spawned: Vec<Guid>,
+    /// Creatures by the spawn they came from.
+    pub by_spawn: AHashMap<u32, Guid>,
+    /// Objects a script changed that go back: (when, object, state; MAX
+    /// to go).
+    pub object_resets: Vec<(Instant, Guid, u32)>,
+    /// Groups scripts made: member → (leader, distance, angle).
+    pub script_groups: AHashMap<Guid, (Guid, f32, f32)>,
+    /// Scripted map events under way.
+    pub map_events: map_events::Events,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -277,6 +302,7 @@ fn guarded<T>(map: &mut Map, f: impl FnOnce(&mut Map) -> T) -> Option<T> {
                 .or_else(|| e.downcast_ref::<String>().cloned())
                 .unwrap_or_default();
             tracing::error!("{} panicked: {what}; going on", map.key);
+            map.stats.panics += 1;
             None
         }
     }
@@ -327,6 +353,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
 impl Map {
     pub fn new(key: MapKey, realm: Arc<Realm>, handle: MapHandle) -> Self {
         let now = Instant::now();
+        let instance = instance_script::State::for_map(&realm.data, key.map, key.instance);
         Self {
             key,
             realm,
@@ -357,6 +384,13 @@ impl Map {
             globals: Vec::new(),
             loot_state: Default::default(),
             outdoor: outdoor_pvp::for_map(key),
+            scripts: Default::default(),
+            instance,
+            ai_spawned: Vec::new(),
+            by_spawn: AHashMap::new(),
+            object_resets: Vec::new(),
+            script_groups: AHashMap::new(),
+            map_events: Default::default(),
         }
     }
 
@@ -513,6 +547,7 @@ impl Map {
                 events: s.events,
                 last_update: s.last_update,
                 max_update: s.max_update,
+                panics: s.panics,
                 ..Default::default()
             };
             return;
@@ -627,6 +662,11 @@ impl Map {
         auras::update(self);
         loot::update(self);
         enchant::update(self);
+        scripts::update(self);
+        event_ai::update_despawns(self);
+        instance_script::update(self);
+        map_events::update(self);
+        scripts::update_objects(self);
         social::push_member_stats(self);
         duel::update(self);
         battleground::update(self);
@@ -724,6 +764,19 @@ impl Map {
             }
             p.fields.clear_dirty();
         }
+        for (_, o) in self.gameobjects.iter_mut() {
+            if !o.fields.is_dirty() {
+                continue;
+            }
+            if !o.observers.is_empty()
+                && let Some(block) = update::values_block(o.guid, &o.fields, Visibility::Public)
+            {
+                for p in &o.observers {
+                    batches.entry(*p).or_default().push(&block);
+                }
+            }
+            o.fields.clear_dirty();
+        }
         for (_, c) in self.creatures.iter_mut() {
             if !c.fields.is_dirty() {
                 continue;
@@ -801,6 +854,12 @@ impl Map {
     pub fn add_creature(&mut self, c: Creature) -> Guid {
         let guid = c.guid;
         let cell = c.cell;
+        if let Some(s) = c.spawn_guid {
+            self.by_spawn.insert(s, guid);
+        }
+        if event_ai::has_events_entry(&self.realm.data, c.entry) || self.instance.script.is_some() {
+            self.ai_spawned.push(guid);
+        }
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
@@ -834,6 +893,12 @@ impl Map {
     pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {
         let key = self.creature_by_guid.remove(&guid)?;
         let mut c = self.creatures.try_remove(key)?;
+        if let Some(s) = c.spawn_guid
+            && self.by_spawn.get(&s) == Some(&guid)
+        {
+            self.by_spawn.remove(&s);
+        }
+        self.script_groups.remove(&guid);
         self.grid.remove(guid, c.cell);
         for o in c.observers.drain() {
             if let Some(p) = self.players.get_mut(&o) {

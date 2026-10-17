@@ -12,6 +12,8 @@ pub mod load;
 pub mod misc;
 pub mod npc;
 pub mod pets;
+pub mod scripts;
+mod scripts_load;
 pub mod spells;
 
 use ahash::AHashMap;
@@ -126,6 +128,8 @@ pub struct Waypoint {
     pub z: f32,
     pub orientation: f32,
     pub wait_ms: u32,
+    /// A `creature_movement_scripts` script run on arrival.
+    pub script_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -374,6 +378,9 @@ pub struct GameData {
     pub creature_addons: AHashMap<u32, CreatureAddon>,
     pub creature_equipment: AHashMap<u32, [u32; 3]>,
     pub waypoints: AHashMap<u32, Vec<Waypoint>>,
+    /// `creature_movement_template`: paths by creature entry, for spawns
+    /// with none of their own.
+    pub waypoints_by_entry: AHashMap<u32, Vec<Waypoint>>,
     pub class_level_stats: AHashMap<(u8, u8), ClassLevelStats>,
     pub display_info: AHashMap<u32, DisplayInfo>,
     pub gameobject_templates: AHashMap<u32, GameObjectTemplate>,
@@ -427,6 +434,7 @@ pub struct GameData {
     pub weather: AHashMap<u32, [[u32; 3]; 4]>,
     /// `WorldSafeLocs`: id → map, x, y, z.
     pub safe_locs: AHashMap<u32, (u32, f32, f32, f32)>,
+    pub scripts: scripts::ScriptData,
     /// Text emote → the animation it plays.
     pub text_emote_anims: AHashMap<u32, u32>,
     /// Locks, item sets, random properties and the like.

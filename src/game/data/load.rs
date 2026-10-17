@@ -125,6 +125,8 @@ pub fn load(dir: &Path) -> GameData {
             super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
             load_pets(&db, dbc.as_ref(), &mut data);
             load_misc(&db, dbc.as_ref(), &mut data);
+            super::scripts_load::load(&db, &mut data);
+            crate::game::map::creature_scripts::install(&mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -522,11 +524,31 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
                     z: c.f32("position_z"),
                     orientation: c.f32("orientation"),
                     wait_ms: c.u32("waittime"),
+                    script_id: c.u32("script_id"),
                 },
             )
         },
     ) {
         data.waypoints.entry(id).or_default().push(w);
+    }
+    for (entry, w) in rows(
+        db,
+        "SELECT * FROM creature_movement_template ORDER BY entry, path_id, point",
+        |c| {
+            (
+                c.u32("entry"),
+                Waypoint {
+                    x: c.f32("position_x"),
+                    y: c.f32("position_y"),
+                    z: c.f32("position_z"),
+                    orientation: c.f32("orientation"),
+                    wait_ms: c.u32("waittime"),
+                    script_id: c.u32("script_id"),
+                },
+            )
+        },
+    ) {
+        data.waypoints_by_entry.entry(entry).or_default().push(w);
     }
 }
 
@@ -842,6 +864,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     box_money: c.u32("box_money"),
                     box_text: c.string("box_text"),
                     condition: c.u32("condition_id"),
+                    script: c.u32("action_script_id"),
                 },
             )
         },
@@ -872,6 +895,8 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     (c.u32("emote_delay2"), c.u32("emote_id2")),
                     (c.u32("emote_delay3"), c.u32("emote_id3")),
                 ],
+                chat_type: c.u32("chat_type"),
+                sound: c.u32("sound_id"),
             },
         )
     }) {

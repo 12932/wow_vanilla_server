@@ -26,6 +26,8 @@ pub struct GossipOption {
     pub box_money: u32,
     pub box_text: String,
     pub condition: u32,
+    /// A gossip script it runs.
+    pub script: u32,
 }
 
 /// One of an NPC text's eight choices: its broadcast text and probability.
@@ -41,6 +43,10 @@ pub struct BroadcastText {
     pub female: String,
     pub language: u32,
     pub emotes: [(u32, u32); 3],
+    /// How a creature says it: 0 say, 1 yell, 2 emote, 3 boss emote, 4
+    /// whisper, 5 boss whisper, 6 zone yell.
+    pub chat_type: u32,
+    pub sound: u32,
 }
 
 /// A spell a trainer teaches.

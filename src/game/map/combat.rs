@@ -1594,6 +1594,16 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
         return;
     };
     let left = f.get_u32(UNIT_FIELD_HEALTH).saturating_sub(damage);
+    // A script can keep a creature from falling below a floor.
+    let floor = crate::game::map::event_ai::invincible_floor(map, victim);
+    let Some(f) = map.unit_fields_mut(victim) else {
+        return;
+    };
+    let left = if floor > 0 {
+        left.max(floor.min(f.get_u32(UNIT_FIELD_HEALTH)))
+    } else {
+        left
+    };
     f.set_u32(UNIT_FIELD_HEALTH, left);
     sync_aura_state(map, victim);
     if left == 0 {
@@ -1629,6 +1639,9 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         );
         vl > gray_level(kl)
     };
+    if guid::is_unit(killer) {
+        crate::game::map::event_ai::kill(map, killer, victim);
+    }
     if guid::is_player(victim) {
         tracing::debug!(
             "{} killed by {}",
