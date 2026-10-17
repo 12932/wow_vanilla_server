@@ -1,11 +1,15 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
-//! batch: the weather's seasons, sounds and changes; a scripted stay.
+//! batch: the weather's seasons, sounds and changes; a scripted stay, a
+//! dead master's guardian.
 
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::*;
 
 use crate::game::data::scripts::ScriptStep;
+use crate::game::fields::*;
+use crate::game::harness;
 use crate::game::map::pets;
 use crate::game::map::{Map, MapHandle};
 use crate::game::tests_pets;
@@ -130,6 +134,37 @@ fn the_weather_changes_gradually_and_suddenly() {
     );
 }
 
+const GUARDIAN: u32 = 3030;
+const SUMMON_GUARDIAN: u32 = 9050;
+
+/// The pets' world, with a guardian a hunter summons for a minute.
+fn guardian_data() -> crate::game::data::GameData {
+    let mut d = tests_pets::data();
+    d.creature_templates.insert(
+        GUARDIAN,
+        tests_pets::template(GUARDIAN, "Dragonling", 35, 1),
+    );
+    let mut e = tests_pets::effect(42, 0, 32);
+    e.misc_value = GUARDIAN as i32;
+    let none = crate::game::data::spells::SpellEffect::default();
+    let mut s = tests_pets::spell(SUMMON_GUARDIAN, "Summon Dragonling", [e, none, none]);
+    s.duration_index = 4;
+    d.spells.spells.insert(SUMMON_GUARDIAN, s);
+    d
+}
+
+/// Wait until `check` holds on the map.
+async fn until(map: &MapHandle, what: &str, check: impl Fn(&Map) -> bool + Send + Clone + 'static) {
+    for _ in 0..150 {
+        let c = check.clone();
+        if map.query(move |m| c(m)).await.unwrap() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("never: {what}");
+}
+
 fn fighting(m: &Map, g: Guid, victim: Guid) -> bool {
     m.combat(g)
         .is_some_and(|c| c.attacking && c.victim == victim)
@@ -167,4 +202,51 @@ async fn a_scripts_stay_keeps_a_pet_in_its_fight() {
         map.query(move |m| fighting(m, pet, wolf)).await.unwrap(),
         "and goes on fighting"
     );
+}
+
+/// A dead master's guardian fights on until its fight ends, as Thistle
+/// Tea's `Guardian.lifetime` keeps it, and only then goes.
+#[tokio::test]
+async fn a_dead_masters_guardian_goes_when_its_fight_ends() {
+    let realm = harness::realm_with(guardian_data());
+    let (h, gh, map) = tests_pets::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    tests_pets::learn(&map, gh, &[SUMMON_GUARDIAN]);
+    tests_pets::cast(&h, SUMMON_GUARDIAN, None).await;
+    until(&map, "a guardian", move |m| {
+        m.players[&gh].owned.guardians.len() == 1
+    })
+    .await;
+    let guardian = map
+        .query(move |m| m.players[&gh].owned.guardians[0])
+        .await
+        .unwrap();
+    let wolf = tests_pets::place(&map, gh, tests_pets::WOLF, 0x70_0401, 3.0).await;
+    map.query(move |m| {
+        if let Some(c) = m.creature_mut(wolf) {
+            c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+        }
+        pets::attack_target(m, guardian, wolf);
+        crate::game::map::combat::engage(m, guardian, wolf);
+        crate::game::map::death::kill(m, gh);
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let kept = map
+        .query(move |m| m.creature(guardian).is_some() && fighting(m, guardian, wolf))
+        .await
+        .unwrap();
+    assert!(kept, "it fights on over its master's body");
+    // Its fight over, it goes.
+    map.query(move |m| {
+        crate::game::map::combat::kill(m, guardian, wolf);
+        crate::game::map::combat::leave_combat(m, guardian);
+    })
+    .await
+    .unwrap();
+    until(&map, "the guardian gone", move |m| {
+        m.creature(guardian).is_none()
+    })
+    .await;
 }
