@@ -27,6 +27,7 @@ pub mod player;
 pub mod procs;
 pub mod query;
 pub mod quests;
+pub mod ranged;
 pub mod skills;
 pub mod social;
 pub mod spells;
@@ -602,6 +603,7 @@ impl Map {
         battleground::update(self);
         self.unload_if_empty();
         ai::update_creatures(self);
+        combat::update_creatures(self);
         ai::update_dead(self);
         visibility::refresh_dirty(self);
         self.flush_forgets();
