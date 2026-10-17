@@ -2299,41 +2299,70 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
 }
 
-/// Damage of `school` a unit takes, less what its absorb auras and mana
-/// shields soak: (what's left, what's absorbed).
+/// Damage of `school` a unit takes, less what its absorb auras soak, then
+/// its mana shields, each no more than the mana there is pays for at its
+/// spell's rate (its effect's multiple value, with the unit's modifiers),
+/// as mangos's `CalculateDamageAbsorbAndResist` and Thistle Tea's
+/// `Absorption` have it: (what's left, what's absorbed).
 pub fn absorb(map: &mut Map, target: Guid, damage: u32, school: u32) -> (u32, u32) {
+    let data = map.realm.data.clone();
+    let rates: Vec<(u32, f32)> = auras(map, target)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| h.has(AURA_MANA_SHIELD))
+                .filter_map(|h| {
+                    let s = data.spells.get(h.spell)?;
+                    let e = s.effects.iter().find(|e| e.aura == AURA_MANA_SHIELD)?;
+                    let m = crate::game::map::spells::mods::for_spell(map, target, s);
+                    let rate = m.apply(
+                        crate::game::map::spells::mods::OP_MULTIPLE_VALUE,
+                        e.multiple_value,
+                    );
+                    Some((h.spell, rate.max(0.0)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let had = map
+        .unit_fields(target)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_POWER1));
+    let mut mana = had;
     let Some(a) = auras_mut(map, target) else {
         return (damage, 0);
     };
     let mut left = damage as i32;
     let mut used_up = Vec::new();
-    let mut mana_cost = 0u32;
-    for h in a.holders.iter_mut() {
-        for x in h.effects.iter_mut() {
-            if left <= 0 {
-                break;
-            }
-            if !matches!(x.kind, AURA_SCHOOL_ABSORB | AURA_MANA_SHIELD)
-                || (x.misc as u32) & school == 0
-            {
-                continue;
-            }
-            let soak = x.left.min(left).max(0);
-            x.left -= soak;
-            left -= soak;
-            if x.kind == AURA_MANA_SHIELD {
-                mana_cost += soak as u32 * 2;
-            }
-            if x.left <= 0 {
-                used_up.push((h.spell, h.caster));
+    for kind in [AURA_SCHOOL_ABSORB, AURA_MANA_SHIELD] {
+        for h in a.holders.iter_mut() {
+            for x in h.effects.iter_mut() {
+                if left <= 0 {
+                    break;
+                }
+                if x.kind != kind || (x.misc as u32) & school == 0 {
+                    continue;
+                }
+                let mut soak = x.left.min(left).max(0);
+                let rate = rates
+                    .iter()
+                    .find(|(spell, _)| *spell == h.spell)
+                    .map_or(0.0, |r| r.1);
+                if kind == AURA_MANA_SHIELD && rate > 0.0 {
+                    soak = soak.min((mana as f32 / rate) as i32);
+                    mana -= ((soak as f32 * rate).round() as u32).min(mana);
+                }
+                x.left -= soak;
+                left -= soak;
+                if x.left <= 0 {
+                    used_up.push((h.spell, h.caster));
+                }
             }
         }
     }
-    if mana_cost > 0
+    if mana != had
         && let Some(f) = map.unit_fields_mut(target)
     {
-        let mana = f.get_u32(UNIT_FIELD_POWER1);
-        f.set_u32(UNIT_FIELD_POWER1, mana.saturating_sub(mana_cost));
+        f.set_u32(UNIT_FIELD_POWER1, mana);
     }
     for (spell, caster) in used_up {
         remove_spell(map, target, spell, Some(caster));
