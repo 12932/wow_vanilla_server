@@ -693,8 +693,14 @@ impl Map {
                 }
             }
         }
-        // What a teleport ends, and leaving the map.
+        // What a teleport ends, and leaving the map: a player's cast under
+        // way too (Thistle Tea's `disengage_for_world_transition`).
         crate::game::map::spells::interrupts::teleported(self, guid);
+        if self.players.contains_key(&guid)
+            && self.caster(guid).is_some_and(|c| c.casting.is_some())
+        {
+            crate::game::map::spells::interrupt(self, guid);
+        }
         if key == self.key {
             movement::teleport_within(self, guid, position, orientation);
             return;

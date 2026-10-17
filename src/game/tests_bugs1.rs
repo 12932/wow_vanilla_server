@@ -1245,3 +1245,49 @@ async fn only_what_the_client_lets_go_is_unlearned() {
         "swords, defense and first aid kept; herbalism unlearned"
     );
 }
+
+#[tokio::test]
+async fn a_teleport_stops_a_cast() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const BOLT: u32 = 21800;
+    let mut d = crate::game::data::GameData::empty();
+    d.spells.cast_times.insert(14, 3000);
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 3,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        BOLT,
+        SpellTemplate {
+            id: BOLT,
+            name: "Bolt".into(),
+            casting_time_index: 14,
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGPORT");
+    let g = a.enter("Bugport", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            spells::learn(m, g, BOLT);
+            spells::cast(m, g, BOLT, Default::default(), None);
+            let began = m.caster(g).is_some_and(|c| c.casting.is_some());
+            let to = Vector3d {
+                x: START.0 + 30.0,
+                y: START.1,
+                z: START.2,
+            };
+            let key = m.key;
+            m.teleport(g, key, to, 0.0);
+            (began, m.caster(g).is_some_and(|c| c.casting.is_some()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, false), "teleported, the cast stops");
+}
