@@ -1303,23 +1303,29 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         |c| {
             (
                 c.u32("entry"),
-                (c.f32("location_x"), c.f32("location_y"), c.f32("location_z")),
+                (
+                    c.f32("location_x"),
+                    c.f32("location_y"),
+                    c.f32("location_z"),
+                ),
             )
         },
     ) {
         data.bg_routes.entry(entry).or_default().push(point);
     }
-    for e in rows(db, "SELECT * FROM areatrigger_bg_entrance", |c| BgEntrance {
-        trigger: c.u32("id"),
-        bg: c.u32("bg_template"),
-        team: c.u32("team"),
-        exit_map: c.u32("exit_map"),
-        exit: (
-            c.f32("exit_position_x"),
-            c.f32("exit_position_y"),
-            c.f32("exit_position_z"),
-            c.f32("exit_orientation"),
-        ),
+    for e in rows(db, "SELECT * FROM areatrigger_bg_entrance", |c| {
+        BgEntrance {
+            trigger: c.u32("id"),
+            bg: c.u32("bg_template"),
+            team: c.u32("team"),
+            exit_map: c.u32("exit_map"),
+            exit: (
+                c.f32("exit_position_x"),
+                c.f32("exit_position_y"),
+                c.f32("exit_position_z"),
+                c.f32("exit_orientation"),
+            ),
+        }
     }) {
         data.bg_entrances.insert(e.trigger, e);
     }
@@ -1843,25 +1849,29 @@ fn apply_spell_mods(db: &Connection, spells: &mut AHashMap<u32, super::spells::S
 fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     use super::spells::*;
     let in_build = "WHERE build_min <= 5875 AND build_max >= 5875";
-    for (id, p) in rows(db, &format!("SELECT * FROM spell_proc_event {in_build}"), |c| {
-        (
-            c.u32("entry"),
-            ProcEvent {
-                school_mask: c.u32("SchoolMask"),
-                family: c.u32("SpellFamilyName"),
-                family_mask: [
-                    c.i64("SpellFamilyMask0") as u64,
-                    c.i64("SpellFamilyMask1") as u64,
-                    c.i64("SpellFamilyMask2") as u64,
-                ],
-                flags: c.u32("procFlags"),
-                ex: c.u32("procEx"),
-                ppm: c.f32("ppmRate"),
-                chance: c.f32("CustomChance"),
-                cooldown: c.u32("Cooldown"),
-            },
-        )
-    }) {
+    for (id, p) in rows(
+        db,
+        &format!("SELECT * FROM spell_proc_event {in_build}"),
+        |c| {
+            (
+                c.u32("entry"),
+                ProcEvent {
+                    school_mask: c.u32("SchoolMask"),
+                    family: c.u32("SpellFamilyName"),
+                    family_mask: [
+                        c.i64("SpellFamilyMask0") as u64,
+                        c.i64("SpellFamilyMask1") as u64,
+                        c.i64("SpellFamilyMask2") as u64,
+                    ],
+                    flags: c.u32("procFlags"),
+                    ex: c.u32("procEx"),
+                    ppm: c.f32("ppmRate"),
+                    chance: c.f32("CustomChance"),
+                    cooldown: c.u32("Cooldown"),
+                },
+            )
+        },
+    ) {
         s.proc_events.insert(id, p);
     }
     for (id, r) in rows(db, &format!("SELECT * FROM spell_chain {in_build}"), |c| {
@@ -1909,12 +1919,22 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     }) {
         s.cones.insert(id, degrees);
     }
-    for (id, kind, entry, condition) in rows(db, &format!("SELECT * FROM spell_script_target {in_build}"), |c| {
-        (c.u32("entry"), c.u32("type"), c.u32("targetEntry"), c.u32("conditionId"))
-    }) {
+    for (id, kind, entry, condition) in rows(
+        db,
+        &format!("SELECT * FROM spell_script_target {in_build}"),
+        |c| {
+            (
+                c.u32("entry"),
+                c.u32("type"),
+                c.u32("targetEntry"),
+                c.u32("conditionId"),
+            )
+        },
+    ) {
         s.script_targets.entry(id).or_default().push((kind, entry));
         if condition != 0 {
-            s.script_target_conditions.insert((id, kind, entry), condition);
+            s.script_target_conditions
+                .insert((id, kind, entry), condition);
         }
     }
     for (spell, learns) in rows(db, "SELECT * FROM spell_learn_spell", |c| {
@@ -2045,16 +2065,20 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     ) {
         pets.create_spells.insert(entry, spells);
     }
-    for (list, build, spells) in rows(db, "SELECT * FROM pet_spell_data WHERE build <= 5875", |c| {
-        (
-            c.u32("entry"),
-            c.i64("build"),
-            (1..=4)
-                .map(|i| c.u32(&format!("spell_id{i}")))
-                .filter(|s| *s != 0)
-                .collect::<Vec<u32>>(),
-        )
-    }) {
+    for (list, build, spells) in rows(
+        db,
+        "SELECT * FROM pet_spell_data WHERE build <= 5875",
+        |c| {
+            (
+                c.u32("entry"),
+                c.i64("build"),
+                (1..=4)
+                    .map(|i| c.u32(&format!("spell_id{i}")))
+                    .filter(|s| *s != 0)
+                    .collect::<Vec<u32>>(),
+            )
+        },
+    ) {
         let _ = build;
         pets.spell_lists.insert(list, spells);
     }
@@ -2149,12 +2173,19 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
 fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     use super::misc::*;
     if let Some(dbc) = dbc {
-        for (race, gender, kind, variation, colour) in rows(
-            dbc,
-            "SELECT * FROM CharSections WHERE npc_only = 0",
-            |c| (c.u8("race"), c.u8("gender"), c.u8("ty"), c.u8("variation_index"), c.u8("colour_index")),
-        ) {
-            data.appearances.add_section(race, gender, kind, variation, colour);
+        for (race, gender, kind, variation, colour) in
+            rows(dbc, "SELECT * FROM CharSections WHERE npc_only = 0", |c| {
+                (
+                    c.u8("race"),
+                    c.u8("gender"),
+                    c.u8("ty"),
+                    c.u8("variation_index"),
+                    c.u8("colour_index"),
+                )
+            })
+        {
+            data.appearances
+                .add_section(race, gender, kind, variation, colour);
         }
         for (race, gender, variation) in rows(dbc, "SELECT * FROM CharacterFacialHairStyles", |c| {
             (c.u8("race"), c.u8("gender"), c.u8("variation_id"))
@@ -2312,7 +2343,10 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             ),
         )
     }) {
-        m.cinematic_waypoints.entry(cinematic).or_default().push(point);
+        m.cinematic_waypoints
+            .entry(cinematic)
+            .or_default()
+            .push(point);
     }
     for points in m.cinematic_waypoints.values_mut() {
         points.sort_by_key(|p| p.0);
@@ -2342,11 +2376,20 @@ mod tests {
             facial_hair,
         };
         assert!(!a.valid(7, 0, look(5, 2, 4, 2, 0)), "a gnome's sixth skin");
-        assert!(!a.valid(6, 0, look(3, 3, 5, 4, 4)), "a tauren's fourth hair colour");
+        assert!(
+            !a.valid(6, 0, look(3, 3, 5, 4, 4)),
+            "a tauren's fourth hair colour"
+        );
         for race in [1, 2, 3, 4, 5, 6, 7, 8] {
             for gender in [0, 1] {
-                assert!(a.valid(race, gender, look(1, 1, 1, 1, 1)), "{race} {gender}");
-                assert!(a.valid(race, gender, look(4, 3, 4, 2, 4)), "everyone's range, {race} {gender}");
+                assert!(
+                    a.valid(race, gender, look(1, 1, 1, 1, 1)),
+                    "{race} {gender}"
+                );
+                assert!(
+                    a.valid(race, gender, look(4, 3, 4, 2, 4)),
+                    "everyone's range, {race} {gender}"
+                );
             }
         }
     }

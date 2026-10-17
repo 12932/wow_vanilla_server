@@ -76,40 +76,50 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut WorldData) {
     }) {
         d.pois.insert(entry, p);
     }
-    for (quest, event) in rows(db, "SELECT * FROM game_event_quest WHERE patch_min <= 10", |c| {
-        (c.u32("quest"), c.u32("event"))
-    }) {
+    for (quest, event) in rows(
+        db,
+        "SELECT * FROM game_event_quest WHERE patch_min <= 10",
+        |c| (c.u32("quest"), c.u32("event")),
+    ) {
         d.event_quests.insert(quest, event);
     }
-    for (guid, e) in rows(db, "SELECT * FROM game_event_creature_data WHERE patch <= 10", |c| {
-        (
-            c.u32("guid"),
-            EventCreature {
-                event: c.u32("event"),
-                entry: c.u32("entry_id"),
-                display: c.u32("display_id"),
-                equipment: c.u32("equipment_id"),
-                spell_start: c.u32("spell_start"),
-                spell_end: c.u32("spell_end"),
-            },
-        )
-    }) {
+    for (guid, e) in rows(
+        db,
+        "SELECT * FROM game_event_creature_data WHERE patch <= 10",
+        |c| {
+            (
+                c.u32("guid"),
+                EventCreature {
+                    event: c.u32("event"),
+                    entry: c.u32("entry_id"),
+                    display: c.u32("display_id"),
+                    equipment: c.u32("equipment_id"),
+                    spell_start: c.u32("spell_start"),
+                    spell_end: c.u32("spell_end"),
+                },
+            )
+        },
+    ) {
         let list = d.event_creatures.entry(guid).or_default();
         list.retain(|x| x.event != e.event);
         list.push(e);
     }
-    for (entry, p) in rows(db, "SELECT * FROM script_waypoint ORDER BY entry, pointid", |c| {
-        (
-            c.u32("entry"),
-            ScriptPoint {
-                point: c.u32("pointid"),
-                x: c.f32("location_x"),
-                y: c.f32("location_y"),
-                z: c.f32("location_z"),
-                wait_ms: c.u32("waittime"),
-            },
-        )
-    }) {
+    for (entry, p) in rows(
+        db,
+        "SELECT * FROM script_waypoint ORDER BY entry, pointid",
+        |c| {
+            (
+                c.u32("entry"),
+                ScriptPoint {
+                    point: c.u32("pointid"),
+                    x: c.f32("location_x"),
+                    y: c.f32("location_y"),
+                    z: c.f32("location_z"),
+                    wait_ms: c.u32("waittime"),
+                },
+            )
+        },
+    ) {
         d.script_waypoints.entry(entry).or_default().push(p);
     }
     let Some(dbc) = dbc else {

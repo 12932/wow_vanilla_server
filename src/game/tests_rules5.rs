@@ -1320,16 +1320,21 @@ async fn a_new_character_has_their_languages_as_skills() {
             )
         })
     };
-    let h = map0(&realm)
-        .query(move |m| skills(m, human))
-        .await
-        .unwrap();
+    let h = map0(&realm).query(move |m| skills(m, human)).await.unwrap();
     let o = realm
         .maps
         .get(&realm, MapKey::world(1))
         .query(move |m| skills(m, orc))
         .await
         .unwrap();
-    assert_eq!(h, [(Some(300), Some(300)), (None, None)], "a human speaks Common");
-    assert_eq!(o, [(None, None), (Some(300), Some(300))], "an orc speaks Orcish");
+    assert_eq!(
+        h,
+        [(Some(300), Some(300)), (None, None)],
+        "a human speaks Common"
+    );
+    assert_eq!(
+        o,
+        [(None, None), (Some(300), Some(300))],
+        "an orc speaks Orcish"
+    );
 }

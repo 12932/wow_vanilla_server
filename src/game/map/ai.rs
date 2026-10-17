@@ -1055,10 +1055,11 @@ fn evade(map: &mut Map, g: Guid) {
                 .holders
                 .iter()
                 .filter(|h| {
-                    let stays = data.spells.get(h.spell).is_some_and(|s| {
-                        s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
-                    }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
-                        || (keeps_buffs && h.positive);
+                    let stays =
+                        data.spells.get(h.spell).is_some_and(|s| {
+                            s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
+                        }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
+                            || (keeps_buffs && h.positive);
                     !stays
                 })
                 .map(|h| (h.spell, h.caster))

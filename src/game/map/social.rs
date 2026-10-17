@@ -226,9 +226,11 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
         // `Who`).
         let words: Vec<&String> = words.iter().filter(|w| !w.is_empty()).collect();
         if !words.is_empty()
-            && !words
-                .iter()
-                .any(|w| lower.contains(w.as_str()) || guild_lower.contains(w.as_str()) || zone_name.contains(w.as_str()))
+            && !words.iter().any(|w| {
+                lower.contains(w.as_str())
+                    || guild_lower.contains(w.as_str())
+                    || zone_name.contains(w.as_str())
+            })
         {
             continue;
         }

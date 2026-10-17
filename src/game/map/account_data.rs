@@ -44,13 +44,22 @@ pub fn key(account: &str, character: u32, kind: u8) -> String {
 }
 
 /// A character's caches and the account's tutorials, from the store.
-pub async fn load(realm: &Realm, account: &str, character: u32) -> (Vec<(u8, Vec<u8>)>, Option<[u32; 8]>) {
+pub async fn load(
+    realm: &Realm,
+    account: &str,
+    character: u32,
+) -> (Vec<(u8, Vec<u8>)>, Option<[u32; 8]>) {
     let mut caches = Vec::new();
     let mut tutorials = None;
     for (kind, _, data) in realm.store.account_data(account).await {
         if kind == TUTORIALS && data.len() == 32 {
             tutorials = Some(std::array::from_fn(|i| {
-                u32::from_le_bytes([data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]])
+                u32::from_le_bytes([
+                    data[i * 4],
+                    data[i * 4 + 1],
+                    data[i * 4 + 2],
+                    data[i * 4 + 3],
+                ])
             }));
         } else if account_wide(kind) {
             caches.push((kind, data));

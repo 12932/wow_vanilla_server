@@ -121,7 +121,8 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     let f = &info.flags;
     let was_swimming = p.movement.flags.get_swimming().is_some();
     let swimming = f.get_swimming().is_some();
-    let translating = f.get_forward() || f.get_backward() || f.get_strafe_left() || f.get_strafe_right();
+    let translating =
+        f.get_forward() || f.get_backward() || f.get_strafe_left() || f.get_strafe_right();
     let moved = translating || crate::game::map::combat::dist(before, info.position) > 0.0;
     let turned = f.get_turn_left()
         || f.get_turn_right()
@@ -143,7 +144,11 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     // `interrupt_water_auras`).
     if was_swimming != swimming {
         use crate::game::map::auras::{INTERRUPT_ABOVE_WATER, INTERRUPT_UNDER_WATER};
-        let mask = if swimming { INTERRUPT_UNDER_WATER } else { INTERRUPT_ABOVE_WATER };
+        let mask = if swimming {
+            INTERRUPT_UNDER_WATER
+        } else {
+            INTERRUPT_ABOVE_WATER
+        };
         crate::game::map::auras::interrupt(map, guid, mask);
     }
     if let Some(drop) = fall {
@@ -163,7 +168,8 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
         return;
     };
     if moved && p.fields.get_u32(crate::game::fields::UNIT_NPC_EMOTESTATE) != 0 {
-        p.fields.set_u32(crate::game::fields::UNIT_NPC_EMOTESTATE, 0);
+        p.fields
+            .set_u32(crate::game::fields::UNIT_NPC_EMOTESTATE, 0);
     }
     // Sitting, sleeping or kneeling; not dead.
     if !matches!(p.stand_state(), 0 | 7) && p.death == crate::game::map::death::Death::Alive {
@@ -221,7 +227,11 @@ fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Opt
         }
         (true, _) => {
             let (was, _) = height(&p.movement);
-            let start = if p.misc.fall_transport == transport || p.fall_from.is_none() { was.max(z) } else { z };
+            let start = if p.misc.fall_transport == transport || p.fall_from.is_none() {
+                was.max(z)
+            } else {
+                z
+            };
             p.fall_from = Some(start);
             p.misc.fall_transport = transport;
             p.misc.fall_far = info.flags.get_fallingfar();
@@ -245,7 +255,9 @@ fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER, AURA_MOD_DAMAGE_PERCENT_TAKEN, AURA_SAFE_FALL};
+    use crate::game::map::auras::{
+        AURA_FEATHER_FALL, AURA_HOVER, AURA_MOD_DAMAGE_PERCENT_TAKEN, AURA_SAFE_FALL,
+    };
     if p.auras.has(AURA_FEATHER_FALL)
         || p.auras.has(AURA_HOVER)
         || p.auras.school_immune(1)

@@ -416,7 +416,10 @@ pub fn add_item_with_property(
     if property != 0 {
         let data = map.realm.data.clone();
         if let Some(p) = map.players.get_mut(&g)
-            && let Some(item) = p.items.get_mut(before..).and_then(|n| n.iter_mut().find(|i| i.entry == entry))
+            && let Some(item) = p
+                .items
+                .get_mut(before..)
+                .and_then(|n| n.iter_mut().find(|i| i.entry == entry))
         {
             crate::game::map::enchant::set_random_property(&data, item, property);
         }
@@ -896,7 +899,11 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
         let Some(t) = data.item(item.entry) else {
             continue;
         };
-        for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_ON_EQUIP) {
+        for s in t
+            .spells
+            .iter()
+            .filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_ON_EQUIP)
+        {
             wanted.push((item.guid, s.id));
         }
         for s in crate::game::map::enchant::equip_spells(&data, item) {
@@ -913,7 +920,11 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
         .filter(|h| h.equipped)
         .filter_map(|h| h.item.map(|i| (i, h.spell)))
         .collect();
-    let stale: Vec<(Guid, u32)> = have.iter().filter(|x| !wanted.contains(x)).copied().collect();
+    let stale: Vec<(Guid, u32)> = have
+        .iter()
+        .filter(|x| !wanted.contains(x))
+        .copied()
+        .collect();
     for (item, spell) in stale {
         crate::game::map::auras::remove_where(map, g, |h| {
             h.equipped && h.item == Some(item) && h.spell == spell

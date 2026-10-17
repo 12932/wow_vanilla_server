@@ -94,14 +94,25 @@ pub fn knows_language(map: &Map, g: Guid, language: u32) -> bool {
 
 /// The language a line goes out in, or `None` if the speaker can't use
 /// the one they chose.
-pub fn resolve_language(map: &Map, g: Guid, kind: &CMSG_MESSAGECHAT_ChatType, language: Language) -> Option<Language> {
+pub fn resolve_language(
+    map: &Map,
+    g: Guid,
+    kind: &CMSG_MESSAGECHAT_ChatType,
+    language: Language,
+) -> Option<Language> {
     use CMSG_MESSAGECHAT_ChatType as T;
     let id = language.as_int();
     // Addon messages keep their marker on the chats addons use.
     if id == ADDON {
         return matches!(
             kind,
-            T::Party | T::Raid | T::Guild | T::Officer | T::Channel { .. } | T::RaidLeader | T::RaidWarning
+            T::Party
+                | T::Raid
+                | T::Guild
+                | T::Officer
+                | T::Channel { .. }
+                | T::RaidLeader
+                | T::RaidWarning
         )
         .then_some(language);
     }
@@ -139,8 +150,8 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
     if m.message.len() > MAX_MESSAGE {
         return None;
     }
-    let gm_line = m.message.starts_with('.')
-        && map.players.get(&guid).is_some_and(|p| p.gm_level > 0);
+    let gm_line =
+        m.message.starts_with('.') && map.players.get(&guid).is_some_and(|p| p.gm_level > 0);
     if !gm_line {
         let Some(language) = resolve_language(map, guid, &m.chat_type, m.language) else {
             // A language not learned (Thistle Tea's `Language.resolve`).
@@ -215,9 +226,10 @@ const CLIENT_EMOTES: [u32; 2] = [0, 3];
 fn may_emote(map: &Map, g: Guid) -> bool {
     map.players.get(&g).is_some_and(|p| {
         p.death == crate::game::map::death::Death::Alive
-            && !p
-                .fields
-                .has_flag(crate::game::fields::UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM)
+            && !p.fields.has_flag(
+                crate::game::fields::UNIT_FIELD_FLAGS,
+                UNIT_FLAG_PREVENT_ANIM,
+            )
     })
 }
 

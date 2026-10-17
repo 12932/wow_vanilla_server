@@ -4,7 +4,6 @@
 //! Word: Shield's bonus, Eyes of the Beast, food on the move, level-scaled
 //! costs and `spell_area`.
 
-
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 

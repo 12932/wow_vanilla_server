@@ -35,7 +35,11 @@ const TWO_PI: f32 = std::f32::consts::TAU;
 type V3 = (f32, f32, f32);
 
 fn lerp(a: V3, b: V3, f: f32) -> V3 {
-    (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f, a.2 + (b.2 - a.2) * f)
+    (
+        a.0 + (b.0 - a.0) * f,
+        a.1 + (b.1 - a.1) * f,
+        a.2 + (b.2 - a.2) * f,
+    )
 }
 
 fn distance(a: V3, b: V3) -> f32 {
@@ -110,7 +114,10 @@ impl Spline {
             }
             lengths[index + 1] = total;
         }
-        Self { points: sp, lengths }
+        Self {
+            points: sp,
+            lengths,
+        }
     }
 
     fn length(&self, first: usize, last: usize) -> f32 {
@@ -185,7 +192,11 @@ fn time_until_stop(f: &Keyframe, speed: f32, accel: f32, accel_distance: f32) ->
 
 impl Route {
     /// A route over `nodes` at the default speed.
-    pub fn new(entry: u32, period: u32, nodes: &[crate::game::data::npc::TaxiPathNode]) -> Option<Self> {
+    pub fn new(
+        entry: u32,
+        period: u32,
+        nodes: &[crate::game::data::npc::TaxiPathNode],
+    ) -> Option<Self> {
         Self::build(entry, period, nodes, DEFAULT_SPEED, DEFAULT_ACCEL)
     }
 
@@ -353,7 +364,11 @@ impl Route {
         if period > 0 {
             frames[count - 1].depart_ms = period;
         }
-        let period = if period > 0 { period } else { frames[count - 1].depart_ms.max(1) };
+        let period = if period > 0 {
+            period
+        } else {
+            frames[count - 1].depart_ms.max(1)
+        };
         let map = frames[0].map;
         Some(Self {
             entry,
@@ -476,7 +491,10 @@ pub fn animation_position(
 ) -> Option<Vector3d> {
     let period = frames.last()?.time_ms.max(1);
     let p = ms % period;
-    let next = frames.iter().position(|f| f.time_ms >= p).unwrap_or(frames.len() - 1);
+    let next = frames
+        .iter()
+        .position(|f| f.time_ms >= p)
+        .unwrap_or(frames.len() - 1);
     let (a, b) = (&frames[next.saturating_sub(1)], &frames[next]);
     let local = if a.time_ms == b.time_ms {
         (a.x, a.y, a.z)
@@ -485,7 +503,13 @@ pub fn animation_position(
         lerp((a.x, a.y, a.z), (b.x, b.y, b.z), t)
     };
     let [qx, qy, qz, qw] = rotation;
-    let cross = |a: V3, b: V3| (a.1 * b.2 - a.2 * b.1, a.2 * b.0 - a.0 * b.2, a.0 * b.1 - a.1 * b.0);
+    let cross = |a: V3, b: V3| {
+        (
+            a.1 * b.2 - a.2 * b.1,
+            a.2 * b.0 - a.0 * b.2,
+            a.0 * b.1 - a.1 * b.0,
+        )
+    };
     let uv = cross((qx, qy, qz), local);
     let uuv = cross((qx, qy, qz), uv);
     let r = (
@@ -730,7 +754,12 @@ mod tests {
         let r = Route::build(7, 0, &nodes, 10.0, 2.0).expect("a route");
         assert_eq!(r.maps().into_iter().collect::<Vec<_>>(), vec![0, 1]);
         // At the stop, still and facing along the path.
-        let stop = r.frames.iter().find(|f| f.stop && f.map == 0).unwrap().clone();
+        let stop = r
+            .frames
+            .iter()
+            .find(|f| f.stop && f.map == 0)
+            .unwrap()
+            .clone();
         let pose = r.pose_at(stop.arrive_ms + 1000);
         assert!(!pose.moving);
         assert!((pose.position.x - 100.0).abs() < 0.01, "{pose:?}");
@@ -762,7 +791,10 @@ mod tests {
             z: 2.0,
         };
         let (world, o) = passenger_world(deck, 0.5, &pose);
-        assert!((world.x - 10.0).abs() < 0.001 && (world.y - 23.0).abs() < 0.001, "{world:?}");
+        assert!(
+            (world.x - 10.0).abs() < 0.001 && (world.y - 23.0).abs() < 0.001,
+            "{world:?}"
+        );
         assert!((world.z - 7.0).abs() < 0.001);
         let (back, bo) = passenger_local(world, o, &pose);
         assert!((back.x - 3.0).abs() < 0.001 && back.y.abs() < 0.001);

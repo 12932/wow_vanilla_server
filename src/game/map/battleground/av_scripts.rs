@@ -925,7 +925,9 @@ fn rally(map: &mut Map, g: Guid, entries: &[u32], radius: f32, warcry: u32) {
                 g,
                 0.0,
                 0.0,
-                crate::game::data::scripts::GROUP_FORMATION | crate::game::data::scripts::GROUP_AGGRO_TOGETHER | crate::game::data::scripts::GROUP_EVADE_TOGETHER,
+                crate::game::data::scripts::GROUP_FORMATION
+                    | crate::game::data::scripts::GROUP_AGGRO_TOGETHER
+                    | crate::game::data::scripts::GROUP_EVADE_TOGETHER,
             );
             av_routes::join(map, m, g);
             follow(map, m, g);

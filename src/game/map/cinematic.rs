@@ -29,8 +29,9 @@ pub struct Camera {
 
 impl Camera {
     fn end(&self) -> Duration {
-        Duration::from_millis(u64::from(self.waypoints.iter().map(|w| w.0).max().unwrap_or(0)))
-            + ENDS_AFTER
+        Duration::from_millis(u64::from(
+            self.waypoints.iter().map(|w| w.0).max().unwrap_or(0),
+        )) + ENDS_AFTER
     }
 
     /// Where the camera looks from at `now`: `None` when it is over,
@@ -71,7 +72,16 @@ pub fn begin(map: &Map, p: &mut Player, sequence: u32) {
         start: p.position(),
         waypoints: points
             .iter()
-            .map(|(t, x, y, z)| (*t, Vector3d { x: *x, y: *y, z: *z }))
+            .map(|(t, x, y, z)| {
+                (
+                    *t,
+                    Vector3d {
+                        x: *x,
+                        y: *y,
+                        z: *z,
+                    },
+                )
+            })
             .collect(),
     });
 }
@@ -125,7 +135,12 @@ mod tests {
         let c = Camera {
             started: t0,
             start: at(0.0),
-            waypoints: vec![(0, at(100.0)), (1000, at(100.0)), (30_000, at(200.0)), (40_000, at(1.0))],
+            waypoints: vec![
+                (0, at(100.0)),
+                (1000, at(100.0)),
+                (30_000, at(200.0)),
+                (40_000, at(1.0)),
+            ],
         };
         assert_eq!(c.view(t0), Some(Some(at(100.0))));
         assert_eq!(c.view(t0 + Duration::from_secs(31)), Some(Some(at(200.0))));

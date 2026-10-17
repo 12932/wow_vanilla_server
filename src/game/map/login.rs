@@ -5,11 +5,10 @@ use std::time::Duration;
 use tracing::debug;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
-    Area, DateTime, InitialSpell, LogoutResult, LogoutSpeed,
-    SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT,
-    SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES, SMSG_INITIAL_SPELLS,
-    SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK, SMSG_LOGOUT_RESPONSE,
-    SMSG_TUTORIAL_FLAGS, Vector3d,
+    Area, DateTime, InitialSpell, LogoutResult, LogoutSpeed, SMSG_ACTION_BUTTONS,
+    SMSG_BINDPOINTUPDATE, SMSG_FORCE_MOVE_ROOT, SMSG_FORCE_MOVE_UNROOT, SMSG_INIT_WORLD_STATES,
+    SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_CANCEL_ACK,
+    SMSG_LOGOUT_RESPONSE, SMSG_TUTORIAL_FLAGS, Vector3d,
 };
 
 use crate::game::fields::*;
@@ -36,7 +35,9 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         position: p.position(),
         orientation: p.movement.orientation,
     });
-    out.send_frame(crate::game::map::account_data::digests_frame(&p.row.state.caches));
+    out.send_frame(crate::game::map::account_data::digests_frame(
+        &p.row.state.caches,
+    ));
     let bind = p.row.state.bind.unwrap_or(crate::game::store::Bind {
         map: p.row.map,
         zone: p.row.zone,
@@ -129,13 +130,14 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     for item in &p.items {
         let e = crate::game::map::enchant::get(item, crate::game::map::enchant::TEMP_SLOT);
         if e.id != 0 && e.duration_ms > 0 {
-            p.outbound
-                .send(&wow_world_messages::vanilla::SMSG_ITEM_ENCHANT_TIME_UPDATE {
+            p.outbound.send(
+                &wow_world_messages::vanilla::SMSG_ITEM_ENCHANT_TIME_UPDATE {
                     item: item.guid,
                     slot: crate::game::map::enchant::TEMP_SLOT as u32,
                     duration: e.duration_ms / 1000,
                     player: guid,
-                });
+                },
+            );
         }
     }
     let motd = &map.realm.config.motd;
@@ -235,9 +237,14 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
     }
     p.logout_at = Some(now + delay);
     use crate::game::map::auras::{AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_ROOT, AURA_MOD_STUN};
-    let held = [AURA_MOD_ROOT, AURA_MOD_STUN, AURA_MOD_FEAR, AURA_MOD_CONFUSE]
-        .iter()
-        .any(|a| p.auras.has(*a));
+    let held = [
+        AURA_MOD_ROOT,
+        AURA_MOD_STUN,
+        AURA_MOD_FEAR,
+        AURA_MOD_CONFUSE,
+    ]
+    .iter()
+    .any(|a| p.auras.has(*a));
     let free = !held && p.death == crate::game::map::death::Death::Alive;
     let flags = p.fields.get_byte(PLAYER_FIELD_BYTES, 0);
     p.fields

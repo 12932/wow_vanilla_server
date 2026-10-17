@@ -40,8 +40,7 @@ fn next_level_xp(p: &Player) -> f32 {
 fn set_bonus(p: &mut Player, bonus: f32) {
     let bonus = bonus.clamp(0.0, next_level_xp(p) * POOL_CAP);
     p.row.state.rest_bonus = bonus;
-    p.fields
-        .set_u32(PLAYER_REST_STATE_EXPERIENCE, bonus as u32);
+    p.fields.set_u32(PLAYER_REST_STATE_EXPERIENCE, bonus as u32);
     let state = if bonus > 10.0 {
         STATE_RESTED
     } else if bonus <= 1.0 {
@@ -74,7 +73,11 @@ pub fn restore(p: &mut Player, now: Instant) {
     let logged_out = p.row.logout_time;
     let wall = chrono::Utc::now().timestamp();
     if logged_out > 0 && wall > logged_out {
-        let rate = if p.row.state.rest_type.is_some() { 1.0 } else { 0.25 };
+        let rate = if p.row.state.rest_type.is_some() {
+            1.0
+        } else {
+            0.25
+        };
         let gained = (wall - logged_out) as f32 * next_level_xp(p) / ACCRUAL_DIVISOR * rate;
         let bonus = p.row.state.rest_bonus + gained;
         set_bonus(p, bonus);
@@ -84,7 +87,8 @@ pub fn restore(p: &mut Player, now: Instant) {
     }
     let resting = p.row.state.rest_type.is_some();
     p.misc.rest_since = resting.then_some(now);
-    p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING, resting);
+    p.fields
+        .set_flag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING, resting);
 }
 
 /// Start resting.
@@ -149,7 +153,10 @@ pub fn update(map: &mut Map) {
     let data = map.realm.data.clone();
     let mut left_inn = Vec::new();
     for p in map.players.values_mut() {
-        if p.misc.rest_checked_at.is_some_and(|t| now.duration_since(t).as_secs() < 1) {
+        if p.misc
+            .rest_checked_at
+            .is_some_and(|t| now.duration_since(t).as_secs() < 1)
+        {
             continue;
         }
         p.misc.rest_checked_at = Some(now);
@@ -158,17 +165,19 @@ pub fn update(map: &mut Map) {
             Some(RestType::City) if !capital => stop(p, now),
             None if capital => start(p, RestType::City, now),
             Some(RestType::Tavern(t)) => {
-                let inside = data
-                    .area_triggers
-                    .get(&t)
-                    .is_some_and(|tr| tr.map == p.row.map && crate::game::map::world::inside(tr, p.position()));
+                let inside = data.area_triggers.get(&t).is_some_and(|tr| {
+                    tr.map == p.row.map && crate::game::map::world::inside(tr, p.position())
+                });
                 if !inside {
                     left_inn.push(p.guid);
                 }
             }
             _ => {}
         }
-        if p.misc.rest_since.is_some_and(|t| now.duration_since(t).as_secs() >= 10) {
+        if p.misc
+            .rest_since
+            .is_some_and(|t| now.duration_since(t).as_secs() >= 10)
+        {
             accrue(p, now);
         }
     }

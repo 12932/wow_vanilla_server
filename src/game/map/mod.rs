@@ -4,9 +4,9 @@
 
 pub mod account_data;
 pub mod ai;
-pub mod auction;
 pub mod arena;
 pub mod assistance;
+pub mod auction;
 pub mod auras;
 pub mod battleground;
 pub mod boss_mechanics;
@@ -16,20 +16,20 @@ pub mod combat;
 pub mod conditions;
 pub mod corpses;
 pub mod creature;
+pub mod creature_combat;
 pub mod creature_groups;
 pub mod creature_motion;
-pub mod creature_combat;
 
 pub mod death;
 pub mod derive;
 pub mod duel;
 pub mod enchant;
 pub mod environment;
-pub mod eviction;
-pub mod exploration;
+pub mod escorts;
 pub mod event_ai;
 pub mod event_quests;
-pub mod escorts;
+pub mod eviction;
+pub mod exploration;
 pub mod extra_effects;
 pub mod gameobject;
 pub mod gm;
@@ -41,16 +41,16 @@ mod instance_adapters;
 pub mod instance_script;
 pub mod intoxication;
 pub mod inventory;
-pub mod item_scripts;
 pub mod item_rules;
-pub mod items_misc;
+pub mod item_scripts;
 pub mod items;
+pub mod items_misc;
 pub mod local_defense;
 pub mod login;
 pub mod loot;
+pub mod map_events;
 pub mod meeting_stones;
 pub mod misc;
-pub mod map_events;
 pub mod mounts;
 pub mod movement;
 pub mod nav;
@@ -60,14 +60,14 @@ pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;
 pub mod player_motion;
-pub mod professions;
 pub mod proc_scripts;
 pub mod procs;
+pub mod professions;
 pub mod pvp;
 pub mod query;
 pub mod quests;
-pub mod ranged;
 pub mod questshare;
+pub mod ranged;
 pub mod reputation;
 pub mod rest;
 pub mod scripts;
@@ -1070,7 +1070,10 @@ impl Map {
         } else if guid::is_corpse(object) {
             self.corpses.get_mut(&object).map(|c| &mut c.observers)
         } else if spells::dynamic::is_dynamic_object(object) {
-            self.spells.dynamic.get_mut(&object).map(|d| &mut d.observers)
+            self.spells
+                .dynamic
+                .get_mut(&object)
+                .map(|d| &mut d.observers)
         } else {
             None
         }

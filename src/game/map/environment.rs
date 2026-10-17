@@ -84,7 +84,10 @@ pub fn damage(map: &mut Map, g: Guid, kind: EnvironmentalDamageType, amount: u32
         _ => None,
     };
     let resist = resist_school
-        .and_then(|s| map.unit_fields(g).map(|f| f.get_u32(UNIT_FIELD_RESISTANCES + s)))
+        .and_then(|s| {
+            map.unit_fields(g)
+                .map(|f| f.get_u32(UNIT_FIELD_RESISTANCES + s))
+        })
         .map(|r| (amount as f32 * (r as f32 / (r as f32 + 300.0)).min(0.75)) as u32)
         .unwrap_or(0);
     let (left, absorbed) = match resist_school {
@@ -172,7 +175,14 @@ pub fn update(map: &mut Map) {
         }
         let depth = surface_at(map, at, liquid).map_or(0.0, |surface| surface - at.z);
         let submerged = depth > BODY_HEIGHT * scale;
-        breathe(map, g, submerged && breath_for > Duration::ZERO, breath_for, depth > 0.0, now);
+        breathe(
+            map,
+            g,
+            submerged && breath_for > Duration::ZERO,
+            breath_for,
+            depth > 0.0,
+            now,
+        );
         lava(map, g, liquid.map(|l| l.magma() && l.touching(at.z)), now);
     }
 }
@@ -216,7 +226,14 @@ fn fifth(p: &crate::game::map::player::Player) -> u32 {
 
 /// The breath timer: draining with the head under, filling above it,
 /// gone when full or out of the water.
-pub fn breathe(map: &mut Map, g: Guid, under: bool, duration: Duration, in_water: bool, now: Instant) {
+pub fn breathe(
+    map: &mut Map,
+    g: Guid,
+    under: bool,
+    duration: Duration,
+    in_water: bool,
+    now: Instant,
+) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -358,7 +375,10 @@ pub fn liquid_spell(map: &mut Map, g: Guid, spell: Option<u32>) {
         crate::game::map::auras::remove_spell(map, g, old, None);
     }
     if let Some(spell) = spell
-        && !map.players.get(&g).is_some_and(|p| p.auras.has_spell(spell))
+        && !map
+            .players
+            .get(&g)
+            .is_some_and(|p| p.auras.has_spell(spell))
     {
         crate::game::map::spells::cast_triggered(map, g, spell, Some(g));
     }

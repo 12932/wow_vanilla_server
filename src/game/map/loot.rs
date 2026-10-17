@@ -538,7 +538,14 @@ fn start_roll(map: &mut Map, object: Guid, slot: usize) {
 }
 
 /// `SMSG_LOOT_ROLL`: a member's vote, or their number.
-fn roll_frame(object: Guid, slot: usize, s: &LootSlot, who: Guid, number: u8, kind: u8) -> Arc<[u8]> {
+fn roll_frame(
+    object: Guid,
+    slot: usize,
+    s: &LootSlot,
+    who: Guid,
+    number: u8,
+    kind: u8,
+) -> Arc<[u8]> {
     let mut b = Body::default();
     b.u64(object.guid())
         .u32(slot as u32)
@@ -767,7 +774,13 @@ pub fn update(map: &mut Map) {
     let rolling = map.loot_state.rolling.clone();
     for object in rolling {
         let due: Vec<usize> = loot_ref(map, object)
-            .map(|l| l.rolls.iter().filter(|r| r.ends <= now).map(|r| r.slot).collect())
+            .map(|l| {
+                l.rolls
+                    .iter()
+                    .filter(|r| r.ends <= now)
+                    .map(|r| r.slot)
+                    .collect()
+            })
             .unwrap_or_default();
         if loot_ref(map, object).is_none() {
             map.loot_state.rolling.retain(|g| *g != object);
@@ -783,7 +796,12 @@ pub fn update(map: &mut Map) {
 /// The conditions of `loot`'s slots that `viewer` meets, from the
 /// corpse or object `source`.
 pub fn conditions_met(map: &Map, loot: &Loot, source: Guid, viewer: Guid) -> Vec<u32> {
-    let mut ids: Vec<u32> = loot.items.iter().map(|s| s.condition).filter(|c| *c != 0).collect();
+    let mut ids: Vec<u32> = loot
+        .items
+        .iter()
+        .map(|s| s.condition)
+        .filter(|c| *c != 0)
+        .collect();
     ids.sort_unstable();
     ids.dedup();
     ids.retain(|c| crate::game::map::conditions::met(map, *c, Some(source), Some(viewer)));
@@ -865,7 +883,12 @@ pub fn open(map: &mut Map, player: Guid, target: Guid) {
     };
     let (tpos, reach) = if guid::is_unit(target) {
         match map.creature(target) {
-            Some(c) if !c.alive() || c.loot.as_ref().is_some_and(|l| l.kind == LootKind::Pickpocket) => {
+            Some(c)
+                if !c.alive()
+                    || c.loot
+                        .as_ref()
+                        .is_some_and(|l| l.kind == LootKind::Pickpocket) =>
+            {
                 (c.position, LOOT_YARDS)
             }
             _ => return,
@@ -944,8 +967,12 @@ pub fn take_item(map: &mut Map, player: Guid, slot: u8) {
         .unwrap_or_default();
     let Some((item, count, property, quest)) = loot_ref(map, target).and_then(|l| {
         let s = l.items.get(usize::from(slot))?;
-        (l.may_loot(player) && l.visible(s, player, &wanted, &met) && !s.blocked)
-            .then_some((s.item, s.count, s.random_property, s.quest))
+        (l.may_loot(player) && l.visible(s, player, &wanted, &met) && !s.blocked).then_some((
+            s.item,
+            s.count,
+            s.random_property,
+            s.quest,
+        ))
     }) else {
         return;
     };
@@ -1036,7 +1063,10 @@ pub fn master_give(map: &mut Map, giver: Guid, object: Guid, slot: u8, to: Guid)
             && l.items
                 .get(usize::from(slot))
                 .is_some_and(|s| s.blocked && !s.taken)
-    }) && map.players.get(&giver).is_some_and(|p| p.looting == Some(object));
+    }) && map
+        .players
+        .get(&giver)
+        .is_some_and(|p| p.looting == Some(object));
     let near = match (map.players.get(&to), position_of(map, object)) {
         (Some(p), Some(at)) => dist(p.position(), at) <= GROUP_REWARD_YARDS,
         _ => false,
@@ -1114,10 +1144,17 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         let loot_id = t.data[1];
         let mut items = Vec::new();
         if let Some(table) = data.loot.gameobject.get(&loot_id) {
-            let allowed = |c: u32| {
-                crate::game::map::conditions::met(map, c, Some(object), Some(player))
-            };
-            roll_for(&data, table, &wanted, &mut rand::rng(), &mut items, 0, &allowed);
+            let allowed =
+                |c: u32| crate::game::map::conditions::met(map, c, Some(object), Some(player));
+            roll_for(
+                &data,
+                table,
+                &wanted,
+                &mut rand::rng(),
+                &mut items,
+                0,
+                &allowed,
+            );
         }
         let gold = if t.gold_max > t.gold_min {
             rand::rng().random_range(t.gold_min..=t.gold_max)

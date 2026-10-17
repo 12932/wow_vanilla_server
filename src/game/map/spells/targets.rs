@@ -392,7 +392,14 @@ fn chain(
 /// Whether `g`, of `entry`, is a target a `spell_script_target` row of
 /// `kinds` names for spell `spell`, meeting the row's condition with the
 /// caster as its source.
-pub fn script_target(map: &Map, caster: Guid, spell: u32, kinds: &[u32], entry: u32, g: Guid) -> bool {
+pub fn script_target(
+    map: &Map,
+    caster: Guid,
+    spell: u32,
+    kinds: &[u32],
+    entry: u32,
+    g: Guid,
+) -> bool {
     let data = &map.realm.data.spells;
     data.script_targets.get(&spell).is_some_and(|v| {
         v.iter().any(|(k, e)| {
@@ -401,7 +408,9 @@ pub fn script_target(map: &Map, caster: Guid, spell: u32, kinds: &[u32], entry: 
                 && data
                     .script_target_conditions
                     .get(&(spell, *k, *e))
-                    .is_none_or(|c| crate::game::map::conditions::met(map, *c, Some(caster), Some(g)))
+                    .is_none_or(|c| {
+                        crate::game::map::conditions::met(map, *c, Some(caster), Some(g))
+                    })
         })
     })
 }

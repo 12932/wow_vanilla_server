@@ -59,7 +59,8 @@ fn data() -> GameData {
         },
     );
     d.misc.faction_by_index.insert(0, STORMWIND);
-    d.creature_templates.insert(WOLF, creature(WOLF, "Wolf", 32));
+    d.creature_templates
+        .insert(WOLF, creature(WOLF, "Wolf", 32));
     d.creature_spawns.insert(
         0,
         vec![CreatureSpawn {
@@ -226,7 +227,9 @@ async fn gm(a: &mut Client, line: &str) {
 async fn the_quest_query_is_laid_out_as_1_12_has_it() {
     let (_realm, mut a) = setup().await;
     a.send(CMSG_QUEST_QUERY { quest_id: QUEST }).await;
-    let b = a.wait_frame("SMSG_QUEST_QUERY_RESPONSE", 0x5D, |_| true).await;
+    let b = a
+        .wait_frame("SMSG_QUEST_QUERY_RESPONSE", 0x5D, |_| true)
+        .await;
     assert_eq!(u32_at(&b, 0), QUEST);
     // The reputation objective's faction and standing are full words.
     assert_eq!(u32_at(&b, 20), STORMWIND);
@@ -245,7 +248,10 @@ async fn a_quest_waits_on_a_standing_and_completes_with_one() {
         let d = m.realm.data.clone();
         let before = crate::game::map::quests::can_take(&m.players[&g], &q, &d);
         crate::game::map::reputation::modify(m, g, STORMWIND, 200, false);
-        (before, crate::game::map::quests::can_take(&m.players[&g], &q, &d))
+        (
+            before,
+            crate::game::map::quests::can_take(&m.players[&g], &q, &d),
+        )
     })
     .await;
     assert!(!before && after);
@@ -257,10 +263,14 @@ async fn a_quest_waits_on_a_standing_and_completes_with_one() {
         });
         crate::game::map::quests::check(m, g, QUEST);
         let q = m.realm.data.npc.quests[&QUEST].clone();
-        let early = crate::game::map::quests::complete(&m.players[&g], &q, &m.players[&g].journal.log[0]);
+        let early =
+            crate::game::map::quests::complete(&m.players[&g], &q, &m.players[&g].journal.log[0]);
         crate::game::map::reputation::modify(m, g, STORMWIND, 3000, false);
         let p = &m.players[&g];
-        (early, crate::game::map::quests::complete(p, &q, &p.journal.log[0]))
+        (
+            early,
+            crate::game::map::quests::complete(p, &q, &p.journal.log[0]),
+        )
     })
     .await;
     assert_eq!(done, (false, true));
@@ -275,7 +285,11 @@ async fn a_tabard_wants_its_standing() {
     })
     .await;
     let at = on_map(&realm, move |m| {
-        let i = m.players[&g].items.iter().find(|i| i.entry == TABARD).unwrap();
+        let i = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == TABARD)
+            .unwrap();
         (i.bag, i.slot)
     })
     .await;
@@ -344,8 +358,10 @@ async fn gm_commands_give_items_quests_spells_levels_and_money() {
     assert!(state.5 > 0);
     gm(&mut a, &format!(".unlearn {SPELL}")).await;
     gm(&mut a, ".modify money -2000").await;
-    let (knows, money) =
-        on_map(&realm, move |m| (m.players[&g].spells.contains(&SPELL), m.players[&g].money())).await;
+    let (knows, money) = on_map(&realm, move |m| {
+        (m.players[&g].spells.contains(&SPELL), m.players[&g].money())
+    })
+    .await;
     assert_eq!((knows, money), (false, 3000));
     gm(&mut a, ".talents reset").await;
     gm(&mut a, ".pos").await;
@@ -362,7 +378,10 @@ async fn gm_commands_act_on_the_selected_creature() {
     gm(&mut a, ".damage 100").await;
     let (health, threat) = on_map(&realm, move |m| {
         let c = m.creature(wolf).unwrap();
-        (c.fields.get_u32(UNIT_FIELD_HEALTH), c.threat.iter().any(|(t, _)| *t == g))
+        (
+            c.fields.get_u32(UNIT_FIELD_HEALTH),
+            c.threat.iter().any(|(t, _)| *t == g),
+        )
     })
     .await;
     assert!(health < 500 && threat, "{health}");
@@ -411,7 +430,10 @@ async fn gm_commands_for_weather_mail_battlegrounds_and_instances() {
     a.enter("Alice", Race::Human, Class::Warrior).await;
     let mut b = Client::connect(&realm, "B");
     let gb = b.enter("Bob", Race::Human, Class::Mage).await;
-    a.send(CMSG_ZONEUPDATE { area: Area::ElwynnForest }).await;
+    a.send(CMSG_ZONEUPDATE {
+        area: Area::ElwynnForest,
+    })
+    .await;
     gm(&mut a, ".weather rain 0.8 permanent").await;
     // The zone's fair weather on entering it, then the rain.
     let grade = a
@@ -548,7 +570,11 @@ async fn go_takes_a_facing_and_tele_lists_what_fits() {
     gm(&mut a, ".tele gold").await;
     let listed = a.system_message("Places").await;
     assert!(listed.contains("Goldshire Inn"));
-    gm(&mut a, &format!(".go xyz {} {} {} here 1.5", START.0 + 5.0, START.1, START.2)).await;
+    gm(
+        &mut a,
+        &format!(".go xyz {} {} {} here 1.5", START.0 + 5.0, START.1, START.2),
+    )
+    .await;
     a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
         matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
     })

@@ -76,14 +76,7 @@ pub fn check(
     ) else {
         return Some(FAIL_BAD_TARGETS);
     };
-    if a.guid == b.guid
-        || map
-            .realm
-            .social
-            .lists
-            .lock()
-            .ignores(b.guid, a.guid)
-    {
+    if a.guid == b.guid || map.realm.social.lists.lock().ignores(b.guid, a.guid) {
         return Some(FAIL_BAD_TARGETS);
     }
     if a.duel.is_some() || b.duel.is_some() {
@@ -226,7 +219,10 @@ fn end(map: &mut Map, loser: Guid, how: Option<DuelWinnerReason>) {
     // Their pets stop fighting the other side.
     for (g, other) in [(loser, winner), (winner, loser)] {
         if let Some(pet) = crate::game::map::pets::pet_of(map, g) {
-            let foes = [other, crate::game::map::pets::pet_of(map, other).unwrap_or_default()];
+            let foes = [
+                other,
+                crate::game::map::pets::pet_of(map, other).unwrap_or_default(),
+            ];
             if map
                 .creature(pet)
                 .is_some_and(|c| c.combat.attacking && foes.contains(&c.combat.victim))

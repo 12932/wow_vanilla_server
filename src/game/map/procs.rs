@@ -385,8 +385,7 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
                     .iter()
                     .find(|(s, _)| *s == h.spell)
                     .map_or(x.trigger, |(_, t)| *t);
-                let trigger =
-                    crate::game::map::spells::class_scripts::proc_spell(h.spell, trigger);
+                let trigger = crate::game::map::spells::class_scripts::proc_spell(h.spell, trigger);
                 if trigger != 0
                     && !crate::game::map::proc_scripts::deep_wounds(map, owner, other, trigger)
                 {

@@ -81,7 +81,8 @@ fn regen_player(p: &mut Player, now: Instant) {
     let stopped = a.has(AURA_INTERRUPT_REGEN);
     // In combat, health comes back only as far as auras allow.
     let combat_share = if in_combat {
-        (a.sum(AURA_MOD_REGEN_DURING_COMBAT) + a.sum(AURA_MOD_HEALTH_REGEN_IN_COMBAT)) as f32 / 100.0
+        (a.sum(AURA_MOD_REGEN_DURING_COMBAT) + a.sum(AURA_MOD_HEALTH_REGEN_IN_COMBAT)) as f32
+            / 100.0
     } else {
         1.0
     };
@@ -99,7 +100,9 @@ fn regen_player(p: &mut Player, now: Instant) {
     // its own (gear's).
     let per_five = |kind: u32, misc: Option<i32>| -> f32 {
         a.effects()
-            .filter(|(_, x)| x.kind == kind && x.period.is_none() && misc.is_none_or(|m| x.misc == m))
+            .filter(|(_, x)| {
+                x.kind == kind && x.period.is_none() && misc.is_none_or(|m| x.misc == m)
+            })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
             .sum::<f32>()
             * REGEN_INTERVAL.as_secs_f32()
@@ -124,11 +127,16 @@ fn regen_player(p: &mut Player, now: Instant) {
             } else {
                 1.0
             };
-            let mut add = if stopped { 0.0 } else { mana_regen(class, spirit) * share };
+            let mut add = if stopped {
+                0.0
+            } else {
+                mana_regen(class, spirit) * share
+            };
             add *= a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 0);
             add += per_five(AURA_MOD_POWER_REGEN, Some(0));
             if mana < max && add > 0.0 {
-                p.fields.set_u32(UNIT_FIELD_POWER1, (mana + add as u32).min(max));
+                p.fields
+                    .set_u32(UNIT_FIELD_POWER1, (mana + add as u32).min(max));
             }
         }
         1 => {

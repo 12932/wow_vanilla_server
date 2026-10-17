@@ -81,7 +81,11 @@ pub fn set(realm: &Realm, zone: u32, kind: u8, grade: f32, permanent: bool) {
     let now = crate::game::social::mail::now();
     let w = Weather {
         kind,
-        grade: if kind == 0 { 0.0 } else { grade.clamp(0.0, 1.0) },
+        grade: if kind == 0 {
+            0.0
+        } else {
+            grade.clamp(0.0, 1.0)
+        },
         next: if permanent {
             i64::MAX
         } else {

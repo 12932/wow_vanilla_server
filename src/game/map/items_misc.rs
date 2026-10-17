@@ -10,10 +10,10 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
+use crate::game::data::items::Body;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
-use crate::game::data::items::Body;
 use crate::game::map::inventory::{
     self, BAG_END, BANK_BAG_END, BANK_BAG_START, BANK_END, BANK_START, EQUIPMENT_END,
 };
@@ -408,7 +408,10 @@ pub fn rewrap_loaded(item: &mut crate::game::map::player::Item, gift: u32, w: Wr
 }
 
 /// The bank's slots: its own, then its bags'.
-fn bank_slots(p: &crate::game::map::player::Player, data: &crate::game::data::GameData) -> Vec<(u8, u8)> {
+fn bank_slots(
+    p: &crate::game::map::player::Player,
+    data: &crate::game::data::GameData,
+) -> Vec<(u8, u8)> {
     let mut slots: Vec<(u8, u8)> = (BANK_START..BANK_END).map(|s| (BAG_PLAYER, s)).collect();
     for bag in BANK_BAG_START..BANK_BAG_END {
         if p.item_at(BAG_PLAYER, bag).is_some() {

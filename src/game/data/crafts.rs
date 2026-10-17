@@ -59,7 +59,10 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut CraftData) {
         "SELECT * FROM item_enchantment_template WHERE patch_min <= 10 AND patch_max >= 10",
         |c| (c.u32("entry"), c.u32("ench"), c.f32("chance")),
     ) {
-        d.random_pools.entry(entry).or_default().push((ench, chance));
+        d.random_pools
+            .entry(entry)
+            .or_default()
+            .push((ench, chance));
     }
     for (spell, charges) in rows(db, "SELECT * FROM spell_enchant_charges", |c| {
         (c.u32("entry"), c.u32("charges"))

@@ -1141,7 +1141,10 @@ pub fn query_response(q: &Quest) -> std::sync::Arc<[u8]> {
         let (item, n) = if hidden { (0, 0) } else { (*item, *n) };
         b.u32(item).u32(n);
     }
-    b.u32(q.point.0).f32(q.point.1).f32(q.point.2).u32(q.point.3);
+    b.u32(q.point.0)
+        .f32(q.point.1)
+        .f32(q.point.2)
+        .u32(q.point.3);
     b.cstr(&q.title)
         .cstr(&q.objectives)
         .cstr(&q.details)

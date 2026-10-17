@@ -117,7 +117,9 @@ fn answer(map: &mut Map, g: Guid, sharer: Guid, message: QuestPartyMessage) {
 pub fn accepted(map: &mut Map, g: Guid, giver: Guid, quest: u32) {
     let data = map.realm.data.clone();
     if let Some(p) = map.players.get_mut(&g)
-        && p.misc.quest_shared.is_some_and(|(by, q)| by == giver && q == quest)
+        && p.misc
+            .quest_shared
+            .is_some_and(|(by, q)| by == giver && q == quest)
     {
         p.misc.quest_shared = None;
         result(map, giver, g, QuestPartyMessage::AcceptQuest);

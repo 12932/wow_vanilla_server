@@ -1002,7 +1002,9 @@ mod combat {
                                 {
                                     Some("forget")
                                 }
-                                Object_UpdateType::CreateObject2 { guid3, .. } if *guid3 == wolf => {
+                                Object_UpdateType::CreateObject2 { guid3, .. }
+                                    if *guid3 == wolf =>
+                                {
                                     Some("create")
                                 }
                                 Object_UpdateType::Values { guid1, .. } if *guid1 == wolf => {

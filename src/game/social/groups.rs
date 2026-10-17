@@ -759,7 +759,11 @@ pub fn swap_subgroups(realm: &Realm, me: &Online, a: &str, b: &str) {
     if !gr.raid || !gr.can_lead(me.guid) {
         return;
     }
-    let find = |gr: &Group, n: &str| gr.members.iter().position(|m| m.name.eq_ignore_ascii_case(n));
+    let find = |gr: &Group, n: &str| {
+        gr.members
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(n))
+    };
     let (Some(i), Some(j)) = (find(gr, a), find(gr, b)) else {
         return;
     };
@@ -840,7 +844,11 @@ pub fn ready_check(realm: &Realm, me: &Online, answer: Option<u8>) {
                 gr.broadcast(realm, &frame, Some(me.guid));
             }
             // Those offline can't answer: not ready, the leader hears.
-            for m in gr.members.iter().filter(|m| realm.registry.online(m.guid).is_none()) {
+            for m in gr
+                .members
+                .iter()
+                .filter(|m| realm.registry.online(m.guid).is_none())
+            {
                 if let Some(frame) = encode(&MSG_RAID_READY_CHECK_Server {
                     state_check: Some(MSG_RAID_READY_CHECK_Server_state_check {
                         guid: m.guid,

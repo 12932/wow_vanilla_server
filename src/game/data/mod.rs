@@ -16,8 +16,8 @@ pub mod pets;
 pub mod scripts;
 mod scripts_load;
 pub mod spells;
-pub mod world;
 pub mod tt_scripts;
+pub mod world;
 
 use ahash::AHashMap;
 use wow_world_base::vanilla::{Class, Gender, PlayerGender, PlayerRace, Race, RaceClass};

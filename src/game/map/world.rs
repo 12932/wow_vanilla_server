@@ -10,9 +10,7 @@ use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::data::{AREA_FLAG_ARENA, AreaTrigger};
 use crate::game::fields::PLAYER_FLAGS;
-use crate::game::map::creature::{
-    MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause,
-};
+use crate::game::map::creature::{MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause};
 use crate::game::map::gameobject::GameObject;
 use crate::game::map::grid::cell_of;
 use crate::game::map::nav::Nav;
@@ -458,7 +456,13 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
         map.trigger_cooldowns
             .insert(id, now + std::time::Duration::from_secs(u64::from(*secs)));
     }
-    if let Some(script) = data.scripts.areatrigger_script.get(&id).copied().filter(|_| scripted) {
+    if let Some(script) = data
+        .scripts
+        .areatrigger_script
+        .get(&id)
+        .copied()
+        .filter(|_| scripted)
+    {
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::Generic,

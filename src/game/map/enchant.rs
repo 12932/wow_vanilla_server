@@ -64,7 +64,9 @@ pub fn set(item: &mut Item, slot: usize, e: Enchant) {
 
 /// The item's enchantments with an id.
 pub fn active(item: &Item) -> impl Iterator<Item = (usize, Enchant)> + '_ {
-    (0..SLOTS).map(|s| (s, get(item, s))).filter(|(_, e)| e.id != 0)
+    (0..SLOTS)
+        .map(|s| (s, get(item, s)))
+        .filter(|(_, e)| e.id != 0)
 }
 
 /// An item's random property, rolled from its template's pool.
@@ -228,7 +230,11 @@ pub fn equip_spells(data: &GameData, item: &Item) -> Vec<u32> {
 /// worn, held by one of the set's pieces.
 pub fn set_spells(data: &GameData, p: &Player) -> Vec<(Guid, u32)> {
     let mut counts: ahash::AHashMap<u32, (u32, Guid)> = ahash::AHashMap::new();
-    for item in p.items.iter().filter(|i| i.bag == BAG_PLAYER && i.slot < 19) {
+    for item in p
+        .items
+        .iter()
+        .filter(|i| i.bag == BAG_PLAYER && i.slot < 19)
+    {
         let Some(set) = data.item(item.entry).map(|t| t.set_id).filter(|s| *s != 0) else {
             continue;
         };
@@ -407,7 +413,11 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     let Some(p) = map.players.get(&e.actor) else {
         return;
     };
-    let Some(item) = p.items.iter().find(|i| i.bag == BAG_PLAYER && i.slot == slot) else {
+    let Some(item) = p
+        .items
+        .iter()
+        .find(|i| i.bag == BAG_PLAYER && i.slot == slot)
+    else {
         return;
     };
     let item_guid = item.guid;
@@ -443,7 +453,11 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
         }
     }
     if let Some(t) = data.item(item.entry) {
-        for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == 2 && wanted(s.id)) {
+        for s in t
+            .spells
+            .iter()
+            .filter(|s| s.id != 0 && s.trigger == 2 && wanted(s.id))
+        {
             let chance = if s.ppm_rate > 0.0 {
                 ppm_chance(s.ppm_rate, delay)
             } else {

@@ -200,9 +200,13 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
         C::CMSG_FORCE_WALK_SPEED_CHANGE_ACK(m) if m.guid == g => {
             speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_WALK_SPEED)
         }
-        C::CMSG_FORCE_TURN_RATE_CHANGE_ACK(m) if m.guid == g => {
-            relay(map, g, m.info, MSG_MOVE_SET_TURN_RATE, &std::f32::consts::PI.to_le_bytes())
-        }
+        C::CMSG_FORCE_TURN_RATE_CHANGE_ACK(m) if m.guid == g => relay(
+            map,
+            g,
+            m.info,
+            MSG_MOVE_SET_TURN_RATE,
+            &std::f32::consts::PI.to_le_bytes(),
+        ),
         C::CMSG_MOVE_KNOCK_BACK_ACK(m) if m.guid == g => {
             // The jump's angle and speeds, as the client fell.
             let tail: Vec<u8> = match m.info.flags.get_jumping() {
@@ -276,8 +280,7 @@ fn cancel_growth(map: &mut Map, g: Guid) {
     use crate::game::map::auras::{self, AURA_MOD_SCALE};
     auras::remove_where(map, g, |h| {
         h.positive
-            && h
-                .effects
+            && h.effects
                 .iter()
                 .any(|a| a.kind == AURA_MOD_SCALE && a.amount > 0)
     });
@@ -298,14 +301,14 @@ pub fn capture_self_res(map: &mut Map, g: Guid) {
             .map(|(_, res)| *res)
     });
     let reincarnation = p.spells.contains(&REINCARNATION_PASSIVE)
-        && p
-            .misc
+        && p.misc
             .self_res_at
             .is_none_or(|t| now.duration_since(t) >= reincarnation_cooldown(&data))
-        && data
-            .spells
-            .get(REINCARNATION)
-            .is_some_and(|s| s.reagents.iter().all(|(r, n)| *r == 0 || p.count_of(*r) >= *n));
+        && data.spells.get(REINCARNATION).is_some_and(|s| {
+            s.reagents
+                .iter()
+                .all(|(r, n)| *r == 0 || p.count_of(*r) >= *n)
+        });
     let spell = stone.unwrap_or(if reincarnation { REINCARNATION } else { 0 });
     p.fields.set_u32(PLAYER_SELF_RES_SPELL, spell);
 }
@@ -346,7 +349,10 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     let (health, mana) = if points < 0 {
         ((-points) as u32, e.misc_value.max(0) as u32)
     } else {
-        (max_health * points as u32 / 100, max_mana * points as u32 / 100)
+        (
+            max_health * points as u32 / 100,
+            max_mana * points as u32 / 100,
+        )
     };
     // Reincarnation takes its Ankh.
     for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0) {
@@ -465,13 +471,20 @@ pub fn talent_wipe_offer(map: &mut Map, g: Guid, npc: Guid) {
 }
 
 /// The talent spells a player knows, and those they taught.
-pub fn talent_spells(p: &crate::game::map::player::Player, data: &crate::game::data::GameData) -> Vec<u32> {
+pub fn talent_spells(
+    p: &crate::game::map::player::Player,
+    data: &crate::game::data::GameData,
+) -> Vec<u32> {
     let mut out = Vec::new();
     for t in data.spells.talents.values() {
         for r in t.ranks.iter().filter(|r| **r != 0 && p.spells.contains(r)) {
             out.push(*r);
             if let Some(s) = data.spells.get(*r) {
-                for e in s.effects.iter().filter(|e| e.effect == 36 && e.trigger_spell != 0) {
+                for e in s
+                    .effects
+                    .iter()
+                    .filter(|e| e.effect == 36 && e.trigger_spell != 0)
+                {
                     if p.spells.contains(&e.trigger_spell) {
                         out.push(e.trigger_spell);
                     }
@@ -546,9 +559,10 @@ fn unlearn_skill(map: &mut Map, g: Guid, skill: u32) {
         .filter(|s| data.spells.spell_skills.get(s) == Some(&skill))
         .chain(p.spells.iter().copied().filter(|s| {
             data.spells.get(*s).is_some_and(|t| {
-                t.effects
-                    .iter()
-                    .any(|e| e.effect == crate::game::map::spells::EFFECT_SKILL && e.misc_value as u32 == skill)
+                t.effects.iter().any(|e| {
+                    e.effect == crate::game::map::spells::EFFECT_SKILL
+                        && e.misc_value as u32 == skill
+                })
             })
         }))
         .collect();

@@ -168,12 +168,16 @@ fn data() -> GameData {
     let mut trainer = creature(TRAINER, "Trainer", 12, 0x10);
     trainer.trainer_class = 1;
     d.creature_templates.insert(TRAINER, trainer);
-    d.creature_templates
-        .insert(FLIGHT_MASTER, creature(FLIGHT_MASTER, "Gryphon Master", 12, 0x8));
+    d.creature_templates.insert(
+        FLIGHT_MASTER,
+        creature(FLIGHT_MASTER, "Gryphon Master", 12, 0x8),
+    );
     d.creature_templates
         .insert(QUEST_GIVER, creature(QUEST_GIVER, "Quest Giver", 12, 0x2));
-    d.creature_templates
-        .insert(SPIRIT_HEALER, creature(SPIRIT_HEALER, "Spirit Healer", 35, 0x21));
+    d.creature_templates.insert(
+        SPIRIT_HEALER,
+        creature(SPIRIT_HEALER, "Spirit Healer", 35, 0x21),
+    );
     d.creature_spawns.insert(
         0,
         vec![
@@ -244,10 +248,7 @@ fn data() -> GameData {
     }
     for (from, to, path, cost) in [(2u32, 3u32, 9u32, 5u32), (3, 4, 10, 7)] {
         d.npc.taxi_paths.insert((from, to), (path, cost));
-        let (a, b) = (
-            d.npc.taxi_nodes[&from].x,
-            d.npc.taxi_nodes[&to].x,
-        );
+        let (a, b) = (d.npc.taxi_nodes[&from].x, d.npc.taxi_nodes[&to].x);
         d.npc.taxi_path_nodes.insert(
             path,
             vec![
@@ -402,7 +403,10 @@ fn map(realm: &Arc<Realm>) -> crate::game::map::MapHandle {
     realm.maps.get(realm, MapKey::world(0))
 }
 
-async fn on_map<T: Send + 'static>(realm: &Arc<Realm>, f: impl FnOnce(&mut Map) -> T + Send + 'static) -> T {
+async fn on_map<T: Send + 'static>(
+    realm: &Arc<Realm>,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
     map(realm).query(f).await.expect("the map answers")
 }
 
@@ -487,7 +491,9 @@ async fn an_honored_player_pays_a_tenth_less() {
     a.send(CMSG_LIST_INVENTORY { guid: vendor }).await;
     let price = a
         .wait_for("SMSG_LIST_INVENTORY", |m| match m {
-            ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) => l.items.first().map(|i| i.price.as_int()),
+            ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) => {
+                l.items.first().map(|i| i.price.as_int())
+            }
             _ => None,
         })
         .await;
@@ -504,7 +510,8 @@ async fn an_inn_rests_and_rested_xp_doubles_a_kill() {
         let p = m.players.get_mut(&g).unwrap();
         // A long rest, as if days had passed.
         p.row.state.rest_bonus = 40.0;
-        p.fields.has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_RESTING)
+        p.fields
+            .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_RESTING)
     })
     .await;
     assert!(resting);
@@ -626,11 +633,15 @@ async fn quests_in_the_log_swap_places() {
         .await;
     }
     tokio::time::sleep(Duration::from_millis(50)).await;
-    a.send(CMSG_QUESTLOG_SWAP_QUEST { slot1: 0, slot2: 1 }).await;
+    a.send(CMSG_QUESTLOG_SWAP_QUEST { slot1: 0, slot2: 1 })
+        .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     let (first, field) = on_map(&realm, move |m| {
         let p = &m.players[&g];
-        (p.journal.log[0].quest, p.fields.get_u32(PLAYER_QUEST_LOG_1_1))
+        (
+            p.journal.log[0].quest,
+            p.fields.get_u32(PLAYER_QUEST_LOG_1_1),
+        )
     })
     .await;
     assert_eq!((first, field), (601, 601));
@@ -664,7 +675,14 @@ async fn a_rewarded_quest_sends_its_mail() {
             .mails
             .values()
             .find(|m| m.receiver == guid::counter(g))
-            .map(|m| (m.body.clone(), m.money, m.item.as_ref().map(|i| i.entry), m.sender))
+            .map(|m| {
+                (
+                    m.body.clone(),
+                    m.money,
+                    m.item.as_ref().map(|i| i.entry),
+                    m.sender,
+                )
+            })
     };
     assert_eq!(
         mail,
@@ -721,7 +739,15 @@ async fn a_ticket_is_filed_answered_and_replaced() {
     a.say(".ticket list").await;
     let listed = a.system_message("Still stuck").await;
     assert!(listed.contains("Alice"));
-    let id = realm.social.tickets.lock().tickets.keys().copied().next().unwrap();
+    let id = realm
+        .social
+        .tickets
+        .lock()
+        .tickets
+        .keys()
+        .copied()
+        .next()
+        .unwrap();
     a.say(&format!(".ticket respond {id} Try .stuck")).await;
     let answered = a
         .wait_for("the answered ticket", |m| match m {
@@ -860,7 +886,13 @@ async fn items_are_read_wrapped_banked_and_equipped_to_a_slot() {
     .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     let banked = slot_of(&realm, g, BOOK).await.unwrap();
-    assert_eq!(banked, (crate::game::store::BAG_PLAYER, crate::game::map::inventory::BANK_START));
+    assert_eq!(
+        banked,
+        (
+            crate::game::store::BAG_PLAYER,
+            crate::game::map::inventory::BANK_START
+        )
+    );
     a.send(CMSG_AUTOSTORE_BANK_ITEM {
         bag_index: banked.0,
         slot_index: banked.1,
@@ -868,7 +900,10 @@ async fn items_are_read_wrapped_banked_and_equipped_to_a_slot() {
     .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     let back = slot_of(&realm, g, BOOK).await.unwrap();
-    assert!(back.1 < crate::game::map::inventory::BANK_START || back.0 != crate::game::store::BAG_PLAYER);
+    assert!(
+        back.1 < crate::game::map::inventory::BANK_START
+            || back.0 != crate::game::store::BAG_PLAYER
+    );
     // A sword into the main hand by its GUID.
     give(&realm, g, SWORD, 1).await;
     let sword = on_map(&realm, move |m| {
@@ -917,8 +952,10 @@ async fn an_express_flight_pays_for_each_hop() {
         })
         .await;
     assert_eq!(reply, ActivateTaxiReply::Ok);
-    let (money, flying) =
-        on_map(&realm, move |m| (m.players[&g].money(), m.players[&g].flight.is_some())).await;
+    let (money, flying) = on_map(&realm, move |m| {
+        (m.players[&g].money(), m.players[&g].flight.is_some())
+    })
+    .await;
     assert_eq!((money, flying), (88, true));
 }
 
@@ -933,7 +970,10 @@ async fn talents_reset_for_a_rising_price_and_skills_unlearn() {
         m.players.get_mut(&g).unwrap().set_money(50_000);
     })
     .await;
-    on_map(&realm, move |m| crate::game::map::misc::talent_wipe_offer(m, g, trainer)).await;
+    on_map(&realm, move |m| {
+        crate::game::map::misc::talent_wipe_offer(m, g, trainer)
+    })
+    .await;
     let cost = a
         .wait_for("MSG_TALENT_WIPE_CONFIRM", |m| match m {
             ServerOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(c) => Some(c.cost_in_copper),
@@ -976,7 +1016,10 @@ async fn talents_reset_for_a_rising_price_and_skills_unlearn() {
     })
     .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let has = on_map(&realm, move |m| crate::game::map::skills::value(&m.players[&g], 182)).await;
+    let has = on_map(&realm, move |m| {
+        crate::game::map::skills::value(&m.players[&g], 182)
+    })
+    .await;
     assert_eq!(has, None);
 }
 
@@ -1072,7 +1115,10 @@ async fn a_soulstone_lets_the_dead_rise_and_a_summons_brings_a_player() {
         crate::game::map::combat::deal_damage(m, gb, ga, 100_000);
     })
     .await;
-    let spell = on_map(&realm, move |m| m.players[&ga].fields.get_u32(PLAYER_SELF_RES_SPELL)).await;
+    let spell = on_map(&realm, move |m| {
+        m.players[&ga].fields.get_u32(PLAYER_SELF_RES_SPELL)
+    })
+    .await;
     assert_eq!(spell, 3026);
     a.send(CMSG_SELF_RES {}).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1090,7 +1136,10 @@ async fn a_soulstone_lets_the_dead_rise_and_a_summons_brings_a_player() {
     // Bob summons Alice to where he stands.
     b.heartbeat(START.0 + 20.0, START.1, START.2).await;
     tokio::time::sleep(Duration::from_millis(30)).await;
-    on_map(&realm, move |m| crate::game::map::misc::offer_summon(m, gb, ga)).await;
+    on_map(&realm, move |m| {
+        crate::game::map::misc::offer_summon(m, gb, ga)
+    })
+    .await;
     let by = a
         .wait_for("SMSG_SUMMON_REQUEST", |m| match m {
             ServerOpcodeMessage::SMSG_SUMMON_REQUEST(s) => Some(s.summoner),
@@ -1135,7 +1184,10 @@ async fn movement_acknowledgements_reach_those_who_watch() {
         .wait_frame("MSG_MOVE_SET_RUN_SPEED", 0x0CD, |_| true)
         .await;
     let n = speed.len();
-    assert_eq!(f32::from_le_bytes([speed[n - 4], speed[n - 3], speed[n - 2], speed[n - 1]]), 9.0);
+    assert_eq!(
+        f32::from_le_bytes([speed[n - 4], speed[n - 3], speed[n - 2], speed[n - 1]]),
+        9.0
+    );
     a.send(CMSG_MOVE_KNOCK_BACK_ACK {
         guid: ga,
         counter: 0,
@@ -1144,9 +1196,7 @@ async fn movement_acknowledgements_reach_those_who_watch() {
     .await;
     b.wait_frame("MSG_MOVE_KNOCK_BACK", 0x0F1, |_| true).await;
     a.send(CMSG_MOVE_TIME_SKIPPED { guid: ga, lag: 250 }).await;
-    let skipped = b
-        .wait_frame("MSG_MOVE_TIME_SKIPPED", 0x319, |_| true)
-        .await;
+    let skipped = b.wait_frame("MSG_MOVE_TIME_SKIPPED", 0x319, |_| true).await;
     let n = skipped.len();
     assert_eq!(u32_at(&skipped, n - 4), 250);
     // The mount's flourish and the small stubs.
@@ -1174,7 +1224,11 @@ async fn a_spirit_healer_leaves_sickness_and_a_wisp_runs_faster() {
     a.sees(healer).await;
     let die = move |g: Guid| {
         move |m: &mut Map| {
-            m.players.get_mut(&g).unwrap().fields.set_u32(UNIT_FIELD_LEVEL, 20);
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_LEVEL, 20);
             crate::game::map::combat::deal_damage(m, g, g, 100_000);
             crate::game::map::death::release(m, g);
             m.players[&g].speeds.run
@@ -1233,7 +1287,9 @@ async fn under_water_the_breath_runs_out_and_drowning_hurts() {
     })
     .await;
     a.wait_for("SMSG_START_MIRROR_TIMER", |m| match m {
-        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(t) => (t.timer == TimerType::Breath).then_some(()),
+        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(t) => {
+            (t.timer == TimerType::Breath).then_some(())
+        }
         _ => None,
     })
     .await;
@@ -1295,7 +1351,10 @@ async fn exploring_an_area_gives_xp_once() {
     let (realm, mut a) = setup().await;
     let g = a.guid;
     a.clear();
-    on_map(&realm, move |m| crate::game::map::exploration::entered(m, g, 12)).await;
+    on_map(&realm, move |m| {
+        crate::game::map::exploration::entered(m, g, 12)
+    })
+    .await;
     let xp = a
         .wait_for("SMSG_EXPLORATION_EXPERIENCE", |m| match m {
             ServerOpcodeMessage::SMSG_EXPLORATION_EXPERIENCE(e) => Some(e.experience),
@@ -1303,9 +1362,15 @@ async fn exploring_an_area_gives_xp_once() {
         })
         .await;
     assert_eq!(xp, 5);
-    let bit = on_map(&realm, move |m| m.players[&g].fields.get_u32(PLAYER_EXPLORED_ZONES_1 + 1)).await;
+    let bit = on_map(&realm, move |m| {
+        m.players[&g].fields.get_u32(PLAYER_EXPLORED_ZONES_1 + 1)
+    })
+    .await;
     assert_eq!(bit, 0x2);
-    on_map(&realm, move |m| crate::game::map::exploration::entered(m, g, 12)).await;
+    on_map(&realm, move |m| {
+        crate::game::map::exploration::entered(m, g, 12)
+    })
+    .await;
     let again = a
         .gets(NONE_WITHIN, |m| {
             matches!(m, ServerOpcodeMessage::SMSG_EXPLORATION_EXPERIENCE(_)).then_some(())
@@ -1362,7 +1427,8 @@ async fn a_deleted_character_leaves_their_guild_mail_and_auctions() {
 #[tokio::test]
 async fn an_escort_asks_the_party_to_join_and_one_who_confirms_has_it() {
     let mut d = data();
-    d.npc.quests.get_mut(&QUEST).unwrap().flags = crate::game::map::questshare::QUEST_FLAGS_PARTY_ACCEPT;
+    d.npc.quests.get_mut(&QUEST).unwrap().flags =
+        crate::game::map::questshare::QUEST_FLAGS_PARTY_ACCEPT;
     let realm = harness::realm_with(d);
     let (mut a, mut b) = party(&realm).await;
     let (ga, gb) = (a.guid, b.guid);
@@ -1400,7 +1466,9 @@ async fn the_deep_sea_tires_a_swimmer_out() {
     .await;
     assert!(after < before);
     a.wait_for("the fatigue timer", |m| match m {
-        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(t) => (t.timer == TimerType::Fatigue).then_some(()),
+        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(t) => {
+            (t.timer == TimerType::Fatigue).then_some(())
+        }
         _ => None,
     })
     .await;

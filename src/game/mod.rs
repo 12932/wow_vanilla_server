@@ -21,6 +21,22 @@ pub mod store;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_ai5;
+#[cfg(test)]
+mod tests_ai5_conditions;
+#[cfg(test)]
+mod tests_ai5_instances;
+#[cfg(test)]
+mod tests_ai5_spells;
+#[cfg(test)]
+mod tests_arena;
+#[cfg(test)]
+mod tests_bg5;
+#[cfg(test)]
+mod tests_bg6;
+#[cfg(test)]
+mod tests_bosses;
+#[cfg(test)]
 mod tests_combat;
 #[cfg(test)]
 mod tests_combat2;
@@ -29,9 +45,19 @@ mod tests_combat3;
 #[cfg(test)]
 mod tests_combat5;
 #[cfg(test)]
+mod tests_creatures4;
+#[cfg(test)]
+mod tests_events;
+#[cfg(test)]
+mod tests_gifts;
+#[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
 mod tests_loot;
+#[cfg(test)]
+mod tests_misc;
+#[cfg(test)]
+mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
@@ -39,19 +65,23 @@ mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
 #[cfg(test)]
-mod tests_taming;
-#[cfg(test)]
-mod tests_events;
-#[cfg(test)]
-mod tests_gifts;
-#[cfg(test)]
-mod tests_misc;
-#[cfg(test)]
-mod tests_misc2;
-#[cfg(test)]
 mod tests_pvp;
 #[cfg(test)]
+mod tests_pvp2;
+#[cfg(test)]
+mod tests_pvp3;
+#[cfg(test)]
+mod tests_pvp4;
+#[cfg(test)]
+mod tests_pvp5;
+#[cfg(test)]
+mod tests_rules;
+#[cfg(test)]
+mod tests_rules5;
+#[cfg(test)]
 mod tests_scripts;
+#[cfg(test)]
+mod tests_scripts2;
 #[cfg(test)]
 mod tests_spells;
 #[cfg(test)]
@@ -63,43 +93,13 @@ mod tests_spells4;
 #[cfg(test)]
 mod tests_spells5;
 #[cfg(test)]
-mod tests_pvp2;
+mod tests_taming;
 #[cfg(test)]
-mod tests_pvp3;
-#[cfg(test)]
-mod tests_pvp4;
-#[cfg(test)]
-mod tests_pvp5;
+mod tests_terrain;
 #[cfg(test)]
 mod tests_world;
 #[cfg(test)]
 mod tests_world5;
-#[cfg(test)]
-mod tests_arena;
-#[cfg(test)]
-mod tests_rules5;
-#[cfg(test)]
-mod tests_bg5;
-#[cfg(test)]
-mod tests_bg6;
-#[cfg(test)]
-mod tests_rules;
-#[cfg(test)]
-mod tests_terrain;
-#[cfg(test)]
-mod tests_scripts2;
-#[cfg(test)]
-mod tests_creatures4;
-#[cfg(test)]
-mod tests_bosses;
-#[cfg(test)]
-mod tests_ai5;
-#[cfg(test)]
-mod tests_ai5_spells;
-#[cfg(test)]
-mod tests_ai5_conditions;
-#[cfg(test)]
-mod tests_ai5_instances;
 pub mod transports;
 pub mod update;
 pub mod weather;
