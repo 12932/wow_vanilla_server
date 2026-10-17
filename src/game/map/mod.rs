@@ -1138,7 +1138,7 @@ impl Map {
         if event_ai::has_events_entry(&self.realm.data, c.entry) || self.instance.script.is_some() {
             self.ai_spawned.push(guid);
         }
-        self.rare.note(&c.engagement);
+        self.rare.note(&c);
         if awake(&c) {
             self.awake.insert(guid);
         }

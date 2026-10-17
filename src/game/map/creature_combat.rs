@@ -96,28 +96,39 @@ pub struct Engagement {
     pub pulse_at: Option<Instant>,
 }
 
-/// Which of a fight's rarer states some creature of the map may be in: a
-/// charge, a flight, a dungeon-wide pulse, a call for help on its way. The
-/// update looks at every creature for one only while one may be in it,
-/// and the look clears it when it finds none. So whatever puts a creature
-/// in one notes it here first (`Map::add_creature` notes what a creature
-/// arrives with); debug builds check that a look skipped would have found
-/// nothing.
+/// Which of the rarer states some creature of the map may be in: a
+/// charge, a flight, a dungeon-wide pulse, a call for help on its way, a
+/// cast, a despawn timer, being a pet. The update looks at every creature
+/// for one only while one may be in it, and the look clears it when it
+/// finds none. So whatever puts a creature in one notes it here first
+/// (`Map::add_creature` notes what a creature arrives with, and
+/// `Map::caster_mut` notes a cast); debug builds check that a look skipped
+/// would have found nothing.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RareStates {
     pub charge: bool,
     pub flee: bool,
     pub zone_pulse: bool,
     pub assist: bool,
+    pub casting: bool,
+    pub despawn: bool,
+    pub pet: bool,
 }
 
 impl RareStates {
-    /// The states `e` is in, noted.
-    pub fn note(&mut self, e: &Engagement) {
+    /// The states `c` is in, noted.
+    pub fn note(&mut self, c: &crate::game::map::creature::Creature) {
+        let e = &c.engagement;
         self.charge |= e.charge.is_some();
         self.flee |= e.flee.is_some();
         self.zone_pulse |= e.zone_pulse_at.is_some();
         self.assist |= !e.assist.is_empty();
+        self.casting |= c.caster.casting.is_some();
+        self.despawn |= c
+            .scripted
+            .as_deref()
+            .is_some_and(|s| s.despawn_at.is_some());
+        self.pet |= c.pet.is_some();
     }
 }
 

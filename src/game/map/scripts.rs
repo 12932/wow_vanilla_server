@@ -1197,6 +1197,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 return false;
             }
             if d1 > 0 {
+                map.rare.despawn = true;
                 if let Some(s) = event_ai::scripted_mut(map, g) {
                     s.despawn_at = Some(now + Duration::from_millis(u64::from(d1)));
                     s.despawn_type = 1;
