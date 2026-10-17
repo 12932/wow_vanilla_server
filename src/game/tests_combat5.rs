@@ -420,7 +420,13 @@ async fn healing_taken_keeps_the_strongest_cut_and_gain_and_loses_at_most_half()
             for s in [CUT_HALF, CUT_TENTH, GAIN_FIFTH, LESS_HOLY] {
                 spells::cast_triggered(m, ga, s, Some(ga));
             }
-            outcome::healing_taken(m, ga, 100.0, 2)
+            // A holy heal whose coefficient is whole.
+            let none = SpellEffect::default();
+            let mut heal = spell(94_099, [effect(10, 100, 1), none, none]);
+            heal.school = 1;
+            heal.dmg_class = 1;
+            heal.effects[0].bonus_coefficient = 1.0;
+            outcome::spell_healing_taken(m, ga, 100.0, &heal, 0, outcome::Kind::Direct, 1, 1.0)
         })
         .await
         .unwrap();

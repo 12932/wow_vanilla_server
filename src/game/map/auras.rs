@@ -769,6 +769,9 @@ pub fn apply_spell(
     effects: &[(usize, i32)],
     ctx: Context,
 ) -> Result<(), Refused> {
+    if crate::game::map::item_scripts::instead_of_aura(map, caster, spell) {
+        return Ok(());
+    }
     let now = map.now;
     let data = map.realm.data.clone();
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
@@ -1850,6 +1853,11 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     crate::game::map::spells::class_scripts::aura_gone(map, target, h);
     crate::game::map::trinkets::removed(map, target, h);
     crate::game::map::item_scripts::aura_gone(map, target, h, expired);
+    // Combo points held for a while go when the hold runs out, not when
+    // it's taken off.
+    if expired && h.has(AURA_RETAIN_COMBO_POINTS) {
+        crate::game::map::spells::retained_combo_points_expired(map, target, h);
+    }
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting
@@ -1991,6 +1999,8 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
         }
         if map.players.contains_key(&target) {
             crate::game::map::spells::restore_form_passives(map, target);
+            // Gear whose spells name forms: held to this one.
+            crate::game::map::inventory::sync_gear(map, target);
         }
     }
 }
@@ -2157,6 +2167,23 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 max * (a.amount * stacks).max(0) as u32 / 100
             } else {
                 (a.amount * stacks).max(0) as u32
+            };
+            // A heal's tick takes the healing taken of the moment (Thistle
+            // Tea's `Periodic.healing_amount`); food's regeneration doesn't.
+            let amount = match map.realm.data.spells.get(h.spell) {
+                Some(s) if a.kind != AURA_MOD_REGEN => {
+                    crate::game::map::spells::outcome::spell_healing_taken(
+                        map,
+                        target,
+                        amount as f32,
+                        s,
+                        usize::from(a.effect),
+                        crate::game::map::spells::outcome::Kind::Dot,
+                        stacks as u32,
+                        1.0,
+                    ) as u32
+                }
+                _ => amount,
             };
             crate::game::map::spells::heal(map, h.caster, target, h.spell, amount, true);
         }
