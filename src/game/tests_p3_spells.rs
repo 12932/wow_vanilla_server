@@ -1200,8 +1200,7 @@ async fn an_emote_ends_feign_death_and_a_weapon_spell_unarmed_wants_its_weapon()
         return;
     }
     let realm = realm();
-    let (mut c, hunter, map) =
-        player(&realm, "P3P17", "Feignone", Race::Dwarf, Class::Hunter).await;
+    let (c, hunter, map) = player(&realm, "P3P17", "Feignone", Race::Dwarf, Class::Hunter).await;
     map.query(move |m| {
         ready(m, hunter, 60, &[]);
         spells::cast_triggered(m, hunter, FEIGN_DEATH, None);
