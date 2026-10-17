@@ -204,3 +204,61 @@ fn an_event_creatures_looks_are_its_latest_patchs() {
     assert_eq!(looks.len(), 1);
     assert_eq!(looks[0].display, 200, "patch 7's, not patch 3's");
 }
+
+async fn group(leader: &mut Client, member: &mut Client, name: &str) {
+    leader.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+    member
+        .wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+    member.send(CMSG_GROUP_ACCEPT {}).await;
+    leader
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+            _ => None,
+        })
+        .await;
+}
+
+async fn leads(map: &MapHandle, g: Guid) -> bool {
+    on(map, move |m| {
+        m.players[&g].fields.has_flag(
+            PLAYER_FLAGS,
+            crate::game::map::player::PLAYER_FLAGS_GROUP_LEADER,
+        )
+    })
+    .await
+}
+
+/// The group's leader carries `PLAYER_FLAGS_GROUP_LEADER`, handed on with
+/// the lead and gone with the group (mangos's `UpdateGroupLeaderFlag`).
+#[tokio::test]
+async fn the_group_leader_is_flagged_as_such() {
+    let realm = harness::realm();
+    let (mut a, ga, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Bea", Race::Human, Class::Warrior).await;
+    assert!(!leads(&map, ga).await);
+    group(&mut a, &mut b, "Bea").await;
+    assert!(leads(&map, ga).await, "the one who invited leads");
+    assert!(!leads(&map, gb).await);
+    a.send(CMSG_GROUP_SET_LEADER { guid: gb }).await;
+    a.wait_for("SMSG_GROUP_SET_LEADER", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_SET_LEADER(_)).then_some(())
+    })
+    .await;
+    b.wait_for("the new roster", |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) if l.leader == gb => Some(()),
+        _ => None,
+    })
+    .await;
+    assert!(!leads(&map, ga).await, "the lead handed on");
+    assert!(leads(&map, gb).await);
+    b.send(CMSG_GROUP_DISBAND {}).await;
+    b.wait_for("the empty roster", |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) if l.members.is_empty() => Some(()),
+        _ => None,
+    })
+    .await;
+    assert!(!leads(&map, gb).await, "no group, no lead");
+}
