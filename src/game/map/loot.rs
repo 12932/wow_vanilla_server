@@ -681,9 +681,12 @@ fn resolve(map: &mut Map, object: Guid, slot: usize) {
     let _ = r;
 }
 
+/// Who rolled what.
+pub type Rolls = Vec<(Guid, u8)>;
+
 /// The rolls in guid order, and their winner: the first of the highest
 /// (Thistle Tea's `LootRoll.pick_winner`); none with no one rolling.
-pub fn pick_winner(mut rolled: Vec<(Guid, u8)>) -> Option<(Vec<(Guid, u8)>, (Guid, u8))> {
+pub fn pick_winner(mut rolled: Rolls) -> Option<(Rolls, (Guid, u8))> {
     rolled.sort_unstable_by_key(|(g, _)| g.guid());
     let best = rolled
         .iter()
@@ -815,8 +818,8 @@ fn refresh_lootable(map: &mut Map, object: Guid) {
                 l.owner.is_none_or(|o| !s.taken_by.contains(&o))
             }
     };
-    let lootable = loot_ref(map, object)
-        .is_some_and(|l| !l.is_empty() || l.items.iter().any(|s| open(l, s)));
+    let lootable =
+        loot_ref(map, object).is_some_and(|l| !l.is_empty() || l.items.iter().any(|s| open(l, s)));
     if let Some(c) = map.creature_mut(object) {
         c.fields
             .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);

@@ -580,7 +580,7 @@ async fn limited_stock_comes_back_after_the_last_purchase() {
     // On the map's clock, in one go.
     let stock = on_map(&realm, move |m| {
         let t0 = m.now;
-        let v = m.realm.data.vendor_items(VENDOR)[0].clone();
+        let v = m.realm.data.vendor_items(VENDOR)[0];
         let left = |m: &mut Map| vendor::stock_left(m, vendor_guid(), &v, 3);
         vendor::buy(m, g, vendor_guid(), LIMITED, 1);
         let first = left(m);
