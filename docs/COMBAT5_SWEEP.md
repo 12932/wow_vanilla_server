@@ -44,6 +44,11 @@ and its state: **fixed**, or **left** with why.
    clears, and XP scales by the players' share. wvs had none of it.
 10. `world/entity/mob/corpse.ex`: a corpse lies 300 seconds, an elite's
     (ranks 1-3) 600. wvs: 60 and 300.
+10b. `threat.ex`: a creature looks down its threat list from the top: past
+    110% of its victim's threat one in melee range takes over, past 130%
+    anyone; one at range between the two doesn't stop one in melee further
+    down. A taunt raises the taunter to the victim's threat, not the top's.
+    wvs looked at the top alone, and taunted to the top.
 
 ## core/loot
 

@@ -183,10 +183,16 @@ pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    let top = c.threat.iter().map(|(_, t)| *t).fold(0.0f32, f32::max);
+    // Its victim's threat, as Thistle Tea's `Threat.taunt` gives it.
+    let victim = c.combat.victim;
+    let theirs = c
+        .threat
+        .iter()
+        .find(|(g, _)| *g == victim)
+        .map_or(0.0, |(_, t)| *t);
     match c.threat.iter_mut().find(|(g, _)| *g == by) {
-        Some((_, t)) => *t = t.max(top),
-        None => c.threat.push((by, top)),
+        Some((_, t)) => *t = t.max(theirs),
+        None => c.threat.push((by, theirs)),
     }
     c.taunted_by = Some(by);
     c.combat.victim = by;
@@ -682,15 +688,40 @@ fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
         c.threat
             .iter()
             .find(|(x, _)| *x == t)
-            .map_or(0.0, |(_, v)| effective_threat(map, t, *v))
+            .map(|(_, v)| effective_threat(map, t, *v))
     };
-    let (mine, theirs) = (threat_of(current), threat_of(best));
-    let near = match (map.unit_view(g), map.unit_view(best)) {
-        (Some(me), Some(them)) => combat::in_melee_range(&me, &them),
-        _ => false,
+    let Some(mine) = threat_of(current) else {
+        return best;
     };
-    let ratio = if near { 1.1 } else { 1.3 };
-    if theirs > mine * ratio { best } else { current }
+    // Down the list from the top (Thistle Tea's `Threat.decide`): past a
+    // tenth more, one in melee range takes over; past three tenths, anyone.
+    let home = c.home;
+    let leash = leash_of(map, c);
+    let mut sorted: Vec<(Guid, f32)> = c
+        .threat
+        .iter()
+        .filter(|(t, _)| {
+            map.unit_view(*t).is_some_and(|u| {
+                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
+            })
+        })
+        .map(|(t, v)| (*t, effective_threat(map, *t, *v)))
+        .collect();
+    sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let me = map.unit_view(g);
+    for (t, theirs) in sorted {
+        if t == current || theirs <= mine * 1.1 {
+            return current;
+        }
+        let near = match (&me, map.unit_view(t)) {
+            (Some(me), Some(them)) => combat::in_melee_range(me, &them),
+            _ => false,
+        };
+        if theirs > mine * 1.3 || near {
+            return t;
+        }
+    }
+    current
 }
 
 /// How far a creature fights from home: its template's leash, or in the
