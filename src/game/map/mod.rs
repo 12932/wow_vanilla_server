@@ -820,13 +820,31 @@ impl Map {
         stats::regen(self);
     }
 
+    /// What each client is to forget, from what it was told this update:
+    /// an object it had at the update's start is forgotten (first, before
+    /// any create), and what it won't have at the end is dropped from its
+    /// batch. One it learned of and lost within the update is neither.
     fn flush_forgets(&mut self) {
         for (observer, guids) in self.forget.drain() {
-            if guids.is_empty() || !self.players.contains_key(&observer) {
+            let Some(p) = self.players.get(&observer) else {
                 continue;
+            };
+            let batch = self.batches.entry(observer).or_default();
+            let mut seen: Vec<Guid> = Vec::with_capacity(guids.len());
+            for &g in &guids {
+                if seen.contains(&g) {
+                    continue;
+                }
+                seen.push(g);
+                // Each forget took it from `known`, each create put it there.
+                let forgets = guids.iter().filter(|x| **x == g).count() as i64;
+                let creates = batch.creates_of(g) as i64;
+                let now = i64::from(p.known.contains(&g));
+                if now + forgets - creates > 0 {
+                    batch.forget(g);
+                }
+                batch.drop_for(g, now == 1);
             }
-            let block = update::out_of_range_block(&guids);
-            self.batches.entry(observer).or_default().push(&block);
         }
     }
 

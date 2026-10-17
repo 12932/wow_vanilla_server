@@ -965,6 +965,60 @@ mod combat {
         a.sees(boar).await;
     }
 
+    /// A creature lost and seen again within one update, its values changed
+    /// too (a despawn and respawn, or the edge of sight): the client is told
+    /// to forget it first, then of it anew, then its values. In the other
+    /// order the 1.12 client crashes, on values for what it was told to
+    /// forget.
+    #[tokio::test]
+    async fn what_a_client_forgets_comes_before_what_it_is_told_anew() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let wolf = guid::unit(2000, 10);
+        a.sees(wolf).await;
+        let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+        map.call(move |m| {
+            crate::game::map::visibility::part(m, ga, wolf);
+            crate::game::map::visibility::introduce(m, ga, wolf);
+            if let Some(c) = m.creature_mut(wolf) {
+                c.fields.set_u32(UNIT_FIELD_HEALTH, 1);
+            }
+        });
+        let order = a
+            .wait_for("the update that forgets the wolf", move |m| match m {
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u)
+                    if u.objects.iter().any(|o| {
+                        matches!(&o.update_type,
+                            Object_UpdateType::OutOfRangeObjects { guids } if guids.contains(&wolf))
+                    }) =>
+                {
+                    Some(
+                        u.objects
+                            .iter()
+                            .filter_map(|o| match &o.update_type {
+                                Object_UpdateType::OutOfRangeObjects { guids }
+                                    if guids.contains(&wolf) =>
+                                {
+                                    Some("forget")
+                                }
+                                Object_UpdateType::CreateObject2 { guid3, .. } if *guid3 == wolf => {
+                                    Some("create")
+                                }
+                                Object_UpdateType::Values { guid1, .. } if *guid1 == wolf => {
+                                    Some("values")
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            })
+            .await;
+        assert_eq!(order, ["forget", "create", "values"]);
+    }
+
     #[tokio::test]
     async fn a_hostile_creature_attacks_a_player_who_comes_near_and_leashes_home() {
         let realm = harness::realm_with(data());
