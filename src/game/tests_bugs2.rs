@@ -76,6 +76,16 @@ fn has(m: &Map, g: Guid, spell: u32) -> bool {
     auras::auras(m, g).is_some_and(|a| a.has_spell(spell))
 }
 
+fn apply(m: &mut Map, caster: Guid, target: Guid, id: u32) {
+    let data = m.realm.data.clone();
+    let s = data.spells.get(id).unwrap().clone();
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+        .map(|i| (i, spells::points(&s, i, 60)))
+        .collect();
+    let _ = auras::apply_spell(m, caster, target, &s, &effects, auras::Context::default());
+}
+
 /// The result of `spell`'s cast as the client hears it: none for a cast
 /// that went, else the failure.
 async fn cast_result(c: &mut Client, spell: u32) -> Option<u8> {
@@ -193,4 +203,27 @@ async fn a_creature_casts_its_list_without_rage_or_energy() {
         .await
         .unwrap();
     assert_eq!(shouted, (true, None), "Battle Shout goes, for nothing");
+}
+
+#[tokio::test]
+async fn dazed_is_no_exclusive_snare() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "DAZEDBUG");
+    let p = c.enter("Dazedp", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let both = map
+        .query(move |m| {
+            level(m, p, 30, &[]);
+            let kobold = spawn(m, p, 6, 30, 3.0);
+            // Hamstring's snare, then a daze from the same unit.
+            apply(m, kobold, p, 1715);
+            apply(m, kobold, p, 1604);
+            (has(m, p, 1715), has(m, p, 1604))
+        })
+        .await
+        .unwrap();
+    assert_eq!(both, (true, true), "the daze and the snare stand together");
 }
