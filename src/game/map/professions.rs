@@ -501,6 +501,8 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
                 o.fields.set_u32(GAMEOBJECT_STATE, 0);
             }
         }
+        // A battleground's banner or beacon.
+        _ if crate::game::map::battleground::opened(map, caster, object) => {}
         _ => loot::open_object(map, caster, object),
     }
 }

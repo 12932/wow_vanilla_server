@@ -91,8 +91,17 @@ impl Corpse {
             r.hair_color,
             r.facial_hair,
         );
-        // A player's corpse.
-        f.set_u32(CORPSE_FIELD_FLAGS, 0x04);
+        // A player's corpse; one fallen in a battleground has insignia to
+        // take.
+        let insignia = if p.fields.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
+        ) {
+            crate::game::map::battleground::insignia::CORPSE_INSIGNIA
+        } else {
+            0
+        };
+        f.set_u32(CORPSE_FIELD_FLAGS, 0x04 | insignia);
         Self {
             guid: g,
             owner: p.guid,
@@ -175,6 +184,11 @@ pub fn release(map: &mut Map, g: Guid) {
         return;
     }
     let corpse = Corpse::new(p, p.position(), p.movement.orientation);
+    p.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
+        false,
+    );
     p.row.state.corpse = Some(CorpseState {
         map: map.key.map,
         x: corpse.position.x,
@@ -251,6 +265,11 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     }
     let was_ghost = matches!(p.death, Death::Ghost { .. });
     p.death = Death::Alive;
+    p.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
+        false,
+    );
     p.row.state.dead = false;
     let corpse = p.row.state.corpse.take();
     let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);

@@ -7,9 +7,8 @@
 //! each; gossip with the NPCs who keep them shows where they stand and
 //! launches them.
 //!
-//! Where Thistle Tea runs vmangos's creature scripts, these are simple:
-//! a launched NPC walks its `script_waypoint` route, a summoner who
-//! reaches the altar raises its lord, who walks on to the enemy.
+//! What the launched NPCs then do, Thistle Tea's creature scripts for
+//! them, is [`super::av_scripts`]'s.
 
 use std::time::Instant;
 
@@ -27,23 +26,17 @@ pub const HONORED: i32 = 9000;
 
 /// Each side's blacksmith.
 const SMITHS: [u32; 2] = [13257, 13176];
-/// Each side's summoner, and the lord they raise.
+/// Each side's summoner.
 const SUMMONERS: [u32; 2] = [13442, 13236];
-const LORDS: [u32; 2] = [13419, 13256];
-/// Where each summoner raises its lord.
-const ALTARS: [(f32, f32, f32, f32); 2] = [
-    (-199.993, -343.217, 6.77662, 3.68265),
-    (-360.139, -133.403, 26.4856, 4.41568),
-];
 pub const OFFERING_GOAL: u32 = 200;
-/// Each side's cavalry commander, quartermaster and ground commander.
+/// Each side's cavalry commander and quartermaster, and the orders it
+/// gives.
 const CAVALRY: [u32; 2] = [13577, 13441];
 const QUARTERMASTERS: [u32; 2] = [12096, 12097];
-const GROUND_COMMANDERS: [u32; 2] = [13446, 13449];
 const ORDERS: [u32; 2] = [17353, 17442];
 
 /// The wing commanders: entry, side, supply quest, goal, reputation per
-/// turn-in, beacon item, beacon text, launch text, rider.
+/// turn-in, beacon item, beacon text, launch text.
 struct WingCommander {
     entry: u32,
     side: usize,
@@ -53,7 +46,6 @@ struct WingCommander {
     beacon: u32,
     beacon_text: u32,
     launch_text: u32,
-    rider: u32,
 }
 
 const WING_COMMANDERS: [WingCommander; 6] = [
@@ -66,7 +58,6 @@ const WING_COMMANDERS: [WingCommander; 6] = [
         beacon: 17324,
         beacon_text: 8667,
         launch_text: 10341,
-        rider: 14943,
     },
     WingCommander {
         entry: 13180,
@@ -77,7 +68,6 @@ const WING_COMMANDERS: [WingCommander; 6] = [
         beacon: 17325,
         beacon_text: 8669,
         launch_text: 10343,
-        rider: 14944,
     },
     WingCommander {
         entry: 13181,
@@ -88,7 +78,6 @@ const WING_COMMANDERS: [WingCommander; 6] = [
         beacon: 17323,
         beacon_text: 8671,
         launch_text: 10346,
-        rider: 14945,
     },
     WingCommander {
         entry: 13438,
@@ -99,7 +88,6 @@ const WING_COMMANDERS: [WingCommander; 6] = [
         beacon: 17506,
         beacon_text: 8796,
         launch_text: 10351,
-        rider: 14946,
     },
     WingCommander {
         entry: 13439,
@@ -110,7 +98,6 @@ const WING_COMMANDERS: [WingCommander; 6] = [
         beacon: 17507,
         beacon_text: 8799,
         launch_text: 10353,
-        rider: 14948,
     },
     WingCommander {
         entry: 13437,
@@ -121,14 +108,14 @@ const WING_COMMANDERS: [WingCommander; 6] = [
         beacon: 17505,
         beacon_text: 8793,
         launch_text: 10349,
-        rider: 14947,
     },
 ];
 
-/// The entries whose routes the valley walks.
-pub const ROUTED: [u32; 16] = [
+/// The entries whose routes the valley walks: the wing commanders, the
+/// summoners and their lords, the cavalry and the ground assault.
+pub const ROUTED: [u32; 24] = [
     13179, 13180, 13181, 13438, 13439, 13437, 13236, 13442, 13419, 13256, 13577, 13441, 13446,
-    13449, 12096, 12097,
+    13449, 13440, 13576, 13524, 13525, 13526, 13527, 13528, 13529, 13530, 13531,
 ];
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -197,24 +184,6 @@ enum Action {
     Vendor,
 }
 
-/// What reaching the end of a route does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Arrival {
-    /// A rescued wing commander is home.
-    CommanderHome(usize),
-    /// A summoner is at the altar.
-    Altar(usize),
-    Nothing,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Run {
-    creature: Guid,
-    ends: Instant,
-    destination: Vector3d,
-    arrival: Arrival,
-}
-
 /// The beacons a side's air attack plants: the Horde's, the Alliance's.
 const BEACONS: [[u32; 3]; 2] = [[178724, 178725, 178726], [178545, 178547, 178549]];
 /// What a beacon calls down: a gryphon, a war rider.
@@ -237,7 +206,10 @@ pub struct Extras {
     pub cavalry: [Cavalry; 2],
     pub ground: [Ground; 2],
     menus: AHashMap<Guid, (Guid, Vec<(u32, Action)>)>,
-    runs: Vec<Run>,
+    /// The routes walked, and the formations behind them.
+    pub routes: crate::game::map::battleground::av_routes::Routes,
+    /// What the NPCs' scripts keep.
+    pub scripts: crate::game::map::battleground::av_scripts::State,
     /// Beacons planted and waiting.
     pub beacons: Vec<Beacon>,
     /// Beacons already seen, waiting or done.
@@ -245,11 +217,11 @@ pub struct Extras {
     next_scan: Option<Instant>,
 }
 
-fn extras(map: &Map) -> Option<&Extras> {
+pub(super) fn extras(map: &Map) -> Option<&Extras> {
     map.battleground.as_ref()?.av.as_ref().map(|av| &av.extras)
 }
 
-fn extras_mut(map: &mut Map) -> Option<&mut Extras> {
+pub(super) fn extras_mut(map: &mut Map) -> Option<&mut Extras> {
     map.battleground
         .as_mut()?
         .av
@@ -414,7 +386,7 @@ pub fn quest_rewarded(map: &mut Map, g: Guid, quest: u32) {
             if let Some(x) = extras_mut(map) {
                 x.ground[s].phase = March::Marching;
             }
-            walk_route(map, c, GROUND_COMMANDERS[s], Arrival::Nothing);
+            super::av_scripts::ground_marches(map, c, s);
         }
     }
 }
@@ -488,13 +460,17 @@ pub fn gossip_hello(map: &mut Map, g: Guid, npc: Guid) -> bool {
                 send_gossip_complete(map, g);
                 return true;
             }
-            FleetPhase::Ready if !f.launched && f.count >= WING_COMMANDERS[i].goal => Some((
+            FleetPhase::Ready
+                if standing >= 0 && !f.launched && f.count >= WING_COMMANDERS[i].goal =>
+            {
+                Some((
                 68,
-                vec![
-                    (WING_COMMANDERS[i].beacon_text, Action::TakeBeacon(i)),
-                    (WING_COMMANDERS[i].launch_text, Action::LaunchAir(i)),
-                ],
-            )),
+                    vec![
+                        (WING_COMMANDERS[i].beacon_text, Action::TakeBeacon(i)),
+                        (WING_COMMANDERS[i].launch_text, Action::LaunchAir(i)),
+                    ],
+                ))
+            }
             _ => None,
         }
     } else if CAVALRY[s] == entry {
@@ -742,80 +718,11 @@ fn yell(map: &Map, entry: u32, text: &str) {
     }
 }
 
-/// `creature` walks its entry's route; reaching its end does `arrival`.
-fn walk_route(map: &mut Map, creature: Guid, entry: u32, arrival: Arrival) -> bool {
-    let now = map.now;
-    let data = map.realm.data.clone();
-    let Some(route) = data.bg_routes.get(&entry).filter(|r| !r.is_empty()) else {
-        return false;
-    };
-    let spline_id = map.next_spline_id;
-    let Some(c) = map.creature_mut(creature) else {
-        return false;
-    };
-    let mut points = vec![c.position];
-    points.extend(route.iter().map(|&(x, y, z)| Vector3d { x, y, z }));
-    let destination = *points.last().expect("a route has points");
-    let Some(frame) = c.walk(points, true, now, spline_id) else {
-        return false;
-    };
-    let ends = match &c.motion {
-        crate::game::map::creature::Motion::Moving(w) => w.started + w.duration,
-        _ => now,
-    };
-    c.home = destination;
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    map.send_to_observers(creature, &frame, false);
-    if let Some(x) = extras_mut(map) {
-        x.runs.push(Run {
-            creature,
-            ends,
-            destination,
-            arrival,
-        });
-    }
-    true
-}
-
-/// Each update: those at the end of their route have arrived, and the
-/// beacons planted call down their flyers.
+/// Each update: the NPCs' scripts and routes, and the beacons planted
+/// calling down their flyers.
 pub fn update(map: &mut Map) {
     beacons(map);
-    let now = map.now;
-    let done: Vec<Run> = {
-        let Some(x) = extras_mut(map) else {
-            return;
-        };
-        if x.runs.iter().all(|r| r.ends > now) {
-            return;
-        }
-        let (done, going): (Vec<Run>, Vec<Run>) = x.runs.drain(..).partition(|r| r.ends <= now);
-        x.runs = going;
-        done
-    };
-    for r in done {
-        // Unwatched, a creature doesn't step along its walk: it's there.
-        if let Some(c) = map.creature_mut(r.creature) {
-            if !c.alive() {
-                continue;
-            }
-            if matches!(c.motion, crate::game::map::creature::Motion::Moving(_)) {
-                c.position = r.destination;
-                c.motion = crate::game::map::creature::Motion::Idle { until: None };
-            }
-        } else {
-            continue;
-        }
-        match r.arrival {
-            Arrival::CommanderHome(i) => {
-                if let Some(x) = extras_mut(map) {
-                    x.air[i].phase = FleetPhase::Ready;
-                }
-            }
-            Arrival::Altar(s) => raise_lord(map, s),
-            Arrival::Nothing => {}
-        }
-    }
+    super::av_scripts::update(map);
 }
 
 /// Beacons once a second: new ones planted wait a minute; one not
@@ -895,28 +802,31 @@ fn rescue(map: &mut Map, i: usize, npc: Guid) {
     if let Some(x) = extras_mut(map) {
         x.air[i].phase = FleetPhase::Returning;
     }
-    if !walk_route(
-        map,
-        npc,
-        WING_COMMANDERS[i].entry,
-        Arrival::CommanderHome(i),
-    ) && let Some(x) = extras_mut(map)
+    if !super::av_scripts::commander_departs(map, npc)
+        && let Some(x) = extras_mut(map)
     {
         x.air[i].phase = FleetPhase::Ready;
     }
 }
 
-/// The offerings are made: the summoner calls, and walks to the altar.
+/// A rescued wing commander reached home: their fleet takes supplies.
+pub(super) fn fleet_home(map: &mut Map, entry: u32) {
+    let Some(i) = WING_COMMANDERS.iter().position(|w| w.entry == entry) else {
+        return;
+    };
+    if let Some(x) = extras_mut(map)
+        && x.air[i].phase == FleetPhase::Returning
+    {
+        x.air[i].phase = FleetPhase::Ready;
+    }
+}
+
+/// The offerings are made: the summoner calls, and sets out for the
+/// altar.
 fn launch_summoner(map: &mut Map, s: usize) {
     if s == 0 {
-        if let Some(line) = map
-            .realm
-            .data
-            .npc
-            .broadcast_line(8732, false)
-            .map(str::to_owned)
-        {
-            yell(map, SUMMONERS[0], &line);
+        if let Some(g) = creature_of(map, SUMMONERS[0]) {
+            crate::game::map::scripts::talk(map, g, 8732, Guid::zero(), None);
         }
     } else {
         yell(
@@ -925,24 +835,11 @@ fn launch_summoner(map: &mut Map, s: usize) {
             "Soldiers of Frostwolf, come to my aid! The Ice Lord has granted us his protection. He's accepted the offering! The time has come to unleash him upon the Stormpike Army!",
         );
     }
-    let summoner = creature_of(map, SUMMONERS[s]);
-    let walked = summoner.is_some_and(|c| walk_route(map, c, SUMMONERS[s], Arrival::Altar(s)));
-    if !walked {
-        raise_lord(map, s);
-    }
+    super::av_scripts::summoner_departs(map, s);
 }
 
-/// The lord rises at the altar, and walks on the enemy.
-fn raise_lord(map: &mut Map, s: usize) {
-    let Some(lord) = crate::game::map::outdoor_pvp::summon(map, LORDS[s], ALTARS[s], 0) else {
-        return;
-    };
-    let name = ["Ivus the Forest Lord", "Lokholar the Ice Lord"][s];
-    bg::announce(map, Some(s), &format!("{name} has been summoned!"));
-    walk_route(map, lord, LORDS[s], Arrival::Nothing);
-}
-
-/// A wing commander launches the air attack: their rider goes out.
+/// A wing commander launches the air attack: they mount, rise, and send
+/// out their rider.
 fn launch_air(map: &mut Map, i: usize, npc: Guid) {
     let ready = extras(map).is_some_and(|x| {
         let f = x.air[i];
@@ -954,29 +851,11 @@ fn launch_air(map: &mut Map, i: usize, npc: Guid) {
     if let Some(x) = extras_mut(map) {
         x.air[i].launched = true;
     }
-    let Some(at) = map.creature(npc).map(|c| c.position) else {
-        return;
-    };
-    crate::game::map::outdoor_pvp::summon(
-        map,
-        WING_COMMANDERS[i].rider,
-        (at.x, at.y, at.z + 10.0, 0.0),
-        0,
-    );
-    let name = map
-        .realm
-        .data
-        .creature_template(WING_COMMANDERS[i].entry)
-        .map(|t| t.name.clone())
-        .unwrap_or_default();
-    bg::announce(
-        map,
-        Some(WING_COMMANDERS[i].side),
-        &format!("{name} launches an air attack!"),
-    );
+    super::av_scripts::commander_launches(map, npc);
 }
 
-/// The cavalry charges: the stables empty, and the commander rides out.
+/// The cavalry charges: the stables empty, and the commander rides out
+/// with their riders.
 fn launch_cavalry(map: &mut Map, g: Guid, s: usize, npc: Guid) {
     let standing = standing(map, g, s);
     let Some(x) = extras_mut(map) else {
@@ -993,13 +872,11 @@ fn launch_cavalry(map: &mut Map, g: Guid, s: usize, npc: Guid) {
     for e in [90u8, 92, 94, 96] {
         bg::set_event(map, e + s as u8, Some(2));
     }
-    walk_route(map, npc, CAVALRY[s], Arrival::Nothing);
-    let who = ["The Stormpike cavalry", "The Frostwolf wolf riders"][s];
-    bg::announce(map, Some(s), &format!("{who} ride into battle!"));
+    super::av_scripts::cavalry_charges(map, npc, s);
 }
 
-/// The quartermaster gives the orders, and the ground commander
-/// assembles at their side.
+/// The quartermaster gives the orders; the first time, the ground
+/// commander and their troops assemble.
 fn take_orders(map: &mut Map, g: Guid, s: usize, npc: Guid) {
     let standing = standing(map, g, s);
     let Some(gr) = extras(map).map(|x| x.ground[s]) else {
@@ -1019,48 +896,82 @@ fn take_orders(map: &mut Map, g: Guid, s: usize, npc: Guid) {
         x.ground[s].coldtooth = 0;
         x.ground[s].phase = March::Assembled;
     }
-    if first && let Some(at) = map.creature(npc).map(|c| (c.position, c.orientation)) {
-        let commander = crate::game::map::outdoor_pvp::summon(
-            map,
-            GROUND_COMMANDERS[s],
-            (at.0.x + 3.0, at.0.y, at.0.z, at.1),
-            0,
-        );
-        if let Some(x) = extras_mut(map) {
-            x.ground[s].commander = commander;
-        }
+    if first {
+        let t = extras(map).map_or(0, |x| x.armor[s].tier);
+        super::av_scripts::ground_assembles(map, npc, s, t);
     }
 }
 
-/// One of the valley's NPCs fell: a cavalry or ground assault is over, or a
-/// quartermaster gives no more orders.
-pub fn creature_died(map: &mut Map, creature: Guid) {
-    let entry = crate::game::guid::entry(creature);
+/// The ground commander assembled: theirs are the orders.
+pub(super) fn ground_commander(map: &mut Map, s: usize, g: Guid) {
+    if let Some(x) = extras_mut(map)
+        && x.ground[s].phase == March::Assembled
+        && x.ground[s].commander.is_none()
+    {
+        x.ground[s].commander = Some(g);
+    }
+}
+
+/// A cavalry commander or quartermaster back after dying: their side can
+/// charge again, or take orders.
+pub(super) fn back_from_the_dead(map: &mut Map) {
+    let (cavalry, quartermasters) = (
+        [0, 1].map(|s| creature_of(map, CAVALRY[s]).is_some()),
+        [0, 1].map(|s| creature_of(map, QUARTERMASTERS[s]).is_some()),
+    );
     let Some(x) = extras_mut(map) else {
         return;
     };
     for s in 0..2 {
-        if CAVALRY[s] == entry {
-            x.cavalry[s].phase = March::Dead;
+        if x.cavalry[s].phase == March::Dead && cavalry[s] {
+            x.cavalry[s].phase = March::Ready;
         }
-        if QUARTERMASTERS[s] == entry {
-            x.ground[s].quartermaster_dead = true;
-        }
-        if x.ground[s].commander == Some(creature) {
-            x.ground[s].phase = March::Dead;
-            x.ground[s].commander = None;
+        if x.ground[s].quartermaster_dead && quartermasters[s] {
+            x.ground[s] = Ground {
+                irondeep: x.ground[s].irondeep,
+                coldtooth: x.ground[s].coldtooth,
+                ..Default::default()
+            };
         }
     }
-    x.runs.retain(|r| r.creature != creature);
+}
+
+/// One of the valley's NPCs fell: a cavalry or ground assault is over, a
+/// quartermaster gives no more orders, a wing commander is a prisoner
+/// again; those who followed them go on alone.
+pub fn creature_died(map: &mut Map, creature: Guid) {
+    let entry = crate::game::guid::entry(creature);
+    if let Some(x) = extras_mut(map) {
+        for s in 0..2 {
+            if CAVALRY[s] == entry {
+                x.cavalry[s].phase = March::Dead;
+            }
+            if QUARTERMASTERS[s] == entry {
+                x.ground[s].quartermaster_dead = true;
+            }
+            if x.ground[s].commander == Some(creature)
+                && matches!(x.ground[s].phase, March::Assembled | March::Marching)
+            {
+                x.ground[s].phase = March::Dead;
+                x.ground[s].commander = None;
+            }
+        }
+        if let Some(i) = WING_COMMANDERS.iter().position(|w| w.entry == entry) {
+            x.air[i].phase = FleetPhase::Prisoner;
+        }
+    }
+    super::av_scripts::died(map, creature, entry);
+}
+
+/// Whether `object` is a planted beacon.
+pub fn is_beacon(map: &Map, object: Guid) -> bool {
+    extras(map).is_some_and(|x| x.beacons.iter().any(|b| b.object == object))
 }
 
 #[cfg(test)]
 impl Extras {
-    /// Every route walked to its end now.
-    pub fn hurry(&mut self, now: Instant) {
-        for r in self.runs.iter_mut() {
-            r.ends = now;
-        }
+    /// The beacons looked at again at once.
+    pub fn hurry(&mut self, _now: Instant) {
         self.next_scan = None;
     }
 }

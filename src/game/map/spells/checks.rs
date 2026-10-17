@@ -249,6 +249,11 @@ pub fn check(
     if !me.alive && !s.attr(0, sd::ATTR_CASTABLE_WHILE_DEAD) {
         return Some(fail::CASTER_DEAD);
     }
+    if !triggered
+        && let Some(code) = crate::game::map::battleground::spell_check(map, caster, s)
+    {
+        return Some(code);
+    }
     let player = map.players.get(&caster);
     if let Some(p) = player {
         if item.is_none() && !triggered && !p.spells.contains(&s.id) {
