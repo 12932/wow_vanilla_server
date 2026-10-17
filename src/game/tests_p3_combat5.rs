@@ -255,3 +255,181 @@ async fn vanish_and_disengaging_clear_a_players_fight_whole() {
         .unwrap();
     assert_eq!(r, (false, None, false, true, true, [true, true]));
 }
+
+fn view(x: f32, y: f32, orientation: f32) -> combat::UnitView {
+    combat::UnitView {
+        guid: Guid::zero(),
+        position: Vector3d { x, y, z: 0.0 },
+        orientation,
+        level: 1,
+        faction: 0,
+        combat_reach: 1.5,
+        alive: true,
+        is_player: true,
+        standing: true,
+        running: false,
+    }
+}
+
+#[test]
+fn a_swing_wants_its_victim_within_a_hundred_and_twenty_degrees_ahead() {
+    let me = view(0.0, 0.0, 0.0);
+    for (x, y, ahead) in [
+        (3.0, 0.0, true),
+        (2.0, 3.4, true),
+        (2.0, 3.5, false),
+        (0.0, 3.0, false),
+        (-3.0, 0.0, false),
+    ] {
+        assert_eq!(combat::facing(&me, &view(x, y, 0.0)), ahead, "{x} {y}");
+    }
+    // The angle wraps.
+    let turned = view(0.0, 0.0, std::f32::consts::TAU - 0.1);
+    assert!(combat::facing(&turned, &view(3.0, 0.0, 0.0)));
+}
+
+#[tokio::test]
+async fn facing_away_a_player_is_told_so_and_both_hands_and_the_strike_wait() {
+    let (_realm, mut a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 1.0);
+            m.players.get_mut(&ga).unwrap().spells.push(STRIKE);
+            combat::queue_next_swing(m, ga, STRIKE);
+            // Turned about.
+            let p = m.players.get_mut(&ga).unwrap();
+            p.movement.orientation += std::f32::consts::PI;
+            let now = m.now;
+            let before = m.unit_fields(brute).unwrap().get_u32(UNIT_FIELD_HEALTH);
+            {
+                let c = m.combat_mut(ga).unwrap();
+                c.victim = brute;
+                c.attacking = true;
+                c.next_swing = Some(now);
+                c.next_offhand = Some(now);
+            }
+            combat::try_swing(m, ga);
+            let c = m.combat(ga).unwrap();
+            (
+                c.next_swing == Some(now),
+                c.queued,
+                m.unit_fields(brute).unwrap().get_u32(UNIT_FIELD_HEALTH) == before,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (true, Some(STRIKE), true));
+    a.wait_for("SMSG_ATTACKSWING_BADFACING", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_ATTACKSWING_BADFACING).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_off_hand_swing_puts_an_imminent_main_hand_a_moment_after() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 1.0);
+            m.players
+                .get_mut(&ga)
+                .unwrap()
+                .spells
+                .push(crate::game::map::derive::SPELL_DUAL_WIELD);
+            equip(m, ga, SWORD, 15);
+            equip(m, ga, SWORD, 16);
+            let now = m.now;
+            {
+                let c = m.combat_mut(ga).unwrap();
+                c.victim = brute;
+                c.attacking = true;
+                c.next_swing = Some(now + Duration::from_millis(50));
+                c.next_offhand = Some(now);
+            }
+            combat::FORCED_OUTCOME.with(|f| f.set(Some(Outcome::Miss)));
+            combat::try_swing(m, ga);
+            combat::FORCED_OUTCOME.with(|f| f.set(None));
+            let c = m.combat(ga).unwrap();
+            (
+                c.next_swing.map(|t| t.duration_since(now).as_millis()),
+                c.next_offhand.map(|t| t.duration_since(now).as_millis()),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, Some(200));
+    assert!(r.1.is_some_and(|t| t >= 1_000), "{r:?}");
+}
+
+#[tokio::test]
+async fn stuns_fears_confusion_pacify_and_feigning_hold_the_swings_and_roots_and_silence_dont() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            use crate::game::map::auras::*;
+            let brute = spawn(m, ga, BRUTE, 20, 1.0);
+            let mut out = Vec::new();
+            let kinds: [&[u32]; 9] = [
+                &[AURA_MOD_STUN],
+                &[AURA_MOD_CONFUSE],
+                &[AURA_MOD_FEAR],
+                &[AURA_MOD_PACIFY],
+                &[AURA_MOD_PACIFY_SILENCE],
+                &[AURA_FEIGN_DEATH],
+                &[AURA_MOD_ROOT],
+                &[AURA_MOD_SILENCE],
+                &[AURA_MOD_FEAR, AURA_PREVENTS_FLEEING],
+            ];
+            for (i, kinds) in kinds.iter().enumerate() {
+                for (j, kind) in kinds.iter().enumerate() {
+                    aura_of(m, ga, 90_500 + 10 * i as u32 + j as u32, *kind, 0, 1);
+                }
+                let before = m.unit_fields(brute).unwrap().get_u32(UNIT_FIELD_HEALTH);
+                forced_swing(m, ga, brute, Outcome::Hit);
+                out.push(m.unit_fields(brute).unwrap().get_u32(UNIT_FIELD_HEALTH) < before);
+                for j in 0..kinds.len() {
+                    remove_spell(m, ga, 90_500 + 10 * i as u32 + j as u32, None);
+                }
+            }
+            out
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        r,
+        vec![false, false, false, false, false, false, true, true, true]
+    );
+}
+
+#[tokio::test]
+async fn no_one_swings_without_meaning_to_nor_at_or_from_the_dead() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 1.0);
+            let health = |m: &Map| m.unit_fields(brute).unwrap().get_u32(UNIT_FIELD_HEALTH);
+            // In a fight, but not attacking: no swing.
+            forced_swing(m, ga, brute, Outcome::Miss);
+            m.combat_mut(ga).unwrap().attacking = false;
+            let now = m.now;
+            m.combat_mut(ga).unwrap().next_swing = Some(now);
+            let before = health(m);
+            combat::FORCED_OUTCOME.with(|f| f.set(Some(Outcome::Hit)));
+            combat::try_swing(m, ga);
+            let idle = health(m) == before;
+            // Dead, the attacker stops.
+            combat::kill(m, brute, ga);
+            {
+                let c = m.combat_mut(ga).unwrap();
+                c.attacking = true;
+                c.next_swing = Some(now);
+            }
+            combat::try_swing(m, ga);
+            let dead = (health(m) == before, m.combat(ga).unwrap().attacking);
+            combat::FORCED_OUTCOME.with(|f| f.set(None));
+            (idle, dead)
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (true, (true, false)));
+}
