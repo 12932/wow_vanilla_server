@@ -1296,3 +1296,40 @@ async fn a_copy_holds_as_many_as_its_map_template_says() {
         .await;
     assert_eq!(reason, TransferAbortReason::IsFull, "one to the copy");
 }
+
+/// A new character knows their race's languages as skills (Language:
+/// Common's 98 from `SkillLineAbility`, as Thistle Tea gives it), so the
+/// client doesn't garble its own player's speech.
+#[tokio::test]
+async fn a_new_character_has_their_languages_as_skills() {
+    let db = &crate::game::harness::real_data("db");
+    if !db.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let realm = harness::realm_with(crate::game::data::load::load(db));
+    let mut a = Client::connect(&realm, "TONGUES");
+    let human = a.enter("Tonguesa", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "TONGUESB");
+    let orc = b.enter("Tonguesb", Race::Orc, Class::Warrior).await;
+    let skills = |m: &Map, g: Guid| {
+        let p = &m.players[&g];
+        [98, 109].map(|s| {
+            (
+                crate::game::map::skills::value(p, s),
+                crate::game::map::skills::max_value(p, s),
+            )
+        })
+    };
+    let h = map0(&realm)
+        .query(move |m| skills(m, human))
+        .await
+        .unwrap();
+    let o = realm
+        .maps
+        .get(&realm, MapKey::world(1))
+        .query(move |m| skills(m, orc))
+        .await
+        .unwrap();
+    assert_eq!(h, [(Some(300), Some(300)), (None, None)], "a human speaks Common");
+    assert_eq!(o, [(None, None), (Some(300), Some(300))], "an orc speaks Orcish");
+}
