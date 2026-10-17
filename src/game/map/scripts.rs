@@ -1171,9 +1171,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             event_ai::set_phase(map, source, rand::rng().random_range(lo..=hi));
             true
         }
-        // Flee: run from the victim for a while.
+        // Flee: to the nearest friend for help, or in fear for a while.
         47 => {
-            crate::game::map::ai::flee(map, source);
+            crate::game::map::creature_combat::flee_for_assistance(map, source);
             true
         }
         // Damage the target: an amount or a percentage of its health.

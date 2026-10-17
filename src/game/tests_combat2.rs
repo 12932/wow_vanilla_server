@@ -432,6 +432,18 @@ async fn a_creature_template_shrugs_off_what_it_is_immune_to() {
     let before = map.query(move |m| health(m, stone)).await.unwrap();
     map.query(move |m| {
         auras::remove_spell(m, stone, SCARE, None);
+        // The fear may have run it a step: back home, in reach.
+        if let Some(c) = m.creature_mut(stone) {
+            c.position = c.home;
+            c.motion = crate::game::map::creature::Motion::Idle { until: None };
+            // At the warrior's level, so the blow isn't dodged or parried
+            // away (a level-20 stone parries most of a level-1's swings).
+            c.fields.set_u32(UNIT_FIELD_LEVEL, 1);
+            crate::game::map::derive::creature(c);
+            c.derived.dodge = 0.0;
+            c.derived.parry = 0.0;
+            c.derived.block = 0.0;
+        }
         m.players.get_mut(&ga).unwrap().derived.hit = 100.0;
         let p = m.players.get_mut(&ga).unwrap();
         p.movement.orientation = std::f32::consts::PI;
