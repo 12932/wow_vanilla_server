@@ -1,7 +1,11 @@
-//! Stage 2g's world against Thistle Tea, through the protocol: a speed
-//! change told to those watching once, at the change (a ghost's release, a
-//! revive and `.speed` among them); water's interrupts by the terrain's
-//! liquid; and Bind's Hearthstone given by the spell.
+//! Stages 2g and 2i against Thistle Tea, through the protocol. The world: a
+//! speed change told to those watching once, at the change (a ghost's
+//! release, a revive and `.speed` among them); water's interrupts by the
+//! terrain's liquid; Bind's Hearthstone given by the spell. The second
+//! pass, line by line: death and resurrection (the spirit healer, the
+//! reclaim, self-resurrection, resurrection spells, the corpse), crafting
+//! and disenchanting, locks (lockpicking, gathering, keys and charges),
+//! skinning's reasons, fishing and the spell focus.
 
 use std::sync::Arc;
 use std::time::Duration;
