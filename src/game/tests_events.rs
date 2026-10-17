@@ -404,6 +404,72 @@ async fn the_spider_god(realm: &Arc<Realm>) {
     turn_in(realm, &mut c, 3188, QUEST).await;
 }
 
+fn health(m: &Map, g: Guid) -> (u32, u32) {
+    m.unit_fields(g).map_or((0, 0), |f| {
+        (
+            f.get_u32(crate::game::fields::UNIT_FIELD_HEALTH),
+            f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH),
+        )
+    })
+}
+
+/// `g` hits `victim` until `stop` holds (or it is dead): a tenth of its
+/// health at a time.
+async fn beat(
+    map: &MapHandle,
+    g: Guid,
+    victim: Guid,
+    stop: impl Fn(&Map) -> bool + Send + Clone + 'static,
+) {
+    for _ in 0..40 {
+        let s = stop.clone();
+        let over = map
+            .query(move |m| {
+                if s(m) || health(m, victim).0 == 0 {
+                    return true;
+                }
+                let blow = (health(m, victim).1 / 10).max(1);
+                crate::game::map::combat::deal_damage(m, g, victim, blow);
+                false
+            })
+            .await
+            .unwrap();
+        if over {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn hostile(m: &Map, a: Guid, b: Guid) -> bool {
+    crate::game::map::combat::can_attack(m, a, b)
+}
+
+/// Beat Bartleby: taking the quest sets him on the warrior; beaten to his
+/// last fifteen percent, he yields.
+async fn beat_bartleby(realm: &Arc<Realm>) {
+    const QUEST: u32 = 1640;
+    const BARTLEBY: u32 = 6090;
+    let (mut c, g, _) = hero(realm, "BRAWLER", Race::Human, Class::Warrior, 10).await;
+    let map = take(realm, &mut c, BARTLEBY, QUEST, &[1639]).await;
+    let bartleby = map.query(|m| npc(m, BARTLEBY)).await.flatten().unwrap().0;
+    assert!(
+        until(&map, move |m| hostile(m, bartleby, g)).await,
+        "Bartleby turns on the warrior"
+    );
+    beat(&map, g, bartleby, move |m| done(m, g, QUEST)).await;
+    let after = map
+        .query(move |m| (done(m, g, QUEST), health(m, bartleby).0 > 0))
+        .await
+        .unwrap();
+    assert_eq!(after, (true, true), "he yields, alive");
+    assert!(
+        until(&map, move |m| !hostile(m, bartleby, g)).await,
+        "and is a friend again"
+    );
+    turn_in(realm, &mut c, BARTLEBY, QUEST).await;
+}
+
 fn wanted(name: &str) -> bool {
     let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
     if yes {
@@ -447,5 +513,8 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
     }
     if wanted("spider") {
         the_spider_god(&realm).await;
+    }
+    if wanted("bartleby") {
+        beat_bartleby(&realm).await;
     }
 }
