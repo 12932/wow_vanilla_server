@@ -698,3 +698,76 @@ async fn a_channel_on_the_pet_ends_on_the_pet() {
         .unwrap();
     assert_eq!(out, (true, true, false), "the imp's funnel goes with it");
 }
+
+#[tokio::test]
+async fn who_may_attack_whom() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "WHOA");
+    let human = a.enter("Whoa", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "WHOB");
+    let undead = b.enter("Whob", Race::Undead, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            use crate::game::map::combat::{Regard, can_attack, regard};
+            use crate::game::map::player::UNIT_FLAG_PVP;
+            level(m, human, 60, &[]);
+            level(m, undead, 60, &[]);
+            let flag = |m: &mut Map, g: Guid, on: bool| {
+                m.players
+                    .get_mut(&g)
+                    .unwrap()
+                    .fields
+                    .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, on);
+            };
+            // The flagged may be attacked; the flag doesn't let one attack.
+            flag(m, human, true);
+            let pvp = (can_attack(m, human, undead), can_attack(m, undead, human));
+            flag(m, undead, true);
+            let both = can_attack(m, human, undead);
+            // Booty Bay's Bruiser: friendly to one not at war with Booty Bay.
+            let bruiser = spawn(m, human, 4624, 60, 3.0);
+            let neutral_faction = (regard(m, human, bruiser), can_attack(m, human, bruiser));
+            // A kobold and a wolf are neutral to each other: neither attacks.
+            let kobold = spawn(m, human, 6, 10, 5.0);
+            let wolf = spawn(m, human, 299, 10, 6.0);
+            let creatures = (
+                regard(m, kobold, wolf),
+                regard(m, wolf, kobold),
+                can_attack(m, kobold, wolf),
+                can_attack(m, wolf, kobold),
+            );
+            // A player attacks the hostile kobold, but not one immune to
+            // players.
+            let hostile = (regard(m, human, kobold), can_attack(m, human, kobold));
+            m.creature_mut(kobold)
+                .unwrap()
+                .fields
+                .set_flag(UNIT_FIELD_FLAGS, 0x100, true);
+            let immune = can_attack(m, human, kobold);
+            (
+                pvp,
+                both,
+                neutral_faction,
+                creatures,
+                hostile,
+                immune,
+                Regard::Neutral,
+            )
+        })
+        .await
+        .unwrap();
+    let (pvp, both, neutral_faction, creatures, hostile, immune, neutral) = out;
+    assert_eq!(pvp, (false, true), "only the flagged one is fair game");
+    assert!(both);
+    assert_eq!(
+        neutral_faction,
+        (crate::game::map::combat::Regard::Friendly, false)
+    );
+    assert_eq!(creatures, (neutral, neutral, false, false));
+    assert_eq!(hostile, (crate::game::map::combat::Regard::Hostile, true));
+    assert!(!immune, "immune to players");
+}
