@@ -240,6 +240,11 @@ fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
         })
 }
 
+/// What a unit's melee hastes and slows make of its swing's period.
+pub fn melee_haste(a: &Auras) -> f32 {
+    period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED])
+}
+
 /// Per-class rates for crit and dodge from agility at levels 1 and 60.
 fn agility_rate(class: u8, level: u32, dodge: bool) -> f32 {
     let (l1, l60) = match (class, dodge) {
