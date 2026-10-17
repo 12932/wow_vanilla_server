@@ -121,6 +121,7 @@ async fn group(leader: &mut Client, member: &mut Client, name: &str) {
 }
 
 const BLOODRAGE: u32 = 2687;
+
 const HEALTH_FUNNEL: u32 = 755;
 
 #[tokio::test]
@@ -314,4 +315,49 @@ async fn plague_spreads_through_the_raid_it_is_on() {
         .await
         .unwrap();
     assert_eq!(hurt, (true, true, true), "the plagued and the one beside");
+}
+
+#[tokio::test]
+async fn a_teleport_within_a_copy_stays_in_it() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BWLORB");
+    let p = c.enter("Orbp", Race::Human, Class::Warrior).await;
+    let from = realm.registry.online(p).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            p,
+            MapKey::world(469),
+            Vector3d {
+                x: -7600.0,
+                y: -1100.0,
+                z: 400.0,
+            },
+            0.0,
+        )
+    });
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(p).await;
+    let copy = realm.registry.online(p).unwrap().map();
+    assert_eq!(copy.key.map, 469);
+    assert_ne!(copy.key.instance, 0, "in a copy");
+    // The orb's teleport (23460) to the top of the lair.
+    let at = copy
+        .query(move |m| {
+            spells::cast_triggered(m, p, 23460, Some(p));
+            m.players.get(&p).map(|p| p.position())
+        })
+        .await
+        .unwrap();
+    let at = at.expect("still in the copy");
+    assert!(
+        (at.x + 7666.46).abs() < 0.1 && (at.y + 1103.08).abs() < 0.1,
+        "at the orb's place: {at:?}"
+    );
 }
