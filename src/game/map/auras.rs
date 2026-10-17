@@ -837,6 +837,8 @@ pub fn apply_spell(
         proc_ready_at: None,
         effects: aura_effects,
     };
+    let mut holder = holder;
+    crate::game::map::trinkets::prepare(existing, &mut holder, spell);
     let visible = visible(spell, caster == target);
     // What the new holder replaces.
     let replaced: Vec<usize> = existing
@@ -956,6 +958,7 @@ pub fn apply_spell(
         for x in &h.effects {
             started(map, target, &h, x);
         }
+        crate::game::map::trinkets::applied(map, target, spell.id, caster);
     }
     recalc(map, target);
     Ok(())
@@ -1402,6 +1405,12 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(kind), true);
             }
         }
+        // Beast Lore: the target's special information shows.
+        AURA_EMPATHY => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_DYNAMIC_FLAGS, crate::game::map::pets::DYNFLAG_SPECIALINFO, true);
+            }
+        }
         AURA_GHOST => {}
         _ => {}
     }
@@ -1553,6 +1562,11 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(a.kind), false);
             }
         }
+        AURA_EMPATHY if !still(map, AURA_EMPATHY) => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_DYNAMIC_FLAGS, crate::game::map::pets::DYNFLAG_SPECIALINFO, false);
+            }
+        }
         _ => {}
     }
 }
@@ -1580,6 +1594,7 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
     }
+    crate::game::map::trinkets::removed(map, target, h);
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting

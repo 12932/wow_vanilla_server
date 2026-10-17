@@ -263,9 +263,14 @@ pub fn handle(map: &mut Map, guid: Guid, msg: ClientOpcodeMessage) -> Option<Cli
             let relay: Relay = |_, _| None;
             on_move(map, guid, m.info, relay);
         }
-        ClientOpcodeMessage::CMSG_MOVE_NOT_ACTIVE_MOVER(_)
-        | ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(_)
-        | ClientOpcodeMessage::CMSG_MOVE_TIME_SKIPPED(_)
+        // Whose movement the client sends: its own, or a possessed unit's.
+        ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(m) => {
+            crate::game::map::pets::set_mover(map, guid, m.guid)
+        }
+        ClientOpcodeMessage::CMSG_MOVE_NOT_ACTIVE_MOVER(m) => {
+            crate::game::map::pets::not_mover(map, guid, m.old_mover)
+        }
+        ClientOpcodeMessage::CMSG_MOVE_TIME_SKIPPED(_)
         | ClientOpcodeMessage::CMSG_MOVE_SPLINE_DONE(_)
         | ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_)
         | ClientOpcodeMessage::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK(_)
