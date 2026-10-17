@@ -342,3 +342,161 @@ async fn an_update_making_a_boat_says_it_has_a_transport() {
     let boats = a.wait_for("the boat's create", |m| header(m, boat)).await;
     assert_eq!(boats, 1, "a transport in it");
 }
+
+const BLADE: u32 = 900_320;
+const AUCTIONEER: u32 = 900_321;
+/// "of the Bear", and Crusader on the blade.
+const BEAR: u32 = 1201;
+const CRUSADER: u32 = 1900;
+
+/// A sword with three charges of its spell, and a goblin auctioneer by the
+/// start.
+fn market_data() -> GameData {
+    let mut d = GameData::empty();
+    let mut blade = ItemTemplate {
+        entry: BLADE,
+        name: "Charged Blade".into(),
+        class: 2,
+        display_id: 1000,
+        quality: 2,
+        inventory_type: 13,
+        allowable_class: -1,
+        allowable_race: -1,
+        stackable: 1,
+        ..Default::default()
+    };
+    blade.spells[0].id = 133;
+    blade.spells[0].charges = 3;
+    d.items.insert(BLADE, blade);
+    d.creature_templates.insert(
+        AUCTIONEER,
+        CreatureTemplate {
+            entry: AUCTIONEER,
+            name: "Auctioneer".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 10,
+            level_max: 10,
+            faction: 35,
+            unit_class: 1,
+            health_max: 100,
+            npc_flags: crate::game::map::npc::NPC_FLAG_AUCTIONEER,
+            ..Default::default()
+        },
+    );
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 41,
+        entries: vec![AUCTIONEER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    d
+}
+
+/// An item's random property, permanent enchantment and charges are told
+/// as it is pushed into the bags, listed at the auction house and in the
+/// mailbox (mangos-zero's `SendNewItem`, `BuildAuctionInfo` and mail list),
+/// so the client names it by its suffix.
+#[tokio::test]
+async fn an_items_suffix_enchantment_and_charges_are_shown() {
+    use crate::game::social::{auction::Auction, mail::Mail};
+    let realm = harness::realm_with(market_data());
+    let (mut a, g, map) = enter(&realm, "A", "Trader", Race::Human, Class::Warrior).await;
+    on(&map, move |m| {
+        crate::game::map::inventory::add_item_with_property(m, g, BLADE, 1, true, BEAR).unwrap();
+    })
+    .await;
+    let pushed = a
+        .wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) if r.item == BLADE => {
+                Some(r.item_random_property_id)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(pushed, BEAR, "pushed with its suffix");
+    let row = crate::game::store::ItemRow {
+        guid: 77,
+        entry: BLADE,
+        count: 1,
+        data: format!("rp:{BEAR};e0:{CRUSADER}/0/0"),
+        ..Default::default()
+    };
+    realm.social.auctions.lock().auctions.insert(
+        5,
+        Auction {
+            id: 5,
+            market: 7,
+            house: 7,
+            item: row.clone(),
+            owner: 999,
+            start_bid: 10,
+            expires_at: chrono::Utc::now().timestamp() + 3600,
+            ..Default::default()
+        },
+    );
+    let auctioneer = on(&map, |m| {
+        m.creatures
+            .iter()
+            .find(|(_, c)| c.entry == AUCTIONEER)
+            .map(|(_, c)| c.guid)
+    })
+    .await
+    .expect("the auctioneer");
+    a.send(CMSG_AUCTION_LIST_ITEMS {
+        auctioneer,
+        list_start_item: 0,
+        searched_name: String::new(),
+        minimum_level: 0,
+        maximum_level: 0,
+        auction_slot_id: u32::MAX,
+        auction_main_category: u32::MAX,
+        auction_sub_category: u32::MAX,
+        auction_quality: ItemQuality::Poor,
+        usable: 0,
+    })
+    .await;
+    let listed = a
+        .wait_for("SMSG_AUCTION_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(l) => l.auctions.first().map(|i| {
+                (
+                    i.item_enchantment,
+                    i.item_random_property_id,
+                    i.item_charges,
+                )
+            }),
+            _ => None,
+        })
+        .await;
+    assert_eq!(listed, (CRUSADER, BEAR, 3), "at the auction house");
+    crate::game::social::mail::post(
+        &realm,
+        Mail {
+            receiver: guid::counter(g),
+            subject: "A blade".into(),
+            item: Some(row),
+            expires_at: chrono::Utc::now().timestamp() + 3600,
+            ..Default::default()
+        },
+    );
+    a.send(CMSG_GET_MAIL_LIST {
+        mailbox: Guid::zero(),
+    })
+    .await;
+    let mailed = a
+        .wait_for("SMSG_MAIL_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(l) => l.mails.first().map(|m| {
+                (
+                    m.item_enchant_id,
+                    m.item_random_property_id,
+                    m.item_spell_charges,
+                )
+            }),
+            _ => None,
+        })
+        .await;
+    assert_eq!(mailed, (CRUSADER, BEAR, 3), "in the mailbox");
+}

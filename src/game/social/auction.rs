@@ -10,8 +10,10 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
+use crate::game::data::GameData;
 use crate::game::guid;
 use crate::game::map::Map;
+use crate::game::map::player::Item;
 use crate::game::social::mail::{self, DAY, Mail};
 use crate::game::social::send_to;
 use crate::game::store::ItemRow;
@@ -48,22 +50,28 @@ pub struct Auction {
     pub expires_at: i64,
 }
 
+/// The random property of an auction's item, which its notices name.
+fn random_property(realm: &Realm, item: &ItemRow) -> u32 {
+    Item::shown(&realm.data, item).random_property
+}
+
 impl Auction {
     /// The least a new bid must add.
     pub fn outbid(&self) -> u32 {
         ((self.bid / 100) * 5).max(1)
     }
 
-    fn list_item(&self) -> AuctionListItem {
+    fn list_item(&self, data: &GameData) -> AuctionListItem {
         let now = mail::now();
+        let shown = Item::shown(data, &self.item);
         AuctionListItem {
             id: self.id,
             item: self.item.entry,
-            item_enchantment: 0,
-            item_random_property_id: 0,
-            item_suffix_factor: 0,
+            item_enchantment: shown.enchantment,
+            item_random_property_id: shown.random_property,
+            item_suffix_factor: shown.suffix_factor,
             item_count: self.item.count,
-            item_charges: 0,
+            item_charges: shown.charges,
             item_owner: guid::player(self.owner),
             start_bid: self.start_bid,
             minimum_bid: if self.bid > 0 { self.outbid() } else { 0 },
@@ -293,7 +301,7 @@ fn settle(realm: &Realm, a: &Auction) {
             auction_out_bid: 0,
             bidder: guid::player(a.bidder),
             item: a.item.entry,
-            item_random_property_id: 0,
+            item_random_property_id: random_property(realm, &a.item),
         },
     );
     realm.store.delete_record(KIND_AUCTION, u64::from(a.id));
@@ -362,7 +370,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
                 won: 0,
                 out_bid: a.outbid(),
                 item_template: a.item.entry,
-                item_random_property_id: 0,
+                item_random_property_id: random_property(&realm, &a.item),
             },
         );
     }
@@ -384,7 +392,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
                 auction_out_bid: outbid,
                 bidder: g,
                 item: a.item.entry,
-                item_random_property_id: 0,
+                item_random_property_id: random_property(&realm, &a.item),
             },
         );
     }
@@ -493,7 +501,7 @@ pub fn list(map: &Map, g: Guid, m: &CMSG_AUCTION_LIST_ITEMS) {
         .into_iter()
         .skip(m.list_start_item as usize)
         .take(PAGE)
-        .map(Auction::list_item)
+        .map(|a| a.list_item(&realm.data))
         .collect();
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_AUCTION_LIST_RESULT {
@@ -516,7 +524,7 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool) {
         .auctions
         .values()
         .filter(|a| a.market == market && if bids { a.bidder == me } else { a.owner == me })
-        .map(Auction::list_item)
+        .map(|a| a.list_item(&realm.data))
         .collect();
     let total = mine.len() as u32;
     let Some(p) = map.players.get(&g) else {
@@ -564,7 +572,7 @@ pub fn sweep(realm: &Realm) {
                 &SMSG_AUCTION_REMOVED_NOTIFICATION {
                     item: a.id,
                     item_template: a.item.entry,
-                    random_property_id: 0,
+                    random_property_id: random_property(realm, &a.item),
                 },
             );
             realm.store.delete_record(KIND_AUCTION, u64::from(a.id));
