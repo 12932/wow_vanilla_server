@@ -79,8 +79,7 @@ pub fn run(opts: &Options, dirs: &Dirs, builder: &dyn Builder) -> Result<Outcome
     let todo = Todo::of(&selection, dirs, builder);
     if todo.is_empty() {
         say(format!(
-            "Built already: {} in {} and {}.",
-            plural(selection.0.len(), "map"),
+            "Nothing left to build: {} and {} have it all.",
             dirs.nav.display(),
             dirs.terrain.display()
         ));
@@ -170,10 +169,6 @@ pub fn run(opts: &Options, dirs: &Dirs, builder: &dyn Builder) -> Result<Outcome
         }
         Err(e) => Err(e.to_string()),
     }
-}
-
-fn plural(n: usize, what: &str) -> String {
-    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
 /// What to do with output another client built (or something the setup
@@ -360,8 +355,8 @@ fn choose_client(opts: &Options, ask: bool, ctrl_c: &ui::CtrlC) -> Result<Option
     }
 }
 
-/// Search every fixed drive into `found`, until a 1.12.1 client turns up,
-/// the time is up, or Ctrl-C.
+/// Search every fixed drive into `found`, until a 1.12 client turns up (one
+/// of another vanilla build doesn't stop it), the time is up, or Ctrl-C.
 fn search_drives(limit: Option<Duration>, ctrl_c: &ui::CtrlC, found: &mut Found) {
     let started = Instant::now();
     let spinner = ui::spinner("Searching...");
@@ -377,7 +372,10 @@ fn search_drives(limit: Option<Duration>, ctrl_c: &ui::CtrlC, found: &mut Found)
             timed_out = limit.is_some_and(|l| started.elapsed() >= l);
             !ctrl_c.pressed()
                 && !timed_out
-                && !found.clients.iter().any(|c| c.build == Build::Exact)
+                && !found
+                    .clients
+                    .iter()
+                    .any(|c| !matches!(c.build, Build::OtherVanilla(_)))
         });
         if !finished {
             break;
@@ -479,8 +477,8 @@ pub enum Startup {
     Ready,
     /// No one to ask: log this, and start.
     Hint(String),
-    /// Ask this, and run the setup on a yes.
-    Ask(String),
+    /// Say what is missing, ask, and run the setup on a yes.
+    Ask { missing: String, question: String },
 }
 
 pub fn startup(missing: Missing, dirs: &Dirs, terminal: bool) -> Startup {
@@ -508,7 +506,10 @@ pub fn startup(missing: Missing, dirs: &Dirs, terminal: bool) -> Startup {
         "it"
     };
     if terminal {
-        Startup::Ask(format!("{what} Find your WoW client and build {it} now?"))
+        Startup::Ask {
+            missing: what,
+            question: format!("Find your WoW client and build {it} now?"),
+        }
     } else {
         Startup::Hint(format!(
             "{what} Build {it} from your WoW 1.12.1 client with `cargo run --release --bin \
@@ -536,9 +537,15 @@ pub fn at_startup_with(
             tracing::warn!("{hint}");
             return true;
         }
-        Startup::Ask(question) => question,
+        Startup::Ask { missing, question } => {
+            say(missing);
+            question
+        }
     };
     if ui::confirm(&question, true) != Some(true) {
+        say(
+            "Starting as it is: `cargo run --release --bin wvs-setup` builds what is missing later.",
+        );
         return true;
     }
     let start = match run(&Options::default(), &dirs, builder) {
@@ -585,7 +592,7 @@ mod tests {
             "{hint}"
         );
         assert!(hint.contains("wvs-setup"), "{hint}");
-        let Startup::Ask(q) = startup(
+        let Startup::Ask { missing, question } = startup(
             Missing {
                 nav: true,
                 terrain: false,
@@ -595,10 +602,9 @@ mod tests {
         ) else {
             panic!("not asked at a terminal");
         };
-        assert!(q.starts_with("No navmesh in "), "{q}");
-        assert!(q.ends_with(
-            "creatures will walk straight lines. Find your WoW client and build it now?"
-        ));
+        assert!(missing.starts_with("No navmesh in "), "{missing}");
+        assert!(missing.ends_with("creatures will walk straight lines."));
+        assert_eq!(question, "Find your WoW client and build it now?");
         assert_eq!(
             startup(
                 Missing {

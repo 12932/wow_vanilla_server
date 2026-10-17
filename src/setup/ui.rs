@@ -172,11 +172,15 @@ const OVERALL: &str = "{prefix:<9} [{bar:24}] {percent:>3}%   {elapsed} so far, 
 const TILES: &str = "{prefix:<9} [{bar:24}] {msg} {human_pos} / {human_len} tiles   ETA {eta}";
 const MODELS: &str = "{prefix:<9} [{bar:24}] {human_pos} / {human_len} models";
 
-/// A spinner with a message, for the search and the checks.
+/// A spinner with a message, for the search and the checks; without a
+/// terminal, the message as a line.
 pub fn spinner(message: impl Into<std::borrow::Cow<'static, str>>) -> ProgressBar {
     let s = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr());
     s.set_style(ProgressStyle::with_template("{spinner} {wide_msg}").expect("a spinner template"));
     s.set_message(message);
+    if s.is_hidden() {
+        eprintln!("{}", s.message());
+    }
     s.enable_steady_tick(Duration::from_millis(100));
     s
 }
