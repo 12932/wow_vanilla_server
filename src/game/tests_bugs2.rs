@@ -605,3 +605,36 @@ async fn a_party_members_spell_lands_only_on_a_party_member() {
     assert!(out.1.is_empty(), "not on the caster for a stranger");
     assert_eq!(out.2, Some(spells::fail::BAD_TARGETS));
 }
+
+const CANNIBALIZE: u32 = 20577;
+
+#[tokio::test]
+async fn cannibalize_wants_a_corpse_that_isnt_a_friends() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "CANNIBAL");
+    let p = c.enter("Cannibal", Race::Undead, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            level(m, p, 60, &[CANNIBALIZE]);
+            // A dead Deathguard is a friend's body.
+            let guard = spawn(m, p, 1495, 60, 2.0);
+            crate::game::map::combat::deal_damage(m, p, guard, 2_000_000);
+            let friend = (
+                spells::cast(m, p, CANNIBALIZE, Targets::default(), None),
+                m.players[&p].caster.cooldowns.contains_key(&CANNIBALIZE),
+            );
+            // A dead kobold isn't.
+            let kobold = spawn(m, p, 6, 60, 2.0);
+            crate::game::map::combat::deal_damage(m, p, kobold, 2_000_000);
+            let foe = spells::cast(m, p, CANNIBALIZE, Targets::default(), None);
+            (friend, foe, has(m, p, 20578))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (false, false), "refused, its cooldown not started");
+    assert_eq!((out.1, out.2), (true, true), "the kobold is eaten");
+}

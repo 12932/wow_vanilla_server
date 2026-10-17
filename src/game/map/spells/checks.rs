@@ -50,6 +50,7 @@ pub mod fail {
     pub const NOT_SHAPESHIFT: u8 = 0x3d;
     pub const NOT_STANDING: u8 = 0x3e;
     pub const NO_COMBO_POINTS: u8 = 0x46;
+    pub const NO_EDIBLE_CORPSES: u8 = 0x86;
     pub const NO_POWER: u8 = 0x4d;
     pub const NOTHING_TO_DISPEL: u8 = 0x4e;
     pub const ONLY_BATTLEGROUNDS: u8 = 0x87;
@@ -446,6 +447,10 @@ pub fn check(
             && !near_focus(map, me.position, s.requires_spell_focus)
         {
             return Some(fail::REQUIRES_SPELL_FOCUS);
+        }
+        // Cannibalize wants a body to eat before it costs anything.
+        if s.script_name == "spell_cannibalize" && !super::scripts::edible_corpse(map, caster, s) {
+            return Some(fail::NO_EDIBLE_CORPSES);
         }
         if !equipped_ok(map, caster, s) {
             return Some(if s.equipped_item_class == 2 {
