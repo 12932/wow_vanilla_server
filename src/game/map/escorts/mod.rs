@@ -210,6 +210,8 @@ pub struct Active {
     /// It got there: the escortee goes, and comes back on its spawn's
     /// time.
     done: bool,
+    /// Its map event ended well: nothing fails it now.
+    event_over: bool,
 }
 
 impl Active {
@@ -255,6 +257,14 @@ impl Active {
     /// Whether it is held at its point, by a hold or an await.
     pub fn held(&self) -> bool {
         matches!(&self.kind, Kind::Escort { hold: Some(_), .. })
+    }
+
+    /// The id of the point an escort is bound for, or waits at.
+    pub fn point(&self) -> Option<u32> {
+        match &self.kind {
+            Kind::Escort { path, next, .. } => path.get(*next).map(|p| p.id),
+            Kind::Follower { .. } => None,
+        }
     }
 }
 
@@ -379,9 +389,43 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
         ends_at: None,
         failed: false,
         done: false,
+        event_over: false,
     });
+    // The quest's map event, as Thistle Tea starts one for each escort,
+    // for half an hour: scripts reach the player through it, and join it
+    // to go when it fails.
+    crate::game::map::map_events::start(map, quest, creature, player, EVENT_LASTS);
     let i = map.escorts.len() - 1;
     run_acts(map, i, accept);
+}
+
+/// How long an escort's map event lasts: past it, the escort fails.
+const EVENT_LASTS: Duration = Duration::from_secs(1800);
+
+/// The map event `id` of an escort of `source` ended, by a script or its
+/// time, as Thistle Tea's escort event has it: well, and nothing fails the
+/// escort from then on (a script that ends it so has credited the quest,
+/// and sends the escortee off itself); badly, and the quest fails and the
+/// escortee is put back.
+pub fn event_ended(map: &mut Map, id: u32, source: Guid, success: bool) {
+    let now = map.now;
+    let Some(i) = map
+        .escorts
+        .iter()
+        .position(|a| a.quest == id && a.creature == source && a.ends_at.is_none())
+    else {
+        return;
+    };
+    if success {
+        map.escorts[i].event_over = true;
+        return;
+    }
+    if !map.escorts[i].failed {
+        let player = map.escorts[i].player;
+        fail(map, player, id);
+        map.escorts[i].failed = true;
+    }
+    map.escorts[i].ends_at = Some(now);
 }
 
 /// A creature says a broadcast text.
@@ -897,6 +941,10 @@ pub fn update(map: &mut Map) {
             i += 1;
         } else {
             let a = map.escorts.remove(i);
+            // Its map event ends with it, and those who joined it hear.
+            if crate::game::map::map_events::target_of(map, 22, a.quest, 0) == Some(a.creature) {
+                crate::game::map::map_events::end(map, a.quest, a.done);
+            }
             for (g, _) in &a.summons {
                 map.remove_creature(*g);
             }
@@ -959,8 +1007,9 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
     let max = max_distance(&map.escorts[i].kind);
     let ppos = map.players.get(&player).map(|p| p.position());
     let strayed = ppos.is_none_or(|p| max > 0.0 && dist(p, cpos) > max);
-    if !alive || (strayed && !map.escorts[i].failed) {
-        if !map.escorts[i].failed {
+    let failable = !map.escorts[i].failed && !map.escorts[i].event_over;
+    if !alive || (strayed && failable) {
+        if failable {
             fail(map, player, quest);
         }
         return false;

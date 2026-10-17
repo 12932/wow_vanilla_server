@@ -921,3 +921,588 @@ async fn an_escort_awaits_its_release_or_gives_up() {
         }
     }
 }
+
+// The real world: event quests walked through.
+
+static DB: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("db"));
+
+fn have_data() -> bool {
+    DB.as_path().join("vmangos.sqlite").exists()
+}
+
+fn real_realm() -> Arc<Realm> {
+    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+}
+
+type Map = crate::game::map::Map;
+type MapHandle = crate::game::map::MapHandle;
+
+/// A player of `race` and `class` at `level`, in the world, hard to kill.
+async fn hero(
+    realm: &Arc<Realm>,
+    account: &str,
+    race: Race,
+    class: Class,
+    level: u8,
+) -> (Client, Guid, MapHandle) {
+    let mut c = Client::connect(realm, account);
+    let name = format!("{}{}", &account[..1], account[1..].to_lowercase());
+    let g = c.enter(&name, race, class).await;
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let map = realm.registry.online(g).expect("online").map();
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &data, level);
+    })
+    .await;
+    (c, g, map)
+}
+
+/// `g` stands at `at` now, as their client would have moved them there:
+/// the grid and what they see follow.
+fn place(m: &mut Map, g: Guid, at: Vector3d) {
+    let Some(p) = m.players.get_mut(&g) else {
+        return;
+    };
+    let (old, new) = (p.cell, crate::game::map::grid::cell_of(at.x, at.y));
+    let anchor = p.vis_anchor;
+    p.movement.position = at;
+    p.cell = new;
+    m.grid.relocate(g, old, new);
+    crate::game::map::visibility::moved(m, g, anchor, at);
+}
+
+/// Whatever comes at `g` does them no harm.
+fn hardy(m: &mut Map, g: Guid) {
+    if let Some(p) = m.players.get_mut(&g) {
+        p.fields
+            .set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+        p.fields
+            .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+    }
+}
+
+/// The first creature of `entry` alive here, and where it stands.
+fn npc(m: &Map, entry: u32) -> Option<(Guid, Vector3d)> {
+    m.creatures
+        .iter()
+        .filter(|(_, c)| c.entry == entry && c.alive())
+        .map(|(_, c)| (c.guid, c.position))
+        .min_by_key(|(g, _)| g.guid())
+}
+
+/// The first object of `entry` here.
+fn object(m: &Map, entry: u32) -> Option<(Guid, Vector3d)> {
+    m.gameobjects
+        .iter()
+        .filter(|(_, o)| o.entry == entry)
+        .map(|(_, o)| (o.guid, o.position))
+        .min_by_key(|(g, _)| g.guid())
+}
+
+/// `c` at `at`, at once.
+async fn put(map: &MapHandle, c: &mut Client, at: Vector3d) {
+    let g = c.guid;
+    map.query(move |m| m.teleport(g, m.key, at, 0.0)).await;
+    c.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: g,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    assert!(
+        until(map, move |m| m
+            .players
+            .get(&g)
+            .is_some_and(|p| p.teleport.is_none()))
+        .await,
+        "teleported"
+    );
+}
+
+fn beside(at: Vector3d) -> Vector3d {
+    Vector3d {
+        x: at.x + 2.0,
+        ..at
+    }
+}
+
+async fn until(map: &MapHandle, what: impl Fn(&Map) -> bool + Send + Clone + 'static) -> bool {
+    for _ in 0..500 {
+        let w = what.clone();
+        if map.query(move |m| w(m)).await.unwrap_or(false) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// [`until`], free to change the map as it looks.
+async fn until_mut(
+    map: &MapHandle,
+    what: impl Fn(&mut Map) -> bool + Send + Clone + 'static,
+) -> bool {
+    for _ in 0..500 {
+        let w = what.clone();
+        if map.query(move |m| w(m)).await.unwrap_or(false) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+fn logged(m: &Map, g: Guid, quest: u32) -> bool {
+    m.players[&g].journal.has(quest)
+}
+
+fn done(m: &Map, g: Guid, quest: u32) -> bool {
+    let p = &m.players[&g];
+    let q = m.realm.data.npc.quests.get(&quest).expect("quest");
+    p.journal
+        .slot_of(quest)
+        .is_some_and(|s| crate::game::map::quests::complete(p, q, &p.journal.log[s]))
+}
+
+fn rewarded(m: &Map, g: Guid, quest: u32) -> bool {
+    m.players[&g].journal.rewarded.contains(&quest)
+}
+
+/// Where `entry` (a creature, else an object) is spawned: its map and
+/// place.
+fn spawn_of(realm: &Realm, entry: u32) -> Option<(u32, Vector3d)> {
+    let data = &realm.data;
+    let mut creatures: Vec<_> = data
+        .creature_spawns
+        .values()
+        .flatten()
+        .filter(|s| s.entries.contains(&entry))
+        .map(|s| (s.guid, s.map, s.x, s.y, s.z))
+        .collect();
+    creatures.sort_by_key(|s| s.0);
+    let mut objects: Vec<_> = data
+        .gameobject_spawns
+        .values()
+        .flatten()
+        .filter(|s| s.entry == entry)
+        .map(|s| (s.guid, s.map, s.x, s.y, s.z))
+        .collect();
+    objects.sort_by_key(|s| s.0);
+    creatures.first().or(objects.first()).map(|s| {
+        (
+            s.1,
+            Vector3d {
+                x: s.2,
+                y: s.3,
+                z: s.4,
+            },
+        )
+    })
+}
+
+/// `c` at `at` in map `id`, across maps if need be: the map they are in.
+async fn travel(realm: &Arc<Realm>, c: &mut Client, id: u32, at: Vector3d) -> MapHandle {
+    let g = c.guid;
+    let from = realm.registry.online(g).expect("online").map();
+    let here = from.query(|m| m.key.map).await.unwrap();
+    if here == id {
+        put(&from, c, at).await;
+        return from;
+    }
+    from.call(move |m| m.teleport(g, MapKey::world(id), at, 0.0));
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+    realm.registry.online(g).expect("online").map()
+}
+
+/// `c` beside the spawn of `entry`: the map, the creature or object, and
+/// where it stands.
+async fn visit(realm: &Arc<Realm>, c: &mut Client, entry: u32) -> (MapHandle, Guid, Vector3d) {
+    let (id, at) = spawn_of(realm, entry).expect("spawned");
+    let map = travel(realm, c, id, beside(at)).await;
+    let (who, at) = map
+        .query(move |m| npc(m, entry).or_else(|| object(m, entry)))
+        .await
+        .flatten()
+        .unwrap_or_else(|| panic!("{entry} here"));
+    put(&map, c, beside(at)).await;
+    let g = c.guid;
+    if guid::is_unit(who) {
+        assert!(
+            until(&map, move |m| m
+                .creature(who)
+                .is_some_and(|c| c.observers.contains(&g)))
+            .await,
+            "{entry} in sight"
+        );
+    }
+    (map, who, at)
+}
+
+/// Take `quest` from `giver`, beside it, `before` done: the map it is in.
+async fn take(
+    realm: &Arc<Realm>,
+    c: &mut Client,
+    giver: u32,
+    quest: u32,
+    before: &'static [u32],
+) -> MapHandle {
+    let g = c.guid;
+    let (map, who, _) = visit(realm, c, giver).await;
+    map.query(move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .journal
+            .rewarded
+            .extend(before.iter().copied());
+        crate::game::map::quests::accept(m, g, who, quest);
+        if debug() {
+            let data = m.realm.data.clone();
+            let p = &m.players[&g];
+            let q = data.npc.quests.get(&quest).unwrap();
+            eprintln!(
+                "take {quest}: can_take {}, condition {}, level {}",
+                crate::game::map::quests::can_take(p, q, &data),
+                crate::game::map::quests::condition_ok(m, g, who, quest),
+                p.level(),
+            );
+        }
+    })
+    .await;
+    assert!(
+        until(&map, move |m| logged(m, g, quest)).await,
+        "{quest} taken"
+    );
+    map
+}
+
+/// Turn `quest` in at `ender`, beside it.
+async fn turn_in(realm: &Arc<Realm>, c: &mut Client, ender: u32, quest: u32) {
+    let g = c.guid;
+    let (map, who, _) = visit(realm, c, ender).await;
+    map.query(move |m| crate::game::map::quests::choose_reward(m, g, who, quest, 0))
+        .await;
+    assert!(
+        until(&map, move |m| rewarded(m, g, quest)).await,
+        "{quest} rewarded"
+    );
+}
+
+/// The map's scripts, creature timers and escorts `by` on: what waits on
+/// them comes sooner.
+fn skip(m: &mut Map, by: Duration) {
+    for r in m.scripts.runs.iter_mut() {
+        if let Some(t) = r.started.checked_sub(by) {
+            r.started = t;
+        }
+    }
+    let all: Vec<Guid> = m.creatures.iter().map(|(_, c)| c.guid).collect();
+    for g in all {
+        if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
+            for t in s.timers.iter_mut().flatten() {
+                if let Some(sooner) = t.checked_sub(by) {
+                    *t = sooner;
+                }
+            }
+        }
+    }
+    for e in m.escorts.iter_mut() {
+        e.hurry(by);
+    }
+}
+
+fn health(m: &Map, g: Guid) -> (u32, u32) {
+    m.unit_fields(g).map_or((0, 0), |f| {
+        (
+            f.get_u32(crate::game::fields::UNIT_FIELD_HEALTH),
+            f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH),
+        )
+    })
+}
+
+/// Those of `entries` alive here.
+fn alive_of(m: &Map, entries: &[u32]) -> Vec<Guid> {
+    m.creatures
+        .iter()
+        .filter(|(_, c)| entries.contains(&c.entry) && c.alive())
+        .map(|(_, c)| c.guid)
+        .collect()
+}
+
+fn debug() -> bool {
+    std::env::var("EVENTS_DEBUG").is_ok()
+}
+
+const UNIT_FLAG_NOT_ATTACKABLE: u32 = 0x2;
+
+/// The Nightmare Manifests (8736): Keeper Remulos leads the player to his
+/// shrine, pulls Eranikus from his rift and holds off the phantasms; the
+/// Tyrant lands and fights; beaten to a fifth of his health, he is
+/// redeemed, and Remulos credits the quest through its map event before
+/// he goes.
+async fn the_nightmare_manifests(realm: &Arc<Realm>) {
+    const QUEST: u32 = 8736;
+    const REMULOS: u32 = 11832;
+    const ERANIKUS: u32 = 15491;
+    const FOES: [u32; 1] = [15629];
+    let (mut c, g, map) = hero(realm, "DREAMER", Race::NightElf, Class::Druid, 60).await;
+    // Neutral with the Brood of Nozdormu, as the quest asks.
+    map.query(move |m| crate::game::map::reputation::modify(m, g, 910, 45_000, false))
+        .await;
+    let map = take(realm, &mut c, REMULOS, QUEST, &[8735]).await;
+    let remulos = map
+        .query(|m| {
+            m.escorts
+                .iter()
+                .find(|e| e.quest == QUEST)
+                .map(|e| e.creature)
+        })
+        .await
+        .flatten()
+        .expect("the escort sets out");
+    #[derive(Debug, Clone, Default)]
+    struct State {
+        point: Option<u32>,
+        eranikus: Option<(Guid, u32, bool, (u32, u32))>,
+        at: Option<Vector3d>,
+        motion: String,
+        phase: Option<u32>,
+        explored: bool,
+        event: bool,
+        escort: bool,
+    }
+    // One look, and the hurrying: Remulos and Eranikus fast, the player at
+    // Remulos's side and unharmed, the phantasms put down as they come.
+    let look = move |m: &mut Map, by: Duration, strike: bool| -> State {
+        hardy(m, g);
+        let at = m.creature(remulos).map(|c| c.position);
+        if let Some(c) = m.creature_mut(remulos) {
+            c.speeds.walk = 60.0;
+            c.speeds.run = 60.0;
+            let max = c.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH);
+            c.fields
+                .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
+        }
+        if let Some(at) = at {
+            place(m, g, beside(at));
+        }
+        for f in alive_of(m, &FOES) {
+            crate::game::map::combat::deal_damage(m, g, f, 1_000_000);
+        }
+        let eranikus = npc(m, ERANIKUS).map(|(e, _)| e);
+        if let Some(e) = eranikus.and_then(|e| m.creature_mut(e)) {
+            e.speeds.walk = 60.0;
+            e.speeds.run = 60.0;
+        }
+        // While the escort walks, its fights are kept off it.
+        let escorting = m.escorts.iter().any(|e| e.quest == QUEST);
+        let fighting_eranikus = eranikus
+            .and_then(|e| m.creature(e))
+            .is_some_and(|c| c.combat.attacking);
+        if escorting
+            && !fighting_eranikus
+            && m.creature(remulos).is_some_and(|c| c.combat.attacking)
+        {
+            crate::game::map::ai::forget(m, remulos);
+            crate::game::map::combat::leave_combat(m, remulos);
+        }
+        if strike && let Some(e) = eranikus {
+            let (hp, max) = health(m, e);
+            if hp > max / 5 {
+                crate::game::map::combat::deal_damage(m, g, e, (max / 20).max(1));
+            }
+        }
+        skip(m, by);
+        let log = m.players[&g].journal.log.iter().find(|l| l.quest == QUEST);
+        State {
+            point: m
+                .escorts
+                .iter()
+                .find(|e| e.quest == QUEST)
+                .and_then(|e| e.point()),
+            eranikus: eranikus.and_then(|e| m.creature(e)).map(|c| {
+                (
+                    c.guid,
+                    c.fields.get_u32(crate::game::fields::UNIT_FIELD_FLAGS),
+                    c.combat.attacking,
+                    health(m, c.guid),
+                )
+            }),
+            at: eranikus.and_then(|e| m.creature(e)).map(|c| c.position),
+            motion: eranikus
+                .and_then(|e| m.creature(e))
+                .map(|c| format!("{:?}", c.motion).chars().take(60).collect())
+                .unwrap_or_default(),
+            phase: eranikus
+                .and_then(|e| crate::game::map::event_ai::scripted(m, e).map(|s| s.phase)),
+            explored: log.is_some_and(|l| l.explored),
+            event: crate::game::map::map_events::active(m, QUEST),
+            escort: escorting,
+        }
+    };
+    // To the shrine, through the waves, until Eranikus lands and may be
+    // fought.
+    let mut s = State::default();
+    let mut landed = false;
+    let mut hovering = false;
+    for i in 0..3000 {
+        s = map
+            .query(move |m| look(m, Duration::from_secs(2), false))
+            .await
+            .unwrap();
+        if debug() && i % 25 == 0 {
+            eprintln!("nightmare: {s:?}");
+        }
+        let unreachable = s
+            .eranikus
+            .map(|(_, f, _, _)| f & UNIT_FLAG_NOT_ATTACKABLE != 0);
+        hovering |= unreachable == Some(true);
+        if hovering && unreachable == Some(false) {
+            landed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(landed, "Eranikus lands to fight: {s:?}");
+    assert!(s.event, "the quest's map event under way: {s:?}");
+    // Beaten to a fifth, he is redeemed; Remulos credits the quest.
+    for i in 0..3000 {
+        s = map
+            .query(move |m| look(m, Duration::from_secs(2), true))
+            .await
+            .unwrap();
+        if debug() && i % 25 == 0 {
+            eprintln!("nightmare fight: {s:?}");
+        }
+        if s.explored {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(s.explored, "credited through the map event: {s:?}");
+    assert!(
+        until(&map, move |m| done(m, g, QUEST)).await,
+        "{QUEST} done"
+    );
+    turn_in(realm, &mut c, REMULOS, QUEST).await;
+}
+
+/// The Nightmare Manifests, walked through on the real world.
+#[tokio::test]
+async fn the_nightmare_manifests_is_done_end_to_end() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    the_nightmare_manifests(&realm).await;
+}
+
+/// An escort runs under its quest's map event, as Thistle Tea's do: one
+/// that joins the event goes with it when the escort fails (as Eranikus
+/// and his helpers do), and a script that ends it well leaves nothing to
+/// fail the escort after, whatever becomes of the escortee.
+#[tokio::test]
+async fn an_escort_runs_under_its_quests_map_event() {
+    const QUEST: u32 = 4121;
+    const HELPER: u32 = 9538;
+    const CLEANUP: u32 = 5000;
+    let mut d = GameData::empty();
+    escortee(&mut d, GRARK, QUEST, HUMAN_START, 1..=45);
+    d.creature_templates
+        .insert(HELPER, template(HELPER, "Helper"));
+    d.scripts.generic.insert(
+        CLEANUP,
+        vec![crate::game::data::scripts::ScriptStep {
+            command: 18,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let a = player(&realm, "Alice").await;
+    let g = a.guid;
+    let map = realm.registry.online(g).unwrap().map();
+    let step =
+        |command: u32, success: u32, failure_script: i32| crate::game::data::scripts::ScriptStep {
+            command,
+            datalong: [QUEST, success, 0, 0],
+            dataint: [0, 0, 0, failure_script],
+            ..Default::default()
+        };
+    // Failed: the escortee killed, its helper goes with the event.
+    let grark = set_out(&map, g, GRARK, QUEST).await;
+    let joined = step(63, 0, CLEANUP as i32);
+    let helper = map
+        .query(move |m| {
+            assert!(
+                crate::game::map::map_events::active(m, QUEST),
+                "the quest's event under way"
+            );
+            assert_eq!(
+                crate::game::map::map_events::target_of(m, 23, QUEST, 0),
+                Some(g),
+                "its target the player"
+            );
+            let at = m.players[&g].position();
+            let h =
+                crate::game::map::scripts::summon(m, Guid::zero(), HELPER, at, 0.0, None).unwrap();
+            crate::game::map::scripts::execute(m, &joined, h, g);
+            crate::game::map::combat::deal_damage(m, g, grark, 1_000_000);
+            h
+        })
+        .await
+        .unwrap();
+    let mut now = going(&map, g, grark, QUEST).await;
+    for _ in 0..200 {
+        if now.over {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        now = going(&map, g, grark, QUEST).await;
+    }
+    assert!(now.over && now.failed, "failed: {now:?}");
+    let gone = map
+        .query(move |m| {
+            m.creature(helper).is_none() && !crate::game::map::map_events::active(m, QUEST)
+        })
+        .await
+        .unwrap();
+    assert!(gone, "the event over, and its helper with it");
+    // Ended well by a script: the escortee may go, and nothing fails.
+    map.query(move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .journal
+            .log
+            .retain(|l| l.quest != QUEST);
+    })
+    .await;
+    let grark = set_out(&map, g, GRARK, QUEST).await;
+    let ended = step(62, 1, 0);
+    map.query(move |m| {
+        crate::game::map::scripts::execute(m, &ended, grark, g);
+        crate::game::map::scripts::despawn(m, grark);
+    })
+    .await;
+    let mut now = going(&map, g, grark, QUEST).await;
+    for _ in 0..200 {
+        if now.over {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        now = going(&map, g, grark, QUEST).await;
+    }
+    assert!(now.over && !now.failed, "over, not failed: {now:?}");
+}
