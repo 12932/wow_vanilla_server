@@ -19,8 +19,8 @@ cd wow_vanilla_server
 cargo run --release
 ```
 
-The first start finds your WoW client, asks, and builds the navmesh and the terrain from it with a progress bar:
-answer Y, and the server starts when they are done. All 36 maps take about 9 GB and, on 16 threads, three minutes;
+The first start offers to build the navmesh and the terrain from your WoW client: answer Y, say where the client is,
+and the server starts when they are done. All 36 maps take about 9 GB and, on 16 threads, three minutes;
 the Eastern Kingdoms alone (Gurubashi Arena, Stormwind, the Undercity) about 3 GB and one minute. The terrain takes
 seconds. To build without starting the server, or again later (more maps, another client):
 
@@ -29,11 +29,18 @@ cargo run --release --bin wvs-setup
 cargo run --release --bin wvs-setup -- --yes --client "C:\Games\WoW 1.12" --maps azeroth    # in a script
 ```
 
-The setup looks where installers and launchers put the client: the registry, `Program Files`, `C:\Games` and the
-other drives' `Games`, Desktop, Downloads and Documents, and Wine, Lutris, Bottles, Proton and CrossOver prefixes. If
-it isn't there, it offers to search every drive. `--client <folder>` (or `WOW_DIR`) gives it the folder holding
-`WoW.exe` and `Data`; a copy of `Data` alone does too. `--maps` takes `all`, `azeroth`, or map names as the client
-names them (`Kalimdor,PVPZone03`), `--threads N` the cores to build with. Ctrl-C stops a build between tiles, keeping
+The setup asks where the client is. Any of these will do, typed, pasted, or dragged onto the window:
+
+- the client's folder, the one with `WoW.exe` and `Data` in it;
+- `WoW.exe` itself, or a renamed `.exe` beside `Data` (its version is read);
+- the `Data` folder, or any file in it: a copy of `Data` alone is enough.
+
+A wrong answer is told what is wrong and asked again, and an empty line stops. The next time, the client used last is
+offered: Enter takes it. A client the server can't use is turned away with the reason: The Burning Crusade or later,
+or one not patched to 1.12.1. Another vanilla build is offered with a warning.
+
+`--client <path>` (or `WOW_DIR`) gives it the client without asking, and `--yes` needs one. `--maps` takes `all`,
+`azeroth`, or map names as the client names them (`Kalimdor,PVPZone03`), `--threads N` the cores to build with. Ctrl-C stops a build between tiles, keeping
 what is finished, and the next run carries on from there. Without a terminal (a service, a script) the server asks
 nothing: it logs how to build what is missing, and starts without it.
 
