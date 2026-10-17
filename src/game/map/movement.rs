@@ -375,16 +375,24 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.cell = new_cell;
     map.grid.relocate(guid, old_cell, new_cell);
     map.visibility_dirty.insert(guid);
-    // Observers still in range see the player jump there.
+    // Observers still in range see the player there at once:
+    // `MSG_MOVE_TELEPORT`, the packed GUID and the movement, as mangos's
+    // SendTeleportPacket and Thistle Tea send it (a heartbeat would have
+    // them run there). wow_messages has no vanilla one; it is the
+    // heartbeat's body.
     if let Some(p) = map.players.get(&guid)
         && let Some(frame) = encode(&MSG_MOVE_HEARTBEAT_Server {
             guid,
             info: p.movement.clone(),
         })
     {
+        let frame = crate::game::update::frame(MSG_MOVE_TELEPORT, &frame[4..]);
         map.send_to_observers(guid, &frame, false);
     }
 }
+
+/// `MSG_MOVE_TELEPORT`, to those who see a player teleported in the map.
+pub const MSG_MOVE_TELEPORT: u16 = 0x0C5;
 
 /// `MSG_MOVE_TELEPORT_ACK`: the client is where it was sent.
 pub fn teleport_ack(map: &mut Map, guid: Guid) {
