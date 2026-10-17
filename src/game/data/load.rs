@@ -1025,6 +1025,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             next_quest: c.i32("NextQuestId"),
             exclusive_group: c.i32("ExclusiveGroup"),
             next_in_chain: c.u32("NextQuestInChain"),
+            breadcrumb_for: c.u32("BreadcrumbForQuestId"),
             source_item: c.u32("SrcItemId"),
             source_item_count: c.u32("SrcItemCount"),
             limit_time: c.u32("LimitTime"),

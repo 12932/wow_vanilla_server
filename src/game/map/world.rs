@@ -448,6 +448,7 @@ pub fn step_creature_key(map: &mut Map, key: usize) {
 /// Game object types.
 pub const GO_DOOR: u8 = 0;
 pub const GO_BUTTON: u8 = 1;
+pub const GO_QUESTGIVER: u8 = 2;
 pub const GO_CHEST: u8 = 3;
 pub const GO_CHAIR: u8 = 7;
 pub const GO_SPELLCASTER: u8 = 22;
@@ -496,6 +497,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
                 );
             }
         }
+        GO_QUESTGIVER => crate::game::map::quests::object_hello(map, player, object),
         GO_CHEST => {
             // A locked chest needs its key or skill (Phase 7); an open one
             // just opens.

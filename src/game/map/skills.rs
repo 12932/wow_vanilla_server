@@ -22,6 +22,18 @@ pub fn value(p: &Player, skill: u32) -> Option<u32> {
     slot_of(p, skill).map(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3 + 1) & 0xFFFF)
 }
 
+/// The skill's value with its bonuses, temporary and permanent (mangos'
+/// `GetSkillValue`); 0 if the player hasn't it.
+pub fn value_with_bonuses(p: &Player, skill: u32) -> u32 {
+    slot_of(p, skill).map_or(0, |i| {
+        let base = p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3 + 1) & 0xFFFF;
+        let bonus = p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3 + 2);
+        let temporary = i32::from(bonus as u16 as i16);
+        let permanent = i32::from((bonus >> 16) as u16 as i16);
+        (base as i32 + temporary + permanent).max(0) as u32
+    })
+}
+
 fn cap(p: &Player, skill: u32, step: u32) -> u32 {
     if LANGUAGES.contains(&skill) {
         300
