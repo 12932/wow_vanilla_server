@@ -640,7 +640,10 @@ impl Map {
             return;
         }
         let since = *self.empty_since.get_or_insert(self.now);
-        if self.now.duration_since(since) >= self.realm.config.instance_unload {
+        // One its raid's reset took goes at once.
+        if crate::game::instances::expired(&self.realm, self.key)
+            || self.now.duration_since(since) >= self.realm.config.instance_unload
+        {
             self.realm.maps.stop(self.key);
             crate::game::instances::unloaded(&self.realm, self.key);
             crate::game::battlegrounds::closed(&self.realm, self.key);
