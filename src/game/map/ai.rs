@@ -424,6 +424,14 @@ fn aggro_scan(map: &mut Map, g: Guid) {
     }
 }
 
+/// A unit's threat on a creature, with what its auras take off for now
+/// (Fade).
+fn effective_threat(map: &Map, unit: Guid, threat: f32) -> f32 {
+    let fade = crate::game::map::auras::auras(map, unit)
+        .map_or(0, |a| a.sum(crate::game::map::auras::AURA_MOD_TOTAL_THREAT));
+    (threat + fade as f32).max(0.0)
+}
+
 /// The highest threat still worth fighting, if any.
 fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
     let c = map.creature(g)?;
@@ -436,8 +444,44 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
                 u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
             })
         })
-        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .max_by(|a, b| {
+            effective_threat(map, a.0, a.1).total_cmp(&effective_threat(map, b.0, b.1))
+        })
         .map(|(t, _)| *t)
+}
+
+/// vmangos's `ThreatManager`: a taunter while the taunt lasts; otherwise
+/// the current victim, until another passes its threat by a tenth in
+/// melee range or three tenths beyond.
+fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
+    let Some(c) = map.creature(g) else {
+        return current;
+    };
+    if let Some(t) = c.taunted_by
+        && map.unit_view(t).is_some_and(|u| u.alive)
+        && combat::can_attack(map, g, t)
+    {
+        return t;
+    }
+    let Some(best) = pick_victim(map, g) else {
+        return current;
+    };
+    if best == current {
+        return current;
+    }
+    let threat_of = |t: Guid| {
+        c.threat
+            .iter()
+            .find(|(x, _)| *x == t)
+            .map_or(0.0, |(_, v)| effective_threat(map, t, *v))
+    };
+    let (mine, theirs) = (threat_of(current), threat_of(best));
+    let near = match (map.unit_view(g), map.unit_view(best)) {
+        (Some(me), Some(them)) => combat::in_melee_range(&me, &them),
+        _ => false,
+    };
+    let ratio = if near { 1.1 } else { 1.3 };
+    if theirs > mine * ratio { best } else { current }
 }
 
 fn leash_of(map: &Map, c: &Creature) -> f32 {
@@ -463,7 +507,7 @@ fn fight_step(map: &mut Map, g: Guid) {
         && dist(pos, home) <= leash
         && combat::can_attack(map, g, current)
     {
-        Some(current)
+        Some(overtake(map, g, current))
     } else {
         pick_victim(map, g)
     };

@@ -2263,6 +2263,11 @@ mod real {
         let template = data.creature_template(6).cloned().expect("Kobold Vermin");
         let p = &m.players[&g];
         let (pos, o) = (p.position(), p.movement.orientation);
+        // Shoot wants a wand, which no one starts with.
+        let ranged = p
+            .items
+            .iter()
+            .any(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == 17);
         let castable: Vec<u32> = p
             .spells
             .iter()
@@ -2272,6 +2277,7 @@ mod real {
                     !t.passive()
                         && t.effects.iter().any(|e| FIGHTING.contains(&e.effect))
                         && *s != 7267
+                        && (!t.auto_repeat() || ranged)
                 })
             })
             .collect();
@@ -2320,6 +2326,22 @@ mod real {
                 c.ends = now;
             }
             spells::update(m);
+            // A next-swing spell goes off at the swing, an auto-repeat one
+            // at its first shot.
+            if s.on_next_swing() {
+                crate::game::map::combat::start_attack(m, g, kobold);
+                crate::game::map::combat::stop_attack(m, g);
+            }
+            if s.auto_repeat() {
+                if let Some(p) = m.players.get_mut(&g) {
+                    p.derived.ranged_hit = 100.0;
+                    if let Some(a) = p.combat.auto_repeat.as_mut() {
+                        a.next_at = now;
+                    }
+                }
+                crate::game::map::ranged::update(m);
+                crate::game::map::ranged::cancel(m, g, false);
+            }
             let after = snapshot(m, g, kobold);
             // Harmful: did it hurt the kobold. Helpful: did it do anything.
             let took = if helpful {

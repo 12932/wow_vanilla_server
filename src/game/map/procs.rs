@@ -1,9 +1,28 @@
 //! Procs: auras that go off when their unit hits or is hit. Melee swings,
 //! ranged shots and spells report what happened through [`trigger`].
+//!
+//! A holder procs when its spell's `procFlags` (or `spell_proc_event`'s)
+//! name what happened, the outcome and the triggering spell's school and
+//! family pass `spell_proc_event`'s rules, its cooldown is over, and its
+//! chance rolls: a flat chance, or procs a minute against the weapon's
+//! speed. Proc-trigger auras then cast their spell, proc-damage auras deal
+//! theirs, and a charge is spent. Weapons proc their chance-on-hit spells
+//! and their enchantments' (Crusader, Fiery, poisons, Windfury), damage
+//! shields hit back, and target-trigger auras (Frostbite, Improved Scorch)
+//! go off on their spells. As in Thistle Tea's `Spell.Proc`.
 
+use std::cell::Cell;
+
+use rand::RngExt;
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::*;
 
+use crate::game::data::spells::{self as sd, ProcEvent, SpellTemplate};
+use crate::game::fields::*;
 use crate::game::map::Map;
+use crate::game::map::auras::{self, Holder};
+use crate::game::map::combat::{self, Hand};
+use crate::game::store::BAG_PLAYER;
 
 // `procFlags`: what happened, to the one who did it or had it done.
 pub const PROC_KILLED: u32 = 0x1;
@@ -44,6 +63,36 @@ pub const EX_DEFLECT: u32 = 0x200;
 pub const EX_ABSORB: u32 = 0x400;
 pub const EX_REFLECT: u32 = 0x800;
 pub const EX_INTERRUPT: u32 = 0x1000;
+/// `spell_proc_event`'s: always, whatever the outcome.
+pub const EX_TRIGGER_ALWAYS: u32 = 0x1_0000;
+pub const EX_PERIODIC_POSITIVE: u32 = 0x4_0000;
+/// The event is a cast ending, not a hit.
+pub const EX_CAST_END: u32 = 0x8_0000;
+
+/// Item spells' trigger: chance on hit.
+const ITEM_SPELL_CHANCE_ON_HIT: u32 = 2;
+/// Enchantment effect type: a spell cast in combat.
+const ENCHANT_COMBAT_SPELL: u32 = 1;
+const ENCHANT_SLOTS: u16 = 7;
+const EFFECT_ADD_EXTRA_ATTACKS: u32 = 19;
+
+/// Lightning Shield's and Shadowguard's ranks, and the spell each strikes
+/// back with.
+const RETALIATION: &[(u32, u32)] = &[
+    (324, 26364),
+    (325, 26365),
+    (905, 26366),
+    (945, 26367),
+    (8134, 26369),
+    (10431, 26370),
+    (10432, 26363),
+    (18137, 28377),
+    (19308, 28378),
+    (19309, 28379),
+    (19310, 28380),
+    (19311, 28381),
+    (19312, 28382),
+];
 
 /// What happened between two units, for their procs.
 #[derive(Debug, Clone, Copy, Default)]
@@ -55,16 +104,514 @@ pub struct Event {
     pub target_flags: u32,
     /// `procEx`.
     pub ex: u32,
-    /// The spell that did it; `None` for a melee swing or a shot.
+    /// The spell that did it; `None` for a melee swing.
     pub spell: Option<u32>,
     pub damage: u32,
     /// The school, as a mask.
     pub school: u32,
     /// The off hand's swing.
     pub offhand: bool,
+    /// A ranged attack.
+    pub ranged: bool,
+    /// An extra attack's: it can't give more.
+    pub extra_attack: bool,
+}
+
+thread_local! {
+    /// How deep procs are in procs: a proc's spell procs only what allows
+    /// it, and not without end.
+    static DEPTH: Cell<u8> = const { Cell::new(0) };
 }
 
 /// Run the procs of both units for `e`.
 pub fn trigger(map: &mut Map, e: Event) {
-    let _ = (map, e);
+    let depth = DEPTH.get();
+    if depth >= 3 {
+        return;
+    }
+    DEPTH.set(depth + 1);
+    let from_proc = depth > 0;
+    if e.actor_flags != 0 {
+        run(map, e.actor, e.target, e.actor_flags, &e, true, from_proc);
+    }
+    if e.target_flags != 0 && e.target != e.actor {
+        run(map, e.target, e.actor, e.target_flags, &e, false, from_proc);
+    }
+    if landed(e.ex) && !from_proc {
+        weapon_procs(map, &e);
+        target_triggers(map, &e);
+    }
+    DEPTH.set(depth);
+}
+
+fn landed(ex: u32) -> bool {
+    ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT | EX_BLOCK) != 0 && ex & EX_CAST_END == 0
+}
+
+/// The hand an event was dealt with.
+fn hand_of(e: &Event) -> Hand {
+    if e.ranged {
+        Hand::Ranged
+    } else if e.offhand {
+        Hand::Off
+    } else {
+        Hand::Main
+    }
+}
+
+/// A weapon's speed in milliseconds, for procs a minute.
+fn weapon_speed(map: &Map, g: Guid, hand: Hand) -> u32 {
+    combat::hand_weapon(map, g, hand)
+        .map(|w| w.delay)
+        .filter(|d| *d > 0)
+        .unwrap_or_else(|| {
+            map.unit_fields(g)
+                .map(|f| f.get_u32(UNIT_FIELD_BASEATTACKTIME))
+                .unwrap_or(2000)
+        })
+}
+
+/// A chance from procs a minute and a weapon's speed.
+pub fn ppm_chance(ppm: f32, speed_ms: u32) -> f32 {
+    (ppm * speed_ms as f32 / 600.0).min(100.0)
+}
+
+/// The `procFlags` a holder procs on.
+fn proc_flags(s: &SpellTemplate, pe: Option<&ProcEvent>) -> u32 {
+    match pe.filter(|p| p.flags != 0) {
+        Some(p) => p.flags,
+        None => s.proc_flags,
+    }
+}
+
+/// `spell_proc_event`'s outcome rule, or by default a hit or crit that
+/// isn't a cast ending.
+pub fn outcome_allowed(pe: Option<&ProcEvent>, ex: u32) -> bool {
+    match pe.filter(|p| p.ex != 0) {
+        Some(p) => {
+            (p.ex & EX_CAST_END) == (ex & EX_CAST_END)
+                && (p.ex & EX_TRIGGER_ALWAYS != 0 || p.ex & ex != 0)
+        }
+        None => ex & EX_CAST_END == 0 && ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT) != 0,
+    }
+}
+
+/// Whether the triggering spell passes `spell_proc_event`'s school and
+/// family rules.
+fn spell_allowed(pe: Option<&ProcEvent>, spell: Option<&SpellTemplate>, school: u32) -> bool {
+    let Some(pe) = pe else {
+        return true;
+    };
+    if pe.school_mask != 0 {
+        let school = spell.map_or(if school == 0 { 1 } else { school }, |s| s.school_mask());
+        if pe.school_mask & school == 0 {
+            return false;
+        }
+    }
+    if pe.family != 0 && spell.is_none_or(|s| s.family_name != pe.family) {
+        return false;
+    }
+    if pe.family_mask.iter().any(|m| *m != 0) {
+        let Some(s) = spell else {
+            return false;
+        };
+        if !pe.family_mask.iter().any(|m| m & s.family_flags != 0) {
+            return false;
+        }
+    }
+    true
+}
+
+fn run(map: &mut Map, owner: Guid, other: Guid, flags: u32, e: &Event, outgoing: bool, from_proc: bool) {
+    let data = map.realm.data.clone();
+    let now = map.now;
+    let Some(a) = auras::auras(map, owner) else {
+        return;
+    };
+    let candidates: Vec<Holder> = a
+        .holders
+        .iter()
+        .filter(|h| {
+            data.spells.get(h.spell).is_some_and(|s| {
+                proc_flags(s, data.spells.proc_events.get(&h.spell)) & flags != 0
+            })
+        })
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let trigger_spell = e.spell.and_then(|id| data.spells.get(id));
+    let mut rng = rand::rng();
+    for h in candidates {
+        let Some(s) = data.spells.get(h.spell) else {
+            continue;
+        };
+        let pe = data.spells.proc_events.get(&h.spell);
+        if e.spell == Some(h.spell) {
+            continue;
+        }
+        if from_proc && !s.attr(3, sd::ATTR_EX3_CAN_PROC_FROM_PROCS) {
+            continue;
+        }
+        if let Some(t) = trigger_spell {
+            let suppress = if outgoing {
+                sd::ATTR_EX3_SUPPRESS_CASTER_PROCS
+            } else {
+                sd::ATTR_EX3_SUPPRESS_TARGET_PROCS
+            };
+            if t.attr(3, suppress) {
+                continue;
+            }
+        }
+        if !spell_allowed(pe, trigger_spell, e.school) || !outcome_allowed(pe, e.ex) {
+            continue;
+        }
+        let hand = hand_of(e);
+        if outgoing
+            && h.item_class == 2
+            && map.players.contains_key(&owner)
+            && !crate::game::map::derive::fits(&h, combat::hand_weapon(map, owner, hand).as_ref())
+        {
+            continue;
+        }
+        if h.proc_ready_at.is_some_and(|t| t > now) {
+            continue;
+        }
+        // An extra attack's swing can't give more.
+        if e.extra_attack && grants_extra_attacks(&data, &h) {
+            continue;
+        }
+        let chance = match pe {
+            Some(p) if p.ppm > 0.0 && outgoing => ppm_chance(p.ppm, weapon_speed(map, owner, hand)),
+            Some(p) if p.chance > 0.0 => p.chance,
+            _ => s.proc_chance as f32,
+        };
+        if chance <= 0.0 || (chance < 100.0 && rng.random_range(0.0f32..100.0) >= chance) {
+            continue;
+        }
+        if let Some(p) = pe.filter(|p| p.cooldown > 0)
+            && let Some(a) = auras::auras_mut(map, owner)
+            && let Some(x) = a
+                .holders
+                .iter_mut()
+                .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+        {
+            x.proc_ready_at = Some(now + std::time::Duration::from_millis(u64::from(p.cooldown)));
+        }
+        fire(map, owner, other, &h);
+        if h.charges > 0 {
+            auras::spend_charge(map, owner, h.spell, h.caster);
+        }
+    }
+}
+
+fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool {
+    h.effects.iter().any(|x| {
+        x.trigger != 0
+            && data
+                .spells
+                .get(x.trigger)
+                .is_some_and(|t| t.has_effect(EFFECT_ADD_EXTRA_ATTACKS))
+    })
+}
+
+/// A holder went off: its trigger spells cast, its damage dealt.
+fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
+    for x in &h.effects {
+        match x.kind {
+            auras::AURA_PROC_TRIGGER_SPELL => {
+                let trigger = RETALIATION
+                    .iter()
+                    .find(|(s, _)| *s == h.spell)
+                    .map_or(x.trigger, |(_, t)| *t);
+                if trigger != 0 {
+                    crate::game::map::spells::cast_triggered(map, owner, trigger, Some(other));
+                }
+            }
+            auras::AURA_PROC_TRIGGER_DAMAGE => {
+                let amount = (x.amount * h.stacks.max(1) as i32).max(0) as u32;
+                spell_damage(map, owner, other, h.spell, amount, h.school);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Spell damage a proc deals: logged, absorbed, dealt.
+pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, spell: u32, damage: u32, school: u32) {
+    if !map.unit_view(target).is_some_and(|u| u.alive) {
+        return;
+    }
+    let (left, absorbed) = auras::absorb(map, target, damage, school);
+    if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLNONMELEEDAMAGELOG {
+        target,
+        attacker: caster,
+        spell,
+        damage: left,
+        school: SpellSchool::try_from(school.trailing_zeros() as u8).unwrap_or(SpellSchool::Normal),
+        absorbed_damage: absorbed,
+        resisted: 0,
+        periodic_log: false,
+        unused: 0,
+        blocked: 0,
+        hit_info: HitInfo::NormalSwing,
+        extend_flag: 0,
+    }) {
+        map.send_to_observers(caster, &frame, true);
+        if let Some(p) = map.players.get(&target)
+            && !p.known.contains(&caster)
+        {
+            p.outbound.send_frame(frame);
+        }
+    }
+    if left > 0 {
+        combat::deal_damage_school(map, caster, target, left, school);
+    }
+}
+
+/// The weapon that dealt a player's blow: its chance-on-hit spells and its
+/// enchantments' combat spells.
+fn weapon_procs(map: &mut Map, e: &Event) {
+    let data = map.realm.data.clone();
+    if !map.players.contains_key(&e.actor)
+        || e.actor == e.target
+        || !map.unit_view(e.target).is_some_and(|u| u.alive)
+        || e.actor_flags
+            & (PROC_DONE_MELEE | PROC_DONE_MELEE_SPELL | PROC_DONE_RANGED | PROC_DONE_RANGED_SPELL)
+            == 0
+    {
+        return;
+    }
+    if let Some(s) = e.spell.and_then(|id| data.spells.get(id))
+        && s.equipped_item_class != 2
+    {
+        return;
+    }
+    let slot = match hand_of(e) {
+        Hand::Main => 15,
+        Hand::Off => 16,
+        Hand::Ranged => 17,
+    };
+    let Some((index, entry)) = map.players.get(&e.actor).and_then(|p| {
+        p.items
+            .iter()
+            .position(|i| i.bag == BAG_PLAYER && i.slot == slot)
+            .map(|i| (i, p.items[i].entry))
+    }) else {
+        return;
+    };
+    let Some(t) = data.item(entry) else {
+        return;
+    };
+    let speed = if t.delay > 0 { t.delay } else { 2000 };
+    let mut rng = rand::rng();
+    let mut casts = Vec::new();
+    for s in t
+        .spells
+        .iter()
+        .filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_CHANCE_ON_HIT)
+    {
+        let Some(spell) = data.spells.get(s.id) else {
+            continue;
+        };
+        if e.extra_attack && spell.has_effect(EFFECT_ADD_EXTRA_ATTACKS) {
+            continue;
+        }
+        let chance = if s.ppm_rate > 0.0 {
+            ppm_chance(s.ppm_rate, speed)
+        } else if spell.proc_chance > 100 {
+            ppm_chance(1.0, speed)
+        } else {
+            spell.proc_chance as f32
+        };
+        if chance >= 100.0 || rng.random_range(0.0f32..100.0) < chance {
+            casts.push((s.id, None));
+        }
+    }
+    let enchants: Vec<(u16, u32, u32)> = {
+        let f = &map.players[&e.actor].items[index].fields;
+        (0..ENCHANT_SLOTS)
+            .map(|slot| {
+                let base = ITEM_FIELD_ENCHANTMENT + slot * 3;
+                (slot, f.get_u32(base), f.get_u32(base + 2))
+            })
+            .filter(|(_, id, _)| *id != 0)
+            .collect()
+    };
+    for (slot, id, charges) in enchants {
+        let Some(ench) = data.spells.enchantments.get(&id) else {
+            continue;
+        };
+        for (kind, amount, _, spell) in ench.effects.iter().copied() {
+            if kind != ENCHANT_COMBAT_SPELL || spell == 0 {
+                continue;
+            }
+            if e.extra_attack
+                && data
+                    .spells
+                    .get(spell)
+                    .is_some_and(|s| s.has_effect(EFFECT_ADD_EXTRA_ATTACKS))
+            {
+                continue;
+            }
+            // vmangos: procs a minute if the spell has a rate, else the
+            // enchantment's chance, else the weapon's speed's.
+            let chance = match data.spells.enchant_ppm.get(&spell) {
+                Some(ppm) if *ppm > 0.0 => ppm_chance(*ppm, speed),
+                _ if amount > 0 => amount as f32,
+                _ => speed as f32 * 1.8 / 1000.0,
+            };
+            if rng.random_range(0.0f32..100.0) < chance {
+                casts.push((spell, (charges > 0).then_some(slot)));
+            }
+        }
+    }
+    for (spell, charged_slot) in casts {
+        if !map.unit_view(e.target).is_some_and(|u| u.alive) {
+            break;
+        }
+        crate::game::map::spells::cast_triggered(map, e.actor, spell, Some(e.target));
+        if let Some(slot) = charged_slot {
+            spend_enchant_charge(map, e.actor, index, slot);
+        }
+    }
+}
+
+/// A charge of an item's enchantment (a poison's) is spent; with none left
+/// the enchantment goes.
+fn spend_enchant_charge(map: &mut Map, g: Guid, index: usize, slot: u16) {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    let Some(item) = p.items.get_mut(index) else {
+        return;
+    };
+    let base = ITEM_FIELD_ENCHANTMENT + slot * 3;
+    let charges = item.fields.get_u32(base + 2);
+    if charges > 1 {
+        item.fields.set_u32(base + 2, charges - 1);
+    } else {
+        item.fields.set_u32(base, 0);
+        item.fields.set_u32(base + 1, 0);
+        item.fields.set_u32(base + 2, 0);
+        p.gear_dirty = true;
+    }
+}
+
+/// Target-trigger auras (Frostbite, Improved Scorch, Healing Way): their
+/// owner's spells of the family and mask they name may cast their spell on
+/// the target.
+fn target_triggers(map: &mut Map, e: &Event) {
+    let data = map.realm.data.clone();
+    let Some(spell) = e.spell.and_then(|id| data.spells.get(id)) else {
+        return;
+    };
+    let Some(a) = auras::auras(map, e.actor) else {
+        return;
+    };
+    let triggers: Vec<(u32, f32)> = a
+        .holders
+        .iter()
+        .filter(|h| {
+            data.spells
+                .get(h.spell)
+                .is_some_and(|s| s.family_name == spell.family_name)
+        })
+        .flat_map(|h| {
+            h.effects
+                .iter()
+                .filter(|x| {
+                    x.kind == auras::AURA_ADD_TARGET_TRIGGER
+                        && x.trigger != 0
+                        && u64::from(x.mask) & spell.family_flags != 0
+                })
+                .map(|x| (x.trigger, x.amount as f32))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut rng = rand::rng();
+    for (trigger, chance) in triggers {
+        if chance >= 100.0 || rng.random_range(0.0f32..100.0) < chance {
+            crate::game::map::spells::cast_triggered(map, e.actor, trigger, Some(e.target));
+        }
+    }
+}
+
+/// Damage shields (Thorns, Retribution Aura) on `victim` strike `attacker`
+/// back for a melee blow that landed.
+pub fn damage_shields(map: &mut Map, attacker: Guid, victim: Guid) {
+    if attacker == victim || !map.unit_view(attacker).is_some_and(|u| u.alive) {
+        return;
+    }
+    let shields: Vec<(u32, u32)> = auras::auras(map, victim)
+        .map(|a| {
+            a.effects()
+                .filter(|(_, x)| x.kind == auras::AURA_DAMAGE_SHIELD)
+                .map(|(h, x)| ((x.amount * h.stacks.max(1) as i32).max(0) as u32, h.school))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (damage, school) in shields {
+        if damage == 0 {
+            continue;
+        }
+        if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLDAMAGESHIELD {
+            victim: attacker,
+            caster: victim,
+            damage,
+            school: SpellSchool::try_from(school.trailing_zeros() as u8)
+                .unwrap_or(SpellSchool::Normal),
+        }) {
+            map.send_to_observers(victim, &frame, true);
+            if let Some(p) = map.players.get(&attacker)
+                && !p.known.contains(&victim)
+            {
+                p.outbound.send_frame(frame);
+            }
+        }
+        combat::deal_damage_school(map, victim, attacker, damage, school);
+        if !map.unit_view(attacker).is_some_and(|u| u.alive) {
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procs_a_minute_scale_with_weapon_speed() {
+        // Seal of Command's 7 a minute on a 3.6-second weapon: 42%.
+        assert!((ppm_chance(7.0, 3600) - 42.0).abs() < 0.01);
+        assert_eq!(ppm_chance(60.0, 4000), 100.0);
+    }
+
+    #[test]
+    fn the_outcome_rules_follow_spell_proc_event() {
+        // By default a hit or a crit.
+        assert!(outcome_allowed(None, EX_NORMAL_HIT));
+        assert!(!outcome_allowed(None, EX_DODGE));
+        // Flurry's talent: crits only.
+        let crit = ProcEvent {
+            ex: EX_CRITICAL_HIT,
+            ..Default::default()
+        };
+        assert!(outcome_allowed(Some(&crit), EX_CRITICAL_HIT));
+        assert!(!outcome_allowed(Some(&crit), EX_NORMAL_HIT));
+        // Flurry's buff: whatever happens.
+        let always = ProcEvent {
+            ex: EX_TRIGGER_ALWAYS,
+            ..Default::default()
+        };
+        assert!(outcome_allowed(Some(&always), EX_MISS));
+        // Redoubt: a block.
+        let block = ProcEvent {
+            ex: EX_BLOCK,
+            ..Default::default()
+        };
+        assert!(outcome_allowed(Some(&block), EX_BLOCK));
+        assert!(!outcome_allowed(Some(&block), EX_NORMAL_HIT));
+    }
 }

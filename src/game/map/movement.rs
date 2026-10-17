@@ -116,6 +116,7 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     let position = info.position;
     if crate::game::map::combat::dist(before, position) > 0.1 {
         crate::game::map::spells::moved(map, guid);
+        crate::game::map::ranged::moved(map, guid);
     }
     map.grid.relocate(guid, old_cell, new_cell);
     visibility::moved(map, guid, anchor, position);

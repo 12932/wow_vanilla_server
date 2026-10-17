@@ -1,6 +1,11 @@
 //! Melee combat, for players and creatures alike: who may attack whom, the
-//! swing timer, vmangos's single-roll hit table, damage and armor, death,
-//! and what a kill is worth.
+//! swing timers of both hands, vmangos's single-roll hit table as Thistle
+//! Tea ports it (weapon skill against defense, from behind, glancing and
+//! crushing blows, blocks), damage with its modifiers and armor, parry
+//! haste, extra attacks, reactive windows (Overpower, Revenge, Riposte),
+//! next-swing spells, rage, skill gains, threat, death, and what a kill is
+//! worth. Ranged auto-repeat is in [`crate::game::map::ranged`], procs in
+//! [`crate::game::map::procs`].
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,14 +24,19 @@ use crate::game::data::items::Body;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
+use crate::game::map::auras::{self, *};
 use crate::game::map::death::{self, Death};
 use crate::game::map::player::{PLAYER_FLAGS_FFA_PVP, UNIT_FLAG_IN_COMBAT, UNIT_FLAG_PVP};
+use crate::game::map::procs;
 
 pub const SMSG_ATTACKERSTATEUPDATE: u16 = 0x14A;
 
 /// `SMSG_ATTACKERSTATEUPDATE` hit flags.
 pub const HITINFO_NORMALSWING2: u32 = 0x02;
+pub const HITINFO_LEFTSWING: u32 = 0x04;
 pub const HITINFO_MISS: u32 = 0x10;
+pub const HITINFO_ABSORB: u32 = 0x20;
+pub const HITINFO_RESIST: u32 = 0x40;
 pub const HITINFO_CRITICALHIT: u32 = 0x80;
 pub const HITINFO_GLANCING: u32 = 0x4000;
 pub const HITINFO_CRUSHING: u32 = 0x8000;
@@ -38,6 +48,21 @@ pub const VICTIMSTATE_DODGE: u32 = 2;
 pub const VICTIMSTATE_PARRY: u32 = 3;
 pub const VICTIMSTATE_BLOCKS: u32 = 5;
 
+/// A creature's `flags_extra`: it never parries, never blocks, or always
+/// crushes.
+pub const FLAG_EXTRA_NO_PARRY: u32 = 0x4;
+pub const FLAG_EXTRA_NO_BLOCK: u32 = 0x10;
+pub const FLAG_EXTRA_ALWAYS_CRUSH: u32 = 0x2000;
+
+/// `UNIT_FIELD_AURASTATE` bits: after a dodge, parry or block (Revenge,
+/// Riposte); below a fifth of health (Execute); after a hunter parries
+/// (Counterattack, Mongoose Bite).
+pub const AURA_STATE_DEFENSE: u32 = 1 << 0;
+pub const AURA_STATE_HEALTHLESS_20: u32 = 1 << 1;
+pub const AURA_STATE_HUNTER_PARRY: u32 = 1 << 6;
+/// How long a reactive window stays open.
+pub const REACTIVE_WINDOW: Duration = Duration::from_millis(4000);
+
 /// A player leaves combat this long after their last blow given or taken.
 pub const COMBAT_TIMEOUT: Duration = Duration::from_secs(6);
 /// A PvP flag lasts this long after the last PvP blow.
@@ -46,18 +71,54 @@ pub const PVP_TIMEOUT: Duration = Duration::from_secs(300);
 const SWING_ERROR_EVERY: Duration = Duration::from_millis(1000);
 /// The attacker faces the victim within this arc.
 const FACING_ARC: f32 = 2.0 * std::f32::consts::PI / 3.0;
+/// Reckoning banks up to this many extra attacks.
+const RECKONING_CAP: u32 = 4;
+pub const SPELL_RECKONING: u32 = 20178;
+pub const SPELL_DAZED: u32 = 1604;
+pub const SPELL_BERSERKER_RAGE: u32 = 18499;
 
-/// A unit's fight: whom it swings at, and when the next swing is due.
+/// A hand a blow comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hand {
+    Main,
+    Off,
+    Ranged,
+}
+
+/// A unit's fight: whom it swings at, and when each hand's next swing is
+/// due.
 #[derive(Debug, Clone, Default)]
 pub struct Combat {
     pub victim: Guid,
     pub attacking: bool,
     pub next_swing: Option<Instant>,
+    pub next_offhand: Option<Instant>,
     pub last_action: Option<Instant>,
     pub last_pvp: Option<Instant>,
     pub swing_error_at: Option<Instant>,
     /// Units fighting this one.
     pub attackers: AHashSet<Guid>,
+    /// A next-swing spell waiting for the main hand (Heroic Strike).
+    pub queued: Option<u32>,
+    /// Auto Shot, Shoot: repeating at the ranged weapon's speed.
+    pub auto_repeat: Option<AutoRepeat>,
+    /// Main-hand attacks owed at once, and Reckoning's banked ones.
+    pub extra_attacks: u32,
+    pub held_extra_attacks: u32,
+    pub in_extra_attack: bool,
+    /// After a dodge, parry or block: the window's target and its end.
+    pub defense_window: Option<(Guid, Instant)>,
+    pub hunter_parry_window: Option<(Guid, Instant)>,
+    /// When the combo point a dodge gave a warrior (Overpower) runs out.
+    pub dodge_combo_until: Option<Instant>,
+}
+
+/// A repeating ranged attack.
+#[derive(Debug, Clone, Copy)]
+pub struct AutoRepeat {
+    pub spell: u32,
+    pub target: Guid,
+    pub next_at: Instant,
 }
 
 /// The outcome of a swing's roll.
@@ -74,7 +135,7 @@ pub enum Outcome {
 }
 
 /// What the hit table is rolled from.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Roll {
     pub attacker_skill: i32,
     pub victim_defense: i32,
@@ -84,59 +145,228 @@ pub struct Roll {
     pub victim_level: i32,
     /// In percent.
     pub crit: f32,
+    pub hit: f32,
     pub dodge: f32,
     pub parry: f32,
     pub block: f32,
     pub from_behind: bool,
+    /// The victim stands (a sitting player is crit).
+    pub standing: bool,
+    /// The victim casts or is stunned: it can't dodge, parry or block.
+    pub avoidance_disabled: bool,
+    /// The attacker wields two weapons: white swings miss more.
+    pub dual_wield: bool,
+    /// A spell's swing (Heroic Strike), not a white one.
+    pub special: bool,
+    pub ranged: bool,
+    pub can_crit: bool,
+    pub no_parry: bool,
+    pub no_block: bool,
+    pub always_crush: bool,
 }
 
-/// vmangos's single roll (`RollMeleeOutcomeAgainst`), `roll` in hundredths
-/// of a percent.
-pub fn roll_outcome(r: &Roll, roll: i32) -> Outcome {
-    let skill_diff = r.attacker_skill - r.victim_defense;
+impl Roll {
+    fn skill_diff(&self) -> i32 {
+        self.attacker_skill - self.victim_defense
+    }
+
+    fn capped_skill_diff(&self) -> i32 {
+        self.attacker_skill.min(self.attacker_level * 5) - self.victim_defense
+    }
+
+    fn avoidance_skill_diff(&self) -> i32 {
+        self.attacker_skill - self.victim_level * 5
+    }
+
+    fn capped_avoidance_skill_diff(&self) -> i32 {
+        self.attacker_skill.min(self.attacker_level * 5) - self.victim_level * 5
+    }
+
+    /// A creature under level ten avoids less.
+    fn low_level(&self, chance: f32) -> f32 {
+        if !self.victim_is_player && self.victim_level < 10 {
+            chance * self.victim_level as f32 / 10.0
+        } else {
+            chance
+        }
+    }
+
+    fn miss(&self) -> i32 {
+        if !self.standing {
+            return 0;
+        }
+        let diff = self.skill_diff() as f32;
+        let skill_bonus = if self.victim_is_player {
+            diff * 0.04
+        } else if diff < -10.0 {
+            diff * 0.2
+        } else {
+            diff * 0.1
+        };
+        let penalty = if self.dual_wield && !self.special && !self.ranged {
+            19.0
+        } else {
+            0.0
+        };
+        let hit = if diff < -10.0 && self.hit > 0.0 {
+            self.hit - 1.0
+        } else {
+            self.hit
+        };
+        bp((self.low_level(5.0 + penalty - skill_bonus) - hit).clamp(0.0, 60.0))
+    }
+
+    fn sitting_crit(&self) -> bool {
+        self.victim_is_player
+            && !self.standing
+            && self.can_crit
+            && (self.crit > 0.0 || !self.attacker_is_player)
+    }
+
+    fn dodge(&self) -> i32 {
+        if self.ranged || self.avoidance_disabled || (self.victim_is_player && self.from_behind) {
+            return 0;
+        }
+        let bonus = if self.victim_is_player {
+            self.avoidance_skill_diff() as f32 * 0.04
+        } else {
+            self.skill_diff() as f32 * 0.1
+        };
+        bp(self.low_level(self.dodge - bonus).max(0.0))
+    }
+
+    fn parry(&self) -> i32 {
+        if self.ranged || self.parry <= 0.0 || self.avoidance_disabled || self.from_behind {
+            return 0;
+        }
+        if self.victim_is_player {
+            return bp((self.parry - self.avoidance_skill_diff() as f32 * 0.04).max(0.0));
+        }
+        if self.no_parry {
+            return 0;
+        }
+        let d = self.capped_avoidance_skill_diff() as f32;
+        let bonus = if d < -10.0 { d * 0.6 } else { d * 0.2 };
+        bp(self.low_level(self.parry - bonus).max(0.0))
+    }
+
+    fn glancing(&self) -> i32 {
+        if self.ranged || !self.attacker_is_player || self.victim_is_player || self.special {
+            return 0;
+        }
+        bp((10.0 - self.capped_skill_diff() as f32 * 2.0).max(0.0)).min(4000)
+    }
+
+    fn block(&self) -> i32 {
+        if self.ranged || self.avoidance_disabled || self.from_behind || self.block <= 0.0 {
+            return 0;
+        }
+        if self.victim_is_player {
+            return bp((self.block - self.avoidance_skill_diff() as f32 * 0.04).max(0.0));
+        }
+        if self.no_block {
+            return 0;
+        }
+        bp(self
+            .low_level((self.block - self.skill_diff() as f32 * 0.1).min(5.0))
+            .max(0.0))
+    }
+
+    fn crit_chance(&self) -> i32 {
+        if !self.can_crit {
+            return 0;
+        }
+        let term = if self.victim_is_player || self.skill_diff() > 0 {
+            self.skill_diff() as f32 * 0.04
+        } else {
+            self.capped_skill_diff() as f32 * 0.2
+        };
+        bp((self.crit + term).max(0.0))
+    }
+
+    fn crushing(&self) -> i32 {
+        if self.attacker_is_player || self.special || self.ranged {
+            return 0;
+        }
+        if self.always_crush {
+            return 10_000;
+        }
+        let diff = self.skill_diff();
+        if diff >= 15 { diff * 200 - 1500 } else { 0 }
+    }
+}
+
+fn bp(chance: f32) -> i32 {
+    (chance * 100.0) as i32
+}
+
+/// Walk the table's steps with a roll in hundredths of a percent.
+fn walk(steps: &[(Outcome, i32)], roll: i32, otherwise: Outcome) -> Outcome {
     let mut sum = 0;
-    // Miss: 5%, more against a higher defense.
-    let mut miss = 500 - skill_diff * if skill_diff < -10 { 20 } else { 4 };
-    if r.attacker_is_player && !r.victim_is_player && skill_diff <= 0 {
-        miss += 100;
-    }
-    sum += miss.clamp(0, 6000);
-    if roll < sum {
-        return Outcome::Miss;
-    }
-    sum += ((r.dodge * 100.0) as i32 - skill_diff * 4).max(0);
-    if roll < sum {
-        return Outcome::Dodge;
-    }
-    if !r.from_behind {
-        sum += ((r.parry * 100.0) as i32 - skill_diff * 4).max(0);
-        if roll < sum {
-            return Outcome::Parry;
+    for (outcome, chance) in steps {
+        if *chance >= 10_000 {
+            return *outcome;
         }
-    }
-    if r.attacker_is_player && !r.victim_is_player && r.victim_level >= r.attacker_level {
-        sum += (1000 + (r.victim_defense - r.attacker_skill) * 200).clamp(0, 4000);
-        if roll < sum {
-            return Outcome::Glancing;
+        if *chance > 0 && roll < sum + chance {
+            return *outcome;
         }
+        sum += (*chance).max(0);
     }
-    if !r.from_behind {
-        sum += ((r.block * 100.0) as i32 - skill_diff * 4).max(0);
-        if roll < sum {
-            return Outcome::Block;
-        }
+    otherwise
+}
+
+/// vmangos's single roll (`RollMeleeOutcomeAgainst`): miss, a sitting
+/// victim's crit, dodge, parry, glancing, block, crit, crushing, `roll` in
+/// hundredths of a percent.
+pub fn roll_outcome(r: &Roll, roll: i32) -> Outcome {
+    let sitting = if r.sitting_crit() { 10_000 } else { 0 };
+    walk(
+        &[
+            (Outcome::Miss, r.miss()),
+            (Outcome::Crit, sitting),
+            (Outcome::Dodge, r.dodge()),
+            (Outcome::Parry, r.parry()),
+            (Outcome::Glancing, r.glancing()),
+            (Outcome::Block, r.block()),
+            (Outcome::Crit, r.crit_chance()),
+            (Outcome::Crushing, r.crushing()),
+        ],
+        roll,
+        Outcome::Hit,
+    )
+}
+
+/// A melee or ranged ability's roll: miss, dodge, parry and block first,
+/// then the crit on a second roll.
+pub fn roll_special(r: &Roll, roll: i32, crit_roll: i32) -> Outcome {
+    let r = Roll { special: true, ..*r };
+    let sitting = if r.sitting_crit() { 10_000 } else { 0 };
+    let first = walk(
+        &[
+            (Outcome::Miss, r.miss()),
+            (Outcome::Crit, sitting),
+            (Outcome::Dodge, r.dodge()),
+            (Outcome::Parry, r.parry()),
+            (Outcome::Block, r.block()),
+        ],
+        roll,
+        Outcome::Hit,
+    );
+    if first == Outcome::Hit && crit_roll < r.crit_chance() {
+        Outcome::Crit
+    } else {
+        first
     }
-    sum += ((r.crit * 100.0) as i32 + skill_diff * 4).max(0);
-    if roll < sum {
-        return Outcome::Crit;
-    }
-    if !r.attacker_is_player && r.attacker_level >= r.victim_level + 4 {
-        sum += (skill_diff * 200 - 1500).max(0);
-        if roll < sum {
-            return Outcome::Crushing;
-        }
-    }
-    Outcome::Hit
+}
+
+/// What a glancing blow keeps of the damage, for a defense `gap` above the
+/// attacker's skill; casters glance harder.
+pub fn glancing_factor(gap: i32, caster: bool, roll: f32) -> f32 {
+    let gap = gap as f32;
+    let (low_cut, low_cap, high_cut) = if caster { (0.7, 0.6, 0.3) } else { (0.0, 0.91, 0.0) };
+    let low = (1.3 - 0.05 * gap - low_cut).clamp(0.01, low_cap);
+    let high = (1.2 - 0.03 * gap - high_cut).clamp(0.2, 0.99);
+    low + (high - low) * roll.clamp(0.0, 1.0)
 }
 
 /// Armor's share of physical damage stopped, up to 75%.
@@ -195,8 +425,39 @@ pub fn rage_for(damage: u32, level: u32, taken: bool) -> u32 {
     (damage as f32 / c * if taken { 2.5 } else { 7.5 } * 10.0) as u32
 }
 
+
 /// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
-/// flags, which wow_messages reads as one value.
+/// flags, which wow_messages reads as one value. `damage` is what got
+/// through, after absorbs; `school` its school's index.
+#[allow(clippy::too_many_arguments)]
+pub fn attacker_state_full(
+    attacker: Guid,
+    victim: Guid,
+    hit_info: u32,
+    damage: u32,
+    victim_state: u32,
+    blocked: u32,
+    absorbed: u32,
+    school: u32,
+) -> Arc<[u8]> {
+    let mut b = Body::default();
+    b.u32(hit_info);
+    crate::game::update::write_packed_guid(&mut b.0, attacker);
+    crate::game::update::write_packed_guid(&mut b.0, victim);
+    b.u32(damage)
+        .u8(1)
+        .u32(school)
+        .f32(damage as f32)
+        .u32(damage)
+        .u32(absorbed)
+        .u32(0)
+        .u32(victim_state)
+        .u32(if absorbed > 0 { u32::MAX } else { 0 })
+        .u32(0)
+        .u32(blocked);
+    b.frame(SMSG_ATTACKERSTATEUPDATE)
+}
+
 pub fn attacker_state(
     attacker: Guid,
     victim: Guid,
@@ -205,22 +466,7 @@ pub fn attacker_state(
     victim_state: u32,
     blocked: u32,
 ) -> Arc<[u8]> {
-    let mut b = Body::default();
-    b.u32(hit_info);
-    crate::game::update::write_packed_guid(&mut b.0, attacker);
-    crate::game::update::write_packed_guid(&mut b.0, victim);
-    b.u32(damage)
-        .u8(1)
-        .u32(1)
-        .f32(damage as f32)
-        .u32(damage)
-        .u32(0)
-        .u32(0)
-        .u32(victim_state)
-        .u32(0)
-        .u32(0)
-        .u32(blocked);
-    b.frame(SMSG_ATTACKERSTATEUPDATE)
+    attacker_state_full(attacker, victim, hit_info, damage, victim_state, blocked, 0, 0)
 }
 
 /// What the map knows of a unit, for a fight.
@@ -359,17 +605,27 @@ pub fn in_melee_range(a: &UnitView, b: &UnitView) -> bool {
     dist(a.position, b.position) <= melee_range(a, b) + 1.0
 }
 
-fn facing(a: &UnitView, b: &UnitView) -> bool {
+/// Whether `a` faces `b` within `arc` radians.
+pub fn in_arc(a: &UnitView, b: &UnitView, arc: f32) -> bool {
     let angle = (b.position.y - a.position.y).atan2(b.position.x - a.position.x);
     let mut diff = (angle - a.orientation).rem_euclid(std::f32::consts::TAU);
     if diff > std::f32::consts::PI {
         diff = std::f32::consts::TAU - diff;
     }
-    diff <= FACING_ARC / 2.0
+    diff <= arc / 2.0
+}
+
+pub fn facing(a: &UnitView, b: &UnitView) -> bool {
+    in_arc(a, b, FACING_ARC)
+}
+
+/// Whether `attacker` stands behind `victim`: outside its front half.
+pub fn behind(victim: &UnitView, attacker: &UnitView) -> bool {
+    !in_arc(victim, attacker, std::f32::consts::PI)
 }
 
 /// Both units are in combat, now.
-fn engage(map: &mut Map, a: Guid, b: Guid) {
+pub fn engage(map: &mut Map, a: Guid, b: Guid) {
     let now = map.now;
     for (x, y) in [(a, b), (b, a)] {
         if let Some(c) = map.combat_mut(x) {
@@ -397,6 +653,207 @@ fn send_to(map: &Map, g: Guid, frame: Option<Arc<[u8]>>) {
     if let (Some(p), Some(f)) = (map.players.get(&g), frame) {
         p.outbound.send_frame(f);
     }
+}
+
+/// A unit's derived stats.
+pub fn derived(map: &Map, g: Guid) -> crate::game::map::derive::Derived {
+    if let Some(p) = map.players.get(&g) {
+        return p.derived;
+    }
+    map.creature(g).map(|c| c.derived).unwrap_or_default()
+}
+
+/// The unit's creature type as a mask, for the auras against one: a player
+/// is a humanoid.
+pub fn creature_type_mask(map: &Map, g: Guid) -> u32 {
+    if map.players.contains_key(&g) {
+        return 1 << 6;
+    }
+    map.creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .map(|t| t.creature_type)
+        .filter(|t| *t > 0)
+        .map_or(0, |t| 1 << (t - 1).min(31))
+}
+
+fn flags_extra(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .map_or(0, |t| t.flags_extra)
+}
+
+/// Whether a player wields two weapons.
+pub fn dual_wields(map: &Map, g: Guid) -> bool {
+    map.players.get(&g).is_some_and(|p| p.derived.dual_wield)
+}
+
+/// The weapon in a player's hand.
+pub fn hand_weapon(map: &Map, g: Guid, hand: Hand) -> Option<crate::game::map::derive::Weapon> {
+    let p = map.players.get(&g)?;
+    let gear = crate::game::map::derive::gear(p, &map.realm.data);
+    match hand {
+        Hand::Main => gear.main,
+        Hand::Off => gear.off,
+        Hand::Ranged => gear.ranged,
+    }
+}
+
+/// The hit table's inputs for `attacker` against `victim` with `hand`.
+pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<Roll> {
+    let (va, vb) = (map.unit_view(attacker)?, map.unit_view(victim)?);
+    let (da, dv) = (derived(map, attacker), derived(map, victim));
+    let or_level = |v: u32, level: u32| if v == 0 { level * 5 } else { v } as i32;
+    let ranged = hand == Hand::Ranged;
+    let held = |g: Guid| {
+        map.caster(g).is_some_and(|c| c.casting.is_some())
+            || map
+                .unit_fields(g)
+                .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_STUNNED))
+    };
+    let extra = flags_extra(map, victim);
+    Some(Roll {
+        attacker_skill: or_level(if ranged { da.ranged_skill } else { da.weapon_skill }, va.level),
+        victim_defense: or_level(dv.defense, vb.level),
+        attacker_is_player: va.is_player,
+        victim_is_player: vb.is_player,
+        attacker_level: va.level as i32,
+        victim_level: vb.level as i32,
+        crit: if ranged { da.ranged_crit } else { da.crit },
+        hit: if ranged { da.ranged_hit } else { da.hit },
+        dodge: dv.dodge,
+        parry: dv.parry,
+        block: dv.block,
+        from_behind: behind(&vb, &va),
+        standing: vb.standing,
+        avoidance_disabled: held(victim),
+        dual_wield: !ranged
+            && dual_wields(map, attacker)
+            && map.combat(attacker).is_some_and(|c| c.queued.is_none()),
+        special: false,
+        ranged,
+        can_crit: true,
+        no_parry: extra & FLAG_EXTRA_NO_PARRY != 0,
+        no_block: extra & FLAG_EXTRA_NO_BLOCK != 0,
+        always_crush: flags_extra(map, attacker) & FLAG_EXTRA_ALWAYS_CRUSH != 0,
+    })
+}
+
+/// The school of a unit's blows, as a mask: a creature's may be magic.
+pub fn melee_school(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .map_or(1, |t| 1 << t.damage_school.min(6))
+}
+
+/// A blow's weapon damage before armor, with what the attacker deals more
+/// and the victim takes more: (damage, school mask).
+pub fn weapon_damage(
+    map: &Map,
+    attacker: Guid,
+    victim: Guid,
+    hand: Hand,
+    rng: &mut impl rand::Rng,
+) -> (u32, u32) {
+    let Some(f) = map.unit_fields(attacker) else {
+        return (1, 1);
+    };
+    let (lo, hi, period) = match hand {
+        Hand::Main => (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_MAXDAMAGE, UNIT_FIELD_BASEATTACKTIME),
+        Hand::Off => (
+            UNIT_FIELD_MINOFFHANDDAMAGE,
+            UNIT_FIELD_MAXOFFHANDDAMAGE,
+            UNIT_FIELD_BASEATTACKTIME + 1,
+        ),
+        Hand::Ranged => (
+            UNIT_FIELD_MINRANGEDDAMAGE,
+            UNIT_FIELD_MAXRANGEDDAMAGE,
+            UNIT_FIELD_RANGEDATTACKTIME,
+        ),
+    };
+    let min = f.get_f32(lo).max(1.0);
+    let max = f.get_f32(hi).max(min);
+    let speed = f.get_u32(period).max(100) as f32 / 1000.0;
+    let rolled = if max > min {
+        rng.random_range(min..=max)
+    } else {
+        min
+    };
+    let school = if hand == Hand::Ranged {
+        1
+    } else {
+        melee_school(map, attacker)
+    };
+    let mut damage = rolled;
+    if let Some(a) = auras::auras(map, attacker) {
+        let weapon = hand_weapon(map, attacker, hand);
+        let is_player = map.players.contains_key(&attacker);
+        damage += a
+            .effects()
+            .filter(|(h, x)| {
+                x.kind == AURA_MOD_DAMAGE_DONE
+                    && (x.misc as u32) & school != 0
+                    && (!is_player || crate::game::map::derive::fits(h, weapon.as_ref()))
+            })
+            .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
+            .sum::<f32>();
+        let kind = creature_type_mask(map, victim);
+        if kind != 0 {
+            damage += a.sum_mask(AURA_MOD_DAMAGE_DONE_CREATURE, kind) as f32;
+            let ap = a.sum_mask(
+                if hand == Hand::Ranged {
+                    AURA_MOD_RANGED_ATTACK_POWER_VERSUS
+                } else {
+                    AURA_MOD_MELEE_ATTACK_POWER_VERSUS
+                },
+                kind,
+            );
+            damage += ap as f32 / 14.0 * speed;
+            damage *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, kind);
+        }
+        // An armed creature, disarmed, hits for four tenths.
+        if a.has(AURA_MOD_DISARM)
+            && let Some(c) = map.creature(attacker)
+            && c.fields.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY) != 0
+            && hand == Hand::Main
+        {
+            damage *= 0.4;
+        }
+    }
+    if let Some(v) = auras::auras(map, victim) {
+        let (flat_kind, pct_kind) = if hand == Hand::Ranged {
+            (AURA_MOD_RANGED_DAMAGE_TAKEN, AURA_MOD_RANGED_DAMAGE_TAKEN_PCT)
+        } else {
+            (AURA_MOD_MELEE_DAMAGE_TAKEN, AURA_MOD_MELEE_DAMAGE_TAKEN_PCT)
+        };
+        damage += v.sum_mask(AURA_MOD_DAMAGE_TAKEN, school) as f32 + v.sum(flat_kind) as f32;
+        damage *= v.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, school) * v.product(pct_kind);
+    }
+    (damage.max(0.0) as u32, school)
+}
+
+/// What armor leaves of physical damage from `attacker` on `victim`.
+pub fn armor_mitigate(map: &Map, attacker: Guid, victim: Guid, damage: u32) -> u32 {
+    if damage == 0 {
+        return 0;
+    }
+    let armor = map
+        .unit_fields(victim)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_RESISTANCES) as i32);
+    let penetration = auras::auras(map, attacker).map_or(0, |a| a.sum_mask(AURA_MOD_TARGET_RESISTANCE, 1));
+    let level = map.unit_view(attacker).map_or(1, |u| u.level);
+    let cut = armor_reduction((armor + penetration).max(0) as u32, level);
+    damage.saturating_sub((damage as f32 * cut) as u32).max(1)
+}
+
+/// A crit's multiplier: double, more against the creature types the
+/// attacker's auras name.
+pub fn crit_multiplier(map: &Map, attacker: Guid, victim: Guid) -> f32 {
+    let kind = creature_type_mask(map, victim);
+    auras::auras(map, attacker).map_or(2.0, |a| {
+        2.0 + (a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, kind) + a.sum(AURA_MOD_CRIT_DAMAGE_BONUS_MELEE))
+            as f32
+            / 100.0
+    })
 }
 
 /// `CMSG_ATTACKSWING`: `attacker` starts on `victim`, with the first swing
@@ -427,6 +884,10 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
     if c.next_swing.is_none_or(|t| t < now) {
         c.next_swing = Some(now);
     }
+    // The off hand follows a moment after.
+    if c.next_offhand.is_none_or(|t| t < now) {
+        c.next_offhand = Some(now + Duration::from_millis(200));
+    }
     if let Some(f) = map.unit_fields_mut(attacker) {
         f.set_guid(UNIT_FIELD_TARGET, victim);
     }
@@ -445,6 +906,7 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
         return;
     }
     c.attacking = false;
+    c.queued = None;
     let victim = c.victim;
     if let Some(frame) = encode(&SMSG_ATTACKSTOP {
         player: attacker,
@@ -455,23 +917,38 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
     }
 }
 
-/// Swing if the timer is due and the swing can land; an error, now and
-/// then, if it can't.
+/// Swing if a hand's timer is due and the swing can land; an error, now
+/// and then, if it can't. Extra attacks owed go first.
 pub fn try_swing(map: &mut Map, attacker: Guid) {
     let now = map.now;
     let Some(c) = map.combat(attacker) else {
         return;
     };
-    if !c.attacking || c.next_swing.is_some_and(|t| t > now) {
+    if !c.attacking {
         return;
     }
     let victim = c.victim;
+    let dual = dual_wields(map, attacker);
+    let main_due = c.next_swing.is_none_or(|t| t <= now);
+    let off_due = dual && c.next_offhand.is_none_or(|t| t <= now);
+    let extra = c.extra_attacks > 0;
+    if !main_due && !off_due && !extra {
+        return;
+    }
     let (Some(va), Some(vb)) = (map.unit_view(attacker), map.unit_view(victim)) else {
         stop_attack(map, attacker);
         return;
     };
     if !vb.alive || !va.alive {
         stop_attack(map, attacker);
+        return;
+    }
+    // A spell being cast, or a stun, holds the swing; a pacified unit
+    // doesn't swing at all.
+    if map.caster(attacker).is_some_and(|c| c.casting.is_some())
+        || auras::held(map, attacker, false)
+        || auras::auras(map, attacker).is_some_and(|a| a.has(AURA_MOD_PACIFY))
+    {
         return;
     }
     let error = if !va.standing {
@@ -495,128 +972,515 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         }
         return;
     }
-    swing(map, attacker, victim);
+    if extra {
+        let owed = map.combat(attacker).map_or(0, |c| c.extra_attacks);
+        if let Some(c) = map.combat_mut(attacker) {
+            c.extra_attacks = 0;
+            c.in_extra_attack = true;
+        }
+        for _ in 0..owed {
+            if !map.unit_view(victim).is_some_and(|u| u.alive) {
+                break;
+            }
+            swing(map, attacker, victim, Hand::Main, true);
+        }
+        if let Some(c) = map.combat_mut(attacker) {
+            c.in_extra_attack = false;
+        }
+    }
+    if main_due && map.unit_view(victim).is_some_and(|u| u.alive) {
+        swing(map, attacker, victim, Hand::Main, false);
+    }
+    if off_due && map.unit_view(victim).is_some_and(|u| u.alive) {
+        swing(map, attacker, victim, Hand::Off, false);
+    }
 }
 
-/// One melee swing, landed or not.
-fn swing(map: &mut Map, attacker: Guid, victim: Guid) {
+/// One swing of `hand`, landed or not. An extra attack leaves the timer
+/// alone.
+fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     let now = map.now;
-    let (Some(va), Some(vb)) = (map.unit_view(attacker), map.unit_view(victim)) else {
+    if !extra {
+        let field = if hand == Hand::Off {
+            UNIT_FIELD_BASEATTACKTIME + 1
+        } else {
+            UNIT_FIELD_BASEATTACKTIME
+        };
+        let period = map
+            .unit_fields(attacker)
+            .map(|f| f.get_u32(field))
+            .unwrap_or(2000)
+            .max(100);
+        if let Some(c) = map.combat_mut(attacker) {
+            let next = Some(now + Duration::from_millis(u64::from(period)));
+            match hand {
+                Hand::Off => c.next_offhand = next,
+                _ => {
+                    c.next_swing = next;
+                    // Reckoning's banked attacks arm on a regular swing.
+                    c.extra_attacks += std::mem::take(&mut c.held_extra_attacks);
+                    // The hands keep a moment apart.
+                    if c.next_offhand.is_some_and(|t| t < now + Duration::from_millis(200)) {
+                        c.next_offhand = Some(now + Duration::from_millis(200));
+                    }
+                }
+            }
+        }
+    }
+    // A next-swing spell takes the main hand's swing.
+    if hand == Hand::Main
+        && !extra
+        && let Some(spell) = map.combat_mut(attacker).and_then(|c| c.queued.take())
+    {
+        let targets = crate::game::map::spells::Targets {
+            unit: Some(victim),
+            ..Default::default()
+        };
+        if crate::game::map::spells::cast_now(map, attacker, spell, targets) {
+            engage(map, attacker, victim);
+            return;
+        }
+    }
+    let Some(roll) = roll_for(map, attacker, victim, hand) else {
         return;
     };
-    let attack_time = map
-        .unit_fields_mut(attacker)
-        .map(|f| f.get_u32(UNIT_FIELD_BASEATTACKTIME))
-        .unwrap_or(2000)
-        .max(500);
-    if let Some(c) = map.combat_mut(attacker) {
-        c.next_swing = Some(now + Duration::from_millis(u64::from(attack_time)));
-    }
     let mut rng = rand::rng();
-    let roll = Roll {
-        attacker_skill: (va.level * 5) as i32,
-        victim_defense: (vb.level * 5) as i32,
-        attacker_is_player: va.is_player,
-        victim_is_player: vb.is_player,
-        attacker_level: va.level as i32,
-        victim_level: vb.level as i32,
-        crit: crit_chance(map, attacker),
-        dodge: dodge_chance(map, victim),
-        parry: if parries(map, victim) { 5.0 } else { 0.0 },
-        block: 0.0,
-        from_behind: !facing(&vb, &va),
-    };
     let outcome = roll_outcome(&roll, rng.random_range(0..10_000));
-    let (min, max) = damage_range(map, attacker);
-    let rolled = if max > min {
-        rng.random_range(min..=max)
+    let (raw, school) = weapon_damage(map, attacker, victim, hand, &mut rng);
+    let mitigated = if school & 1 != 0 {
+        armor_mitigate(map, attacker, victim, raw)
     } else {
-        min
+        raw
     };
-    let armor = map
-        .unit_fields_mut(victim)
-        .map(|f| f.get_u32(UNIT_FIELD_RESISTANCES))
-        .unwrap_or(0);
-    let mitigated = (rolled as f32 * (1.0 - armor_reduction(armor, va.level))) as u32;
-    let (hit_info, state, damage) = match outcome {
-        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0),
-        Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0),
-        Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0),
-        Outcome::Block => (HITINFO_NORMALSWING2, VICTIMSTATE_BLOCKS, mitigated / 2),
-        Outcome::Glancing => (
-            HITINFO_NORMALSWING2 | HITINFO_GLANCING,
-            VICTIMSTATE_NORMAL,
-            (mitigated as f32 * rng.random_range(0.65f32..0.95)) as u32,
-        ),
+    let block_value = derived(map, victim).block_value;
+    let caster_class = map
+        .players
+        .get(&attacker)
+        .is_some_and(|p| matches!(p.row.class, 5 | 8 | 9));
+    let (mut hit_info, state, damage, blocked) = match outcome {
+        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
+        Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
+        Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
+        Outcome::Block => {
+            let blocked = block_value.min(mitigated);
+            let state = if blocked >= mitigated {
+                VICTIMSTATE_BLOCKS
+            } else {
+                VICTIMSTATE_NORMAL
+            };
+            (HITINFO_NORMALSWING2, state, mitigated - blocked, blocked)
+        }
+        Outcome::Glancing => {
+            let gap = roll.victim_defense - roll.attacker_skill;
+            let kept = glancing_factor(gap, caster_class, rng.random_range(0.0f32..1.0));
+            (
+                HITINFO_NORMALSWING2 | HITINFO_GLANCING,
+                VICTIMSTATE_NORMAL,
+                ((mitigated as f32 * kept) as u32).max(raw.min(1)),
+                0,
+            )
+        }
         Outcome::Crit => (
             HITINFO_NORMALSWING2 | HITINFO_CRITICALHIT,
             VICTIMSTATE_NORMAL,
-            mitigated * 2,
+            (mitigated as f32 * crit_multiplier(map, attacker, victim)) as u32,
+            0,
         ),
         Outcome::Crushing => (
             HITINFO_NORMALSWING2 | HITINFO_CRUSHING,
             VICTIMSTATE_NORMAL,
             mitigated * 3 / 2,
+            0,
         ),
-        Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated),
+        Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated, 0),
     };
-    let damage = match outcome {
-        Outcome::Miss | Outcome::Dodge | Outcome::Parry => 0,
-        _ => damage.max(1),
+    if hand == Hand::Off {
+        hit_info |= HITINFO_LEFTSWING;
+    }
+    let (left, absorbed) = if damage > 0 {
+        auras::absorb(map, victim, damage, school)
+    } else {
+        (0, 0)
     };
-    let frame = attacker_state(attacker, victim, hit_info, damage, state, 0);
+    if absorbed > 0 {
+        hit_info |= HITINFO_ABSORB;
+    }
+    let frame = attacker_state_full(
+        attacker,
+        victim,
+        hit_info,
+        left,
+        state,
+        blocked,
+        absorbed,
+        school.trailing_zeros(),
+    );
     map.send_to_observers(attacker, &frame, true);
     // A creature's victim hears of the blow even if it doesn't see it yet.
-    if !va.is_player
+    if !guid::is_player(attacker)
         && let Some(p) = map.players.get(&victim)
         && !p.known.contains(&attacker)
     {
         p.outbound.send_frame(frame);
     }
     engage(map, attacker, victim);
-    if damage > 0 {
-        deal_damage(map, attacker, victim, damage);
+    after_outcome(map, attacker, victim, outcome);
+    let landed = matches!(
+        outcome,
+        Outcome::Hit | Outcome::Crit | Outcome::Glancing | Outcome::Crushing | Outcome::Block
+    );
+    if landed && damage > 0 {
+        gain_rage(map, attacker, damage, false);
+    }
+    skill_gains(map, attacker, victim, hand);
+    if left > 0 {
+        deal_damage_school(map, attacker, victim, left, school);
+    }
+    let mut ex = outcome_ex(outcome);
+    if outcome == Outcome::Block && damage > 0 {
+        ex |= procs::EX_NORMAL_HIT;
+    }
+    if absorbed > 0 {
+        ex |= procs::EX_ABSORB;
+    }
+    procs::trigger(
+        map,
+        procs::Event {
+            actor: attacker,
+            target: victim,
+            actor_flags: procs::PROC_DONE_MELEE,
+            target_flags: procs::PROC_TAKEN_MELEE,
+            ex,
+            spell: None,
+            damage: left,
+            school,
+            offhand: hand == Hand::Off,
+            extra_attack: extra,
+            ..Default::default()
+        },
+    );
+    if landed && (left > 0 || outcome == Outcome::Block) {
+        procs::damage_shields(map, attacker, victim);
+    }
+    if left > 0 {
+        daze(map, attacker, victim, &roll);
     }
 }
 
-fn crit_chance(map: &Map, g: Guid) -> f32 {
-    match map.players.get(&g) {
-        Some(p) => 5.0 + p.fields.get_u32(UNIT_FIELD_STAT0 + 1) as f32 / 20.0,
-        None => 5.0,
+/// The `procEx` an outcome is.
+pub fn outcome_ex(outcome: Outcome) -> u32 {
+    match outcome {
+        Outcome::Miss => procs::EX_MISS,
+        Outcome::Dodge => procs::EX_DODGE,
+        Outcome::Parry => procs::EX_PARRY,
+        Outcome::Block => procs::EX_BLOCK,
+        Outcome::Crit => procs::EX_CRITICAL_HIT,
+        Outcome::Hit | Outcome::Glancing | Outcome::Crushing => procs::EX_NORMAL_HIT,
     }
 }
 
-fn dodge_chance(map: &Map, g: Guid) -> f32 {
-    match map.players.get(&g) {
-        Some(p) => p.fields.get_u32(UNIT_FIELD_STAT0 + 1) as f32 / 20.0,
-        None => 5.0,
+/// What a dodge, parry or block opens: the defender's reactive window
+/// (Revenge, Riposte; a hunter's Counterattack), a warrior attacker's
+/// combo point for Overpower, and a parry's haste.
+pub fn after_outcome(map: &mut Map, attacker: Guid, victim: Guid, outcome: Outcome) {
+    let now = map.now;
+    if !matches!(outcome, Outcome::Dodge | Outcome::Parry | Outcome::Block) {
+        return;
     }
+    let class = map.players.get(&victim).map(|p| p.row.class);
+    if let Some(class) = class
+        && let Some(c) = map.combat_mut(victim)
+    {
+        let window = Some((attacker, now + REACTIVE_WINDOW));
+        match (class, outcome) {
+            // A rogue's dodge opens nothing.
+            (4, Outcome::Dodge) => {}
+            (3, Outcome::Parry) => c.hunter_parry_window = window,
+            _ => c.defense_window = window,
+        }
+    }
+    if outcome == Outcome::Dodge
+        && let Some(p) = map.players.get_mut(&attacker)
+        && p.row.class == 1
+    {
+        p.caster.combo_target = victim;
+        p.caster.combo_points = 1;
+        p.combat.dodge_combo_until = Some(now + REACTIVE_WINDOW);
+        p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, victim);
+        p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 1);
+    }
+    if outcome == Outcome::Parry {
+        parry_haste(map, victim);
+    }
+    sync_aura_state(map, victim);
 }
 
-fn parries(map: &Map, g: Guid) -> bool {
-    match map.players.get(&g) {
-        // Warriors, paladins, hunters and rogues learn parry.
-        Some(p) => matches!(p.row.class, 1..=4),
-        None => true,
-    }
-}
-
-/// A swing's weapon damage, before armor.
-fn damage_range(map: &Map, g: Guid) -> (u32, u32) {
-    let f = if let Some(p) = map.players.get(&g) {
-        &p.fields
-    } else if let Some(c) = map.creature(g) {
-        &c.fields
-    } else {
-        return (1, 2);
+/// A parry hastens the parrier's next swing: the earlier hand loses up to
+/// two fifths of its period, to no less than a fifth.
+pub fn parry_haste(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let dual = dual_wields(map, g);
+    let periods = map
+        .unit_fields(g)
+        .map(|f| {
+            (
+                f.get_u32(UNIT_FIELD_BASEATTACKTIME),
+                f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1),
+            )
+        })
+        .unwrap_or((2000, 2000));
+    let Some(c) = map.combat_mut(g) else {
+        return;
     };
-    let min = f.get_f32(UNIT_FIELD_MINDAMAGE).max(1.0);
-    let max = f.get_f32(UNIT_FIELD_MAXDAMAGE).max(min);
-    (min as u32, max as u32)
+    if !c.attacking {
+        return;
+    }
+    let main = c.next_swing.filter(|t| *t > now);
+    let off = c.next_offhand.filter(|t| *t > now && dual);
+    let (slot, deadline, period) = match (main, off) {
+        (Some(m), Some(o)) if o < m => (&mut c.next_offhand, o, periods.1),
+        (Some(m), _) => (&mut c.next_swing, m, periods.0),
+        (None, Some(o)) => (&mut c.next_offhand, o, periods.1),
+        (None, None) => return,
+    };
+    let remaining = deadline.duration_since(now).as_millis() as f32;
+    let period = period.max(1) as f32;
+    let shortened = remaining.min((period * 0.2).max(remaining - period * 0.4));
+    *slot = Some(now + Duration::from_millis(shortened as u64));
+}
+
+/// `UNIT_FIELD_AURASTATE` brought in line: the reactive windows still open,
+/// and health below a fifth.
+pub fn sync_aura_state(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let (defense, parry) = map.combat(g).map_or((false, false), |c| {
+        (
+            c.defense_window.is_some_and(|(_, t)| t > now),
+            c.hunter_parry_window.is_some_and(|(_, t)| t > now),
+        )
+    });
+    let Some(f) = map.unit_fields_mut(g) else {
+        return;
+    };
+    let health = f.get_u32(UNIT_FIELD_HEALTH);
+    let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+    let old = f.get_u32(UNIT_FIELD_AURASTATE);
+    let mut bits = old & !(AURA_STATE_DEFENSE | AURA_STATE_HUNTER_PARRY | AURA_STATE_HEALTHLESS_20);
+    if defense {
+        bits |= AURA_STATE_DEFENSE;
+    }
+    if parry {
+        bits |= AURA_STATE_HUNTER_PARRY;
+    }
+    if health > 0 && (health as u64) * 5 < max as u64 {
+        bits |= AURA_STATE_HEALTHLESS_20;
+    }
+    if bits != old {
+        f.set_u32(UNIT_FIELD_AURASTATE, bits);
+    }
+}
+
+/// Windows that closed, and a warrior's Overpower point that ran out.
+fn expire_windows(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let Some(c) = map.combat_mut(g) else {
+        return;
+    };
+    let mut changed = false;
+    if c.defense_window.is_some_and(|(_, t)| t <= now) {
+        c.defense_window = None;
+        changed = true;
+    }
+    if c.hunter_parry_window.is_some_and(|(_, t)| t <= now) {
+        c.hunter_parry_window = None;
+        changed = true;
+    }
+    let combo_gone = c.dodge_combo_until.is_some_and(|t| t <= now);
+    if combo_gone {
+        c.dodge_combo_until = None;
+    }
+    if combo_gone && let Some(p) = map.players.get_mut(&g) {
+        p.caster.combo_points = 0;
+        p.caster.combo_target = Guid::zero();
+        p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, Guid::zero());
+        p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 0);
+    }
+    if changed {
+        sync_aura_state(map, g);
+    }
+}
+
+/// Rage for a blow dealt or taken, for a unit whose power is rage.
+pub fn gain_rage(map: &mut Map, g: Guid, damage: u32, taken: bool) {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.fields.get_byte(UNIT_FIELD_BYTES_0, 3) != 1 {
+        return;
+    }
+    let mut gain = rage_for(damage, u32::from(p.level()), taken);
+    if taken && p.auras.has_spell(SPELL_BERSERKER_RAGE) {
+        gain = gain * 13 / 10;
+    }
+    let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 1).max(1000);
+    let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
+    p.fields
+        .set_u32(UNIT_FIELD_POWER1 + 1, (rage + gain).min(max));
+}
+
+/// Raise a player's skill by a point, if below its cap.
+fn raise_skill(p: &mut crate::game::map::player::Player, skill: u32) -> bool {
+    for i in 0..128u16 {
+        let base = PLAYER_SKILL_INFO_1_1 + i * 3;
+        if p.fields.get_u32(base) & 0xFFFF != skill {
+            continue;
+        }
+        let v = p.fields.get_u32(base + 1);
+        let (value, max) = (v & 0xFFFF, v >> 16);
+        if value >= max {
+            return false;
+        }
+        p.fields.set_u32(base + 1, (value + 1) | (max << 16));
+        return true;
+    }
+    false
+}
+
+/// Thistle Tea's weapon skill-up chance, in percent.
+pub fn weapon_skill_chance(value: u32, cap: u32, intellect: u32) -> f32 {
+    let (value, cap) = (value as f32, cap as f32);
+    let base = if cap * 0.9 > value {
+        (cap * 0.9 * 50.0 / value.max(1.0)).min(100.0)
+    } else {
+        let chance = (0.5 - 0.016_896_6 * value * (300.0 / cap) + 0.015_206_9 * 300.0) * 100.0;
+        let diff = cap - value;
+        if diff <= 3.0 { chance * (0.5 / (4.0 - diff)) } else { chance }
+    };
+    (base + (0.02 * intellect as f32).min(10.0)).min(100.0)
+}
+
+/// Thistle Tea's defense skill-up chance, in percent.
+pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: u32) -> f32 {
+    let mob = mob_level.min(player_level + 5);
+    let diff = mob.saturating_sub(gray_level(player_level)).max(3) as f32;
+    (3.0 * diff * cap.saturating_sub(value) as f32 / player_level.max(1) as f32).min(100.0)
+}
+
+/// Weapon and defense skills that a blow against a creature trains.
+fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
+    let mut rng = rand::rng();
+    let trains = |map: &Map, g: Guid| {
+        map.creature(g)
+            .is_some_and(|c| c.owner.is_none_or(|o| !guid::is_player(o)))
+    };
+    // The attacker's weapon.
+    if map.players.contains_key(&attacker) && trains(map, victim) {
+        let mob_level = map.unit_view(victim).map_or(1, |u| u.level);
+        let skill = hand_weapon(map, attacker, hand)
+            .map_or(162, |w| crate::game::map::derive::weapon_skill(w.subclass));
+        let gained = map.players.get_mut(&attacker).is_some_and(|p| {
+            let level = u32::from(p.level());
+            if mob_level <= gray_level(level) {
+                return false;
+            }
+            let Some(value) = crate::game::map::skills::value(p, skill) else {
+                return false;
+            };
+            let cap = level * 5;
+            if value >= cap {
+                return false;
+            }
+            let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
+            rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
+                && raise_skill(p, skill)
+        });
+        if gained {
+            auras::recalc(map, attacker);
+        }
+    }
+    // The victim's defense.
+    if map.players.contains_key(&victim) && trains(map, attacker) {
+        let mob_level = map.unit_view(attacker).map_or(1, |u| u.level);
+        let skill = crate::game::map::derive::SKILL_DEFENSE;
+        let gained = map.players.get_mut(&victim).is_some_and(|p| {
+            let level = u32::from(p.level());
+            let Some(value) = crate::game::map::skills::value(p, skill) else {
+                return false;
+            };
+            let cap = level * 5;
+            value < cap
+                && rng.random_range(0.0f32..100.0) < defense_skill_chance(value, cap, level, mob_level)
+                && raise_skill(p, skill)
+        });
+        if gained {
+            auras::recalc(map, victim);
+        }
+    }
+}
+
+/// A creature striking a player from behind may daze them.
+fn daze(map: &mut Map, attacker: Guid, victim: Guid, roll: &Roll) {
+    if roll.ranged || !roll.from_behind || !map.players.contains_key(&victim) {
+        return;
+    }
+    if !map.creature(attacker).is_some_and(|c| c.owner.is_none()) {
+        return;
+    }
+    let level = roll.victim_level as f32;
+    let base = if level < 30.0 { 0.65 * level + 0.5 } else { 20.0 };
+    let chance = (base + (roll.attacker_skill - roll.victim_defense) as f32 * 0.2).clamp(0.0, 40.0);
+    if rand::rng().random_range(0.0f32..100.0) < chance {
+        crate::game::map::spells::cast_triggered(map, attacker, SPELL_DAZED, Some(victim));
+    }
+}
+
+/// A spell (Windfury, Sword Specialization, Hand of Justice) owes `count`
+/// main-hand attacks at once; Reckoning banks one for the next swing. An
+/// extra attack can't give more, nor can a batch stack.
+pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
+    let Some(c) = map.combat_mut(g) else {
+        return;
+    };
+    if spell == SPELL_RECKONING {
+        if c.extra_attacks + c.held_extra_attacks < RECKONING_CAP {
+            c.held_extra_attacks += 1;
+        }
+        return;
+    }
+    if c.in_extra_attack || c.extra_attacks > 0 || count == 0 {
+        return;
+    }
+    c.extra_attacks = count;
+}
+
+/// A next-swing spell (Heroic Strike, Cleave, Maul, Raptor Strike) waits
+/// for the main hand's swing.
+pub fn queue_next_swing(map: &mut Map, g: Guid, spell: u32) {
+    if let Some(c) = map.combat_mut(g) {
+        c.queued = Some(spell);
+    }
+}
+
+/// `CMSG_CANCEL_CAST` takes a waiting next-swing spell back.
+pub fn cancel_queued(map: &mut Map, g: Guid) {
+    if let Some(c) = map.combat_mut(g) {
+        c.queued = None;
+    }
 }
 
 /// Damage a unit: rage, threat, health, death.
 pub fn deal_damage(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
+    deal_damage_school(map, attacker, victim, damage, 1);
+}
+
+/// Threat a unit's blows of `school` make, as a multiplier.
+pub fn threat_multiplier(map: &Map, g: Guid, school: u32) -> f32 {
+    auras::auras(map, g).map_or(1.0, |a| a.product_mask(AURA_MOD_THREAT, school))
+}
+
+/// Damage of `school` (a mask) on a unit: the rage it gives, threat, the
+/// auras damage breaks, health, death.
+pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u32, school: u32) {
     let damage = if guid::is_player(victim) && guid::is_player(attacker) {
         crate::game::map::duel::soften(map, attacker, victim, damage)
     } else {
@@ -625,24 +1489,20 @@ pub fn deal_damage(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
     if damage == 0 {
         return;
     }
-    for (g, taken) in [(attacker, false), (victim, true)] {
-        if let Some(p) = map.players.get_mut(&g)
-            && p.power_type() == 1
-        {
-            let gain = rage_for(damage, u32::from(p.level()), taken);
-            let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
-            p.fields
-                .set_u32(UNIT_FIELD_POWER1 + 1, (rage + gain).min(1000));
-        }
-    }
+    gain_rage(map, victim, damage, true);
     if guid::is_unit(victim) {
-        crate::game::map::ai::add_threat(map, victim, attacker, damage as f32);
+        let threat = damage as f32 * threat_multiplier(map, attacker, school);
+        crate::game::map::ai::add_threat(map, victim, attacker, threat);
+    }
+    if attacker != victim {
+        auras::interrupt(map, victim, INTERRUPT_DAMAGE);
     }
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
     };
     let left = f.get_u32(UNIT_FIELD_HEALTH).saturating_sub(damage);
     f.set_u32(UNIT_FIELD_HEALTH, left);
+    sync_aura_state(map, victim);
     if left == 0 {
         kill(map, attacker, victim);
     }
@@ -663,9 +1523,19 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         }
         if let Some(c) = map.combat_mut(a) {
             c.attackers.remove(&victim);
+            if c.auto_repeat.is_some_and(|r| r.target == victim) {
+                c.auto_repeat = None;
+            }
         }
     }
     stop_attack(map, victim);
+    let worth = {
+        let (kl, vl) = (
+            map.unit_view(killer).map_or(1, |u| u.level),
+            map.unit_view(victim).map_or(1, |u| u.level),
+        );
+        vl > gray_level(kl)
+    };
     if guid::is_player(victim) {
         tracing::debug!(
             "{} killed by {}",
@@ -693,6 +1563,19 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
             reward(map, tapper, victim);
         }
         crate::game::map::ai::die(map, victim, tapper);
+    }
+    if killer != victim {
+        procs::trigger(
+            map,
+            procs::Event {
+                actor: killer,
+                target: victim,
+                actor_flags: if worth { procs::PROC_KILL } else { 0 },
+                target_flags: procs::PROC_KILLED,
+                ex: procs::EX_NORMAL_HIT,
+                ..Default::default()
+            },
+        );
     }
 }
 
@@ -832,17 +1715,41 @@ fn honor(map: &mut Map, killer: Guid, victim: Guid) {
         });
 }
 
-/// Run the players' swings, and expire their combat and PvP flags.
+/// Run the players' swings and shots, close their reactive windows, and
+/// expire their combat and PvP flags.
 pub fn update_players(map: &mut Map) {
     let now = map.now;
     let swinging: Vec<Guid> = map
         .players
         .values()
-        .filter(|p| p.combat.attacking)
+        .filter(|p| p.combat.attacking || p.combat.extra_attacks > 0)
         .map(|p| p.guid)
         .collect();
     for g in swinging {
         try_swing(map, g);
+    }
+    crate::game::map::ranged::update(map);
+    let windows: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| {
+            p.combat.defense_window.is_some()
+                || p.combat.hunter_parry_window.is_some()
+                || p.combat.dodge_combo_until.is_some()
+        })
+        .map(|p| p.guid)
+        .collect();
+    for g in windows {
+        expire_windows(map, g);
+    }
+    let fighting: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| p.combat.last_action.is_some())
+        .map(|p| p.guid)
+        .collect();
+    for g in fighting {
+        sync_aura_state(map, g);
     }
     for p in map.players.values_mut() {
         if !p.combat.attacking
@@ -865,12 +1772,28 @@ pub fn update_players(map: &mut Map) {
     }
 }
 
+/// The aura states of creatures in a fight: below a fifth of health
+/// (Execute), and their reactive windows.
+pub fn update_creatures(map: &mut Map) {
+    let fighting: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && (c.combat.attacking || !c.combat.attackers.is_empty()))
+        .map(|(_, c)| c.guid)
+        .collect();
+    for g in fighting {
+        expire_windows(map, g);
+        sync_aura_state(map, g);
+    }
+}
+
 /// A unit stops fighting: out of combat, attacking nothing.
 pub fn leave_combat(map: &mut Map, g: Guid) {
     stop_attack(map, g);
     if let Some(c) = map.combat_mut(g) {
         c.attackers.clear();
         c.last_action = None;
+        c.auto_repeat = None;
     }
     if let Some(f) = map.unit_fields_mut(g) {
         f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
@@ -892,8 +1815,9 @@ mod tests {
             crit: 5.0,
             dodge: 5.0,
             parry: 5.0,
-            block: 0.0,
-            from_behind: false,
+            standing: true,
+            can_crit: true,
+            ..Default::default()
         }
     }
 
@@ -906,21 +1830,85 @@ mod tests {
         assert_eq!(roll_outcome(&r, 1000), Outcome::Parry);
         assert_eq!(roll_outcome(&r, 1500), Outcome::Crit);
         assert_eq!(roll_outcome(&r, 2000), Outcome::Hit);
+        // From behind, a player can't dodge or parry.
         let behind = Roll {
             from_behind: true,
             ..r
         };
-        assert_eq!(roll_outcome(&behind, 1000), Outcome::Crit);
+        assert_eq!(roll_outcome(&behind, 500), Outcome::Crit);
+        // A sitting player is crit, and never missed.
+        let sitting = Roll {
+            standing: false,
+            ..r
+        };
+        assert_eq!(roll_outcome(&sitting, 0), Outcome::Crit);
     }
 
     #[test]
     fn players_glance_off_creatures_of_their_level() {
         let r = Roll {
             victim_is_player: false,
-            ..even(10)
+            ..even(20)
         };
-        // Miss 6%, dodge 5, parry 5, then glancing.
-        assert_eq!(roll_outcome(&r, 1700), Outcome::Glancing);
+        // Miss 5%, dodge 5, parry 5, then glancing's 10%.
+        assert_eq!(roll_outcome(&r, 1499), Outcome::Parry);
+        assert_eq!(roll_outcome(&r, 1500), Outcome::Glancing);
+        assert_eq!(roll_outcome(&r, 2499), Outcome::Glancing);
+        assert_eq!(roll_outcome(&r, 2500), Outcome::Crit);
+    }
+
+    #[test]
+    fn dual_wielding_misses_nineteen_percent_more_on_white_swings() {
+        let r = Roll {
+            dual_wield: true,
+            ..even(20)
+        };
+        assert_eq!(roll_outcome(&r, 2399), Outcome::Miss);
+        assert_eq!(roll_outcome(&r, 2400), Outcome::Dodge);
+        // An ability's swing doesn't pay it.
+        assert_eq!(roll_special(&r, 500, 9999), Outcome::Dodge);
+    }
+
+    #[test]
+    fn creatures_far_above_crush_and_rangers_only_miss_or_crit() {
+        let r = Roll {
+            attacker_is_player: false,
+            attacker_skill: 100,
+            victim_defense: 75,
+            attacker_level: 20,
+            victim_level: 15,
+            ..even(15)
+        };
+        // A skill gap of 25: miss, dodge and parry 4% each, crit 6%, then
+        // crushing's 35%.
+        assert_eq!(roll_outcome(&r, 1799), Outcome::Crit);
+        assert_eq!(roll_outcome(&r, 1800), Outcome::Crushing);
+        assert_eq!(roll_outcome(&r, 5299), Outcome::Crushing);
+        assert_eq!(roll_outcome(&r, 5300), Outcome::Hit);
+        let ranged = Roll {
+            ranged: true,
+            ..even(20)
+        };
+        assert_eq!(roll_outcome(&ranged, 600), Outcome::Crit);
+        assert_eq!(roll_outcome(&ranged, 1100), Outcome::Hit);
+        let no_parry = Roll {
+            victim_is_player: false,
+            no_parry: true,
+            ..even(20)
+        };
+        assert_eq!(roll_outcome(&no_parry, 1100), Outcome::Glancing);
+    }
+
+    #[test]
+    fn skill_ups_follow_thistle_tea() {
+        // Far below the cap, a sure gain.
+        assert_eq!(weapon_skill_chance(10, 100, 0), 100.0);
+        assert!(weapon_skill_chance(99, 100, 0) < 20.0);
+        assert!(defense_skill_chance(50, 100, 20, 20) > 0.0);
+        assert_eq!(defense_skill_chance(100, 100, 20, 20), 0.0);
+        let low = glancing_factor(15, false, 0.0);
+        let high = glancing_factor(15, false, 1.0);
+        assert!((low - 0.55).abs() < 0.001 && (high - 0.75).abs() < 0.001, "{low} {high}");
     }
 
     #[test]
@@ -943,5 +1931,17 @@ mod tests {
         let m =
             wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::read_unencrypted(&frame[..]);
         assert!(m.is_ok(), "{m:?}");
+        // The full layout is as long as the plain one.
+        let full = attacker_state_full(
+            Guid::new(1),
+            Guid::new(2),
+            HITINFO_NORMALSWING2 | HITINFO_LEFTSWING | HITINFO_ABSORB,
+            7,
+            1,
+            3,
+            5,
+            0,
+        );
+        assert_eq!(full.len(), frame.len());
     }
 }
