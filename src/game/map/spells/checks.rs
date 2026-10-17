@@ -167,6 +167,13 @@ fn crosses(p: Vector3d, q: Vector3d, a: Vector3d, b: Vector3d) -> bool {
     d1 * d2 < 0.0 && d3 * d4 < 0.0
 }
 
+/// Gouge's attributes: its target must face its caster.
+const TARGET_FACING_CASTER: u32 = 0x15_0010;
+/// The melee range index.
+const RANGE_MELEE: u32 = 2;
+/// Units this close face each other whatever their facing.
+const OVERLAP_DISTANCE: f32 = 1.4;
+
 /// Whether `a` faces `b` within `arc` radians.
 pub fn facing(map: &Map, a: Guid, b: Guid, arc: f32) -> bool {
     let (Some(ua), Some(pb)) = (map.unit_view(a), map.position_of(b)) else {
@@ -594,11 +601,23 @@ fn check_target(
         if s.from_behind() && facing(map, target, caster, std::f32::consts::PI) {
             return Some(fail::NOT_BEHIND);
         }
-        // Players face what they cast at; abilities and harmful spells
-        // within half a circle in front.
-        if map.players.contains_key(&caster)
-            && harmful
-            && (s.melee_or_ranged() || s.dmg_class == 1)
+        // Gouge's kind: the target must face the caster.
+        if s.attributes[0] == TARGET_FACING_CASTER
+            && !facing(map, target, caster, std::f32::consts::PI)
+        {
+            return Some(fail::NOT_INFRONT);
+        }
+        // What must be cast forward, as Thistle Tea's `Facing` has it: a
+        // melee-range spell, and a player's spell vmangos marks to face its
+        // target or an auto-repeat one; within half a circle in front, or
+        // close enough to overlap.
+        let forward = !triggered
+            && !s.on_next_swing()
+            && (s.range_index == RANGE_MELEE
+                || (map.players.contains_key(&caster)
+                    && (s.custom(sd::CUSTOM_FACE_TARGET) || s.auto_repeat())));
+        if forward
+            && dist(me.position, u.position) >= OVERLAP_DISTANCE
             && !facing(map, caster, target, std::f32::consts::PI)
         {
             return Some(fail::UNIT_NOT_INFRONT);
