@@ -1352,24 +1352,17 @@ async fn a_logout_sits_and_holds_the_player_starts_again_on_asking_ends_on_refus
         logout_response(&mut a).await;
         on_map(&realm, move |m| hold(m, ga, spell)).await;
         a.clear();
-        a.raw.clear();
         a.send(CMSG_LOGOUT_CANCEL {}).await;
         a.wait_for("SMSG_LOGOUT_CANCEL_ACK", |m| {
             matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK).then_some(())
         })
         .await;
-        // Read as a message, or kept raw where wow_messages can't (its
-        // packed guid).
-        let parsed = a
+        let unrooted = a
             .gets(Duration::from_millis(200), |m| {
                 matches!(m, ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(_)).then_some(())
             })
             .await
             .is_some();
-        let unrooted = parsed
-            || a.raw
-                .iter()
-                .any(|f| f.len() >= 4 && f[2..4] == [0xEA, 0x00]);
         let state = on_map(&realm, move |m| logout_state(m, ga)).await;
         assert!(!unrooted, "held by {spell}");
         assert_eq!((state.1, state.2), (still_stunned, false));
@@ -1382,8 +1375,11 @@ async fn a_logout_sits_and_holds_the_player_starts_again_on_asking_ends_on_refus
     logout_response(&mut a).await;
     a.clear();
     a.send(CMSG_LOGOUT_CANCEL {}).await;
-    a.wait_frame("SMSG_FORCE_MOVE_UNROOT", 0x0EA, |_| true)
-        .await;
+    a.wait_for("SMSG_FORCE_MOVE_UNROOT", |m| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(u) if u.guid == ga => Some(()),
+        _ => None,
+    })
+    .await;
     assert_eq!(
         on_map(&realm, move |m| logout_state(m, ga)).await,
         (0, false, false, None)

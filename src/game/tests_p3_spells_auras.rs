@@ -397,8 +397,11 @@ async fn a_refresh_on_a_full_bar_stacks_in_place_and_a_root_given_way_frees() {
     assert_eq!(fresh, Some((1, Some(32))), "one again, first again");
     assert!(rooted, "rooted");
     assert!(freed, "the root gave way");
-    d.wait_frame("SMSG_FORCE_MOVE_UNROOT", 0x0EA, |_| true)
-        .await;
+    d.wait_for("SMSG_FORCE_MOVE_UNROOT", |m| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(u) if u.guid == druid => Some(()),
+        _ => None,
+    })
+    .await;
     assert_eq!(
         recovers,
         Some(vec![(1, Some(Duration::from_secs(15)))]),

@@ -1375,15 +1375,15 @@ async fn a_teleport_in_the_map_is_shown_as_one() {
         m.teleport(ga, key, to, 1.5);
     })
     .await;
-    let seen = b.wait_frame("MSG_MOVE_TELEPORT", 0x0C5, |_| true).await;
-    let mut want = Vec::new();
-    crate::game::update::write_packed_guid(&mut want, ga);
-    assert_eq!(&seen[..want.len()], &want[..]);
-    let info = &seen[want.len()..];
-    assert_eq!(u32_at(info, 0), 0, "standing");
-    let f = |at: usize| f32::from_le_bytes(info[at..at + 4].try_into().unwrap());
-    assert_eq!((f(8), f(12), f(16), f(20)), (to.x, to.y, to.z, 1.5));
-    assert_eq!(info.len(), 28, "flags, time, place, facing, fall time");
+    let seen = b
+        .wait_for("MSG_MOVE_TELEPORT", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT(t) => Some(t.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(seen.player, ga);
+    assert_eq!(seen.info.flags, MovementInfo_MovementFlags::empty(), "standing");
+    assert_eq!((seen.info.position, seen.info.orientation), (to, 1.5));
 }
 
 /// Thistle Tea's server_test: queries sent after a logout is asked for

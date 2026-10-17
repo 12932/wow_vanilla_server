@@ -12,21 +12,15 @@ use crate::game::conn::encode;
 use crate::game::map::player::PendingTeleport;
 use crate::game::map::{Map, grid, visibility};
 
-pub const SMSG_FORCE_MOVE_ROOT: u16 = 0x0E8;
-pub const SMSG_FORCE_MOVE_UNROOT: u16 = 0x0EA;
-
-/// `SMSG_FORCE_MOVE_ROOT` or `SMSG_FORCE_MOVE_UNROOT`, by hand: 1.12's GUID
-/// is packed (mangos-zero's SetRoot, mangos-classic's and Thistle Tea's),
-/// where wow_messages writes it whole and the client reads another unit.
+/// `SMSG_FORCE_MOVE_ROOT` or `SMSG_FORCE_MOVE_UNROOT`: 1.12's GUID is
+/// packed (mangos-zero's SetRoot, mangos-classic's and Thistle Tea's).
 pub fn root_frame(guid: Guid, root: bool) -> Arc<[u8]> {
-    let mut b = crate::game::data::items::Body::default();
-    crate::game::update::write_packed_guid(&mut b.0, guid);
-    b.u32(0);
-    b.frame(if root {
-        SMSG_FORCE_MOVE_ROOT
+    let frame = if root {
+        encode(&SMSG_FORCE_MOVE_ROOT { guid, counter: 0 })
     } else {
-        SMSG_FORCE_MOVE_UNROOT
-    })
+        encode(&SMSG_FORCE_MOVE_UNROOT { guid, counter: 0 })
+    };
+    frame.expect("a root encodes")
 }
 
 /// The map enum for a map id; maps the protocol doesn't name are taken as
@@ -379,21 +373,16 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     // Observers still in range see the player there at once:
     // `MSG_MOVE_TELEPORT`, the packed GUID and the movement, as mangos's
     // SendTeleportPacket and Thistle Tea send it (a heartbeat would have
-    // them run there). wow_messages has no vanilla one; it is the
-    // heartbeat's body.
+    // them run there).
     if let Some(p) = map.players.get(&guid)
-        && let Some(frame) = encode(&MSG_MOVE_HEARTBEAT_Server {
-            guid,
+        && let Some(frame) = encode(&MSG_MOVE_TELEPORT_Server {
+            player: guid,
             info: p.movement.clone(),
         })
     {
-        let frame = crate::game::update::frame(MSG_MOVE_TELEPORT, &frame[4..]);
         map.send_to_observers(guid, &frame, false);
     }
 }
-
-/// `MSG_MOVE_TELEPORT`, to those who see a player teleported in the map.
-pub const MSG_MOVE_TELEPORT: u16 = 0x0C5;
 
 /// `MSG_MOVE_TELEPORT_ACK`: the client is where it was sent.
 pub fn teleport_ack(map: &mut Map, guid: Guid) {
