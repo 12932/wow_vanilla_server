@@ -61,6 +61,7 @@ pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;
 pub mod player_motion;
+pub mod pools;
 pub mod proc_scripts;
 pub mod procs;
 pub mod professions;
@@ -322,6 +323,8 @@ pub struct Map {
     /// Formations whose leader died, by the leader's spawn: the member
     /// leading their patrol meanwhile.
     pub acting_leaders: AHashMap<u32, Guid>,
+    /// The spawn pools here, by their root: what each has picked.
+    pub pools: AHashMap<u32, pools::PoolState>,
     /// Scripted map events under way.
     pub map_events: map_events::Events,
     pub spells: spells::MapSpells,
@@ -444,6 +447,7 @@ impl Map {
             object_resets: Vec::new(),
             script_groups: AHashMap::new(),
             acting_leaders: AHashMap::new(),
+            pools: AHashMap::new(),
             map_events: Default::default(),
             spells: Default::default(),
             escorts: Vec::new(),

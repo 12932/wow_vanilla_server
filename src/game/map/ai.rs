@@ -447,16 +447,38 @@ fn respawn(map: &mut Map, g: Guid) {
     if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
         return;
     }
-    // A pooled spawn may give way to another of its pool.
-    let chosen = crate::game::map::creature_groups::respawn_choice(map, spawn.guid);
-    let spawn = if chosen == spawn.guid {
-        spawn
-    } else {
-        data.creature_spawns
-            .get(&map.key.map)
-            .and_then(|v| v.iter().find(|s| s.guid == chosen))
-            .unwrap_or(spawn)
+    // A pooled spawn's pool picks again: it, or others of the pool, come.
+    use crate::game::map::pools::{self, Member};
+    let back = match pools::came_back(map, Member::Creature(spawn.guid)) {
+        Some(picked) => {
+            crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
+            picked
+        }
+        None => vec![Member::Creature(spawn.guid)],
     };
+    for m in back {
+        match m {
+            Member::Creature(s) => spawn_creature_of(map, s),
+            Member::Object(s) => pools::spawn_object(map, s),
+            Member::Pool(_) => {}
+        }
+    }
+}
+
+/// A spawn's creature comes into the map anew, unless a battleground or a
+/// link bars it.
+pub fn spawn_creature_of(map: &mut Map, spawn_guid: u32) {
+    let data = map.realm.data.clone();
+    let Some(spawn) = data
+        .creature_spawns
+        .get(&map.key.map)
+        .and_then(|v| v.iter().find(|s| s.guid == spawn_guid))
+    else {
+        return;
+    };
+    if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
+        return;
+    }
     crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
     if !crate::game::map::creature_groups::may_spawn(map, spawn.guid) {
         return;
