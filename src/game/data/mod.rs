@@ -14,7 +14,7 @@ pub mod misc;
 pub mod npc;
 pub mod pets;
 pub mod scripts;
-mod scripts_load;
+pub(crate) mod scripts_load;
 pub mod spells;
 pub mod tt_scripts;
 pub mod world;
