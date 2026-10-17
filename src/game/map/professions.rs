@@ -397,6 +397,12 @@ pub fn check(
     let data = &map.realm.data;
     let p = map.players.get(&caster)?;
     let cast_item = entry_of(p, cast_item);
+    // Skinning's corpse before its knife (Thistle Tea's `Skinning.validate`).
+    if s.has_effect(EFFECT_SKINNING)
+        && let Some(code) = skinning_fails(map, p, t)
+    {
+        return Some(code);
+    }
     if s.requires_spell_focus != 0 && !focus_near(map, p.position(), s.requires_spell_focus) {
         return Some(FAIL_REQUIRES_SPELL_FOCUS);
     }
@@ -438,28 +444,6 @@ pub fn check(
                 }
             }
             EFFECT_OPEN_LOCK_ITEM => return Some(FAIL_ITEM_GONE),
-            EFFECT_SKINNING => {
-                let c = t.unit.and_then(|u| map.creature(u));
-                let Some(c) = c else {
-                    return Some(FAIL_BAD_TARGETS);
-                };
-                if c.alive() {
-                    return Some(FAIL_TARGET_NOT_DEAD);
-                }
-                if !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE) {
-                    let looted = c.loot.as_ref().is_none_or(|l| l.is_empty());
-                    return Some(if looted {
-                        FAIL_TARGET_UNSKINNABLE
-                    } else {
-                        FAIL_TARGET_NOT_LOOTED
-                    });
-                }
-                let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
-                let skill = skill_value(p, SKILL_SKINNING);
-                if skill == 0 || skinning_required(level, skill) > skill {
-                    return Some(FAIL_LOW_CASTLEVEL);
-                }
-            }
             EFFECT_PICKPOCKET => {
                 if !p.auras.has(AURA_MOD_STEALTH) {
                     return Some(FAIL_ONLY_STEALTHED);
@@ -517,6 +501,46 @@ pub fn check(
             }
             _ => {}
         }
+    }
+    None
+}
+
+/// Whether a corpse has a skin still on it: its kind has skins, and it
+/// isn't skinned.
+fn has_skin(data: &GameData, c: &crate::game::map::creature::Creature) -> bool {
+    data.creature_template(c.entry)
+        .is_some_and(|t| t.skinning_loot_id != 0)
+        && !c
+            .loot
+            .as_ref()
+            .is_some_and(|l| l.kind == LootKind::Skinning)
+}
+
+/// Why a corpse can't be skinned, in Thistle Tea's order: not a wild
+/// creature's, alive, without a skin, still with its loot, beyond the
+/// skill.
+fn skinning_fails(map: &Map, p: &Player, t: &Targets) -> Option<u8> {
+    let data = &map.realm.data;
+    let Some(c) = t
+        .unit
+        .and_then(|u| map.creature(u))
+        .filter(|c| c.owner.is_none())
+    else {
+        return Some(FAIL_BAD_TARGETS);
+    };
+    if c.alive() {
+        return Some(FAIL_TARGET_NOT_DEAD);
+    }
+    if !has_skin(data, c) {
+        return Some(FAIL_TARGET_UNSKINNABLE);
+    }
+    if c.loot.as_ref().is_some_and(|l| !l.is_empty()) {
+        return Some(FAIL_TARGET_NOT_LOOTED);
+    }
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    let skill = skill_value(p, SKILL_SKINNING);
+    if skill == 0 || skinning_required(level, skill) > skill {
+        return Some(FAIL_LOW_CASTLEVEL);
     }
     None
 }
@@ -640,6 +664,16 @@ fn open_lock(
     let Some((entry, kind)) = map.gameobject(object).map(|o| (o.entry, o.kind)) else {
         return;
     };
+    // Another's window opened on it in the meantime (Thistle Tea's check
+    // at completion, mangos's too).
+    if map.gameobject(object).is_some_and(|o| {
+        o.loot
+            .as_ref()
+            .is_some_and(|l| l.looters.iter().any(|g| *g != caster))
+    }) {
+        send_failure(map, caster, s.id, FAIL_CHEST_IN_USE);
+        return;
+    }
     let lock = object_lock(&data, entry);
     let Some(p) = map.players.get(&caster) else {
         return;
@@ -731,9 +765,13 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     let data = map.realm.data.clone();
     let Some((entry, level)) = map
         .creature(creature)
-        .filter(|c| c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE))
+        .filter(|c| {
+            !c.alive() && has_skin(&data, c) && c.loot.as_ref().is_none_or(|l| l.is_empty())
+        })
         .map(|c| (c.entry, c.fields.get_u32(UNIT_FIELD_LEVEL)))
     else {
+        // Skinned by another first (Thistle Tea's check at completion).
+        send_failure(map, caster, spell, FAIL_TARGET_UNSKINNABLE);
         return;
     };
     let Some(t) = data.creature_template(entry) else {
