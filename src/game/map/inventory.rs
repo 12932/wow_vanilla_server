@@ -59,6 +59,7 @@ pub enum Fail {
     OnlyEmptyBags,
     InventoryFull,
     YouAreDead,
+    Rank,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -86,6 +87,11 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::NeverUse => R::YouCanNeverUseThatItem {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::Rank => R::CantEquipRank {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -338,6 +344,9 @@ pub fn can_equip(p: &Player, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
     }
     if u32::from(p.level()) < t.required_level {
         return Err(Fail::Level(t.required_level as u8));
+    }
+    if t.required_honor_rank > 0 && crate::game::map::items::honor_rank(p) < t.required_honor_rank {
+        return Err(Fail::Rank);
     }
     if !proficient(p.row.class, p.level(), t) {
         return Err(Fail::NoProficiency);

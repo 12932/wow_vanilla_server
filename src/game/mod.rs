@@ -3,6 +3,7 @@
 pub mod battlegrounds;
 pub mod conn;
 pub mod data;
+pub mod elemental;
 pub mod events;
 pub mod fields;
 pub mod guid;

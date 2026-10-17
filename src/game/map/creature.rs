@@ -199,6 +199,8 @@ pub struct Creature {
     pub owner: Option<Guid>,
     /// The event whose looks it wears; 0 for its own.
     pub event_looks: u32,
+    /// When something summoned it, for a summons that lasts a while.
+    pub summoned_at: Option<Instant>,
 }
 
 /// Alive, or dead and waiting.
@@ -292,6 +294,7 @@ impl Creature {
             taunted_by: None,
             owner: None,
             event_looks: 0,
+            summoned_at: None,
         }
         .with_base()
     }

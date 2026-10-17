@@ -693,11 +693,9 @@ async fn the_scourge_invasion_counts_its_victories() {
 /// quest and a path to walk.
 #[test]
 fn the_real_world_data_loads() {
-    let dir = std::path::Path::new("/local/home/wallenx/runs/tt-data/db");
-    if !dir.join("vmangos.sqlite").exists() {
+    let Some(d) = crate::game::data::load::real_data() else {
         return;
-    }
-    let d = crate::game::data::load::load(dir);
+    };
     assert!(d.world.pois.len() > 100, "{}", d.world.pois.len());
     assert!(d.world.event_quests.len() > 30);
     assert!(!d.world.event_creatures.is_empty());
@@ -715,4 +713,74 @@ fn the_real_world_data_loads() {
     for f in crate::game::map::escorts::catalog::FOLLOWERS {
         assert!(d.npc.quests.contains_key(&f.quest), "follower quest {}", f.quest);
     }
+}
+
+#[tokio::test]
+async fn an_elemental_rift_calls_out_its_invaders() {
+    let mut d = data();
+    for (id, name) in [(13, "Elemental Invasion"), (68, "Fire rift")] {
+        d.events.insert(
+            id,
+            GameEvent {
+                id,
+                name: name.into(),
+                start: 0,
+                end: 0,
+                occurence: 0,
+                length: 0,
+                hardcoded: true,
+            },
+        );
+    }
+    d.gameobject_templates.insert(
+        179_666,
+        GameObjectTemplate {
+            entry: 179_666,
+            kind: 5,
+            display_id: 1,
+            name: "Elemental Rift".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 60,
+            entry: 179_666,
+            map: 0,
+            x: START.0 + 5.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    d.event_objects.insert(60, 68);
+    let mut invader = d.creature_templates[&GIVER].clone();
+    invader.entry = 14_460;
+    invader.name = "Blazing Invader".into();
+    invader.npc_flags = 0;
+    d.creature_templates.insert(14_460, invader);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    // The world starts invaded: the rift comes with its event.
+    crate::game::social::sweep(&realm);
+    let rift = guid::game_object(179_666, 60);
+    a.sees(rift).await;
+    let invaders = map
+        .query(|m| {
+            m.rifts_checked_at = None;
+            crate::game::elemental::update(m);
+            m.rifts.values().map(|r| r.invaders.clone()).next().unwrap_or_default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(invaders.len(), 3, "three invaders at the first stage");
+    // One slain counts against the element.
+    let first = invaders[0];
+    map.query(move |m| crate::game::map::combat::kill(m, g, first)).await;
+    assert_eq!(realm.social.elemental.lock().kills[0], 1);
 }

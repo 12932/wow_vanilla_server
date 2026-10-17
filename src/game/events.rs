@@ -12,6 +12,7 @@
 
 use ahash::{AHashMap, AHashSet};
 use chrono::{Datelike, Timelike};
+use wow_world_messages::Guid;
 
 use crate::game::Realm;
 use crate::game::data::GameData;
@@ -207,45 +208,44 @@ pub fn spawn_creature(
 pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
     let data = map.realm.data.clone();
     let mut rng = rand::rng();
+    // What is out, by spawn: one pass, not one a spawn.
+    let creatures: AHashMap<u32, (Guid, u32)> = map
+        .creatures
+        .iter()
+        .filter_map(|(_, c)| c.spawn_guid.map(|s| (s, (c.guid, c.event_looks))))
+        .collect();
+    let objects: AHashMap<u32, Guid> = map
+        .gameobjects
+        .iter()
+        .filter_map(|(_, g)| g.spawn_guid.map(|s| (s, g.guid)))
+        .collect();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
-            let Some(tie) = data.event_creatures.get(&s.guid).copied() else {
+            let tie = data.event_creatures.get(&s.guid).copied();
+            let looks_differ = data.world.event_creatures.contains_key(&s.guid);
+            if tie.is_none() && !looks_differ {
                 continue;
-            };
-            let out = map
-                .creatures
-                .iter()
-                .find(|(_, c)| c.spawn_guid == Some(s.guid))
-                .map(|(_, c)| c.guid);
-            match (spawned(Some(tie), on), out) {
+            }
+            let out = creatures.get(&s.guid).copied();
+            match (spawned(tie, on), out) {
                 (true, None) => {
                     if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
                         map.add_creature(c);
                     }
                 }
-                (false, Some(g)) => {
+                (false, Some((g, _))) => {
                     map.remove_creature(g);
                 }
-                _ => {}
-            }
-        }
-        // Spawns that look different in an event change as it starts and
-        // ends.
-        for s in spawns.iter().filter(|s| data.world.event_creatures.contains_key(&s.guid)) {
-            let Some((g, worn)) = map
-                .creatures
-                .iter()
-                .find(|(_, c)| c.spawn_guid == Some(s.guid))
-                .map(|(_, c)| (c.guid, c.event_looks))
-            else {
-                continue;
-            };
-            let fits = worn == looks(&data, s.guid, on).map_or(0, |e| e.event);
-            if !fits {
-                map.remove_creature(g);
-                if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
-                    map.add_creature(c);
+                // Out, and looking as it should in the events on?
+                (true, Some((g, worn)))
+                    if looks_differ && worn != looks(&data, s.guid, on).map_or(0, |e| e.event) =>
+                {
+                    map.remove_creature(g);
+                    if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
+                        map.add_creature(c);
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -254,11 +254,7 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
             let Some(tie) = data.event_objects.get(&s.guid).copied() else {
                 continue;
             };
-            let out = map
-                .gameobjects
-                .iter()
-                .find(|(_, g)| g.spawn_guid == Some(s.guid))
-                .map(|(_, g)| g.guid);
+            let out = objects.get(&s.guid).copied();
             match (spawned(Some(tie), on), out) {
                 (true, None) => {
                     if let Some(t) = data.gameobject_templates.get(&s.entry) {
