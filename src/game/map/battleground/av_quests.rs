@@ -215,6 +215,19 @@ struct Run {
     arrival: Arrival,
 }
 
+/// The beacons a side's air attack plants: the Horde's, the Alliance's.
+const BEACONS: [[u32; 3]; 2] = [[178724, 178725, 178726], [178545, 178547, 178549]];
+/// What a beacon calls down: a gryphon, a war rider.
+const BEACON_CALLS: [u32; 2] = [13161, 13178];
+pub const BEACON_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Beacon {
+    pub object: Guid,
+    pub side: usize,
+    pub ready_at: Instant,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Extras {
     pub armor: [Armor; 2],
@@ -225,6 +238,11 @@ pub struct Extras {
     pub ground: [Ground; 2],
     menus: AHashMap<Guid, (Guid, Vec<(u32, Action)>)>,
     runs: Vec<Run>,
+    /// Beacons planted and waiting.
+    pub beacons: Vec<Beacon>,
+    /// Beacons already seen, waiting or done.
+    seen: ahash::AHashSet<Guid>,
+    next_scan: Option<Instant>,
 }
 
 fn extras(map: &Map) -> Option<&Extras> {
@@ -759,8 +777,10 @@ fn walk_route(map: &mut Map, creature: Guid, entry: u32, arrival: Arrival) -> bo
     true
 }
 
-/// Each update: those at the end of their route have arrived.
+/// Each update: those at the end of their route have arrived, and the
+/// beacons planted call down their flyers.
 pub fn update(map: &mut Map) {
+    beacons(map);
     let now = map.now;
     let done: Vec<Run> = {
         let Some(x) = extras_mut(map) else {
@@ -796,6 +816,78 @@ pub fn update(map: &mut Map) {
             Arrival::Nothing => {}
         }
     }
+}
+
+/// Beacons once a second: new ones planted wait a minute; one not
+/// disabled by then calls down its side's flyer.
+fn beacons(map: &mut Map) {
+    let now = map.now;
+    let Some(x) = extras(map) else {
+        return;
+    };
+    if x.next_scan.is_some_and(|t| t > now) {
+        return;
+    }
+    let planted: Vec<(Guid, usize)> = map
+        .gameobjects
+        .iter()
+        .filter_map(|(_, o)| {
+            let side = BEACONS.iter().position(|b| b.contains(&o.entry))?;
+            (!x.seen.contains(&o.guid)).then_some((o.guid, side))
+        })
+        .collect();
+    let due: Vec<Beacon> = x
+        .beacons
+        .iter()
+        .filter(|b| b.ready_at <= now)
+        .copied()
+        .collect();
+    let Some(x) = extras_mut(map) else {
+        return;
+    };
+    x.next_scan = Some(now + std::time::Duration::from_secs(1));
+    for (object, side) in planted {
+        x.seen.insert(object);
+        x.beacons.push(Beacon {
+            object,
+            side,
+            ready_at: now + BEACON_WAIT,
+        });
+    }
+    x.beacons.retain(|b| b.ready_at > now);
+    for b in due {
+        let Some(at) = map
+            .gameobject(b.object)
+            .map(|o| (o.position, o.orientation))
+        else {
+            continue;
+        };
+        map.remove_gameobject(b.object);
+        crate::game::map::outdoor_pvp::summon(
+            map,
+            BEACON_CALLS[b.side],
+            (at.0.x, at.0.y, at.0.z + 30.0, at.1),
+            0,
+        );
+    }
+}
+
+/// `CMSG_GAMEOBJ_USE` on a beacon: the enemy disables it before it calls.
+/// Returns whether it was one.
+pub fn use_beacon(map: &mut Map, g: Guid, object: Guid) -> bool {
+    let Some(i) = extras(map).and_then(|x| x.beacons.iter().position(|b| b.object == object))
+    else {
+        return false;
+    };
+    let side = map.battleground.as_ref().and_then(|m| playing_side(m, g));
+    let Some(x) = extras_mut(map) else {
+        return true;
+    };
+    if side.is_some_and(|s| s != x.beacons[i].side) {
+        x.beacons.remove(i);
+        map.remove_gameobject(object);
+    }
+    true
 }
 
 /// A captured wing commander is freed: they run home.
@@ -969,5 +1061,6 @@ impl Extras {
         for r in self.runs.iter_mut() {
             r.ends = now;
         }
+        self.next_scan = None;
     }
 }
