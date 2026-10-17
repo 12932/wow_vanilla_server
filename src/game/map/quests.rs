@@ -319,6 +319,15 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
         let _ = inventory::add_item(map, player, q.source_item, q.source_item_count.max(1), true);
     }
     check(map, player, quest);
+    if let Some(script) = data.scripts.quest_start_script.get(&quest).copied() {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::QuestStart,
+            script,
+            giver,
+            player,
+        );
+    }
 }
 
 /// The log's update fields, from the journal.
@@ -673,6 +682,15 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     }
     if q.reward_spell != 0 {
         crate::game::map::spells::learn(map, player, q.reward_spell);
+    }
+    if let Some(script) = data.scripts.quest_complete_script.get(&quest).copied() {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::QuestEnd,
+            script,
+            giver,
+            player,
+        );
     }
     // The chain's next quest, offered at once.
     if q.next_in_chain != 0

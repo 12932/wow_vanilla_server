@@ -16,6 +16,8 @@ pub mod social;
 pub mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_scripts;
 pub mod transports;
 pub mod update;
 pub mod weather;

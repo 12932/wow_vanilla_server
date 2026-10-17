@@ -363,6 +363,27 @@ impl Session {
             let _ = existing.session.send(Control::Kick);
             return fail(&self.outbound, WorldResult::CharLoginDuplicateCharacter);
         }
+        // Logged out in a dungeon or raid: back into their copy, or, if it
+        // won't have them, home.
+        let mut row = row;
+        let mut map = map;
+        if matches!(
+            crate::game::instances::instance_type(&self.realm, row.map),
+            1 | 2
+        ) {
+            match crate::game::instances::key_for(&self.realm, g, online.gm, row.map) {
+                Ok(k) => map = self.realm.maps.get(&self.realm, k),
+                Err(_) => {
+                    if let Some(b) = row.state.bind {
+                        row.map = b.map;
+                        row.x = b.x;
+                        row.y = b.y;
+                        row.z = b.z;
+                        map = self.realm.maps.get(&self.realm, MapKey::world(b.map));
+                    }
+                }
+            }
+        }
         map.send(MapEvent::Arrive(Box::new(Arrival {
             kind: ArrivalKind::Login(Box::new(row)),
             online,

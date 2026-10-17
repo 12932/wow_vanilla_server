@@ -186,6 +186,8 @@ pub struct Creature {
     pub taunted_by: Option<Guid>,
     /// The unit that summoned or owns it: a pet's master, a totem's shaman.
     pub owner: Option<Guid>,
+    /// What scripts keep on it: EventAI's state, its phase, a summoner.
+    pub scripted: Option<Box<crate::game::map::event_ai::Scripted>>,
 }
 
 /// Alive, or dead and waiting.
@@ -278,6 +280,7 @@ impl Creature {
             derived: Default::default(),
             taunted_by: None,
             owner: None,
+            scripted: None,
         }
         .with_base()
     }

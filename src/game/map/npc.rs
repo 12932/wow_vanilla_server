@@ -74,11 +74,11 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
         .creature(npc)
         .map(|c| c.fields.get_u32(UNIT_NPC_FLAGS))
         .unwrap_or(0);
-    let menu_id = data
-        .creature_template(entry)
-        .map(|t| t.gossip_menu_id)
+    let menu_id = crate::game::map::event_ai::scripted(map, npc)
+        .and_then(|s| s.gossip_menu)
+        .or_else(|| data.creature_template(entry).map(|t| t.gossip_menu_id))
         .unwrap_or(0);
-    let options = menu_options(map, menu_id, flags);
+    let options = menu_options(map, menu_id, flags, player, npc);
     let quests = quests::giver_quests(map, player, npc);
     if options.is_empty() && quests.is_empty() && menu_id == 0 {
         // No menu: the NPC's one service.
@@ -105,7 +105,13 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
 }
 
 /// The options of a menu this NPC offers.
-fn menu_options(map: &Map, menu_id: u32, npc_flags: u32) -> Vec<GossipOption> {
+fn menu_options(
+    map: &Map,
+    menu_id: u32,
+    npc_flags: u32,
+    player: Guid,
+    npc: Guid,
+) -> Vec<GossipOption> {
     map.realm
         .data
         .npc
@@ -115,6 +121,16 @@ fn menu_options(map: &Map, menu_id: u32, npc_flags: u32) -> Vec<GossipOption> {
             m.options
                 .iter()
                 .filter(|o| o.npc_flag == 0 || o.npc_flag & npc_flags != 0)
+                .filter(|o| {
+                    o.condition == 0
+                        || !map.realm.data.scripts.conditions.contains_key(&o.condition)
+                        || crate::game::map::conditions::met(
+                            map,
+                            o.condition,
+                            Some(npc),
+                            Some(player),
+                        )
+                })
                 .cloned()
                 .collect()
         })
@@ -130,12 +146,25 @@ fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u3
         .and_then(|m| {
             m.texts
                 .iter()
-                .find(|(_, cond)| *cond == 0)
+                .find(|(_, cond)| {
+                    *cond != 0
+                        && crate::game::map::conditions::met(map, *cond, Some(npc), Some(player))
+                })
+                .or_else(|| m.texts.iter().find(|(_, cond)| *cond == 0))
                 .or(m.texts.first())
         })
         .map(|(t, _)| *t)
         .unwrap_or(DEFAULT_TEXT);
-    let gossips = menu_options(map, menu_id, npc_flags)
+    if let Some(script) = data.scripts.gossip_menu_script.get(&menu_id).copied() {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::Gossip,
+            script,
+            npc,
+            player,
+        );
+    }
+    let gossips = menu_options(map, menu_id, npc_flags, player, npc)
         .iter()
         .map(|o| GossipItem {
             id: o.id,
@@ -174,12 +203,24 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         .map(|(_, m)| m)
         .or_else(|| data.creature_template(entry).map(|t| t.gossip_menu_id))
         .unwrap_or(0);
-    let Some(o) = menu_options(map, menu_id, flags)
+    let Some(o) = menu_options(map, menu_id, flags, player, npc)
         .into_iter()
         .find(|o| o.id == option)
     else {
         return;
     };
+    if o.script != 0 {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::Gossip,
+            o.script,
+            npc,
+            player,
+        );
+        if o.kind == 1 && o.action_menu <= 0 {
+            return send(map, player, &SMSG_GOSSIP_COMPLETE {});
+        }
+    }
     match o.kind {
         1 if o.action_menu > 0 => show_menu(map, player, npc, o.action_menu as u32, flags),
         2 => quests::hello(map, player, npc),
