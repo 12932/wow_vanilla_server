@@ -128,6 +128,9 @@ pub struct Loot {
     pub kind: LootKind,
     /// Who has the window open.
     pub looters: AHashSet<Guid>,
+    /// Behind a lock: those who opened it, till they close the window
+    /// (Thistle Tea's `opened_by`).
+    pub opened_by: AHashSet<Guid>,
 }
 
 impl Loot {
@@ -137,6 +140,9 @@ impl Loot {
 
     /// Whether `g` may open it.
     pub fn may_loot(&self, g: Guid) -> bool {
+        if self.kind == LootKind::Opened && !self.opened_by.contains(&g) {
+            return false;
+        }
         if !self.allowed.is_empty() {
             return self.allowed.contains(&g)
                 && (self.method != Some(GroupLootSetting::RoundRobin)
@@ -937,6 +943,15 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
         return;
     };
     if !loot.may_loot(player) {
+        // A lock not opened by them: the window shuts (Thistle Tea's).
+        if loot.kind == LootKind::Opened
+            && let Some(p) = map.players.get(&player)
+        {
+            p.outbound.send(&SMSG_LOOT_RELEASE_RESPONSE {
+                guid: target,
+                unknown1: 1,
+            });
+        }
         return;
     }
     loot.looters.insert(player);
@@ -1111,6 +1126,8 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
     let (empty, kind) = match loot_mut(map, target) {
         Some(l) => {
             l.looters.remove(&player);
+            // Closed, a lock must be opened again.
+            l.opened_by.remove(&player);
             (l.is_empty(), l.kind)
         }
         None => return,
@@ -1193,6 +1210,10 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
                 ..Default::default()
             });
         }
+    }
+    // Opened, by lock or by hand: theirs to look at.
+    if let Some(l) = map.gameobject_mut(object).and_then(|o| o.loot.as_mut()) {
+        l.opened_by.insert(player);
     }
     open(map, player, object);
 }

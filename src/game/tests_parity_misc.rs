@@ -2241,3 +2241,40 @@ async fn a_craft_is_told_as_created_and_a_stack_joined_as_no_one_slot() {
     let (_, slot) = push(&mut a).await;
     assert_eq!(slot, u32::MAX, "onto the stack");
 }
+
+#[tokio::test]
+async fn a_picked_chests_loot_is_the_pickers_till_they_close_it() {
+    let realm = harness::realm_with(lock_data());
+    let (mut a, ga) = rogue(&realm).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let chest = on_map(&realm, move |m| {
+        let chest = object(m, CHEST);
+        cast(m, ga, PICK_LOCK, at_object(chest));
+        chest
+    })
+    .await;
+    a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |f| {
+        f[..8] == chest.guid().to_le_bytes()
+    })
+    .await;
+    a.send(CMSG_LOOT_RELEASE { guid: chest }).await;
+    fence(&mut a).await;
+    // Neither Bob, who didn't pick it, nor Alice, who closed it, looks in.
+    for c in [&mut b, &mut a] {
+        c.clear();
+        c.send(CMSG_LOOT { guid: chest }).await;
+        c.wait_for("SMSG_LOOT_RELEASE_RESPONSE", |m| match m {
+            ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(r) if r.guid == chest => Some(()),
+            _ => None,
+        })
+        .await;
+        fence(c).await;
+        let shown = c
+            .gets(Duration::ZERO, |m| {
+                matches!(m, ServerOpcodeMessage::SMSG_LOOT_RESPONSE(_)).then_some(())
+            })
+            .await;
+        assert!(shown.is_none() && !c.raw.iter().any(|f| f[2..4] == [0x60, 0x01]));
+    }
+}
