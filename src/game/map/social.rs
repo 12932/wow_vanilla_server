@@ -163,19 +163,19 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     let Some(me) = online(map, g) else {
         return;
     };
+    // More than the client can send is no query, as mangos's
+    // HandleWhoOpcode and Thistle Tea's CmsgWho turn it away.
+    if m.zones.len() > 10 || m.search_strings.len() > 4 {
+        return;
+    }
     let (low, high) = (
         u32::from(m.minimum_level.as_int()),
         u32::from(m.maximum_level.as_int()),
     );
     let name = m.player_name.to_lowercase();
     let guild_filter = m.guild_name.to_lowercase();
-    let words: Vec<String> = m
-        .search_strings
-        .iter()
-        .take(4)
-        .map(|s| s.to_lowercase())
-        .collect();
-    let zones: Vec<u32> = m.zones.iter().take(10).copied().collect();
+    let words: Vec<String> = m.search_strings.iter().map(|s| s.to_lowercase()).collect();
+    let zones: Vec<u32> = m.zones.clone();
     let mut matched = 0usize;
     let mut b = Body::default();
     let mut listed = 0u32;

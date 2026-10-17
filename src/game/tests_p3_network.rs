@@ -570,3 +570,56 @@ async fn letters_are_read_whole_and_rocks_are_not() {
         "the loop sent once"
     );
 }
+
+fn who(zones: Vec<u32>, search_strings: Vec<String>) -> CMSG_WHO {
+    CMSG_WHO {
+        minimum_level: Level::new(0),
+        maximum_level: Level::new(60),
+        player_name: String::new(),
+        guild_name: String::new(),
+        race_mask: 0,
+        class_mask: 0,
+        zones,
+        search_strings,
+    }
+}
+
+/// Thistle Tea's cmsg_who_test: a `/who` with more zones (ten) or search
+/// words (four) than the client can send is turned away, unanswered; one
+/// at the limit is answered.
+#[tokio::test]
+async fn a_who_with_more_than_the_client_sends_is_turned_away() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.clear();
+    // Eleven zones, five words: either would list no one, if answered.
+    a.send(who(vec![9_999; 11], Vec::new())).await;
+    a.send(who(Vec::new(), vec!["zzz".into(); 5])).await;
+    // Four words, each Alice's: she is listed.
+    a.send(who(Vec::new(), vec!["ali".into(); 4])).await;
+    let reply = a
+        .wait_frame("SMSG_WHO", crate::game::map::social::SMSG_WHO, |_| true)
+        .await;
+    assert_eq!(
+        &reply[..4],
+        &1u32.to_le_bytes(),
+        "the first answer is the last query's"
+    );
+}
+
+/// Thistle Tea's cmsg_set_active_mover_test: a mover that isn't the player
+/// or a unit they control is ignored.
+#[tokio::test]
+async fn an_active_mover_not_controlled_is_ignored() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: gb }).await;
+    settled(&mut a).await;
+    let mover = on_map(&realm, move |m| m.players[&g].owned.mover).await;
+    assert_ne!(mover, Some(gb), "Bob isn't Alice's to move");
+    assert_eq!(mover, None);
+}
