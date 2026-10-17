@@ -39,6 +39,8 @@ const SMSG_SPELL_DELAYED: u16 = 0x1E2;
 
 // Effects.
 pub const EFFECT_INSTAKILL: u32 = 1;
+/// Honor points: a battleground quest's reward.
+pub const EFFECT_ADD_HONOR: u32 = 45;
 pub const EFFECT_SCHOOL_DAMAGE: u32 = 2;
 pub const EFFECT_DUMMY: u32 = 3;
 pub const EFFECT_TELEPORT_UNITS: u32 = 5;

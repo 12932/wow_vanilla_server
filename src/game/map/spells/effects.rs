@@ -423,6 +423,9 @@ fn effect(
         19 => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
         }
+        EFFECT_ADD_HONOR if crate::game::guid::is_player(target) => {
+            crate::game::map::pvp::bonus_honor(map, target, amount.max(0) as u32)
+        }
         EFFECT_INSTAKILL => {
             let health = map
                 .unit_fields(target)

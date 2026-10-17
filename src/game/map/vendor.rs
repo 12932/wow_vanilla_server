@@ -128,6 +128,14 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
     let Some(t) = data.item(item) else {
         return;
     };
+    if map
+        .players
+        .get(&player)
+        .is_some_and(|p| !crate::game::map::pvp::rank_allows_buy(p, t))
+    {
+        buy_failed(map, player, npc, item, BuyResult::RankRequire);
+        return;
+    }
     let count = u32::from(amount.max(1)) * t.buy_count.max(1);
     let left = stock_left(map, npc, item, v.max_count, v.restock_secs);
     if left != u32::MAX && left < count {

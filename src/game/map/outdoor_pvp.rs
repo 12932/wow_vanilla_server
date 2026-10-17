@@ -232,6 +232,8 @@ pub struct Outdoor {
     pub next_tick: Option<Instant>,
     pub last_tick: Option<Instant>,
     pub silithus: Option<Silithus>,
+    /// What the towers held put up: by tower and what it is.
+    pub services: AHashMap<(usize, u8), (u32, Guid)>,
 }
 
 impl Outdoor {
@@ -502,6 +504,250 @@ fn towers(map: &mut Map, elapsed: i64) {
     if after_counts != before_counts {
         tower_buffs(map, after_counts);
     }
+    if before != after {
+        reconcile_services(map);
+    }
+}
+
+/// What a tower's holder gets, by tower (Crown Guard, Eastwall, Northpass,
+/// Plaguewood): a service spawn's slot, kind, entry, place, and for a
+/// creature its faction and aura.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Service {
+    slot: u8,
+    creature: bool,
+    entry: u32,
+    at: (f32, f32, f32, f32),
+    faction: u32,
+    aura: u32,
+}
+
+const SQUAD: [(f32, f32, f32, f32); 5] = [
+    (2532.85, -4764.92, 103.617, 2.35619),
+    (2533.33, -4769.31, 104.396, 2.37365),
+    (2537.34, -4773.92, 105.941, 2.21657),
+    (2537.77, -4765.94, 104.432, 2.3911),
+    (2542.57, -4770.22, 106.145, 2.42601),
+];
+/// Each tower's victory flare, the Alliance's and the Horde's.
+const FLARES: [[(f32, f32, f32, f32); 2]; 4] = [
+    [
+        (1855.66, -3725.0, 197.044, 1.53589),
+        (1853.12, -3722.62, 197.406, 0.628317),
+    ],
+    [
+        (2563.26, -4795.15, 145.852, 1.81514),
+        (2565.27, -4797.59, 147.846, 3.05433),
+    ],
+    [
+        (3171.86, -4377.2, 174.898, 0.174532),
+        (3169.76, -4375.13, 175.458, 2.70526),
+    ],
+    [
+        (2971.41, -3038.36, 157.492, 5.35816),
+        (2973.17, -3037.19, 156.443, 1.97222),
+    ],
+];
+/// The Crown Guard graveyard (`game_graveyard_zone`), open to its holder.
+pub const CROWN_GUARD_GRAVEYARD: u32 = 927;
+
+fn services(tower: usize, phase: Phase) -> Vec<Service> {
+    let mut out = Vec::new();
+    if let Some(s) = phase.owner() {
+        let faction = [774, 775][s];
+        match tower {
+            0 => {
+                out.push(Service {
+                    slot: 0,
+                    creature: false,
+                    entry: [180421, 180422][s],
+                    at: (1985.47, -3653.88, 120.172, 1.46608),
+                    faction: 0,
+                    aura: 0,
+                });
+                out.push(Service {
+                    slot: 1,
+                    creature: true,
+                    entry: 18039,
+                    at: (1856.58, -3714.72, 194.637, 0.762214),
+                    faction,
+                    aura: [31954, 31951][s],
+                });
+            }
+            1 => {
+                for (i, at) in SQUAD.iter().enumerate() {
+                    let entry = if i == 0 {
+                        [17635, 17995][s]
+                    } else {
+                        [17647, 17996][s]
+                    };
+                    out.push(Service {
+                        slot: i as u8,
+                        creature: true,
+                        entry,
+                        at: *at,
+                        faction: 0,
+                        aura: 0,
+                    });
+                }
+            }
+            2 => {
+                let at = [
+                    (3167.72, -4355.91, 138.785, 1.69297),
+                    (3167.5, -4356.25, 138.821, 1.69297),
+                ][s];
+                for (slot, entry) in [(0, [181682, 181955][s]), (1, [180100, 180101][s])] {
+                    out.push(Service {
+                        slot,
+                        creature: false,
+                        entry,
+                        at,
+                        faction: 0,
+                        aura: 0,
+                    });
+                }
+            }
+            _ => out.push(Service {
+                slot: 0,
+                creature: true,
+                entry: 17209,
+                at: (2987.5, -3049.11, 120.126, 5.75959),
+                faction,
+                aura: [17327, 31309][s],
+            }),
+        }
+    }
+    if let Phase::Controlled(s) = phase {
+        out.push(Service {
+            slot: 9,
+            creature: false,
+            entry: [181852, 181853][s],
+            at: FLARES[tower][s],
+            faction: 0,
+            aura: 0,
+        });
+    }
+    out
+}
+
+/// The towers' services in line with who holds them.
+fn reconcile_services(map: &mut Map) {
+    let Some(o) = map.outdoor.as_ref() else {
+        return;
+    };
+    let wanted: Vec<(usize, Service)> = o
+        .towers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, t)| services(i, t.meter.phase).into_iter().map(move |s| (i, s)))
+        .collect();
+    let stale: Vec<((usize, u8), Guid)> = o
+        .services
+        .iter()
+        .filter(|((i, slot), (entry, _))| {
+            !wanted
+                .iter()
+                .any(|(wi, s)| wi == i && s.slot == *slot && s.entry == *entry)
+        })
+        .map(|(k, (_, g))| (*k, *g))
+        .collect();
+    let new: Vec<(usize, Service)> = wanted
+        .into_iter()
+        .filter(|(i, s)| {
+            o.services
+                .get(&(*i, s.slot))
+                .is_none_or(|(entry, _)| *entry != s.entry)
+        })
+        .collect();
+    for (k, g) in stale {
+        if crate::game::guid::is_unit(g) {
+            map.remove_creature(g);
+        } else {
+            map.remove_gameobject(g);
+        }
+        if let Some(o) = map.outdoor.as_mut() {
+            o.services.remove(&k);
+        }
+    }
+    for (i, s) in new {
+        let g = if s.creature {
+            summon(map, s.entry, s.at, s.faction)
+        } else {
+            place_object(map, s.entry, s.at)
+        };
+        let Some(g) = g else {
+            continue;
+        };
+        if s.aura != 0 {
+            crate::game::map::spells::cast_triggered(map, g, s.aura, Some(g));
+        }
+        if let Some(o) = map.outdoor.as_mut() {
+            o.services.insert((i, s.slot), (s.entry, g));
+        }
+    }
+}
+
+/// A creature put in the world by world PvP, of its template (with a
+/// faction other than its own if given); it doesn't respawn.
+pub fn summon(map: &mut Map, entry: u32, at: (f32, f32, f32, f32), faction: u32) -> Option<Guid> {
+    let data = map.realm.data.clone();
+    let counter = map.next_creature_counter;
+    map.next_creature_counter += 1;
+    let spawn = crate::game::data::CreatureSpawn {
+        guid: counter | 0x80_0000,
+        entries: vec![entry],
+        map: map.key.map,
+        x: at.0,
+        y: at.1,
+        z: at.2,
+        orientation: at.3,
+        ..Default::default()
+    };
+    let mut c = crate::game::map::creature::Creature::from_spawn(&data, &spawn, &mut rand::rng())?;
+    c.spawn_guid = None;
+    if faction != 0 {
+        c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
+        let civilian = data.creature_template(entry).is_some_and(|t| t.civilian);
+        c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, faction, civilian);
+    }
+    Some(map.add_creature(c))
+}
+
+fn place_object(map: &mut Map, entry: u32, at: (f32, f32, f32, f32)) -> Option<Guid> {
+    let data = map.realm.data.clone();
+    let t = data.gameobject_templates.get(&entry)?;
+    let counter = map.next_creature_counter;
+    map.next_creature_counter += 1;
+    let mut go = GameObject::from_spawn(
+        t,
+        &GameObjectSpawn {
+            guid: counter | 0x80_0000,
+            entry,
+            map: map.key.map,
+            x: at.0,
+            y: at.1,
+            z: at.2,
+            orientation: at.3,
+            state: 1,
+            ..Default::default()
+        },
+    );
+    go.spawn_guid = None;
+    Some(map.add_gameobject(go))
+}
+
+/// Whether a graveyard is open to `faction` (469, 67): the Crown Guard
+/// graveyard only to the side holding Crown Guard Tower.
+pub fn graveyard_open(map: &Map, graveyard: u32, faction: u32) -> bool {
+    if graveyard != CROWN_GUARD_GRAVEYARD {
+        return true;
+    }
+    let owner = map
+        .outdoor
+        .as_ref()
+        .and_then(|o| o.towers.first())
+        .and_then(|t| t.meter.phase.owner());
+    owner.is_some_and(|s| [469, 67][s] == faction)
 }
 
 type Vector3dLike = (f32, f32, f32);
@@ -591,11 +837,8 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     let s = side(p.team);
     crate::game::map::spells::cast_triggered(map, g, SPELL_CARRYING, Some(g));
     crate::game::map::spells::cast_triggered(map, g, SPELL_TEAM_CARRYING[s], Some(g));
-    // Carrying it flags the carrier.
-    let now = map.now;
-    if let Some(p) = map.players.get_mut(&g) {
-        p.pvp.until = Some(now + crate::game::map::pvp::PVP_LINGER);
-    }
+    // Carrying it flags the carrier, and contests them.
+    crate::game::map::pvp::contest(map, g);
     if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
         si.carriers.insert(g);
     }

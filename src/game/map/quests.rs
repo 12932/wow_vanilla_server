@@ -702,7 +702,12 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     if q.reward_spell != 0 {
         crate::game::map::spells::learn(map, player, q.reward_spell);
     }
+    // The spell the quest casts on its rewarded: honor, a buff, an item.
+    if q.reward_spell_cast != 0 {
+        crate::game::map::spells::cast_triggered(map, player, q.reward_spell_cast, Some(player));
+    }
     crate::game::map::reputation::quest_rewarded(map, player, &q);
+    crate::game::map::battleground::quest_rewarded(map, player, quest);
     crate::game::social::mail::quest_mail(&map.realm, player, giver, quest);
     if let Some(script) = data.scripts.quest_complete_script.get(&quest).copied() {
         crate::game::map::scripts::start(
