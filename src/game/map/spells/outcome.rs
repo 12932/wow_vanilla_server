@@ -979,6 +979,11 @@ pub fn damage_log(
 /// Deal `d` of `s` to `target`: absorbs, the log, pushback, the damage,
 /// the procs and the threat.
 pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Damage, l: &Landing) {
+    // Its damage puts a creature in the fight, whether it saw the caster
+    // or not; a proc's doesn't (Thistle Tea's `Engagement.on_damage`).
+    if d.amount > 0 && caster != target && guid::is_unit(target) && !l.triggered {
+        crate::game::map::ai::attacked(map, target, caster);
+    }
     let amount = split(map, caster, target, s, d.amount);
     let (left, absorbed) = auras::absorb(map, target, amount, s.school_mask());
     let frame = damage_log(

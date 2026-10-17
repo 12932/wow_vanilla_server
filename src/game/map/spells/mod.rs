@@ -899,15 +899,6 @@ fn execute(
             });
         }
     }
-    if !auras::positive(s)
-        && let Some(t) = targets.unit
-        && t != caster
-        && guid::is_unit(t)
-        && !triggered
-    {
-        // Casting at a creature is a fight.
-        crate::game::map::ai::attacked(map, t, caster);
-    }
     // A pet's feeding and abilities, and the professions' effects (which
     // run on their own and are skipped below).
     crate::game::map::pets::before_effects(map, caster, s, &targets);
@@ -1122,9 +1113,7 @@ fn land(
                 extra_attack: false,
             },
         );
-        if guid::is_unit(aim) && !auras::positive(s) {
-            crate::game::map::ai::attacked(map, aim, caster);
-        }
+        contact(map, caster, aim, s, l, false);
         return false;
     }
     // Each harmful effect of a mechanic other than the spell's: immune, or
@@ -1152,6 +1141,7 @@ fn land(
         if before > 0 && !effects.iter().any(|e| *e) {
             let why = if immune { Hit::Immune } else { Hit::Resist };
             outcome::send_miss(map, caster, aim, s.id, why);
+            contact(map, caster, aim, s, l, false);
             return false;
         }
     }
@@ -1180,6 +1170,7 @@ fn land(
     if !l.triggered && !crate::game::map::objects::opens_lock(s) {
         crate::game::map::quests::cast_credit(map, caster, &[aim], s.id);
     }
+    contact(map, caster, aim, s, l, true);
     effects::run(
         map, caster, aim, s, effects, &landing, chain, l.item, &l.targets,
     );
@@ -1212,6 +1203,56 @@ fn land(
         }
     }
     true
+}
+
+/// Sap (the rogues' family, flag 0x80): it never starts a fight.
+const SAP_FLAG: u64 = 0x80;
+/// Seduction: a fight whether its caster is seen or not.
+const SEDUCTION: u32 = 6358;
+/// `AttributesEx`: no threat; threat only when it misses; a miss breaks
+/// the caster's stealth. `AttributesEx2`: no threat as it lands.
+const ATTR_EX_NO_THREAT: u32 = 0x400;
+const ATTR_EX_THREAT_ONLY_ON_MISS: u32 = 0x20_0000;
+const ATTR_EX_FAILURE_BREAKS_STEALTH: u32 = 0x1000;
+const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
+
+/// A harmful spell got to creature `target`, landing (`hit`) or not:
+/// whether that puts it in the fight with its caster (Thistle Tea's
+/// `Spell.Combat.decide`). Landing, it does if the creature saw the caster
+/// (or it is Seduction), the cast was the caster's own (not an aura's or a
+/// proc's, unless it travelled) or makes threat outright, and the spell
+/// starts fights: not Sap, nor one with no threat, threat only on a miss,
+/// or none as it lands. Missing, it does if the creature saw the caster or
+/// the miss breaks stealth, and the cast was the caster's own with threat.
+/// Damage puts it in the fight anyway (`outcome::deal`).
+fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Launch, hit: bool) {
+    if target == caster
+        || !guid::is_unit(target)
+        || auras::positive(s)
+        || !(guid::is_player(caster) || guid::is_unit(caster))
+    {
+        return;
+    }
+    let seen = stealth::sees(map, target, caster);
+    let own = !l.triggered || s.speed > 0.0;
+    let fights = if hit {
+        let sap = s.family_name == 8 && s.family_flags & SAP_FLAG != 0;
+        let threat = s.effects.iter().any(|e| {
+            matches!(e.effect, EFFECT_THREAT | EFFECT_ATTACK_ME | 91) && e.base_points > 0
+        });
+        !sap && (seen || s.id == SEDUCTION)
+            && (own || threat)
+            && !s.attr(1, ATTR_EX_NO_THREAT)
+            && !s.attr(1, ATTR_EX_THREAT_ONLY_ON_MISS)
+            && !s.attr(2, ATTR_EX2_NO_INITIAL_THREAT)
+    } else {
+        let breaks = s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH);
+        (seen || breaks) && (breaks || (own && !s.attr(1, ATTR_EX_NO_THREAT)))
+    };
+    if fights {
+        crate::game::map::ai::attacked(map, target, caster);
+        crate::game::map::creature_combat::hostile_act(map, target);
+    }
 }
 
 /// Whether a spell can be pulled aside by a spell magnet (Grounding
