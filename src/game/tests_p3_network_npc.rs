@@ -121,6 +121,8 @@ fn data() -> GameData {
         .unwrap()
         .extend([spawn(13, QUIET_TRAINER, 1.0), spawn(14, TRAINER, 1.5)]);
     d.npc.trainer_greetings.insert(QUIET_TRAINER, "Hi".into());
+    // One bank slot to buy, for 10 silver.
+    d.npc.bank_slot_prices.insert(1, 1_000);
     d.creature_templates.insert(
         AUCTIONEER,
         creature(
@@ -762,5 +764,52 @@ async fn an_auction_house_opens_sells_takes_bids_and_lists() {
     assert_eq!(
         (word(&removed, 0), word(&removed, 4), word(&removed, 8)),
         (expired, 1, 0)
+    );
+}
+
+/// Thistle Tea's bank_messages_test: a bank slot's purchase answers its
+/// result as a word: 1 without the money, 3 bought, 0 with no more to
+/// buy; and 2 from one who isn't a banker.
+#[tokio::test]
+async fn bank_slots_are_bought_and_refused_with_their_results() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let banker = guid::unit(GOSSIPER, 12);
+    let vendor = guid::unit(VENDOR, 11);
+    a.sees(banker).await;
+    a.sees(vendor).await;
+    let buy = |guid| CMSG_BUY_BANK_SLOT { guid };
+    a.send(buy(banker)).await;
+    assert_eq!(
+        a.wait_frame("SMSG_BUY_BANK_SLOT_RESULT", 0x1BA, |_| true)
+            .await,
+        1u32.to_le_bytes(),
+        "not enough money"
+    );
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1_000)
+    })
+    .await;
+    a.send(buy(banker)).await;
+    assert_eq!(
+        a.wait_frame("SMSG_BUY_BANK_SLOT_RESULT", 0x1BA, |_| true)
+            .await,
+        3u32.to_le_bytes(),
+        "bought"
+    );
+    a.send(buy(banker)).await;
+    assert_eq!(
+        a.wait_frame("SMSG_BUY_BANK_SLOT_RESULT", 0x1BA, |_| true)
+            .await,
+        0u32.to_le_bytes(),
+        "no more"
+    );
+    a.send(buy(vendor)).await;
+    assert_eq!(
+        a.wait_frame("SMSG_BUY_BANK_SLOT_RESULT", 0x1BA, |_| true)
+            .await,
+        2u32.to_le_bytes(),
+        "not a banker"
     );
 }
