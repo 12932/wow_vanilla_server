@@ -175,6 +175,10 @@ impl Map {
             crate::game::map::account_data::update_raw(self, guid, body);
             return;
         }
+        if opcode == crate::game::map::tickets::CMSG_GMSURVEY_SUBMIT {
+            crate::game::map::tickets::survey(self, guid, body);
+            return;
+        }
         tracing::trace!("raw opcode 0x{opcode:03X} not handled");
     }
 }
