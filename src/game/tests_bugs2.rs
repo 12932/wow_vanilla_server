@@ -803,3 +803,52 @@ async fn melee_damage_taken_auras_touch_abilities() {
         .unwrap();
     assert_eq!(taken, 96.0);
 }
+
+#[tokio::test]
+async fn mana_shield_absorbs_what_its_mana_pays_for_after_other_absorbs() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "MANASHIELD");
+    let mage = c.enter("Manash", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            level(m, mage, 60, &[]);
+            let mana = |m: &mut Map, v: u32| {
+                m.players
+                    .get_mut(&mage)
+                    .unwrap()
+                    .fields
+                    .set_u32(UNIT_FIELD_POWER1, v)
+            };
+            // Ten mana pay for five points of the shield's 120.
+            apply(m, mage, mage, 1463);
+            mana(m, 10);
+            let short = auras::absorb(m, mage, 100, 1);
+            let left = m.players[&mage].fields.get_u32(UNIT_FIELD_POWER1);
+            // Power Word: Shield soaks first, the mana shield the rest.
+            auras::remove_spell(m, mage, 1463, None);
+            apply(m, mage, mage, 1463);
+            apply(m, mage, mage, 17);
+            mana(m, 1000);
+            let shield = auras::auras(m, mage)
+                .and_then(|a| a.holders.iter().find(|h| h.spell == 17).cloned())
+                .map_or(0, |h| h.effects[0].left)
+                .max(0) as u32;
+            let both = auras::absorb(m, mage, 50, 1);
+            let spent = 1000 - m.players[&mage].fields.get_u32(UNIT_FIELD_POWER1);
+            (short, left, shield, both, spent)
+        })
+        .await
+        .unwrap();
+    let (short, left, shield, both, spent) = out;
+    assert_eq!((short, left), ((95, 5), 0), "five absorbed, the mana gone");
+    assert_eq!(both, (0, 50));
+    assert_eq!(
+        spent,
+        (50 - shield.min(50)) * 2,
+        "the shield's {shield} first"
+    );
+}
