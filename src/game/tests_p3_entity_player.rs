@@ -365,3 +365,102 @@ async fn a_capitals_rest_ends_outside_it() {
     })
     .await;
 }
+
+/// Thistle Tea's "marks player in combat when a mob attack lands",
+/// "cancels an in-flight cast when the character is dead", "ignores an
+/// attack already in flight after death", "after spirit release" and "a
+/// harmful spell outcome already in flight after spirit release": a
+/// creature's blow puts a player in the fight, where their health doesn't
+/// come back; death stops their cast and says so; and nothing hurts the
+/// dead, nor a ghost, a blow or a missile on its way.
+#[tokio::test]
+async fn the_dead_and_their_ghosts_take_no_harm_and_cast_no_more() {
+    use crate::game::tests_p3_combat::{BRUTE, spawn};
+    let mut d = world();
+    let mut bolt = spell(
+        98_010,
+        &[SpellEffect {
+            effect: 2,
+            base_points: 9,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            ..Default::default()
+        }],
+    );
+    bolt.speed = 20.0;
+    d.spells.spells.insert(98_010, bolt);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let health = move |m: &Map| m.players[&ga].fields.get_u32(UNIT_FIELD_HEALTH);
+    // Struck, hurt: in the fight, and no health back.
+    let (brute, fighting, hurt, after) = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 2.0);
+        let max = m.players[&ga].fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_HEALTH, max / 2);
+        crate::game::map::combat::engage(m, brute, ga);
+        crate::game::map::combat::deal_damage(m, brute, ga, 5);
+        let fighting = m.players[&ga].fields.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        );
+        let hurt = health(m);
+        let now = m.now;
+        m.players.get_mut(&ga).unwrap().regen_at = now;
+        crate::game::map::stats::regen(m);
+        (brute, fighting, hurt, health(m))
+    })
+    .await;
+    assert!(fighting, "in the fight");
+    assert_eq!(after, hurt, "no health back while fighting");
+    // Casting, she dies: the cast stops and she hears it.
+    on(&map, move |m| {
+        spells::learn(m, ga, SLOW);
+        spells::cast(m, ga, SLOW, Targets::default(), None);
+    })
+    .await;
+    a.clear();
+    let casting = on(&map, move |m| {
+        crate::game::map::death::kill(m, ga);
+        m.caster(ga).is_some_and(|c| c.casting.is_some())
+    })
+    .await;
+    assert!(!casting, "the cast is over");
+    let failure = a
+        .wait_frame("SMSG_SPELL_FAILURE", SMSG_SPELL_FAILURE, |_| true)
+        .await;
+    assert!(failure.windows(4).any(|w| w == SLOW.to_le_bytes()));
+    // Dead: a blow hurts nothing.
+    let dead = on(&map, move |m| {
+        crate::game::map::combat::deal_damage(m, brute, ga, 10);
+        health(m)
+    })
+    .await;
+    assert_eq!(dead, 0, "the dead are hurt no more");
+    // A ghost: neither a blow nor a missile on its way.
+    a.send(CMSG_REPOP_REQUEST {}).await;
+    crate::game::tests_p3_entity_objects::until(&map, "a ghost", move |m| {
+        m.players[&ga].death != crate::game::map::death::Death::Alive && health(m) > 0
+    })
+    .await;
+    let ghost = on(&map, move |m| {
+        let before = health(m);
+        crate::game::map::combat::deal_damage(m, brute, ga, 10);
+        m.spells.travel = Some(true);
+        crate::game::map::spells::cast_triggered(m, brute, 98_010, Some(ga));
+        let flying = m.spells.in_flight.len();
+        m.now += Duration::from_secs(3);
+        spells::update(m);
+        m.spells.travel = None;
+        (before, flying, health(m))
+    })
+    .await;
+    assert_eq!(ghost.0, ghost.2, "the ghost unhurt");
+    assert!(ghost.1 <= 1, "a missile flew, or none was let fly");
+}
