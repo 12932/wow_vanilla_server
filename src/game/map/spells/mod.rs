@@ -278,6 +278,10 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     };
     p.outbound.send(&SMSG_LEARNED_SPELL { id: spell });
     apply_passive(map, player, spell);
+    let data = map.realm.data.clone();
+    if let Some(p) = map.players.get_mut(&player) {
+        crate::game::map::skills::learn_from_spell(p, &data, spell);
+    }
     let with = map
         .realm
         .data

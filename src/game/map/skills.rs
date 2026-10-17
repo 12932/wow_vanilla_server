@@ -131,17 +131,7 @@ pub fn init(p: &mut Player, data: &GameData) {
         1u32 << (p.row.race.max(1) - 1),
     );
     for spell in spells {
-        let Some(s) = data.spells.get(spell) else {
-            continue;
-        };
-        for e in s
-            .effects
-            .iter()
-            .filter(|e| e.effect == crate::game::map::spells::EFFECT_SKILL)
-        {
-            let points = e.base_points + e.base_dice.max(1);
-            learn_skill(p, e.misc_value.max(0) as u32, points.max(1) as u32);
-        }
+        learn_from_spell(p, data, spell);
         let languages: Vec<u32> = data
             .spells
             .skill_abilities
@@ -161,6 +151,23 @@ pub fn init(p: &mut Player, data: &GameData) {
                 learn_skill(p, skill, 1);
             }
         }
+    }
+}
+
+/// The skills a spell's skill effects teach, each at the step its points
+/// say: on login, and as the spell is learned (mangos's `addSpell` learns
+/// a spell's skill with it; a profession's rank is no passive).
+pub fn learn_from_spell(p: &mut Player, data: &GameData, spell: u32) {
+    let Some(s) = data.spells.get(spell) else {
+        return;
+    };
+    for e in s
+        .effects
+        .iter()
+        .filter(|e| e.effect == crate::game::map::spells::EFFECT_SKILL)
+    {
+        let points = e.base_points + e.base_dice.max(1);
+        learn_skill(p, e.misc_value.max(0) as u32, points.max(1) as u32);
     }
 }
 
