@@ -568,6 +568,26 @@ pub fn sweep(realm: &Realm) {
     }
 }
 
+/// A character deleted: their auctions go, and their bids with them.
+pub fn character_deleted(realm: &Realm, counter: u32) {
+    let mut auctions = realm.social.auctions.lock();
+    let owned: Vec<u32> = auctions
+        .auctions
+        .values()
+        .filter(|a| a.owner == counter)
+        .map(|a| a.id)
+        .collect();
+    for id in owned {
+        auctions.auctions.remove(&id);
+        realm.store.delete_record(KIND_AUCTION, u64::from(id));
+    }
+    for a in auctions.auctions.values_mut().filter(|a| a.bidder == counter) {
+        a.bidder = 0;
+        a.bid = 0;
+        save(realm, a);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

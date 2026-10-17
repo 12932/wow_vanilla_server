@@ -321,15 +321,18 @@ impl Session {
     }
 
     async fn delete(&mut self, g: Guid) {
+        let counter = guid::counter(g);
         let result = if !guid::is_player(g) || self.realm.registry.online(g).is_some() {
             WorldResult::CharDeleteFailed
-        } else if self
-            .realm
-            .store
-            .delete(&self.account, guid::counter(g))
-            .await
-        {
+        } else if crate::game::social::guilds::leads_others(&self.realm, counter) {
+            // A guild's leader passes it on first.
+            WorldResult::CharDeleteFailed
+        } else if self.realm.store.delete(&self.account, counter).await {
             self.realm.registry.remove_name(g);
+            crate::game::social::guilds::character_deleted(&self.realm, counter);
+            crate::game::social::mail::character_deleted(&self.realm, counter);
+            crate::game::social::auction::character_deleted(&self.realm, counter);
+            crate::game::social::friends::character_deleted(&self.realm, g);
             WorldResult::CharDeleteSuccess
         } else {
             WorldResult::CharDeleteFailed
