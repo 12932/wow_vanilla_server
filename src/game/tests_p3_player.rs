@@ -1686,3 +1686,66 @@ async fn a_kills_reputation_is_the_killers_sides_and_half_again_to_the_parent_pa
     .await;
     assert_eq!(capped, (9_000, 50));
 }
+
+const SELF_HEAL: u32 = 960_301;
+const AMBUSH: u32 = 960_302;
+
+#[tokio::test]
+async fn a_seated_player_casts_nothing_and_an_opener_wants_stealth_neither_spending_any_power() {
+    use crate::game::data::spells::{ATTR_ONLY_STEALTHED, SpellEffect, SpellTemplate};
+    use crate::game::map::spells::checks::fail;
+    let mut d = data();
+    for (id, attributes) in [(SELF_HEAL, 0), (AMBUSH, ATTR_ONLY_STEALTHED)] {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            equipped_item_class: -1,
+            mana_cost: 10,
+            ..Default::default()
+        };
+        s.attributes[0] = attributes;
+        s.effects[0] = SpellEffect {
+            effect: 10,
+            base_points: 9,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        };
+        d.spells.spells.insert(id, s);
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Mage).await;
+    let got = on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.spells.push(SELF_HEAL);
+        p.spells.push(AMBUSH);
+        p.set_stand_state(1);
+        let mana = p.fields.get_u32(UNIT_FIELD_POWER1);
+        let data = m.realm.data.clone();
+        let check = |m: &mut Map, spell: u32| {
+            let s = data.spells.get(spell).unwrap();
+            let t = crate::game::map::spells::Targets::default();
+            let mods = crate::game::map::spells::mods::for_spell(m, g, s);
+            crate::game::map::spells::checks::check(m, g, s, &t, None, false, &mods)
+        };
+        let seated = check(m, SELF_HEAL);
+        crate::game::map::spells::cast(m, g, SELF_HEAL, Default::default(), None);
+        let kept = m.players[&g].fields.get_u32(UNIT_FIELD_POWER1) == mana;
+        m.players.get_mut(&g).unwrap().set_stand_state(0);
+        let open = check(m, AMBUSH);
+        crate::game::map::spells::cast(m, g, AMBUSH, Default::default(), None);
+        let kept_too = m.players[&g].fields.get_u32(UNIT_FIELD_POWER1) == mana;
+        (seated, kept, open, kept_too)
+    })
+    .await;
+    assert_eq!(
+        got,
+        (
+            Some(fail::NOT_STANDING),
+            true,
+            Some(fail::ONLY_STEALTHED),
+            true
+        )
+    );
+}
