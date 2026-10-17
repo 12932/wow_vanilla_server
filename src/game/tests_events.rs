@@ -148,9 +148,6 @@ fn rewarded(m: &Map, g: Guid, quest: u32) -> bool {
     m.players[&g].journal.rewarded.contains(&quest)
 }
 
-/// Take `quest` from the creature (or object) `giver`, beside it, its
-/// earlier quests done.
-
 /// Where `entry` (a creature, else an object) is spawned: its map and
 /// place.
 fn spawn_of(realm: &Realm, entry: u32) -> Option<(u32, Vector3d)> {
