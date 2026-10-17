@@ -87,6 +87,9 @@ pub struct MiscData {
     pub reward_rates: AHashMap<u32, (f32, f32, f32)>,
     /// `exploration_basexp`: level → XP for finding an area.
     pub exploration_xp: AHashMap<u32, u32>,
+    /// `player_crit_per_agility`: (class, level) → agility a percent of
+    /// melee crit, for the levels it lists.
+    pub crit_per_agility: AHashMap<(u8, u8), f32>,
     /// Meeting stones by game object entry.
     pub meeting_stones: AHashMap<u32, MeetingStone>,
     /// `cinematic_waypoints`: where an intro's camera is at each point of
@@ -95,6 +98,16 @@ pub struct MiscData {
 }
 
 impl MiscData {
+    /// The agility a percent of melee crit takes for `class` at `level`:
+    /// the rate of the highest level listed up to it (Thistle Tea's
+    /// `PlayerCritPerAgility.rate`), if any is.
+    pub fn crit_per_agility(&self, class: u8, level: u8) -> Option<f32> {
+        (1..=level)
+            .rev()
+            .find_map(|l| self.crit_per_agility.get(&(class, l)).copied())
+            .filter(|r| *r > 0.0)
+    }
+
     pub fn faction(&self, id: u32) -> Option<&FactionDef> {
         self.factions.get(&id)
     }

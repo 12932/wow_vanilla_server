@@ -920,7 +920,9 @@ pub fn sync_gear_all(map: &mut Map) {
 }
 
 /// A player's gear auras in line with what they wear: each equipped,
-/// unbroken item's on-equip spells, and nothing from gear they took off.
+/// unbroken item's on-equip spells, a bag's among them (a quiver's haste,
+/// as mangos's `_ApplyAllItemMods` takes the bag slots), and nothing from
+/// gear they took off.
 /// An item's or a set's spell that names forms (a weapon's feral attack
 /// power) holds only in them, as Thistle Tea's `EquipmentSpells.eligible?`
 /// has it; a form taken or left syncs again.
@@ -940,7 +942,7 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
     for item in p
         .items
         .iter()
-        .filter(|i| i.bag == BAG_PLAYER && i.slot < EQUIPMENT_END)
+        .filter(|i| i.bag == BAG_PLAYER && i.slot < BAG_END)
     {
         if item.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
             && item.fields.get_u32(ITEM_FIELD_DURABILITY) == 0
