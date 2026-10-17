@@ -215,6 +215,17 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             .and_then(|s| map.unit_fields(s))
             .is_some_and(|f| f.get_u32(v1 as u16) & v2 as u32 != 0),
         33 => map.key.map == v1 as u32,
+        11 => compare(
+            i64::from(crate::game::map::scripts::server_variable(v1 as u32)),
+            i64::from(v2),
+            v3,
+        ),
+        35 => crate::game::map::map_events::data(map, v1 as u32, v2 as u32)
+            .is_some_and(|d| compare(i64::from(d), i64::from(v3), v4)),
+        36 => crate::game::map::map_events::active(map, v1 as u32),
+        47 => crate::game::map::map_events::targets(map, v1 as u32)
+            .into_iter()
+            .all(|t| eval(map, v2.max(0) as u32, source, Some(t), depth + 1)),
         34 => {
             let actual = crate::game::map::instance_script::get_data(map, v1 as u32);
             compare(i64::from(actual), i64::from(v2), v3)

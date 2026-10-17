@@ -19,6 +19,26 @@ use crate::game::map::creature::{Creature, Motion};
 use crate::game::map::event_ai;
 use crate::game::map::{Map, MapKey};
 
+/// The commands that do something here (the rest are skipped, as
+/// Thistle Tea skips them).
+pub fn command_supported(command: u32) -> bool {
+    matches!(
+        command,
+        0..=20
+            | 22..=29
+            | 31..=35
+            | 37
+            | 39..=52
+            | 54..=56
+            | 59..=71
+            | 73
+            | 74
+            | 76..=85
+            | 87
+            | 89..=92
+    ) && !matches!(command, 21 | 36 | 38 | 53 | 57 | 58 | 72 | 75 | 86 | 88)
+}
+
 /// A script under way.
 #[derive(Debug, Clone)]
 pub struct Run {
@@ -311,6 +331,7 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
                 _ => pick(friends, &mut rng),
             }
         }
+        22..=24 => crate::game::map::map_events::target_of(map, step.target_type, p1, p2),
         25 => players_near(map, at, p1 as f32).into_iter().next(),
         26 => players_near(map, at, p1 as f32)
             .into_iter()
@@ -1406,10 +1427,74 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             true
         }
-        // Map events, server variables, meeting stones and the like are
-        // left alone.
+        // Set a field to a value.
+        2 => {
+            let Some(f) = map.unit_fields_mut(source) else {
+                return false;
+            };
+            f.set_u32(d1 as u16, d2);
+            true
+        }
+        54 => {
+            set_server_variable(d1, d2);
+            true
+        }
+        61..=66 | 69 => crate::game::map::map_events::command(map, step, source, target),
+        // A spawn the world database keeps back until a script loads it.
+        82 => {
+            if object_of_spawn(map, d1).is_some() {
+                return true;
+            }
+            let spawn = data
+                .gameobject_spawns
+                .get(&map.key.map)
+                .and_then(|v| v.iter().find(|s| s.guid == d1))
+                .cloned();
+            let Some(s) = spawn else {
+                return false;
+            };
+            let Some(t) = data.gameobject_templates.get(&s.entry) else {
+                return false;
+            };
+            map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, &s));
+            true
+        }
+        91 => {
+            if creature_of_spawn(map, d1).is_some() {
+                return true;
+            }
+            let spawn = data
+                .creature_spawns
+                .get(&map.key.map)
+                .and_then(|v| v.iter().find(|s| s.guid == d1))
+                .cloned();
+            let Some(s) = spawn else {
+                return false;
+            };
+            match Creature::from_spawn(&data, &s, &mut rand::rng()) {
+                Some(c) => {
+                    map.add_creature(c);
+                    true
+                }
+                None => false,
+            }
+        }
+        // Flying, meeting stones, pet command states, taxis and the like have
+        // nothing to do here.
         _ => true,
     }
+}
+
+static SERVER_VARIABLES: std::sync::LazyLock<parking_lot::Mutex<ahash::AHashMap<u32, u32>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// A server-wide variable scripts set and conditions read.
+pub fn server_variable(index: u32) -> u32 {
+    SERVER_VARIABLES.lock().get(&index).copied().unwrap_or(0)
+}
+
+pub fn set_server_variable(index: u32, value: u32) {
+    SERVER_VARIABLES.lock().insert(index, value);
 }
 
 /// `player`'s group members in the map, or the player alone.

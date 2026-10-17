@@ -681,3 +681,155 @@ fn the_real_eventai_uses_known_event_types() {
         Some("instance_molten_core")
     );
 }
+
+/// The real Deadmines: Rhahk'Zor's death opens his door, and the copy's
+/// EventAI creatures fight a player without trouble.
+#[tokio::test]
+async fn the_real_deadmines_opens_rhahkzors_door() {
+    let dir = std::path::Path::new("<runs>/tt-data/db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let data = crate::game::data::load::load(dir);
+    let boss = data
+        .creature_spawns
+        .get(&36)
+        .and_then(|v| v.iter().find(|s| s.entries.contains(&644)))
+        .cloned()
+        .expect("Rhahk'Zor's spawn");
+    let realm = harness::realm_with(data);
+    let mut a = Client::connect(&realm, "A");
+    let me = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let from = realm.registry.online(me).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            me,
+            MapKey::world(36),
+            Vector3d {
+                x: boss.x + 4.0,
+                y: boss.y,
+                z: boss.z,
+            },
+            0.0,
+        )
+    });
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(me).await;
+    let map = realm.registry.online(me).unwrap().map();
+    let (scripted, door) = map
+        .query(|m| {
+            let door = m
+                .gameobjects
+                .iter()
+                .find(|(_, o)| o.entry == 13965)
+                .map(|(_, o)| o.fields.get_u32(GAMEOBJECT_STATE));
+            (m.instance.script, door)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        scripted,
+        Some(crate::game::map::instance_script::Script::Deadmines)
+    );
+    assert_eq!(door, Some(1), "the factory door starts shut");
+    // A fight with whatever is near, for a few updates.
+    map.call(move |m| {
+        let near: Vec<Guid> = m
+            .creatures
+            .iter()
+            .filter(|(_, c)| {
+                c.alive()
+                    && crate::game::map::combat::dist(c.position, m.players[&me].position()) < 30.0
+            })
+            .map(|(_, c)| c.guid)
+            .take(5)
+            .collect();
+        for c in near {
+            crate::game::map::ai::attacked(m, c, me);
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    kill(&realm, me, 644).await;
+    let door = map
+        .query(|m| {
+            m.gameobjects
+                .iter()
+                .find(|(_, o)| o.entry == 13965)
+                .map(|(_, o)| o.fields.get_u32(GAMEOBJECT_STATE))
+        })
+        .await
+        .flatten();
+    assert_eq!(door, Some(0), "Rhahk'Zor's death opens it");
+    let saved = crate::game::instances::save_of(&realm, key_of(&realm, me).instance).unwrap();
+    assert_eq!(saved.data.get(&10), Some(&3));
+    // He comes back on his spawn's timer, not before.
+    let back = saved.dead.get(&boss.guid).copied().expect("saved dead");
+    assert!(back > crate::game::social::mail::now() + 60, "{back}");
+}
+
+#[tokio::test]
+async fn a_map_event_ends_in_success_when_its_condition_is_met() {
+    let mut d = eventai_data();
+    d.scripts.ai_events.clear();
+    // Success when counter 0 of event 1 reaches 2.
+    d.scripts.conditions.insert(
+        10,
+        Condition {
+            entry: 10,
+            kind: 35,
+            values: [1, 0, 2, 1],
+            flags: 0,
+        },
+    );
+    d.npc.broadcast_texts.insert(
+        300,
+        BroadcastText {
+            male: "The event is won.".into(),
+            ..Default::default()
+        },
+    );
+    d.scripts.generic.insert(
+        600,
+        vec![ScriptStep {
+            dataint: [300, 0, 0, 0],
+            ..step(600, 0)
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let me = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let brute = guid::unit(BRUTE, 1);
+    a.sees(brute).await;
+    let map = realm.registry.online(me).unwrap().map();
+    map.call(move |m| {
+        let start = ScriptStep {
+            datalong: [1, 60, 0, 0],
+            dataint: [10, 600, 0, 0],
+            ..step(0, 61)
+        };
+        let add = ScriptStep {
+            datalong: [1, 0, 1, 1],
+            ..step(0, 65)
+        };
+        crate::game::map::scripts::execute(m, &start, brute, me);
+        crate::game::map::scripts::execute(m, &add, brute, me);
+        assert!(crate::game::map::map_events::active(m, 1));
+        crate::game::map::scripts::execute(m, &add, brute, me);
+    });
+    let line = a
+        .wait_for("the success script", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => Some(c.message.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(line, "The event is won.");
+    let over = map
+        .query(|m| !crate::game::map::map_events::active(m, 1))
+        .await
+        .unwrap();
+    assert!(over);
+}

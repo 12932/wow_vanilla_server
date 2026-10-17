@@ -24,6 +24,7 @@ pub mod instance_script;
 pub mod inventory;
 pub mod login;
 pub mod loot;
+pub mod map_events;
 pub mod movement;
 pub mod nav;
 pub mod npc;
@@ -263,6 +264,8 @@ pub struct Map {
     pub object_resets: Vec<(Instant, Guid, u32)>,
     /// Groups scripts made: member → (leader, distance, angle).
     pub script_groups: AHashMap<Guid, (Guid, f32, f32)>,
+    /// Scripted map events under way.
+    pub map_events: map_events::Events,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -363,6 +366,7 @@ impl Map {
             by_spawn: AHashMap::new(),
             object_resets: Vec::new(),
             script_groups: AHashMap::new(),
+            map_events: Default::default(),
         }
     }
 
@@ -626,6 +630,7 @@ impl Map {
         scripts::update(self);
         event_ai::update_despawns(self);
         instance_script::update(self);
+        map_events::update(self);
         scripts::update_objects(self);
         social::push_member_stats(self);
         duel::update(self);
