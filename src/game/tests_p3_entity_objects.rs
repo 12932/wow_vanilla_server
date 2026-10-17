@@ -735,3 +735,78 @@ async fn a_cooldown_that_waits_for_its_object_starts_as_it_goes() {
     .await;
     assert_eq!(done, (true, (false, true)), "done, gone and started");
 }
+
+const LOOT_CHEST: u32 = 97_040;
+const TREASURE: u32 = 97_041;
+
+fn chest_world() -> GameData {
+    let mut d = objects_world();
+    d.gameobject_templates
+        .insert(LOOT_CHEST, object(LOOT_CHEST, 3, "Chest", &[(1, 900)]));
+    d.loot.gameobject.insert(
+        900,
+        vec![crate::game::data::LootEntry {
+            item: TREASURE,
+            chance: 100.0,
+            group: 0,
+            min: 1,
+            max: 1,
+            condition: 0,
+        }],
+    );
+    d.items.insert(
+        TREASURE,
+        crate::game::data::items::ItemTemplate {
+            entry: TREASURE,
+            name: "Treasure".into(),
+            stackable: 20,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's chest `reserve_item`, `view` and `Chest.release`: an item
+/// taken from a chest is had once, a second take of its slot giving
+/// nothing; emptied and let go, a summoned chest goes, with no respawn to
+/// come, and gone, it gives no loot.
+#[tokio::test]
+async fn a_chests_item_is_had_once_and_an_emptied_summoned_chest_goes_for_good() {
+    let realm = harness::realm_with(chest_world());
+    let mut cs = grouped(&realm, &["Alice"], false).await;
+    let ga = cs[0].guid;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let chest = on(&map, move |m| {
+        objects::summon(m, None, LOOT_CHEST, here(), 0.0, 0, 0, 0, None).unwrap()
+    })
+    .await;
+    let a = &mut cs[0];
+    a.sees(chest).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: chest }).await;
+    a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await;
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_RELEASE { guid: chest }).await;
+    crate::game::tests_p3_entity_objects::until(&map, "the chest gone", move |m| {
+        m.gameobject(chest).is_none()
+    })
+    .await;
+    let (count, respawns) = on(&map, move |m| {
+        let count: u32 = m.players[&ga]
+            .items
+            .iter()
+            .filter(|i| i.entry == TREASURE)
+            .map(|i| i.count())
+            .sum();
+        (count, m.objects.respawns.len())
+    })
+    .await;
+    assert_eq!(count, 1, "one treasure, not two");
+    assert_eq!(respawns, 0, "a summoned chest comes back no more");
+    a.clear();
+    a.send(CMSG_GAMEOBJ_USE { guid: chest }).await;
+    assert!(
+        !crate::game::tests_p3_entity::gets_frame(a, 0x160, |_| true).await,
+        "gone, no loot"
+    );
+}
