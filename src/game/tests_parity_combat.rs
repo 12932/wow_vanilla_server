@@ -44,6 +44,10 @@ const SAP: u32 = 95_006;
 const CURSE: u32 = 95_007;
 const QUIET_CURSE: u32 = 95_008;
 const BOLT: u32 = 95_009;
+/// A creature's charm of a player.
+const DOMINATE: u32 = 95_010;
+/// A mage's bolt, dear in mana.
+const DEAR_BOLT: u32 = 95_011;
 
 /// The spawns: (guid, entry, east, north).
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
@@ -199,7 +203,7 @@ fn data() -> GameData {
         }
         s.spells.insert(id, t);
     }
-    for id in [SAP, CURSE, QUIET_CURSE, BOLT] {
+    for id in [SAP, CURSE, QUIET_CURSE, BOLT, DEAR_BOLT] {
         let mut t = crate::game::data::spells::SpellTemplate {
             id,
             name: format!("Spell {id}"),
@@ -208,7 +212,7 @@ fn data() -> GameData {
             duration_index: 9,
             ..Default::default()
         };
-        t.effects[0] = if id == BOLT {
+        t.effects[0] = if matches!(id, BOLT | DEAR_BOLT) {
             crate::game::data::spells::SpellEffect {
                 effect: 2,
                 base_points: 9,
@@ -235,9 +239,13 @@ fn data() -> GameData {
         if id == QUIET_CURSE {
             t.attributes[1] = 0x400;
         }
+        if id == DEAR_BOLT {
+            t.family_name = 3;
+            t.mana_cost = 1000;
+        }
         s.spells.insert(id, t);
     }
-    for (id, aura) in [(HIDE, 16), (GOAD, 11), (MOCK, 11)] {
+    for (id, aura) in [(HIDE, 16), (GOAD, 11), (MOCK, 11), (DOMINATE, 6)] {
         let mut t = crate::game::data::spells::SpellTemplate {
             id,
             name: format!("Spell {id}"),
@@ -1152,4 +1160,91 @@ async fn creatures_spread_round_their_victim() {
     assert!(apart > 1.118, "the two step apart: {apart}");
     assert!(off > 1.25, "the one in its victim steps back: {off}");
     assert!(in_reach, "all still in reach");
+}
+
+/// A player a creature charms fights its charmer's foes, not whoever is
+/// nearest, and is theirs again once its charmer's fight is over (Thistle
+/// Tea's `BT.Charm` and `PlayerCharm.controller_active?`).
+#[tokio::test]
+async fn a_charmed_player_fights_its_charmers_foes_while_it_fights() {
+    let (realm, _a, ga, map) = setup(Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Cid", Race::Human, Class::Warrior).await;
+    let k = kobold(23);
+    let out = map
+        .query(move |m| {
+            let turn = |m: &mut Map| {
+                m.now += Duration::from_millis(50);
+                crate::game::map::ai::update_creatures(m);
+                combat::update_creatures(m);
+                crate::game::map::pets::update(m);
+                crate::game::map::player_motion::update(m);
+            };
+            for (g, dx) in [(ga, 40.0), (gb, 44.0), (gc, 39.0)] {
+                m.players.get_mut(&g).unwrap().movement.position = at(dx, 50.0);
+            }
+            put(m, k, at(48.0, 50.0));
+            crate::game::map::ai::attacked(m, k, gb);
+            crate::game::map::spells::cast_triggered(m, k, DOMINATE, Some(ga));
+            let charmed = m.players[&ga].owned.possessed_by.is_some();
+            let mut struck = Vec::new();
+            for _ in 0..40 {
+                turn(m);
+                let c = &m.players[&ga].combat;
+                if c.attacking && !struck.contains(&c.victim) {
+                    struck.push(c.victim);
+                }
+            }
+            crate::game::map::ai::enter_evade(m, k);
+            for _ in 0..4 {
+                turn(m);
+            }
+            let freed = m.players[&ga].owned.possessed_by.is_none()
+                && !crate::game::map::auras::auras(m, ga)
+                    .unwrap()
+                    .has_spell(DOMINATE);
+            (charmed, struck, freed)
+        })
+        .await
+        .unwrap();
+    let (charmed, struck, freed) = out;
+    assert!(charmed, "charmed");
+    assert_eq!(struck, vec![gb], "its charmer's foe, not the nearest");
+    assert!(freed, "theirs again once its charmer's fight is over");
+}
+
+/// A charmed caster casts what it can, and with nothing it can cast (no
+/// mana) fights by blade till its next try (Thistle Tea's `try_spell` and
+/// `melee_fallback?`).
+#[tokio::test]
+async fn a_charmed_caster_with_nothing_to_cast_fights_by_blade() {
+    let (realm, _a, ga, map) = setup(Class::Mage).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let k = kobold(23);
+    let struck = map
+        .query(move |m| {
+            let p = m.players.get_mut(&ga).unwrap();
+            p.spells.push(DEAR_BOLT);
+            p.fields.set_u32(UNIT_FIELD_POWER1, 0);
+            m.players.get_mut(&ga).unwrap().movement.position = at(40.0, 50.0);
+            m.players.get_mut(&gb).unwrap().movement.position = at(43.0, 50.0);
+            put(m, k, at(48.0, 50.0));
+            crate::game::map::ai::attacked(m, k, gb);
+            crate::game::map::spells::cast_triggered(m, k, DOMINATE, Some(ga));
+            for _ in 0..20 {
+                m.now += Duration::from_millis(50);
+                crate::game::map::ai::update_creatures(m);
+                combat::update_creatures(m);
+                crate::game::map::pets::update(m);
+                crate::game::map::player_motion::update(m);
+            }
+            let c = &m.players[&ga].combat;
+            c.attacking.then_some(c.victim)
+        })
+        .await
+        .unwrap();
+    assert_eq!(struck, Some(gb), "by blade");
 }
