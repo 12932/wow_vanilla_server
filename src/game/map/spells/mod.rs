@@ -532,7 +532,8 @@ fn resolve(
 ) -> Vec<(Guid, [bool; 3])> {
     let mut out: Vec<(Guid, [bool; 3])> = Vec::new();
     for index in 0..3 {
-        if s.effects[index].effect == 0 {
+        // A persistent area ticks on its own; it lands on no one at the cast.
+        if matches!(s.effects[index].effect, 0 | EFFECT_PERSISTENT_AREA_AURA) {
             continue;
         }
         for g in targets::effect_targets(map, caster, s, index, t, m) {
