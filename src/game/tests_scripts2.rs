@@ -1110,3 +1110,75 @@ async fn blackfathom_fires_call_waves_and_open_the_portal() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(state_of(&map, 21117).await, Some(0), "the portal opens");
 }
+
+/// The real data: Thistle Tea's scripted bosses in their own copies fight
+/// a player for a while without trouble, and Onyxia takes to the air.
+#[tokio::test]
+async fn the_real_scripted_bosses_fight_without_trouble() {
+    let dir = std::path::Path::new("<runs>/tt-data/db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let data = crate::game::data::load::load(dir);
+    let realm = harness::realm_with(data);
+    let (mut a, me) = enter(&realm).await;
+    // Onyxia, at 64 percent.
+    go_to(&realm, &mut a, 249, (-10.0, -217.0, -86.7)).await;
+    let lair = realm.registry.online(me).unwrap().map();
+    let onyxia = lair
+        .query(|m| {
+            m.creatures
+                .iter()
+                .find(|(_, c)| c.entry == ONYXIA)
+                .map(|(_, c)| c.guid)
+        })
+        .await
+        .flatten()
+        .expect("Onyxia");
+    lair.call(move |m| {
+        crate::game::map::ai::attacked(m, onyxia, me);
+        let f = m.unit_fields_mut(onyxia).unwrap();
+        let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+        f.set_u32(UNIT_FIELD_HEALTH, max * 64 / 100);
+    });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (phase, panics) = lair
+        .query(move |m| (crate::game::map::event_ai::phase(m, onyxia), m.stats.panics))
+        .await
+        .unwrap();
+    assert_eq!(panics, 0, "nothing in the lair panicked");
+    assert!(phase >= 1, "she is on her way up: phase {phase}");
+    // Molten Core's lieutenants, one after another.
+    let lieutenants: [(u32, (f32, f32, f32)); 5] = [
+        (12057, (691.0, -498.4, -214.3)),
+        (12264, (583.5, -799.8, -205.4)),
+        (12056, (614.0, -806.3, -207.0)),
+        (12118, (1024.4, -973.3, -181.5)),
+        (11988, (793.2, -998.3, -206.8)),
+    ];
+    go_to(&realm, &mut a, 409, lieutenants[0].1).await;
+    let map = realm.registry.online(me).unwrap().map();
+    for (entry, at) in lieutenants {
+        map.call(move |m| {
+            let pos = Vector3d {
+                x: at.0 + 3.0,
+                y: at.1,
+                z: at.2,
+            };
+            if let Some(p) = m.players.get_mut(&me) {
+                p.movement.position = pos;
+            }
+            let boss = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == entry && c.alive())
+                .map(|(_, c)| c.guid);
+            if let Some(b) = boss {
+                crate::game::map::ai::attacked(m, b, me);
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+    let panics = map.query(|m| m.stats.panics).await.unwrap();
+    assert_eq!(panics, 0, "nothing in Molten Core panicked");
+}
