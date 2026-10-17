@@ -771,3 +771,35 @@ async fn who_may_attack_whom() {
     assert_eq!(hostile, (crate::game::map::combat::Regard::Hostile, true));
     assert!(!immune, "immune to players");
 }
+
+#[tokio::test]
+async fn melee_damage_taken_auras_touch_abilities() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "STONESKIN");
+    let p = c.enter("Stonesk", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let taken = map
+        .query(move |m| {
+            level(m, p, 60, &[]);
+            let kobold = spawn(m, p, 6, 60, 2.0);
+            // Stoneskin (a totem's area aura): 4 less from each melee blow.
+            let stoneskin = m.realm.data.spells.get(8072).unwrap().clone();
+            let points = spells::points(&stoneskin, 0, 60);
+            let _ = auras::apply_spell(
+                m,
+                kobold,
+                kobold,
+                &stoneskin,
+                &[(0, points)],
+                auras::Context::default(),
+            );
+            let heroic_strike = m.realm.data.spells.get(78).unwrap().clone();
+            spells::outcome::taken(m, kobold, &heroic_strike, 100.0)
+        })
+        .await
+        .unwrap();
+    assert_eq!(taken, 96.0);
+}

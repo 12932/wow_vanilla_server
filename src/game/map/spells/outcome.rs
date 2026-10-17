@@ -770,14 +770,17 @@ pub fn taken(map: &Map, target: Guid, s: &SpellTemplate, damage: f32) -> f32 {
     let mask = s.school_mask();
     let mut d = damage + a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
     d *= a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, mask);
+    // A melee or ranged ability takes the melee or ranged damage taken
+    // auras, whatever their school (theirs is 0: Stoneskin, Windwall), as
+    // a swing does (Thistle Tea's `AttackDamageTaken.spell_amount`).
     match s.dmg_class {
         2 => {
-            d += a.sum_mask(AURA_MOD_MELEE_DAMAGE_TAKEN, mask) as f32;
-            d *= a.product_mask(AURA_MOD_MELEE_DAMAGE_TAKEN_PCT, mask);
+            d += a.sum(AURA_MOD_MELEE_DAMAGE_TAKEN) as f32;
+            d *= a.product(AURA_MOD_MELEE_DAMAGE_TAKEN_PCT);
         }
         3 => {
-            d += a.sum_mask(AURA_MOD_RANGED_DAMAGE_TAKEN, mask) as f32;
-            d *= a.product_mask(AURA_MOD_RANGED_DAMAGE_TAKEN_PCT, mask);
+            d += a.sum(AURA_MOD_RANGED_DAMAGE_TAKEN) as f32;
+            d *= a.product(AURA_MOD_RANGED_DAMAGE_TAKEN_PCT);
         }
         _ => {}
     }
