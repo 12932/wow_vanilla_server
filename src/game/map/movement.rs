@@ -327,6 +327,7 @@ fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     }) {
         map.send_to_observers(g, &frame, true);
     }
+    crate::game::map::spells::pushback_by(map, g, g);
     crate::game::map::combat::deal_damage(map, g, g, damage);
 }
 
