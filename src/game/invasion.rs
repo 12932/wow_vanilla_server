@@ -346,13 +346,10 @@ pub fn creature_died(map: &mut Map, entry: u32, at: Vector3d) {
     if !realm.social.invasion.lock().enabled {
         return;
     }
-    let zone = map
-        .nav
-        .as_mut()
-        .and_then(|n| n.zone_and_area(at))
-        .map(|(z, a)| if z != 0 { z } else { realm.data.zone_of(a) })
+    let zone = crate::game::map::world::zone_and_area(map, at)
+        .map(|(z, _)| z)
         .or_else(|| {
-            // Without a navmesh, the attacked zone of this map nearest.
+            // Without a navmesh or terrain, the attacked zone of this map nearest.
             ZONES
                 .iter()
                 .filter(|z| z.map == map.key.map && realm.social.invasion.lock().active.contains(&z.zone))

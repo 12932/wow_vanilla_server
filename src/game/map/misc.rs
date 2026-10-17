@@ -48,7 +48,10 @@ pub struct PlayerMisc {
     pub rest_checked_at: Option<Instant>,
     pub breath: Option<crate::game::map::environment::Mirror>,
     pub fatigue: Option<crate::game::map::environment::Mirror>,
-    pub env_damage_at: Option<Instant>,
+    /// Lava's grace: a second touching it before it burns.
+    pub lava: Option<crate::game::map::environment::Mirror>,
+    /// The spell the liquid the player is in put on (Naxxramas's slime).
+    pub liquid_spell: Option<u32>,
     pub env_checked_at: Option<Instant>,
     /// A summons waiting: by whom, to where, until when.
     pub summon: Option<Summon>,
@@ -117,8 +120,8 @@ pub fn handle_all(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Cl
             None
         }
         ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
-            // Without a navmesh, the client's zone is the one explored.
-            if map.nav.is_none() {
+            // Without a navmesh or terrain, the client's zone is the one explored.
+            if map.nav.is_none() && map.terrain.is_none() {
                 crate::game::map::exploration::entered(map, g, m.area.as_int());
             }
             Some(ClientOpcodeMessage::CMSG_ZONEUPDATE(m))
