@@ -985,9 +985,19 @@ mod combat {
             _ => None,
         })
         .await;
-        // Far past its leash: it gives up and goes home.
+        // Far past its leash: it gives up and goes home, once it has
+        // chased more than 50 yards from where the fight began with no
+        // blow for 12 seconds (Thistle Tea's leash).
         a.heartbeat(START.0 + 200.0, START.1, START.2).await;
         let map = realm.maps.get(&realm, MapKey::world(0));
+        map.call(move |m| {
+            if let Some(c) = m.creature_mut(wolf)
+                && let Some(origin) = c.engagement.origin
+            {
+                c.position.x = origin.x + 60.0;
+                c.engagement.last_hostile = Some(Instant::now() - Duration::from_secs(13));
+            }
+        });
         let mut evaded = false;
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_millis(20)).await;

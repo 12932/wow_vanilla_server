@@ -186,6 +186,8 @@ pub struct Creature {
     pub taunted_by: Option<Guid>,
     /// The unit that summoned or owns it: a pet's master, a totem's shaman.
     pub owner: Option<Guid>,
+    /// Its fight's leash, reach, flight and regeneration.
+    pub engagement: crate::game::map::creature_combat::Engagement,
 }
 
 /// Alive, or dead and waiting.
@@ -278,6 +280,7 @@ impl Creature {
             derived: Default::default(),
             taunted_by: None,
             owner: None,
+            engagement: Default::default(),
         }
         .with_base()
     }
