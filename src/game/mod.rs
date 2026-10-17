@@ -27,6 +27,8 @@ mod tests_pets;
 mod tests_misc;
 #[cfg(test)]
 mod tests_pvp;
+#[cfg(test)]
+mod tests_arena;
 pub mod transports;
 pub mod update;
 pub mod weather;
@@ -63,6 +65,7 @@ pub struct RealmConfig {
     pub max_packets_per_sec: u32,
     /// The weekday honor's week turns over on: 1 Monday to 7 Sunday.
     pub honor_reset_weekday: u8,
+    pub arena: crate::game::map::arena::ArenaConfig,
 }
 
 impl RealmConfig {
@@ -82,6 +85,7 @@ impl RealmConfig {
             pvp_realm: c.world.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
+            arena: c.arena.clone(),
         }
     }
 }

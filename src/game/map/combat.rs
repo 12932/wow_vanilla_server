@@ -565,6 +565,10 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
     {
         return false;
     }
+    // Gurubashi Arena's battle has its own rules for its fighters.
+    if let Some(allowed) = crate::game::map::arena::can_attack(map, a, b) {
+        return allowed;
+    }
     if ua.is_player && ub.is_player {
         if crate::game::map::duel::dueling(map, a, b) {
             return true;
@@ -1578,6 +1582,7 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
     };
     if guid::is_player(victim) {
         crate::game::map::pvp::damaged(map, attacker, victim, damage);
+        crate::game::map::arena::damaged(map, attacker, victim, damage);
     }
     if damage == 0 {
         return;
@@ -1642,6 +1647,7 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         );
         honor(map, killer, victim);
         crate::game::map::battleground::died(map, victim, killer);
+        crate::game::map::arena::died(map, victim, killer);
         death::kill(map, victim);
         // Dying to a creature wears gear down; to a player, it doesn't.
         if guid::is_unit(killer) {

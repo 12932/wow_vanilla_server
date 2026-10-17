@@ -33,6 +33,7 @@ pub fn test_config() -> RealmConfig {
         pvp_realm: false,
         max_packets_per_sec: 200,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
+        arena: Default::default(),
     }
 }
 

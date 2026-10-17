@@ -622,11 +622,12 @@ fn load_gameobjects(db: &Connection, data: &mut GameData) {
                 c.f32("rotation2"),
                 c.f32("rotation3"),
             ],
-            respawn_min: c.u32("spawntimesecsmin"),
-            respawn_max: c.u32("spawntimesecsmax"),
+            respawn_min: c.i64("spawntimesecsmin").unsigned_abs() as u32,
+            respawn_max: c.i64("spawntimesecsmax").unsigned_abs() as u32,
             anim_progress: c.u8("animprogress"),
             state: c.u8("state"),
             spawn_flags: c.u32("spawn_flags"),
+            despawned: c.i64("spawntimesecsmin") < 0,
         },
     ) {
         if data.gameobject_templates.contains_key(&s.entry) {
