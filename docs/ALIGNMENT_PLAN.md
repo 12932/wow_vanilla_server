@@ -1240,6 +1240,26 @@ Beyond Thistle Tea, which has no such event.
 - **Zones:** the navmesh's, at the point or the floor nearest it; else the tile's area; else the map's only zone.
 - God mode, not a GM account, now spares a player the environment.
 
+### Trade spells, the run back to a corpse, and item rules (2026-10-17)
+
+- **The trade's seventh slot:** a player enchants or picks the lock of the item their partner shows there, as
+  Thistle Tea's `Trade.Spells`:
+  - the spell waits in the caster's offer, shown in both windows;
+  - at the accept it is checked again (a failure clears it and goes back to trading);
+  - then the caster pays reagents, power and a cast item's charge, and their skill may rise;
+  - the item stays its owner's, enchanted or unlocked.
+- **Corpses:**
+  - the wait to reclaim grows with deaths close together (30, 60 then 120 seconds, fading five minutes at a
+    time), kept across a relog, and sent in milliseconds as the client reads it;
+  - a corpse in a dungeon the ghost is outside is shown at its entrance;
+  - dungeon portals turn away ghosts whose corpse isn't inside, and bring back to life at half health those whose
+    corpse is;
+  - a dungeon's release finds its graveyard by the dungeon's zone, reckoned from its entrance.
+- **Items:**
+  - items bound to a map or zone go when their owner is alive outside it (the bank only at login);
+  - `item_required_target`'s items are used only on their creatures, alive or dead as asked;
+  - timed items' time goes to the client.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
