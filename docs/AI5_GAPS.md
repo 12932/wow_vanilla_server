@@ -270,3 +270,52 @@ By encounter (beyond the root causes):
 - D25. Mizzle: a script's walk home (movement 7) never fires reached
   home, so the Gordok tribute can't be had.
 - D30. The Emperor's rally: friendly creatures in sight (C1).
+
+## Status at the wrap-up (2026-10-17)
+
+Fixed on ai5 (with tests in `tests_ai5*.rs`):
+
+- Movement: M1, M3, M6, M7, M9 (the home facing only), M13 (escorts:
+  point ids, navmesh, end-of-escort respawn, combat home), M14 (flyers'
+  speeds and a cyclic path's approach; not the packet format), M15, M16,
+  M17, M19 (first moves at once).
+- Instances: I1, I2 (code in; its real-data check fails on the merged
+  branch and is ignored, see below), I3-I26 as the instance work reports,
+  the stoned statues (aura 10255's unselectable flag), D5, D21 (Eranikus's
+  8736 escort), I10.
+- EventAI and spell lists: E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E11,
+  E12, E13 (in a fight, selectable, not hostile), E14, E15; S5, S19.
+- Combat: C1, C2, C3, C4, C5, C7, C8, C17 (detection range rule, LOS on
+  every candidate, eye heights), C20.
+- Conditions: K1-K18 (K5's area cache fills when an object is first seen
+  or moves).
+- Scripts: S1, S13 (scripts outlive death and evade; stopped with the
+  corpse), D-R3 (the same), D-R5 (E3), D-R10 (E2).
+
+Open (not done):
+
+- M2 wander points unclamped; M4 pools (limits over 1, re-rolls, event
+  spawns); M5 charge; M8 fear/confuse/flee spline stops, anchor and
+  checks; M9's heal timing; M10 distract; M11 formation fidelity; M12
+  scripted follow; M14 flying spline packet format; M18 (to confirm);
+  M19's other minor items.
+- I2's real-data check (`tests_ai5_instances::the_real_instances`,
+  ignored): the Quintessence doesn't douse the rune on the merged branch.
+- E16 (smaller EventAI ordering items).
+- C6 harmful casts and stealth; C9 melee range and chase; C10 emote and
+  stand state; C11 heal on leashing; C12 combat facing packets; C13
+  ATTACKSTART/STOP timing; C14 spreading; C15 leash extension; C16 taunt
+  auras; C17's event-driven cadence; C18 victim selection; C19 caster LOS;
+  C21 creature charm of players; C22 auras kept on evade.
+- S2-S4, S6-S12, S14-S18, S20-S23 (script commands), D-R1 summon despawn
+  types, D-R2 dying summons counted alive, D-R4 the unkillable flag, D-R6
+  update_entry, D-R7 zone pulse command, D-R8 emote states, D18, D20, D25.
+- From the spell-list work: 0x04 force-cast, creature_spells_scripts'
+  order, a timed-out 41 summon despawns rather than dies, creature-owned
+  guardians don't follow or go with their owner and keep loot, the
+  injured-friend test unrun (stashed in ai5-spl).
+- From the conditions work: unregistered instance fields read as data,
+  not unknown; 1564 Bloodsail Warlock summons (TT never does).
+- From the instance work: raid binds on any killer (TT: players); chests
+  re-raised after a reload get fresh loot; RFD gong state across a reload;
+  lazy adoption; hold/await escort steps.
