@@ -418,7 +418,8 @@ pub struct KillXp {
     pub elite: bool,
     /// In a five-man dungeon, an elite is worth more.
     pub dungeon: bool,
-    /// The template's multiplier (none set counts as one).
+    /// The template's multiplier (`CreatureTemplate::xp_rate`): 0 gives
+    /// nothing.
     pub multiplier: f32,
     /// The share of its damage players dealt (`DamageOrigin`).
     pub damage_share: f32,
@@ -467,7 +468,9 @@ pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillX
     if o.pet_victim {
         xp *= 0.75;
     }
-    xp *= if o.multiplier > 0.0 {
+    // A multiplier of nothing gives nothing; only one below that is
+    // taken for one (Thistle Tea's `experience_multiplier`).
+    xp *= if o.multiplier >= 0.0 {
         o.multiplier
     } else {
         1.0
@@ -504,7 +507,7 @@ pub fn kill_options(map: &Map, victim: Guid) -> KillXp {
     KillXp {
         elite: t.is_some_and(|t| matches!(t.rank, 1..=3)),
         dungeon: crate::game::instances::instance_type(&map.realm, map.key.map) == 1,
-        multiplier: t.map_or(1.0, |t| t.xp_multiplier),
+        multiplier: t.map_or(1.0, |t| t.xp_rate()),
         damage_share: crate::game::map::creature_combat::xp_share(map, victim),
         no_xp: controlled || summoned || t.is_some_and(|t| t.static_flags1 & 0x2 != 0),
         pet_victim: c.pet.is_some(),
@@ -2014,12 +2017,25 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
         }
     }
     stop_attack(map, victim);
-    let worth = {
+    // A kill a player's on-kill procs count (Thistle Tea's
+    // `KillFeedback.eligible?`): not grey, and no pet, totem or creature
+    // worth no XP; a creature's kills all count.
+    let worth = if guid::is_player(killer) {
         let (kl, vl) = (
             map.unit_view(killer).map_or(1, |u| u.level),
             map.unit_view(victim).map_or(1, |u| u.level),
         );
-        vl > gray_level(kl)
+        let rewarding = map.creature(victim).is_none_or(|c| {
+            c.pet.is_none()
+                && map
+                    .realm
+                    .data
+                    .creature_template(c.entry)
+                    .is_none_or(|t| t.xp_rate() != 0.0 && t.static_flags1 & 0x2 == 0)
+        });
+        rewarding && vl > gray_level(kl)
+    } else {
+        true
     };
     if guid::is_unit(killer) {
         crate::game::map::event_ai::kill(map, killer, victim);
