@@ -360,6 +360,14 @@ pub fn aura_gone(map: &mut Map, target: Guid, h: &Holder, expired: bool) {
     );
 }
 
+/// An engineered guardian's own passive, if it has one.
+pub fn guardian_passive(entry: u32) -> Option<u32> {
+    GUARDIAN_PASSIVES
+        .iter()
+        .find(|(e, _)| *e == entry)
+        .map(|(_, p)| *p)
+}
+
 /// An engineered guardian came: its passive, and the Sheep's and the
 /// Bomb's own time.
 pub fn guardian_summoned(map: &mut Map, g: Guid, entry: u32) {

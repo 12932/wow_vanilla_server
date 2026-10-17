@@ -10,8 +10,14 @@ use crate::game::map::Map;
 use crate::game::map::auras;
 use crate::game::map::spells::{self, EFFECT_APPLY_AREA_AURA_PARTY, EFFECT_APPLY_AURA};
 
-/// The creature's spawn auras, each once.
-fn spells(map: &Map, g: Guid) -> Vec<u32> {
+/// The Explosive Sheep: its passive and its suicide are its fuse's, not
+/// its addon's (Thistle Tea's `Engineering.guardian_addon_auras`).
+const EXPLOSIVE_SHEEP: u32 = 2675;
+const SHEEP_SKIPS: [u32; 2] = [4051, 8327];
+
+/// The creature's spawn auras, each once; an engineered guardian's own
+/// passive comes another way.
+pub fn spells(map: &Map, g: Guid) -> Vec<u32> {
     let Some(c) = map.creature(g) else {
         return Vec::new();
     };
@@ -27,9 +33,13 @@ fn spells(map: &Map, g: Guid) -> Vec<u32> {
             None => return Vec::new(),
         },
     };
+    let passive = crate::game::map::item_scripts::guardian_passive(c.entry);
+    let skips = |s: u32| {
+        (c.entry == EXPLOSIVE_SHEEP && SHEEP_SKIPS.contains(&s)) || Some(s) == passive
+    };
     let mut once = Vec::with_capacity(ids.len());
     for s in ids {
-        if !once.contains(s) {
+        if !once.contains(s) && !skips(*s) {
             once.push(*s);
         }
     }

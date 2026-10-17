@@ -263,3 +263,212 @@ async fn revival_weapon_lock_and_heart_of_the_wild() {
     assert_eq!(cat, (false, amount), "cat form's strength instead");
     assert!(!human, "none out of form");
 }
+
+#[tokio::test]
+async fn addon_auras_custom_flags_and_single_targets() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "MAGE8");
+    let mage = c.enter("Mageg", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            let data = m.realm.data.clone();
+            // A Defias Conjurer comes in its template's Frost Armor, and
+            // gets it back at home.
+            let conjurer = spawn(m, mage, 619, 20, 8.0);
+            let armored = has(m, conjurer, 12544);
+            auras::remove_spell(m, conjurer, 12544, None);
+            crate::game::map::spawn_auras::restore(m, conjurer);
+            let restored = has(m, conjurer, 12544);
+            // The Explosive Sheep leaves its passive and suicide to its fuse.
+            let sheep = spawn(m, mage, 2675, 20, 9.0);
+            let sheep_ids = crate::game::map::spawn_auras::spells(m, sheep);
+            // vmangos's own word on helpful and harmful.
+            let polarity = (
+                auras::positive(data.spells.get(18788).unwrap()),
+                auras::positive(data.spells.get(24131).unwrap()),
+            );
+            // Fixed damage takes no done bonus; ignored armor none of it.
+            let kobold = dummy(m, mage, 60, 5.0);
+            let doubled = plain_aura_done(990_700);
+            let _ = auras::apply_spell(
+                m,
+                mage,
+                mage,
+                &doubled,
+                &[(0, 100)],
+                auras::Context::default(),
+            );
+            let mut fire = data.spells.get(133).unwrap().clone();
+            let l = spells::outcome::Landing::default();
+            let plain = spells::outcome::damage(m, mage, kobold, &fire, 0, 100.0, &l).amount;
+            fire.custom_flags |= crate::game::data::spells::CUSTOM_FIXED_DAMAGE;
+            let fixed = spells::outcome::damage(m, mage, kobold, &fire, 0, 100.0, &l).amount;
+            auras::remove_spell(m, mage, 990_700, None);
+            m.creature_mut(kobold)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_RESISTANCES, 10_000);
+            let mut blow = data.spells.get(78).unwrap().clone();
+            let armored_blow = spells::outcome::damage(m, mage, kobold, &blow, 0, 100.0, &l).amount;
+            blow.custom_flags |= crate::game::data::spells::CUSTOM_IGNORE_ARMOR;
+            let bare_blow = spells::outcome::damage(m, mage, kobold, &blow, 0, 100.0, &l).amount;
+            // Blessing of Freedom takes the root it guards against.
+            let mut root = plain_aura_root(990_701);
+            root.mechanic = 7;
+            let _ =
+                auras::apply_spell(m, kobold, mage, &root, &[(0, 1)], auras::Context::default());
+            let rooted = has(m, mage, 990_701);
+            apply(m, mage, mage, 1044);
+            let freed = rooted && !has(m, mage, 990_701);
+            // One Polymorph at a time: on another, the first ends.
+            let (a, b) = (dummy(m, mage, 60, 6.0), dummy(m, mage, 60, 7.0));
+            apply(m, mage, a, 118);
+            apply(m, mage, b, 118);
+            let sheeped = (has(m, a, 118), has(m, b, 118));
+            (
+                armored,
+                restored,
+                sheep_ids,
+                polarity,
+                plain,
+                fixed,
+                armored_blow,
+                bare_blow,
+                sheeped,
+                freed,
+            )
+        })
+        .await
+        .unwrap();
+    let (
+        armored,
+        restored,
+        sheep_ids,
+        polarity,
+        plain,
+        fixed,
+        armored_blow,
+        bare_blow,
+        sheeped,
+        freed,
+    ) = out;
+    assert!(freed, "Blessing of Freedom purges the root");
+    assert!(armored && restored, "its template's aura, back at home");
+    assert!(
+        !sheep_ids.contains(&4051) && !sheep_ids.contains(&8327),
+        "the Sheep's own: {sheep_ids:?}"
+    );
+    assert_eq!(polarity, (true, false), "vmangos's helpful and harmful");
+    assert!(
+        plain >= 190 && fixed == 100,
+        "fixed damage {fixed}, else {plain}"
+    );
+    assert!(
+        armored_blow < bare_blow && bare_blow == 100,
+        "armor ignored: {armored_blow} {bare_blow}"
+    );
+    assert_eq!(sheeped, (false, true), "one Polymorph at a time");
+}
+
+/// A root.
+fn plain_aura_root(id: u32) -> crate::game::data::spells::SpellTemplate {
+    let mut s = plain_aura_done(id);
+    s.effects[0].aura = auras::AURA_MOD_ROOT;
+    s.effects[0].misc_value = 0;
+    s
+}
+
+/// +100% of all schools' damage done.
+fn plain_aura_done(id: u32) -> crate::game::data::spells::SpellTemplate {
+    let mut effects = [crate::game::data::spells::SpellEffect::default(); 3];
+    effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 6,
+        aura: 79,
+        misc_value: 0x7f,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    crate::game::data::spells::SpellTemplate {
+        id,
+        name: "Test Aura".into(),
+        equipped_item_class: -1,
+        effects,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn facing_pushback_and_temporary_health() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "ROGUE6");
+    let r = c.enter("Roguec", Race::Human, Class::Rogue).await;
+    let mut d = Client::connect(&realm, "MAGE9");
+    let mage = d.enter("Mageh", Race::Human, Class::Mage).await;
+    let mut e = Client::connect(&realm, "WARRIOR8");
+    let w = e.enter("Warrf", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            ready(m, r, 60, &[1776]);
+            ready(m, mage, 60, &[116, 689]);
+            ready(m, w, 60, &[12975]);
+            let data = m.realm.data.clone();
+            let mods = spells::mods::Mods::default();
+            // Gouge needs its target to face the rogue.
+            let kobold = dummy(m, r, 60, 2.0);
+            let o = m.players[&r].movement.orientation;
+            m.creature_mut(kobold).unwrap().orientation = o;
+            let gouge = data.spells.get(1776).unwrap().clone();
+            let at = spells::Targets {
+                unit: Some(kobold),
+                ..Default::default()
+            };
+            let turned = spells::checks::check(m, r, &gouge, &at, None, false, &mods);
+            // A cast pushed back a second, then less.
+            let target = dummy(m, mage, 60, 20.0);
+            let at = spells::Targets {
+                unit: Some(target),
+                ..Default::default()
+            };
+            spells::cast(m, mage, 116, at, None);
+            let ends = |m: &Map| m.players[&mage].caster.casting.as_ref().map(|c| c.ends);
+            let start = ends(m);
+            m.now += Duration::from_millis(1500);
+            spells::pushback(m, mage);
+            let first = ends(m).zip(start).map(|(a, b)| a - b);
+            spells::pushback(m, mage);
+            let second = ends(m).zip(start).map(|(a, b)| a - b);
+            // Last Stand's health comes and goes with it.
+            let before = m.players[&w].fields.get_u32(UNIT_FIELD_HEALTH);
+            spells::cast_triggered(m, w, 12975, None);
+            let stood = m.players[&w].fields.get_u32(UNIT_FIELD_HEALTH);
+            auras::remove_spell(m, w, 12976, None);
+            let after = m.players[&w].fields.get_u32(UNIT_FIELD_HEALTH);
+            (turned, first, second, before, stood, after)
+        })
+        .await
+        .unwrap();
+    let (turned, first, second, before, stood, after) = out;
+    assert_eq!(
+        turned,
+        Some(spells::fail::NOT_INFRONT),
+        "Gouge's target must face"
+    );
+    assert_eq!(first, Some(Duration::from_millis(1000)), "a second back");
+    assert_eq!(
+        second,
+        Some(Duration::from_millis(1500)),
+        "then the half second it has"
+    );
+    assert!(stood > before, "Last Stand's health: {before} to {stood}");
+    assert_eq!(after, before, "and gone with it");
+}
