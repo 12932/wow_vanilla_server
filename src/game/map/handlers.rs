@@ -315,13 +315,15 @@ impl Map {
             | ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC
             | ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
             | ClientOpcodeMessage::CMSG_BUG(_)
-            | ClientOpcodeMessage::CMSG_CHAT_IGNORED(_)
             | ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO
             | ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET
             | ClientOpcodeMessage::CMSG_GMTICKET_SYSTEMSTATUS
             | ClientOpcodeMessage::CMSG_BATTLEFIELD_STATUS
-            | ClientOpcodeMessage::CMSG_FRIEND_LIST
             | ClientOpcodeMessage::CMSG_CHAR_ENUM => {}
+            ClientOpcodeMessage::CMSG_CHAT_IGNORED(m) => {
+                crate::game::social::friends::chat_ignored(self, guid, m.guid)
+            }
+            ClientOpcodeMessage::CMSG_FRIEND_LIST => crate::game::social::friends::list(self, guid),
             ClientOpcodeMessage::CMSG_WORLD_TELEPORT(m) => {
                 if self.players.get(&guid).is_some_and(|p| p.gm) {
                     let orientation = m.orientation;
