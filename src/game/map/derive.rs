@@ -232,12 +232,25 @@ fn speed_factor(amount: i32) -> f32 {
     }
 }
 
+/// The hastes and slows of `kinds`, each a factor on the period: they
+/// multiply, but of the melee slows only the strongest counts, beside any
+/// a passive aura gives (vanilla's slows don't stack, as Thistle Tea's
+/// `AttackSpeed.multiplier` has it).
 fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
-    a.effects()
+    let mut slow = 0;
+    let m = a
+        .effects()
         .filter(|(_, x)| kinds.contains(&x.kind))
         .fold(1.0, |m, (h, x)| {
-            m * speed_factor(x.amount * h.stacks.max(1) as i32)
-        })
+            let amount = x.amount * h.stacks.max(1) as i32;
+            if x.kind == AURA_MOD_HASTE && amount < 0 && !h.passive {
+                slow = slow.min(amount);
+                m
+            } else {
+                m * speed_factor(amount)
+            }
+        });
+    m * speed_factor(slow)
 }
 
 /// What a unit's melee hastes and slows make of its swing's period.
@@ -245,8 +258,9 @@ pub fn melee_haste(a: &Auras) -> f32 {
     period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED])
 }
 
-/// Per-class rates for crit and dodge from agility at levels 1 and 60.
-fn agility_rate(class: u8, level: u32, dodge: bool) -> f32 {
+/// Per-class rates for crit and dodge from agility at levels 1 and 60,
+/// and between them on a line.
+pub fn agility_rate(class: u8, level: u32, dodge: bool) -> f32 {
     let (l1, l60) = match (class, dodge) {
         (WARRIOR, _) => (3.9, 20.0),
         (PALADIN, _) => (4.6, 20.0),
@@ -265,7 +279,8 @@ fn agility_rate(class: u8, level: u32, dodge: bool) -> f32 {
     l1 * (60.0 - level) / 59.0 + l60 * (level - 1.0) / 59.0
 }
 
-fn class_base_bonus(class: u8) -> f32 {
+/// A class's crit and dodge before agility.
+pub fn class_base_bonus(class: u8) -> f32 {
     match class {
         PALADIN => 0.7,
         PRIEST => 3.0,
@@ -313,7 +328,8 @@ pub fn ranged_attack_power(class: u8, level: u32, agility: u32) -> u32 {
     v.max(0) as u32
 }
 
-fn stamina_health(stamina: u32) -> u32 {
+/// Health from stamina: one a point for the first twenty, ten after.
+pub fn stamina_health(stamina: u32) -> u32 {
     stamina.min(20) + stamina.saturating_sub(20) * 10
 }
 
@@ -321,17 +337,41 @@ fn intellect_mana(intellect: u32) -> u32 {
     intellect.min(20) + intellect.saturating_sub(20) * 15
 }
 
-/// Armor (school 0) and resistances, from a base, auras and agility.
-fn resistances(a: &Auras, base: [i32; 7], agility: u32, creature: bool) -> [i32; 7] {
+/// `SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT`: a share of intellect (the
+/// only stat it takes in 1.12) as armor or resistance.
+const AURA_MOD_RESISTANCE_OF_STAT_PERCENT: u32 = 182;
+
+/// The percentages of `kind` on school `bit`, each a factor, in doubles
+/// as Thistle Tea multiplies them: 1.4 and 1.5 make 2.1, not 2.0999999.
+fn percent_product(a: &Auras, kind: u32, bit: u32) -> f64 {
+    a.effects()
+        .filter(|(_, x)| x.kind == kind && (x.misc as u32) & bit != 0)
+        .fold(1.0, |m, (h, x)| {
+            m * f64::from((100 + x.amount * h.stacks.max(1) as i32).max(0)) / 100.0
+        })
+}
+
+/// Armor (school 0) and resistances, from a base, auras, agility and
+/// intellect, as Thistle Tea's `Resistances.recompute`: the base and its
+/// flats scaled by the base percentages; agility's armor, intellect's
+/// share and the flat bonuses on top; then the percentages, truncated
+/// once at the end.
+fn resistances(
+    a: &Auras,
+    base: [i32; 7],
+    agility: u32,
+    intellect: u32,
+    creature: bool,
+) -> [i32; 7] {
     std::array::from_fn(|i| {
         let bit = 1u32 << i;
         let initial = base[i] + a.sum_mask(AURA_MOD_BASE_RESISTANCE, bit);
-        let scaled = initial as f32 * a.product_mask(AURA_MOD_BASE_RESISTANCE_PCT, bit);
-        let stat = if i == 0 {
+        let scaled = f64::from(initial) * percent_product(a, AURA_MOD_BASE_RESISTANCE_PCT, bit);
+        let stat = f64::from(if i == 0 {
             if creature { agility } else { agility * 2 }
         } else {
             0
-        } as f32;
+        });
         let exclusive = {
             let v: Vec<i32> = a
                 .effects()
@@ -343,10 +383,39 @@ fn resistances(a: &Auras, base: [i32; 7], agility: u32, creature: bool) -> [i32;
             v.iter().copied().max().unwrap_or(0).max(0)
                 + v.iter().copied().min().unwrap_or(0).min(0)
         };
-        let total = scaled + stat + a.sum_mask(AURA_MOD_RESISTANCE, bit) as f32 + exclusive as f32;
-        let value = (total * a.product_mask(AURA_MOD_RESISTANCE_PCT, bit)) as i32;
+        let of_intellect = f64::from(intellect)
+            * f64::from(a.sum_mask(AURA_MOD_RESISTANCE_OF_STAT_PERCENT, bit))
+            / 100.0;
+        let total = scaled
+            + stat
+            + of_intellect
+            + f64::from(a.sum_mask(AURA_MOD_RESISTANCE, bit))
+            + f64::from(exclusive);
+        let value = (total * percent_product(a, AURA_MOD_RESISTANCE_PCT, bit)) as i32;
         if base[i] < 0 { value } else { value.max(0) }
     })
+}
+
+/// `UNIT_FIELD_AURASTATE`'s Judgement bit (aura state 5): set while a seal
+/// is on, as mangos's seals set `AURA_STATE_JUDGEMENT`, so a Judgement
+/// (caster aura state 5) may be cast, and its button lit.
+const AURA_STATE_JUDGEMENT_BIT: u32 = 1 << 4;
+
+fn judgement_state(p: &mut Player) {
+    let sealed = p
+        .auras
+        .holders
+        .iter()
+        .any(|h| h.exclusive == Some(auras::Exclusive::PaladinSeal));
+    let state = p.fields.get_u32(UNIT_FIELD_AURASTATE);
+    let want = if sealed {
+        state | AURA_STATE_JUDGEMENT_BIT
+    } else {
+        state & !AURA_STATE_JUDGEMENT_BIT
+    };
+    if want != state {
+        p.fields.set_u32(UNIT_FIELD_AURASTATE, want);
+    }
 }
 
 /// Work a unit's stats out again.
@@ -354,6 +423,7 @@ pub fn unit(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
     if let Some(p) = map.players.get_mut(&g) {
         player(p, &data);
+        judgement_state(p);
         speed(map, g);
         return;
     }
@@ -443,7 +513,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         f.set_u32(UNIT_FIELD_MAXPOWER1 + 1, 1000);
     }
     // Armor and resistances.
-    let res = resistances(a, g.resistances, agility, false);
+    let res = resistances(a, g.resistances, agility, intellect, false);
     for (i, v) in res.iter().enumerate() {
         let s = i as u16;
         f.set_u32(UNIT_FIELD_RESISTANCES + s, (*v).max(0) as u32);
@@ -592,7 +662,13 @@ pub fn player(p: &mut Player, data: &GameData) {
     }
     // The chances.
     let max_skill = level * 5;
-    let base_crit = class_base_bonus(class) + agility as f32 / agility_rate(class, level, false);
+    // Melee crit from agility at vmangos's rate for the class and level,
+    // where `player_crit_per_agility` has one; else on the line.
+    let crit_rate = data
+        .misc
+        .crit_per_agility(class, level as u8)
+        .unwrap_or_else(|| agility_rate(class, level, false));
+    let base_crit = class_base_bonus(class) + agility as f32 / crit_rate;
     let crit = (base_crit
         + sum_for(a, AURA_MOD_CRIT_PERCENT, main.as_ref())
         + (weapon_skill as f32 - max_skill as f32) * 0.04)
@@ -607,7 +683,10 @@ pub fn player(p: &mut Player, data: &GameData) {
         + a.sum(AURA_MOD_DODGE_PERCENT) as f32
         + defense_bonus)
         .max(0.0);
-    let can_parry = knows_parry && !disarmed && form == 0;
+    // Parrying wants a melee weapon in a hand (mangos's
+    // `CanParryInCombat`, Thistle Tea's `parry_chance`).
+    let armed = g.main.is_some() || g.off.is_some();
+    let can_parry = knows_parry && !disarmed && form == 0 && armed;
     let parry = if can_parry {
         (5.0 + a.sum(AURA_MOD_PARRY_PERCENT) as f32 + defense_bonus).max(0.0)
     } else {
@@ -688,7 +767,7 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
     if f.get_u32(UNIT_FIELD_HEALTH) > health {
         f.set_u32(UNIT_FIELD_HEALTH, health);
     }
-    let res = resistances(a, b.resistances, 0, true);
+    let res = resistances(a, b.resistances, 0, 0, true);
     for (i, v) in res.iter().enumerate() {
         f.set_u32(UNIT_FIELD_RESISTANCES + i as u16, (*v).max(0) as u32);
     }
@@ -750,6 +829,57 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
     };
 }
 
+/// `SPELL_AURA_USE_NORMAL_MOVEMENT_SPEED`: a cap on the speed, in yards a
+/// second (the Silithyst carrier's, "I can't drive 55").
+const AURA_USE_NORMAL_MOVEMENT_SPEED: u32 = 191;
+const RUN_SPEED: f32 = 7.0;
+const SWIM_SPEED: f32 = 4.722_222;
+
+/// What the auras make of a base run speed, as mangos's `UpdateSpeed` and
+/// Thistle Tea's `MovementStats` have it: the best speed bonus (a
+/// mount's, mounted) times the better of the stacking and the
+/// non-stacking ones; capped by a normal-speed aura; then the worst slow.
+pub fn run_multiplier(a: &Auras, mounted: bool) -> f32 {
+    let (main, always, not_stack) = if mounted {
+        (
+            AURA_MOD_INCREASE_MOUNTED_SPEED,
+            AURA_MOD_MOUNTED_SPEED_ALWAYS,
+            AURA_MOD_MOUNTED_SPEED_NOT_STACK,
+        )
+    } else {
+        (
+            AURA_MOD_INCREASE_SPEED,
+            AURA_MOD_SPEED_ALWAYS,
+            AURA_MOD_SPEED_NOT_STACK,
+        )
+    };
+    let bonus = a
+        .product(always)
+        .max((100 + a.max(not_stack).max(0)) as f32 / 100.0);
+    let up = bonus * (100 + a.max(main).max(0)) as f32 / 100.0;
+    normal_capped(a, up, RUN_SPEED) * slow_multiplier(a)
+}
+
+/// The swim speed's: the best swim bonus, capped, then the worst slow.
+fn swim_multiplier(a: &Auras) -> f32 {
+    let up = (100 + a.max(AURA_MOD_INCREASE_SWIM_SPEED).max(0)) as f32 / 100.0;
+    normal_capped(a, up, SWIM_SPEED) * slow_multiplier(a)
+}
+
+fn normal_capped(a: &Auras, multiplier: f32, base: f32) -> f32 {
+    let limit = a.max(AURA_USE_NORMAL_MOVEMENT_SPEED);
+    if limit > 0 {
+        multiplier.min(limit as f32 / base)
+    } else {
+        multiplier
+    }
+}
+
+/// The worst slow, alone.
+fn slow_multiplier(a: &Auras) -> f32 {
+    ((100 + a.min(AURA_MOD_DECREASE_SPEED).min(0)) as f32 / 100.0).max(0.0)
+}
+
 /// Run speed with the auras' hastes and slows, sent where it changed.
 fn speed(map: &mut Map, g: Guid) {
     use crate::game::map::misc::{
@@ -764,7 +894,7 @@ fn speed(map: &mut Map, g: Guid) {
     // `broadcast_speed`).
     let mut told: Vec<(u16, f32)> = Vec::new();
     if let Some(p) = map.players.get_mut(&g) {
-        let speed = (7.0 * p.speed_rate * p.auras.speed_multiplier(mounted)).max(0.5);
+        let speed = (RUN_SPEED * p.speed_rate * run_multiplier(&p.auras, mounted)).max(0.5);
         let ghost = p.death != crate::game::map::death::Death::Alive;
         if !ghost && (speed - p.speeds.run).abs() > 0.01 {
             p.speeds.run = speed;
@@ -776,8 +906,7 @@ fn speed(map: &mut Map, g: Guid) {
             told.push((MSG_MOVE_SET_RUN_SPEED, speed));
         }
         // Backwards, only slows count (Thistle Tea's `MovementStats`).
-        let slow = (1.0 + p.auras.min(AURA_MOD_DECREASE_SPEED).min(0) as f32 / 100.0).max(0.0);
-        let back = 4.5 * slow;
+        let back = 4.5 * slow_multiplier(&p.auras);
         if !ghost && (back - p.speeds.run_back).abs() > 0.01 {
             p.speeds.run_back = back;
             p.outbound.send(&SMSG_FORCE_RUN_BACK_SPEED_CHANGE {
@@ -798,8 +927,7 @@ fn speed(map: &mut Map, g: Guid) {
         }
         // Forward swimming: the strongest swim bonus, and slows (Thistle
         // Tea's swimming speeds, vmangos's `Unit::UpdateSpeed`).
-        let bonus = p.auras.max(AURA_MOD_INCREASE_SWIM_SPEED).max(0) as f32;
-        let swim = 4.722_222 * (1.0 + bonus / 100.0) * slow;
+        let swim = SWIM_SPEED * swim_multiplier(&p.auras);
         if !ghost && (swim - p.speeds.swim).abs() > 0.01 {
             p.speeds.swim = swim;
             p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
@@ -817,11 +945,11 @@ fn speed(map: &mut Map, g: Guid) {
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    let mult = c.auras.speed_multiplier(mounted);
+    let mult = run_multiplier(&c.auras, mounted);
     let base = if c.base.run_speed > 0.0 {
         c.base.run_speed
     } else {
-        7.0
+        RUN_SPEED
     };
     // Wounds slow it, past the auras.
     let speed = (base * mult * c.wounded).max(0.5);

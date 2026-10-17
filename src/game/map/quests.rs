@@ -1307,19 +1307,20 @@ pub fn offer_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
 }
 
 /// The XP a quest gives a player of `level` (vmangos: less as the player
-/// outlevels it).
+/// outlevels it), rounded up, as mangos's `Quest::XPValue` and Thistle
+/// Tea's `Experience.quest_xp` round it.
 pub fn quest_xp(q: &Quest, level: u8) -> u32 {
     let qlevel = q.level_for(level);
     let diff = i64::from(level) - i64::from(qlevel);
-    let pct = match diff {
-        i64::MIN..=5 => 100,
-        6 => 80,
-        7 => 60,
-        8 => 40,
-        9 => 20,
-        _ => 10,
+    let share = match diff {
+        i64::MIN..=5 => 1.0,
+        6 => 0.8,
+        7 => 0.6,
+        8 => 0.4,
+        9 => 0.2,
+        _ => 0.1,
     };
-    q.reward_xp * pct / 100
+    (f64::from(q.reward_xp) * share).ceil() as u32
 }
 
 /// `CMSG_QUESTGIVER_CHOOSE_REWARD`: the quest is done.

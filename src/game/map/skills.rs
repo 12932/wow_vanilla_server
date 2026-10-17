@@ -34,9 +34,15 @@ pub fn value_with_bonuses(p: &Player, skill: u32) -> u32 {
     })
 }
 
+/// The armor skills (`SkillLine` category 8): one point, at every level
+/// (mangos's `SKILL_RANGE_MONO`, Thistle Tea's `:mono`).
+const ARMOR: &[u32] = &[293, 413, 414, 415, 433];
+
 fn cap(p: &Player, skill: u32, step: u32) -> u32 {
     if LANGUAGES.contains(&skill) {
         300
+    } else if ARMOR.contains(&skill) {
+        1
     } else if PROFESSIONS.contains(&skill) {
         75 * step.max(1)
     } else {

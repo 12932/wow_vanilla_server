@@ -228,6 +228,7 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
     }
     changes.push((faction, delta));
     let mut sent = Vec::new();
+    let mut shown = Vec::new();
     for (faction, delta) in changes {
         let Some(def) = data.misc.faction(faction) else {
             continue;
@@ -236,13 +237,21 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
         let s = entry(p, def);
         let total = (base + s.standing + delta).clamp(misc::STANDING_MIN, misc::STANDING_MAX);
         s.standing = total - base;
-        if s.flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED) == 0 {
+        if s.flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED | FLAG_VISIBLE) == 0 {
             s.flags |= FLAG_VISIBLE;
+            shown.push(def.index);
         }
         if misc::rank(total) <= misc::RANK_HOSTILE {
             s.flags |= FLAG_AT_WAR;
         }
         sent.push((def.index, s.standing));
+    }
+    // A faction newly shown is told before its standing (mangos's
+    // `SetOneFactionReputation` makes it visible first).
+    for index in shown {
+        let mut b = Body::default();
+        b.u32(index);
+        p.outbound.send_frame(b.frame(SMSG_SET_FACTION_VISIBLE));
     }
     if !sent.is_empty() {
         p.outbound.send_frame(standing_frame(&sent));

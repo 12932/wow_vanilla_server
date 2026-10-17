@@ -619,6 +619,8 @@ async fn a_shieldless_player_never_blocks_and_parry_auras_widen_the_parry() {
             let p = m.players.get_mut(&ga).unwrap();
             p.spells.push(crate::game::map::derive::SPELL_BLOCK);
             p.spells.push(crate::game::map::derive::SPELL_PARRY);
+            // A parry needs a weapon in hand (mangos's GetUnitParryChance).
+            equip(m, ga, SWORD, 15);
             let data = m.realm.data.clone();
             m.players.get_mut(&ga).unwrap().apply_stats(&data);
             aura_of(m, ga, 90_010, auras::AURA_MOD_PARRY_PERCENT, 0, 25);
