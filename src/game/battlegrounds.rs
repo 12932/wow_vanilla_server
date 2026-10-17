@@ -144,6 +144,48 @@ fn template(realm: &Realm, bg: u32) -> (u32, u32, u32, u32) {
     (min, max, lo, hi)
 }
 
+/// `CMSG_BATTLEFIELD_STATUS`: where a player stands: queued, invited, in a
+/// match, or none.
+pub fn send_status(realm: &Realm, me: &Online) {
+    let now = Instant::now();
+    let frame = {
+        let bgs = realm.social.battlegrounds.lock();
+        let queued = bgs
+            .queues
+            .iter()
+            .find_map(|((bg, _), q)| q.iter().find(|x| x.guid == me.guid).map(|x| (*bg, x.since)));
+        if let Some(m) = bgs.match_of(me.guid) {
+            match m.invited.get(&me.guid) {
+                Some((_, until)) => status_frame(
+                    map_of(m.bg),
+                    m.id,
+                    WAIT_JOIN,
+                    until.saturating_duration_since(now).as_millis() as u32,
+                    0,
+                ),
+                None => status_frame(
+                    map_of(m.bg),
+                    m.id,
+                    IN_PROGRESS,
+                    0,
+                    now.saturating_duration_since(m.started).as_millis() as u32,
+                ),
+            }
+        } else if let Some((bg, since)) = queued {
+            status_frame(
+                map_of(bg),
+                0,
+                WAIT_QUEUE,
+                60_000,
+                now.saturating_duration_since(since).as_millis() as u32,
+            )
+        } else {
+            status_frame(0, 0, 0, 0, 0)
+        }
+    };
+    me.outbound.send_frame(frame);
+}
+
 /// The matches of `bg` in `bracket` that are still on, for the list.
 pub fn instances(realm: &Realm, bg: u32, bracket: u8) -> Vec<u32> {
     let bgs = realm.social.battlegrounds.lock();
