@@ -33,6 +33,7 @@ const QUIET_TRAINER: u32 = 2020;
 const TRAINER: u32 = 2021;
 const TAUGHT: u32 = 900_401;
 const NEEDED: u32 = 900_402;
+const AUCTIONEER: u32 = 2030;
 /// A quest the gossiper offers from level 10.
 const QUEST_HIGH: u32 = 9_101;
 
@@ -120,6 +121,19 @@ fn data() -> GameData {
         .unwrap()
         .extend([spawn(13, QUIET_TRAINER, 1.0), spawn(14, TRAINER, 1.5)]);
     d.npc.trainer_greetings.insert(QUIET_TRAINER, "Hi".into());
+    d.creature_templates.insert(
+        AUCTIONEER,
+        creature(
+            AUCTIONEER,
+            "Auctioneer",
+            12,
+            crate::game::map::npc::NPC_FLAG_AUCTIONEER,
+        ),
+    );
+    d.creature_spawns
+        .get_mut(&0)
+        .unwrap()
+        .push(spawn(15, AUCTIONEER, 2.5));
     d.npc.quests.insert(
         QUEST_HIGH,
         crate::game::data::npc::Quest {
@@ -627,4 +641,113 @@ async fn a_creatures_whispers_and_emotes_name_it_and_whom_they_are_for() {
         want.push(0);
         assert_eq!(said, want, "type 0x{wire:02X}");
     }
+}
+
+fn word(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+/// Thistle Tea's auction_messages_test: the auction house opens with the
+/// auctioneer and its house, no enabled byte; a sale is told with the
+/// auction, started, all right, and nothing after; a bid placed with the
+/// least the next must add; an owner's list shows an unbid auction asking
+/// no increment, and an expired one with no time left.
+#[tokio::test]
+async fn an_auction_house_opens_sells_takes_bids_and_lists() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let npc = guid::unit(AUCTIONEER, 15);
+    a.sees(npc).await;
+    b.sees(npc).await;
+    let jerkies = on_map(&realm, move |m| {
+        for g in [ga, gb] {
+            m.players.get_mut(&g).unwrap().set_money(10_000);
+        }
+        crate::game::map::inventory::add_item(m, ga, JERKY, 1, false).unwrap();
+        crate::game::map::inventory::add_item(m, ga, LIMITED, 1, false).unwrap();
+        let p = &m.players[&ga];
+        let of = |e| p.items.iter().find(|i| i.entry == e).unwrap().guid;
+        (of(JERKY), of(LIMITED))
+    })
+    .await;
+    a.send(MSG_AUCTION_HELLO_Client { auctioneer: npc }).await;
+    let hello = a.wait_frame("MSG_AUCTION_HELLO", 0x255, |_| true).await;
+    assert_eq!(
+        hello,
+        [
+            &npc.guid().to_le_bytes()[..],
+            &(AuctionHouse::Alliance.as_int()).to_le_bytes()
+        ]
+        .concat()
+    );
+    let mut ids = Vec::new();
+    for item in [jerkies.0, jerkies.1] {
+        a.send(CMSG_AUCTION_SELL_ITEM {
+            auctioneer: npc,
+            item,
+            starting_bid: 100,
+            buyout: 200,
+            auction_duration_in_minutes: 120,
+        })
+        .await;
+        let started = a
+            .wait_frame("SMSG_AUCTION_COMMAND_RESULT", 0x25B, |_| true)
+            .await;
+        assert_eq!(started.len(), 12, "nothing after a sale's result");
+        assert_eq!(
+            (word(&started, 4), word(&started, 8)),
+            (0, 0),
+            "started, all right"
+        );
+        ids.push(word(&started, 0));
+    }
+    b.send(CMSG_AUCTION_PLACE_BID {
+        auctioneer: npc,
+        auction_id: ids[0],
+        price: Gold::new(150),
+    })
+    .await;
+    let bid = b
+        .wait_frame("SMSG_AUCTION_COMMAND_RESULT", 0x25B, |_| true)
+        .await;
+    let mut want = Vec::new();
+    for v in [ids[0], 2, 0, 5] {
+        want.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(bid, want, "a bid placed, and the next's least increment");
+    // The second, unbid, run out.
+    let expired = ids[1];
+    realm
+        .social
+        .auctions
+        .lock()
+        .auctions
+        .get_mut(&expired)
+        .unwrap()
+        .expires_at = 0;
+    a.send(CMSG_AUCTION_LIST_OWNER_ITEMS {
+        auctioneer: npc,
+        list_from: 0,
+    })
+    .await;
+    let list = a
+        .wait_frame("SMSG_AUCTION_OWNER_LIST_RESULT", 0x25D, |_| true)
+        .await;
+    assert_eq!(word(&list, 0), 2);
+    let row = |id: u32| {
+        (0..2)
+            .map(|i| &list[4 + i * 64..4 + (i + 1) * 64])
+            .find(|r| word(r, 0) == id)
+            .unwrap()
+            .to_vec()
+    };
+    let (bid_on, unbid) = (row(ids[0]), row(expired));
+    assert_eq!(word(&bid_on, 40), 5, "the least increment over a bid");
+    assert_eq!(word(&bid_on, 60), 150);
+    assert_eq!(word(&unbid, 40), 0, "no increment without a bid");
+    assert_eq!(word(&unbid, 48), 0, "no time left");
+    assert_eq!(&unbid[52..60], &[0u8; 8], "no bidder");
 }
