@@ -27,6 +27,12 @@ const GOSSIPER: u32 = 2010;
 const MENU: u32 = 60;
 const TALK_QUEST: u32 = 9_100;
 const LEVEL_10: u32 = 70;
+/// A trainer with nothing to teach a warrior, and one teaching a spell
+/// that needs another and has no rank before it.
+const QUIET_TRAINER: u32 = 2020;
+const TRAINER: u32 = 2021;
+const TAUGHT: u32 = 900_401;
+const NEEDED: u32 = 900_402;
 
 fn spawn(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     CreatureSpawn {
@@ -102,6 +108,34 @@ fn data() -> GameData {
     d.creature_spawns
         .insert(0, vec![spawn(11, VENDOR, 2.0), spawn(12, GOSSIPER, 3.0)]);
     gossip(&mut d);
+    for (entry, name) in [(QUIET_TRAINER, "Quiet Trainer"), (TRAINER, "Trainer")] {
+        let mut t = creature(entry, name, 12, 0x10);
+        t.trainer_type = 2;
+        d.creature_templates.insert(entry, t);
+    }
+    d.creature_spawns
+        .get_mut(&0)
+        .unwrap()
+        .extend([spawn(13, QUIET_TRAINER, 1.0), spawn(14, TRAINER, 1.5)]);
+    d.npc.trainer_greetings.insert(QUIET_TRAINER, "Hi".into());
+    d.npc.trainers.insert(
+        TRAINER,
+        vec![crate::game::data::npc::TrainerSpell {
+            spell: TAUGHT,
+            cost: 10,
+            required_level: 1,
+            ..Default::default()
+        }],
+    );
+    d.spells.ranks.insert(
+        TAUGHT,
+        crate::game::data::spells::SpellRank {
+            prev: 0,
+            first: TAUGHT,
+            rank: 1,
+            req: NEEDED,
+        },
+    );
     let sold = |slot, item, max_count| VendorItem {
         slot,
         item,
@@ -430,4 +464,42 @@ async fn gossip_options_talk_open_the_bank_and_flight_map_and_run_their_scripts(
         (there.x - (here.x + 50.0)).abs() > 1.0 || (there.y - (here.y + 50.0)).abs() > 1.0,
         "not where the client said: {there:?}"
     );
+}
+
+/// Thistle Tea's smsg_trainer_list_test: a trainer with nothing to teach
+/// sends an empty list and its greeting; a spell with no rank before it
+/// names the spell it needs first, the second slot left 0.
+#[tokio::test]
+async fn a_trainers_list_greets_and_names_what_a_spell_needs() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let quiet = guid::unit(QUIET_TRAINER, 13);
+    let trainer = guid::unit(TRAINER, 14);
+    a.sees(quiet).await;
+    a.sees(trainer).await;
+    a.send(CMSG_TRAINER_LIST { guid: quiet }).await;
+    let empty = a
+        .wait_frame("SMSG_TRAINER_LIST", 0x1B1, |f| {
+            f[..8] == quiet.guid().to_le_bytes()
+        })
+        .await;
+    let mut want = quiet.guid().to_le_bytes().to_vec();
+    want.extend_from_slice(&2u32.to_le_bytes());
+    want.extend_from_slice(&0u32.to_le_bytes());
+    want.extend_from_slice(b"Hi\0");
+    assert_eq!(empty, want, "an empty list, then the greeting");
+    a.send(CMSG_TRAINER_LIST { guid: trainer }).await;
+    let list = a
+        .wait_frame("SMSG_TRAINER_LIST", 0x1B1, |f| {
+            f[..8] == trainer.guid().to_le_bytes()
+        })
+        .await;
+    assert_eq!(u32::from_le_bytes(list[12..16].try_into().unwrap()), 1);
+    // The spell, its state, cost, two profession words, level, skill and
+    // its value; then the three spells it needs.
+    let entry = &list[16..16 + 38];
+    assert_eq!(&entry[..4], &TAUGHT.to_le_bytes());
+    let needs = |at: usize| u32::from_le_bytes(entry[at..at + 4].try_into().unwrap());
+    assert_eq!((needs(26), needs(30), needs(34)), (NEEDED, 0, 0));
 }
