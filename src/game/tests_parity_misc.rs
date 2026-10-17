@@ -1983,3 +1983,144 @@ async fn a_line_lands_only_in_water_and_fishes_the_waters_zone() {
     .await;
     assert_eq!(failed(&mut a, FISHING).await, 0x34);
 }
+
+// Skinning's reasons, and a chest in use when an opening completes.
+
+const SKINNING: u32 = 8613;
+const KNIFE: u32 = 7005;
+const SKINNABLE_BOAR: u32 = 900_900;
+const BARE_KOBOLD: u32 = 900_901;
+const LEATHER: u32 = 900_902;
+
+fn skinning_data() -> GameData {
+    use crate::game::data::LootEntry;
+    let mut d = lock_data();
+    let mut skinning = create_item(SKINNING, 25, 0);
+    skinning.effects[0] = SpellEffect {
+        effect: 95,
+        target_a: 25,
+        ..Default::default()
+    };
+    skinning.totems = [KNIFE, 0];
+    d.spells.spells.insert(SKINNING, skinning);
+    for (entry, name) in [(KNIFE, "Skinning Knife"), (LEATHER, "Leather")] {
+        d.items.insert(
+            entry,
+            ItemTemplate {
+                entry,
+                name: name.into(),
+                stackable: 20,
+                ..Default::default()
+            },
+        );
+    }
+    let mut spawns = d.creature_spawns.remove(&0).unwrap_or_default();
+    for (i, (entry, skin)) in [(SKINNABLE_BOAR, true), (BARE_KOBOLD, false)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut t = d.creature_templates[&INNKEEPER].clone();
+        t.entry = entry;
+        t.npc_flags = 0;
+        t.faction = 32;
+        t.level_min = 1;
+        t.level_max = 1;
+        t.loot_id = entry;
+        t.skinning_loot_id = if skin { entry } else { 0 };
+        d.creature_templates.insert(entry, t);
+        let leather = vec![LootEntry {
+            item: LEATHER,
+            chance: 100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }];
+        d.loot.creature.insert(entry, leather.clone());
+        d.loot.skinning.insert(entry, leather);
+        spawns.push(CreatureSpawn {
+            guid: 95 + i as u32,
+            entries: vec![entry],
+            map: 0,
+            x: START.0 + 1.5,
+            y: START.1 - 1.0 - i as f32,
+            z: START.2,
+            respawn_min: 600,
+            respawn_max: 600,
+            ..Default::default()
+        });
+    }
+    d.creature_spawns.insert(0, spawns);
+    d
+}
+
+fn at_unit(unit: Guid) -> crate::game::map::spells::Targets {
+    crate::game::map::spells::Targets {
+        unit: Some(unit),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn skinning_tells_why_in_thistle_teas_order() {
+    let realm = harness::realm_with(skinning_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let boar = crate::game::guid::unit(SKINNABLE_BOAR, 95);
+    let kobold = crate::game::guid::unit(BARE_KOBOLD, 96);
+    a.sees(boar).await;
+    a.sees(kobold).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.gm = false;
+        crate::game::map::skills::learn_skill(p, 393, 1);
+    })
+    .await;
+    // Alive, and no knife either: alive is why.
+    on_map(&realm, move |m| cast(m, g, SKINNING, at_unit(boar))).await;
+    assert_eq!(failed(&mut a, SKINNING).await, 0x6E);
+    // Dead, its loot on it: a kobold has no skin; a boar's loot is first.
+    on_map(&realm, move |m| {
+        crate::game::map::combat::kill(m, g, boar);
+        crate::game::map::combat::kill(m, g, kobold);
+        cast(m, g, SKINNING, at_unit(kobold));
+    })
+    .await;
+    assert_eq!(failed(&mut a, SKINNING).await, 0x74);
+    on_map(&realm, move |m| cast(m, g, SKINNING, at_unit(boar))).await;
+    assert_eq!(failed(&mut a, SKINNING).await, 0x70);
+    // Looted clean, the knife is what's missing.
+    on_map(&realm, move |m| {
+        if let Some(c) = m.creature_mut(boar) {
+            c.loot = None;
+        }
+        cast(m, g, SKINNING, at_unit(boar));
+    })
+    .await;
+    assert_eq!(failed(&mut a, SKINNING).await, 0x18);
+}
+
+#[tokio::test]
+async fn an_opening_finds_the_chest_in_use_when_it_completes() {
+    let realm = harness::realm_with(lock_data());
+    let (_a, ga) = rogue(&realm).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Rogue).await;
+    b.say(".levelup 29").await;
+    b.wait_for("SMSG_LEVELUP_INFO", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LEVELUP_INFO(_)).then_some(())
+    })
+    .await;
+    on_map(&realm, move |m| {
+        let chest = object(m, CHEST);
+        // Bob's cast, skilled enough, began before Alice's window opened;
+        // it completes after.
+        cast(m, ga, PICK_LOCK, at_object(chest));
+        let p = m.players.get_mut(&gb).unwrap();
+        crate::game::map::skills::learn_skill(p, 633, 1);
+        crate::game::map::skills::set_value(p, 633, 100);
+        let s = m.realm.data.spells.get(PICK_LOCK).unwrap().clone();
+        crate::game::map::professions::execute(m, gb, &s, &at_object(chest), None);
+    })
+    .await;
+    assert_eq!(failed(&mut b, PICK_LOCK).await, 0x15);
+}
