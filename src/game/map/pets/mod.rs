@@ -24,7 +24,7 @@ mod hunter;
 mod summon;
 mod totems;
 
-pub use control::{handle, send_spells};
+pub use control::{button, handle, send_spells};
 pub use hunter::{NPC_FLAG_STABLEMASTER, list_stable, pet_xp_to_level, untrain_offer};
 pub use summon::{dismiss, unsummon};
 
