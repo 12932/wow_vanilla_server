@@ -16,7 +16,7 @@ use crate::game::map::combat::{self, dist};
 
 use super::mods::{self, Mods};
 use super::targets::{self, Implicit};
-use super::{Targets, power_cost, power_index};
+use super::{Targets, power_cost, unpayable};
 
 /// `SpellCastResult` codes.
 pub mod fail {
@@ -424,14 +424,8 @@ pub fn check(
         }
         // Power, reagents, tools, focus, gear.
         let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
-        if cost > 0 {
-            let have = map
-                .unit_fields(caster)
-                .map(|f| f.get_u32(UNIT_FIELD_POWER1 + power_index(s)))
-                .unwrap_or(0);
-            if have < cost {
-                return Some(fail::NO_POWER);
-            }
+        if let Some(r) = unpayable(map, caster, s, cost) {
+            return Some(r);
         }
         if let Some(p) = map.players.get(&caster)
             && !p.gm
