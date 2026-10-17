@@ -116,6 +116,20 @@ fn members(map: &Map, g: Guid, raid_wide: bool) -> Vec<Guid> {
     }
 }
 
+/// Whether a party member's spell (target 35) from `caster` may land on
+/// `target`: never the caster, but its master, its own pet, or one of its
+/// master's group or their pets (mangos's `TARGET_UNIT_PARTY`, Thistle
+/// Tea's `party_unit_allowed?`).
+pub fn party_unit(map: &Map, caster: Guid, target: Guid) -> bool {
+    if target == caster || !alive(map, target) {
+        return false;
+    }
+    let owner = crate::game::map::pets::master(map, caster);
+    let target_owner = crate::game::map::pets::master(map, target);
+    target == owner
+        || (guid::is_player(target_owner) && members(map, owner, true).contains(&target_owner))
+}
+
 fn alive(map: &Map, g: Guid) -> bool {
     map.unit_view(g).is_some_and(|u| u.alive)
 }
@@ -281,14 +295,11 @@ pub fn effect_targets(
                 })
                 .collect()
         }
-        (PartyMember, _) => {
-            let target = t.unit.unwrap_or(caster);
-            if members(map, caster, true).contains(&target) {
-                vec![target]
-            } else {
-                vec![caster]
-            }
-        }
+        (PartyMember, _) => t
+            .unit
+            .filter(|u| party_unit(map, caster, *u))
+            .into_iter()
+            .collect(),
         (Caster, _) | (None, _) => vec![caster],
         (Pet, _) => crate::game::map::pets::pet_of(map, caster)
             .into_iter()
