@@ -748,3 +748,178 @@ async fn charge_modifiers_add_to_their_spells_charges_flat_then_percent() {
         "the aura does, and has its charge"
     );
 }
+
+const NIGHTFALL: u32 = 18094;
+const SHADOW_TRANCE: u32 = 17941;
+const CORRUPTION: u32 = 172;
+const SHADOW_BOLT: u32 = 686;
+const FIREBALL: u32 = 133;
+const IMPROVED_BLIZZARD: u32 = 11185;
+const CHILLED: u32 = 12484;
+const FROSTBOLT: u32 = 116;
+
+/// Nightfall sure to go off, with a second's cooldown.
+fn sure_nightfall(d: &mut crate::game::data::GameData) {
+    if let Some(p) = d.spells.proc_events.get_mut(&NIGHTFALL) {
+        p.chance = 100.0;
+        p.cooldown = 1000;
+    }
+}
+
+#[tokio::test]
+async fn nightfall_goes_off_on_corruptions_ticks_alone_by_its_charges_and_cooldown() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(sure_nightfall);
+    let (_c, lock, map) = player(&realm, "P3A12", "Nightone", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, lock, 60, &[NIGHTFALL]);
+            let kobold = dummy(m, lock, 60, 5.0);
+            let trance = |m: &mut Map| {
+                let had = has(m, lock, SHADOW_TRANCE);
+                auras::remove_spell(m, lock, SHADOW_TRANCE, None);
+                had
+            };
+            // A Shadow Bolt and a Fireball: nothing.
+            spells::cast_triggered(m, lock, SHADOW_BOLT, Some(kobold));
+            spells::cast_triggered(m, lock, FIREBALL, Some(kobold));
+            let direct = trance(m);
+            // Corruption's tick: Shadow Trance on the warlock.
+            spells::cast_triggered(m, lock, CORRUPTION, Some(kobold));
+            tick_now(m, kobold, CORRUPTION);
+            let first = trance(m);
+            // Two charges: the cooldown holds a second, then the last goes.
+            if let Some(a) = auras::auras_mut(m, lock)
+                && let Some(h) = a.holders.iter_mut().find(|h| h.spell == NIGHTFALL)
+            {
+                h.charges = 2;
+                h.proc_ready_at = None;
+            }
+            tick_now(m, kobold, CORRUPTION);
+            let charged = (trance(m), holder(m, lock, NIGHTFALL).map(|h| h.charges));
+            m.now += Duration::from_millis(999);
+            tick_now(m, kobold, CORRUPTION);
+            let cooling = trance(m);
+            m.now += Duration::from_millis(1);
+            tick_now(m, kobold, CORRUPTION);
+            let last = (trance(m), has(m, lock, NIGHTFALL));
+            (direct, first, charged, cooling, last)
+        })
+        .await
+        .unwrap();
+    let (direct, first, charged, cooling, last) = out;
+    assert!(
+        !direct,
+        "no trance from a direct spell, nor another family's"
+    );
+    assert!(first, "Corruption's tick gives Shadow Trance");
+    assert_eq!(charged, (true, Some(1)), "a charge spent");
+    assert!(!cooling, "nothing within its cooldown");
+    assert_eq!(last, (true, false), "then the last charge, and it is gone");
+}
+
+#[tokio::test]
+async fn improved_blizzard_chills_from_blizzard_alone() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, mage, map) = player(&realm, "P3A13", "Chillone", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[IMPROVED_BLIZZARD, BLIZZARD]);
+            let kobold = dummy(m, mage, 60, 10.0);
+            spells::cast_triggered(m, mage, FROSTBOLT, Some(kobold));
+            let by_frostbolt = has(m, kobold, CHILLED);
+            let t = spells::Targets {
+                dest: m.position_of(kobold),
+                ..Default::default()
+            };
+            cast_fresh(m, mage, BLIZZARD, t);
+            pass(m, 1_100);
+            let by_blizzard = has(m, kobold, CHILLED);
+            spells::interrupt(m, mage);
+            (by_frostbolt, by_blizzard)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (false, true), "Chilled from Blizzard, not Frostbolt");
+}
+
+const MEND_PET: u32 = 136;
+const IMPROVED_MEND_PET: u32 = 19572;
+const IMPROVED_MEND_PET_CLEANSE: u32 = 24406;
+const REJUVENATION: u32 = 774;
+const REGROWTH: u32 = 8936;
+const DREAMWALKER_REJUVENATION: u32 = 28716;
+const DREAMWALKER_MANA: u32 = 28722;
+const DREAMWALKER_REGROWTH: u32 = 28744;
+const BLESSING_OF_THE_CLAW: u32 = 28750;
+const CORRUPTED_HEALING: u32 = 23401;
+const CORRUPTED_HEALING_HURT: u32 = 23402;
+const LESSER_HEAL: u32 = 2050;
+const RENEW: u32 = 139;
+
+/// Improved Mend Pet's and the Dreamwalker's chances made sure.
+fn sure_heal_scripts(d: &mut crate::game::data::GameData) {
+    if let Some(s) = d.spells.spells.get_mut(&IMPROVED_MEND_PET) {
+        s.effects[0].base_points = 99;
+    }
+    if let Some(p) = d.spells.proc_events.get_mut(&DREAMWALKER_REJUVENATION) {
+        p.chance = 100.0;
+    }
+}
+
+#[tokio::test]
+async fn heals_over_time_go_off_by_their_ticks_and_direct_heals_by_their_cast() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(sure_heal_scripts);
+    let (mut c, hunter, map) = player(&realm, "P3A14", "Mendone", Race::Dwarf, Class::Hunter).await;
+    let (mut d, druid, _) = player(&realm, "P3A15", "Mendtwo", Race::Human, Class::Paladin).await;
+    let (_e, priest, _) = player(&realm, "P3A16", "Mendthree", Race::Human, Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            ready(m, hunter, 60, &[IMPROVED_MEND_PET]);
+            ready(m, druid, 60, &[]);
+            ready(m, priest, 60, &[]);
+            let wolf = dummy(m, hunter, 60, 3.0);
+            // Mend Pet's tick: Improved Mend Pet's cleanse.
+            apply(m, hunter, wolf, MEND_PET);
+            tick_now(m, wolf, MEND_PET);
+            // Rejuvenation's tick on one of mana: the Dreamwalker's mana;
+            // Regrowth's cast: the Blessing of the Claw.
+            apply(m, druid, druid, DREAMWALKER_REJUVENATION);
+            apply(m, druid, druid, DREAMWALKER_REGROWTH);
+            apply(m, druid, priest, REJUVENATION);
+            tick_now(m, priest, REJUVENATION);
+            spells::cast_triggered(m, druid, REGROWTH, Some(priest));
+            let claw = has(m, priest, BLESSING_OF_THE_CLAW);
+            // Corrupted Healing: a direct heal hurts, a heal over time
+            // doesn't.
+            apply(m, priest, priest, CORRUPTED_HEALING);
+            apply(m, priest, priest, RENEW);
+            tick_now(m, priest, RENEW);
+            let by_renew = has(m, priest, CORRUPTED_HEALING_HURT);
+            spells::cast_triggered(m, priest, LESSER_HEAL, Some(priest));
+            let by_heal = has(m, priest, CORRUPTED_HEALING_HURT);
+            (claw, by_renew, by_heal)
+        })
+        .await
+        .unwrap();
+    let (claw, by_renew, by_heal) = out;
+    assert!(
+        saw_go(&mut c, IMPROVED_MEND_PET_CLEANSE).await,
+        "Mend Pet's tick cleanses"
+    );
+    assert!(
+        saw_go(&mut d, DREAMWALKER_MANA).await,
+        "Rejuvenation's tick gives mana"
+    );
+    assert!(claw, "Regrowth gives the Blessing of the Claw");
+    assert!(!by_renew, "Renew's tick doesn't corrupt");
+    assert!(by_heal, "a direct heal does");
+}
