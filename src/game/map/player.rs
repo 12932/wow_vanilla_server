@@ -106,11 +106,13 @@ impl Item {
     }
 
     pub fn from_row(data: &GameData, row: &ItemRow, owner: Guid) -> Self {
+        // A gift is made as what it wraps, then wrapped again.
+        let gift = crate::game::map::items_misc::wrapped(&row.data);
         let mut item = Self::new(
             data,
             guid::item(row.guid),
             owner,
-            row.entry,
+            gift.map_or(row.entry, |w| w.entry),
             row.bag,
             row.slot,
             row.count,
@@ -127,6 +129,9 @@ impl Item {
             item.fields.set_u32(ITEM_FIELD_ITEM_TEXT_ID, text);
         }
         crate::game::map::enchant::decode(data, &mut item);
+        if let Some(w) = gift {
+            crate::game::map::items_misc::rewrap_loaded(&mut item, row.entry, w);
+        }
         item
     }
 
@@ -207,6 +212,8 @@ pub struct Player {
     pub buyback_next: u8,
     /// The NPC and gossip menu the player last had open.
     pub gossip_menu: Option<(Guid, u32)>,
+    /// The quest objects this client knows shown as usable for a quest.
+    pub quest_objects: AHashSet<Guid>,
     pub flight: Option<crate::game::map::npc::Flight>,
     pub journal: crate::game::map::quests::Journal,
     pub auras: crate::game::map::auras::Auras,
@@ -291,6 +298,7 @@ impl Player {
             looting: None,
             buyback_next: 0,
             gossip_menu: None,
+            quest_objects: AHashSet::new(),
             flight: None,
             journal: row.state.quests.clone(),
             auras: Default::default(),

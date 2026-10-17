@@ -227,6 +227,7 @@ fn quest_data() -> GameData {
             ..Default::default()
         },
     );
+    d.npc.creature_ends.insert(2100, vec![300]);
     d.npc.broadcast_texts.insert(
         200,
         BroadcastText {
