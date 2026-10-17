@@ -592,8 +592,16 @@ fn execute(
 ) {
     let now = map.now;
     let m = mods::for_spell(map, caster, s);
+    // What the cast cost, for a refund if an ability is avoided.
+    let mut paid = 0;
     if !triggered {
         let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
+        paid = cost;
+        // A ranged ability (Arcane Shot, Multi-Shot, Aimed Shot) spends a
+        // round of ammunition.
+        if s.attr(0, sd::ATTR_RANGED) && s.dmg_class == 3 && !s.auto_repeat() {
+            let _ = crate::game::map::ranged::pay_ammunition(map, caster);
+        }
         if cost > 0 {
             let index = power_index(s);
             if let Some(f) = map.unit_fields_mut(caster) {
@@ -703,6 +711,10 @@ fn execute(
             continue;
         }
         let mut hit = outcome::roll_hit(map, caster, target, s, &m);
+        // A creature immune to the spell (its template's masks).
+        if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
+            hit = Hit::Immune;
+        }
         let mut aim = target;
         if hit == Hit::Reflect {
             // Back at the caster.
@@ -712,6 +724,10 @@ fn execute(
         }
         if !hit.lands() {
             outcome::send_miss(map, caster, aim, s.id, hit);
+            // An avoided ability gives back some of its rage or energy.
+            if !triggered && outcome::physical(s) {
+                crate::game::map::combat::ability_avoided(map, caster, s.id, hit.proc_ex(), paid);
+            }
             let (done, taken) = outcome::proc_flags(s);
             crate::game::map::procs::trigger(
                 map,
@@ -1052,21 +1068,37 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     }
 }
 
-/// Damage taken while casting pushes a cast back half a second (twice at
-/// most), or cuts a channel short by a quarter; talents and auras may
-/// resist it.
-fn pushback(map: &mut Map, g: Guid) {
+/// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a
+/// player's cast whose interrupt flags say so is pushed back half a second
+/// (twice at most) or cancelled, and a channel cut short by a quarter or
+/// cancelled; talents and auras may resist the pushback.
+pub fn pushback(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
-    let Some(spell) = map
+    if !map.players.contains_key(&g) {
+        return;
+    }
+    let Some((spell, channel)) = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
-        .map(|c| c.spell)
+        .map(|c| (c.spell, c.channel_until.is_some()))
     else {
         return;
     };
     let Some(s) = data.spells.get(spell) else {
         return;
     };
+    let (delays, cancels) = if channel {
+        (s.channel_interrupt_flags & 0x4000 != 0, s.channel_interrupt_flags & 0x2 != 0)
+    } else {
+        (s.interrupt_flags & 0x2 != 0, s.interrupt_flags & 0x10 != 0)
+    };
+    if cancels && !delays {
+        interrupt(map, g);
+        return;
+    }
+    if !delays {
+        return;
+    }
     let m = mods::for_spell(map, g, s);
     let resist = auras::auras(map, g).map_or(0, |a| {
         a.sum_mask(auras::AURA_RESIST_PUSHBACK, s.school_mask())

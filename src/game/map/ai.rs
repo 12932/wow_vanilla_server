@@ -757,35 +757,6 @@ pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
     }
 }
 
-/// Run from the victim for a while (a script's `flee`).
-pub fn flee(map: &mut Map, g: Guid) {
-    let now = map.now;
-    let spline_id = map.next_spline_id;
-    let Some(c) = map.creature(g) else {
-        return;
-    };
-    let from = c.position;
-    let away = map
-        .position_of(c.combat.victim)
-        .map(|v| (from.y - v.y).atan2(from.x - v.x))
-        .unwrap_or(c.orientation);
-    let to = Vector3d {
-        x: from.x + 15.0 * away.cos(),
-        y: from.y + 15.0 * away.sin(),
-        z: from.z,
-    };
-    let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
-        None => vec![from, to],
-    };
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    if let Some(c) = map.creature_mut(g)
-        && let Some(frame) = c.walk(path, false, now, spline_id)
-    {
-        map.send_to_observers(g, &frame, false);
-    }
-}
-
 /// Give up the fight and run home.
 fn evade(map: &mut Map, g: Guid) {
     crate::game::map::creature_combat::disengaged(map, g);

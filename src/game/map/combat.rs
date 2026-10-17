@@ -1238,6 +1238,8 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     }
     skill_gains(map, attacker, victim, hand);
     if left > 0 {
+        // A blow on a caster pushes its cast back.
+        crate::game::map::spells::pushback(map, victim);
         deal_damage_school(map, attacker, victim, left, school);
     }
     let mut ex = if immune {
