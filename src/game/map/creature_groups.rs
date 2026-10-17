@@ -23,7 +23,7 @@ fn spawn_of(map: &Map, g: Guid) -> Option<u32> {
 
 /// The leader's spawn of `g`'s group.
 pub fn leader_of(map: &Map, g: Guid) -> Option<u32> {
-    if let Some((leader, _, _)) = map.script_groups.get(&g) {
+    if let Some((leader, _, _, _)) = map.script_groups.get(&g) {
         return spawn_of(map, *leader).or(Some(0));
     }
     let spawn = spawn_of(map, g)?;
@@ -32,7 +32,19 @@ pub fn leader_of(map: &Map, g: Guid) -> Option<u32> {
 
 pub fn is_leader(map: &Map, g: Guid) -> bool {
     spawn_of(map, g).is_some_and(|s| map.realm.data.scripts.groups.contains_key(&s))
-        || map.script_groups.values().any(|(l, _, _)| *l == g)
+        || map.script_groups.values().any(|(l, _, _, _)| *l == g)
+}
+
+/// The flags of `g`'s place in a group a script made: its own as a
+/// member, its members' as a leader.
+fn script_flags(map: &Map, g: Guid) -> u32 {
+    if let Some((_, _, _, flags)) = map.script_groups.get(&g) {
+        return *flags;
+    }
+    map.script_groups
+        .values()
+        .filter(|(l, _, _, _)| *l == g)
+        .fold(0, |f, (_, _, _, x)| f | x)
 }
 
 fn group_flags(map: &Map, leader: u32) -> u32 {
@@ -46,22 +58,22 @@ fn group_flags(map: &Map, leader: u32) -> u32 {
 
 /// The creatures of `g`'s group here, its leader first.
 pub fn members_of(map: &Map, g: Guid) -> Vec<Guid> {
-    if let Some((leader, _, _)) = map.script_groups.get(&g).copied() {
+    if let Some((leader, _, _, _)) = map.script_groups.get(&g).copied() {
         let mut out = vec![leader];
         out.extend(
             map.script_groups
                 .iter()
-                .filter(|(_, (l, _, _))| *l == leader)
+                .filter(|(_, (l, _, _, _))| *l == leader)
                 .map(|(m, _)| *m),
         );
         return out;
     }
-    if map.script_groups.values().any(|(l, _, _)| *l == g) {
+    if map.script_groups.values().any(|(l, _, _, _)| *l == g) {
         let mut out = vec![g];
         out.extend(
             map.script_groups
                 .iter()
-                .filter(|(_, (l, _, _))| *l == g)
+                .filter(|(_, (l, _, _, _))| *l == g)
                 .map(|(m, _)| *m),
         );
         return out;
@@ -92,12 +104,19 @@ pub fn all_dead(map: &Map, g: Guid) -> bool {
             .all(|m| map.creature(*m).is_none_or(|c| !c.alive()))
 }
 
-/// A script puts `g` in `leader`'s group, at a distance and angle.
-pub fn join(map: &mut Map, g: Guid, leader: Guid, distance: f32, angle: f32) {
-    if g != leader && guid::is_unit(leader) {
-        map.script_groups
-            .insert(g, (leader, distance, angle.to_radians()));
+/// A script puts `g` in `leader`'s group, at a distance and angle (in
+/// radians from the leader's facing), with group flags.
+pub fn join_with(map: &mut Map, g: Guid, leader: Guid, distance: f32, angle: f32, flags: u32) {
+    if g == leader || !guid::is_unit(leader) {
+        return;
     }
+    // A leader's own leader leads the lot.
+    let leader = map
+        .script_groups
+        .get(&leader)
+        .map_or(leader, |(l, _, _, _)| *l);
+    map.script_groups
+        .insert(g, (leader, distance, angle, flags));
 }
 
 pub fn leave(map: &mut Map, g: Guid) {
@@ -107,9 +126,8 @@ pub fn leave(map: &mut Map, g: Guid) {
 /// `g` was attacked by `enemy`: its group and its links join in.
 pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
     let mut join: Vec<Guid> = Vec::new();
-    if let Some(leader) = leader_of(map, g)
-        && (group_flags(map, leader) & GROUP_AGGRO_TOGETHER != 0
-            || map.script_groups.contains_key(&g))
+    if leader_of(map, g).is_some_and(|l| group_flags(map, l) & GROUP_AGGRO_TOGETHER != 0)
+        || script_flags(map, g) & GROUP_AGGRO_TOGETHER != 0
     {
         join.extend(members_of(map, g));
     }
@@ -153,8 +171,8 @@ fn attack_all(map: &mut Map, who: Vec<Guid>, enemy: Guid) {
 /// links.
 pub fn evaded(map: &mut Map, g: Guid) {
     let mut evade: Vec<Guid> = Vec::new();
-    if let Some(leader) = leader_of(map, g)
-        && group_flags(map, leader) & GROUP_EVADE_TOGETHER != 0
+    if leader_of(map, g).is_some_and(|l| group_flags(map, l) & GROUP_EVADE_TOGETHER != 0)
+        || script_flags(map, g) & GROUP_EVADE_TOGETHER != 0
     {
         evade.extend(members_of(map, g).into_iter().filter(|m| *m != g));
     }
@@ -246,6 +264,27 @@ pub fn may_spawn(map: &Map, spawn: u32) -> bool {
 /// A leader starts a walk to `to`: its formation follows, each at its
 /// place behind it.
 pub fn leader_walked(map: &mut Map, leader: Guid, to: Vector3d, facing: f32, run: bool) {
+    // Those a script put in formation behind it.
+    let scripted: Vec<(Guid, f32, f32)> = map
+        .script_groups
+        .iter()
+        .filter(|(_, (l, _, _, f))| *l == leader && f & GROUP_FORMATION != 0)
+        .map(|(m, (_, d, a, _))| (*m, *d, *a))
+        .collect();
+    for (c, distance, angle) in scripted {
+        let ok = map
+            .creature(c)
+            .is_some_and(|x| x.alive() && !x.combat.attacking && !x.evading);
+        if ok {
+            let angle = facing + angle;
+            let place = Vector3d {
+                x: to.x + distance * angle.cos(),
+                y: to.y + distance * angle.sin(),
+                z: to.z,
+            };
+            crate::game::map::scripts::move_to(map, c, place, run);
+        }
+    }
     let Some(spawn) = spawn_of(map, leader) else {
         return;
     };
@@ -429,6 +468,40 @@ fn pick(
             Member::Pool(child) => pick(s, child, rng, out, depth + 1),
         }
     }
+}
+
+/// A pooled object (an herb, a vein, a chest) comes back: the spawn may
+/// be another of its pool, one not up now nor waiting to be.
+pub fn object_respawn_choice(map: &Map, spawn: u32, waiting: &[u32]) -> u32 {
+    let s = &map.realm.data.scripts;
+    let Some(pool) = s.object_pool.get(&spawn).and_then(|p| s.pools.get(p)) else {
+        return spawn;
+    };
+    if pool.objects.len() < 2 || pool.objects.iter().any(|(_, c)| *c > 0.0) {
+        return spawn;
+    }
+    let on_map: ahash::AHashSet<u32> = map
+        .realm
+        .data
+        .gameobject_spawns
+        .get(&map.key.map)
+        .map(|v| v.iter().map(|o| o.guid).collect())
+        .unwrap_or_default();
+    let free: Vec<u32> = pool
+        .objects
+        .iter()
+        .map(|(g, _)| *g)
+        .filter(|g| on_map.contains(g))
+        .filter(|g| {
+            *g == spawn
+                || (crate::game::map::scripts::object_of_spawn(map, *g).is_none()
+                    && !waiting.contains(g))
+        })
+        .collect();
+    if free.is_empty() {
+        return spawn;
+    }
+    free[rand::rng().random_range(0..free.len())]
 }
 
 /// A pooled creature died: the spawn that comes back may be another of its

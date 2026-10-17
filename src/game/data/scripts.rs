@@ -25,6 +25,53 @@ pub struct ScriptStep {
     pub z: f32,
     pub o: f32,
     pub condition: u32,
+    /// What only a code-built step has (Thistle Tea's creature scripts).
+    pub ext: Option<Box<StepExt>>,
+}
+
+/// A code-built step's extras, as Thistle Tea's `ScriptStep` has them.
+#[derive(Debug, Clone, Default)]
+pub struct StepExt {
+    /// Lines to say, one at random, in place of broadcast texts.
+    pub texts: Vec<InlineText>,
+    /// A summon's places: one no living creature stands on, at random.
+    pub positions: Vec<[f32; 4]>,
+    /// A summon lands on a random point this far around its place.
+    pub scatter: f32,
+    /// How many a summon brings.
+    pub count: SummonCount,
+    /// A summon or teleport at the target's feet.
+    pub at_target: bool,
+    /// A group join keeps the creature's distance and bearing from its
+    /// leader.
+    pub formation_from_position: bool,
+    /// The target must be farther than this, flat, past both bounding
+    /// radii.
+    pub min_target_distance_2d: Option<f32>,
+    /// A summon comes hidden from players, until a script shows it.
+    pub concealed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct InlineText {
+    pub text: String,
+    pub chat_type: u32,
+    pub language: u32,
+    pub emote: u32,
+}
+
+/// A summon's count: a number, or one that scales with the living
+/// players on the summoner's threat list (ratio, at least, at most).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SummonCount {
+    Fixed(u32),
+    ThreatPlayers(f32, u32, u32),
+}
+
+impl Default for SummonCount {
+    fn default() -> Self {
+        SummonCount::Fixed(1)
+    }
 }
 
 /// `data_flags`.
@@ -53,6 +100,10 @@ pub const EF_REPEATABLE: u32 = 0x1;
 pub const EF_RANDOM_ACTION: u32 = 0x2;
 pub const EF_NOT_CASTING: u32 = 0x4;
 pub const EF_CHECK_RESULT: u32 = 0x8;
+/// Thistle Tea's: fires only with its victim in melee reach, and its timer
+/// waits while it is stunned.
+pub const EF_VICTIM_IN_MELEE: u32 = 0x100;
+pub const EF_PAUSE_WHILE_STUNNED: u32 = 0x200;
 
 // Event types.
 pub const EVENT_TIMER_IN_COMBAT: u32 = 0;
@@ -148,6 +199,26 @@ pub struct Pool {
     pub mother: u32,
 }
 
+/// A `spell_area` row: `spell` belongs in `area` for players who match.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpellArea {
+    pub spell: u32,
+    pub area: u32,
+    /// A quest that must be taken (and, with `quest_start_active`, not yet
+    /// complete) or rewarded.
+    pub quest_start: u32,
+    pub quest_start_active: bool,
+    /// A quest that must not be rewarded yet.
+    pub quest_end: u32,
+    /// An aura the player must (positive) or mustn't (negative) have.
+    pub aura_spell: i32,
+    pub race_mask: u32,
+    /// 0 male, 1 female, 2 either.
+    pub gender: u32,
+    /// Cast on the player there; otherwise only allowed there.
+    pub autocast: bool,
+}
+
 /// `map_template`: a map's instance script and reset.
 #[derive(Debug, Clone, Default)]
 pub struct MapTemplate {
@@ -195,6 +266,22 @@ pub struct ScriptData {
     pub map_templates: AHashMap<u32, MapTemplate>,
     /// `areatrigger_template`'s scripts: trigger → generic script.
     pub areatrigger_script: AHashMap<u32, u32>,
+    /// `game_event.holiday`: event → holiday.
+    pub event_holidays: AHashMap<u32, u32>,
+    /// `quest_template.RequiredCondition`.
+    pub quest_condition: AHashMap<u32, u32>,
+    /// `areatrigger_teleport.required_condition`.
+    pub teleport_condition: AHashMap<u32, u32>,
+    /// `spell_area`: auras a place (and a quest, race or gender) brings.
+    pub spell_areas: Vec<SpellArea>,
+    /// Paths creature scripts walk (`start_waypoints` source 5): by entry
+    /// and variant.
+    pub routes: super::tt_scripts::Routes,
+    /// Code-built object scripts (Thistle Tea's `GOHello` ports): run on
+    /// the player who uses the object, at it. By spawn, and by entry for an
+    /// object of no spawn.
+    pub object_hello: AHashMap<u32, u32>,
+    pub object_hello_entry: AHashMap<u32, u32>,
 }
 
 impl ScriptData {

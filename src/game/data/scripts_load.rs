@@ -34,6 +34,7 @@ fn step(c: &Cols) -> ScriptStep {
         z: c.f32("z"),
         o: c.f32("o"),
         condition: c.u32("condition_id"),
+        ext: None,
     }
 }
 
@@ -274,6 +275,42 @@ pub fn load(db: &Connection, data: &mut GameData) {
             s.areatrigger_script.insert(id, script);
         }
     }
+    for (event, holiday) in rows(db, "SELECT entry, holiday FROM game_event", |c| {
+        (c.u32("entry"), c.u32("holiday"))
+    }) {
+        if holiday != 0 {
+            s.event_holidays.insert(event, holiday);
+        }
+    }
+    for (quest, condition) in rows(
+        db,
+        "SELECT entry, RequiredCondition FROM quest_template",
+        |c| (c.u32("entry"), c.u32("RequiredCondition")),
+    ) {
+        if condition != 0 {
+            s.quest_condition.insert(quest, condition);
+        }
+    }
+    for (trigger, condition) in rows(
+        db,
+        "SELECT id, required_condition FROM areatrigger_teleport",
+        |c| (c.u32("id"), c.u32("required_condition")),
+    ) {
+        if condition != 0 {
+            s.teleport_condition.insert(trigger, condition);
+        }
+    }
+    s.spell_areas = rows(db, "SELECT * FROM spell_area", |c| SpellArea {
+        spell: c.u32("spell"),
+        area: c.u32("area"),
+        quest_start: c.u32("quest_start"),
+        quest_start_active: c.i64("quest_start_active") != 0,
+        quest_end: c.u32("quest_end"),
+        aura_spell: c.i32("aura_spell"),
+        race_mask: c.u32("racemask"),
+        gender: c.u32("gender"),
+        autocast: c.i64("autocast") != 0,
+    });
     info!(
         "scripts: {} creatures with EventAI, {} conditions, {} pools, {} creature groups",
         s.ai_events.len(),

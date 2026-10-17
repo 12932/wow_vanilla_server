@@ -185,8 +185,12 @@ fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
         return;
     };
     let template = map.realm.data.creature_template(c.entry);
-    let radius = template
-        .map(|t| t.call_for_help_range)
+    // A script's range stands over the template's.
+    let radius = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.call_for_help_range)
+        .or_else(|| template.map(|t| t.call_for_help_range))
         .filter(|r| *r > 0.0)
         .unwrap_or(0.0);
     if radius <= 0.0 {
@@ -459,7 +463,15 @@ pub fn update_creatures(map: &mut Map) {
         .creatures
         .iter()
         .filter(|(_, c)| c.pet.is_none())
-        .filter(|(_, c)| c.alive() && (!c.observers.is_empty() || c.combat.attacking || c.evading))
+        .filter(|(_, c)| {
+            c.alive()
+                && (!c.observers.is_empty()
+                    || c.combat.attacking
+                    || c.evading
+                    || c.scripted
+                        .as_deref()
+                        .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some())))
+        })
         .map(|(k, _)| k)
         .collect();
     for key in keys {
@@ -470,11 +482,26 @@ pub fn update_creatures(map: &mut Map) {
         let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
             continue;
         };
-        let (g, evading) = (c.guid, c.evading);
+        // Down in a linked feign death, or holding its path.
+        if c.scripted
+            .as_deref()
+            .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+        {
+            crate::game::map::event_ai::feign_tick(map, g);
+            continue;
+        }
+        let (holding, evading) = (
+            c.scripted.as_deref().is_some_and(|s| s.hold.is_some()),
+            c.evading,
+        );
+        if holding {
+            crate::game::map::event_ai::hold_tick(map, g);
+        }
+        // Feared, confused or fleeing: it moves as that has it.
         if !evading && crate::game::map::creature_combat::controlled_step(map, g) {
             continue;
         }
-        let Some(c) = map.creatures.get(key) else {
+        let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
             continue;
         };
         if c.evading {
@@ -496,6 +523,23 @@ pub fn update_creatures(map: &mut Map) {
             {
                 crate::game::map::world::step_creature_key(map, key);
             }
+        }
+        let (moving, follows, fighting) = map
+            .creature(g)
+            .map(|c| {
+                let s = c.scripted.as_deref();
+                (
+                    s.is_some_and(|s| s.scripted_move.is_some()),
+                    s.is_some_and(|s| s.follow.is_some()),
+                    c.combat.attacking || c.evading,
+                )
+            })
+            .unwrap_or_default();
+        if moving {
+            crate::game::map::event_ai::scripted_move_ended(map, g);
+        }
+        if follows && !fighting {
+            crate::game::map::event_ai::follow_step(map, g);
         }
     }
 }
@@ -618,13 +662,21 @@ fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     if theirs > mine * ratio { best } else { current }
 }
 
+/// How far a creature fights from home: its template's leash, or in the
+/// open world the default. In a dungeon or raid copy only a template's
+/// leash holds it, as Thistle Tea has it, so a boss may take its fight
+/// across its room.
 fn leash_of(map: &Map, c: &Creature) -> f32 {
     map.realm
         .data
         .creature_template(c.entry)
         .map(|t| t.leash_range)
         .filter(|l| *l > 0.0)
-        .unwrap_or(DEFAULT_LEASH)
+        .unwrap_or(if map.key.instance != 0 && map.battleground.is_none() {
+            f32::INFINITY
+        } else {
+            DEFAULT_LEASH
+        })
 }
 
 fn fight_step(map: &mut Map, g: Guid) {
@@ -654,6 +706,10 @@ fn fight_step(map: &mut Map, g: Guid) {
         c.fields.set_guid(UNIT_FIELD_TARGET, victim);
     }
     advance_motion(map, g);
+    // A script's move goes on until it gets there.
+    if scripted_moving(map, g) {
+        return;
+    }
     // Stunned, or casting: it stands where it is.
     crate::game::map::spells::creature_cast(map, g, victim);
     let busy = map.creature(g).is_some_and(|c| c.caster.casting.is_some())
@@ -665,7 +721,11 @@ fn fight_step(map: &mut Map, g: Guid) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
-    let chase = crate::game::map::event_ai::combat_movement(map, g);
+    // A caster with a chase distance stands off within it.
+    let stand_off = crate::game::map::event_ai::scripted(map, g)
+        .and_then(|s| s.caster_chase_distance)
+        .is_some_and(|d| dist(me.position, them.position) <= d);
+    let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off;
     let swing = crate::game::map::event_ai::melee(map, g);
     if combat::in_melee_range(&me, &them) || !chase {
         if combat::in_melee_range(&me, &them) {
@@ -724,6 +784,16 @@ fn fight_step(map: &mut Map, g: Guid) {
     }
 }
 
+/// Whether a script's move is under way.
+fn scripted_moving(map: &Map, g: Guid) -> bool {
+    map.creature(g).is_some_and(|c| {
+        matches!(
+            (&c.motion, c.scripted.as_deref().and_then(|s| s.scripted_move)),
+            (Motion::Moving(w), Some(m)) if w.spline_id == m.spline_id
+        )
+    })
+}
+
 /// A script's `enter evade`.
 pub fn enter_evade(map: &mut Map, g: Guid) {
     evade(map, g);
@@ -755,6 +825,35 @@ pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
         .collect();
     for h in helpers {
         attacked(map, h, enemy);
+    }
+}
+
+/// Run from `enemy` (for a while: one run here, whatever the time).
+pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, _for: Option<Duration>) {
+    let now = map.now;
+    let spline_id = map.next_spline_id;
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let from = c.position;
+    let away = map
+        .position_of(enemy)
+        .map(|v| (from.y - v.y).atan2(from.x - v.x))
+        .unwrap_or(c.orientation);
+    let to = Vector3d {
+        x: from.x + 15.0 * away.cos(),
+        y: from.y + 15.0 * away.sin(),
+        z: from.z,
+    };
+    let path = match map.nav.as_mut() {
+        Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
+        None => vec![from, to],
+    };
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    if let Some(c) = map.creature_mut(g)
+        && let Some(frame) = c.walk(path, false, now, spline_id)
+    {
+        map.send_to_observers(g, &frame, false);
     }
 }
 

@@ -183,6 +183,15 @@ fn relations(map: &Map, giver: Guid) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// The icon a quest giver shows `player`.
+/// Whether `player` meets a quest's `RequiredCondition`, with `giver` as
+/// the source.
+pub fn condition_ok(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
+    match map.realm.data.scripts.quest_condition.get(&quest) {
+        Some(c) => crate::game::map::conditions::met(map, *c, Some(giver), Some(player)),
+        None => true,
+    }
+}
+
 pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
     let Some(p) = map.players.get(&player) else {
         return QuestGiverStatus::None;
@@ -213,7 +222,7 @@ pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
         }
     }
     for q in starts.iter().filter_map(|id| data.npc.quests.get(id)) {
-        if can_take(p, q, data) {
+        if can_take(p, q, data) && condition_ok(map, player, giver, q.id) {
             consider(QuestGiverStatus::Available);
         } else if soon(p, q) {
             consider(QuestGiverStatus::Unavailable);
@@ -243,7 +252,10 @@ pub fn giver_quests(map: &Map, player: Guid, giver: Guid) -> Vec<QuestItem> {
         }
     }
     for q in starts.iter().filter_map(|id| data.npc.quests.get(id)) {
-        if can_take(p, q, data) && !out.iter().any(|o| o.quest_id == q.id) {
+        if can_take(p, q, data)
+            && condition_ok(map, player, giver, q.id)
+            && !out.iter().any(|o| o.quest_id == q.id)
+        {
             out.push(QuestItem {
                 quest_id: q.id,
                 quest_icon: 2,
@@ -476,6 +488,7 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     if !item_start && (!starts.contains(&quest) || !near_giver(map, player, giver)) {
         return;
     }
+    let condition = condition_ok(map, player, giver, quest);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
@@ -485,7 +498,7 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     if p.level() < q.min_level {
         return invalid(p, QuestFailedReason::QuestFailedLowLevel);
     }
-    if !can_take(p, q, &data) {
+    if !can_take(p, q, &data) || !condition {
         return invalid(p, QuestFailedReason::QuestFailedReqs);
     }
     if p.journal.log.len() >= QUEST_LOG_SIZE {
@@ -507,6 +520,7 @@ pub fn accept(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
     }
     check(map, player, quest);
     crate::game::map::questshare::accepted(map, player, giver, quest);
+    crate::game::map::spell_areas::reconcile(map, player);
     if let Some(script) = data.scripts.quest_start_script.get(&quest).copied() {
         crate::game::map::scripts::start(
             map,
@@ -919,6 +933,7 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     crate::game::map::reputation::quest_rewarded(map, player, &q);
     crate::game::map::battleground::quest_rewarded(map, player, quest);
     crate::game::social::mail::quest_mail(&map.realm, player, giver, quest);
+    crate::game::map::spell_areas::reconcile(map, player);
     if let Some(script) = data.scripts.quest_complete_script.get(&quest).copied() {
         crate::game::map::scripts::start(
             map,
