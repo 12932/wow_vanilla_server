@@ -391,11 +391,34 @@ fn resistances(
     })
 }
 
+/// `UNIT_FIELD_AURASTATE`'s Judgement bit (aura state 5): set while a seal
+/// is on, as mangos's seals set `AURA_STATE_JUDGEMENT`, so a Judgement
+/// (caster aura state 5) may be cast, and its button lit.
+const AURA_STATE_JUDGEMENT_BIT: u32 = 1 << 4;
+
+fn judgement_state(p: &mut Player) {
+    let sealed = p
+        .auras
+        .holders
+        .iter()
+        .any(|h| h.exclusive == Some(auras::Exclusive::PaladinSeal));
+    let state = p.fields.get_u32(UNIT_FIELD_AURASTATE);
+    let want = if sealed {
+        state | AURA_STATE_JUDGEMENT_BIT
+    } else {
+        state & !AURA_STATE_JUDGEMENT_BIT
+    };
+    if want != state {
+        p.fields.set_u32(UNIT_FIELD_AURASTATE, want);
+    }
+}
+
 /// Work a unit's stats out again.
 pub fn unit(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
     if let Some(p) = map.players.get_mut(&g) {
         player(p, &data);
+        judgement_state(p);
         speed(map, g);
         return;
     }
