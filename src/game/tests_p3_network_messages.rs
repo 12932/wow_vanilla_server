@@ -853,3 +853,86 @@ async fn a_channel_and_forced_reactions_are_laid_out_as_1_12_has_them() {
     }
     assert_eq!(reactions, want);
 }
+
+const KNOCK: u32 = 900_361;
+
+/// Thistle Tea's knockback_test: the one knocked back is told its packed
+/// GUID, a counter, the launch's cosine and sine, its speed out and its
+/// speed up (negative); those who see them, at the client's word, its
+/// movement and the same four.
+#[tokio::test]
+async fn a_knockback_is_laid_out_as_1_12_has_it() {
+    let mut d = data();
+    d.spells.spells.insert(
+        KNOCK,
+        spell(
+            KNOCK,
+            &[SpellEffect {
+                effect: crate::game::map::spells::EFFECT_KNOCK_BACK,
+                base_points: 69,
+                base_dice: 1,
+                misc_value: 120,
+                target_a: 25,
+                ..Default::default()
+            }],
+        ),
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    a.sees(gb).await;
+    on_map(&realm, move |m| {
+        let at = m.players[&ga].position();
+        let p = m.players.get_mut(&gb).unwrap();
+        p.movement.position = Vector3d {
+            x: at.x + 3.0,
+            y: at.y + 4.0,
+            z: at.z,
+        };
+        crate::game::map::spells::cast_triggered(m, ga, KNOCK, Some(gb));
+    })
+    .await;
+    let launch = b.wait_frame("SMSG_MOVE_KNOCK_BACK", 0x0EF, |_| true).await;
+    let mut want = packed(gb);
+    want.extend_from_slice(&0u32.to_le_bytes());
+    let tail: Vec<u8> = [0.6f32, 0.8, 12.0, -7.0]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    assert_eq!(&launch[..want.len()], &want[..]);
+    let floats: Vec<f32> = launch[want.len()..]
+        .chunks(4)
+        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    for (got, want) in floats.iter().zip([0.6f32, 0.8, 12.0, -7.0]) {
+        assert!((got - want).abs() < 1e-4, "{floats:?}");
+    }
+    a.clear();
+    let at = on_map(&realm, move |m| m.players[&gb].position()).await;
+    b.send(CMSG_MOVE_KNOCK_BACK_ACK {
+        guid: gb,
+        counter: 0,
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::new_jumping(MovementInfo_MovementFlags_Jumping {
+                cos_angle: 0.6,
+                sin_angle: 0.8,
+                xy_speed: 12.0,
+                z_speed: -7.0,
+            }),
+            timestamp: 0,
+            position: at,
+            orientation: 0.0,
+            fall_time: 0.0,
+        },
+    })
+    .await;
+    let seen = a.wait_frame("MSG_MOVE_KNOCK_BACK", 0x0F1, |_| true).await;
+    assert_eq!(&seen[..packed(gb).len()], &packed(gb)[..]);
+    assert_eq!(
+        &seen[seen.len() - 16..],
+        &tail[..],
+        "the jump's four after the movement"
+    );
+}
