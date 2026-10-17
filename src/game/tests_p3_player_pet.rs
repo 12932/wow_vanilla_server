@@ -487,3 +487,120 @@ fn a_pets_kill_is_its_masters_base_by_its_own_levels_factor() {
     assert_eq!(kill_xp_with(20, 8, 8, &none), 0);
     assert_eq!(kill_xp_with(60, 8, 52, &plain), 414);
 }
+
+#[test]
+fn a_pets_name_is_two_to_twelve_letters_of_one_script() {
+    for good in [
+        "Fang",
+        "Éclair",
+        "Волк",
+        "白狼",
+        "シロオオカミ",
+        "늑대",
+        "Abcdefghijkl",
+    ] {
+        assert!(hunter::good_name(good), "{good}");
+    }
+    for bad in [
+        "",
+        "A",
+        "Abcdefghijklm",
+        "Wolf123",
+        "White Wolf",
+        "Fang!",
+        "Woлf",
+    ] {
+        assert!(!hunter::good_name(bad), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_hunters_pet_may_be_renamed_once_by_its_master_with_a_good_name_and_keeps_it() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage as S;
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "H");
+    let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
+    let mut b = Client::connect(&realm, "O");
+    b.enter("Other", Race::Dwarf, Class::Hunter).await;
+    let record = crate::game::store::PetRecord {
+        number: 1,
+        entry: WOLF,
+        kind: 1,
+        name: "Wolf".into(),
+        level: 20,
+        happiness: 500_000,
+        loyalty: 1,
+        loyalty_points: 1_000,
+        ..Default::default()
+    };
+    let pet = on_map(&realm, move |m| {
+        m.players.get_mut(&h).unwrap().row.state.pets.current = Some(record.clone());
+        let pet = hunter::from_record(m, h, &record).unwrap();
+        m.creature_mut(pet)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_PET_NAME_TIMESTAMP, u32::MAX - 10);
+        pet
+    })
+    .await;
+    let look = move |m: &mut Map| {
+        let c = m.creature(pet).unwrap();
+        (
+            c.pet.as_deref().unwrap().name.clone(),
+            c.fields
+                .has_flag(UNIT_FIELD_FLAGS, hunter::UNIT_FLAG_PET_RENAME),
+            c.fields
+                .has_flag(UNIT_FIELD_FLAGS, hunter::UNIT_FLAG_PET_ABANDON),
+            c.fields.get_u32(UNIT_FIELD_PET_NAME_TIMESTAMP),
+        )
+    };
+    assert_eq!(
+        on_map(&realm, look).await,
+        ("Wolf".to_owned(), true, true, u32::MAX - 10)
+    );
+    let rename = |name: &str| CMSG_PET_RENAME {
+        pet,
+        name: name.into(),
+    };
+    // A bad name is refused, the rename kept for a good one.
+    a.send(rename("Bad Name")).await;
+    a.wait_for("SMSG_PET_NAME_INVALID", |m| {
+        matches!(m, S::SMSG_PET_NAME_INVALID).then_some(())
+    })
+    .await;
+    // Another hunter can't name it.
+    b.send(rename("Mine")).await;
+    a.send(rename("Fang")).await;
+    a.send(CMSG_PLAYED_TIME {}).await;
+    a.wait_for("SMSG_PLAYED_TIME", |m| {
+        matches!(m, S::SMSG_PLAYED_TIME(_)).then_some(())
+    })
+    .await;
+    // Named, a new stamp past the last, though the clock is behind it; no
+    // Rename, still Abandon.
+    assert_eq!(
+        on_map(&realm, look).await,
+        ("Fang".to_owned(), false, true, u32::MAX - 9)
+    );
+    a.send(rename("Claw")).await;
+    a.send(CMSG_PLAYED_TIME {}).await;
+    a.wait_for("SMSG_PLAYED_TIME", |m| {
+        matches!(m, S::SMSG_PLAYED_TIME(_)).then_some(())
+    })
+    .await;
+    assert_eq!(on_map(&realm, look).await.0, "Fang");
+    // Dismissed and called again: still Fang, and not to be renamed.
+    let back = on_map(&realm, move |m| {
+        crate::game::map::pets::dismiss(m, pet);
+        let record = m.players[&h].row.state.pets.current.clone().unwrap();
+        let again = hunter::from_record(m, h, &record).unwrap();
+        let c = m.creature(again).unwrap();
+        (
+            c.pet.as_deref().unwrap().name.clone(),
+            c.fields
+                .has_flag(UNIT_FIELD_FLAGS, hunter::UNIT_FLAG_PET_RENAME),
+        )
+    })
+    .await;
+    assert_eq!(back, ("Fang".to_owned(), false));
+}

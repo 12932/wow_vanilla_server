@@ -471,9 +471,23 @@ fn autocast(map: &mut Map, player: Guid, pet: Guid, spell: u32, on: bool) {
     repaint(&data, s);
 }
 
-/// Whether a pet's name may be had: letters, two to twelve.
-fn good_name(name: &str) -> bool {
-    (2..=12).contains(&name.chars().count()) && name.chars().all(|c| c.is_ascii_alphabetic())
+/// Whether a pet's name may be had: two to twelve letters, all of one
+/// script, Latin (with its accents), Cyrillic or East Asian (mangos's
+/// `CheckPetName` against mixed languages, Thistle Tea's `valid?`).
+pub fn good_name(name: &str) -> bool {
+    let script = |c: char| -> Option<u8> {
+        match c as u32 {
+            0x41..=0x5A | 0x61..=0x7A | 0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x24F => Some(0),
+            0x400..=0x4FF => Some(1),
+            0x1100..=0x11FF | 0x3040..=0x30FF | 0x3130..=0x318F | 0x4E00..=0x9FFF => Some(2),
+            0xAC00..=0xD7AF => Some(2),
+            _ => None,
+        }
+    };
+    let first = name.chars().next().and_then(script);
+    (2..=12).contains(&name.chars().count())
+        && first.is_some()
+        && name.chars().all(|c| script(c) == first)
 }
 
 /// `CMSG_PET_RENAME`: a hunter's pet may be named once.
@@ -495,7 +509,13 @@ fn rename(map: &mut Map, player: Guid, pet: Guid, name: &str) {
     }
     let unix = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
     if let Some(c) = map.creature_mut(pet) {
-        c.fields.set_u32(UNIT_FIELD_PET_NAME_TIMESTAMP, unix);
+        // A new stamp, so the clients' caches take the name, even within
+        // the second the last was stamped (Thistle Tea's `rename`); and no
+        // more renaming.
+        let stamp = unix.max(c.fields.get_u32(UNIT_FIELD_PET_NAME_TIMESTAMP) + 1);
+        c.fields.set_u32(UNIT_FIELD_PET_NAME_TIMESTAMP, stamp);
+        c.fields
+            .set_flag(UNIT_FIELD_FLAGS, super::summon::UNIT_FLAG_PET_RENAME, false);
         if let Some(s) = c.pet.as_deref_mut() {
             s.name = name;
             s.renamed = true;
