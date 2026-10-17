@@ -208,6 +208,9 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
     if let Some(o) = map.observers_mut(object) {
         o.insert(observer);
     }
+    if map.creature_by_guid.contains_key(&object) {
+        map.awake.insert(object);
+    }
     crate::game::map::conditions::locate(map, object, false);
     if guid::is_unit(object) {
         crate::game::map::tap::introduced(map, observer, object);

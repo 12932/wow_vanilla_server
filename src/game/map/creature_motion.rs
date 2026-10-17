@@ -811,6 +811,7 @@ pub fn critter_hit(map: &mut Map, g: Guid, source: Guid) {
     if source == g || !critter(map, g) || !map.creature(g).is_some_and(|c| c.alive()) {
         return;
     }
+    map.rare.flee = true;
     let Some(c) = map.creature_mut(g) else {
         return;
     };

@@ -131,6 +131,17 @@ pub fn refreshed(
     Some(new)
 }
 
+fn due(b: &Heartbeat, now: Instant) -> bool {
+    b.break_at.is_some_and(|t| t <= now) || b.next_check.is_some_and(|t| t <= now)
+}
+
+/// Whether any of the crowd control in `a` breaks or rolls now.
+pub fn any_due(a: &auras::Auras, now: Instant) -> bool {
+    a.holders
+        .iter()
+        .any(|h| h.heartbeat.is_some_and(|b| due(&b, now)))
+}
+
 /// `g`'s crowd control that breaks now.
 pub fn update(map: &mut Map, g: Guid) {
     let now = map.now;
@@ -139,9 +150,7 @@ pub fn update(map: &mut Map, g: Guid) {
             a.holders
                 .iter()
                 .filter_map(|h| h.heartbeat.map(|b| (h.spell, h.caster, b)))
-                .filter(|(_, _, b)| {
-                    b.break_at.is_some_and(|t| t <= now) || b.next_check.is_some_and(|t| t <= now)
-                })
+                .filter(|(_, _, b)| due(b, now))
                 .collect()
         })
         .unwrap_or_default();

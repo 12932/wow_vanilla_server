@@ -1106,6 +1106,8 @@ async fn a_ranged_ability_is_sped_by_ranged_haste_and_a_spell_by_casting_speed()
     let out = map
         .query(move |m| {
             ready(m, hunter, 60, &[]);
+            // The starting quiver's haste on, now rather than at the next update.
+            crate::game::map::inventory::sync_gear_all(m);
             let data = m.realm.data.clone();
             let mods = spells::mods::Mods::default();
             let aimed = data.spells.get(AIMED_SHOT).cloned().unwrap();
@@ -1124,8 +1126,16 @@ async fn a_ranged_ability_is_sped_by_ranged_haste_and_a_spell_by_casting_speed()
         .await
         .unwrap();
     let (before, after) = out;
-    assert_eq!(before.0, 3000, "Aimed Shot's three seconds");
-    assert_eq!(after.0, (3000.0 / 1.4) as u32, "Rapid Fire's 40% speeds it");
+    // Three seconds, less the starting quiver's 10% ranged haste.
+    assert_eq!(
+        before.0,
+        (3000.0 / 1.1) as u32,
+        "Aimed Shot's three seconds by the quiver"
+    );
+    assert!(
+        after.0.abs_diff((3000.0 / 1.1 / 1.4) as u32) <= 1,
+        "Rapid Fire's 40% speeds it: {after:?}"
+    );
     assert_eq!(after.1, before.1, "not a spell's cast");
 }
 

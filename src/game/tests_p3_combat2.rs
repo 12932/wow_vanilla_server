@@ -26,6 +26,8 @@ fn fighting(m: &mut Map, g: Guid, victim: Guid, list: &[(Guid, f32)]) -> Guid {
     c.combat.victim = victim;
     c.combat.attacking = !victim.is_zero();
     c.threat = list.to_vec();
+    // Fighting, it is one the update looks at (`Map::awake`).
+    m.note_fighting(brute);
     brute
 }
 

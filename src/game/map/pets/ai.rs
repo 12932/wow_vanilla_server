@@ -300,6 +300,7 @@ pub fn attack(map: &mut Map, g: Guid, target: Guid) {
         c.chase_target_at = None;
     }
     combat::start_attack(map, g, target);
+    map.note_fighting(g);
     if let Some(c) = map.creature_mut(g) {
         c.combat.victim = target;
         c.combat.attacking = true;

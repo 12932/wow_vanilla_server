@@ -704,6 +704,10 @@ pub fn auras_mut(map: &mut Map, g: Guid) -> Option<&mut Auras> {
     if map.players.contains_key(&g) {
         return map.players.get_mut(&g).map(|p| &mut p.auras);
     }
+    // Every aura a creature gets comes by here (see `Map::with_auras`).
+    if map.creature_by_guid.contains_key(&g) {
+        map.with_auras.insert(g);
+    }
     map.creature_mut(g).map(|c| &mut c.auras)
 }
 
@@ -2181,12 +2185,7 @@ pub fn update(map: &mut Map) {
         .filter(|p| !p.auras.is_empty())
         .map(|p| p.guid)
         .collect();
-    units.extend(
-        map.creatures
-            .iter()
-            .filter(|(_, c)| !c.auras.is_empty())
-            .map(|(_, c)| c.guid),
-    );
+    units.extend(map.with_auras_where(|c| !c.auras.is_empty(), |_, c| c.guid));
     for g in units {
         let Some(a) = auras(map, g) else {
             continue;
@@ -2200,6 +2199,11 @@ pub fn update(map: &mut Map) {
             .filter(|(_, x)| x.next_tick.is_some_and(|t| t <= now))
             .map(|(h, x)| (h.clone(), x.clone()))
             .collect();
+        // Nothing ticks or ends, so nothing changes before the crowd
+        // control's look, and that would find nothing due either.
+        if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
+            continue;
+        }
         for (h, t) in ticks {
             if let Some(a) = auras_mut(map, g)
                 && let Some(x) = a
