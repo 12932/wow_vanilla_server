@@ -363,3 +363,174 @@ async fn the_towers_wear_their_holders_colours_and_their_buff_follows_the_zones(
         .unwrap();
     assert!(!buffed);
 }
+
+fn creature_template(entry: u32, civilian: bool, xp: f32) -> CreatureTemplate {
+    CreatureTemplate {
+        entry,
+        name: format!("Peasant {entry}"),
+        display_ids: [1, 0, 0, 0],
+        display_scales: [1.0, 0.0, 0.0, 0.0],
+        display_probabilities: [100, 0, 0, 0],
+        level_min: 1,
+        level_max: 1,
+        faction: 35,
+        health_max: 10,
+        civilian,
+        xp_multiplier: xp,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn a_civilian_worth_nothing_is_a_dishonorable_kill_for_the_group_near() {
+    let mut d = GameData::empty();
+    d.creature_templates
+        .insert(700, creature_template(700, true, 0.0));
+    d.creature_templates
+        .insert(701, creature_template(701, true, 1.0));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Mage).await;
+    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_LIST(_)).then_some(())
+    })
+    .await;
+    let key = realm.registry.online(alice).unwrap().map().key;
+    let map = realm.maps.get(&realm, key);
+    let dishonorable = move |m: &mut crate::game::map::Map| {
+        let h = m.realm.social.honor.lock();
+        [alice, bob].map(|g| {
+            h.project(crate::game::guid::counter(g))
+                .lifetime_dishonorable
+        })
+    };
+    // A civilian worth experience: no shame in it.
+    map.query(move |m| {
+        let at = m.players[&alice].position();
+        let c = crate::game::map::scripts::summon(m, alice, 701, at, 0.0, None).unwrap();
+        crate::game::map::ai::die(m, c, alice);
+    })
+    .await;
+    assert_eq!(map.query(dishonorable).await.unwrap(), [0, 0]);
+    // One worth nothing: a dishonorable kill, for Bob too.
+    map.query(move |m| {
+        let at = m.players[&alice].position();
+        let c = crate::game::map::scripts::summon(m, alice, 700, at, 0.0, None).unwrap();
+        crate::game::map::ai::die(m, c, alice);
+    })
+    .await;
+    assert_eq!(map.query(dishonorable).await.unwrap(), [1, 1]);
+}
+
+#[tokio::test]
+async fn arriving_in_an_enemy_capital_is_honorless_a_while() {
+    let mut d = GameData::empty();
+    marker(&mut d, crate::game::map::pvp::SPELL_HONORLESS_TARGET);
+    d.areas.insert(
+        1519,
+        AreaInfo {
+            id: 1519,
+            map: 0,
+            flags: crate::game::data::AREA_FLAG_CAPITAL,
+            team: 2,
+            name: "Stormwind City".into(),
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut g = Client::connect(&realm, "G");
+    let grom = g.enter("Grom", Race::Undead, Class::Warrior).await;
+    let key = realm.registry.online(grom).unwrap().map().key;
+    let map = realm.maps.get(&realm, key);
+    map.query(move |m| {
+        m.players.get_mut(&grom).unwrap().zone = 1519;
+        let at = m.players[&grom].position();
+        m.teleport(
+            grom,
+            m.key,
+            Vector3d {
+                x: at.x + 5.0,
+                ..at
+            },
+            0.0,
+        );
+    })
+    .await;
+    g.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    g.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: grom,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let honorless = map
+        .query(move |m| {
+            m.players[&grom]
+                .auras
+                .has_spell(crate::game::map::pvp::SPELL_HONORLESS_TARGET)
+        })
+        .await
+        .unwrap();
+    assert!(honorless);
+}
+
+#[tokio::test]
+async fn a_duel_is_refused_where_duels_arent_fought_and_by_one_ignoring() {
+    let mut d = GameData::empty();
+    for (id, flags) in [(12, crate::game::map::duel::AREA_FLAG_DUELS), (1519, 0x138)] {
+        d.areas.insert(
+            id,
+            AreaInfo {
+                id,
+                map: 0,
+                flags,
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Mage).await;
+    let key = realm.registry.online(alice).unwrap().map().key;
+    let map = realm.maps.get(&realm, key);
+    let check = move |area: u32| {
+        move |m: &mut crate::game::map::Map| {
+            for g in [alice, bob] {
+                m.players.get_mut(&g).unwrap().area = area;
+            }
+            let mut s = crate::game::data::spells::SpellTemplate {
+                id: 7266,
+                ..Default::default()
+            };
+            s.effects[0].effect = crate::game::map::spells::EFFECT_DUEL;
+            crate::game::map::duel::check(m, alice, &s, Some(bob))
+        }
+    };
+    assert_eq!(map.query(check(12)).await.unwrap(), None, "Elwynn: fine");
+    assert_eq!(
+        map.query(check(1519)).await.unwrap(),
+        Some(0x47),
+        "not in a city"
+    );
+    // Bob ignores her.
+    b.send(CMSG_ADD_IGNORE {
+        name: "Alice".into(),
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(map.query(check(12)).await.unwrap(), Some(0x0a));
+}

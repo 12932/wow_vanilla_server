@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 
 pub const KIND: &str = "honor";
 
-/// The weekday the week turns over on: 1 Monday to 7 Sunday.
-pub const DEFAULT_RESET_WEEKDAY: u8 = 3;
+/// The weekday the week turns over on: 1 Monday to 7 Sunday; Thistle
+/// Tea's Tuesday.
+pub const DEFAULT_RESET_WEEKDAY: u8 = 2;
 
 /// What a day earned.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
