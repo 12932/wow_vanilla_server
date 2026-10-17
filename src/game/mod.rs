@@ -114,6 +114,8 @@ mod tests_p3_core_reputation;
 #[cfg(test)]
 mod tests_p3_core_social;
 #[cfg(test)]
+mod tests_p3_core_stone;
+#[cfg(test)]
 mod tests_p3_core_trade;
 #[cfg(test)]
 mod tests_p3_items;
