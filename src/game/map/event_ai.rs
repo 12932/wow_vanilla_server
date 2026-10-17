@@ -165,6 +165,8 @@ pub struct ScriptedMove {
     /// A walk home (`SCRIPT_COMMAND_MOVEMENT` 7): home, it is as an
     /// evade's arrival.
     pub home: bool,
+    /// Distancing (movement 19): only force-cast spells go meanwhile.
+    pub distancing: bool,
 }
 
 /// The motion type of a script's point movement.

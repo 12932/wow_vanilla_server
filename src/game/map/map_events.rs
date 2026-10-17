@@ -119,14 +119,19 @@ pub fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             let Some(e) = map.map_events.active.get_mut(&id) else {
                 return false;
             };
+            // The newest first, as Thistle Tea's list has them: an extra
+            // target looked for is the newest of its entry.
             e.targets.retain(|t| t.guid != source);
-            e.targets.push(EventTarget {
-                guid: source,
-                success_condition: int(step.dataint[0]),
-                success_script: int(step.dataint[1]),
-                failure_condition: int(step.dataint[2]),
-                failure_script: int(step.dataint[3]),
-            });
+            e.targets.insert(
+                0,
+                EventTarget {
+                    guid: source,
+                    success_condition: int(step.dataint[0]),
+                    success_script: int(step.dataint[1]),
+                    failure_condition: int(step.dataint[2]),
+                    failure_script: int(step.dataint[3]),
+                },
+            );
             true
         }
         64 => {
