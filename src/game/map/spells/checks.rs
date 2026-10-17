@@ -194,6 +194,23 @@ fn creature_type_allowed(s: &SpellTemplate, creature_type: u32) -> bool {
         || (creature_type > 0 && s.target_creature_type & (1 << (creature_type - 1).min(31)) != 0)
 }
 
+/// Whether unit `g`'s type is one the spell may land on: a creature's
+/// template's, a player's humanoid.
+pub(crate) fn unit_type_allowed(map: &Map, s: &SpellTemplate, g: Guid) -> bool {
+    if s.target_creature_type == 0 {
+        return true;
+    }
+    let creature_type = match map.creature(g) {
+        Some(c) => map
+            .realm
+            .data
+            .creature_template(c.entry)
+            .map_or(0, |t| t.creature_type),
+        None => 7,
+    };
+    creature_type_allowed(s, creature_type)
+}
+
 /// Whether `caster` has the item `s` needs equipped.
 fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
     // No spell asks for a consumable (class 0): 0 and -1 are none.

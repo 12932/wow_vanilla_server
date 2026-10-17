@@ -638,3 +638,29 @@ async fn cannibalize_wants_a_corpse_that_isnt_a_friends() {
     assert_eq!(out.0, (false, false), "refused, its cooldown not started");
     assert_eq!((out.1, out.2), (true, true), "the kobold is eaten");
 }
+
+#[tokio::test]
+async fn an_area_spares_the_creature_types_its_spell_doesnt_name() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "HOLYWRATH");
+    let pal = c.enter("Wrathp", Race::Human, Class::Paladin).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let hurt = map
+        .query(move |m| {
+            level(m, pal, 60, &[]);
+            let kobold = spawn(m, pal, 6, 60, 4.0);
+            let skeleton = spawn(m, pal, 48, 60, 5.0);
+            // Holy Wrath: undead (and demons) only.
+            spells::cast_triggered(m, pal, 2812, None);
+            (
+                health(m, kobold) < 1_000_000,
+                health(m, skeleton) < 1_000_000,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(hurt, (false, true));
+}

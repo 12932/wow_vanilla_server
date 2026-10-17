@@ -198,11 +198,16 @@ pub fn effect_targets(
     // aura is on, and their friends and foes are that unit's (mangos's
     // `PickTargetsForSpellTrigger`, Thistle Tea's trigger resolution).
     let about = t.origin.unwrap_or(caster);
-    let enemy = |g: Guid| alive(map, g) && combat::can_attack(map, about, g);
+    // An area spares the creature types its spell doesn't name (Holy
+    // Wrath's undead and demons), as Thistle Tea's target resolver does.
+    let typed = |g: Guid| super::checks::unit_type_allowed(map, s, g);
+    let enemy = |g: Guid| alive(map, g) && combat::can_attack(map, about, g) && typed(g);
     let ally = |g: Guid| {
         alive(map, g)
             && (g == about
-                || (!combat::can_attack(map, about, g) && !combat::hostile(map, about, g)))
+                || (!combat::can_attack(map, about, g)
+                    && !combat::hostile(map, about, g)
+                    && typed(g)))
     };
     let mut out = match (a, b) {
         // An area named by the second target.
