@@ -380,15 +380,15 @@ pub fn player(p: &mut Player, data: &GameData) {
     let a = &p.auras;
     let f = &mut p.fields;
     let mut stat = [0u32; 5];
-    for i in 0..5 {
+    for (i, value) in stat.iter_mut().enumerate() {
         let own = (base.stats[i] as i32 + g.stats[i]) as f32;
         let v = (own * a.product_misc(AURA_MOD_PERCENT_STAT, i as i32)
             + a.sum_misc(AURA_MOD_STAT, i as i32) as f32)
             * a.product_misc(AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32);
-        stat[i] = v.max(0.0) as u32;
+        *value = v.max(0.0) as u32;
         let s = i as u16;
-        f.set_u32(UNIT_FIELD_STAT0 + s, stat[i]);
-        let diff = stat[i] as i32 - base.stats[i] as i32;
+        f.set_u32(UNIT_FIELD_STAT0 + s, *value);
+        let diff = *value as i32 - base.stats[i] as i32;
         f.set_u32(PLAYER_FIELD_POSSTAT0 + s, diff.max(0) as u32);
         f.set_u32(PLAYER_FIELD_NEGSTAT0 + s, (-diff).max(0) as u32);
     }

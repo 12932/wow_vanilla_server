@@ -66,7 +66,7 @@ pub fn darkmoon(date: chrono::NaiveDate) -> Option<u32> {
     let first_weekday = first.weekday().number_from_monday() as i32;
     let opening = (8 - first_weekday).rem_euclid(7) + 1;
     let day = date.day() as i32;
-    let elwynn = date.month() % 2 == 0;
+    let elwynn = date.month().is_multiple_of(2);
     if day + 3 < opening {
         None
     } else if day < opening {

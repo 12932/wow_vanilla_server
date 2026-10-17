@@ -2229,7 +2229,7 @@ mod tests {
             .chain(data.npc.trainer_templates.values())
             .flatten()
             .filter(|t| t.required_level <= 20)
-            .map(|t| spells::learns(&data, t.spell))
+            .map(|t| spells::learns(data, t.spell))
             .collect();
         taught.sort_unstable();
         taught.dedup();
