@@ -932,3 +932,78 @@ fn place(
 
 const BEAR_FORM: u32 = 5487;
 const CAT_FORM: u32 = 768;
+
+const ARCANE_EXPLOSION: u32 = 1449;
+const HOLY_WRATH: u32 = 2812;
+const CHAIN_LIGHTNING: u32 = 421;
+const ARCTIC_REACH: u32 = 16758;
+
+#[tokio::test]
+async fn an_area_takes_its_count_its_kinds_and_its_reach() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, me, map) = player(&realm, "P3P12", "Areaone", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, me, 60, &[]);
+            let data = m.realm.data.clone();
+            let s = |id: u32| data.spells.get(id).cloned().unwrap();
+            let hit = |m: &Map, id: u32, t: spells::Targets| {
+                let mods = spells::mods::for_spell(m, me, &s(id));
+                spells::targets::effect_targets(m, me, &s(id), 0, &t, &mods)
+            };
+            // Six about the caster: Psychic Scream takes two, Arcane
+            // Explosion all.
+            let six: Vec<_> = (0..6)
+                .map(|i| dummy(m, me, 60, 2.0 + i as f32 * 0.3))
+                .collect();
+            let scream = hit(m, PSYCHIC_SCREAM, spells::Targets::default()).len();
+            let explosion = hit(m, ARCANE_EXPLOSION, spells::Targets::default()).len();
+            for g in &six {
+                m.remove_creature(*g);
+            }
+            // Holy Wrath: the undead, not the humanoid.
+            let undead = spawn(m, me, SKELETAL_WARRIOR, 60, 3.0);
+            let kobold = dummy(m, me, 60, 4.0);
+            let wrath = hit(m, HOLY_WRATH, spells::Targets::default());
+            m.remove_creature(undead);
+            m.remove_creature(kobold);
+            // Chain Lightning jumps ten yards from each.
+            let chain: Vec<_> = [5.0, 14.0, 23.0]
+                .into_iter()
+                .map(|d| dummy(m, me, 60, d))
+                .collect();
+            let lightning = hit(m, CHAIN_LIGHTNING, at(chain[0]));
+            for g in &chain {
+                m.remove_creature(*g);
+            }
+            // Frost Nova's ten yards, a fifth more with Arctic Reach.
+            let ring: Vec<_> = [9.0, 11.0, 13.0]
+                .into_iter()
+                .map(|d| dummy(m, me, 60, d))
+                .collect();
+            let nova = hit(m, FROST_NOVA, spells::Targets::default());
+            apply(m, me, me, ARCTIC_REACH);
+            let reached = hit(m, FROST_NOVA, spells::Targets::default());
+            (
+                scream, explosion, wrath, undead, lightning, chain, nova, reached, ring,
+            )
+        })
+        .await
+        .unwrap();
+    let (scream, explosion, wrath, undead, lightning, chain, nova, reached, ring) = out;
+    assert_eq!(scream, 2, "Psychic Scream takes two");
+    assert_eq!(explosion, 6, "Arcane Explosion all six");
+    assert_eq!(wrath, vec![undead], "Holy Wrath the undead alone");
+    // Its third may be a creature of the world's nearer the second.
+    assert_eq!(lightning.len(), 3, "Chain Lightning's three");
+    assert_eq!(lightning[..2], chain[..2], "jumping ten yards from each");
+    assert_eq!(nova, vec![ring[0]], "Frost Nova's ten yards");
+    assert_eq!(
+        reached,
+        vec![ring[0], ring[1]],
+        "and twelve with Arctic Reach"
+    );
+}
