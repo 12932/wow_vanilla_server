@@ -795,3 +795,42 @@ async fn a_cast_with_nothing_left_to_pay_with_fails() {
     assert_eq!(after, before, "no arrows: no shot, no mana spent");
     assert_eq!(drained, (true, 100_000, false), "drained: no Frostbolt");
 }
+
+#[tokio::test]
+async fn a_ghost_explores_nothing() {
+    const AREA: u32 = 12;
+    let mut d = crate::game::data::GameData::empty();
+    d.areas.insert(
+        AREA,
+        crate::game::data::AreaInfo {
+            id: AREA,
+            map: 0,
+            explore_bit: 33,
+            level: 1,
+            name: "Elwynn Forest".into(),
+            ..Default::default()
+        },
+    );
+    d.misc.exploration_xp.insert(1, 5);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGGHOST");
+    let g = a.enter("Bugghost", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let explored =
+        move |m: &Map| m.players[&g].fields.get_u32(PLAYER_EXPLORED_ZONES_1 + 1) & 0x2 != 0;
+    let out = map
+        .query(move |m| {
+            let now = m.now;
+            m.players.get_mut(&g).unwrap().death =
+                crate::game::map::death::Death::Ghost { since: now };
+            crate::game::map::exploration::entered(m, g, AREA);
+            let as_ghost = (explored(m), xp(m, g));
+            m.players.get_mut(&g).unwrap().death = crate::game::map::death::Death::Alive;
+            crate::game::map::exploration::entered(m, g, AREA);
+            (as_ghost, (explored(m), xp(m, g)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (false, 0), "a ghost explores nothing");
+    assert_eq!(out.1, (true, 5), "alive again, it is explored");
+}
