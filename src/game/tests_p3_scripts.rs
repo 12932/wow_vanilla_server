@@ -321,6 +321,63 @@ pub(super) async fn cast_start_of(
     .await
 }
 
+/// A cast of `spell` by `caster` that `c` sees begin or go within
+/// `within`: the unit it is aimed at (zero for none).
+pub(super) async fn cast_any_of(
+    c: &mut Client,
+    caster: Guid,
+    spell: u32,
+    within: Duration,
+) -> Option<Guid> {
+    c.gets(within, move |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == caster && s.spell == spell => {
+            Some(aimed_at(&s.targets))
+        }
+        ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.caster == caster && s.spell == spell => {
+            Some(aimed_at(&s.targets))
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// A timed cast of `g`'s, pulled just now: its event `id` first due
+/// `first` seconds on (from, to); made due, `spell` goes (at `at`, if
+/// given) and is due again `repeat` seconds on.
+pub(super) async fn timed_cast(
+    c: &mut Client,
+    map: &MapHandle,
+    g: Guid,
+    id: u32,
+    spell: u32,
+    first: (f32, f32),
+    repeat: (f32, f32),
+    at: Option<Guid>,
+) {
+    let t = timer(map, g, id).await;
+    assert!(
+        between(t, first.0, first.1),
+        "{id}: first in {t:?}, not {first:?}"
+    );
+    c.clear();
+    fire(map, g, id).await;
+    let t = timer(map, g, id).await;
+    // A next swing's ability goes with the swing.
+    let aimed = cast_any_of(c, g, spell, Duration::from_millis(3500))
+        .await
+        .unwrap_or_else(|| panic!("{id}: {spell} cast"));
+    if let Some(at) = at {
+        assert_eq!(aimed, at, "{spell} aimed");
+    }
+    assert!(
+        between(t, repeat.0, repeat.1),
+        "{id}: again in {t:?}, not {repeat:?}"
+    );
+    // A cast with a cast time ends before the next.
+    map.query(move |m| crate::game::map::spells::interrupt(m, g))
+        .await;
+}
+
 /// The casts by `caster` that `c` sees go over `within`: each spell and
 /// the unit it was aimed at.
 pub(super) async fn casts_by(c: &mut Client, caster: Guid, within: Duration) -> Vec<(u32, Guid)> {
@@ -346,21 +403,43 @@ pub(super) async fn casts_by(c: &mut Client, caster: Guid, within: Duration) -> 
     }
 }
 
-/// A text `c` hears `speaker` say, yell or emote within `within`.
+/// A line `c` hears `speaker` say or yell within `within`.
 pub(super) async fn heard(c: &mut Client, speaker: Guid, within: Duration) -> Option<String> {
     c.gets(within, move |m| match m {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(s) => {
-            let from = match &s.chat_type {
-                SMSG_MESSAGECHAT_ChatType::MonsterSay { sender1, .. }
-                | SMSG_MESSAGECHAT_ChatType::MonsterYell { sender1, .. }
-                | SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-                    monster: sender1, ..
-                } => *sender1,
-                SMSG_MESSAGECHAT_ChatType::RaidBossEmote { monster, .. } => *monster,
-                _ => return None,
-            };
-            (from == speaker).then(|| s.message.clone())
-        }
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(s) => match &s.chat_type {
+            SMSG_MESSAGECHAT_ChatType::MonsterSay { sender1, .. }
+            | SMSG_MESSAGECHAT_ChatType::MonsterYell { sender1, .. }
+                if *sender1 == speaker =>
+            {
+                Some(s.message.clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+    .await
+}
+
+/// An emote of the creature named `name` that `c` sees within `within`:
+/// its text, and the unit it is at (1.12's emote names its speaker, and
+/// carries its target's guid).
+pub(super) async fn emoted(
+    c: &mut Client,
+    name: &'static str,
+    within: Duration,
+) -> Option<(String, Guid)> {
+    c.gets(within, move |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(s) => match &s.chat_type {
+            SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+                monster,
+                monster_name,
+            }
+            | SMSG_MESSAGECHAT_ChatType::RaidBossEmote {
+                monster,
+                monster_name,
+            } if monster_name == name => Some((s.message.clone(), *monster)),
+            _ => None,
+        },
         _ => None,
     })
     .await
