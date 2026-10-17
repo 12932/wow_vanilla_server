@@ -496,7 +496,7 @@ fn target_triggers(map: &mut Map, e: &Event) {
                 .filter(|x| {
                     x.kind == auras::AURA_ADD_TARGET_TRIGGER
                         && x.trigger != 0
-                        && u64::from(x.mask) & spell.family_flags != 0
+                        && x.mask & spell.family_flags != 0
                 })
                 .map(|x| (x.trigger, x.amount as f32))
                 .collect::<Vec<_>>()

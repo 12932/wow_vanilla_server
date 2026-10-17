@@ -1479,7 +1479,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     amplitude: c.u32(&format!("effectAmplitude{n}")),
                     multiple_value: c.f32(&format!("effectMultipleValue{n}")),
                     chain_target: c.u32(&format!("effectChainTarget{n}")),
-                    item_type: c.u32(&format!("effectItemType{n}")),
+                    item_type: c.i64(&format!("effectItemType{n}")) as u64,
                     misc_value: c.i32(&format!("effectMiscValue{n}")),
                     trigger_spell: c.u32(&format!("effectTriggerSpell{n}")),
                     points_per_combo_point: c.f32(&format!("effectPointsPerComboPoint{n}")),
@@ -1825,7 +1825,9 @@ fn apply_spell_mods(db: &Connection, spells: &mut AHashMap<u32, super::spells::S
         set(&mut e.target_b, v[8]);
         set(&mut e.radius_index, v[9]);
         set(&mut e.aura, v[10]);
-        set(&mut e.item_type, v[11]);
+        if v[11] != -1 {
+            e.item_type = v[11] as u64;
+        }
         if v[12] != -1 {
             e.misc_value = v[12] as i32;
         }

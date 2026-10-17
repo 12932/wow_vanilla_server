@@ -84,8 +84,8 @@ impl Mods {
 }
 
 /// Whether a modifier with `mask` from a spell of `family` touches `s`.
-pub fn touches(family: u32, mask: u32, s: &SpellTemplate) -> bool {
-    family != 0 && family == s.family_name && u64::from(mask) & s.family_flags != 0
+pub fn touches(family: u32, mask: u64, s: &SpellTemplate) -> bool {
+    family != 0 && family == s.family_name && mask & s.family_flags != 0
 }
 
 /// The modifiers `caster`'s auras put on `s`.
@@ -147,20 +147,21 @@ pub fn spend(map: &mut Map, caster: Guid, mods: &Mods) {
     }
 }
 
-/// Tell a player's client the modifiers their auras give: for each bit of
-/// the family mask, the sum of each operation's flat and percent values.
+/// Tell a player's client the modifiers their auras give: for each of the
+/// family mask's 64 bits, the sum of each operation's flat and percent
+/// values.
 pub fn send(map: &Map, player: Guid) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let mut flat = [[0i32; OPS]; 32];
-    let mut pct = [[0i32; OPS]; 32];
+    let mut flat = [[0i32; OPS]; 64];
+    let mut pct = [[0i32; OPS]; 64];
     for (h, x) in p.auras.effects() {
         if !matches!(x.kind, AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER) {
             continue;
         }
         let op = x.misc.clamp(0, OPS as i32 - 1) as usize;
-        for bit in 0..32 {
+        for bit in 0..64 {
             if x.mask & (1 << bit) != 0 {
                 let v = x.amount * h.stacks.max(1) as i32;
                 if x.kind == AURA_ADD_FLAT_MODIFIER {
@@ -187,7 +188,7 @@ pub fn send(map: &Map, player: Guid) {
 
 /// A modifier aura came or went: the client hears every bit it covered
 /// again, with zeros where nothing is left.
-pub fn changed(map: &Map, player: Guid, mask: u32, op: usize, pct: bool) {
+pub fn changed(map: &Map, player: Guid, mask: u64, op: usize, pct: bool) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
@@ -196,7 +197,7 @@ pub fn changed(map: &Map, player: Guid, mask: u32, op: usize, pct: bool) {
     } else {
         AURA_ADD_FLAT_MODIFIER
     };
-    for bit in 0..32 {
+    for bit in 0..64 {
         if mask & (1 << bit) == 0 {
             continue;
         }

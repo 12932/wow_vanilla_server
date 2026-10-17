@@ -752,7 +752,12 @@ fn effect(
         }
         EFFECT_KNOCK_BACK => knock_back(map, caster, target, e.misc_value, amount),
         EFFECT_CREATE_ITEM if e.item_type != 0 => {
-            let item = super::scripts::created_item(map, caster, s, e.item_type);
+            let item = super::scripts::created_item(
+                map,
+                caster,
+                s,
+                u32::try_from(e.item_type).unwrap_or(0),
+            );
             let _ = crate::game::map::inventory::add_item(
                 map,
                 caster,
