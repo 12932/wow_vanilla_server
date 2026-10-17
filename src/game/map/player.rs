@@ -245,6 +245,9 @@ pub struct Player {
     pub driven: Option<crate::game::map::player_motion::Driven>,
     /// A charge it is on.
     pub charge: Option<crate::game::map::charge::Charge>,
+    /// The last place it stood on the ground, for Stuck: (map, position,
+    /// facing).
+    pub safe_position: Option<(u32, Vector3d, f32)>,
     pub drunk: crate::game::map::intoxication::Drunk,
     pub gadgets: crate::game::map::item_scripts::Gadgets,
     /// The pet, totems, guardians and charmed unit the player controls.
@@ -331,6 +334,7 @@ impl Player {
             derived: Default::default(),
             driven: None,
             charge: None,
+            safe_position: None,
             drunk: Default::default(),
             gadgets: Default::default(),
             owned: Default::default(),

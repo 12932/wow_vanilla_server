@@ -54,8 +54,10 @@ const DEFAULT_RADIUS: f32 = 0.389;
 pub const TALK_PAUSE: Duration = Duration::from_secs(180);
 /// How long a frightened critter keeps away.
 pub const ESCAPE: Duration = Duration::from_secs(30);
-/// Gravity, for a falling corpse.
+/// Gravity, and the speed a fall goes no faster than, for a falling
+/// corpse.
 const GRAVITY: f32 = 19.291_105;
+const TERMINAL_VELOCITY: f32 = 60.148_003;
 
 /// Where a creature may go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,6 +302,11 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
         return true;
     }
     let hab = habitat(map, g);
+    // One keeping its place in a formation goes only where it is led.
+    if (hab.fly || hab.swims) && crate::game::map::creature_groups::following(map, g) {
+        crate::game::map::ai::advance_motion(map, g);
+        return true;
+    }
     let Some(c) = map.creatures.get(key) else {
         return false;
     };
@@ -498,16 +505,12 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
         return;
     }
     let at = c.position;
-    let Some(ground) = map
-        .nav
-        .as_mut()
-        .and_then(|n| n.ground(at.x, at.y, at.z))
-        .filter(|z| *z < at.z - 1.0)
-    else {
+    // To the highest ground under it.
+    let Some(ground) = floor_under(map, at).filter(|z| *z < at.z - 0.1) else {
         return;
     };
     let height = at.z - ground;
-    let time = (2.0 * height / GRAVITY).sqrt();
+    let time = fall_time(height);
     let to = Vector3d { z: ground, ..at };
     let now = map.now;
     let spline_id = map.next_spline_id;
@@ -535,6 +538,20 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
     }
+}
+
+/// How long a fall of `height` yards takes (Thistle Tea's
+/// `Falling.duration`): under gravity, no faster than its terminal
+/// velocity, to the millisecond.
+pub fn fall_time(height: f32) -> f32 {
+    let terminal_time = TERMINAL_VELOCITY / GRAVITY;
+    let terminal_distance = TERMINAL_VELOCITY * TERMINAL_VELOCITY / (2.0 * GRAVITY);
+    let seconds = if height >= terminal_distance {
+        (height - terminal_distance) / TERMINAL_VELOCITY + terminal_time
+    } else {
+        (2.0 * height / GRAVITY).sqrt()
+    };
+    (seconds * 1000.0).ceil() / 1000.0
 }
 
 /// How fast a creature's wounds let it run: 70, 60 and 50 percent below

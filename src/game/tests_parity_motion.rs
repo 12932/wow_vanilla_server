@@ -1447,3 +1447,158 @@ async fn an_events_pooled_spawns_keep_to_their_pool() {
     assert_eq!(during.len(), 1, "one of the pool: {during:?}");
     assert!(after.is_empty(), "none after: {after:?}");
 }
+
+const BOLT: u32 = 92_007;
+const KNOCKBACK: u32 = 92_008;
+const STUCK: u32 = 92_009;
+
+/// A bolt with a three-second cast, a knockback and Stuck.
+fn with_minor_spells(mut d: GameData) -> GameData {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let s = &mut d.spells;
+    s.cast_times.insert(5, 3000);
+    let effect = |effect: u32, target_a: u32| SpellEffect {
+        effect,
+        base_points: 99,
+        base_dice: 1,
+        die_sides: 1,
+        target_a,
+        misc_value: 100,
+        ..Default::default()
+    };
+    let spell = |id: u32, name: &str, e: SpellEffect| SpellTemplate {
+        id,
+        name: name.into(),
+        range_index: 1,
+        equipped_item_class: -1,
+        effects: [e, SpellEffect::default(), SpellEffect::default()],
+        ..Default::default()
+    };
+    let bolt = SpellTemplate {
+        casting_time_index: 5,
+        ..spell(BOLT, "Bolt", effect(2, 6))
+    };
+    for t in [
+        bolt,
+        spell(KNOCKBACK, "Knockback", effect(98, 6)),
+        spell(STUCK, "Stuck", effect(84, 1)),
+    ] {
+        s.spells.insert(t.id, t);
+    }
+    d
+}
+
+/// A knockback stops the cast of a creature it could move, as a player's
+/// (Thistle Tea's `Knockback.launch`).
+#[tokio::test]
+async fn a_knockback_breaks_a_creatures_cast() {
+    let (_realm, mut a, ga, map) = enter(with_minor_spells(wolf_world())).await;
+    let g = wolf();
+    a.sees(g).await;
+    let (casting, after) = map
+        .query(move |m| {
+            crate::game::map::spells::cast(
+                m,
+                g,
+                BOLT,
+                crate::game::map::spells::Targets {
+                    unit: Some(ga),
+                    ..Default::default()
+                },
+                None,
+            );
+            let casting = m.creature(g).unwrap().caster.casting.is_some();
+            crate::game::map::spells::cast_triggered(m, ga, KNOCKBACK, Some(g));
+            (casting, m.creature(g).unwrap().caster.casting.is_some())
+        })
+        .await
+        .unwrap();
+    assert!(casting, "it casts");
+    assert!(!after, "the knockback breaks it");
+}
+
+/// A corpse falls no faster than terminal velocity (Thistle Tea's
+/// `Falling.duration`): gravity's 19.29 yd/s/s up to 60.15 yd/s, then
+/// that; some 9.9 s for 500 yards, not the 7.2 s of an endless gravity.
+#[test]
+fn a_corpse_falls_no_faster_than_terminal_velocity() {
+    let fall = crate::game::map::creature_motion::fall_time;
+    let (terminal, g) = (60.148_003f32, 19.291_105f32);
+    let reach = terminal * terminal / (2.0 * g);
+    let want = (500.0 - reach) / terminal + terminal / g;
+    assert!(
+        (fall(500.0) - want).abs() < 0.002,
+        "{} not {want}",
+        fall(500.0)
+    );
+    // Short of terminal velocity, gravity alone.
+    assert!((fall(10.0) - (20.0 / g).sqrt()).abs() < 0.002);
+}
+
+/// Stuck takes a player back to where it last stood on the ground, not to
+/// its hearth (Thistle Tea's `SafePosition`).
+#[tokio::test]
+async fn stuck_goes_back_to_where_one_last_stood() {
+    let (_realm, a, ga, map) = enter(with_minor_spells(world())).await;
+    let stood = at(60.0, 0.0);
+    a.heartbeat(stood.x, stood.y, stood.z).await;
+    // Off the ground, further on.
+    let leapt = at(70.0, 0.0);
+    a.send(MSG_MOVE_JUMP_Client {
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::new_jumping(MovementInfo_MovementFlags_Jumping {
+                cos_angle: 1.0,
+                sin_angle: 0.0,
+                xy_speed: 7.0,
+                z_speed: 7.0,
+            }),
+            timestamp: 0,
+            position: leapt,
+            orientation: 0.0,
+            fall_time: 0.0,
+        },
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let back = map
+        .query(move |m| {
+            crate::game::map::spells::cast_triggered(m, ga, STUCK, None);
+            m.players[&ga].position()
+        })
+        .await
+        .unwrap();
+    assert!(dist(back, stood) < 0.1, "where it stood: {back:?}");
+}
+
+/// A flyer keeping its place in a formation goes only where it is led: it
+/// doesn't circle on its own (Thistle Tea's `BT.Formation` comes before
+/// its idle flight).
+#[tokio::test]
+async fn a_flying_follower_goes_only_where_it_is_led() {
+    let mut d = group_world(0);
+    let mut bat = template(FLYER, "Bat", NEUTRAL);
+    bat.inhabit_type = 4;
+    d.creature_templates.insert(FLYER, bat);
+    let spawns = d.creature_spawns.get_mut(&0).unwrap();
+    let mut s = spawn(94, FLYER, v(START.0 + 17.0, START.1 - 40.0, START.2 + 10.0));
+    s.movement_type = 1;
+    s.wander_distance = 5.0;
+    spawns.push(s);
+    let members = d.scripts.groups.get_mut(&90).unwrap();
+    members[1].guid = 94;
+    d.scripts.group_of.remove(&91);
+    d.scripts.group_of.insert(94, 90);
+    let (_realm, _a, _ga, map) = enter(d).await;
+    let bat = guid::unit(FLYER, 94);
+    let circling = map
+        .query(move |m| {
+            let key = m.creature_by_guid[&bat];
+            let now = m.now;
+            m.creature_mut(bat).unwrap().motion = Motion::Idle { until: Some(now) };
+            crate::game::map::creature_motion::idle_step(m, key);
+            walking(m, bat).is_some()
+        })
+        .await
+        .unwrap();
+    assert!(!circling, "it waits on its leader");
+}
