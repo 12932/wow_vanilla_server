@@ -593,7 +593,8 @@ async fn triage(realm: &Arc<Realm>) {
 /// once, and its player keeps up, until `quest` is done and the escort
 /// over (leaving it sooner fails the quest).
 async fn hurry_escort(map: &MapHandle, g: Guid, escortee: u32, quest: u32) -> bool {
-    for _ in 0..600 {
+    // A minute at most: a loaded machine can take a while over the walk.
+    for _ in 0..2000 {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let over = map
             .query(move |m| {
@@ -639,6 +640,21 @@ async fn stinkys_escape(realm: &Arc<Realm>) {
             "{quest} done at the credit point"
         );
         turn_in(realm, &mut c, ender, quest).await;
+        // The escort's end despawns him on his spawn's timer (three
+        // minutes), as Thistle Tea's; the next walk wants him back now.
+        let _ = map
+            .query(|m| {
+                let dead: Vec<Guid> = m
+                    .creatures
+                    .iter()
+                    .filter(|(_, c)| c.entry == STINKY && !c.alive())
+                    .map(|(_, c)| c.guid)
+                    .collect();
+                for g in dead {
+                    crate::game::map::ai::respawn_now(m, g);
+                }
+            })
+            .await;
     }
 }
 
