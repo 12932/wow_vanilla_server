@@ -831,14 +831,10 @@ fn effect(
                 auras::remove_spell(map, target, spell, None);
             }
         }
+        // Its amount is seconds.
         EFFECT_DISTRACT => {
-            let until = map.now + Duration::from_millis(amount.max(1000) as u64);
-            if let (Some(c), Some(at)) = (map.creature_mut(target), t.dest) {
-                if c.combat.attacking {
-                    return;
-                }
-                c.orientation = (at.y - c.position.y).atan2(at.x - c.position.x);
-                c.motion = crate::game::map::creature::Motion::Idle { until: Some(until) };
+            if let Some(at) = t.dest {
+                crate::game::map::creature_motion::distract(map, target, at, amount);
             }
         }
         EFFECT_ADD_COMBO_POINTS => add_combo_points(map, caster, target, amount.max(1) as u8),

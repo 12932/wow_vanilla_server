@@ -475,11 +475,31 @@ fn with_spells(mut d: GameData) -> GameData {
         effects: [e, SpellEffect::default(), SpellEffect::default()],
         ..Default::default()
     };
+    // Distract as the client's data has it (1725): ten seconds on the
+    // enemies within ten yards of the point.
+    s.radii.insert(13, 10.0);
+    let distract = SpellTemplate {
+        targets: 0x40,
+        ..spell(
+            DISTRACT,
+            "Distract",
+            SpellEffect {
+                effect: 69,
+                base_points: 9,
+                base_dice: 1,
+                die_sides: 1,
+                target_a: 16,
+                radius_index: 13,
+                ..Default::default()
+            },
+        )
+    };
     for t in [
         spell(FEAR, "Fear", aura(7)),
         spell(CONFUSE, "Confuse", aura(5)),
         spell(ROOT, "Root", aura(26)),
         spell(STUN, "Stun", aura(12)),
+        distract,
     ] {
         s.spells.insert(t.id, t);
     }
@@ -749,4 +769,64 @@ async fn a_feared_players_runs_keep_to_the_navmesh() {
         assert!(length <= 30.01, "no further than thirty yards: {length}");
         assert!(on_mesh, "to a point of the navmesh");
     }
+}
+
+/// Distract, as Thistle Tea's `Distraction`: a creature out of a fight
+/// stops, turns to the point (its watchers told of both) and stands the
+/// effect's ten seconds, not one; one in a fight pays it no heed.
+#[tokio::test]
+async fn distract_stops_and_turns_a_creature_for_its_seconds() {
+    let mut d = wolf_world();
+    d.creature_spawns
+        .get_mut(&0)
+        .unwrap()
+        .push(spawn(81, WOLF, at(16.0, 3.0)));
+    let (_realm, mut a, ga, map) = enter(d).await;
+    let (g, fighter) = (wolf(), guid::unit(WOLF, 81));
+    a.sees(g).await;
+    let point = at(15.0, 0.0);
+    let (walk, walking_after, held_for, facing, fighter_held) = map
+        .query(move |m| {
+            crate::game::map::ai::attacked(m, fighter, ga);
+            let walk = send_off(m, g, at(10.0, 20.0));
+            let now = m.now;
+            crate::game::map::spells::cast_triggered_at(m, ga, DISTRACT, point);
+            let held = |m: &crate::game::map::Map, x: Guid| match m.creature(x).unwrap().motion {
+                Motion::Idle { until: Some(t) } => Some(t.duration_since(now)),
+                _ => None,
+            };
+            let facing = m.creature(g).unwrap().orientation;
+            (walk, walking(m, g), held(m, g), facing, held(m, fighter))
+        })
+        .await
+        .unwrap();
+    assert_eq!(walking_after, None, "it stops");
+    let held = held_for.expect("it is distracted");
+    assert!(
+        held >= Duration::from_millis(9_900) && held <= Duration::from_secs(10),
+        "for ten seconds: {held:?}"
+    );
+    assert!(facing.abs() < 0.01, "toward the point, east: {facing}");
+    assert!(
+        fighter_held.is_none_or(|t| t < Duration::from_secs(1)),
+        "one fighting pays it no heed: {fighter_held:?}"
+    );
+    let stop = next_move(&mut a, g, |m| m.kind == 1).await;
+    assert_ne!(stop.id, walk);
+    let face = next_move(&mut a, g, |m| m.kind == 4).await;
+    assert!(face.angle.is_some_and(|o| o.abs() < 0.01), "{face:?}");
+    // It stands while it lasts, as ready to wander as it may be.
+    let still = map
+        .query(move |m| {
+            let now = m.now;
+            let c = m.creature_mut(g).unwrap();
+            c.movement_type = crate::game::map::creature::MOVEMENT_RANDOM;
+            c.wander_distance = 5.0;
+            c.motion = Motion::Idle { until: Some(now) };
+            crate::game::map::ai::update_creatures(m);
+            walking(m, g).is_none()
+        })
+        .await
+        .unwrap();
+    assert!(still, "it stands");
 }

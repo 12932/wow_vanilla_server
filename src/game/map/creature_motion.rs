@@ -640,6 +640,84 @@ pub fn retime(map: &mut Map, g: Guid) {
     }
 }
 
+/// Whether a creature heeds a distraction (Thistle Tea's
+/// `Distraction.responsive?`): alive, out of a fight and going nowhere of
+/// its own, not feared, stunned, confused or feigning death.
+fn heeds_distraction(map: &Map, g: Guid) -> bool {
+    use crate::game::map::auras::{
+        AURA_FEIGN_DEATH, AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_STUN, AURA_PREVENTS_FLEEING,
+    };
+    map.creature(g).is_some_and(|c| {
+        let a = &c.auras;
+        c.alive()
+            && c.pet.is_none()
+            && !c.evading
+            && !c.combat.attacking
+            && !c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+            && !(a.has(AURA_MOD_FEAR) && !a.has(AURA_PREVENTS_FLEEING))
+            && !a.has(AURA_MOD_STUN)
+            && !a.has(AURA_MOD_CONFUSE)
+            && !a.has(AURA_FEIGN_DEATH)
+    })
+}
+
+/// Distract (spell effect 69), as Thistle Tea's `Distraction.apply`: a
+/// creature that heeds it stops where it is, turns to `at`, its watchers
+/// told, and stands for the effect's `seconds`, its wandering or patrol
+/// waiting (the point it was bound for kept). One that never moves pays it
+/// no heed.
+pub fn distract(map: &mut Map, g: Guid, at: Vector3d, seconds: i32) {
+    if seconds <= 0 || !heeds_distraction(map, g) || sessile(map, g) {
+        return;
+    }
+    let now = map.now;
+    let until = now + Duration::from_secs(seconds as u64);
+    crate::game::map::ai::halt(map, g);
+    let spline_id = map.next_spline_id;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let pos = c.position;
+    if at.x != pos.x || at.y != pos.y {
+        c.orientation = (at.y - pos.y).atan2(at.x - pos.x);
+    }
+    let o = c.orientation;
+    c.engagement.distracted_until = Some(until);
+    c.motion = Motion::Idle { until: Some(until) };
+    let frame = crate::game::map::ai::face_packet(g, pos, o, spline_id);
+    map.send_to_observers(g, &frame, false);
+}
+
+/// Whether a distraction holds a creature still now. It ends with its
+/// time, or as soon as the creature no longer heeds it (a fight, fear).
+pub fn distracted(map: &mut Map, g: Guid) -> bool {
+    let now = map.now;
+    let until = map.creature(g).and_then(|c| c.engagement.distracted_until);
+    let Some(until) = until else {
+        return false;
+    };
+    if until > now && heeds_distraction(map, g) {
+        return true;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.distracted_until = None;
+    }
+    false
+}
+
+/// [`distracted`], without ending one.
+pub fn held_by_distraction(map: &Map, g: Guid) -> bool {
+    let now = map.now;
+    map.creature(g)
+        .and_then(|c| c.engagement.distracted_until)
+        .is_some_and(|t| t > now)
+        && heeds_distraction(map, g)
+}
+
 /// A player greets a creature or picks its gossip: its wandering or patrol
 /// waits three minutes, unless it is fighting, dead, flying, on a
 /// script's move, or its template keeps it going.

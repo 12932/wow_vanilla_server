@@ -81,6 +81,8 @@ pub struct Engagement {
     pub watch_at: Option<Instant>,
     /// When a frightened critter's escape ends.
     pub escape_at: Option<Instant>,
+    /// Until when a distraction holds it.
+    pub distracted_until: Option<Instant>,
     /// Damage it took from players' side, and from NPCs', this fight.
     pub damage_by_players: u64,
     pub damage_by_npcs: u64,
