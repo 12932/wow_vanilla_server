@@ -1235,3 +1235,58 @@ async fn lavas_grace_comes_back_ten_times_as_fast_and_is_kept_when_one_steps_in_
     assert!(gone);
     assert_eq!(h[4], h[3]);
 }
+
+#[tokio::test]
+async fn the_real_environmental_fires_are_fire_and_burn_without_a_fight() {
+    let Some(real) = crate::game::data::load::real_data() else {
+        return;
+    };
+    let ids = [7897, 7902, 12_796, 20_533, 20_676, 21_650, 23_485, 29_115];
+    for id in ids {
+        let s = real.spells.get(id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(s.school, 2, "{id}: fire");
+        let kinds: Vec<u32> = s
+            .effects
+            .iter()
+            .map(|e| e.effect)
+            .filter(|e| *e != 0)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![crate::game::map::spells::EFFECT_ENVIRONMENTAL_DAMAGE],
+            "{id}"
+        );
+    }
+    let mut d = world();
+    super::tests_p3_world_bg::copy_spell(&mut d, real, 7897);
+    super::tests_pvp2::npc(&mut d, 90_500, "Kobold", 14);
+    let realm = harness::realm_with(d);
+    let (mut a, g) = alice(&realm, Class::Warrior).await;
+    a.clear();
+    let fighting = on_map(&realm, move |m| {
+        hardy(m, g);
+        let pos = m.players[&g].position();
+        let spawn = crate::game::data::CreatureSpawn {
+            guid: 0x7D_0001,
+            entries: vec![90_500],
+            map: 0,
+            x: pos.x + 2.0,
+            y: pos.y,
+            z: pos.z,
+            ..Default::default()
+        };
+        let data = m.realm.data.clone();
+        let c = crate::game::map::creature::Creature::from_spawn(&data, &spawn, &mut rand::rng())
+            .unwrap();
+        let fire = m.add_creature(c);
+        crate::game::map::spells::cast_triggered(m, fire, 7897, Some(g));
+        m.players[&g].fields.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+    })
+    .await;
+    assert!(!fighting, "no fight");
+    let (kind, ..) = log(&mut a).await;
+    assert_eq!(kind, EnvironmentalDamageType::Fire);
+}
