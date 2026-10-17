@@ -765,14 +765,38 @@ fn captain_buff(map: &mut Map, s: usize) {
     }
 }
 
-/// The nearest graveyard a side holds.
+/// The nearest of a side's graveyards: its base's, and those it holds
+/// (Thistle Tea's, the base's among them).
 pub fn graveyard(map: &Map, s: usize, pos: Vector3d) -> Option<(Vector3d, f32)> {
     let av = map.battleground.as_ref()?.av.as_ref()?;
-    let held: Vec<u32> = (0..7)
-        .filter(|id| av.controlled_by(*id) == Some(s))
-        .map(|id| NODE_GRAVEYARDS[id])
+    let held: Vec<u32> = [[611u32, 610][s]]
+        .into_iter()
+        .chain(
+            (0..7)
+                .filter(|id| av.controlled_by(*id) == Some(s))
+                .map(|id| NODE_GRAVEYARDS[id]),
+        )
         .collect();
     bg::nearest_safe_loc(map, &held, pos)
+}
+
+/// The mines' supplies, Irondeep's then Coldtooth's.
+const SUPPLIES: [[u32; 3]; 2] = [[178785, 178788, 178789], [178784, 178786, 178787]];
+
+/// Whether `object` is a mine's supplies the side `s` may not take: only
+/// the side holding the mine may (Thistle Tea's `Mine.supply_allowed?`).
+pub fn supplies_barred(map: &Map, s: Option<usize>, object: Guid) -> bool {
+    let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
+        return false;
+    };
+    let Some(mine) = SUPPLIES.iter().position(|e| e.contains(&entry)) else {
+        return false;
+    };
+    let Some(m) = map.battleground.as_ref() else {
+        return false;
+    };
+    let owner = m.av.as_ref().and_then(|av| av.mines[mine].owner);
+    !m.playing() || owner.is_none() || owner != s
 }
 
 #[allow(dead_code)]

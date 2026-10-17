@@ -205,6 +205,7 @@ pub fn release(map: &mut Map, g: Guid) {
     map.add_corpse(corpse);
     // In a battleground, the fallen wait at their side's start.
     if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
+        crate::game::map::battleground::released(map, g);
         map.teleport(g, map.key, at, facing);
         return;
     }

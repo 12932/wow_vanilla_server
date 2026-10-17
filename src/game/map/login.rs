@@ -24,6 +24,12 @@ pub const LOGOUT_DELAY: Duration = Duration::from_secs(20);
 /// The packets a client gets on entering the world, up to its own create
 /// block. Everything around it follows at the next update.
 pub fn send_login(map: &mut Map, p: &mut Player) {
+    // The helm and cloak as they were left.
+    use crate::game::map::player::{PLAYER_FLAGS_HIDE_CLOAK, PLAYER_FLAGS_HIDE_HELM};
+    for flag in [PLAYER_FLAGS_HIDE_HELM, PLAYER_FLAGS_HIDE_CLOAK] {
+        let on = p.row.state.flags & flag != 0;
+        p.fields.set_flag(PLAYER_FLAGS, flag, on);
+    }
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_VERIFY_WORLD {
         map: map_enum(map.key.map),
@@ -118,6 +124,20 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         let sequence = c.cinematic;
         crate::game::map::cinematic::begin(map, p, sequence);
     }
+    // Temporary enchantments' time left (Thistle Tea's
+    // `send_active_timers`).
+    for item in &p.items {
+        let e = crate::game::map::enchant::get(item, crate::game::map::enchant::TEMP_SLOT);
+        if e.id != 0 && e.duration_ms > 0 {
+            p.outbound
+                .send(&wow_world_messages::vanilla::SMSG_ITEM_ENCHANT_TIME_UPDATE {
+                    item: item.guid,
+                    slot: crate::game::map::enchant::TEMP_SLOT as u32,
+                    duration: e.duration_ms / 1000,
+                    player: guid,
+                });
+        }
+    }
     let motd = &map.realm.config.motd;
     if !motd.is_empty() {
         chat::send_system(&p.outbound, motd);
@@ -146,27 +166,56 @@ pub fn game_time() -> DateTime {
     )
 }
 
-/// `CMSG_LOGOUT_REQUEST`: sit, root, and leave after [`LOGOUT_DELAY`];
-/// at once for a GM.
+/// GM Freeze: no logout under it.
+const SPELL_GM_FREEZE: u32 = 9454;
+/// `PLAYER_FIELD_BYTES`' first byte: logging out.
+const FIELD_BYTES_LOGGING_OUT: u8 = 0x04;
+
+/// `CMSG_LOGOUT_REQUEST`, as Thistle Tea's `Logout`: refused in combat,
+/// in the air or frozen by a GM; at once resting, on a flight or for a GM;
+/// else after [`LOGOUT_DELAY`], sat down and rooted if free to move. A
+/// trade and a loot window close first.
 pub fn request_logout(map: &mut Map, guid: Guid) {
     let now = map.now;
-    let Some(p) = map.players.get_mut(&guid) else {
+    let Some(p) = map.players.get(&guid) else {
         return;
     };
     if p.logout_at.is_some() {
         return;
     }
-    if p.fields.has_flag(
+    if let Some(target) = p.looting {
+        crate::game::map::loot::release(map, guid, target);
+    }
+    crate::game::map::trade::cancel(
+        map,
+        guid,
+        wow_world_messages::vanilla::SMSG_TRADE_STATUS_TradeStatus::TradeCanceled,
+    );
+    let Some(p) = map.players.get_mut(&guid) else {
+        return;
+    };
+    let airborne = p.movement.flags.get_jumping().is_some() || p.movement.flags.get_fallingfar();
+    let refused = if p.fields.has_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::player::UNIT_FLAG_IN_COMBAT,
     ) {
+        Some(LogoutResult::FailureInCombat)
+    } else if airborne {
+        Some(LogoutResult::FailureJumpingOrFalling)
+    } else if p.auras.has_spell(SPELL_GM_FREEZE) {
+        Some(LogoutResult::FailureFrozenByGm)
+    } else {
+        None
+    };
+    if let Some(result) = refused {
         p.outbound.send(&SMSG_LOGOUT_RESPONSE {
-            result: LogoutResult::FailureInCombat,
+            result,
             speed: LogoutSpeed::Delayed,
         });
         return;
     }
     let instant = p.gm
+        || p.flight.is_some()
         || p.fields
             .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_RESTING);
     p.outbound.send(&SMSG_LOGOUT_RESPONSE {
@@ -182,9 +231,44 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         return;
     }
     p.logout_at = Some(now + LOGOUT_DELAY);
-    p.set_stand_state(STAND_STATE_SIT);
+    use crate::game::map::auras::{AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_ROOT, AURA_MOD_STUN};
+    let held = [AURA_MOD_ROOT, AURA_MOD_STUN, AURA_MOD_FEAR, AURA_MOD_CONFUSE]
+        .iter()
+        .any(|a| p.auras.has(*a));
+    let free = !held && p.death == crate::game::map::death::Death::Alive;
+    let flags = p.fields.get_byte(PLAYER_FIELD_BYTES, 0);
+    p.fields
+        .set_byte(PLAYER_FIELD_BYTES, 0, flags | FIELD_BYTES_LOGGING_OUT);
+    p.misc.logout_rooted = free;
+    if !free {
+        return;
+    }
+    let mounted = p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0;
+    let swimming = p.movement.flags.get_swimming().is_some();
+    if p.stand_state() == STAND_STATE_STAND && !mounted && !swimming {
+        p.set_stand_state(STAND_STATE_SIT);
+    }
     p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, true);
     p.outbound.send(&SMSG_FORCE_MOVE_ROOT { guid, counter: 0 });
+}
+
+/// The logout's posture and root undone, as far as it made them.
+fn undo_logout(p: &mut crate::game::map::player::Player) {
+    let flags = p.fields.get_byte(PLAYER_FIELD_BYTES, 0);
+    p.fields
+        .set_byte(PLAYER_FIELD_BYTES, 0, flags & !FIELD_BYTES_LOGGING_OUT);
+    if !std::mem::take(&mut p.misc.logout_rooted) {
+        return;
+    }
+    if p.stand_state() == STAND_STATE_SIT && p.death == crate::game::map::death::Death::Alive {
+        p.set_stand_state(STAND_STATE_STAND);
+    }
+    p.fields
+        .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
+    p.outbound.send(&SMSG_FORCE_MOVE_UNROOT {
+        guid: p.guid,
+        counter: 0,
+    });
 }
 
 /// `CMSG_LOGOUT_CANCEL`.
@@ -196,11 +280,7 @@ pub fn cancel_logout(map: &mut Map, guid: Guid) {
         return;
     }
     p.outbound.send(&SMSG_LOGOUT_CANCEL_ACK {});
-    p.set_stand_state(STAND_STATE_STAND);
-    p.fields
-        .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
-    p.outbound
-        .send(&SMSG_FORCE_MOVE_UNROOT { guid, counter: 0 });
+    undo_logout(p);
 }
 
 /// The logout is due: save the character and hand the session back to the
@@ -210,9 +290,7 @@ pub fn complete_logout(map: &mut Map, guid: Guid) {
         return;
     };
     p.logout_at = None;
-    p.set_stand_state(STAND_STATE_STAND);
-    p.fields
-        .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
+    undo_logout(&mut p);
     let session = p.online.session.clone();
     map.save_and_go_offline(p);
     let _ = session.send(Control::LoggedOut);

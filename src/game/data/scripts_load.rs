@@ -278,11 +278,14 @@ pub fn load(db: &Connection, data: &mut GameData) {
     }) {
         s.map_templates.insert(t.map, t);
     }
-    for (id, script) in rows(db, "SELECT * FROM areatrigger_template", |c| {
-        (c.u32("id"), c.u32("script_id"))
+    for (id, script, cooldown) in rows(db, "SELECT * FROM areatrigger_template", |c| {
+        (c.u32("id"), c.u32("script_id"), c.u32("cooldown"))
     }) {
         if script != 0 {
             s.areatrigger_script.insert(id, script);
+        }
+        if cooldown != 0 {
+            s.areatrigger_cooldown.insert(id, cooldown);
         }
     }
     for (event, holiday) in rows(db, "SELECT entry, holiday FROM game_event", |c| {

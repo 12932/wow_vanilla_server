@@ -71,6 +71,12 @@ pub struct PlayerMisc {
     pub items_checked_at: Option<Instant>,
     pub items_login_checked: bool,
     pub timed_told: Vec<Guid>,
+    /// A logout under way sat and rooted the player.
+    pub logout_rooted: bool,
+    /// A fall under way: whether it went far, and the transport it is
+    /// measured on.
+    pub fall_far: bool,
+    pub fall_transport: Guid,
 }
 
 /// A summons: to the summoner's side.
