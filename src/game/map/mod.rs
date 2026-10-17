@@ -306,6 +306,10 @@ pub struct Map {
     pub creature_by_guid: AHashMap<Guid, usize>,
     pub gameobjects: Slab<GameObject>,
     pub gameobject_by_guid: AHashMap<Guid, usize>,
+    /// The game objects (their keys) that may have changed since the last
+    /// update's flush: every change to one goes through
+    /// `Map::gameobject_mut`, or comes with `Map::add_gameobject`.
+    touched_objects: Vec<usize>,
     pub corpses: AHashMap<Guid, death::Corpse>,
     /// Creatures dead and waiting to decay or respawn.
     pub dead_creatures: Vec<Guid>,
@@ -366,7 +370,9 @@ pub struct Map {
     /// Scripted map events under way.
     pub map_events: map_events::Events,
     pub spells: spells::MapSpells,
-    /// Which of a fight's rarer states a creature here may be in.
+    /// Which of the rarer states a creature here may be in (a charge, a
+    /// flight, a call for help, a cast, a pet), so the update can skip its
+    /// looks for them.
     pub rare: creature_combat::RareStates,
     /// Creatures that may be awake: seen by a player, or in a fight
     /// (attacking, attacked, evading, or down in a feign death). Every
@@ -504,6 +510,7 @@ impl Map {
             creature_by_guid: AHashMap::new(),
             gameobjects: Slab::new(),
             gameobject_by_guid: AHashMap::new(),
+            touched_objects: Vec::new(),
             corpses: AHashMap::new(),
             dead_creatures: Vec::new(),
             vendor_stock: AHashMap::new(),
@@ -985,7 +992,15 @@ impl Map {
             }
             p.fields.clear_dirty();
         }
-        for (_, o) in self.gameobjects.iter_mut() {
+        // Only a game object changed since the last flush can have dirty
+        // fields; in key order, as a look through every one goes.
+        let mut touched = std::mem::take(&mut self.touched_objects);
+        touched.sort_unstable();
+        touched.dedup();
+        for k in touched {
+            let Some(o) = self.gameobjects.get_mut(k) else {
+                continue;
+            };
             if !o.fields.is_dirty() {
                 continue;
             }
@@ -998,6 +1013,11 @@ impl Map {
             }
             o.fields.clear_dirty();
         }
+        debug_assert!(
+            self.gameobjects.iter().all(|(_, o)| !o.fields.is_dirty()),
+            "{}: a game object changed, but not through Map::gameobject_mut",
+            self.key
+        );
         for (_, c) in self.creatures.iter_mut() {
             if !c.fields.is_dirty() {
                 continue;
@@ -1126,6 +1146,7 @@ impl Map {
 
     pub fn gameobject_mut(&mut self, guid: Guid) -> Option<&mut GameObject> {
         let k = *self.gameobject_by_guid.get(&guid)?;
+        self.touched_objects.push(k);
         self.gameobjects.get_mut(k)
     }
 
@@ -1154,6 +1175,7 @@ impl Map {
         let guid = g.guid;
         let cell = g.cell;
         let key = self.gameobjects.insert(g);
+        self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
