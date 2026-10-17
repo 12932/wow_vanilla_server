@@ -83,6 +83,9 @@ pub struct Run {
     /// The EventAI event (its creature and index) that checks this run's
     /// result: if it fails, the event may fire again at once.
     pub checked: Option<(Guid, usize)>,
+    /// Its steps run at once, their delays aside: an EventAI event's
+    /// actions, as Thistle Tea runs them (`Run.start`'s `:direct`).
+    pub direct: bool,
 }
 
 /// The scripts running on a map.
@@ -131,6 +134,7 @@ pub fn start_checked(
         source,
         target,
         checked,
+        direct: table == ScriptTable::CreatureAi,
     });
     let i = map.scripts.runs.len() - 1;
     map.scripts.depth += 1;
@@ -175,7 +179,8 @@ fn advance(map: &mut Map, i: usize) {
             map.scripts.runs[i].next = usize::MAX;
             return;
         };
-        if run.started + Duration::from_millis(u64::from(step.delay_ms)) > map.now {
+        let delay = if run.direct { 0 } else { step.delay_ms };
+        if run.started + Duration::from_millis(u64::from(delay)) > map.now {
             return;
         }
         map.scripts.runs[i].next += 1;
