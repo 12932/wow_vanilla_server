@@ -92,6 +92,8 @@ mod tests_p3_combat8;
 #[cfg(test)]
 mod tests_p3_combat9;
 #[cfg(test)]
+mod tests_p3_core_inventory;
+#[cfg(test)]
 mod tests_p3_items;
 #[cfg(test)]
 mod tests_p3_items_loot;

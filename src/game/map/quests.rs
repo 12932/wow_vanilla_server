@@ -1354,13 +1354,23 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
             None => return,
         }
     }
-    let free = p
-        .carry_slots(&data)
+    // What it takes and gives, as one change: the rewards in the room the
+    // taken items leave, onto stacks, within their unique limits; what it
+    // takes carried, not banked (Thistle Tea's turn-in plan, mangos's
+    // "quest items in bank").
+    let required: Vec<(u32, u32)> = q
+        .required_items
         .iter()
-        .filter(|(b, s)| p.item_at(*b, *s).is_none())
-        .count();
-    if free < rewards.len() {
-        return invalid(p, QuestFailedReason::QuestFailedInventoryFull);
+        .copied()
+        .filter(|(i, _)| *i != 0)
+        .collect();
+    let given: Vec<(u32, u32)> = rewards.iter().map(|(i, n)| (*i, (*n).max(1))).collect();
+    match inventory::plan_change(p, &data, &required, &given) {
+        Ok(()) => {}
+        Err(inventory::Fail::InventoryFull) => {
+            return invalid(p, QuestFailedReason::QuestFailedInventoryFull);
+        }
+        Err(f) => return inventory::send_fail(p, f, Guid::zero()),
     }
     // Take what the quest needed.
     for (item, count) in q.required_items.iter().filter(|(i, _)| *i != 0) {
@@ -1450,13 +1460,18 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     }
 }
 
-/// Take `count` of `item` from wherever the player carries it.
+/// Take `count` of `item` from wherever the player carries it, not the
+/// bank (mangos's `DestroyItemCount`).
 fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32) {
     while count > 0 {
         let Some(p) = map.players.get(&player) else {
             return;
         };
-        let Some(i) = p.items.iter().position(|it| it.entry == item) else {
+        let Some(i) = p
+            .items
+            .iter()
+            .position(|it| it.entry == item && it.carried())
+        else {
             return;
         };
         let n = p.items[i].count().min(count);

@@ -522,16 +522,29 @@ pub fn rewrap_loaded(item: &mut crate::game::map::player::Item, gift: u32, w: Wr
         .set_guid(ITEM_FIELD_GIFTCREATOR, Guid::new(w.creator));
 }
 
-/// The bank's slots: its own, then its bags'.
+/// The bank's slots, in the order an item is put away there: the bags
+/// made for it, the bank's own, then its plain bags (mangos's
+/// `CanBankItem`, Thistle Tea's special bank bags first).
 fn bank_slots(
     p: &crate::game::map::player::Player,
     data: &crate::game::data::GameData,
+    t: Option<&crate::game::data::ItemTemplate>,
 ) -> Vec<(u8, u8)> {
-    let mut slots: Vec<(u8, u8)> = (BANK_START..BANK_END).map(|s| (BAG_PLAYER, s)).collect();
-    for bag in BANK_BAG_START..BANK_BAG_END {
-        if p.item_at(BAG_PLAYER, bag).is_some() {
-            slots.extend((0..p.bag_size(data, bag)).map(|s| (bag, s)));
-        }
+    use crate::game::map::items::{bag_family, fits_bag};
+    let bags: Vec<u8> = (BANK_BAG_START..BANK_BAG_END)
+        .filter(|b| p.item_at(BAG_PLAYER, *b).is_some())
+        .collect();
+    let special = bags
+        .iter()
+        .filter(|b| bag_family(data, p, **b) != 0 && fits_bag(data, p, **b, t));
+    let plain = bags.iter().filter(|b| bag_family(data, p, **b) == 0);
+    let mut slots: Vec<(u8, u8)> = Vec::new();
+    for bag in special {
+        slots.extend((0..p.bag_size(data, *bag)).map(|s| (*bag, s)));
+    }
+    slots.extend((BANK_START..BANK_END).map(|s| (BAG_PLAYER, s)));
+    for bag in plain {
+        slots.extend((0..p.bag_size(data, *bag)).map(|s| (*bag, s)));
     }
     slots
 }
@@ -541,38 +554,37 @@ fn in_bank(at: (u8, u8)) -> bool {
         || (BANK_BAG_START..BANK_BAG_END).contains(&at.0)
 }
 
-/// `CMSG_AUTOBANK_ITEM`: into the first free bank slot.
+/// `CMSG_AUTOBANK_ITEM`: into the bank, onto its stacks there first.
 fn bank(map: &mut Map, g: Guid, from: (u8, u8)) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    if p.item_at(from.0, from.1).is_none() || in_bank(from) {
+    let Some(i) = p.item_at(from.0, from.1) else {
+        return;
+    };
+    if in_bank(from) {
         return;
     }
-    match bank_slots(p, &data)
-        .into_iter()
-        .find(|(b, s)| p.item_at(*b, *s).is_none())
-    {
-        Some(to) => inventory::move_item(map, g, from, to),
-        None => fail(p, InventoryResult::BankFull, Guid::zero()),
-    }
+    let slots = bank_slots(p, &data, data.item(p.items[i].entry));
+    inventory::stow(map, g, from, &slots, inventory::Fail::BankFull);
 }
 
-/// `CMSG_AUTOSTORE_BANK_ITEM`: from the bank into the first free carried
-/// slot.
+/// `CMSG_AUTOSTORE_BANK_ITEM`: from the bank into the bags, onto their
+/// stacks first.
 fn unbank(map: &mut Map, g: Guid, from: (u8, u8)) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    if p.item_at(from.0, from.1).is_none() || !in_bank(from) {
+    let Some(i) = p.item_at(from.0, from.1) else {
+        return;
+    };
+    if !in_bank(from) {
         return;
     }
-    match p.free_carry_slot(&data) {
-        Some(to) => inventory::move_item(map, g, from, to),
-        None => fail(p, InventoryResult::InventoryFull, Guid::zero()),
-    }
+    let slots = crate::game::map::items::carry_slots(&data, p, data.item(p.items[i].entry));
+    inventory::stow(map, g, from, &slots, inventory::Fail::InventoryFull);
 }
 
 /// `CMSG_AUTOEQUIP_ITEM_SLOT`: an item, wherever it is, into an
