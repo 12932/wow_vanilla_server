@@ -1272,6 +1272,8 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
         .await
         .flatten()
         .expect("the escort sets out");
+    // Some fields are for the debug output alone.
+    #[allow(dead_code)]
     #[derive(Debug, Clone, Default)]
     struct State {
         point: Option<u32>,
@@ -1505,4 +1507,315 @@ async fn an_escort_runs_under_its_quests_map_event() {
         now = going(&map, g, grark, QUEST).await;
     }
     assert!(now.over && !now.failed, "over, not failed: {now:?}");
+}
+
+fn wanted(name: &str) -> bool {
+    let yes = std::env::var("EVENTS_ONLY").map_or(true, |v| v.split(',').any(|w| w == name));
+    if yes && debug() {
+        eprintln!("event quests: {name}");
+    }
+    yes
+}
+
+/// `c` uses the item `item` from their bags on the object `object`.
+async fn use_item_on_object(c: &mut Client, map: &MapHandle, item: u32, object: Guid) {
+    let g = c.guid;
+    let (bag, slot) = map
+        .query(move |m| {
+            let p = m.players.get_mut(&g).unwrap();
+            p.caster.gcd_until = None;
+            p.caster.cooldowns.clear();
+            p.caster.category_cooldowns.clear();
+            p.items
+                .iter()
+                .find(|i| i.entry == item)
+                .map(|i| (i.bag, i.slot))
+        })
+        .await
+        .flatten()
+        .unwrap_or_else(|| panic!("item {item} in the bags"));
+    c.send(CMSG_USE_ITEM {
+        bag_index: bag,
+        bag_slot: slot,
+        spell_index: 0,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::empty().set_gameobject(
+                SpellCastTargets_SpellCastTargetFlags_Gameobject::Gameobject { gameobject: object },
+            ),
+        },
+    })
+    .await;
+}
+
+/// The cast under way ends now.
+fn finish_cast(m: &mut Map, g: Guid) {
+    if let Some(c) = m
+        .players
+        .get_mut(&g)
+        .and_then(|p| p.caster.casting.as_mut())
+    {
+        c.ends = m.now;
+    }
+    crate::game::map::spells::update(m);
+}
+
+/// Those who fight any of `protected` are put down, and `protected` kept
+/// whole.
+fn defend(m: &mut Map, protected: &[Guid]) {
+    let foes: Vec<Guid> = m
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && c.combat.attacking && protected.contains(&c.combat.victim))
+        .map(|(_, c)| c.guid)
+        .collect();
+    let by = protected
+        .iter()
+        .copied()
+        .find(|g| guid::is_player(*g))
+        .unwrap_or_default();
+    for f in foes {
+        crate::game::map::combat::deal_damage(m, by, f, 1_000_000);
+    }
+    for g in protected {
+        if let Some(c) = m.creature_mut(*g) {
+            let max = c.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH);
+            c.fields
+                .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, max);
+        }
+    }
+    if let Some(p) = protected.iter().find(|g| guid::is_player(**g)) {
+        hardy(m, *p);
+    }
+}
+
+/// Freedom for All Creatures (2969): Kindal Moonweaver follows the player
+/// to the Grimtotem camp; the Bamboo Cage Key, used on the cage, frees the
+/// sprite darters, and six of them getting away does it.
+async fn freedom_for_all_creatures(realm: &Arc<Realm>) {
+    const QUEST: u32 = 2969;
+    const KINDAL: u32 = 7956;
+    const SPRITE: u32 = 7997;
+    const KEY: u32 = 12301;
+    const CAGE: u32 = 143979;
+    let (mut c, g, _) = hero(realm, "FREER", Race::NightElf, Class::Hunter, 47).await;
+    let map = take(realm, &mut c, KINDAL, QUEST, &[]).await;
+    map.query(move |m| hardy(m, g)).await;
+    assert!(
+        until(&map, move |m| m.players[&g]
+            .items
+            .iter()
+            .any(|i| i.entry == KEY))
+        .await,
+        "the key given"
+    );
+    let kindal = map
+        .query(|m| npc(m, KINDAL).map(|(k, _)| k))
+        .await
+        .flatten()
+        .unwrap();
+    // To the cage, Kindal following.
+    let pen = Vector3d {
+        x: -4533.17,
+        y: 808.743,
+        z: 60.29,
+    };
+    let cage = map
+        .query(move |m| {
+            m.gameobjects
+                .iter()
+                .filter(|(_, o)| o.entry == CAGE)
+                .map(|(_, o)| (o.guid, o.position))
+                .min_by(|a, b| {
+                    crate::game::map::combat::dist(a.1, pen)
+                        .total_cmp(&crate::game::map::combat::dist(b.1, pen))
+                })
+        })
+        .await
+        .flatten()
+        .expect("the cage");
+    put(&map, &mut c, beside(cage.1)).await;
+    let near = until_mut(&map, move |m| {
+        defend(m, &[g, kindal]);
+        if let Some(k) = m.creature_mut(kindal) {
+            k.speeds.walk = 20.0;
+            k.speeds.run = 20.0;
+        }
+        skip(m, Duration::from_millis(200));
+        m.creature(kindal).is_some_and(|k| {
+            crate::game::map::combat::dist(k.position, m.players[&g].position()) < 6.0
+        })
+    })
+    .await;
+    assert!(near, "Kindal follows to the cage");
+    // The key on the cage.
+    use_item_on_object(&mut c, &map, KEY, cage.0).await;
+    let opened = until_mut(&map, move |m| {
+        defend(m, &[g, kindal]);
+        if m.players[&g].caster.casting.is_some() {
+            finish_cast(m, g);
+        }
+        m.gameobject(cage.0)
+            .is_some_and(|o| o.fields.get_u32(crate::game::fields::GAMEOBJECT_STATE) == 0)
+    })
+    .await;
+    assert!(opened, "the key opens the cage");
+    // The sprites fly free, kept from harm.
+    let mut freed = false;
+    for i in 0..1500 {
+        let (sprites, quest_done, state) = map
+            .query(move |m| {
+                let sprites = alive_of(m, &[SPRITE]);
+                for s in &sprites {
+                    if let Some(c) = m.creature_mut(*s) {
+                        c.speeds.walk = 40.0;
+                        c.speeds.run = 40.0;
+                    }
+                }
+                let mut protected = vec![g, kindal];
+                protected.extend(sprites.iter().copied());
+                defend(m, &protected);
+                skip(m, Duration::from_secs(1));
+                let log = m.players[&g]
+                    .journal
+                    .log
+                    .iter()
+                    .find(|l| l.quest == QUEST)
+                    .map(|l| (l.explored, l.failed));
+                (
+                    sprites.len(),
+                    done(m, g, QUEST),
+                    (
+                        crate::game::map::map_events::active(m, QUEST),
+                        crate::game::map::map_events::data(m, SPRITE, 0),
+                        crate::game::map::map_events::data(m, SPRITE, 1),
+                        log,
+                    ),
+                )
+            })
+            .await
+            .unwrap();
+        if debug() && i % 50 == 0 {
+            eprintln!("freedom: {sprites} sprites, done {quest_done}, {state:?}");
+        }
+        if quest_done {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(freed, "{QUEST} done as the sprites get away");
+    turn_in(realm, &mut c, KINDAL, QUEST).await;
+}
+
+/// The event quests Thistle Tea builds in code, walked through on the real
+/// world: Freedom for All Creatures, the Gizelton Caravan, The Great
+/// Masquerade, The Balance of Light and Shadow.
+#[tokio::test]
+async fn the_imported_event_quests_are_done_end_to_end() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    if wanted("freedom") {
+        freedom_for_all_creatures(&realm).await;
+    }
+}
+
+/// A key used on the door it opens opens it, and is used up: the door is
+/// the lock's target, not the key, which is the item used and so the
+/// spell's item too (vmangos's `EffectOpenLock` takes the object first);
+/// and the key used up by the cast is the lock's key all the same.
+#[tokio::test]
+async fn a_key_used_on_its_door_opens_it() {
+    const KEY: u32 = 12301;
+    const OPENING: u32 = 3366;
+    const DOOR: u32 = 143979;
+    let mut d = GameData::empty();
+    let mut door = GameObjectTemplate {
+        entry: DOOR,
+        kind: 0,
+        display_id: 411,
+        name: "Cage Door".into(),
+        size: 1.0,
+        ..Default::default()
+    };
+    door.data[1] = 859;
+    d.gameobject_templates.insert(DOOR, door);
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 50029,
+            entry: DOOR,
+            map: 0,
+            x: HUMAN_START.0 + 2.0,
+            y: HUMAN_START.1,
+            z: HUMAN_START.2,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    d.crafts.locks.insert(
+        859,
+        vec![crate::game::data::crafts::LockKey {
+            kind: 1,
+            index: KEY,
+            skill: 0,
+        }],
+    );
+    let mut opening = crate::game::data::spells::SpellTemplate {
+        id: OPENING,
+        name: "Opening".into(),
+        range_index: 1,
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    opening.effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 59,
+        target_a: 23,
+        ..Default::default()
+    };
+    d.spells.spells.insert(OPENING, opening);
+    let mut key = ItemTemplate {
+        entry: KEY,
+        class: 13,
+        name: "Bamboo Cage Key".into(),
+        quality: 1,
+        stackable: 1,
+        ..Default::default()
+    };
+    // Used up by its use, as the Bamboo Cage Key is.
+    key.spells[0] = crate::game::data::items::ItemSpell {
+        id: OPENING,
+        charges: -1,
+        ..Default::default()
+    };
+    d.items.insert(KEY, key);
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "Alice").await;
+    let g = a.guid;
+    let map = realm.registry.online(g).unwrap().map();
+    let door = guid::game_object(DOOR, 50029);
+    a.sees(door).await;
+    map.query(move |m| {
+        crate::game::map::inventory::add_item(m, g, KEY, 1, false).unwrap();
+    })
+    .await;
+    use_item_on_object(&mut a, &map, KEY, door).await;
+    let r = a.wait_frame("SMSG_CAST_RESULT", 0x130, |_| true).await;
+    assert_eq!(r[4], 0, "cast: {r:?}");
+    let open = until_mut(&map, move |m| {
+        if m.players[&g].caster.casting.is_some() {
+            finish_cast(m, g);
+        }
+        m.gameobject(door)
+            .is_some_and(|o| o.fields.get_u32(crate::game::fields::GAMEOBJECT_STATE) == 0)
+    })
+    .await;
+    assert!(open, "the door opened");
+    let kept = map
+        .query(move |m| m.players[&g].count_of(KEY))
+        .await
+        .unwrap();
+    assert_eq!(kept, 0, "the key used up");
 }
