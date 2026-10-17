@@ -60,6 +60,12 @@ the questions waiting for you.
 15. **Script teleport (6) with a player source** (from 2d). wvs teleports the player, as vmangos does; Thistle Tea
     does nothing. Keep vmangos's?
 
+16. **Eranikus evades in The Nightmare Manifests** (from 2e). Under load, Eranikus evaded mid-fight, which failed
+    the quest: his victim Remulos was out of his melee reach, and he doesn't move in combat. The test now beats him
+    down quickly. Is wvs's evade-when-unreachable right for him? What Thistle Tea does here isn't confirmed.
+17. **Quest 2078** (from 2e). Thistle Tea starts its follower from a gossip option ("[PH] Insert key"); wvs starts
+    it on accept. It isn't an event quest, so I left it. Port it?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -205,6 +211,24 @@ the questions waiting for you.
         2g's.
       - **`update_entry`'s size:** it now uses the shared creature-size fix.
 
+16. **2e's choices:**
+    - **Escort time limit:** every escort runs under its quest's map event, with Thistle Tea's 30 minutes, and fails
+      past it. Before, wvs escorts had no limit.
+    - **Tuten'kash's death** settles his encounter's field, as vmangos and mangos do; Thistle Tea never sets it.
+    - **A raised chest emptied before a reload** comes back after its spawn's respawn delay, with fresh loot, as
+      Thistle Tea's chests do.
+    - **Instances by group:** a group takes over its leader's instances when it forms, as Thistle Tea's
+      `group_changed` does; a disbanded group leaves them ownerless.
+    - **Merge notes:**
+      - **Passive creatures on a scripted walk** (Eris Havenfire's peasants in 7622) were stopped by 2c's combat
+        rules. A peasant shot by the archers enters a passive fight, and when its foe died it walked home to its
+        summon point, losing its walk, so only the first wave reached the light. Now such a creature ends its fight
+        where it stands and walks on. Thistle Tea's exact behaviour here isn't confirmed; this is what makes the
+        quest work.
+      - **Keys cast at locks:** 2e and 2g both fixed them. The lock code now takes the object before the item, as
+        vmangos's `EffectOpenLock` does, so a key cast at a door opens the door.
+      - **Keys in the bags:** a key carried but not cast doesn't open a lock (2g's rule, as Thistle Tea has it).
+
 ## Progress
 
 | Stage | State | Commit |
@@ -222,7 +246,7 @@ the questions waiting for you.
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |
 | 2c: creature combat (all 15 items) | merged | e557cf0 |
 | 2d: scripts, encounters, spell lists, the Molten Core rune | merged | e089517 |
-| 2e+2f: instances, quests, events | running | |
+| 2e+2f: instances, quests, events (all 8 items) | merged | |
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |

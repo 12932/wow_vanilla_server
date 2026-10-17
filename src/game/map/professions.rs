@@ -418,17 +418,10 @@ pub fn check(
     }
     for (index, e) in s.effects.iter().enumerate() {
         match e.effect {
-            // A lockbox in the bags: Pick Lock's, or a key's.
-            EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM if t.item.is_some() => {
-                if let Some(code) = t
-                    .item
-                    .and_then(|item| lockbox_fails(data, p, s, index, item, cast_item))
-                {
-                    return Some(code);
-                }
-            }
             // A chest, node or door (or a rune a Quintessence douses): near,
-            // not in use, locked, and the lock not too much.
+            // not in use, locked, and the lock not too much. The object
+            // first, as vmangos's `EffectOpenLock` has it: a key cast at a
+            // door is the target item too.
             EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM if t.object.is_some() => {
                 let o = t.object.and_then(|g| map.gameobject(g))?;
                 if dist(p.position(), o.position) > LOCK_YARDS {
@@ -442,6 +435,15 @@ pub fn check(
                     return Some(FAIL_ALREADY_OPEN);
                 }
                 if let Err(code) = resolve_lock(data, p, s, index, lock, cast_item) {
+                    return Some(code);
+                }
+            }
+            // A lockbox in the bags: Pick Lock's, or a key's.
+            EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM if t.item.is_some() => {
+                if let Some(code) = t
+                    .item
+                    .and_then(|item| lockbox_fails(data, p, s, index, item, cast_item))
+                {
                     return Some(code);
                 }
             }
@@ -576,8 +578,9 @@ pub fn focus_near(map: &Map, caster: Guid, focus: u32) -> bool {
         })
 }
 
-/// Run `s`'s profession effects at `t`; the effects run are returned as a
-/// mask. An enchantment made by hand raises its skill (Thistle Tea's
+/// Run `s`'s profession effects at `t`, cast with an item of entry
+/// `cast_item` if any; the effects run are returned as a mask. An
+/// enchantment made by hand raises its skill (Thistle Tea's
 /// `advance_skill`); one from an item, or for a time, doesn't.
 pub fn execute(
     map: &mut Map,
@@ -594,14 +597,9 @@ pub fn execute(
         }
         done |= 1 << index;
         match s.effects[index].effect {
-            EFFECT_OPEN_LOCK => match (t.item, t.object) {
-                (Some(item), _) => open_lock_item(map, caster, s, index, item, cast_item),
-                (None, Some(object)) => open_lock(map, caster, s, index, object, cast_item),
-                _ => {}
-            },
-            EFFECT_OPEN_LOCK_ITEM => match (t.item, t.object) {
-                (Some(item), _) => open_lock_item(map, caster, s, index, item, cast_item),
-                (None, Some(object)) => open_lock(map, caster, s, index, object, cast_item),
+            EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM => match (t.object, t.item) {
+                (Some(object), _) => open_lock(map, caster, s, index, object, cast_item),
+                (None, Some(item)) => open_lock_item(map, caster, s, index, item, cast_item),
                 _ => {}
             },
             EFFECT_SKINNING => {
@@ -1334,8 +1332,9 @@ fn despawn(map: &mut Map, object: Guid) {
         .get(&map.key.map)
         .and_then(|l| l.iter().find(|s| s.guid == spawn))
         .map_or(300, |s| s.respawn_min.max(1));
-    let at = map.now + Duration::from_secs(u64::from(secs));
-    map.loot_state.respawns.push((at, spawn));
+    let after = Duration::from_secs(u64::from(secs));
+    map.loot_state.respawns.push((map.now + after, spawn));
+    crate::game::map::instance_script::chest_gone(map, spawn, after);
 }
 
 /// Bobbers bite and come out; gathered objects come back.

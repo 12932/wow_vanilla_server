@@ -2535,6 +2535,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         C_RELEASE_WAYPOINTS => {
+            // An escortee's await, or a scripted path's hold.
+            if crate::game::map::escorts::release(map, source) {
+                return true;
+            }
             if let Some(h) = event_ai::scripted_mut(map, source).and_then(|s| s.hold.as_mut()) {
                 h.signaled |= now < h.until;
                 h.until = h.until.min(now);
@@ -2906,6 +2910,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
     }
     match d1 {
         0 => {
+            crate::game::map::escorts::halt(map, source);
             let at = map.position_of(source);
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
@@ -2938,6 +2943,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
         // Its path (the spawn's, else the entry's), as START_WAYPOINTS
         // with the start point datalong3 and round again with datalong2.
         2 => {
+            crate::game::map::escorts::resume(map, source);
             let walk = ScriptStep {
                 command: 60,
                 datalong: [0, d3, 0, d2],

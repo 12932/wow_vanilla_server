@@ -239,11 +239,41 @@ pub fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
     }
 }
 
-/// End event `id`: its success or failure scripts run.
+/// Start event `id` from `source` on `target`, lasting `lasts`, with no
+/// conditions or scripts of its own, if it isn't under way: whether it
+/// started. An escort's event is its quest's, as Thistle Tea starts one
+/// for each.
+pub fn start(map: &mut Map, id: u32, source: Guid, target: Guid, lasts: Duration) -> bool {
+    if active(map, id) {
+        return false;
+    }
+    let now = map.now;
+    map.map_events.active.insert(
+        id,
+        ScriptedEvent {
+            id,
+            source,
+            target,
+            expires: now + lasts,
+            success_condition: 0,
+            failure_condition: 0,
+            success_script: 0,
+            failure_script: 0,
+            data: AHashMap::new(),
+            targets: Vec::new(),
+        },
+    );
+    map.map_events.next_check.get_or_insert(now + CHECK_EVERY);
+    true
+}
+
+/// End event `id`: its success or failure scripts run, and an escort it
+/// is the event of ends with it.
 pub fn end(map: &mut Map, id: u32, success: bool) {
     let Some(e) = map.map_events.active.remove(&id) else {
         return;
     };
+    crate::game::map::escorts::event_ended(map, id, e.source, success);
     let script = if success {
         e.success_script
     } else {

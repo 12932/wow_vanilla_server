@@ -114,25 +114,31 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   - Respawning a creature (71) with target type 10 still finds dead creatures; Thistle Tea's search finds only the
     living, so it could never respawn a dead one.
   - The Nightmare's druids may attack pets.
-- **Instances:**
-  - raid binds are given on any killer, where Thistle Tea wants a player;
-  - chests raised again after a reload get fresh loot;
-  - Razorfen Downs' gong is forgotten across a reload.
 
 ### Quests and events
 
 Every quest that waits on an event (SpecialFlags 0x2, 212 of them) has a source that something triggers, as in
 Thistle Tea, with these exceptions:
-- **The Nightmare Manifests (8736)** can't be finished. Remulos's escort to the shrine isn't imported (the generator
-  drops escorts Thistle Tea builds by function call), and porting it needs what wvs's escort engine lacks: unit flags
-  and a script phase set on the way, a signal to Eranikus, facing, batch summons, and the map event its credit goes
-  through.
 - **The Glowing Shard (3366), Jail Break! (4322), Master Ryson's All Seeing Eye (6847, 6848) and A Pawn on the
   Eternal Board (8519)** can't be finished, on Thistle Tea either: nothing in the data or in Thistle Tea raises their
   event (vmangos scripts them in C++).
-- Imported from Thistle Tea but not walked through end to end: Freedom for All Creatures (2969), the Gizelton
-  Caravan (5821, 5943), The Great Masquerade (6403), The Balance of Light and Shadow (7622). About 176 world-database
-  event quests rest on the generic area-trigger, script and escort paths, sampled rather than walked one by one.
+- **What is walked.** Every event quest's source is in reach on the real world
+  (`tests_parity_world::every_real_event_quest_has_its_source`).
+  - **Walked end to end:**
+    - The Nightmare Manifests, Freedom for All Creatures, the Gizelton Caravan, The Great Masquerade and The Balance
+      of Light and Shadow;
+    - every escort and follower event quest, except Celebras's (7046, which needs Celebras the Cursed dead) and
+      Ancient Spirit (4261, whose giver has no spawn);
+    - 84 of the 103 that the database raises by an area trigger, a gossip option or a start script.
+  - **Not walked, listed in `tests_parity_world::UNWALKED`** (the other 19):
+    - object gossip, and menus no spawned creature has;
+    - Winter Veil's Metzen;
+    - options that want an aura or item the walk doesn't give;
+    - 4001, 4866, 6001 and 6002, still to look at.
+  - **Checked only for a source in reach:** the roughly 80 raised by a spell, a generic script, an EventAI or a
+    waypoint script.
+- **Escorts.** The escort catalog leaves out its summons' own steps and their despawn kinds. 2078's follower starts on
+  accept, not from its gossip option.
 
 ## Tests and tooling
 

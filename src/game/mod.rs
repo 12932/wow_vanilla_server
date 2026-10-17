@@ -78,6 +78,8 @@ mod tests_parity_scripts;
 #[cfg(test)]
 mod tests_parity_spells;
 #[cfg(test)]
+mod tests_parity_world;
+#[cfg(test)]
 mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
