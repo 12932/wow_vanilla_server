@@ -224,12 +224,14 @@ const CLIENT_EMOTES: [u32; 2] = [0, 3];
 
 /// Whether `g` may emote: alive, and not held from moving its body.
 fn may_emote(map: &Map, g: Guid) -> bool {
+    // Feign Death's flag is the same bit, and an emote ends it (mangos's
+    // feign death sets no PREVENT_ANIM, Thistle Tea's emote interrupts it).
     map.players.get(&g).is_some_and(|p| {
         p.death == crate::game::map::death::Death::Alive
-            && !p.fields.has_flag(
+            && (!p.fields.has_flag(
                 crate::game::fields::UNIT_FIELD_FLAGS,
                 UNIT_FLAG_PREVENT_ANIM,
-            )
+            ) || p.auras.has(crate::game::map::auras::AURA_FEIGN_DEATH))
     })
 }
 

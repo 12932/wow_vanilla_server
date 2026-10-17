@@ -305,6 +305,11 @@ pub fn effect_targets(
             .filter(|u| party_unit(map, caster, *u))
             .into_iter()
             .collect(),
+        // A resurrection with no implicit target (Resurrection 2006) is at
+        // the unit aimed at, as mangos's default target is.
+        (None, _) if matches!(e.effect, 18 | 113) && t.unit.is_some() => {
+            t.unit.into_iter().collect()
+        }
         (Caster, _) | (None, _) => vec![caster],
         (Pet, _) => crate::game::map::pets::pet_of(map, caster)
             .into_iter()

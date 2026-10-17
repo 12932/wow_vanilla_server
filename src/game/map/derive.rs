@@ -232,7 +232,7 @@ fn speed_factor(amount: i32) -> f32 {
     }
 }
 
-fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
+pub(crate) fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
     a.effects()
         .filter(|(_, x)| kinds.contains(&x.kind))
         .fold(1.0, |m, (h, x)| {

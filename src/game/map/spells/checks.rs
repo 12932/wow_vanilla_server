@@ -37,7 +37,6 @@ pub mod fail {
     pub const INTERRUPTED: u8 = 0x23;
     pub const ITEM_GONE: u8 = 0x26;
     pub const LINE_OF_SIGHT: u8 = 0x2a;
-    pub const MAINHAND_EMPTY: u8 = 0x2d;
     pub const LOWLEVEL: u8 = 0x2b;
     pub const MOVING: u8 = 0x2e;
     pub const NOT_BEHIND: u8 = 0x33;
@@ -466,12 +465,10 @@ pub fn check(
         if s.script_name == "spell_cannibalize" && !super::scripts::edible_corpse(map, caster, s) {
             return Some(fail::NO_EDIBLE_CORPSES);
         }
+        // Without the weapon or item it wants, as mangos's `CheckItems`
+        // and Thistle Tea answer it.
         if !equipped_ok(map, caster, s) {
-            return Some(if s.equipped_item_class == 2 {
-                fail::MAINHAND_EMPTY
-            } else {
-                fail::EQUIPPED_ITEM_CLASS
-            });
+            return Some(fail::EQUIPPED_ITEM_CLASS);
         }
         if s.equipped_item_class == 2
             && auras::auras(map, caster).is_some_and(|a| a.has(AURA_MOD_DISARM))
@@ -556,11 +553,9 @@ fn check_target(
     m: &Mods,
 ) -> Option<u8> {
     let harmful = !auras::positive(s);
-    let wants_unit = s
-        .effects
-        .iter()
-        .filter(|e| e.effect != 0)
-        .any(|e| targets::wants_unit(e.target_a));
+    let wants_unit = s.effects.iter().filter(|e| e.effect != 0).any(|e| {
+        targets::wants_unit(e.target_a) || (e.target_a == 0 && matches!(e.effect, 18 | 113))
+    });
     if !wants_unit {
         // A destination's range.
         if let (Some(d), Some(me)) = (t.dest, map.unit_view(caster))
