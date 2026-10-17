@@ -365,8 +365,7 @@ pub fn xp_share(map: &Map, g: Guid) -> f32 {
         return 1.0;
     };
     let (p, n) = (c.engagement.damage_by_players, c.engagement.damage_by_npcs);
-    if template(map, g).is_some_and(|t| t.static_flags1 & STATIC_CORPSE_RAID != 0) || p + n == 0
-    {
+    if template(map, g).is_some_and(|t| t.static_flags1 & STATIC_CORPSE_RAID != 0) || p + n == 0 {
         1.0
     } else if loot_allowed(map, g) {
         p as f32 / (p + n) as f32

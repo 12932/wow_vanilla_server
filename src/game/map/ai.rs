@@ -208,7 +208,6 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
     }
 }
 
-
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     if guid::is_player(tapper) {

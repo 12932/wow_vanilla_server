@@ -224,7 +224,10 @@ impl Roll {
         } else {
             self.hit
         };
-        bp((self.low_level(5.0 + penalty - skill_bonus) - hit - self.attacker_hit).clamp(0.0, 60.0))
+        bp(
+            (self.low_level(5.0 + penalty - skill_bonus) - hit - self.attacker_hit)
+                .clamp(0.0, 60.0),
+        )
     }
 
     fn sitting_crit(&self) -> bool {
@@ -464,7 +467,11 @@ pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillX
     if o.pet_victim {
         xp *= 0.75;
     }
-    xp *= if o.multiplier > 0.0 { o.multiplier } else { 1.0 };
+    xp *= if o.multiplier > 0.0 {
+        o.multiplier
+    } else {
+        1.0
+    };
     xp *= o.damage_share;
     round_half_even(xp)
 }
@@ -899,8 +906,9 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
             AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE,
         )
     };
-    let (attacker_hit, attacker_crit) = auras::auras(map, victim)
-        .map_or((0.0, 0.0), |a| (a.sum(hit_kind) as f32, a.sum(crit_kind) as f32));
+    let (attacker_hit, attacker_crit) = auras::auras(map, victim).map_or((0.0, 0.0), |a| {
+        (a.sum(hit_kind) as f32, a.sum(crit_kind) as f32)
+    });
     // A player's weapons put away can't block.
     let sheathed = map
         .players
@@ -2169,7 +2177,11 @@ fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
         if m.2 != Death::Alive {
             continue;
         }
-        let xp = if top.is_some_and(|t| m.1 <= t) { share } else { 0 };
+        let xp = if top.is_some_and(|t| m.1 <= t) {
+            share
+        } else {
+            0
+        };
         crate::game::map::stats::give_xp(map, m.0, xp, Some(victim));
         let pet = if solo {
             crate::game::map::pets::KillShare::Solo

@@ -204,8 +204,10 @@ pub fn equipped(map: &mut Map, player: Guid, item: Guid) {
         if !waiting {
             p.caster.cooldowns.insert(s.id, now + EQUIP_COOLDOWN);
         }
-        p.outbound
-            .send(&SMSG_ITEM_COOLDOWN { guid: item, id: s.id });
+        p.outbound.send(&SMSG_ITEM_COOLDOWN {
+            guid: item,
+            id: s.id,
+        });
     }
 }
 
