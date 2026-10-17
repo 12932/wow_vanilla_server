@@ -7,8 +7,7 @@ use std::time::Duration;
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
-    Area as WireArea, Power, SMSG_BINDPOINTUPDATE, SMSG_RESURRECT_REQUEST, SMSG_SPELLENERGIZELOG,
-    Vector3d,
+    Area as WireArea, Power, SMSG_BINDPOINTUPDATE, SMSG_SPELLENERGIZELOG, Vector3d,
 };
 
 use crate::game::data::spells::{self as sd, SpellTemplate};
@@ -852,20 +851,31 @@ fn effect(
         }
         EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
         EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
-            let name = map
-                .players
-                .get(&caster)
-                .map(|p| p.name.to_string())
-                .unwrap_or_default();
+            // A player's name the client knows; a creature's is sent.
+            let (name, spirit_healer) = map.creature(caster).map_or((String::new(), false), |c| {
+                let name = map
+                    .realm
+                    .data
+                    .creature_templates
+                    .get(&c.entry)
+                    .map(|t| t.name.to_string())
+                    .unwrap_or_default();
+                let flags = c.fields.get_u32(UNIT_NPC_FLAGS);
+                (
+                    name,
+                    flags & crate::game::map::npc::NPC_FLAG_SPIRITHEALER != 0,
+                )
+            });
             if let Some(p) = map.players.get_mut(&target)
                 && p.death != crate::game::map::death::Death::Alive
             {
                 p.resurrect_offer = Some((caster, amount.clamp(1, 100) as u32));
-                p.outbound.send(&SMSG_RESURRECT_REQUEST {
-                    guid: caster,
-                    name,
-                    player: true,
-                });
+                p.outbound.send_frame(resurrect_request(
+                    caster,
+                    &name,
+                    spirit_healer,
+                    !s.attr(3, sd::ATTR_EX3_NO_RES_TIMER),
+                ));
             }
         }
         EFFECT_SKILL | EFFECT_SKILL_STEP => {
@@ -1012,6 +1022,26 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
 }
 
 /// Where a player's hearthstone goes.
+/// `SMSG_RESURRECT_REQUEST`, as mangos-zero lays it out: the caster, its
+/// name (none for a player), whether it is a spirit healer, and whether
+/// the client holds the acceptance back by its resurrection timer.
+fn resurrect_request(
+    caster: Guid,
+    name: &str,
+    spirit_healer: bool,
+    timer: bool,
+) -> std::sync::Arc<[u8]> {
+    let mut b = Body::default();
+    b.u64(caster.guid())
+        .u32(name.len() as u32 + 1)
+        .cstr(name)
+        .u8(spirit_healer.into())
+        .u8(timer.into());
+    b.frame(SMSG_RESURRECT_REQUEST)
+}
+
+const SMSG_RESURRECT_REQUEST: u16 = 0x15B;
+
 fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
     map.players.get(&g).and_then(|p| p.row.state.bind).map(|b| {
         (

@@ -10,6 +10,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
+use crate::game::data::spells;
 use crate::game::data::*;
 use crate::game::fields::*;
 use crate::game::guid;
@@ -76,4 +77,61 @@ async fn experience_for_a_kill_carries_its_rested_split() {
     assert_eq!(quest.len(), 13, "guid, total and type");
     assert_eq!(u32_at(&quest, 8), 25);
     assert_eq!(quest[12], 1, "not a kill");
+}
+
+const RES: u32 = 900_300;
+const REBIRTH: u32 = 900_301;
+const SMSG_RESURRECT_REQUEST: u16 = 0x15B;
+
+fn unit_spell(id: u32, effect: u32) -> spells::SpellTemplate {
+    let mut s = spells::SpellTemplate {
+        id,
+        name: format!("Spell {id}"),
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    s.effects[0] = spells::SpellEffect {
+        effect,
+        target_a: 25,
+        base_points: 34,
+        ..Default::default()
+    };
+    s
+}
+
+/// A resurrection's offer is laid out as mangos-zero's: no name for a
+/// player caster, not a spirit healer, and whether the client holds the
+/// acceptance back by its timer, which Rebirth's attribute skips.
+#[tokio::test]
+async fn a_resurrection_offer_says_whether_it_waits_on_the_timer() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    d.spells.spells.insert(RES, unit_spell(RES, 18));
+    let mut rebirth = unit_spell(REBIRTH, 18);
+    rebirth.attributes[3] = spells::ATTR_EX3_NO_RES_TIMER;
+    d.spells.spells.insert(REBIRTH, rebirth);
+    let realm = harness::realm_with(d);
+    let (_a, priest, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, fallen, _) = enter(&realm, "B", "Fallen", Race::Human, Class::Warrior).await;
+    on(&map, move |m| {
+        crate::game::map::combat::deal_damage(m, priest, fallen, 1_000_000);
+        crate::game::map::spells::cast_triggered(m, priest, RES, Some(fallen));
+    })
+    .await;
+    let offer = b
+        .wait_frame("the offer", SMSG_RESURRECT_REQUEST, |_| true)
+        .await;
+    let mut want = priest.guid().to_le_bytes().to_vec();
+    want.extend([1, 0, 0, 0, 0]);
+    want.extend([0, 1]);
+    assert_eq!(offer, want, "no name, not a spirit healer, on the timer");
+    on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, priest, REBIRTH, Some(fallen));
+    })
+    .await;
+    let offer = b
+        .wait_frame("Rebirth's offer", SMSG_RESURRECT_REQUEST, |_| true)
+        .await;
+    assert_eq!(offer[offer.len() - 2..], [0, 0], "at once");
 }
