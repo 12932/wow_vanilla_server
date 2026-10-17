@@ -97,6 +97,9 @@ pub struct LootSlot {
     pub taken_by: Vec<Guid>,
     /// Kept for the master looter, or rolled for.
     pub blocked: bool,
+    /// A roll's winner who couldn't carry it: theirs alone to take
+    /// (Thistle Tea's need ownership).
+    pub winner: Option<Guid>,
     pub quality: u32,
     /// A condition the viewer must meet to see it.
     pub condition: u32,
@@ -154,7 +157,10 @@ impl Loot {
     /// Whether `g` sees slot `s`, needing `wanted` and meeting the
     /// conditions `met`.
     fn visible(&self, s: &LootSlot, g: Guid, wanted: &[u32], met: &[u32]) -> bool {
-        if s.taken || (s.condition != 0 && !met.contains(&s.condition)) {
+        if s.taken
+            || (s.condition != 0 && !met.contains(&s.condition))
+            || s.winner.is_some_and(|w| w != g)
+        {
             return false;
         }
         if s.quest {
@@ -409,7 +415,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         ..Default::default()
     };
     if group.len() > 1 {
-        setup_group(map, &mut loot, tapper, group);
+        setup_group(map, &mut loot, creature, tapper, group);
     }
     let lootable = !loot.is_empty() || loot.items.iter().any(|s| s.quest);
     let rolls: Vec<usize> = loot.rolls.iter().map(|r| r.slot).collect();
@@ -437,7 +443,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
 }
 
 /// The group's loot method on a kill.
-fn setup_group(map: &mut Map, loot: &mut Loot, tapper: Guid, near: Vec<Guid>) {
+fn setup_group(map: &mut Map, loot: &mut Loot, creature: Guid, tapper: Guid, near: Vec<Guid>) {
     let data = map.realm.data.clone();
     let (method, master, threshold, assigned) = {
         let mut groups = map.realm.social.groups.lock();
@@ -483,9 +489,16 @@ fn setup_group(map: &mut Map, loot: &mut Loot, tapper: Guid, near: Vec<Guid>) {
             let now = map.now;
             for i in rollable {
                 let item = data.item(loot.items[i].item);
+                let condition = loot.items[i].condition;
+                // Those near who meet the item's condition (mangos's
+                // `AllowedForPlayer`); for need before greed, who could
+                // use it.
                 let eligible: Vec<Guid> = near
                     .iter()
                     .copied()
+                    .filter(|g| {
+                        crate::game::map::conditions::met(map, condition, Some(creature), Some(*g))
+                    })
                     .filter(|g| {
                         method != GroupLootSetting::NeedBeforeGreed
                             || match (map.players.get(g), item) {
@@ -653,28 +666,32 @@ fn resolve(map: &mut Map, object: Guid, slot: usize) {
         finish_rolls(map, object);
         return;
     }
-    // In guid order, the first of the highest wins (Thistle Tea's
-    // `LootRoll.pick_winner`).
-    let mut contenders = contenders;
-    contenders.sort_unstable_by_key(|g| g.guid());
     let mut rng = rand::rng();
     let rolled: Vec<(Guid, u8)> = contenders
         .iter()
         .map(|g| (*g, rng.random_range(1..=100u8)))
         .collect();
-    let (winner, number) = rolled
+    let (rolled, (winner, number)) = pick_winner(rolled).expect("there are contenders");
+    award(map, object, slot, winner, number, kind, &rolled);
+    let _ = r;
+}
+
+/// The rolls in guid order, and their winner: the first of the highest
+/// (Thistle Tea's `LootRoll.pick_winner`); none with no one rolling.
+pub fn pick_winner(mut rolled: Vec<(Guid, u8)>) -> Option<(Vec<(Guid, u8)>, (Guid, u8))> {
+    rolled.sort_unstable_by_key(|(g, _)| g.guid());
+    let best = rolled
         .iter()
         .copied()
         .fold(None, |best: Option<(Guid, u8)>, x| match best {
             Some(b) if b.1 >= x.1 => Some(b),
             _ => Some(x),
-        })
-        .expect("there are contenders");
-    award(map, object, slot, winner, number, kind, &rolled);
-    let _ = r;
+        })?;
+    Some((rolled, best))
 }
 
-/// The roll's winner gets the item, if it fits; if not, it's free again.
+/// The roll's winner gets the item, if it fits; if not, theirs to take
+/// when they can. A winner gone too far has nothing: it's free.
 fn award(
     map: &mut Map,
     object: Guid,
@@ -721,7 +738,11 @@ fn award(
         _ => false,
     };
     if near {
-        give(map, object, slot, winner);
+        if !give(map, object, slot, winner)
+            && let Some(x) = loot_mut(map, object).and_then(|l| l.items.get_mut(slot))
+        {
+            x.winner = Some(winner);
+        }
     } else if let Some(l) = loot_mut(map, object)
         && let Some(x) = l.items.get_mut(slot)
     {
@@ -896,9 +917,23 @@ pub fn show_item_loot(map: &mut Map, player: Guid, item: Guid, loot: Loot) {
 
 /// `CMSG_LOOT`: open the loot window on a corpse or object.
 pub fn open(map: &mut Map, player: Guid, target: Guid) {
-    let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {
+    let Some(p) = map.players.get(&player) else {
         return;
     };
+    // Not the dead (mangos's `HandleLootOpcode`), the feared nor the
+    // confused (Thistle Tea's `Looting.open`): the window shuts.
+    use crate::game::map::auras::{AURA_MOD_CONFUSE, AURA_MOD_FEAR};
+    if p.death != crate::game::map::death::Death::Alive
+        || p.auras.has(AURA_MOD_FEAR)
+        || p.auras.has(AURA_MOD_CONFUSE)
+    {
+        p.outbound.send(&SMSG_LOOT_RELEASE_RESPONSE {
+            guid: target,
+            unknown1: 1,
+        });
+        return;
+    }
+    let ppos = p.position();
     let (tpos, reach) = if guid::is_unit(target) {
         match map.creature(target) {
             Some(c)
@@ -1093,12 +1128,16 @@ pub fn take_money(map: &mut Map, player: Guid) {
 /// `CMSG_LOOT_MASTER_GIVE`: the master looter gives a kept item to a
 /// member near.
 pub fn master_give(map: &mut Map, giver: Guid, object: Guid, slot: u8, to: Guid) {
+    // To one who meets the item's condition (Thistle Tea's
+    // `reserve_master`, mangos's `AllowedForPlayer`).
     let ok = loot_ref(map, object).is_some_and(|l| {
         l.master == Some(giver)
             && l.allowed.contains(&to)
-            && l.items
-                .get(usize::from(slot))
-                .is_some_and(|s| s.blocked && !s.taken)
+            && l.items.get(usize::from(slot)).is_some_and(|s| {
+                s.blocked
+                    && !s.taken
+                    && crate::game::map::conditions::met(map, s.condition, Some(object), Some(to))
+            })
     }) && map
         .players
         .get(&giver)
@@ -1107,8 +1146,14 @@ pub fn master_give(map: &mut Map, giver: Guid, object: Guid, slot: u8, to: Guid)
         (Some(p), Some(at)) => dist(p.position(), at) <= GROUP_REWARD_YARDS,
         _ => false,
     };
-    if ok && near {
-        give(map, object, usize::from(slot), to);
+    // What doesn't fit stays the master's to give (mangos's
+    // `HandleLootMasterGiveOpcode`, Thistle Tea's master reservation).
+    if ok
+        && near
+        && !give(map, object, usize::from(slot), to)
+        && let Some(x) = loot_mut(map, object).and_then(|l| l.items.get_mut(usize::from(slot)))
+    {
+        x.blocked = true;
     }
 }
 
