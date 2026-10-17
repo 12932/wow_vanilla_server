@@ -36,6 +36,8 @@ pub use wsg::{
 };
 
 pub const SPELL_DESERTER: u32 = 26013;
+/// Waiting to Resurrect: a ghost in the match, for the next wave.
+pub const SPELL_WAITING_TO_RESURRECT: u32 = 2584;
 pub const RESURRECT_EVERY: Duration = Duration::from_secs(30);
 pub const CLOSE_AFTER: Duration = Duration::from_secs(120);
 /// How near a kill a side's players must be to share its honorable kill.
@@ -109,6 +111,12 @@ pub enum Due {
     CaptainBuff(usize),
     /// A pickup comes back.
     Buff(usize),
+    /// A Warsong flag left on the ground goes home, if still there.
+    FlagReturn { side: u8, object: Guid },
+    /// Warsong's flags stand again after a capture.
+    FlagsPlaced,
+    /// A second into the battle: everyone's status and the scoreboard.
+    StatusRefresh,
 }
 
 /// A pickup's place: what's there now, and since when it's been gone.
@@ -338,16 +346,15 @@ pub fn stop_respawns(map: &mut Map, event: u8) {
 
 /// A battleground message to everyone in the match, or one side.
 pub fn announce(map: &Map, s: Option<usize>, text: &str) {
+    announce_by(map, s, text, Guid::zero());
+}
+
+/// A battleground message, from the player it tells of.
+pub fn announce_by(map: &Map, s: Option<usize>, text: &str, actor: Guid) {
     let chat_type = match s {
-        Some(0) => SMSG_MESSAGECHAT_ChatType::BgSystemAlliance {
-            sender2: Guid::zero(),
-        },
-        Some(_) => SMSG_MESSAGECHAT_ChatType::BgSystemHorde {
-            sender2: Guid::zero(),
-        },
-        None => SMSG_MESSAGECHAT_ChatType::BgSystemNeutral {
-            sender2: Guid::zero(),
-        },
+        Some(0) => SMSG_MESSAGECHAT_ChatType::BgSystemAlliance { sender2: actor },
+        Some(_) => SMSG_MESSAGECHAT_ChatType::BgSystemHorde { sender2: actor },
+        None => SMSG_MESSAGECHAT_ChatType::BgSystemNeutral { sender2: actor },
     };
     let Some(frame) = crate::game::conn::encode(&SMSG_MESSAGECHAT {
         chat_type,
@@ -365,11 +372,25 @@ pub fn announce(map: &Map, s: Option<usize>, text: &str) {
 /// A broadcast text as a battleground message, its `$1776W`-style world
 /// states filled in.
 pub fn announce_text(map: &Map, s: Option<usize>, id: u32) {
+    announce_text_by(map, s, id, Guid::zero());
+}
+
+/// A broadcast text as a battleground message about `actor`: their name
+/// for its `$n`, and they its sender.
+pub fn announce_text_by(map: &Map, s: Option<usize>, id: u32, actor: Guid) {
     let Some(line) = map.realm.data.npc.broadcast_line(id, false) else {
         return;
     };
-    let text = fill_world_states(map, line);
-    announce(map, s, &text);
+    let mut text = fill_world_states(map, line);
+    if !actor.is_zero() && text.contains("$n") {
+        let name = map
+            .players
+            .get(&actor)
+            .map(|p| p.name.to_string())
+            .unwrap_or_else(|| "Unknown".into());
+        text = text.replace("$n", &name).replace("$N", &name);
+    }
+    announce_by(map, s, &text, actor);
 }
 
 fn fill_world_states(map: &Map, line: &str) -> String {
@@ -579,7 +600,7 @@ pub fn update(map: &mut Map) {
         match map.battleground.as_ref().map(|m| m.bg) {
             Some(BG_AB) => ab::update(map),
             Some(BG_AV) => av::update(map),
-            _ => {}
+            _ => wsg::update(map),
         }
         buffs(map);
     }
@@ -594,7 +615,7 @@ fn countdown(map: &mut Map, left: Duration) {
     let (minute, half) = match m.bg {
         BG_AB => (10477, 10478),
         BG_AV => (10638, 10639),
-        _ => return,
+        _ => wsg::COUNTDOWN,
     };
     let done = m.countdown;
     let say = if left <= Duration::from_secs(30) && done < 2 {
@@ -634,10 +655,14 @@ fn run_timers(map: &mut Map) {
         }
         match d {
             Due::Buff(slot) => spawn_buff(map, slot),
+            Due::StatusRefresh => {
+                battlegrounds::status_to_members(&map.realm, map.key);
+                scoreboard_all(map);
+            }
             _ => match map.battleground.as_ref().map(|m| m.bg) {
                 Some(BG_AB) => ab::due(map, d),
                 Some(BG_AV) => av::due(map, d),
-                _ => {}
+                _ => wsg::due(map, d),
             },
         }
     }
@@ -669,7 +694,9 @@ fn start(map: &mut Map) {
     if let Some(m) = map.battleground.as_mut() {
         m.phase = Phase::Playing;
         m.started_at = Some(now);
+        m.schedule(now + Duration::from_secs(1), Due::StatusRefresh);
     }
+    battlegrounds::began(&map.realm, map.key);
     match map.battleground.as_ref().map(|m| m.bg) {
         Some(BG_AB) => ab::start(map),
         Some(BG_AV) => av::start(map),
@@ -709,6 +736,7 @@ fn resurrect_wave(map: &mut Map) {
             continue;
         };
         crate::game::map::death::resurrect(map, g, 1.0);
+        crate::game::map::auras::remove_spell(map, g, SPELL_WAITING_TO_RESURRECT, None);
         map.teleport(g, map.key, at, o);
     }
 }
@@ -825,6 +853,10 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     match m.bg {
         BG_AB => near && alive && ab::use_object(map, g, object),
         BG_AV => {
+            // A mine's supplies are its holders' alone.
+            if av::supplies_barred(map, m.team_of(g), object) {
+                return true;
+            }
             near && alive
                 && (av_scripts::use_ritual(map, g, object)
                     // A beacon is disarmed by the Attacking cast.
@@ -835,12 +867,13 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     }
 }
 
-/// A lock opened by a spell in the match (the client's Opening and
-/// Attacking casts): a banner assaulted, a beacon disarmed. Returns
-/// whether it was one.
+/// A lock opened by a spell (the client's Opening and Attacking casts):
+/// in the match, a banner assaulted, a beacon disarmed; out of one,
+/// silithyst picked up. Returns whether it was one.
 pub fn opened(map: &mut Map, g: Guid, object: Guid) -> bool {
     let Some(m) = map.battleground.as_ref() else {
-        return false;
+        // Out of a match: Silithus's silithyst.
+        return crate::game::map::outdoor_pvp::use_object(map, g, object);
     };
     if m.bg == BG_AV && av_quests::use_beacon(map, g, object) {
         return true;
@@ -900,7 +933,10 @@ pub fn spell_check(
 /// A beacon planted where `caster` stands: Alliance's or the Horde's, no
 /// one's own, and it outlasts its planter.
 pub fn plant(map: &mut Map, caster: Guid, entry: u32) {
-    let Some((at, o)) = map.players.get(&caster).map(|p| (p.position(), p.movement.orientation))
+    let Some((at, o)) = map
+        .players
+        .get(&caster)
+        .map(|p| (p.position(), p.movement.orientation))
     else {
         return;
     };
@@ -1050,12 +1086,17 @@ pub fn finish(map: &mut Map, winner: usize) {
     {
         return;
     }
+    if bg == BG_WSG {
+        wsg::finished(map);
+    }
     if let Some(m) = map.battleground.as_mut() {
         m.phase = Phase::Ended { winner, at: now };
         m.timers.clear();
         m.resurrect_queue.clear();
     }
     battlegrounds::ended(&map.realm, map.key);
+    // Everyone hears how long until they're sent home.
+    battlegrounds::status_to_members(&map.realm, map.key);
     let template = map.realm.data.battlegrounds.get(&bg).cloned();
     let everyone: Vec<(Guid, usize)> = map
         .players
@@ -1196,15 +1237,55 @@ fn clear_buffs(map: &mut Map) {
     }
 }
 
-/// `CMSG_AREA_SPIRIT_HEALER_QUEUE`: a ghost waits for the next wave.
+/// `CMSG_AREA_SPIRIT_HEALER_QUEUE`: a ghost waits for the next wave,
+/// Waiting to Resurrect.
 pub fn queue_resurrection(map: &mut Map, g: Guid) {
     let dead = map.players.get(&g).is_some_and(|p| p.death != Death::Alive);
-    if let Some(m) = map.battleground.as_mut()
+    let queued = if let Some(m) = map.battleground.as_mut()
         && dead
         && m.scores.contains_key(&g)
     {
         m.resurrect_queue.insert(g);
+        true
+    } else {
+        false
+    };
+    if queued {
+        waiting(map, g);
     }
+}
+
+/// Waiting to Resurrect on a ghost, put straight on as Thistle Tea does
+/// (`Aura.apply_spell`): a cast wouldn't land on the dead.
+fn waiting(map: &mut Map, g: Guid) {
+    if map
+        .players
+        .get(&g)
+        .is_none_or(|p| p.auras.has_spell(SPELL_WAITING_TO_RESURRECT))
+    {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let Some(s) = data.spells.get(SPELL_WAITING_TO_RESURRECT) else {
+        return;
+    };
+    let level = map.unit_view(g).map(|u| u.level).unwrap_or(1);
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+        .map(|i| (i, crate::game::map::spells::points(s, i, level)))
+        .collect();
+    let _ = crate::game::map::auras::apply_spell(map, g, g, s, &effects, Default::default());
+}
+
+/// A player released their spirit in the match: Waiting to Resurrect, as
+/// Thistle Tea gives it, and in the queue for the next wave.
+pub fn released(map: &mut Map, g: Guid) {
+    if let Some(m) = map.battleground.as_mut()
+        && m.scores.contains_key(&g)
+    {
+        m.resurrect_queue.insert(g);
+    }
+    waiting(map, g);
 }
 
 /// `MSG_BATTLEGROUND_PLAYER_POSITIONS`: where the flag carriers are.

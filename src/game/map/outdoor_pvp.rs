@@ -197,6 +197,38 @@ impl Meter {
 pub struct Tower {
     pub meter: Meter,
     pub object: Option<Guid>,
+    /// The banners by it, in its holder's colours.
+    pub banners: Vec<Guid>,
+}
+
+/// The banners by each tower, in `TOWERS` order.
+const BANNERS: [[(f32, f32, f32, f32); 2]; 4] = [
+    [
+        (1838.42, -3703.56, 167.713, 0.890117),
+        (1877.6, -3716.76, 167.188, 1.74533),
+    ],
+    [
+        (2539.61, -4801.55, 115.766, 2.00713),
+        (2569.6, -4772.93, 115.399, 2.72271),
+    ],
+    [
+        (3148.17, -4365.51, 145.029, 1.53589),
+        (3188.76, -4358.5, 144.555, 1.97222),
+    ],
+    [
+        (2975.5, -3060.36, 125.108, 5.23599),
+        (2992.63, -3022.95, 125.593, 3.03684),
+    ],
+];
+const TOWER_BANNER: u32 = 182106;
+
+/// A tower's colours (art kit) and its banners' animation, by holder.
+fn art_kit(owner: Option<usize>) -> (u32, u32) {
+    match owner {
+        None => (21, 2),
+        Some(0) => (2, 1),
+        Some(_) => (1, 0),
+    }
 }
 
 /// Silithus: silithyst brought home by each side, toward 200.
@@ -211,14 +243,17 @@ const TURN_IN: [u32; 2] = [4162, 4168];
 const TURN_IN_REWARDS: [u32; 3] = [29534, 31420, 31247];
 const TURN_IN_CREDIT: [u32; 2] = [17090, 18199];
 pub const SILITHYST_LIMIT: u32 = 200;
+/// How long silithyst lies where it fell.
+pub const MOUND_LASTS: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, Default)]
 pub struct Silithus {
     pub brought: [u32; 2],
     /// The side with the Cenarion Favor.
     pub controller: Option<usize>,
-    /// Those carrying silithyst, for when they fall.
-    pub carriers: AHashSet<Guid>,
+    /// Those carrying silithyst, and where they were last seen: it falls
+    /// where its carrier lost it.
+    pub carriers: AHashMap<Guid, Vector3d>,
 }
 
 /// A continent's world PvP.
@@ -319,6 +354,67 @@ pub fn update(map: &mut Map) {
     if map.key.map == 1 {
         silithus_update(map);
     }
+    reconcile_buffs(map);
+}
+
+/// A zone's outdoor world states, for `SMSG_INIT_WORLD_STATES`: Silithus's
+/// tallies, the Plaguelands' towers (and an idle slider).
+pub fn zone_states(map: &Map, zone: u32) -> Vec<(u32, u32)> {
+    let Some(o) = map.outdoor.as_ref() else {
+        return Vec::new();
+    };
+    match (map.key.map, zone) {
+        (1, SILITHUS) => o.silithus.as_ref().map(silithus_states).unwrap_or_default(),
+        (0, PLAGUELANDS) => {
+            let mut s = o.tower_states();
+            s.extend([(2426, 0), (2428, 20), (2427, 50)]);
+            s
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Each second: the buffs world PvP gives, on those who should have them
+/// and off everyone else (Thistle Tea's `OutdoorPvp.reconcile`): the
+/// towers' in the Plaguelands' zones, by how many the side holds; the
+/// Cenarion Favor in Silithus's, for the side that won it; neither for the
+/// dead.
+fn reconcile_buffs(map: &mut Map) {
+    let Some(o) = map.outdoor.as_ref() else {
+        return;
+    };
+    let counts = o.counts();
+    let controller = o.silithus.as_ref().and_then(|si| si.controller);
+    let on = map.key.map;
+    let wanted: Vec<(Guid, [Option<u32>; 2])> = map
+        .players
+        .values()
+        .map(|p| {
+            let s = side(p.team);
+            let alive = p.death == Death::Alive;
+            let tower = (alive && on == 0 && PLAGUELANDS_BUFF_ZONES.contains(&p.zone))
+                .then(|| (1..=4).contains(&counts[s]).then(|| TOWER_BUFFS[s][counts[s] - 1]))
+                .flatten();
+            let favor = (alive
+                && on == 1
+                && SILITHUS_BUFF_ZONES.contains(&p.zone)
+                && controller == Some(s))
+            .then_some(SPELL_FAVOR);
+            (p.guid, [tower, favor])
+        })
+        .collect();
+    for (g, want) in wanted {
+        let managed = TOWER_BUFFS.iter().flatten().copied().chain([SPELL_FAVOR]);
+        for b in managed {
+            let has = map.players.get(&g).is_some_and(|p| p.auras.has_spell(b));
+            let keep = want.contains(&Some(b));
+            if has && !keep {
+                crate::game::map::auras::remove_spell(map, g, b, None);
+            } else if keep && !has {
+                crate::game::map::spells::cast_triggered(map, g, b, Some(g));
+            }
+        }
+    }
 }
 
 /// The towers' capture points go up.
@@ -349,10 +445,21 @@ fn place_towers(map: &mut Map) {
             },
         );
         go.spawn_guid = None;
+        go.fields.set_u32(GAMEOBJECT_ARTKIT, art_kit(None).0);
         let g = map.add_gameobject(go);
+        let banners = BANNERS[i]
+            .iter()
+            .filter_map(|at| place_object(map, TOWER_BANNER, *at))
+            .collect::<Vec<_>>();
+        for b in &banners {
+            if let Some(o) = map.gameobject_mut(*b) {
+                o.fields.set_u32(GAMEOBJECT_ARTKIT, art_kit(None).0);
+            }
+        }
         towers.push(Tower {
             meter,
             object: Some(g),
+            banners,
         });
     }
     if let Some(o) = map.outdoor.as_mut() {
@@ -438,9 +545,17 @@ fn towers(map: &mut Map, elapsed: i64) {
     let after_states = o.tower_states();
     let after_counts = o.counts();
     let meters: Vec<Meter> = o.towers.iter().map(|t| t.meter).collect();
-    // Those come into the zone see its states.
+    // Those come into the zone see its states; those gone out of it, none.
     for g in watching.difference(&before_watching) {
         send_states(map, *g, &after_states);
+    }
+    let cleared: Vec<(u32, u32)> = after_states
+        .iter()
+        .map(|(f, _)| (*f, 0))
+        .chain([(2426, 0)])
+        .collect();
+    for g in before_watching.difference(&watching) {
+        send_states(map, *g, &cleared);
     }
     if after_states != before_states {
         for g in &watching {
@@ -475,6 +590,7 @@ fn towers(map: &mut Map, elapsed: i64) {
         if was == now {
             continue;
         }
+        colours(map, i, now);
         if let Some(s) = now {
             defense(map, TOWERS[i].announcements[s]);
             capture_credit(map, i, s);
@@ -488,9 +604,12 @@ fn towers(map: &mut Map, elapsed: i64) {
             (_, Phase::Progress(_)) => Some(8213),
             _ => None,
         };
+        // Heard within 250 yards of the tower, as Thistle Tea plays it.
         if let Some(sound) = sound {
-            for g in &watching {
-                if let Some(p) = map.players.get(g) {
+            let at = TOWERS[i].at;
+            for p in map.players.values() {
+                let pos = p.position();
+                if dist(at, (pos.x, pos.y, pos.z)) <= 250.0 {
                     p.outbound.send(&SMSG_PLAY_SOUND { sound_id: sound });
                 }
             }
@@ -501,11 +620,28 @@ fn towers(map: &mut Map, elapsed: i64) {
             defense(map, VICTORY[s]);
         }
     }
-    if after_counts != before_counts {
-        tower_buffs(map, after_counts);
-    }
     if before != after {
         reconcile_services(map);
+    }
+}
+
+/// A tower and its banners take their new holder's colours.
+fn colours(map: &mut Map, tower: usize, owner: Option<usize>) {
+    let Some(t) = map.outdoor.as_ref().and_then(|o| o.towers.get(tower)) else {
+        return;
+    };
+    let objects: Vec<Guid> = t.object.into_iter().chain(t.banners.iter().copied()).collect();
+    let (kit, animation) = art_kit(owner);
+    for g in objects {
+        if let Some(o) = map.gameobject_mut(g) {
+            o.fields.set_u32(GAMEOBJECT_ARTKIT, kit);
+        }
+        if let Some(frame) = crate::game::conn::encode(&SMSG_GAMEOBJECT_CUSTOM_ANIM {
+            guid: g,
+            animation_id: animation,
+        }) {
+            map.send_to_observers(g, &frame, false);
+        }
     }
 }
 
@@ -836,34 +972,11 @@ fn capture_credit(map: &mut Map, tower: usize, s: usize) {
     }
 }
 
-/// The buff of the towers held, for each side's players in the zones.
-fn tower_buffs(map: &mut Map, counts: [usize; 2]) {
-    let players: Vec<(Guid, usize)> = map
-        .players
-        .values()
-        .filter(|p| PLAGUELANDS_BUFF_ZONES.contains(&p.zone))
-        .map(|p| (p.guid, side(p.team)))
-        .collect();
-    for (g, s) in players {
-        apply_tower_buff(map, g, s, counts[s]);
-    }
-}
-
-fn apply_tower_buff(map: &mut Map, g: Guid, s: usize, count: usize) {
-    let want = (1..=4).contains(&count).then(|| TOWER_BUFFS[s][count - 1]);
-    for b in TOWER_BUFFS[s] {
-        if Some(b) != want {
-            crate::game::map::auras::remove_spell(map, g, b, None);
-        }
-    }
-    if let Some(b) = want
-        && !map.players.get(&g).is_some_and(|p| p.auras.has_spell(b))
-    {
-        crate::game::map::spells::cast_triggered(map, g, b, Some(g));
-    }
-}
-
-/// `CMSG_GAMEOBJ_USE` on silithyst: picked up. Returns whether it was.
+/// Silithyst, at a geyser or where a carrier lost it, picked up (by
+/// `CMSG_GAMEOBJ_USE`, or the client's Opening of it): carried, and the
+/// carrier's side's aura with it; the carrier is contested. It's used up:
+/// a mound goes, a geyser until it comes back. One carrying can't take
+/// more. Returns whether it was silithyst.
 pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     if map.outdoor.as_ref().is_none_or(|o| o.silithus.is_none()) {
         return false;
@@ -871,27 +984,36 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     let Some(o) = map.gameobject(object) else {
         return false;
     };
-    let (entry, dropped) = (o.entry, o.spawn_guid.is_none());
+    let (entry, spawn, at) = (o.entry, o.spawn_guid, o.position);
     if !matches!(entry, SILITHYST_MOUND | SILITHYST_GEYSER) {
         return false;
     }
     let Some(p) = map.players.get(&g) else {
         return true;
     };
-    if p.death != Death::Alive || p.auras.has_spell(SPELL_CARRYING) {
+    let near = crate::game::map::combat::dist(p.position(), at) <= 10.0;
+    if !near || p.death != Death::Alive || p.auras.has_spell(SPELL_CARRYING) {
         return true;
     }
-    let s = side(p.team);
+    let (s, pos) = (side(p.team), p.position());
     crate::game::map::spells::cast_triggered(map, g, SPELL_CARRYING, Some(g));
     crate::game::map::spells::cast_triggered(map, g, SPELL_TEAM_CARRYING[s], Some(g));
     // Carrying it flags the carrier, and contests them.
     crate::game::map::pvp::contest(map, g);
     if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
-        si.carriers.insert(g);
+        si.carriers.insert(g, pos);
     }
-    // A mound a carrier dropped is gone once picked up.
-    if dropped {
-        map.remove_gameobject(object);
+    map.remove_gameobject(object);
+    if let Some(spawn) = spawn {
+        let secs = map
+            .realm
+            .data
+            .gameobject_spawns
+            .get(&map.key.map)
+            .and_then(|l| l.iter().find(|s| s.guid == spawn))
+            .map_or(180, |s| s.respawn_min.max(1));
+        let back = map.now + Duration::from_secs(u64::from(secs));
+        map.loot_state.respawns.push((back, spawn));
     }
     true
 }
@@ -908,6 +1030,10 @@ pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
     if TURN_IN[s] != trigger || p.death != Death::Alive || !p.auras.has_spell(SPELL_CARRYING) {
         return;
     }
+    // Home, not fallen: no longer a carrier before the aura goes.
+    if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
+        si.carriers.remove(&g);
+    }
     crate::game::map::auras::remove_spell(map, g, SPELL_CARRYING, None);
     crate::game::map::auras::remove_spell(map, g, SPELL_TEAM_CARRYING[s], None);
     for r in TURN_IN_REWARDS {
@@ -917,7 +1043,6 @@ pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
     let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) else {
         return;
     };
-    si.carriers.remove(&g);
     si.brought[s] += 1;
     let captured = si.brought[s] >= SILITHYST_LIMIT;
     if captured {
@@ -935,7 +1060,7 @@ pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
         send_states(map, w, &states);
     }
     if captured {
-        favor(map);
+        reconcile_buffs(map);
     }
 }
 
@@ -947,92 +1072,90 @@ fn silithus_states(si: &Silithus) -> Vec<(u32, u32)> {
     ]
 }
 
-/// The Cenarion Favor for the controlling side in the zones, and off the
-/// other.
-fn favor(map: &mut Map) {
-    let controller = map
-        .outdoor
-        .as_ref()
-        .and_then(|o| o.silithus.as_ref())
-        .and_then(|si| si.controller);
-    let players: Vec<(Guid, usize, bool)> = map
-        .players
-        .values()
-        .map(|p| (p.guid, side(p.team), SILITHUS_BUFF_ZONES.contains(&p.zone)))
-        .collect();
-    for (g, s, in_zone) in players {
-        let has = map
-            .players
-            .get(&g)
-            .is_some_and(|p| p.auras.has_spell(SPELL_FAVOR));
-        if in_zone && controller == Some(s) {
-            if !has {
-                crate::game::map::spells::cast_triggered(map, g, SPELL_FAVOR, Some(g));
-            }
-        } else if has {
-            crate::game::map::auras::remove_spell(map, g, SPELL_FAVOR, None);
-        }
-    }
-}
-
-/// Each second in Kalimdor: a fallen carrier drops the silithyst, those
-/// come into Silithus see its states, and the favor follows the zones.
+/// Each second in Kalimdor, behind the aura's interrupts that end it at
+/// the moment: carriers who mount, stealth or take a flight lose the
+/// silithyst; silithyst lost any way but at the camp (fallen, mounted,
+/// cancelled, gone from the map) falls where its carrier was, with their
+/// side's aura off them (Thistle Tea's `Silithyst.after_remove`); those
+/// who come into Silithus see its tallies, and those who leave it, none.
 fn silithus_update(map: &mut Map) {
+    use crate::game::map::auras::{AURA_MOD_INVISIBILITY, AURA_MOD_STEALTH};
     let Some(si) = map.outdoor.as_ref().and_then(|o| o.silithus.as_ref()) else {
         return;
     };
-    let dropped: Vec<(Guid, Vector3d)> = si
-        .carriers
-        .iter()
-        .filter_map(|g| match map.players.get(g) {
-            Some(p) if p.auras.has_spell(SPELL_CARRYING) => None,
-            Some(p) => Some((*g, p.position())),
-            None => Some((
-                *g,
-                Vector3d {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-            )),
-        })
-        .collect();
+    let carriers: Vec<(Guid, Vector3d)> = si.carriers.iter().map(|(g, at)| (*g, *at)).collect();
+    for (g, last) in carriers {
+        let Some(p) = map.players.get(&g) else {
+            lost(map, g, last);
+            continue;
+        };
+        let at = p.position();
+        let broken = p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0
+            || p.flight.is_some()
+            || p.auras.has(AURA_MOD_STEALTH)
+            || p.auras.has(AURA_MOD_INVISIBILITY);
+        if broken {
+            crate::game::map::auras::remove_spell(map, g, SPELL_CARRYING, None);
+        }
+        if !map
+            .players
+            .get(&g)
+            .is_some_and(|p| p.auras.has_spell(SPELL_CARRYING))
+        {
+            lost(map, g, at);
+        } else if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
+            si.carriers.insert(g, at);
+        }
+    }
+    let Some(si) = map.outdoor.as_ref().and_then(|o| o.silithus.as_ref()) else {
+        return;
+    };
     let states = silithus_states(si);
-    let entering: Vec<Guid> = map
-        .players
-        .values()
-        .filter(|p| {
-            p.zone == SILITHUS
-                && !map
-                    .outdoor
-                    .as_ref()
-                    .is_some_and(|o| o.watching.contains(&p.guid))
-        })
-        .map(|p| p.guid)
-        .collect();
     let watching: AHashSet<Guid> = map
         .players
         .values()
         .filter(|p| p.zone == SILITHUS)
         .map(|p| p.guid)
         .collect();
-    for g in &entering {
+    let before = map
+        .outdoor
+        .as_ref()
+        .map(|o| o.watching.clone())
+        .unwrap_or_default();
+    for g in watching.difference(&before) {
         send_states(map, *g, &states);
     }
-    for (g, at) in dropped {
-        if let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) {
-            si.carriers.remove(&g);
-        }
-        // Only one who fell (rather than left) leaves it behind.
-        let fell = map.players.get(&g).is_some_and(|p| p.death != Death::Alive);
-        if fell {
-            drop_silithyst(map, at);
-        }
+    let cleared: Vec<(u32, u32)> = states.iter().map(|(f, _)| (*f, 0)).collect();
+    for g in before.difference(&watching) {
+        send_states(map, *g, &cleared);
     }
     if let Some(o) = map.outdoor.as_mut() {
         o.watching = watching;
     }
-    favor(map);
+}
+
+/// The silithyst's aura came off `g` (mounted, stealthed, flown, dead,
+/// cancelled, off the map): it falls where they are, at the moment
+/// (Thistle Tea's `Silithyst.after_remove`); the second's check is the
+/// backstop.
+pub fn carrying_ended(map: &mut Map, g: Guid) {
+    if let Some(at) = map.players.get(&g).map(|p| p.position()) {
+        lost(map, g, at);
+    }
+}
+
+/// A carrier lost the silithyst, not at the camp: it falls at `at`, once.
+fn lost(map: &mut Map, g: Guid, at: Vector3d) {
+    let Some(si) = map.outdoor.as_mut().and_then(|o| o.silithus.as_mut()) else {
+        return;
+    };
+    if si.carriers.remove(&g).is_none() {
+        return;
+    }
+    for a in SPELL_TEAM_CARRYING {
+        crate::game::map::auras::remove_spell(map, g, a, None);
+    }
+    drop_silithyst(map, at);
 }
 
 fn drop_silithyst(map: &mut Map, at: Vector3d) {
@@ -1056,7 +1179,10 @@ fn drop_silithyst(map: &mut Map, at: Vector3d) {
         },
     );
     go.spawn_guid = None;
-    map.add_gameobject(go);
+    let g = map.add_gameobject(go);
+    // A dropped mound lasts three minutes.
+    map.object_resets
+        .push((map.now + MOUND_LASTS, g, u32::MAX));
 }
 
 #[cfg(test)]

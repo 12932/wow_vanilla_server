@@ -23,9 +23,10 @@ const AGGRO_SCAN_EVERY: Duration = Duration::from_millis(500);
 const DEFAULT_LEASH: f32 = 60.0;
 /// A chasing creature paths again when its victim has moved this far.
 const REPATH_YARDS: f32 = 1.5;
-/// How long a corpse lies before it goes.
-const CORPSE_DECAY: Duration = Duration::from_secs(60);
-const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(300);
+/// How long a corpse lies before it goes (Thistle Tea's `@corpse_decay_ms`):
+/// an elite's, ranks one to three, twice as long.
+const CORPSE_DECAY: Duration = Duration::from_secs(300);
+const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(600);
 /// The shortest wait before a creature respawns.
 const MIN_RESPAWN: Duration = Duration::from_secs(5);
 /// `UNIT_DYNAMIC_FLAGS`: the creature is tapped by someone else.
@@ -110,7 +111,7 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if critter {
         return;
     }
-    call_for_help(map, creature, attacker);
+    crate::game::map::creature_combat::called_for_help(map, creature, attacker);
     if first {
         crate::game::map::event_ai::aggro(map, creature, attacker);
         crate::game::map::creature_combat::entered(map, creature, attacker);
@@ -144,6 +145,7 @@ pub fn forget(map: &mut Map, g: Guid) {
         .map(|(_, c)| c.guid)
         .collect();
     for c in fighting {
+        crate::game::map::spells::threat_sync::removed(map, c, g);
         let next = {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
@@ -176,17 +178,21 @@ pub fn forget(map: &mut Map, g: Guid) {
     }
 }
 
-/// A taunt: `by` goes to the top of `creature`'s threat, and is its victim
-/// while the taunt lasts.
+/// A taunt: `by` is `creature`'s victim while the taunt lasts, and level
+/// with its old target's threat meanwhile.
 pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    let top = c.threat.iter().map(|(_, t)| *t).fold(0.0f32, f32::max);
-    match c.threat.iter_mut().find(|(g, _)| *g == by) {
-        Some((_, t)) => *t = t.max(top),
-        None => c.threat.push((by, top)),
+    // On the threat list, and borrowing what brings it level with the
+    // creature's target for the taunt (Thistle Tea's `apply_taunt`).
+    if !c.threat.iter().any(|(g, _)| *g == by) {
+        c.threat.push((by, 0.0));
     }
+    crate::game::map::spells::threat_sync::taunted(map, creature, by);
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
     c.taunted_by = Some(by);
     c.combat.victim = by;
     c.fields.set_guid(UNIT_FIELD_TARGET, by);
@@ -199,43 +205,7 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
     {
         c.taunted_by = None;
     }
-}
-
-/// Creatures of the same faction near `creature` join its fight.
-fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
-    let Some(c) = map.creature(creature) else {
-        return;
-    };
-    let template = map.realm.data.creature_template(c.entry);
-    // A script's range stands over the template's.
-    let radius = c
-        .scripted
-        .as_deref()
-        .and_then(|s| s.call_for_help_range)
-        .or_else(|| template.map(|t| t.call_for_help_range))
-        .filter(|r| *r > 0.0)
-        .unwrap_or(0.0);
-    if radius <= 0.0 {
-        return;
-    }
-    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
-    let helpers: Vec<Guid> = map
-        .grid
-        .around(pos.x, pos.y, radius)
-        .filter(|g| guid::is_unit(*g) && *g != creature)
-        .filter(|g| {
-            map.creature(*g).is_some_and(|h| {
-                h.alive()
-                    && !crate::game::map::creature_motion::critter(map, *g)
-                    && !h.combat.attacking
-                    && h.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction
-                    && dist(h.position, pos) <= radius
-            })
-        })
-        .collect();
-    for h in helpers {
-        attacked(map, h, enemy);
-    }
+    crate::game::map::spells::threat_sync::taunt_ended(map, creature, by);
 }
 
 /// A creature dies.
@@ -243,6 +213,9 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     if guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
+    // Honor sees the auras it died with (Honorless Target), before death
+    // takes them.
+    crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::auras::clear_on_death(map, creature);
     crate::game::map::scripts::stop_for(map, creature);
     crate::game::map::event_ai::death(map, creature, tapper);
@@ -259,11 +232,12 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
+    crate::game::map::spells::threat_sync::wiped(map, creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
     let template = data.creature_template(c.entry);
-    let elite = template.is_some_and(|t| t.rank == 1 || t.rank == 2);
+    let elite = template.is_some_and(|t| matches!(t.rank, 1..=3));
     let respawn = c
         .spawn_guid
         .and_then(|g| {
@@ -326,7 +300,6 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     crate::game::map::creature_motion::fall_dead(map, creature);
     crate::game::map::event_ai::death_heard(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
-    crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::battleground::creature_died(map, creature, tapper);
 }
 
@@ -444,6 +417,7 @@ pub fn respawn_now(map: &mut Map, g: Guid) {
 pub fn quiet_death(map: &mut Map, g: Guid) {
     let now = map.now;
     crate::game::map::auras::clear_on_death(map, g);
+    crate::game::map::spells::threat_sync::wiped(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -635,12 +609,11 @@ fn aggro_scan(map: &mut Map, g: Guid) {
     }
 }
 
-/// A unit's threat on a creature, with what its auras take off for now
-/// (Fade).
-fn effective_threat(map: &Map, unit: Guid, threat: f32) -> f32 {
-    let fade = crate::game::map::auras::auras(map, unit)
-        .map_or(0, |a| a.sum(crate::game::map::auras::AURA_MOD_TOTAL_THREAT));
-    (threat + fade as f32).max(0.0)
+/// A unit's threat on a creature, never below none. Fade's share is in the
+/// threat itself, for those fighting the priest when it went on
+/// (`threat_sync`).
+fn effective_threat(threat: f32) -> f32 {
+    threat.max(0.0)
 }
 
 /// The highest threat still worth fighting, if any.
@@ -655,14 +628,14 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
                 u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
             })
         })
-        .max_by(|a, b| effective_threat(map, a.0, a.1).total_cmp(&effective_threat(map, b.0, b.1)))
+        .max_by(|a, b| effective_threat(a.1).total_cmp(&effective_threat(b.1)))
         .map(|(t, _)| *t)
 }
 
 /// vmangos's `ThreatManager`: a taunter while the taunt lasts; otherwise
 /// the current victim, until another passes its threat by a tenth in
 /// melee range or three tenths beyond.
-fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
+pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     let Some(c) = map.creature(g) else {
         return current;
     };
@@ -682,15 +655,40 @@ fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
         c.threat
             .iter()
             .find(|(x, _)| *x == t)
-            .map_or(0.0, |(_, v)| effective_threat(map, t, *v))
+            .map(|(_, v)| effective_threat(*v))
     };
-    let (mine, theirs) = (threat_of(current), threat_of(best));
-    let near = match (map.unit_view(g), map.unit_view(best)) {
-        (Some(me), Some(them)) => combat::in_melee_range(&me, &them),
-        _ => false,
+    let Some(mine) = threat_of(current) else {
+        return best;
     };
-    let ratio = if near { 1.1 } else { 1.3 };
-    if theirs > mine * ratio { best } else { current }
+    // Down the list from the top (Thistle Tea's `Threat.decide`): past a
+    // tenth more, one in melee range takes over; past three tenths, anyone.
+    let home = c.home;
+    let leash = leash_of(map, c);
+    let mut sorted: Vec<(Guid, f32)> = c
+        .threat
+        .iter()
+        .filter(|(t, _)| {
+            map.unit_view(*t).is_some_and(|u| {
+                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
+            })
+        })
+        .map(|(t, v)| (*t, effective_threat(*v)))
+        .collect();
+    sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let me = map.unit_view(g);
+    for (t, theirs) in sorted {
+        if t == current || theirs <= mine * 1.1 {
+            return current;
+        }
+        let near = match (&me, map.unit_view(t)) {
+            (Some(me), Some(them)) => combat::in_melee_range(me, &them),
+            _ => false,
+        };
+        if theirs > mine * 1.3 || near {
+            return t;
+        }
+    }
+    current
 }
 
 /// How far a creature fights from home: its template's leash, or in the
@@ -900,6 +898,7 @@ pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, _for: Option<Duration>) {
 /// Give up the fight and run home.
 fn evade(map: &mut Map, g: Guid) {
     crate::game::map::creature_combat::disengaged(map, g);
+    crate::game::map::spells::threat_sync::wiped(map, g);
     let now = map.now;
     let spline_id = map.next_spline_id;
     let Some(c) = map.creature(g) else {
@@ -917,12 +916,33 @@ fn evade(map: &mut Map, g: Guid) {
         .unwrap_or_default();
     combat::stop_attack(map, g);
     crate::game::map::spells::interrupt(map, g);
-    let held: Vec<u32> = map
+    // What an evade takes, as Thistle Tea's `remove_on_evade` has it: all
+    // but what vmangos marks to stay, a player's timed buffs, and (for a
+    // creature whose template says so) its buffs.
+    let data = map.realm.data.clone();
+    let keeps_buffs = map
         .creature(g)
-        .map(|c| c.auras.holders.iter().map(|a| a.spell).collect())
+        .and_then(|c| data.creature_template(c.entry))
+        .is_some_and(|t| t.flags_extra & 0x1000 != 0);
+    let held: Vec<(u32, Guid)> = map
+        .creature(g)
+        .map(|c| {
+            c.auras
+                .holders
+                .iter()
+                .filter(|h| {
+                    let stays = data.spells.get(h.spell).is_some_and(|s| {
+                        s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
+                    }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
+                        || (keeps_buffs && h.positive);
+                    !stays
+                })
+                .map(|h| (h.spell, h.caster))
+                .collect()
+        })
         .unwrap_or_default();
-    for spell in held {
-        crate::game::map::auras::remove_spell(map, g, spell, None);
+    for (spell, caster) in held {
+        crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
     }
     let Some(c) = map.creature_mut(g) else {
         return;
@@ -954,6 +974,9 @@ fn evade(map: &mut Map, g: Guid) {
     }
     crate::game::map::scripts::stop_for(map, g);
     crate::game::map::event_ai::evade(map, g);
+    if map.creature(g).is_some_and(|c| !c.evading) {
+        crate::game::map::spawn_auras::restore(map, g);
+    }
 }
 
 /// An evading creature walks home, and is whole again when it gets there.
@@ -972,6 +995,7 @@ fn evade_step(map: &mut Map, g: Guid) {
             until: Some(now + Duration::from_secs(2)),
         };
         combat::sync_aura_state(map, g);
+        crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
 }

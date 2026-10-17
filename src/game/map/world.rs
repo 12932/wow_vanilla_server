@@ -421,12 +421,25 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     if t.map != map.key.map || !inside(t, p.position()) {
         return;
     }
-    crate::game::map::quests::explored(map, guid, id);
+    // Quests and scripts are the living's (Thistle Tea's `AreaTriggers`).
+    let alive = p.death == crate::game::map::death::Death::Alive;
+    if alive {
+        crate::game::map::quests::explored(map, guid, id);
+    }
     crate::game::map::rest::area_trigger(map, guid, id);
     crate::game::map::battleground::area_trigger(map, guid, id);
     crate::game::map::outdoor_pvp::area_trigger(map, guid, id);
     crate::game::map::pvp::entrance(map, guid, id);
-    if let Some(script) = data.scripts.areatrigger_script.get(&id).copied() {
+    // A trigger with a cooldown runs for the first through, then rests in
+    // this copy (vmangos's `m_areaTriggerCooldowns`).
+    let now = map.now;
+    let resting = map.trigger_cooldowns.get(&id).is_some_and(|t| *t > now);
+    let scripted = alive && !resting;
+    if scripted && let Some(secs) = data.scripts.areatrigger_cooldown.get(&id) {
+        map.trigger_cooldowns
+            .insert(id, now + std::time::Duration::from_secs(u64::from(*secs)));
+    }
+    if let Some(script) = data.scripts.areatrigger_script.get(&id).copied().filter(|_| scripted) {
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::Generic,
@@ -435,7 +448,7 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
             guid,
         );
     }
-    if data.scripts.areatrigger.contains_key(&id) {
+    if scripted && data.scripts.areatrigger.contains_key(&id) {
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::AreaTrigger,

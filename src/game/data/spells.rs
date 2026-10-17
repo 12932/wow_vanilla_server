@@ -90,6 +90,16 @@ pub struct SpellTemplate {
 
 /// `Attributes`: the spell is a passive one.
 pub const ATTR_PASSIVE: u32 = 0x40;
+/// vmangos's `customFlags` on `spell_template`.
+pub const CUSTOM_ALLOW_STACK_BETWEEN_CASTERS: u32 = 0x001;
+pub const CUSTOM_NEGATIVE: u32 = 0x002;
+pub const CUSTOM_POSITIVE: u32 = 0x004;
+pub const CUSTOM_FIXED_DAMAGE: u32 = 0x010;
+pub const CUSTOM_IGNORE_ARMOR: u32 = 0x020;
+pub const CUSTOM_FACE_TARGET: u32 = 0x080;
+pub const CUSTOM_SINGLE_TARGET_AURA: u32 = 0x100;
+pub const CUSTOM_NOT_REMOVED_ON_EVADE: u32 = 0x400;
+pub const CUSTOM_SEPARATE_AURA_PER_CASTER: u32 = 0x1000;
 /// `Attributes`: it strikes on the next melee swing.
 pub const ATTR_ON_NEXT_SWING: u32 = 0x4;
 /// `AttributesEx`: it is channeled.
@@ -163,6 +173,11 @@ impl SpellTemplate {
         self.attributes[word] & bit != 0
     }
 
+    /// One of vmangos's `customFlags`.
+    pub fn custom(&self, flag: u32) -> bool {
+        self.custom_flags & flag != 0
+    }
+
     /// A physical ability: melee or ranged, with a weapon.
     pub fn ability(&self) -> bool {
         self.attr(0, ATTR_ABILITY)
@@ -218,6 +233,8 @@ pub struct SpellRank {
     pub prev: u32,
     pub first: u32,
     pub rank: u32,
+    /// A spell needed before this one (`req_spell`).
+    pub req: u32,
 }
 
 /// `SpellItemEnchantment`: up to three effects an enchantment gives.

@@ -118,6 +118,12 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     let new_cell = grid::cell_of(info.position.x, info.position.y);
     let old_cell = p.cell;
     let before = p.movement.position;
+    let f = &info.flags;
+    let translating = f.get_forward() || f.get_backward() || f.get_strafe_left() || f.get_strafe_right();
+    let moved = translating || crate::game::map::combat::dist(before, info.position) > 0.0;
+    let turned = f.get_turn_left()
+        || f.get_turn_right()
+        || (info.orientation - p.movement.orientation).abs() > f32::EPSILON;
     p.cell = new_cell;
     p.movement = info.clone();
     let position = info.position;
@@ -130,9 +136,36 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if let Some(frame) = relay(guid, info) {
         map.send_to_observers(guid, &frame, false);
     }
+    body_moved(map, guid, moved, turned);
     if let Some(drop) = fall {
         fall_damage(map, guid, drop);
     }
+}
+
+/// A player moved or turned (Thistle Tea's `Emote.move` and movement
+/// interrupts): moving ends an emote state, moving or turning stands them
+/// up, and the auras moving or turning breaks go.
+fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
+    use crate::game::map::auras::{INTERRUPT_MOVE, INTERRUPT_NOT_SEATED, INTERRUPT_TURNING};
+    if !moved && !turned {
+        return;
+    }
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if moved && p.fields.get_u32(crate::game::fields::UNIT_NPC_EMOTESTATE) != 0 {
+        p.fields.set_u32(crate::game::fields::UNIT_NPC_EMOTESTATE, 0);
+    }
+    // Sitting, sleeping or kneeling; not dead.
+    if !matches!(p.stand_state(), 0 | 7) && p.death == crate::game::map::death::Death::Alive {
+        p.set_stand_state(0);
+    }
+    let mask = if moved {
+        INTERRUPT_MOVE | INTERRUPT_TURNING | INTERRUPT_NOT_SEATED
+    } else {
+        INTERRUPT_TURNING
+    };
+    crate::game::map::auras::interrupt(map, g, mask);
 }
 
 /// How much faster than their speed a player may seem to go, and the
@@ -146,46 +179,81 @@ fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
-/// A fall's start is the highest point since leaving the ground; landing
-/// returns how far it was.
+/// The least fall time (ms) a landing hurts after (vmangos's
+/// `HandleFall`).
+const HURTING_FALL_MS: u32 = 1229;
+
+/// Where a fall is measured: on a transport, its deck's height and the
+/// transport.
+fn height(info: &MovementInfo) -> (f32, Guid) {
+    match info.flags.get_on_transport() {
+        Some(t) => (t.transport.position.z, t.transport.guid),
+        None => (info.position.z, Guid::zero()),
+    }
+}
+
+/// A fall's start is the highest point since leaving the ground (on a
+/// transport, of its deck), as Thistle Tea's `Falling` tracks it; a landing
+/// after a long fall (the falling-far flag seen, 1,229 ms in the air, on the
+/// same transport) returns how far it was. Swimming ends a fall.
 fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Option<f32> {
     let falling = info.flags.get_jumping().is_some() || info.flags.get_fallingfar();
-    let z = info.position.z;
+    let (z, transport) = height(info);
+    if info.flags.get_swimming().is_some() {
+        p.fall_from = None;
+        p.misc.fall_far = false;
+        return None;
+    }
     match (falling, p.fall_from) {
-        (true, Some(top)) => {
+        (true, Some(top)) if p.misc.fall_transport == transport => {
             p.fall_from = Some(top.max(z));
+            p.misc.fall_far |= info.flags.get_fallingfar();
             None
         }
-        (true, None) => {
-            p.fall_from = Some(z.max(p.movement.position.z));
+        (true, _) => {
+            let (was, _) = height(&p.movement);
+            let start = if p.misc.fall_transport == transport || p.fall_from.is_none() { was.max(z) } else { z };
+            p.fall_from = Some(start);
+            p.misc.fall_transport = transport;
+            p.misc.fall_far = info.flags.get_fallingfar();
             None
         }
         (false, Some(top)) => {
             p.fall_from = None;
-            let swimming = info.flags.get_swimming().is_some();
-            (!swimming).then_some(top - z)
+            let far = std::mem::take(&mut p.misc.fall_far);
+            let long = info.fall_time.to_bits() >= HURTING_FALL_MS;
+            (far && long && p.misc.fall_transport == transport).then_some(top - z)
         }
         (false, None) => None,
     }
 }
 
-/// vmangos's fall damage: 1.8% of maximum health a yard past the safe
-/// fall, less a quarter.
+/// vmangos's fall damage, as Thistle Tea's `Falling`: 1.8% of maximum
+/// health a yard past the safe fall, less a quarter, by physical damage
+/// taken modifiers and at most all of it. Not for the dead, a god, a
+/// flight, Slow Fall, hover or physical immunity.
 fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER, AURA_SAFE_FALL};
-    if p.auras.has(AURA_FEATHER_FALL) || p.auras.has(AURA_HOVER) {
+    use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER, AURA_MOD_DAMAGE_PERCENT_TAKEN, AURA_SAFE_FALL};
+    if p.auras.has(AURA_FEATHER_FALL)
+        || p.auras.has(AURA_HOVER)
+        || p.auras.school_immune(1)
+        || p.misc.god
+        || p.flight.is_some()
+        || p.death != crate::game::map::death::Death::Alive
+    {
+        return;
+    }
+    if drop < SAFE_FALL {
         return;
     }
     // Safe Fall takes yards off the drop.
     let drop = drop - p.auras.sum(AURA_SAFE_FALL).max(0) as f32;
-    if drop < SAFE_FALL || p.gm || p.death != crate::game::map::death::Death::Alive {
-        return;
-    }
     let max = p.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH) as f32;
-    let damage = ((0.018 * drop - 0.2426) * max).max(0.0) as u32;
+    let taken = p.auras.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, 1);
+    let damage = ((0.018 * drop - 0.2426) * max * taken).clamp(0.0, max) as u32;
     if damage == 0 {
         return;
     }
@@ -241,6 +309,7 @@ pub fn teleport_ack(map: &mut Map, guid: Guid) {
     if let Some(p) = map.players.get_mut(&guid) {
         p.teleport = None;
     }
+    crate::game::map::pvp::arrived(map, guid);
 }
 
 /// `MSG_MOVE_WORLDPORT_ACK`: the client has loaded the map it was sent to;
@@ -257,6 +326,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
     map.visibility_dirty.insert(guid);
     crate::game::map::battleground::arrived(map, guid);
     crate::game::map::eviction::arrived(map, guid);
+    crate::game::map::pvp::arrived(map, guid);
 }
 
 /// Handle the packets of the movement family other than movement itself.

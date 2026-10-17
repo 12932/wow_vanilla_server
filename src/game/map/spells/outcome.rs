@@ -93,6 +93,8 @@ pub struct Landing {
     pub reflected: bool,
     /// How many share its first effect's damage (a meteor's), if any do.
     pub shared: u32,
+    /// The spell was triggered.
+    pub triggered: bool,
 }
 
 /// Whether spell outcomes are rolled (production), or fixed: always a hit,
@@ -344,16 +346,31 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
             return Hit::Reflect;
         }
     }
+    let chance = spell_hit_chance(map, caster, target, s, m);
+    if roll_strict(map, chance) {
+        Hit::Hit
+    } else {
+        Hit::Resist
+    }
+}
+
+/// The chance, in hundredths of a percent, that magic spell `s` from
+/// `caster` lands on `target` (before immunities and reflection).
+pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mods) -> i32 {
+    let Some(a) = auras::auras(map, target) else {
+        return 10_000;
+    };
     let caster_level = level(map, caster);
     let target_level = level(map, target);
     let d = derived(map, caster);
     let hit_bonus = d.spell_hit + m.flat[mods::OP_RESIST_MISS_CHANCE] as f32;
-    let mechanic = std::iter::once(s.mechanic)
-        .chain(s.effects.iter().map(|e| e.mechanic))
-        .filter(|m| *m != 0)
-        .map(|mech| a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, mech as i32))
-        .max()
-        .unwrap_or(0) as f32;
+    // The spell's own mechanic in its hit; an effect's of another rolls
+    // apart (`effect_resisted`).
+    let mechanic = if s.mechanic != 0 {
+        a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, s.mechanic as i32) as f32
+    } else {
+        0.0
+    };
     let binary_resist = if binary(s) {
         resist_chance(
             resistance(map, caster, target, school_index(s)),
@@ -369,19 +386,28 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     } else {
         0.0
     } + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
-    let chance = magic_hit_chance(
+    magic_hit_chance(
         caster_level,
         target_level,
         guid::is_player(target),
         hit_bonus - aoe,
         mechanic,
         binary_resist,
-    );
-    if roll_strict(map, chance) {
-        Hit::Hit
-    } else {
-        Hit::Resist
+    )
+}
+
+/// Whether `target` resists effect `index` of harmful `s` apart from the
+/// spell, as Thistle Tea's `MechanicResistance.effect_resisted?` has it: an
+/// effect whose mechanic isn't the spell's rolls its own resistance.
+pub fn effect_resisted(map: &Map, target: Guid, s: &SpellTemplate, index: usize) -> bool {
+    let mechanic = s.effects[index].mechanic;
+    if mechanic == 0 || mechanic == s.mechanic {
+        return false;
     }
+    let chance = auras::auras(map, target).map_or(0, |a| {
+        a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, mechanic as i32)
+    });
+    chance > 0 && roll(map) < chance * 100
 }
 
 /// Improved Fire Ward and Frost Warding: a ward up against its school may
@@ -422,6 +448,11 @@ fn ward_reflect(map: &Map, target: Guid, s: &SpellTemplate) -> i32 {
 }
 
 /// A hit roll: in the fixed rolls of tests, anything above 1% hits.
+/// Whether a chance of `chance_bp` hundredths of a percent comes up.
+pub fn hits(map: &Map, chance_bp: i32) -> bool {
+    roll_strict(map, chance_bp)
+}
+
 fn roll_strict(map: &Map, chance_bp: i32) -> bool {
     if !rolling(map) {
         return chance_bp > 100;
@@ -455,7 +486,23 @@ pub fn melee_roll(
     if s.attr(0, 0x20_0000) {
         r.avoidance_disabled = true;
     }
-    match combat::roll_special(&r, roll(map), roll(map)) {
+    // Its mechanic resisted, in the band just past the miss chance
+    // (Thistle Tea's `roll_special_outcome`).
+    let first = roll(map);
+    let resist = auras::auras(map, target).map_or(0, |a| {
+        std::iter::once(s.mechanic)
+            .chain(s.effects.iter().map(|e| e.mechanic))
+            .filter(|m| *m != 0)
+            .map(|mech| a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, mech as i32))
+            .max()
+            .unwrap_or(0)
+            * 100
+    });
+    let miss = r.miss_bp();
+    if resist > 0 && first >= miss && first < miss + resist {
+        return (Hit::Resist, false);
+    }
+    match combat::roll_special(&r, first, roll(map)) {
         combat::Outcome::Miss => (Hit::Miss, false),
         combat::Outcome::Dodge => (Hit::Dodge, false),
         combat::Outcome::Parry => (Hit::Parry, false),
@@ -755,15 +802,26 @@ pub fn damage(
     base: f32,
     l: &Landing,
 ) -> Damage {
-    let mut d = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
+    // A fixed amount takes no bonus or modifier, done or taken (vmangos's
+    // custom flag).
+    let fixed = s.custom(sd::CUSTOM_FIXED_DAMAGE);
+    let mut d = if fixed {
+        base
+    } else {
+        base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods)
+    };
     d *= if l.chain > 0.0 { l.chain } else { 1.0 };
-    d *= done_multiplier(map, caster, target, s);
-    d = l.mods.apply(mods::OP_DAMAGE, d);
-    if s.school == 0 {
+    if !fixed {
+        d *= done_multiplier(map, caster, target, s);
+        d = l.mods.apply(mods::OP_DAMAGE, d);
+    }
+    if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
         let armor = resistance(map, caster, target, 0);
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
-    d = taken(map, target, s, d);
+    if !fixed {
+        d = taken(map, target, s, d);
+    }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
         let bonus = if physical(s) {
@@ -847,18 +905,24 @@ pub fn healing(
             .sum();
         h *= (100 + pct) as f32 / 100.0;
     }
-    h = healing_taken(map, target, h);
+    h = healing_taken(map, target, h, s.school_mask());
     if l.crit {
         h *= 1.5;
     }
     h.max(0.0) as u32
 }
 
-/// Healing `target` takes: its flat and percent modifiers.
-pub fn healing_taken(map: &Map, target: Guid, amount: f32) -> f32 {
+/// Healing of school mask `school` that `target` takes (Thistle Tea's
+/// `HealingReceived`): its flat modifiers for the school, taking at most
+/// half, then only its strongest percentage cut and strongest gain.
+pub fn healing_taken(map: &Map, target: Guid, amount: f32, school: u32) -> f32 {
     match auras::auras(map, target) {
         Some(a) => {
-            ((amount + a.sum(AURA_MOD_HEALING) as f32) * a.product(AURA_MOD_HEALING_PCT)).max(0.0)
+            let flat = (a.sum_mask(AURA_MOD_HEALING, school) as f32).max(-amount / 2.0);
+            let cut = a.min(AURA_MOD_HEALING_PCT).min(0);
+            let gain = a.max(AURA_MOD_HEALING_PCT).max(0);
+            ((amount + flat) * (100 + cut).max(0) as f32 / 100.0 * (100 + gain) as f32 / 100.0)
+                .max(0.0)
         }
         None => amount,
     }
@@ -1001,7 +1065,7 @@ pub fn split(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damag
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
 /// casters (Drain Soul's and Shadowburn's soul shards), if `damage` kills
 /// it: only for a death that gives experience or honor.
-pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32)> {
+pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)> {
     let health = map
         .unit_fields(target)
         .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
@@ -1012,25 +1076,51 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32)> {
     let Some(a) = auras::auras(map, target) else {
         return Vec::new();
     };
-    a.effects()
-        .filter(|(h, x)| {
-            x.kind == AURA_CHANNEL_DEATH_ITEM && x.mask != 0 && guid::is_player(h.caster)
-        })
-        .filter(|(h, _)| {
-            let caster_level = level(map, h.caster);
-            let target_level = level(map, target);
-            guid::is_player(target) || target_level > combat::gray_level(caster_level)
-        })
-        .map(|(h, x)| (h.caster, x.mask))
-        .collect()
+    let data = &map.realm.data;
+    let target_level = level(map, target);
+    let creature = map.creature(target);
+    // A soul shard only from a death worth something to its caster (Thistle
+    // Tea's `DeathItem.eligible?`): not grey, a player or tapped, not a
+    // pet or a totem.
+    let shard_target = creature.is_none_or(|c| {
+        c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none()
+    });
+    let mut items: Vec<(Guid, u32, u32)> = Vec::new();
+    for (h, x) in a.effects() {
+        if x.kind != AURA_CHANNEL_DEATH_ITEM || x.mask == 0 {
+            continue;
+        }
+        if x.mask == SOUL_SHARD {
+            let tapped = guid::is_player(target)
+                || creature.is_some_and(|c| c.tapped_by.is_none_or(|t| t == h.caster));
+            if !shard_target
+                || !tapped
+                || target_level <= combat::gray_level(level(map, h.caster))
+            {
+                continue;
+            }
+        }
+        // One shard a warlock, however many of their drains were on it.
+        let warlock = data.spells.get(h.spell).is_some_and(|s| s.family_name == 5);
+        if warlock && items.iter().any(|(c, i, _)| *c == h.caster && *i == x.mask) {
+            continue;
+        }
+        items.push((h.caster, x.mask, x.amount.max(1) as u32));
+    }
+    items
 }
 
-pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32)>) {
+/// Soul Shard.
+const SOUL_SHARD: u32 = 6265;
+
+pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32, u32)>) {
     if items.is_empty() || map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }
-    for (caster, item) in items {
-        let _ = crate::game::map::inventory::add_item(map, caster, item, 1, true);
+    for (caster, item, count) in items {
+        if guid::is_player(caster) {
+            let _ = crate::game::map::inventory::add_item(map, caster, item, count, true);
+        }
     }
 }
 

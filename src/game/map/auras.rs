@@ -189,6 +189,11 @@ pub const AURA_MOD_MOUNTED_SPEED_NOT_STACK: u32 = 172;
 pub const AURA_ALLOW_CHAMPION_SPELLS: u32 = 173;
 pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
+/// Changes to the hit and crit chance of those who attack the unit.
+pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
+pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
+pub const AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE: u32 = 187;
+pub const AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE: u32 = 188;
 
 /// `SpellAuraInterruptFlags`, as Thistle Tea reads them.
 pub const INTERRUPT_CAST: u32 = 0x1;
@@ -271,6 +276,7 @@ pub enum Exclusive {
     Flask,
     NegativeHaste,
     Snare,
+    GeneralsWarcry,
 }
 
 impl Exclusive {
@@ -308,6 +314,9 @@ const DISPEL_CURSE: u32 = 2;
 /// The exclusive kind of a spell, as Thistle Tea's `exclusive_category`
 /// works it out.
 pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
+    if matches!(s.id, 28418..=28420) {
+        return Some(Exclusive::GeneralsWarcry);
+    }
     let flags = s.family_flags as u32;
     let flags_hi = (s.family_flags >> 32) as u32;
     let aura = |a: u32| s.effects.iter().any(|e| e.effect == 6 && e.aura == a);
@@ -477,6 +486,10 @@ pub struct Holder {
     /// A proc's own cooldown.
     pub proc_ready_at: Option<Instant>,
     pub effects: Vec<Aura>,
+    /// When crowd control may break early.
+    pub heartbeat: Option<crate::game::map::spells::heartbeat::Heartbeat>,
+    /// From a triggered spell (worth less when the bar is full).
+    pub triggered: bool,
 }
 
 impl Holder {
@@ -629,6 +642,13 @@ impl Auras {
 
 /// Whether a spell is helpful: no harmful effects, aimed at a friend.
 pub fn positive(s: &SpellTemplate) -> bool {
+    // vmangos's own word on it first.
+    if s.custom(sd::CUSTOM_NEGATIVE) {
+        return false;
+    }
+    if s.custom(sd::CUSTOM_POSITIVE) {
+        return true;
+    }
     if s.attr(0, sd::ATTR_DEBUFF) {
         return false;
     }
@@ -712,6 +732,8 @@ pub struct Context {
     pub duration: Option<Option<u32>>,
     /// Charges the cast worked out.
     pub charges: Option<u32>,
+    /// From a triggered spell.
+    pub triggered: bool,
 }
 
 /// Why an aura couldn't be applied.
@@ -851,6 +873,10 @@ pub fn apply_spell(
         combo: ctx.combo,
         proc_ready_at: None,
         effects: aura_effects,
+        heartbeat: crate::game::map::spells::heartbeat::prepare(
+            map, caster, target, spell, pos, duration,
+        ),
+        triggered: ctx.triggered,
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
@@ -875,7 +901,11 @@ pub fn apply_spell(
         if let Some(i) = a
             .holders
             .iter()
-            .position(|h| h.spell == spell.id && h.caster == caster && h.item == ctx.item)
+            .position(|h| {
+                h.spell == spell.id
+                    && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
+                    && h.item == ctx.item
+            })
         {
             let old = &mut a.holders[i];
             let stacks = if spell.stack_amount > 1 {
@@ -889,11 +919,14 @@ pub fn apply_spell(
                 .map(|x| (x.effect, x.next_tick, x.ticks))
                 .collect();
             let slot = old.slot;
+            let beat = old.heartbeat;
             *old = Holder {
                 stacks,
                 slot,
                 ..holder.clone()
             };
+            old.heartbeat =
+                crate::game::map::spells::heartbeat::refreshed(beat, holder.heartbeat, now);
             // A stacking aura keeps its ticks' rhythm (and some others).
             if crate::game::map::spells::class_scripts::preserves_periodic_timer(spell) {
                 for x in old.effects.iter_mut() {
@@ -936,9 +969,10 @@ pub fn apply_spell(
         }
     }
     // A slot for the new holder.
-    let index = refreshed.unwrap_or_else(|| auras(map, target).map_or(0, |a| a.holders.len() - 1));
+    let mut index =
+        refreshed.unwrap_or_else(|| auras(map, target).map_or(0, |a| a.holders.len() - 1));
     if visible {
-        let slot = {
+        let mut slot = {
             let fields_taken: Vec<bool> = map
                 .unit_fields(target)
                 .map(|f| {
@@ -953,6 +987,32 @@ pub fn apply_spell(
                 range.into_iter().find(|i| !a.slot_taken(*i) && !fields_taken[*i])
             })
         };
+        // All slots of its kind taken: the one of least worth gives way.
+        if slot.is_none()
+            && let Some(i) = crate::game::map::spells::capacity::gives_way(map, target, pos, index)
+        {
+            if i == index {
+                if let Some(a) = auras_mut(map, target) {
+                    a.holders.remove(index);
+                }
+                return Ok(());
+            }
+            let Some(old) = auras(map, target).map(|a| a.holders[i].clone()) else {
+                return Ok(());
+            };
+            slot = old.slot;
+            remove_where(map, target, |h| {
+                h.spell == old.spell && h.caster == old.caster && h.item == old.item && h.slot == old.slot
+            });
+            let Some(found) = auras(map, target).and_then(|a| {
+                a.holders.iter().position(|h| {
+                    h.spell == spell.id && h.caster == caster && h.item == ctx.item && h.slot.is_none()
+                })
+            }) else {
+                return Ok(());
+            };
+            index = found;
+        }
         if let Some(a) = auras_mut(map, target) {
             a.holders[index].slot = slot;
         }
@@ -975,6 +1035,8 @@ pub fn apply_spell(
         }
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
         crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
+        crate::game::map::spells::single_target::applied(map, caster, target, spell);
+        crate::game::map::spells::immunity::applied(map, target, &h);
     }
     recalc(map, target);
     // Helping a flagged player flags the helper.
@@ -1014,7 +1076,10 @@ fn cross_caster_coexist(s: &SpellTemplate, h: &Holder, effects: &[(usize, i32)])
         AURA_PERIODIC_MANA_LEECH,
         AURA_CHANNEL_DEATH_ITEM,
     ];
-    if s.channeled() || s.attr(3, sd::ATTR_EX3_DOT_STACKING) {
+    if s.channeled()
+        || s.attr(3, sd::ATTR_EX3_DOT_STACKING)
+        || s.custom(sd::CUSTOM_SEPARATE_AURA_PER_CASTER)
+    {
         return true;
     }
     effects.iter().all(|(i, _)| {
@@ -1095,8 +1160,10 @@ fn replaces(
         return true;
     }
     if old.spell == new.spell {
-        // Another caster's: replaced unless the effects stand together.
-        return !cross_caster_coexist(spell, old, effects);
+        // Another caster's: replaced unless the effects stand together (or
+        // its stacks are anyone's).
+        return !spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS)
+            && !cross_caster_coexist(spell, old, effects);
     }
     if data.spells.same_kind(old.spell, new.spell) {
         return old.caster == new.caster || !cross_caster_coexist(spell, old, effects);
@@ -1224,6 +1291,43 @@ pub fn interrupt(map: &mut Map, target: Guid, flags: u32) {
     }
 }
 
+/// A channel pushed back by `cut`: `caster`'s holders of `spell` on
+/// `target` end that much sooner, and so does their crowd control's break
+/// (Thistle Tea's `delay_source_spell`).
+pub fn delay_source(map: &mut Map, target: Guid, spell: u32, caster: Guid, cut: Duration) {
+    let now = map.now;
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let mut shown = Vec::new();
+    for h in a
+        .holders
+        .iter_mut()
+        .filter(|h| h.spell == spell && h.caster == caster)
+    {
+        if let Some(t) = h.expires {
+            let t = t.checked_sub(cut).unwrap_or(now).max(now);
+            h.expires = Some(t);
+            if let Some(slot) = h.slot {
+                shown.push((slot, t.saturating_duration_since(now).as_millis() as u32));
+            }
+        }
+        if let Some(b) = h.heartbeat.as_mut()
+            && let Some(at) = b.break_at
+        {
+            b.break_at = Some(at.checked_sub(cut).unwrap_or(now).max(now));
+        }
+    }
+    if let Some(p) = map.players.get(&target) {
+        for (slot, ms) in shown {
+            p.outbound.send(&SMSG_UPDATE_AURA_DURATION {
+                aura_slot: slot as u8,
+                aura_duration: ms,
+            });
+        }
+    }
+}
+
 /// One stack (or, with no stacks, the whole holder) of `spell` comes off.
 pub fn remove_stack(map: &mut Map, target: Guid, spell: u32) {
     let Some(a) = auras_mut(map, target) else {
@@ -1238,6 +1342,28 @@ pub fn remove_stack(map: &mut Map, target: Guid, spell: u32) {
         recalc(map, target);
     } else {
         remove_where(map, target, |h| h.spell == spell);
+    }
+}
+
+/// `count` stacks of `caster`'s `spell` come off (the holder, with none
+/// left).
+pub fn remove_stacks(map: &mut Map, target: Guid, spell: u32, caster: Guid, count: u32) {
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let Some(i) = a
+        .holders
+        .iter()
+        .position(|h| h.spell == spell && h.caster == caster)
+    else {
+        return;
+    };
+    if a.holders[i].stacks > count {
+        a.holders[i].stacks -= count;
+        write_slot(map, target, i);
+        recalc(map, target);
+    } else {
+        remove_spell(map, target, spell, Some(caster));
     }
 }
 
@@ -1307,8 +1433,15 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
             crate::game::map::spells::interrupt(map, target);
+            // Both at once pacifies as well (Thistle Tea's `CombatControl`).
+            if a.kind == AURA_MOD_PACIFY_SILENCE {
+                crate::game::map::combat::stop_attack(map, target);
+            }
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, true);
+                if a.kind == AURA_MOD_PACIFY_SILENCE {
+                    f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, true);
+                }
             }
         }
         AURA_MOD_PACIFY => {
@@ -1332,6 +1465,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             {
                 f.set_u32(UNIT_FIELD_DISPLAYID, display);
             }
+            crate::game::map::spells::interrupts::transformed(map, target, h.spell, a.effect);
         }
         AURA_MOUNTED => {
             let display = map
@@ -1343,6 +1477,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_u32(UNIT_FIELD_MOUNTDISPLAYID, display);
             }
+            crate::game::map::spells::interrupts::mounted(map, target, h.spell);
         }
         AURA_TRACK_CREATURES => {
             if let Some(f) = map.unit_fields_mut(target) {
@@ -1366,8 +1501,21 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_FEIGN_DEATH => {
-            crate::game::map::combat::leave_combat(map, target);
-            crate::game::map::ai::forget(map, target);
+            // The creatures fighting it may see through it (Thistle Tea's
+            // `FeignDeath`): then it only stops attacking.
+            if crate::game::map::spells::class_scripts::feign_death_resisted(map, target, h.spell) {
+                crate::game::map::combat::stop_attack(map, target);
+                if let Some(p) = map.players.get(&target) {
+                    p.outbound.send_frame(
+                        crate::game::data::items::Body::default()
+                            .frame(crate::game::map::spells::class_scripts::SMSG_FEIGN_DEATH_RESISTED),
+                    );
+                }
+            } else {
+                crate::game::map::combat::leave_combat(map, target);
+                crate::game::map::ai::forget(map, target);
+                crate::game::map::spells::interrupts::concealed(map, target, h.spell);
+            }
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FEIGN_DEATH, true);
                 f.set_flag(UNIT_DYNAMIC_FLAGS, 0x20, true);
@@ -1384,6 +1532,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 f.set_byte(UNIT_FIELD_BYTES_1, 2, 0x02 | f.get_byte(UNIT_FIELD_BYTES_1, 2));
             }
             crate::game::map::visibility::stealth_changed(map, target);
+            crate::game::map::spells::interrupts::concealed(map, target, h.spell);
         }
         AURA_WATER_WALK | AURA_FEATHER_FALL | AURA_HOVER => {
             if let Some(p) = map.players.get(&target) {
@@ -1432,10 +1581,13 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 kind == AURA_ADD_PCT_MODIFIER,
             );
         }
-        AURA_MOD_TOTAL_THREAT => total_threat(map, target, a.amount * h.stacks.max(1) as i32),
+        AURA_MOD_TOTAL_THREAT => crate::game::map::spells::threat_sync::fade_changed(map, target),
         AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(kind), true);
+            }
+            if kind == AURA_MOD_UNATTACKABLE {
+                crate::game::map::spells::interrupts::invulnerable(map, target, h.spell);
             }
         }
         // Beast Lore: the target's special information shows.
@@ -1445,6 +1597,18 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_GHOST => {}
+        // A player's own protection from every school drops what
+        // invulnerability ends (a flag, silithyst); one's own is helpful,
+        // as Thistle Tea's holders have it.
+        AURA_SCHOOL_IMMUNITY
+            if (h.positive || h.caster == target)
+                && map
+                    .players
+                    .get(&target)
+                    .is_some_and(|p| p.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero()) =>
+        {
+            crate::game::map::spells::interrupts::invulnerable(map, target, h.spell);
+        }
         _ => {}
     }
 }
@@ -1482,16 +1646,15 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             crate::game::map::player_motion::control(map, target);
         }
-        AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE
-            if !still(map, AURA_MOD_SILENCE) && !still(map, AURA_MOD_PACIFY_SILENCE) =>
-        {
+        AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE | AURA_MOD_PACIFY => {
+            // What's left of either still holds (Thistle Tea's
+            // `CombatControl.sync`).
+            let both = still(map, AURA_MOD_PACIFY_SILENCE);
+            let silenced = both || still(map, AURA_MOD_SILENCE);
+            let pacified = both || still(map, AURA_MOD_PACIFY);
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, false);
-            }
-        }
-        AURA_MOD_PACIFY if !still(map, AURA_MOD_PACIFY) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, false);
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, silenced);
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, pacified);
             }
         }
         AURA_MOD_SHAPESHIFT if !still(map, AURA_MOD_SHAPESHIFT) => {
@@ -1507,6 +1670,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 0);
             }
+            crate::game::map::spells::interrupts::dismounted(map, target);
         }
         AURA_TRACK_CREATURES if !still(map, AURA_TRACK_CREATURES) => {
             if let Some(f) = map.unit_fields_mut(target) {
@@ -1597,7 +1761,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 a.kind == AURA_ADD_PCT_MODIFIER,
             );
         }
-        AURA_MOD_TOTAL_THREAT => total_threat(map, target, -(a.amount * h.stacks.max(1) as i32)),
+        AURA_MOD_TOTAL_THREAT => crate::game::map::spells::threat_sync::fade_changed(map, target),
         AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE if !still(map, a.kind) => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(a.kind), false);
@@ -1612,16 +1776,6 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
 }
 
-/// A unit's threat on every creature fighting it changes by `amount`, for
-/// as long as the aura holds (Fade).
-fn total_threat(map: &mut Map, target: Guid, amount: i32) {
-    for (_, c) in map.creatures.iter_mut() {
-        if let Some((_, t)) = c.threat.iter_mut().find(|(g, _)| *g == target) {
-            *t = (*t + amount as f32).max(0.0);
-        }
-    }
-}
-
 /// The unit flag an aura sets, as Thistle Tea's unit sync does.
 fn unit_flag_of(kind: u32) -> u32 {
     match kind {
@@ -1632,6 +1786,12 @@ fn unit_flag_of(kind: u32) -> u32 {
 
 /// A holder came off: what its going does.
 fn removed(map: &mut Map, target: Guid, h: &Holder) {
+    if !h.positive {
+        crate::game::map::spells::dr_aura_gone(map, target, h.spell);
+    }
+    if h.spell == crate::game::map::outdoor_pvp::SPELL_CARRYING {
+        crate::game::map::outdoor_pvp::carrying_ended(map, target);
+    }
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
     }
@@ -1699,10 +1859,23 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
     if let Some(f) = map.unit_fields_mut(target) {
         f.set_byte(UNIT_FIELD_BYTES_1, 2, form);
     }
+    let data = map.realm.data.clone();
+    // A form left ends the unit's own auras that hang on forms (Thistle
+    // Tea's `Shapeshift.interrupt_holders`); the new form's come back
+    // below.
+    if before != 0 && form != before {
+        remove_where(map, target, |h| {
+            h.caster == target
+                && h.spell != by
+                && data
+                    .spells
+                    .get(h.spell)
+                    .is_some_and(crate::game::map::spells::ends_with_form)
+        });
+    }
     for s in form_passives(before) {
         remove_spell(map, target, *s, Some(target));
     }
-    let data = map.realm.data.clone();
     for s in form_passives(form) {
         if let Some(t) = data.spells.get(*s) {
             let effects: Vec<(usize, i32)> = (0..3)
@@ -1730,21 +1903,45 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
             p.fields.set_u32(UNIT_FIELD_POWER1 + 3, 0);
         }
     }
+    // A warrior's stance keeps only the rage Tactical Mastery holds on to
+    // (Thistle Tea's `retained_stance_rage`: 5 a rank, override scripts
+    // 831 to 835).
+    if form != 0
+        && form != before
+        && map.players.get(&target).is_some_and(|p| p.row.class == 1)
+    {
+        let kept = auras(map, target).map_or(0, |a| {
+            a.effects()
+                .filter(|(_, x)| x.kind == AURA_OVERRIDE_CLASS_SCRIPTS && (831..=835).contains(&x.misc))
+                .map(|(_, x)| ((x.misc - 830) * 50) as u32)
+                .max()
+                .unwrap_or(0)
+        });
+        if let Some(f) = map.unit_fields_mut(target) {
+            let rage = f.get_u32(UNIT_FIELD_POWER1 + 1);
+            f.set_u32(UNIT_FIELD_POWER1 + 1, rage.min(kept));
+        }
+    }
     if form != before {
         crate::game::map::spells::scripts::shapeshifted(map, target, before, form);
     }
-    if form != 0 && form != before {
-        // Entering a form breaks what shapeshifting cancels, but the form.
-        remove_where(map, target, |h| {
-            h.spell != by && h.interrupt_flags & INTERRUPT_SHAPESHIFT != 0
-        });
-        // Druid forms shake off roots and snares.
-        if matches!(form, 1..=5 | 8 | 31) {
+    if form != before {
+        // Entering a shapeshifted form (not a stance's like) breaks what
+        // shapeshifting cancels, but the form.
+        if form != 0 && !matches!(form, 17 | 18 | 19 | 28 | 30 | 31) {
             remove_where(map, target, |h| {
-                !h.positive
-                    && (h.has(AURA_MOD_ROOT) || h.has(AURA_MOD_DECREASE_SPEED))
-                    && !matches!(h.mechanic, 1 | 2 | 5 | 8 | 12 | 13 | 18 | 20 | 23 | 24 | 27 | 30)
+                h.spell != by && h.interrupt_flags & INTERRUPT_SHAPESHIFT != 0
             });
+        }
+        // Druid forms shake off roots and snares, going in and coming out.
+        let cleansing = |f: u8| matches!(f, 1..=5 | 8 | 31);
+        if cleansing(form) || cleansing(before) {
+            remove_where(map, target, |h| {
+                crate::game::map::spells::class_scripts::shapeshift_removable(&data, h)
+            });
+        }
+        if map.players.contains_key(&target) {
+            crate::game::map::spells::restore_form_passives(map, target);
         }
     }
 }
@@ -1758,7 +1955,32 @@ pub fn form(map: &Map, g: Guid) -> u8 {
 
 /// Recompute a unit's stats and speed with its auras.
 pub fn recalc(map: &mut Map, target: Guid) {
+    let before = crate::game::map::spells::health_sync::state(map, target);
     crate::game::map::derive::unit(map, target);
+    if let Some(before) = before {
+        crate::game::map::spells::health_sync::sync(map, target, before);
+    }
+    power_costs(map, target);
+}
+
+/// The client's cost fields by school: the flat and the share auras put
+/// on spells' cost (Thistle Tea's `PowerCostSync`).
+fn power_costs(map: &mut Map, target: Guid) {
+    let Some(a) = auras(map, target) else {
+        return;
+    };
+    let costs: [(i32, f32); 7] = std::array::from_fn(|school| {
+        (
+            a.sum_mask(AURA_MOD_POWER_COST_SCHOOL, 1 << school),
+            a.sum_mask(AURA_MOD_POWER_COST_SCHOOL_PCT, 1 << school) as f32 / 100.0,
+        )
+    });
+    if let Some(f) = map.unit_fields_mut(target) {
+        for (school, (flat, share)) in (0u16..).zip(costs) {
+            f.set_u32(UNIT_FIELD_POWER_COST_MODIFIER + school, flat as u32);
+            f.set_f32(UNIT_FIELD_POWER_COST_MULTIPLIER + school, share);
+        }
+    }
 }
 
 /// Expire auras, and tick the periodic ones.
@@ -1806,6 +2028,7 @@ pub fn update(map: &mut Map) {
         if expired {
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
+        crate::game::map::spells::heartbeat::update(map, g);
     }
 }
 
@@ -1833,6 +2056,12 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     if !alive {
         return;
     }
+    // An encounter's pulse that the data can't say.
+    if a.kind == AURA_PERIODIC_TRIGGER_SPELL
+        && crate::game::map::boss_mechanics::periodic_trigger(map, target, h, a)
+    {
+        return;
+    }
     let stacks = h.stacks.max(1) as i32;
     match a.kind {
         AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_DAMAGE_PERCENT
@@ -1849,7 +2078,13 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     .unwrap_or(0);
                 (max as i32 * a.amount * stacks / 100).max(0) as u32
             } else {
-                (a.amount * stacks).max(0) as u32
+                // Curse of Agony and Starshards grow as they go.
+                let ramp = if a.kind == AURA_PERIODIC_DAMAGE {
+                    crate::game::map::spells::class_scripts::ramp(&map.realm.data, h.spell, a.ticks + 1)
+                } else {
+                    0.0
+                };
+                ((a.amount * stacks).max(0) as f32 + ramp).round().max(0.0) as u32
             };
             let amount = crate::game::map::item_scripts::periodic_damage(map, target, h, amount);
             crate::game::map::spells::periodic_damage(map, h, target, amount, a.kind == AURA_PERIODIC_LEECH);
@@ -1930,7 +2165,13 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
             }
         }
+        AURA_PERIODIC_TRIGGER_SPELL
+            if a.trigger != 0
+                && !crate::game::map::spells::class_scripts::periodic_trigger_allowed(
+                    map, target, h,
+                ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
+            crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
             // A channel's trigger aims at the channel's target.
             let aim = if h.caster == target {
                 map.caster(h.caster)
@@ -2026,8 +2267,11 @@ pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
 /// On death every aura but the passive and death-persistent ones goes, and
 /// so does the cast.
 pub fn clear_on_death(map: &mut Map, g: Guid) {
+    // What it held one of on another goes with it.
+    crate::game::map::spells::single_target::caster_gone(map, g);
     crate::game::map::spells::interrupt(map, g);
     let data = map.realm.data.clone();
+    let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
     remove_where(map, g, |h| {
         !h.passive
             && !data
@@ -2035,6 +2279,7 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
                 .get(h.spell)
                 .is_some_and(|s| s.attr(3, sd::ATTR_EX3_DEATH_PERSISTENT))
     });
+    crate::game::map::boss_mechanics::cast_on_death(map, g, death_casts);
 }
 
 /// The holders a dispel of `dispel` can take, helpful (`friendly` target)

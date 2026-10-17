@@ -8,6 +8,7 @@ pub mod auction;
 pub mod arena;
 pub mod auras;
 pub mod battleground;
+pub mod boss_mechanics;
 pub mod chat;
 pub mod cinematic;
 pub mod combat;
@@ -71,6 +72,7 @@ pub mod rest;
 pub mod scripts;
 pub mod skills;
 pub mod social;
+pub mod spawn_auras;
 pub mod spell_areas;
 pub mod spells;
 pub mod stats;
@@ -302,6 +304,8 @@ pub struct Map {
     pub outdoor: Option<outdoor_pvp::Outdoor>,
     /// The DB scripts running.
     pub scripts: scripts::Runner,
+    /// The encounters' spell mechanics' own state.
+    pub bosses: boss_mechanics::State,
     /// A copy's instance script and its data.
     pub instance: instance_script::State,
     /// Creatures whose spawned events run at the next update.
@@ -327,6 +331,8 @@ pub struct Map {
     pub objects: objects::Objects,
     /// Frames for after this update's create blocks: (observer, frame).
     pub late_frames: Vec<(Guid, Arc<[u8]>)>,
+    /// Scripted area triggers resting from their cooldown, until when.
+    pub trigger_cooldowns: AHashMap<u32, Instant>,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -426,6 +432,7 @@ impl Map {
             loot_state: Default::default(),
             outdoor: outdoor_pvp::for_map(key),
             scripts: Default::default(),
+            bosses: Default::default(),
             instance,
             ai_spawned: Vec::new(),
             by_spawn: AHashMap::new(),
@@ -439,6 +446,7 @@ impl Map {
             arena: Default::default(),
             objects: Default::default(),
             late_frames: Vec::new(),
+            trigger_cooldowns: AHashMap::new(),
         }
     }
 
@@ -681,10 +689,13 @@ impl Map {
                 }
             }
         }
+        // What a teleport ends, and leaving the map.
+        crate::game::map::spells::interrupts::teleported(self, guid);
         if key == self.key {
             movement::teleport_within(self, guid, position, orientation);
             return;
         }
+        crate::game::map::spells::interrupts::changed_map(self, guid);
         let Some(p) = self.players.get(&guid) else {
             return;
         };
@@ -727,6 +738,7 @@ impl Map {
         npc::update_flights(self);
         spells::update(self);
         auras::update(self);
+        boss_mechanics::update(self);
         loot::update(self);
         quests::update_timers(self);
         items::update(self);
@@ -946,6 +958,7 @@ impl Map {
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
+        spawn_auras::apply(self, guid);
         guid
     }
 

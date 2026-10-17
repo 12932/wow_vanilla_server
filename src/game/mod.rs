@@ -27,6 +27,8 @@ mod tests_combat2;
 #[cfg(test)]
 mod tests_combat3;
 #[cfg(test)]
+mod tests_combat5;
+#[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
 mod tests_loot;
@@ -57,17 +59,27 @@ mod tests_spells2;
 #[cfg(test)]
 mod tests_spells3;
 #[cfg(test)]
+mod tests_spells4;
+#[cfg(test)]
+mod tests_spells5;
+#[cfg(test)]
 mod tests_pvp2;
 #[cfg(test)]
 mod tests_pvp3;
 #[cfg(test)]
 mod tests_pvp4;
 #[cfg(test)]
+mod tests_pvp5;
+#[cfg(test)]
 mod tests_world;
 #[cfg(test)]
 mod tests_world5;
 #[cfg(test)]
 mod tests_arena;
+#[cfg(test)]
+mod tests_rules5;
+#[cfg(test)]
+mod tests_bg5;
 #[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
@@ -76,6 +88,8 @@ mod tests_terrain;
 mod tests_scripts2;
 #[cfg(test)]
 mod tests_creatures4;
+#[cfg(test)]
+mod tests_bosses;
 pub mod transports;
 pub mod update;
 pub mod weather;
