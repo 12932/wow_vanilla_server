@@ -57,14 +57,23 @@ pub struct ListState {
 }
 
 /// The list a creature casts from: one a script set (0 for none) over its
-/// template's.
+/// own.
 pub fn list_of(map: &Map, g: Guid) -> u32 {
+    map.creature(g)
+        .and_then(|c| c.scripted.as_deref())
+        .and_then(|s| s.spell_list)
+        .unwrap_or_else(|| base_list(map, g))
+}
+
+/// A creature's own list: its template's, or one it kept from an entry it
+/// was before (`update_entry` to an entry with none).
+pub fn base_list(map: &Map, g: Guid) -> u32 {
     let Some(c) = map.creature(g) else {
         return 0;
     };
     c.scripted
         .as_deref()
-        .and_then(|s| s.spell_list)
+        .and_then(|s| s.base_spell_list)
         .or_else(|| {
             map.realm
                 .data

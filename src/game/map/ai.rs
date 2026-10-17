@@ -387,6 +387,8 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     crate::game::map::event_ai::death_heard(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
     crate::game::map::battleground::creature_died(map, creature, tapper);
+    // A summon of a type that vanishes at death goes now.
+    crate::game::map::event_ai::summon_died(map, creature);
 }
 
 /// Corpses that decay and creatures that respawn.

@@ -1180,3 +1180,300 @@ async fn the_zone_pulse_is_a_dungeons_and_goes_on() {
         "the nearest, 40 yards off, first; again in three seconds"
     );
 }
+
+const SON: u32 = 4300;
+
+fn with_son(d: &mut GameData) {
+    d.creature_templates
+        .insert(SON, creature(SON, "Son of Flame", 14));
+}
+
+/// The host summons a Son for `ms` (0 for no time) of despawn type
+/// `kind`, beside it.
+fn summon_son(m: &mut crate::game::map::Map, ms: u32, kind: i32) -> Guid {
+    let summon = ScriptStep {
+        dataint: [0, 0, -1, kind],
+        x: START.0 + 3.0,
+        y: START.1 + 4.0,
+        z: START.2,
+        ..step(10, [SON, ms, 0, 0])
+    };
+    crate::game::map::scripts::execute(m, &summon, host(), Guid::zero());
+    m.creatures
+        .iter()
+        .filter(|(_, c)| c.entry == SON)
+        .map(|(_, c)| c.guid)
+        .max_by_key(|g| g.guid())
+        .unwrap()
+}
+
+/// Summons go as their despawn types have them (D-R1): 2 and 5 vanish at
+/// death; 1 waits out a fight, its time starting again when it ends; 3
+/// goes in one; 4 times again from its death; 7 has no time.
+#[tokio::test]
+async fn summons_go_as_their_despawn_types_say() {
+    let mut d = world();
+    with_son(&mut d);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    a.sees(host()).await;
+    let out = map
+        .query(move |m| {
+            let due = |m: &mut crate::game::map::Map, g| {
+                let past = m.now - Duration::from_millis(1);
+                if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
+                    s.despawn_at = Some(past);
+                }
+                crate::game::map::event_ai::update_despawns(m);
+            };
+            let time_left = |m: &crate::game::map::Map, g| {
+                crate::game::map::event_ai::scripted(m, g)
+                    .and_then(|s| s.despawn_at)
+                    .map(|t| t.saturating_duration_since(m.now).as_secs())
+            };
+            let kill = |m: &mut crate::game::map::Map, g| {
+                crate::game::map::combat::deal_damage(m, me, g, 100_000);
+            };
+            // 2 and 5: gone at death.
+            let two = summon_son(m, 60_000, 2);
+            let five = summon_son(m, 0, 5);
+            kill(m, two);
+            kill(m, five);
+            let vanished = (m.creature(two).is_none(), m.creature(five).is_none());
+            // 1: in a fight, it waits; the fight over, its minute again.
+            let one = summon_son(m, 60_000, 1);
+            crate::game::map::combat::engage(m, me, one);
+            due(m, one);
+            let waited = m.creature(one).is_some();
+            crate::game::map::ai::enter_evade(m, one);
+            let again = time_left(m, one);
+            // 3: gone, fight or not.
+            let three = summon_son(m, 60_000, 3);
+            crate::game::map::combat::engage(m, me, three);
+            due(m, three);
+            let gone = m.creature(three).is_none();
+            // 4: dead, its time starts from its death.
+            let four = summon_son(m, 30_000, 4);
+            kill(m, four);
+            let from_death = (m.creature(four).is_some(), time_left(m, four));
+            // 7: no time at all.
+            let seven = summon_son(m, 60_000, 7);
+            (
+                vanished,
+                waited,
+                again,
+                gone,
+                from_death,
+                time_left(m, seven),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (true, true), "2 and 5 vanish at death");
+    assert!(out.1, "1 waits out its fight");
+    assert_eq!(out.2, Some(60), "and starts its minute again after it");
+    assert!(out.3, "3 goes in a fight");
+    assert_eq!(out.4, (true, Some(30)), "4's corpse waits its time");
+    assert_eq!(out.5, None, "7 has none");
+}
+
+/// A summoner told of a summon's death no longer counts it among the
+/// living (D-R2): the second of two Sons dying is the last.
+#[tokio::test]
+async fn a_dying_summon_is_not_counted_alive() {
+    let mut d = world();
+    with_son(&mut d);
+    // No Son alive within 100 yards (reversed).
+    d.scripts.conditions.insert(
+        900,
+        Condition {
+            entry: 900,
+            kind: 20,
+            values: [SON as i32, 100, 0, 0],
+            flags: CF_REVERSE_RESULT,
+        },
+    );
+    d.scripts.ai_events.insert(
+        HOST,
+        vec![AiEvent {
+            id: 1,
+            creature: HOST,
+            kind: EVENT_SUMMONED_JUST_DIED,
+            chance: 100,
+            flags: EF_REPEATABLE,
+            params: [SON as i32, 0, 0, 0],
+            actions: [901, 0, 0],
+            ..Default::default()
+        }],
+    );
+    d.scripts.ai_scripts.insert(
+        901,
+        vec![ScriptStep {
+            condition: 900,
+            ..step(44, [1, 0, 0, 0])
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    let phases = map
+        .query(move |m| {
+            let sons = [summon_son(m, 0, 0), summon_son(m, 0, 0)];
+            let mut seen = Vec::new();
+            for s in sons {
+                crate::game::map::combat::deal_damage(m, me, s, 100_000);
+                seen.push(crate::game::map::event_ai::phase(m, host));
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(phases, vec![0, 1], "the last Son's death is the last");
+}
+
+/// An unkillable template keeps a creature at one health, until a script
+/// says otherwise (D-R4).
+#[tokio::test]
+async fn an_unkillable_creature_stops_at_one_health() {
+    let mut d = world();
+    d.creature_templates.get_mut(&HOST).unwrap().static_flags1 = 0x8;
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    let out = map
+        .query(move |m| {
+            crate::game::map::combat::deal_damage(m, me, host, 100_000);
+            let held = m
+                .creature(host)
+                .map(|c| (c.alive(), c.fields.get_u32(UNIT_FIELD_HEALTH)));
+            // Invincibility 0 lets it die.
+            crate::game::map::scripts::execute(m, &step(52, [0; 4]), host, host);
+            crate::game::map::combat::deal_damage(m, me, host, 100_000);
+            (held, m.creature(host).map(|c| c.alive()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (Some((true, 1)), Some(false)));
+}
+
+const LATHORIC: u32 = 4400;
+
+/// `update_entry` makes it the other entry whole: look, size, faction,
+/// flags, level, stats in proportion and weapons; it keeps its old
+/// entry's EventAI; a respawn brings the old entry back (S17, D-R6).
+#[tokio::test]
+async fn update_entry_becomes_the_entry_and_keeps_its_events() {
+    let mut d = world();
+    hear_event_seven(&mut d);
+    let mut lathoric = creature(LATHORIC, "Lathoric the Black", 14);
+    lathoric.display_ids = [7777, 0, 0, 0];
+    lathoric.display_scales = [2.0, 0.0, 0.0, 0.0];
+    lathoric.level_min = 20;
+    lathoric.level_max = 20;
+    lathoric.npc_flags = 0x1;
+    lathoric.unit_flags = 0x100;
+    lathoric.speed_run = 2.0;
+    lathoric.equipment_id = 78;
+    d.creature_templates.insert(LATHORIC, lathoric);
+    d.items.insert(
+        5100,
+        ItemTemplate {
+            entry: 5100,
+            name: "Black Blade".into(),
+            display_id: 5110,
+            ..Default::default()
+        },
+    );
+    d.creature_equipment.insert(78, [5100, 0, 0]);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let me = a.guid;
+    let host = host();
+    a.sees(host).await;
+    let out = map
+        .query(move |m| {
+            if let Some(f) = m.unit_fields_mut(host) {
+                let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+                f.set_u32(UNIT_FIELD_HEALTH, max / 2);
+            }
+            crate::game::map::scripts::execute(m, &step(27, [LATHORIC, 0, 0, 0]), host, host);
+            let c = m.creature(host).unwrap();
+            let f = &c.fields;
+            let became = (
+                c.entry,
+                f.get_u32(UNIT_FIELD_DISPLAYID),
+                f.get_f32(OBJECT_FIELD_SCALE_X),
+                f.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+                f.get_u32(UNIT_NPC_FLAGS),
+                f.get_u32(UNIT_FIELD_FLAGS) & 0x100,
+                f.get_u32(UNIT_FIELD_LEVEL),
+                f.get_u32(UNIT_FIELD_HEALTH) * 2 / f.get_u32(UNIT_FIELD_MAXHEALTH).max(1),
+                f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY),
+                c.speeds.run,
+            );
+            // Its old entry's events still run: map event 7's script event.
+            crate::game::map::event_ai::script_event(m, host, 7, 5, None);
+            let phase = crate::game::map::event_ai::phase(m, host);
+            crate::game::map::combat::deal_damage(m, me, host, 100_000);
+            crate::game::map::ai::respawn_now(m, host);
+            (became, phase, m.creature(host).map(|c| c.entry))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out.0,
+        (LATHORIC, 7777, 2.0, 14, 0x1, 0x100, 20, 1, 5110, 14.0)
+    );
+    assert_eq!(out.1, 1, "the host's own events");
+    assert_eq!(out.2, Some(HOST), "back as it was at its respawn");
+}
+
+/// A script's walk home is an arrival home: its reached-home events fire
+/// (D25, Mizzle's walk back for the Gordok tribute).
+#[tokio::test]
+async fn a_scripts_walk_home_fires_reached_home() {
+    let mut d = world();
+    d.scripts.ai_events.insert(
+        HOST,
+        vec![AiEvent {
+            id: 1,
+            creature: HOST,
+            kind: EVENT_REACHED_HOME,
+            chance: 100,
+            flags: EF_REPEATABLE,
+            actions: [902, 0, 0],
+            ..Default::default()
+        }],
+    );
+    d.scripts
+        .ai_scripts
+        .insert(902, vec![step(44, [1, 0, 0, 0])]);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let host = host();
+    a.sees(host).await;
+    map.query(move |m| {
+        if let Some(c) = m.creature_mut(host) {
+            c.position.y += 6.0;
+        }
+        crate::game::map::scripts::execute(m, &step(20, [7, 0, 0, 0]), host, host);
+    })
+    .await;
+    let mut phase = 0;
+    for _ in 0..100 {
+        phase = map
+            .query(move |m| crate::game::map::event_ai::phase(m, host))
+            .await
+            .unwrap();
+        if phase == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(phase, 1, "home, its event fired");
+}
