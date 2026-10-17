@@ -445,7 +445,11 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
             }
             EFFECT_OPEN_LOCK_ITEM => match (t.item, t.object) {
                 (Some(item), _) => open_lock_item(map, caster, s, index, item),
-                (None, Some(object)) => open_lock(map, caster, s, index, object),
+                // An object opened by the item cast (a Quintessence on a
+                // rune): its lock was checked as the cast began, as mangos
+                // and Thistle Tea check it, for the item that is its key
+                // is spent by now.
+                (None, Some(object)) => opened(map, caster, object),
                 _ => {}
             },
             EFFECT_SKINNING => {
@@ -511,7 +515,7 @@ pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
 /// a door opens.
 fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, object: Guid) {
     let data = map.realm.data.clone();
-    let Some((entry, kind)) = map.gameobject(object).map(|o| (o.entry, o.kind)) else {
+    let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
         return;
     };
     let lock = object_lock(&data, entry);
@@ -546,6 +550,15 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
             gather_gain_chance(skill, learned, required, 1),
         );
     }
+    opened(map, caster, object);
+}
+
+/// An object whose lock is open: a door opens, a chest or node shows its
+/// loot, and its scripts run.
+fn opened(map: &mut Map, caster: Guid, object: Guid) {
+    let Some(kind) = map.gameobject(object).map(|o| o.kind) else {
+        return;
+    };
     match kind {
         GO_DOOR | GO_BUTTON => {
             if let Some(o) = map.gameobject_mut(object) {
