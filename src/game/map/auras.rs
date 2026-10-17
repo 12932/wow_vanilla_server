@@ -2200,6 +2200,28 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 _ => amount,
             };
             crate::game::map::spells::heal(map, h.caster, target, h.spell, amount, true);
+            // A heal's tick procs what goes off on a periodic heal (Improved
+            // Mend Pet, the Dreamwalker's Rejuvenation), as mangos's
+            // `PeriodicTick` and Thistle Tea's periodic heal raise it.
+            if a.kind == AURA_PERIODIC_HEAL {
+                crate::game::map::procs::trigger(
+                    map,
+                    crate::game::map::procs::Event {
+                        actor: h.caster,
+                        target,
+                        actor_flags: crate::game::map::procs::PROC_DONE_PERIODIC,
+                        target_flags: crate::game::map::procs::PROC_TAKEN_PERIODIC,
+                        ex: crate::game::map::procs::EX_NORMAL_HIT
+                            | crate::game::map::procs::EX_PERIODIC_POSITIVE,
+                        spell: Some(h.spell),
+                        damage: 0,
+                        school: h.school,
+                        offhand: false,
+                        ranged: false,
+                        extra_attack: false,
+                    },
+                );
+            }
         }
         AURA_PERIODIC_HEALTH_FUNNEL => {
             // The caster pays health for the target's.

@@ -245,3 +245,27 @@ pub fn cast_fresh(m: &mut Map, caster: Guid, spell: u32, t: spells::Targets) -> 
     fresh(m, caster);
     spells::cast(m, caster, spell, t, None)
 }
+
+/// Make `g`'s ticks of `spell` due now and run the auras: a tick of each.
+pub fn tick_now(m: &mut Map, g: Guid, spell: u32) {
+    let now = m.now;
+    if let Some(a) = auras::auras_mut(m, g) {
+        for h in a.holders.iter_mut().filter(|h| h.spell == spell) {
+            for x in h.effects.iter_mut().filter(|x| x.period.is_some()) {
+                x.next_tick = Some(now);
+            }
+        }
+    }
+    auras::update(m);
+}
+
+/// Whether `c` was told `spell` went off.
+pub async fn saw_go(c: &mut Client, spell: u32) -> bool {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    c.gets(Duration::from_millis(300), |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => Some(()),
+        _ => None,
+    })
+    .await
+    .is_some()
+}
