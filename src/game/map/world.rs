@@ -478,6 +478,10 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
 
 /// Move one creature along its spawn's movement, by slab key.
 pub fn step_creature_key(map: &mut Map, key: usize) {
+    // Flyers and swimmers go their own ways.
+    if crate::game::map::creature_motion::idle_step(map, key) {
+        return;
+    }
     let now = map.now;
     let mut nav = map.nav.take();
     let mut rng = rand::rng();

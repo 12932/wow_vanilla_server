@@ -14,6 +14,7 @@ pub mod combat;
 pub mod conditions;
 pub mod creature;
 pub mod creature_groups;
+pub mod creature_motion;
 pub mod creature_combat;
 
 pub mod death;

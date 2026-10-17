@@ -68,7 +68,16 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if c.threat.iter().all(|(g, _)| *g != attacker) {
         c.threat.push((attacker, 0.0));
     }
-    if c.combat.attacking {
+    let attacking = c.combat.attacking;
+    // A critter runs, from each hit anew.
+    let critter = crate::game::map::creature_motion::critter(map, creature);
+    if critter {
+        crate::game::map::creature_motion::critter_hit(map, creature, attacker);
+    }
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
+    if attacking {
         return;
     }
     let first =
@@ -92,6 +101,10 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
         {
             p.outbound.send_frame(frame);
         }
+    }
+    // A critter calls no one, and fights no one.
+    if critter {
+        return;
     }
     call_for_help(map, creature, attacker);
     if first {
@@ -299,6 +312,8 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         let frame = stop_packet(creature, pos, spline_id);
         map.send_to_observers(creature, &frame, false);
     }
+    // A flyer falls to the ground.
+    crate::game::map::creature_motion::fall_dead(map, creature);
     crate::game::map::loot::creature_died(map, creature, tapper);
     crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::battleground::creature_died(map, creature, tapper);
@@ -570,6 +585,7 @@ fn aggro_scan(map: &mut Map, g: Guid) {
                             + pl.auras.sum(crate::game::map::auras::AURA_MOD_DETECT_RANGE) as f32)
                             .max(0.0)
                     && crate::game::map::spells::stealth::sees(map, g, *p)
+                    && crate::game::map::creature_motion::may_reach(map, g, *p)
             })
         })
         .collect();
@@ -681,6 +697,9 @@ fn leash_of(map: &Map, c: &Creature) -> f32 {
 
 fn fight_step(map: &mut Map, g: Guid) {
     let now = map.now;
+    if crate::game::map::creature_motion::critter_step(map, g) {
+        return;
+    }
     let Some(c) = map.creature(g) else {
         return;
     };
@@ -770,16 +789,22 @@ fn fight_step(map: &mut Map, g: Guid) {
         y: them.position.y + to_me.y / len * reach.min(len),
         z: them.position.z,
     };
-    let routed = map.nav.as_mut().map(|nav| nav.path(me.position, goal));
-    crate::game::map::creature_combat::reach(map, g, !matches!(routed, Some(None)));
-    let path = routed.flatten().unwrap_or_else(|| vec![me.position, goal]);
+    // As its habitat lets it: through the air, the water, or only to the
+    // edge of what it can't enter.
+    let routed = crate::game::map::creature_motion::route(map, g, me.position, goal);
+    crate::game::map::creature_combat::reach(map, g, routed.as_ref().is_some_and(|r| r.1));
+    let (path, fly) = match routed {
+        Some((path, _, fly)) => (path, fly),
+        None if map.nav.is_some() => return,
+        None => (vec![me.position, goal], false),
+    };
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
     c.chase_target_at = Some(them.position);
-    if let Some(frame) = c.walk(path, true, now, spline_id) {
+    if let Some(frame) = c.walk_at(path, true, fly, None, now, spline_id) {
         map.send_to_observers(g, &frame, false);
     }
 }
@@ -931,6 +956,7 @@ fn evade_step(map: &mut Map, g: Guid) {
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
+        combat::sync_aura_state(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
 }
