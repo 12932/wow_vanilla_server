@@ -9,6 +9,12 @@ use crate::game::fields::*;
 use crate::game::map::player::{PLAYER_FLAGS_HIDE_CLOAK, PLAYER_FLAGS_HIDE_HELM};
 use crate::game::map::{Map, chat, login, movement, query};
 
+/// An action button's kinds, its packed data's high byte.
+const ACTION_BUTTON_SPELL: u8 = 0x00;
+const ACTION_BUTTON_MACRO: u8 = 0x40;
+const ACTION_BUTTON_CLICK_MACRO: u8 = 0x41;
+const ACTION_BUTTON_ITEM: u8 = 0x80;
+
 impl Map {
     pub fn handle_packet(&mut self, guid: Guid, msg: ClientOpcodeMessage) {
         let Some(p) = self.players.get(&guid) else {
@@ -350,15 +356,37 @@ impl Map {
         }
     }
 
+    /// A button set or cleared. As mangos's `IsActionButtonDataValid` and
+    /// Thistle Tea's `ActionButtons.set` have it, a spell must be known and
+    /// not passive, an item must exist, a macro is taken as it is, and any
+    /// other kind is refused; a refused button leaves the bar as it was.
     fn set_action_button(&mut self, guid: Guid, m: CMSG_SET_ACTION_BUTTON) {
+        let data = self.realm.data.clone();
         let Some(p) = self.players.get_mut(&guid) else {
             return;
         };
         if m.button >= 120 {
             return;
         }
+        let action = u32::from(m.action);
+        let clear = action == 0 && m.misc == 0 && m.action_type == 0;
+        let valid = clear
+            || match m.action_type {
+                ACTION_BUTTON_SPELL => {
+                    p.spells.contains(&action)
+                        && !data.spells.get(action).is_some_and(|s| s.passive())
+                }
+                ACTION_BUTTON_ITEM => {
+                    data.item(action).is_some() || wow_items::vanilla::lookup_item(action).is_some()
+                }
+                ACTION_BUTTON_MACRO | ACTION_BUTTON_CLICK_MACRO => true,
+                _ => false,
+            };
+        if !valid {
+            return;
+        }
         p.row.actions.retain(|a| a.button != m.button);
-        if m.action != 0 || m.action_type != 0 {
+        if !clear {
             p.row.actions.push(crate::game::store::ActionRow {
                 button: m.button,
                 action: m.action,
