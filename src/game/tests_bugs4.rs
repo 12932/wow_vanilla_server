@@ -1,6 +1,14 @@
 //! Bugs found while mapping wvs's tests against Thistle Tea's, the fourth
-//! batch: the weather's seasons, sounds and changes.
+//! batch: the weather's seasons, sounds and changes; a scripted stay.
 
+use std::time::Duration;
+
+use wow_world_messages::Guid;
+
+use crate::game::data::scripts::ScriptStep;
+use crate::game::map::pets;
+use crate::game::map::{Map, MapHandle};
+use crate::game::tests_pets;
 use crate::game::weather::{self, Rolls};
 
 /// A change's rolls.
@@ -119,5 +127,44 @@ fn the_weather_changes_gradually_and_suddenly() {
     assert_eq!(
         weather::advance(0, 0.0, snow, rolls(90, 1, 0, 49, 0.0)),
         (2, 0.3334)
+    );
+}
+
+fn fighting(m: &Map, g: Guid, victim: Guid) -> bool {
+    m.combat(g)
+        .is_some_and(|c| c.attacking && c.victim == victim)
+}
+
+/// Script command 88's stay leaves a pet in its fight, as vmangos's
+/// `HandlePetCommand` and Thistle Tea's `PetBT.command(:stay)` have it: it
+/// halts where it is, and its attack goes on.
+#[tokio::test]
+async fn a_scripts_stay_keeps_a_pet_in_its_fight() {
+    let (_realm, _h, _gh, map, pet, wolf) = tests_pets::tamed().await;
+    let (sent, kept, command) = map
+        .query(move |m| {
+            pets::attack_target(m, pet, wolf);
+            let sent = fighting(m, pet, wolf);
+            let stay = ScriptStep {
+                command: 88,
+                datalong: [u32::from(pets::COMMAND_STAY), 0, 0, 0],
+                ..Default::default()
+            };
+            crate::game::map::scripts::execute(m, &stay, pet, Guid::zero());
+            (
+                sent,
+                fighting(m, pet, wolf),
+                pets::state(m, pet).map(|s| s.command),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(sent, "sent at the wolf");
+    assert!(kept, "staying, it fights on");
+    assert_eq!(command, Some(pets::COMMAND_STAY));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        map.query(move |m| fighting(m, pet, wolf)).await.unwrap(),
+        "and goes on fighting"
     );
 }
