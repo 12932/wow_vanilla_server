@@ -173,3 +173,79 @@ async fn a_spell_that_ignores_its_casters_modifiers_takes_no_power_percent_or_da
     assert_eq!(healed, 150, "a heal's crit stays, without power or percent");
     assert_eq!(tick, Some(100), "a tick held without them");
 }
+
+const BLIZZARD: u32 = 10;
+const RAIN_OF_FIRE: u32 = 5740;
+const CONSECRATION: u32 = 26573;
+
+/// The times (ms after the cast) `kobold` was hurt while `ms` pass in
+/// steps of 50.
+fn hurt_at(m: &mut Map, kobold: Guid, ms: u64) -> Vec<u64> {
+    let mut at = Vec::new();
+    let mut gone = 0;
+    while gone < ms {
+        let before = health(m, kobold);
+        pass(m, 50);
+        gone += 50;
+        if health(m, kobold) < before {
+            at.push(gone);
+        }
+    }
+    at
+}
+
+#[tokio::test]
+async fn a_ground_spell_ticks_a_period_in_and_has_its_last_tick_as_it_ends() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, mage, map) = player(&realm, "P3D3", "Groundone", Race::Human, Class::Mage).await;
+    let (_d, pally, _) = player(&realm, "P3D4", "Groundtwo", Race::Human, Class::Paladin).await;
+    let (_e, lock, _) = player(&realm, "P3D5", "Groundthree", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[BLIZZARD]);
+            ready(m, pally, 60, &[CONSECRATION]);
+            ready(m, lock, 60, &[RAIN_OF_FIRE]);
+            let kobold = dummy(m, mage, 60, 10.0);
+            let at = m.position_of(kobold);
+            let ground = |m: &mut Map, caster: Guid, spell: u32| {
+                let t = crate::game::map::spells::Targets {
+                    dest: at,
+                    ..Default::default()
+                };
+                assert!(cast_fresh(m, caster, spell, t), "{spell} cast");
+                hurt_at(m, kobold, 10_000)
+            };
+            let blizzard = ground(m, mage, BLIZZARD);
+            let rain = ground(m, lock, RAIN_OF_FIRE);
+            // Consecration is about the paladin.
+            let p = m.position_of(kobold).unwrap();
+            if let Some(x) = m.players.get_mut(&pally) {
+                x.movement.position = p;
+            }
+            assert!(cast_fresh(
+                m,
+                pally,
+                CONSECRATION,
+                crate::game::map::spells::Targets::default()
+            ));
+            let consecration = hurt_at(m, kobold, 10_000);
+            (blizzard, rain, consecration)
+        })
+        .await
+        .unwrap();
+    let (blizzard, rain, consecration) = out;
+    assert_eq!(
+        blizzard,
+        (1..=8).map(|s| s * 1000).collect::<Vec<_>>(),
+        "Blizzard's eight waves, a second apart"
+    );
+    assert_eq!(rain, vec![2000, 4000, 6000, 8000], "Rain of Fire's four");
+    assert_eq!(
+        consecration,
+        (1..=8).map(|s| s * 1000).collect::<Vec<_>>(),
+        "Consecration's eight, the first a second in"
+    );
+}

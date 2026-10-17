@@ -1875,6 +1875,9 @@ pub fn moved(map: &mut Map, g: Guid) {
 pub fn update(map: &mut Map) {
     let now = map.now;
     let data = map.realm.data.clone();
+    // Areas first: a channel's area has its last tick before the channel,
+    // run out, takes it away.
+    effects::tick_areas(map);
     let mut done: Vec<Guid> = map
         .players
         .values()
@@ -1922,7 +1925,6 @@ pub fn update(map: &mut Map) {
         }
         execute(map, g, s, casting.targets, casting.item, false);
     }
-    effects::tick_areas(map);
     effects::refresh_area_auras(map);
     land_arrivals(map);
     dynamic::update(map);
