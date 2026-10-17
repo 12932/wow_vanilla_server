@@ -1403,6 +1403,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let kind = a.kind;
     let misc = a.misc;
     match kind {
+        AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             crate::game::map::combat::stop_attack(map, target);
             if kind == AURA_MOD_STUN
@@ -1636,6 +1637,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
 fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let still = |map: &Map, k: u32| auras(map, target).is_some_and(|x| x.has(k));
     match a.kind {
+        AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             let stunned = still(map, AURA_MOD_STUN);
             let rooted = stunned || still(map, AURA_MOD_ROOT);

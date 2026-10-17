@@ -834,3 +834,67 @@ async fn a_ghost_explores_nothing() {
     assert_eq!(out.0, (false, 0), "a ghost explores nothing");
     assert_eq!(out.1, (true, 5), "alive again, it is explored");
 }
+
+#[tokio::test]
+async fn forced_reactions_are_sent_as_they_change() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    const FORCE: u32 = 21500;
+    const FACTION: i32 = 76;
+    let mut d = crate::game::data::GameData::empty();
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_FORCE_REACTION,
+        base_points: 3,
+        base_dice: 1,
+        misc_value: FACTION,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        FORCE,
+        SpellTemplate {
+            id: FORCE,
+            name: "Forced".into(),
+            effects,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGFORCE");
+    let g = a.enter("Bugforce", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    // The login's, with nothing forced.
+    let reactions = |b: &[u8]| u32::from_le_bytes(b[0..4].try_into().unwrap());
+    let login = a
+        .wait_frame("the login's forced reactions", 0x2A5, |_| true)
+        .await;
+    assert_eq!(reactions(&login), 0);
+    map.query(move |m| {
+        let s = m.realm.data.spells.get(FORCE).unwrap().clone();
+        let _ = crate::game::map::auras::apply_spell(
+            m,
+            g,
+            g,
+            &s,
+            &[(0, 4)],
+            crate::game::map::auras::Context::default(),
+        );
+    })
+    .await
+    .unwrap();
+    let on = a.wait_frame("the forced reaction", 0x2A5, |_| true).await;
+    assert_eq!(
+        (
+            reactions(&on),
+            u32::from_le_bytes(on[4..8].try_into().unwrap())
+        ),
+        (1, FACTION as u32)
+    );
+    map.query(move |m| crate::game::map::auras::remove_spell(m, g, FORCE, None))
+        .await
+        .unwrap();
+    let off = a.wait_frame("it gone", 0x2A5, |_| true).await;
+    assert_eq!(reactions(&off), 0);
+}
