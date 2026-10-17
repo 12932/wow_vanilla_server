@@ -856,6 +856,15 @@ fn spring(map: &mut Map, g: Guid, target: Guid) {
     }
 }
 
+/// A trap disarmed: it springs no more, and goes until it comes back at
+/// its spawn's time.
+pub fn disarm(map: &mut Map, g: Guid) {
+    if let Some(t) = map.objects.traps.get_mut(&g) {
+        t.depleted = true;
+    }
+    despawn(map, g);
+}
+
 /// Whom a trap springs on: an enemy of its owner's (one that may be
 /// attacked, and is hostile or fighting), or, nobody's, any living player.
 fn trap_target(map: &Map, g: Guid, trap: &Trap) -> Option<Guid> {
