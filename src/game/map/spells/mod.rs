@@ -143,6 +143,9 @@ pub struct Targets {
     pub object: Option<Guid>,
     pub item: Option<Guid>,
     pub dest: Option<Vector3d>,
+    /// Whom areas and groups about the caster are about, when not the
+    /// caster: the unit an aura that triggers the spell is on.
+    pub origin: Option<Guid>,
 }
 
 /// A cast under way.
@@ -605,6 +608,7 @@ fn targets_of(t: &SpellCastTargets) -> Targets {
             | SpellCastTargets_SpellCastTargetFlags_Item::TradeItem { trade_item: item } => *item,
         }),
         dest: f.get_dest_location().map(|d| d.destination),
+        origin: None,
     }
 }
 
