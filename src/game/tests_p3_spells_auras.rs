@@ -1627,3 +1627,102 @@ async fn who_sees_through_stealth_and_invisibility() {
     assert!(detected, "as a stronger detection does");
     assert!(after, "the one left still sees it");
 }
+
+const CHALLENGING_SHOUT: u32 = 1161;
+const TAUNT: u32 = 355;
+const MOCKING_BLOW: u32 = 694;
+
+fn threat_of(m: &Map, c: Guid, g: Guid) -> f32 {
+    m.creature(c)
+        .and_then(|c| c.threat.iter().find(|(t, _)| *t == g).map(|(_, v)| *v))
+        .unwrap_or(-1.0)
+}
+
+fn victim(m: &Map, c: Guid) -> Guid {
+    m.creature(c).map(|c| c.combat.victim).unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_taunt_borrows_threat_while_it_lasts_and_the_newest_holds() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_a, w1, map) = player(&realm, "P3A26", "Tauntone", Race::Human, Class::Warrior).await;
+    let (_b, w2, _) = player(&realm, "P3A27", "Taunttwo", Race::Human, Class::Warrior).await;
+    let (_c, w3, _) = player(&realm, "P3A28", "Tauntthree", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            for w in [w1, w2, w3] {
+                ready(m, w, 60, &[]);
+            }
+            let kobold = dummy(m, w1, 60, 3.0);
+            for (w, t) in [(w1, 500.0), (w2, 50.0), (w3, 600.0)] {
+                crate::game::map::ai::add_threat(m, kobold, w, t);
+            }
+            if let Some(c) = m.creature_mut(kobold) {
+                c.combat.victim = w1;
+            }
+            // The shout: level with the victim, on it.
+            apply(m, w2, kobold, CHALLENGING_SHOUT);
+            let shouted = (threat_of(m, kobold, w2), victim(m, kobold));
+            // Earned meanwhile stays; refreshed, nothing more borrowed.
+            crate::game::map::ai::add_threat(m, kobold, w2, 25.0);
+            m.now += Duration::from_secs(1);
+            apply(m, w2, kobold, CHALLENGING_SHOUT);
+            let refreshed = threat_of(m, kobold, w2);
+            // A Taunt from the third, newer: on it; at its end, back to the
+            // shout's.
+            m.now += Duration::from_secs(1);
+            spells::cast_triggered(m, w3, TAUNT, Some(kobold));
+            let taunted = victim(m, kobold);
+            pass(m, 3_100);
+            // Its choice at the next turn of its fight.
+            let back = crate::game::map::ai::overtake(m, kobold, victim(m, kobold));
+            // At the shout's end, the loan goes back.
+            pass(m, 3_000);
+            let ended = (threat_of(m, kobold, w2), has(m, kobold, CHALLENGING_SHOUT));
+            // The shout, then Mocking Blow's shorter taunt, both the second's:
+            // the loan stays while either does.
+            apply(m, w2, kobold, CHALLENGING_SHOUT);
+            let lent = threat_of(m, kobold, w2);
+            m.now += Duration::from_secs(1);
+            apply(m, w2, kobold, MOCKING_BLOW);
+            pass(m, 4_100);
+            let during = threat_of(m, kobold, w2);
+            pass(m, 2_000);
+            let after = threat_of(m, kobold, w2);
+            // A dead creature borrows nothing.
+            let dead = dummy(m, w1, 60, 4.0);
+            crate::game::map::ai::add_threat(m, dead, w2, 10.0);
+            crate::game::map::combat::deal_damage(m, w1, dead, 2_000_000);
+            apply(m, w2, dead, CHALLENGING_SHOUT);
+            let corpse = m.spells.temp_threat.contains_key(&(dead, w2));
+            (
+                shouted, refreshed, taunted, back, ended, lent, during, after, corpse,
+            )
+        })
+        .await
+        .unwrap();
+    let (shouted, refreshed, taunted, back, ended, lent, during, after, corpse) = out;
+    assert_eq!(
+        shouted,
+        (500.0, w2),
+        "level with the victim, and on the shouter"
+    );
+    assert_eq!(
+        refreshed, 525.0,
+        "what it earned stays; a refresh borrows no more"
+    );
+    assert_eq!(taunted, w3, "the newer Taunt holds");
+    assert_eq!(back, w2, "and at its end, the shout again");
+    assert_eq!(
+        ended,
+        (75.0, false),
+        "the loan back at the shout's end, the 25 kept"
+    );
+    assert!(lent > 75.0, "lent again: {lent}");
+    assert_eq!(during, lent, "held while either taunt lasts");
+    assert_eq!(after, 75.0, "given back when both are gone");
+    assert!(!corpse, "a dead creature lends nothing");
+}
