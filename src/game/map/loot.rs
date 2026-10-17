@@ -369,8 +369,10 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     let mut rng = rand::rng();
     let mut items = Vec::new();
     // Killed mostly by NPCs, it carries nothing (Thistle Tea's
-    // `DamageOrigin.loot_allowed?`).
-    let allowed = crate::game::map::creature_combat::loot_allowed(map, creature);
+    // `DamageOrigin.loot_allowed?`); nor does a creature's guardian (its
+    // `loot: nil`).
+    let guardian = crate::game::map::event_ai::scripted(map, creature).is_some_and(|s| s.guardian);
+    let allowed = !guardian && crate::game::map::creature_combat::loot_allowed(map, creature);
     if allowed
         && t.loot_id != 0
         && let Some(table) = data.loot.creature.get(&t.loot_id)
