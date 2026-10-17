@@ -782,6 +782,32 @@ const CHARACTER_COLUMNS: &str = "guid, account, name, race, class, gender, skin,
      hair_style, hair_color, facial_hair, level, xp, money, map, x, y, z, orientation, zone, \
      played_total, played_level, logout_time, at_login, state";
 
+/// A character's state from its JSON. A field that won't parse goes back
+/// to its default, and only it: the rest are kept. (A float that was NaN
+/// is saved as `null`, which an `f32` won't take; before, it cost the
+/// whole state: quests, reputation, pets, the hearthstone's place.)
+fn parse_state(json: &str) -> CharacterState {
+    let e = match serde_json::from_str(json) {
+        Ok(state) => return state,
+        Err(e) => e,
+    };
+    let Ok(serde_json::Value::Object(mut fields)) = serde_json::from_str(json) else {
+        warn!("a character's state doesn't parse ({e}); using defaults");
+        return CharacterState::default();
+    };
+    let names: Vec<String> = fields.keys().cloned().collect();
+    for name in names {
+        let alone = serde_json::Value::Object(
+            std::iter::once((name.clone(), fields[&name].clone())).collect(),
+        );
+        if let Err(e) = serde_json::from_value::<CharacterState>(alone) {
+            warn!("a character's {name} doesn't parse ({e}); it goes back to its default");
+            fields.remove(&name);
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(fields)).unwrap_or_default()
+}
+
 fn row_from(r: &rusqlite::Row) -> rusqlite::Result<CharacterRow> {
     let state: String = r.get(24)?;
     Ok(CharacterRow {
@@ -809,10 +835,7 @@ fn row_from(r: &rusqlite::Row) -> rusqlite::Result<CharacterRow> {
         played_level: r.get(21)?,
         logout_time: r.get(22)?,
         at_login: r.get(23)?,
-        state: serde_json::from_str(&state).unwrap_or_else(|e| {
-            warn!("a character's state doesn't parse ({e}); using defaults");
-            CharacterState::default()
-        }),
+        state: parse_state(&state),
         items: Vec::new(),
         spells: Vec::new(),
         actions: Vec::new(),
