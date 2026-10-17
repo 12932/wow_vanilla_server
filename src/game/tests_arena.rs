@@ -330,3 +330,16 @@ fn probe_the_pit() {
     }
     println!("centre area {:?}", nav.zone_and_area(CENTRE));
 }
+
+/// The shipped config's `[arena]` reads.
+#[test]
+fn the_shipped_config_has_the_arena() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.toml");
+    let cfg = crate::config::load(&path).expect("config.toml parses");
+    assert_eq!(cfg.arena.countdown_secs, 30);
+    assert_eq!(cfg.arena.reward_item, 19024);
+    assert_eq!(
+        cfg.arena.every_minutes, 0,
+        "no scheduled battles by default"
+    );
+}
