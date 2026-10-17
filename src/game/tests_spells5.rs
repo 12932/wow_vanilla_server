@@ -282,11 +282,11 @@ async fn addon_auras_custom_flags_and_single_targets() {
             let conjurer = spawn(m, mage, 619, 20, 8.0);
             let armored = has(m, conjurer, 12544);
             auras::remove_spell(m, conjurer, 12544, None);
-            spells::addon::restore(m, conjurer);
+            crate::game::map::spawn_auras::restore(m, conjurer);
             let restored = has(m, conjurer, 12544);
             // The Explosive Sheep leaves its passive and suicide to its fuse.
             let sheep = spawn(m, mage, 2675, 20, 9.0);
-            let sheep_ids = spells::addon::ids(m, sheep);
+            let sheep_ids = crate::game::map::spawn_auras::spells(m, sheep);
             // vmangos's own word on helpful and harmful.
             let polarity = (
                 auras::positive(data.spells.get(18788).unwrap()),
@@ -317,6 +317,14 @@ async fn addon_auras_custom_flags_and_single_targets() {
             let armored_blow = spells::outcome::damage(m, mage, kobold, &blow, 0, 100.0, &l).amount;
             blow.custom_flags |= crate::game::data::spells::CUSTOM_IGNORE_ARMOR;
             let bare_blow = spells::outcome::damage(m, mage, kobold, &blow, 0, 100.0, &l).amount;
+            // Blessing of Freedom takes the root it guards against.
+            let mut root = plain_aura_root(990_701);
+            root.mechanic = 7;
+            let _ =
+                auras::apply_spell(m, kobold, mage, &root, &[(0, 1)], auras::Context::default());
+            let rooted = has(m, mage, 990_701);
+            apply(m, mage, mage, 1044);
+            let freed = rooted && !has(m, mage, 990_701);
             // One Polymorph at a time: on another, the first ends.
             let (a, b) = (dummy(m, mage, 60, 6.0), dummy(m, mage, 60, 7.0));
             apply(m, mage, a, 118);
@@ -332,12 +340,24 @@ async fn addon_auras_custom_flags_and_single_targets() {
                 armored_blow,
                 bare_blow,
                 sheeped,
+                freed,
             )
         })
         .await
         .unwrap();
-    let (armored, restored, sheep_ids, polarity, plain, fixed, armored_blow, bare_blow, sheeped) =
-        out;
+    let (
+        armored,
+        restored,
+        sheep_ids,
+        polarity,
+        plain,
+        fixed,
+        armored_blow,
+        bare_blow,
+        sheeped,
+        freed,
+    ) = out;
+    assert!(freed, "Blessing of Freedom purges the root");
     assert!(armored && restored, "its template's aura, back at home");
     assert!(
         !sheep_ids.contains(&4051) && !sheep_ids.contains(&8327),
@@ -353,6 +373,14 @@ async fn addon_auras_custom_flags_and_single_targets() {
         "armor ignored: {armored_blow} {bare_blow}"
     );
     assert_eq!(sheeped, (false, true), "one Polymorph at a time");
+}
+
+/// A root.
+fn plain_aura_root(id: u32) -> crate::game::data::spells::SpellTemplate {
+    let mut s = plain_aura_done(id);
+    s.effects[0].aura = auras::AURA_MOD_ROOT;
+    s.effects[0].misc_value = 0;
+    s
 }
 
 /// +100% of all schools' damage done.

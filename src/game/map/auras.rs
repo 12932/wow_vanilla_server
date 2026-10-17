@@ -1031,6 +1031,7 @@ pub fn apply_spell(
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
         crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
         crate::game::map::spells::single_target::applied(map, caster, target, spell);
+        crate::game::map::spells::immunity::applied(map, target, &h);
     }
     recalc(map, target);
     // Helping a flagged player flags the helper.
