@@ -110,10 +110,13 @@ fn evict(map: &mut Map, g: Guid) {
 
 /// A player arriving from `p.row.map` onto `to`: leaving a copy (a
 /// dungeon's, a raid's, a battleground's) for the open world, the client
-/// hears which once it's there; a grace under way is over.
+/// hears which once it's there; a grace under way is over, and the client
+/// is told so.
 pub fn transferred(realm: &crate::game::Realm, p: &mut Player, to: MapKey) {
     let from = p.row.map;
-    p.eviction = None;
+    if p.eviction.take().is_some() {
+        raid_group_only(p, Duration::ZERO);
+    }
     let copy = matches!(instance_type(realm, from), 1..=4)
         || crate::game::battlegrounds::bg_of_map(from).is_some();
     if copy && to.instance == 0 && from != to.map {

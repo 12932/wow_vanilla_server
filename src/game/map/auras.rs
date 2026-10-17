@@ -1033,6 +1033,7 @@ pub fn apply_spell(
         for x in &h.effects {
             started(map, target, &h, x);
         }
+        dummy_flags(map, target, spell.id, true);
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
         crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
         crate::game::map::spells::single_target::applied(map, caster, target, spell);
@@ -1784,6 +1785,28 @@ fn unit_flag_of(kind: u32) -> u32 {
     }
 }
 
+/// The unit flags vmangos's dummy auras set on a creature while it holds
+/// them, as Thistle Tea's `DummyFlags` has them: Stoned leaves the statues
+/// of Uldaman and Blackrock Depths unselectable.
+fn dummy_flag(spell: u32) -> u32 {
+    match spell {
+        10255 => 0x0200_0000,
+        _ => 0,
+    }
+}
+
+/// A dummy aura's flag set as it comes, and cleared as the last of it goes
+/// (whatever else set the flag).
+fn dummy_flags(map: &mut Map, target: Guid, spell: u32, on: bool) {
+    let flag = dummy_flag(spell);
+    if flag == 0 || (!on && auras(map, target).is_some_and(|a| a.has_spell(spell))) {
+        return;
+    }
+    if let Some(c) = map.creature_mut(target) {
+        c.fields.set_flag(UNIT_FIELD_FLAGS, flag, on);
+    }
+}
+
 /// A holder came off: what its going does.
 fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if !h.positive {
@@ -1792,6 +1815,7 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if h.spell == crate::game::map::outdoor_pvp::SPELL_CARRYING {
         crate::game::map::outdoor_pvp::carrying_ended(map, target);
     }
+    dummy_flags(map, target, h.spell, false);
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
     }

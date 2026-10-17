@@ -784,8 +784,8 @@ async fn a_creature_calls_its_kind_near_and_they_come_a_moment_later() {
             crate::game::map::ai::attacked(m, wolf_a, ga);
             let at_once = m.creature(wolf_b).unwrap().combat.attacking;
             let now = m.now;
-            if let Some(x) = m.creature_mut(wolf_a).unwrap().engagement.assist.as_mut() {
-                x.at = now;
+            for x in m.creature_mut(wolf_a).unwrap().engagement.assist.iter_mut() {
+                x.due = now;
             }
             creature_combat::update(m);
             let b = m.creature(wolf_b).unwrap();

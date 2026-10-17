@@ -1,10 +1,13 @@
 //! Escort and follower quests, as Thistle Tea keeps vmangos's
 //! `npc_escortAI` and `FollowerAI` scripts: data ([`catalog`]) run by an
 //! engine here. Accepting an escort's quest sets its escortee walking its
-//! `script_waypoint` path, acting at chosen points and crediting the quest
-//! at its credit point; accepting a follower's sets it trailing the player
-//! to its goal. Either fails the quest if the escortee dies or the player
-//! strays too far, and puts the escortee back where it stood.
+//! `script_waypoint` path along the navmesh, acting at chosen points (by
+//! their point ids) and crediting the quest at its credit point; accepting
+//! a follower's sets it trailing the player to its goal. Either fails the
+//! quest if the escortee dies or the player strays too far, and puts the
+//! escortee back where it stood at once. One that gets there goes after
+//! its last wait and comes back on its spawn's own time, or in a second
+//! for one that respawns at once.
 
 pub mod catalog;
 
@@ -20,7 +23,7 @@ use crate::game::data::CreatureSpawn;
 use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::combat::dist;
-use crate::game::map::creature::{Motion, Walk};
+use crate::game::map::creature::Motion;
 
 /// Whom a summoned creature attacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,12 +48,44 @@ pub enum Act {
     Run,
     Walk,
     After(u32, &'static [Act]),
+    /// `despawn_ms` `u32::MAX`: until it dies.
     Summon {
         entry: u32,
         at: (f32, f32, f32, f32),
         aim: Aim,
         despawn_ms: u32,
     },
+    /// `count` at once, each on a walkable point within `scatter` yards of
+    /// the place, or of the player's feet.
+    SummonMany {
+        entry: u32,
+        at: (f32, f32, f32, f32),
+        at_player: bool,
+        count: u32,
+        scatter: f32,
+        aim: Aim,
+        despawn_ms: u32,
+    },
+    /// Unit flags set, until it respawns.
+    UnitFlags(u32),
+    /// Its EventAI phase.
+    EventPhase(u32),
+    /// 0 passive, 1 defensive, 2 aggressive.
+    React(u32),
+    /// A spell on itself, with its cast time.
+    CastTimed(u32),
+    /// Its cast or channel of the spell ended.
+    Interrupt(u32),
+    /// A field of the copy's instance data set.
+    InstanceData(u32, u32),
+    /// A game object anyone may use, at a place, for a while (ms).
+    SummonObject(u32, (f32, f32, f32, f32), u32),
+    /// The nearest creature of an entry hears a script event.
+    Signal(u32, u32),
+    /// It turns to the nearest creature of an entry.
+    Face(u32),
+    /// The quest credited to the player and their group near.
+    Credit,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,13 +123,26 @@ pub struct Follower {
     pub arrive: &'static [Act],
 }
 
+/// A point of an escort's path: where, its wait, and its point id.
+#[derive(Debug, Clone, Copy)]
+struct Point {
+    at: Vector3d,
+    wait_ms: u32,
+    id: u32,
+}
+
 #[derive(Debug, Clone)]
 enum Kind {
     Escort {
         def: Escort,
-        path: Vec<(Vector3d, u32)>,
-        /// The point it is walking to.
+        path: Vec<Point>,
+        /// The point it is walking to, or waiting at.
         next: usize,
+        /// Where the walk under way ends, to tell its arrival from a walk
+        /// a fight broke off.
+        walking: Option<Vector3d>,
+        /// At `next`, its acts run.
+        arrived: bool,
         waiting_until: Option<Instant>,
         start_at: Instant,
     },
@@ -117,6 +165,9 @@ pub struct Active {
     /// When it ends (and the escortee goes home).
     ends_at: Option<Instant>,
     failed: bool,
+    /// It got there: the escortee goes, and comes back on its spawn's
+    /// time.
+    done: bool,
 }
 
 impl Active {
@@ -158,10 +209,21 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
     };
     let now = map.now;
     let (entry, kind, accept) = if let Some(def) = escort(quest) {
-        let mut path: Vec<(Vector3d, u32)> = match def.path {
+        // Its own points are numbered from 0; `script_waypoint`'s by their
+        // point ids.
+        let mut path: Vec<Point> = match def.path {
             Some(points) => points
                 .iter()
-                .map(|(x, y, z, w)| (Vector3d { x: *x, y: *y, z: *z }, *w))
+                .zip(0..)
+                .map(|((x, y, z, w), id)| Point {
+                    at: Vector3d {
+                        x: *x,
+                        y: *y,
+                        z: *z,
+                    },
+                    wait_ms: *w,
+                    id,
+                })
                 .collect(),
             None => map
                 .realm
@@ -171,11 +233,20 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
                 .get(&def.entry)
                 .map(|ps| {
                     ps.iter()
-                        .map(|p| (Vector3d { x: p.x, y: p.y, z: p.z }, p.wait_ms))
+                        .map(|p| Point {
+                            at: Vector3d {
+                                x: p.x,
+                                y: p.y,
+                                z: p.z,
+                            },
+                            wait_ms: p.wait_ms,
+                            id: p.point,
+                        })
                         .collect()
                 })
                 .unwrap_or_default(),
         };
+        path.sort_by_key(|p| p.id);
         if path.is_empty() {
             return;
         }
@@ -186,6 +257,8 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
                 def: *def,
                 path,
                 next: 0,
+                walking: None,
+                arrived: false,
                 waiting_until: None,
                 start_at: now + Duration::from_millis(u64::from(def.start_delay_ms)),
             },
@@ -224,6 +297,7 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
         summons: Vec::new(),
         ends_at: None,
         failed: false,
+        done: false,
     });
     let i = map.escorts.len() - 1;
     run_acts(map, i, accept);
@@ -336,18 +410,148 @@ fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
                 let Some(pos) = pos else {
                     continue;
                 };
-                if let Some(g) = summon(map, entry, pos, at.3) {
-                    map.escorts[i]
-                        .summons
-                        .push((g, now + Duration::from_millis(u64::from(despawn_ms))));
-                    match aim {
-                        Aim::Escort => crate::game::map::ai::attacked(map, g, creature),
-                        Aim::Player => crate::game::map::ai::attacked(map, g, player),
-                        Aim::None => {}
-                    }
+                summon_for(map, i, entry, pos, at.3, aim, despawn_ms);
+            }
+            Act::SummonMany {
+                entry,
+                at,
+                at_player,
+                count,
+                scatter,
+                aim,
+                despawn_ms,
+            } => {
+                let place = if at_player {
+                    map.players.get(&player).map(|p| p.position())
+                } else {
+                    Some(Vector3d {
+                        x: at.0,
+                        y: at.1,
+                        z: at.2,
+                    })
+                };
+                let Some(place) = place else {
+                    continue;
+                };
+                for _ in 0..count {
+                    let pos = (scatter > 0.0)
+                        .then(|| {
+                            map.nav
+                                .as_mut()
+                                .and_then(|n| n.random_point(place, scatter))
+                        })
+                        .flatten()
+                        .unwrap_or(place);
+                    summon_for(map, i, entry, pos, at.3, aim, despawn_ms);
+                }
+            }
+            Act::UnitFlags(m) => {
+                if let Some(c) = map.creature_mut(creature) {
+                    let f = c.fields.get_u32(UNIT_FIELD_FLAGS);
+                    c.fields.set_u32(UNIT_FIELD_FLAGS, f | m);
+                }
+            }
+            Act::EventPhase(phase) => script_step(map, creature, creature, 44, [phase, 0, 0, 0]),
+            Act::React(state) => script_step(map, creature, creature, 59, [state, 0, 0, 0]),
+            Act::CastTimed(spell) => {
+                crate::game::map::scripts::cast(map, creature, creature, spell, 0);
+            }
+            Act::Interrupt(spell) => {
+                let casting = map
+                    .caster(creature)
+                    .and_then(|c| c.casting.as_ref())
+                    .is_some_and(|c| c.spell == spell);
+                if casting {
+                    crate::game::map::spells::interrupt(map, creature);
+                }
+            }
+            Act::InstanceData(field, value) => {
+                crate::game::map::instance_script::set_data(map, field, value, 0);
+            }
+            Act::SummonObject(entry, at, ms) => {
+                crate::game::map::objects::summon(
+                    map,
+                    None,
+                    entry,
+                    Vector3d {
+                        x: at.0,
+                        y: at.1,
+                        z: at.2,
+                    },
+                    at.3,
+                    ms,
+                    0,
+                    0,
+                    None,
+                );
+            }
+            Act::Signal(entry, event) => {
+                if let Some(at) = map.creature(creature).map(|c| c.position)
+                    && let Some(by) = nearest(map, entry, at, 150.0)
+                {
+                    script_step(map, by, creature, 85, [event, 0, 0, 0]);
+                }
+            }
+            Act::Face(entry) => {
+                if let Some(at) = map.creature(creature).map(|c| c.position)
+                    && let Some(to) = nearest(map, entry, at, 150.0)
+                {
+                    script_step(map, creature, to, 35, [0; 4]);
+                }
+            }
+            Act::Credit => {
+                let (quest, reach) = (map.escorts[i].quest, max_distance(&map.escorts[i].kind));
+                if let Some(at) = map.creature(creature).map(|c| c.position) {
+                    credit(map, player, quest, reach, at);
                 }
             }
         }
+    }
+}
+
+/// One script command from `source` on `target`.
+fn script_step(map: &mut Map, source: Guid, target: Guid, command: u32, datalong: [u32; 4]) {
+    let step = crate::game::data::scripts::ScriptStep {
+        command,
+        datalong,
+        ..Default::default()
+    };
+    crate::game::map::scripts::execute(map, &step, source, target);
+}
+
+/// A summon of escort `i`'s, gone after `despawn_ms` (`u32::MAX`: when it
+/// dies), and whom it attacks.
+#[allow(clippy::too_many_arguments)]
+fn summon_for(
+    map: &mut Map,
+    i: usize,
+    entry: u32,
+    pos: Vector3d,
+    o: f32,
+    aim: Aim,
+    despawn_ms: u32,
+) {
+    let now = map.now;
+    let (creature, player) = (map.escorts[i].creature, map.escorts[i].player);
+    let Some(g) = summon(map, entry, pos, o) else {
+        return;
+    };
+    if despawn_ms != u32::MAX {
+        map.escorts[i]
+            .summons
+            .push((g, now + Duration::from_millis(u64::from(despawn_ms))));
+    }
+    match aim {
+        Aim::Escort => crate::game::map::ai::attacked(map, g, creature),
+        Aim::Player => crate::game::map::ai::attacked(map, g, player),
+        Aim::None => {}
+    }
+}
+
+fn max_distance(kind: &Kind) -> f32 {
+    match kind {
+        Kind::Escort { def, .. } => def.max_distance,
+        Kind::Follower { def, .. } => def.max_distance,
     }
 }
 
@@ -408,7 +612,7 @@ fn fail(map: &mut Map, player: Guid, quest: u32) {
     }
 }
 
-/// The escortee goes back where it stood, as it was.
+/// The escortee goes back where it stood, as it was, at once.
 fn reset(map: &mut Map, creature: Guid) {
     let data = map.realm.data.clone();
     let spawn = map.creature(creature).and_then(|c| c.spawn_guid).and_then(|s| {
@@ -426,22 +630,58 @@ fn reset(map: &mut Map, creature: Guid) {
     }
 }
 
-fn walk_to(map: &mut Map, creature: Guid, to: Vector3d, run: bool) {
-    let now = map.now;
-    let spline_id = map.next_spline_id;
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    let Some(c) = map.creature_mut(creature) else {
+/// An escortee whose escort got there goes, as Thistle Tea's `despawn`
+/// has it: back in a second if it respawns at once, else on its spawn's
+/// own respawn time.
+fn depart(map: &mut Map, creature: Guid, instant: bool) {
+    let data = map.realm.data.clone();
+    let Some(spawn) = map.creature(creature).map(|c| c.spawn_guid) else {
         return;
     };
-    let from = c.position;
-    let speed = if run { c.speeds.run } else { c.speeds.walk };
-    let walk = Walk::new(vec![from, to], speed, now, spline_id, run);
-    let packet = walk.packet(creature, from);
-    c.home = to;
-    c.motion = Motion::Moving(walk);
-    if let Some(frame) = crate::game::conn::encode(&packet) {
-        map.send_to_observers(creature, &frame, false);
+    let Some(spawn) = spawn.and_then(|s| {
+        data.creature_spawns
+            .get(&map.key.map)
+            .and_then(|l| l.iter().find(|x| x.guid == s))
+    }) else {
+        map.remove_creature(creature);
+        return;
+    };
+    let wait = if instant {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_secs(u64::from(spawn.respawn_min.max(1)))
+    };
+    crate::game::map::scripts::despawn(map, creature);
+    let now = map.now;
+    if let Some(c) = map.creature_mut(creature)
+        && let crate::game::map::creature::Life::Dead { respawn_at, .. } = &mut c.life
+    {
+        *respawn_at = now + wait;
     }
+}
+
+/// It walks (or runs) to `to`, along the navmesh: where the walk ends, if
+/// it set out.
+fn walk_to(map: &mut Map, creature: Guid, to: Vector3d, run: bool) -> Option<Vector3d> {
+    crate::game::map::scripts::move_with(
+        map,
+        creature,
+        to,
+        crate::game::map::scripts::Move {
+            run,
+            pathfind: true,
+            ..Default::default()
+        },
+    );
+    match &map.creature(creature)?.motion {
+        Motion::Moving(w) => w.points.last().copied(),
+        _ => Some(to),
+    }
+}
+
+/// The flat distance between two places.
+fn dist2(a: Vector3d, b: Vector3d) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
 /// Escorts and followers move along, act, credit and fail.
@@ -459,7 +699,15 @@ pub fn update(map: &mut Map) {
             for (g, _) in &a.summons {
                 map.remove_creature(*g);
             }
-            reset(map, a.creature);
+            if a.done {
+                let instant = match &a.kind {
+                    Kind::Escort { def, .. } => def.instant_respawn,
+                    Kind::Follower { .. } => false,
+                };
+                depart(map, a.creature, instant);
+            } else {
+                reset(map, a.creature);
+            }
         }
     }
 }
@@ -502,12 +750,10 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
     }) else {
         return false;
     };
-    let max = match &map.escorts[i].kind {
-        Kind::Escort { def, .. } => def.max_distance,
-        Kind::Follower { def, .. } => def.max_distance,
-    };
+    // No limit to how far the player may be, for one with none.
+    let max = max_distance(&map.escorts[i].kind);
     let ppos = map.players.get(&player).map(|p| p.position());
-    let strayed = ppos.is_none_or(|p| dist(p, cpos) > max);
+    let strayed = ppos.is_none_or(|p| max > 0.0 && dist(p, cpos) > max);
     if !alive || (strayed && !map.escorts[i].failed) {
         if !map.escorts[i].failed {
             fail(map, player, quest);
@@ -523,42 +769,83 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
             def,
             path,
             next,
+            walking,
+            arrived,
             waiting_until,
             start_at,
         } => {
             if now < start_at || waiting_until.is_some_and(|t| t > now) {
                 return true;
             }
-            // Arrived at the point it was walking to: its acts and wait.
-            if next < path.len() && dist(cpos, path[next].0) < 1.5 && waiting_until.is_none() {
-                let point = next as u32;
-                if let Some((_, acts)) = def.points.iter().find(|(p, _)| *p == point) {
-                    run_acts(map, i, acts);
+            let Some(point) = path.get(next).copied() else {
+                return false;
+            };
+            if !arrived {
+                // There: the point's acts, its credit, its wait; and a
+                // fight from here on comes back here.
+                let there = walking.is_some_and(|end| dist2(cpos, end) <= 2.0)
+                    || dist(cpos, point.at) < 1.5;
+                if there {
+                    if let Kind::Escort {
+                        walking, arrived, ..
+                    } = &mut map.escorts[i].kind
+                    {
+                        *walking = None;
+                        *arrived = true;
+                    }
+                    if let Some(c) = map.creature_mut(creature) {
+                        c.home = cpos;
+                    }
+                    if let Some((_, acts)) = def.points.iter().find(|(p, _)| *p == point.id) {
+                        run_acts(map, i, acts);
+                    }
+                    if def.credit_point == Some(point.id) {
+                        const CREDIT: &[Act] = &[Act::Credit];
+                        let delay = Duration::from_millis(u64::from(def.credit_delay_ms));
+                        if delay.is_zero() {
+                            run_acts(map, i, CREDIT);
+                        } else {
+                            map.escorts[i].delayed.push((now + delay, CREDIT));
+                        }
+                    }
+                    if let Kind::Escort { waiting_until, .. } = &mut map.escorts[i].kind {
+                        let base = waiting_until.unwrap_or(now).max(now);
+                        *waiting_until =
+                            Some(base + Duration::from_millis(u64::from(point.wait_ms)));
+                    }
+                    return true;
                 }
-                if def.credit_point == Some(point) {
-                    credit(map, player, quest, def.max_distance, cpos);
-                }
-                if let Kind::Escort { waiting_until, .. } = &mut map.escorts[i].kind {
-                    let base = waiting_until.unwrap_or(now).max(now);
-                    *waiting_until = Some(base + Duration::from_millis(u64::from(path[next].1)));
+                // On its way, or back on it after a fight.
+                let end = walk_to(map, creature, point.at, run);
+                if let Kind::Escort { walking, .. } = &mut map.escorts[i].kind {
+                    *walking = end;
                 }
                 return true;
             }
-            let target = if waiting_until.is_some() { next + 1 } else { next };
+            // Its wait over: on to the next point, or, past the last, done.
+            if next + 1 >= path.len() {
+                map.escorts[i].done = true;
+                map.escorts[i].ends_at = Some(now);
+                return true;
+            }
             if let Kind::Escort {
-                next, waiting_until, ..
+                next,
+                arrived,
+                waiting_until,
+                walking,
+                ..
             } = &mut map.escorts[i].kind
             {
-                *next = target;
+                *next += 1;
+                *arrived = false;
                 *waiting_until = None;
+                *walking = None;
             }
-            if target >= path.len() {
-                // The last point: done, and home after its wait.
-                map.escorts[i].ends_at = Some(now + Duration::from_millis(1000));
-                let _ = def.instant_respawn;
-                return true;
+            let to = path[next + 1].at;
+            let end = walk_to(map, creature, to, run);
+            if let Kind::Escort { walking, .. } = &mut map.escorts[i].kind {
+                *walking = end;
             }
-            walk_to(map, creature, path[target].0, run);
             true
         }
         Kind::Follower { def, arrived } => {
@@ -577,6 +864,7 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
                     *arrived = true;
                 }
                 run_acts(map, i, def.arrive);
+                map.escorts[i].done = true;
                 map.escorts[i].ends_at =
                     Some(now + Duration::from_millis(u64::from(def.despawn_ms.max(1000))));
                 return true;

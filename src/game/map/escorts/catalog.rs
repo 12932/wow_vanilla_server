@@ -434,11 +434,231 @@ pub const ESCORTS: &[Escort] = &[
         credit_delay_ms: 244000,
         instant_respawn: false,
         accept: &[Act::Say(4493), Act::Faction(250)],
-        points: &[(24, &[])],
+        points: &[(24, IDOL_RITUAL)],
         path: None,
     },
 
+    Escort {
+        quest: 8736,
+        entry: 11832,
+        credit_point: None,
+        giver: None,
+        max_distance: 0.0f32,
+        start_delay_ms: 2500,
+        credit_delay_ms: 0,
+        instant_respawn: false,
+        accept: &[],
+        points: &[
+            (
+                0,
+                &[
+                    Act::Say(11282),
+                    Act::UnitFlags(0x1000),
+                    Act::Walk,
+                    Act::EventPhase(1),
+                ],
+            ),
+            (1, &[Act::Faction(1254), Act::Say(11283)]),
+            (13, &[Act::Say(11290)]),
+            (14, &[Act::Say(11291)]),
+            (15, &[Act::Say(11292)]),
+            (
+                16,
+                &[
+                    Act::CastTimed(25813),
+                    Act::After(
+                        10000,
+                        &[Act::Summon {
+                            entry: ERANIKUS,
+                            at: (7881.72f32, -2651.23f32, 493.29f32, 0.40f32),
+                            aim: Aim::None,
+                            despawn_ms: 600000,
+                        }],
+                    ),
+                ],
+            ),
+            (17, &[Act::SayBy(ERANIKUS, 11030)]),
+            (18, &[Act::Say(11293)]),
+            (19, &[Act::SayBy(ERANIKUS, 11296)]),
+            (20, &[Act::SayBy(ERANIKUS, 11294)]),
+            (21, &[Act::Say(11295)]),
+            (22, &[Act::SayBy(ERANIKUS, 11297)]),
+            (23, &[Act::SayBy(ERANIKUS, 11298)]),
+            (24, &[Act::Say(11300), Act::Signal(ERANIKUS, 1)]),
+            (28, &[Act::Say(11301), Act::Face(ERANIKUS)]),
+            (29, &[Act::SayBy(ERANIKUS, 11299)]),
+            (30, NIGHTMARE_WAVES),
+            (31, &[Act::Pause(1800000)]),
+        ],
+        path: None,
+    },
 ];
+
+/// Belnistrasz chants the idol of Razorfen Downs quiet for four minutes,
+/// heedless of the quilboar that rise around him, then sets out the
+/// brazier and puts out the idol's fires (Thistle Tea's `idol_ritual`).
+const IDOL_RITUAL: &[Act] = &[
+    Act::Say(4501),
+    Act::Pause(245000),
+    Act::EventPhase(1),
+    Act::React(0),
+    Act::After(1000, &[Act::Cast(12774)]),
+    Act::After(
+        2000,
+        &idol_wave((2582.79f32, 954.392f32, 52.4821f32, 3.78736f32)),
+    ),
+    Act::After(
+        41000,
+        &idol_wave((2569.42f32, 956.380f32, 52.2732f32, 5.42797f32)),
+    ),
+    Act::After(
+        81000,
+        &idol_wave((2570.62f32, 942.393f32, 53.7433f32, 0.71558f32)),
+    ),
+    Act::After(
+        121000,
+        &idol_wave((2582.79f32, 954.392f32, 52.4821f32, 3.78736f32)),
+    ),
+    Act::After(
+        161000,
+        &idol_wave((2569.42f32, 956.380f32, 52.2732f32, 5.42797f32)),
+    ),
+    Act::After(
+        221000,
+        &[Act::Summon {
+            entry: 7356,
+            at: (2570.62f32, 942.393f32, 53.7433f32, 0.71558f32),
+            aim: Aim::Escort,
+            despawn_ms: 60000,
+        }],
+    ),
+    Act::After(61000, &[Act::Say(4504)]),
+    Act::After(121000, &[Act::Say(4505)]),
+    Act::After(181000, &[Act::Say(4506)]),
+    Act::After(241000, &[Act::Say(4507)]),
+    Act::After(
+        244000,
+        &[
+            Act::Interrupt(12774),
+            Act::SummonObject(
+                152097,
+                (2577.196f32, 947.0781f32, 53.16757f32, 2.356195f32),
+                3600000,
+            ),
+            Act::InstanceData(2, 1),
+            Act::React(2),
+            Act::EventPhase(0),
+        ],
+    ),
+];
+
+/// A wave of the idol's quilboar at one of its three spots.
+const fn idol_wave(at: (f32, f32, f32, f32)) -> [Act; 3] {
+    [
+        quilboar(7333, at, 2),
+        quilboar(7329, at, 1),
+        quilboar(7335, at, 1),
+    ]
+}
+
+const fn quilboar(entry: u32, at: (f32, f32, f32, f32), count: u32) -> Act {
+    Act::SummonMany {
+        entry,
+        at,
+        at_player: false,
+        count,
+        scatter: 2.0,
+        aim: Aim::Escort,
+        despawn_ms: 60000,
+    }
+}
+
+const ERANIKUS: u32 = 15491;
+const PHANTASM: u32 = 15629;
+
+/// Remulos at his shrine holds off the Nightmare's phantasms, the shrine's
+/// three shades first, then waves at its approaches and at the player, and
+/// at the last Eranikus comes down (Thistle Tea's `nightmare_waves`).
+const NIGHTMARE_WAVES: &[Act] = &[
+    Act::Say(11302),
+    Act::Face(ERANIKUS),
+    Act::Pause(5000),
+    Act::After(5000, &[Act::SayBy(ERANIKUS, 11304)]),
+    Act::After(
+        5000,
+        &[
+            Act::Summon {
+                entry: PHANTASM,
+                at: (7832.78f32, -2604.57f32, 489.29f32, 0.0f32),
+                aim: Aim::Escort,
+                despawn_ms: u32::MAX,
+            },
+            Act::Summon {
+                entry: PHANTASM,
+                at: (7826.68f32, -2538.46f32, 489.30f32, 0.0f32),
+                aim: Aim::Escort,
+                despawn_ms: u32::MAX,
+            },
+            Act::Summon {
+                entry: PHANTASM,
+                at: (7811.48f32, -2573.20f32, 488.49f32, 0.0f32),
+                aim: Aim::Escort,
+                despawn_ms: u32::MAX,
+            },
+        ],
+    ),
+    Act::After(
+        5000,
+        &[approach((7888.32f32, -2566.25f32, 487.02f32, 0.0f32), 3)],
+    ),
+    Act::After(30000, &[at_player(4)]),
+    Act::After(
+        52000,
+        &[approach((7946.12f32, -2577.10f32, 489.97f32, 0.0f32), 3)],
+    ),
+    Act::After(80000, &[at_player(3)]),
+    Act::After(
+        104000,
+        &[approach((7963.00f32, -2492.03f32, 487.84f32, 0.0f32), 4)],
+    ),
+    Act::After(131000, &[at_player(3)]),
+    Act::After(
+        152000,
+        &[approach((7888.32f32, -2566.25f32, 487.02f32, 0.0f32), 4)],
+    ),
+    Act::After(181000, &[at_player(4)]),
+    Act::After(
+        207000,
+        &[approach((7946.12f32, -2577.10f32, 489.97f32, 0.0f32), 3)],
+    ),
+    Act::After(207000, &[Act::Signal(ERANIKUS, 2)]),
+];
+
+/// Phantasms at one of the shrine's approaches.
+const fn approach(at: (f32, f32, f32, f32), count: u32) -> Act {
+    Act::SummonMany {
+        entry: PHANTASM,
+        at,
+        at_player: false,
+        count,
+        scatter: 10.0,
+        aim: Aim::Escort,
+        despawn_ms: 50000,
+    }
+}
+
+/// Phantasms at the player's feet.
+const fn at_player(count: u32) -> Act {
+    Act::SummonMany {
+        entry: PHANTASM,
+        at: (0.0, 0.0, 0.0, 0.0),
+        at_player: true,
+        count,
+        scatter: 20.0,
+        aim: Aim::Escort,
+        despawn_ms: 30000,
+    }
+}
 
 pub const FOLLOWERS: &[Follower] = &[
     Follower {

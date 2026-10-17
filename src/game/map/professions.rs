@@ -309,6 +309,17 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
                     return Some(code);
                 }
             }
+            // On a game object (a Quintessence on a rune), as any opening.
+            EFFECT_OPEN_LOCK_ITEM if t.item.is_none() && t.object.is_some() => {
+                let o = t.object.and_then(|g| map.gameobject(g))?;
+                if o.loot.as_ref().is_some_and(|l| !l.looters.is_empty()) {
+                    return Some(FAIL_CHEST_IN_USE);
+                }
+                let lock = object_lock(data, o.entry);
+                if let Err(code) = resolve_lock(data, p, s, index, lock) {
+                    return Some(code);
+                }
+            }
             EFFECT_OPEN_LOCK_ITEM => {
                 let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
                 let Some(item) = item else {
@@ -428,11 +439,11 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
                     open_lock(map, caster, s, index, object);
                 }
             }
-            EFFECT_OPEN_LOCK_ITEM => {
-                if let Some(item) = t.item {
-                    open_lock_item(map, caster, s, index, item);
-                }
-            }
+            EFFECT_OPEN_LOCK_ITEM => match (t.item, t.object) {
+                (Some(item), _) => open_lock_item(map, caster, s, index, item),
+                (None, Some(object)) => open_lock(map, caster, s, index, object),
+                _ => {}
+            },
             EFFECT_SKINNING => {
                 if let Some(unit) = t.unit {
                     skin(map, caster, unit, s.id);
@@ -525,10 +536,14 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
             if let Some(o) = map.gameobject_mut(object) {
                 o.fields.set_u32(GAMEOBJECT_STATE, 0);
             }
+            crate::game::map::scripts::object_used(map, caster, object);
         }
         // A battleground's banner or beacon.
         _ if crate::game::map::battleground::opened(map, caster, object) => {}
-        _ => loot::open_object(map, caster, object),
+        _ => {
+            loot::open_object(map, caster, object);
+            crate::game::map::scripts::object_used(map, caster, object);
+        }
     }
 }
 

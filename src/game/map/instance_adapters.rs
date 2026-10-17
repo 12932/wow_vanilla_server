@@ -39,11 +39,17 @@ fn v(data: &Data, field: u32) -> u32 {
     data.get(&field).copied().unwrap_or(0)
 }
 
-/// What a script does to a game object.
+/// What a script does to a game object, as Thistle Tea's
+/// `GameObjectActions.operate` has it: opening and destroying mark it in
+/// use, the rest clear the mark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Act {
+pub(super) enum Act {
+    /// A closed one opens.
     Open,
+    /// An open one shuts.
     Close,
+    /// Broken: open for good.
+    Destroy,
     /// Back to the state it spawned in.
     Reset,
     /// Not to be used.
@@ -55,10 +61,11 @@ enum Act {
     Unlock,
 }
 
+const GO_FLAG_IN_USE: u32 = 0x1;
 const GO_FLAG_LOCKED: u32 = 0x2;
 const GO_FLAG_NO_INTERACT: u32 = 0x10;
 
-fn operate(map: &mut Map, entry: u32, act: Act) {
+pub(super) fn operate(map: &mut Map, entry: u32, act: Act) {
     let objects: Vec<(Guid, Option<u32>)> = map
         .gameobjects
         .iter()
@@ -81,19 +88,44 @@ fn operate(map: &mut Map, entry: u32, act: Act) {
         };
         let f = &mut o.fields;
         let flags = f.get_u32(GAMEOBJECT_FLAGS);
+        let state = f.get_u32(GAMEOBJECT_STATE);
+        let in_use = |on: bool| {
+            if on {
+                flags | GO_FLAG_IN_USE
+            } else {
+                flags & !GO_FLAG_IN_USE
+            }
+        };
         match act {
-            Act::Open => f.set_u32(GAMEOBJECT_STATE, 0),
-            Act::Close => f.set_u32(GAMEOBJECT_STATE, 1),
-            Act::Reset => f.set_u32(GAMEOBJECT_STATE, default),
+            Act::Open => {
+                if state == 1 {
+                    f.set_u32(GAMEOBJECT_STATE, 0);
+                }
+                f.set_u32(GAMEOBJECT_FLAGS, in_use(true));
+            }
+            Act::Close => {
+                if state == 0 {
+                    f.set_u32(GAMEOBJECT_STATE, 1);
+                }
+                f.set_u32(GAMEOBJECT_FLAGS, in_use(false));
+            }
+            Act::Destroy => {
+                f.set_u32(GAMEOBJECT_STATE, 2);
+                f.set_u32(GAMEOBJECT_FLAGS, in_use(true));
+            }
+            Act::Reset => {
+                f.set_u32(GAMEOBJECT_STATE, default);
+                f.set_u32(GAMEOBJECT_FLAGS, in_use(false));
+            }
             Act::Inert => f.set_u32(GAMEOBJECT_FLAGS, flags | GO_FLAG_NO_INTERACT),
             Act::Active => f.set_u32(GAMEOBJECT_FLAGS, flags & !GO_FLAG_NO_INTERACT),
             Act::Lock => {
                 f.set_u32(GAMEOBJECT_STATE, default);
-                f.set_u32(GAMEOBJECT_FLAGS, flags | GO_FLAG_LOCKED);
+                f.set_u32(GAMEOBJECT_FLAGS, in_use(false) | GO_FLAG_LOCKED);
             }
             Act::Unlock => {
                 f.set_u32(GAMEOBJECT_STATE, 0);
-                f.set_u32(GAMEOBJECT_FLAGS, flags & !GO_FLAG_LOCKED);
+                f.set_u32(GAMEOBJECT_FLAGS, in_use(true) & !GO_FLAG_LOCKED);
             }
         }
     }
@@ -223,8 +255,10 @@ fn attack_nearest(map: &mut Map, g: Guid, radius: f32) {
     }
 }
 
-/// A creature back as it spawned, even if alive.
+/// A creature back as it spawned, even if alive; what it was waiting to do
+/// is called off.
 fn respawn(map: &mut Map, g: Guid) {
+    super::instance_script::cancel_for(map, g);
     if map.creature(g).is_some_and(|c| c.alive()) {
         if map.creature(g).is_some_and(|c| c.spawn_guid.is_none()) {
             return;
@@ -234,29 +268,28 @@ fn respawn(map: &mut Map, g: Guid) {
     crate::game::map::ai::respawn_now(map, g);
 }
 
+/// A creature goes: a summoned one for good, a spawned one until its
+/// spawn's own time.
 fn despawn(map: &mut Map, g: Guid) {
-    crate::game::map::scripts::despawn(map, g);
+    super::instance_script::despawn(map, g, false);
 }
 
-/// An object the world database keeps back, up for `for_ms`.
-fn raise_object(map: &mut Map, spawn: u32, for_ms: u64) {
-    let present = crate::game::map::scripts::object_of_spawn(map, spawn);
-    let g =
-        match present {
-            Some(g) => Some(g),
-            None => {
-                let data = map.realm.data.clone();
-                data.gameobject_spawns
-                    .get(&map.key.map)
-                    .and_then(|v| v.iter().find(|s| s.guid == spawn))
-                    .and_then(|s| {
-                        let t = data.gameobject_templates.get(&s.entry)?;
-                        Some(map.add_gameobject(
-                            crate::game::map::gameobject::GameObject::from_spawn(t, s),
-                        ))
-                    })
-            }
-        };
+/// An object the world database keeps back, up for `for_ms`; one already
+/// up stays as it is, as Thistle Tea's `respawn_game_object` leaves a
+/// spawn it didn't start.
+pub(super) fn raise_object(map: &mut Map, spawn: u32, for_ms: u64) {
+    if crate::game::map::scripts::object_of_spawn(map, spawn).is_some() {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let g = data
+        .gameobject_spawns
+        .get(&map.key.map)
+        .and_then(|v| v.iter().find(|s| s.guid == spawn))
+        .and_then(|s| {
+            let t = data.gameobject_templates.get(&s.entry)?;
+            Some(map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, s)))
+        });
     if let Some(g) = g {
         crate::game::map::scripts::set_object_state(map, g, 1);
         map.visibility_dirty.insert(g);
@@ -513,6 +546,34 @@ pub fn settle_spawns(map: &mut Map, s: Script) {
             }
         }
         Script::Stratholme => strat_settle(map),
+        Script::Scholomance => scholo_gandling(map),
+        Script::BlackrockSpire => brs_settle(map),
+        Script::BlackrockDepths if get_data(map, BRD_TOMB) == DONE => {
+            raise_object(map, 399065, 3_600_000);
+        }
+        Script::DireMaul => dm_settle(map),
+        _ => {}
+    }
+}
+
+/// The spawns of `spawns` that lie dead as the copy loads.
+fn dead_spawns(map: &Map, spawns: &[u32]) -> Vec<u32> {
+    map.creatures
+        .iter()
+        .filter(|(_, c)| !c.alive())
+        .filter_map(|(_, c)| c.spawn_guid)
+        .filter(|s| spawns.contains(s))
+        .collect()
+}
+
+/// A timed step of an adapter for one creature.
+pub fn creature_timer(map: &mut Map, s: Script, key: u32, g: Guid) {
+    match s {
+        Script::Uldaman => uld_creature_timer(map, key, g),
+        Script::Gnomeregan if key == T_GNOME_WALK => gnome_bomb_walks(map, g),
+        Script::Stratholme if key == T_STRAT_MALOWN => strat_malown_due(map, g),
+        Script::DireMaul => dm_creature_timer(map, key, g),
+        Script::BlackrockDepths if key == T_BRD_PULSE => zone_pulse(map, g),
         _ => {}
     }
 }
@@ -821,6 +882,11 @@ fn scholo_set(map: &mut Map, field: u32, value: u32) {
         }
         return;
     }
+    scholo_gandling(map);
+}
+
+/// The room bosses all dead, Gandling comes.
+fn scholo_gandling(map: &mut Map) {
     if get_data(map, 0) == NOT_STARTED
         && SCHOLO_ROOM_BOSSES
             .iter()
@@ -987,17 +1053,15 @@ fn gnome_creature(map: &mut Map, entry: u32, event: Event) {
     }
 }
 
-fn gnome_timer(map: &mut Map, key: u32) {
-    // The bombs that have landed walk to Thermaplugg.
-    if key == T_GNOME_WALK {
-        let boss = creatures(map, 7800).into_iter().next();
-        for b in map.instance.lists.remove(&GNOME_BOMB).unwrap_or_default() {
-            if let Some(at) = boss.and_then(|t| map.position_of(t)) {
-                walk_to(map, b, [at.x, at.y, at.z], false);
-            }
-        }
-        return;
+/// A bomb that has landed walks to Thermaplugg.
+fn gnome_bomb_walks(map: &mut Map, b: Guid) {
+    let boss = creatures(map, 7800).into_iter().next();
+    if let Some(at) = boss.and_then(|t| map.position_of(t)) {
+        walk_to(map, b, [at.x, at.y, at.z], false);
     }
+}
+
+fn gnome_timer(map: &mut Map, key: u32) {
     let index = (key - T_GNOME_BOMB) as usize;
     if index >= 6
         || get_data(map, GNOME_FACE_FIELDS + index as u32) == 0
@@ -1032,8 +1096,7 @@ fn gnome_timer(map: &mut Map, key: u32) {
             },
         );
         // Then it walks to Thermaplugg.
-        push(map, GNOME_BOMB, b);
-        schedule(map, T_GNOME_WALK, ms(800));
+        super::instance_script::schedule_for(map, T_GNOME_WALK, b, ms(800));
     }
 }
 
@@ -1390,6 +1453,8 @@ const T_ULD_WARDERS: u32 = TIMERS + 404;
 const T_ULD_RESET: u32 = TIMERS + 405;
 const T_ULD_CLEAR: u32 = TIMERS + 406;
 const T_ULD_ATTACK: u32 = TIMERS + 407;
+const T_ULD_AWAKEN_CAST: u32 = TIMERS + 408;
+const T_ULD_AWAKEN_STONE: u32 = TIMERS + 409;
 
 /// Roles: keeper, ironaya, archaedas, guardian, warder, furniture (the
 /// warders outside), wall (the earthen on the walls).
@@ -1486,8 +1551,7 @@ fn uld_wake(map: &mut Map, g: Guid, faction_id: Option<u32>, delay: u64) {
     if let Some(f) = faction_id {
         faction(map, g, f);
     }
-    push(map, T_ULD_ATTACK, g);
-    schedule(map, T_ULD_ATTACK, ms(delay));
+    super::instance_script::schedule_for(map, T_ULD_ATTACK, g, ms(delay));
 }
 
 fn uld_set(map: &mut Map, field: u32, value: u32) {
@@ -1675,26 +1739,33 @@ fn uld_timer(map: &mut Map, key: u32) {
                 crate::game::map::ai::respawn_now(map, g);
             }
         }
-        T_ULD_ATTACK => {
-            for g in std::mem::take(map.instance.lists.entry(T_ULD_ATTACK).or_default()) {
-                attack_nearest(map, g, 80.0);
-            }
-        }
         _ => {}
     }
 }
 
-/// An earthen wakes: its stone falls away over four seconds, then it
-/// fights.
+/// One creature's steps of its waking: the stone stirring, then falling
+/// away and the fight.
+fn uld_creature_timer(map: &mut Map, key: u32, g: Guid) {
+    match key {
+        T_ULD_AWAKEN_CAST => cast_self(map, g, 10254),
+        T_ULD_AWAKEN_STONE => {
+            remove_aura(map, g, ULD_STONED);
+            attack_nearest(map, g, 80.0);
+        }
+        T_ULD_ATTACK => attack_nearest(map, g, 80.0),
+        _ => {}
+    }
+}
+
+/// An earthen wakes: free to move at once, its stone stirring after a
+/// second and falling away at four, when it fights.
 fn uld_awaken_earthen(map: &mut Map, g: Guid, faction_id: Option<u32>) {
     unit_flags(map, g, ULD_FROZEN, 2);
     if let Some(f) = faction_id {
         faction(map, g, f);
     }
-    cast_self(map, g, 10254);
-    remove_aura(map, g, ULD_STONED);
-    push(map, T_ULD_ATTACK, g);
-    schedule(map, T_ULD_ATTACK, ms(4000));
+    super::instance_script::schedule_for(map, T_ULD_AWAKEN_CAST, g, ms(1000));
+    super::instance_script::schedule_for(map, T_ULD_AWAKEN_STONE, g, ms(4000));
 }
 
 // Blackrock Spire: the Hall of Blackhand's runes, the Dragonspine Door,
@@ -1737,6 +1808,30 @@ fn brs_set(map: &mut Map, field: u32, value: u32) {
         }
         (6, IN_PROGRESS) => schedule(map, T_BRS_ROOKERY, ms(5000)),
         _ => {}
+    }
+}
+
+/// As the copy loads: the rooms whose guards lie dead have their runes
+/// out, and the Dragonspine Door and its braziers stand open once opened.
+fn brs_settle(map: &mut Map) {
+    let guards: Vec<u32> = BRS_ROOMS
+        .iter()
+        .flat_map(|(_, g)| g.iter().copied())
+        .collect();
+    for spawn in dead_spawns(map, &guards) {
+        mark(map, BRS_SLAIN, spawn);
+    }
+    for (rune, _) in BRS_ROOMS {
+        if brs_room_clear(map, rune) {
+            operate(map, rune, Act::Close);
+        }
+    }
+    if get_data(map, 5) == DONE {
+        for (l, r) in BRS_BRAZIERS {
+            operate(map, l, Act::Open);
+            operate(map, r, Act::Open);
+        }
+        operate(map, 164725, Act::Open);
     }
 }
 
@@ -1847,6 +1942,8 @@ const DM_IMMOLTHAR: u32 = 11496;
 const DM_TORTHELDRIN: u32 = 11486;
 const DM_CHORUSH: u32 = 14324;
 const DM_GUARDS_ALIVE: u32 = 15;
+const T_DM_SUMMONER_ATTACKS: u32 = TIMERS + 800;
+const T_DM_CHORUSH_TALKS: u32 = TIMERS + 801;
 const DM_IMPRISONED: u32 = 0x0200_0002;
 const DM_FREED: u32 = 0x0200_0202;
 
@@ -1874,6 +1971,32 @@ fn dm_set(map: &mut Map, field: u32, value: u32) {
         }
         _ => {
             settle(map, field, value);
+        }
+    }
+}
+
+/// As the copy loads: the generators whose guards lie dead are dark, and
+/// the tribute chest and the Felvine Shards stand while their fights are
+/// won.
+fn dm_settle(map: &mut Map) {
+    let guards: Vec<u32> = DM_GENERATORS
+        .iter()
+        .flat_map(|(_, g)| g.iter().copied())
+        .collect();
+    for spawn in dead_spawns(map, &guards) {
+        mark(map, DM_FALLEN, spawn);
+    }
+    for (generator, _) in DM_GENERATORS {
+        if dm_dark(map, generator) {
+            operate(map, generator, Act::Open);
+        }
+    }
+    if get_data(map, 6) == DONE {
+        raise_object(map, 396409, 3_600_000);
+    }
+    if get_data(map, 11) == DONE {
+        for s in [44726, 44727, 44728, 44729, 44730] {
+            raise_object(map, s, 3_600_000);
         }
     }
 }
@@ -1942,19 +2065,39 @@ fn dm_free_immolthar(map: &mut Map) {
         y: 812.44,
         z: -29.45,
     };
-    let immolthar = creatures(map, DM_IMMOLTHAR).into_iter().next();
     for s in creatures(map, 11466) {
         if !map.position_of(s).is_some_and(|p| dist(p, hall) <= 100.0) {
             continue;
         }
         unit_flags(map, s, DM_FREED, 2);
         faction(map, s, 100);
-        if let Some(i) = immolthar {
-            crate::game::map::ai::attacked(map, s, i);
-        }
+        super::instance_script::schedule_for(map, T_DM_SUMMONER_ATTACKS, s, ms(1000));
     }
     if let Some(first) = list(map, DM_SUMMONERS).into_iter().next() {
         talk_as(map, first, 9364);
+    }
+}
+
+/// A Highborne Summoner freed turns on the nearest Immol'thar; Cho'Rush,
+/// standing down, speaks.
+fn dm_creature_timer(map: &mut Map, key: u32, g: Guid) {
+    match key {
+        T_DM_SUMMONER_ATTACKS => {
+            let Some(at) = map.position_of(g) else {
+                return;
+            };
+            let nearest = creatures(map, DM_IMMOLTHAR)
+                .into_iter()
+                .filter_map(|i| map.position_of(i).map(|p| (dist(p, at), i)))
+                .filter(|(d, _)| *d <= 100.0)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, i)| i);
+            if let Some(i) = nearest {
+                crate::game::map::ai::attacked(map, g, i);
+            }
+        }
+        T_DM_CHORUSH_TALKS if map.creature(g).is_some_and(|c| c.alive()) => talk_as(map, g, 9472),
+        _ => {}
     }
 }
 
@@ -1974,7 +2117,7 @@ fn dm_died(map: &mut Map, entry: u32) {
             if scratch(map, DM_CHORUSH_DEAD) == 0 {
                 for c in creatures(map, DM_CHORUSH) {
                     faction(map, c, 35);
-                    talk_as(map, c, 9472);
+                    super::instance_script::schedule_for(map, T_DM_CHORUSH_TALKS, c, ms(5000));
                 }
             }
         }
@@ -1986,12 +2129,7 @@ fn dm_died(map: &mut Map, entry: u32) {
                 store(map, 10, DONE);
             }
             if get_data(map, 6) != DONE {
-                let alive = map
-                    .instance
-                    .data
-                    .get(&DM_GUARDS_ALIVE)
-                    .copied()
-                    .unwrap_or(DM_TRIBUTE_GUARDS.len() as u32);
+                let alive = get_data(map, DM_GUARDS_ALIVE);
                 store(map, DM_GUARDS_ALIVE, alive.saturating_sub(1));
             }
         }
@@ -2022,6 +2160,7 @@ const T_BRD_TOMB: u32 = TIMERS + 600;
 const T_BRD_RING_CHAMPION: u32 = TIMERS + 610;
 const T_BRD_RING_FINISH: u32 = TIMERS + 611;
 const T_BRD_SENTENCE: u32 = TIMERS + 612;
+const T_BRD_PULSE: u32 = TIMERS + 613;
 
 fn brd_set(map: &mut Map, field: u32, value: u32) {
     match field {
@@ -2227,7 +2366,7 @@ fn brd_timer(map: &mut Map, key: u32) {
         for g in creatures(map, entry) {
             unit_flags(map, g, IMMUNE_TO_PLAYER, 2);
             faction(map, g, 54);
-            zone_pulse(map, g);
+            super::instance_script::schedule_for(map, T_BRD_PULSE, g, ms(500));
         }
         if round + 1 < 7 {
             schedule(map, key + 1, ms(30_000));
@@ -2303,6 +2442,9 @@ const T_STRAT_ABOMINATION: u32 = TIMERS + 706;
 const T_STRAT_RAMSTEIN_ARRIVAL: u32 = TIMERS + 707;
 const T_STRAT_BLACK_GUARD: u32 = TIMERS + 708;
 const T_STRAT_GATE_RESET: u32 = TIMERS + 709;
+const T_STRAT_MALOWN: u32 = TIMERS + 710;
+const STRAT_MALOWN_MS: u64 = 180_000;
+const S_MALOWN_FOUGHT: u32 = 18;
 
 fn strat_players_cast(map: &mut Map, spell: u32) {
     for p in players(map) {
@@ -2420,7 +2562,7 @@ fn strat_ramstein(map: &mut Map, value: u32) {
                     4.88,
                 ];
                 if let Some(g) = summon(map, 11030, at, Some((1_800_000, 1))) {
-                    walk_to(map, g, [3941.29, -3394.84, 119.69], true);
+                    walk_to(map, g, [3941.29, -3394.84, 119.69], false);
                 }
             }
             schedule(map, T_STRAT_BLACK_GUARD, ms(60_000));
@@ -2453,8 +2595,43 @@ fn strat_object(map: &mut Map, entry: u32) {
         ];
         summon(map, 11142, at, None);
     }
-    if uses == 3 {
-        summon(map, 11143, *spot, Some((180_000, 1)));
+    // Postmaster Malown, for three minutes: not ended mid-fight, and his
+    // corpse kept, as a timed-or-dead summon.
+    if uses == 3
+        && let Some(g) = summon(map, 11143, *spot, None)
+    {
+        super::instance_script::schedule_for(map, T_STRAT_MALOWN, g, ms(STRAT_MALOWN_MS));
+    }
+}
+
+/// Postmaster Malown's time is up: he goes, unless he has died or is
+/// fighting; a fight over starts his time again.
+fn strat_malown_due(map: &mut Map, g: Guid) {
+    if !map.creature(g).is_some_and(|c| c.alive()) {
+        return;
+    }
+    let fighting = map.creature(g).is_some_and(|c| {
+        c.combat.attacking
+            || c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+    });
+    let fought = map
+        .instance
+        .seen
+        .get(&S_MALOWN_FOUGHT)
+        .is_some_and(|l| l.contains(&(g.guid() as u32)));
+    if fighting {
+        mark(map, S_MALOWN_FOUGHT, g.guid() as u32);
+        super::instance_script::schedule_for(map, T_STRAT_MALOWN, g, ms(1000));
+    } else if fought {
+        if let Some(l) = map.instance.seen.get_mut(&S_MALOWN_FOUGHT) {
+            l.retain(|x| *x != g.guid() as u32);
+        }
+        super::instance_script::schedule_for(map, T_STRAT_MALOWN, g, ms(STRAT_MALOWN_MS));
+    } else {
+        despawn(map, g);
     }
 }
 
@@ -2568,6 +2745,26 @@ fn strat_door(map: &mut Map, field: u32) {
 }
 
 fn strat_settle(map: &mut Map) {
+    // Who lies dead from before: the acolytes, their crystals, the
+    // abominations.
+    let acolytes: Vec<u32> = STRAT_ACOLYTES.iter().flat_map(|(_, a)| *a).collect();
+    for spawn in dead_spawns(map, &acolytes) {
+        mark(map, S_DEAD_ACOLYTES, spawn);
+    }
+    let crystals: Vec<u32> = STRAT_ACOLYTES.iter().map(|(c, _)| *c).collect();
+    for spawn in dead_spawns(map, &crystals) {
+        mark(map, S_TRIGGERED_CRYSTALS, spawn);
+        mark(map, S_DEAD_CRYSTALS, spawn);
+    }
+    for spawn in dead_spawns(map, &STRAT_ABOMINATIONS) {
+        mark(map, S_DEAD_ABOMINATIONS, spawn);
+    }
+    if get_data(map, STRAT_RAMSTEIN_EVENT) == DONE {
+        set_scratch(map, S_RAMSTEIN_SUMMONED, 1);
+    }
+    if get_data(map, STRAT_RAMSTEIN) == DONE {
+        set_scratch(map, S_RAMSTEIN_DEAD, 1);
+    }
     let baron = get_data(map, STRAT_BARON);
     let ramstein = get_data(map, STRAT_RAMSTEIN);
     if baron == IN_PROGRESS || matches!(ramstein, IN_PROGRESS | SPECIAL) {

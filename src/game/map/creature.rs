@@ -186,7 +186,11 @@ pub struct Creature {
     pub move_flags: u32,
     pub movement_type: u8,
     pub wander_distance: f32,
+    /// The waypoint it is bound for (an index into its path; past the end
+    /// once a path that doesn't go round is done).
     pub waypoint: usize,
+    /// The last waypoint it reached: where it goes back to after a fight.
+    pub last_waypoint: Option<usize>,
     pub motion: Motion,
     /// Players whose clients know this creature.
     pub observers: AHashSet<Guid>,
@@ -228,6 +232,9 @@ pub struct Creature {
     pub engagement: crate::game::map::creature_combat::Engagement,
     /// What its wounds leave of its run speed.
     pub wounded: f32,
+    /// The zone and area it stands in, once worked out: as it comes into
+    /// view and as it moves.
+    pub zone_area: Option<(u32, u32)>,
 }
 
 /// Alive, or dead and waiting.
@@ -299,6 +306,7 @@ impl Creature {
             movement_type: MOVEMENT_IDLE,
             wander_distance: 0.0,
             waypoint: 0,
+            last_waypoint: None,
             motion: Motion::Idle { until: None },
             observers: AHashSet::new(),
             vis_anchor: position,
@@ -326,6 +334,7 @@ impl Creature {
             summoned_at: None,
             engagement: Default::default(),
             wounded: 1.0,
+            zone_area: None,
         }
         .with_base()
     }
@@ -454,17 +463,23 @@ impl Creature {
         if crate::game::map::creature_motion::template_flies(template) {
             c.move_flags |= crate::game::map::creature_motion::FLIGHT_FLAGS;
         }
-        if spawn.movement_type == MOVEMENT_WAYPOINT && !data.waypoints.contains_key(&spawn.guid) {
-            c.movement_type = MOVEMENT_IDLE;
+        // A spawn with a path of its own walks it, whatever its movement
+        // type says (bar going round in the air), from the point nearest
+        // its spawn, as Thistle Tea builds its route.
+        match data.waypoints.get(&spawn.guid).filter(|p| !p.is_empty()) {
+            Some(path) if c.movement_type != crate::game::map::creature_motion::MOVEMENT_CYCLIC => {
+                c.movement_type = MOVEMENT_WAYPOINT;
+                c.waypoint = nearest_waypoint(path, position);
+            }
+            None if c.movement_type == MOVEMENT_WAYPOINT => c.movement_type = MOVEMENT_IDLE,
+            _ => {}
         }
         if c.movement_type == MOVEMENT_RANDOM && c.wander_distance <= 0.0 {
             c.movement_type = MOVEMENT_IDLE;
         }
         if c.movement_type != MOVEMENT_IDLE {
-            // Spread the first moves out, so creatures don't all start at
-            // once.
             c.motion = Motion::Idle {
-                until: Some(Instant::now() + Duration::from_millis(rng.random_range(0..8_000))),
+                until: Some(Instant::now()),
             };
         }
         for (i, r) in template.resistances.iter().enumerate() {
@@ -614,6 +629,16 @@ fn pick_display(t: &CreatureTemplate) -> (u32, f32) {
         .unwrap_or(0);
     let scale = t.display_scales[i];
     (t.display_ids[i], if scale > 0.0 { scale } else { 1.0 })
+}
+
+/// The index of the point of `path` nearest `at`.
+pub fn nearest_waypoint(path: &[crate::game::data::Waypoint], at: Vector3d) -> usize {
+    let d = |w: &crate::game::data::Waypoint| {
+        (w.x - at.x).powi(2) + (w.y - at.y).powi(2) + (w.z - at.z).powi(2)
+    };
+    (0..path.len())
+        .min_by(|a, b| d(&path[*a]).total_cmp(&d(&path[*b])))
+        .unwrap_or(0)
 }
 
 /// How long a wandering creature waits before its next walk.

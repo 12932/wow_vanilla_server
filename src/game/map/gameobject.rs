@@ -27,6 +27,8 @@ pub struct GameObject {
     pub observers: AHashSet<Guid>,
     pub cell: CellKey,
     pub loot: Option<crate::game::map::loot::Loot>,
+    /// The zone and area it stands in, once worked out.
+    pub zone_area: Option<(u32, u32)>,
 }
 
 impl GameObject {
@@ -69,6 +71,7 @@ impl GameObject {
             observers: AHashSet::new(),
             cell: cell_of(s.x, s.y),
             loot: None,
+            zone_area: None,
         }
     }
 

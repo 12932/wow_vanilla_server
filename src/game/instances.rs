@@ -10,7 +10,10 @@
 //! holds its map's limit, and an account may enter at most five copies an
 //! hour. A group formed by a copy's owner takes it over; one inside a copy
 //! that is no longer theirs (out of the group, out of the raid) has a
-//! minute's grace, then goes home ([`crate::game::map::eviction`]).
+//! minute's grace, then goes home ([`crate::game::map::eviction`]). A group
+//! is held by its leader's raid binds, and one who goes into a raid copy
+//! their group is bound to is bound to it too. A raid that resets with
+//! players inside takes no one more and goes once they have left.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -27,7 +30,7 @@ use crate::game::map::{Map, MapKey};
 pub const KIND_RAID: &str = "raid";
 pub const KIND_INSTANCE: &str = "instance";
 /// How long an empty copy lasts.
-pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(30 * 60);
+pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(5 * 60);
 /// Raid resets count from a Tuesday, 04:00 UTC.
 const RESET_EPOCH: i64 = 1_101_182_400;
 const DAY: i64 = 86_400;
@@ -69,6 +72,12 @@ pub struct InstanceSave {
     pub dead: BTreeMap<u32, i64>,
     /// The instance script's data.
     pub data: BTreeMap<u32, u32>,
+    /// Who has gone in, by GUID counter: each player is on the list of the
+    /// copy of the map they last went into.
+    pub entered: Vec<u32>,
+    /// Its raid reset with players inside: it takes no one more, and goes
+    /// once they have left.
+    pub expired: bool,
 }
 
 #[derive(Debug, Default)]
@@ -93,9 +102,17 @@ impl Instances {
                     }
                 }
                 KIND_INSTANCE => {
-                    if let Ok(save) = serde_json::from_str::<InstanceSave>(data) {
+                    if let Ok(mut save) = serde_json::from_str::<InstanceSave>(data) {
                         i.next_id = i.next_id.max(save.id);
-                        if let Some(owner) = save.owner {
+                        // Groups don't outlive a restart, and their ids come
+                        // again: a group's copy is left without an owner, for
+                        // its old leader's next group to take up.
+                        if matches!(save.owner, Some(Owner::Group(_))) {
+                            save.owner = None;
+                        }
+                        if let Some(owner) = save.owner
+                            && !save.expired
+                        {
                             i.owned.insert((owner, save.map), save.id);
                         }
                         i.saves.insert(save.id, save);
@@ -122,11 +139,12 @@ impl Instances {
     }
 
     /// Whether `account` may enter `key` now: a copy it entered in the
-    /// hour, or a sixth.
+    /// hour (its hour starts again), or a sixth.
     fn admit(&mut self, account: &str, key: MapKey, now: i64) -> bool {
         let entries = self.entries.entry(account.to_owned()).or_default();
         entries.retain(|(_, at)| *at + 3600 > now);
-        if entries.iter().any(|(k, _)| *k == key) {
+        if let Some(e) = entries.iter_mut().find(|(k, _)| *k == key) {
+            e.1 = now;
             return true;
         }
         if entries.len() >= ENTRIES_AN_HOUR {
@@ -135,19 +153,49 @@ impl Instances {
         entries.push((key, now));
         true
     }
+
+    /// Whether players are bound to copy `id` of a raid.
+    fn saved(&self, id: u32) -> bool {
+        self.raids.get(&id).is_some_and(|r| !r.players.is_empty())
+    }
+
+    /// The copy of `map` that `player` last went into.
+    fn last_entered(&self, player: u32, map: u32) -> Option<u32> {
+        self.saves
+            .values()
+            .find(|s| s.map == map && s.entered.contains(&player))
+            .map(|s| s.id)
+    }
+
+    /// `player` went into copy `id` of `map`: it is the one of the map they
+    /// last went into. The saves changed, to be stored.
+    fn enter(&mut self, player: u32, map: u32, id: u32) -> Vec<InstanceSave> {
+        let mut changed = Vec::new();
+        for s in self.saves.values_mut().filter(|s| s.map == map) {
+            let was = s.entered.contains(&player);
+            if s.id == id && !was {
+                s.entered.push(player);
+            } else if s.id != id && was {
+                s.entered.retain(|p| *p != player);
+            } else {
+                continue;
+            }
+            changed.push(s.clone());
+        }
+        changed
+    }
 }
 
 pub fn instance_type(realm: &Realm, map: u32) -> u32 {
     realm.data.maps.get(&map).map_or(0, |m| m.instance_type)
 }
 
-/// How many may be in a copy of `map`.
-pub fn limit(map: u32, instance_type: u32) -> usize {
-    match (map, instance_type) {
-        (309 | 509, _) => 20,
-        (_, 2) => 40,
-        (229, _) => 10,
-        _ => 5,
+/// How many may be in a copy of `map`: its template's player limit, none
+/// for 0 or no template.
+pub fn limit(data: &crate::game::data::GameData, map: u32) -> usize {
+    match data.scripts.map_templates.get(&map).map(|t| t.player_limit) {
+        Some(n) if n > 0 => n as usize,
+        _ => usize::MAX,
     }
 }
 
@@ -181,79 +229,67 @@ fn now() -> i64 {
     crate::game::social::mail::now()
 }
 
-/// The copy of `map` `g` goes into: the raid they are bound to, their
-/// group's, or their own, made if there is none.
+/// Who `g` goes in with: their group's id, whether it is a raid, and its
+/// leader.
+fn group_of(realm: &Realm, g: Guid) -> Option<(u32, bool, Guid)> {
+    let groups = realm.social.groups.lock();
+    groups.group_of(g).map(|gr| (gr.id, gr.raid, gr.leader))
+}
+
+/// The raid copy of `map` a group is bound to: its leader's, as Thistle
+/// Tea binds a group to its leader's saves when it forms and when its
+/// leader changes.
+fn group_bind(inst: &Instances, group: Option<(u32, bool, Guid)>, map: u32) -> Option<u32> {
+    group.and_then(|(_, _, leader)| inst.raid_bind(guid::counter(leader), map))
+}
+
+/// The copy of `map` `g` goes into: the raid their group or they are bound
+/// to, their group's, or their own, made if there is none.
 pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Refused> {
     let kind = instance_type(realm, map);
     if !matches!(kind, 1 | 2) {
         return Ok(MapKey::world(map));
     }
     let me = guid::counter(g);
-    let (group, leader) = {
-        let groups = realm.social.groups.lock();
-        (
-            groups.group_of(g).map(|gr| (gr.id, gr.raid)),
-            groups.group_of(g).map(|gr| gr.leader),
-        )
-    };
-    if kind == 2 && !gm && !group.is_some_and(|(_, raid)| raid) {
+    let group = group_of(realm, g);
+    if kind == 2 && !gm && !group.is_some_and(|(_, raid, _)| raid) {
         return Err(Refused::RaidGroupOnly);
     }
-    let account = realm
-        .registry
-        .online(g)
-        .map(|o| o.account.to_string())
-        .unwrap_or_default();
-    let now = now();
+    let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
     let mut inst = realm.social.instances.lock();
-    let owner = match group {
-        Some((id, _)) => Owner::Group(id),
-        None => Owner::Player(me),
-    };
-    if let (Some((id, _)), Some(leader)) = (group, leader) {
+    let bound = inst.raid_bind(me, map);
+    let group_bound = group_bind(&inst, group, map);
+    // A group that follows its leader's save leaves the copy it had.
+    if let Some(b) = group_bound
+        && inst.owned.get(&(owner, map)).is_some_and(|o| *o != b)
+    {
+        inst.owned.remove(&(owner, map));
+    }
+    if let Some((id, _, leader)) = group {
         adopt(realm, &mut inst, id, leader, map);
     }
-    let bound = inst.raid_bind(me, map);
     let owned = inst.owned.get(&(owner, map)).copied();
+    let selected = group_bound.or(bound).or(owned);
     // A raid bind holds: into another copy of the raid, no.
-    if let (Some(b), Some(o)) = (bound, owned)
-        && b != o
+    if let Some(id) = selected
         && !gm
+        && ([group_bound, bound]
+            .iter()
+            .any(|b| b.is_some_and(|b| b != id))
+            || (kind == 2 && owned.is_some_and(|o| o != id)))
     {
-        return Err(Refused::Message(
-            "You are already saved to another copy of this instance.".into(),
-        ));
+        return Err(Refused::Abort(TransferAbortReason::NotFound));
     }
-    let id = match bound.or(owned) {
+    let id = match selected {
         Some(id) => id,
-        None => {
-            inst.next_id += 1;
-            inst.next_id
-        }
+        None => inst.new_id(),
     };
     let key = MapKey { map, instance: id };
-    let inside = realm
-        .registry
-        .all_online()
-        .iter()
-        .filter(|o| o.guid != g && o.map().key == key)
-        .count();
-    // The copy's size: `map_template`'s, as Thistle Tea takes it.
-    let cap = realm
-        .data
-        .scripts
-        .map_templates
-        .get(&map)
-        .map(|t| t.player_limit as usize)
-        .filter(|l| *l > 0)
-        .unwrap_or_else(|| limit(map, kind));
-    if inside >= cap && !gm {
-        return Err(Refused::Abort(TransferAbortReason::IsFull));
-    }
-    if !gm && !inst.admit(&account, key, now) {
-        return Err(Refused::Abort(TransferAbortReason::TooManyInstances));
-    }
+    drop(inst);
+    admit_copy(realm, g, gm, key)?;
+    let mut inst = realm.social.instances.lock();
     inst.owned.entry((owner, map)).or_insert(id);
+    let now = now();
     let save = inst.saves.entry(id).or_insert_with(|| InstanceSave {
         id,
         map,
@@ -261,7 +297,6 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
         ..Default::default()
     });
     save.touched_at = now;
-    let record = save.clone();
     if kind == 2 {
         inst.raids.entry(id).or_insert_with(|| RaidSave {
             id,
@@ -271,39 +306,126 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
         });
     }
     drop(inst);
-    realm
-        .store
-        .put_record(KIND_INSTANCE, u64::from(id), &record);
+    entered(realm, g, key, kind, group_bound == Some(id));
     Ok(key)
 }
 
-/// A group takes over its leader's copy of `map` (one not yet locked to a
-/// raid), or one left without an owner by a group gone that its leader is
-/// in, as Thistle Tea's `Instance.group_changed` hands them over.
+/// Whether `g` may go into the copy `key` now: it is not gone, it has
+/// room, and their account has not been into five others this hour.
+fn admit_copy(realm: &Realm, g: Guid, gm: bool, key: MapKey) -> Result<(), Refused> {
+    if gm {
+        return Ok(());
+    }
+    let account = realm
+        .registry
+        .online(g)
+        .map(|o| o.account.to_string())
+        .unwrap_or_default();
+    let mut inst = realm.social.instances.lock();
+    if inst.saves.get(&key.instance).is_some_and(|s| s.expired) {
+        return Err(Refused::Abort(TransferAbortReason::NotFound));
+    }
+    let inside = realm
+        .registry
+        .all_online()
+        .iter()
+        .filter(|o| o.guid != g && o.map().key == key)
+        .count();
+    if inside >= limit(&realm.data, key.map) {
+        return Err(Refused::Abort(TransferAbortReason::IsFull));
+    }
+    if !inst.admit(&account, key, now()) {
+        return Err(Refused::Abort(TransferAbortReason::TooManyInstances));
+    }
+    Ok(())
+}
+
+/// `g` goes into copy `key`: it is the one of its map they last went into,
+/// and one who goes into a raid copy their group is bound to is bound to it
+/// too, as Thistle Tea's `Lockouts.inherit` has it.
+fn entered(realm: &Realm, g: Guid, key: MapKey, kind: u32, group_bound: bool) {
+    let me = guid::counter(g);
+    let (changed, raid) = {
+        let mut inst = realm.social.instances.lock();
+        let changed = inst.enter(me, key.map, key.instance);
+        let raid = (kind == 2 && group_bound && inst.raid_bind(me, key.map).is_none())
+            .then(|| {
+                inst.raids.get_mut(&key.instance).map(|r| {
+                    r.players.push(me);
+                    r.clone()
+                })
+            })
+            .flatten();
+        let mut changed = changed;
+        if let Some(s) = inst.saves.get(&key.instance)
+            && !changed.iter().any(|c| c.id == s.id)
+        {
+            changed.push(s.clone());
+        }
+        (changed, raid)
+    };
+    for s in changed {
+        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
+    }
+    if let Some(r) = raid {
+        realm.store.put_record(KIND_RAID, u64::from(r.id), &r);
+        lockout_changed(realm, g, true);
+    }
+}
+
+/// Back into the copy of `map` a player logged out in, as Thistle Tea's
+/// `resume` has it: the copy they last went into, if it is still theirs
+/// and will have them; else none, and they go home.
+pub fn resume(realm: &Realm, g: Guid, gm: bool, map: u32) -> Option<MapKey> {
+    let kind = instance_type(realm, map);
+    if !matches!(kind, 1 | 2) {
+        return Some(MapKey::world(map));
+    }
+    let me = guid::counter(g);
+    let id = {
+        let inst = realm.social.instances.lock();
+        inst.last_entered(me, map)
+            .filter(|id| inst.saves.get(id).is_some_and(|s| !s.expired))?
+    };
+    let key = MapKey { map, instance: id };
+    if !gm && !belongs(realm, g, key) {
+        return None;
+    }
+    admit_copy(realm, g, gm, key).ok()?;
+    let group_bound = {
+        let inst = realm.social.instances.lock();
+        group_bind(&inst, group_of(realm, g), map) == Some(id)
+    };
+    entered(realm, g, key, kind, group_bound);
+    Some(key)
+}
+
+/// A group takes over its leader's copy of `map`: the one they last went
+/// into, if it was theirs alone or was left without an owner, and is
+/// neither gone nor bound to a raid, as Thistle Tea's
+/// `Instance.group_changed` hands them over.
 fn adopt(realm: &Realm, inst: &mut Instances, group: u32, leader: Guid, map: u32) {
     if inst.owned.contains_key(&(Owner::Group(group), map)) {
         return;
     }
-    let solo = inst
-        .owned
-        .get(&(Owner::Player(guid::counter(leader)), map))
-        .copied()
-        .filter(|id| inst.raids.get(id).is_none_or(|r| r.players.is_empty()));
-    let orphaned = || {
-        let key = realm.registry.online(leader)?.map().key;
-        (key.map == map && key.instance != 0)
-            .then_some(key.instance)
-            .filter(|id| {
-                inst.saves.get(id).is_some_and(|s| match s.owner {
-                    Some(Owner::Group(old)) => !realm.social.groups.lock().formed(old),
-                    _ => false,
-                })
-            })
-    };
-    let Some(id) = solo.or_else(orphaned) else {
+    let me = guid::counter(leader);
+    let Some(id) = inst.last_entered(me, map) else {
         return;
     };
-    if let Some(old) = inst.saves.get(&id).and_then(|s| s.owner) {
+    let Some(s) = inst.saves.get(&id) else {
+        return;
+    };
+    let orphaned = match s.owner {
+        None => true,
+        Some(Owner::Group(old)) => old != group && !realm.social.groups.lock().formed(old),
+        Some(Owner::Player(p)) => p == me,
+    };
+    if !orphaned || s.expired || inst.saved(id) {
+        return;
+    }
+    if let Some(old) = s.owner
+        && inst.owned.get(&(old, map)) == Some(&id)
+    {
         inst.owned.remove(&(old, map));
     }
     inst.owned.insert((Owner::Group(group), map), id);
@@ -316,37 +438,68 @@ fn adopt(realm: &Realm, inst: &mut Instances, group: u32, leader: Guid, map: u32
     }
 }
 
-/// Whether `g` belongs in the copy `key` still: it is their group's (or,
-/// alone, their own, or the raid they're bound to and own), and a raid's
-/// is for a raid group.
+/// Whether `g` belongs in the copy `key` still: it is not gone, no bind
+/// of theirs or their group's holds them to another, and it is their
+/// group's (or, alone, their own), their group's raid, or the raid they
+/// are bound to; a raid's is for a raid group.
 pub fn belongs(realm: &Realm, g: Guid, key: MapKey) -> bool {
     let kind = instance_type(realm, key.map);
     if key.instance == 0 || !matches!(kind, 1 | 2) {
         return true;
     }
-    let (group, raid, leader) = {
-        let groups = realm.social.groups.lock();
-        match groups.group_of(g) {
-            Some(gr) => (Some(gr.id), gr.raid, Some(gr.leader)),
-            None => (None, false, None),
-        }
-    };
-    if kind == 2 && !raid {
+    let group = group_of(realm, g);
+    if kind == 2 && !group.is_some_and(|(_, raid, _)| raid) {
         return false;
     }
     let me = guid::counter(g);
-    let owner = group.map_or(Owner::Player(me), Owner::Group);
+    let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
     let mut inst = realm.social.instances.lock();
-    if let (Some(id), Some(leader)) = (group, leader) {
+    if let Some((id, _, leader)) = group {
         adopt(realm, &mut inst, id, leader, key.map);
     }
-    let bound = inst.raid_bind(me, key.map);
-    if bound.is_some_and(|b| b != key.instance) {
+    if inst.saves.get(&key.instance).is_none_or(|s| s.expired) {
         return false;
     }
-    let held_by = inst.saves.get(&key.instance).and_then(|s| s.owner);
-    held_by == Some(owner)
-        || (bound == Some(key.instance) && held_by == Some(Owner::Player(me)))
+    let bound = inst.raid_bind(me, key.map);
+    let group_bound = group_bind(&inst, group, key.map);
+    if [bound, group_bound]
+        .iter()
+        .any(|b| b.is_some_and(|b| b != key.instance))
+    {
+        return false;
+    }
+    inst.owned.get(&(owner, key.map)) == Some(&key.instance)
+        || group_bound == Some(key.instance)
+        || bound == Some(key.instance)
+}
+
+/// Whether the copy `key` has gone with its raid's reset, and goes once it
+/// is empty.
+pub fn expired(realm: &Realm, key: MapKey) -> bool {
+    key.instance != 0
+        && realm
+            .social
+            .instances
+            .lock()
+            .saves
+            .get(&key.instance)
+            .is_some_and(|s| s.expired)
+}
+
+/// A player's raid binds changed: they hear of the new save, if one was
+/// made, then what they are saved to now, as Thistle Tea's
+/// `lockout_changed` tells them.
+fn lockout_changed(realm: &Realm, g: Guid, created: bool) {
+    let Some(o) = realm.registry.online(g) else {
+        return;
+    };
+    if created {
+        o.outbound.send(&SMSG_INSTANCE_SAVE_CREATED { unknown: 0 });
+    }
+    send_saved(realm, g, &o.outbound);
+    o.outbound.send(&SMSG_RAID_INSTANCE_INFO {
+        raid_infos: raid_infos(realm, guid::counter(g)),
+    });
 }
 
 /// What a player is saved to, as Thistle Tea tells it at login and each
@@ -473,10 +626,7 @@ pub fn bind_raid(map: &Map) {
         .store
         .put_record(KIND_RAID, u64::from(key.instance), &record);
     for g in newly {
-        if let Some(p) = map.players.get(&g) {
-            p.outbound.send(&SMSG_INSTANCE_SAVE_CREATED { unknown: 0 });
-            send_saved(realm, g, &p.outbound);
-        }
+        lockout_changed(realm, g, true);
     }
 }
 
@@ -549,12 +699,10 @@ pub fn reset(map: &Map, g: Guid) {
     }
 }
 
-/// `CMSG_REQUEST_RAID_INFO`: the raids the player is bound to.
-pub fn raid_info(map: &Map, g: Guid) {
-    let me = guid::counter(g);
+/// The raids player `me` is bound to, and how long each has left.
+fn raid_infos(realm: &Realm, me: u32) -> Vec<RaidInfo> {
     let now = now();
-    let raid_infos = map
-        .realm
+    let mut infos: Vec<RaidInfo> = realm
         .social
         .instances
         .lock()
@@ -567,36 +715,32 @@ pub fn raid_info(map: &Map, g: Guid) {
             instance_id: r.id,
         })
         .collect();
+    infos.sort_by_key(|i| i.map.as_int());
+    infos
+}
+
+/// `CMSG_REQUEST_RAID_INFO`: the raids the player is bound to.
+pub fn raid_info(map: &Map, g: Guid) {
+    let raid_infos = raid_infos(&map.realm, guid::counter(g));
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_RAID_INSTANCE_INFO { raid_infos });
     }
 }
 
-/// Raid copies past their reset day go, binds and all; dungeon saves of
-/// copies empty long enough (as after a restart) go too.
+/// Raid copies past their reset day go, binds and all (an occupied one
+/// once it empties); dungeon saves of copies empty long enough (as after a
+/// restart) go too.
 pub fn sweep(realm: &Realm) {
     let now = now();
-    let expired: Vec<RaidSave> = {
-        let mut inst = realm.social.instances.lock();
-        let ids: Vec<u32> = inst
-            .raids
+    let due: Vec<u32> = {
+        let inst = realm.social.instances.lock();
+        inst.raids
             .values()
             .filter(|r| r.reset_at <= now)
             .map(|r| r.id)
-            .collect();
-        ids.iter().filter_map(|id| inst.raids.remove(id)).collect()
+            .collect()
     };
-    for r in expired {
-        realm.store.delete_record(KIND_RAID, u64::from(r.id));
-        realm.store.delete_record(KIND_INSTANCE, u64::from(r.id));
-        realm.maps.stop(MapKey {
-            map: r.map,
-            instance: r.id,
-        });
-        let mut inst = realm.social.instances.lock();
-        inst.owned.retain(|_, id| *id != r.id);
-        inst.saves.remove(&r.id);
-    }
+    expire(realm, &due);
     let unload =
         (realm.config.instance_unload.as_secs() as i64).max(UNLOAD_EMPTY_AFTER.as_secs() as i64);
     let online = realm.registry.all_online();
@@ -617,6 +761,75 @@ pub fn sweep(realm: &Realm) {
             inst.owned.retain(|_, i| *i != id);
         }
         realm.store.delete_record(KIND_INSTANCE, u64::from(id));
+    }
+}
+
+/// Every copy of raid `map` resets now, as a GM may have it: what
+/// [`sweep`] does on the reset day. How many copies there were.
+pub fn reset_raid(realm: &Realm, map: u32) -> usize {
+    let ids: Vec<u32> = {
+        let inst = realm.social.instances.lock();
+        inst.raids
+            .values()
+            .filter(|r| r.map == map)
+            .map(|r| r.id)
+            .collect()
+    };
+    expire(realm, &ids);
+    ids.len()
+}
+
+/// Raid copies `ids` reset, as Thistle Tea's `expire_raid` has it: their
+/// binds go, and those who were bound hear of it; an empty copy goes at
+/// once, and one with players inside takes no one more, its players have
+/// the minute's grace, and it goes once they have left.
+fn expire(realm: &Realm, ids: &[u32]) {
+    if ids.is_empty() {
+        return;
+    }
+    let online = realm.registry.all_online();
+    let mut told = Vec::new();
+    for id in ids {
+        let Some(r) = realm.social.instances.lock().raids.remove(id) else {
+            continue;
+        };
+        realm.store.delete_record(KIND_RAID, u64::from(r.id));
+        told.extend(r.players.iter().copied());
+        let key = MapKey {
+            map: r.map,
+            instance: r.id,
+        };
+        let occupied = online.iter().any(|o| o.map().key == key);
+        let record = {
+            let mut inst = realm.social.instances.lock();
+            inst.owned.retain(|_, i| *i != r.id);
+            if occupied {
+                inst.saves.get_mut(&r.id).map(|s| {
+                    s.expired = true;
+                    s.clone()
+                })
+            } else {
+                inst.saves.remove(&r.id);
+                None
+            }
+        };
+        match record {
+            Some(s) => realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s),
+            None => {
+                realm.store.delete_record(KIND_INSTANCE, u64::from(r.id));
+                if !occupied {
+                    realm.maps.stop(key);
+                }
+            }
+        }
+    }
+    told.sort_unstable();
+    told.dedup();
+    for o in online
+        .iter()
+        .filter(|o| told.contains(&guid::counter(o.guid)))
+    {
+        lockout_changed(realm, o.guid, false);
     }
 }
 
@@ -641,9 +854,6 @@ mod tests {
         let wednesday = RESET_EPOCH + DAY;
         assert_eq!(next_reset(409, wednesday), RESET_EPOCH + 7 * DAY);
         assert_eq!(next_reset(309, wednesday), RESET_EPOCH + 3 * DAY);
-        assert_eq!(limit(36, 1), 5);
-        assert_eq!(limit(409, 2), 40);
-        assert_eq!(limit(309, 2), 20);
     }
 
     #[test]

@@ -42,17 +42,55 @@ pub fn stop_packet(g: Guid, at: Vector3d, spline_id: u32) -> Arc<[u8]> {
     b.frame(SMSG_MONSTER_MOVE)
 }
 
-/// The radius at which a creature notices a player (vmangos's
-/// `GetAttackDistance`): about 20 yards at an even level, a yard less for
-/// each level the player is above it, at least 5.
-pub fn aggro_radius(detection: f32, creature_level: u32, player_level: u32) -> f32 {
-    let base = if detection > 0.0 { detection } else { 20.0 };
-    let diff = (player_level as i32 - creature_level as i32).max(-25);
-    (base - diff as f32).clamp(5.0, 45.0)
+/// A creature turning on the spot to `angle` (a facing-angle monster
+/// move of 100 ms, as Thistle Tea turns one).
+pub fn face_packet(g: Guid, at: Vector3d, angle: f32, spline_id: u32) -> Arc<[u8]> {
+    let mut b = Body::default();
+    crate::game::update::write_packed_guid(&mut b.0, g);
+    b.f32(at.x)
+        .f32(at.y)
+        .f32(at.z)
+        .u32(spline_id)
+        .u8(4)
+        .f32(angle);
+    b.u32(0).u32(100).u32(1).f32(at.x).f32(at.y).f32(at.z);
+    b.frame(SMSG_MONSTER_MOVE)
 }
 
-/// `creature` was attacked by `attacker`: it fights back.
+/// The radius at which a creature notices a unit (vmangos's
+/// `GetAttackDistance`): its detection range at an even level, a yard less
+/// for each level the unit is above it (more for up to 25 below), at least
+/// five yards (or its range, if less); none with a range under a yard.
+pub fn aggro_radius(detection: f32, creature_level: u32, player_level: u32) -> f32 {
+    aggro_reach(detection, creature_level, player_level, 0.0)
+}
+
+/// `aggro_radius` with the creature's own detect-range auras (Mind Soothe).
+pub fn aggro_reach(detection: f32, creature_level: u32, unit_level: u32, modifier: f32) -> f32 {
+    if detection < 1.0 {
+        return 0.0;
+    }
+    let diff = (unit_level as i32 - creature_level as i32).max(-25);
+    (detection - diff as f32 + modifier).max(detection.min(5.0))
+}
+
+/// The unit flags that put a unit out of any fight: not attackable (both),
+/// not selectable, on a flight.
+const UNTARGETABLE: u32 = 0x2 | 0x1_0000 | 0x0200_0000 | 0x0010_0000;
+
+/// `creature` was attacked by `attacker`: it fights back, and calls for
+/// help.
 pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
+    engage(map, creature, attacker, true);
+}
+
+/// `creature` comes to another's help against `enemy`: it fights, calling
+/// no one itself.
+pub fn assist(map: &mut Map, creature: Guid, enemy: Guid) {
+    engage(map, creature, enemy, false);
+}
+
+fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     if crate::game::map::pets::on_attacked(map, creature, attacker) {
         return;
     }
@@ -79,6 +117,9 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if critter {
         crate::game::map::creature_motion::critter_hit(map, creature, attacker);
     }
+    let passive = !critter
+        && crate::game::map::assistance::reaction(map, creature)
+            == crate::game::map::assistance::Reaction::Passive;
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
@@ -87,6 +128,20 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     }
     let first =
         c.combat_start.is_none() || !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    // A passive one is in the fight, but takes no victim and calls no one.
+    if passive && c.owner.is_none() {
+        if first {
+            c.combat_start = Some(now);
+            c.engagement.origin = Some(c.position);
+        }
+        c.engagement.last_hostile = Some(now);
+        c.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+        if first {
+            crate::game::map::event_ai::aggro(map, creature, attacker);
+        }
+        return;
+    }
     c.combat_start = Some(now);
     c.engagement.origin = Some(c.position);
     c.engagement.last_hostile = Some(now);
@@ -111,7 +166,9 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if critter {
         return;
     }
-    crate::game::map::creature_combat::called_for_help(map, creature, attacker);
+    if call {
+        crate::game::map::assistance::drawn_in(map, creature, attacker);
+    }
     if first {
         crate::game::map::event_ai::aggro(map, creature, attacker);
         crate::game::map::creature_combat::entered(map, creature, attacker);
@@ -210,6 +267,12 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
 
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
+    die_by(map, creature, tapper, tapper);
+}
+
+/// It died to `killer`, `tapper` holding its tap. Its scripts run on to
+/// its corpse's end, as Thistle Tea's do.
+pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     if guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
@@ -217,8 +280,7 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
     // takes them.
     crate::game::map::pvp::creature_killed(map, tapper, creature);
     crate::game::map::auras::clear_on_death(map, creature);
-    crate::game::map::scripts::stop_for(map, creature);
-    crate::game::map::event_ai::death(map, creature, tapper);
+    crate::game::map::event_ai::death(map, creature, killer);
     crate::game::map::instance_script::creature_event(
         map,
         creature,
@@ -329,6 +391,7 @@ pub fn update_dead(map: &mut Map) {
         if corpse_until <= now && !c.despawned {
             c.despawned = true;
             despawn_from_view(map, g);
+            crate::game::map::scripts::stop_for(map, g);
         }
         still.push(g);
     }
@@ -368,6 +431,7 @@ fn respawn(map: &mut Map, g: Guid) {
     if !despawned {
         despawn_from_view(map, g);
     }
+    crate::game::map::scripts::stop_for(map, g);
     if let Some(c) = map
         .creature_by_guid
         .remove(&g)
@@ -478,7 +542,10 @@ pub fn update_creatures(map: &mut Map) {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
         };
-        crate::game::map::event_ai::tick(map, g);
+        // Its timed events wait while it walks home.
+        if !map.creatures.get(key).is_some_and(|c| c.evading) {
+            crate::game::map::event_ai::tick(map, g);
+        }
         let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
             continue;
         };
@@ -509,14 +576,12 @@ pub fn update_creatures(map: &mut Map) {
         } else if c.combat.attacking {
             fight_step(map, g);
         } else {
-            let passive = c.scripted.as_deref().is_some_and(|s| s.passive);
-            if c.hostile_to_players
-                && !passive
-                && c.aggro_check_at <= now
-                && !c.observers.is_empty()
-            {
+            if c.aggro_check_at <= now && !c.observers.is_empty() {
                 aggro_scan(map, g);
             }
+            // Passive in a fight: it waits it out until no one it could
+            // fight is left.
+            passive_fight(map, g);
             if !map
                 .creature(g)
                 .is_some_and(|c| c.combat.attacking || c.evading)
@@ -544,8 +609,14 @@ pub fn update_creatures(map: &mut Map) {
     }
 }
 
-/// Look for a player to attack.
+/// Look for an enemy to attack, as Thistle Tea's creatures look: only an
+/// aggressive one, in a state to fight, at the nearest enemy (player,
+/// creature or pet) within its reach of it that it sees and can get at.
 fn aggro_scan(map: &mut Map, g: Guid) {
+    use crate::game::map::auras::{
+        AURA_FEIGN_DEATH, AURA_MOD_CONFUSE, AURA_MOD_DETECT_RANGE, AURA_MOD_FEAR, AURA_MOD_PACIFY,
+        AURA_MOD_PACIFY_SILENCE, AURA_MOD_STUN,
+    };
     let now = map.now;
     // A critter looks for no one.
     if crate::game::map::creature_motion::critter(map, g) {
@@ -556,56 +627,105 @@ fn aggro_scan(map: &mut Map, g: Guid) {
         return;
     };
     c.aggro_check_at = now + AGGRO_SCAN_EVERY;
+    if crate::game::map::assistance::reaction(map, g)
+        != crate::game::map::assistance::Reaction::Aggressive
+    {
+        return;
+    }
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    // Stunned, pacified, feigning or under control, or itself out of reach
+    // of a fight: it starts none.
+    let held = [
+        AURA_MOD_STUN,
+        AURA_MOD_PACIFY,
+        AURA_MOD_PACIFY_SILENCE,
+        AURA_FEIGN_DEATH,
+        AURA_MOD_FEAR,
+        AURA_MOD_CONFUSE,
+    ]
+    .iter()
+    .any(|a| c.auras.has(*a))
+        || c.engagement.flee.is_some();
+    if held || c.fields.get_u32(UNIT_FIELD_FLAGS) & UNTARGETABLE != 0 {
+        return;
+    }
     let (pos, level) = (c.position, c.fields.get_u32(UNIT_FIELD_LEVEL));
     let detection = data
         .creature_template(c.entry)
         .map(|t| t.detection_range)
         .unwrap_or(20.0);
-    let candidates: Vec<Guid> = map
-        .players_near(pos.x, pos.y, 45.0)
+    let modifier = c.auras.sum(AURA_MOD_DETECT_RANGE) as f32;
+    let search = aggro_reach(detection, level, 0, modifier);
+    if search <= 0.0 {
+        return;
+    }
+    // Its reach of a unit, by that unit's level (a pet's, its master's).
+    let reach_of = |map: &Map, t: Guid| -> f32 {
+        let master = crate::game::map::pets::master(map, t);
+        let who = if map.players.contains_key(&master) {
+            master
+        } else {
+            t
+        };
+        let lv = map
+            .unit_fields(who)
+            .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
+        aggro_reach(detection, level, lv, modifier)
+    };
+    let mut near: Vec<(Guid, f32)> = map
+        .grid
+        .around(pos.x, pos.y, search)
+        .filter(|t| *t != g && (guid::is_player(*t) || guid::is_unit(*t)))
+        .filter_map(|t| map.position_of(t).map(|at| (t, dist(at, pos))))
+        .filter(|(_, d)| *d <= search)
+        .collect();
+    near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.guid().cmp(&b.0.guid())));
+    let eligible: Vec<Guid> = near
         .into_iter()
-        .filter(|p| {
-            map.players.get(p).is_some_and(|pl| {
+        .filter(|(t, d)| {
+            let player_ok = map.players.get(t).is_none_or(|pl| {
                 pl.death == Death::Alive
                     && !pl.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_GM)
                     && !pl.awaiting_worldport
-                    && dist(pl.position(), pos)
-                        <= (aggro_radius(detection, level, u32::from(pl.level()))
-                            + pl.auras.sum(crate::game::map::auras::AURA_MOD_DETECT_RANGE) as f32)
-                            .max(0.0)
-                    && crate::game::map::spells::stealth::sees(map, g, *p)
-                    && crate::game::map::creature_motion::may_reach(map, g, *p)
-            })
+            });
+            player_ok
+                && map.unit_view(*t).is_some_and(|u| u.alive)
+                && *d <= reach_of(map, *t)
+                && combat::hostile(map, g, *t)
+                && combat::can_attack(map, g, *t)
+                && crate::game::map::spells::stealth::sees(map, g, *t)
+                && crate::game::map::creature_motion::may_reach(map, g, *t)
         })
+        .map(|(t, _)| t)
         .collect();
-    let target = candidates
-        .into_iter()
-        .filter(|p| combat::hostile(map, g, *p))
-        .min_by(|a, b| {
-            let da = map
-                .players
-                .get(a)
-                .map(|p| dist(p.position(), pos))
-                .unwrap_or(f32::MAX);
-            let db = map
-                .players
-                .get(b)
-                .map(|p| dist(p.position(), pos))
-                .unwrap_or(f32::MAX);
-            da.total_cmp(&db)
-        });
-    let Some(target) = target else {
+    for t in eligible {
+        let Some(to) = map.position_of(t) else {
+            continue;
+        };
+        if crate::game::map::assistance::sees(map, pos, to) {
+            attacked(map, g, t);
+            return;
+        }
+    }
+}
+
+/// A passive creature in a fight takes no victim; when none on its threat
+/// list is left to fight, the fight is over.
+fn passive_fight(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
         return;
     };
-    let line_clear = match (map.nav.as_mut(), map.players.get(&target)) {
-        (Some(nav), Some(p)) => {
-            let eye = |v: Vector3d| Vector3d { z: v.z + 1.5, ..v };
-            nav.line_of_sight(eye(pos), eye(p.position()))
-        }
-        _ => true,
-    };
-    if line_clear {
-        attacked(map, g, target);
+    if c.combat.attacking || !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT) {
+        return;
+    }
+    let left = c
+        .threat
+        .iter()
+        .any(|(t, _)| map.unit_view(*t).is_some_and(|u| u.alive) && combat::can_attack(map, g, *t));
+    if !left {
+        evade(map, g);
     }
 }
 
@@ -832,38 +952,41 @@ fn scripted_moving(map: &Map, g: Guid) -> bool {
     })
 }
 
+/// `g` backs away from `enemy` to stand `distance` yards off it (and its
+/// reach), as Thistle Tea's distancing moves it.
+pub fn back_away(map: &mut Map, g: Guid, enemy: Guid, distance: f32) {
+    let (Some(me), Some(e)) = (map.unit_view(g), map.unit_view(enemy)) else {
+        return;
+    };
+    if g == enemy || !e.alive {
+        return;
+    }
+    let angle = (me.position.y - e.position.y).atan2(me.position.x - e.position.x);
+    let bounding = map
+        .unit_fields(enemy)
+        .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0));
+    let r = distance + bounding;
+    let to = Vector3d {
+        x: e.position.x + r * angle.cos(),
+        y: e.position.y + r * angle.sin(),
+        z: e.position.z,
+    };
+    crate::game::map::spells::interrupt(map, g);
+    crate::game::map::scripts::move_to(map, g, to, true);
+}
+
 /// A script's `enter evade`.
 pub fn enter_evade(map: &mut Map, g: Guid) {
     evade(map, g);
 }
 
-/// Creatures of the same faction within `radius` join `g`'s fight.
+/// A script's call for help: those of `g`'s friends within `radius` that
+/// answer join its fight (a radius of none calls no one).
 pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
-    let Some(c) = map.creature(g) else {
+    let Some(enemy) = map.creature(g).map(|c| c.combat.victim) else {
         return;
     };
-    let enemy = c.combat.victim;
-    if enemy.is_zero() {
-        return;
-    }
-    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
-    let radius = if radius > 0.0 { radius } else { 10.0 };
-    let helpers: Vec<Guid> = map
-        .grid
-        .around(pos.x, pos.y, radius)
-        .filter(|h| guid::is_unit(*h) && *h != g)
-        .filter(|h| {
-            map.creature(*h).is_some_and(|x| {
-                x.alive()
-                    && !x.combat.attacking
-                    && x.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction
-                    && dist(x.position, pos) <= radius
-            })
-        })
-        .collect();
-    for h in helpers {
-        attacked(map, h, enemy);
-    }
+    crate::game::map::assistance::call_friends(map, g, enemy, radius);
 }
 
 /// Run from `enemy` (for a while: one run here, whatever the time).
@@ -904,7 +1027,8 @@ fn evade(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let (from, home) = (c.position, c.home);
+    // A patroller goes back to the last point of its path it reached.
+    let (from, home) = (c.position, patrol_home(map, g).unwrap_or(c.home));
     let path = match map.nav.as_mut() {
         Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
         None => vec![from, home],
@@ -972,7 +1096,8 @@ fn evade(map: &mut Map, g: Guid) {
             c.attackers.remove(&g);
         }
     }
-    crate::game::map::scripts::stop_for(map, g);
+    // Its scripts run on: a script that wants them stopped says so.
+    crate::game::map::spells::lists::left_combat(map, g);
     crate::game::map::event_ai::evade(map, g);
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::spawn_auras::restore(map, g);
@@ -990,14 +1115,40 @@ fn evade_step(map: &mut Map, g: Guid) {
         c.evading = false;
         let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
         c.fields.set_u32(UNIT_FIELD_HEALTH, max);
-        c.orientation = c.home_orientation;
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
+        // Home, it turns to its spawn's facing (a patroller as it is).
+        let (at, o) = (c.position, c.home_orientation);
+        let turned = c.orientation != o;
+        if turned && patrol_home(map, g).is_none() {
+            let spline_id = map.next_spline_id;
+            map.next_spline_id = map.next_spline_id.wrapping_add(1);
+            if let Some(c) = map.creature_mut(g) {
+                c.orientation = o;
+            }
+            map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
+        }
         combat::sync_aura_state(map, g);
         crate::game::map::spawn_auras::restore(map, g);
         crate::game::map::event_ai::reached_home(map, g);
     }
+}
+
+/// Where a creature walking a path goes back to after a fight: the last
+/// point it reached (none until it reaches one).
+fn patrol_home(map: &Map, g: Guid) -> Option<Vector3d> {
+    let c = map.creature(g)?;
+    if c.movement_type != crate::game::map::creature::MOVEMENT_WAYPOINT {
+        return None;
+    }
+    let i = c.last_waypoint?;
+    let w = *crate::game::map::creature_motion::waypoints(map, g)?.get(i)?;
+    Some(Vector3d {
+        x: w.x,
+        y: w.y,
+        z: w.z,
+    })
 }
 
 /// Bring a moving creature's position up to now, and its grid cell and

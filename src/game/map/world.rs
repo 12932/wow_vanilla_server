@@ -181,7 +181,7 @@ fn step_creature(
             && c.scripted
                 .as_deref()
                 .and_then(|s| s.route.as_ref())
-                .is_some_and(|r| !r.repeat && c.waypoint.wrapping_add(1) >= r.points.len())
+                .is_some_and(|r| !r.repeat && c.waypoint >= r.points.len())
     });
     if route_ends {
         if let Some(c) = map.creatures.get_mut(key) {
@@ -219,11 +219,27 @@ fn step_creature(
             if done {
                 let pause = match &waypoints {
                     Some(wps) if !wps.is_empty() && !scripted => {
-                        let wp = wps[c.waypoint % wps.len()];
-                        if wp.orientation != 0.0 {
-                            c.orientation = wp.orientation;
+                        // Reached: it is the point to come back to, and the
+                        // next is the one it is bound for.
+                        let i = c.waypoint % wps.len();
+                        let wp = wps[i];
+                        if let Some(o) = wp.orientation {
+                            c.orientation = o;
                         }
-                        arrived = Some((c.waypoint % wps.len(), wp.script_id));
+                        arrived = Some((wp.point, wp.script_id));
+                        let repeat = c
+                            .scripted
+                            .as_deref()
+                            .and_then(|s| s.route.as_ref())
+                            .is_none_or(|r| r.repeat);
+                        c.last_waypoint = Some(i);
+                        c.waypoint = if i + 1 < wps.len() {
+                            i + 1
+                        } else if repeat {
+                            0
+                        } else {
+                            wps.len()
+                        };
                         Duration::from_millis(u64::from(wp.wait_ms))
                     }
                     _ => wander_pause(rng),
@@ -236,8 +252,7 @@ fn step_creature(
         Motion::Idle { until: Some(t) } if *t <= now => {
             let target = match (&waypoints, c.movement_type) {
                 (Some(wps), _) if !wps.is_empty() => {
-                    c.waypoint = c.waypoint.wrapping_add(1) % wps.len();
-                    let wp = wps[c.waypoint];
+                    let wp = wps[c.waypoint % wps.len()];
                     Some(Vector3d {
                         x: wp.x,
                         y: wp.y,
@@ -298,7 +313,7 @@ fn step_creature(
         crate::game::map::creature_groups::leader_walked(map, guid, to, facing, run);
     }
     if let Some((point, script)) = arrived {
-        crate::game::map::event_ai::movement_inform(map, guid, 2, point as u32);
+        crate::game::map::event_ai::movement_inform(map, guid, 2, point);
         if script != 0 {
             crate::game::map::scripts::start(
                 map,
@@ -476,13 +491,11 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     let Some(p) = map.players.get(&guid) else {
         return;
     };
+    // Refused: the trigger's own message, if it has one.
     if (p.level() < tp.required_level || barred) && !p.gm {
-        let text = if tp.message.is_empty() {
-            format!("You must be level {} to enter.", tp.required_level)
-        } else {
-            tp.message.clone()
-        };
-        map.system_message(guid, &text);
+        if !tp.message.is_empty() {
+            crate::game::map::corpses::refuse(map, guid, tp.message.clone());
+        }
         return;
     }
     crate::game::map::corpses::revive_for_map(map, guid, tp.map);
@@ -522,6 +535,15 @@ pub const GO_SPELLCASTER: u8 = 22;
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
 pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
+    // Not one flagged against use, nor a door a copy's script works.
+    let inert = map.gameobject(object).is_some_and(|o| {
+        o.fields.get_u32(crate::game::fields::GAMEOBJECT_FLAGS)
+            & crate::game::map::objects::GO_FLAG_NO_INTERACT
+            != 0
+    });
+    if inert || crate::game::map::instance_script::scripted_door(map, object) {
+        return;
+    }
     if crate::game::map::battleground::use_object(map, player, object)
         || crate::game::map::outdoor_pvp::use_object(map, player, object)
     {
@@ -534,11 +556,25 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::objects::use_goober(map, player, object) {
         return;
     }
-    crate::game::map::scripts::object_used(map, player, object);
     // Near enough: by its model, for the objects measured so.
     if !crate::game::map::objects::in_use_range(map, player, object) {
         return;
     }
+    // A locked chest opens by its spell, not by a hand.
+    let gm = map.players.get(&player).is_some_and(|p| p.gm);
+    let locked_chest = map.gameobject(object).is_some_and(|o| {
+        o.kind == GO_CHEST
+            && map
+                .realm
+                .data
+                .gameobject_templates
+                .get(&o.entry)
+                .is_some_and(|t| t.data[0] != 0)
+    });
+    if locked_chest && !gm {
+        return;
+    }
+    crate::game::map::scripts::object_used(map, player, object);
     // A launcher by Elune's lake counts its fireworks; it launches them too.
     crate::game::omen::use_object(map, object);
     // Doors, traps, pages, rituals, spell casters; quest credit for a use.
@@ -570,7 +606,6 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
         GO_CHEST => {
             // A locked chest needs its key or skill (Phase 7); an open one
             // just opens.
-            let gm = map.players.get(&player).is_some_and(|p| p.gm);
             if lock == 0 || gm {
                 crate::game::map::loot::open_object(map, player, object);
             }

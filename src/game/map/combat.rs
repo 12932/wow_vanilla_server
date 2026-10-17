@@ -730,29 +730,114 @@ pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
     }
 }
 
+/// How one unit regards another, as Thistle Tea ranks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Regard {
+    Hostile,
+    Neutral,
+    Friendly,
+}
+
 /// Whether `a` is hostile to `b`, and so attacks it on sight.
 pub fn hostile(map: &Map, a: Guid, b: Guid) -> bool {
+    regard(map, a, b) == Regard::Hostile
+}
+
+/// Whether `a` is friendly to `b`.
+pub fn friendly(map: &Map, a: Guid, b: Guid) -> bool {
+    regard(map, a, b) == Regard::Friendly
+}
+
+/// How `a` regards `b` (Thistle Tea's `Hostility.reaction_rank`): units of
+/// one master are friends; between a creature and a player (or one of a
+/// player's), a rank an aura forces, a guard of contested ground's on one
+/// flagged for it, else the player's standing with the creature's faction
+/// if it has one; else their faction templates.
+pub fn regard(map: &Map, a: Guid, b: Guid) -> Regard {
+    use crate::game::data::misc::{RANK_FRIENDLY, RANK_HOSTILE, RANK_NEUTRAL};
     let (Some(ua), Some(ub)) = (map.unit_view(a), map.unit_view(b)) else {
-        return false;
+        return Regard::Neutral;
     };
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    if ma == mb {
+        return Regard::Friendly;
+    }
     let data = &map.realm.data;
-    // A creature turns on a player hated or hostile with its faction.
-    if !ua.is_player
-        && ub.is_player
-        && let Some(faction) = crate::game::map::reputation::faction_of(map, a)
-        && data.misc.faction(faction).is_some()
-        && crate::game::map::reputation::rank(&map.players[&b], data, faction)
-            <= crate::game::data::misc::RANK_HOSTILE
+    let of_rank = |rank: u32| {
+        if rank <= RANK_HOSTILE {
+            Regard::Hostile
+        } else if rank >= RANK_FRIENDLY {
+            Regard::Friendly
+        } else {
+            Regard::Neutral
+        }
+    };
+    let (pa, pb) = (map.players.get(&ma), map.players.get(&mb));
+    // A creature and a player's side: the player's standing decides.
+    let creature_player = match (pa, pb) {
+        (None, Some(p)) if !ua.is_player => Some((a, p, false)),
+        (Some(p), None) if !ub.is_player => Some((b, p, true)),
+        _ => None,
+    };
+    if let Some((creature, p, player_first)) = creature_player
+        && let Some(faction) = crate::game::map::reputation::faction_of(map, creature)
     {
-        return true;
+        if let Some(rank) = forced_rank(p, faction) {
+            return of_rank(rank);
+        }
+        let template = map
+            .unit_view(creature)
+            .and_then(|u| data.faction_templates.get(&u.faction));
+        if template.is_some_and(|t| t.flags & FACTION_ATTACKS_CONTESTED != 0)
+            && p.fields.has_flag(
+                PLAYER_FLAGS,
+                crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+            )
+        {
+            return Regard::Hostile;
+        }
+        if data.misc.faction(faction).is_some() {
+            let at_war = crate::game::map::reputation::at_war(p, data, faction);
+            if player_first {
+                return if at_war {
+                    Regard::Hostile
+                } else {
+                    Regard::Friendly
+                };
+            }
+            let rank = crate::game::map::reputation::rank(p, data, faction);
+            // At war while friendly or better: neutral.
+            return if at_war && rank >= RANK_FRIENDLY {
+                of_rank(RANK_NEUTRAL)
+            } else {
+                of_rank(rank)
+            };
+        }
     }
     match (
         data.faction_templates.get(&ua.faction),
         data.faction_templates.get(&ub.faction),
     ) {
-        (Some(fa), Some(fb)) => fa.hostile_to(fb),
-        _ => false,
+        (Some(fa), Some(fb)) if fa.hostile_to(fb) => Regard::Hostile,
+        (Some(fa), Some(fb)) if fa.friendly_to(fb) || fb.friendly_to(fa) => Regard::Friendly,
+        _ => Regard::Neutral,
     }
+}
+
+/// A faction template's guards attack players flagged on contested ground.
+const FACTION_ATTACKS_CONTESTED: u32 = 0x1000;
+
+/// The rank a player's auras force with `faction`, if any.
+fn forced_rank(p: &crate::game::map::player::Player, faction: u32) -> Option<u32> {
+    p.auras
+        .effects()
+        .find(|(_, a)| {
+            a.kind == crate::game::map::auras::AURA_FORCE_REACTION && a.misc == faction as i32
+        })
+        .map(|(_, a)| a.amount.clamp(0, 7) as u32)
 }
 
 pub fn dist(a: Vector3d, b: Vector3d) -> f32 {
@@ -2087,7 +2172,7 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
             }
         }
         crate::game::map::local_defense::fallen(map, victim, killer);
-        crate::game::map::ai::die(map, victim, tapper);
+        crate::game::map::ai::die_by(map, victim, tapper, killer);
     }
     if killer != victim {
         procs::trigger(

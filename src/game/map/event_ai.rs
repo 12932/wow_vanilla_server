@@ -22,8 +22,8 @@ use crate::game::map::Map;
 use crate::game::map::combat::dist;
 use crate::game::map::scripts;
 
-/// How often timed events are looked at.
-const TICK: Duration = Duration::from_millis(500);
+/// How often timed events are looked at (Thistle Tea's second).
+const TICK: Duration = Duration::from_secs(1);
 const FRIENDLY_RADIUS: f32 = 30.0;
 
 /// What scripts keep on a creature: its EventAI state, and what scripts
@@ -50,6 +50,8 @@ pub struct Scripted {
     pub run: bool,
     /// Passive: it doesn't look for enemies.
     pub passive: bool,
+    /// A reaction mode a script set, over its template's.
+    pub reaction: Option<crate::game::map::assistance::Reaction>,
     /// A spell list a script set, over its template's.
     pub spell_list: Option<u32>,
     /// A gossip menu a script set.
@@ -284,29 +286,35 @@ fn timed(kind: u32) -> bool {
     )
 }
 
+/// Health as a whole percentage, rounded down, as Thistle Tea has it.
 fn health_pct(map: &Map, g: Guid) -> Option<f32> {
     let f = map.unit_fields(g)?;
-    let max = f.get_u32(UNIT_FIELD_MAXHEALTH).max(1);
-    Some(f.get_u32(UNIT_FIELD_HEALTH) as f32 * 100.0 / max as f32)
+    let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+    if max == 0 {
+        return Some(100.0);
+    }
+    Some((f.get_u32(UNIT_FIELD_HEALTH) as f32 / max as f32 * 100.0).trunc())
 }
 
+/// Mana likewise; none for one with no mana.
 fn mana_pct(map: &Map, g: Guid) -> Option<f32> {
     let f = map.unit_fields(g)?;
     let max = f.get_u32(UNIT_FIELD_MAXPOWER1);
     if max == 0 {
-        return Some(100.0);
+        return None;
     }
-    Some(f.get_u32(UNIT_FIELD_POWER1) as f32 * 100.0 / max as f32)
+    Some((f.get_u32(UNIT_FIELD_POWER1) as f32 / max as f32 * 100.0).trunc())
 }
 
+/// The most stacks of `spell` any one holder has on `g`.
 fn stacks_of(map: &Map, g: Guid, spell: u32) -> u32 {
     crate::game::map::auras::auras(map, g)
-        .map(|a| {
+        .and_then(|a| {
             a.holders
                 .iter()
                 .filter(|h| h.spell == spell)
                 .map(|h| h.stacks.max(1))
-                .sum()
+                .max()
         })
         .unwrap_or(0)
 }
@@ -338,41 +346,11 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
             let d = dist(a, b);
             ok(d >= e.params[0] as f32 && d <= e.params[1] as f32)
         }
-        EVENT_OOC_LOS => {
-            if combat {
-                return None;
-            }
-            let radius = if e.params[1] > 0 {
-                e.params[1] as f32
-            } else {
-                FRIENDLY_RADIUS
-            };
-            let me = map.position_of(g)?;
-            let found = map
-                .grid
-                .around(me.x, me.y, radius)
-                .filter(|u| *u != g && (guid::is_player(*u) || guid::is_unit(*u)))
-                .filter(|u| {
-                    map.unit_view(*u)
-                        .is_some_and(|v| v.alive && dist(v.position, me) <= radius)
-                })
-                .filter(|u| !map.players.get(u).is_some_and(|p| p.gm))
-                .filter(|u| match e.params[0] {
-                    1 => crate::game::map::combat::hostile(map, g, *u),
-                    2 => !crate::game::map::combat::hostile(map, g, *u),
-                    _ => true,
-                })
-                .filter(|u| {
-                    e.condition == 0
-                        || crate::game::map::conditions::met(map, e.condition, Some(g), Some(*u))
-                })
-                .min_by(|a, b| {
-                    let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, me));
-                    let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, me));
-                    da.total_cmp(&db)
-                })?;
-            Some(Some(found))
-        }
+        // Its own look about, with line of sight: `ooc_los`.
+        EVENT_OOC_LOS => None,
+        // The most hurt of itself and its friends about, in a fight, by
+        // the share of health missing (over 1%), as Thistle Tea picks them:
+        // its first parameter, a health deficit, plays no part.
         EVENT_FRIENDLY_HP => {
             if !combat {
                 return None;
@@ -382,14 +360,23 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
             } else {
                 FRIENDLY_RADIUS
             };
-            let found = friendlies(map, g, radius).into_iter().find(|f| {
-                map.unit_fields(*f).is_some_and(|x| {
-                    x.get_u32(UNIT_FIELD_MAXHEALTH)
-                        .saturating_sub(x.get_u32(UNIT_FIELD_HEALTH))
-                        >= e.params[0].max(1) as u32
-                })
-            })?;
-            Some(Some(found))
+            let missing = |u: Guid| 100.0 - health_pct(map, u).unwrap_or(100.0);
+            let mut best: Option<(Guid, f32)> = None;
+            let alive = map.unit_view(g).is_some_and(|u| u.alive);
+            let candidates = (alive && missing(g) > 1.0).then_some(g).into_iter().chain(
+                nearby(map, g, radius).into_iter().filter(|u| {
+                    in_fight_and_selectable(map, *u)
+                        && crate::game::map::combat::friendly(map, g, *u)
+                        && missing(*u) > 1.0
+                }),
+            );
+            for u in candidates {
+                let m = missing(u);
+                if best.is_none_or(|(_, b)| m > b) {
+                    best = Some((u, m));
+                }
+            }
+            Some(Some(best?.0))
         }
         EVENT_FRIENDLY_IS_CC => {
             if !combat {
@@ -412,9 +399,9 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
                 FRIENDLY_RADIUS
             };
             let spell = e.params[0].max(0) as u32;
-            let mut all = friendlies(map, g, radius);
-            all.insert(0, g);
-            let found = all.into_iter().find(|f| stacks_of(map, *f, spell) == 0)?;
+            let found = friendlies(map, g, radius)
+                .into_iter()
+                .find(|f| stacks_of(map, *f, spell) == 0)?;
             Some(Some(found))
         }
         EVENT_AURA => {
@@ -425,11 +412,11 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
         }
         EVENT_TARGET_AURA => {
             let v = victim(map, g)?;
-            ok(stacks_of(map, v, e.params[0].max(0) as u32) >= e.params[1].max(0) as u32)
+            ok(combat && stacks_of(map, v, e.params[0].max(0) as u32) >= e.params[1].max(0) as u32)
         }
         EVENT_TARGET_MISSING_AURA => {
             let v = victim(map, g)?;
-            ok(stacks_of(map, v, e.params[0].max(0) as u32) < e.params[1].max(0) as u32)
+            ok(combat && stacks_of(map, v, e.params[0].max(0) as u32) < e.params[1].max(0) as u32)
         }
         EVENT_VICTIM_ROOTED => {
             let v = victim(map, g)?;
@@ -462,27 +449,86 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
     }
 }
 
-/// Friendly, living units near `g` in combat.
-fn friendlies(map: &Map, g: Guid, radius: f32) -> Vec<Guid> {
+/// The units near `g`, creatures then players, each nearest first.
+fn nearby(map: &Map, g: Guid, radius: f32) -> Vec<Guid> {
     let Some(me) = map.position_of(g) else {
         return Vec::new();
     };
-    let mut out: Vec<(f32, Guid)> = map
+    let mut out: Vec<(bool, f32, Guid)> = map
         .grid
         .around(me.x, me.y, radius)
-        .filter(|u| *u != g && guid::is_unit(*u))
+        .filter(|u| *u != g && (guid::is_unit(*u) || guid::is_player(*u)))
         .filter_map(|u| {
-            let c = map.creature(u)?;
-            let d = dist(c.position, me);
-            (c.alive()
-                && d <= radius
-                && !crate::game::map::combat::hostile(map, g, u)
-                && !crate::game::map::combat::can_attack(map, g, u))
-            .then_some((d, u))
+            let d = dist(map.position_of(u)?, me);
+            (d <= radius).then_some((guid::is_player(u), d, u))
         })
         .collect();
-    out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    out.into_iter().map(|(_, u)| u).collect()
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    out.into_iter().map(|(_, _, u)| u).collect()
+}
+
+/// Alive, in a fight and selectable.
+fn in_fight_and_selectable(map: &Map, u: Guid) -> bool {
+    map.unit_view(u).is_some_and(|v| v.alive)
+        && map.unit_fields(u).is_some_and(|f| {
+            let flags = f.get_u32(UNIT_FIELD_FLAGS);
+            flags & crate::game::map::player::UNIT_FLAG_IN_COMBAT != 0 && flags & 0x0200_0000 == 0
+        })
+}
+
+/// The units a friendly event looks at, itself first, then those near:
+/// alive, in a fight, selectable and not hostile to it (Thistle Tea's
+/// `friendly_candidates`).
+fn friendlies(map: &Map, g: Guid, radius: f32) -> Vec<Guid> {
+    std::iter::once(g)
+        .chain(nearby(map, g, radius))
+        .filter(|u| {
+            in_fight_and_selectable(map, *u)
+                && (*u == g || !crate::game::map::combat::hostile(map, g, *u))
+        })
+        .collect()
+}
+
+/// An out-of-combat line-of-sight event's unit: the nearest within its
+/// radius of the reaction it names (any, hostile or not), in sight, that
+/// meets its condition.
+fn ooc_los(map: &mut Map, g: Guid, e: &AiEvent) -> Option<Option<Guid>> {
+    if in_combat(map, g) {
+        return None;
+    }
+    let radius = if e.params[1] > 0 {
+        e.params[1] as f32
+    } else {
+        FRIENDLY_RADIUS
+    };
+    let me = map.position_of(g)?;
+    let mut near: Vec<(f32, Guid)> = map
+        .grid
+        .around(me.x, me.y, radius)
+        .filter(|u| *u != g && (guid::is_player(*u) || guid::is_unit(*u)))
+        .filter_map(|u| {
+            let v = map.unit_view(u)?;
+            let d = dist(v.position, me);
+            (v.alive && d <= radius).then_some((d, u))
+        })
+        .filter(|(_, u)| !map.players.get(u).is_some_and(|p| p.gm))
+        .filter(|(_, u)| match e.params[0] {
+            0 => true,
+            1 => crate::game::map::combat::hostile(map, g, *u),
+            2 => !crate::game::map::combat::hostile(map, g, *u),
+            _ => false,
+        })
+        .filter(|(_, u)| {
+            e.condition == 0
+                || crate::game::map::conditions::met(map, e.condition, Some(g), Some(*u))
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let found = near.into_iter().map(|(_, u)| u).find(|u| {
+        map.position_of(*u)
+            .is_some_and(|to| crate::game::map::assistance::sees(map, me, to))
+    })?;
+    Some(Some(found))
 }
 
 /// Try the events `matches` picks, with `invoker` as the one who caused
@@ -518,7 +564,11 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
         {
             continue;
         }
-        if e.flags & EF_PAUSE_WHILE_STUNNED != 0 && crate::game::map::auras::held(map, g, false) {
+        if e.flags & EF_PAUSE_WHILE_STUNNED != 0
+            && map
+                .creature(g)
+                .is_some_and(|c| c.auras.has(crate::game::map::auras::AURA_MOD_STUN))
+        {
             continue;
         }
         if e.flags & EF_VICTIM_IN_MELEE != 0
@@ -529,7 +579,12 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
         {
             continue;
         }
-        let Some(target) = satisfy(map, g, e, invoker) else {
+        let target = if e.kind == EVENT_OOC_LOS {
+            ooc_los(map, g, e)
+        } else {
+            satisfy(map, g, e, invoker)
+        };
+        let Some(target) = target else {
             continue;
         };
         if e.kind != EVENT_OOC_LOS
@@ -538,7 +593,7 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
                 map,
                 e.condition,
                 Some(g),
-                target.or_else(|| victim(map, g)),
+                target.or_else(|| victim(map, g)).or(Some(g)),
             )
         {
             continue;
@@ -645,6 +700,11 @@ pub fn tick(map: &mut Map, g: Guid) {
     if s.next_tick.is_some_and(|t| t > now) {
         return;
     }
+    // The time since the last look, which a stun's pause adds back.
+    let since = s
+        .next_tick
+        .and_then(|t| t.checked_sub(TICK))
+        .map_or(TICK, |last| now.saturating_duration_since(last));
     s.next_tick = Some(now + TICK);
     // A stunned creature's paused timers wait out the stun.
     let paused: Vec<usize> = map
@@ -659,13 +719,16 @@ pub fn tick(map: &mut Map, g: Guid) {
                 .collect()
         })
         .unwrap_or_default();
+    let stunned = map
+        .creature(g)
+        .is_some_and(|c| c.auras.has(crate::game::map::auras::AURA_MOD_STUN));
     if !paused.is_empty()
-        && crate::game::map::auras::held(map, g, false)
+        && stunned
         && let Some(s) = scripted_mut(map, g)
     {
         for i in paused {
             if let Some(Some(t)) = s.timers.get_mut(i) {
-                *t += TICK;
+                *t += since;
             }
         }
     }
@@ -823,6 +886,14 @@ pub fn evade(map: &mut Map, g: Guid) {
     let now = map.now;
     if !has_events(map, g) {
         return;
+    }
+    // Out of the fight, then evading, as Thistle Tea tells them.
+    let was = scripted(map, g).is_some_and(|s| s.in_combat);
+    if let Some(s) = scripted_mut(map, g) {
+        s.in_combat = false;
+    }
+    if was {
+        fire(map, g, |e| e.kind == EVENT_LEAVE_COMBAT, None);
     }
     fire(map, g, |e| e.kind == EVENT_EVADE, None);
     let Some(entry) = map.creature(g).map(|c| c.entry) else {
@@ -1155,13 +1226,16 @@ pub fn phase(map: &Map, g: Guid) -> u32 {
     scripted(map, g).map_or(0, |s| s.phase)
 }
 
-/// Whether a script stopped the creature chasing or swinging.
+/// Whether a script (or a main-ranged spell) stopped the creature chasing
+/// or swinging.
 pub fn combat_movement(map: &Map, g: Guid) -> bool {
     !scripted(map, g).is_some_and(|s| s.no_combat_movement)
+        && !crate::game::map::spells::lists::holding(map, g)
 }
 
 pub fn melee(map: &Map, g: Guid) -> bool {
     !scripted(map, g).is_some_and(|s| s.no_melee)
+        && !crate::game::map::spells::lists::holding(map, g)
 }
 
 /// Damage to a scripted-invincible creature leaves it its floor of

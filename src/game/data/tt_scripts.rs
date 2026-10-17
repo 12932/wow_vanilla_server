@@ -441,6 +441,7 @@ impl Import<'_> {
             return id;
         };
         let mut values = ["value1", "value2", "value3", "value4"].map(|k| int(v.get(k)) as i32);
+        let floats = ["value1", "value2", "value3", "value4"].map(|k| float(v.get(k)) as f32);
         let children: Vec<u32> = v
             .get("children")
             .and_then(Value::as_array)
@@ -500,6 +501,9 @@ impl Import<'_> {
                 flags,
             },
         );
+        if floats.iter().any(|f| f.fract() != 0.0) {
+            self.data.scripts.condition_floats.insert(id, floats);
+        }
         id
     }
 
@@ -511,13 +515,15 @@ impl Import<'_> {
         let mut points: Vec<super::Waypoint> = match v.get("path").and_then(Value::as_array) {
             Some(path) => path
                 .iter()
-                .map(|p| {
+                .enumerate()
+                .map(|(i, p)| {
                     let t = tuple(Some(p));
                     super::Waypoint {
+                        point: i as u32,
                         x: float(t.first()) as f32,
                         y: float(t.get(1)) as f32,
                         z: float(t.get(2)) as f32,
-                        orientation: 0.0,
+                        orientation: None,
                         wait_ms: int(t.get(3)).max(0) as u32,
                         script_id: 0,
                     }
@@ -535,14 +541,16 @@ impl Import<'_> {
             return;
         }
         if let Some(at) = v.get("points").and_then(Value::as_object) {
+            // By the point's number: a path's own from 0, else the
+            // `script_waypoint` rows' `pointid`.
             for (point, steps) in at {
-                let Ok(point) = point.parse::<usize>() else {
+                let Ok(point) = point.parse::<u32>() else {
                     continue;
                 };
                 let id = self.id();
                 let steps = self.steps(steps);
                 self.data.scripts.movement.insert(id, steps);
-                if let Some(p) = points.get_mut(point) {
+                if let Some(p) = points.iter_mut().find(|p| p.point == point) {
                     p.script_id = id;
                 }
             }
@@ -567,9 +575,6 @@ impl Import<'_> {
             };
             texts.push((text, condition));
         }
-        // The last text whose condition holds is the greeting; the menu
-        // takes the first, so they go in backwards.
-        texts.reverse();
         let mut options = Vec::new();
         for (i, o) in v
             .get("options")

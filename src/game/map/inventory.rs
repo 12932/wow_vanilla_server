@@ -246,6 +246,23 @@ impl Player {
             .sum()
     }
 
+    /// How many of `entry` the player carries: worn, in the pack and its
+    /// bags, on the keyring; not in the bank.
+    pub fn carried_count_of(&self, entry: u32) -> u32 {
+        self.items
+            .iter()
+            .filter(|i| i.entry == entry)
+            .filter(|i| {
+                if i.bag == BAG_PLAYER {
+                    !(BANK_START..BUYBACK_END).contains(&i.slot)
+                } else {
+                    !(BANK_BAG_START..BANK_BAG_END).contains(&i.bag)
+                }
+            })
+            .map(|i| i.count())
+            .sum()
+    }
+
     pub fn money(&self) -> u32 {
         self.fields.get_u32(PLAYER_FIELD_COINAGE)
     }

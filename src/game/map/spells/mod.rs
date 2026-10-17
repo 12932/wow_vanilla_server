@@ -18,6 +18,7 @@ pub mod heartbeat;
 pub mod immunity;
 pub mod interrupts;
 mod holiday;
+pub mod lists;
 pub mod log;
 pub mod mods;
 pub mod outcome;
@@ -164,8 +165,8 @@ pub struct Caster {
     pub cooldowns: AHashMap<u32, Instant>,
     pub category_cooldowns: AHashMap<u32, Instant>,
     pub gcd_until: Option<Instant>,
-    /// For a creature: when it next tries a spell from its list.
-    pub next_spell_at: Option<Instant>,
+    /// For a creature: its spell list's timers in the fight it is in.
+    pub spell_list: Option<Box<lists::ListState>>,
     pub combo_target: Guid,
     pub combo_points: u8,
     /// Spells whose cooldown starts when their aura goes (Stealth).
@@ -606,14 +607,21 @@ fn cast_time(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods) -> u32 {
 }
 
 /// Cast `spell`: checked, then begun (or done at once if instant).
-pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item: Option<Guid>) {
+/// Whether it was.
+pub fn cast(
+    map: &mut Map,
+    caster: Guid,
+    spell: u32,
+    mut targets: Targets,
+    item: Option<Guid>,
+) -> bool {
     let data = map.realm.data.clone();
     let Some(s) = data.spells.get(spell) else {
         send_cast_result(map, caster, spell, Some(fail::NOT_KNOWN));
-        return;
+        return false;
     };
     if s.passive() {
-        return;
+        return false;
     }
     // A buff too high for its target goes on at a rank that may.
     if item.is_none() && map.players.contains_key(&caster) {
@@ -621,14 +629,14 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
             Some(id) if id != spell => return cast(map, caster, id, targets, item),
             None => {
                 send_cast_result(map, caster, spell, Some(fail::LOWLEVEL));
-                return;
+                return false;
             }
             _ => {}
         }
     }
     let m = mods::for_spell(map, caster, s);
     if crate::game::map::mounts::dismissed(map, caster, s) {
-        return;
+        return true;
     }
     if map.players.contains_key(&caster)
         && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
@@ -639,7 +647,7 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
     }
     if let Some(r) = checks::check(map, caster, s, &targets, item, false, &m) {
         send_cast_result(map, caster, spell, Some(r));
-        return;
+        return false;
     }
     if targets.unit.is_none() && auras::positive(s) {
         targets.unit = Some(caster);
@@ -647,11 +655,11 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
     // A next-swing spell waits for the swing; an auto-repeat one repeats.
     if s.on_next_swing() {
         crate::game::map::combat::queue_next_swing(map, caster, spell);
-        return;
+        return true;
     }
     if s.auto_repeat() {
         crate::game::map::ranged::start(map, caster, spell, targets);
-        return;
+        return true;
     }
     let now = map.now;
     let time = cast_time(map, caster, s, &m);
@@ -675,7 +683,7 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
     }
     if time == 0 {
         execute(map, caster, s, targets, item, false);
-        return;
+        return true;
     }
     // Casting breaks what casting breaks (Stealth, Invisibility).
     auras::interrupt(map, caster, auras::INTERRUPT_CAST);
@@ -690,6 +698,7 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
             duration: time,
         });
     }
+    true
 }
 
 /// Cast `spell` at once, without its cast time: a next-swing spell at its
@@ -1728,60 +1737,7 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
 
 /// A creature in a fight tries a spell from its list.
 pub fn creature_cast(map: &mut Map, creature: Guid, victim: Guid) {
-    let now = map.now;
-    let data = map.realm.data.clone();
-    let Some(c) = map.creature(creature) else {
-        return;
-    };
-    if c.caster.casting.is_some() || c.caster.next_spell_at.is_some_and(|t| t > now) {
-        return;
-    }
-    // A list a script set (0 for none) stands over the template's.
-    let list = c
-        .scripted
-        .as_deref()
-        .and_then(|s| s.spell_list)
-        .or_else(|| data.creature_template(c.entry).map(|t| t.spell_list_id))
-        .filter(|l| *l != 0)
-        .and_then(|l| data.spells.creature_spells.get(&l));
-    let Some(list) = list else {
-        if let Some(c) = map.creature_mut(creature) {
-            c.caster.next_spell_at = Some(now + Duration::from_secs(3600));
-        }
-        return;
-    };
-    let mut rng = rand::rng();
-    let pick = list
-        .iter()
-        .filter(|s| s.probability == 0 || rng.random_range(0..100) < s.probability)
-        .find(|s| data.spells.get(s.spell).is_some())
-        .copied();
-    let delay = pick
-        .map(|s| s.delay_repeat)
-        .filter(|(lo, hi)| *hi > 0 || *lo > 0)
-        .map(|(lo, hi)| {
-            let hi = hi.max(lo);
-            Duration::from_millis(u64::from(if hi > lo {
-                rng.random_range(lo..=hi)
-            } else {
-                lo
-            }))
-        })
-        .unwrap_or(Duration::from_secs(8));
-    if let Some(c) = map.creature_mut(creature) {
-        c.caster.next_spell_at = Some(now + delay);
-    }
-    let Some(spell) = pick else {
-        return;
-    };
-    // Target 0 and 1: the victim; anything else, for now: itself.
-    let target = if spell.target <= 1 { victim } else { creature };
-    let targets = Targets {
-        unit: Some(target),
-        dest: map.position_of(target),
-        ..Default::default()
-    };
-    cast(map, creature, spell.spell, targets, None);
+    lists::tick(map, creature, victim);
 }
 
 /// Talent points a player has to spend: one a level from ten, less those

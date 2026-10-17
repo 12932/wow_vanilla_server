@@ -290,6 +290,9 @@ pub struct SpellData {
     /// `spell_script_target`: the creatures (type 1) or objects (type 0)
     /// a scripted spell aims at.
     pub script_targets: AHashMap<u32, Vec<(u32, u32)>>,
+    /// The condition a script target must meet, by (spell, type, entry):
+    /// the caster the source, the candidate the target.
+    pub script_target_conditions: AHashMap<(u32, u32, u32), u32>,
 }
 
 /// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.
@@ -317,14 +320,20 @@ pub struct TalentInfo {
     pub depends_rank: u32,
 }
 
-/// A creature's spell from its list.
+/// A creature's spell from its list: its cast target type and that
+/// target's parameters, its cast flags, its delays (in milliseconds, from
+/// the table's seconds), and the `creature_spells_scripts` its cast starts.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CreatureSpell {
     pub spell: u32,
     pub probability: u32,
     pub target: u32,
+    pub target_param1: u32,
+    pub target_param2: u32,
+    pub flags: u32,
     pub delay_initial: (u32, u32),
     pub delay_repeat: (u32, u32),
+    pub script: u32,
 }
 
 impl SpellData {
