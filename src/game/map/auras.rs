@@ -2160,6 +2160,23 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             } else {
                 (a.amount * stacks).max(0) as u32
             };
+            // A heal's tick takes the healing taken of the moment (Thistle
+            // Tea's `Periodic.healing_amount`); food's regeneration doesn't.
+            let amount = match map.realm.data.spells.get(h.spell) {
+                Some(s) if a.kind != AURA_MOD_REGEN => {
+                    crate::game::map::spells::outcome::spell_healing_taken(
+                        map,
+                        target,
+                        amount as f32,
+                        s,
+                        usize::from(a.effect),
+                        crate::game::map::spells::outcome::Kind::Dot,
+                        stacks as u32,
+                        1.0,
+                    ) as u32
+                }
+                _ => amount,
+            };
             crate::game::map::spells::heal(map, h.caster, target, h.spell, amount, true);
         }
         AURA_PERIODIC_HEALTH_FUNNEL => {
