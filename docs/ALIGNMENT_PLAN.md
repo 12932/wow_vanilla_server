@@ -1289,6 +1289,81 @@ Six agents took these on, each on its own branch.
   - `item_required_target`'s items are used only on their creatures, alive or dead as asked;
   - timed items' time goes to the client.
 
+### Spell-summoned objects (2026-10-17)
+
+`map/objects.rs`, as Thistle Tea's:
+- **Summoned objects** (effects 50, 76, 104 to 107):
+  - placed where the spell puts them, with their owner and level;
+  - lasting the spell's duration;
+  - one per slot;
+  - bringing their linked trap (a campfire's fire, which is a cooking focus).
+- **Traps:**
+  - arm after their delay, and spring on an enemy of their owner (or, unowned, on any player);
+  - their spell is cast where they stand;
+  - hidden from enemies who can't detect traps.
+- **Rituals:** one use each and the owner's group only. Their completion spell is cast: Ritual of Summoning's
+  summons (effect 85), the Ritual of Doom's sacrifice.
+- **Portals** for the owner's party, with their charges. Effect 86 activates objects.
+- **Using objects:**
+  - books send their page;
+  - goobers go off only for those on their quest (and spring their trap, run their scripts and cast their spell);
+  - doors close again on their timer;
+  - `gameobject_requirement` holds.
+- **Quest objectives on objects** are credited on use, and shared with the group.
+
+### Class, item and engineering scripts (2026-10-17)
+
+- **Marks:** Weakened Soul, Forbearance and Recently Bandaged, with the mechanic immunities that stop a second cast.
+- **Damage:**
+  - Bloodthirst's 45% of attack power;
+  - Ferocious Bite's attack power and leftover energy;
+  - Shield Slam's block value;
+  - Judgement of Command's half damage unless stunned;
+  - Hammer of Wrath's melee crit.
+- **Heals and sacrifices:** Swiftmend eating a Rejuvenation or Regrowth, Holy Nova's heal, Demonic Sacrifice's buff by
+  demon.
+- **The rest:**
+  - Enrage, Readiness, Refocus, Flametongue's attack, Touch of Weakness;
+  - Wyvern Sting's poison on waking;
+  - Bestial Wrath's immunities, Stoneform, Shadowmeld;
+  - Intimidating Shout's split targets, Mongoose Bite and Counterattack's windows;
+  - Devour Magic, Inferno, Vanish's stealth, Blade Flurry.
+- **Spells travel:** effects land after the distance over the spell's speed.
+- **The client is told:** a higher rank sends `SMSG_SUPERCEDED_SPELL`, and the combat log gains the execute,
+  dispel, dispel-failed, immune and instakill packets.
+- **Items:** Noggenfogger, the Deviate Fish and Delight, Linken's Boomerang, Goblin Jumper Cables, the Six Demon Bag,
+  and the rest of Thistle Tea's weighted item scripts.
+- **Engineering:**
+  - the Gnomish and Everlook transporters with their mishaps;
+  - Net-o-Matic, the Universal Remote and the Mind Control Cap;
+  - the dragonlings and battle chicken, Explosive Sheep and Goblin Bomb;
+  - the Death Ray.
+- **Drink** (effect 100): the drunk value in `PLAYER_BYTES_3`, sobering, and drunken invisibility.
+- **More effects:** reputation (103), taxis (123), pulls (124), item changes (34); auras 37 and 165.
+- **Mount rules:** no mounts in most dungeons, indoors, on ships' decks or in some forms; the Qiraji tanks;
+  reindeer.
+
+### Battleground groups and instance eviction (2026-10-17)
+
+- **A group queues together:** the leader's join takes every member (online, one side and bracket, no deserter),
+  into one match. `SMSG_GROUP_JOINED_BATTLEGROUND`, and the Deserter check that was missing.
+- **A match keeps an offline player's place** for two minutes.
+- **Eviction:** a copy no longer yours (out of its group, or a raid without a raid group) gives 60 seconds with
+  `SMSG_RAID_GROUP_ONLY`, then home. A group formed inside a copy takes it over. The client is told its saved raids
+  and its last instance.
+
+### Creatures' habitats and the world's alerts (2026-10-17)
+
+- **Habitats** (`creature_motion.rs`, by `inhabit_type`):
+  - flyers start, path and wander in the air, and fall when killed;
+  - swimmers keep their depth and chase through water;
+  - land-only and water-only creatures stop at the shore, and evade if they can't reach.
+- **Wounded creatures** slow below 16, 11 and 6% health. A creature pauses three minutes while a player talks to it.
+  Hurt critters flee and never fight.
+- **Alerts:** a guard's death sends `SMSG_ZONE_UNDER_ATTACK` to the other faction (LocalDefense). The War Effort is
+  as Thistle Tea has it.
+- **A pet's failed cast** tells its owner with `SMSG_PET_CAST_FAILED`.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
