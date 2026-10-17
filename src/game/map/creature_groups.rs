@@ -132,7 +132,7 @@ pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
         join.extend(members_of(map, g));
     }
     let Some(spawn) = spawn_of(map, g) else {
-        attack_all(map, join, enemy);
+        attack_all(map, g, join, enemy);
         return;
     };
     let data = map.realm.data.clone();
@@ -152,10 +152,12 @@ pub fn aggro(map: &mut Map, g: Guid, enemy: Guid) {
     {
         join.push(m);
     }
-    attack_all(map, join, enemy);
+    attack_all(map, g, join, enemy);
 }
 
-fn attack_all(map: &mut Map, who: Vec<Guid>, enemy: Guid) {
+/// Those of `g`'s group or links not yet fighting `enemy` join in, on
+/// `g`'s leash.
+fn attack_all(map: &mut Map, g: Guid, who: Vec<Guid>, enemy: Guid) {
     for c in who {
         if map
             .creature(c)
@@ -163,6 +165,7 @@ fn attack_all(map: &mut Map, who: Vec<Guid>, enemy: Guid) {
             && crate::game::map::combat::can_attack(map, c, enemy)
         {
             crate::game::map::ai::attacked(map, c, enemy);
+            crate::game::map::creature_combat::share_leash(map, c, g);
         }
     }
 }

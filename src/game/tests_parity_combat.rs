@@ -21,10 +21,20 @@ const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 const HUMANS: u32 = 1;
 /// Hostile to humans.
 const PACK: u32 = 14;
+/// Hostile to humans, and answering calls for help.
+const CALLERS: u32 = 15;
 
 const KOBOLD: u32 = 4100;
 /// A kobold that doesn't regenerate.
 const WORN: u32 = 4101;
+/// A kobold with a keen eye: it notices players forty yards off.
+const KEEN: u32 = 4102;
+/// One that calls its kind near for help.
+const CALLER: u32 = 4103;
+
+/// A burn over time, and a drain channelled.
+const BURN: u32 = 95_001;
+const DRAIN: u32 = 95_002;
 
 /// The spawns: (guid, entry, east, north).
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
@@ -33,6 +43,12 @@ const SPAWNS: &[(u32, u32, f32, f32)] = &[
     // Off to the east, out of sight: one sitting at its fire, one worn.
     (11, KOBOLD, 30.0, 0.0),
     (12, WORN, 30.0, 6.0),
+    // Its pack, near it.
+    (13, KOBOLD, 33.0, 0.0),
+    (14, KEEN, 30.0, -6.0),
+    // Two that call each other, further off.
+    (15, CALLER, 60.0, 0.0),
+    (16, CALLER, 63.0, 0.0),
 ];
 
 fn faction(id: u32, ours: u32, enemy_mask: u32) -> FactionTemplate {
@@ -79,6 +95,13 @@ fn data() -> GameData {
     d.faction_templates.extend([
         (HUMANS, faction(HUMANS, 0x1, 0x2)),
         (PACK, faction(PACK, 0x2, 0x1)),
+        (
+            CALLERS,
+            FactionTemplate {
+                flags: 0x01,
+                ..faction(CALLERS, 0x2, 0x1)
+            },
+        ),
     ]);
     d.class_level_stats.insert(
         (1, 2),
@@ -121,6 +144,45 @@ fn data() -> GameData {
         })
         .collect();
     d.creature_spawns.insert(0, spawns);
+    let mut keen = creature(KEEN, "Keen Kobold", PACK);
+    keen.detection_range = 40.0;
+    d.creature_templates.insert(KEEN, keen);
+    let mut caller = creature(CALLER, "Kobold Caller", CALLERS);
+    caller.call_for_help_range = 10.0;
+    d.creature_templates.insert(CALLER, caller);
+    let s = &mut d.spells;
+    s.ranges.insert(1, (0.0, 30.0));
+    s.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 30_000,
+            ..Default::default()
+        },
+    );
+    for (id, channeled) in [(BURN, false), (DRAIN, true)] {
+        let mut t = crate::game::data::spells::SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            range_index: 1,
+            equipped_item_class: -1,
+            duration_index: 9,
+            ..Default::default()
+        };
+        t.effects[0] = crate::game::data::spells::SpellEffect {
+            effect: 6,
+            aura: 3,
+            base_points: 1,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            amplitude: 1000,
+            ..Default::default()
+        };
+        if channeled {
+            t.attributes[1] = crate::game::data::spells::ATTR_EX_CHANNELED;
+        }
+        s.spells.insert(id, t);
+    }
     d
 }
 
@@ -156,6 +218,7 @@ fn step(m: &mut Map, steps: u32) {
     for _ in 0..steps {
         m.now += Duration::from_millis(50);
         crate::game::map::ai::update_creatures(m);
+        combat::update_creatures(m);
     }
 }
 
@@ -650,4 +713,106 @@ async fn a_leashing_creature_is_healed_as_it_goes_if_it_regenerates() {
     let (max, going, home) = out[1];
     assert_eq!(going, (true, max / 2), "a worn one stays worn");
     assert_eq!(home, (false, max / 2), "home too");
+}
+
+/// The leash as Thistle Tea extends it (`CombatLeash`): a blow on the
+/// creature keeps it, landed or not, and a channel's tick, but not a burn's;
+/// under control it is kept, so it doesn't go the moment it is free; those
+/// its kind called share its clock; and its reach is half again its aggro
+/// radius where that is more than fifty yards.
+#[tokio::test]
+async fn the_leash_holds_as_thistle_tea_holds_it() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let (k, keen) = (kobold(11), guid::unit(KEEN, 14));
+    let (caller, called) = (guid::unit(CALLER, 15), guid::unit(CALLER, 16));
+    let out = map
+        .query(move |m| {
+            // Far from where its fight began, its victim further, nothing
+            // done to it for thirteen seconds.
+            let far = |m: &mut Map, g: Guid, yards: f32, theirs: f32| {
+                let ago = m.now - Duration::from_secs(13);
+                let c = m.creature_mut(g).unwrap();
+                let origin = c.engagement.origin.unwrap();
+                c.position = Vector3d {
+                    x: origin.x + yards,
+                    ..origin
+                };
+                c.engagement.last_hostile = Some(ago);
+                m.players.get_mut(&ga).unwrap().movement.position = Vector3d {
+                    x: origin.x + theirs,
+                    ..origin
+                };
+            };
+            let evades =
+                |m: &Map, g: Guid| crate::game::map::creature_combat::should_evade(m, g, ga);
+            let tick = |m: &mut Map, spell: u32| {
+                let data = m.realm.data.clone();
+                crate::game::map::auras::apply_spell(
+                    m,
+                    ga,
+                    k,
+                    data.spells.get(spell).unwrap(),
+                    &[(0, 1)],
+                    Default::default(),
+                )
+                .unwrap();
+                let h = crate::game::map::auras::auras(m, k)
+                    .unwrap()
+                    .holders
+                    .iter()
+                    .find(|h| h.spell == spell)
+                    .unwrap()
+                    .clone();
+                crate::game::map::spells::periodic_damage(m, &h, k, 1, false);
+            };
+            m.players.get_mut(&ga).unwrap().movement.position = at(26.0, 0.0);
+            crate::game::map::ai::attacked(m, k, ga);
+            far(m, k, 56.0, 55.0);
+            let late = evades(m, k);
+            tick(m, BURN);
+            let burnt = evades(m, k);
+            tick(m, DRAIN);
+            let drained = evades(m, k);
+            far(m, k, 56.0, 55.0);
+            // A blow that misses as much as one that lands.
+            combat::engage(m, ga, k);
+            let struck = evades(m, k);
+            // Stunned for three and a half seconds, then free.
+            far(m, k, 56.0, 55.0);
+            let stun = crate::game::map::player::UNIT_FLAG_STUNNED;
+            m.unit_fields_mut(k)
+                .unwrap()
+                .set_flag(UNIT_FIELD_FLAGS, stun, true);
+            step(m, 70);
+            m.unit_fields_mut(k)
+                .unwrap()
+                .set_flag(UNIT_FIELD_FLAGS, stun, false);
+            let held = evades(m, k);
+            // The one its call brought shares its clock.
+            m.players.get_mut(&ga).unwrap().movement.position = at(56.0, 0.0);
+            crate::game::map::ai::attacked(m, caller, ga);
+            step(m, 40);
+            let came = m.creature(called).unwrap().combat.attacking;
+            far(m, called, 56.0, 55.0);
+            far(m, caller, 56.0, 55.0);
+            combat::engage(m, ga, caller);
+            let shared = evades(m, called);
+            // Its reach of a level 1 player is 41 yards: 61 and a half.
+            m.players.get_mut(&ga).unwrap().movement.position = at(26.0, -6.0);
+            crate::game::map::ai::attacked(m, keen, ga);
+            far(m, keen, 58.0, 59.0);
+            let keen_held = evades(m, keen);
+            (late, burnt, drained, struck, held, came, shared, keen_held)
+        })
+        .await
+        .unwrap();
+    let (late, burnt, drained, struck, held, came, shared, keen_held) = out;
+    assert!(late, "far and late, it goes home");
+    assert!(burnt, "a burn's tick doesn't keep it");
+    assert!(!drained, "a channel's does");
+    assert!(!struck, "a blow does");
+    assert!(!held, "kept while stunned");
+    assert!(came, "its kind came");
+    assert!(!shared, "on its caller's leash");
+    assert!(!keen_held, "half again its reach");
 }

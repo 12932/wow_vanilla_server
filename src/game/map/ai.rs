@@ -83,6 +83,33 @@ pub fn aggro_reach(detection: f32, creature_level: u32, unit_level: u32, modifie
     (detection - diff as f32 + modifier).max(detection.min(5.0))
 }
 
+/// How near `t` `g` notices it (Thistle Tea's `Acquisition.radius`): its
+/// aggro radius at `t`'s level (a pet's, its master's), with its own
+/// detect-range auras.
+pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
+    use crate::game::map::auras::AURA_MOD_DETECT_RANGE;
+    let Some(c) = map.creature(g) else {
+        return 0.0;
+    };
+    let detection = map
+        .realm
+        .data
+        .creature_template(c.entry)
+        .map_or(20.0, |t| t.detection_range);
+    let modifier = c.auras.sum(AURA_MOD_DETECT_RANGE) as f32;
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    let master = crate::game::map::pets::master(map, t);
+    let who = if map.players.contains_key(&master) {
+        master
+    } else {
+        t
+    };
+    let lv = map
+        .unit_fields(who)
+        .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
+    aggro_reach(detection, level, lv, modifier)
+}
+
 /// The unit flags that put a unit out of any fight: not attackable (both),
 /// not selectable, on a flight.
 const UNTARGETABLE: u32 = 0x2 | 0x1_0000 | 0x0200_0000 | 0x0010_0000;
@@ -147,6 +174,7 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
         if first {
+            crate::game::map::creature_combat::leash_begins(map, creature);
             crate::game::map::creature_combat::stand_up(map, creature);
             crate::game::map::event_ai::aggro(map, creature, attacker);
         }
@@ -162,6 +190,7 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
     if first {
+        crate::game::map::creature_combat::leash_begins(map, creature);
         crate::game::map::creature_combat::stand_up(map, creature);
     }
     // Its SMSG_ATTACKSTART waits for its first swing in reach (`announce`).
@@ -545,6 +574,8 @@ pub fn update_creatures(map: &mut Map) {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
         };
+        // Under control, its leash is kept.
+        crate::game::map::creature_combat::maintain_leash(map, g);
         // Its timed events wait while it walks home.
         if !map.creatures.get(key).is_some_and(|c| c.evading) {
             crate::game::map::event_ai::tick(map, g);
@@ -664,19 +695,6 @@ fn aggro_scan(map: &mut Map, g: Guid) {
     if search <= 0.0 {
         return;
     }
-    // Its reach of a unit, by that unit's level (a pet's, its master's).
-    let reach_of = |map: &Map, t: Guid| -> f32 {
-        let master = crate::game::map::pets::master(map, t);
-        let who = if map.players.contains_key(&master) {
-            master
-        } else {
-            t
-        };
-        let lv = map
-            .unit_fields(who)
-            .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
-        aggro_reach(detection, level, lv, modifier)
-    };
     let mut near: Vec<(Guid, f32)> = map
         .grid
         .around(pos.x, pos.y, search)
@@ -695,7 +713,7 @@ fn aggro_scan(map: &mut Map, g: Guid) {
             });
             player_ok
                 && map.unit_view(*t).is_some_and(|u| u.alive)
-                && *d <= reach_of(map, *t)
+                && *d <= attack_distance(map, g, *t)
                 && combat::hostile(map, g, *t)
                 && combat::can_attack(map, g, *t)
                 && crate::game::map::spells::stealth::sees(map, g, *t)
