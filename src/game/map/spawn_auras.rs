@@ -34,9 +34,8 @@ pub fn spells(map: &Map, g: Guid) -> Vec<u32> {
         },
     };
     let passive = crate::game::map::item_scripts::guardian_passive(c.entry);
-    let skips = |s: u32| {
-        (c.entry == EXPLOSIVE_SHEEP && SHEEP_SKIPS.contains(&s)) || Some(s) == passive
-    };
+    let skips =
+        |s: u32| (c.entry == EXPLOSIVE_SHEEP && SHEEP_SKIPS.contains(&s)) || Some(s) == passive;
     let mut once = Vec::with_capacity(ids.len());
     for s in ids {
         if !once.contains(s) && !skips(*s) {

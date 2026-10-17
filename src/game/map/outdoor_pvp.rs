@@ -393,7 +393,11 @@ fn reconcile_buffs(map: &mut Map) {
             let s = side(p.team);
             let alive = p.death == Death::Alive;
             let tower = (alive && on == 0 && PLAGUELANDS_BUFF_ZONES.contains(&p.zone))
-                .then(|| (1..=4).contains(&counts[s]).then(|| TOWER_BUFFS[s][counts[s] - 1]))
+                .then(|| {
+                    (1..=4)
+                        .contains(&counts[s])
+                        .then(|| TOWER_BUFFS[s][counts[s] - 1])
+                })
                 .flatten();
             let favor = (alive
                 && on == 1
@@ -630,7 +634,11 @@ fn colours(map: &mut Map, tower: usize, owner: Option<usize>) {
     let Some(t) = map.outdoor.as_ref().and_then(|o| o.towers.get(tower)) else {
         return;
     };
-    let objects: Vec<Guid> = t.object.into_iter().chain(t.banners.iter().copied()).collect();
+    let objects: Vec<Guid> = t
+        .object
+        .into_iter()
+        .chain(t.banners.iter().copied())
+        .collect();
     let (kit, animation) = art_kit(owner);
     for g in objects {
         if let Some(o) = map.gameobject_mut(g) {
@@ -866,7 +874,9 @@ fn link_soldier(map: &mut Map, g: Guid, slot: usize) {
         leader,
         5.0,
         angle,
-        crate::game::data::scripts::GROUP_FORMATION | crate::game::data::scripts::GROUP_AGGRO_TOGETHER | crate::game::data::scripts::GROUP_EVADE_TOGETHER,
+        crate::game::data::scripts::GROUP_FORMATION
+            | crate::game::data::scripts::GROUP_AGGRO_TOGETHER
+            | crate::game::data::scripts::GROUP_EVADE_TOGETHER,
     );
 }
 
@@ -1181,8 +1191,7 @@ fn drop_silithyst(map: &mut Map, at: Vector3d) {
     go.spawn_guid = None;
     let g = map.add_gameobject(go);
     // A dropped mound lasts three minutes.
-    map.object_resets
-        .push((map.now + MOUND_LASTS, g, u32::MAX));
+    map.object_resets.push((map.now + MOUND_LASTS, g, u32::MAX));
 }
 
 #[cfg(test)]

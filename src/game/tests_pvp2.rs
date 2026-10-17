@@ -643,7 +643,10 @@ async fn a_beacon_left_a_minute_calls_down_its_gryphon_and_the_enemy_can_stop_on
     // Attacking cast does.
     b.send(CMSG_GAMEOBJ_USE { guid: stopped }).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let still = map.query(move |m| m.gameobject(stopped).is_some()).await.unwrap();
+    let still = map
+        .query(move |m| m.gameobject(stopped).is_some())
+        .await
+        .unwrap();
     assert!(still);
     let gb = b.guid;
     map.query(move |m| crate::game::map::battleground::opened(m, gb, stopped))

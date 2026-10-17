@@ -76,7 +76,9 @@ impl UnitBase {
         Self {
             max_health: f.get_u32(UNIT_FIELD_MAXHEALTH),
             max_mana: f.get_u32(UNIT_FIELD_MAXPOWER1),
-            resistances: std::array::from_fn(|i| f.get_u32(UNIT_FIELD_RESISTANCES + i as u16) as i32),
+            resistances: std::array::from_fn(|i| {
+                f.get_u32(UNIT_FIELD_RESISTANCES + i as u16) as i32
+            }),
             min_damage: f.get_f32(UNIT_FIELD_MINDAMAGE),
             max_damage: f.get_f32(UNIT_FIELD_MAXDAMAGE),
             min_ranged: f.get_f32(UNIT_FIELD_MINRANGEDDAMAGE),
@@ -145,7 +147,11 @@ pub const SKILL_DEFENSE: u32 = 95;
 pub fn gear(p: &Player, data: &GameData) -> Gear {
     use crate::game::store::BAG_PLAYER;
     let mut g = Gear::default();
-    for item in p.items.iter().filter(|i| i.bag == BAG_PLAYER && i.slot < 19) {
+    for item in p
+        .items
+        .iter()
+        .filter(|i| i.bag == BAG_PLAYER && i.slot < 19)
+    {
         let Some(t) = data.item(item.entry) else {
             continue;
         };
@@ -205,7 +211,8 @@ pub fn fits(h: &Holder, w: Option<&Weapon>) -> bool {
     let Some(w) = w else {
         return false;
     };
-    h.item_class == 2 && (h.item_subclass_mask <= 0 || h.item_subclass_mask & (1 << w.subclass) != 0)
+    h.item_class == 2
+        && (h.item_subclass_mask <= 0 || h.item_subclass_mask & (1 << w.subclass) != 0)
 }
 
 /// The sum of `kind` auras that apply to the weapon `w`.
@@ -228,7 +235,9 @@ fn speed_factor(amount: i32) -> f32 {
 fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
     a.effects()
         .filter(|(_, x)| kinds.contains(&x.kind))
-        .fold(1.0, |m, (h, x)| m * speed_factor(x.amount * h.stacks.max(1) as i32))
+        .fold(1.0, |m, (h, x)| {
+            m * speed_factor(x.amount * h.stacks.max(1) as i32)
+        })
 }
 
 /// Per-class rates for crit and dodge from agility at levels 1 and 60.
@@ -326,7 +335,8 @@ fn resistances(a: &Auras, base: [i32; 7], agility: u32, creature: bool) -> [i32;
                 })
                 .map(|(h, x)| x.amount * h.stacks.max(1) as i32)
                 .collect();
-            v.iter().copied().max().unwrap_or(0).max(0) + v.iter().copied().min().unwrap_or(0).min(0)
+            v.iter().copied().max().unwrap_or(0).max(0)
+                + v.iter().copied().min().unwrap_or(0).min(0)
         };
         let total = scaled + stat + a.sum_mask(AURA_MOD_RESISTANCE, bit) as f32 + exclusive as f32;
         let value = (total * a.product_mask(AURA_MOD_RESISTANCE_PCT, bit)) as i32;
@@ -372,8 +382,12 @@ pub fn player(p: &mut Player, data: &GameData) {
     let weapon_skill = skill_of(main_hand.as_ref());
     let ranged_skill = skill_of(g.ranged.as_ref());
     let defense = crate::game::map::skills::value(p, SKILL_DEFENSE).unwrap_or(level * 5)
-        + p.auras.sum_misc(AURA_MOD_SKILL, SKILL_DEFENSE as i32).max(0) as u32
-        + p.auras.sum_misc(AURA_MOD_SKILL_TALENT, SKILL_DEFENSE as i32).max(0) as u32;
+        + p.auras
+            .sum_misc(AURA_MOD_SKILL, SKILL_DEFENSE as i32)
+            .max(0) as u32
+        + p.auras
+            .sum_misc(AURA_MOD_SKILL_TALENT, SKILL_DEFENSE as i32)
+            .max(0) as u32;
     let knows_parry = p.spells.contains(&SPELL_PARRY);
     let knows_block = p.spells.contains(&SPELL_BLOCK);
     let knows_dual_wield = p.spells.contains(&SPELL_DUAL_WIELD);
@@ -429,8 +443,14 @@ pub fn player(p: &mut Player, data: &GameData) {
         let s = i as u16;
         f.set_u32(UNIT_FIELD_RESISTANCES + s, (*v).max(0) as u32);
         let diff = *v - g.resistances[i];
-        f.set_u32(PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE + s, diff.max(0) as u32);
-        f.set_u32(PLAYER_FIELD_RESISTANCEBUFFMODSNEGATIVE + s, (-diff).max(0) as u32);
+        f.set_u32(
+            PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE + s,
+            diff.max(0) as u32,
+        );
+        f.set_u32(
+            PLAYER_FIELD_RESISTANCEBUFFMODSNEGATIVE + s,
+            (-diff).max(0) as u32,
+        );
     }
     // Attack power.
     let mut ap_base = melee_attack_power(class, level, strength, agility);
@@ -444,7 +464,10 @@ pub fn player(p: &mut Player, data: &GameData) {
         }
         // Predatory Strikes: half, once or one and a half times the level
         // more in cat and bear form.
-        if matches!(form, auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR) {
+        if matches!(
+            form,
+            auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
+        ) {
             let pct = a
                 .effects()
                 .filter(|(h, x)| matches!(h.spell, 16972 | 16974 | 16975) && x.kind == AURA_DUMMY)
@@ -616,7 +639,9 @@ pub fn player(p: &mut Player, data: &GameData) {
     let spell_power = std::array::from_fn(|i| {
         a.effects()
             .filter(|(h, x)| {
-                x.kind == AURA_MOD_DAMAGE_DONE && (x.misc as u32) & (1 << i) != 0 && h.unrestricted()
+                x.kind == AURA_MOD_DAMAGE_DONE
+                    && (x.misc as u32) & (1 << i) != 0
+                    && h.unrestricted()
             })
             .map(|(h, x)| x.amount * h.stacks.max(1) as i32)
             .sum::<i32>()
@@ -663,7 +688,8 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
         f.set_u32(UNIT_FIELD_RESISTANCES + i as u16, (*v).max(0) as u32);
     }
     let ap_mods = a.sum(AURA_MOD_ATTACK_POWER);
-    let ap = ((b.attack_power as i32 + ap_mods) as f32 * a.product(AURA_MOD_ATTACK_POWER_PCT)).max(0.0);
+    let ap =
+        ((b.attack_power as i32 + ap_mods) as f32 * a.product(AURA_MOD_ATTACK_POWER_PCT)).max(0.0);
     f.set_u32(UNIT_FIELD_ATTACK_POWER, b.attack_power);
     f.set_u32(UNIT_FIELD_ATTACK_POWER_MODS, ap_mods.max(0) as u32);
     // vmangos's creature damage with attack power changed: seven tenths
@@ -677,9 +703,19 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
     f.set_f32(UNIT_FIELD_MINDAMAGE, (b.min_damage * ratio * pct).max(1.0));
     f.set_f32(UNIT_FIELD_MAXDAMAGE, (b.max_damage * ratio * pct).max(1.0));
     let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
-    let attack = if b.attack_time > 0 { b.attack_time } else { 2000 };
-    f.set_u32(UNIT_FIELD_BASEATTACKTIME, ((attack as f32 * haste) as u32).max(100));
-    f.set_u32(UNIT_FIELD_BASEATTACKTIME + 1, ((attack as f32 * haste) as u32).max(100));
+    let attack = if b.attack_time > 0 {
+        b.attack_time
+    } else {
+        2000
+    };
+    f.set_u32(
+        UNIT_FIELD_BASEATTACKTIME,
+        ((attack as f32 * haste) as u32).max(100),
+    );
+    f.set_u32(
+        UNIT_FIELD_BASEATTACKTIME + 1,
+        ((attack as f32 * haste) as u32).max(100),
+    );
     let cast = period_multiplier(a, &[AURA_MOD_CASTING_SPEED]);
     f.set_f32(UNIT_MOD_CAST_SPEED, cast);
     let level = f.get_u32(UNIT_FIELD_LEVEL);
@@ -690,8 +726,9 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
         parry: (5.0 + a.sum(AURA_MOD_PARRY_PERCENT) as f32).max(0.0),
         block: (5.0 + a.sum(AURA_MOD_BLOCK_PERCENT) as f32).max(0.0),
         spell_crit: std::array::from_fn(|i| {
-            (a.sum(AURA_MOD_SPELL_CRIT_CHANCE) + a.sum_mask(AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL, 1 << i))
-                .max(0) as f32
+            (a.sum(AURA_MOD_SPELL_CRIT_CHANCE)
+                + a.sum_mask(AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL, 1 << i))
+            .max(0) as f32
         }),
         hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
         ranged_hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
@@ -777,12 +814,18 @@ fn speed(map: &mut Map, g: Guid) {
         return;
     };
     let pct = c.auras.speed_percent(mounted);
-    let base = if c.base.run_speed > 0.0 { c.base.run_speed } else { 7.0 };
+    let base = if c.base.run_speed > 0.0 {
+        c.base.run_speed
+    } else {
+        7.0
+    };
     // Wounds slow it, past the auras.
     let speed = (base * (1.0 + pct as f32 / 100.0) * c.wounded).max(0.5);
     if (speed - c.speeds.run).abs() > 0.01 {
         c.speeds.run = speed;
-        if let Some(frame) = crate::game::conn::encode(&SMSG_SPLINE_SET_RUN_SPEED { guid: g, speed }) {
+        if let Some(frame) =
+            crate::game::conn::encode(&SMSG_SPLINE_SET_RUN_SPEED { guid: g, speed })
+        {
             map.send_to_observers(g, &frame, false);
         }
     }

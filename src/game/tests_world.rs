@@ -140,7 +140,8 @@ fn data() -> GameData {
         .insert(GIVER, npc(GIVER, "Giver", 0x1 | 0x2, 50));
     d.creature_templates
         .insert(ESCORTEE, npc(ESCORTEE, "Escortee", 0x2, 0));
-    d.creature_templates.insert(3011, npc(3011, "Dressed Up", 0, 0));
+    d.creature_templates
+        .insert(3011, npc(3011, "Dressed Up", 0, 0));
     let spawn = |guid, entry, dx: f32| CreatureSpawn {
         guid,
         entries: vec![entry],
@@ -154,7 +155,11 @@ fn data() -> GameData {
     };
     d.creature_spawns.insert(
         0,
-        vec![spawn(30, GIVER, 1.5), spawn(31, ESCORTEE, -1.5), spawn(32, 3011, 3.0)],
+        vec![
+            spawn(30, GIVER, 1.5),
+            spawn(31, ESCORTEE, -1.5),
+            spawn(32, 3011, 3.0),
+        ],
     );
     d.world.event_creatures.insert(
         32,
@@ -175,7 +180,9 @@ fn data() -> GameData {
     };
     d.npc.quests.insert(TIMED_QUEST, quest(TIMED_QUEST, 1, 0));
     d.npc.quests.insert(EVENT_QUEST, quest(EVENT_QUEST, 0, 0));
-    d.npc.quests.insert(ESCORT_QUEST, quest(ESCORT_QUEST, 0, 0x4));
+    d.npc
+        .quests
+        .insert(ESCORT_QUEST, quest(ESCORT_QUEST, 0, 0x4));
     d.npc
         .creature_starts
         .insert(GIVER, vec![TIMED_QUEST, EVENT_QUEST]);
@@ -246,7 +253,10 @@ async fn world_states_come_on_login_and_with_each_zone() {
         _ => None,
     };
     a.wait_for("the login's world states", has).await;
-    a.send(CMSG_ZONEUPDATE { area: Area::Westfall0 }).await;
+    a.send(CMSG_ZONEUPDATE {
+        area: Area::Westfall0,
+    })
+    .await;
     let area = a.wait_for("a new zone's world states", has).await;
     assert_eq!(area, Area::Westfall0);
     // A change goes out to everyone.
@@ -260,7 +270,9 @@ async fn world_states_come_on_login_and_with_each_zone() {
 
 fn said(m: &ServerOpcodeMessage) -> Option<(Language, String)> {
     match m {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if matches!(c.chat_type, SMSG_MESSAGECHAT_ChatType::Say { .. }) => {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c)
+            if matches!(c.chat_type, SMSG_MESSAGECHAT_ChatType::Say { .. }) =>
+        {
             Some((c.language, c.message.clone()))
         }
         _ => None,
@@ -295,7 +307,11 @@ async fn players_speak_the_languages_they_know() {
     a.send(say(Language::Orcish)).await;
     a.send(say(Language::Common)).await;
     let heard = b.wait_for("Alice's Common", said).await;
-    assert_eq!(heard, (Language::Common, "in Common".to_owned()), "her Orcish isn't heard");
+    assert_eq!(
+        heard,
+        (Language::Common, "in Common".to_owned()),
+        "her Orcish isn't heard"
+    );
     // Cursed, she speaks Orcish whatever she chooses.
     map.query(move |m| {
         let s = m.realm.data.spells.get(CURSE_OF_TONGUES).cloned().unwrap();
@@ -343,7 +359,11 @@ async fn an_event_brings_its_quest_and_its_looks() {
     let g = a.guid;
     let giver = guid::unit(GIVER, 30);
     let offered = move |m: &mut Map| crate::game::map::quests::giver_quests(m, g, giver).len();
-    assert_eq!(map.query(offered).await, Some(1), "the event's quest waits for it");
+    assert_eq!(
+        map.query(offered).await,
+        Some(1),
+        "the event's quest waits for it"
+    );
     let dressed = guid::unit(3011, 32);
     let display = move |m: &mut Map| {
         m.creatures
@@ -360,7 +380,8 @@ async fn an_event_brings_its_quest_and_its_looks() {
     // Over, it looks itself again.
     let off = ahash::AHashSet::new();
     *realm.social.events.lock() = off.clone();
-    map.query(move |m| crate::game::events::apply(m, &off)).await;
+    map.query(move |m| crate::game::events::apply(m, &off))
+        .await;
     assert_eq!(map.query(display).await.flatten(), before);
     let _ = dressed;
 }
@@ -439,7 +460,10 @@ async fn charges_are_spent_and_cooldowns_kept() {
     assert_eq!(left, Some(1), "a potion drunk is gone");
     // The category's cooldown holds the next.
     map.query(use_item(POTION)).await;
-    assert_eq!(map.query(move |m| m.players[&g].count_of(POTION)).await, Some(1));
+    assert_eq!(
+        map.query(move |m| m.players[&g].count_of(POTION)).await,
+        Some(1)
+    );
     // A wand's charges run down to nothing; the wand stays.
     let charges = move |m: &mut Map| {
         m.players[&g]
@@ -453,7 +477,10 @@ async fn charges_are_spent_and_cooldowns_kept() {
     map.query(use_item(WAND)).await;
     map.query(use_item(WAND)).await;
     assert_eq!(map.query(charges).await.flatten(), Some(0));
-    assert_eq!(map.query(move |m| m.players[&g].count_of(WAND)).await, Some(1));
+    assert_eq!(
+        map.query(move |m| m.players[&g].count_of(WAND)).await,
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -501,14 +528,23 @@ async fn keys_go_on_the_keyring_and_arrows_in_the_quiver() {
             crate::game::map::inventory::add_item(m, g, ARROW, 50, false).unwrap();
             crate::game::map::inventory::add_item(m, g, BOP_RING, 1, false).unwrap();
             let p = &m.players[&g];
-            let where_ = |e| p.items.iter().find(|i| i.entry == e).map(|i| (i.bag, i.slot));
+            let where_ = |e| {
+                p.items
+                    .iter()
+                    .find(|i| i.entry == e)
+                    .map(|i| (i.bag, i.slot))
+            };
             (where_(KEY), where_(ARROW), where_(BOP_RING))
         })
         .await
         .unwrap();
     assert_eq!(places.0, Some((BAG_PLAYER, 81)), "the keyring");
     assert_eq!(places.1, Some((19, 0)), "the quiver");
-    assert_ne!(places.2.map(|p| p.0), Some(19), "a ring isn't for the quiver");
+    assert_ne!(
+        places.2.map(|p| p.0),
+        Some(19),
+        "a ring isn't for the quiver"
+    );
 }
 
 #[tokio::test]
@@ -519,14 +555,19 @@ async fn a_timed_quest_fails_when_its_time_is_up() {
     map.query(move |m| crate::game::map::quests::accept(m, g, giver, TIMED_QUEST))
         .await;
     a.wait_for("SMSG_QUESTUPDATE_FAILEDTIMER", |m| match m {
-        ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(f) if f.quest_id == TIMED_QUEST => Some(()),
+        ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(f) if f.quest_id == TIMED_QUEST => {
+            Some(())
+        }
         _ => None,
     })
     .await;
     let failed = map
         .query(move |m| {
             let p = &m.players[&g];
-            p.journal.log.iter().any(|l| l.quest == TIMED_QUEST && l.failed)
+            p.journal
+                .log
+                .iter()
+                .any(|l| l.quest == TIMED_QUEST && l.failed)
         })
         .await;
     assert_eq!(failed, Some(true));
@@ -663,10 +704,22 @@ async fn the_scourge_invasion_counts_its_victories() {
         let s = realm.social.invasion.lock();
         assert_eq!(s.active.len(), 6, "the first wave strikes everywhere");
     }
-    assert!(realm.social.events.lock().contains(&crate::game::invasion::INVASION) || {
-        // The event is driven; with no row for it in this world it can't run.
-        realm.social.driven_events.lock().get(&crate::game::invasion::INVASION) == Some(&true)
-    });
+    assert!(
+        realm
+            .social
+            .events
+            .lock()
+            .contains(&crate::game::invasion::INVASION)
+            || {
+                // The event is driven; with no row for it in this world it can't run.
+                realm
+                    .social
+                    .driven_events
+                    .lock()
+                    .get(&crate::game::invasion::INVASION)
+                    == Some(&true)
+            }
+    );
     assert!(
         crate::game::map::world_states::global(&realm)
             .iter()
@@ -701,17 +754,28 @@ fn the_real_world_data_loads() {
     assert!(!d.world.event_creatures.is_empty());
     assert!(d.world.script_waypoints.len() > 30);
     assert!(d.world.animations.len() > 5);
-    assert!(d.events.get(&4).is_some_and(|e| e.hardcoded), "the Darkmoon Faire");
+    assert!(
+        d.events.get(&4).is_some_and(|e| e.hardcoded),
+        "the Darkmoon Faire"
+    );
     let mut walkable = 0;
     for e in crate::game::map::escorts::catalog::ESCORTS {
-        assert!(d.npc.quests.contains_key(&e.quest), "escort quest {}", e.quest);
+        assert!(
+            d.npc.quests.contains_key(&e.quest),
+            "escort quest {}",
+            e.quest
+        );
         if e.path.is_some() || d.world.script_waypoints.contains_key(&e.entry) {
             walkable += 1;
         }
     }
     assert!(walkable >= 25, "{walkable} escorts with a path");
     for f in crate::game::map::escorts::catalog::FOLLOWERS {
-        assert!(d.npc.quests.contains_key(&f.quest), "follower quest {}", f.quest);
+        assert!(
+            d.npc.quests.contains_key(&f.quest),
+            "follower quest {}",
+            f.quest
+        );
     }
 }
 
@@ -774,14 +838,19 @@ async fn an_elemental_rift_calls_out_its_invaders() {
         .query(|m| {
             m.rifts_checked_at = None;
             crate::game::elemental::update(m);
-            m.rifts.values().map(|r| r.invaders.clone()).next().unwrap_or_default()
+            m.rifts
+                .values()
+                .map(|r| r.invaders.clone())
+                .next()
+                .unwrap_or_default()
         })
         .await
         .unwrap();
     assert_eq!(invaders.len(), 3, "three invaders at the first stage");
     // One slain counts against the element.
     let first = invaders[0];
-    map.query(move |m| crate::game::map::combat::kill(m, g, first)).await;
+    map.query(move |m| crate::game::map::combat::kill(m, g, first))
+        .await;
     assert_eq!(realm.social.elemental.lock().kills[0], 1);
 }
 
@@ -835,7 +904,11 @@ async fn twenty_fireworks_wake_omen() {
     assert!(!out[18] && out[19], "Omen rises at the twentieth");
     assert!(realm.social.omen.lock().minions);
     assert_eq!(
-        realm.social.driven_events.lock().get(&crate::game::omen::MINIONS_OF_OMEN),
+        realm
+            .social
+            .driven_events
+            .lock()
+            .get(&crate::game::omen::MINIONS_OF_OMEN),
         Some(&true)
     );
 }

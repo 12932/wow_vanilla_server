@@ -49,7 +49,8 @@ pub fn bound(item: &Item) -> bool {
 
 fn bind(item: &mut Item) {
     let flags = item.fields.get_u32(ITEM_FIELD_FLAGS);
-    item.fields.set_u32(ITEM_FIELD_FLAGS, flags | ITEM_FLAG_SOULBOUND);
+    item.fields
+        .set_u32(ITEM_FIELD_FLAGS, flags | ITEM_FLAG_SOULBOUND);
 }
 
 /// A new item in a player's hands: one bound on pickup is theirs.
@@ -64,7 +65,10 @@ pub fn on_create(data: &GameData, item: &mut Item) {
 
 /// An item put on: one bound on equip is theirs now.
 pub fn on_equip(data: &GameData, item: &mut Item) {
-    if data.item(item.entry).is_some_and(|t| t.bonding == BIND_ON_EQUIP) {
+    if data
+        .item(item.entry)
+        .is_some_and(|t| t.bonding == BIND_ON_EQUIP)
+    {
         bind(item);
     }
 }
@@ -118,7 +122,9 @@ pub fn carry_slots(data: &GameData, p: &Player, t: Option<&ItemTemplate>) -> Vec
     use crate::game::map::inventory::{BAG_END, BAG_START, PACK_END, PACK_START};
     let mut out = Vec::new();
     if t.is_some_and(is_key) {
-        out.extend((KEYRING_START..KEYRING_START + keyring_size(p.level())).map(|s| (BAG_PLAYER, s)));
+        out.extend(
+            (KEYRING_START..KEYRING_START + keyring_size(p.level())).map(|s| (BAG_PLAYER, s)),
+        );
     }
     let special: Vec<u8> = (BAG_START..BAG_END)
         .filter(|b| bag_family(data, p, *b) != 0)
@@ -149,8 +155,7 @@ pub fn check_use(map: &Map, player: Guid, item: Guid, index: usize) -> Option<u8
     let now = map.now;
     let c = &p.caster;
     if s.category > 0
-        && c
-            .category_cooldowns
+        && c.category_cooldowns
             .get(&s.category)
             .is_some_and(|t| *t > now)
     {
@@ -231,10 +236,9 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
     };
     let s = t.spells[index];
     if s.cooldown > 0 {
-        p.caster.cooldowns.insert(
-            spell,
-            now + Duration::from_millis(s.cooldown.max(0) as u64),
-        );
+        p.caster
+            .cooldowns
+            .insert(spell, now + Duration::from_millis(s.cooldown.max(0) as u64));
     }
     if s.category > 0 && s.category_cooldown > 0 {
         p.caster.category_cooldowns.insert(
@@ -243,8 +247,10 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
         );
     }
     if s.cooldown > 0 || s.category_cooldown > 0 {
-        p.outbound
-            .send(&SMSG_ITEM_COOLDOWN { guid: item, id: spell });
+        p.outbound.send(&SMSG_ITEM_COOLDOWN {
+            guid: item,
+            id: spell,
+        });
     }
     if t.bonding == BIND_ON_USE {
         bind(&mut p.items[i]);

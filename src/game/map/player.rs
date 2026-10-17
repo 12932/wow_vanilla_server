@@ -573,17 +573,20 @@ impl Player {
                 t.transport.orientation,
             )
         });
-        row.state.flight = self.flight.as_ref().map(|f| crate::game::store::SavedFlight {
-            map: self.row.map,
-            points: f
-                .walk
-                .remaining(now)
-                .into_iter()
-                .map(|p| (p.x, p.y, p.z))
-                .collect(),
-            destination: f.destination,
-            mount: f.mount,
-        });
+        row.state.flight = self
+            .flight
+            .as_ref()
+            .map(|f| crate::game::store::SavedFlight {
+                map: self.row.map,
+                points: f
+                    .walk
+                    .remaining(now)
+                    .into_iter()
+                    .map(|p| (p.x, p.y, p.z))
+                    .collect(),
+                destination: f.destination,
+                mount: f.mount,
+            });
         row.state.quests = self.journal.clone();
         row.state.auras = crate::game::map::spells::cooldowns::saved_auras(self, now);
         row.state.cooldowns = crate::game::map::spells::cooldowns::saved_cooldowns(self, now);

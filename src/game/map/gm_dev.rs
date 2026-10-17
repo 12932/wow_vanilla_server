@@ -203,7 +203,10 @@ fn addquest(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
 
 fn learn(map: &mut Map, g: Guid, args: &[&str], learn: bool) -> Option<String> {
     let Some(spell) = num::<u32>(args.first()) else {
-        return Some(format!("Usage: .{} <spell_id>", if learn { "learn" } else { "unlearn" }));
+        return Some(format!(
+            "Usage: .{} <spell_id>",
+            if learn { "learn" } else { "unlearn" }
+        ));
     };
     let Some(name) = map.realm.data.spells.get(spell).map(|s| s.name.clone()) else {
         return Some(format!("No spell {spell}."));
@@ -252,7 +255,9 @@ fn kill(map: &mut Map, g: Guid) -> Option<String> {
     if map.unit_view(t).is_none_or(|u| !u.alive) || t == g {
         return Some("Select a living unit.".into());
     }
-    let health = map.unit_fields(t).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
+    let health = map
+        .unit_fields(t)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
     if guid::is_unit(t) {
         crate::game::map::ai::attacked(map, t, g);
     }
@@ -286,7 +291,11 @@ fn respawn(map: &mut Map, g: Guid) -> Option<String> {
 /// `.move [x y z]`: the selected creature to the GM, or to a place.
 fn move_target(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     let t = selected(map, g);
-    let to = match (num::<f32>(args.first()), num::<f32>(args.get(1)), num::<f32>(args.get(2))) {
+    let to = match (
+        num::<f32>(args.first()),
+        num::<f32>(args.get(1)),
+        num::<f32>(args.get(2)),
+    ) {
         (Some(x), Some(y), Some(z)) => Vector3d { x, y, z },
         _ => map.players.get(&g)?.position(),
     };
@@ -387,8 +396,8 @@ fn modify(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
 fn rested(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     let to = player_target(map, g);
     let p = map.players.get_mut(&to)?;
-    let amount = num::<f32>(args.first())
-        .unwrap_or_else(|| p.fields.get_u32(PLAYER_NEXT_LEVEL_XP) as f32);
+    let amount =
+        num::<f32>(args.first()).unwrap_or_else(|| p.fields.get_u32(PLAYER_NEXT_LEVEL_XP) as f32);
     crate::game::map::rest::add_bonus(p, amount);
     Some(format!("Rested XP: {:.0}.", p.row.state.rest_bonus))
 }
@@ -642,7 +651,10 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             p.caster.category_cooldowns.clear();
             p.caster.gcd_until = None;
             for id in &spells {
-                p.outbound.send(&SMSG_CLEAR_COOLDOWN { id: *id, target: to });
+                p.outbound.send(&SMSG_CLEAR_COOLDOWN {
+                    id: *id,
+                    target: to,
+                });
             }
             Some(format!("Cleared {} cooldowns.", spells.len()))
         }
@@ -662,12 +674,23 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                 .lock()
                 .iter()
                 .map(|e| {
-                    let name = data.events.get(e).map(|x| x.name.clone()).unwrap_or_default();
+                    let name = data
+                        .events
+                        .get(e)
+                        .map(|x| x.name.clone())
+                        .unwrap_or_default();
                     format!("{e} {name}")
                 })
                 .collect();
             on.sort();
-            Some(format!("Events on: {}", if on.is_empty() { "none".into() } else { on.join(", ") }))
+            Some(format!(
+                "Events on: {}",
+                if on.is_empty() {
+                    "none".into()
+                } else {
+                    on.join(", ")
+                }
+            ))
         }
         ["events", action @ ("start" | "stop"), id] => event(map, &[*action, *id]),
         ["explore"] => {
@@ -688,7 +711,10 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let t = selected(map, g);
             let t = if t.is_zero() { g } else { t };
             let at = map.position_of(t)?;
-            Some(format!("{t}: {:.2}, {:.2}, {:.2} in {}", at.x, at.y, at.z, map.key))
+            Some(format!(
+                "{t}: {:.2}, {:.2}, {:.2} in {}",
+                at.x, at.y, at.z, map.key
+            ))
         }
         ["professions"] => {
             let to = player_target(map, g);
@@ -750,7 +776,14 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                 .filter(|r| r.maps().contains(&map.key.map))
                 .map(|r| format!("{} ({} s)", r.entry, r.period / 1000))
                 .collect();
-            Some(format!("Transports here: {}", if here.is_empty() { "none".into() } else { here.join(", ") }))
+            Some(format!(
+                "Transports here: {}",
+                if here.is_empty() {
+                    "none".into()
+                } else {
+                    here.join(", ")
+                }
+            ))
         }
         ["random", "equipment"] => random_equipment(map, g),
         _ => Some(format!("Usage: {HELP}")),
@@ -798,7 +831,11 @@ fn reputation(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             .iter()
             .find(|s| s.faction == f)
             .map_or(0, |s| s.flags);
-        let name = data.misc.faction(f).map(|d| d.name.clone()).unwrap_or_default();
+        let name = data
+            .misc
+            .faction(f)
+            .map(|d| d.name.clone())
+            .unwrap_or_default();
         format!(
             "{f} {name}: {} (rank {}), flags 0x{flags:X}",
             rep::standing(p, &data, f),

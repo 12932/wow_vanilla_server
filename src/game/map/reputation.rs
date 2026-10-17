@@ -166,7 +166,8 @@ pub fn send_login(p: &mut Player, data: &GameData) {
     p.outbound.send_frame(initialize_frame(p, data));
     p.outbound.send_frame(forced_reactions_frame(p));
     let watched = p.row.state.watched_faction.unwrap_or(u32::MAX);
-    p.fields.set_u32(PLAYER_FIELD_WATCHED_FACTION_INDEX, watched);
+    p.fields
+        .set_u32(PLAYER_FIELD_WATCHED_FACTION_INDEX, watched);
 }
 
 fn standing_frame(changes: &[(u32, i32)]) -> Arc<[u8]> {
@@ -243,7 +244,12 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
         .log
         .iter()
         .map(|l| l.quest)
-        .filter(|q| data.npc.quests.get(q).is_some_and(|q| q.rep_objective.0 != 0))
+        .filter(|q| {
+            data.npc
+                .quests
+                .get(q)
+                .is_some_and(|q| q.rep_objective.0 != 0)
+        })
         .collect();
     for q in waiting {
         crate::game::map::quests::check(map, g, q);
@@ -343,7 +349,11 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
                 grants.push((r.faction, delta, true));
             }
             if r.team_award
-                && let Some(parent) = data.misc.faction(r.faction).map(|d| d.parent).filter(|x| *x != 0)
+                && let Some(parent) = data
+                    .misc
+                    .faction(r.faction)
+                    .map(|d| d.parent)
+                    .filter(|x| *x != 0)
             {
                 grants.push((parent, delta / 2, false));
             }
@@ -560,7 +570,12 @@ pub fn meets(p: &Player, data: &GameData, faction: u32, required_rank: u32) -> b
 /// The player's choice of a faction to be at war with (`CMSG_SET_FACTION_ATWAR`).
 pub fn set_at_war(map: &mut Map, g: Guid, index: u32, war: bool) {
     let data = map.realm.data.clone();
-    let Some(def) = data.misc.faction_by_index.get(&index).and_then(|f| data.misc.faction(*f)) else {
+    let Some(def) = data
+        .misc
+        .faction_by_index
+        .get(&index)
+        .and_then(|f| data.misc.faction(*f))
+    else {
         return;
     };
     let Some(p) = map.players.get_mut(&g) else {
@@ -583,7 +598,12 @@ pub fn set_at_war(map: &mut Map, g: Guid, index: u32, war: bool) {
 /// `CMSG_SET_FACTION_INACTIVE`.
 pub fn set_inactive(map: &mut Map, g: Guid, index: u32, inactive: bool) {
     let data = map.realm.data.clone();
-    let Some(def) = data.misc.faction_by_index.get(&index).and_then(|f| data.misc.faction(*f)) else {
+    let Some(def) = data
+        .misc
+        .faction_by_index
+        .get(&index)
+        .and_then(|f| data.misc.faction(*f))
+    else {
         return;
     };
     let Some(p) = map.players.get_mut(&g) else {
@@ -658,8 +678,10 @@ pub fn handle_raw(map: &mut Map, g: Guid, opcode: u16, body: &[u8]) -> bool {
             let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
             let index = (id < 64).then_some(id);
             p.row.state.watched_faction = index;
-            p.fields
-                .set_u32(PLAYER_FIELD_WATCHED_FACTION_INDEX, index.unwrap_or(u32::MAX));
+            p.fields.set_u32(
+                PLAYER_FIELD_WATCHED_FACTION_INDEX,
+                index.unwrap_or(u32::MAX),
+            );
         }
         return true;
     }

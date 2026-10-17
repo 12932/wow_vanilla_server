@@ -77,9 +77,15 @@ pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
     use crate::game::map::auras::{
         AURA_MOD_CHARM, AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_POSSESS, AURA_MOD_STUN,
     };
-    let held = [AURA_MOD_STUN, AURA_MOD_FEAR, AURA_MOD_CONFUSE, AURA_MOD_CHARM, AURA_MOD_POSSESS]
-        .iter()
-        .any(|a| p.auras.has(*a));
+    let held = [
+        AURA_MOD_STUN,
+        AURA_MOD_FEAR,
+        AURA_MOD_CONFUSE,
+        AURA_MOD_CHARM,
+        AURA_MOD_POSSESS,
+    ]
+    .iter()
+    .any(|a| p.auras.has(*a));
     if p.flight.is_some() || held || crate::game::map::combat::hostile(map, npc, player) {
         return None;
     }
@@ -383,12 +389,18 @@ fn skill_step(data: &crate::game::data::GameData, teach: u32) -> Option<(u32, u3
 /// Whether a spell is for a player's class and race (`SkillLineAbility`).
 fn fits_class_race(data: &crate::game::data::GameData, teach: u32, class: u8, race: u8) -> bool {
     let learned = crate::game::map::spells::learns(data, teach);
-    let Some(lines) = data.spells.skill_abilities.get(&learned).filter(|l| !l.is_empty()) else {
+    let Some(lines) = data
+        .spells
+        .skill_abilities
+        .get(&learned)
+        .filter(|l| !l.is_empty())
+    else {
         return true;
     };
     let (class_bit, race_bit) = (1u32 << (class.max(1) - 1), 1u32 << (race.max(1) - 1));
     lines.iter().any(|a| {
-        (a.class_mask == 0 || a.class_mask & class_bit != 0) && (a.race_mask == 0 || a.race_mask & race_bit != 0)
+        (a.class_mask == 0 || a.class_mask & class_bit != 0)
+            && (a.race_mask == 0 || a.race_mask & race_bit != 0)
     })
 }
 
@@ -418,7 +430,8 @@ fn teaching(
     } else {
         TrainerSpellState::Green
     };
-    let first_profession = step.is_some_and(|(skill, max)| PRIMARY_PROFESSIONS.contains(&skill) && max == 75);
+    let first_profession =
+        step.is_some_and(|(skill, max)| PRIMARY_PROFESSIONS.contains(&skill) && max == 75);
     let primaries = PRIMARY_PROFESSIONS
         .iter()
         .filter(|sk| skills::value(p, **sk).is_some())
@@ -799,7 +812,10 @@ fn taxi_refusal(map: &Map, player: Guid, route: &[u32]) -> Option<ActivateTaxiRe
     let p = map.players.get(&player)?;
     let busy = p.death != crate::game::map::death::Death::Alive
         || p.flight.is_some()
-        || p.fields.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT)
+        || p.fields.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
         || p.caster.casting.is_some();
     if busy {
         return Some(ActivateTaxiReply::PlayerBusy);
@@ -884,7 +900,10 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    if route[1..].iter().any(|n| !knows_node(&p.row.state.taxi_mask, *n)) {
+    if route[1..]
+        .iter()
+        .any(|n| !knows_node(&p.row.state.taxi_mask, *n))
+    {
         p.outbound.send(&SMSG_ACTIVATETAXIREPLY {
             reply: ActivateTaxiReply::NotVisited,
         });

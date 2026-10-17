@@ -116,8 +116,7 @@ fn ticket_message(realm: &Realm, player: u32) -> SMSG_GMTICKET_GETTICKET {
                 days_since_ticket_creation: days(t.modified, now),
                 days_since_oldest_ticket_creation: days(tickets.oldest_open().unwrap_or(now), now),
                 days_since_last_updated: days(tickets.changed.max(t.created), now),
-                escalation_status:
-                    GmTicketEscalationStatus::GmticketAssignedtogmStatusNotAssigned,
+                escalation_status: GmTicketEscalationStatus::GmticketAssignedtogmStatusNotAssigned,
                 read_by_gm: t.viewed,
             },
         },
@@ -149,7 +148,11 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
         C::CMSG_GMTICKET_UPDATETEXT(m) => update(map, g, m.ticket_type.as_int(), m.message),
         C::CMSG_GMTICKET_DELETETICKET => abandon(map, g),
         C::CMSG_GMSURVEY_SUBMIT(m) => {
-            let name = map.players.get(&g).map(|p| p.name.to_string()).unwrap_or_default();
+            let name = map
+                .players
+                .get(&g)
+                .map(|p| p.name.to_string())
+                .unwrap_or_default();
             tracing::info!(
                 "GM survey {} from {name}: {:?} {}",
                 m.survey_id,
@@ -306,7 +309,8 @@ pub fn command(map: &mut Map, _gm: Guid, args: &[&str]) -> String {
     match args {
         [] | ["list"] => {
             let tickets = realm.social.tickets.lock();
-            let mut open: Vec<&Ticket> = tickets.tickets.values().filter(|t| !t.completed).collect();
+            let mut open: Vec<&Ticket> =
+                tickets.tickets.values().filter(|t| !t.completed).collect();
             open.sort_by_key(|t| t.id);
             if open.is_empty() {
                 return "No open tickets.".into();

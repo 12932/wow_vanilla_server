@@ -2,7 +2,6 @@
 //! and a rogue's spells at 60, talents, crits, resists and line of sight,
 //! and how many of the spells players can have wvs runs.
 
-
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 

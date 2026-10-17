@@ -29,12 +29,12 @@ mod summon;
 mod totems;
 mod wild;
 
+/// A pet sent at a target, or stopped where it is: for scripts.
+pub use ai::{attack as attack_target, stop as stop_where};
 pub use control::{button, handle, send_spells};
 pub use hunter::{NPC_FLAG_STABLEMASTER, list_stable, pet_xp_to_level, untrain_offer};
 pub use summon::{dismiss, spellbook, unsummon};
 pub use wild::remove_guardians;
-/// A pet sent at a target, or stopped where it is: for scripts.
-pub use ai::{attack as attack_target, stop as stop_where};
 
 // Spell effects that make or touch pets.
 pub const EFFECT_SUMMON: u32 = 28;

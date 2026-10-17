@@ -346,7 +346,10 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         return Some(Exclusive::Shapeshift);
     }
     if s.id == 13161
-        || (s.family_name == FAMILY_HUNTER && s.spell_icon != 0 && active_icon(s) == 122 && s.id != 75)
+        || (s.family_name == FAMILY_HUNTER
+            && s.spell_icon != 0
+            && active_icon(s) == 122
+            && s.id != 75)
     {
         return Some(Exclusive::HunterAspect);
     }
@@ -420,16 +423,9 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         }
     }
     if s.family_name != 13 {
-        let only = |a: u32| {
-            aura(a)
-                && s
-                    .effects
-                    .iter()
-                    .all(|e| e.effect != 6 || e.aura == a)
-        };
+        let only = |a: u32| aura(a) && s.effects.iter().all(|e| e.effect != 6 || e.aura == a);
         if only(AURA_MOD_HASTE)
-            && s
-                .effects
+            && s.effects
                 .iter()
                 .any(|e| e.aura == AURA_MOD_HASTE && e.base_points + e.base_dice < 0)
         {
@@ -898,15 +894,11 @@ pub fn apply_spell(
         };
         // The same spell from the same caster and item: refreshed, and a
         // stack more.
-        if let Some(i) = a
-            .holders
-            .iter()
-            .position(|h| {
-                h.spell == spell.id
-                    && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
-                    && h.item == ctx.item
-            })
-        {
+        if let Some(i) = a.holders.iter().position(|h| {
+            h.spell == spell.id
+                && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
+                && h.item == ctx.item
+        }) {
             let old = &mut a.holders[i];
             let stacks = if spell.stack_amount > 1 {
                 (old.stacks + 1).min(spell.stack_amount)
@@ -983,8 +975,14 @@ pub fn apply_spell(
                 .unwrap_or_else(|| vec![false; MAX_SLOTS]);
             let a = auras(map, target).expect("the unit is here");
             a.holders[index].slot.or(kept_slot).or_else(|| {
-                let range = if pos { 0..POSITIVE_SLOTS } else { POSITIVE_SLOTS..MAX_SLOTS };
-                range.into_iter().find(|i| !a.slot_taken(*i) && !fields_taken[*i])
+                let range = if pos {
+                    0..POSITIVE_SLOTS
+                } else {
+                    POSITIVE_SLOTS..MAX_SLOTS
+                };
+                range
+                    .into_iter()
+                    .find(|i| !a.slot_taken(*i) && !fields_taken[*i])
             })
         };
         // All slots of its kind taken: the one of least worth gives way.
@@ -1002,11 +1000,17 @@ pub fn apply_spell(
             };
             slot = old.slot;
             remove_where(map, target, |h| {
-                h.spell == old.spell && h.caster == old.caster && h.item == old.item && h.slot == old.slot
+                h.spell == old.spell
+                    && h.caster == old.caster
+                    && h.item == old.item
+                    && h.slot == old.slot
             });
             let Some(found) = auras(map, target).and_then(|a| {
                 a.holders.iter().position(|h| {
-                    h.spell == spell.id && h.caster == caster && h.item == ctx.item && h.slot.is_none()
+                    h.spell == spell.id
+                        && h.caster == caster
+                        && h.item == ctx.item
+                        && h.slot.is_none()
                 })
             }) else {
                 return Ok(());
@@ -1084,8 +1088,7 @@ fn cross_caster_coexist(s: &SpellTemplate, h: &Holder, effects: &[(usize, i32)])
         return true;
     }
     effects.iter().all(|(i, _)| {
-        !h.effects.iter().any(|x| x.effect as usize == *i)
-            || PERSONAL.contains(&s.effects[*i].aura)
+        !h.effects.iter().any(|x| x.effect as usize == *i) || PERSONAL.contains(&s.effects[*i].aura)
     })
 }
 
@@ -1187,7 +1190,10 @@ fn replaces(
 
 /// The slot fields for holder `index` of `target`.
 fn write_slot(map: &mut Map, target: Guid, index: usize) {
-    let Some(h) = auras(map, target).and_then(|a| a.holders.get(index)).cloned() else {
+    let Some(h) = auras(map, target)
+        .and_then(|a| a.holders.get(index))
+        .cloned()
+    else {
         return;
     };
     let Some(slot) = h.slot else {
@@ -1226,7 +1232,10 @@ fn set_slot_fields(
     let flags_word = UNIT_FIELD_AURAFLAGS + slot / 8;
     let shift = (slot % 8) * 4;
     let old = f.get_u32(flags_word);
-    f.set_u32(flags_word, (old & !(0xF << shift)) | ((flags & 0xF) << shift));
+    f.set_u32(
+        flags_word,
+        (old & !(0xF << shift)) | ((flags & 0xF) << shift),
+    );
     let byte = (slot % 4) as u8;
     f.set_byte(
         UNIT_FIELD_AURALEVELS + slot / 4,
@@ -1508,8 +1517,9 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::combat::stop_attack(map, target);
                 if let Some(p) = map.players.get(&target) {
                     p.outbound.send_frame(
-                        crate::game::data::items::Body::default()
-                            .frame(crate::game::map::spells::class_scripts::SMSG_FEIGN_DEATH_RESISTED),
+                        crate::game::data::items::Body::default().frame(
+                            crate::game::map::spells::class_scripts::SMSG_FEIGN_DEATH_RESISTED,
+                        ),
                     );
                 }
             } else {
@@ -1530,7 +1540,11 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if kind == AURA_MOD_STEALTH
                 && let Some(f) = map.unit_fields_mut(target)
             {
-                f.set_byte(UNIT_FIELD_BYTES_1, 2, 0x02 | f.get_byte(UNIT_FIELD_BYTES_1, 2));
+                f.set_byte(
+                    UNIT_FIELD_BYTES_1,
+                    2,
+                    0x02 | f.get_byte(UNIT_FIELD_BYTES_1, 2),
+                );
             }
             crate::game::map::visibility::stealth_changed(map, target);
             crate::game::map::spells::interrupts::concealed(map, target, h.spell);
@@ -1594,7 +1608,11 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         // Beast Lore: the target's special information shows.
         AURA_EMPATHY => {
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_DYNAMIC_FLAGS, crate::game::map::pets::DYNFLAG_SPECIALINFO, true);
+                f.set_flag(
+                    UNIT_DYNAMIC_FLAGS,
+                    crate::game::map::pets::DYNFLAG_SPECIALINFO,
+                    true,
+                );
             }
         }
         AURA_GHOST => {}
@@ -1711,7 +1729,11 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 && !still(map, AURA_MOD_STEALTH)
                 && let Some(f) = map.unit_fields_mut(target)
             {
-                f.set_byte(UNIT_FIELD_BYTES_1, 2, f.get_byte(UNIT_FIELD_BYTES_1, 2) & !0x02);
+                f.set_byte(
+                    UNIT_FIELD_BYTES_1,
+                    2,
+                    f.get_byte(UNIT_FIELD_BYTES_1, 2) & !0x02,
+                );
             }
             crate::game::map::visibility::stealth_changed(map, target);
         }
@@ -1770,7 +1792,11 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_EMPATHY if !still(map, AURA_EMPATHY) => {
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_DYNAMIC_FLAGS, crate::game::map::pets::DYNFLAG_SPECIALINFO, false);
+                f.set_flag(
+                    UNIT_DYNAMIC_FLAGS,
+                    crate::game::map::pets::DYNFLAG_SPECIALINFO,
+                    false,
+                );
             }
         }
         _ => {}
@@ -1930,13 +1956,12 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
     // A warrior's stance keeps only the rage Tactical Mastery holds on to
     // (Thistle Tea's `retained_stance_rage`: 5 a rank, override scripts
     // 831 to 835).
-    if form != 0
-        && form != before
-        && map.players.get(&target).is_some_and(|p| p.row.class == 1)
-    {
+    if form != 0 && form != before && map.players.get(&target).is_some_and(|p| p.row.class == 1) {
         let kept = auras(map, target).map_or(0, |a| {
             a.effects()
-                .filter(|(_, x)| x.kind == AURA_OVERRIDE_CLASS_SCRIPTS && (831..=835).contains(&x.misc))
+                .filter(|(_, x)| {
+                    x.kind == AURA_OVERRIDE_CLASS_SCRIPTS && (831..=835).contains(&x.misc)
+                })
                 .map(|(_, x)| ((x.misc - 830) * 50) as u32)
                 .max()
                 .unwrap_or(0)
@@ -2104,14 +2129,24 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             } else {
                 // Curse of Agony and Starshards grow as they go.
                 let ramp = if a.kind == AURA_PERIODIC_DAMAGE {
-                    crate::game::map::spells::class_scripts::ramp(&map.realm.data, h.spell, a.ticks + 1)
+                    crate::game::map::spells::class_scripts::ramp(
+                        &map.realm.data,
+                        h.spell,
+                        a.ticks + 1,
+                    )
                 } else {
                     0.0
                 };
                 ((a.amount * stacks).max(0) as f32 + ramp).round().max(0.0) as u32
             };
             let amount = crate::game::map::item_scripts::periodic_damage(map, target, h, amount);
-            crate::game::map::spells::periodic_damage(map, h, target, amount, a.kind == AURA_PERIODIC_LEECH);
+            crate::game::map::spells::periodic_damage(
+                map,
+                h,
+                target,
+                amount,
+                a.kind == AURA_PERIODIC_LEECH,
+            );
         }
         AURA_PERIODIC_HEAL | AURA_OBS_MOD_HEALTH | AURA_MOD_REGEN => {
             let amount = if a.kind == AURA_OBS_MOD_HEALTH {
@@ -2135,13 +2170,9 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if paid {
                 crate::game::map::combat::deal_damage(map, h.caster, h.caster, cost);
                 let gain = (cost as f32
-                    * map
-                        .realm
-                        .data
-                        .spells
-                        .get(h.spell)
-                        .map_or(1.0, |s| s.effects[a.effect as usize].multiple_value.max(1.0)))
-                    as u32;
+                    * map.realm.data.spells.get(h.spell).map_or(1.0, |s| {
+                        s.effects[a.effect as usize].multiple_value.max(1.0)
+                    })) as u32;
                 crate::game::map::spells::heal(map, h.caster, target, h.spell, gain, true);
             }
         }

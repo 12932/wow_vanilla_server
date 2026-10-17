@@ -93,4 +93,3 @@ pub fn creature_died(map: &mut Map, entry: u32) {
     }
     crate::game::events::drive(&realm, MINIONS_OF_OMEN, false);
 }
-

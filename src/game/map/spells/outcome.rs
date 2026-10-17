@@ -1082,9 +1082,8 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
     // A soul shard only from a death worth something to its caster (Thistle
     // Tea's `DeathItem.eligible?`): not grey, a player or tapped, not a
     // pet or a totem.
-    let shard_target = creature.is_none_or(|c| {
-        c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none()
-    });
+    let shard_target = creature
+        .is_none_or(|c| c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none());
     let mut items: Vec<(Guid, u32, u32)> = Vec::new();
     for (h, x) in a.effects() {
         if x.kind != AURA_CHANNEL_DEATH_ITEM || x.mask == 0 {
@@ -1093,9 +1092,7 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
         if x.mask == SOUL_SHARD {
             let tapped = guid::is_player(target)
                 || creature.is_some_and(|c| c.tapped_by.is_none_or(|t| t == h.caster));
-            if !shard_target
-                || !tapped
-                || target_level <= combat::gray_level(level(map, h.caster))
+            if !shard_target || !tapped || target_level <= combat::gray_level(level(map, h.caster))
             {
                 continue;
             }

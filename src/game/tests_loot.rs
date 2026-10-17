@@ -42,7 +42,14 @@ const LEATHER: u32 = 2318;
 const VEIN: u32 = 1731;
 const BOBBER: u32 = 35591;
 
-fn item(entry: u32, name: &str, class: u32, subclass: u32, inventory_type: u32, quality: u32) -> ItemTemplate {
+fn item(
+    entry: u32,
+    name: &str,
+    class: u32,
+    subclass: u32,
+    inventory_type: u32,
+    quality: u32,
+) -> ItemTemplate {
     ItemTemplate {
         entry,
         class,
@@ -348,7 +355,11 @@ async fn a_group_rolls_need_and_greed_and_the_need_wins() {
         })
         .await;
     assert_eq!(held, Some(true));
-    for (who, vote) in [(&a, RollVote::Greed), (&b, RollVote::Need), (&c, RollVote::Pass)] {
+    for (who, vote) in [
+        (&a, RollVote::Greed),
+        (&b, RollVote::Need),
+        (&c, RollVote::Pass),
+    ] {
         who.send(CMSG_LOOT_ROLL {
             item: kobold,
             item_slot: 0,
@@ -384,10 +395,7 @@ async fn a_group_rolls_need_and_greed_and_the_need_wins() {
     })
     .await;
     let money = map
-        .query(move |m| {
-            [ga, gb]
-                .map(|g| m.players.get(&g).map_or(0, |p| p.money()))
-        })
+        .query(move |m| [ga, gb].map(|g| m.players.get(&g).map_or(0, |p| p.money())))
         .await
         .unwrap();
     assert_eq!(money, [10, 10]);
@@ -458,12 +466,11 @@ async fn round_robin_hands_the_corpses_out_in_turn() {
     let map = realm.maps.get(&realm, MapKey::world(0));
     let looters = map
         .query(move |m| {
-            [21u32, 22, 23]
-                .map(|n| {
-                    let k = guid::unit(3001, n);
-                    crate::game::map::combat::kill(m, ga, k);
-                    crate::game::map::loot::loot_ref(m, k).and_then(|l| l.assigned)
-                })
+            [21u32, 22, 23].map(|n| {
+                let k = guid::unit(3001, n);
+                crate::game::map::combat::kill(m, ga, k);
+                crate::game::map::loot::loot_ref(m, k).and_then(|l| l.assigned)
+            })
         })
         .await
         .unwrap();
@@ -481,7 +488,14 @@ async fn round_robin_hands_the_corpses_out_in_turn() {
 }
 
 /// One player at the start, and the map.
-async fn alone(name: &str, class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, crate::game::map::MapHandle) {
+async fn alone(
+    name: &str,
+    class: Class,
+) -> (
+    std::sync::Arc<crate::game::Realm>,
+    Client,
+    crate::game::map::MapHandle,
+) {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, name);
     a.enter(name, Race::Human, class).await;
@@ -595,10 +609,7 @@ async fn a_miner_gathers_a_vein_and_learns_from_it() {
     a.send(CMSG_LOOT_RELEASE { guid: vein }).await;
     // Mined out, the vein goes until it respawns.
     a.forgets(vein).await;
-    let waiting = map
-        .query(|m| m.loot_state.respawns.len())
-        .await
-        .unwrap();
+    let waiting = map.query(|m| m.loot_state.respawns.len()).await.unwrap();
     assert_eq!(waiting, 1);
 }
 
@@ -658,8 +669,7 @@ fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) -> Guid {
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let guid = guid::item(counter);
     let p = m.players.get_mut(&g).expect("the player");
-    p.items
-        .retain(|i| !(i.bag == BAG_PLAYER && i.slot == slot));
+    p.items.retain(|i| !(i.bag == BAG_PLAYER && i.slot == slot));
     p.items.push(crate::game::map::player::Item::new(
         &data, guid, g, entry, BAG_PLAYER, slot, 1,
     ));
@@ -778,7 +788,10 @@ async fn a_poison_procs_spends_its_charges_and_runs_out() {
     assert_eq!(health[1].0, hp0 - 10);
     assert_eq!(health[1].1.charges, 1);
     assert_eq!(health[2].0, hp0 - 20);
-    assert_eq!(health[2].1.id, 0, "the last charge spent, the poison is gone");
+    assert_eq!(
+        health[2].1.id, 0,
+        "the last charge spent, the poison is gone"
+    );
     assert_eq!(health[3].0, hp0 - 20, "no poison, no proc");
     assert_eq!(health[4].1.id, 0, "its time run out, the poison is gone");
 }
@@ -814,7 +827,8 @@ fn a_random_property_rolls_and_is_kept() {
     d.crafts.random_properties.insert(77, [107, 0, 0, 0, 0]);
     let rolled = crate::game::map::enchant::roll_random_property(&d, LOOT_ITEM, &mut rand::rng());
     assert_eq!(rolled, 77);
-    let mut i = crate::game::map::player::Item::new(&d, guid::item(1), Guid::zero(), LOOT_ITEM, 0, 0, 1);
+    let mut i =
+        crate::game::map::player::Item::new(&d, guid::item(1), Guid::zero(), LOOT_ITEM, 0, 0, 1);
     crate::game::map::enchant::set_random_property(&d, &mut i, rolled);
     let row = i.to_row();
     assert_eq!(row.data, "rp:77");
@@ -837,12 +851,19 @@ fn the_real_crafting_data_loads() {
     let vein = d.gameobject_templates.get(&1731).expect("Copper Vein");
     let keys = d.crafts.locks.get(&vein.data[0]).expect("its lock");
     assert!(keys.iter().any(|k| k.kind == 2 && k.index == 3), "{keys:?}");
-    assert!(d.crafts.item_sets.len() > 100, "{}", d.crafts.item_sets.len());
+    assert!(
+        d.crafts.item_sets.len() > 100,
+        "{}",
+        d.crafts.item_sets.len()
+    );
     assert!(d.crafts.random_pools.len() > 100);
     assert!(d.crafts.random_properties.len() > 1000);
     assert!(d.crafts.enchant_charges.get(&2823).is_some_and(|c| *c > 0));
     assert!(!d.crafts.fishing_skill.is_empty());
-    assert_eq!(d.spells.enchantments.get(&107).map(|e| e.effects[0].0), Some(3));
+    assert_eq!(
+        d.spells.enchantments.get(&107).map(|e| e.effects[0].0),
+        Some(3)
+    );
     // Herb Gathering and Skinning are profession effects.
     let herb = d.spells.get(2366).expect("Herb Gathering");
     assert!(crate::game::map::professions::handles(d, herb, 0));
@@ -911,7 +932,10 @@ async fn a_skinner_skins_a_looted_corpse() {
         _ => None,
     })
     .await;
-    assert_eq!(map.query(move |m| skill_of(m, g, 393)).await, Some(before + 1));
+    assert_eq!(
+        map.query(move |m| skill_of(m, g, 393)).await,
+        Some(before + 1)
+    );
     // Skinned once, it can't be again.
     let again = map
         .query(move |m| {

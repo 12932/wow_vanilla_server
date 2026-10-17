@@ -168,8 +168,8 @@ fn join(map: &mut Map, g: Guid, map_id: u32) {
 /// out says nothing.
 fn join_as(map: &mut Map, g: Guid, bg: u32, as_group: bool, instance: u32) {
     use crate::game::battlegrounds::{self as bgs, Refused};
-    let result = entrants(map, g, as_group)
-        .and_then(|who| bgs::join_all(&map.realm, &who, bg, instance));
+    let result =
+        entrants(map, g, as_group).and_then(|who| bgs::join_all(&map.realm, &who, bg, instance));
     if result == Err(Refused::Deserter)
         && let (Some(p), Some(frame)) = (map.players.get(&g), bgs::joined_frame(None))
     {

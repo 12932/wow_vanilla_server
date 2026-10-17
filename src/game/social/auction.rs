@@ -184,7 +184,12 @@ fn command_result(
 /// The house an auctioneer near the player is of, if they may use it now
 /// (the services' shared checks, as Thistle Tea checks each auction).
 fn house_at(map: &Map, g: Guid, auctioneer: Guid) -> Option<AuctionHouse> {
-    crate::game::map::npc::npc_entry(map, g, auctioneer, crate::game::map::npc::NPC_FLAG_AUCTIONEER)?;
+    crate::game::map::npc::npc_entry(
+        map,
+        g,
+        auctioneer,
+        crate::game::map::npc::NPC_FLAG_AUCTIONEER,
+    )?;
     Some(crate::game::map::auction::house_of(map, auctioneer))
 }
 
@@ -580,7 +585,11 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
         auctions.auctions.remove(&id);
         realm.store.delete_record(KIND_AUCTION, u64::from(id));
     }
-    for a in auctions.auctions.values_mut().filter(|a| a.bidder == counter) {
+    for a in auctions
+        .auctions
+        .values_mut()
+        .filter(|a| a.bidder == counter)
+    {
         a.bidder = 0;
         a.bid = 0;
         save(realm, a);

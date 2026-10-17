@@ -246,7 +246,11 @@ pub fn craft_gain_chance(value: u32, yellow: u32, gray: u32) -> u32 {
 /// Raise `skill` by one, `chance` percent of the time.
 pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: u32) -> bool {
     let roll = rand::rng().random_range(0..100);
-    roll < chance && map.players.get_mut(&player).is_some_and(|p| skills::raise(p, skill, 1))
+    roll < chance
+        && map
+            .players
+            .get_mut(&player)
+            .is_some_and(|p| skills::raise(p, skill, 1))
 }
 
 fn send_failure(map: &Map, player: Guid, spell: u32, code: u8) {
@@ -462,11 +466,13 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
             EFFECT_ENCHANT_ITEM | EFFECT_ENCHANT_ITEM_TEMPORARY => {
                 if let Some(item) = t.item {
                     let id = s.effects[index].misc_value.max(0) as u32;
-                    let temporary = (s.effects[index].effect == EFFECT_ENCHANT_ITEM_TEMPORARY).then(|| {
-                        let secs = crate::game::map::spells::points(s, index, 1).max(1) as u32;
-                        let charges = data.crafts.enchant_charges.get(&s.id).copied().unwrap_or(0);
-                        (secs * 1000, charges)
-                    });
+                    let temporary = (s.effects[index].effect == EFFECT_ENCHANT_ITEM_TEMPORARY)
+                        .then(|| {
+                            let secs = crate::game::map::spells::points(s, index, 1).max(1) as u32;
+                            let charges =
+                                data.crafts.enchant_charges.get(&s.id).copied().unwrap_or(0);
+                            (secs * 1000, charges)
+                        });
                     crate::game::map::enchant::enchant_item(map, caster, item, id, temporary);
                 }
             }
@@ -484,8 +490,15 @@ pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     let Some(abilities) = data.spells.skill_abilities.get(&s.id) else {
         return;
     };
-    for a in abilities.iter().filter(|a| CRAFTS.contains(&a.skill) && a.trivial_high > 0) {
-        let Some(value) = map.players.get(&caster).and_then(|p| skills::value(p, a.skill)) else {
+    for a in abilities
+        .iter()
+        .filter(|a| CRAFTS.contains(&a.skill) && a.trivial_high > 0)
+    {
+        let Some(value) = map
+            .players
+            .get(&caster)
+            .and_then(|p| skills::value(p, a.skill))
+        else {
             continue;
         };
         let chance = craft_gain_chance(value, a.trivial_low, a.trivial_high);
@@ -512,7 +525,9 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
             return;
         }
     };
-    if let Some(skill) = skill.filter(|sk| matches!(*sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING)) {
+    if let Some(skill) =
+        skill.filter(|sk| matches!(*sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING))
+    {
         let roll = value as i32 - 26 + rand::rng().random_range(1..=63);
         let sure = matches!(skill, SKILL_HERBALISM | SKILL_MINING) && value >= 300;
         if !sure && (required as i32) > roll {
@@ -568,7 +583,8 @@ fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, 
         && let Some(i) = p.items.iter_mut().find(|i| i.guid == item)
     {
         let flags = i.fields.get_u32(ITEM_FIELD_FLAGS);
-        i.fields.set_u32(ITEM_FIELD_FLAGS, flags | ITEM_FLAG_UNLOCKED);
+        i.fields
+            .set_u32(ITEM_FIELD_FLAGS, flags | ITEM_FLAG_UNLOCKED);
     }
     if let Some(skill) = skill {
         let learned = map
@@ -576,7 +592,12 @@ fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, 
             .get(&caster)
             .and_then(|p| skills::value(p, skill))
             .unwrap_or(0);
-        try_raise(map, caster, skill, gather_gain_chance(skill, learned, required, 1));
+        try_raise(
+            map,
+            caster,
+            skill,
+            gather_gain_chance(skill, learned, required, 1),
+        );
     }
 }
 
@@ -802,7 +823,13 @@ pub fn catch_landed(skill: u32, zone_skill: i32, roll: i32) -> bool {
 /// `CMSG_GAMEOBJ_USE` on something this module owns: a bobber. Whether it
 /// was one.
 pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
-    let Some(b) = map.loot_state.bobbers.iter().find(|b| b.guid == object).cloned() else {
+    let Some(b) = map
+        .loot_state
+        .bobbers
+        .iter()
+        .find(|b| b.guid == object)
+        .cloned()
+    else {
         return false;
     };
     if b.owner != player {
@@ -895,7 +922,12 @@ fn hole_near(map: &Map, bobber: Guid) -> Option<(Guid, Vec<crate::game::data::Lo
         .find_map(|o| {
             let t = data.gameobject_templates.get(&o.entry)?;
             (t.kind == GO_FISHING_HOLE && dist(o.position, at) <= (t.data[0] as f32).max(1.0))
-                .then(|| data.loot.gameobject.get(&t.data[1]).map(|l| (o.guid, l.clone())))
+                .then(|| {
+                    data.loot
+                        .gameobject
+                        .get(&t.data[1])
+                        .map(|l| (o.guid, l.clone()))
+                })
                 .flatten()
         })
 }
@@ -918,7 +950,10 @@ pub fn corpse_looted(map: &mut Map, creature: Guid) {
     let skinnable = data
         .creature_template(c.entry)
         .is_some_and(|t| t.skinning_loot_id != 0);
-    let skinned = c.loot.as_ref().is_some_and(|l| l.kind == LootKind::Skinning);
+    let skinned = c
+        .loot
+        .as_ref()
+        .is_some_and(|l| l.kind == LootKind::Skinning);
     if skinnable && !skinned {
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE, true);

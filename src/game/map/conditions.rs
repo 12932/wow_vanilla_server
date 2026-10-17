@@ -196,10 +196,7 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
     let present = |g: Option<Guid>| g.filter(|g| map.position_of(*g).is_some());
     // The facts of a player target; another target hasn't got them.
     let player = |f: &dyn Fn(&Player) -> bool| -> Truth {
-        target
-            .and_then(|t| map.players.get(&t))
-            .map(f)
-            .into()
+        target.and_then(|t| map.players.get(&t)).map(f).into()
     };
     let unit_fields = |g: Option<Guid>| g.and_then(|g| map.unit_fields(g));
     let position = |g: Option<Guid>| g.and_then(|g| map.position_of(g));

@@ -151,7 +151,10 @@ pub fn driven(s: &State) -> Vec<(u32, bool)> {
         .collect();
     out.extend([
         (INVASION, invading),
-        (FIFTY_VICTORIES, invading && s.victories >= 50 && s.victories < 100),
+        (
+            FIFTY_VICTORIES,
+            invading && s.victories >= 50 && s.victories < 100,
+        ),
         (HUNDRED_VICTORIES, invading && s.victories >= 100),
         (HUNDRED_FIFTY_VICTORIES, done),
         (INVASIONS_DONE, done),
@@ -352,7 +355,9 @@ pub fn creature_died(map: &mut Map, entry: u32, at: Vector3d) {
             // Without a navmesh or terrain, the attacked zone of this map nearest.
             ZONES
                 .iter()
-                .filter(|z| z.map == map.key.map && realm.social.invasion.lock().active.contains(&z.zone))
+                .filter(|z| {
+                    z.map == map.key.map && realm.social.invasion.lock().active.contains(&z.zone)
+                })
                 .min_by(|a, b| {
                     let d = |z: &Zone| (z.mouth.0 - at.x).powi(2) + (z.mouth.1 - at.y).powi(2);
                     d(a).total_cmp(&d(b))

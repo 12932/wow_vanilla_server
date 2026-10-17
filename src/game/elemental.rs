@@ -109,8 +109,8 @@ impl State {
 
     /// The events the invasion holds on.
     pub fn driven(&self, now: i64) -> Vec<(u32, bool)> {
-        let invading = self.started
-            && (0..4).any(|i| self.stages[i] < BOSS_DOWN || self.looting(i, now));
+        let invading =
+            self.started && (0..4).any(|i| self.stages[i] < BOSS_DOWN || self.looting(i, now));
         let mut out = vec![(INVASION, invading)];
         for (i, e) in ELEMENTS.iter().enumerate() {
             let stage = self.stages[i];
@@ -218,7 +218,10 @@ pub struct Rift {
 /// Rifts in the map call out the invaders their element's stage wants.
 pub fn update(map: &mut Map) {
     let now = map.now;
-    if map.rifts_checked_at.is_some_and(|t| now.duration_since(t) < Duration::from_secs(5)) {
+    if map
+        .rifts_checked_at
+        .is_some_and(|t| now.duration_since(t) < Duration::from_secs(5))
+    {
         return;
     }
     map.rifts_checked_at = Some(now);
@@ -232,7 +235,8 @@ pub fn update(map: &mut Map) {
                 .map(|i| (o.guid, i, o.position))
         })
         .collect();
-    map.rifts.retain(|g, _| rifts.iter().any(|(r, _, _)| r == g));
+    map.rifts
+        .retain(|g, _| rifts.iter().any(|(r, _, _)| r == g));
     let stages = map.realm.social.elemental.lock().stages;
     for (rift, i, at) in rifts {
         let due = {
@@ -253,7 +257,10 @@ pub fn update(map: &mut Map) {
     let old: Vec<Guid> = map
         .creatures
         .iter()
-        .filter(|(_, c)| c.summoned_at.is_some_and(|t| now.duration_since(t) > INVADER_LIFETIME))
+        .filter(|(_, c)| {
+            c.summoned_at
+                .is_some_and(|t| now.duration_since(t) > INVADER_LIFETIME)
+        })
         .map(|(_, c)| c.guid)
         .collect();
     for g in old {

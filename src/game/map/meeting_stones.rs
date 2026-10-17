@@ -124,7 +124,9 @@ fn join(map: &mut Map, g: Guid, stone: Guid) {
     let (team, class) = (p.team, p.row.class);
     let party = {
         let groups = map.realm.social.groups.lock();
-        groups.group_of(g).map(|gr| (gr.leader, gr.raid, gr.members.len()))
+        groups
+            .group_of(g)
+            .map(|gr| (gr.leader, gr.raid, gr.members.len()))
     };
     let leader = match party {
         Some((leader, raid, size)) => {
@@ -289,12 +291,18 @@ pub fn sweep(realm: &Realm) {
                     break;
                 };
                 solos.retain(|q| q.guid != pick);
-                let (Some(lo), Some(po)) = (realm.registry.online(leader), realm.registry.online(pick))
+                let (Some(lo), Some(po)) =
+                    (realm.registry.online(leader), realm.registry.online(pick))
                 else {
                     continue;
                 };
                 if groups::join_directly(realm, &lo, &po) {
-                    realm.social.meeting_stones.lock().queue.retain(|q| q.guid != pick);
+                    realm
+                        .social
+                        .meeting_stones
+                        .lock()
+                        .queue
+                        .retain(|q| q.guid != pick);
                     let mut stones = realm.social.meeting_stones.lock();
                     // The leader now queues for a party.
                     if let Some(q) = stones.queue.iter_mut().find(|q| q.guid == leader) {

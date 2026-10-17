@@ -464,7 +464,7 @@ pub fn gossip_hello(map: &mut Map, g: Guid, npc: Guid) -> bool {
                 if standing >= 0 && !f.launched && f.count >= WING_COMMANDERS[i].goal =>
             {
                 Some((
-                68,
+                    68,
                     vec![
                         (WING_COMMANDERS[i].beacon_text, Action::TakeBeacon(i)),
                         (WING_COMMANDERS[i].launch_text, Action::LaunchAir(i)),

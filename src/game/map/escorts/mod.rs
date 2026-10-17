@@ -608,19 +608,23 @@ fn fail(map: &mut Map, player: Guid, quest: u32) {
     {
         p.journal.log[slot].failed = true;
         crate::game::map::quests::refresh_log(p, &data);
-        p.outbound.send(&SMSG_QUESTUPDATE_FAILED { quest_id: quest });
+        p.outbound
+            .send(&SMSG_QUESTUPDATE_FAILED { quest_id: quest });
     }
 }
 
 /// The escortee goes back where it stood, as it was, at once.
 fn reset(map: &mut Map, creature: Guid) {
     let data = map.realm.data.clone();
-    let spawn = map.creature(creature).and_then(|c| c.spawn_guid).and_then(|s| {
-        data.creature_spawns
-            .get(&map.key.map)
-            .and_then(|l| l.iter().find(|x| x.guid == s))
-            .cloned()
-    });
+    let spawn = map
+        .creature(creature)
+        .and_then(|c| c.spawn_guid)
+        .and_then(|s| {
+            data.creature_spawns
+                .get(&map.key.map)
+                .and_then(|l| l.iter().find(|x| x.guid == s))
+                .cloned()
+        });
     map.remove_creature(creature);
     if let Some(s) = spawn {
         let on = crate::game::events::current(&map.realm);
@@ -714,7 +718,11 @@ pub fn update(map: &mut Map) {
 
 /// One escort's step; false when it is over.
 fn step(map: &mut Map, i: usize, now: Instant) -> bool {
-    let (creature, player, quest) = (map.escorts[i].creature, map.escorts[i].player, map.escorts[i].quest);
+    let (creature, player, quest) = (
+        map.escorts[i].creature,
+        map.escorts[i].player,
+        map.escorts[i].quest,
+    );
     // Summons whose time is up go.
     let gone: Vec<Guid> = map.escorts[i]
         .summons
@@ -873,7 +881,10 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
             if let Some(p) = ppos
                 && dist(p, cpos) > 3.0
             {
-                let o = map.players.get(&player).map_or(0.0, |p| p.movement.orientation)
+                let o = map
+                    .players
+                    .get(&player)
+                    .map_or(0.0, |p| p.movement.orientation)
                     + std::f32::consts::FRAC_PI_2;
                 let to = Vector3d {
                     x: p.x + 2.0 * o.cos(),
