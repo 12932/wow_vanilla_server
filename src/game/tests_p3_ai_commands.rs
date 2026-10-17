@@ -339,17 +339,6 @@ fn logged(m: &Map, g: Guid, quest: u32) -> crate::game::store::Logged {
         .unwrap_or_default()
 }
 
-fn fighting(m: &mut Map, g: Guid, victim: Guid) {
-    let c = m.creature_mut(g).unwrap();
-    c.combat.victim = victim;
-    c.combat.attacking = true;
-    c.fields.set_flag(
-        UNIT_FIELD_FLAGS,
-        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-        true,
-    );
-}
-
 /// The item, quest and credit commands go to the player of the step:
 /// items taken (from the player only) and given, a kill credited by
 /// entry, a cast by spell against the creature's entry, a quest credit
@@ -1232,4 +1221,645 @@ async fn the_object_commands() {
     );
     assert_eq!(out.5, (true, 0.7), "at its summoner, facing its way");
     assert_eq!(out.6, Some(Duration::from_secs(300)));
+}
+
+/// A cast under way is broken by its spell's id or by any (5) and kept for
+/// another; a stop ends its source's other scripts (200); a terminate ends
+/// its script by a creature near, alive or not (31), and a chain's later
+/// steps with it; an unsupported command is passed over; and an instance
+/// data mode not 0, 1 or 2 changes nothing.
+#[tokio::test]
+async fn interrupts_stops_terminates_and_the_unsupported() {
+    let mut d = data();
+    d.scripts.generic.insert(
+        970,
+        vec![ScriptStep {
+            delay_ms: 180_000,
+            ..step(44, [3, 0, 0, 0])
+        }],
+    );
+    d.scripts
+        .generic
+        .insert(971, vec![step(scripts::C_STOP_SCRIPTS, [0; 4])]);
+    d.scripts.generic.insert(
+        972,
+        vec![
+            ScriptStep {
+                delay_ms: 1000,
+                ..step(44, [1, 0, 0, 0])
+            },
+            ScriptStep {
+                delay_ms: 2000,
+                ..step(31, [0; 4])
+            },
+            ScriptStep {
+                delay_ms: 3000,
+                ..step(44, [3, 0, 0, 0])
+            },
+        ],
+    );
+    let (_realm, _a, _me, map) = setup_with(d).await;
+    let (host, buddy) = (host(), buddy());
+    let out = map
+        .query(move |m| {
+            crate::game::map::spells::cast(
+                m,
+                host,
+                SLOW,
+                crate::game::map::spells::Targets {
+                    unit: Some(host),
+                    ..Default::default()
+                },
+                None,
+            );
+            let casting = |m: &Map| m.caster(host).is_some_and(|c| c.casting.is_some());
+            let began = casting(m);
+            run(m, &step(5, [0, BOON, 0, 0]), host, Guid::zero());
+            let other = casting(m);
+            run(m, &step(5, [0, SLOW, 0, 0]), host, Guid::zero());
+            let broken = !casting(m);
+            // A stop.
+            scripts::start(m, ScriptTable::Generic, 970, host, Guid::zero());
+            let waiting = m
+                .scripts
+                .runs
+                .iter()
+                .any(|r| r.source == host && r.id == 970);
+            scripts::start(m, ScriptTable::Generic, 971, host, Guid::zero());
+            let stopped = !m
+                .scripts
+                .runs
+                .iter()
+                .any(|r| r.source == host && r.id == 970 && r.next != usize::MAX);
+            // A chain cut at its second step.
+            let t0 = m.now;
+            scripts::start(m, ScriptTable::Generic, 972, buddy, Guid::zero());
+            for ms in [1000, 2000, 3000, 4000] {
+                m.now = t0 + Duration::from_millis(ms);
+                scripts::update(m);
+            }
+            let chain = event_ai::phase(m, buddy);
+            // Terminate by a creature near: alive (datalong3 1) ends it.
+            let alive_ends = !run(m, &step(31, [BUDDY, 20, 1, 0]), host, host);
+            let absent_goes_on = run(m, &step(31, [BUDDY, 20, 0, 0]), host, host);
+            let unsupported = (
+                run(m, &step(150, [0; 4]), host, host),
+                scripts::command_supported(150),
+            );
+            (
+                (began, other, broken),
+                (waiting, stopped),
+                chain,
+                alive_ends,
+                absent_goes_on,
+                unsupported,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out.0,
+        (true, true, true),
+        "kept for another spell, broken by its own"
+    );
+    assert_eq!(out.1, (true, true), "its waiting script stopped");
+    assert_eq!(out.2, 1, "the step after the terminate never ran");
+    assert!(out.3 && out.4);
+    assert_eq!(out.5, (true, false), "passed over");
+}
+
+/// Clearing auras sheds what an evade would: a player's timed buff stays,
+/// the creature's own aura and a player's harmful one go.
+#[tokio::test]
+async fn clear_auras_sheds_what_an_evade_would() {
+    let mut d = data();
+    let mut harm = aura_spell(96_310);
+    harm.effects[0].target_a = 6;
+    d.spells.spells.insert(96_310, harm);
+    let mut timed = aura_spell(96_311);
+    timed.duration_index = 1;
+    d.spells.durations.insert(
+        1,
+        crate::game::data::spells::SpellDuration {
+            base: 10_000,
+            per_level: 0,
+            max: 10_000,
+        },
+    );
+    timed.effects[0].target_a = 21;
+    d.spells.spells.insert(96_311, timed);
+    let (_realm, _a, me, map) = setup_with(d).await;
+    let host = host();
+    let out = map
+        .query(move |m| {
+            crate::game::map::spells::cast_triggered(m, host, BOON, Some(host));
+            let data = m.realm.data.clone();
+            let harm = data.spells.get(96_310).unwrap();
+            let _ = crate::game::map::auras::apply_spell(
+                m,
+                me,
+                host,
+                harm,
+                &[(0, 0)],
+                Default::default(),
+            );
+            let timed = data.spells.get(96_311).unwrap();
+            let _ = crate::game::map::auras::apply_spell(
+                m,
+                me,
+                host,
+                timed,
+                &[(0, 0)],
+                Default::default(),
+            );
+            let before = [BOON, 96_310, 96_311].map(|s| has_aura(m, host, s));
+            run(m, &step(scripts::C_CLEAR_AURAS, [0; 4]), host, Guid::zero());
+            (before, [BOON, 96_310, 96_311].map(|s| has_aura(m, host, s)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, [true, true, true]);
+    assert_eq!(
+        out.1,
+        [false, false, true],
+        "only the player's timed buff stays"
+    );
+}
+
+/// Combat stop: a creature out of its fight with no victim, target or
+/// threat; a player out of theirs, the creatures that fought them
+/// forgetting them.
+#[tokio::test]
+async fn combat_stop_ends_a_creatures_fight_and_a_players() {
+    let (_realm, _a, me, map) = setup().await;
+    let (host, foe) = (host(), foe());
+    let out = map
+        .query(move |m| {
+            ai::attacked(m, host, foe);
+            run(m, &step(73, [0; 4]), host, Guid::zero());
+            let c = m.creature(host).unwrap();
+            let creature = (
+                c.combat.attacking,
+                c.combat.victim,
+                c.fields.get_guid(UNIT_FIELD_TARGET),
+                c.threat.len(),
+                c.fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                ),
+            );
+            ai::attacked(m, foe, me);
+            crate::game::map::combat::start_attack(m, me, foe);
+            run(m, &step(73, [0; 4]), me, Guid::zero());
+            let p = &m.players[&me];
+            let player = (
+                p.combat.attacking,
+                p.fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                ),
+            );
+            let forgotten = m
+                .creature(foe)
+                .unwrap()
+                .threat
+                .iter()
+                .all(|(g, _)| *g != me);
+            (creature, player, forgotten)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (false, Guid::zero(), Guid::zero(), 0, false));
+    assert_eq!(out.1, (false, false));
+    assert!(out.2, "the foe forgot the player");
+}
+
+/// Evade: a living creature source evades; a player's step evades the
+/// creature it names; a corpse doesn't.
+#[tokio::test]
+async fn enter_evade_is_a_living_creatures_or_the_one_a_player_names() {
+    let (_realm, _a, me, map) = setup().await;
+    let (host, buddy, foe) = (host(), buddy(), foe());
+    let out = map
+        .query(move |m| {
+            ai::attacked(m, host, foe);
+            run(m, &step(33, [0; 4]), host, Guid::zero());
+            let own = m.creature(host).unwrap().evading;
+            ai::attacked(m, buddy, foe);
+            run(m, &step(33, [0; 4]), me, buddy);
+            let named = m.creature(buddy).unwrap().evading;
+            ai::die(m, foe, me);
+            let corpse = run(
+                m,
+                &ScriptStep {
+                    data_flags: SF_ABORT_ON_FAILURE,
+                    ..step(33, [0; 4])
+                },
+                foe,
+                Guid::zero(),
+            );
+            (own, named, corpse, m.creature(foe).unwrap().evading)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, false, false));
+}
+
+/// A path held (201): until the summons made since are gone, those alive
+/// before it aside; or, signalled, until a release (202).
+#[tokio::test]
+async fn a_hold_waits_for_new_summons_or_a_release() {
+    let (_realm, _a, _me, map) = setup().await;
+    let host = host();
+    let out = map
+        .query(move |m| {
+            let now = m.now;
+            let at = m.creature(host).unwrap().position;
+            let before = scripts::summon(m, host, SON, at, 0.0, None).unwrap();
+            run(
+                m,
+                &step(scripts::C_HOLD_WAYPOINTS, [5000, 0, 0, 0]),
+                host,
+                Guid::zero(),
+            );
+            let h = event_ai::scripted(m, host)
+                .and_then(|s| s.hold.clone())
+                .unwrap();
+            let held = (
+                h.until.duration_since(now),
+                h.ready_at.duration_since(now),
+                h.signal,
+                h.earlier.contains(&before),
+            );
+            run(
+                m,
+                &step(scripts::C_HOLD_WAYPOINTS, [600_000, 1, 0, 0]),
+                host,
+                Guid::zero(),
+            );
+            run(
+                m,
+                &step(scripts::C_RELEASE_WAYPOINTS, [0; 4]),
+                host,
+                Guid::zero(),
+            );
+            let h = event_ai::scripted(m, host)
+                .and_then(|s| s.hold.clone())
+                .unwrap();
+            (held, h.signal, h.signaled, h.until <= m.now)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out.0,
+        (
+            Duration::from_millis(5000),
+            Duration::from_millis(1),
+            false,
+            true
+        )
+    );
+    assert_eq!(
+        (out.1, out.2, out.3),
+        (true, true, true),
+        "a signal hold, released"
+    );
+}
+
+/// The target types: the second on the threat list (never its top), the
+/// farthest on it, the nearest player within reach, a friendly player
+/// (not a neutral one), a living creature of an entry (passing over its
+/// corpse), a creature by its spawn, an instance's creature, and a map
+/// event's target.
+#[tokio::test]
+async fn the_target_types_pick_as_thistle_tea_does() {
+    let mut d = data();
+    d.faction_templates.insert(
+        NEUTRAL,
+        FactionTemplate {
+            id: NEUTRAL,
+            faction: NEUTRAL,
+            ..Default::default()
+        },
+    );
+    let (realm, _a, me, map) = setup_with(d).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let (host, buddy, third, foe) = (host(), buddy(), third(), foe());
+    let out = map
+        .query(move |m| {
+            let sits = |m: &mut Map, kind: u32, p1: u32, p2: u32| {
+                for g in [buddy, third, foe, me, bob] {
+                    if let Some(f) = m.unit_fields_mut(g) {
+                        f.set_byte(UNIT_FIELD_BYTES_1, 0, 0);
+                    }
+                    if let Some(p) = m.players.get_mut(&g) {
+                        p.set_stand_state(0);
+                    }
+                }
+                let s = ScriptStep {
+                    target_type: kind,
+                    target_param1: p1,
+                    target_param2: p2,
+                    ..step(28, [1, 1, 0, 0])
+                };
+                run(m, &s, host, Guid::zero());
+                [buddy, third, foe, me, bob].into_iter().find(|g| {
+                    stand(m, *g) == 1 || m.players.get(g).is_some_and(|p| p.stand_state() == 1)
+                })
+            };
+            let c = m.creature_mut(host).unwrap();
+            c.threat = vec![(buddy, 100.0), (third, 70.0)];
+            c.combat.victim = buddy;
+            let second = sits(m, 5, 0, 0);
+            let farthest = sits(m, 7, 0, 0);
+            let nearest_player = sits(m, 25, 20, 0);
+            // Bob turned neutral: not friendly, though not hostile.
+            m.players
+                .get_mut(&bob)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_FACTIONTEMPLATE, NEUTRAL);
+            m.players
+                .get_mut(&me)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_FACTIONTEMPLATE, NEUTRAL);
+            let no_friend = sits(m, 27, 20, 0);
+            m.players
+                .get_mut(&me)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_FACTIONTEMPLATE, HUMANS);
+            let friend = sits(m, 27, 20, 0);
+            // A corpse of the entry passed over for the living one.
+            let at = m.creature(third).unwrap().position;
+            let another = scripts::summon(m, host, THIRD, at, 0.0, None).unwrap();
+            ai::die(m, third, me);
+            let entry = sits(m, 10, THIRD, 30);
+            let by_spawn = sits(m, 11, 2, 0);
+            m.instance.guids.insert(2, buddy);
+            let instance = sits(m, 12, 2, 0);
+            (
+                second,
+                farthest,
+                nearest_player,
+                no_friend,
+                friend,
+                entry == Some(another) || entry.is_none() && stand(m, another) == 1,
+                by_spawn,
+                instance,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, Some(third), "the second on the list");
+    assert_eq!(out.1, Some(third), "the farthest");
+    assert_eq!(out.2, Some(me), "the nearest player");
+    assert_eq!(out.3, None, "no friendly player");
+    assert_eq!(out.4, Some(me), "the friendly one");
+    assert!(out.5, "the living one, not the corpse");
+    assert_eq!(out.6, Some(buddy), "by its spawn");
+    assert_eq!(out.7, Some(buddy), "the instance's");
+}
+
+/// A move: to a point, on its arrival telling of the step's point; to
+/// the step's centre when no random point is had (no navmesh), with no
+/// facing; told of no point without the flag; and none for a rooted
+/// creature unless forced.
+#[tokio::test]
+async fn a_scripts_move_goes_where_it_says_and_a_root_holds_it() {
+    let (_realm, _a, _me, map) = setup().await;
+    let (host, buddy) = (host(), buddy());
+    let out = map
+        .query(move |m| {
+            let p = at(10.0, 10.0);
+            let random = ScriptStep {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                o: 5.0,
+                dataint: [7, 0, 0, 0],
+                ..step(3, [3, 2000, 5, 2])
+            };
+            run(m, &random, host, Guid::zero());
+            let mv = event_ai::scripted(m, host).and_then(|s| s.scripted_move);
+            let random = mv.map(|mv| {
+                (
+                    crate::game::map::combat::dist(mv.to, p) < 0.01,
+                    mv.face,
+                    mv.point,
+                )
+            });
+            let raw = ScriptStep {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                dataint: [1, 0, 0, 0],
+                ..step(3, [0; 4])
+            };
+            run(m, &raw, buddy, Guid::zero());
+            let raw = event_ai::scripted(m, buddy)
+                .and_then(|s| s.scripted_move)
+                .map(|mv| mv.point);
+            aura_of(m, buddy, 96_320, AURA_MOD_ROOT, 0, 0);
+            let rooted = run(
+                m,
+                &ScriptStep {
+                    data_flags: SF_ABORT_ON_FAILURE,
+                    ..raw_to(p, 0)
+                },
+                buddy,
+                Guid::zero(),
+            );
+            let forced = run(m, &raw_to(p, 1), buddy, Guid::zero());
+            (random, raw, rooted, forced)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out.0,
+        Some((true, None, Some(7))),
+        "its centre, no facing, its point"
+    );
+    assert_eq!(out.1, Some(None), "no point told without the flag");
+    assert!(!out.2 && out.3, "rooted, only a forced move");
+}
+
+fn raw_to(p: Vector3d, datalong4: u32) -> ScriptStep {
+    ScriptStep {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        ..step(3, [0, 0, 0, datalong4])
+    }
+}
+
+/// An object removed for good (41), a creature put at its target's feet
+/// (Thistle Tea's teleport to the target), and damage dealt to itself, a
+/// share of its health (48).
+#[tokio::test]
+async fn remove_teleport_to_the_target_and_damage_to_itself() {
+    let (_realm, _a, me, map) = setup().await;
+    let (host, buddy, third) = (host(), buddy(), third());
+    let out = map
+        .query(move |m| {
+            run(m, &step(41, [0; 4]), host, host);
+            let removed = m.creature(host).is_none();
+            let to_target = ScriptStep {
+                command: scripts::C_TELEPORT_SELF,
+                ext: Some(Box::new(StepExt {
+                    at_target: true,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            run(m, &to_target, buddy, me);
+            let at_feet = crate::game::map::combat::dist(
+                m.creature(buddy).unwrap().position,
+                m.players[&me].position(),
+            ) < 0.01;
+            let hurt = ScriptStep {
+                data_flags: SF_TARGET_SELF,
+                ..step(48, [30, 1, 0, 0])
+            };
+            run(m, &hurt, third, me);
+            let health = m.unit_fields(third).unwrap().get_u32(UNIT_FIELD_HEALTH);
+            run(
+                m,
+                &ScriptStep {
+                    data_flags: SF_TARGET_SELF,
+                    ..step(48, [100, 1, 0, 0])
+                },
+                third,
+                me,
+            );
+            (
+                removed,
+                at_feet,
+                health,
+                m.creature(third).is_some_and(|c| c.alive()),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, 350, false));
+    let back = map
+        .query(move |m| {
+            ai::update_dead(m);
+            m.creature(host).is_some()
+        })
+        .await
+        .unwrap();
+    assert!(!back, "removed for good");
+}
+
+/// A creature spell list set by a script: one with no definition keeps
+/// the list it has, and a source that isn't a creature fails it; the
+/// guardian and group commands want a unit too.
+#[tokio::test]
+async fn list_guardian_and_group_commands_want_a_creature_or_a_unit() {
+    let mut d = data();
+    d.spells.creature_spells.insert(
+        70,
+        vec![crate::game::data::spells::CreatureSpell {
+            spell: BOON,
+            probability: 100,
+            ..Default::default()
+        }],
+    );
+    let (_realm, _a, me, map) = setup_with(d).await;
+    let (host, door) = (host(), door());
+    let out = map
+        .query(move |m| {
+            let list = |l| ScriptStep {
+                dataint: [100, 0, 0, 0],
+                ..step(55, [l, 0, 0, 0])
+            };
+            run(m, &list(70), host, Guid::zero());
+            run(m, &list(999), host, Guid::zero());
+            let kept = crate::game::map::spells::lists::list_of(m, host);
+            let abort = |s: ScriptStep| ScriptStep {
+                data_flags: SF_ABORT_ON_FAILURE,
+                ..s
+            };
+            (
+                kept,
+                run(m, &abort(list(70)), me, Guid::zero()),
+                run(m, &abort(step(56, [0; 4])), door, Guid::zero()),
+                run(
+                    m,
+                    &abort(ScriptStep {
+                        dataint: [100, 0, 0, 0],
+                        ..step(90, [SIT, 0, 0, 0])
+                    }),
+                    door,
+                    Guid::zero(),
+                ),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (70, false, false, false));
+}
+
+/// Instance data by script (37): set, raised or lowered; any other mode
+/// changes nothing.
+#[tokio::test]
+async fn instance_data_modes_other_than_set_raise_and_lower_are_none() {
+    let mut d = data();
+    d.maps.insert(
+        429,
+        crate::game::data::MapInfo {
+            id: 429,
+            internal_name: "Map429".into(),
+            name: "Map 429".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    d.scripts.map_templates.insert(
+        429,
+        MapTemplate {
+            map: 429,
+            map_type: 1,
+            player_limit: 5,
+            script_name: "instance_dire_maul".into(),
+            ..Default::default()
+        },
+    );
+    let (realm, mut a, me, map) = setup_with(d).await;
+    map.call(move |m| {
+        m.teleport(
+            me,
+            MapKey::world(429),
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    });
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(me).await;
+    let copy = realm.registry.online(me).unwrap().map();
+    let out = copy
+        .query(move |m| {
+            let data = |m: &Map| crate::game::map::instance_script::get_data(m, 15);
+            let start = data(m);
+            run(m, &step(37, [15, 1, 9, 0]), me, Guid::zero());
+            let unknown = data(m);
+            run(m, &step(37, [15, 1, 2, 0]), me, Guid::zero());
+            let lowered = data(m);
+            run(m, &step(37, [15, 4, 1, 0]), me, Guid::zero());
+            (start, unknown, lowered, data(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (6, 6, 5, 9));
 }
