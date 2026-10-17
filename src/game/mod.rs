@@ -98,6 +98,8 @@ mod tests_p3_core_guild;
 #[cfg(test)]
 mod tests_p3_core_inventory;
 #[cfg(test)]
+mod tests_p3_core_misc;
+#[cfg(test)]
 mod tests_p3_core_party;
 #[cfg(test)]
 mod tests_p3_core_social;
