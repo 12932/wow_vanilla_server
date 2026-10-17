@@ -900,6 +900,95 @@ and the write-up are in peon: `results/2026-10-16/aligned/`, `results/2026-10-16
 - Lightning Shield, damage shields, target triggers, kill procs, and the scripted procs (Seal of Righteousness,
   Nightfall, Eye for an Eye).
 
+### Phase 13: pets, guardians, totems and charm (2026-10-17)
+
+`map/pets/` (summon, control, AI, hunter, totems) and `data/pets.rs`.
+
+- **A pet** is a creature with an owner: the owner's faction, a pet number and name. A hunter's pet also has XP,
+  focus, happiness, loyalty and training points. Its bar goes out in `SMSG_PET_SPELLS`.
+- **Its behaviour:**
+  - it follows (and jumps to its master past 60 yards), stays, and attacks on command or by its stance, defensive and
+    aggressive picking their fights;
+  - it casts what's set to autocast, and an imp keeps its distance to cast;
+  - it goes while its master is mounted, dead or flying and comes back after, and is kept across a logout and a map
+    change.
+- **The opcodes:** the 11 pet opcodes and the 5 stable ones. Stable masters by their NPC flag and gossip, and
+  untraining by gossip.
+- **Hunters:**
+  - taming through its channel, with Thistle Tea's checks;
+  - Call, Dismiss and Revive Pet;
+  - feeding by food type and level;
+  - pet XP and levels, happiness and loyalty;
+  - spellbooks by the pet's skill lines;
+  - training as Thistle Tea checks it.
+- **Warlocks:** demons with their create and Grimoire spells at the right ranks, and generated names. Enslave Demon
+  charms, and the demon turns on its warlock when it's let go. Mind Control and Eye of Kilrogg possess: far sight,
+  the client in control, the unit moving with it.
+- **Totems:** one of each element, a new one replacing the old with its auras. A totem holds its party aura on the
+  group members in range.
+- **Guardians** fight for the spell's duration. **Companions** follow, and casting the same one again sends it away.
+
+### Phase 14 (2026-10-17)
+
+The battlegrounds share one layer, `map/battleground/{mod,wsg,ab,av}.rs`:
+- vmangos's battleground events gate the spawns;
+- the countdown, doors and ghost gates;
+- 30-second spirit guide waves;
+- each battleground's scoreboard columns, bonus honor, win and lose spells, and the close after 120 seconds.
+
+- **Arathi Basin:** five bases assaulted or claimed by their banners, taken after 60 seconds or defended at once.
+  - vmangos's resource rates to 2,000, its world states and announcements, graveyards at the bases held.
+  - Honor every 330 resources and on the win, the four- and five-base spells, the near-victory warning, and the speed,
+    restoration and berserk pickups.
+- **Alterac Valley:** 15 graveyards and towers, taken after 5 minutes; a burnt tower stays burnt, and the defenders
+  follow their events.
+  - The mines are won by killing their keeper and reclaimed after 20 minutes.
+  - Captains, commanders, explosives experts and lieutenants. The generals end it.
+  - Honor for objectives and for surviving, by the match's length. The captains buff their side now and then.
+- **Honor** (`game/honor.rs`, kept as records):
+  - honorable kills, a tenth less for each repeat of the same victim in a day, as Thistle Tea has it;
+  - credit shared by the last 60 seconds' player damage, and by group;
+  - dishonorable kills of civilians; racial leaders count;
+  - the weekly ranking by standing, with decay and level caps;
+  - the honor fields, rank titles and highest rank, `MSG_INSPECT_HONOR_STATS`, `SMSG_PVP_CREDIT` with real values, and
+    Honorless Target on arrival;
+  - the week turns on a configured day (Wednesday); `.honor week` and `.honor points`.
+- **The opcodes:** battlefield list, join and status, the area spirit healer's query and queue, flag carriers'
+  positions, and `/pvp`. A battleground portal shows its list.
+- **The PvP flag:** `/pvp`, enemy capitals, and on a PvP realm enemy and contested land, lasting 5 minutes after.
+- **World PvP** (`map/outdoor_pvp.rs`):
+  - the four Plaguelands towers, with capture meters, world states, defense messages, credit and the buffs for towers
+    held;
+  - Silithus's silithyst, carried to camp: 200 give the Cenarion Favor, and a carrier who falls drops it.
+
+### Phase 13: reputation, rest and the remaining opcodes (2026-10-17)
+
+- **Raw packets:** wow_messages reads a 16-bit faction where 1.12 sends a 32-bit index in the three faction opcodes,
+  so a real client's were dropped. The connection now hands them on raw.
+- **Reputation:**
+  - standings and gains from kills (with the group) and quests, with the level rates and spillover;
+  - forced reactions, at war, inactive and watched;
+  - a faction shown when targeted;
+  - a tenth off at vendors from honored, and items behind reputation hidden;
+  - at war makes a faction's units attackable; hated or hostile ones attack.
+- **Rested XP:** inns and friendly capitals, accrued online and off (a quarter outside rest), doubling kill XP from
+  the pool. Inns give an instant logout.
+- **Quests:** sharing with its results, escort confirmations and swapping the log. Template mail on quests. Taking a
+  quest "from a player" now needs it shared.
+- **GM tickets**, kept as records, with `.ticket`.
+- **Items:** opening (lockboxes and clams with their loot), reading and page text, gift wrapping, the bank's auto
+  moves, and equipping to a slot.
+- **Express flights**, talent resets at the rising price, unlearning a skill, swapping raid subgroups, meeting stones
+  (matched by class role), the LFG stub, soulstones and Reincarnation, summons, far sight, the mount animation,
+  cancelling growth auras, and the speed, knockback and time-skip acknowledgements.
+- **Player systems:**
+  - resurrection sickness at the spirit healer;
+  - ghost speed by race (a night elf's wisp is faster);
+  - breath, fatigue, lava and slime with their mirror timers;
+  - exploration XP, which was missing;
+  - deleting a character cleans up their guild, charters, mail, auctions and friends (a guild leader with members is
+    refused).
+
 ### Phase 15 (2026-10-17)
 
 **Group loot** (`loot.rs`), as Thistle Tea's:
