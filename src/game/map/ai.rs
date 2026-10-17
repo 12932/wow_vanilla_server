@@ -111,7 +111,7 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if critter {
         return;
     }
-    call_for_help(map, creature, attacker);
+    crate::game::map::creature_combat::called_for_help(map, creature, attacker);
     if first {
         crate::game::map::event_ai::aggro(map, creature, attacker);
         crate::game::map::creature_combat::entered(map, creature, attacker);
@@ -208,42 +208,6 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
     }
 }
 
-/// Creatures of the same faction near `creature` join its fight.
-fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
-    let Some(c) = map.creature(creature) else {
-        return;
-    };
-    let template = map.realm.data.creature_template(c.entry);
-    // A script's range stands over the template's.
-    let radius = c
-        .scripted
-        .as_deref()
-        .and_then(|s| s.call_for_help_range)
-        .or_else(|| template.map(|t| t.call_for_help_range))
-        .filter(|r| *r > 0.0)
-        .unwrap_or(0.0);
-    if radius <= 0.0 {
-        return;
-    }
-    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
-    let helpers: Vec<Guid> = map
-        .grid
-        .around(pos.x, pos.y, radius)
-        .filter(|g| guid::is_unit(*g) && *g != creature)
-        .filter(|g| {
-            map.creature(*g).is_some_and(|h| {
-                h.alive()
-                    && !crate::game::map::creature_motion::critter(map, *g)
-                    && !h.combat.attacking
-                    && h.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction
-                    && dist(h.position, pos) <= radius
-            })
-        })
-        .collect();
-    for h in helpers {
-        attacked(map, h, enemy);
-    }
-}
 
 /// A creature dies.
 pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
