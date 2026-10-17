@@ -40,19 +40,59 @@ pub fn populate(map: &mut Map) {
     }
     let on = crate::game::events::current(&map.realm);
     let mut rng = rand::rng();
+    let (skip_creatures, skip_objects) =
+        crate::game::map::creature_groups::unpicked(&data, map.key.map, &mut rng);
+    // A copy's save: its dead stay dead until they are due back.
+    let save = (map.key.instance != 0)
+        .then(|| crate::game::instances::save_of(&map.realm, map.key.instance))
+        .flatten();
+    if let Some(s) = &save {
+        crate::game::map::instance_script::load(map, &s.data);
+    }
+    let unix = crate::game::social::mail::now();
+    let mut lying = Vec::new();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on) {
+            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
+                || skip_creatures.contains(&s.guid)
+            {
                 continue;
             }
             if let Some(c) = Creature::from_spawn(&data, s, &mut rng) {
-                map.add_creature(c);
+                let g = map.add_creature(c);
+                if let Some(back) = save.as_ref().and_then(|v| v.dead.get(&s.guid)).copied()
+                    && back > unix
+                {
+                    let wait = (back != crate::game::instances::NEVER)
+                        .then(|| Duration::from_secs((back - unix) as u64));
+                    lying.push((g, wait));
+                }
             }
+        }
+    }
+    for (g, wait) in lying {
+        crate::game::map::ai::lie_dead(map, g, wait);
+    }
+    // Linked slaves that can't spawn with their master dead.
+    let barred: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive())
+        .filter_map(|(_, c)| c.spawn_guid.map(|s| (c.guid, s)))
+        .filter(|(_, s)| data.scripts.links.contains_key(s))
+        .map(|(g, _)| g)
+        .collect();
+    for g in barred {
+        let spawn = map.creature(g).and_then(|c| c.spawn_guid).unwrap_or(0);
+        if !crate::game::map::creature_groups::may_spawn(map, spawn) {
+            crate::game::map::ai::lie_dead(map, g, Some(Duration::from_secs(30)));
         }
     }
     if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on) {
+            if !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
+                || skip_objects.contains(&s.guid)
+            {
                 continue;
             }
             if let Some(t) = data.gameobject_templates.get(&s.entry) {
@@ -60,6 +100,7 @@ pub fn populate(map: &mut Map) {
             }
         }
     }
+    crate::game::map::instance_script::settle_spawns(map);
     // Nobody is here yet to see any of it.
     map.visibility_dirty.clear();
     if !map.creatures.is_empty() || !map.gameobjects.is_empty() {
@@ -104,14 +145,21 @@ fn step_creature(
         let Some(c) = map.creatures.get(key) else {
             return;
         };
+        if crate::game::map::creature_groups::follows(&map.realm.data, c.spawn_guid)
+            && !matches!(c.motion, Motion::Moving(_))
+        {
+            return;
+        }
         if c.movement_type == MOVEMENT_WAYPOINT {
             c.spawn_guid
                 .and_then(|g| map.realm.data.waypoints.get(&g))
+                .or_else(|| map.realm.data.waypoints_by_entry.get(&c.entry))
                 .cloned()
         } else {
             None
         }
     };
+    let mut arrived = None;
     let spline_id = map.next_spline_id;
     let Some(c) = map.creatures.get_mut(key) else {
         return;
@@ -135,6 +183,7 @@ fn step_creature(
                         if wp.orientation != 0.0 {
                             c.orientation = wp.orientation;
                         }
+                        arrived = Some((c.waypoint % wps.len(), wp.script_id));
                         Duration::from_millis(u64::from(wp.wait_ms))
                     }
                     _ => wander_pause(rng),
@@ -176,7 +225,8 @@ fn step_creature(
                         }
                         None => vec![from, target],
                     };
-                    frame = c.walk(path, false, now, spline_id);
+                    let run = c.scripted.as_deref().is_some_and(|s| s.run);
+                    frame = c.walk(path, run, now, spline_id);
                     if frame.is_none() {
                         c.motion = Motion::Idle {
                             until: Some(now + wander_pause(rng)),
@@ -191,6 +241,11 @@ fn step_creature(
     let (pos, anchor, old_cell) = (c.position, c.vis_anchor, c.cell);
     let new_cell = cell_of(pos.x, pos.y);
     c.cell = new_cell;
+    let walked = match (&frame, &c.motion) {
+        (Some(_), Motion::Moving(w)) => Some((w.destination(), w.run)),
+        _ => None,
+    };
+    let facing = c.orientation;
     if frame.is_some() {
         map.next_spline_id = map.next_spline_id.wrapping_add(1);
     }
@@ -198,6 +253,21 @@ fn step_creature(
     visibility::moved(map, guid, anchor, pos);
     if let Some(frame) = frame {
         map.send_to_observers(guid, &frame, false);
+    }
+    if let Some((to, run)) = walked {
+        crate::game::map::creature_groups::leader_walked(map, guid, to, facing, run);
+    }
+    if let Some((point, script)) = arrived {
+        crate::game::map::event_ai::movement_inform(map, guid, 2, point as u32);
+        if script != 0 {
+            crate::game::map::scripts::start(
+                map,
+                crate::game::data::scripts::ScriptTable::Movement,
+                script,
+                guid,
+                Guid::zero(),
+            );
+        }
     }
 }
 
@@ -272,6 +342,24 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
     }
     crate::game::map::quests::explored(map, guid, id);
     crate::game::map::battleground::area_trigger(map, guid, id);
+    if let Some(script) = data.scripts.areatrigger_script.get(&id).copied() {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::Generic,
+            script,
+            guid,
+            guid,
+        );
+    }
+    if data.scripts.areatrigger.contains_key(&id) {
+        crate::game::map::scripts::start(
+            map,
+            crate::game::data::scripts::ScriptTable::AreaTrigger,
+            id,
+            guid,
+            guid,
+        );
+    }
     let Some(p) = map.players.get(&guid) else {
         return;
     };
@@ -320,6 +408,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::battleground::use_object(map, player, object) {
         return;
     }
+    crate::game::map::scripts::object_used(map, player, object);
     let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {
         return;
     };

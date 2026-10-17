@@ -12,13 +12,13 @@ use super::*;
 
 /// A row's columns by name, read leniently: a number may be stored as an
 /// integer or a real.
-struct Cols<'a, 'b>(&'a Row<'b>);
+pub(super) struct Cols<'a, 'b>(&'a Row<'b>);
 
 impl Cols<'_, '_> {
     fn value(&self, name: &str) -> Value {
         self.0.get::<_, Value>(name).unwrap_or(Value::Null)
     }
-    fn i64(&self, name: &str) -> i64 {
+    pub(super) fn i64(&self, name: &str) -> i64 {
         match self.value(name) {
             Value::Integer(i) => i,
             Value::Real(f) => f as i64,
@@ -26,17 +26,17 @@ impl Cols<'_, '_> {
             _ => 0,
         }
     }
-    fn u32(&self, name: &str) -> u32 {
+    pub(super) fn u32(&self, name: &str) -> u32 {
         u32::try_from(self.i64(name).max(0)).unwrap_or(u32::MAX)
     }
-    fn i32(&self, name: &str) -> i32 {
+    pub(super) fn i32(&self, name: &str) -> i32 {
         self.i64(name)
             .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
     }
-    fn u8(&self, name: &str) -> u8 {
+    pub(super) fn u8(&self, name: &str) -> u8 {
         self.i64(name).clamp(0, 255) as u8
     }
-    fn f32(&self, name: &str) -> f32 {
+    pub(super) fn f32(&self, name: &str) -> f32 {
         match self.value(name) {
             Value::Integer(i) => i as f32,
             Value::Real(f) => f as f32,
@@ -44,7 +44,7 @@ impl Cols<'_, '_> {
             _ => 0.0,
         }
     }
-    fn string(&self, name: &str) -> String {
+    pub(super) fn string(&self, name: &str) -> String {
         match self.value(name) {
             Value::Text(t) => t,
             Value::Integer(i) => i.to_string(),
@@ -61,7 +61,7 @@ fn open(path: &Path) -> rusqlite::Result<Connection> {
 }
 
 /// Every row of `sql`, through `f`.
-fn rows<T>(conn: &Connection, sql: &str, mut f: impl FnMut(&Cols) -> T) -> Vec<T> {
+pub(super) fn rows<T>(conn: &Connection, sql: &str, mut f: impl FnMut(&Cols) -> T) -> Vec<T> {
     let mut stmt = match conn.prepare(sql) {
         Ok(s) => s,
         Err(e) => {
@@ -122,6 +122,8 @@ pub fn load(dir: &Path) -> GameData {
             load_vmangos(&db, &mut data);
             load_npcs(&db, dbc.as_ref(), &mut data);
             load_spells(&db, dbc.as_ref(), &mut data);
+            super::scripts_load::load(&db, &mut data);
+            crate::game::map::creature_scripts::install(&mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -519,11 +521,31 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
                     z: c.f32("position_z"),
                     orientation: c.f32("orientation"),
                     wait_ms: c.u32("waittime"),
+                    script_id: c.u32("script_id"),
                 },
             )
         },
     ) {
         data.waypoints.entry(id).or_default().push(w);
+    }
+    for (entry, w) in rows(
+        db,
+        "SELECT * FROM creature_movement_template ORDER BY entry, path_id, point",
+        |c| {
+            (
+                c.u32("entry"),
+                Waypoint {
+                    x: c.f32("position_x"),
+                    y: c.f32("position_y"),
+                    z: c.f32("position_z"),
+                    orientation: c.f32("orientation"),
+                    wait_ms: c.u32("waittime"),
+                    script_id: c.u32("script_id"),
+                },
+            )
+        },
+    ) {
+        data.waypoints_by_entry.entry(entry).or_default().push(w);
     }
 }
 
@@ -839,6 +861,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     box_money: c.u32("box_money"),
                     box_text: c.string("box_text"),
                     condition: c.u32("condition_id"),
+                    script: c.u32("action_script_id"),
                 },
             )
         },
@@ -869,6 +892,8 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     (c.u32("emote_delay2"), c.u32("emote_id2")),
                     (c.u32("emote_delay3"), c.u32("emote_id3")),
                 ],
+                chat_type: c.u32("chat_type"),
+                sound: c.u32("sound_id"),
             },
         )
     }) {
