@@ -50,6 +50,8 @@ pub struct Walk {
     pub fly: bool,
     /// Falling (a flyer's corpse).
     pub falling: bool,
+    /// The unit it turns to face as it goes (a chase's victim).
+    pub face: Option<Guid>,
 }
 
 impl Walk {
@@ -78,7 +80,18 @@ impl Walk {
             run,
             fly: false,
             falling: false,
+            face: None,
         }
+    }
+
+    /// The points it has passed by `now`, where it set off from first.
+    pub fn passed(&self, now: Instant) -> impl Iterator<Item = Vector3d> + '_ {
+        let travelled = now.duration_since(self.started).as_secs_f32() * self.speed;
+        self.points
+            .iter()
+            .zip(&self.lengths)
+            .filter(move |(_, l)| **l <= travelled)
+            .map(|(p, _)| *p)
     }
 
     /// The distance from the start to each point.
@@ -159,7 +172,10 @@ impl Walk {
             guid,
             spline_point: from,
             spline_id: self.spline_id,
-            move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
+            move_type: match self.face {
+                Some(target) => SMSG_MONSTER_MOVE_MonsterMoveType::FacingTarget { target },
+                None => SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
+            },
             spline_flags: SplineFlag::new(self.spline_flags()),
             duration: self.duration.as_millis() as u32,
             splines,
@@ -590,6 +606,28 @@ impl Creature {
         }
         let mut walk = Walk::new(points, speed, now, spline_id, run);
         walk.fly = fly;
+        let frame = encode(&walk.packet(self.guid, self.position));
+        self.motion = Motion::Moving(walk);
+        frame
+    }
+
+    /// A chase: [`Self::walk_at`] at a run, facing `victim` as it goes and
+    /// at the end, as Thistle Tea's `Navigation.chase` and mangos's chase
+    /// (`SetFacing`) send it.
+    pub fn chase(
+        &mut self,
+        points: Vec<Vector3d>,
+        fly: bool,
+        victim: Guid,
+        now: Instant,
+        spline_id: u32,
+    ) -> Option<Arc<[u8]>> {
+        if points.len() < 2 {
+            return None;
+        }
+        let mut walk = Walk::new(points, self.speeds.run, now, spline_id, true);
+        walk.fly = fly;
+        walk.face = Some(victim);
         let frame = encode(&walk.packet(self.guid, self.position));
         self.motion = Motion::Moving(walk);
         frame
