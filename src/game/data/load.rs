@@ -338,6 +338,8 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
                 attack_power: c.u32("attack_power"),
                 ranged_attack_power: c.u32("ranged_attack_power"),
                 armor: c.u32("armor"),
+                intellect: c.u32("intellect"),
+                spirit: c.u32("spirit"),
             },
         )
     }) {

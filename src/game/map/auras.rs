@@ -1290,6 +1290,8 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     true,
                 );
             }
+            // A player is moved by the server while it lasts.
+            crate::game::map::player_motion::control(map, target);
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
             crate::game::map::spells::interrupt(map, target);
@@ -1454,11 +1456,13 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
             }
+            crate::game::map::player_motion::control(map, target);
         }
         AURA_MOD_CONFUSE if !still(map, AURA_MOD_CONFUSE) => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_CONFUSED, false);
             }
+            crate::game::map::player_motion::control(map, target);
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE
             if !still(map, AURA_MOD_SILENCE) && !still(map, AURA_MOD_PACIFY_SILENCE) =>
@@ -1885,6 +1889,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     let now = f.get_u32(UNIT_FIELD_POWER1 + power);
                     f.set_u32(UNIT_FIELD_POWER1 + power, (now + gain).min(max));
                 }
+                crate::game::map::proc_scripts::leeched(map, target, h, power);
             } else {
                 let damage = (taken as f32 * mult.max(0.0)) as u32;
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
