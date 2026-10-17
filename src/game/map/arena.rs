@@ -689,6 +689,7 @@ fn countdown(map: &mut Map) {
             let mana = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
             p.fields.set_u32(UNIT_FIELD_POWER1, mana);
         }
+        free_for_all(map, g);
     }
     shout(map, "FIGHT!");
     yell(map, "Let the blood of the Gurubashi flow! FIGHT!");
@@ -1027,6 +1028,7 @@ fn fall(map: &mut Map, g: Guid, by: Option<Guid>, how: Fall) {
         Fall::Fell => format!("{victim} has fallen! {left} fighters remain."),
     };
     crate::game::map::auras::remove_spell(map, g, SPELL_RING_BURN, None);
+    free_for_all(map, g);
     yell(map, &line);
     for e in extra {
         shout(map, &e);
@@ -1090,6 +1092,7 @@ fn end_battle(map: &mut Map, won: Option<Option<Guid>>) {
     let mut seat_n = 0;
     for f in &b.fighters {
         crate::game::map::auras::remove_spell(map, f.guid, SPELL_RING_BURN, None);
+        free_for_all(map, f.guid);
         let Some(p) = map.players.get(&f.guid) else {
             continue;
         };
@@ -1208,6 +1211,30 @@ fn reward(map: &mut Map, g: Guid, config: &ArenaConfig) {
             map,
             g,
             "Your bags are full: the arena keeps your prize. Make room, champion.",
+        );
+    }
+}
+
+/// Whether `g` is a fighter still standing in a fight under way.
+pub fn fighting(map: &Map, g: Guid) -> bool {
+    map.arena
+        .battle
+        .as_ref()
+        .is_some_and(|b| b.fighting() && b.fighter(g).is_some_and(|f| f.alive))
+}
+
+/// A fighter's free-for-all flag: on while they fight, else as their area
+/// has it. The client lets a player strike one of their own side only when
+/// both carry it, and the server knows the pit's area only from the navmesh
+/// or the terrain; without them, two of one side could never fight.
+fn free_for_all(map: &mut Map, g: Guid) {
+    let area = map.players.get(&g).map_or(0, |p| p.area);
+    let on = fighting(map, g) || crate::game::map::world::area_is_ffa(&map.realm.data, area);
+    if let Some(p) = map.players.get_mut(&g) {
+        p.fields.set_flag(
+            PLAYER_FLAGS,
+            crate::game::map::player::PLAYER_FLAGS_FFA_PVP,
+            on,
         );
     }
 }

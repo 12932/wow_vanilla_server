@@ -343,3 +343,52 @@ fn the_shipped_config_has_the_arena() {
         "no scheduled battles by default"
     );
 }
+
+/// Two of one side, a Human and a Dwarf, may strike each other once the
+/// fight is on: the battle marks its fighters free-for-all, which is what
+/// the client goes by, even where the server knows no area (no navmesh or
+/// terrain). Before the fight and after it, they are friends again.
+#[tokio::test]
+async fn fighters_of_one_side_are_free_for_all_for_the_fight() {
+    let realm = harness::realm_with(data());
+    let (mut a, alice) = fighter(&realm, "Alice", 0.0).await;
+    let mut d = Client::connect(&realm, "Dora");
+    let dora = d.enter("Dora", Race::Dwarf, Class::Warrior).await;
+    let map = arena_map(&realm);
+    map.query(move |m| {
+        let at = Vector3d {
+            x: CENTRE.x + 3.0,
+            y: CENTRE.y,
+            z: CENTRE.z,
+        };
+        m.teleport(dora, m.key, at, 0.0);
+    })
+    .await;
+    let flags = move |m: &crate::game::map::Map| {
+        [alice, dora].map(|g| {
+            m.players[&g]
+                .fields
+                .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_FFA_PVP)
+        })
+    };
+    let before = map.query(move |m| flags(m)).await.unwrap();
+    assert_eq!(before, [false, false], "one side, no area: friends");
+    a.say(".arena start 1").await;
+    hears(&mut a, "FIGHT").await;
+    let (during, may) = map
+        .query(move |m| {
+            (
+                flags(m),
+                crate::game::map::combat::can_attack(m, alice, dora),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(during, [true, true], "both free-for-all for the fight");
+    assert!(may, "and the server lets them");
+    map.query(move |m| crate::game::map::combat::kill(m, alice, dora))
+        .await;
+    hears(&mut a, "Champion of Gurubashi Arena").await;
+    let after = map.query(move |m| flags(m)).await.unwrap();
+    assert_eq!(after, [false, false], "friends again once it's over");
+}
