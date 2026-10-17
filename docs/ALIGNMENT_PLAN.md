@@ -1051,6 +1051,136 @@ The battlegrounds share one layer, `map/battleground/{mod,wsg,ab,av}.rs`:
 - **A panic count:** maps count the panics `guarded()` catches. A real-data test fights EventAI creatures in Northshire
   and the Deadmines and finds none.
 
+### Phase 13: spells (2026-10-17)
+
+`map/spells/`: casting, checks, outcomes, modifiers, cooldowns, targets, effects, class scripts and stealth. Of the
+3,494 spells a player can have, 98.5% now run every effect, aura and target they use (a real-data test counts them).
+
+- **Outcomes:**
+  - vmangos's magic hit by level, binary and partial resists;
+  - immunities, evade and reflection (the wards' talents too);
+  - abilities rolled on combat's table;
+  - crits at 150% for spells and 200% for abilities, with talents, Shatter and crit against creature types;
+  - spell and healing power with each spell's coefficient;
+  - damage and healing done and taken, absorbs and damage split;
+  - the damage, heal and miss logs in 1.12's layout.
+- **Talent modifiers** (auras 107 and 108), matched by family mask: points, cost, cast time, cooldown, global
+  cooldown, duration, range, radius, crit, threat, charges, chains and damage over time. Their charges are spent, and
+  the client is told.
+- **The checks**, as Thistle Tea's validation:
+  - the caster's state (stunned, silenced, pacified, feared, sitting, mounted, flying, in combat, stealthed);
+  - forms and stances, aura states, combo points, power, reagents, tools, spell focus, gear and disarm;
+  - the target's side, creature type, level, range, facing, back and line of sight;
+  - school lockouts.
+- **Targets:** Thistle Tea's implicit-target table: chains, areas, cones, parties, raids and limits.
+- **Effects:**
+  - a spell's auras as one holder, with diminishing returns;
+  - weapon damage as one blow, normalized where the spell is;
+  - about 30 more (power burn, dispel by mechanic, interrupts with lockouts, vanish, knockback, taunt, bind, stuck,
+    distract, durability);
+  - persistent areas (Blizzard) and party auras following their caster.
+- **Class scripts:**
+  - Execute, Life Tap, Conflagrate;
+  - Judgement, Holy Light and Flash of Light with Blessing of Light, Holy Shock;
+  - Cold Snap, Preparation, Last Stand;
+  - Berserking, Blood Fury, Cannibalize, Bloodrage;
+  - healthstones and soul shards, Eviscerate's attack power;
+  - Healing Way, Predatory Strikes, Furor, Leader of the Pack, Hunter's Mark, Fade.
+- **The rest:**
+  - stealth and invisibility, with their detection, in sight and aggro;
+  - regeneration auras;
+  - Safe Fall and Feather Fall;
+  - a druid's power by form;
+  - cooldowns by category, by item, and on an aura's end (Stealth);
+  - auras and cooldowns kept across a logout.
+- **One of each:** pushback follows Thistle Tea's flags: a player's cast delayed or cancelled, a channel shortened
+  or cancelled. A channel run its course has its last tick.
+
+### Phase 13: creature combat and class procs (2026-10-17)
+
+- **Refunds:** an avoided ability gives back most of its rage or energy, as Thistle Tea's. A dodged or parried white
+  swing gives three quarters of its rage.
+- **Thrown weapons and ammunition:** a ranged ability spends a round, and a thrown stack gets used up.
+- **Creatures:**
+  - a creature's off-hand weapon swings;
+  - `creature_template`'s mechanic and school immunities;
+  - Thistle Tea's leash (50 yards from where the fight began, 12 seconds without blows, 24 seconds out of reach);
+  - fleeing for assistance, or in fear;
+  - feared creatures run and confused ones stagger;
+  - out-of-combat regeneration (creatures didn't regenerate before);
+  - crowd control broken by any damage;
+  - attack power changing their blows, by vmangos's ratio.
+- **Class procs** (`proc_scripts.rs`), through the procs as Thistle Tea drives them:
+  - Ignite, Deep Wounds;
+  - Master of Elements, Illumination, Magic Absorption, Mana Drain;
+  - Pyroclasm, Blessed Recovery, Persistent Shield, Vampiric Embrace;
+  - Judgement of Light and Wisdom, Combustion, Sweeping Strikes, Retaliation, Eye for an Eye.
+- **PvP contact,** as Thistle Tea's: flagged by a blow on a flagged unit, by a flagged player's blow, or by healing
+  one. A player stays in combat while on any creature's threat list. Guards come to a civilian's call.
+
+### Phases 13 and 14: the second round (2026-10-17)
+
+- **Pets:**
+  - pets fight by their master's PvP rules, and their kills are their master's honor;
+  - Mind Control on players, with the active mover;
+  - a pet takes on its master's spell modifiers and the auras its master's talents give it;
+  - totems shrug off others' harm;
+  - hunter pets sized by family and level;
+  - pets' cooldowns kept;
+  - the stacking trinkets (Unstable Power, Ascendance and the like).
+- **Battlegrounds:**
+  - reputation from Warsong Gulch, Arathi Basin and Alterac Valley at Thistle Tea's amounts;
+  - Alterac Valley's quest-driven armor, offerings (Ivus, Lokholar), air, beacons, cavalry and ground assaults;
+  - the Plaguelands towers' rewards;
+  - rank gear worn by the highest rank reached;
+  - quest rewards cast their spell, and effect 45 gives honor.
+- **GM and client:**
+  - the dev commands at Thistle Tea's breadth (`.additem`, `.learn`, `.tgm`, `.instance`, `.bg`, `.debug`…);
+  - the client's caches kept and compressed;
+  - tutorials by account, and the intro cinematic's camera;
+  - quests' reputation requirements, and equipping by reputation.
+- **A bug fixed:** wvs's quest query response was four bytes short (a 16-bit faction where 1.12 has 32).
+
+### The world (2026-10-17)
+
+- **Transports:** vmangos's keyframes, as Thistle Tea's `Travel.Transport`: splines with acceleration, stops and map
+  changes. Passengers keep their place on deck as the ship turns, aboard across a relog. Elevators move by their
+  animation's frames.
+- **Events:**
+  - the hard-coded events as Thistle Tea's (the Darkmoon Faire's calendar, fireworks, Dragons of Nightmare);
+  - event quests and event looks;
+  - the Scourge Invasion (by `.invasion on`), the Elemental Invasion, and Omen's minions.
+- **World states** on every zone change, and the server's own live.
+- **Items:**
+  - binding on pickup, equip and use;
+  - charges spent, and items used up;
+  - item and category cooldowns;
+  - conjured items gone after 15 minutes offline, and timed items;
+  - the keyring and special bags;
+  - honor-rank gear.
+- **Chat:** only languages a player knows, with Curse of Tongues.
+- **Quests:**
+  - timed quests;
+  - gossip's points of interest;
+  - flights resumed after a relog;
+  - 29 escorts and 7 followers, from Thistle Tea's catalogues.
+
+### Gurubashi Arena: last man standing (2026-10-17)
+
+Beyond Thistle Tea, which has no such event.
+- **The start:** a GM's `.arena start` (or a schedule) makes everyone on the pit's floor a fighter. Short John
+  Mithril counts down.
+- **The fight:**
+  - the fallen can't be raised until it ends, and go to the stands;
+  - the kill feed calls each kill, streak and milestone to the zone;
+  - after two minutes a ring of fire closes, burning anyone outside.
+- **The end:** the champion gets Spirit of Zandalar, gold and the Arena Grand Master trinket, every fighter gets the
+  standings, and the result is kept (`.arena history`).
+- **Also:** the Booty Run's chest falls with its event, and objects with a negative spawn time stay out until a
+  script or event places them.
+- **peon's last-man-standing scenario** plays it out: 100 level-60 bots to one champion in four minutes, at 0.10
+  cores.
+
 ## Where the plan leaves the gap
 
 Each phase's "Left for later" lists what remains. The largest:
