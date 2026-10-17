@@ -2,6 +2,8 @@
 //! here, as Thistle Tea's tests of them have it: what a target's damage
 //! taken does to a spell's hit and tick.
 
+use std::time::Duration;
+
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
@@ -339,4 +341,180 @@ async fn a_damage_over_time_keeps_its_cadence_through_late_updates_and_its_last_
     assert_eq!(full % 3000, 0, "Corruption's ticks three seconds apart");
     assert_eq!(ticks, full / 3000, "every tick, the last too");
     assert!(quiet, "removed, it ticks no more");
+}
+
+const FIREBALL: u32 = 133;
+const FROSTBOLT: u32 = 116;
+const LAY_ON_HANDS: u32 = 633;
+const CONJURE_WATER: u32 = 5504;
+const CONJURED_WATER: u32 = 5350;
+const RESURRECTION: u32 = 2006;
+const SEAL_OF_RIGHTEOUSNESS_STRIKE: u32 = 25742;
+const AMPLIFY_MAGIC: u32 = 1008;
+const LESSER_HEAL: u32 = 2050;
+const COUNTERSPELL: u32 = 2139;
+
+#[tokio::test]
+async fn spells_do_what_their_effects_say() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, mage, map) = player(&realm, "P3D8", "Effectone", Race::Human, Class::Mage).await;
+    let (_d, pally, _) = player(&realm, "P3D9", "Effecttwo", Race::Human, Class::Paladin).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            ready(m, pally, 60, &[]);
+            let kobold = dummy(m, mage, 60, 10.0);
+            let data = m.realm.data.clone();
+            let s = |id: u32| data.spells.get(id).cloned().unwrap();
+            // A fire reflect sends a Fireball back, not a Frostbolt.
+            let mut reflect = made_up(990_980, 6, auras::AURA_REFLECT_SPELLS_SCHOOL, 4, 100);
+            reflect.duration_index = 21;
+            apply_template(m, kobold, kobold, &reflect);
+            let (k, me) = (health(m, kobold), health(m, mage));
+            crate::game::map::spells::cast_triggered(m, mage, FIREBALL, Some(kobold));
+            let reflected = (health(m, kobold) == k, health(m, mage) < me);
+            crate::game::map::spells::cast_triggered(m, mage, FROSTBOLT, Some(kobold));
+            let frost = health(m, kobold) < k;
+            auras::remove_spell(m, kobold, 990_980, None);
+            // A heal's crit is half more.
+            let heal = s(LESSER_HEAL);
+            let plain = outcome::healing(m, pally, pally, &heal, 0, 100.0, &Landing::default());
+            let crit = outcome::healing(
+                m,
+                pally,
+                pally,
+                &heal,
+                0,
+                100.0,
+                &Landing {
+                    crit: true,
+                    ..Default::default()
+                },
+            );
+            // Amplify Magic's healing by the heal's coefficient.
+            apply(m, mage, pally, AMPLIFY_MAGIC);
+            let amplified = outcome::healing(m, pally, pally, &heal, 0, 100.0, &Landing::default());
+            let bonus =
+                auras::auras(m, pally).map_or(0, |a| a.sum_mask(auras::AURA_MOD_HEALING, 2));
+            let coefficient = outcome::coefficient(m, &heal, 0, Kind::Direct);
+            auras::remove_spell(m, pally, AMPLIFY_MAGIC, None);
+            // Lay on Hands: the caster's whole health.
+            let max = m
+                .unit_fields(pally)
+                .map_or(0, |f| f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH));
+            set_health(m, mage, 100);
+            if let Some(f) = m.unit_fields_mut(mage) {
+                f.set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 100_000);
+            }
+            crate::game::map::spells::cast_triggered(m, pally, LAY_ON_HANDS, Some(mage));
+            let laid = health(m, mage) - 100;
+            // A spell that can't crit doesn't, at a sure crit.
+            let mut sure = made_up(990_981, 6, auras::AURA_MOD_SPELL_CRIT_CHANCE, 0, 100);
+            sure.duration_index = 21;
+            apply_template(m, pally, pally, &sure);
+            let mods = crate::game::map::spells::mods::Mods::default();
+            let crits = (
+                outcome::roll_crit(m, pally, kobold, &s(FIREBALL), &mods),
+                outcome::roll_crit(m, pally, kobold, &s(SEAL_OF_RIGHTEOUSNESS_STRIKE), &mods),
+            );
+            // Shadow power does nothing for a Fireball.
+            let mut shadow = made_up(990_982, 6, auras::AURA_MOD_DAMAGE_DONE, 32, 100);
+            shadow.duration_index = 21;
+            apply_template(m, mage, mage, &shadow);
+            let fire =
+                outcome::damage(m, mage, kobold, &s(FIREBALL), 0, 100.0, &Landing::default())
+                    .amount;
+            // A Fireball that kills leaves no burn on the dead.
+            set_health(m, kobold, 5);
+            crate::game::map::spells::cast_triggered(m, mage, FIREBALL, Some(kobold));
+            let killed = (
+                m.creature(kobold).is_none_or(|c| !c.alive()),
+                has(m, kobold, FIREBALL),
+            );
+            // Resurrection does nothing for a dead creature.
+            crate::game::map::spells::cast_triggered(m, pally, RESURRECTION, Some(kobold));
+            let raised = m.creature(kobold).is_some_and(|c| c.alive());
+            // Conjure Water makes two.
+            let had = m.players[&mage].carried_count_of(CONJURED_WATER);
+            crate::game::map::spells::cast_triggered(m, mage, CONJURE_WATER, None);
+            let water = m.players[&mage].carried_count_of(CONJURED_WATER) - had;
+            // Counterspell locks the school out for its ten seconds.
+            let other = dummy(m, mage, 60, 8.0);
+            crate::game::map::spells::cast(m, other, FIREBALL, at(mage), None);
+            crate::game::map::spells::cast_triggered(m, mage, COUNTERSPELL, Some(other));
+            let lock = m.caster(other).map(|c| {
+                c.school_lockout
+                    .iter()
+                    .map(|(mask, t)| (*mask, t.saturating_duration_since(m.now)))
+                    .collect::<Vec<_>>()
+            });
+            (
+                reflected,
+                frost,
+                plain,
+                crit,
+                amplified,
+                bonus,
+                coefficient,
+                max,
+                laid,
+                crits,
+                fire,
+                killed,
+                raised,
+                water,
+                lock,
+            )
+        })
+        .await
+        .unwrap();
+    let (
+        reflected,
+        frost,
+        plain,
+        crit,
+        amplified,
+        bonus,
+        coefficient,
+        max,
+        laid,
+        crits,
+        fire,
+        killed,
+        raised,
+        water,
+        lock,
+    ) = out;
+    assert_eq!(
+        reflected,
+        (true, true),
+        "the Fireball comes back at the mage"
+    );
+    assert!(frost, "a Frostbolt isn't reflected");
+    assert_eq!(crit, plain * 3 / 2, "a heal's crit is half more");
+    assert!(bonus > 0);
+    assert_eq!(
+        amplified,
+        (100.0 + bonus as f32 * coefficient) as u32,
+        "Amplify Magic by the coefficient"
+    );
+    assert_eq!(laid, max, "Lay on Hands heals the paladin's health");
+    assert_eq!(
+        crits,
+        (true, false),
+        "Seal of Righteousness's strike can't crit"
+    );
+    assert_eq!(fire, 100, "shadow power is nothing to a Fireball");
+    assert_eq!(killed, (true, false), "a killing Fireball leaves no burn");
+    assert!(!raised, "Resurrection is for players");
+    // Two at its own level, two more a level to its thirteenth.
+    assert_eq!(water, 20, "twenty waters at sixty");
+    assert_eq!(
+        lock,
+        Some(vec![(4, Duration::from_secs(10))]),
+        "fire locked out ten seconds"
+    );
 }
