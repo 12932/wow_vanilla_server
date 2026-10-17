@@ -202,6 +202,13 @@ pub const MAPS: &[MapInfo] = &[
 /// The game object models (`<nav>/models/`), built with any navmesh.
 pub const MODELS_BYTES: u64 = 15_746_765;
 
+/// The time each part of a build takes, for an overall bar, in KB of
+/// navmesh written (rustigator writes about 35 MB of it a second on 16
+/// threads, the 36 maps in some 5 minutes): a terrain tile (all 2,429 take
+/// under 2 s), and the models (about a second).
+pub const TERRAIN_TILE_WORK: u64 = 25;
+pub const MODELS_WORK: u64 = 35 << 10;
+
 impl MapInfo {
     pub fn has_navmesh(&self) -> bool {
         self.nav_bytes > 0

@@ -60,9 +60,10 @@ async fn async_main(start: Start) -> u8 {
                 // Past the setup's progress bars while they are drawn.
                 .with_writer(setup::ui::LogWriter)
                 .with_filter(
-                    // Recast's complaints, by the thousand in a navmesh build.
+                    // Recast's complaints, by the thousand in a navmesh build,
+                    // and a line an archive each time the client is opened.
                     EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| EnvFilter::new("info,landmark=off")),
+                        .unwrap_or_else(|_| EnvFilter::new("info,landmark=off,wow_mpq=warn")),
                 ),
         )
         .with(tracy_layer)

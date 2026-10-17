@@ -364,7 +364,11 @@ impl Watch for Bars {
         if !state.done.insert(k.clone()) {
             return;
         }
-        let steps = state.steps.get(&k).map_or(0, |s| s.1);
+        // A build that didn't say how many steps it had gets no count.
+        let steps = state.steps.get(&k).map(|s| s.1);
+        let counted = |n: Option<u64>, what: &str| {
+            n.map_or(String::new(), |n| format!(" {}", count(n, what)))
+        };
         match stage {
             Stage::Terrain(_) => {
                 state.terrain_left.remove(&k);
@@ -373,10 +377,11 @@ impl Watch for Bars {
                 {
                     bar.finish_and_clear();
                     self.multi.remove(&bar);
+                    let tiles = (bar.position() > 0).then(|| bar.position());
                     self.line(format!(
-                        "{:<9} {} in {}",
+                        "{:<9}{} in {}",
                         "Terrain",
-                        count(bar.position(), "tile"),
+                        counted(tiles, "tile"),
                         short(bar.elapsed())
                     ));
                 }
@@ -386,9 +391,9 @@ impl Watch for Bars {
                     bar.finish_and_clear();
                     self.multi.remove(&bar);
                     self.line(format!(
-                        "{:<9} {} in {}",
+                        "{:<9}{} in {}",
                         "Models",
-                        count(bar.position(), "model"),
+                        counted(steps.map(|_| bar.position()), "model"),
                         short(bar.elapsed())
                     ));
                 }
@@ -400,11 +405,14 @@ impl Watch for Bars {
                     bar.elapsed()
                 });
                 self.line(format!(
-                    "{:<9} {}: {} in {}",
+                    "{:<9} {}{}{}",
                     "Navmesh",
                     title(name),
-                    count(steps, "tile"),
-                    short(elapsed.unwrap_or_default())
+                    match steps {
+                        Some(n) => format!(": {}", count(n, "tile")),
+                        None => String::new(),
+                    },
+                    elapsed.map_or(String::new(), |e| format!(" in {}", short(e)))
                 ));
             }
         }
