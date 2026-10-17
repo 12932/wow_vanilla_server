@@ -616,6 +616,29 @@ pub const CHAT_BOSS_EMOTE: u32 = 3;
 pub const CHAT_WHISPER: u32 = 4;
 pub const CHAT_BOSS_WHISPER: u32 = 5;
 pub const CHAT_ZONE_YELL: u32 = 6;
+pub const CHAT_ZONE_EMOTE: u32 = 7;
+
+/// How far a creature's say and its yell carry (Thistle Tea's
+/// `@listen_range_say` and `@listen_range_yell`).
+const SAY_YARDS: f32 = 25.0;
+const YELL_YARDS: f32 = 300.0;
+
+/// A script's emote, as Thistle Tea resolves one by `Emotes.dbc`: one the
+/// unit stays in (or 0, none) becomes its emote state; any other plays
+/// once.
+pub fn emote(map: &mut Map, g: Guid, emote: u32) {
+    if emote == 0 || map.realm.data.emote_states.contains(&emote) {
+        if let Some(f) = map.unit_fields_mut(g) {
+            f.set_u32(UNIT_NPC_EMOTESTATE, emote);
+        }
+        return;
+    }
+    if let Ok(emote) = Emote::try_from(emote)
+        && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE { emote, guid: g })
+    {
+        map.send_to_observers(g, &frame, true);
+    }
+}
 
 /// `speaker` says broadcast text `text` (to `target`, for a whisper or a
 /// name), with the text's emote and sound.
@@ -634,28 +657,21 @@ pub fn talk(map: &mut Map, speaker: Guid, text: u32, target: Guid, chat_type: Op
     } else {
         &b.female
     };
+    let chat_type = chat_type.unwrap_or(b.chat_type);
+    // A whisper is for a player, or for no one.
+    if matches!(chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER) && !guid::is_player(target) {
+        return;
+    }
     let line = fill(map, line, target);
-    say(
-        map,
-        speaker,
-        &line,
-        chat_type.unwrap_or(b.chat_type),
-        b.language,
-        target,
-    );
-    if b.emotes[0].1 != 0
-        && let Ok(emote) = Emote::try_from(b.emotes[0].1)
-        && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-            emote,
-            guid: speaker,
-        })
-    {
-        map.send_to_observers(speaker, &frame, false);
+    say(map, speaker, &line, chat_type, b.language, target);
+    if b.emotes[0].1 != 0 {
+        emote(map, speaker, b.emotes[0].1);
     }
     if b.sound != 0
         && let Some(frame) = crate::game::conn::encode(&SMSG_PLAY_SOUND { sound_id: b.sound })
     {
-        hearers(map, speaker, chat_type.unwrap_or(b.chat_type), target)
+        let zone = speaker_zone(map, speaker);
+        hearers(map, speaker, chat_type, target, zone)
             .into_iter()
             .for_each(|g| {
                 if let Some(p) = map.players.get(&g) {
@@ -665,50 +681,103 @@ pub fn talk(map: &mut Map, speaker: Guid, text: u32, target: Guid, chat_type: Op
     }
 }
 
-/// Who hears a creature's line of `chat_type`.
-fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid) -> Vec<Guid> {
+/// The zone a speaker stands in, if it is known.
+fn speaker_zone(map: &mut Map, speaker: Guid) -> Option<u32> {
+    if let Some(p) = map.players.get(&speaker) {
+        return Some(p.zone).filter(|z| *z != 0);
+    }
+    if let Some(z) = map.creature(speaker).and_then(|c| c.zone_area) {
+        return Some(z.0).filter(|z| *z != 0);
+    }
+    let at = map.position_of(speaker)?;
+    crate::game::map::world::zone_and_area(map, at)
+        .map(|(z, _)| z)
+        .filter(|z| *z != 0)
+}
+
+/// Who hears a creature's line of `chat_type`, as Thistle Tea's
+/// `MonsterTalk` reaches them: a whisper its target alone; a zone yell
+/// everyone in the speaker's zone (or, that unknown, as far as a yell); a
+/// yell or boss emote 300 yards; the rest 25.
+fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid, zone: Option<u32>) -> Vec<Guid> {
     let Some(at) = map.position_of(speaker) else {
         return Vec::new();
     };
+    let within = |yards: f32| {
+        map.players
+            .values()
+            .filter(|p| dist(p.position(), at) <= yards)
+            .map(|p| p.guid)
+            .collect()
+    };
     match chat_type {
         CHAT_WHISPER | CHAT_BOSS_WHISPER => vec![target],
-        CHAT_BOSS_EMOTE | CHAT_ZONE_YELL => map.players.keys().copied().collect(),
-        CHAT_YELL => map
-            .players
-            .values()
-            .filter(|p| dist(p.position(), at) <= 300.0)
-            .map(|p| p.guid)
-            .collect(),
-        _ => map
-            .players
-            .values()
-            .filter(|p| dist(p.position(), at) <= 25.0)
-            .map(|p| p.guid)
-            .collect(),
+        CHAT_ZONE_YELL => match zone {
+            Some(z) => map
+                .players
+                .values()
+                .filter(|p| p.zone == z)
+                .map(|p| p.guid)
+                .collect(),
+            None => within(YELL_YARDS),
+        },
+        CHAT_YELL | CHAT_BOSS_EMOTE => within(YELL_YARDS),
+        _ => within(SAY_YARDS),
     }
 }
 
-/// `speaker` says `line`.
+/// `SMSG_MESSAGECHAT`'s raid boss whisper, as 1.12 lays it out (mangos-zero's
+/// `BuildChatPacket`): the speaker's name, the one it whispers to, then the
+/// line. wow_messages has it without the name.
+fn boss_whisper(name: &str, target: Guid, line: &str, language: u32) -> std::sync::Arc<[u8]> {
+    const SMSG_MESSAGECHAT: u16 = 0x096;
+    const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x59;
+    let mut b = crate::game::data::items::Body::default();
+    b.u8(CHAT_MSG_RAID_BOSS_WHISPER)
+        .u32(language)
+        .u32(name.len() as u32 + 1)
+        .cstr(name)
+        .u64(target.guid())
+        .u32(line.len() as u32 + 1)
+        .cstr(line)
+        .u8(0);
+    b.frame(SMSG_MESSAGECHAT)
+}
+
+/// `speaker` says `line`, in the kind of message its chat type is: a yell
+/// (or zone yell), an emote (or zone emote), a boss emote or whisper, a
+/// whisper, or a say. Those with no sender's own guid carry the target's,
+/// as mangos and Thistle Tea write them.
 pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u32, target: Guid) {
     let name = speaker_name(map, speaker);
+    let zone = (chat_type == CHAT_ZONE_YELL)
+        .then(|| speaker_zone(map, speaker))
+        .flatten();
     let kind = match chat_type {
         CHAT_YELL | CHAT_ZONE_YELL => SMSG_MESSAGECHAT_ChatType::MonsterYell {
             sender1: speaker,
             sender_name: name,
             target,
         },
-        CHAT_TEXT_EMOTE => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-            monster: speaker,
+        CHAT_TEXT_EMOTE | CHAT_ZONE_EMOTE => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+            monster: target,
             monster_name: name,
         },
         CHAT_BOSS_EMOTE => SMSG_MESSAGECHAT_ChatType::RaidBossEmote {
-            monster: speaker,
+            monster: target,
             monster_name: name,
         },
-        CHAT_WHISPER | CHAT_BOSS_WHISPER => SMSG_MESSAGECHAT_ChatType::MonsterWhisper {
-            monster: speaker,
+        CHAT_WHISPER => SMSG_MESSAGECHAT_ChatType::MonsterWhisper {
+            monster: target,
             monster_name: name,
         },
+        CHAT_BOSS_WHISPER => {
+            let frame = boss_whisper(&name, target, line, language);
+            if let Some(p) = map.players.get(&target) {
+                p.outbound.send_frame(frame);
+            }
+            return;
+        }
         _ => SMSG_MESSAGECHAT_ChatType::MonsterSay {
             sender1: speaker,
             sender_name: name,
@@ -723,7 +792,7 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
     }) else {
         return;
     };
-    for g in hearers(map, speaker, chat_type, target) {
+    for g in hearers(map, speaker, chat_type, target, zone) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }
@@ -944,8 +1013,10 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         z: step.z,
     };
     match step.command {
-        // Talk: one of up to four broadcast texts.
+        // Talk: one of up to four broadcast texts, in the chat type
+        // datalong names (if any) over the text's own.
         0 => {
+            let chat_type = (d1 > 0).then_some(d1);
             if let Some(lines) = step
                 .ext
                 .as_ref()
@@ -953,21 +1024,15 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 .filter(|t| !t.is_empty())
             {
                 let line = &lines[rand::rng().random_range(0..lines.len())];
-                if matches!(line.chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER)
-                    && !guid::is_player(target)
+                let chat_type = chat_type.unwrap_or(line.chat_type);
+                if matches!(chat_type, CHAT_WHISPER | CHAT_BOSS_WHISPER) && !guid::is_player(target)
                 {
                     return true;
                 }
                 let text = fill(map, &line.text, target);
-                say(map, source, &text, line.chat_type, line.language, target);
-                if line.emote != 0
-                    && let Ok(emote) = Emote::try_from(line.emote)
-                    && let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                        emote,
-                        guid: source,
-                    })
-                {
-                    map.send_to_observers(source, &frame, false);
+                say(map, source, &text, chat_type, line.language, target);
+                if line.emote != 0 {
+                    emote(map, source, line.emote);
                 }
                 return true;
             }
@@ -981,7 +1046,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 return false;
             }
             let text = texts[rand::rng().random_range(0..texts.len())];
-            talk(map, source, text, target, None);
+            talk(map, source, text, target, chat_type);
             true
         }
         // Emote: one of up to four.
@@ -990,15 +1055,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 .chain([d2, d3, d4].into_iter().take_while(|e| *e > 0))
                 .collect();
             let e = emotes[rand::rng().random_range(0..emotes.len())];
-            let Ok(emote) = Emote::try_from(e) else {
-                return false;
-            };
-            if let Some(frame) = crate::game::conn::encode(&SMSG_EMOTE {
-                emote,
-                guid: source,
-            }) {
-                map.send_to_observers(source, &frame, true);
-            }
+            emote(map, source, e);
             true
         }
         // Move: to a point (datalong 0), offset from the target (1), at a

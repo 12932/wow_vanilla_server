@@ -717,3 +717,179 @@ async fn the_nearest_player_with_no_radius_is_within_thirty_yards() {
         .unwrap();
     assert_eq!(out, vec![0, 8], "not at 50 yards; at 20");
 }
+
+/// Broadcast texts 100 to 106, said as each chat type 0 to 6, and 107 as a
+/// zone emote.
+fn with_texts(d: &mut GameData) {
+    for (id, chat_type) in (100..108).zip(0..8) {
+        d.npc.broadcast_texts.insert(
+            id,
+            crate::game::data::npc::BroadcastText {
+                male: format!("Line {id}."),
+                chat_type,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+fn heard(m: &ServerOpcodeMessage, line: &str) -> Option<SMSG_MESSAGECHAT_ChatType> {
+    match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == line => Some(c.chat_type.clone()),
+        _ => None,
+    }
+}
+
+/// Talk's datalong names the chat type over the text's own; a boss emote
+/// carries as far as a yell, not over the map; a zone yell is the zone's;
+/// a zone emote is an emote, and a boss whisper the raid boss whisper of
+/// 1.12's layout (S16).
+#[tokio::test]
+async fn talk_has_thistle_teas_chat_types_and_reach() {
+    let mut d = world();
+    with_texts(&mut d);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let (mut b, _) = player(&realm, "Bob").await;
+    let (me, bob, host) = (a.guid, b.guid, host());
+    a.sees(host).await;
+    // Alice 50 yards off in the host's zone; Bob 400 yards off, in another.
+    map.query(move |m| {
+        let at = m.position_of(host).unwrap();
+        if let Some(c) = m.creature_mut(host) {
+            c.zone_area = Some((12, 12));
+        }
+        for (g, off, zone) in [(me, 50.0, 12), (bob, 400.0, 40)] {
+            if let Some(p) = m.players.get_mut(&g) {
+                p.movement.position = Vector3d {
+                    x: at.x + off,
+                    ..at
+                };
+                p.zone = zone;
+            }
+        }
+    })
+    .await;
+    a.clear();
+    b.clear();
+    let talk = move |text: i32, chat: u32| {
+        move |m: &mut crate::game::map::Map| {
+            let say = ScriptStep {
+                dataint: [text, 0, 0, 0],
+                ..step(0, [chat, 0, 0, 0])
+            };
+            crate::game::map::scripts::execute(m, &say, host, me);
+        }
+    };
+    // A say yelled carries to Alice.
+    map.call(talk(100, 1));
+    let kind = a.wait_for("the yell", |m| heard(m, "Line 100.")).await;
+    assert!(matches!(
+        kind,
+        SMSG_MESSAGECHAT_ChatType::MonsterYell { .. }
+    ));
+    // A boss emote: Alice, not Bob.
+    map.call(talk(103, 0));
+    let kind = a
+        .wait_for("the boss emote", |m| heard(m, "Line 103."))
+        .await;
+    assert!(
+        matches!(kind, SMSG_MESSAGECHAT_ChatType::RaidBossEmote { monster, .. } if monster == me)
+    );
+    // A zone yell: Alice in the zone hears it; Bob, out of it, doesn't.
+    map.call(talk(106, 0));
+    a.wait_for("the zone yell", |m| heard(m, "Line 106.")).await;
+    // A zone emote is an emote, as near as a say.
+    map.query(move |m| {
+        let at = m.position_of(host).unwrap();
+        if let Some(p) = m.players.get_mut(&me) {
+            p.movement.position = Vector3d {
+                x: at.x + 20.0,
+                ..at
+            };
+        }
+    })
+    .await;
+    map.call(talk(107, 0));
+    let kind = a
+        .wait_for("the zone emote", |m| heard(m, "Line 107."))
+        .await;
+    assert!(matches!(
+        kind,
+        SMSG_MESSAGECHAT_ChatType::MonsterEmote { .. }
+    ));
+    // A boss whisper: chat type 0x59, the speaker's name, Alice, the line.
+    map.call(talk(105, 0));
+    let body = a
+        .wait_frame("the boss whisper", 0x096, |b| b.first() == Some(&0x59))
+        .await;
+    let name_len = u32::from_le_bytes(body[5..9].try_into().unwrap()) as usize;
+    assert_eq!(&body[9..9 + name_len - 1], b"Host");
+    let at = 9 + name_len;
+    assert_eq!(
+        u64::from_le_bytes(body[at..at + 8].try_into().unwrap()),
+        me.guid()
+    );
+    assert!(body.windows(9).any(|w| w == b"Line 105."));
+    // Bob, 400 yards off in another zone, heard none of them.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let bob_heard = b
+        .gets(Duration::from_millis(50), |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message.starts_with("Line") => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(bob_heard.is_none(), "Bob is out of reach");
+}
+
+/// A script's emote that the unit stays in becomes its emote state (and
+/// none, 0, clears it); another plays once (D-R8).
+#[tokio::test]
+async fn a_script_emote_that_lasts_is_an_emote_state() {
+    let mut d = world();
+    // Emote 10 (dance) is one a unit stays in.
+    d.emote_states.insert(10);
+    let realm = harness::realm_with(d);
+    let (mut a, map) = player(&realm, "Alice").await;
+    let host = host();
+    a.sees(host).await;
+    a.clear();
+    let state = move |m: &crate::game::map::Map| {
+        m.unit_fields(host)
+            .map_or(0, |f| f.get_u32(UNIT_NPC_EMOTESTATE))
+    };
+    let dancing = map
+        .query(move |m| {
+            crate::game::map::scripts::execute(m, &step(1, [10, 0, 0, 0]), host, host);
+            state(m)
+        })
+        .await
+        .unwrap();
+    assert_eq!(dancing, 10, "it dances on");
+    let played = a
+        .gets(Duration::from_millis(200), |m| match m {
+            ServerOpcodeMessage::SMSG_EMOTE(e) if e.guid == host => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(played.is_none(), "no emote played for a state");
+    let (talking, cleared) = map
+        .query(move |m| {
+            crate::game::map::scripts::execute(m, &step(1, [1, 0, 0, 0]), host, host);
+            let talking = state(m);
+            crate::game::map::scripts::execute(m, &step(1, [0, 0, 0, 0]), host, host);
+            (talking, state(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (talking, cleared),
+        (10, 0),
+        "a one-off leaves it; 0 clears it"
+    );
+    a.wait_for("the talk emote", |m| match m {
+        ServerOpcodeMessage::SMSG_EMOTE(e) if e.guid == host => Some(()),
+        _ => None,
+    })
+    .await;
+}
