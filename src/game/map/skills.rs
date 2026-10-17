@@ -59,6 +59,26 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
     p.fields.set_u32(base + 1, value.min(max) | (max << 16));
 }
 
+/// The skill's cap, if the player has it.
+pub fn max_value(p: &Player, skill: u32) -> Option<u32> {
+    slot_of(p, skill).map(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3 + 1) >> 16)
+}
+
+/// Raise a skill by `by`, up to its cap: whether it rose.
+pub fn raise(p: &mut Player, skill: u32, by: u32) -> bool {
+    let Some(i) = slot_of(p, skill) else {
+        return false;
+    };
+    let field = PLAYER_SKILL_INFO_1_1 + i * 3 + 1;
+    let word = p.fields.get_u32(field);
+    let (value, max) = (word & 0xFFFF, word >> 16);
+    if value >= max {
+        return false;
+    }
+    p.fields.set_u32(field, (value + by).min(max) | (max << 16));
+    true
+}
+
 /// The skills a character's spells give, set on login.
 pub fn init(p: &mut Player, data: &GameData) {
     let spells = p.spells.clone();

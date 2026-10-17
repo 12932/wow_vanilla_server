@@ -192,6 +192,7 @@ pub fn gear(p: &Player, data: &GameData) -> Gear {
                 _ => {}
             }
         }
+        crate::game::map::enchant::add_to_gear(data, item, &mut g);
     }
     g
 }
