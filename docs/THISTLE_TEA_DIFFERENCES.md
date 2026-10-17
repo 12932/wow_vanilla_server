@@ -137,18 +137,12 @@ Thistle Tea, with these exceptions:
 
 ## Tests and tooling
 
-- **wow_messages.** wvs pins `gtker/wow_messages` at `e8dc643`. Two layout fixes are committed in the local clone
-  (`/local/home/wallenx/wow_messages`, branch `vanilla-1.12-layouts`) and not yet anywhere wvs can pin:
-  `SMSG_BATTLEFIELD_STATUS`'s status is a u32 in 1.12 (`c9a8d912e`); and strings over 256 bytes, with
-  `SMSG_QUESTGIVER_QUEST_DETAILS`'s reward items carrying their display id (`d5055998c`). The server builds both
-  messages by hand and is unaffected. Until the clone is pushed to a fork and wvs repinned, the test client logs
-  the battlefield status as unparsed and reads quest details itself, and other messages with strings over 256
-  bytes (long reward texts, gossip) fail to decode in tests. Repinning also needs two small wvs changes, for the
-  clone's other commits: `quests.rs`'s `choice_item_rewards` and `item_rewards`, and `SMSG_CAST_RESULT`'s new
-  `reason` field in `tests.rs`.
+- **wow_messages** comes from 12932's fork (`12932/wow_messages`, branch `vanilla-1.12-layouts`), as it does for
+  rustigator and peon: gtker's `e8dc643` with 1.12's own layouts for the game object query, who, loot, the cast
+  result, quest details (reward items with their display id, strings past 256 bytes) and the battlefield status.
 - wow_messages types the client's fall time as a float; it is a u32 of milliseconds, so wvs reads the raw bits.
 - **Load-sensitive tests.** Each real-data test loads the whole world. On a machine running several suites at once
-  (load average 40 to 50 on 16 cores) a few time out; `tests_spells3::the_combat_log_packets` most often. They pass
-  run alone. The harness waits 20 seconds for what a test expects.
+  (load average 40 to 50 on 16 cores) a few can time out; they pass run alone. The harness waits 20 seconds for
+  what a test expects.
 - Not covered by a test of their own: the play-object-sound script command, the meeting stone's in-progress
   message, and Ritual of Summoning's dungeon and battleground refusals.
