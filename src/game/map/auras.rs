@@ -189,6 +189,11 @@ pub const AURA_MOD_MOUNTED_SPEED_NOT_STACK: u32 = 172;
 pub const AURA_ALLOW_CHAMPION_SPELLS: u32 = 173;
 pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
+/// Changes to the hit and crit chance of those who attack the unit.
+pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
+pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
+pub const AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE: u32 = 187;
+pub const AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE: u32 = 188;
 
 /// `SpellAuraInterruptFlags`, as Thistle Tea reads them.
 pub const INTERRUPT_CAST: u32 = 0x1;
@@ -1406,8 +1411,15 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
             crate::game::map::spells::interrupt(map, target);
+            // Both at once pacifies as well (Thistle Tea's `CombatControl`).
+            if a.kind == AURA_MOD_PACIFY_SILENCE {
+                crate::game::map::combat::stop_attack(map, target);
+            }
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, true);
+                if a.kind == AURA_MOD_PACIFY_SILENCE {
+                    f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, true);
+                }
             }
         }
         AURA_MOD_PACIFY => {
@@ -1593,16 +1605,15 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             crate::game::map::player_motion::control(map, target);
         }
-        AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE
-            if !still(map, AURA_MOD_SILENCE) && !still(map, AURA_MOD_PACIFY_SILENCE) =>
-        {
+        AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE | AURA_MOD_PACIFY => {
+            // What's left of either still holds (Thistle Tea's
+            // `CombatControl.sync`).
+            let both = still(map, AURA_MOD_PACIFY_SILENCE);
+            let silenced = both || still(map, AURA_MOD_SILENCE);
+            let pacified = both || still(map, AURA_MOD_PACIFY);
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, false);
-            }
-        }
-        AURA_MOD_PACIFY if !still(map, AURA_MOD_PACIFY) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, false);
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, silenced);
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, pacified);
             }
         }
         AURA_MOD_SHAPESHIFT if !still(map, AURA_MOD_SHAPESHIFT) => {

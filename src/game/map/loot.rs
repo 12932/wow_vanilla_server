@@ -43,8 +43,10 @@ pub const SMSG_LOOT_MONEY_NOTIFY: u16 = 0x163;
 pub const LOOT_YARDS: f32 = 6.0;
 /// How long a roll stands.
 pub const ROLL_FOR: Duration = Duration::from_secs(60);
-/// References nest this deep at most.
-const MAX_DEPTH: u32 = 4;
+/// References nest this deep at most (Thistle Tea's `@max_reference_depth`).
+const MAX_DEPTH: u32 = 3;
+/// A loot window holds this many items at most.
+pub const MAX_ITEMS: usize = 16;
 /// `UNIT_FIELD_FLAGS`: the player has a loot window open.
 const UNIT_FLAG_LOOTING: u32 = 0x400;
 
@@ -251,14 +253,13 @@ pub fn roll(
         }
     }
     for g in groups {
-        let members: Vec<&LootEntry> = entries
-            .iter()
-            .filter(|e| e.group == g && !skip(e))
-            .collect();
+        // A quest drop is picked by its chance as any other; one no one
+        // wants then drops for no one (Thistle Tea's `roll_group`).
+        let members: Vec<&LootEntry> = entries.iter().filter(|e| e.group == g).collect();
         let mut r = rng.random_range(0.0f32..100.0);
         let mut picked = None;
-        for e in members.iter().filter(|e| e.chance > 0.0) {
-            r -= e.chance;
+        for e in members.iter().filter(|e| e.chance != 0.0) {
+            r -= e.chance.abs();
             if r < 0.0 {
                 picked = Some(**e);
                 break;
@@ -270,7 +271,7 @@ pub fn roll(
                 picked = Some(**equal[rng.random_range(0..equal.len())]);
             }
         }
-        let Some(e) = picked else {
+        let Some(e) = picked.filter(|e| !skip(e)) else {
             continue;
         };
         if e.min < 0 {
@@ -278,6 +279,9 @@ pub fn roll(
         } else {
             out.push(slot_for(data, &e, rng));
         }
+    }
+    if depth == 0 {
+        out.truncate(MAX_ITEMS);
     }
 }
 
@@ -344,12 +348,18 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     }
     let mut rng = rand::rng();
     let mut items = Vec::new();
-    if t.loot_id != 0
+    // Killed mostly by NPCs, it carries nothing (Thistle Tea's
+    // `DamageOrigin.loot_allowed?`).
+    let allowed = crate::game::map::creature_combat::loot_allowed(map, creature);
+    if allowed
+        && t.loot_id != 0
         && let Some(table) = data.loot.creature.get(&t.loot_id)
     {
         roll(&data, table, &wanted, &mut rng, &mut items, 0);
     }
-    let gold = if t.gold_max > t.gold_min {
+    let gold = if !allowed {
+        0
+    } else if t.gold_max > t.gold_min {
         rng.random_range(t.gold_min..=t.gold_max)
     } else {
         t.gold_min
@@ -598,6 +608,10 @@ fn resolve(map: &mut Map, object: Guid, slot: usize) {
         finish_rolls(map, object);
         return;
     }
+    // In guid order, the first of the highest wins (Thistle Tea's
+    // `LootRoll.pick_winner`).
+    let mut contenders = contenders;
+    contenders.sort_unstable_by_key(|g| g.guid());
     let mut rng = rand::rng();
     let rolled: Vec<(Guid, u8)> = contenders
         .iter()
@@ -606,7 +620,10 @@ fn resolve(map: &mut Map, object: Guid, slot: usize) {
     let (winner, number) = rolled
         .iter()
         .copied()
-        .max_by_key(|(_, n)| *n)
+        .fold(None, |best: Option<(Guid, u8)>, x| match best {
+            Some(b) if b.1 >= x.1 => Some(b),
+            _ => Some(x),
+        })
         .expect("there are contenders");
     award(map, object, slot, winner, number, kind, &rolled);
     let _ = r;
@@ -650,7 +667,21 @@ fn award(
     if let Some(l) = loot_mut(map, object) {
         l.rolls.retain(|r| r.slot != slot);
     }
-    give(map, object, slot, winner);
+    // A winner gone too far has nothing; it's free for the taking.
+    let near = match (
+        map.players.get(&winner).map(|p| p.position()),
+        position_of(map, object),
+    ) {
+        (Some(a), Some(b)) => dist(a, b) <= GROUP_REWARD_YARDS,
+        _ => false,
+    };
+    if near {
+        give(map, object, slot, winner);
+    } else if let Some(l) = loot_mut(map, object)
+        && let Some(x) = l.items.get_mut(slot)
+    {
+        x.blocked = false;
+    }
     finish_rolls(map, object);
 }
 
@@ -949,27 +980,24 @@ pub fn take_money(map: &mut Map, player: Guid) {
     if gold == 0 {
         return;
     }
+    // A corpse's or an object's money is the group's near the looter, in
+    // even shares, the remainder lost; a pocket's or a container's is the
+    // looter's (Thistle Tea's `Looting.split_gold`).
     let at = map.players.get(&player).map(|p| p.position());
-    let sharers = match (at, kind) {
-        (Some(at), LootKind::Corpse) => tap_group(map, player, at),
+    let shared =
+        kind != LootKind::Pickpocket && (guid::is_unit(target) || guid::is_game_object(target));
+    let sharers = match at {
+        Some(at) if shared => tap_group(map, player, at),
         _ => vec![player],
     };
     let share = gold / sharers.len().max(1) as u32;
     for g in &sharers {
-        // The looter takes the remainder.
-        let amount = if *g == player {
-            gold - share * (sharers.len() as u32 - 1)
-        } else {
-            share
-        };
         if let Some(p) = map.players.get_mut(g) {
-            let money = p.money().saturating_add(amount);
+            let money = p.money().saturating_add(share);
             p.set_money(money);
-            if sharers.len() > 1 {
-                let mut b = Body::default();
-                b.u32(amount);
-                p.outbound.send_frame(b.frame(SMSG_LOOT_MONEY_NOTIFY));
-            }
+            let mut b = Body::default();
+            b.u32(share);
+            p.outbound.send_frame(b.frame(SMSG_LOOT_MONEY_NOTIFY));
         }
     }
     for g in looters {

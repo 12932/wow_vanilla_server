@@ -23,9 +23,10 @@ const AGGRO_SCAN_EVERY: Duration = Duration::from_millis(500);
 const DEFAULT_LEASH: f32 = 60.0;
 /// A chasing creature paths again when its victim has moved this far.
 const REPATH_YARDS: f32 = 1.5;
-/// How long a corpse lies before it goes.
-const CORPSE_DECAY: Duration = Duration::from_secs(60);
-const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(300);
+/// How long a corpse lies before it goes (Thistle Tea's `@corpse_decay_ms`):
+/// an elite's, ranks one to three, twice as long.
+const CORPSE_DECAY: Duration = Duration::from_secs(300);
+const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(600);
 /// The shortest wait before a creature respawns.
 const MIN_RESPAWN: Duration = Duration::from_secs(5);
 /// `UNIT_DYNAMIC_FLAGS`: the creature is tapped by someone else.
@@ -110,7 +111,7 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
     if critter {
         return;
     }
-    call_for_help(map, creature, attacker);
+    crate::game::map::creature_combat::called_for_help(map, creature, attacker);
     if first {
         crate::game::map::event_ai::aggro(map, creature, attacker);
         crate::game::map::creature_combat::entered(map, creature, attacker);
@@ -182,10 +183,16 @@ pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    let top = c.threat.iter().map(|(_, t)| *t).fold(0.0f32, f32::max);
+    // Its victim's threat, as Thistle Tea's `Threat.taunt` gives it.
+    let victim = c.combat.victim;
+    let theirs = c
+        .threat
+        .iter()
+        .find(|(g, _)| *g == victim)
+        .map_or(0.0, |(_, t)| *t);
     match c.threat.iter_mut().find(|(g, _)| *g == by) {
-        Some((_, t)) => *t = t.max(top),
-        None => c.threat.push((by, top)),
+        Some((_, t)) => *t = t.max(theirs),
+        None => c.threat.push((by, theirs)),
     }
     c.taunted_by = Some(by);
     c.combat.victim = by;
@@ -198,43 +205,6 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
         && c.taunted_by == Some(by)
     {
         c.taunted_by = None;
-    }
-}
-
-/// Creatures of the same faction near `creature` join its fight.
-fn call_for_help(map: &mut Map, creature: Guid, enemy: Guid) {
-    let Some(c) = map.creature(creature) else {
-        return;
-    };
-    let template = map.realm.data.creature_template(c.entry);
-    // A script's range stands over the template's.
-    let radius = c
-        .scripted
-        .as_deref()
-        .and_then(|s| s.call_for_help_range)
-        .or_else(|| template.map(|t| t.call_for_help_range))
-        .filter(|r| *r > 0.0)
-        .unwrap_or(0.0);
-    if radius <= 0.0 {
-        return;
-    }
-    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
-    let helpers: Vec<Guid> = map
-        .grid
-        .around(pos.x, pos.y, radius)
-        .filter(|g| guid::is_unit(*g) && *g != creature)
-        .filter(|g| {
-            map.creature(*g).is_some_and(|h| {
-                h.alive()
-                    && !crate::game::map::creature_motion::critter(map, *g)
-                    && !h.combat.attacking
-                    && h.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction
-                    && dist(h.position, pos) <= radius
-            })
-        })
-        .collect();
-    for h in helpers {
-        attacked(map, h, enemy);
     }
 }
 
@@ -263,7 +233,7 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
         return;
     };
     let template = data.creature_template(c.entry);
-    let elite = template.is_some_and(|t| t.rank == 1 || t.rank == 2);
+    let elite = template.is_some_and(|t| matches!(t.rank, 1..=3));
     let respawn = c
         .spawn_guid
         .and_then(|g| {
@@ -661,7 +631,7 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
 /// vmangos's `ThreatManager`: a taunter while the taunt lasts; otherwise
 /// the current victim, until another passes its threat by a tenth in
 /// melee range or three tenths beyond.
-fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
+pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     let Some(c) = map.creature(g) else {
         return current;
     };
@@ -681,15 +651,40 @@ fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
         c.threat
             .iter()
             .find(|(x, _)| *x == t)
-            .map_or(0.0, |(_, v)| effective_threat(map, t, *v))
+            .map(|(_, v)| effective_threat(map, t, *v))
     };
-    let (mine, theirs) = (threat_of(current), threat_of(best));
-    let near = match (map.unit_view(g), map.unit_view(best)) {
-        (Some(me), Some(them)) => combat::in_melee_range(&me, &them),
-        _ => false,
+    let Some(mine) = threat_of(current) else {
+        return best;
     };
-    let ratio = if near { 1.1 } else { 1.3 };
-    if theirs > mine * ratio { best } else { current }
+    // Down the list from the top (Thistle Tea's `Threat.decide`): past a
+    // tenth more, one in melee range takes over; past three tenths, anyone.
+    let home = c.home;
+    let leash = leash_of(map, c);
+    let mut sorted: Vec<(Guid, f32)> = c
+        .threat
+        .iter()
+        .filter(|(t, _)| {
+            map.unit_view(*t).is_some_and(|u| {
+                u.alive && dist(u.position, home) <= leash && combat::can_attack(map, g, *t)
+            })
+        })
+        .map(|(t, v)| (*t, effective_threat(map, *t, *v)))
+        .collect();
+    sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let me = map.unit_view(g);
+    for (t, theirs) in sorted {
+        if t == current || theirs <= mine * 1.1 {
+            return current;
+        }
+        let near = match (&me, map.unit_view(t)) {
+            (Some(me), Some(them)) => combat::in_melee_range(me, &them),
+            _ => false,
+        };
+        if theirs > mine * 1.3 || near {
+            return t;
+        }
+    }
+    current
 }
 
 /// How far a creature fights from home: its template's leash, or in the

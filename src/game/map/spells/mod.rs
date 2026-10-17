@@ -936,6 +936,7 @@ fn execute(
         if auras::auras(map, caster).is_some_and(|a| a.holders.iter().any(breaks)) {
             auras::remove_where(map, caster, breaks);
         }
+        crate::game::map::combat::spell_launched(map, caster, s);
     }
 }
 

@@ -471,7 +471,23 @@ pub fn melee_roll(
     if s.attr(0, 0x20_0000) {
         r.avoidance_disabled = true;
     }
-    match combat::roll_special(&r, roll(map), roll(map)) {
+    // Its mechanic resisted, in the band just past the miss chance
+    // (Thistle Tea's `roll_special_outcome`).
+    let first = roll(map);
+    let resist = auras::auras(map, target).map_or(0, |a| {
+        std::iter::once(s.mechanic)
+            .chain(s.effects.iter().map(|e| e.mechanic))
+            .filter(|m| *m != 0)
+            .map(|mech| a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, mech as i32))
+            .max()
+            .unwrap_or(0)
+            * 100
+    });
+    let miss = r.miss_bp();
+    if resist > 0 && first >= miss && first < miss + resist {
+        return (Hit::Resist, false);
+    }
+    match combat::roll_special(&r, first, roll(map)) {
         combat::Outcome::Miss => (Hit::Miss, false),
         combat::Outcome::Dodge => (Hit::Dodge, false),
         combat::Outcome::Parry => (Hit::Parry, false),
@@ -874,18 +890,24 @@ pub fn healing(
             .sum();
         h *= (100 + pct) as f32 / 100.0;
     }
-    h = healing_taken(map, target, h);
+    h = healing_taken(map, target, h, s.school_mask());
     if l.crit {
         h *= 1.5;
     }
     h.max(0.0) as u32
 }
 
-/// Healing `target` takes: its flat and percent modifiers.
-pub fn healing_taken(map: &Map, target: Guid, amount: f32) -> f32 {
+/// Healing of school mask `school` that `target` takes (Thistle Tea's
+/// `HealingReceived`): its flat modifiers for the school, taking at most
+/// half, then only its strongest percentage cut and strongest gain.
+pub fn healing_taken(map: &Map, target: Guid, amount: f32, school: u32) -> f32 {
     match auras::auras(map, target) {
         Some(a) => {
-            ((amount + a.sum(AURA_MOD_HEALING) as f32) * a.product(AURA_MOD_HEALING_PCT)).max(0.0)
+            let flat = (a.sum_mask(AURA_MOD_HEALING, school) as f32).max(-amount / 2.0);
+            let cut = a.min(AURA_MOD_HEALING_PCT).min(0);
+            let gain = a.max(AURA_MOD_HEALING_PCT).max(0);
+            ((amount + flat) * (100 + cut).max(0) as f32 / 100.0 * (100 + gain) as f32 / 100.0)
+                .max(0.0)
         }
         None => amount,
     }

@@ -464,6 +464,20 @@ pub fn price(map: &Map, player: Guid, vendor: Guid, amount: u32) -> u32 {
     }
 }
 
+/// The discount `vendor` gives `player` as a factor: a tenth off from
+/// Honored.
+pub fn discount(map: &Map, player: Guid, vendor: Guid) -> f32 {
+    let (Some(p), Some(f)) = (map.players.get(&player), faction_of(map, vendor)) else {
+        return 1.0;
+    };
+    let data = &map.realm.data;
+    if data.misc.faction(f).is_some() && rank(p, data, f) >= misc::RANK_HONORED {
+        0.9
+    } else {
+        1.0
+    }
+}
+
 /// Whether a player's standing meets an item's reputation requirement.
 pub fn meets(p: &Player, data: &GameData, faction: u32, required_rank: u32) -> bool {
     faction == 0 || required_rank == 0 || rank(p, data, faction) >= required_rank

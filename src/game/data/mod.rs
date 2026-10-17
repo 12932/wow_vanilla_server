@@ -376,6 +376,9 @@ pub struct VendorItem {
     pub max_count: u32,
     pub restock_secs: u32,
     pub condition: u32,
+    /// `itemflags`: 1, the restock time varies; 2, it shortens with the
+    /// realm's population.
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
