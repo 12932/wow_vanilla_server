@@ -285,3 +285,87 @@ async fn a_druid_regenerates_mana_in_bear_and_cat_forms() {
     assert!(out[1].0 > 100, "mana in cat form: {out:?}");
     assert!(out[1].1 > 0, "and energy in cat form: {out:?}");
 }
+
+#[tokio::test]
+async fn only_an_item_the_player_has_that_starts_the_quest_starts_it() {
+    use crate::game::data::npc::Quest;
+    const LETTER: u32 = 9100;
+    const RELIC: u32 = 9101;
+    const OTHER: u32 = 9102;
+    const FROM_LETTER: u32 = 800;
+    const FROM_RELIC: u32 = 801;
+    let mut d = crate::game::data::GameData::empty();
+    let quest = |id| Quest {
+        id,
+        level: 1,
+        min_level: 1,
+        title: "From an item".into(),
+        ..Default::default()
+    };
+    d.npc.quests.insert(FROM_LETTER, quest(FROM_LETTER));
+    // The relic is asked for: it stays.
+    let mut relic_quest = quest(FROM_RELIC);
+    relic_quest.required_items[0] = (RELIC, 1);
+    d.npc.quests.insert(FROM_RELIC, relic_quest);
+    let mut letter = item(LETTER, "A Letter");
+    letter.start_quest = FROM_LETTER;
+    d.items.insert(LETTER, letter);
+    let mut relic = item(RELIC, "A Relic");
+    relic.start_quest = FROM_RELIC;
+    d.items.insert(RELIC, relic);
+    d.items.insert(OTHER, item(OTHER, "Not a Letter"));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGQUEST");
+    let g = a.enter("Bugquest", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let held = map
+        .query(move |m| {
+            for e in [LETTER, RELIC, OTHER] {
+                crate::game::map::inventory::add_item(m, g, e, 1, false).unwrap();
+            }
+            let p = &m.players[&g];
+            [LETTER, RELIC, OTHER].map(|e| p.items.iter().find(|i| i.entry == e).unwrap().guid)
+        })
+        .await
+        .unwrap();
+    let [letter, relic, other] = held;
+    let has = async |q| {
+        map.query(move |m| m.players[&g].journal.has(q))
+            .await
+            .unwrap()
+    };
+    // An item GUID no one has, and an item that starts something else.
+    for giver in [guid::item(0xFFF0), other] {
+        a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+            guid: giver,
+            quest_id: FROM_LETTER,
+        })
+        .await;
+    }
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: letter,
+        quest_id: FROM_RELIC,
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!has(FROM_LETTER).await, "no item of the player's starts it");
+    assert!(!has(FROM_RELIC).await, "the letter starts its own quest");
+    // The letter starts its quest and goes; the relic is kept.
+    for (giver, q) in [(letter, FROM_LETTER), (relic, FROM_RELIC)] {
+        a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+            guid: giver,
+            quest_id: q,
+        })
+        .await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(has(FROM_LETTER).await && has(FROM_RELIC).await);
+    let left = map
+        .query(move |m| {
+            let p = &m.players[&g];
+            (p.count_of(LETTER), p.count_of(RELIC))
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, (0, 1), "the letter is taken, the relic kept");
+}
