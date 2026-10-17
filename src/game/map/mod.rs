@@ -210,6 +210,8 @@ pub struct MapStats {
     pub window_updates: u32,
     pub window_total: Duration,
     pub window_max: Duration,
+    /// Events and updates that panicked and were let go.
+    pub panics: u64,
 }
 
 pub struct Map {
@@ -282,6 +284,7 @@ fn guarded<T>(map: &mut Map, f: impl FnOnce(&mut Map) -> T) -> Option<T> {
                 .or_else(|| e.downcast_ref::<String>().cloned())
                 .unwrap_or_default();
             tracing::error!("{} panicked: {what}; going on", map.key);
+            map.stats.panics += 1;
             None
         }
     }
@@ -519,6 +522,7 @@ impl Map {
                 events: s.events,
                 last_update: s.last_update,
                 max_update: s.max_update,
+                panics: s.panics,
                 ..Default::default()
             };
             return;

@@ -672,7 +672,10 @@ fn the_real_eventai_uses_known_event_types() {
         "Lucifron's script"
     );
     assert!(
-        data.scripts.ai_events.get(&9196).is_some_and(|e| e.len() >= 6),
+        data.scripts
+            .ai_events
+            .get(&9196)
+            .is_some_and(|e| e.len() >= 6),
         "Highlord Omokk's timed casts, from Thistle Tea's script"
     );
     assert!(data.scripts.conditions.len() > 1_000);
@@ -705,6 +708,28 @@ async fn the_real_deadmines_opens_rhahkzors_door() {
     let mut a = Client::connect(&realm, "A");
     let me = a.enter("Alice", Race::Human, Class::Warrior).await;
     let from = realm.registry.online(me).unwrap().map();
+    // Northshire first: its EventAI creatures, a fight with them, and their
+    // spawned events, without a panic.
+    from.call(move |m| {
+        let at = m.players[&me].position();
+        let near: Vec<Guid> = m
+            .creatures
+            .iter()
+            .filter(|(_, c)| {
+                c.alive()
+                    && crate::game::map::event_ai::has_events_entry(&m.realm.data, c.entry)
+                    && crate::game::map::combat::dist(c.position, at) < 80.0
+            })
+            .map(|(_, c)| c.guid)
+            .take(8)
+            .collect();
+        for c in near {
+            crate::game::map::ai::attacked(m, c, me);
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    let panics = from.query(|m| m.stats.panics).await.unwrap();
+    assert_eq!(panics, 0, "nothing in Northshire panicked");
     from.call(move |m| {
         m.teleport(
             me,
@@ -758,6 +783,9 @@ async fn the_real_deadmines_opens_rhahkzors_door() {
     });
     tokio::time::sleep(Duration::from_millis(1500)).await;
     kill(&realm, me, 644).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let panics = map.query(|m| m.stats.panics).await.unwrap();
+    assert_eq!(panics, 0, "nothing in the copy panicked");
     let door = map
         .query(|m| {
             m.gameobjects
