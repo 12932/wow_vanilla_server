@@ -138,9 +138,12 @@ struct Post {
     recharged_at: Instant,
 }
 
+/// Guard posts by map, copy and area.
+type Posts = Mutex<AHashMap<(u32, u32, u32), Post>>;
+
 /// The posts, by map, copy and area, shared by every civilian of a town.
-fn posts() -> &'static Mutex<AHashMap<(u32, u32, u32), Post>> {
-    static POSTS: OnceLock<Mutex<AHashMap<(u32, u32, u32), Post>>> = OnceLock::new();
+fn posts() -> &'static Posts {
+    static POSTS: OnceLock<Posts> = OnceLock::new();
     POSTS.get_or_init(|| Mutex::new(AHashMap::new()))
 }
 

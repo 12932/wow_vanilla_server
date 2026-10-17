@@ -316,13 +316,13 @@ mod tests {
         }
         assert_eq!(s.stages[0], 2);
         let on: AHashMap<u32, bool> = s.driven(0).into_iter().collect();
-        assert_eq!(on[&INVASION], true);
-        assert_eq!(on[&68], true);
-        assert_eq!(on[&72], false);
+        assert!(on[&INVASION]);
+        assert!(on[&68]);
+        assert!(!on[&72]);
         s.stages[0] = BOSS_STAGE;
-        assert_eq!(s.driven(0).into_iter().collect::<AHashMap<_, _>>()[&72], true);
+        assert!(s.driven(0).into_iter().collect::<AHashMap<_, _>>()[&72]);
         s.stages = [BOSS_DOWN; 4];
         let on: AHashMap<u32, bool> = s.driven(0).into_iter().collect();
-        assert_eq!(on[&INVASION], false, "all four lords down");
+        assert!(!on[&INVASION], "all four lords down");
     }
 }

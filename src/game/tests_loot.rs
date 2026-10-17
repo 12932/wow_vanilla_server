@@ -844,9 +844,9 @@ fn the_real_crafting_data_loads() {
     assert_eq!(d.spells.enchantments.get(&107).map(|e| e.effects[0].0), Some(3));
     // Herb Gathering and Skinning are profession effects.
     let herb = d.spells.get(2366).expect("Herb Gathering");
-    assert!(crate::game::map::professions::handles(&d, herb, 0));
+    assert!(crate::game::map::professions::handles(d, herb, 0));
     let fishing = d.spells.get(7620).expect("Fishing");
-    assert!(crate::game::map::professions::handles(&d, fishing, 0));
+    assert!(crate::game::map::professions::handles(d, fishing, 0));
 }
 
 #[tokio::test]

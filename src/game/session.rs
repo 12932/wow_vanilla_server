@@ -385,7 +385,6 @@ impl Session {
         }
         // Logged out in a dungeon or raid: back into their copy, or, if it
         // won't have them, home.
-        let mut row = row;
         let mut map = map;
         if matches!(
             crate::game::instances::instance_type(&self.realm, row.map),
