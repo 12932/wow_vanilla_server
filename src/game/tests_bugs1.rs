@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::fields::*;
@@ -137,4 +138,116 @@ async fn the_dead_are_not_killed_again() {
     assert!(second > first, "the second kobold's experience");
     assert_eq!(landed, second, "a missile on a corpse kills nothing");
     assert_eq!(kills, 1, "one honorable kill of a corpse hit twice");
+}
+
+fn item(entry: u32, name: &str) -> crate::game::data::ItemTemplate {
+    crate::game::data::ItemTemplate {
+        entry,
+        name: name.into(),
+        allowable_class: -1,
+        allowable_race: -1,
+        stackable: 1,
+        buy_count: 1,
+        ..Default::default()
+    }
+}
+
+async fn relog(c: &mut Client) {
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+    let g = c.guid;
+    c.login(g).await;
+}
+
+/// The items and gold a 1.12 loot window shows.
+fn window(frame: &[u8]) -> (Guid, u32, Vec<u32>) {
+    let u32_at = |at: usize| u32::from_le_bytes(frame[at..at + 4].try_into().unwrap());
+    let items = (0..usize::from(frame[13]))
+        .map(|n| u32_at(14 + n * 22 + 1))
+        .collect();
+    (
+        Guid::new(u64::from_le_bytes(frame[0..8].try_into().unwrap())),
+        u32_at(9),
+        items,
+    )
+}
+
+#[tokio::test]
+async fn a_part_looted_container_keeps_what_is_left() {
+    const CLAM: u32 = 9000;
+    const MEAT: u32 = 9001;
+    const PEARL: u32 = 9002;
+    let mut d = crate::game::data::GameData::empty();
+    let mut clam = item(CLAM, "Small Barnacled Clam");
+    clam.flags = 0x4;
+    clam.min_money_loot = 1;
+    clam.max_money_loot = 1000;
+    d.items.insert(CLAM, clam);
+    d.items.insert(MEAT, item(MEAT, "Clam Meat"));
+    d.items.insert(PEARL, item(PEARL, "Small Lustrous Pearl"));
+    let entry = |item| crate::game::data::LootEntry {
+        item,
+        chance: 100.0,
+        min: 1,
+        max: 1,
+        ..Default::default()
+    };
+    d.loot.item.insert(CLAM, vec![entry(MEAT), entry(PEARL)]);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "BUGCLAM");
+    let g = a.enter("Bugclam", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let at = map
+        .query(move |m| {
+            crate::game::map::inventory::add_item(m, g, CLAM, 1, false).unwrap();
+            let i = m.players[&g]
+                .items
+                .iter()
+                .find(|i| i.entry == CLAM)
+                .unwrap();
+            (i.bag, i.slot)
+        })
+        .await
+        .unwrap();
+    let open = async |a: &mut Client| {
+        a.clear();
+        a.send(CMSG_OPEN_ITEM {
+            bag_index: at.0,
+            slot: at.1,
+        })
+        .await;
+        window(&a.wait_frame("SMSG_LOOT_RESPONSE", 0x160, |_| true).await)
+    };
+    let (clam, gold, first) = open(&mut a).await;
+    assert_eq!(first, vec![MEAT, PEARL]);
+    // The meat taken, the window closed: the pearl and the gold are left.
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    let (_, gold_again, again) = open(&mut a).await;
+    assert_eq!((gold_again, again), (gold, vec![PEARL]), "reopened");
+    // And after a logout too.
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    relog(&mut a).await;
+    let (_, gold_later, later) = open(&mut a).await;
+    assert_eq!((gold_later, later), (gold, vec![PEARL]), "after a logout");
+    // Emptied, it is used up.
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.send(CMSG_LOOT_MONEY {}).await;
+    a.send(CMSG_LOOT_RELEASE { guid: clam }).await;
+    a.wait_for("SMSG_LOOT_RELEASE_RESPONSE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(_)).then_some(())
+    })
+    .await;
+    let left = map
+        .query(move |m| {
+            let p = &m.players[&g];
+            (p.count_of(CLAM), p.count_of(MEAT), p.count_of(PEARL))
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, (0, 1, 1));
 }
