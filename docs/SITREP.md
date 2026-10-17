@@ -28,11 +28,28 @@ the questions waiting for you.
    - **Merging:** I merge each stage into `master` when the full suite and clippy are clean, then push.
    - **Records:** the agents don't edit THISTLE_TEA_DIFFERENCES.md or this file. I do, at each merge, so the branches
      don't conflict.
+3. **A whole-repo `cargo fmt`.** The toolchain's rustfmt (1.10) formats 67 files differently from how they were
+   committed. That is one mechanical commit (`ec87804`), made before the stages branched, so each agent can run
+   `cargo fmt` without churning files it never touched.
+4. **The matrix's not-applicable rows.** Phase 1a lists all 8,850 Thistle Tea tests in `docs/parity/matrix.csv`.
+   I marked 26 of them not applicable: the web server, telemetry, the developer seed, the namigator NIF, and the
+   Elixir layering rules. The rest are being mapped by area.
+5. **wow_messages misreads 1.12's stop packets.** A STOP `SMSG_MONSTER_MOVE` ends after its move type in 1.12
+   (mangos-classic's `WriteStopMovement`), but the fork read on into spline flags. So wvs's test client and peon
+   dropped every creature stop as unparsed; the real client was never affected. It is being fixed in the fork, then
+   repinned in rustigator, wvs and peon together.
 
 ## Progress
 
 | Stage | State | Commit |
 |---|---|---|
-| The kobold's reach | done | |
+| The kobold's reach | done | dd2d397 |
+| 1a: the test matrix, listed | done | b50233b |
+| 1a: the matrix, mapped (entity, ai, spell, combat) | running | |
+| 2a+2h: spells, auras, PvP | running | |
+| 2b: creature movement | running | |
+| 2c: creature combat | running | |
+| Robustness | running | |
+| wow_messages stop layout | running | |
 
 ## Left for later, and why
