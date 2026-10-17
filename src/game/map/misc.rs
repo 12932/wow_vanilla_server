@@ -100,19 +100,22 @@ pub fn movement_bytes(guid: Guid, info: &MovementInfo) -> Vec<u8> {
     frame[4..].to_vec()
 }
 
-pub const MSG_MOVE_ROOT: u16 = 0x0EC;
-pub const MSG_MOVE_UNROOT: u16 = 0x0ED;
-
 fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
-    let was = map
-        .players
-        .get(&g)
-        .is_some_and(|p| p.movement.flags.get_root());
-    if was == root {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.movement.flags.get_root() == root {
         return;
     }
-    let opcode = if root { MSG_MOVE_ROOT } else { MSG_MOVE_UNROOT };
-    relay(map, g, info, opcode, &[]);
+    p.movement = info.clone();
+    let frame = if root {
+        encode(&MSG_MOVE_ROOT_Server { player: g, info })
+    } else {
+        encode(&MSG_MOVE_UNROOT_Server { player: g, info })
+    };
+    if let Some(frame) = frame {
+        map.send_to_observers(g, &frame, false);
+    }
 }
 
 fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {

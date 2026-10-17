@@ -29,16 +29,16 @@ tokio = { version = "1.52.3", features = [
     "rt-multi-thread",
     "signal",
 ] }
-wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "e904e8e190891b0e12e5a23534a9e1743d4720c7", features = ["tokio"] }
-wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "e904e8e190891b0e12e5a23534a9e1743d4720c7", features = ["sync", "tokio", "vanilla", "print-testcase"] }
-wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "e904e8e190891b0e12e5a23534a9e1743d4720c7", features = ["extended", "vanilla", "serde"] }
-wow_items = { git = "https://github.com/12932/wow_messages", rev = "e904e8e190891b0e12e5a23534a9e1743d4720c7", features = ["vanilla"] }
+wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["tokio"] }
+wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["sync", "tokio", "vanilla", "print-testcase"] }
+wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["extended", "vanilla", "serde"] }
+wow_items = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["vanilla"] }
 wow_srp = { git="https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163" }
 walkdir = "2.5.0"
 
-rustigator = { git = "https://github.com/12932/rustigator", rev = "a1c3a82d4ad170852d9658a36fb80e74e92c3a72", features = ["vanilla"] }
+rustigator = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b", features = ["vanilla"] }
 # The navmesh and terrain builds, for the data setup.
-rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "a1c3a82d4ad170852d9658a36fb80e74e92c3a72" }
+rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }

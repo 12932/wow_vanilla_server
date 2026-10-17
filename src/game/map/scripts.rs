@@ -753,24 +753,6 @@ fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid, zone: Option<
     }
 }
 
-/// `SMSG_MESSAGECHAT`'s raid boss whisper, as 1.12 lays it out (mangos-zero's
-/// `BuildChatPacket`): the speaker's name, the one it whispers to, then the
-/// line. wow_messages has it without the name.
-fn boss_whisper(name: &str, target: Guid, line: &str, language: u32) -> std::sync::Arc<[u8]> {
-    const SMSG_MESSAGECHAT: u16 = 0x096;
-    const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x59;
-    let mut b = crate::game::data::items::Body::default();
-    b.u8(CHAT_MSG_RAID_BOSS_WHISPER)
-        .u32(language)
-        .u32(name.len() as u32 + 1)
-        .cstr(name)
-        .u64(target.guid())
-        .u32(line.len() as u32 + 1)
-        .cstr(line)
-        .u8(0);
-    b.frame(SMSG_MESSAGECHAT)
-}
-
 /// `speaker` says `line`, in the kind of message its chat type is: a yell
 /// (or zone yell), an emote (or zone emote), a boss emote or whisper, a
 /// whisper, or a say. Those with no sender's own guid carry the target's,
@@ -798,13 +780,12 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
             monster: target,
             monster_name: name,
         },
-        CHAT_BOSS_WHISPER => {
-            let frame = boss_whisper(&name, target, line, language);
-            if let Some(p) = map.players.get(&target) {
-                p.outbound.send_frame(frame);
-            }
-            return;
-        }
+        // 1.12's has the speaker's name before the one it whispers to
+        // (mangos-zero's `BuildChatPacket`).
+        CHAT_BOSS_WHISPER => SMSG_MESSAGECHAT_ChatType::RaidBossWhisper {
+            monster: target,
+            monster_name: name,
+        },
         _ => SMSG_MESSAGECHAT_ChatType::MonsterSay {
             sender1: speaker,
             sender_name: name,

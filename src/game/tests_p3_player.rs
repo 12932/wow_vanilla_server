@@ -118,8 +118,6 @@ async fn level_ups(c: &mut Client) -> Vec<u8> {
     out
 }
 
-const SMSG_LOG_XPGAIN: u16 = 0x1D0;
-
 /// Wait until the map has handled what `c` sent so far: it answers
 /// `CMSG_PLAYED_TIME` in turn.
 async fn synced(c: &mut Client) {
@@ -169,7 +167,6 @@ async fn experience_chains_levels_from_one_grant_stops_at_the_top_and_takes_noth
     assert_eq!((level, xp), (60, 0));
     // At the top, a grant is not even told.
     a.clear();
-    a.raw.clear();
     let xp = on_map(&realm, move |m| {
         stats::give_xp(m, ga, 500, None);
         m.players[&ga].fields.get_u32(PLAYER_XP)
@@ -179,19 +176,14 @@ async fn experience_chains_levels_from_one_grant_stops_at_the_top_and_takes_noth
     assert!(!told_xp(&mut a).await);
 }
 
-/// Whether `SMSG_LOG_XPGAIN` came in a moment, read or raw.
+/// Whether `SMSG_LOG_XPGAIN` came in a moment.
 async fn told_xp(c: &mut Client) -> bool {
-    let read = c
-        .gets(Duration::from_millis(300), |m| match m {
-            ServerOpcodeMessage::SMSG_LOG_XPGAIN(_) => Some(()),
-            _ => None,
-        })
-        .await
-        .is_some();
-    let before = c.raw.len();
-    c.raw
-        .retain(|f| u16::from_le_bytes([f[2], f[3]]) != SMSG_LOG_XPGAIN);
-    read || c.raw.len() < before
+    c.gets(Duration::from_millis(300), |m| match m {
+        ServerOpcodeMessage::SMSG_LOG_XPGAIN(_) => Some(()),
+        _ => None,
+    })
+    .await
+    .is_some()
 }
 
 #[test]
@@ -1360,24 +1352,17 @@ async fn a_logout_sits_and_holds_the_player_starts_again_on_asking_ends_on_refus
         logout_response(&mut a).await;
         on_map(&realm, move |m| hold(m, ga, spell)).await;
         a.clear();
-        a.raw.clear();
         a.send(CMSG_LOGOUT_CANCEL {}).await;
         a.wait_for("SMSG_LOGOUT_CANCEL_ACK", |m| {
             matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK).then_some(())
         })
         .await;
-        // Read as a message, or kept raw where wow_messages can't (its
-        // packed guid).
-        let parsed = a
+        let unrooted = a
             .gets(Duration::from_millis(200), |m| {
                 matches!(m, ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(_)).then_some(())
             })
             .await
             .is_some();
-        let unrooted = parsed
-            || a.raw
-                .iter()
-                .any(|f| f.len() >= 4 && f[2..4] == [0xEA, 0x00]);
         let state = on_map(&realm, move |m| logout_state(m, ga)).await;
         assert!(!unrooted, "held by {spell}");
         assert_eq!((state.1, state.2), (still_stunned, false));
@@ -1390,8 +1375,11 @@ async fn a_logout_sits_and_holds_the_player_starts_again_on_asking_ends_on_refus
     logout_response(&mut a).await;
     a.clear();
     a.send(CMSG_LOGOUT_CANCEL {}).await;
-    a.wait_frame("SMSG_FORCE_MOVE_UNROOT", 0x0EA, |_| true)
-        .await;
+    a.wait_for("SMSG_FORCE_MOVE_UNROOT", |m| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(u) if u.guid == ga => Some(()),
+        _ => None,
+    })
+    .await;
     assert_eq!(
         on_map(&realm, move |m| logout_state(m, ga)).await,
         (0, false, false, None)
