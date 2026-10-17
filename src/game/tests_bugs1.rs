@@ -369,3 +369,61 @@ async fn only_an_item_the_player_has_that_starts_the_quest_starts_it() {
         .unwrap();
     assert_eq!(left, (0, 1), "the letter is taken, the relic kept");
 }
+
+#[tokio::test]
+async fn the_ritual_of_dooms_cooldown_waits_for_its_portal() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "BUGLOCK");
+    let g = c.enter("Buglock", Race::Human, Class::Warlock).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            const DOOM: u32 = 18540;
+            ready(m, g, 60, &[DOOM]);
+            crate::game::map::inventory::add_item(m, g, 16583, 3, false).unwrap();
+            let portal = |m: &Map| {
+                m.objects
+                    .summoned
+                    .iter()
+                    .find(|s| s.owner == Some(g) && s.spell == DOOM)
+                    .map(|s| s.guid)
+            };
+            let waiting = |m: &Map| {
+                m.caster(g)
+                    .is_some_and(|c| c.pending_cooldowns.contains(&DOOM))
+            };
+            let cooling = |m: &Map| {
+                m.caster(g)
+                    .is_some_and(|c| c.cooldowns.get(&DOOM).is_some_and(|t| *t > m.now))
+            };
+            // Cast, then the channel stopped short: the portal goes, and
+            // there is no cooldown.
+            let first = spells::cast_now(m, g, DOOM, Default::default());
+            let raised = (portal(m).is_some(), waiting(m));
+            spells::cancel(m, g);
+            let stopped = (portal(m).is_some(), waiting(m), cooling(m));
+            // Cast again; the ritual done, its portal goes and the hour
+            // starts.
+            m.now += Duration::from_secs(2);
+            ready(m, g, 60, &[]);
+            let second = spells::cast_now(m, g, DOOM, Default::default());
+            let o = portal(m);
+            if let Some(o) = o {
+                m.objects.rituals.get_mut(&o).unwrap().completed = true;
+                crate::game::map::objects::despawn(m, o);
+            }
+            let done = (waiting(m), cooling(m));
+            (first, raised, stopped, second, o.is_some(), done)
+        })
+        .await
+        .unwrap();
+    let (first, raised, stopped, second, again, done) = out;
+    assert!(first, "the ritual is cast");
+    assert_eq!(raised, (true, true), "its portal up, its cooldown waiting");
+    assert_eq!(stopped, (false, false, false), "stopped short, no cooldown");
+    assert!(second && again, "so it can be cast again");
+    assert_eq!(done, (false, true), "done, the hour starts");
+}

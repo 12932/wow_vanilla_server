@@ -400,10 +400,21 @@ pub fn despawn(map: &mut Map, g: Guid) {
     if summoned.is_some() && (kind != GO_RITUAL || state == GO_STATE_READY) {
         send(map, g, &SMSG_GAMEOBJECT_DESPAWN_ANIM { guid: g });
     }
-    if let Some(r) = map.objects.rituals.get(&g).cloned() {
-        for u in r.users {
-            finish_channel(map, u, g);
+    let ritual = map.objects.rituals.get(&g).cloned();
+    if let Some(r) = &ritual {
+        for u in &r.users {
+            finish_channel(map, *u, g);
         }
+    }
+    // A cooldown that waited for the object (the Ritual of Doom's) starts
+    // as it goes, or, its ritual never done, there is none (Thistle Tea's
+    // `GameObject.release_cooldown`).
+    if let Some(s) = summoned.map(|i| &map.objects.summoned[i])
+        && let Some(owner) = s.owner
+    {
+        let spell = s.spell;
+        let done = ritual.is_none_or(|r| r.completed);
+        crate::game::map::spells::cooldowns::release(map, owner, spell, done);
     }
     let linked = summoned
         .map(|i| map.objects.summoned.remove(i).linked)
