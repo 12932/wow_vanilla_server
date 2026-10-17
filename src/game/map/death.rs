@@ -412,13 +412,16 @@ pub fn nearest_graveyard(
     };
     let data = &map.realm.data;
     let on_map = |gy: &&crate::game::data::Graveyard| {
-        gy.map == map.key.map && (gy.faction == 0 || gy.faction == faction)
+        gy.map == map.key.map
+            && (gy.faction == 0 || gy.faction == faction)
+            && crate::game::map::outdoor_pvp::graveyard_open(map, gy.id, faction)
     };
     let dist = |gy: &crate::game::data::Graveyard| (gy.x - pos.x).powi(2) + (gy.y - pos.y).powi(2);
     let best = data
         .graveyards
         .iter()
         .filter(|gy| gy.zone == zone && (gy.faction == 0 || gy.faction == faction))
+        .filter(|gy| crate::game::map::outdoor_pvp::graveyard_open(map, gy.id, faction))
         .min_by(|a, b| dist(a).total_cmp(&dist(b)))
         .or_else(|| {
             data.graveyards

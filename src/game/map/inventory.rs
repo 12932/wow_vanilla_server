@@ -59,6 +59,8 @@ pub enum Fail {
     OnlyEmptyBags,
     InventoryFull,
     YouAreDead,
+    /// The item wants a higher PvP rank than the player has reached.
+    Rank,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -146,6 +148,11 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::YouAreDead => R::YouAreDead {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::Rank => R::CantEquipRank {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -344,6 +351,9 @@ pub fn can_equip(p: &Player, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
     }
     if u32::from(p.level()) < t.required_level {
         return Err(Fail::Level(t.required_level as u8));
+    }
+    if !crate::game::map::pvp::rank_allows_use(p, t) {
+        return Err(Fail::Rank);
     }
     if !proficient(p.row.class, p.level(), t) {
         return Err(Fail::NoProficiency);

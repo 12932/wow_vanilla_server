@@ -1105,6 +1105,23 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         data.bg_object_events.entry(guid).or_default().push(event);
     }
+    let routed = crate::game::map::battleground::av_quests::ROUTED
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    for (entry, point) in rows(
+        db,
+        &format!("SELECT * FROM script_waypoint WHERE entry IN ({routed}) ORDER BY entry, pointid"),
+        |c| {
+            (
+                c.u32("entry"),
+                (c.f32("location_x"), c.f32("location_y"), c.f32("location_z")),
+            )
+        },
+    ) {
+        data.bg_routes.entry(entry).or_default().push(point);
+    }
     for e in rows(db, "SELECT * FROM areatrigger_bg_entrance", |c| BgEntrance {
         trigger: c.u32("id"),
         bg: c.u32("bg_template"),

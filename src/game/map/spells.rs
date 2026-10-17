@@ -49,6 +49,8 @@ pub const EFFECT_HEAL_MAX_HEALTH: u32 = 67;
 pub const EFFECT_INTERRUPT_CAST: u32 = 68;
 pub const EFFECT_ADD_COMBO_POINTS: u32 = 80;
 pub const EFFECT_DUEL: u32 = 83;
+/// Honor points: a battleground quest's reward.
+pub const EFFECT_ADD_HONOR: u32 = 45;
 pub const EFFECT_ADD_EXTRA_ATTACKS: u32 = 19;
 pub const EFFECT_CHARGE: u32 = 96;
 pub const EFFECT_RESURRECT_NEW: u32 = 113;
@@ -889,6 +891,9 @@ fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
             }
         }
         EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
+        EFFECT_ADD_HONOR if crate::game::guid::is_player(target) => {
+            crate::game::map::pvp::bonus_honor(map, target, amount.max(0) as u32)
+        }
         EFFECT_ADD_EXTRA_ATTACKS => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
         }

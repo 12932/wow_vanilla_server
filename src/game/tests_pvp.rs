@@ -14,7 +14,7 @@ const AB: u32 = 529;
 const AV: u32 = 30;
 
 /// A battleground on its map, with each team's start.
-fn battleground(d: &mut GameData, map: u32, bg: u32, name: &str, starts: [u32; 2]) {
+pub(super) fn battleground(d: &mut GameData, map: u32, bg: u32, name: &str, starts: [u32; 2]) {
     d.maps.insert(
         map,
         MapInfo {
@@ -41,7 +41,7 @@ fn battleground(d: &mut GameData, map: u32, bg: u32, name: &str, starts: [u32; 2
     d.safe_locs.insert(starts[1], (map, 100.0, 100.0, 0.0));
 }
 
-fn banner(d: &mut GameData, entry: u32, kind: u8) {
+pub(super) fn banner(d: &mut GameData, entry: u32, kind: u8) {
     d.gameobject_templates.insert(
         entry,
         GameObjectTemplate {
@@ -56,7 +56,7 @@ fn banner(d: &mut GameData, entry: u32, kind: u8) {
 }
 
 /// An object of the battleground, in an event's state.
-fn bound_object(
+pub(super) fn bound_object(
     d: &mut GameData,
     map: u32,
     guid: u32,
@@ -82,7 +82,7 @@ fn bound_object(
 
 /// The five bases of Arathi Basin, each with a banner for each of its
 /// states.
-fn arathi() -> GameData {
+pub(super) fn arathi() -> GameData {
     let mut d = GameData::empty();
     battleground(&mut d, AB, 3, "PVPzone04", [890, 889]);
     for id in [895, 894, 893, 897, 896, 898, 899] {
@@ -106,7 +106,7 @@ fn arathi() -> GameData {
     d
 }
 
-async fn queue(c: &Client, map: Map) {
+pub(super) async fn queue(c: &Client, map: Map) {
     c.send(CMSG_BATTLEMASTER_JOIN {
         guid: Guid::zero(),
         map,
@@ -117,7 +117,7 @@ async fn queue(c: &Client, map: Map) {
 }
 
 /// Alice and Grom queue, and go in.
-async fn both_into(
+pub(super) async fn both_into(
     realm: &std::sync::Arc<crate::game::Realm>,
     a: &mut Client,
     b: &mut Client,
@@ -141,7 +141,11 @@ async fn both_into(
     panic!("the battle never began");
 }
 
-async fn into(realm: &std::sync::Arc<crate::game::Realm>, c: &mut Client, map: Map) -> MapHandle {
+pub(super) async fn into(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    c: &mut Client,
+    map: Map,
+) -> MapHandle {
     c.wait_frame(
         "the invitation",
         crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
@@ -166,7 +170,7 @@ async fn into(realm: &std::sync::Arc<crate::game::Realm>, c: &mut Client, map: M
 }
 
 /// Move `c` within the match's map, at once.
-async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32) {
+pub(super) async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32) {
     let g = c.guid;
     map.query(move |m| m.teleport(g, m.key, Vector3d { x, y, z: 0.0 }, 0.0))
         .await;
@@ -183,7 +187,7 @@ async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32) {
 }
 
 /// The match's timers, and its assaults' deadlines, due now.
-async fn hurry(map: &MapHandle) {
+pub(super) async fn hurry(map: &MapHandle) {
     map.query(|m| {
         if let Some(b) = m.battleground.as_mut() {
             let now = Instant::now();
@@ -205,7 +209,7 @@ async fn hurry(map: &MapHandle) {
 }
 
 /// The object of a spawn, once it's in the map.
-async fn object_of(map: &MapHandle, spawn: u32) -> Guid {
+pub(super) async fn object_of(map: &MapHandle, spawn: u32) -> Guid {
     for _ in 0..200 {
         let g = map
             .query(move |m| {
@@ -224,7 +228,7 @@ async fn object_of(map: &MapHandle, spawn: u32) -> Guid {
     panic!("spawn {spawn} never came");
 }
 
-async fn world_state(c: &mut Client, what: &str, state: u32, value: u32) {
+pub(super) async fn world_state(c: &mut Client, what: &str, state: u32, value: u32) {
     c.wait_for(what, |m| match m {
         ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) => {
             (w.state.state == state && w.state.value == value).then_some(())
@@ -234,7 +238,7 @@ async fn world_state(c: &mut Client, what: &str, state: u32, value: u32) {
     .await;
 }
 
-async fn said(c: &mut Client, what: &str, containing: &str) {
+pub(super) async fn said(c: &mut Client, what: &str, containing: &str) {
     c.wait_for(what, |m| match m {
         ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => c.message.contains(containing).then_some(()),
         _ => None,
@@ -242,7 +246,7 @@ async fn said(c: &mut Client, what: &str, containing: &str) {
     .await;
 }
 
-async fn winner(c: &mut Client) -> BattlegroundWinner {
+pub(super) async fn winner(c: &mut Client) -> BattlegroundWinner {
     c.wait_for("the end", |m| match m {
         ServerOpcodeMessage::MSG_PVP_LOG_DATA(l) => match &l.status {
             MSG_PVP_LOG_DATA_Server_BattlegroundEndStatus::Ended { winner } => Some(*winner),
@@ -352,7 +356,7 @@ async fn an_arathi_base_is_defended_before_it_falls() {
 }
 
 /// Alterac Valley's generals and one Horde tower.
-fn alterac() -> GameData {
+pub(super) fn alterac() -> GameData {
     let mut d = GameData::empty();
     battleground(&mut d, AV, 1, "PVPZone01", [611, 610]);
     for (entry, name) in [(11946, "Drek'Thar"), (11948, "Vanndar Stormpike")] {
@@ -669,7 +673,7 @@ fn a_week_of_kills_ranks_by_standing() {
 }
 
 /// A spell that only marks its target with a dummy aura.
-fn marker(d: &mut GameData, id: u32) {
+pub(super) fn marker(d: &mut GameData, id: u32) {
     let mut s = crate::game::data::spells::SpellTemplate {
         id,
         name: format!("Marker {id}"),

@@ -63,7 +63,9 @@ fn send(map: &Map, player: Guid, m: &impl ServerMessage) {
 /// `CMSG_GOSSIP_HELLO`: the NPC's menu with its quests, or its one service
 /// at once.
 pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
-    if crate::game::map::death::spirit_healer_hello(map, player, npc) {
+    if crate::game::map::death::spirit_healer_hello(map, player, npc)
+        || crate::game::map::battleground::gossip_hello(map, player, npc)
+    {
         return;
     }
     let Some(entry) = npc_entry(map, player, npc, 0) else {
@@ -161,6 +163,9 @@ fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u3
 
 /// `CMSG_GOSSIP_SELECT_OPTION`: what the option does.
 pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
+    if crate::game::map::battleground::gossip_select(map, player, npc, option) {
+        return;
+    }
     let Some(entry) = npc_entry(map, player, npc, 0) else {
         return;
     };
