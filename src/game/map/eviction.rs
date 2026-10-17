@@ -121,8 +121,10 @@ pub fn transferred(realm: &crate::game::Realm, p: &mut Player, to: MapKey) {
     }
 }
 
-/// `MSG_MOVE_WORLDPORT_ACK`: the copy just left, if one was.
+/// `MSG_MOVE_WORLDPORT_ACK`: the copy just left, if one was; one still in
+/// a match elsewhere has left it.
 pub fn arrived(map: &mut Map, g: Guid) {
+    crate::game::battlegrounds::strayed(map, g);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };

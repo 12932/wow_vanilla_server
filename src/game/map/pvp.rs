@@ -239,20 +239,18 @@ pub fn battlefield_list(map: &Map, g: Guid, battlemaster: Guid, map_id: u32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let level = p.level();
-    let bracket = match level {
-        0..=19 => BattlegroundBracket::Tens,
-        20..=29 => BattlegroundBracket::Twenties,
-        30..=39 => BattlegroundBracket::Thirties,
-        40..=49 => BattlegroundBracket::Fourties,
-        50..=59 => BattlegroundBracket::Fifties,
+    let bg = crate::game::battlegrounds::bg_of_map(map_id).unwrap_or(0);
+    // Alterac Valley's one bracket is the first (Thistle Tea's list).
+    let number = crate::game::battlegrounds::bracket_for(bg, p.level());
+    let bracket = match number {
+        0 => BattlegroundBracket::Tens,
+        1 => BattlegroundBracket::Twenties,
+        2 => BattlegroundBracket::Thirties,
+        3 => BattlegroundBracket::Fourties,
+        4 => BattlegroundBracket::Fifties,
         _ => BattlegroundBracket::Sixty,
     };
-    let instances = crate::game::battlegrounds::instances(
-        &map.realm,
-        crate::game::battlegrounds::bg_of_map(map_id).unwrap_or(0),
-        crate::game::battlegrounds::bracket_of(level),
-    );
+    let instances = crate::game::battlegrounds::instances(&map.realm, bg, number);
     p.outbound.send(&SMSG_BATTLEFIELD_LIST {
         battlemaster,
         map: crate::game::map::movement::map_enum(map_id),

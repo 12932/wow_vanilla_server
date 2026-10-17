@@ -75,6 +75,8 @@ mod tests_arena;
 #[cfg(test)]
 mod tests_rules5;
 #[cfg(test)]
+mod tests_bg5;
+#[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
 mod tests_terrain;
