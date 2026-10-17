@@ -285,3 +285,45 @@ async fn a_leech_heals_no_more_than_the_health_it_took() {
     assert_eq!(whole, tick, "a whole tick healed whole");
     assert_eq!(little, 2, "no more than the kobold had");
 }
+
+#[tokio::test]
+async fn a_damage_over_time_keeps_its_cadence_through_late_updates_and_its_last_tick() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, lock, map) = player(&realm, "P3D7", "Cadenceone", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, lock, 60, &[]);
+            let kobold = dummy(m, lock, 60, 5.0);
+            crate::game::map::spells::cast_triggered(m, lock, CORRUPTION, Some(kobold));
+            let full = holder(m, kobold, CORRUPTION)
+                .and_then(|h| h.duration)
+                .unwrap_or(0);
+            // Updates 55 ms apart, each a little late for a tick.
+            let mut ticks = 0;
+            let mut gone = 0;
+            while gone < u64::from(full) + 500 {
+                let before = health(m, kobold);
+                pass(m, 55);
+                gone += 55;
+                if health(m, kobold) < before {
+                    ticks += 1;
+                }
+            }
+            // Removed, it ticks no more.
+            crate::game::map::spells::cast_triggered(m, lock, CORRUPTION, Some(kobold));
+            pass(m, 1_000);
+            auras::remove_spell(m, kobold, CORRUPTION, None);
+            let before = health(m, kobold);
+            pass(m, 5_000);
+            (full, ticks, health(m, kobold) == before)
+        })
+        .await
+        .unwrap();
+    let (full, ticks, quiet) = out;
+    assert_eq!(full % 3000, 0, "Corruption's ticks three seconds apart");
+    assert_eq!(ticks, full / 3000, "every tick, the last too");
+    assert!(quiet, "removed, it ticks no more");
+}

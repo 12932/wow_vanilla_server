@@ -2140,7 +2140,10 @@ pub fn update(map: &mut Map) {
                     .and_then(|x| x.effects.iter_mut().find(|e| e.effect == t.effect))
                 && let Some(p) = x.period
             {
-                x.next_tick = Some(now + p);
+                // On the aura's own cadence, an update late or not, so a
+                // late one doesn't lose the last tick (mangos's
+                // `m_periodicTimer += periodictime`).
+                x.next_tick = Some(x.next_tick.unwrap_or(now) + p);
                 x.ticks += 1;
             }
             tick(map, g, &h, &t);

@@ -833,6 +833,8 @@ async fn improved_blizzard_chills_from_blizzard_alone() {
             let kobold = dummy(m, mage, 60, 10.0);
             spells::cast_triggered(m, mage, FROSTBOLT, Some(kobold));
             let by_frostbolt = has(m, kobold, CHILLED);
+            // Frostbolt's own chill, stronger, would keep Chilled off.
+            auras::remove_spell(m, kobold, FROSTBOLT, None);
             let t = spells::Targets {
                 dest: m.position_of(kobold),
                 ..Default::default()
