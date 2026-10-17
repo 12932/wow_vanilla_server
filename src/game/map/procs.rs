@@ -473,12 +473,18 @@ pub fn spell_damage(
 
 /// Target-trigger auras (Frostbite, Improved Scorch, Healing Way): their
 /// owner's spells of the family and mask they name may cast their spell on
-/// the target.
+/// the target. The chance is the aura's, and its effect's points a combo
+/// point for each a finisher spends (Relentless Strikes' 20%), as Thistle
+/// Tea's `TargetTrigger` rolls it.
 fn target_triggers(map: &mut Map, e: &Event) {
     let data = map.realm.data.clone();
     let Some(spell) = e.spell.and_then(|id| data.spells.get(id)) else {
         return;
     };
+    let combo = map
+        .caster(e.actor)
+        .filter(|c| spell.finisher() && c.combo_target == e.target)
+        .map_or(0, |c| c.combo_points);
     let Some(a) = auras::auras(map, e.actor) else {
         return;
     };
@@ -491,6 +497,11 @@ fn target_triggers(map: &mut Map, e: &Event) {
                 .is_some_and(|s| s.family_name == spell.family_name)
         })
         .flat_map(|h| {
+            let per_combo = |index: u8| {
+                data.spells.get(h.spell).map_or(0.0, |s| {
+                    s.effects[usize::from(index).min(2)].points_per_combo_point
+                })
+            };
             h.effects
                 .iter()
                 .filter(|x| {
@@ -498,7 +509,10 @@ fn target_triggers(map: &mut Map, e: &Event) {
                         && x.trigger != 0
                         && x.mask & spell.family_flags != 0
                 })
-                .map(|x| (x.trigger, x.amount as f32))
+                .map(|x| {
+                    let chance = x.amount + (per_combo(x.effect) * f32::from(combo)) as i32;
+                    (x.trigger, chance as f32)
+                })
                 .collect::<Vec<_>>()
         })
         .collect();
