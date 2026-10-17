@@ -177,6 +177,20 @@ pub fn resolve_lock(
     index: usize,
     lock: u32,
 ) -> Result<(Option<u32>, u32, u32), u8> {
+    resolve_lock_with(data, p, s, index, lock, None)
+}
+
+/// [`resolve_lock`], cast with an item of entry `cast_item`, which is a
+/// key of its own, as vmangos's `CanOpenLock` has it: a key used up by
+/// the cast still opens what it was cast at.
+fn resolve_lock_with(
+    data: &GameData,
+    p: &Player,
+    s: &SpellTemplate,
+    index: usize,
+    lock: u32,
+    cast_item: Option<u32>,
+) -> Result<(Option<u32>, u32, u32), u8> {
     let Some(keys) = data.crafts.locks.get(&lock) else {
         return Ok((None, 0, 0));
     };
@@ -185,7 +199,11 @@ pub fn resolve_lock(
     let mut failed = FAIL_BAD_TARGETS;
     for k in keys {
         match k.kind {
-            LOCK_KEY_ITEM if k.index != 0 && p.count_of(k.index) > 0 => return Ok((None, 0, 0)),
+            LOCK_KEY_ITEM
+                if k.index != 0 && (cast_item == Some(k.index) || p.count_of(k.index) > 0) =>
+            {
+                return Ok((None, 0, 0));
+            }
             LOCK_KEY_SKILL if k.index == lock_type => {
                 let skill = lock_skill(lock_type);
                 let value = skill.map_or(0, |sk| skill_value(p, sk)) + bonus;
@@ -313,8 +331,11 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
                     return Some(code);
                 }
             }
-            // On a game object (a Quintessence on a rune), as any opening.
-            EFFECT_OPEN_LOCK_ITEM if t.item.is_none() && t.object.is_some() => {
+            // On a game object (a Quintessence on a rune, a key on a cage),
+            // as any opening: the object first, as vmangos's
+            // `EffectOpenLock` has it, for the item used is the target item
+            // too.
+            EFFECT_OPEN_LOCK_ITEM if t.object.is_some() => {
                 let o = t.object.and_then(|g| map.gameobject(g))?;
                 if o.loot.as_ref().is_some_and(|l| !l.looters.is_empty()) {
                     return Some(FAIL_CHEST_IN_USE);
@@ -427,9 +448,16 @@ fn focus_near(map: &Map, at: Vector3d, focus: u32) -> bool {
         })
 }
 
-/// Run `s`'s profession effects at `t`; the effects run are returned as a
-/// mask, and a recipe raises its skill.
-pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u8 {
+/// Run `s`'s profession effects at `t`, cast with an item of entry
+/// `cast_item` if any; the effects run are returned as a mask, and a
+/// recipe raises its skill.
+pub fn execute(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    cast_item: Option<u32>,
+) -> u8 {
     let data = map.realm.data.clone();
     let mut done = 0u8;
     for index in 0..3 {
@@ -440,12 +468,12 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
         match s.effects[index].effect {
             EFFECT_OPEN_LOCK => {
                 if let Some(object) = t.object {
-                    open_lock(map, caster, s, index, object);
+                    open_lock(map, caster, s, index, object, cast_item);
                 }
             }
-            EFFECT_OPEN_LOCK_ITEM => match (t.item, t.object) {
-                (Some(item), _) => open_lock_item(map, caster, s, index, item),
-                (None, Some(object)) => open_lock(map, caster, s, index, object),
+            EFFECT_OPEN_LOCK_ITEM => match (t.object, t.item) {
+                (Some(object), _) => open_lock(map, caster, s, index, object, cast_item),
+                (None, Some(item)) => open_lock_item(map, caster, s, index, item, cast_item),
                 _ => {}
             },
             EFFECT_SKINNING => {
@@ -509,7 +537,14 @@ pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
 /// Gathering, lockpicking or a plain opening: a lock opened with skill
 /// may fail, and may raise the skill; a chest or node then shows its loot,
 /// a door opens.
-fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, object: Guid) {
+fn open_lock(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    object: Guid,
+    cast_item: Option<u32>,
+) {
     let data = map.realm.data.clone();
     let Some((entry, kind)) = map.gameobject(object).map(|o| (o.entry, o.kind)) else {
         return;
@@ -518,7 +553,7 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
     let Some(p) = map.players.get(&caster) else {
         return;
     };
-    let (skill, value, required) = match resolve_lock(&data, p, s, index, lock) {
+    let (skill, value, required) = match resolve_lock_with(&data, p, s, index, lock, cast_item) {
         Ok(r) => r,
         Err(code) => {
             send_failure(map, caster, s.id, code);
@@ -563,7 +598,14 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
 }
 
 /// A lockbox picked: it can be opened now.
-fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, item: Guid) {
+fn open_lock_item(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    item: Guid,
+    cast_item: Option<u32>,
+) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&caster) else {
         return;
@@ -572,7 +614,7 @@ fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, 
         return;
     };
     let lock = data.item(entry).map_or(0, |t| t.lock_id);
-    let (skill, _value, required) = match resolve_lock(&data, p, s, index, lock) {
+    let (skill, _value, required) = match resolve_lock_with(&data, p, s, index, lock, cast_item) {
         Ok(r) => r,
         Err(code) => {
             send_failure(map, caster, s.id, code);
