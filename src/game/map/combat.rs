@@ -47,6 +47,7 @@ pub const VICTIMSTATE_NORMAL: u32 = 1;
 pub const VICTIMSTATE_DODGE: u32 = 2;
 pub const VICTIMSTATE_PARRY: u32 = 3;
 pub const VICTIMSTATE_BLOCKS: u32 = 5;
+pub const VICTIMSTATE_IS_IMMUNE: u32 = 7;
 
 /// A creature's `flags_extra`: it never parries, never blocks, or always
 /// crushes.
@@ -679,19 +680,14 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
             f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
         }
     }
-    // A blow between the factions flags the attacker (or its master) for
-    // PvP.
+    // A blow on a flagged unit flags the attacker; a flagged player's blow
+    // flags the one struck. A pet's blows count as its master's.
     let (ma, mb) = (
         crate::game::map::pets::master(map, a),
         crate::game::map::pets::master(map, b),
     );
-    if let (Some(pa), Some(pb)) = (map.players.get(&ma), map.players.get(&mb))
-        && pa.team != pb.team
-        && let Some(p) = map.players.get_mut(&ma)
-    {
-        p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, true);
-        p.combat.last_pvp = Some(now);
-    }
+    pvp_contact(map, ma, mb, Contact::Attack);
+    pvp_contact(map, mb, ma, Contact::Attacked);
     if guid::is_unit(b) {
         crate::game::map::ai::attacked(map, b, a);
     }
@@ -730,9 +726,27 @@ fn flags_extra(map: &Map, g: Guid) -> u32 {
         .map_or(0, |t| t.flags_extra)
 }
 
-/// Whether a player wields two weapons.
+/// Whether a unit wields two weapons: a player who can, or a creature
+/// whose off hand holds a weapon (not a shield or a held item).
 pub fn dual_wields(map: &Map, g: Guid) -> bool {
-    map.players.get(&g).is_some_and(|p| p.derived.dual_wield)
+    if let Some(p) = map.players.get(&g) {
+        return p.derived.dual_wield;
+    }
+    map.creature(g).is_some_and(|c| {
+        let info = c.fields.get_u32(UNIT_VIRTUAL_ITEM_INFO + 2);
+        let (class, inventory_type) = (info & 0xFF, info >> 24);
+        c.fields.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 1) != 0
+            && class == 2
+            && !matches!(inventory_type, 14 | 23)
+            && !c.auras.has(AURA_MOD_DISARM)
+    })
+}
+
+/// Whether a school (a mask) can't touch a unit: its auras' immunities
+/// (Divine Shield, Ice Block) or a creature's template's.
+pub fn school_immune(map: &Map, g: Guid, school: u32) -> bool {
+    auras::auras(map, g).is_some_and(|a| a.school_immune(school))
+        || crate::game::map::creature_combat::school_immune(map, g, school)
 }
 
 /// The weapon in a player's hand.
@@ -821,6 +835,12 @@ pub fn weapon_damage(
             UNIT_FIELD_MAXDAMAGE,
             UNIT_FIELD_BASEATTACKTIME,
         ),
+        // A creature's off hand strikes for half its main hand.
+        Hand::Off if !map.players.contains_key(&attacker) => (
+            UNIT_FIELD_MINDAMAGE,
+            UNIT_FIELD_MAXDAMAGE,
+            UNIT_FIELD_BASEATTACKTIME + 1,
+        ),
         Hand::Off => (
             UNIT_FIELD_MINOFFHANDDAMAGE,
             UNIT_FIELD_MAXOFFHANDDAMAGE,
@@ -846,6 +866,9 @@ pub fn weapon_damage(
         melee_school(map, attacker)
     };
     let mut damage = rolled;
+    if hand == Hand::Off && !map.players.contains_key(&attacker) {
+        damage *= 0.5;
+    }
     if let Some(a) = auras::auras(map, attacker) {
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
@@ -1162,6 +1185,14 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         ),
         Outcome::Hit => (HITINFO_NORMALSWING2, VICTIMSTATE_NORMAL, mitigated, 0),
     };
+    // A blow on a unit its school can't touch does nothing.
+    let immune = !matches!(outcome, Outcome::Miss | Outcome::Dodge | Outcome::Parry)
+        && school_immune(map, victim, school);
+    let (state, damage, blocked) = if immune {
+        (VICTIMSTATE_IS_IMMUNE, 0, 0)
+    } else {
+        (state, damage, blocked)
+    };
     if hand == Hand::Off {
         hit_info |= HITINFO_LEFTSWING;
     }
@@ -1193,18 +1224,27 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     }
     engage(map, attacker, victim);
     after_outcome(map, attacker, victim, outcome);
-    let landed = matches!(
-        outcome,
-        Outcome::Hit | Outcome::Crit | Outcome::Glancing | Outcome::Crushing | Outcome::Block
-    );
+    let landed = !immune
+        && matches!(
+            outcome,
+            Outcome::Hit | Outcome::Crit | Outcome::Glancing | Outcome::Crushing | Outcome::Block
+        );
     if landed && damage > 0 {
         gain_rage(map, attacker, damage, false);
+    }
+    // A dodged or parried blow still gives three quarters of its rage.
+    if matches!(outcome, Outcome::Dodge | Outcome::Parry) {
+        gain_rage(map, attacker, mitigated * 3 / 4, false);
     }
     skill_gains(map, attacker, victim, hand);
     if left > 0 {
         deal_damage_school(map, attacker, victim, left, school);
     }
-    let mut ex = outcome_ex(outcome);
+    let mut ex = if immune {
+        procs::EX_IMMUNE
+    } else {
+        outcome_ex(outcome)
+    };
     if outcome == Outcome::Block && damage > 0 {
         ex |= procs::EX_NORMAL_HIT;
     }
@@ -1530,6 +1570,87 @@ pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
     c.extra_attacks = count;
 }
 
+/// Thistle Tea's `AttackFeedback`: an ability that pays rage or energy and
+/// discounts its power on a miss gives back 82% of what it cost when it is
+/// avoided: rage on a dodge or parry, energy on a miss, dodge, parry or
+/// immunity.
+pub fn ability_avoided(map: &mut Map, caster: Guid, spell: u32, outcome_ex: u32, cost: u32) {
+    let refundable = map.realm.data.spells.get(spell).is_some_and(|s| {
+        s.attr(1, crate::game::data::spells::ATTR_EX_DISCOUNT_POWER_ON_MISS)
+            && match s.power_type {
+                1 => outcome_ex & (procs::EX_DODGE | procs::EX_PARRY) != 0,
+                3 => {
+                    outcome_ex
+                        & (procs::EX_MISS | procs::EX_DODGE | procs::EX_PARRY | procs::EX_IMMUNE)
+                        != 0
+                }
+                _ => false,
+            }
+    });
+    if !refundable {
+        return;
+    }
+    let power = map
+        .realm
+        .data
+        .spells
+        .get(spell)
+        .map_or(0, |s| s.power_type.min(4) as u16);
+    let refund = (cost as f32 * 0.82).round() as u32;
+    if let Some(f) = map.unit_fields_mut(caster) {
+        let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
+        let now = f.get_u32(UNIT_FIELD_POWER1 + power);
+        f.set_u32(UNIT_FIELD_POWER1 + power, (now + refund).min(max));
+    }
+}
+
+/// Thistle Tea's `Pvp.contact`: a player who touches a PvP-flagged unit
+/// is flagged in turn: attacking it, being attacked by a flagged player,
+/// or helping a flagged player (or a flagged unit in a fight). Duelists and
+/// free-for-all opponents aren't.
+pub fn pvp_contact(map: &mut Map, me: Guid, other: Guid, role: Contact) {
+    let now = map.now;
+    if me == other || !map.players.contains_key(&me) {
+        return;
+    }
+    let Some(f) = map.unit_fields(other) else {
+        return;
+    };
+    if !f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP) {
+        return;
+    }
+    let other_player = map.players.contains_key(&other);
+    let other_fighting = f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    if other_player && crate::game::map::duel::dueling(map, me, other) {
+        return;
+    }
+    let ffa = |g: Guid| {
+        map.players
+            .get(&g)
+            .is_some_and(|p| p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP))
+    };
+    if ffa(me) && ffa(other) {
+        return;
+    }
+    let flags = match role {
+        Contact::Attack => true,
+        Contact::Attacked => other_player,
+        Contact::Assist => other_player || other_fighting,
+    };
+    if flags && let Some(p) = map.players.get_mut(&me) {
+        p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, true);
+        p.combat.last_pvp = Some(now);
+    }
+}
+
+/// How a player touched another unit, for [`pvp_contact`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Contact {
+    Attack,
+    Attacked,
+    Assist,
+}
+
 /// A next-swing spell (Heroic Strike, Cleave, Maul, Raptor Strike) waits
 /// for the main hand's swing.
 pub fn queue_next_swing(map: &mut Map, g: Guid, spell: u32) {
@@ -1548,6 +1669,7 @@ pub fn cancel_queued(map: &mut Map, g: Guid) {
 /// A heal makes threat for the healer on every creature fighting the
 /// healed: half the health it gave back.
 pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained: u32) {
+    pvp_contact(map, healer, healed, Contact::Assist);
     if gained == 0 {
         return;
     }
@@ -1608,8 +1730,13 @@ pub fn deal_damage_school(map: &mut Map, attacker: Guid, victim: Guid, damage: u
         let threat = damage as f32 * threat_multiplier(map, attacker, school);
         crate::game::map::ai::add_threat(map, victim, attacker, threat);
     }
+    // Thistle Tea's `break_on_damage`, whatever the source (a fall too):
+    // confusion (Polymorph, Blind) and what damage interrupts (Sap, Gouge).
+    auras::remove_where(map, victim, |h| {
+        h.interrupt_flags & INTERRUPT_DAMAGE != 0 || (h.has(AURA_MOD_CONFUSE) && !h.positive)
+    });
     if attacker != victim {
-        auras::interrupt(map, victim, INTERRUPT_DAMAGE);
+        crate::game::map::creature_combat::hostile_act(map, victim);
     }
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
@@ -1856,7 +1983,16 @@ pub fn update_players(map: &mut Map) {
     for g in fighting {
         sync_aura_state(map, g);
     }
+    let threatened: ahash::AHashSet<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && c.combat.attacking)
+        .flat_map(|(_, c)| c.threat.iter().map(|(t, _)| *t))
+        .collect();
     for p in map.players.values_mut() {
+        if threatened.contains(&p.guid) && p.combat.last_action.is_some() {
+            p.combat.last_action = Some(now);
+        }
         if !p.combat.attacking
             && p.combat
                 .last_action
@@ -1872,7 +2008,12 @@ pub fn update_players(map: &mut Map) {
             .is_some_and(|t| now.duration_since(t) > PVP_TIMEOUT)
         {
             p.combat.last_pvp = None;
-            p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, false);
+            if !p.fields.has_flag(
+                PLAYER_FLAGS,
+                crate::game::map::player::PLAYER_FLAGS_PVP_DESIRED,
+            ) {
+                p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, false);
+            }
         }
     }
 }
@@ -1890,6 +2031,7 @@ pub fn update_creatures(map: &mut Map) {
         expire_windows(map, g);
         sync_aura_state(map, g);
     }
+    crate::game::map::creature_combat::update(map);
 }
 
 /// A unit stops fighting: out of combat, attacking nothing.

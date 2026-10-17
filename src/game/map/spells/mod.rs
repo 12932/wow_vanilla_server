@@ -712,9 +712,6 @@ fn execute(
         }
         if !hit.lands() {
             outcome::send_miss(map, caster, aim, s.id, hit);
-            if hit == Hit::Resist {
-                scripts::magic_absorption(map, aim);
-            }
             let (done, taken) = outcome::proc_flags(s);
             crate::game::map::procs::trigger(
                 map,
@@ -807,14 +804,6 @@ fn execute(
                 h.spell != s.id && h.interrupt_flags & auras::INTERRUPT_CAST != 0
             });
         }
-    }
-}
-
-/// Whether `b` is within `yards` of `a`.
-fn outcome_near(map: &Map, a: Guid, b: Guid, yards: f32) -> bool {
-    match (map.position_of(a), map.position_of(b)) {
-        (Some(x), Some(y)) => combat::dist(x, y) <= yards,
-        _ => false,
     }
 }
 

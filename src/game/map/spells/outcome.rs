@@ -949,10 +949,6 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
         combat::deal_damage(map, caster, target, left);
     }
     give_death_items(map, target, items);
-    if l.crit && left > 0 {
-        eye_for_an_eye(map, target, caster, left);
-    }
-    super::scripts::after_damage(map, caster, target, s, left, l.crit);
     super::threat(map, caster, target, s, left as f32, &l.mods);
 }
 
@@ -990,24 +986,6 @@ pub fn split(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damag
         combat::deal_damage(map, caster, to, share);
     }
     left
-}
-
-/// Eye for an Eye: a crit taken is dealt back in part.
-fn eye_for_an_eye(map: &mut Map, victim: Guid, attacker: Guid, damage: u32) {
-    let pct = auras::auras(map, victim).map_or(0, |a| {
-        a.effects()
-            .filter(|(h, x)| matches!(h.spell, 9799 | 25988) && x.kind == AURA_DUMMY)
-            .map(|(_, x)| x.amount)
-            .max()
-            .unwrap_or(0)
-    });
-    if pct <= 0 || attacker == victim {
-        return;
-    }
-    let back = (damage * pct as u32 / 100) as i32;
-    if back > 0 {
-        super::scripts::cast_with_points(map, victim, 25997, attacker, [Some(back), None, None]);
-    }
 }
 
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
