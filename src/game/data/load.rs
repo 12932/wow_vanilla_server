@@ -139,6 +139,7 @@ pub fn load(dir: &Path) -> GameData {
             load_misc(&db, dbc.as_ref(), &mut data);
             super::scripts_load::load(&db, &mut data);
             crate::game::map::creature_scripts::install(&mut data);
+            crate::game::map::battleground::av_scripts::install(&mut data);
             super::world::load(&db, dbc.as_ref(), &mut data.world);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
