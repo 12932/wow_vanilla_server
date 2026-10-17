@@ -23,6 +23,8 @@ pub struct Trade {
     /// The window is open on both sides.
     pub open: bool,
     pub items: [Option<Guid>; SLOTS],
+    /// Each slot's stack as it was offered, as the partner saw it.
+    pub counts: [u32; SLOTS],
     pub money: u32,
     pub accepted: bool,
     /// A spell on the partner's item in the slot not traded.
@@ -207,19 +209,17 @@ pub fn set_item(map: &mut Map, g: Guid, slot: u8, bag: u8, bag_slot: u8) {
     let Some(i) = p.item_at(bag, bag_slot) else {
         return;
     };
-    let item = &p.items[i];
-    let bound = item.fields.get_u32(ITEM_FIELD_FLAGS) & 0x1 != 0;
-    let worn = item.bag == crate::game::store::BAG_PLAYER && item.slot < 19;
-    let guid = item.guid;
-    if (bound && slot != NOT_TRADED) || worn {
+    if !tradable(p, i, slot != NOT_TRADED) {
         return;
     }
+    let (guid, count) = (p.items[i].guid, p.items[i].count());
     let p = map.players.get_mut(&g).expect("checked above");
     let t = p.trade.as_mut().expect("checked above");
     if t.items.contains(&Some(guid)) {
         return;
     }
     t.items[slot] = Some(guid);
+    t.counts[slot] = count;
     changed(map, g);
 }
 
@@ -250,6 +250,41 @@ pub fn unaccept(map: &mut Map, g: Guid) {
         t.accepted = false;
     }
     status(map, with, SMSG_TRADE_STATUS_TradeStatus::BackToTrade);
+}
+
+/// Whether item `i` may go in a trade slot: carried (in the backpack, the
+/// keyring or a bag; not worn, banked, or a bag in its slot, the only bag
+/// that holds anything), and for a slot that trades it, not soulbound
+/// (mangos's `CanBeTraded`, Thistle Tea's `validate_item` and
+/// `validate_slot`).
+fn tradable(p: &crate::game::map::player::Player, i: usize, traded: bool) -> bool {
+    use crate::game::map::inventory::{BAG_END, BAG_START, PACK_END, PACK_START};
+    let item = &p.items[i];
+    let carried = if item.bag == crate::game::store::BAG_PLAYER {
+        (PACK_START..PACK_END).contains(&item.slot)
+            || crate::game::map::items::keyring_slot(p, item.slot)
+    } else {
+        (BAG_START..BAG_END).contains(&item.bag)
+    };
+    let bound = item.fields.get_u32(ITEM_FIELD_FLAGS) & 0x1 != 0;
+    carried && !(traded && bound)
+}
+
+/// Whether `g`'s offer is still what the partner was shown: each item
+/// there, where it may be traded from, its stack as it was offered.
+fn offer_holds(map: &Map, g: Guid) -> bool {
+    let Some(p) = map.players.get(&g) else {
+        return false;
+    };
+    let Some(t) = p.trade.as_ref() else {
+        return false;
+    };
+    (0..NOT_TRADED).all(|slot| {
+        t.items[slot].is_none_or(|it| {
+            p.item_by_guid(it)
+                .is_some_and(|i| tradable(p, i, true) && p.items[i].count() == t.counts[slot])
+        })
+    })
 }
 
 /// The items `g` trades away, by inventory index.
@@ -293,6 +328,12 @@ pub fn accept(map: &mut Map, g: Guid) {
     };
     if !near {
         cancel(map, g, S::TargetToFar);
+        return;
+    }
+    // What was offered is checked again: an item worn, banked, gone or
+    // split since calls the trade off.
+    if !offer_holds(map, g) || !offer_holds(map, with) {
+        cancel(map, g, S::TradeCanceled);
         return;
     }
     let (mine, theirs) = (traded(map, g), traded(map, with));

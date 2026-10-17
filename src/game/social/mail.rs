@@ -233,6 +233,9 @@ pub fn list(map: &Map, g: Guid) {
             let max_durability = item
                 .map(|i| crate::game::map::player::max_durability(&realm.data, i.entry))
                 .unwrap_or(0);
+            let shown = item
+                .map(|i| crate::game::map::player::Item::shown(&realm.data, i))
+                .unwrap_or_default();
             wow_world_messages::vanilla::Mail {
                 message_id: m.id,
                 message_type: match m.kind {
@@ -251,11 +254,11 @@ pub fn list(map: &Map, g: Guid) {
                 unknown1: 0,
                 stationery: m.stationery,
                 item: item.map_or(0, |i| i.entry),
-                item_enchant_id: 0,
-                item_random_property_id: 0,
-                item_suffix_factor: 0,
+                item_enchant_id: shown.enchantment,
+                item_random_property_id: shown.random_property,
+                item_suffix_factor: shown.suffix_factor,
                 item_stack_size: item.map_or(0, |i| i.count.min(255) as u8),
-                item_spell_charges: 0,
+                item_spell_charges: shown.charges,
                 max_durability,
                 durability: item.map_or(0, |i| i.durability),
                 money: Gold::new(m.money),

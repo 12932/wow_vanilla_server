@@ -209,6 +209,9 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
         o.insert(observer);
     }
     crate::game::map::conditions::locate(map, object, false);
+    if guid::is_unit(object) {
+        crate::game::map::tap::introduced(map, observer, object);
+    }
     // A banner taken by attacking it starts each viewer afresh (Thistle
     // Tea's `reset_banner_interaction`), once they have it.
     if guid::is_game_object(object)

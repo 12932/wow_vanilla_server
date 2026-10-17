@@ -63,9 +63,18 @@ pub fn spawn(
         .unit_fields(owner)
         .map(|f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
         .unwrap_or(t.faction);
+    // Under a player's control if its owner is: a player, or one of theirs
+    // (mangos copies the caster's flag, Thistle Tea's `attach_owner` sets
+    // it for a player's). A creature's keeps its template's flags.
+    let controlled = guid::is_player(owner)
+        || map
+            .unit_fields(owner)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED));
     let f = &mut c.fields;
     f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
-    f.set_u32(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
+    if controlled {
+        f.set_u32(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
+    }
     f.set_u32(UNIT_NPC_FLAGS, 0);
     f.set_guid(UNIT_FIELD_SUMMONEDBY, owner);
     f.set_guid(UNIT_FIELD_CREATEDBY, owner);

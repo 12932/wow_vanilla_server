@@ -617,8 +617,8 @@ async fn a_spirit_healer_serves_a_ghost_within_reach_and_no_one_else() {
     let mut a = Client::connect(&realm, "A");
     let g = a.enter("Alice", Race::Human, Class::Warrior).await;
     a.say(".levelup 19").await;
+    // The living don't see a spirit healer; they may still name one.
     let healer = crate::game::guid::unit(SPIRIT_HEALER, SPIRIT_HEALER_COUNTER);
-    a.sees(healer).await;
     let sick = move |m: &Map| m.players[&g].auras.has_spell(SICKNESS);
     // The living: nothing, no wear and no sickness.
     a.send(CMSG_SPIRIT_HEALER_ACTIVATE { guid: healer }).await;
@@ -870,7 +870,8 @@ async fn a_resurrection_offers_its_health_and_mana_and_is_spent_by_rising() {
     on_map(&realm, move |m| crate::game::map::death::kill(m, ga)).await;
     let request = offer(&mut a, RESURRECTION).await;
     assert_eq!(&request[..8], &gb.guid().to_le_bytes());
-    assert_eq!(&request[request.len() - 6..], b"Bob\0\0\x01");
+    // A player caster's name goes empty: the client knows it (mangos).
+    assert_eq!(&request[8..], b"\x01\0\0\0\0\0\x01");
     a.send(CMSG_RESURRECT_RESPONSE {
         guid: gb,
         status: 1,

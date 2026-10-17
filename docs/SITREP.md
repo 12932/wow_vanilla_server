@@ -28,8 +28,9 @@ the questions waiting for you.
    itself. Should they also be fixed in your fork, or reported to gtker upstream? That would be a public issue,
    which is why I'm asking first.
 
-5. **Knockback on creatures** (from 2b). Should a knockback move a creature, as mangos-classic does and wvs now
-   does, or only break its cast, as Thistle Tea does? I kept mangos-classic's.
+5. **Knockback on creatures** (settled by bugs3). A knockback no longer moves a creature the server runs: mangos
+   ("no non player controlled pre-wotlk") and Thistle Tea agree, so 2b's teleporting creatures is gone. Nothing to
+   answer unless you want them moved.
 
 6. **Water** (from 2g). Thistle Tea ends what water breaks only by the client's swimming flag. wvs now also goes by
    the terrain's liquid, as mangos-classic does. Keep it, or match Thistle Tea exactly (revert `c99aab1`)?
@@ -44,6 +45,15 @@ the questions waiting for you.
     it is in reach. The client shows a moving creature slightly behind where the server has it, so swinging on
     arrival keeps a creature from hitting from where the client still shows it out of reach: your kobold report.
     Keep it?
+
+11. **Packet order in an update** (from bugs3). An update's blocks go at its end, after any packet sent during it.
+    A packet naming an object created in that update (a monster move right after a player arrives) can reach the
+    client first. A general fix (per-observer ordering, or flushing before direct sends) touches the hot path. Do
+    it?
+12. **Gates of Ahn'Qiraj and the Cenarion Favor** (from bugs3). Thistle Tea's zone list leaves out zone 3478;
+    mangos-classic includes it. I followed Thistle Tea.
+13. **Charged items** (found by bugs3). Spell charges aren't saved, so a part-used charged item comes back full after
+    a relog, a mail or an auction. Fix it?
 
 ## Decisions made (override any)
 
@@ -164,6 +174,18 @@ the questions waiting for you.
     - **Merge note:** traps now have their lock, as mangos's `GetLockId` gives it, which Disarm Trap needed after the
       lock rules from 2g.
 
+14. **bugs3's choices:**
+    - **`SMSG_GROUP_LIST`** ends with a byte, as Thistle Tea and mangos-classic send it (mangos-zero omits it).
+    - **The equipped-item-class cast result** carries the real inventory-type mask, as mangos-zero does; Thistle Tea
+      sends 0.
+    - **Ghosts** see every player, as in Thistle Tea; mangos limits this. Ghosts see only creatures within 45 yards
+      of their corpse.
+    - **Single-target auras** end when their caster leaves the world, as mangos and Thistle Tea have it.
+    - **Spawn flags:** disabled spawns (0x2) stay out, hidden ones (0x40) are concealed, and dead ones (0x80) lie as
+      corpses.
+    - **Merge note:** 2g's resurrection request sent a player caster's name. mangos-classic sends it empty (the
+      client knows it), as bugs3 had it, so the name goes empty and 2g's test was corrected.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -175,7 +197,7 @@ the questions waiting for you.
 | Creature size and reach | done | c5e1440 |
 | Bugs from the mapping, batch 1 (23) | merged | 25ecb91 |
 | Bugs from the mapping, batch 2 (18: spells, power, attack rules) | merged | d2dd886 |
-| Bugs from the mapping, batch 3 (24: visibility, spawns, wire layouts) | running | |
+| Bugs from the mapping, batch 3 (22 of 24; 2 kept) | merged | |
 | Bugs from the mapping, batch 4 (equipment, weather, leftovers) | running | |
 | 2a+2h: spells, auras, PvP | merged (all 8 items) | 099722e |
 | 2b: creature movement (all 11 items) | merged | c2bb0e7 |

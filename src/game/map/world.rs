@@ -53,7 +53,8 @@ pub fn populate(map: &mut Map) {
     let mut lying = Vec::new();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
-            if !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
+            if s.spawn_flags & crate::game::data::SPAWN_FLAG_DISABLED != 0
+                || !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
                 || !crate::game::map::battleground::spawn_allowed(map, true, s.guid)
                 || skip_creatures.contains(&s.guid)
             {
@@ -61,6 +62,7 @@ pub fn populate(map: &mut Map) {
             }
             if let Some(c) = crate::game::events::spawn_creature(&data, s, &on, &mut rng) {
                 let g = map.add_creature(c);
+                crate::game::map::ai::lie_dead_if_spawned_so(map, g, s);
                 if let Some(back) = save.as_ref().and_then(|v| v.dead.get(&s.guid)).copied()
                     && back > unix
                 {
@@ -92,6 +94,7 @@ pub fn populate(map: &mut Map) {
     if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
         for s in spawns {
             if s.despawned
+                || s.spawn_flags & crate::game::data::SPAWN_FLAG_DISABLED != 0
                 || !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
                 || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
                 || skip_objects.contains(&s.guid)

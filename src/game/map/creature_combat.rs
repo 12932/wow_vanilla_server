@@ -948,7 +948,7 @@ fn sighted_enemy(map: &mut Map, g: Guid) -> Option<Guid> {
     let (at, fighting, victim) = (c.position, c.combat.attacking, c.combat.victim);
     let range = template(map, g).map_or(20.0, |t| t.detection_range);
     let enemy = map
-        .players_near(at.x, at.y, range)
+        .players_near(at, range)
         .into_iter()
         .filter(|p| !fighting || *p == victim)
         .filter_map(|p| {

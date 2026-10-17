@@ -521,8 +521,29 @@ pub fn spawn_creature_of(map: &mut Map, spawn_guid: u32) {
     let on = crate::game::events::current(&map.realm);
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
+        lie_dead_if_spawned_so(map, g, spawn);
         crate::game::map::creature_groups::respawned(map, g);
     }
+}
+
+/// A spawn flagged dead (`SPAWN_FLAG_DEAD`) comes out a corpse, its death
+/// settled: nothing on it, no respawn of its own, until a spell brings it
+/// back (Thistle Tea's `Mob.spawn_dead`, mangos-zero's dead by default).
+pub fn lie_dead_if_spawned_so(map: &mut Map, g: Guid, spawn: &crate::game::data::CreatureSpawn) {
+    if spawn.spawn_flags & crate::game::data::SPAWN_FLAG_DEAD == 0 {
+        return;
+    }
+    let now = map.now;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let never = now + Duration::from_secs(10 * 365 * 86_400);
+    c.life = Life::Dead {
+        corpse_until: never,
+        respawn_at: never,
+    };
+    c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    map.dead_creatures.push(g);
 }
 
 /// A dead creature (or one never spawned, like a pooled spawn's other

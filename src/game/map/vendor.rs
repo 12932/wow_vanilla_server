@@ -193,6 +193,19 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
     let Some(t) = data.item(item) else {
         return;
     };
+    // A standing short of the item's: its own faction's, else the
+    // vendor's (mangos's `BuyItemFromVendor`, Thistle Tea's
+    // `item_requirement_met?`).
+    let faction = match t.required_reputation_faction {
+        0 => crate::game::map::reputation::faction_of(map, npc).unwrap_or(0),
+        f => f,
+    };
+    if map.players.get(&player).is_some_and(|p| {
+        !crate::game::map::reputation::meets(p, &data, faction, t.required_reputation_rank)
+    }) {
+        buy_failed(map, player, npc, item, BuyResult::ReputationRequire);
+        return;
+    }
     if map
         .players
         .get(&player)

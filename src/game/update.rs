@@ -344,6 +344,8 @@ struct Span {
     start: u32,
     len: u32,
     create: bool,
+    /// A create of a boat or zeppelin.
+    transport: bool,
     live: bool,
 }
 
@@ -376,6 +378,7 @@ impl Batch {
             start: self.body.len() as u32,
             len: block.len() as u32,
             create,
+            transport: create && creates_transport(block),
             live: true,
         });
         self.body.extend_from_slice(block);
@@ -415,22 +418,26 @@ impl Batch {
 
     /// The batch's packets, ready to queue: the out-of-range block first,
     /// then the blocks in order, cut so no packet needs a size the 1.12
-    /// client can't read.
+    /// client can't read. A packet that makes a boat or zeppelin says it
+    /// has a transport, as mangos's `SendInitTransports` and Thistle Tea's
+    /// header do.
     pub fn finish(self) -> Vec<Arc<[u8]>> {
         let mut packets = Vec::new();
         let mut count = 0u32;
+        let mut transport = false;
         let mut body = Vec::new();
-        let mut cut = |count: &mut u32, body: &mut Vec<u8>| {
+        let mut cut = |count: &mut u32, transport: &mut bool, body: &mut Vec<u8>| {
             if *count == 0 {
                 return;
             }
             let mut payload = Vec::with_capacity(5 + body.len());
             payload.extend_from_slice(&count.to_le_bytes());
-            payload.push(0);
+            payload.push(u8::from(*transport));
             payload.extend_from_slice(body);
             packets.push(frame_update(&payload));
             body.clear();
             *count = 0;
+            *transport = false;
         };
         // At most 9 bytes a guid: a block that keeps under the limit.
         for guids in self.forget.chunks(PACKET_LIMIT / 9) {
@@ -440,14 +447,34 @@ impl Batch {
         for s in self.spans.iter().filter(|s| s.live) {
             let block = &self.body[s.start as usize..(s.start + s.len) as usize];
             if !body.is_empty() && body.len() + block.len() > PACKET_LIMIT {
-                cut(&mut count, &mut body);
+                cut(&mut count, &mut transport, &mut body);
             }
             body.extend_from_slice(block);
             count += 1;
+            transport |= s.transport;
         }
-        cut(&mut count, &mut body);
+        cut(&mut count, &mut transport, &mut body);
         packets
     }
+}
+
+/// Whether a create block makes a boat or zeppelin: its packed GUID is a
+/// moving transport's.
+fn creates_transport(block: &[u8]) -> bool {
+    let Some((&mask, rest)) = block.get(1..).and_then(|b| b.split_first()) else {
+        return false;
+    };
+    let mut guid = 0u64;
+    let mut bytes = rest.iter();
+    for i in 0..8 {
+        if mask & (1 << i) != 0 {
+            let Some(&b) = bytes.next() else {
+                return false;
+            };
+            guid |= u64::from(b) << (i * 8);
+        }
+    }
+    crate::game::guid::high(Guid::new(guid)) == Some(crate::game::guid::HighGuid::MoTransport)
 }
 
 /// `[size BE][opcode LE][body]`, the shape the writer task encrypts.

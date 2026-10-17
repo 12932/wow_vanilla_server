@@ -85,7 +85,7 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut WorldData) {
     }
     for (guid, e) in rows(
         db,
-        "SELECT * FROM game_event_creature_data WHERE patch <= 10",
+        "SELECT * FROM game_event_creature_data WHERE patch <= 10 ORDER BY patch",
         |c| {
             (
                 c.u32("guid"),

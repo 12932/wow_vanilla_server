@@ -80,6 +80,7 @@ pub mod spell_areas;
 pub mod spells;
 pub mod stats;
 pub mod supervise;
+pub mod tap;
 pub mod terrain;
 pub mod tickets;
 pub mod trade;
@@ -653,6 +654,7 @@ impl Map {
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
         pets::owner_leaving(self, guid);
+        spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);
         duel::left(self, guid, true);
         trade::cancel(
@@ -992,10 +994,18 @@ impl Map {
             }
             o.fields.clear_dirty();
         }
+        // Creatures whose tap their observers see anew: taken or gone, or
+        // their flags sent again to those outside it.
+        let mut taps = Vec::new();
         for (_, c) in self.creatures.iter_mut() {
-            if !c.fields.is_dirty() {
+            let tap_changed = c.tapped_by != c.tap_told;
+            if !c.fields.is_dirty() && !tap_changed {
                 continue;
             }
+            let flags_sent = c
+                .fields
+                .dirty()
+                .get(crate::game::fields::UNIT_DYNAMIC_FLAGS);
             if !c.observers.is_empty()
                 && let Some(block) = update::values_block(c.guid, &c.fields, Visibility::Public)
             {
@@ -1003,7 +1013,14 @@ impl Map {
                     batches.entry(*o).or_default().push(&block);
                 }
             }
+            if !c.observers.is_empty() && (tap_changed || (flags_sent && c.tapped_by.is_some())) {
+                taps.push((c.guid, tap_changed));
+            }
+            c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
+        }
+        for (g, all) in taps {
+            tap::tell(self, g, all);
         }
     }
 
@@ -1231,17 +1248,21 @@ impl Map {
         }
     }
 
-    /// Players within `radius` yards of `object`, the object included if it
-    /// is one.
-    pub fn players_near(&self, x: f32, y: f32, radius: f32) -> Vec<Guid> {
+    /// Players within `radius` yards of `at`, in three dimensions (Thistle
+    /// Tea's `nearby_players`, mangos's `MessageDistDeliverer`).
+    pub fn players_near(
+        &self,
+        at: wow_world_messages::vanilla::Vector3d,
+        radius: f32,
+    ) -> Vec<Guid> {
         let r2 = radius * radius;
         self.grid
-            .around(x, y, radius)
+            .around(at.x, at.y, radius)
             .filter(|g| guid::is_player(*g))
             .filter(|g| {
                 self.players.get(g).is_some_and(|p| {
                     let d = p.position();
-                    (d.x - x).powi(2) + (d.y - y).powi(2) <= r2
+                    (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= r2
                 })
             })
             .collect()

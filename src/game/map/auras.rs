@@ -194,6 +194,9 @@ pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
 pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
 pub const AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE: u32 = 187;
 pub const AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE: u32 = 188;
+/// vmangos's own: the trigger spell's auras held while this one lasts
+/// (`spell_effect_mod` gives Barkskin one, for "Barkskin Effect (DND)").
+pub const AURA_LINKED: u32 = 192;
 
 /// `SpellAuraInterruptFlags`, as Thistle Tea reads them.
 pub const INTERRUPT_CAST: u32 = 0x1;
@@ -227,7 +230,7 @@ pub const POSITIVE_SLOTS: usize = 32;
 /// Every aura type the server knows: those with an effect here or in the
 /// stats, and those it keeps on the unit with no effect of their own.
 pub fn supported(aura: u32) -> bool {
-    aura <= 175 && !matches!(aura, 46 | 48 | 63 | 119 | 164)
+    (aura <= 175 && !matches!(aura, 46 | 48 | 63 | 119 | 164)) || aura == AURA_LINKED
 }
 
 /// One aura effect of a holder.
@@ -732,6 +735,10 @@ pub struct Context {
     pub charges: Option<u32>,
     /// From a triggered spell.
     pub triggered: bool,
+    /// A linked aura's spell: held unseen and as a passive, with no slot
+    /// of its own, going with the aura that holds it (Thistle Tea's linked
+    /// holders).
+    pub linked: bool,
 }
 
 /// Why an aura couldn't be applied.
@@ -781,7 +788,7 @@ pub fn apply_spell(
         .duration
         .unwrap_or_else(|| data.spells.duration(spell, level));
     let pos = positive(spell);
-    let passive = spell.passive();
+    let passive = spell.passive() || ctx.linked;
     let Some(existing) = auras(map, target) else {
         return Ok(());
     };
@@ -881,7 +888,7 @@ pub fn apply_spell(
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
-    let visible = visible(spell, caster == target);
+    let visible = visible(spell, caster == target) && !ctx.linked;
     // What the new holder replaces.
     let replaced: Vec<usize> = existing
         .holders
@@ -1403,12 +1410,37 @@ pub fn spend_charge(map: &mut Map, target: Guid, spell: u32, caster: Guid) {
     }
 }
 
+/// A linked aura's spell: its auras on `target` from the same caster, for
+/// as long as the linked aura has left (Thistle Tea's `Aura.Linked`).
+fn linked(map: &mut Map, target: Guid, h: &Holder, spell: u32) {
+    let data = map.realm.data.clone();
+    let Some(s) = data.spells.get(spell) else {
+        return;
+    };
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
+        .map(|i| (i, crate::game::map::spells::points(s, i, h.level)))
+        .collect();
+    let left = h
+        .expires
+        .map(|t| t.saturating_duration_since(map.now).as_millis() as u32);
+    let ctx = Context {
+        item: h.item,
+        duration: Some(left),
+        triggered: true,
+        linked: true,
+        ..Default::default()
+    };
+    let _ = apply_spell(map, h.caster, target, s, &effects, ctx);
+}
+
 /// An aura effect began: what it does at once.
 fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let kind = a.kind;
     let misc = a.misc;
     match kind {
         AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
+        AURA_LINKED => linked(map, target, h, a.trigger),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             crate::game::map::combat::stop_attack(map, target);
             if kind == AURA_MOD_STUN
@@ -1650,6 +1682,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let still = |map: &Map, k: u32| auras(map, target).is_some_and(|x| x.has(k));
     match a.kind {
         AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
+        AURA_LINKED => remove_spell(map, target, a.trigger, Some(h.caster)),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             let stunned = still(map, AURA_MOD_STUN);
             let rooted = stunned || still(map, AURA_MOD_ROOT);
@@ -2411,8 +2444,8 @@ pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
 /// On death every aura but the passive and death-persistent ones goes, and
 /// so does the cast.
 pub fn clear_on_death(map: &mut Map, g: Guid) {
-    // What it held one of on another goes with it.
-    crate::game::map::spells::single_target::caster_gone(map, g);
+    // Its Hunter's Mark on another goes with it.
+    crate::game::map::spells::single_target::caster_died(map, g);
     crate::game::map::spells::interrupt(map, g);
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);

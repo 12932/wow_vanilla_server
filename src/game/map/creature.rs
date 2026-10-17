@@ -286,6 +286,8 @@ pub struct Creature {
     pub threat: Vec<(Guid, f32)>,
     /// The player whose kill this is.
     pub tapped_by: Option<Guid>,
+    /// The tap as its observers were last told it (`map::tap`).
+    pub tap_told: Option<Guid>,
     pub evading: bool,
     /// Where the victim was when the chase last pathed.
     pub chase_target_at: Option<Vector3d>,
@@ -421,6 +423,7 @@ impl Creature {
             combat_start: None,
             threat: Vec::new(),
             tapped_by: None,
+            tap_told: None,
             evading: false,
             chase_target_at: None,
             aggro_check_at: Instant::now(),
@@ -517,6 +520,10 @@ impl Creature {
             spawn.orientation,
         );
         c.spawn_guid = Some(spawn.guid);
+        // Out, but unseen until a script shows it.
+        if spawn.spawn_flags & crate::game::data::SPAWN_FLAG_NOT_VISIBLE != 0 {
+            c.scripted.get_or_insert_with(Default::default).concealed = true;
+        }
         if let Some(stats) = data.class_level_stats.get(&(template.unit_class, level)) {
             let health =
                 crate::game::data::load::creature_health(stats.health, template.health_multiplier);

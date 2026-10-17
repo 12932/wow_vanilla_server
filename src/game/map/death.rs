@@ -570,6 +570,44 @@ pub fn nearest_graveyard(
     }
 }
 
+/// How near its corpse a ghost sees the living (Thistle Tea's
+/// `@corpse_sight_range`; mangos's `(20 + 25) * Rate.Creature.Aggro`).
+pub const CORPSE_SIGHT_YARDS: f32 = 45.0;
+
+/// Whether player `observer` sees creature `c` (Thistle Tea's
+/// `Visibility.Filter`, mangos-classic's `IsVisibleInGridForPlayer` and
+/// `isInvisibleForAlive`): the living see all but the spirit healers and
+/// guides; a ghost sees those, the creatures its kind are shown to (type
+/// flag 0x2), and the living within 45 yards of its corpse.
+fn creature_seen(map: &Map, observer: Guid, c: &crate::game::map::creature::Creature) -> bool {
+    let spirit = c.fields.get_u32(UNIT_NPC_FLAGS)
+        & (crate::game::map::npc::NPC_FLAG_SPIRITHEALER
+            | crate::game::map::npc::NPC_FLAG_SPIRITGUIDE)
+        != 0;
+    let ghost = map
+        .players
+        .get(&observer)
+        .is_some_and(|p| matches!(p.death, Death::Ghost { .. }));
+    if !ghost {
+        return !spirit;
+    }
+    let shown_to_ghosts = map
+        .realm
+        .data
+        .creature_template(c.entry)
+        .is_some_and(|t| t.type_flags & 0x2 != 0);
+    if spirit || shown_to_ghosts {
+        return true;
+    }
+    let corpse = map.corpses.get(&guid::corpse(guid::counter(observer)));
+    c.alive()
+        && corpse.is_some_and(|k| {
+            let (a, b) = (k.position, c.position);
+            (a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)
+                <= CORPSE_SIGHT_YARDS * CORPSE_SIGHT_YARDS
+        })
+}
+
 /// Whether `observer` may see `object`: the living don't see ghosts.
 pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
     let gm = |g: Guid| {
@@ -593,6 +631,11 @@ pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
     // A stealthed trap, from its owner's enemies.
     if guid::is_game_object(object) && !crate::game::map::objects::seen_by(map, observer, object) {
         return false;
+    }
+    if let Some(c) = map.creature(object)
+        && !gm(observer)
+    {
+        return creature_seen(map, observer, c);
     }
     if !guid::is_player(object) || observer == object {
         return true;

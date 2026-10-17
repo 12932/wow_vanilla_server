@@ -158,6 +158,7 @@ pub fn load(dir: &Path) -> GameData {
         // Alterac Valley's NPCs as the battleground drives them, over the
         // general import.
         crate::game::map::battleground::av_scripts::install(&mut data);
+        super::scripts_load::link_templates(&mut data);
     }
     let spawns: usize = data.creature_spawns.values().map(Vec::len).sum();
     let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();
