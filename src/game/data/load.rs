@@ -1461,6 +1461,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     s.spells = best.into_iter().map(|(k, (_, t))| (k, t)).collect();
     apply_spell_mods(db, &mut s.spells);
     load_spell_tables(db, s);
+    crate::game::map::spells::class_scripts::patch(s);
     for (id, map, x, y, z, o) in rows(
         db,
         "SELECT * FROM spell_target_position WHERE build_min <= 5875 AND build_max >= 5875",

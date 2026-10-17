@@ -77,7 +77,18 @@ pub fn cast_with_points(
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    let mut s = s.clone();
+    cast_template_with_points(map, caster, s.clone(), target, points);
+}
+
+/// Cast `s` (a spell's template, changed) from `caster` at `target` with
+/// its effects' points fixed.
+pub fn cast_template_with_points(
+    map: &mut Map,
+    caster: Guid,
+    mut s: SpellTemplate,
+    target: Guid,
+    points: [Option<i32>; 3],
+) {
     for (i, p) in points.iter().enumerate() {
         if let Some(p) = p {
             let e = &mut s.effects[i];
