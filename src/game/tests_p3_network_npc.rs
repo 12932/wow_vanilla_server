@@ -22,6 +22,11 @@ const VENDOR: u32 = 2001;
 const JERKY: u32 = 117;
 const TABARD: u32 = 50_100;
 const LIMITED: u32 = 50_101;
+/// A gossiper who is a flight master and a banker too.
+const GOSSIPER: u32 = 2010;
+const MENU: u32 = 60;
+const TALK_QUEST: u32 = 9_100;
+const LEVEL_10: u32 = 70;
 
 fn spawn(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     CreatureSpawn {
@@ -91,7 +96,12 @@ fn data() -> GameData {
     );
     d.creature_templates
         .insert(VENDOR, creature(VENDOR, "Vendor", 12, 0x4));
-    d.creature_spawns.insert(0, vec![spawn(11, VENDOR, 2.0)]);
+    let mut gossiper = creature(GOSSIPER, "Gossiper", 12, 0x1 | 0x8 | 0x100);
+    gossiper.gossip_menu_id = MENU;
+    d.creature_templates.insert(GOSSIPER, gossiper);
+    d.creature_spawns
+        .insert(0, vec![spawn(11, VENDOR, 2.0), spawn(12, GOSSIPER, 3.0)]);
+    gossip(&mut d);
     let sold = |slot, item, max_count| VendorItem {
         slot,
         item,
@@ -117,6 +127,86 @@ fn data() -> GameData {
     limited.buy_price = 1;
     d.items.insert(LIMITED, limited);
     d
+}
+
+/// The gossiper's menu: a goodbye that flies the player off by a script,
+/// the flight map, the bank, a plain goodbye, and one for level 10.
+fn gossip(d: &mut GameData) {
+    use crate::game::data::npc::{GossipMenu, GossipOption, TaxiNode, TaxiPathNode};
+    use crate::game::data::scripts::{Condition, ScriptStep};
+    let option = |id, kind, npc_flag, action_menu, script, condition| GossipOption {
+        id,
+        text: format!("Option {id}"),
+        kind,
+        npc_flag,
+        action_menu,
+        script,
+        condition,
+        ..Default::default()
+    };
+    d.npc.gossip_menus.insert(
+        MENU,
+        GossipMenu {
+            texts: Vec::new(),
+            options: vec![
+                option(0, 1, 0, -1, 900, 0),
+                option(1, 4, 0x8, 0, 0, 0),
+                option(2, 9, 0x100, 0, 0, 0),
+                option(3, 1, 0, -1, 0, 0),
+                option(4, 1, 0, -1, 900, LEVEL_10),
+            ],
+        },
+    );
+    // Script 900 sends its player along path 315.
+    d.scripts.gossip.insert(
+        900,
+        vec![ScriptStep {
+            command: 30,
+            datalong: [315, 0, 0, 0],
+            ..Default::default()
+        }],
+    );
+    d.scripts.conditions.insert(
+        LEVEL_10,
+        Condition {
+            entry: LEVEL_10,
+            kind: 15,
+            values: [10, 1, 0, 0],
+            flags: 0,
+        },
+    );
+    d.npc.taxi_nodes.insert(
+        2,
+        TaxiNode {
+            id: 2,
+            map: 0,
+            x: START.0 + 3.0,
+            y: START.1,
+            z: START.2,
+            name: "Northshire".into(),
+            mounts: [0, 0],
+        },
+    );
+    let node = |dx: f32| TaxiPathNode {
+        map: 0,
+        x: START.0 + dx,
+        y: START.1,
+        z: START.2 + 20.0,
+        ..Default::default()
+    };
+    d.npc
+        .taxi_path_nodes
+        .insert(315, vec![node(0.0), node(100.0), node(200.0)]);
+    // Speak with the gossiper.
+    d.npc.quests.insert(
+        TALK_QUEST,
+        crate::game::data::npc::Quest {
+            id: TALK_QUEST,
+            title: "Have a Word".into(),
+            required_kills: [(GOSSIPER as i32, 1), (0, 0), (0, 0), (0, 0)],
+            ..Default::default()
+        },
+    );
 }
 
 async fn on_map<T: Send + 'static>(
@@ -217,4 +307,113 @@ async fn a_vendor_asks_for_standing_discounts_the_whole_and_runs_out() {
     let list = listed(&mut a, vendor).await;
     assert!(list.contains(&(LIMITED, 0)), "{list:?}");
     assert!(list.contains(&(JERKY, u32::MAX)), "unlimited: {list:?}");
+}
+
+fn select(npc: Guid, option: u32) -> CMSG_GOSSIP_SELECT_OPTION {
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: npc,
+        gossip_list_id: option,
+        unknown: None,
+    }
+}
+
+/// Thistle Tea's cmsg_gossip_select_option_test: a goodbye credits a quest
+/// asking to speak with the creature; an option whose condition no longer
+/// holds does nothing; the bank and flight map options open them; and a
+/// goodbye's script flies its player off.
+#[tokio::test]
+async fn gossip_options_talk_open_the_bank_and_flight_map_and_run_their_scripts() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let npc = guid::unit(GOSSIPER, 12);
+    a.sees(npc).await;
+    on_map(&realm, move |m| {
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        p.journal.log.push(crate::game::store::Logged {
+            quest: TALK_QUEST,
+            ..Default::default()
+        });
+        crate::game::map::quests::refresh_log(p, &d);
+    })
+    .await;
+    a.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+    let shown = a
+        .wait_for("SMSG_GOSSIP_MESSAGE", |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => {
+                Some(g.gossips.iter().map(|o| o.id).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(!shown.contains(&4), "level 10's option hidden: {shown:?}");
+    // A goodbye: the window closes, and the talk is credited.
+    a.send(select(npc, 3)).await;
+    a.wait_for("SMSG_GOSSIP_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+    })
+    .await;
+    let (quest, guid) = a
+        .wait_for("SMSG_QUESTUPDATE_ADD_KILL", |m| match m {
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(k) => Some((k.quest_id, k.guid)),
+            _ => None,
+        })
+        .await;
+    assert_eq!((quest, guid), (TALK_QUEST, npc));
+    let kills = on_map(&realm, move |m| {
+        m.players[&g]
+            .journal
+            .log
+            .iter()
+            .find(|l| l.quest == TALK_QUEST)
+            .map(|l| l.kills[0])
+    })
+    .await;
+    assert_eq!(kills, Some(1));
+    // The level 10 option, chosen at level 1 anyway: nothing.
+    a.clear();
+    a.send(select(npc, 4)).await;
+    assert!(
+        a.gets(std::time::Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+            | ServerOpcodeMessage::SMSG_MONSTER_MOVE(_) => Some(()),
+            _ => None,
+        })
+        .await
+        .is_none(),
+        "a condition not met does nothing"
+    );
+    // The bank, and the flight map from the node here.
+    a.send(select(npc, 2)).await;
+    let bank = a
+        .wait_for("SMSG_SHOW_BANK", |m| match m {
+            ServerOpcodeMessage::SMSG_SHOW_BANK(b) => Some(b.guid),
+            _ => None,
+        })
+        .await;
+    assert_eq!(bank, npc);
+    a.send(select(npc, 1)).await;
+    let (from, nearest) = a
+        .wait_for("SMSG_SHOWTAXINODES", |m| match m {
+            ServerOpcodeMessage::SMSG_SHOWTAXINODES(t) => Some((t.guid, t.nearest_node)),
+            _ => None,
+        })
+        .await;
+    assert_eq!((from, nearest), (npc, 2));
+    // The scripted goodbye: closed, and away on path 315.
+    a.send(select(npc, 0)).await;
+    a.wait_for("SMSG_GOSSIP_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+    })
+    .await;
+    let mut flying = false;
+    for _ in 0..100 {
+        flying = on_map(&realm, move |m| m.players[&g].flight.is_some()).await;
+        if flying {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(flying, "the script's flight");
 }

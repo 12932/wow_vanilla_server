@@ -310,6 +310,9 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             },
         );
     }
+    // An option that closes a creature's gossip is talking to it, once the
+    // window is closed (mangos's GOSSIP_OPTION_GOSSIP with a menu below 0).
+    let talked = o.kind == 1 && o.action_menu < 0;
     if o.script != 0 {
         crate::game::map::scripts::start(
             map,
@@ -319,7 +322,11 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             player,
         );
         if o.kind == 1 && o.action_menu <= 0 {
-            return send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            if talked {
+                quests::talked(map, player, npc);
+            }
+            return;
         }
     }
     match o.kind {
@@ -340,6 +347,9 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         15 => vendor::list(map, player, npc),
         16 => crate::game::map::misc::talent_wipe_offer(map, player, npc),
         _ => send(map, player, &SMSG_GOSSIP_COMPLETE {}),
+    }
+    if talked {
+        quests::talked(map, player, npc);
     }
 }
 
