@@ -54,6 +54,9 @@ fn data() -> GameData {
     for e in [BLADE, RING, IDOL] {
         d.items.insert(e, item(e, 2));
     }
+    // The blade comes "of the Bear".
+    d.items.get_mut(&BLADE).unwrap().random_property = 77;
+    d.crafts.random_pools.insert(77, vec![(1182, 100.0)]);
     let mut axe = item(AXE, 2);
     axe.allowable_class = 1;
     d.items.insert(AXE, axe);
@@ -696,9 +699,13 @@ async fn a_winner_keeps_what_does_not_fit() {
     unfill(&realm, gb).await;
     assert!(opened(&mut b, corpse).await);
     b.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
-    b.wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
-        ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) => (r.item == BLADE).then_some(()),
-        _ => None,
-    })
-    .await;
+    let property = b
+        .wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) => {
+                (r.item == BLADE).then_some(r.item_random_property_id)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(property, 1182, "the blade it rolled, kept through the roll");
 }
