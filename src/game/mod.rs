@@ -33,6 +33,8 @@ mod tests_pvp;
 mod tests_scripts;
 #[cfg(test)]
 mod tests_spells;
+#[cfg(test)]
+mod tests_pvp2;
 pub mod transports;
 pub mod update;
 pub mod weather;

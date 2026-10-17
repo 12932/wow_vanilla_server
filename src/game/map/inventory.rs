@@ -359,6 +359,9 @@ pub fn can_equip(p: &Player, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
     if u32::from(p.level()) < t.required_level {
         return Err(Fail::Level(t.required_level as u8));
     }
+    if !crate::game::map::pvp::rank_allows_use(p, t) {
+        return Err(Fail::Rank);
+    }
     if !proficient(p.row.class, p.level(), t) {
         return Err(Fail::NoProficiency);
     }
@@ -543,11 +546,6 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
             )
         {
             return Err(Fail::Reputation);
-        }
-        if t.required_honor_rank != 0
-            && u32::from(p.fields.get_byte(PLAYER_FIELD_BYTES, 3)) < t.required_honor_rank
-        {
-            return Err(Fail::Rank);
         }
         // A two-hander needs the off hand free, and the reverse.
         if slot == SLOT_OFF_HAND

@@ -422,6 +422,9 @@ pub struct GameData {
     pub bg_object_events: AHashMap<u32, Vec<(u8, u8)>>,
     /// `areatrigger_bg_entrance`: a battleground's portal in the world.
     pub bg_entrances: AHashMap<u32, BgEntrance>,
+    /// `script_waypoint`: the routes Alterac Valley's launched NPCs walk,
+    /// by creature entry.
+    pub bg_routes: AHashMap<u32, Vec<(f32, f32, f32)>>,
     /// `transports`: boats and zeppelins, with their cycles in milliseconds.
     pub transports: Vec<TransportRoute>,
     /// `game_event`: seasonal events, by id.
