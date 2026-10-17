@@ -377,6 +377,21 @@ fn demote(data: &mut BTreeMap<u32, u32>, s: Script) {
         }
         // The cathedral's fight.
         Script::ScarletMonastery => back(SM_PAIR, &|v| (1..=3).contains(&v)),
+        // Razorfen Downs' gong: the wave it called went with the copy, so
+        // the gong is to be struck for it again, as it stood before (the
+        // fiends from 0, the reavers from 9, Tuten'kash from 14, unless he
+        // is dead).
+        Script::RazorfenDowns => {
+            let tutenkash_dead = data.get(&0) == Some(&DONE);
+            if let Some(v) = data.get_mut(&1) {
+                *v = match *v {
+                    1..=8 => 0,
+                    10..=13 => 9,
+                    15.. if !tutenkash_dead => 14,
+                    v => v,
+                };
+            }
+        }
         // Majordomo called but not beaten: he is called again.
         Script::MoltenCore if data.get(&MC_MAJORDOMO_FIELD) != Some(&DONE) => {
             data.remove(&MC_MAJORDOMO_SUMMONED);

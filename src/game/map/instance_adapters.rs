@@ -501,6 +501,11 @@ pub fn creature_event(
         Script::DireMaul => dm_creature(map, g, entry, spawn, event),
         Script::BlackrockDepths => brd_creature(map, g, entry, event),
         Script::Stratholme => strat_creature(map, g, entry, spawn, event),
+        // Tuten'kash's death settles his encounter, as vmangos's
+        // `OnCreatureDeath` has it, so a reload knows him dead.
+        Script::RazorfenDowns if entry == RFD_TUTENKASH && event == Event::Death => {
+            settle(map, 0, DONE);
+        }
         _ => {}
     }
 }
@@ -738,6 +743,7 @@ fn wc_set(map: &mut Map, field: u32, value: u32) {
 
 const RFD_GONG: u32 = 148917;
 const RFD_TUTENKASH_WAVE: u32 = 15;
+const RFD_TUTENKASH: u32 = 7355;
 
 fn rfd_set(map: &mut Map, field: u32, value: u32) {
     match field {
@@ -747,7 +753,7 @@ fn rfd_set(map: &mut Map, field: u32, value: u32) {
                 9 | 14 => operate(map, RFD_GONG, Act::Active),
                 1 => rfd_wave(map, 7349, 8),
                 10 => rfd_wave(map, 7351, 4),
-                RFD_TUTENKASH_WAVE => rfd_wave(map, 7355, 1),
+                RFD_TUTENKASH_WAVE => rfd_wave(map, RFD_TUTENKASH, 1),
                 _ => {}
             }
         }

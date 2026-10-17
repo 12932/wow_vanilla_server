@@ -206,3 +206,178 @@ async fn a_raid_is_bound_only_by_a_players_kill() {
     .await;
     assert_eq!(bound(&realm), Some(copy.instance), "bound by her hound's");
 }
+
+/// A store in a file of its own, for a restart.
+fn store_file(what: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "wvs-2e-{what}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("characters.sqlite")
+}
+
+/// A server on the store at `path`, whose empty copies last.
+fn server(path: &std::path::Path, data: GameData) -> Arc<Realm> {
+    let (store, startup) = crate::game::store::Store::open(path.to_str().unwrap()).unwrap();
+    let mut cfg = harness::test_config();
+    cfg.instance_unload = Duration::from_secs(600);
+    Realm::new(cfg, store, startup, data, None)
+}
+
+/// The old server saves `g` and its copies and goes; a new one on the same
+/// store takes `g` back in where they were.
+async fn restart(
+    realm: &Arc<Realm>,
+    path: &std::path::Path,
+    data: GameData,
+    g: Guid,
+) -> (Arc<Realm>, Client) {
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| m.save_player(g)).await;
+    realm.store.flush().await;
+    let realm2 = server(path, data);
+    let mut c = Client::connect(&realm2, "A");
+    c.login(g).await;
+    c.sees(g).await;
+    (realm2, c)
+}
+
+const RFD: u32 = 129;
+const GONG: u32 = 148917;
+const TOMB_FIEND: u32 = 7349;
+const TUTENKASH: u32 = 7355;
+const GO_FLAG_NO_INTERACT: u32 = 0x10;
+
+/// Razorfen Downs with its gong, and what it calls.
+fn razorfen_downs() -> GameData {
+    let mut d = GameData::empty();
+    map_info(&mut d, RFD, 1, 5, "instance_razorfen_downs");
+    d.gameobject_templates.insert(
+        GONG,
+        GameObjectTemplate {
+            entry: GONG,
+            kind: 10,
+            display_id: 411,
+            name: "Gong".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    d.gameobject_spawns.insert(
+        RFD,
+        vec![GameObjectSpawn {
+            guid: 32045,
+            entry: GONG,
+            map: RFD,
+            x: 2.0,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    for (entry, name) in [
+        (TOMB_FIEND, "Tomb Fiend"),
+        (7351, "Tomb Reaver"),
+        (TUTENKASH, "Tuten'kash"),
+    ] {
+        d.creature_templates.insert(entry, template(entry, name));
+    }
+    d
+}
+
+/// The gong's waves called, whether it can be struck, and how many of
+/// `entry` are up.
+async fn gong(realm: &Arc<Realm>, g: Guid, entry: u32) -> (u32, bool, usize) {
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let flags = m
+            .gameobjects
+            .iter()
+            .find(|(_, o)| o.entry == GONG)
+            .map_or(u32::MAX, |(_, o)| {
+                o.fields.get_u32(crate::game::fields::GAMEOBJECT_FLAGS)
+            });
+        let up = m
+            .creatures
+            .iter()
+            .filter(|(_, c)| c.entry == entry && c.alive())
+            .count();
+        (
+            crate::game::map::instance_script::get_data(m, 1),
+            flags & GO_FLAG_NO_INTERACT == 0,
+            up,
+        )
+    })
+    .await
+    .unwrap()
+}
+
+async fn strike(realm: &Arc<Realm>, g: Guid) {
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let gong = m
+            .gameobjects
+            .iter()
+            .find(|(_, o)| o.entry == GONG)
+            .map(|(_, o)| o.guid)
+            .unwrap();
+        crate::game::map::scripts::object_used(m, g, gong);
+    })
+    .await;
+}
+
+/// Razorfen Downs' gong across a restart: a wave under way when the copy
+/// went is called again, the fiends first, then Tuten'kash, so the gong
+/// is as it was before the wave was struck.
+#[tokio::test]
+async fn razorfen_downs_gong_is_kept_across_a_reload() {
+    let path = store_file("gong");
+    let realm = server(&path, razorfen_downs());
+    let mut a = Client::connect(&realm, "A");
+    let me = a.enter("Alice", Race::Human, Class::Warrior).await;
+    go(&realm, &mut a, RFD).await;
+    strike(&realm, me).await;
+    assert_eq!(gong(&realm, me, TOMB_FIEND).await, (1, false, 8), "struck");
+    let (realm, _a) = restart(&realm, &path, razorfen_downs(), me).await;
+    assert_eq!(
+        gong(&realm, me, TOMB_FIEND).await,
+        (0, true, 0),
+        "the fiends' wave to call again"
+    );
+    strike(&realm, me).await;
+    assert_eq!(gong(&realm, me, TOMB_FIEND).await, (1, false, 8));
+    // The reavers dead, Tuten'kash called; the copy goes before he dies.
+    let map = realm.registry.online(me).unwrap().map();
+    map.query(|m| crate::game::map::instance_script::set_data(m, 1, 14, 0))
+        .await;
+    assert!(gong(&realm, me, TUTENKASH).await.1, "awake for the last");
+    strike(&realm, me).await;
+    assert_eq!(gong(&realm, me, TUTENKASH).await, (15, false, 1));
+    let (realm, _a) = restart(&realm, &path, razorfen_downs(), me).await;
+    assert_eq!(
+        gong(&realm, me, TUTENKASH).await,
+        (14, true, 0),
+        "Tuten'kash to call again"
+    );
+    strike(&realm, me).await;
+    assert_eq!(gong(&realm, me, TUTENKASH).await, (15, false, 1));
+    // Slain, he stays slain: the gong is still for good.
+    let map = realm.registry.online(me).unwrap().map();
+    map.query(move |m| {
+        let t = m
+            .creatures
+            .iter()
+            .find(|(_, c)| c.entry == TUTENKASH && c.alive())
+            .map(|(_, c)| c.guid)
+            .unwrap();
+        crate::game::map::combat::deal_damage(m, me, t, 1_000_000);
+    })
+    .await;
+    let (realm, _a) = restart(&realm, &path, razorfen_downs(), me).await;
+    assert_eq!(gong(&realm, me, TUTENKASH).await, (15, false, 0), "done");
+}
