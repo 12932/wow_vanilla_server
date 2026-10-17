@@ -100,6 +100,21 @@ pub fn movement_bytes(guid: Guid, info: &MovementInfo) -> Vec<u8> {
     frame[4..].to_vec()
 }
 
+pub const MSG_MOVE_ROOT: u16 = 0x0EC;
+pub const MSG_MOVE_UNROOT: u16 = 0x0ED;
+
+fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
+    let was = map
+        .players
+        .get(&g)
+        .is_some_and(|p| p.movement.flags.get_root());
+    if was == root {
+        return;
+    }
+    let opcode = if root { MSG_MOVE_ROOT } else { MSG_MOVE_UNROOT };
+    relay(map, g, info, opcode, &[]);
+}
+
 fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
     if let Some(p) = map.players.get_mut(&g) {
         p.movement = info.clone();
@@ -206,6 +221,11 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
                 &m.new_speed.to_le_bytes(),
             )
         }
+        // A root or an unroot taken: the client is where it says, and
+        // those who see it are told, as mangos's HandleMoveRootAck tells
+        // them; one for the state the client is already in is stale.
+        C::CMSG_FORCE_MOVE_ROOT_ACK(m) if m.guid == g => root_ack(map, g, m.info, true),
+        C::CMSG_FORCE_MOVE_UNROOT_ACK(m) if m.guid == g => root_ack(map, g, m.info, false),
         C::CMSG_MOVE_KNOCK_BACK_ACK(m) if m.guid == g => {
             // The jump's angle and speeds, as the client fell.
             let tail: Vec<u8> = match m.info.flags.get_jumping() {

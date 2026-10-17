@@ -936,3 +936,62 @@ async fn a_knockback_is_laid_out_as_1_12_has_it() {
         "the jump's four after the movement"
     );
 }
+
+/// Thistle Tea's cmsg_force_move_root_ack_test: a root's acknowledgement
+/// puts the player where the client says, and those who see them are
+/// told with `MSG_MOVE_ROOT`, as mangos's HandleMoveRootAck tells them;
+/// another for the state the client is already in is stale, and nothing;
+/// the unroot's is told with `MSG_MOVE_UNROOT`.
+#[tokio::test]
+async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(ga).await;
+    let at = on_map(&realm, move |m| m.players[&ga].position()).await;
+    let there = Vector3d {
+        x: at.x + 1.0,
+        ..at
+    };
+    let info = |flags| MovementInfo {
+        flags,
+        timestamp: 0,
+        position: there,
+        orientation: 0.0,
+        fall_time: 0.0,
+    };
+    b.clear();
+    let root = || CMSG_FORCE_MOVE_ROOT_ACK {
+        guid: ga,
+        movement_counter: 0,
+        info: info(MovementInfo_MovementFlags::new_root()),
+    };
+    a.send(root()).await;
+    let rooted = b.wait_frame("MSG_MOVE_ROOT", 0x0EC, |_| true).await;
+    assert_eq!(&rooted[..packed(ga).len()], &packed(ga)[..]);
+    settled(&mut a).await;
+    let now = on_map(&realm, move |m| m.players[&ga].position()).await;
+    assert_eq!(now.x, there.x, "where the client says");
+    // Again, already rooted: stale. (wow_messages reads no MSG_MOVE_ROOT:
+    // it comes raw.)
+    b.clear();
+    b.raw.clear();
+    a.send(root()).await;
+    settled(&mut a).await;
+    a.send(CMSG_FORCE_MOVE_UNROOT_ACK {
+        guid: ga,
+        movement_counter: 0,
+        info: info(MovementInfo_MovementFlags::empty()),
+    })
+    .await;
+    b.wait_frame("MSG_MOVE_UNROOT", 0x0ED, |_| true).await;
+    settled(&mut b).await;
+    let roots = b
+        .raw
+        .iter()
+        .filter(|f| u16::from_le_bytes([f[2], f[3]]) == 0x0EC)
+        .count();
+    assert_eq!(roots, 0, "the stale root told no one");
+}
