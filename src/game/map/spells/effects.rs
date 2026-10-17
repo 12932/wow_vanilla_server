@@ -1338,8 +1338,10 @@ pub fn run_untargeted(
                     at,
                     radius,
                     ends: now + Duration::from_millis(u64::from(ms)),
+                    // A periodic one's first tick a period in (mangos's
+                    // PersistentAreaAura); a slow on those inside at once.
                     next_tick: now
-                        + if s.channeled() {
+                        + if s.channeled() || periodic_area(e.aura) {
                             period
                         } else {
                             Duration::ZERO
@@ -1379,22 +1381,16 @@ pub fn run_untargeted(
 /// a helpful one, friend) inside.
 pub fn tick_areas(map: &mut Map) {
     let now = map.now;
-    let ended: Vec<Guid> = map
-        .spells
-        .areas
-        .iter()
-        .filter(|a| a.ends <= now)
-        .map(|a| a.object)
-        .collect();
-    for g in ended {
-        super::dynamic::remove(map, g);
-    }
-    map.spells.areas.retain(|a| a.ends > now);
     map.spells
         .area_ticked
         .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
+    // The tick due as an area ends is had before it goes (mangos's
+    // `Aura::Update` keeps the last tick): Blizzard's eighth wave.
     let due: Vec<usize> = (0..map.spells.areas.len())
-        .filter(|i| map.spells.areas[*i].next_tick <= now)
+        .filter(|i| {
+            let a = &map.spells.areas[*i];
+            a.next_tick <= now && (a.next_tick <= a.ends || a.ends > now)
+        })
         .collect();
     let data = map.realm.data.clone();
     for i in due {
@@ -1497,6 +1493,28 @@ pub fn tick_areas(map: &mut Map) {
             }
         }
     }
+    let ended: Vec<Guid> = map
+        .spells
+        .areas
+        .iter()
+        .filter(|a| a.ends <= now)
+        .map(|a| a.object)
+        .collect();
+    for g in ended {
+        super::dynamic::remove(map, g);
+    }
+    map.spells.areas.retain(|a| a.ends > now);
+}
+
+/// Whether a ground area's aura ticks (damage, healing, a trigger).
+fn periodic_area(aura: u32) -> bool {
+    matches!(
+        aura,
+        AURA_PERIODIC_DAMAGE
+            | AURA_PERIODIC_LEECH
+            | AURA_PERIODIC_HEAL
+            | AURA_PERIODIC_TRIGGER_SPELL
+    )
 }
 
 fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
