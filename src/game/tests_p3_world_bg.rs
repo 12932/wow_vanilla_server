@@ -702,9 +702,12 @@ async fn fire(map: &MapHandle, which: fn(&bg::Due) -> bool) {
             if which(&bg::Due::Capture {
                 node: 0,
                 revision: 0,
-            }) && let Some(ab) = b.ab.as_mut()
-            {
-                for p in ab.nodes.iter_mut() {
+            }) {
+                let points = b.ab.iter_mut().flat_map(|ab| ab.nodes.iter_mut()).chain(
+                    b.av.iter_mut()
+                        .flat_map(|av| av.nodes.iter_mut().map(|n| &mut n.point)),
+                );
+                for p in points {
                     if p.capture_at.is_some() {
                         p.capture_at = Some(now);
                     }
@@ -1321,4 +1324,568 @@ async fn deserter_is_a_harmful_quarter_hour_that_cant_be_cancelled_and_outlasts_
         .flatten()
         .expect("kept through death");
     assert_eq!(after, expires);
+}
+
+// Alterac Valley.
+
+const AV: u32 = 30;
+const GALVANGAR: u32 = 90_049;
+const BALINDA: u32 = 90_048;
+const COMMANDER: u32 = 90_057;
+const LIEUTENANT: u32 = 90_069;
+const KEEPERS: [u32; 3] = [90_046, 90_146, 90_246];
+
+/// The valley with Stonehearth Graveyard's banners (node 2) and
+/// Snowfall's (node 3) in each state, the captains, a Horde commander,
+/// two Horde lieutenants, and Irondeep's keepers: its own, the Alliance's
+/// and the Horde's.
+fn vale() -> GameData {
+    let mut d = super::tests_pvp2::valley();
+    for (node, x) in [(2u8, 40.0), (3, 50.0)] {
+        for state in [0u8, 1, 2, 3, 5] {
+            bound_object(
+                &mut d,
+                AV,
+                161_000 + u32::from(node) * 10 + u32::from(state),
+                178365,
+                (x, 0.0),
+                (node, state),
+            );
+        }
+    }
+    let mut creature = |guid: u32, entry: u32, name: &str, x: f32, event: (u8, u8)| {
+        super::tests_pvp2::npc(&mut d, entry, name, 14);
+        super::tests_pvp2::spawn(&mut d, guid, entry, x);
+        d.bg_creature_events.entry(guid).or_default().push(event);
+    };
+    creature(171_049, GALVANGAR, "Galvangar", 60.0, (49, 0));
+    creature(171_048, BALINDA, "Balinda Stonehearth", 61.0, (48, 0));
+    creature(171_057, COMMANDER, "Commander", 62.0, (57, 0));
+    creature(171_069, LIEUTENANT, "Lieutenant", 63.0, (69, 0));
+    creature(171_070, LIEUTENANT, "Lieutenant", 64.0, (69, 0));
+    creature(171_146, KEEPERS[0], "Irondeep's Own", 65.0, (46, 2));
+    creature(171_246, KEEPERS[1], "Irondeep's Alliance", 66.0, (46, 0));
+    creature(171_346, KEEPERS[2], "Irondeep's Horde", 67.0, (46, 1));
+    for spell in [22751, 23693, 23658] {
+        marker(&mut d, spell);
+    }
+    // The assault credit's quest, for both.
+    let mut q = crate::game::data::npc::Quest {
+        id: 90_000,
+        ..Default::default()
+    };
+    q.required_kills[0] = (13756, 5);
+    d.npc.quests.insert(90_000, q);
+    d
+}
+
+fn av_of(m: &mut crate::game::map::Map) -> &mut crate::game::map::battleground::av::Av {
+    m.battleground.as_mut().unwrap().av.as_mut().unwrap()
+}
+
+/// Alice and Grom in the valley, each with the assault quest.
+async fn in_the_valley(d: GameData) -> (Arc<Realm>, Client, Client, MapHandle) {
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = super::tests_pvp::both_into(&realm, &mut a, &mut b, Map::AlteracValley).await;
+    let (alice, grom) = (a.guid, b.guid);
+    map.query(move |m| {
+        for g in [alice, grom] {
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .journal
+                .log
+                .push(crate::game::store::Logged {
+                    quest: 90_000,
+                    ..Default::default()
+                });
+        }
+    })
+    .await;
+    (realm, a, b, map)
+}
+
+fn credit(m: &crate::game::map::Map, g: Guid) -> u32 {
+    m.players[&g].journal.log[0].kills[0]
+}
+
+fn event(m: &crate::game::map::Map, e: u8) -> Option<Option<u8>> {
+    m.battleground.as_ref().unwrap().events.get(&e).copied()
+}
+
+/// The creature of `spawn`, killed by `killer`.
+fn slay(m: &mut crate::game::map::Map, spawn: u32, killer: Guid) {
+    let c = m
+        .creatures
+        .iter()
+        .find(|(_, c)| c.spawn_guid == Some(spawn))
+        .map(|(_, c)| c.guid)
+        .expect("the creature");
+    crate::game::map::combat::kill(m, killer, c);
+}
+
+#[tokio::test]
+async fn an_alterac_graveyard_assaulted_stops_its_defenders_respawns_and_its_defense_brings_them_back()
+ {
+    let (_realm, mut a, mut b, map) = in_the_valley(vale()).await;
+    let (alice, grom) = (a.guid, b.guid);
+    // Grom assaults Stonehearth Graveyard, the Alliance's: its defenders
+    // (event 17) stop coming back, and he has the assault's credit.
+    let held = super::tests_pvp::object_of(&map, 161_021).await;
+    super::tests_pvp::put(&map, &mut b, 40.0, 0.0).await;
+    b.send(CMSG_GAMEOBJ_USE { guid: held }).await;
+    said(&mut b, "The Horde has assaulted Stonehearth Graveyard").await;
+    let (defenders, assaulted, credited) = map
+        .query(move |m| (event(m, 17), score(m, grom).objectives[0], credit(m, grom)))
+        .await
+        .unwrap();
+    assert_eq!(defenders, Some(None), "no respawns");
+    assert_eq!((assaulted, credited), (1, 1));
+    // Alice takes it back at once: the defenders return, a defense and no
+    // credit; the stale banner and capture timers do nothing.
+    fire(&map, banner_due).await;
+    let contested = super::tests_pvp::object_of(&map, 161_022).await;
+    super::tests_pvp::put(&map, &mut a, 40.0, 0.0).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: contested }).await;
+    said(&mut a, "The Alliance has defended Stonehearth Graveyard").await;
+    map.query(|m| {
+        let b = m.battleground.as_mut().unwrap();
+        let now = Instant::now();
+        for t in b.timers.iter_mut() {
+            t.0 = now;
+        }
+        b.av.as_mut().unwrap().nodes[2].point.capture_at = Some(now);
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let (defenders, state, columns, credited) = map
+        .query(move |m| {
+            (
+                event(m, 17),
+                av_of(m).event_state(2),
+                [score(m, alice).objectives, score(m, grom).objectives],
+                credit(m, alice),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(defenders, Some(Some(0)));
+    assert_eq!(state, 1, "the Alliance's");
+    assert_eq!(columns, [[0, 1, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0]]);
+    assert_eq!(credited, 0);
+}
+
+#[tokio::test]
+async fn snowfall_claimed_gives_no_assault_credit_until_its_taken_from_an_enemy() {
+    let (_realm, mut a, mut b, map) = in_the_valley(vale()).await;
+    let (alice, grom) = (a.guid, b.guid);
+    let neutral = super::tests_pvp::object_of(&map, 161_035).await;
+    super::tests_pvp::put(&map, &mut a, 50.0, 0.0).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: neutral }).await;
+    said(&mut a, "The Alliance has assaulted Snowfall Graveyard").await;
+    fire(&map, capture_due).await;
+    said(&mut a, "The Alliance has taken Snowfall Graveyard").await;
+    assert_eq!(map.query(move |m| credit(m, alice)).await, Some(0));
+    fire(&map, banner_due).await;
+    let held = super::tests_pvp::object_of(&map, 161_031).await;
+    super::tests_pvp::put(&map, &mut b, 50.0, 0.0).await;
+    b.send(CMSG_GAMEOBJ_USE { guid: held }).await;
+    said(&mut b, "The Horde has assaulted Snowfall Graveyard").await;
+    assert_eq!(map.query(move |m| credit(m, grom)).await, Some(1));
+}
+
+#[tokio::test]
+async fn alterac_banners_refuse_the_countdown_the_absent_and_the_stale() {
+    let (_realm, _a, mut b, map) = in_the_valley(vale()).await;
+    let grom = b.guid;
+    let held = super::tests_pvp::object_of(&map, 161_021).await;
+    super::tests_pvp::put(&map, &mut b, 40.0, 0.0).await;
+    for refusal in 0..3 {
+        let state = map
+            .query(move |m| {
+                let b = m.battleground.as_mut().unwrap();
+                let saved = (b.phase, b.scores[&grom]);
+                match refusal {
+                    0 => b.phase = Phase::Starting { at: Instant::now() },
+                    1 => {
+                        b.scores.remove(&grom);
+                    }
+                    // Stale: the banner's state is no longer the node's.
+                    _ => b.av.as_mut().unwrap().nodes[2].point.owner = Some(1),
+                }
+                bg::use_object(m, grom, held);
+                let state = av_of(m).event_state(2);
+                let b = m.battleground.as_mut().unwrap();
+                b.phase = saved.0;
+                b.scores.insert(grom, saved.1);
+                b.av.as_mut().unwrap().nodes[2].point.owner = Some(0);
+                (state, b.av.as_ref().unwrap().nodes[2].point.assaulting)
+            })
+            .await
+            .unwrap();
+        assert_eq!(state.1, None, "refusal {refusal}: not assaulted");
+    }
+}
+
+#[tokio::test]
+async fn a_slain_captain_rallies_no_more_and_counts_once_and_lieutenants_count_each_time() {
+    let (_realm, a, b, map) = in_the_valley(vale()).await;
+    let (alice, grom) = (a.guid, b.guid);
+    // Galvangar's rally, before.
+    map.query(|m| crate::game::map::battleground::av::due(m, bg::Due::CaptainBuff(1)))
+        .await;
+    assert_eq!(
+        map.query(move |m| m.players[&grom].auras.has_spell(22751))
+            .await,
+        Some(true)
+    );
+    map.query(move |m| {
+        crate::game::map::auras::remove_spell(m, grom, 22751, None);
+        slay(m, 171_049, alice);
+    })
+    .await;
+    let (honor, leaders, respawns, dead) = map
+        .query(move |m| {
+            (
+                score(m, alice).bonus_honor,
+                score(m, alice).objectives[5],
+                event(m, 49),
+                event(m, 64),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!((honor, leaders), (594, 1));
+    assert_eq!((respawns, dead), (Some(None), Some(Some(0))));
+    // He rallies no more; Balinda still does.
+    map.query(|m| {
+        crate::game::map::battleground::av::due(m, bg::Due::CaptainBuff(1));
+        crate::game::map::battleground::av::due(m, bg::Due::CaptainBuff(0));
+    })
+    .await;
+    let (horde, alliance) = map
+        .query(move |m| {
+            (
+                m.players[&grom].auras.has_spell(22751),
+                m.players[&alice].auras.has_spell(23693),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(!horde && alliance);
+    // The commander once; each lieutenant, 198 apiece.
+    map.query(move |m| {
+        slay(m, 171_057, alice);
+        slay(m, 171_069, alice);
+        slay(m, 171_070, alice);
+    })
+    .await;
+    let (honor, leaders) = map
+        .query(move |m| (score(m, alice).bonus_honor, score(m, alice).objectives[5]))
+        .await
+        .unwrap();
+    assert_eq!((honor, leaders), (594 + 3 * 198, 4));
+    // A commander's second coming counts for nothing.
+    map.query(move |m| {
+        let b = m.battleground.as_mut().unwrap();
+        b.events.insert(57, Some(0));
+        let data = m.realm.data.clone();
+        let spawn = data.creature_spawns[&AV]
+            .iter()
+            .find(|s| s.guid == 171_057)
+            .unwrap()
+            .clone();
+        let mut c =
+            crate::game::map::creature::Creature::from_spawn(&data, &spawn, &mut rand::rng())
+                .unwrap();
+        c.guid = crate::game::guid::unit(COMMANDER, 0x7F_0000);
+        let g = m.add_creature(c);
+        crate::game::map::combat::kill(m, alice, g);
+    })
+    .await;
+    assert_eq!(
+        map.query(move |m| score(m, alice).bonus_honor).await,
+        Some(594 + 3 * 198)
+    );
+}
+
+#[tokio::test]
+async fn irondeep_goes_to_whoever_kills_its_keeper_and_back_to_its_own_after_twenty_minutes() {
+    let (_realm, mut a, b, map) = in_the_valley(vale()).await;
+    let (alice, grom) = (a.guid, b.guid);
+    let fields = |m: &mut crate::game::map::Map| {
+        m.battleground
+            .as_ref()
+            .unwrap()
+            .world_states()
+            .into_iter()
+            .filter(|w| (1358..=1360).contains(&w.state))
+            .map(|w| w.value)
+            .collect::<Vec<u32>>()
+    };
+    assert_eq!(map.query(fields).await, Some(vec![0, 0, 1]), "its own");
+    // Alice kills its own keeper: the Alliance's, its keeper and miners
+    // (events 46 and 50) the Alliance's.
+    map.query(move |m| slay(m, 171_146, alice)).await;
+    said(&mut a, "The Alliance has taken Irondeep Mine").await;
+    let (owner, events, mines) = map
+        .query(move |m| {
+            (
+                av_of(m).mines[0].owner,
+                (event(m, 46), event(m, 50)),
+                score(m, alice).objectives[4],
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (owner, events, mines),
+        (Some(0), (Some(Some(0)), Some(Some(0))), 1)
+    );
+    assert_eq!(map.query(fields).await, Some(vec![1, 0, 0]));
+    // Alice kills the Alliance's keeper again: nothing more, no new timer.
+    let reclaims = |m: &mut crate::game::map::Map| {
+        m.battleground
+            .as_ref()
+            .unwrap()
+            .timers
+            .iter()
+            .filter(|t| matches!(t.1, bg::Due::MineReclaim { .. }))
+            .count()
+    };
+    map.query(move |m| slay(m, 171_246, alice)).await;
+    assert_eq!(map.query(reclaims).await, Some(1));
+    // Grom takes it: the first timer is stale; the Horde's twenty minutes
+    // give it back to its own.
+    map.query(move |m| {
+        m.battleground.as_mut().unwrap().events.insert(46, Some(0));
+        let data = m.realm.data.clone();
+        let spawn = data.creature_spawns[&AV]
+            .iter()
+            .find(|s| s.guid == 171_246)
+            .unwrap()
+            .clone();
+        let mut c =
+            crate::game::map::creature::Creature::from_spawn(&data, &spawn, &mut rand::rng())
+                .unwrap();
+        c.guid = crate::game::guid::unit(KEEPERS[1], 0x7F_0001);
+        let g = m.add_creature(c);
+        crate::game::map::combat::kill(m, grom, g);
+    })
+    .await;
+    assert_eq!(map.query(|m| av_of(m).mines[0].owner).await, Some(Some(1)));
+    assert_eq!(map.query(fields).await, Some(vec![0, 1, 0]));
+    map.query(|m| {
+        let b = m.battleground.as_mut().unwrap();
+        let first = b
+            .timers
+            .iter_mut()
+            .find(|t| matches!(t.1, bg::Due::MineReclaim { revision: 1, .. }))
+            .unwrap();
+        first.0 = Instant::now();
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(
+        map.query(|m| av_of(m).mines[0].owner).await,
+        Some(Some(1)),
+        "stale"
+    );
+    fire(&map, |d| matches!(d, bg::Due::MineReclaim { .. })).await;
+    said(
+        &mut a,
+        "Irondeep Mine has been reclaimed by its original inhabitants",
+    )
+    .await;
+    let (owner, events, mines) = map
+        .query(move |m| {
+            (
+                av_of(m).mines[0].owner,
+                (event(m, 46), event(m, 50)),
+                score(m, grom).objectives[4],
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (owner, events, mines),
+        (None, (Some(Some(2)), Some(Some(2))), 1)
+    );
+    assert_eq!(map.query(fields).await, Some(vec![0, 0, 1]));
+}
+
+#[tokio::test]
+async fn alterac_valleys_scoreboard_has_its_seven_columns_in_order() {
+    let (_realm, mut a, _b, map) = in_the_valley(vale()).await;
+    let alice = a.guid;
+    map.query(move |m| {
+        let s = m
+            .battleground
+            .as_mut()
+            .unwrap()
+            .scores
+            .get_mut(&alice)
+            .unwrap();
+        s.objectives = [0, 0, 0, 0, 2, 3, 4];
+    })
+    .await;
+    a.clear();
+    a.send(MSG_PVP_LOG_DATA_Client {}).await;
+    let fields = a
+        .wait_for("the scoreboard", |m| match m {
+            ServerOpcodeMessage::MSG_PVP_LOG_DATA(l) => l
+                .players
+                .iter()
+                .find(|p| p.player == alice)
+                .map(|p| p.fields.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(fields, vec![0, 0, 0, 0, 2, 3, 4]);
+}
+
+#[test]
+fn alteracs_map_shows_one_icon_per_objective() {
+    use crate::game::map::battleground::av::CAPTURE;
+    let now = Instant::now();
+    let m = bg::Match::new(bg::BG_AV, now);
+    let states = m.world_states();
+    assert_eq!(states.len(), 67);
+    assert_eq!(states.iter().filter(|w| w.value == 1).count(), 17);
+    let mut ids: Vec<u32> = states.iter().map(|w| w.state).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 67);
+    assert!(
+        !states
+            .iter()
+            .any(|w| [3127, 3128, 3133, 3134].contains(&w.state))
+    );
+    // Each node, assaulted by the other side and then taken, shows one icon
+    // at each step, and a different one.
+    let home = [0usize, 0, 0, 2, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1];
+    for (id, home) in home.into_iter().enumerate() {
+        let enemy = if home == 0 { 1 } else { 0 };
+        let mut m = bg::Match::new(bg::BG_AV, now);
+        let icons = |m: &bg::Match| -> Vec<(u32, u32)> {
+            m.world_states()
+                .into_iter()
+                .map(|w| (w.state, w.value))
+                .collect()
+        };
+        let before = icons(&m);
+        let av = m.av.as_mut().unwrap();
+        av.nodes[id].point.assault(enemy, now, CAPTURE);
+        let attacked = icons(&m);
+        let av = m.av.as_mut().unwrap();
+        let rev = av.nodes[id].point.revision;
+        assert!(av.nodes[id].point.capture(rev, now + CAPTURE));
+        let captured = icons(&m);
+        for states in [&before, &attacked, &captured] {
+            assert_eq!(states.iter().filter(|s| s.1 == 1).count(), 17, "node {id}");
+            assert!(states.iter().all(|s| s.1 <= 1));
+        }
+        assert_ne!(before, attacked, "node {id}");
+        assert_ne!(attacked, captured, "node {id}");
+    }
+}
+
+#[test]
+fn snowfalls_counterassault_waits_its_full_five_minutes_and_a_defense_is_at_once() {
+    use crate::game::map::battleground::av::{Av, CAPTURE};
+    let t0 = Instant::now();
+    let mut av = Av::new();
+    let p = &mut av.nodes[3].point;
+    assert_eq!(p.assault(0, t0, CAPTURE), bg::Assault::Assaulted);
+    let alliance = p.revision;
+    let t1 = t0 + Duration::from_secs(299);
+    assert_eq!(p.assault(1, t1, CAPTURE), bg::Assault::Assaulted);
+    assert_eq!((p.owner, p.capture_at), (None, Some(t1 + CAPTURE)));
+    let horde = p.revision;
+    assert!(
+        !p.capture(alliance, t0 + CAPTURE),
+        "the Alliance's minute is stale"
+    );
+    assert!(!p.capture(horde, t1 + CAPTURE - Duration::from_millis(1)));
+    assert!(p.capture(horde, t1 + CAPTURE));
+    assert_eq!(av.controlled_by(3), Some(1));
+    let p = &mut av.nodes[3].point;
+    assert_eq!(p.assault(0, t1 + CAPTURE, CAPTURE), bg::Assault::Assaulted);
+    assert_eq!(p.assault(1, t1 + CAPTURE, CAPTURE), bg::Assault::Defended);
+    assert_eq!(av.controlled_by(3), Some(1));
+}
+
+/// Drek'Thar falls to Alice after `setup`: Alice's and Grom's bonus
+/// honor, and Alice's standing with the Stormpike Guard.
+async fn drekthar_falls(setup: fn(&mut crate::game::map::Map)) -> (u32, u32, i32) {
+    let (realm, a, b, map) = in_the_valley(vale()).await;
+    let (alice, grom) = (a.guid, b.guid);
+    map.query(move |m| {
+        setup(m);
+        slay(m, 150_100, alice);
+    })
+    .await;
+    let data = realm.data.clone();
+    map.query(move |m| {
+        assert!(matches!(
+            m.battleground.as_ref().unwrap().phase,
+            Phase::Ended { winner: 0, .. }
+        ));
+        (
+            score(m, alice).bonus_honor,
+            score(m, grom).bonus_honor,
+            crate::game::map::reputation::standing(&m.players[&alice], &data, 730),
+        )
+    })
+    .await
+    .unwrap()
+}
+
+fn an_hour_in(m: &mut crate::game::map::Map) {
+    m.battleground.as_mut().unwrap().started_at = Some(Instant::now() - Duration::from_secs(3600));
+}
+
+#[tokio::test]
+async fn a_generals_fall_pays_by_the_matchs_length_and_what_each_side_still_holds() {
+    // An hour in: the general's six kills' worth, and each side's four
+    // towers, captain and two graveyards, in full.
+    let (alice, grom, rep) = drekthar_falls(an_hour_in).await;
+    assert_eq!(
+        (alice, grom),
+        (198 * (6 + 4 * 3 + 3 + 2), 198 * (4 * 3 + 3 + 2))
+    );
+    assert_eq!(rep, 350 + 4 * 12 + 125 + 2 * 12);
+    // At once: the general, towers and graveyards a sixtieth, the captain
+    // whole.
+    let (alice, grom, _) = drekthar_falls(|_| {}).await;
+    assert_eq!((alice, grom), (19 + 39 + 594 + 6, 39 + 594 + 6));
+    // A tower contested and the Alliance's captain dead: neither pays.
+    let (alice, grom, _) = drekthar_falls(|m| {
+        an_hour_in(m);
+        let av = av_of(m);
+        av.nodes[7].point.assaulting = Some(1);
+        av.defeated.insert(48);
+    })
+    .await;
+    assert_eq!(
+        (alice, grom),
+        (198 * (6 + 3 * 3 + 2), 198 * (4 * 3 + 3 + 2))
+    );
+    // On a weekend, 1,584 more each and 396 the winner's, and the general's
+    // reputation 525.
+    let (alice, grom, rep) = drekthar_falls(|m| {
+        an_hour_in(m);
+        m.battleground.as_mut().unwrap().weekend = true;
+        let av = av_of(m);
+        av.nodes[7].point.assaulting = Some(1);
+        av.defeated.insert(48);
+    })
+    .await;
+    assert_eq!(
+        (alice, grom),
+        (198 * (6 + 3 * 3 + 2) + 1_980, 198 * (4 * 3 + 3 + 2) + 1_584)
+    );
+    assert_eq!(rep, 525 + 3 * 18 + 2 * 18);
 }
