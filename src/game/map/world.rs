@@ -320,6 +320,9 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if crate::game::map::battleground::use_object(map, player, object) {
         return;
     }
+    if crate::game::map::professions::use_object(map, player, object) {
+        return;
+    }
     let Some(ppos) = map.players.get(&player).map(|p| p.position()) else {
         return;
     };

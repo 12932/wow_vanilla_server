@@ -275,6 +275,16 @@ fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
         }
         Some(r) => {
             b.u8(2).u8(r);
+            // A spell focus failure names the focus.
+            if r == crate::game::map::professions::FAIL_REQUIRES_SPELL_FOCUS {
+                let focus = map
+                    .realm
+                    .data
+                    .spells
+                    .get(spell)
+                    .map_or(0, |s| s.requires_spell_focus);
+                b.u32(focus);
+            }
         }
     }
     p.outbound.send_frame(b.frame(SMSG_CAST_RESULT));
@@ -384,6 +394,9 @@ fn check(
         if have < cost {
             return Some(SpellCastResult::NoPower.as_int());
         }
+    }
+    if let Some(r) = crate::game::map::professions::check(map, caster, s, t) {
+        return Some(r);
     }
     // A target in range, alive, of the right side.
     let harmful = !auras::positive(s);
@@ -668,9 +681,10 @@ fn effect_targets(
 
 fn execute_effects(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    let professions = crate::game::map::professions::execute(map, caster, s, t);
     for index in 0..3 {
         let e = s.effects[index];
-        if e.effect == 0 {
+        if e.effect == 0 || professions & (1 << index) != 0 {
             continue;
         }
         for target in effect_targets(map, caster, s, index, t) {

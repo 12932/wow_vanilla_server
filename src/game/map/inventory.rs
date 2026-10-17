@@ -289,7 +289,7 @@ impl Item {
     }
 }
 
-fn proficient(class: u8, level: u8, t: &ItemTemplate) -> bool {
+pub fn proficient(class: u8, level: u8, t: &ItemTemplate) -> bool {
     const WEAPON: u32 = 2;
     const ARMOR: u32 = 4;
     match t.class {
@@ -356,6 +356,28 @@ pub fn can_equip(p: &Player, t: &ItemTemplate, slot: u8) -> Result<(), Fail> {
         };
         if !dual {
             return Err(Fail::CantDualWield);
+        }
+    }
+    Ok(())
+}
+
+/// [`add_item`], with a random property (a suffix) on a new item.
+pub fn add_item_with_property(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    alert: bool,
+    property: u32,
+) -> Result<(), Fail> {
+    let before = map.players.get(&g).map_or(0, |p| p.items.len());
+    add_item(map, g, entry, count, alert)?;
+    if property != 0 {
+        let data = map.realm.data.clone();
+        if let Some(p) = map.players.get_mut(&g)
+            && let Some(item) = p.items.get_mut(before..).and_then(|n| n.iter_mut().find(|i| i.entry == entry))
+        {
+            crate::game::map::enchant::set_random_property(&data, item, property);
         }
     }
     Ok(())
@@ -787,7 +809,13 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
         for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == ITEM_SPELL_ON_EQUIP) {
             wanted.push((item.guid, s.id));
         }
+        for s in crate::game::map::enchant::equip_spells(&data, item) {
+            wanted.push((item.guid, s));
+        }
     }
+    wanted.extend(crate::game::map::enchant::set_spells(&data, p));
+    wanted.sort_unstable_by_key(|(g, s)| (g.guid(), *s));
+    wanted.dedup();
     let have: Vec<(Guid, u32)> = p
         .auras
         .holders
