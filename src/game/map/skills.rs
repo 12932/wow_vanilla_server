@@ -118,9 +118,18 @@ pub fn forget_skill(p: &mut Player, skill: u32) {
     }
 }
 
-/// The skills a character's spells give, set on login.
+/// The skills a character's spells give, set on login: a skill effect's,
+/// and the language a language spell is a line of. Language: Common (668)
+/// has no skill effect; its skill (98) comes from `SkillLineAbility`, as
+/// Thistle Tea's `initial_skills` takes it (learned with the spell, for the
+/// character's race and class). Without the skill the client garbles even
+/// its own player's speech.
 pub fn init(p: &mut Player, data: &GameData) {
     let spells = p.spells.clone();
+    let (class_bit, race_bit) = (
+        1u32 << (p.row.class.max(1) - 1),
+        1u32 << (p.row.race.max(1) - 1),
+    );
     for spell in spells {
         let Some(s) = data.spells.get(spell) else {
             continue;
@@ -132,6 +141,25 @@ pub fn init(p: &mut Player, data: &GameData) {
         {
             let points = e.base_points + e.base_dice.max(1);
             learn_skill(p, e.misc_value.max(0) as u32, points.max(1) as u32);
+        }
+        let languages: Vec<u32> = data
+            .spells
+            .skill_abilities
+            .get(&spell)
+            .into_iter()
+            .flatten()
+            .filter(|a| {
+                a.acquire == 2
+                    && LANGUAGES.contains(&a.skill)
+                    && (a.class_mask == 0 || a.class_mask & class_bit != 0)
+                    && (a.race_mask == 0 || a.race_mask & race_bit != 0)
+            })
+            .map(|a| a.skill)
+            .collect();
+        for skill in languages {
+            if slot_of(p, skill).is_none() {
+                learn_skill(p, skill, 1);
+            }
         }
     }
 }
