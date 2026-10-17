@@ -589,3 +589,50 @@ async fn a_meteor_is_shared_among_those_it_falls_on() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_buff_too_high_for_its_target_goes_on_at_a_lower_rank() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(crate::game::data::load::load(Path::new(DB)));
+    let mut c = Client::connect(&realm, "RANK1");
+    let g = c.enter("Rankpriest", Race::Human, Class::Priest).await;
+    let mut d = Client::connect(&realm, "RANK2");
+    let low = d.enter("Ranklow", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            const FORTITUDE: [u32; 6] = [1243, 1244, 1245, 2791, 10937, 10938];
+            const PRAYER: u32 = 21562;
+            ready(m, g, 60, &FORTITUDE);
+            ready(m, low, 20, &[]);
+            let at_low = Targets {
+                unit: Some(low),
+                ..Default::default()
+            };
+            spells::cast(m, g, FORTITUDE[5], at_low.clone(), None);
+            let on = auras::auras(m, low)
+                .map(|a| {
+                    FORTITUDE
+                        .iter()
+                        .copied()
+                        .filter(|id| a.has_spell(*id))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            // Prayer of Fortitude (level 48) passes over a level 20 who
+            // isn't the one it was cast at.
+            let data = m.realm.data.clone();
+            let prayer = data.spells.get(PRAYER).unwrap().clone();
+            let all = vec![(g, [true, false, false]), (low, [true, false, false])];
+            let kept = spells::aura_rank::recipients(m, g, &prayer, &Targets::default(), all);
+            let kept: Vec<Guid> = kept.into_iter().map(|(x, _)| x).collect();
+            (on, kept)
+        })
+        .await
+        .unwrap();
+    let (on, kept) = out;
+    assert_eq!(on, vec![1245], "rank 3, for a level 20");
+    assert_eq!(kept, vec![g], "the group buff passes over the low one");
+}

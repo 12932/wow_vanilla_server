@@ -38,6 +38,7 @@ pub mod fail {
     pub const ITEM_GONE: u8 = 0x26;
     pub const LINE_OF_SIGHT: u8 = 0x2a;
     pub const MAINHAND_EMPTY: u8 = 0x2d;
+    pub const LOWLEVEL: u8 = 0x2b;
     pub const MOVING: u8 = 0x2e;
     pub const NOT_BEHIND: u8 = 0x33;
     pub const NOT_INFRONT: u8 = 0x36;
