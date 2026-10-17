@@ -75,7 +75,14 @@ pub fn spawn(
     if controlled {
         f.set_u32(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
     }
-    f.set_u32(UNIT_NPC_FLAGS, 0);
+    // A companion keeps its template's: some give quests, as Children's
+    // Week's orphans (mangos's `EffectSummonCritter`); the others none.
+    let npc_flags = if kind == Kind::Critter {
+        t.npc_flags
+    } else {
+        0
+    };
+    f.set_u32(UNIT_NPC_FLAGS, npc_flags);
     f.set_guid(UNIT_FIELD_SUMMONEDBY, owner);
     f.set_guid(UNIT_FIELD_CREATEDBY, owner);
     creature_stats(&data, &mut c, &t, level);

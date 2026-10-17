@@ -1155,6 +1155,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         let q = Quest {
             id: c.u32("entry"),
             method: c.u32("Method"),
+            auto_complete: c.u32("Method") == 0,
             zone_or_sort: c.i32("ZoneOrSort"),
             min_level: c.u8("MinLevel"),
             level: c.i32("QuestLevel"),

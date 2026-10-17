@@ -380,9 +380,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     };
     let mut wanted = Vec::new();
     for g in &group {
-        if let Some(p) = map.players.get(g) {
-            wanted.extend(crate::game::map::quests::wanted_items(p, &data));
-        }
+        wanted.extend(crate::game::map::quests::wanted(map, *g));
     }
     let mut rng = rand::rng();
     let mut items = Vec::new();
@@ -951,11 +949,7 @@ pub fn open(map: &mut Map, player: Guid, target: Guid) {
 /// Open `target`'s loot window for `player`, distance aside.
 pub fn show(map: &mut Map, player: Guid, target: Guid) {
     let data = map.realm.data.clone();
-    let wanted = map
-        .players
-        .get(&player)
-        .map(|p| crate::game::map::quests::wanted_items(p, &data))
-        .unwrap_or_default();
+    let wanted = crate::game::map::quests::wanted(map, player);
     let met = loot_ref(map, target)
         .map(|l| conditions_met(map, l, target, player))
         .unwrap_or_default();
@@ -1000,15 +994,10 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
 
 /// `CMSG_AUTOSTORE_LOOT_ITEM`: take an item from the open window.
 pub fn take_item(map: &mut Map, player: Guid, slot: u8) {
-    let data = map.realm.data.clone();
     let Some(target) = map.players.get(&player).and_then(|p| p.looting) else {
         return;
     };
-    let wanted = map
-        .players
-        .get(&player)
-        .map(|p| crate::game::map::quests::wanted_items(p, &data))
-        .unwrap_or_default();
+    let wanted = crate::game::map::quests::wanted(map, player);
     let met = loot_ref(map, target)
         .map(|l| conditions_met(map, l, target, player))
         .unwrap_or_default();
@@ -1182,11 +1171,7 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
 /// A chest or node is opened: its loot, rolled now if it hasn't been.
 pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
     let data = map.realm.data.clone();
-    let wanted = map
-        .players
-        .get(&player)
-        .map(|p| crate::game::map::quests::wanted_items(p, &data))
-        .unwrap_or_default();
+    let wanted = crate::game::map::quests::wanted(map, player);
     let Some(o) = map.gameobject(object) else {
         return;
     };

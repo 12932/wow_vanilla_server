@@ -86,6 +86,11 @@ pub struct TaxiPathNode {
 pub struct Quest {
     pub id: u32,
     pub method: u32,
+    /// `Method` 0: nothing to accept; its giver takes it back from anyone
+    /// who could take it, with what it asks for (mangos's
+    /// `IsAutoComplete`, Thistle Tea's `auto_complete?`). Apart from the
+    /// method, so that a quest made in a test is an ordinary one.
+    pub auto_complete: bool,
     pub zone_or_sort: i32,
     pub min_level: u8,
     pub level: i32,
