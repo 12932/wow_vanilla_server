@@ -619,3 +619,376 @@ async fn the_group_leaders_flag_goes_on_and_off_alone() {
         0x400
     );
 }
+
+/// A warrior's tree (tab 161) as Thistle Tea's test catalogue has it, and
+/// a mage's talent (tab 999).
+const WARRIOR_TAB: u32 = 161;
+const MAGE_TAB: u32 = 999;
+
+fn with_talents(mut d: GameData) -> GameData {
+    use crate::game::data::spells::{SpellTemplate, TalentInfo};
+    let talent = |id, tab, row, column, ranks: &[u32], depends_on, depends_rank| {
+        let mut all = [0; 5];
+        all[..ranks.len()].copy_from_slice(ranks);
+        TalentInfo {
+            id,
+            tab,
+            row,
+            column,
+            ranks: all,
+            depends_on,
+            depends_rank,
+        }
+    };
+    for t in [
+        talent(100, WARRIOR_TAB, 0, 0, &[1_001, 1_002, 1_003], 0, 0),
+        talent(101, WARRIOR_TAB, 1, 0, &[2_001], 0, 0),
+        talent(102, WARRIOR_TAB, 1, 1, &[3_001], 100, 2),
+        talent(103, WARRIOR_TAB, 0, 1, &[5_001, 5_002, 5_003], 0, 0),
+        talent(200, MAGE_TAB, 0, 0, &[4_001], 0, 0),
+    ] {
+        for spell in t.ranks.into_iter().filter(|s| *s != 0) {
+            d.spells.spells.insert(
+                spell,
+                SpellTemplate {
+                    id: spell,
+                    name: format!("Talent {spell}"),
+                    equipped_item_class: -1,
+                    ..Default::default()
+                },
+            );
+        }
+        d.spells.talents.insert(t.id, t);
+    }
+    d.spells.talent_tab_classes.insert(WARRIOR_TAB, 0x1);
+    d.spells.talent_tab_classes.insert(MAGE_TAB, 0x80);
+    d
+}
+
+#[tokio::test]
+async fn talents_cost_a_point_a_rank_jumped_open_a_tier_at_five_and_want_their_prerequisites_rank()
+{
+    let realm = harness::realm_with(with_talents(data()));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let got = on_map(&realm, move |m| {
+        use crate::game::map::spells;
+        let data = m.realm.data.clone();
+        let mut out = Vec::new();
+        // Learn `talent`'s `rank` at `level` knowing `known`: what is
+        // known after.
+        let mut try_learn = |m: &mut Map, level, known: &[u32], talent, rank| {
+            let p = m.players.get_mut(&ga).unwrap();
+            p.spells.retain(|s| !(1_000..6_000).contains(s));
+            p.spells.extend_from_slice(known);
+            stats::set_level(p, &data, level);
+            spells::learn_talent(m, ga, talent, rank);
+            let mut have: Vec<u32> = m.players[&ga]
+                .spells
+                .iter()
+                .copied()
+                .filter(|s| (1_000..6_000).contains(s))
+                .collect();
+            have.sort_unstable();
+            out.push(have);
+        };
+        // A jump of a rank wants a point for each.
+        try_learn(m, 10, &[], 100, 1);
+        try_learn(m, 11, &[], 100, 1);
+        // Row two wants five in the tree.
+        try_learn(m, 20, &[1_003], 101, 0);
+        try_learn(m, 20, &[1_003, 5_001], 101, 0);
+        try_learn(m, 20, &[1_003, 5_002], 101, 0);
+        // Its prerequisite's third rank.
+        try_learn(m, 20, &[1_002, 5_003], 102, 0);
+        try_learn(m, 20, &[1_003, 5_002], 102, 0);
+        // Another class's tree, and a rank known.
+        try_learn(m, 60, &[], 200, 0);
+        try_learn(m, 20, &[1_001], 100, 0);
+        // Spent points are the highest ranks known (of eleven at 20).
+        let p = m.players.get_mut(&ga).unwrap();
+        let mut spent = Vec::new();
+        for known in [&[1_002, 2_001][..], &[1_001, 1_002], &[9_999]] {
+            p.spells.retain(|s| !(1_000..10_000).contains(s));
+            p.spells.extend_from_slice(known);
+            spent.push(11 - spells::free_talent_points(p, &data));
+        }
+        (out, spent)
+    })
+    .await;
+    let (learned, spent) = got;
+    assert_eq!(
+        learned,
+        vec![
+            vec![],
+            vec![1_002],
+            vec![1_003],
+            vec![1_003, 5_001],
+            vec![1_003, 2_001, 5_002],
+            vec![1_002, 5_003],
+            vec![1_003, 3_001, 5_002],
+            vec![],
+            vec![1_001],
+        ]
+    );
+    assert_eq!(spent, vec![3, 2, 0]);
+}
+
+/// A warriors' trainer beside Northshire's start, and what it teaches.
+const TRAINER: u32 = 960_010;
+const TRAINER_A: u32 = 96_010;
+const KNOWN: u32 = 960_101;
+const WANTS_SPELL: u32 = 960_102;
+const WANTED: u32 = 960_103;
+const WANTS_SKILL: u32 = 960_104;
+const WANTS_COOKING: u32 = 960_105;
+const APPRENTICE_MINING: u32 = 960_106;
+const FOR_MAGES: u32 = 960_107;
+const FOR_HUMANS: u32 = 960_108;
+const FOR_EITHER: u32 = 960_109;
+const FOR_ORCS: u32 = 960_110;
+const FOR_ALL: u32 = 960_111;
+const TALENT_SPELL: u32 = 1_001;
+
+fn with_trainer(mut d: GameData) -> GameData {
+    use crate::game::data::npc::TrainerSpell;
+    use crate::game::data::spells::{SkillAbility, SpellEffect, SpellRank, SpellTemplate};
+    let mut t = creature(TRAINER, 0);
+    t.name = "Trainer".into();
+    t.faction = 12;
+    t.npc_flags = 0x10;
+    t.trainer_class = 1;
+    d.creature_templates.insert(TRAINER, t);
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: TRAINER_A,
+        entries: vec![TRAINER],
+        map: 0,
+        x: START.0 + 2.0,
+        y: START.1,
+        z: START.2,
+        respawn_min: 600,
+        respawn_max: 600,
+        ..Default::default()
+    });
+    let all = [
+        KNOWN,
+        WANTS_SPELL,
+        WANTED,
+        WANTS_SKILL,
+        WANTS_COOKING,
+        APPRENTICE_MINING,
+        FOR_MAGES,
+        FOR_HUMANS,
+        FOR_EITHER,
+        FOR_ORCS,
+        FOR_ALL,
+    ];
+    for id in all {
+        d.spells.spells.insert(
+            id,
+            SpellTemplate {
+                id,
+                name: format!("Spell {id}"),
+                equipped_item_class: -1,
+                ..Default::default()
+            },
+        );
+    }
+    d.spells.spells.get_mut(&APPRENTICE_MINING).unwrap().effects[0] = SpellEffect {
+        effect: 44,
+        misc_value: 186,
+        base_points: 0,
+        ..Default::default()
+    };
+    d.spells.ranks.insert(
+        WANTS_SPELL,
+        SpellRank {
+            first: WANTS_SPELL,
+            rank: 1,
+            req: WANTED,
+            ..Default::default()
+        },
+    );
+    let line = |spell, class_mask, race_mask| SkillAbility {
+        skill: 26,
+        spell,
+        class_mask,
+        race_mask,
+        ..Default::default()
+    };
+    d.spells
+        .skill_abilities
+        .insert(FOR_MAGES, vec![line(FOR_MAGES, 0x80, 0)]);
+    d.spells
+        .skill_abilities
+        .insert(FOR_HUMANS, vec![line(FOR_HUMANS, 0, 0x1)]);
+    d.spells.skill_abilities.insert(
+        FOR_EITHER,
+        vec![line(FOR_EITHER, 0x1, 0), line(FOR_EITHER, 0x80, 0)],
+    );
+    d.spells
+        .skill_abilities
+        .insert(FOR_ORCS, vec![line(FOR_ORCS, 0, 0x2)]);
+    let teach = |spell, required_skill, required_skill_value| TrainerSpell {
+        spell,
+        cost: 10,
+        required_skill,
+        required_skill_value,
+        required_level: 1,
+    };
+    d.npc.trainers.insert(
+        TRAINER,
+        vec![
+            teach(KNOWN, 0, 0),
+            teach(WANTS_SPELL, 0, 0),
+            teach(WANTS_SKILL, 171, 50),
+            teach(WANTS_COOKING, 185, 50),
+            teach(APPRENTICE_MINING, 0, 0),
+            teach(FOR_MAGES, 0, 0),
+            teach(FOR_HUMANS, 0, 0),
+            teach(FOR_EITHER, 0, 0),
+            teach(FOR_ORCS, 0, 0),
+            teach(FOR_ALL, 0, 0),
+        ],
+    );
+    d
+}
+
+async fn trainer_list(a: &mut Client) -> Vec<TrainerSpell> {
+    a.clear();
+    a.send(CMSG_TRAINER_LIST {
+        guid: guid::unit(TRAINER, TRAINER_A),
+    })
+    .await;
+    a.wait_for("SMSG_TRAINER_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(l) => Some(l.spells.clone()),
+        _ => None,
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_trainers_list_greys_what_is_known_reds_what_wants_a_spell_or_skill_and_fits_class_and_race()
+ {
+    let realm = harness::realm_with(with_trainer(data()));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(guid::unit(TRAINER, TRAINER_A)).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&ga).unwrap();
+        p.spells.push(KNOWN);
+        // Journeyman mining: its apprentice rank is behind it.
+        crate::game::map::skills::learn_skill(p, 186, 2);
+        crate::game::map::skills::learn_skill(p, 185, 1);
+        crate::game::map::skills::set_value(p, 185, 50);
+    })
+    .await;
+    let list = trainer_list(&mut a).await;
+    let state = |list: &[TrainerSpell], id| list.iter().find(|s| s.spell == id).map(|s| s.state);
+    assert_eq!(state(&list, KNOWN), Some(TrainerSpellState::Gray));
+    assert_eq!(
+        state(&list, APPRENTICE_MINING),
+        Some(TrainerSpellState::Gray)
+    );
+    assert_eq!(state(&list, WANTS_SPELL), Some(TrainerSpellState::Red));
+    assert_eq!(state(&list, WANTS_SKILL), Some(TrainerSpellState::Red));
+    assert_eq!(state(&list, WANTS_COOKING), Some(TrainerSpellState::Green));
+    // The masks: a mage's spell isn't for a warrior, an orc's not for a
+    // human; either of two lines will do, and no lines is anyone's.
+    assert_eq!(state(&list, FOR_MAGES), None);
+    assert_eq!(state(&list, FOR_ORCS), None);
+    assert_eq!(state(&list, FOR_HUMANS), Some(TrainerSpellState::Green));
+    assert_eq!(state(&list, FOR_EITHER), Some(TrainerSpellState::Green));
+    assert_eq!(state(&list, FOR_ALL), Some(TrainerSpellState::Green));
+    let fits = |spell, class, race| {
+        crate::game::map::npc::fits_class_race(&realm.data, spell, class, race)
+    };
+    assert!(fits(FOR_MAGES, 8, 1) && fits(FOR_HUMANS, 8, 1) && !fits(FOR_HUMANS, 8, 2));
+    assert!(fits(FOR_EITHER, 8, 1) && fits(FOR_EITHER, 1, 2) && fits(FOR_ALL, 1, 2));
+    // The spell it wants known, it is green; bought, grey.
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().spells.push(WANTED)
+    })
+    .await;
+    let list = trainer_list(&mut a).await;
+    assert_eq!(state(&list, WANTS_SPELL), Some(TrainerSpellState::Green));
+}
+
+#[tokio::test]
+async fn a_talent_reset_wants_a_class_trainer_and_level_ten_and_a_failed_payment_changes_nothing() {
+    let realm = harness::realm_with(with_trainer(with_talents(data())));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let trainer = guid::unit(TRAINER, TRAINER_A);
+    a.sees(trainer).await;
+    let history = async |realm: &Arc<Realm>| {
+        on_map(realm, move |m| {
+            let p = &m.players[&ga];
+            (
+                p.row.state.talent_wipes,
+                p.spells.contains(&TALENT_SPELL),
+                p.money(),
+            )
+        })
+        .await
+    };
+    let confirm = async |a: &mut Client| {
+        a.clear();
+        a.send(MSG_TALENT_WIPE_CONFIRM_Client {
+            wiping_npc: trainer,
+        })
+        .await;
+        synced(a).await;
+    };
+    let wipe_reply = |a: &mut Client| {
+        a.backlog.iter().find_map(|m| match m {
+            ServerOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(c) => {
+                Some((c.wiping_npc, c.cost_in_copper))
+            }
+            _ => None,
+        })
+    };
+    let buy_failed = |a: &mut Client| {
+        a.backlog.iter().find_map(|m| match m {
+            ServerOpcodeMessage::SMSG_BUY_FAILED(f) => Some(f.result),
+            _ => None,
+        })
+    };
+    // Level one: not offered, not done.
+    on_map(&realm, move |m| {
+        crate::game::map::spells::learn(m, ga, TALENT_SPELL);
+        m.players.get_mut(&ga).unwrap().set_money(5_000);
+        crate::game::map::misc::talent_wipe_offer(m, ga, trainer);
+    })
+    .await;
+    synced(&mut a).await;
+    assert_eq!(wipe_reply(&mut a), None);
+    confirm(&mut a).await;
+    assert_eq!(wipe_reply(&mut a), None);
+    assert_eq!(history(&realm).await, (0, true, 5_000));
+    // Level ten, with too little: a failed purchase, nothing reset.
+    on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        stats::set_level(m.players.get_mut(&ga).unwrap(), &data, 10);
+        crate::game::map::misc::talent_wipe_offer(m, ga, trainer);
+    })
+    .await;
+    synced(&mut a).await;
+    assert_eq!(wipe_reply(&mut a), Some((trainer, 10_000)));
+    confirm(&mut a).await;
+    assert_eq!(buy_failed(&mut a), Some(BuyResult::NotEnoughtMoney));
+    assert_eq!(wipe_reply(&mut a), Some((Guid::zero(), 0)));
+    assert_eq!(history(&realm).await, (0, true, 5_000));
+    // Paid, it is done.
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().set_money(15_000)
+    })
+    .await;
+    confirm(&mut a).await;
+    assert_eq!(history(&realm).await, (10_000, false, 5_000));
+    // Nothing left to reset: told so, not charged.
+    confirm(&mut a).await;
+    assert_eq!(buy_failed(&mut a), None);
+    assert_eq!(wipe_reply(&mut a), Some((Guid::zero(), 0)));
+    assert_eq!(history(&realm).await, (10_000, false, 5_000));
+}

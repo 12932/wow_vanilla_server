@@ -967,7 +967,11 @@ async fn talents_reset_for_a_rising_price_and_skills_unlearn() {
     a.sees(trainer).await;
     on_map(&realm, move |m| {
         crate::game::map::spells::learn(m, g, TALENT_SPELL);
-        m.players.get_mut(&g).unwrap().set_money(50_000);
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        // A reset is for level ten and over.
+        crate::game::map::stats::set_level(p, &data, 10);
+        p.set_money(50_000);
     })
     .await;
     on_map(&realm, move |m| {

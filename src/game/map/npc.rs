@@ -421,7 +421,12 @@ fn skill_step(data: &crate::game::data::GameData, teach: u32) -> Option<(u32, u3
 }
 
 /// Whether a spell is for a player's class and race (`SkillLineAbility`).
-fn fits_class_race(data: &crate::game::data::GameData, teach: u32, class: u8, race: u8) -> bool {
+pub fn fits_class_race(
+    data: &crate::game::data::GameData,
+    teach: u32,
+    class: u8,
+    race: u8,
+) -> bool {
     let learned = crate::game::map::spells::learns(data, teach);
     let Some(lines) = data
         .spells
