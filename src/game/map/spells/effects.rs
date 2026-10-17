@@ -823,10 +823,8 @@ fn effect(
                 p.gear_dirty = true;
             }
         }
-        EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT => {
-            if !super::holiday::effect(map, caster, target, s) {
-                super::scripts::dummy(map, caster, target, s, index, amount, l, item);
-            }
+        EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT if !super::holiday::effect(map, caster, target, s) => {
+            super::scripts::dummy(map, caster, target, s, index, amount, l, item);
         }
         _ => {}
     }
