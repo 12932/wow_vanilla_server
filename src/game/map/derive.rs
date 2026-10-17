@@ -323,7 +323,8 @@ pub fn ranged_attack_power(class: u8, level: u32, agility: u32) -> u32 {
     v.max(0) as u32
 }
 
-fn stamina_health(stamina: u32) -> u32 {
+/// Health from stamina: one a point for the first twenty, ten after.
+pub fn stamina_health(stamina: u32) -> u32 {
     stamina.min(20) + stamina.saturating_sub(20) * 10
 }
 

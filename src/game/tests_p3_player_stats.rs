@@ -968,3 +968,53 @@ async fn gear_gives_its_equip_spells_while_whole_and_worn_and_its_stats_to_whate
     assert!(armor >= 120, "{armor}");
     assert_eq!(health, max);
 }
+
+#[test]
+fn attack_power_and_stamina_health_follow_each_classs_formula_and_never_go_negative() {
+    use derive::{melee_attack_power as melee, ranged_attack_power as ranged, stamina_health};
+    let (hunter, shaman, priest, druid) = (3, 7, 5, 11);
+    assert_eq!(melee(WARRIOR, 10, 30, 20), 10 * 3 + 30 * 2 - 20);
+    assert_eq!(melee(ROGUE, 10, 20, 25), 10 * 2 + 20 + 25 - 20);
+    assert_eq!(melee(shaman, 10, 20, 15), 10 * 2 + 20 * 2 - 20);
+    assert_eq!(melee(druid, 10, 20, 15), 20 * 2 - 20);
+    assert_eq!((melee(MAGE, 10, 15, 15), melee(priest, 10, 15, 15)), (5, 5));
+    assert_eq!(melee(MAGE, 1, 3, 3), 0);
+    assert_eq!(ranged(hunter, 10, 25), 10 * 2 + 25 * 2 - 10);
+    assert_eq!((ranged(WARRIOR, 10, 25), ranged(ROGUE, 10, 25)), (25, 25));
+    assert_eq!(ranged(MAGE, 10, 25), 15);
+    assert_eq!((stamina_health(15), stamina_health(25)), (15, 70));
+}
+
+#[tokio::test]
+async fn a_level_raises_the_weapon_skills_caps_not_the_armors_and_the_same_level_keeps_its_time() {
+    use crate::game::map::skills;
+    let (realm, _a, g) = player(data(), Class::Warrior).await;
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        skills::learn_skill(p, 43, 1);
+        skills::set_value(p, 43, 1);
+        skills::learn_skill(p, 415, 1);
+        let before = (skills::max_value(p, 43), skills::max_value(p, 415));
+        stats::set_level(p, &data, 6);
+        let after = (
+            skills::value(p, 43),
+            skills::max_value(p, 43),
+            skills::value(p, 415),
+            skills::max_value(p, 415),
+        );
+        // The same level again keeps the level's time played.
+        p.row.played_level = 500;
+        p.played_at = m.now;
+        let p = m.players.get_mut(&g).unwrap();
+        stats::set_level(p, &data, 6);
+        let kept = p.row.played_level;
+        stats::set_level(p, &data, 7);
+        (before, after, kept, p.row.played_level)
+    })
+    .await;
+    let (before, after, kept, next) = got;
+    assert_eq!(before, (Some(5), Some(1)));
+    assert_eq!(after, (Some(1), Some(30), Some(1), Some(1)));
+    assert_eq!((kept, next), (500, 0));
+}

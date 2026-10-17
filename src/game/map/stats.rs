@@ -225,6 +225,7 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
 /// level-up message.
 pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) {
     let level = level.clamp(1, MAX_LEVEL);
+    let changed = p.level() != level;
     let before: Vec<u32> = (0..5)
         .map(|i| p.fields.get_u32(UNIT_FIELD_STAT0 + i))
         .collect();
@@ -239,9 +240,11 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
     p.fields
         .set_u32(PLAYER_NEXT_LEVEL_XP, data.xp_to_level(level).max(1));
     // The time played so far is the old level's; the new one's starts now
-    // (Thistle Tea's `PlayedTime.level_changed`).
-    p.count_played(Instant::now());
-    p.row.played_level = 0;
+    // (Thistle Tea's `PlayedTime.level_changed`), if it is a new one.
+    if changed {
+        p.count_played(Instant::now());
+        p.row.played_level = 0;
+    }
     let max_health = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     let max_mana = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
     p.fields.set_u32(UNIT_FIELD_HEALTH, max_health);
@@ -267,6 +270,9 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
     });
     if level >= MAX_LEVEL {
         p.fields.set_u32(PLAYER_XP, 0);
+        // No more rest at the top: the pool goes (Thistle Tea's
+        // `Stats.apply` with no next level).
+        crate::game::map::rest::add_bonus(p, 0.0);
     }
 }
 
