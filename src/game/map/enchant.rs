@@ -328,6 +328,8 @@ pub fn enchant_item(
     if worn {
         let data = map.realm.data.clone();
         if let Some(p) = map.players.get_mut(&player) {
+            // Its glow for others to see too.
+            p.equip_fields();
             p.apply_stats(&data);
             p.gear_dirty = true;
         }
@@ -354,6 +356,7 @@ pub fn clear(map: &mut Map, player: Guid, item: Guid, slot: usize) {
         });
     }
     if p.items[i].bag == BAG_PLAYER && p.items[i].slot < 19 {
+        p.equip_fields();
         p.apply_stats(&data);
         p.gear_dirty = true;
     }
