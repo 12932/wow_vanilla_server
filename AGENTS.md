@@ -78,7 +78,7 @@ There is no world tick.
 - **GUIDs are typed** (`src/game/guid.rs`): players by counter, items `0x4000`, creatures `0xF130` with their entry,
   game objects `0xF110`.
 - **Never panic on client data**: look things up fallibly, log at `debug`, drop the packet. (A panic that slips
-  through costs one map event: the actor catches it.)
+  through costs one event, update step or creature turn; see [docs/RELIABILITY.md](docs/RELIABILITY.md).)
 - **Never block a map**: no `.await`, no file or database work in a handler; the store is fire-and-forget.
 - **Tests go through the protocol** (`src/game/harness.rs`): connect clients to a realm, send real messages, and
   read what comes back with wow_messages.
