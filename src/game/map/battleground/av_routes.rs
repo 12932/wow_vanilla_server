@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use ahash::AHashMap;
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{SplineFlag, Vector3d};
+use wow_world_messages::vanilla::{SMSG_MONSTER_MOVE_MonsterMoveType, SplineFlag, Vector3d};
 
 use crate::game::map::Map;
 use crate::game::map::battleground::av_quests::{extras, extras_mut};
@@ -210,8 +210,11 @@ pub fn go(map: &mut Map, g: Guid, to: Vector3d) -> Option<Instant> {
     };
     let ends = w.started + w.duration;
     let mut packet = w.packet(g, from);
-    if fly {
-        packet.spline_flags = SplineFlag::new(SPLINE_FLYING | if run { SPLINE_RUN } else { 0 });
+    if fly
+        && let SMSG_MONSTER_MOVE_MonsterMoveType::Normal { spline_flags, .. } =
+            &mut packet.move_type
+    {
+        *spline_flags = SplineFlag::new(SPLINE_FLYING | if run { SPLINE_RUN } else { 0 });
     }
     c.orientation = (to.y - from.y).atan2(to.x - from.x);
     map.next_spline_id = map.next_spline_id.wrapping_add(1);

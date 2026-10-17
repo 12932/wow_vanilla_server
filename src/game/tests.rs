@@ -610,9 +610,11 @@ mod world {
         });
         let to = a
             .wait_for("SMSG_MONSTER_MOVE", |m| match m {
-                ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == wolf => {
-                    mv.splines.first().copied()
-                }
+                ServerOpcodeMessage::SMSG_MONSTER_MOVE(SMSG_MONSTER_MOVE {
+                    guid,
+                    move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal { splines, .. },
+                    ..
+                }) if *guid == wolf => splines.first().copied(),
                 _ => None,
             })
             .await;
@@ -1039,7 +1041,12 @@ mod combat {
         assert_eq!(attacker, wolf);
         // It chases.
         a.wait_for("the wolf moving", |m| match m {
-            ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == wolf => Some(()),
+            ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv)
+                if mv.guid == wolf
+                    && !matches!(mv.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::Stop) =>
+            {
+                Some(())
+            }
             _ => None,
         })
         .await;

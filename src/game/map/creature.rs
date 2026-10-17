@@ -159,10 +159,11 @@ impl Walk {
             guid,
             spline_point: from,
             spline_id: self.spline_id,
-            move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
-            spline_flags: SplineFlag::new(self.spline_flags()),
-            duration: self.duration.as_millis() as u32,
-            splines,
+            move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal {
+                spline_flags: SplineFlag::new(self.spline_flags()),
+                duration: self.duration.as_millis() as u32,
+                splines,
+            },
         }
     }
 }
@@ -691,8 +692,14 @@ mod tests {
         else {
             panic!("not a monster move");
         };
-        assert_eq!(m.splines[0].x, 10.0);
-        assert_eq!(m.duration, 8000);
+        let SMSG_MONSTER_MOVE_MonsterMoveType::Normal {
+            duration, splines, ..
+        } = m.move_type
+        else {
+            panic!("not a walk");
+        };
+        assert_eq!(splines[0].x, 10.0);
+        assert_eq!(duration, 8000);
     }
 
     #[test]

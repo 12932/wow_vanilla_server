@@ -301,7 +301,12 @@ async fn fear_takes_a_players_control_and_runs_them() {
     assert!(!allowed);
     // Its own client is told where it runs.
     a.wait_for("the run", |m| match m {
-        ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == ga => Some(()),
+        ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv)
+            if mv.guid == ga
+                && !matches!(mv.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::Stop) =>
+        {
+            Some(())
+        }
         _ => None,
     })
     .await;
