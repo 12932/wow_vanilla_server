@@ -49,6 +49,7 @@ pub const EFFECT_HEAL_MAX_HEALTH: u32 = 67;
 pub const EFFECT_INTERRUPT_CAST: u32 = 68;
 pub const EFFECT_ADD_COMBO_POINTS: u32 = 80;
 pub const EFFECT_DUEL: u32 = 83;
+pub const EFFECT_ADD_EXTRA_ATTACKS: u32 = 19;
 pub const EFFECT_CHARGE: u32 = 96;
 pub const EFFECT_RESURRECT_NEW: u32 = 113;
 pub const EFFECT_SKILL: u32 = 118;
@@ -485,6 +486,15 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
     if targets.unit.is_none() && auras::positive(s) {
         targets.unit = Some(caster);
     }
+    // A next-swing spell waits for the swing; an auto-repeat one repeats.
+    if s.on_next_swing() {
+        crate::game::map::combat::queue_next_swing(map, caster, spell);
+        return;
+    }
+    if s.auto_repeat() {
+        crate::game::map::ranged::start(map, caster, spell, targets);
+        return;
+    }
     let now = map.now;
     let cast_time = data.spells.cast_time(s);
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_START {
@@ -516,6 +526,21 @@ pub fn cast(map: &mut Map, caster: Guid, spell: u32, mut targets: Targets, item:
             channel_until: None,
         });
     }
+}
+
+/// Cast `spell` at once, without its cast time: a next-swing spell at its
+/// swing. Whether it went off.
+pub fn cast_now(map: &mut Map, caster: Guid, spell: u32, targets: Targets) -> bool {
+    let data = map.realm.data.clone();
+    let Some(s) = data.spells.get(spell) else {
+        return false;
+    };
+    if let Some(r) = check(map, caster, s, &targets, None) {
+        send_cast_result(map, caster, spell, Some(r));
+        return false;
+    }
+    execute(map, caster, s, targets, None);
+    true
 }
 
 /// A spell cast for free, as another spell or an aura's tick does.
@@ -855,6 +880,9 @@ fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, index: u
             }
         }
         EFFECT_DUEL => crate::game::map::duel::challenge(map, caster, target),
+        EFFECT_ADD_EXTRA_ATTACKS => {
+            crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
+        }
         EFFECT_RESURRECT | EFFECT_RESURRECT_NEW => {
             let name = map
                 .players
@@ -959,6 +987,8 @@ pub fn heal(map: &mut Map, caster: Guid, target: Guid, spell: u32, amount: u32, 
         return;
     }
     f.set_u32(UNIT_FIELD_HEALTH, (now + amount).min(max));
+    let gained = (now + amount).min(max) - now;
+    crate::game::map::combat::heal_threat(map, caster, target, spell, gained);
     let frame = if periodic {
         crate::game::conn::encode(&SMSG_PERIODICAURALOG {
             target,
@@ -1029,6 +1059,7 @@ fn pushback(map: &mut Map, g: Guid) {
 /// `CMSG_CANCEL_CAST` and `CMSG_CANCEL_CHANNELLING`.
 pub fn cancel(map: &mut Map, g: Guid) {
     interrupt(map, g);
+    crate::game::map::combat::cancel_queued(map, g);
 }
 
 /// A player moved: a cast that movement interrupts stops.
