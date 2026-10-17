@@ -364,12 +364,13 @@ pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate
     let target_level = level(map, target);
     let d = derived(map, caster);
     let hit_bonus = d.spell_hit + m.flat[mods::OP_RESIST_MISS_CHANCE] as f32;
-    let mechanic = std::iter::once(s.mechanic)
-        .chain(s.effects.iter().map(|e| e.mechanic))
-        .filter(|m| *m != 0)
-        .map(|mech| a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, mech as i32))
-        .max()
-        .unwrap_or(0) as f32;
+    // The spell's own mechanic in its hit; an effect's of another rolls
+    // apart (`effect_resisted`).
+    let mechanic = if s.mechanic != 0 {
+        a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, s.mechanic as i32) as f32
+    } else {
+        0.0
+    };
     let binary_resist = if binary(s) {
         resist_chance(
             resistance(map, caster, target, school_index(s)),
@@ -393,6 +394,20 @@ pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate
         mechanic,
         binary_resist,
     )
+}
+
+/// Whether `target` resists effect `index` of harmful `s` apart from the
+/// spell, as Thistle Tea's `MechanicResistance.effect_resisted?` has it: an
+/// effect whose mechanic isn't the spell's rolls its own resistance.
+pub fn effect_resisted(map: &Map, target: Guid, s: &SpellTemplate, index: usize) -> bool {
+    let mechanic = s.effects[index].mechanic;
+    if mechanic == 0 || mechanic == s.mechanic {
+        return false;
+    }
+    let chance = auras::auras(map, target).map_or(0, |a| {
+        a.sum_misc(AURA_MOD_MECHANIC_RESISTANCE, mechanic as i32)
+    });
+    chance > 0 && roll(map) < chance * 100
 }
 
 /// Improved Fire Ward and Frost Warding: a ward up against its school may

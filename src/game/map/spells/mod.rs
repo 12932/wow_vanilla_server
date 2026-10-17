@@ -11,10 +11,12 @@ pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
+pub use effects::dr_aura_gone;
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
 pub mod immunity;
+pub mod interrupts;
 mod holiday;
 pub mod log;
 pub mod mods;
@@ -25,6 +27,7 @@ pub mod sight;
 pub mod single_target;
 pub mod stealth;
 pub mod targets;
+pub mod threat_sync;
 
 use std::time::{Duration, Instant};
 
@@ -204,6 +207,11 @@ pub struct MapSpells {
     pub in_flight: Vec<InFlight>,
     /// What units' auras last gave their health (Last Stand, bear form).
     pub health_seen: AHashMap<Guid, health_sync::State>,
+    /// When each caster's ground spell (its effect) last ticked each unit.
+    pub area_ticked: AHashMap<(Guid, u32, usize, Guid), Instant>,
+    /// Threat held for a while: (creature, unit) to its amount (taunts,
+    /// Fade).
+    pub temp_threat: AHashMap<(Guid, Guid), f32>,
 }
 
 /// A persistent area aura on the ground.
@@ -317,7 +325,7 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    if !s.passive() {
+    if !s.passive() || !passive_eligible(s, auras::form(map, player)) {
         return;
     }
     if s.attr(0, sd::ATTR_ONLY_OUTDOORS) && environment::outdoors(map, player) == Some(false) {
@@ -344,6 +352,58 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
         }
         if matches!(e.effect, EFFECT_WEAPON | EFFECT_PROFICIENCY) {
             effects::proficiency(map, player, s);
+        }
+    }
+}
+
+/// Allowed out of a form though it names forms.
+const ATTR_EX2_NOT_NEED_SHAPESHIFT: u32 = 0x8_0000;
+
+/// The forms a passive hangs on (Thistle Tea's `Passive.form_mask`: its
+/// stances, and cat form for Feline Swiftness's 24864).
+fn form_mask(s: &SpellTemplate) -> u32 {
+    if s.id == 24_864 { 1 } else { s.stances }
+}
+
+/// Whether a learned passive holds in `form`, as Thistle Tea's
+/// `Passive.eligible?` has it: in one of the forms it names, or anywhere if
+/// it names none (or out of form, if allowed there).
+pub fn passive_eligible(s: &SpellTemplate, form: u8) -> bool {
+    let mask = form_mask(s);
+    let out_of_form = s.attr(2, ATTR_EX2_NOT_NEED_SHAPESHIFT);
+    let in_form = form > 0
+        && (s.passive() || s.attr(0, sd::ATTR_HIDDEN))
+        && mask & (1 << (form - 1)) != 0
+        && !out_of_form;
+    in_form || (s.passive() && (mask == 0 || (form == 0 && out_of_form)))
+}
+
+/// Whether leaving a form ends a unit's own aura of `s` (Thistle Tea's
+/// `Passive.removed_on_shape_lost?`).
+pub fn ends_with_form(s: &SpellTemplate) -> bool {
+    form_mask(s) != 0
+        && !s.attr(2, ATTR_EX2_NOT_NEED_SHAPESHIFT)
+        && !s.attr(0, sd::ATTR_NOT_SHAPESHIFTED)
+}
+
+/// A player took a form or left one: the learned passives hanging on
+/// forms that hold in this one take hold (Thistle Tea's
+/// `PassiveSpells.restore` for forms), alive and off a flight.
+pub fn restore_form_passives(map: &mut Map, player: Guid) {
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    if p.death != crate::game::map::death::Death::Alive || p.flight.is_some() {
+        return;
+    }
+    let mut spells = p.spells.clone();
+    spells.sort_unstable();
+    let data = map.realm.data.clone();
+    for spell in spells {
+        if data.spells.get(spell).is_some_and(|s| form_mask(s) != 0)
+            && !auras::auras(map, player).is_some_and(|a| a.has_spell(spell))
+        {
+            apply_passive(map, player, spell);
         }
     }
 }
@@ -445,10 +505,10 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         };
     }
     if let Some(a) = auras::auras(map, caster) {
+        // The shares add, as the client's cost multiplier field does.
         cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
-        cost = (cost as f32
-            * a.product_mask(auras::AURA_MOD_POWER_COST_SCHOOL_PCT, s.school_mask()))
-            as i32;
+        let share = a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL_PCT, s.school_mask());
+        cost = (cost as f32 * (1.0 + share as f32 / 100.0)) as i32;
     }
     cost.max(0) as u32
 }
@@ -1057,6 +1117,34 @@ fn land(
             crate::game::map::ai::attacked(map, aim, caster);
         }
         return false;
+    }
+    // Each harmful effect of a mechanic other than the spell's: immune, or
+    // resisted on its own roll (Thistle Tea's `EffectImmunity` and
+    // `MechanicResistance`).
+    let mut effects = effects;
+    if aim != caster && !auras::positive(s) {
+        let before = effects.iter().filter(|e| **e).count();
+        let mut immune = false;
+        for (i, on) in effects.iter_mut().enumerate() {
+            if !*on {
+                continue;
+            }
+            let mechanic = s.effects[i].mechanic;
+            if mechanic != 0
+                && !s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic))
+            {
+                *on = false;
+                immune = true;
+            } else if outcome::effect_resisted(map, aim, s, i) {
+                *on = false;
+            }
+        }
+        if before > 0 && !effects.iter().any(|e| *e) {
+            let why = if immune { Hit::Immune } else { Hit::Resist };
+            outcome::send_miss(map, caster, aim, s.id, why);
+            return false;
+        }
     }
     let deals = s
         .effects

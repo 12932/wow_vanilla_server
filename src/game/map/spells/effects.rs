@@ -87,6 +87,7 @@ fn dr_group(s: &SpellTemplate) -> Option<Dr> {
 /// returns: whole, a half, a quarter, then immune (`None`) for 15 seconds.
 fn diminished(
     map: &mut Map,
+    caster: Guid,
     target: Guid,
     s: &SpellTemplate,
     duration: Option<u32>,
@@ -101,41 +102,73 @@ fn diminished(
         group,
         Dr::ControlledStun | Dr::TriggeredStun | Dr::KidneyShot
     );
-    if !all && !guid::is_player(target) {
+    // The rest only between players (and what players control), as
+    // Thistle Tea's `DiminishingReturns.applicable?` has it.
+    let player_side = |g: Guid| {
+        guid::is_player(g) || crate::game::map::pets::owner_of(map, g).is_some_and(guid::is_player)
+    };
+    if !all && !(player_side(target) && player_side(caster)) {
         return Some(duration);
     }
     let now = map.now;
+    let on = group_on(map, target, group);
     let c = map.caster_mut(target)?;
-    let entry = c.diminishing.iter_mut().find(|(g, _, _)| *g == group as u8);
-    let applications = match entry {
-        Some(e) if e.2.is_none_or(|r| r > now) => {
-            if e.1 >= 3 {
-                return None;
+    // Recovered once its time since the group's last aura went is up; no
+    // clock while one is on.
+    let entry = match c
+        .diminishing
+        .iter_mut()
+        .position(|(g, _, _)| *g == group as u8)
+    {
+        Some(i) => {
+            if !on && c.diminishing[i].2.is_some_and(|r| r <= now) {
+                c.diminishing[i] = (group as u8, 0, None);
             }
-            e.1 += 1;
-            e.2 = Some(
-                now + Duration::from_millis(u64::from(ms >> (e.1 - 1))) + Duration::from_secs(15),
-            );
-            e.1 - 1
-        }
-        Some(e) => {
-            *e = (
-                group as u8,
-                1,
-                Some(now + Duration::from_millis(u64::from(ms)) + Duration::from_secs(15)),
-            );
-            0
+            &mut c.diminishing[i]
         }
         None => {
-            c.diminishing.push((
-                group as u8,
-                1,
-                Some(now + Duration::from_millis(u64::from(ms)) + Duration::from_secs(15)),
-            ));
-            0
+            c.diminishing.push((group as u8, 0, None));
+            c.diminishing.last_mut().expect("just pushed")
         }
     };
+    if entry.1 >= 3 {
+        return None;
+    }
+    let applications = entry.1;
+    entry.1 += 1;
+    entry.2 = None;
     Some(Some(ms >> applications))
+}
+
+/// How long a diminishing-returns group takes to recover once its last
+/// aura is gone.
+const DR_RECOVERY: Duration = Duration::from_secs(15);
+
+/// Whether a harmful aura of diminishing `group` is on `target`.
+fn group_on(map: &Map, target: Guid, group: Dr) -> bool {
+    let data = &map.realm.data;
+    auras::auras(map, target).is_some_and(|a| {
+        a.holders
+            .iter()
+            .any(|h| !h.positive && data.spells.get(h.spell).and_then(dr_group) == Some(group))
+    })
+}
+
+/// An aura came off `target`: if it was the last of its diminishing
+/// group there, the group starts to recover.
+pub fn dr_aura_gone(map: &mut Map, target: Guid, spell: u32) {
+    let Some(group) = map.realm.data.spells.get(spell).and_then(dr_group) else {
+        return;
+    };
+    if group_on(map, target, group) {
+        return;
+    }
+    let now = map.now;
+    if let Some(c) = map.caster_mut(target)
+        && let Some(e) = c.diminishing.iter_mut().find(|(g, _, _)| *g == group as u8)
+    {
+        e.2 = Some(now + DR_RECOVERY);
+    }
 }
 
 /// An aura's duration: the spell's at the caster's level, longer for a
@@ -270,7 +303,7 @@ pub fn run(
         let duration = if auras::positive(s) || target == caster {
             Some(duration)
         } else {
-            diminished(map, target, s, duration)
+            diminished(map, caster, target, s, duration)
         };
         let Some(duration) = duration else {
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
@@ -727,36 +760,7 @@ fn effect(
             cast_triggered(map, caster, e.trigger_spell, Some(target));
         }
         EFFECT_DISPEL => {
-            let friendly = !combat::can_attack(map, caster, target);
-            let tries: Vec<(u32, Guid)> =
-                auras::dispellable(map, target, e.misc_value as u32, friendly)
-                    .into_iter()
-                    .take(amount.max(1) as usize)
-                    .collect();
-            // An aura its caster's talents hold on may resist (Thistle
-            // Tea's `DispelResistance`).
-            let data = map.realm.data.clone();
-            let (mut gone, mut held) = (Vec::new(), Vec::new());
-            for (spell, by) in tries {
-                let resist = data.spells.get(spell).map_or(0, |t| {
-                    super::mods::for_spell(map, by, t).flat[super::mods::OP_RESIST_DISPEL_CHANCE]
-                });
-                if resist > 0 && outcome::chance(map, resist as f32) {
-                    held.push(spell);
-                } else {
-                    gone.push((spell, by));
-                }
-            }
-            let any = !gone.is_empty();
-            let ids: Vec<u32> = gone.iter().map(|(spell, _)| *spell).collect();
-            for (spell, by) in gone {
-                auras::remove_spell(map, target, spell, Some(by));
-            }
-            super::log::dispelled(map, caster, target, ids);
-            super::log::dispel_failed(map, caster, target, held);
-            if any {
-                super::class_scripts::dispelled(map, caster, s);
-            }
+            dispel(map, caster, target, s, e.misc_value, amount.max(1) as u32);
         }
         EFFECT_DISPEL_MECHANIC => {
             let mechanic = e.misc_value.max(0) as u32;
@@ -802,6 +806,7 @@ fn effect(
         }
         EFFECT_ATTACK_ME => {
             if guid::is_unit(target) {
+                super::threat_sync::matched(map, target, caster);
                 crate::game::map::ai::taunted(map, target, caster);
             }
         }
@@ -923,6 +928,75 @@ fn effect(
             super::scripts::dummy(map, caster, target, s, index, amount, l, item);
         }
         _ => {}
+    }
+}
+
+/// A dispel of `kind` with `count` tries, as Thistle Tea's `Dispel` makes
+/// it: each try takes one stack of one of the auras it may take (picked at
+/// random), unless that aura's caster's talents hold it on; magic and
+/// poison only of the side the target is on to the dispeller, curses and
+/// diseases either way.
+fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i32, count: u32) {
+    // An enemy's buffs, a friend's afflictions.
+    let positive = combat::can_attack(map, caster, target);
+    let matches = |dispel: u32, holder_positive: bool| {
+        let kind_ok = if kind == 7 || kind < 0 {
+            matches!(dispel, 1..=4)
+        } else {
+            dispel == kind as u32
+        };
+        kind_ok && (!matches!(dispel, 1 | 4) || holder_positive == positive)
+    };
+    let mut candidates: Vec<(u32, Guid, u32)> = auras::auras(map, target)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| !h.passive && h.dispel != 0 && matches(h.dispel, h.positive))
+                .map(|h| (h.spell, h.caster, h.stacks.max(1)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let data = map.realm.data.clone();
+    let mut taken: Vec<(u32, Guid, u32)> = Vec::new();
+    let mut held = Vec::new();
+    for _ in 0..count {
+        if candidates.is_empty() {
+            break;
+        }
+        let i = if outcome::rolling(map) {
+            use rand::RngExt;
+            rand::rng().random_range(0..candidates.len())
+        } else {
+            0
+        };
+        let (spell, by, stacks) = candidates[i];
+        if stacks > 1 {
+            candidates[i].2 -= 1;
+        } else {
+            candidates.remove(i);
+        }
+        // An aura its caster's talents hold on may resist (Thistle Tea's
+        // `DispelResistance`).
+        let resist = data.spells.get(spell).map_or(0, |t| {
+            super::mods::for_spell(map, by, t).flat[super::mods::OP_RESIST_DISPEL_CHANCE]
+        });
+        if resist > 0 && outcome::chance(map, resist as f32) {
+            held.push(spell);
+            continue;
+        }
+        match taken.iter_mut().find(|(t, c, _)| *t == spell && *c == by) {
+            Some(t) => t.2 += 1,
+            None => taken.push((spell, by, 1)),
+        }
+    }
+    let ids: Vec<u32> = taken.iter().map(|(spell, _, _)| *spell).collect();
+    for (spell, by, n) in &taken {
+        auras::remove_stacks(map, target, *spell, *by, *n);
+    }
+    super::log::dispelled(map, caster, target, ids);
+    super::log::dispel_failed(map, caster, target, held);
+    if !taken.is_empty() {
+        super::class_scripts::dispelled(map, caster, s);
     }
 }
 
@@ -1130,6 +1204,9 @@ pub fn tick_areas(map: &mut Map) {
         super::dynamic::remove(map, g);
     }
     map.spells.areas.retain(|a| a.ends > now);
+    map.spells
+        .area_ticked
+        .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
     let due: Vec<usize> = (0..map.spells.areas.len())
         .filter(|i| map.spells.areas[*i].next_tick <= now)
         .collect();
@@ -1164,6 +1241,25 @@ pub fn tick_areas(map: &mut Map) {
             })
             .collect();
         let e = s.effects[area.index];
+        // One caster's overlapping areas of a spell tick a unit once a
+        // period between them (Thistle Tea's `AreaSources`: one holder,
+        // shared).
+        let gap = area.period.saturating_sub(Duration::from_millis(100));
+        let inside: Vec<Guid> = inside
+            .into_iter()
+            .filter(|g| {
+                let key = (area.caster, area.spell, area.index, *g);
+                let fresh = map
+                    .spells
+                    .area_ticked
+                    .get(&key)
+                    .is_none_or(|t| now.saturating_duration_since(*t) >= gap);
+                if fresh {
+                    map.spells.area_ticked.insert(key, now);
+                }
+                fresh
+            })
+            .collect();
         for g in inside {
             match e.aura {
                 AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {

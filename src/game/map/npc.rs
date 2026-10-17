@@ -725,6 +725,7 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
     let now = map.now;
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    crate::game::map::spells::interrupts::taking_flight(map, player);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
@@ -878,6 +879,8 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     });
     // A trade doesn't fly along.
     crate::game::map::trade::cancel(map, player, SMSG_TRADE_STATUS_TradeStatus::TargetToFar);
+    // Out of stealth, off the mount, out of a form that can't fly.
+    crate::game::map::spells::interrupts::taking_flight(map, player);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
