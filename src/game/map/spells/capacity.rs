@@ -113,7 +113,7 @@ pub fn worth(data: &GameData, target: Guid, h: &Holder) -> u8 {
 
 fn by_effects(s: &SpellTemplate, h: &Holder) -> u8 {
     if h.has(auras::AURA_MOD_CHARM) {
-        return 4;
+        return adjust(4, s, h);
     }
     if h.has(127) || (h.has(auras::AURA_DUMMY) && (s.spell_visual, s.spell_icon) == (3582, 150)) {
         return 3;
@@ -134,7 +134,15 @@ fn by_effects(s: &SpellTemplate, h: &Holder) -> u8 {
         })
         .max()
         .unwrap_or(0);
-    if s.attr(1, sd::ATTR_EX_CHANNELED) {
+    adjust(p, s, h)
+}
+
+/// A triggered holder is worth at most 2 (if it was worth more) or
+/// nothing; a channelled one at least 1.
+fn adjust(p: u8, s: &SpellTemplate, h: &Holder) -> u8 {
+    if h.triggered {
+        if p > 2 { 2 } else { 0 }
+    } else if s.attr(1, sd::ATTR_EX_CHANNELED) {
         p.max(1)
     } else {
         p

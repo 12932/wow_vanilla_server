@@ -170,6 +170,8 @@ pub struct Caster {
     pub next_swing: Option<u32>,
     /// Diminishing returns on this unit: (group, applications, resets at).
     pub diminishing: Vec<(u8, u8, Option<Instant>)>,
+    /// A weapon put on in a fight locks weapon changes until then.
+    pub weapon_change_until: Option<Instant>,
 }
 
 /// A map's spell state beyond each unit's.
@@ -1068,6 +1070,7 @@ fn land(
         mods: l.m.clone(),
         reflected: aim != target,
         shared: l.shared,
+        triggered: l.triggered,
     };
     // A quest's spell cast at what it hit (Thistle Tea's
     // `queue_quest_cast_credit`).
@@ -1454,6 +1457,7 @@ pub fn pushback(map: &mut Map, g: Guid) {
     }
     let now = map.now;
     let mut channel_left = None;
+    let mut delayed = None;
     let mut pushed = false;
     if let Some(c) = map.caster_mut(g)
         && let Some(casting) = c.casting.as_mut()
@@ -1465,14 +1469,26 @@ pub fn pushback(map: &mut Map, g: Guid) {
             None => casting.ends += Duration::from_millis(500),
             Some(until) => {
                 let cut = Duration::from_millis(u64::from(casting.duration / 4));
+                let before = *until;
                 *until = until.checked_sub(cut).unwrap_or(now).max(now);
                 casting.ends = *until;
                 channel_left = Some(until.saturating_duration_since(now).as_millis() as u32);
+                delayed = Some((
+                    casting.spell,
+                    casting.targets.unit.unwrap_or(g),
+                    before - *until,
+                ));
             }
         }
     }
     if !pushed {
         return;
+    }
+    // The channel's auras end that much sooner too.
+    if let Some((spell, target, cut)) = delayed
+        && !cut.is_zero()
+    {
+        auras::delay_source(map, target, spell, g, cut);
     }
     let Some(p) = map.players.get(&g) else {
         return;

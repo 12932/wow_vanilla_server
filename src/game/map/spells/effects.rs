@@ -283,6 +283,7 @@ pub fn run(
             combo: l.combo,
             duration: Some(duration),
             charges,
+            triggered: l.triggered,
         };
         if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
             && caster != target
@@ -1237,6 +1238,7 @@ fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
         proc_ready_at: None,
         effects: Vec::new(),
         heartbeat: None,
+        triggered: false,
     }
 }
 
