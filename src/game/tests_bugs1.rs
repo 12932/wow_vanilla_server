@@ -607,3 +607,39 @@ async fn disarm_trap_spends_the_trap_and_opens_no_loot() {
         "cast, the trap gone, no loot window"
     );
 }
+
+#[tokio::test]
+async fn a_locked_objects_loot_is_for_those_who_opened_it() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let mut a = Client::connect(&realm, "BUGHERB1");
+    let herbalist = a.enter("Bugherba", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "BUGHERB2");
+    let other = b.enter("Bugherbb", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = map
+        .query(move |m| {
+            let at = m.players[&herbalist].position();
+            for g in [herbalist, other] {
+                m.players.get_mut(&g).unwrap().movement.position = at;
+            }
+            let spot = Vector3d {
+                x: at.x + 1.0,
+                ..at
+            };
+            // Peacebloom, locked to herbalism.
+            let node = crate::game::map::objects::summon(m, None, 1618, spot, 0.0, 0, 0, 0, None)
+                .expect("the herb");
+            let locked = crate::game::map::professions::object_lock(&m.realm.data, 1618) != 0;
+            // Gathered by one; the other asks for its loot window.
+            crate::game::map::loot::open_object(m, herbalist, node);
+            let gathered = m.players[&herbalist].looting;
+            crate::game::map::loot::open(m, other, node);
+            (locked, gathered == Some(node), m.players[&other].looting)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, None), "only the herbalist looks in it");
+}

@@ -124,6 +124,8 @@ pub struct Loot {
     pub kind: LootKind,
     /// Who has the window open.
     pub looters: AHashSet<Guid>,
+    /// Who opened it: a locked object's loot is theirs alone to look in.
+    pub opened_by: AHashSet<Guid>,
 }
 
 impl Loot {
@@ -894,6 +896,17 @@ pub fn open(map: &mut Map, player: Guid, target: Guid) {
             _ => return,
         }
     } else if let Some(o) = map.gameobject(target) {
+        // A locked object (a chest, a vein, a herb) is looked in only by
+        // one who opened it, as Thistle Tea's `Chest.authorized?` has it.
+        let lock = crate::game::map::professions::object_lock(&map.realm.data, o.entry);
+        if lock != 0
+            && !o
+                .loot
+                .as_ref()
+                .is_some_and(|l| l.opened_by.contains(&player))
+        {
+            return;
+        }
         // A bobber is looted from the shore.
         let reach = if o.kind == crate::game::map::professions::GO_FISHING_NODE {
             30.0
@@ -1168,6 +1181,9 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
                 ..Default::default()
             });
         }
+    }
+    if let Some(l) = map.gameobject_mut(object).and_then(|o| o.loot.as_mut()) {
+        l.opened_by.insert(player);
     }
     open(map, player, object);
 }
