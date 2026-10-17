@@ -177,7 +177,7 @@ async fn a_cast_refused_for_its_gear_names_the_gear() {
     assert_eq!(refused, want, "a shield, in the off hand");
     let parsed = a
         .wait_for("the refusal, read", |m| match m {
-            ServerOpcodeMessage::SMSG_CAST_RESULT(r) => Some(r.clone()),
+            ServerOpcodeMessage::SMSG_CAST_RESULT(r) => Some(*r),
             _ => None,
         })
         .await;
@@ -1016,7 +1016,7 @@ async fn a_vendor_wont_sell_what_wants_more_reputation() {
         amount: 1,
         unknown1: 0,
     };
-    a.send(buy.clone()).await;
+    a.send(buy).await;
     let refused = a
         .wait_for("SMSG_BUY_FAILED", |m| match m {
             ServerOpcodeMessage::SMSG_BUY_FAILED(f) => Some(f.result),
@@ -1069,7 +1069,7 @@ async fn trade_end(c: &mut Client) -> SMSG_TRADE_STATUS_TradeStatus {
                     | SMSG_TRADE_STATUS_TradeStatus::TradeCanceled
             ) =>
         {
-            Some(s.status.clone())
+            Some(s.status)
         }
         _ => None,
     })
@@ -1315,7 +1315,7 @@ async fn dynamic_flags(c: &mut Client, of: Guid) -> u32 {
                 UpdateMask::Unit(u) if g == of => u.unit_dynamic_flags(),
                 _ => None,
             })
-            .last()
+            .next_back()
     })
     .await as u32
 }
