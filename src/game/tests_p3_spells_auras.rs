@@ -1519,3 +1519,111 @@ async fn stealth_marks_the_visibility_byte_not_the_form() {
     );
     assert_eq!(plain.1 & 0x06, 0, "and none of it after");
 }
+
+#[test]
+fn stealth_is_seen_within_a_distance_of_levels_detection_and_skill() {
+    use crate::game::map::spells::stealth::detection_distance as d;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    // A level 10 player with 50 detection against a level 10 rogue at 50:
+    // 24 yards in front, 15 behind; at level 60, capped at 30, 21 behind.
+    assert!(near(d(10, true, true, 10, 50, 50, false), 24.0));
+    assert!(near(d(10, true, true, 10, 50, 50, true), 15.0));
+    assert!(near(d(60, true, true, 10, 50, 50, false), 30.0));
+    assert!(near(d(60, true, true, 10, 50, 50, true), 21.0));
+    // Three levels above, 13.5; four, the skill counts twice: 21.
+    assert!(near(d(13, true, true, 10, 0, 50, false), 13.5));
+    assert!(near(d(14, true, true, 10, 0, 50, false), 21.0));
+    // A level 10 creature: five sixths of a yard.
+    assert!(near(d(10, false, true, 10, 0, 50, false), 5.0 / 6.0));
+    // Level 10 players at 50: nine in front, nothing behind.
+    assert!(near(d(10, true, true, 10, 0, 50, false), 9.0));
+    assert!(d(10, true, true, 10, 0, 50, true) <= 0.0);
+}
+
+const DETECT_LESSER_INVISIBILITY: u32 = 132;
+const HUNTERS_MARK: u32 = 1130;
+
+/// `target` `yards` before `viewer`, facing away or towards.
+fn place(m: &mut Map, viewer: Guid, target: Guid, yards: f32) {
+    let (p, o) = {
+        let v = m.unit_view(viewer).unwrap();
+        (v.position, v.orientation)
+    };
+    let at = Vector3d {
+        x: p.x + yards * o.cos(),
+        y: p.y + yards * o.sin(),
+        z: p.z,
+    };
+    if let Some(x) = m.players.get_mut(&target) {
+        x.movement.position = at;
+    } else if let Some(c) = m.creature_mut(target) {
+        c.position = at;
+    }
+}
+
+#[tokio::test]
+async fn who_sees_through_stealth_and_invisibility() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, rogue, map) = player(&realm, "P3A25", "Hideone", Race::Human, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, rogue, 60, &[]);
+            let kobold = dummy(m, rogue, 60, 5.0);
+            let sees = |m: &Map, v: Guid| crate::game::map::spells::stealth::sees(m, v, rogue);
+            spells::cast_triggered(m, rogue, STEALTH, None);
+            // A level 60 kobold: within a bump, seen; at four yards, not.
+            place(m, kobold, rogue, 1.4);
+            let bumped = sees(m, kobold);
+            place(m, kobold, rogue, 4.0);
+            let apart = sees(m, kobold);
+            // Its Hunter's Mark on the rogue: its marker sees it.
+            apply(m, kobold, rogue, HUNTERS_MARK);
+            let marked = sees(m, kobold);
+            auras::remove_spell(m, rogue, HUNTERS_MARK, None);
+            // Stunned, it sees no one stealthed, even close.
+            place(m, kobold, rogue, 1.0);
+            apply(m, kobold, kobold, HAMMER_OF_JUSTICE);
+            let stunned = sees(m, kobold);
+            clear(m, kobold);
+            // Invisible too: no bump sees it; detection as strong does.
+            apply(m, rogue, rogue, LESSER_INVISIBILITY);
+            let invisible_close = sees(m, kobold);
+            apply(m, kobold, kobold, DETECT_LESSER_INVISIBILITY);
+            let lesser = sees(m, kobold);
+            // A stronger one of another spell beside it; gone, the first
+            // still sees.
+            let mut strong = made_up(990_970, 6, auras::AURA_MOD_INVISIBILITY_DETECTION, 0, 1000);
+            strong.duration_index = 21;
+            apply_template(m, kobold, kobold, &strong);
+            let detected = sees(m, kobold);
+            auras::remove_spell(m, kobold, 990_970, None);
+            let after = sees(m, kobold);
+            (
+                bumped,
+                apart,
+                marked,
+                stunned,
+                invisible_close,
+                lesser,
+                detected,
+                after,
+            )
+        })
+        .await
+        .unwrap();
+    let (bumped, apart, marked, stunned, invisible_close, lesser, detected, after) = out;
+    assert!(bumped, "within a bump, seen");
+    assert!(!apart, "four yards off, not");
+    assert!(marked, "its marker sees it");
+    assert!(!stunned, "a stunned viewer sees no one stealthed");
+    assert!(!invisible_close, "the invisible aren't bumped into");
+    assert!(
+        lesser,
+        "Detect Lesser Invisibility sees Lesser Invisibility"
+    );
+    assert!(detected, "as a stronger detection does");
+    assert!(after, "the one left still sees it");
+}
