@@ -719,14 +719,22 @@ fn resurrect_wave(map: &mut Map) {
         m.resurrect_at = now + RESURRECT_EVERY;
         m.resurrect_queue.clear();
     }
-    // Ghosts wait at a spirit guide, so every ghost rises; those queued
-    // by the spirit healer too, if dead.
+    // Those queued at a spirit guide (or by releasing) rise, if still dead
+    // and Waiting to Resurrect: one who cancelled the aura has left the
+    // queue (Thistle Tea's `Resurrection.ready?`).
+    let known = map
+        .realm
+        .data
+        .spells
+        .get(SPELL_WAITING_TO_RESURRECT)
+        .is_some();
     let mut ghosts: Vec<Guid> = map
         .players
         .values()
         .filter(|p| {
-            matches!(p.death, Death::Ghost { .. })
-                || (queued.contains(&p.guid) && p.death != Death::Alive)
+            queued.contains(&p.guid)
+                && p.death != Death::Alive
+                && (!known || p.auras.has_spell(SPELL_WAITING_TO_RESURRECT))
         })
         .map(|p| p.guid)
         .collect();
@@ -736,7 +744,6 @@ fn resurrect_wave(map: &mut Map) {
             continue;
         };
         crate::game::map::death::resurrect(map, g, 1.0);
-        crate::game::map::auras::remove_spell(map, g, SPELL_WAITING_TO_RESURRECT, None);
         map.teleport(g, map.key, at, o);
     }
 }
