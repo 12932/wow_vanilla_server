@@ -326,6 +326,9 @@ pub struct Fields {
     type_id: TypeId,
     values: Vec<u32>,
     dirty: Mask,
+    /// Whether any bit of `dirty` is set: the map's update asks of every
+    /// object, every update, and this answers without reading the mask.
+    any_dirty: bool,
 }
 
 impl Fields {
@@ -335,6 +338,7 @@ impl Fields {
             type_id,
             values: vec![0; usize::from(count)],
             dirty: Mask::new(count),
+            any_dirty: false,
         };
         f.set_guid(OBJECT_FIELD_GUID, guid);
         f.set_u32(OBJECT_FIELD_TYPE, type_id.type_mask());
@@ -384,6 +388,7 @@ impl Fields {
         if *slot != value {
             *slot = value;
             self.dirty.set(index);
+            self.any_dirty = true;
         }
     }
 
@@ -407,6 +412,7 @@ impl Fields {
             if let Some(slot) = self.values.get_mut(usize::from(i)) {
                 *slot = v;
                 self.dirty.set(i);
+                self.any_dirty = true;
             }
         }
     }
@@ -442,11 +448,15 @@ impl Fields {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty.any()
+        debug_assert_eq!(self.any_dirty, self.dirty.any());
+        self.any_dirty
     }
 
     pub fn clear_dirty(&mut self) {
-        self.dirty.clear();
+        if self.any_dirty {
+            self.dirty.clear();
+            self.any_dirty = false;
+        }
     }
 
     /// The fields an observer of `visibility` gets, among `candidates`
