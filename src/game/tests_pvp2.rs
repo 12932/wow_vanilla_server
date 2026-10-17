@@ -16,7 +16,7 @@ use crate::game::map::MapHandle;
 
 const AV: u32 = 30;
 
-fn faction(d: &mut GameData, id: u32, index: u32) {
+pub(super) fn faction(d: &mut GameData, id: u32, index: u32) {
     d.misc.factions.insert(
         id,
         FactionDef {
@@ -29,7 +29,7 @@ fn faction(d: &mut GameData, id: u32, index: u32) {
     d.misc.faction_by_index.insert(index, id);
 }
 
-fn npc(d: &mut GameData, entry: u32, name: &str, faction: u32) {
+pub(super) fn npc(d: &mut GameData, entry: u32, name: &str, faction: u32) {
     d.creature_templates.insert(
         entry,
         CreatureTemplate {
@@ -48,7 +48,7 @@ fn npc(d: &mut GameData, entry: u32, name: &str, faction: u32) {
     );
 }
 
-fn spawn(d: &mut GameData, guid: u32, entry: u32, x: f32) {
+pub(super) fn spawn(d: &mut GameData, guid: u32, entry: u32, x: f32) {
     d.creature_spawns
         .entry(AV)
         .or_default()
@@ -65,7 +65,7 @@ fn spawn(d: &mut GameData, guid: u32, entry: u32, x: f32) {
 
 /// Alterac Valley with its two factions, a smith, a summoner and a wing
 /// commander by the Alliance's start, and the routes they walk.
-fn valley() -> GameData {
+pub(super) fn valley() -> GameData {
     let mut d = alterac();
     faction(&mut d, 730, 10);
     faction(&mut d, 729, 11);
@@ -77,25 +77,49 @@ fn valley() -> GameData {
     spawn(&mut d, 170001, 13257, 1.0);
     spawn(&mut d, 170002, 13442, 2.0);
     spawn(&mut d, 170003, 13437, 3.0);
-    d.bg_routes
-        .insert(13442, vec![(5.0, 0.0, 0.0), (10.0, 0.0, 0.0)]);
-    d.bg_routes.insert(13419, vec![(20.0, 0.0, 0.0)]);
-    d.bg_routes.insert(13437, vec![(8.0, 5.0, 0.0)]);
+    // Renferal reaches her altar at her fiftieth point; Ichman is home at
+    // his ninety-third.
+    d.bg_routes.insert(13442, line(50, 0.1));
+    d.bg_routes.insert(13419, line(25, 0.5));
+    d.bg_routes.insert(13437, line(93, 0.05));
+    d.gameobject_templates.insert(
+        178670,
+        GameObjectTemplate {
+            entry: 178670,
+            kind: 18,
+            display_id: 1,
+            size: 1.0,
+            name: "Circle of Calling".into(),
+            data: {
+                let mut data = [0; 24];
+                data[0] = 1;
+                data[1] = 21648;
+                data[2] = 11206;
+                data
+            },
+            ..Default::default()
+        },
+    );
     d
 }
 
-/// The valley's routes, walked at once.
-async fn arrive(map: &MapHandle) {
+/// A route of `n` points `step` apart along the x axis.
+pub(super) fn line(n: usize, step: f32) -> Vec<(f32, f32, f32)> {
+    (0..n).map(|i| (i as f32 * step, 0.0, 0.0)).collect()
+}
+
+/// The valley's routes walked, and its scripts' waits over, at once.
+pub(super) async fn arrive(map: &MapHandle) {
     map.query(|m| {
-        let now = Instant::now();
+        crate::game::map::battleground::av_scripts::hurry(m);
         let av = m.battleground.as_mut().unwrap().av.as_mut().unwrap();
-        av.extras.hurry(now);
+        av.extras.hurry(Instant::now());
     })
     .await;
     tokio::time::sleep(Duration::from_millis(120)).await;
 }
 
-async fn turn_in(map: &MapHandle, g: Guid, quest: u32, times: u32) {
+pub(super) async fn turn_in(map: &MapHandle, g: Guid, quest: u32, times: u32) {
     map.query(move |m| {
         for _ in 0..times {
             crate::game::map::battleground::quest_rewarded(m, g, quest);
@@ -104,14 +128,14 @@ async fn turn_in(map: &MapHandle, g: Guid, quest: u32, times: u32) {
     .await;
 }
 
-fn creature(m: &crate::game::map::Map, entry: u32) -> Option<Guid> {
+pub(super) fn creature(m: &crate::game::map::Map, entry: u32) -> Option<Guid> {
     m.creatures
         .iter()
         .find(|(_, c)| c.entry == entry)
         .map(|(_, c)| c.guid)
 }
 
-async fn options(c: &mut Client, npc: Guid) -> usize {
+pub(super) async fn options(c: &mut Client, npc: Guid) -> usize {
     c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
     c.wait_for("the menu", |m| match m {
         ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) if g.guid == npc => Some(g.gossips.len()),
@@ -120,7 +144,7 @@ async fn options(c: &mut Client, npc: Guid) -> usize {
     .await
 }
 
-async fn choose(c: &Client, npc: Guid, option: u32) {
+pub(super) async fn choose(c: &Client, npc: Guid, option: u32) {
     c.send(CMSG_GOSSIP_SELECT_OPTION {
         guid: npc,
         gossip_list_id: option,
@@ -200,9 +224,27 @@ async fn two_hundred_offerings_raise_ivus_the_forest_lord() {
     let none = map.query(|m| creature(m, 13419)).await.flatten();
     assert!(none.is_none(), "195 isn't enough");
     turn_in(&map, g, 7386, 1).await;
-    // The summoner walks to the altar; Ivus rises there.
+    // The summoner walks to the altar and puts down the circle; Ivus rises
+    // when the ritual is done.
     arrive(&map).await;
-    said(&mut a, "Ivus", "Ivus the Forest Lord has been summoned!").await;
+    let circle = map
+        .query(|m| {
+            m.gameobjects
+                .iter()
+                .find(|(_, o)| o.entry == 178670)
+                .map(|(_, o)| (o.guid, o.position))
+        })
+        .await
+        .flatten()
+        .expect("the Circle of Calling");
+    super::tests_pvp::put(&map, &mut a, circle.1.x, circle.1.y).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: circle.0 }).await;
+    for _ in 0..100 {
+        if map.query(|m| creature(m, 13419)).await.flatten().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let ivus = map.query(|m| creature(m, 13419)).await.flatten();
     assert!(ivus.is_some());
 }
@@ -227,7 +269,8 @@ async fn a_rescued_wing_commander_launches_an_air_attack() {
     turn_in(&map, g, 6943, 30).await;
     assert_eq!(options(&mut a, ichman).await, 2);
     choose(&a, ichman, 1).await;
-    said(&mut a, "the launch", "launches an air attack").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    arrive(&map).await;
     let rider = map.query(|m| creature(m, 14947)).await.flatten();
     assert!(rider.is_some(), "his gryphon is out");
 }
@@ -451,6 +494,7 @@ fn assaults() -> GameData {
     npc(&mut d, 13577, "Stormpike Ram Rider Commander", 35);
     npc(&mut d, 12096, "Stormpike Quartermaster", 35);
     npc(&mut d, 13446, "Field Marshal Teravaine", 35);
+    npc(&mut d, 13576, "Stormpike Ram Rider", 35);
     spawn(&mut d, 170004, 13577, 4.0);
     spawn(&mut d, 170005, 12096, 5.0);
     d.bg_routes.insert(13577, vec![(30.0, 0.0, 0.0)]);
@@ -489,7 +533,21 @@ async fn the_cavalry_charges_and_the_ground_assault_marches() {
     let commander = map.query(|m| creature(m, 13577)).await.flatten().unwrap();
     assert_eq!(options(&mut a, commander).await, 1);
     choose(&a, commander, 0).await;
-    said(&mut a, "the charge", "ride into battle").await;
+    for _ in 0..100 {
+        let riders = map
+            .query(|m| m.creatures.iter().filter(|(_, c)| c.entry == 13576).count())
+            .await
+            .unwrap();
+        if riders == 8 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let riders = map
+        .query(|m| m.creatures.iter().filter(|(_, c)| c.entry == 13576).count())
+        .await
+        .unwrap();
+    assert_eq!(riders, 8, "eight riders ride with him");
     let stable = map
         .query(|m| m.battleground.as_ref().unwrap().events.get(&90).copied())
         .await
@@ -581,9 +639,15 @@ async fn a_beacon_left_a_minute_calls_down_its_gryphon_and_the_enemy_can_stop_on
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    // Grom, of the Horde, disables one.
+    // Grom, of the Horde, disarms one: using it does nothing, his
+    // Attacking cast does.
     b.send(CMSG_GAMEOBJ_USE { guid: stopped }).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
+    let still = map.query(move |m| m.gameobject(stopped).is_some()).await.unwrap();
+    assert!(still);
+    let gb = b.guid;
+    map.query(move |m| crate::game::map::battleground::opened(m, gb, stopped))
+        .await;
     map.query(|m| {
         let x = &mut m.battleground.as_mut().unwrap().av.as_mut().unwrap().extras;
         for b in x.beacons.iter_mut() {

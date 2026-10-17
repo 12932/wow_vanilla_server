@@ -421,6 +421,8 @@ fn effect(
 ) {
     let e = s.effects[index];
     match e.effect {
+        // A beacon's planting is the battleground's: see `run_untargeted`.
+        _ if crate::game::map::battleground::plants(s) => {}
         _ if crate::game::map::pets::handles(s, index) => {
             crate::game::map::pets::effect(map, caster, target, s, index, amount)
         }
@@ -910,6 +912,11 @@ pub fn run_untargeted(
         }
         let e = s.effects[index];
         match e.effect {
+            _ if crate::game::map::battleground::plants(s) => {
+                if e.effect == crate::game::map::professions::EFFECT_TRANS_DOOR {
+                    crate::game::map::battleground::plant(map, caster, e.misc_value.max(0) as u32);
+                }
+            }
             EFFECT_PERSISTENT_AREA_AURA => {
                 let at = t
                     .dest

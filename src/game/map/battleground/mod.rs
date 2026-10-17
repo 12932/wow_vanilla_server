@@ -9,6 +9,8 @@
 pub mod ab;
 pub mod av;
 pub mod av_quests;
+pub mod av_routes;
+pub mod av_scripts;
 pub mod wsg;
 
 use std::time::{Duration, Instant};
@@ -813,10 +815,111 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
         BG_AB => near && alive && ab::use_object(map, g, object),
         BG_AV => {
             near && alive
-                && (av_quests::use_beacon(map, g, object) || av::use_object(map, g, object))
+                && (av_scripts::use_ritual(map, g, object)
+                    // A beacon is disarmed by the Attacking cast.
+                    || av_quests::is_beacon(map, object)
+                    || av::use_object(map, g, object))
         }
         _ => wsg::use_object(map, g, object),
     }
+}
+
+/// A lock opened by a spell in the match (the client's Opening and
+/// Attacking casts): a banner assaulted, a beacon disarmed. Returns
+/// whether it was one.
+pub fn opened(map: &mut Map, g: Guid, object: Guid) -> bool {
+    let Some(m) = map.battleground.as_ref() else {
+        return false;
+    };
+    if m.bg == BG_AV && av_quests::use_beacon(map, g, object) {
+        return true;
+    }
+    use_object(map, g, object)
+}
+
+/// The spells that plant Alterac Valley's beacons, by the side they're
+/// the Alliance's or the Horde's.
+const BEACON_PLANTS: [(u32, usize); 6] = [
+    (21728, 0),
+    (21729, 0),
+    (21730, 0),
+    (21355, 1),
+    (21370, 1),
+    (21371, 1),
+];
+/// Alterac Valley's own: its recalls and battle standards.
+const VALLEY_SPELLS: [u32; 4] = [22563, 22564, 23538, 23539];
+const ATTR_EX3_ONLY_BATTLEGROUNDS: u32 = 0x800;
+const FAIL_REQUIRES_AREA: u8 = 0x5d;
+const FAIL_ONLY_BATTLEGROUNDS: u8 = 0x87;
+
+/// Whether `s` plants a beacon.
+pub fn plants(s: &crate::game::data::spells::SpellTemplate) -> bool {
+    BEACON_PLANTS.iter().any(|(id, _)| *id == s.id)
+}
+
+/// Why `caster` can't cast a battleground's spell here, as Thistle Tea's
+/// `Spell.Battleground` has it: a beacon only in Alterac Valley's battle
+/// and by its side, the valley's own spells only there, and the rest
+/// marked for battlegrounds only in one.
+pub fn spell_check(
+    map: &Map,
+    caster: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+) -> Option<u8> {
+    if !guid::is_player(caster) {
+        return None;
+    }
+    let m = map.battleground.as_ref();
+    let valley = m.filter(|m| m.bg == BG_AV);
+    if let Some((_, side)) = BEACON_PLANTS.iter().find(|(id, _)| *id == s.id) {
+        let ok = valley.is_some_and(|m| m.playing() && m.team_of(caster) == Some(*side));
+        return (!ok).then_some(FAIL_REQUIRES_AREA);
+    }
+    if VALLEY_SPELLS.contains(&s.id) {
+        let ok = valley.is_some_and(|m| m.playing() || matches!(m.phase, Phase::Ended { .. }));
+        return (!ok).then_some(FAIL_REQUIRES_AREA);
+    }
+    if s.attr(3, ATTR_EX3_ONLY_BATTLEGROUNDS) && m.is_none() {
+        return Some(FAIL_ONLY_BATTLEGROUNDS);
+    }
+    None
+}
+
+/// A beacon planted where `caster` stands: Alliance's or the Horde's, no
+/// one's own, and it outlasts its planter.
+pub fn plant(map: &mut Map, caster: Guid, entry: u32) {
+    let Some((at, o)) = map.players.get(&caster).map(|p| (p.position(), p.movement.orientation))
+    else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    let Some(t) = data.gameobject_templates.get(&entry) else {
+        return;
+    };
+    let side = usize::from(!matches!(entry, 178724..=178726));
+    let counter = map.next_creature_counter;
+    map.next_creature_counter += 1;
+    let mut go = GameObject::from_spawn(
+        t,
+        &crate::game::data::GameObjectSpawn {
+            guid: counter | 0x80_0000,
+            entry,
+            map: map.key.map,
+            x: at.x,
+            y: at.y,
+            z: at.z,
+            orientation: o,
+            rotation: [0.0, 0.0, (o / 2.0).sin(), (o / 2.0).cos()],
+            state: 1,
+            anim_progress: 100,
+            ..Default::default()
+        },
+    );
+    go.spawn_guid = None;
+    go.fields.set_u32(GAMEOBJECT_FACTION, [83, 84][side]);
+    go.fields.set_u32(GAMEOBJECT_LEVEL, 0);
+    map.add_gameobject(go);
 }
 
 /// Where a ghost goes in a match: its side's start before the battle,
