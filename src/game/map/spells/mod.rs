@@ -1560,6 +1560,19 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     if target != g {
         auras::remove_spell(map, g, casting.spell, Some(g));
     }
+    // A channel at the pet (Mend Pet, Health Funnel) ends on the pet,
+    // whatever the client aimed it at.
+    let at_pet = map.realm.data.spells.get(casting.spell).is_some_and(|s| {
+        s.effects
+            .iter()
+            .any(|e| targets::implicit(e.target_a) == targets::Implicit::Pet)
+    });
+    if at_pet
+        && let Some(pet) = crate::game::map::pets::pet_of(map, g)
+        && pet != target
+    {
+        auras::remove_spell(map, pet, casting.spell, Some(g));
+    }
     map.spells
         .areas
         .retain(|a| !(a.caster == g && a.spell == casting.spell));
