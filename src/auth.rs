@@ -258,7 +258,8 @@ where
     .await
 }
 
-async fn handle(mut stream: TcpStream, users: UserCache) {
+/// One login connection, from its first message.
+pub(crate) async fn handle(mut stream: TcpStream, users: UserCache) {
     let limit = crate::config::config().network.handshake_timeout();
     let opcode = match tokio::time::timeout(limit, tokio_read_initial_message(&mut stream)).await {
         Ok(r) => r,
@@ -287,7 +288,11 @@ async fn handle(mut stream: TcpStream, users: UserCache) {
             _ => {}
         },
         InitialMessage::Reconnect(r) => match r.protocol_version {
-            ProtocolVersion::Two => reconnect_version_2(stream, r, users).await,
+            // Protocol 3 (1.12's logon) reconnects as 2 does: wow_messages'
+            // version 3 has version 2's reconnect messages.
+            ProtocolVersion::Two | ProtocolVersion::Three => {
+                reconnect_version_2(stream, r, users).await
+            }
             ProtocolVersion::Eight => reconnect_version_8(stream, r, users).await,
             _ => {}
         },
@@ -303,10 +308,19 @@ async fn reconnect_version_8(
 
     debug!("Reconnect version: {}", r.protocol_version);
 
-    let server_reconnect_challenge_data = {
-        let mut guard = users_lock(&users);
-        let srp = or_return!(opt: guard.get(&r.account_name), "unknown account");
-        *srp.reconnect_challenge_data()
+    // An account with no session to resume is told so, as Thistle Tea
+    // answers it, rather than cut off.
+    let challenge = users_lock(&users)
+        .get(&r.account_name)
+        .map(|srp| *srp.reconnect_challenge_data());
+    let Some(server_reconnect_challenge_data) = challenge else {
+        debug!("auth: reconnect for {} with no session", r.account_name);
+        let _ = CMD_AUTH_RECONNECT_CHALLENGE_Server {
+            result: CMD_AUTH_RECONNECT_CHALLENGE_Server_LoginResult::FailUnknownAccount,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
     };
 
     or_return!(
@@ -361,10 +375,19 @@ async fn reconnect_version_2(
 
     debug!("Reconnect version: {}", r.protocol_version);
 
-    let server_reconnect_challenge_data = {
-        let mut guard = users_lock(&users);
-        let srp = or_return!(opt: guard.get(&r.account_name), "unknown account");
-        *srp.reconnect_challenge_data()
+    // An account with no session to resume is told so, as Thistle Tea
+    // answers it, rather than cut off.
+    let challenge = users_lock(&users)
+        .get(&r.account_name)
+        .map(|srp| *srp.reconnect_challenge_data());
+    let Some(server_reconnect_challenge_data) = challenge else {
+        debug!("auth: reconnect for {} with no session", r.account_name);
+        let _ = CMD_AUTH_RECONNECT_CHALLENGE_Server {
+            result: CMD_AUTH_RECONNECT_CHALLENGE_Server_LoginResult::FailUnknownAccount,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
     };
 
     or_return!(
