@@ -970,6 +970,8 @@ pub fn heal(map: &mut Map, caster: Guid, target: Guid, spell: u32, amount: u32, 
         return;
     }
     f.set_u32(UNIT_FIELD_HEALTH, (now + amount).min(max));
+    let gained = (now + amount).min(max) - now;
+    crate::game::map::combat::heal_threat(map, caster, target, spell, gained);
     let frame = if periodic {
         crate::game::conn::encode(&SMSG_PERIODICAURALOG {
             target,

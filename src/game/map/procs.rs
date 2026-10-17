@@ -94,6 +94,26 @@ const RETALIATION: &[(u32, u32)] = &[
     (19312, 28382),
 ];
 
+/// Seal of Righteousness's ranks and the holy strike each deals.
+const RIGHTEOUSNESS: &[(u32, u32)] = &[
+    (20154, 25742),
+    (21084, 25742),
+    (20287, 25740),
+    (20288, 25739),
+    (20289, 25738),
+    (20290, 25737),
+    (20291, 25736),
+    (20292, 25735),
+    (20293, 25713),
+];
+/// Nightfall's ranks give Shadow Trance.
+const NIGHTFALL: &[u32] = &[18094, 18095];
+const SHADOW_TRANCE: u32 = 17941;
+/// Eye for an Eye's ranks strike back with a share of a crit taken.
+const EYE_FOR_AN_EYE: &[u32] = &[9799, 25988];
+const EYE_FOR_AN_EYE_DAMAGE: u32 = 25997;
+const SCHOOL_HOLY: u32 = 2;
+
 /// What happened between two units, for their procs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Event {
@@ -176,11 +196,17 @@ pub fn ppm_chance(ppm: f32, speed_ms: u32) -> f32 {
     (ppm * speed_ms as f32 / 600.0).min(100.0)
 }
 
-/// The `procFlags` a holder procs on.
+/// The `procFlags` a holder procs on. A seal of righteousness strikes on
+/// abilities' blows too.
 fn proc_flags(s: &SpellTemplate, pe: Option<&ProcEvent>) -> u32 {
-    match pe.filter(|p| p.flags != 0) {
+    let flags = match pe.filter(|p| p.flags != 0) {
         Some(p) => p.flags,
         None => s.proc_flags,
+    };
+    if RIGHTEOUSNESS.iter().any(|(r, _)| *r == s.id) {
+        flags | PROC_DONE_MELEE_SPELL
+    } else {
+        flags
     }
 }
 
@@ -222,7 +248,15 @@ fn spell_allowed(pe: Option<&ProcEvent>, spell: Option<&SpellTemplate>, school: 
     true
 }
 
-fn run(map: &mut Map, owner: Guid, other: Guid, flags: u32, e: &Event, outgoing: bool, from_proc: bool) {
+fn run(
+    map: &mut Map,
+    owner: Guid,
+    other: Guid,
+    flags: u32,
+    e: &Event,
+    outgoing: bool,
+    from_proc: bool,
+) {
     let data = map.realm.data.clone();
     let now = map.now;
     let Some(a) = auras::auras(map, owner) else {
@@ -232,9 +266,9 @@ fn run(map: &mut Map, owner: Guid, other: Guid, flags: u32, e: &Event, outgoing:
         .holders
         .iter()
         .filter(|h| {
-            data.spells.get(h.spell).is_some_and(|s| {
-                proc_flags(s, data.spells.proc_events.get(&h.spell)) & flags != 0
-            })
+            data.spells
+                .get(h.spell)
+                .is_some_and(|s| proc_flags(s, data.spells.proc_events.get(&h.spell)) & flags != 0)
         })
         .cloned()
         .collect();
@@ -299,7 +333,7 @@ fn run(map: &mut Map, owner: Guid, other: Guid, flags: u32, e: &Event, outgoing:
         {
             x.proc_ready_at = Some(now + std::time::Duration::from_millis(u64::from(p.cooldown)));
         }
-        fire(map, owner, other, &h);
+        fire(map, owner, other, &h, e);
         if h.charges > 0 {
             auras::spend_charge(map, owner, h.spell, h.caster);
         }
@@ -316,10 +350,43 @@ fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool 
     })
 }
 
-/// A holder went off: its trigger spells cast, its damage dealt.
-fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
+/// A holder went off: its trigger spells cast, its damage dealt, and the
+/// class scripts the data can't say (Thistle Tea's `Core.Class`).
+fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) {
     for x in &h.effects {
         match x.kind {
+            auras::AURA_DUMMY => {
+                if let Some((_, strike)) = RIGHTEOUSNESS.iter().find(|(s, _)| *s == h.spell)
+                    && x.effect == 0
+                {
+                    let speed = (weapon_speed(map, owner, Hand::Main) as f32 / 1000.0).max(1.5);
+                    let amount = (x.amount * h.stacks.max(1) as i32) as f32;
+                    let damage = amount / 87.0
+                        + (amount / 25.0 - amount / 87.0) * ((speed.min(4.0) - 1.5) / 2.5);
+                    spell_damage(
+                        map,
+                        owner,
+                        other,
+                        *strike,
+                        damage.max(0.0) as u32,
+                        SCHOOL_HOLY,
+                    );
+                }
+                if EYE_FOR_AN_EYE.contains(&h.spell) && e.ex & EX_CRITICAL_HIT != 0 {
+                    let damage = e.damage as i64 * i64::from(x.amount) / 100;
+                    spell_damage(
+                        map,
+                        owner,
+                        other,
+                        EYE_FOR_AN_EYE_DAMAGE,
+                        damage.max(0) as u32,
+                        SCHOOL_HOLY,
+                    );
+                }
+            }
+            auras::AURA_OVERRIDE_CLASS_SCRIPTS if NIGHTFALL.contains(&h.spell) => {
+                crate::game::map::spells::cast_triggered(map, owner, SHADOW_TRANCE, Some(owner));
+            }
             auras::AURA_PROC_TRIGGER_SPELL => {
                 let trigger = RETALIATION
                     .iter()
@@ -339,7 +406,14 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
 }
 
 /// Spell damage a proc deals: logged, absorbed, dealt.
-pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, spell: u32, damage: u32, school: u32) {
+pub fn spell_damage(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    spell: u32,
+    damage: u32,
+    school: u32,
+) {
     if !map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }

@@ -339,7 +339,10 @@ pub fn roll_outcome(r: &Roll, roll: i32) -> Outcome {
 /// A melee or ranged ability's roll: miss, dodge, parry and block first,
 /// then the crit on a second roll.
 pub fn roll_special(r: &Roll, roll: i32, crit_roll: i32) -> Outcome {
-    let r = Roll { special: true, ..*r };
+    let r = Roll {
+        special: true,
+        ..*r
+    };
     let sitting = if r.sitting_crit() { 10_000 } else { 0 };
     let first = walk(
         &[
@@ -363,7 +366,11 @@ pub fn roll_special(r: &Roll, roll: i32, crit_roll: i32) -> Outcome {
 /// attacker's skill; casters glance harder.
 pub fn glancing_factor(gap: i32, caster: bool, roll: f32) -> f32 {
     let gap = gap as f32;
-    let (low_cut, low_cap, high_cut) = if caster { (0.7, 0.6, 0.3) } else { (0.0, 0.91, 0.0) };
+    let (low_cut, low_cap, high_cut) = if caster {
+        (0.7, 0.6, 0.3)
+    } else {
+        (0.0, 0.91, 0.0)
+    };
     let low = (1.3 - 0.05 * gap - low_cut).clamp(0.01, low_cap);
     let high = (1.2 - 0.03 * gap - high_cut).clamp(0.2, 0.99);
     low + (high - low) * roll.clamp(0.0, 1.0)
@@ -425,7 +432,6 @@ pub fn rage_for(damage: u32, level: u32, taken: bool) -> u32 {
     (damage as f32 / c * if taken { 2.5 } else { 7.5 } * 10.0) as u32
 }
 
-
 /// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
 /// flags, which wow_messages reads as one value. `damage` is what got
 /// through, after absorbs; `school` its school's index.
@@ -466,7 +472,16 @@ pub fn attacker_state(
     victim_state: u32,
     blocked: u32,
 ) -> Arc<[u8]> {
-    attacker_state_full(attacker, victim, hit_info, damage, victim_state, blocked, 0, 0)
+    attacker_state_full(
+        attacker,
+        victim,
+        hit_info,
+        damage,
+        victim_state,
+        blocked,
+        0,
+        0,
+    )
 }
 
 /// What the map knows of a unit, for a fight.
@@ -706,13 +721,23 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
     let ranged = hand == Hand::Ranged;
     let held = |g: Guid| {
         map.caster(g).is_some_and(|c| c.casting.is_some())
-            || map
-                .unit_fields(g)
-                .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_STUNNED))
+            || map.unit_fields(g).is_some_and(|f| {
+                f.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_STUNNED,
+                )
+            })
     };
     let extra = flags_extra(map, victim);
     Some(Roll {
-        attacker_skill: or_level(if ranged { da.ranged_skill } else { da.weapon_skill }, va.level),
+        attacker_skill: or_level(
+            if ranged {
+                da.ranged_skill
+            } else {
+                da.weapon_skill
+            },
+            va.level,
+        ),
         victim_defense: or_level(dv.defense, vb.level),
         attacker_is_player: va.is_player,
         victim_is_player: vb.is_player,
@@ -758,7 +783,11 @@ pub fn weapon_damage(
         return (1, 1);
     };
     let (lo, hi, period) = match hand {
-        Hand::Main => (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_MAXDAMAGE, UNIT_FIELD_BASEATTACKTIME),
+        Hand::Main => (
+            UNIT_FIELD_MINDAMAGE,
+            UNIT_FIELD_MAXDAMAGE,
+            UNIT_FIELD_BASEATTACKTIME,
+        ),
         Hand::Off => (
             UNIT_FIELD_MINOFFHANDDAMAGE,
             UNIT_FIELD_MAXOFFHANDDAMAGE,
@@ -821,7 +850,10 @@ pub fn weapon_damage(
     }
     if let Some(v) = auras::auras(map, victim) {
         let (flat_kind, pct_kind) = if hand == Hand::Ranged {
-            (AURA_MOD_RANGED_DAMAGE_TAKEN, AURA_MOD_RANGED_DAMAGE_TAKEN_PCT)
+            (
+                AURA_MOD_RANGED_DAMAGE_TAKEN,
+                AURA_MOD_RANGED_DAMAGE_TAKEN_PCT,
+            )
         } else {
             (AURA_MOD_MELEE_DAMAGE_TAKEN, AURA_MOD_MELEE_DAMAGE_TAKEN_PCT)
         };
@@ -839,7 +871,8 @@ pub fn armor_mitigate(map: &Map, attacker: Guid, victim: Guid, damage: u32) -> u
     let armor = map
         .unit_fields(victim)
         .map_or(0, |f| f.get_u32(UNIT_FIELD_RESISTANCES) as i32);
-    let penetration = auras::auras(map, attacker).map_or(0, |a| a.sum_mask(AURA_MOD_TARGET_RESISTANCE, 1));
+    let penetration =
+        auras::auras(map, attacker).map_or(0, |a| a.sum_mask(AURA_MOD_TARGET_RESISTANCE, 1));
     let level = map.unit_view(attacker).map_or(1, |u| u.level);
     let cut = armor_reduction((armor + penetration).max(0) as u32, level);
     damage.saturating_sub((damage as f32 * cut) as u32).max(1)
@@ -850,8 +883,8 @@ pub fn armor_mitigate(map: &Map, attacker: Guid, victim: Guid, damage: u32) -> u
 pub fn crit_multiplier(map: &Map, attacker: Guid, victim: Guid) -> f32 {
     let kind = creature_type_mask(map, victim);
     auras::auras(map, attacker).map_or(2.0, |a| {
-        2.0 + (a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, kind) + a.sum(AURA_MOD_CRIT_DAMAGE_BONUS_MELEE))
-            as f32
+        2.0 + (a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, kind)
+            + a.sum(AURA_MOD_CRIT_DAMAGE_BONUS_MELEE)) as f32
             / 100.0
     })
 }
@@ -1020,7 +1053,9 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
                     // Reckoning's banked attacks arm on a regular swing.
                     c.extra_attacks += std::mem::take(&mut c.held_extra_attacks);
                     // The hands keep a moment apart.
-                    if c.next_offhand.is_some_and(|t| t < now + Duration::from_millis(200)) {
+                    if c.next_offhand
+                        .is_some_and(|t| t < now + Duration::from_millis(200))
+                    {
                         c.next_offhand = Some(now + Duration::from_millis(200));
                     }
                 }
@@ -1354,7 +1389,11 @@ pub fn weapon_skill_chance(value: u32, cap: u32, intellect: u32) -> f32 {
     } else {
         let chance = (0.5 - 0.016_896_6 * value * (300.0 / cap) + 0.015_206_9 * 300.0) * 100.0;
         let diff = cap - value;
-        if diff <= 3.0 { chance * (0.5 / (4.0 - diff)) } else { chance }
+        if diff <= 3.0 {
+            chance * (0.5 / (4.0 - diff))
+        } else {
+            chance
+        }
     };
     (base + (0.02 * intellect as f32).min(10.0)).min(100.0)
 }
@@ -1409,7 +1448,8 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
             };
             let cap = level * 5;
             value < cap
-                && rng.random_range(0.0f32..100.0) < defense_skill_chance(value, cap, level, mob_level)
+                && rng.random_range(0.0f32..100.0)
+                    < defense_skill_chance(value, cap, level, mob_level)
                 && raise_skill(p, skill)
         });
         if gained {
@@ -1427,7 +1467,11 @@ fn daze(map: &mut Map, attacker: Guid, victim: Guid, roll: &Roll) {
         return;
     }
     let level = roll.victim_level as f32;
-    let base = if level < 30.0 { 0.65 * level + 0.5 } else { 20.0 };
+    let base = if level < 30.0 {
+        0.65 * level + 0.5
+    } else {
+        20.0
+    };
     let chance = (base + (roll.attacker_skill - roll.victim_defense) as f32 * 0.2).clamp(0.0, 40.0);
     if rand::rng().random_range(0.0f32..100.0) < chance {
         crate::game::map::spells::cast_triggered(map, attacker, SPELL_DAZED, Some(victim));
@@ -1465,6 +1509,34 @@ pub fn queue_next_swing(map: &mut Map, g: Guid, spell: u32) {
 pub fn cancel_queued(map: &mut Map, g: Guid) {
     if let Some(c) = map.combat_mut(g) {
         c.queued = None;
+    }
+}
+
+/// A heal makes threat for the healer on every creature fighting the
+/// healed: half the health it gave back.
+pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained: u32) {
+    if gained == 0 {
+        return;
+    }
+    let school = map
+        .realm
+        .data
+        .spells
+        .get(spell)
+        .map_or(2, |s| s.school_mask());
+    let threat = gained as f32 * 0.5 * threat_multiplier(map, healer, school);
+    let fighting: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| {
+            c.alive() && c.combat.attacking && c.threat.iter().any(|(t, _)| *t == healed)
+        })
+        .map(|(_, c)| c.guid)
+        .collect();
+    for c in fighting {
+        if can_attack(map, c, healer) {
+            crate::game::map::ai::add_threat(map, c, healer, threat);
+        }
     }
 }
 
@@ -1908,7 +1980,10 @@ mod tests {
         assert_eq!(defense_skill_chance(100, 100, 20, 20), 0.0);
         let low = glancing_factor(15, false, 0.0);
         let high = glancing_factor(15, false, 1.0);
-        assert!((low - 0.55).abs() < 0.001 && (high - 0.75).abs() < 0.001, "{low} {high}");
+        assert!(
+            (low - 0.55).abs() < 0.001 && (high - 0.75).abs() < 0.001,
+            "{low} {high}"
+        );
     }
 
     #[test]

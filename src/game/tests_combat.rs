@@ -34,6 +34,9 @@ const PROC_AURA: u32 = 90_001;
 const PROC_BLOW: u32 = 90_002;
 const THORNS: u32 = 90_003;
 const CHANCE_AURA: u32 = 90_004;
+const RIGHTEOUSNESS: u32 = 20154;
+/// An enchantment whose combat spell is the blow, six times a minute.
+const ENCHANT: u32 = 9_001;
 
 fn effect(effect: u32, base_points: i32, target_a: u32) -> SpellEffect {
     SpellEffect {
@@ -46,7 +49,13 @@ fn effect(effect: u32, base_points: i32, target_a: u32) -> SpellEffect {
     }
 }
 
-fn weapon(entry: u32, subclass: u32, inventory_type: u32, delay: u32, damage: (f32, f32)) -> ItemTemplate {
+fn weapon(
+    entry: u32,
+    subclass: u32,
+    inventory_type: u32,
+    delay: u32,
+    damage: (f32, f32),
+) -> ItemTemplate {
     ItemTemplate {
         entry,
         class: 2,
@@ -54,7 +63,13 @@ fn weapon(entry: u32, subclass: u32, inventory_type: u32, delay: u32, damage: (f
         name: format!("Weapon {entry}"),
         inventory_type,
         delay,
-        damages: [(damage.0, damage.1, 0), (0.0, 0.0, 0), (0.0, 0.0, 0), (0.0, 0.0, 0), (0.0, 0.0, 0)],
+        damages: [
+            (damage.0, damage.1, 0),
+            (0.0, 0.0, 0),
+            (0.0, 0.0, 0),
+            (0.0, 0.0, 0),
+            (0.0, 0.0, 0),
+        ],
         stackable: 1,
         ..Default::default()
     }
@@ -103,8 +118,10 @@ fn data() -> GameData {
     };
     d.creature_spawns
         .insert(0, vec![spawn(DUMMY.1, 2.0), spawn(FAR_DUMMY.1, 15.0)]);
-    d.items.insert(SWORD, weapon(SWORD, 7, 13, 2000, (10.0, 20.0)));
-    d.items.insert(DAGGER, weapon(DAGGER, 15, 13, 1500, (5.0, 8.0)));
+    d.items
+        .insert(SWORD, weapon(SWORD, 7, 13, 2000, (10.0, 20.0)));
+    d.items
+        .insert(DAGGER, weapon(DAGGER, 15, 13, 1500, (5.0, 8.0)));
     let mut bow = weapon(BOW, 2, 15, 2000, (10.0, 12.0));
     bow.ammo_type = 2;
     d.items.insert(BOW, bow);
@@ -117,7 +134,13 @@ fn data() -> GameData {
             name: "Arrow".into(),
             inventory_type: 24,
             stackable: 200,
-            damages: [(2.0, 2.0, 0), (0.0, 0.0, 0), (0.0, 0.0, 0), (0.0, 0.0, 0), (0.0, 0.0, 0)],
+            damages: [
+                (2.0, 2.0, 0),
+                (0.0, 0.0, 0),
+                (0.0, 0.0, 0),
+                (0.0, 0.0, 0),
+                (0.0, 0.0, 0),
+            ],
             ..Default::default()
         },
     );
@@ -133,7 +156,11 @@ fn data() -> GameData {
         ..Default::default()
     };
     let none = SpellEffect::default();
-    let mut hs = spell(HEROIC_STRIKE, "Heroic Strike", [effect(17, 99, 6), none, none]);
+    let mut hs = spell(
+        HEROIC_STRIKE,
+        "Heroic Strike",
+        [effect(17, 99, 6), none, none],
+    );
     hs.attributes[0] = 0x4 | 0x10;
     hs.power_type = 1;
     hs.mana_cost = 150;
@@ -165,9 +192,27 @@ fn data() -> GameData {
     thorns_effect.aura = 15;
     let mut thorns = spell(THORNS, "Thorns", [thorns_effect, none, none]);
     thorns.school = 3;
-    for t in [hs, shot, proc_aura, blow, chance, thorns] {
+    let mut seal_effect = effect(6, 999, 1);
+    seal_effect.aura = 4;
+    let mut seal = spell(
+        RIGHTEOUSNESS,
+        "Seal of Righteousness",
+        [seal_effect, none, none],
+    );
+    seal.proc_flags = 0x4;
+    seal.proc_chance = 100;
+    for t in [hs, shot, proc_aura, blow, chance, thorns, seal] {
         s.spells.insert(t.id, t);
     }
+    s.enchantments.insert(
+        ENCHANT,
+        crate::game::data::spells::Enchantment {
+            id: ENCHANT,
+            effects: [(1, 0, 0, PROC_BLOW), (0, 0, 0, 0), (0, 0, 0, 0)],
+            name: "Blows".into(),
+        },
+    );
+    s.enchant_ppm.insert(PROC_BLOW, 6.0);
     d
 }
 
@@ -186,8 +231,13 @@ fn dummy() -> Guid {
     guid::unit(DUMMY.0, DUMMY.1)
 }
 
-/// Put an item of `entry` in the equipment slot `slot`.
+/// Put an item of `entry` in the equipment slot `slot`, in place of what
+/// the character started with there.
 fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) {
+    if let Some(p) = m.players.get_mut(&g) {
+        p.items
+            .retain(|i| !(i.bag == crate::game::store::BAG_PLAYER && i.slot == slot));
+    }
     crate::game::map::inventory::add_item(m, g, entry, 1, false).expect("room for it");
     let data = m.realm.data.clone();
     let p = m.players.get_mut(&g).expect("the player");
@@ -280,7 +330,10 @@ async fn a_dodge_gives_a_warrior_overpower_for_a_while_and_opens_the_defender_wi
     let (points, combo_target) = map
         .query(move |m| {
             let p = &m.players[&ga];
-            (p.caster.combo_points, p.fields.get_guid(PLAYER_FIELD_COMBO_TARGET))
+            (
+                p.caster.combo_points,
+                p.fields.get_guid(PLAYER_FIELD_COMBO_TARGET),
+            )
         })
         .await
         .unwrap();
@@ -359,7 +412,8 @@ async fn heroic_strike_takes_the_next_swing() {
             (
                 m.players[&ga].combat.queued,
                 m.players[&ga].fields.get_u32(UNIT_FIELD_POWER1 + 1),
-                m.creature(target).map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH)),
+                m.creature(target)
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH)),
             )
         })
         .await
@@ -450,7 +504,10 @@ async fn a_proc_aura_goes_off_at_its_chance() {
     let (always, third) = map
         .query(move |m| {
             let data = m.realm.data.clone();
-            let health = |m: &Map| m.creature(target).map_or(0, |c| c.fields.get_u32(UNIT_FIELD_HEALTH));
+            let health = |m: &Map| {
+                m.creature(target)
+                    .map_or(0, |c| c.fields.get_u32(UNIT_FIELD_HEALTH))
+            };
             let landed = crate::game::map::procs::Event {
                 actor: ga,
                 target,
@@ -486,6 +543,65 @@ async fn a_proc_aura_goes_off_at_its_chance() {
         .unwrap();
     assert_eq!(always, 100, "a blow of one on every hit");
     assert!((220..=380).contains(&third), "about 300 of 1000: {third}");
+}
+
+#[tokio::test]
+async fn a_weapon_enchantment_procs_a_minute_and_a_seal_strikes_by_weapon_speed() {
+    let (_realm, _a, ga, map) = setup().await;
+    let target = dummy();
+    let (enchanted, seal) = map
+        .query(move |m| {
+            let data = m.realm.data.clone();
+            equip(m, ga, SWORD, 15);
+            let health = |m: &Map| {
+                m.creature(target)
+                    .map_or(0, |c| c.fields.get_u32(UNIT_FIELD_HEALTH))
+            };
+            let landed = crate::game::map::procs::Event {
+                actor: ga,
+                target,
+                actor_flags: crate::game::map::procs::PROC_DONE_MELEE,
+                target_flags: crate::game::map::procs::PROC_TAKEN_MELEE,
+                ex: crate::game::map::procs::EX_NORMAL_HIT,
+                school: 1,
+                ..Default::default()
+            };
+            if let Some(p) = m.players.get_mut(&ga)
+                && let Some(i) = p.items.iter().position(|i| i.entry == SWORD)
+            {
+                p.items[i].fields.set_u32(ITEM_FIELD_ENCHANTMENT, ENCHANT);
+            }
+            let before = health(m);
+            for _ in 0..1000 {
+                crate::game::map::procs::trigger(m, landed);
+            }
+            let enchanted = before - health(m);
+            if let Some(p) = m.players.get_mut(&ga)
+                && let Some(i) = p.items.iter().position(|i| i.entry == SWORD)
+            {
+                p.items[i].fields.set_u32(ITEM_FIELD_ENCHANTMENT, 0);
+            }
+            crate::game::map::auras::apply(
+                m,
+                ga,
+                ga,
+                data.spells.get(RIGHTEOUSNESS).unwrap(),
+                0,
+                1000,
+            );
+            let before = health(m);
+            crate::game::map::procs::trigger(m, landed);
+            (enchanted, before - health(m))
+        })
+        .await
+        .unwrap();
+    // Six a minute on a two-second sword: 20%.
+    assert!(
+        (140..=260).contains(&enchanted),
+        "about 200 of 1000: {enchanted}"
+    );
+    // 1000/87 + (1000/25 - 1000/87) * (2.0 - 1.5) / 2.5.
+    assert_eq!(seal, 17);
 }
 
 #[tokio::test]
