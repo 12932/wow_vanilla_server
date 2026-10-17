@@ -254,9 +254,10 @@ fn trigger_at(realm: &Realm, id: u32) -> (u32, Vector3d) {
     )
 }
 
-/// Thistle Tea's cmsg_areatrigger_test: Ragefire Chasm turns away a player
-/// below level 8 with its message, takes one of 8 into a copy at its
-/// entrance, and its exit goes back to Orgrimmar.
+/// Thistle Tea's cmsg_areatrigger_test and cmsg_reset_instances_test:
+/// Ragefire Chasm turns away a player below level 8 with its message, takes
+/// one of 8 into a copy at its entrance, won't reset while they are in it,
+/// and its exit goes back to Orgrimmar.
 #[tokio::test]
 async fn ragefire_chasm_turns_the_young_away_and_its_exit_leads_out() {
     if !have_data() {
@@ -303,6 +304,16 @@ async fn ragefire_chasm_turns_the_young_away_and_its_exit_leads_out() {
     let key = copy.query(|m| m.key).await.unwrap();
     assert_eq!(key.map, 389);
     assert_ne!(key.instance, 0, "a copy of its own");
+    // A copy with its player inside isn't reset.
+    a.send(CMSG_RESET_INSTANCES {}).await;
+    let (reason, map) = a
+        .wait_for("SMSG_INSTANCE_RESET_FAILED", |m| match m {
+            ServerOpcodeMessage::SMSG_INSTANCE_RESET_FAILED(f) => Some((f.reason, f.map)),
+            _ => None,
+        })
+        .await;
+    assert_eq!(reason, InstanceResetFailedReason::General);
+    assert_eq!(map.as_int(), 389);
     // The exit, back to the open world.
     let (id, at) = trigger_at(&realm, 2226);
     go(&realm, &mut a, id, at).await;
