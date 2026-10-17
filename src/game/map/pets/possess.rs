@@ -196,6 +196,7 @@ pub fn set_mover(map: &mut Map, player: Guid, mover: Guid) {
                 .and_then(|v| v.owned.possessed_by)
                 .is_some_and(|pos| pos.manual && pos.master == player)
     });
+    let manual = manual || super::eyes::controls(map, player, mover);
     if let Some(p) = map.players.get_mut(&player) {
         p.owned.mover = (manual && mover != player).then_some(mover);
     }

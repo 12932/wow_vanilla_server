@@ -38,6 +38,7 @@ pub mod fail {
     pub const ITEM_GONE: u8 = 0x26;
     pub const LINE_OF_SIGHT: u8 = 0x2a;
     pub const MAINHAND_EMPTY: u8 = 0x2d;
+    pub const LOWLEVEL: u8 = 0x2b;
     pub const MOVING: u8 = 0x2e;
     pub const NOT_BEHIND: u8 = 0x33;
     pub const NOT_INFRONT: u8 = 0x36;
@@ -51,13 +52,14 @@ pub mod fail {
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_POWER: u8 = 0x4d;
     pub const NOTHING_TO_DISPEL: u8 = 0x4e;
+    pub const ONLY_BATTLEGROUNDS: u8 = 0x87;
     pub const ONLY_SHAPESHIFT: u8 = 0x56;
     pub const ONLY_STEALTHED: u8 = 0x57;
     pub const OUT_OF_RANGE: u8 = 0x59;
     pub const PACIFIED: u8 = 0x5a;
     pub const REAGENTS: u8 = 0x5c;
-    pub const REQUIRES_SPELL_FOCUS: u8 = 0x5e;
     pub const REQUIRES_AREA: u8 = 0x5d;
+    pub const REQUIRES_SPELL_FOCUS: u8 = 0x5e;
     pub const SILENCED: u8 = 0x60;
     pub const SPELL_IN_PROGRESS: u8 = 0x61;
     pub const STUNNED: u8 = 0x64;
@@ -209,6 +211,17 @@ fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
 }
 
 /// Whether a spell focus object of `focus` is near `at`.
+/// Whether a client's movement flags say it is going somewhere: walking,
+/// strafing, jumping or falling.
+pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bool {
+    f.get_forward()
+        || f.get_backward()
+        || f.get_strafe_left()
+        || f.get_strafe_right()
+        || f.get_jumping().is_some()
+        || f.get_fallingfar()
+}
+
 fn near_focus(map: &Map, at: Vector3d, focus: u32) -> bool {
     let data = &map.realm.data;
     map.gameobjects.iter().any(|(_, g)| {
@@ -233,10 +246,6 @@ pub fn check(
     let Some(me) = map.unit_view(caster) else {
         return Some(fail::ERROR);
     };
-    // `spell_area`: some spells are only for some places.
-    if !crate::game::map::spell_areas::allowed(map, caster, s.id) {
-        return Some(fail::REQUIRES_AREA);
-    }
     if !me.alive && !s.attr(0, sd::ATTR_CASTABLE_WHILE_DEAD) {
         return Some(fail::CASTER_DEAD);
     }
@@ -247,6 +256,11 @@ pub fn check(
         }
         if !triggered && p.stand_state() != 0 && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
             return Some(fail::NOT_STANDING);
+        }
+        // Food and drink, which standing up ends, aren't had on the move
+        // (Thistle Tea's `Posture`).
+        if s.aura_interrupt_flags & INTERRUPT_NOT_SEATED != 0 && moving(&p.movement.flags) {
+            return Some(fail::MOVING);
         }
         if p.flight.is_some() {
             return Some(fail::NOT_ON_TAXI);
@@ -341,6 +355,23 @@ pub fn check(
         }
         if let Some(e) = form_error(s, auras::form(map, caster)) {
             return Some(e);
+        }
+        if let Some(e) = super::environment::check(map, caster, s) {
+            return Some(e);
+        }
+        if !super::area::allows(map, caster, s.id) {
+            return Some(fail::REQUIRES_AREA);
+        }
+        // A battleground's own spells (Thistle Tea's `Spell.Battleground`).
+        if s.attr(3, sd::ATTR_EX3_BATTLEGROUND)
+            && map.players.contains_key(&caster)
+            && map.battleground.is_none()
+        {
+            return Some(fail::ONLY_BATTLEGROUNDS);
+        }
+        // A spirit of redemption only heals.
+        if !super::redemption::allows(map, caster, s) {
+            return Some(fail::NOT_SHAPESHIFT);
         }
         if s.caster_aura_state != 0 && !aura_state(map, caster, s.caster_aura_state) {
             return Some(fail::CASTER_AURASTATE);

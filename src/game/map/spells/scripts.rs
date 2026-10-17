@@ -5,7 +5,6 @@
 //! Cannibalize, Bloodrage, healthstones, Eviscerate's attack power, and
 //! Ignite.
 
-
 use wow_world_messages::Guid;
 
 use crate::game::data::spells::SpellTemplate;

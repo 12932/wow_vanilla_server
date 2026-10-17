@@ -1397,13 +1397,19 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 }
             }
         }
-        AURA_FAR_SIGHT | AURA_BIND_SIGHT => {
+        AURA_BIND_SIGHT => {
+            crate::game::map::spells::sight::grant(map, h.caster, target);
+        }
+        AURA_FAR_SIGHT => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_guid(PLAYER_FARSIGHT, h.caster);
             }
         }
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::charmed(map, h.caster, target, kind == AURA_MOD_POSSESS);
+        }
+        AURA_MOD_POSSESS_PET => {
+            crate::game::map::pets::eyes::look(map, h.caster, target);
         }
         AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
             crate::game::map::spells::mods::changed(
@@ -1556,13 +1562,19 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 });
             }
         }
-        AURA_FAR_SIGHT | AURA_BIND_SIGHT => {
+        AURA_BIND_SIGHT => {
+            crate::game::map::spells::sight::release(map, h.caster, target);
+        }
+        AURA_FAR_SIGHT => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_guid(PLAYER_FARSIGHT, Guid::zero());
             }
         }
         AURA_MOD_POSSESS | AURA_MOD_CHARM => {
             crate::game::map::pets::uncharmed(map, h.caster, target);
+        }
+        AURA_MOD_POSSESS_PET => {
+            crate::game::map::pets::eyes::look_away(map, h.caster, target);
         }
         AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER => {
             crate::game::map::spells::mods::changed(
@@ -1611,6 +1623,8 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
     }
+    let expired = h.expires.is_some_and(|t| t <= map.now);
+    crate::game::map::spells::redemption::aura_gone(map, target, h.spell, expired);
     crate::game::map::trinkets::removed(map, target, h);
     // A channel's aura gone ends the channel.
     if let Some(c) = map.caster(h.caster)

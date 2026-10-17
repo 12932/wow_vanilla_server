@@ -45,6 +45,8 @@ mod tests_scripts;
 #[cfg(test)]
 mod tests_spells;
 #[cfg(test)]
+mod tests_spells2;
+#[cfg(test)]
 mod tests_pvp2;
 #[cfg(test)]
 mod tests_world;
