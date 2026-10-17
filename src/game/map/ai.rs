@@ -1181,7 +1181,7 @@ pub fn advance_motion(map: &mut Map, g: Guid) {
     };
     let done = w.done(now);
     let (pos, o) = if done {
-        (w.destination(), c.orientation)
+        (w.destination(), w.face.unwrap_or(c.orientation))
     } else {
         w.position_at(now)
     };

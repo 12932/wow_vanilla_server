@@ -55,6 +55,8 @@ pub struct Walk {
     pub fly: bool,
     /// Falling (a flyer's corpse).
     pub falling: bool,
+    /// The facing it takes on arriving, the packet says.
+    pub face: Option<f32>,
 }
 
 impl Walk {
@@ -83,6 +85,7 @@ impl Walk {
             run,
             fly: false,
             falling: false,
+            face: None,
         }
     }
 
@@ -159,11 +162,11 @@ impl Walk {
         // start, whole.
         let mut b = crate::game::data::items::Body::default();
         crate::game::update::write_packed_guid(&mut b.0, guid);
-        b.f32(from.x)
-            .f32(from.y)
-            .f32(from.z)
-            .u32(self.spline_id)
-            .u8(0);
+        b.f32(from.x).f32(from.y).f32(from.z).u32(self.spline_id);
+        match self.face {
+            Some(angle) => b.u8(4).f32(angle),
+            None => b.u8(0),
+        };
         b.u32(self.monster_move_flags())
             .u32(self.duration.as_millis() as u32);
         let points = &self.points[1..];
@@ -198,7 +201,10 @@ impl Walk {
             guid,
             spline_point: from,
             spline_id: self.spline_id,
-            move_type: SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
+            move_type: match self.face {
+                Some(angle) => SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle },
+                None => SMSG_MONSTER_MOVE_MonsterMoveType::Normal,
+            },
             spline_flags: SplineFlag::new(self.monster_move_flags()),
             duration: self.duration.as_millis() as u32,
             splines,

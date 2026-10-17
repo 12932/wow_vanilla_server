@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use rand::RngExt;
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::data::scripts::*;
 use crate::game::fields::*;
@@ -1016,35 +1017,137 @@ pub fn movement_inform(map: &mut Map, g: Guid, kind: u32, point: u32) {
     }
 }
 
-/// A follower keeps its place by the one it follows.
+/// How near its spot a follower counts as there, how far its spot moves
+/// before it paths again, how far ahead it looks along its leader's way,
+/// and the slack it keeps by a leader standing still (Thistle Tea's
+/// `BT.Follow`).
+const FOLLOW_START: f32 = 0.25;
+const FOLLOW_REPATH: f32 = 0.5;
+const FOLLOW_AHEAD: f32 = 0.5;
+const FOLLOW_SLACK: f32 = 1.4;
+const DEFAULT_RADIUS: f32 = 0.389;
+
+/// Where a leader will be half a second on, which way it faces, and
+/// whether it is on the move: a player by the way its client says it
+/// goes, a creature where it is along its walk.
+fn leader_ahead(map: &Map, leader: Guid) -> Option<(Vector3d, f32, bool)> {
+    let now = map.now;
+    if let Some(p) = map.players.get(&leader) {
+        let info = &p.movement;
+        let f = &info.flags;
+        let axis = |a: bool, b: bool| f32::from(u8::from(a)) - f32::from(u8::from(b));
+        let forward = axis(f.get_forward(), f.get_backward());
+        let strafe = axis(f.get_strafe_left(), f.get_strafe_right());
+        let airborne = f.get_jumping().is_some() || f.get_fallingfar();
+        let o = info.orientation;
+        let (dx, dy) = (
+            forward * o.cos() - strafe * o.sin(),
+            forward * o.sin() + strafe * o.cos(),
+        );
+        let len = (dx * dx + dy * dy).sqrt();
+        let swimming = f.get_swimming().is_some();
+        let speed = match (f.get_walk_mode(), forward < 0.0, swimming) {
+            (true, _, _) => p.speeds.walk,
+            (false, true, true) => p.speeds.swim_back,
+            (false, true, false) => p.speeds.run_back,
+            (false, false, true) => p.speeds.swim,
+            (false, false, false) => p.speeds.run,
+        };
+        let at = info.position;
+        if len == 0.0 || airborne || speed <= 0.0 {
+            return Some((at, o, false));
+        }
+        let step = speed * FOLLOW_AHEAD / len;
+        let ahead = Vector3d {
+            x: at.x + dx * step,
+            y: at.y + dy * step,
+            z: at.z,
+        };
+        return Some((ahead, o, true));
+    }
+    let c = map.creature(leader)?;
+    match &c.motion {
+        crate::game::map::creature::Motion::Moving(w) if !w.done(now) => {
+            let (at, o) = w.position_at(now);
+            Some((at, o, true))
+        }
+        _ => Some((c.position, c.orientation, false)),
+    }
+}
+
+/// A follower keeps its place by the one it follows, as Thistle Tea's
+/// `BT.Follow` has it: at its distance and angle off the leader's facing
+/// where the leader will be half a second on; running, faster the
+/// further behind it is, and facing as the leader does when there. It
+/// paths again only once that spot has moved, and settles by a leader who
+/// stands. A leader out of sight is waited for.
 pub fn follow_step(map: &mut Map, g: Guid) {
     let Some((leader, distance, angle)) = scripted(map, g).and_then(|s| s.follow) else {
         return;
     };
-    let Some(l) = map.unit_view(leader).filter(|l| l.alive) else {
-        if let Some(s) = scripted_mut(map, g) {
-            s.follow = None;
-        }
+    let Some((ahead, facing, leader_moving)) = leader_ahead(map, leader) else {
         return;
     };
+    crate::game::map::ai::advance_motion(map, g);
+    let radius = |x: Guid| {
+        map.unit_fields(x)
+            .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+            .filter(|r| *r > 0.0)
+            .unwrap_or(DEFAULT_RADIUS)
+    };
+    let slack = FOLLOW_SLACK * distance + radius(g) + radius(leader);
     let Some(c) = map.creature(g) else {
         return;
     };
-    let a = l.orientation + angle;
-    let spot = wow_world_messages::vanilla::Vector3d {
-        x: l.position.x + distance * a.cos(),
-        y: l.position.y + distance * a.sin(),
-        z: l.position.z,
+    let a = facing + angle;
+    let spot = Vector3d {
+        x: ahead.x + distance * a.cos(),
+        y: ahead.y + distance * a.sin(),
+        z: ahead.z,
     };
     let heading = match &c.motion {
         crate::game::map::creature::Motion::Moving(w) => Some(w.destination()),
         _ => None,
     };
-    if dist(c.position, spot) < 2.0 || heading.is_some_and(|h| dist(h, spot) < 2.0) {
+    let settled = !leader_moving && heading.is_none() && dist(c.position, ahead) <= slack;
+    if settled
+        || dist(c.position, spot) <= FOLLOW_START
+        || heading.is_some_and(|h| dist(h, spot) <= FOLLOW_REPATH)
+    {
         return;
     }
-    let run = dist(c.position, spot) > 10.0 || scripted(map, g).is_some_and(|s| s.run);
-    scripts::move_to(map, g, spot, run);
+    // Further behind than it runs in a second, it runs faster, up to 2.1
+    // times.
+    let behind = dist(c.position, spot);
+    let run = c.speeds.run;
+    let factor = if behind > run {
+        (1.0 + 0.04 * (behind - run)).min(2.1)
+    } else {
+        1.0
+    };
+    let from = c.position;
+    let path = match map.nav.as_mut() {
+        Some(nav) => nav.path(from, spot).unwrap_or_else(|| vec![from, spot]),
+        None => vec![from, spot],
+    };
+    let now = map.now;
+    let spline_id = map.next_spline_id;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let fly = crate::game::map::creature_motion::habitat(map, g).fly;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    let mut walk = crate::game::map::creature::Walk::new(path, run * factor, now, spline_id, true);
+    walk.fly = fly;
+    walk.face = Some(facing);
+    let frame = walk.frame(g, from);
+    c.motion = crate::game::map::creature::Motion::Moving(walk);
+    if let Some(s) = c.scripted.as_deref_mut() {
+        s.scripted_move = None;
+    }
+    if let Some(frame) = frame {
+        map.send_to_observers(g, &frame, false);
+    }
 }
 
 /// The spell a script made its swings.
