@@ -1062,7 +1062,12 @@ fn land_arrivals(map: &mut Map) {
         .partition(|f| f.lands <= now);
     map.spells.in_flight = waiting;
     for mut f in due {
-        if map.unit_view(f.target).is_none() {
+        // A target that died while it flew is missed, unless the spell is
+        // for the dead: Thistle Tea keeps only what works on a corpse.
+        if map
+            .unit_view(f.target)
+            .is_none_or(|u| !u.alive && !checks::for_the_dead(&f.spell))
+        {
             continue;
         }
         land(

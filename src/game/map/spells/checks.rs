@@ -478,6 +478,17 @@ pub fn check(
     check_target(map, caster, s, t, triggered, m)
 }
 
+/// Whether `s` brings back the dead.
+fn resurrects(s: &SpellTemplate) -> bool {
+    s.effects.iter().any(|e| matches!(e.effect, 18 | 113))
+}
+
+/// Whether `s` may land on the dead: a resurrection, a spell that allows
+/// a dead target, or skinning.
+pub fn for_the_dead(s: &SpellTemplate) -> bool {
+    resurrects(s) || s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET) || s.has_effect(95)
+}
+
 /// The target's checks.
 fn check_target(
     map: &mut Map,
@@ -521,12 +532,11 @@ fn check_target(
     let Some(u) = map.unit_view(target) else {
         return Some(fail::BAD_TARGETS);
     };
-    let resurrects = s.effects.iter().any(|e| matches!(e.effect, 18 | 113));
-    if resurrects {
+    if resurrects(s) {
         if u.alive {
             return Some(fail::TARGET_NOT_DEAD);
         }
-    } else if !u.alive && !s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET) && !s.has_effect(95) {
+    } else if !u.alive && !for_the_dead(s) {
         return Some(fail::TARGETS_DEAD);
     }
     if target != caster {
@@ -540,7 +550,7 @@ fn check_target(
                 Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
             )
         });
-        if (requires_enemy || harmful && !resurrects)
+        if (requires_enemy || harmful && !resurrects(s))
             && !combat::can_attack(map, caster, target)
             && !s.has_effect(95)
         {
