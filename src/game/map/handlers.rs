@@ -251,15 +251,7 @@ impl Map {
                 }
             }
             ClientOpcodeMessage::CMSG_STANDSTATECHANGE(m) => {
-                if let Some(p) = self.players.get_mut(&guid)
-                    && p.logout_at.is_none()
-                {
-                    let state = m.animation_state.as_int();
-                    p.set_stand_state(state);
-                    p.outbound.send(&SMSG_STANDSTATE_UPDATE {
-                        state: m.animation_state,
-                    });
-                }
+                chat::stand_state(self, guid, m.animation_state);
             }
             ClientOpcodeMessage::CMSG_SETSHEATHED(m) => {
                 if let Some(p) = self.players.get_mut(&guid) {
