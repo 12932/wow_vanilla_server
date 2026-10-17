@@ -1277,7 +1277,9 @@ fn magnet(map: &mut Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Tar
     t
 }
 
-/// A rogue's or druid's combo points go, and any hold on them.
+/// A rogue's or druid's combo points go, and any hold on them. The field
+/// still names the target they were on, its points at 0 (mangos's
+/// `ClearComboPoints`, Thistle Tea's `put_points`).
 pub fn clear_combo_points(map: &mut Map, caster: Guid) {
     release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
@@ -1285,7 +1287,6 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
         c.combo_target = Guid::zero();
     }
     if let Some(p) = map.players.get_mut(&caster) {
-        p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, Guid::zero());
         p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 0);
     }
 }

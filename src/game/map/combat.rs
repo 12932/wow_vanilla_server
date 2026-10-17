@@ -1737,7 +1737,6 @@ fn expire_windows(map: &mut Map, g: Guid) {
     if combo_gone && let Some(p) = map.players.get_mut(&g) {
         p.caster.combo_points = 0;
         p.caster.combo_target = Guid::zero();
-        p.fields.set_guid(PLAYER_FIELD_COMBO_TARGET, Guid::zero());
         p.fields.set_byte(PLAYER_FIELD_BYTES, 1, 0);
     }
     if changed {

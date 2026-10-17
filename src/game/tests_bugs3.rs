@@ -15,6 +15,7 @@ use crate::game::data::*;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::harness::{self, Client};
+use crate::game::map::spells as spells_effect;
 use crate::game::map::{Map, MapHandle};
 
 /// Northshire, where humans start.
@@ -569,4 +570,67 @@ async fn a_say_carries_in_three_dimensions() {
         _ => None,
     })
     .await;
+}
+
+const COMBO: u32 = 900_330;
+const WOLF: u32 = 900_331;
+
+/// Spent combo points leave `PLAYER_FIELD_COMBO_TARGET` naming the target
+/// they were on, the points at 0, as mangos's `ClearComboPoints` and
+/// Thistle Tea's `put_points` leave it.
+#[tokio::test]
+async fn spent_combo_points_keep_their_target() {
+    let mut d = GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    d.spells.spells.insert(
+        COMBO,
+        unit_spell(COMBO, spells_effect::EFFECT_ADD_COMBO_POINTS),
+    );
+    d.creature_templates.insert(
+        WOLF,
+        CreatureTemplate {
+            entry: WOLF,
+            name: "Wolf".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 1,
+            level_max: 1,
+            faction: 7,
+            unit_class: 1,
+            health_max: 100,
+            ..Default::default()
+        },
+    );
+    d.creature_spawns.entry(0).or_default().push(CreatureSpawn {
+        guid: 42,
+        entries: vec![WOLF],
+        map: 0,
+        x: START.0 + 3.0,
+        y: START.1,
+        z: START.2,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let (_a, g, map) = enter(&realm, "A", "Rogue", Race::Human, Class::Rogue).await;
+    let target = on(&map, |m| {
+        m.creatures
+            .iter()
+            .find(|(_, c)| c.entry == WOLF)
+            .map(|(_, c)| c.guid)
+    })
+    .await
+    .expect("the wolf");
+    let (field, points) = on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, COMBO, Some(target));
+        assert!(m.players[&g].fields.get_byte(PLAYER_FIELD_BYTES, 1) > 0);
+        crate::game::map::spells::clear_combo_points(m, g);
+        let f = &m.players[&g].fields;
+        (
+            f.get_guid(PLAYER_FIELD_COMBO_TARGET),
+            f.get_byte(PLAYER_FIELD_BYTES, 1),
+        )
+    })
+    .await;
+    assert_eq!(points, 0, "spent");
+    assert_eq!(field, target, "the target they were on");
 }
