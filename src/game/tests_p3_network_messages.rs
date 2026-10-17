@@ -507,3 +507,170 @@ async fn periodic_ticks_are_logged_as_1_12_has_them() {
     want.extend_from_slice(&0.5f32.to_le_bytes());
     assert_eq!(leech, want);
 }
+
+const BLOOD_PRICE: u32 = 900_331;
+const DEAR: u32 = 900_332;
+const SWING: u32 = 900_333;
+const STAB: u32 = 900_334;
+const GOUGE: u32 = 900_335;
+const DARKSHORE: u32 = 900_336;
+const ORCS_ONLY: u32 = 900_337;
+const ANVIL: u32 = 900_338;
+const FEAST: u32 = 900_339;
+
+/// The `SMSG_CAST_RESULT` for `spell` cast at `target` through the
+/// protocol: its body after the spell.
+async fn refused(c: &mut Client, spell: u32, target: Guid) -> Vec<u8> {
+    c.send(CMSG_CAST_SPELL {
+        spell,
+        targets: wire_targets(&Targets {
+            unit: Some(target),
+            ..Default::default()
+        }),
+    })
+    .await;
+    let f = c
+        .wait_frame("SMSG_CAST_RESULT", 0x130, move |f| {
+            f[..4] == spell.to_le_bytes()
+        })
+        .await;
+    f[4..].to_vec()
+}
+
+/// Thistle Tea's smsg_cast_result_test: a cost in health more than the
+/// caster has is `CASTER_AURASTATE`, in mana `NO_POWER`; a melee spell
+/// with its target behind is `UNIT_NOT_INFRONT`, a stab from in front
+/// `NOT_BEHIND`, a gouge at a back `NOT_INFRONT`; a spell of another
+/// place names the area it wants, or 0 for a rule with none; a spell
+/// focus names the focus; and Cannibalize with no corpse to eat is
+/// `NO_EDIBLE_CORPSES`.
+#[tokio::test]
+async fn cast_failures_say_why_as_1_12_has_them() {
+    use crate::game::data::scripts::SpellArea;
+    let mut d = data();
+    let any = |id| {
+        spell(
+            id,
+            &[SpellEffect {
+                effect: 3,
+                target_a: 25,
+                ..Default::default()
+            }],
+        )
+    };
+    let mut blood = any(BLOOD_PRICE);
+    blood.power_type = crate::game::map::spells::POWER_HEALTH;
+    blood.mana_cost = 1_000_000;
+    let mut dear = any(DEAR);
+    dear.mana_cost = 1_000_000;
+    let mut swing = any(SWING);
+    swing.range_index = 2;
+    let mut stab = any(STAB);
+    stab.attributes[2] = crate::game::data::spells::ATTR_EX2_BEHIND_TARGET;
+    stab.attributes[1] = crate::game::data::spells::ATTR_EX_FROM_BEHIND;
+    let mut gouge = any(GOUGE);
+    gouge.attributes[0] = 0x15_0010;
+    let mut anvil = any(ANVIL);
+    anvil.requires_spell_focus = 3;
+    let mut feast = any(FEAST);
+    feast.script_name = "spell_cannibalize".into();
+    for s in [
+        blood,
+        dear,
+        swing,
+        stab,
+        gouge,
+        any(DARKSHORE),
+        any(ORCS_ONLY),
+        anvil,
+        feast,
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d.scripts.spell_areas.push(SpellArea {
+        spell: DARKSHORE,
+        area: 148,
+        gender: 2,
+        ..Default::default()
+    });
+    d.scripts.spell_areas.push(SpellArea {
+        spell: ORCS_ONLY,
+        area: 0,
+        race_mask: 0x2,
+        gender: 2,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Mage).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let place = move |m: &mut Map, alice: f32, bob: f32| {
+        let at = m.players[&ga].position();
+        let p = m.players.get_mut(&ga).unwrap();
+        p.movement.orientation = alice;
+        let p = m.players.get_mut(&gb).unwrap();
+        p.movement.position = Vector3d {
+            x: at.x + 3.0,
+            y: at.y,
+            z: at.z,
+        };
+        p.movement.orientation = bob;
+    };
+    on_map(&realm, move |m| {
+        for s in [
+            BLOOD_PRICE,
+            DEAR,
+            SWING,
+            STAB,
+            GOUGE,
+            DARKSHORE,
+            ORCS_ONLY,
+            ANVIL,
+            FEAST,
+        ] {
+            m.players.get_mut(&ga).unwrap().spells.push(s);
+        }
+        let p = m.players.get_mut(&ga).unwrap();
+        p.fields.set_u32(UNIT_FIELD_POWER1, 100);
+        // Bob east of Alice; she faces west, away from him.
+        place(m, std::f32::consts::PI, 0.0);
+    })
+    .await;
+    a.clear();
+    let failed = |code: u8| vec![2, code];
+    assert_eq!(
+        refused(&mut a, BLOOD_PRICE, ga).await,
+        failed(0x12),
+        "health"
+    );
+    assert_eq!(refused(&mut a, DEAR, ga).await, failed(0x4D), "mana");
+    assert_eq!(refused(&mut a, SWING, gb).await, failed(0x7C), "behind her");
+    // Face to face: a stab isn't from behind.
+    on_map(&realm, move |m| place(m, 0.0, std::f32::consts::PI)).await;
+    assert_eq!(
+        refused(&mut a, STAB, gb).await,
+        failed(0x33),
+        "in front of him"
+    );
+    // Bob turned away: a gouge wants his face.
+    on_map(&realm, move |m| place(m, 0.0, 0.0)).await;
+    assert_eq!(refused(&mut a, GOUGE, gb).await, failed(0x36), "his back");
+    let with = |code: u8, v: u32| [&[2u8, code][..], &v.to_le_bytes()].concat();
+    assert_eq!(
+        refused(&mut a, DARKSHORE, ga).await,
+        with(0x5D, 148),
+        "Darkshore's"
+    );
+    assert_eq!(
+        refused(&mut a, ORCS_ONLY, ga).await,
+        with(0x5D, 0),
+        "no area named"
+    );
+    assert_eq!(refused(&mut a, ANVIL, ga).await, with(0x5E, 3), "the focus");
+    assert_eq!(
+        refused(&mut a, FEAST, ga).await,
+        failed(0x86),
+        "nothing to eat"
+    );
+}
