@@ -82,7 +82,28 @@ pub struct Scripted {
     pub feign: Option<Feign>,
     /// A path a script set it walking, over its spawn's.
     pub route: Option<Route>,
+    /// A faction a script set (`SCRIPT_COMMAND_SET_FACTION`): the one it
+    /// had, the one set, and when the old one comes back (datalong2).
+    pub temp_faction: Option<TempFaction>,
+    /// A despawn a script put off (`SCRIPT_COMMAND_DESPAWN_SELF`): when,
+    /// and the respawn's delay over its spawn's.
+    pub script_despawn: Option<(Instant, Option<Duration>)>,
 }
+
+/// A script's faction for a while, as Thistle Tea's `TemporaryFaction`
+/// keeps it: the old one back at a respawn (0x1), when a fight stops
+/// (0x2) or home again (0x4), as its flags say; kept over a respawn
+/// without 0x1.
+#[derive(Debug, Clone, Copy)]
+pub struct TempFaction {
+    pub original: u32,
+    pub value: u32,
+    pub flags: u32,
+}
+
+pub const FACTION_RESTORE_RESPAWN: u32 = 0x1;
+pub const FACTION_RESTORE_COMBAT_STOP: u32 = 0x2;
+pub const FACTION_RESTORE_REACH_HOME: u32 = 0x4;
 
 /// A path held, as vmangos's escorts pause: until the summons made since
 /// are gone (or, `signal`, until a script lets it go), and at most until
@@ -743,9 +764,24 @@ pub fn tick(map: &mut Map, g: Guid) {
     fire(map, g, |e| timed(e.kind), None);
 }
 
-/// A creature's despawn timer, for those summoned with one.
+/// A creature's despawn timer, for those summoned with one, and the
+/// despawns scripts put off.
 pub fn update_despawns(map: &mut Map) {
     let now = map.now;
+    let put_off: Vec<(Guid, Option<Duration>)> = map
+        .creatures
+        .iter()
+        .filter_map(|(_, c)| {
+            let (at, respawn) = c.scripted.as_deref()?.script_despawn?;
+            (at <= now).then_some((c.guid, respawn))
+        })
+        .collect();
+    for (g, respawn) in put_off {
+        if let Some(s) = scripted_mut(map, g) {
+            s.script_despawn = None;
+        }
+        scripts::despawn_with(map, g, respawn);
+    }
     let due: Vec<Guid> = map
         .creatures
         .iter()
@@ -910,6 +946,14 @@ pub fn evade(map: &mut Map, g: Guid) {
             reset_ooc(s, &events, now);
         }
     }
+}
+
+/// Its fight stopped (an evade, its death, a script's combat stop), as
+/// Thistle Tea's `Engagement.leave`: a faction a script set for the fight
+/// gives way.
+pub fn combat_stopped(map: &mut Map, g: Guid, died: bool) {
+    let _ = died;
+    scripts::restore_faction(map, g, FACTION_RESTORE_COMBAT_STOP);
 }
 
 /// It walked home from an evade.

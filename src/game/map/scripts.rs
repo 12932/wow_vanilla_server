@@ -868,8 +868,14 @@ pub fn summon(
 }
 
 /// A creature goes: a summoned one for good, a spawned one until it
-/// respawns.
+/// respawns, on its spawn's time.
 pub fn despawn(map: &mut Map, g: Guid) {
+    despawn_with(map, g, None);
+}
+
+/// A creature goes, as [`despawn`]; a spawned one comes back after
+/// `respawn` if given, else on its spawn's time.
+pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
     let Some(c) = map.creature(g) else {
         return;
     };
@@ -882,7 +888,9 @@ pub fn despawn(map: &mut Map, g: Guid) {
             map.remove_creature(g);
         }
         Some(_) => {
-            crate::game::map::ai::quiet_death(map, g);
+            let respawn = respawn
+                .unwrap_or_else(|| crate::game::map::ai::respawn_delay(&map.realm.data, spawn));
+            crate::game::map::ai::quiet_death_for(map, g, respawn);
         }
     }
     if let Some(s) = summoner {
@@ -905,6 +913,50 @@ pub fn remove_for_good(map: &mut Map, g: Guid) {
     if let Some(s) = summoner {
         event_ai::summoned_despawned(map, s, g, entry);
     }
+}
+
+/// The weapons a creature came with: its spawn's (its addon's, over its
+/// template's), as it spawned.
+fn default_equipment(data: &crate::game::data::GameData, c: &Creature) -> [u32; 3] {
+    let template = data
+        .creature_template(c.entry)
+        .map_or(0, |t| t.equipment_id);
+    let equipment = match c.spawn_guid.and_then(|s| data.creature_addons.get(&s)) {
+        Some(a) if a.equipment_id > 0 => a.equipment_id as u32,
+        Some(a) if a.equipment_id < 0 => 0,
+        _ => template,
+    };
+    data.creature_equipment
+        .get(&equipment)
+        .copied()
+        .unwrap_or([0; 3])
+}
+
+/// A creature's faction, and whether players are its enemies.
+pub fn set_faction(map: &mut Map, g: Guid, faction: u32) {
+    let data = map.realm.data.clone();
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
+    let civilian = data.creature_template(c.entry).is_some_and(|t| t.civilian);
+    c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, faction, civilian);
+}
+
+/// The faction a script set gives way to the old one, if its flags say so
+/// for `why` ([`event_ai::FACTION_RESTORE_COMBAT_STOP`] or
+/// [`event_ai::FACTION_RESTORE_REACH_HOME`]).
+pub fn restore_faction(map: &mut Map, g: Guid, why: u32) {
+    let Some(t) = event_ai::scripted(map, g).and_then(|s| s.temp_faction) else {
+        return;
+    };
+    if t.flags & why == 0 {
+        return;
+    }
+    if let Some(s) = event_ai::scripted_mut(map, g) {
+        s.temp_faction = None;
+    }
+    set_faction(map, g, t.original);
 }
 
 fn creature_mut(map: &mut Map, g: Guid) -> Option<&mut Creature> {
@@ -1338,35 +1390,38 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         17 => script_player(source, target).is_some_and(|p| {
             crate::game::map::inventory::add_item(map, p, d1, d2.max(1), true).is_ok()
         }),
-        // Despawn, after datalong ms.
+        // Despawn, after datalong ms; a spawn comes back after datalong2
+        // seconds, or (with none) on its own time.
         18 => {
             let g = source;
-            if !guid::is_unit(g) {
+            if map.creature(g).is_none() {
                 return false;
             }
+            let respawn = (d2 > 0).then(|| Duration::from_secs(u64::from(d2)));
             if d1 > 0 {
                 if let Some(s) = event_ai::scripted_mut(map, g) {
-                    s.despawn_at = Some(now + Duration::from_millis(u64::from(d1)));
-                    s.despawn_type = 1;
+                    s.script_despawn = Some((now + Duration::from_millis(u64::from(d1)), respawn));
                 }
             } else {
-                despawn(map, g);
+                despawn_with(map, g, respawn);
             }
             true
         }
+        // Weapons: with datalong, the ones it spawned with; else each of
+        // dataint's three, its slot left as it is below zero and emptied
+        // at zero.
         19 => {
-            let items =
-                [step.dataint[0], step.dataint[1], step.dataint[2]].map(|i| i.max(0) as u32);
-            let items = if d1 != 0 {
-                data.creature_template(map.creature(source).map_or(0, |c| c.entry))
-                    .and_then(|t| data.creature_equipment.get(&t.equipment_id))
-                    .copied()
-                    .unwrap_or([0; 3])
+            let Some(c) = map.creature(source) else {
+                return false;
+            };
+            let slots = if d1 != 0 {
+                default_equipment(&data, c).map(Some)
             } else {
-                items
+                [step.dataint[0], step.dataint[1], step.dataint[2]]
+                    .map(|i| (i >= 0).then_some(i as u32))
             };
             if let Some(c) = creature_mut(map, source) {
-                c.set_equipment(&data, items);
+                c.set_equipment_slots(&data, slots);
             }
             true
         }
@@ -1374,22 +1429,33 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // datalong2 where it is), 2 waypoints, 7 home, 10 flee, 15 follow
         // the target at x yards and angle o, 19 keep x yards from it.
         20 => movement(map, step, source, target),
-        // Faction: set, or (0) the template's.
+        // Faction: set for a while, the old one back as datalong2's flags
+        // say; or (0) the one it had before (with none set, its
+        // template's).
         22 => {
-            let faction = if d1 == 0 {
-                map.creature(source)
-                    .and_then(|c| data.creature_template(c.entry))
-                    .map_or(0, |t| t.faction)
-            } else {
-                d1
-            };
-            let Some(c) = creature_mut(map, source) else {
+            let Some(c) = map.creature(source) else {
                 return false;
             };
-            c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
-            let civilian = data.creature_template(c.entry).is_some_and(|t| t.civilian);
-            c.hostile_to_players =
-                crate::game::map::ai::hostile_to_players(&data, faction, civilian);
+            let now_faction = c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
+            let tracked = c.scripted.as_deref().and_then(|s| s.temp_faction);
+            if d1 == 0 {
+                let back = tracked
+                    .map(|t| t.original)
+                    .unwrap_or_else(|| data.creature_template(c.entry).map_or(0, |t| t.faction));
+                if let Some(s) = event_ai::scripted_mut(map, source) {
+                    s.temp_faction = None;
+                }
+                set_faction(map, source, back);
+                return true;
+            }
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.temp_faction = Some(event_ai::TempFaction {
+                    original: tracked.map_or(now_faction, |t| t.original),
+                    value: d1,
+                    flags: d2,
+                });
+            }
+            set_faction(map, source, d1);
             true
         }
         // Morph to an entry's look (datalong2 0) or a display (1); 0 back.
@@ -1700,19 +1766,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             crate::game::map::combat::deal_damage(map, source, target, amount);
             true
         }
-        // Everyone in the zone (here: the map) fights.
-        49 => {
-            let players: Vec<Guid> = map
-                .players
-                .values()
-                .filter(|p| p.death == crate::game::map::death::Death::Alive)
-                .map(|p| p.guid)
-                .collect();
-            for p in players {
-                crate::game::map::ai::attacked(map, source, p);
-            }
-            true
-        }
+        // Its dungeon fights it, at once (datalong: those fighting
+        // already too) and every three seconds while it fights.
+        49 => crate::game::map::creature_combat::script_zone_pulse(map, source, d1 != 0),
         // Call for help within x yards.
         50 => {
             let radius = if step.x > 0.0 { step.x } else { d1 as f32 };
@@ -1921,6 +1977,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             crate::game::map::combat::leave_combat(map, source);
             if let Some(c) = creature_mut(map, source) {
                 c.threat.clear();
+            }
+            if map.creature(source).is_some() {
+                event_ai::combat_stopped(map, source, false);
             }
             true
         }
