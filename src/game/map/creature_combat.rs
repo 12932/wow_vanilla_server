@@ -77,6 +77,10 @@ pub struct Engagement {
     pub watch_at: Option<Instant>,
     /// When a frightened critter's escape ends.
     pub escape_at: Option<Instant>,
+    /// Its calls for help on their way.
+    pub assist: Vec<crate::game::map::assistance::Assist>,
+    /// When it next calls its friends, fighting away from its spawn.
+    pub pulse_at: Option<Instant>,
 }
 
 /// A civilian's call for the guards, answered: it makes one at a time.
@@ -128,6 +132,8 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.unreachable_since = None;
         c.engagement.flee = None;
         c.engagement.zone_pulse_at = None;
+        c.engagement.assist.clear();
+        c.engagement.pulse_at = None;
     }
 }
 
@@ -289,10 +295,11 @@ fn flee_prevented(map: &Map, g: Guid) -> bool {
     })
 }
 
-/// vmangos's `DoFleeToGetAssistance` (EventAI's flee for assistance): to
-/// the nearest creature of its faction not fighting, which joins in on
-/// arrival; with none near, it runs in fear for seven seconds.
-pub fn flee_for_assistance(map: &mut Map, g: Guid) {
+/// A creature flees (script command 47): seeking help (`seek`), to the
+/// nearest creature of its faction within 30 yards in sight that answers
+/// calls, which it calls on arrival; else, or with none, it runs in fear
+/// for seven seconds (Thistle Tea's `Flee.start`).
+pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
     let now = map.now;
     if flee_prevented(map, g) {
         return;
@@ -304,22 +311,11 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid) {
     if from.is_zero() {
         return;
     }
-    let (pos, faction) = (c.position, c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
-    let helper = map
-        .grid
-        .around(pos.x, pos.y, FLEE_ASSISTANCE_RADIUS)
-        .filter(|h| guid::is_unit(*h) && *h != g)
-        .filter_map(|h| {
-            let hc = map.creature(h)?;
-            (hc.alive()
-                && !hc.combat.attacking
-                && hc.owner.is_none()
-                && hc.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE) == faction)
-                .then(|| (h, dist(hc.position, pos)))
-        })
-        .filter(|(_, d)| *d <= FLEE_ASSISTANCE_RADIUS)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(h, _)| h);
+    let helper = if seek {
+        crate::game::map::assistance::nearest_helper(map, g)
+    } else {
+        None
+    };
     emote(map, g, "%s attempts to run away in fear!");
     crate::game::map::spells::interrupt(map, g);
     let Some(c) = map.creature_mut(g) else {
@@ -399,7 +395,7 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
                 // Arrived: help is called, and given a moment.
                 if f.called_at.is_none() {
                     if !f.from.is_zero() {
-                        crate::game::map::ai::attacked(map, helper, f.from);
+                        crate::game::map::assistance::drawn_in(map, g, f.from);
                     }
                     if let Some(c) = map.creature_mut(g)
                         && let Some(fl) = c.engagement.flee.as_mut()
@@ -822,6 +818,7 @@ pub fn regenerate(map: &mut Map) {
 pub fn update(map: &mut Map) {
     regenerate(map);
     watch_for_enemies(map);
+    crate::game::map::assistance::update(map);
     let now = map.now;
     let pulses: Vec<(Guid, Guid)> = map
         .creatures

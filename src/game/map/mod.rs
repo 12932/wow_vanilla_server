@@ -6,6 +6,7 @@ pub mod account_data;
 pub mod ai;
 pub mod auction;
 pub mod arena;
+pub mod assistance;
 pub mod auras;
 pub mod battleground;
 pub mod boss_mechanics;
