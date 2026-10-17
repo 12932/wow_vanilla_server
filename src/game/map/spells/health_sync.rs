@@ -35,7 +35,11 @@ pub fn state(map: &Map, g: Guid) -> Option<State> {
         return None;
     }
     let seen = map.spells.health_seen.get(&g).copied().unwrap_or_default();
-    Some(State { health, max, ..seen })
+    Some(State {
+        health,
+        max,
+        ..seen
+    })
 }
 
 /// What `g`'s auras give its health now.

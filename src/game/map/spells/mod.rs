@@ -14,6 +14,7 @@ mod effects;
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
+pub mod immunity;
 mod holiday;
 pub mod log;
 pub mod mods;
