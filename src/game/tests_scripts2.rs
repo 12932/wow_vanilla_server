@@ -343,9 +343,10 @@ async fn the_added_script_commands_do_their_work() {
     };
     let (cooled, cleared, pvp) = map
         .query(move |m| {
-            crate::game::map::scripts::execute(m, &step(57, [133, 60, 0, 0]), merchant, me);
+            // The source's cooldowns.
+            crate::game::map::scripts::execute(m, &step(57, [133, 60, 0, 0]), me, merchant);
             let cooled = m.players[&me].caster.cooldowns.contains_key(&133);
-            crate::game::map::scripts::execute(m, &step(58, [133, 0, 0, 0]), merchant, me);
+            crate::game::map::scripts::execute(m, &step(58, [133, 0, 0, 0]), me, merchant);
             let cleared = !m.players[&me].caster.cooldowns.contains_key(&133);
             crate::game::map::scripts::execute(m, &step(86, [1, 0, 0, 0]), merchant, me);
             let pvp = m.players[&me]

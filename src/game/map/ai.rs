@@ -480,6 +480,23 @@ pub fn update_creatures(map: &mut Map) {
                 crate::game::map::world::step_creature_key(map, key);
             }
         }
+        let (moving, follows, fighting) = map
+            .creature(g)
+            .map(|c| {
+                let s = c.scripted.as_deref();
+                (
+                    s.is_some_and(|s| s.scripted_move.is_some()),
+                    s.is_some_and(|s| s.follow.is_some()),
+                    c.combat.attacking || c.evading,
+                )
+            })
+            .unwrap_or_default();
+        if moving {
+            crate::game::map::event_ai::scripted_move_ended(map, g);
+        }
+        if follows && !fighting {
+            crate::game::map::event_ai::follow_step(map, g);
+        }
     }
 }
 
@@ -636,6 +653,10 @@ fn fight_step(map: &mut Map, g: Guid) {
         c.fields.set_guid(UNIT_FIELD_TARGET, victim);
     }
     advance_motion(map, g);
+    // A script's move goes on until it gets there.
+    if scripted_moving(map, g) {
+        return;
+    }
     // Stunned, or casting: it stands where it is.
     crate::game::map::spells::creature_cast(map, g, victim);
     let busy = map.creature(g).is_some_and(|c| c.caster.casting.is_some())
@@ -706,6 +727,16 @@ fn fight_step(map: &mut Map, g: Guid) {
     }
 }
 
+/// Whether a script's move is under way.
+fn scripted_moving(map: &Map, g: Guid) -> bool {
+    map.creature(g).is_some_and(|c| {
+        matches!(
+            (&c.motion, c.scripted.as_deref().and_then(|s| s.scripted_move)),
+            (Motion::Moving(w), Some(m)) if w.spline_id == m.spline_id
+        )
+    })
+}
+
 /// A script's `enter evade`.
 pub fn enter_evade(map: &mut Map, g: Guid) {
     evade(map, g);
@@ -742,6 +773,12 @@ pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
 
 /// Run from the victim for a while (a script's `flee`).
 pub fn flee(map: &mut Map, g: Guid) {
+    let victim = map.creature(g).map(|c| c.combat.victim).unwrap_or_default();
+    flee_from(map, g, victim, None);
+}
+
+/// Run from `enemy` (for a while: one run here, whatever the time).
+pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, _for: Option<Duration>) {
     let now = map.now;
     let spline_id = map.next_spline_id;
     let Some(c) = map.creature(g) else {
@@ -749,7 +786,7 @@ pub fn flee(map: &mut Map, g: Guid) {
     };
     let from = c.position;
     let away = map
-        .position_of(c.combat.victim)
+        .position_of(enemy)
         .map(|v| (from.y - v.y).atan2(from.x - v.x))
         .unwrap_or(c.orientation);
     let to = Vector3d {

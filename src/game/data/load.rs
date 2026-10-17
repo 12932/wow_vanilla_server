@@ -126,7 +126,7 @@ pub fn load(dir: &Path) -> GameData {
             load_pets(&db, dbc.as_ref(), &mut data);
             load_misc(&db, dbc.as_ref(), &mut data);
             super::scripts_load::load(&db, &mut data);
-            crate::game::map::creature_scripts::install(&mut data);
+            super::tt_scripts::install(&mut data);
         }
         Err(e) => warn!("game data: {}: {e}", dir.join("vmangos.sqlite").display()),
     }
@@ -549,6 +549,44 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
         },
     ) {
         data.waypoints_by_entry.entry(entry).or_default().push(w);
+    }
+    for (entry, w) in rows(
+        db,
+        "SELECT * FROM creature_movement_special ORDER BY id, point",
+        |c| {
+            (
+                c.u32("id"),
+                Waypoint {
+                    x: c.f32("position_x"),
+                    y: c.f32("position_y"),
+                    z: c.f32("position_z"),
+                    orientation: c.f32("orientation"),
+                    wait_ms: c.u32("waittime"),
+                    script_id: c.u32("script_id"),
+                },
+            )
+        },
+    ) {
+        data.waypoints_special.entry(entry).or_default().push(w);
+    }
+    for (entry, w) in rows(
+        db,
+        "SELECT * FROM script_waypoint ORDER BY entry, pointid",
+        |c| {
+            (
+                c.u32("entry"),
+                Waypoint {
+                    x: c.f32("location_x"),
+                    y: c.f32("location_y"),
+                    z: c.f32("location_z"),
+                    orientation: 0.0,
+                    wait_ms: c.u32("waittime"),
+                    script_id: 0,
+                },
+            )
+        },
+    ) {
+        data.script_waypoints.entry(entry).or_default().push(w);
     }
 }
 

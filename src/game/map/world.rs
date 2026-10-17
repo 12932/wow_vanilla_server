@@ -152,15 +152,43 @@ fn step_creature(
         {
             return;
         }
+        // A path held by a script waits.
+        if c.scripted.as_deref().is_some_and(|s| s.hold.is_some())
+            && !matches!(c.motion, Motion::Moving(_))
+        {
+            return;
+        }
         if c.movement_type == MOVEMENT_WAYPOINT {
-            c.spawn_guid
-                .and_then(|g| map.realm.data.waypoints.get(&g))
-                .or_else(|| map.realm.data.waypoints_by_entry.get(&c.entry))
-                .cloned()
+            match c.scripted.as_deref().and_then(|s| s.route.as_ref()) {
+                Some(r) => Some((*r.points).clone()),
+                None => c
+                    .spawn_guid
+                    .and_then(|g| map.realm.data.waypoints.get(&g))
+                    .or_else(|| map.realm.data.waypoints_by_entry.get(&c.entry))
+                    .cloned(),
+            }
         } else {
             None
         }
     };
+    // A script's path that doesn't go round ends at its last point.
+    let route_ends = map.creatures.get(key).is_some_and(|c| {
+        matches!(c.motion, Motion::Idle { until: Some(t) } if t <= now)
+            && c.scripted
+                .as_deref()
+                .and_then(|s| s.route.as_ref())
+                .is_some_and(|r| !r.repeat && c.waypoint.wrapping_add(1) >= r.points.len())
+    });
+    if route_ends {
+        if let Some(c) = map.creatures.get_mut(key) {
+            c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+            c.motion = Motion::Idle { until: None };
+            if let Some(s) = c.scripted.as_deref_mut() {
+                s.route = None;
+            }
+        }
+        return;
+    }
     let mut arrived = None;
     let spline_id = map.next_spline_id;
     let Some(c) = map.creatures.get_mut(key) else {
@@ -178,9 +206,15 @@ fn step_creature(
             };
             c.position = pos;
             c.orientation = o;
+            // A script's move isn't a waypoint reached.
+            let scripted = c
+                .scripted
+                .as_deref()
+                .and_then(|s| s.scripted_move)
+                .is_some_and(|m| m.spline_id == w.spline_id);
             if done {
                 let pause = match &waypoints {
-                    Some(wps) if !wps.is_empty() => {
+                    Some(wps) if !wps.is_empty() && !scripted => {
                         let wp = wps[c.waypoint % wps.len()];
                         if wp.orientation != 0.0 {
                             c.orientation = wp.orientation;
@@ -198,7 +232,7 @@ fn step_creature(
         Motion::Idle { until: Some(t) } if *t <= now => {
             let target = match (&waypoints, c.movement_type) {
                 (Some(wps), _) if !wps.is_empty() => {
-                    c.waypoint = (c.waypoint + 1) % wps.len();
+                    c.waypoint = c.waypoint.wrapping_add(1) % wps.len();
                     let wp = wps[c.waypoint];
                     Some(Vector3d {
                         x: wp.x,

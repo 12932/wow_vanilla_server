@@ -34,6 +34,7 @@ fn step(c: &Cols) -> ScriptStep {
         z: c.f32("z"),
         o: c.f32("o"),
         condition: c.u32("condition_id"),
+        ext: None,
     }
 }
 

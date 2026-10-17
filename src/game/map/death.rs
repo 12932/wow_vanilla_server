@@ -442,6 +442,21 @@ pub fn nearest_graveyard(
 
 /// Whether `observer` may see `object`: the living don't see ghosts.
 pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
+    let gm = |g: Guid| {
+        map.players.get(&g).is_some_and(|p| {
+            p.fields
+                .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
+        })
+    };
+    // A creature a script conceals.
+    if guid::is_unit(object)
+        && map
+            .creature(object)
+            .and_then(|c| c.scripted.as_deref())
+            .is_some_and(|s| s.concealed)
+    {
+        return gm(observer);
+    }
     if !guid::is_player(object) || observer == object {
         return true;
     }
@@ -453,9 +468,5 @@ pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
     if !ghost(object) {
         return true;
     }
-    ghost(observer)
-        || map.players.get(&observer).is_some_and(|p| {
-            p.fields
-                .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
-        })
+    ghost(observer) || gm(observer)
 }
