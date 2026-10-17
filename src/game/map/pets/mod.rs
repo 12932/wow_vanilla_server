@@ -887,3 +887,12 @@ mod tests {
         assert_eq!(control::unpack(0xC100_0C26), (3110, ACT_ENABLED));
     }
 }
+
+/// What the tests reach of a hunter's pet and the summons.
+#[cfg(test)]
+pub mod testing {
+    pub use super::hunter::{
+        HAPPINESS_TICK, change_happiness, change_loyalty, on_death, show_training_points, tick,
+    };
+    pub use super::summon::spawn;
+}
