@@ -1196,3 +1196,71 @@ async fn mail_says_when_it_waits_and_what_was_taken() {
     }
     assert_eq!(taken, want);
 }
+
+/// The first word of the next frame with `opcode`.
+async fn first_word(c: &mut Client, opcode: u16) -> u32 {
+    let f = c
+        .wait_frame(&format!("0x{opcode:03X}"), opcode, |_| true)
+        .await;
+    u32_at(&f, 0)
+}
+
+/// Thistle Tea's guild_emblem_test: the tabard vendor's window opens with
+/// its GUID back; an emblem saved reads its five fields, and is answered
+/// with its result as a word: no guild, not enough money, saved.
+#[tokio::test]
+async fn a_guild_master_saves_an_emblem_and_others_are_told_why_not() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    a.send(CMSG_GUILD_CREATE {
+        guild_name: "Peons".into(),
+    })
+    .await;
+    settled(&mut a).await;
+    let vendor = Guid::new(0xF130_0000_0000_002A);
+    a.send(MSG_TABARDVENDOR_ACTIVATE { guid: vendor }).await;
+    let opened = a
+        .wait_frame("MSG_TABARDVENDOR_ACTIVATE", 0x1F2, |_| true)
+        .await;
+    assert_eq!(opened, vendor.guid().to_le_bytes().to_vec());
+    let emblem = MSG_SAVE_GUILD_EMBLEM_Client {
+        vendor,
+        emblem_style: 1,
+        emblem_color: 2,
+        border_style: 3,
+        border_color: 4,
+        background_color: 5,
+    };
+    b.send(emblem.clone()).await;
+    assert_eq!(first_word(&mut b, 0x1F1).await, 2, "no guild");
+    a.send(emblem.clone()).await;
+    assert_eq!(first_word(&mut a, 0x1F1).await, 4, "not enough money");
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().set_money(100_000)
+    })
+    .await;
+    a.send(emblem).await;
+    assert_eq!(first_word(&mut a, 0x1F1).await, 0, "saved");
+    let saved = {
+        let guilds = realm.social.guilds.lock();
+        guilds.of(ga).map(|g| {
+            let e = &g.emblem;
+            (
+                e.style,
+                e.color,
+                e.border_style,
+                e.border_color,
+                e.background,
+            )
+        })
+    };
+    assert_eq!(saved, Some((1, 2, 3, 4, 5)));
+    assert_eq!(
+        on_map(&realm, move |m| m.players[&ga].money()).await,
+        0,
+        "paid"
+    );
+}
