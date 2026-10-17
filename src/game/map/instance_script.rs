@@ -428,6 +428,17 @@ pub fn creature_event(map: &mut Map, g: Guid, event: Event) {
                 .timers
                 .push((map.now + Duration::from_secs(7), T_RAGNAROS_ROARS));
         }
+        // Golemagg's fight resets with both his ragers back.
+        (Script::MoltenCore, 11988, Event::Spawned | Event::Evade) if get_data(map, 3) != DONE => {
+            for spawn in [56685, 56699] {
+                if let Some(r) = crate::game::map::scripts::creature_of_spawn(map, spawn) {
+                    if event == Event::Evade && map.creature(r).is_some_and(|c| c.alive()) {
+                        crate::game::map::ai::quiet_death(map, r);
+                    }
+                    crate::game::map::ai::respawn_now(map, r);
+                }
+            }
+        }
         // Golemagg's ragers go with him.
         (Script::MoltenCore, 11988, Event::Death) => {
             for r in creatures_of(map, 11672) {
