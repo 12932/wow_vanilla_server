@@ -523,3 +523,50 @@ async fn a_groups_roster_ends_with_its_difficulty_byte() {
     assert_eq!(&roster[6..10], b"Bea\0");
     assert_eq!(u32_at(&roster, 10), gb.guid() as u32);
 }
+
+/// What is said carries 25 yards in three dimensions, as Thistle Tea's
+/// `nearby_players` and mangos's `MessageDistDeliverer` measure it: not to
+/// one 30 yards overhead.
+#[tokio::test]
+async fn a_say_carries_in_three_dimensions() {
+    let realm = harness::realm();
+    let (a, ga, map) = enter(&realm, "A", "Low", Race::Human, Class::Warrior).await;
+    let (mut b, gb, _) = enter(&realm, "B", "High", Race::Human, Class::Warrior).await;
+    let place = move |m: &mut Map, g: Guid, dz: f32| {
+        if let Some(p) = m.players.get_mut(&g) {
+            p.movement.position = Vector3d {
+                x: START.0 + 5.0,
+                y: START.1,
+                z: START.2 + dz,
+            };
+        }
+    };
+    on(&map, move |m| {
+        if let Some(p) = m.players.get_mut(&ga) {
+            p.movement.position = Vector3d {
+                x: START.0,
+                y: START.1,
+                z: START.2,
+            };
+        }
+        place(m, gb, 30.0);
+    })
+    .await;
+    b.clear();
+    a.say("up there?").await;
+    let heard = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message.contains("up there") => Some(()),
+        _ => None,
+    };
+    assert!(
+        b.gets(Duration::from_millis(400), heard).await.is_none(),
+        "30 yards up is out of earshot"
+    );
+    on(&map, move |m| place(m, gb, 0.0)).await;
+    a.say("down here").await;
+    b.wait_for("the say", |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message.contains("down here") => Some(()),
+        _ => None,
+    })
+    .await;
+}

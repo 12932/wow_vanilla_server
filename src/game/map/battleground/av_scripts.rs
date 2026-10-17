@@ -812,7 +812,7 @@ fn riders(map: &mut Map) {
             continue;
         }
         let enemy = map.position_of(g).and_then(|at| {
-            map.players_near(at.x, at.y, 50.0)
+            map.players_near(at, 50.0)
                 .into_iter()
                 .filter(|p| {
                     map.players.get(p).is_some_and(|pl| {

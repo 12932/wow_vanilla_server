@@ -1102,17 +1102,21 @@ impl Map {
         }
     }
 
-    /// Players within `radius` yards of `object`, the object included if it
-    /// is one.
-    pub fn players_near(&self, x: f32, y: f32, radius: f32) -> Vec<Guid> {
+    /// Players within `radius` yards of `at`, in three dimensions (Thistle
+    /// Tea's `nearby_players`, mangos's `MessageDistDeliverer`).
+    pub fn players_near(
+        &self,
+        at: wow_world_messages::vanilla::Vector3d,
+        radius: f32,
+    ) -> Vec<Guid> {
         let r2 = radius * radius;
         self.grid
-            .around(x, y, radius)
+            .around(at.x, at.y, radius)
             .filter(|g| guid::is_player(*g))
             .filter(|g| {
                 self.players.get(g).is_some_and(|p| {
                     let d = p.position();
-                    (d.x - x).powi(2) + (d.y - y).powi(2) <= r2
+                    (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= r2
                 })
             })
             .collect()

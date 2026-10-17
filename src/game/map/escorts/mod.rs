@@ -328,7 +328,7 @@ fn say(map: &Map, who: Guid, text: u32) {
     }) else {
         return;
     };
-    for g in map.players_near(c.position.x, c.position.y, SAY_YARDS) {
+    for g in map.players_near(c.position, SAY_YARDS) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }
