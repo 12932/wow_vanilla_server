@@ -61,6 +61,8 @@ mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
+mod tests_parity_world;
+#[cfg(test)]
 mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
