@@ -588,7 +588,8 @@ async fn a_quest_too_high_is_refused_and_hidden_rewards_are_not_shown() {
         .await;
     assert_eq!(
         invalid,
-        (QuestFailedReason::QuestFailedLowLevel.as_int() as u32)
+        QuestFailedReason::QuestFailedLowLevel
+            .as_int()
             .to_le_bytes()
             .to_vec()
     );

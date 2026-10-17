@@ -1234,9 +1234,9 @@ async fn a_guild_master_saves_an_emblem_and_others_are_told_why_not() {
         border_color: 4,
         background_color: 5,
     };
-    b.send(emblem.clone()).await;
+    b.send(emblem).await;
     assert_eq!(first_word(&mut b, 0x1F1).await, 2, "no guild");
-    a.send(emblem.clone()).await;
+    a.send(emblem).await;
     assert_eq!(first_word(&mut a, 0x1F1).await, 4, "not enough money");
     on_map(&realm, move |m| {
         m.players.get_mut(&ga).unwrap().set_money(100_000)
