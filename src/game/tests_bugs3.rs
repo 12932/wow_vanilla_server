@@ -262,3 +262,83 @@ async fn the_group_leader_is_flagged_as_such() {
     .await;
     assert!(!leads(&map, gb).await, "no group, no lead");
 }
+
+const BOAT: u32 = 9999;
+
+/// A boat that sails from the start on Eastern Kingdoms, crosses to
+/// Kalimdor and back, every 1.6 seconds.
+fn boat_data() -> GameData {
+    let mut d = GameData::empty();
+    let mut data = [0u32; 24];
+    data[0] = 77;
+    data[1] = 1000;
+    data[2] = 1000;
+    d.gameobject_templates.insert(
+        BOAT,
+        GameObjectTemplate {
+            entry: BOAT,
+            kind: 15,
+            display_id: 3015,
+            name: "The Test Boat".into(),
+            size: 1.0,
+            data,
+            ..Default::default()
+        },
+    );
+    d.transports.push(TransportRoute {
+        entry: BOAT,
+        name: "Here and There".into(),
+        period: 1600,
+    });
+    let node = |map, x: f32, y: f32| crate::game::data::npc::TaxiPathNode {
+        map,
+        x,
+        y,
+        z: START.2,
+        flags: 0,
+        delay: 0,
+    };
+    d.npc.taxi_path_nodes.insert(
+        77,
+        vec![
+            node(0, START.0, START.1),
+            node(0, START.0 + 30.0, START.1),
+            node(0, START.0 + 60.0, START.1),
+            node(0, START.0 + 100.0, START.1),
+            node(1, 990.0, 1000.0),
+            node(1, 1000.0, 1000.0),
+            node(1, 1010.0, 1000.0),
+            node(1, 1020.0, 1000.0),
+        ],
+    );
+    d
+}
+
+/// The update that makes a boat says it has a transport, as mangos's
+/// `SendInitTransports` and Thistle Tea's header do; one without says not.
+#[tokio::test]
+async fn an_update_making_a_boat_says_it_has_a_transport() {
+    let realm = harness::realm_with(boat_data());
+    let mut a = Client::connect(&realm, "A");
+    let me = a.enter("Sailor", Race::Human, Class::Warrior).await;
+    let boat = guid::make(guid::HighGuid::MoTransport, 0, BOAT);
+    let header = |m: &ServerOpcodeMessage, of: Guid| {
+        let (has, objects) = match m {
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => (u.has_transport, &u.objects),
+            ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => (u.has_transport, &u.objects),
+            _ => return None,
+        };
+        objects
+            .iter()
+            .any(|o| match &o.update_type {
+                Object_UpdateType::CreateObject { guid3, .. }
+                | Object_UpdateType::CreateObject2 { guid3, .. } => *guid3 == of,
+                _ => false,
+            })
+            .then_some(has)
+    };
+    let mine = a.wait_for("my own create", |m| header(m, me)).await;
+    assert_eq!(mine, 0, "no boat in it");
+    let boats = a.wait_for("the boat's create", |m| header(m, boat)).await;
+    assert_eq!(boats, 1, "a transport in it");
+}
