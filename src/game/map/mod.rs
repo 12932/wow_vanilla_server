@@ -52,6 +52,7 @@ pub mod mounts;
 pub mod movement;
 pub mod nav;
 pub mod npc;
+pub mod objects;
 pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;
@@ -321,6 +322,8 @@ pub struct Map {
     pub rifts_checked_at: Option<Instant>,
     /// Gurubashi Arena's battles and Booty Run (on its continent).
     pub arena: arena::Arena,
+    /// Objects spells summoned, traps, rituals and quest objects.
+    pub objects: objects::Objects,
 }
 
 /// Run a map's actor until it is told to stop.
@@ -431,6 +434,7 @@ impl Map {
             rifts: AHashMap::new(),
             rifts_checked_at: None,
             arena: Default::default(),
+            objects: Default::default(),
         }
     }
 
@@ -728,6 +732,7 @@ impl Map {
         instance_script::update(self);
         map_events::update(self);
         scripts::update_objects(self);
+        objects::update(self);
         social::push_member_stats(self);
         duel::update(self);
         battleground::update(self);

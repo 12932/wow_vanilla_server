@@ -31,6 +31,8 @@ mod tests_items3;
 #[cfg(test)]
 mod tests_loot;
 #[cfg(test)]
+mod tests_objects;
+#[cfg(test)]
 mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;

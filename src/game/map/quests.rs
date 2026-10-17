@@ -649,6 +649,91 @@ pub fn killed(map: &mut Map, player: Guid, creature: Guid) {
     }
 }
 
+/// A game object used: credit for the quests that ask for its use (a
+/// negative objective, with no spell); a quest object's goes to the group
+/// near it too, for their shareable quests (Thistle Tea's
+/// `credit_game_object_use`).
+pub fn object_used(map: &mut Map, player: Guid, object: Guid, group: bool) {
+    credit_object(map, player, object, 0, false);
+    if !group {
+        return;
+    }
+    let members: Vec<Guid> = {
+        let groups = map.realm.social.groups.lock();
+        groups
+            .group_of(player)
+            .map(|g| g.members.iter().map(|m| m.guid).collect())
+            .unwrap_or_default()
+    };
+    let Some(at) = map.position_of(object) else {
+        return;
+    };
+    for m in members.into_iter().filter(|m| *m != player) {
+        let near = map.players.get(&m).is_some_and(|p| {
+            !matches!(p.death, crate::game::map::death::Death::Ghost { .. })
+                && crate::game::map::combat::dist(p.position(), at)
+                    <= crate::game::map::combat::GROUP_REWARD_YARDS
+        });
+        if near {
+            credit_object(map, m, object, 0, true);
+        }
+    }
+}
+
+/// A spell cast at a game object: the quests asking for it cast there.
+pub fn cast_on_object(map: &mut Map, player: Guid, object: Guid, spell: u32) {
+    if spell != 0 {
+        credit_object(map, player, object, spell, false);
+    }
+}
+
+/// One objective of the player's quests under way that asks for `object`
+/// (by `spell`, or used), a step on.
+fn credit_object(map: &mut Map, player: Guid, object: Guid, spell: u32, shareable: bool) {
+    let entry = guid::entry(object);
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let mut touched = Vec::new();
+    for i in 0..p.journal.log.len() {
+        let Some(q) = data.npc.quests.get(&p.journal.log[i].quest) else {
+            continue;
+        };
+        if (shareable && q.flags & crate::game::map::questshare::QUEST_FLAGS_SHARABLE == 0)
+            || complete(p, q, &p.journal.log[i])
+        {
+            continue;
+        }
+        let l = &mut p.journal.log[i];
+        let Some(k) = q
+            .required_kills
+            .iter()
+            .enumerate()
+            .position(|(k, (id, count))| {
+                *id < 0
+                    && id.unsigned_abs() == entry
+                    && q.required_spell_casts[k] == spell
+                    && l.kills[k] < *count
+            })
+        else {
+            continue;
+        };
+        l.kills[k] += 1;
+        p.outbound.send(&SMSG_QUESTUPDATE_ADD_KILL {
+            quest_id: q.id,
+            creature_id: entry | 0x8000_0000,
+            kill_count: l.kills[k],
+            required_kill_count: q.required_kills[k].1,
+            guid: object,
+        });
+        touched.push(q.id);
+    }
+    for q in touched {
+        check(map, player, q);
+    }
+}
+
 /// Items came or went: the quests that need them.
 pub fn items_changed(map: &mut Map, player: Guid, item: u32) {
     let data = map.realm.data.clone();
