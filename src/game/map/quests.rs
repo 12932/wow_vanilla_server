@@ -687,6 +687,15 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     if !from_item && !shared && (!starts.contains(&quest) || !near_giver(map, player, giver)) {
         return;
     }
+    // A shared quest: still near its sharer, and the sharer's time left.
+    let shared_expiry = if shared {
+        match crate::game::map::questshare::admit(map, player, giver, quest) {
+            Ok(expires) => Some(expires),
+            Err(()) => return,
+        }
+    } else {
+        None
+    };
     let condition = condition_ok(map, player, giver, quest);
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -722,10 +731,10 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     };
     p.journal.add(Logged {
         quest,
-        expires: if q.limit_time > 0 {
-            crate::game::social::mail::now() + i64::from(q.limit_time)
-        } else {
-            0
+        expires: match shared_expiry {
+            Some(expires) if q.limit_time > 0 && expires != 0 => expires,
+            _ if q.limit_time > 0 => crate::game::social::mail::now() + i64::from(q.limit_time),
+            _ => 0,
         },
         ..Default::default()
     });

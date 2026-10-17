@@ -280,6 +280,8 @@ fn data() -> GameData {
             details: "Help.".into(),
             objectives: "Help.".into(),
             reputation_rewards: [(STORMWIND, 250), (0, 0), (0, 0), (0, 0), (0, 0)],
+            // Shareable: a quest without the flag isn't shared.
+            flags: crate::game::map::questshare::QUEST_FLAGS_SHARABLE,
             ..Default::default()
         },
     );
