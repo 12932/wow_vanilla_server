@@ -159,6 +159,22 @@ fn rewarded(p: &Player, data: &GameData, quest: u32) -> bool {
             .is_none_or(|q| q.special_flags & QUEST_SPECIAL_REPEATABLE == 0)
 }
 
+/// A quest under way: in the log, not failed, and not done and rewarded
+/// before (mangos's `IsCurrentQuest`, Thistle Tea's `current?`).
+fn current_quest(p: &Player, data: &GameData, quest: u32) -> bool {
+    let Some(slot) = p.journal.slot_of(quest) else {
+        return false;
+    };
+    let l = &p.journal.log[slot];
+    !l.failed
+        && !(p.journal.rewarded.contains(&quest)
+            && data
+                .npc
+                .quests
+                .get(&quest)
+                .is_some_and(|q| complete(p, q, l)))
+}
+
 /// On it, or done with it for good.
 fn taken(p: &Player, data: &GameData, quest: u32) -> bool {
     p.journal.has(quest) || rewarded(p, data, quest)
@@ -176,7 +192,7 @@ fn dependencies_met(p: &Player, q: &Quest, data: &GameData) -> bool {
     if let Some(pre) = g.prerequisites.get(&q.id) {
         let state = |quest: u32, current: bool| {
             if current {
-                j.has(quest)
+                current_quest(p, data, quest)
             } else {
                 j.rewarded.contains(&quest)
             }
@@ -244,12 +260,21 @@ fn relations(map: &Map, giver: Guid) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// Whether `player` meets a quest's `RequiredCondition`, with `giver` as
-/// the source.
+/// the source; a breadcrumb, its targets' too (Thistle Tea's
+/// `breadcrumb_conditions_met?`).
 pub fn condition_ok(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
-    match map.realm.data.scripts.quest_condition.get(&quest) {
+    let data = &map.realm.data;
+    let own = |quest: u32| match data.scripts.quest_condition.get(&quest) {
         Some(c) => crate::game::map::conditions::met(map, *c, Some(giver), Some(player)),
         None => true,
-    }
+    };
+    own(quest)
+        && data
+            .npc
+            .quest_graph()
+            .breadcrumb_targets
+            .get(&quest)
+            .is_none_or(|targets| targets.iter().all(|t| own(*t)))
 }
 
 /// Where `p` is with a quest an ender takes back: done, under way, or
@@ -512,23 +537,54 @@ pub fn hello(map: &mut Map, player: Guid, giver: Guid) {
         }
         return details(map, player, giver, q);
     }
-    let greeting = map
-        .realm
-        .data
-        .npc
-        .quest_greetings
-        .get(&guid::entry(giver))
-        .cloned()
-        .unwrap_or_default();
+    let (title, emote_delay, emote) = greeting(map, player, giver);
     if let Some(p) = map.players.get(&player) {
         p.outbound.send(&SMSG_QUESTGIVER_QUEST_LIST {
             npc: giver,
-            title: greeting,
-            emote_delay: 0,
-            emote: 0,
+            title,
+            emote_delay,
+            emote,
             quest_items: quests,
         });
     }
+}
+
+/// A quest list's greeting, its emote's delay and the emote: the giver's
+/// quest greeting, else its gossip menu's text but the default one (mangos's
+/// `SendPreparedQuest`, Thistle Tea's `greeting`), else nothing.
+fn greeting(map: &Map, player: Guid, giver: Guid) -> (String, u32, u32) {
+    let npc = &map.realm.data.npc;
+    if let Some(text) = npc.quest_greetings.get(&guid::entry(giver)) {
+        return (text.clone(), 0, 0);
+    }
+    let Some(c) = map.creature(giver) else {
+        return Default::default();
+    };
+    let menu = crate::game::map::event_ai::scripted(map, giver)
+        .and_then(|s| s.gossip_menu)
+        .or_else(|| {
+            map.realm
+                .data
+                .creature_template(c.entry)
+                .map(|t| t.gossip_menu_id)
+        })
+        .unwrap_or(0);
+    let text = crate::game::map::npc::greeting(map, menu, giver, player);
+    if text == crate::game::map::npc::DEFAULT_TEXT {
+        return Default::default();
+    }
+    npc.npc_texts
+        .get(&text)
+        .and_then(|choices| npc.broadcast_texts.get(&choices[0].broadcast))
+        .map(|b| {
+            let said = if b.male.is_empty() {
+                &b.female
+            } else {
+                &b.male
+            };
+            (said.clone(), b.emotes[0].0, b.emotes[0].1)
+        })
+        .unwrap_or_default()
 }
 
 /// `CMSG_GAMEOBJ_USE` on a quest giver (a present under the tree, a wanted

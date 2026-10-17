@@ -1453,3 +1453,249 @@ async fn a_quest_is_shared_as_mangos_shares_it() {
     .await;
     assert_eq!(taken, (expires, 2));
 }
+
+/// The quest list a hello at the giver brings, as `d` has it: its title,
+/// emote delay and emote.
+async fn quest_list(d: GameData) -> (String, u32, u32) {
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(giver()).await;
+    a.send(CMSG_QUESTGIVER_HELLO { guid: giver() }).await;
+    a.wait_for("SMSG_QUESTGIVER_QUEST_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(l) => {
+            Some((l.title.clone(), l.emote_delay, l.emote))
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's `greeting/2`: the giver's quest greeting, else its gossip
+/// text, else nothing for the default text.
+#[tokio::test]
+async fn a_quest_list_greets_with_the_givers_words() {
+    let mut d = data();
+    d.npc
+        .quest_greetings
+        .insert(GIVER, "Hello there, $c.".into());
+    assert_eq!(quest_list(d).await, ("Hello there, $c.".into(), 0, 0));
+    let with_menu = |text: u32| {
+        let mut d = data();
+        d.creature_templates.get_mut(&GIVER).unwrap().gossip_menu_id = 500;
+        d.npc.gossip_menus.insert(
+            500,
+            crate::game::data::npc::GossipMenu {
+                texts: vec![(text, 0)],
+                options: Vec::new(),
+            },
+        );
+        let mut choices: [crate::game::data::npc::NpcTextChoice; 8] = Default::default();
+        choices[0].broadcast = 7000;
+        choices[0].probability = 1.0;
+        d.npc.npc_texts.insert(text, choices);
+        d.npc.broadcast_texts.insert(
+            7000,
+            crate::game::data::npc::BroadcastText {
+                female: "Welcome, traveler.".into(),
+                emotes: [(100, 2), (0, 0), (0, 0)],
+                ..Default::default()
+            },
+        );
+        d
+    };
+    assert_eq!(
+        quest_list(with_menu(6000)).await,
+        ("Welcome, traveler.".into(), 100, 2)
+    );
+    assert_eq!(
+        quest_list(with_menu(crate::game::map::npc::DEFAULT_TEXT)).await,
+        (String::new(), 0, 0)
+    );
+}
+
+/// Quests depending on one another, for Thistle Tea's `QuestDependencies`.
+fn graph_data() -> GameData {
+    let mut d = data();
+    let mut put = |q: Quest| {
+        d.npc.quests.insert(q.id, q);
+    };
+    // 201 or 202 rewarded, or 203 under way, before 204.
+    put(Quest {
+        next_quest: 204,
+        ..quest(201)
+    });
+    put(Quest {
+        next_quest: 204,
+        ..quest(202)
+    });
+    put(Quest {
+        next_quest: -204,
+        special_flags: 1,
+        required_items: [(SCALE, 1), (0, 0), (0, 0), (0, 0)],
+        ..quest(203)
+    });
+    put(quest(204));
+    // One of 211, 212 and 213 (which repeats).
+    for (id, flags) in [(211, 0), (212, 0), (213, 1)] {
+        put(Quest {
+            exclusive_group: 1,
+            special_flags: flags,
+            ..quest(id)
+        });
+    }
+    // A breadcrumb to a quest whose condition fails, one at level 3.
+    put(Quest {
+        breadcrumb_for: 222,
+        min_level: 3,
+        ..quest(221)
+    });
+    put(quest(222));
+    // A breadcrumb that repeats; one to itself.
+    put(Quest {
+        breadcrumb_for: 232,
+        special_flags: 1,
+        ..quest(231)
+    });
+    put(quest(232));
+    put(Quest {
+        breadcrumb_for: 241,
+        ..quest(241)
+    });
+    // Cooking 50.
+    put(Quest {
+        required_skill: 185,
+        required_skill_value: 50,
+        ..quest(251)
+    });
+    put(Quest {
+        required_skill: 185,
+        required_skill_value: 0,
+        ..quest(252)
+    });
+    d.scripts.quest_condition.insert(222, LEVEL_FIVE);
+    d.npc.creature_starts.insert(SHOWS + 30, vec![221]);
+    d
+}
+
+/// Thistle Tea's `QuestDependencies`: any rewarded alternative before a
+/// quest, or one under way for a negative one (not failed, nor done and
+/// rewarded before); a repeating breadcrumb blocking its quest while on it;
+/// a breadcrumb to itself never taken; a breadcrumb whose quest's condition
+/// fails not offered, nor shown a few levels off; a skill with its bonuses,
+/// only if known.
+#[tokio::test]
+async fn quests_wait_on_what_they_depend_on() {
+    let realm = harness::realm_with(graph_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // (logged, failed, rewarded, quests asked about)
+    let takes = |log: &'static [(u32, bool)], rewarded: &'static [u32], ids: &'static [u32]| {
+        let realm = realm.clone();
+        async move {
+            on_map(&realm, move |m| {
+                let d = m.realm.data.clone();
+                let p = m.players.get_mut(&g).unwrap();
+                p.journal.log = log
+                    .iter()
+                    .map(|(quest, failed)| crate::game::store::Logged {
+                        quest: *quest,
+                        failed: *failed,
+                        ..Default::default()
+                    })
+                    .collect();
+                p.journal.rewarded = rewarded.iter().copied().collect();
+                let p = &m.players[&g];
+                ids.iter()
+                    .map(|id| quests::can_take(p, &d.npc.quests[id], &d))
+                    .collect::<Vec<bool>>()
+            })
+            .await
+        }
+    };
+    assert_eq!(takes(&[], &[], &[204]).await, vec![false]);
+    assert_eq!(takes(&[], &[201], &[204]).await, vec![true]);
+    assert_eq!(takes(&[], &[202], &[204]).await, vec![true]);
+    assert_eq!(
+        takes(&[(203, false)], &[], &[204]).await,
+        vec![true],
+        "203 on"
+    );
+    assert_eq!(
+        takes(&[(203, true)], &[], &[204]).await,
+        vec![false],
+        "failed"
+    );
+    assert_eq!(
+        takes(&[], &[203], &[204]).await,
+        vec![false],
+        "only rewarded"
+    );
+    assert_eq!(
+        takes(&[(203, false)], &[203], &[204]).await,
+        vec![true],
+        "on it again"
+    );
+    give(&realm, g, SCALE, 1).await;
+    assert_eq!(
+        takes(&[(203, false)], &[203], &[204]).await,
+        vec![false],
+        "done again and rewarded before"
+    );
+    // Exclusive: one taken, done or done for good shuts out the others; a
+    // repeatable one rewarded doesn't.
+    assert_eq!(takes(&[(212, false)], &[], &[211]).await, vec![false]);
+    assert_eq!(takes(&[(213, false)], &[213], &[211]).await, vec![false]);
+    assert_eq!(takes(&[], &[212], &[211]).await, vec![false]);
+    assert_eq!(takes(&[], &[213], &[211]).await, vec![true]);
+    // A repeating breadcrumb on, rewarded before or not, failed or not.
+    for failed in [false, true] {
+        let log: &'static [(u32, bool)] = if failed {
+            &[(231, true)]
+        } else {
+            &[(231, false)]
+        };
+        assert_eq!(takes(log, &[231], &[232]).await, vec![false]);
+    }
+    assert_eq!(takes(&[], &[231], &[232]).await, vec![true]);
+    assert_eq!(takes(&[], &[], &[241]).await, vec![false], "to itself");
+    // The breadcrumb to a quest whose condition fails: not offered, nor
+    // shown as a few levels off.
+    let shown = on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().journal = Default::default();
+        quests::status(m, g, guid::unit(SHOWS + 30, 1))
+    })
+    .await;
+    assert_eq!(shown, QuestGiverStatus::None);
+    // Cooking: unknown, 49, 49 with +2 -1, 50; unknown with +200.
+    let skill = on_map(&realm, move |m| {
+        let d = m.realm.data.clone();
+        let can = |m: &Map| {
+            let p = &m.players[&g];
+            [251, 252].map(|id| quests::can_take(p, &d.npc.quests[&id], &d))
+        };
+        let mut out = vec![can(m)];
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::skills::learn_skill(p, 185, 1);
+        let i = (0..128u16)
+            .find(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF == 185)
+            .unwrap();
+        let value = PLAYER_SKILL_INFO_1_1 + i * 3 + 1;
+        let bonus = PLAYER_SKILL_INFO_1_1 + i * 3 + 2;
+        p.fields.set_u32(value, (75 << 16) | 49);
+        out.push(can(m));
+        let p = m.players.get_mut(&g).unwrap();
+        p.fields.set_u32(bonus, (0xFFFF << 16) | 2);
+        out.push(can(m));
+        let p = m.players.get_mut(&g).unwrap();
+        p.fields.set_u32(bonus, 0);
+        p.fields.set_u32(value, (75 << 16) | 50);
+        out.push(can(m));
+        out
+    })
+    .await;
+    assert_eq!(
+        skill,
+        vec![[false, true], [false, true], [true, true], [true, true]]
+    );
+}
