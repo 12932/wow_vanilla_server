@@ -139,6 +139,8 @@ pub const ATTR_EX2_BEHIND_TARGET: u32 = 0x10_0000;
 pub const ATTR_EX2_NO_SCHOOL_IMMUNITIES: u32 = 0x400_0000;
 pub const ATTR_EX2_CANT_CRIT: u32 = 0x2000_0000;
 /// `AttributesEx3` (word 3).
+/// A resurrection that doesn't wait out the reclaim delay (Rebirth's).
+pub const ATTR_EX3_NO_RES_TIMER: u32 = 0x10;
 /// A death it causes wears no gear down.
 pub const ATTR_EX3_NO_DURABILITY_LOSS: u32 = 0x20;
 pub const ATTR_EX3_DOT_STACKING: u32 = 0x80;

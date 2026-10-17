@@ -2,7 +2,9 @@
 //! special animation, growth auras, the looking-for-group stub,
 //! self-resurrection (soulstones and Reincarnation), summons, talent
 //! resets, unlearning a skill, and the movement acknowledgements other
-//! clients hear of (speed changes, knockbacks, skipped time).
+//! clients hear of (knockbacks, skipped time). A speed change they hear of
+//! at the change itself ([`speed_to_observers`]), not at its
+//! acknowledgement.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,10 +22,8 @@ use crate::game::map::{Map, MapKey};
 pub const MSG_MOVE_KNOCK_BACK: u16 = 0x0F1;
 pub const MSG_MOVE_SET_RUN_SPEED: u16 = 0x0CD;
 pub const MSG_MOVE_SET_RUN_BACK_SPEED: u16 = 0x0CF;
-pub const MSG_MOVE_SET_WALK_SPEED: u16 = 0x0D1;
 pub const MSG_MOVE_SET_SWIM_SPEED: u16 = 0x0D3;
 pub const MSG_MOVE_SET_SWIM_BACK_SPEED: u16 = 0x0D5;
-pub const MSG_MOVE_SET_TURN_RATE: u16 = 0x0D8;
 pub const MSG_MOVE_TIME_SKIPPED: u16 = 0x319;
 
 /// Soulstone Resurrection's ranks, and the self-resurrection each gives.
@@ -52,13 +52,13 @@ pub struct PlayerMisc {
     pub lava: Option<crate::game::map::environment::Mirror>,
     /// The spell the liquid the player is in put on (Naxxramas's slime).
     pub liquid_spell: Option<u32>,
+    /// In water deep enough to swim, by the terrain's liquid.
+    pub in_water: bool,
     pub env_checked_at: Option<Instant>,
     /// A summons waiting: by whom, to where, until when.
     pub summon: Option<Summon>,
     /// A quest a group member shared, waiting to be taken.
     pub quest_shared: Option<(Guid, u32)>,
-    /// When the self-resurrection last went off.
-    pub self_res_at: Option<Instant>,
     /// A GM's god mode: no damage taken.
     pub god: bool,
     /// The intro cinematic's camera, and where it has the player see from.
@@ -111,7 +111,9 @@ fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
 }
 
 /// A player's new speed, to those who see them: `MSG_MOVE_SET_*_SPEED`
-/// with where they are (Thistle Tea's observer speed packets).
+/// with where they are (Thistle Tea's observer speed packets). Sent with
+/// the player's own `SMSG_FORCE_*_SPEED_CHANGE`, once: the client's
+/// acknowledgement isn't passed on, as Thistle Tea's isn't.
 pub fn speed_to_observers(map: &Map, g: Guid, opcode: u16, speed: f32) {
     let Some(p) = map.players.get(&g) else {
         return;
@@ -120,10 +122,6 @@ pub fn speed_to_observers(map: &Map, g: Guid, opcode: u16, speed: f32) {
     b.0.extend_from_slice(&speed.to_le_bytes());
     let frame = b.frame(opcode);
     map.send_to_observers(g, &frame, false);
-}
-
-fn speed_ack(map: &mut Map, g: Guid, info: MovementInfo, speed: f32, opcode: u16) {
-    relay(map, g, info, opcode, &speed.to_le_bytes());
 }
 
 /// Every opcode the player systems here and beside them handle, before
@@ -185,28 +183,6 @@ impl Map {
 pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     use ClientOpcodeMessage as C;
     match msg {
-        C::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(m) if m.guid == g => {
-            speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_RUN_SPEED)
-        }
-        C::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK(m) if m.guid == g => {
-            speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_RUN_BACK_SPEED)
-        }
-        C::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK(m) if m.guid == g => {
-            speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_SWIM_SPEED)
-        }
-        C::CMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK(m) if m.guid == g => {
-            speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_SWIM_BACK_SPEED)
-        }
-        C::CMSG_FORCE_WALK_SPEED_CHANGE_ACK(m) if m.guid == g => {
-            speed_ack(map, g, m.info, m.new_speed, MSG_MOVE_SET_WALK_SPEED)
-        }
-        C::CMSG_FORCE_TURN_RATE_CHANGE_ACK(m) if m.guid == g => relay(
-            map,
-            g,
-            m.info,
-            MSG_MOVE_SET_TURN_RATE,
-            &std::f32::consts::PI.to_le_bytes(),
-        ),
         C::CMSG_MOVE_KNOCK_BACK_ACK(m) if m.guid == g => {
             // The jump's angle and speeds, as the client fell.
             let tail: Vec<u8> = match m.info.flags.get_jumping() {
@@ -300,31 +276,38 @@ pub fn capture_self_res(map: &mut Map, g: Guid) {
             .find(|(aura, _)| *aura == h.spell)
             .map(|(_, res)| *res)
     });
+    // Reincarnation off its cooldown (its own or its category's), with
+    // its Ankh carried.
     let reincarnation = p.spells.contains(&REINCARNATION_PASSIVE)
-        && p.misc
-            .self_res_at
-            .is_none_or(|t| now.duration_since(t) >= reincarnation_cooldown(&data))
         && data.spells.get(REINCARNATION).is_some_and(|s| {
-            s.reagents
-                .iter()
-                .all(|(r, n)| *r == 0 || p.count_of(*r) >= *n)
+            let cooling = p.caster.cooldowns.get(&s.id).is_some_and(|t| *t > now)
+                || (s.category != 0
+                    && p.caster
+                        .category_cooldowns
+                        .get(&s.category)
+                        .is_some_and(|t| *t > now));
+            !cooling && has_reagents(p, s)
         });
     let spell = stone.unwrap_or(if reincarnation { REINCARNATION } else { 0 });
     p.fields.set_u32(PLAYER_SELF_RES_SPELL, spell);
 }
 
-fn reincarnation_cooldown(data: &crate::game::data::GameData) -> Duration {
-    Duration::from_millis(u64::from(
-        data.spells
-            .get(REINCARNATION)
-            .map_or(3_600_000, |s| s.recovery_time.max(s.category_recovery_time)),
-    ))
+/// Whether `p` carries what `s` takes.
+fn has_reagents(
+    p: &crate::game::map::player::Player,
+    s: &crate::game::data::spells::SpellTemplate,
+) -> bool {
+    s.reagents
+        .iter()
+        .all(|(r, n)| *r == 0 || p.carried_count_of(*r) >= *n)
 }
 
 /// `CMSG_SELF_RES`: dead and not released, back with the spell's share of
-/// health and mana.
+/// health and mana (with the caster's modifiers: Improved Reincarnation's),
+/// full energy and no rage; the reagent taken and the cooldown started.
+/// Without the reagent still carried, nothing (Thistle Tea's
+/// `SelfResurrection`).
 fn self_resurrect(map: &mut Map, g: Guid) {
-    let now = map.now;
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&g) else {
         return;
@@ -338,10 +321,15 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     };
     // `SELF_RESURRECT`: points are a percentage, or (below zero) health
     // with the misc value's mana.
-    let Some(e) = s.effects.iter().find(|e| e.effect == 94) else {
+    let Some(index) = s.effects.iter().position(|e| e.effect == 94) else {
         return;
     };
-    let points = e.base_points + e.base_dice.max(1);
+    if !has_reagents(p, s) {
+        return;
+    }
+    let e = s.effects[index];
+    let m = crate::game::map::spells::mods::for_spell(map, g, s);
+    let points = m.points(index, e.base_points + e.base_dice.max(1));
     let (max_health, max_mana) = (
         p.fields.get_u32(UNIT_FIELD_MAXHEALTH),
         p.fields.get_u32(UNIT_FIELD_MAXPOWER1),
@@ -358,11 +346,11 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0) {
         let mut left = *count;
         while left > 0 {
-            let Some(i) = map
-                .players
-                .get(&g)
-                .and_then(|p| p.items.iter().position(|it| it.entry == *reagent))
-            else {
+            let Some(i) = map.players.get(&g).and_then(|p| {
+                p.items
+                    .iter()
+                    .position(|it| it.entry == *reagent && it.carried())
+            }) else {
                 break;
             };
             let n = map.players[&g].items[i].count().min(left);
@@ -370,16 +358,8 @@ fn self_resurrect(map: &mut Map, g: Guid) {
             left -= n;
         }
     }
-    crate::game::map::death::resurrect(map, g, 1.0);
-    if let Some(p) = map.players.get_mut(&g) {
-        p.fields
-            .set_u32(UNIT_FIELD_HEALTH, health.clamp(1, max_health.max(1)));
-        p.fields.set_u32(UNIT_FIELD_POWER1, mana.min(max_mana));
-        p.fields.set_u32(PLAYER_SELF_RES_SPELL, 0);
-        if spell == REINCARNATION {
-            p.misc.self_res_at = Some(now);
-        }
-    }
+    crate::game::map::spells::cooldowns::start(map, g, s, &m, None);
+    crate::game::map::death::resurrect_with(map, g, health, mana);
 }
 
 /// Offer `target` (anywhere in the realm) a summons to where `summoner`

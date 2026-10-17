@@ -266,8 +266,12 @@ pub fn check(map: &Map, caster: Guid, owner: Guid, c: &TradeCast) -> Option<u8> 
             .enumerate()
             .filter(|(_, e)| is_lock(e.effect))
         {
+            let cast_item = c
+                .item
+                .and_then(|g| p.item_by_guid(g))
+                .map(|i| p.items[i].entry);
             if let Err(code) =
-                crate::game::map::professions::resolve_lock(data, p, s, index, t.lock_id)
+                crate::game::map::professions::resolve_lock(data, p, s, index, t.lock_id, cast_item)
             {
                 return Some(code);
             }
@@ -446,10 +450,13 @@ fn unlock(
         .and_then(|o| o.item_by_guid(c.target).map(|i| o.items[i].entry))
         .and_then(|entry| data.item(entry))
         .map_or(0, |t| t.lock_id);
-    let resolved = map
-        .players
-        .get(&caster)
-        .and_then(|p| crate::game::map::professions::resolve_lock(&data, p, s, index, lock).ok());
+    let resolved = map.players.get(&caster).and_then(|p| {
+        let cast_item = c
+            .item
+            .and_then(|g| p.item_by_guid(g))
+            .map(|i| p.items[i].entry);
+        crate::game::map::professions::resolve_lock(&data, p, s, index, lock, cast_item).ok()
+    });
     if let Some(o) = map.players.get_mut(&owner)
         && let Some(i) = o.item_by_guid(c.target)
     {
@@ -458,8 +465,12 @@ fn unlock(
             .fields
             .set_u32(ITEM_FIELD_FLAGS, flags | ITEM_FLAG_UNLOCKED);
     }
-    if let Some((Some(skill), _, required)) = resolved
-        && c.item.is_none()
+    if let Some(crate::game::map::professions::Opening {
+        skill: Some(skill),
+        required,
+        gain: true,
+        ..
+    }) = resolved
     {
         let learned = map
             .players

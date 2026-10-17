@@ -31,6 +31,13 @@ the questions waiting for you.
 5. **Knockback on creatures** (from 2b). Should a knockback move a creature, as mangos-classic does and wvs now
    does, or only break its cast, as Thistle Tea does? I kept mangos-classic's.
 
+6. **Water** (from 2g). Thistle Tea ends what water breaks only by the client's swimming flag. wvs now also goes by
+   the terrain's liquid, as mangos-classic does. Keep it, or match Thistle Tea exactly (revert `c99aab1`)?
+7. **Locked doors and buttons used by hand** (from 2g). Thistle Tea refuses them without the key, wvs opens them,
+   and mangos trusts the client. Follow Thistle Tea?
+8. **Failed openings.** Thistle Tea holds back `SMSG_SPELL_GO` for a failed opening, which changes the cast
+   pipeline. Should wvs do the same?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -109,6 +116,17 @@ the questions waiting for you.
    - **Healing on leashing:** a creature heals as it leashes, and only if it regenerates, rather than on getting
      home (M9 and C11).
 
+10. **2g's choices:**
+    - **Create-item targets:** a creature's create-item effect lands on the unit it is cast at. A player's own
+      untargeted create-item stays theirs, even if the client names another unit, so a craft can't go to a selected
+      friend. That is stricter than Thistle Tea.
+    - **Stricter than before:**
+      - a key carried in the bags opens a lock only when it is the item cast;
+      - lock spells reach 5 yards;
+      - ordinary chests despawn once emptied, rather than refilling at once.
+    - **Speed acknowledgements** are no longer relayed to watchers, and no longer set the player's movement.
+    - **Resurrection offers:** a second offer is ignored while one is pending.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -124,7 +142,7 @@ the questions waiting for you.
 | 2c: creature combat | running | |
 | 2d: scripts, encounters | running | |
 | 2e+2f: instances, quests, events | running | |
-| 2g+2i: world, social, second pass | running | |
+| 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
 | Performance | running | |

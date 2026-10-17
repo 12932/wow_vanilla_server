@@ -552,9 +552,10 @@ const SPELL_BIND: u32 = 3286;
 const HEARTHSTONE: u32 = 6948;
 
 /// `CMSG_BINDER_ACTIVATE`: the innkeeper binds the player here, as
-/// Thistle Tea's `HomeBind`: not in a dungeon or battleground copy, to the
-/// area they stand in, with Bind's visual and a Hearthstone if they have
-/// none.
+/// Thistle Tea's `HomeBind`: not in a dungeon or battleground copy. The
+/// innkeeper casts Bind on them, whose effects bind them ([`bind_home`])
+/// and give them a Hearthstone if they have none; without the spell, both
+/// are done here.
 pub fn bind(map: &mut Map, player: Guid, npc: Guid) {
     if npc_entry(map, player, npc, NPC_FLAG_INNKEEPER).is_none() {
         return;
@@ -567,7 +568,23 @@ pub fn bind(map: &mut Map, player: Guid, npc: Guid) {
     send(map, player, &SMSG_GOSSIP_COMPLETE {});
     if map.realm.data.spells.get(SPELL_BIND).is_some() {
         crate::game::map::spells::cast_triggered(map, npc, SPELL_BIND, Some(player));
+        return;
     }
+    bind_home(map, player, npc);
+    let lacks = map
+        .players
+        .get(&player)
+        .is_some_and(|p| p.count_of(HEARTHSTONE) == 0);
+    if lacks && map.realm.data.item(HEARTHSTONE).is_some() {
+        let _ = crate::game::map::inventory::add_item(map, player, HEARTHSTONE, 1, true);
+    }
+}
+
+/// A player bound where they stand, to the area they stand in, by
+/// `binder`: an innkeeper's Bind (Thistle Tea's `HomeBind.complete`), told
+/// whose it was; or a Bind they cast themselves.
+pub fn bind_home(map: &mut Map, player: Guid, binder: Guid) {
+    let key = map.key;
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
@@ -585,13 +602,11 @@ pub fn bind(map: &mut Map, player: Guid, npc: Guid) {
         map: crate::game::map::movement::map_enum(key.map),
         area: Area::try_from(area).unwrap_or_default(),
     });
-    p.outbound.send(&SMSG_PLAYERBOUND {
-        guid: npc,
-        area: Area::try_from(area).unwrap_or_default(),
-    });
-    let lacks = p.count_of(HEARTHSTONE) == 0;
-    if lacks && map.realm.data.item(HEARTHSTONE).is_some() {
-        let _ = crate::game::map::inventory::add_item(map, player, HEARTHSTONE, 1, true);
+    if binder != player {
+        p.outbound.send(&SMSG_PLAYERBOUND {
+            guid: binder,
+            area: Area::try_from(area).unwrap_or_default(),
+        });
     }
 }
 

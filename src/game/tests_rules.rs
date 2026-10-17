@@ -116,6 +116,15 @@ fn data() -> GameData {
         },
     );
     d.spells.spells.insert(PICK_LOCK, spell(PICK_LOCK, 33, 1));
+    // The junkbox's lock: a lockpicker's, of no skill.
+    d.crafts.locks.insert(
+        5,
+        vec![crate::game::data::crafts::LockKey {
+            kind: 2,
+            index: 1,
+            skill: 0,
+        }],
+    );
     d.spells
         .spells
         .insert(LIGHT_TORCH, spell(LIGHT_TORCH, 3, 0));

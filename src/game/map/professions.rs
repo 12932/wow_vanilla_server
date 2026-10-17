@@ -41,13 +41,14 @@ pub const SKILL_FISHING: u32 = 356;
 pub const SKILL_SKINNING: u32 = 393;
 pub const SKILL_LOCKPICKING: u32 = 633;
 
-/// The skills recipes raise.
+/// The skills recipes raise: smelting raises Mining.
 const CRAFTS: &[u32] = &[
     SKILL_FIRST_AID,
     SKILL_BLACKSMITHING,
     SKILL_LEATHERWORKING,
     SKILL_ALCHEMY,
     SKILL_COOKING,
+    SKILL_MINING,
     SKILL_TAILORING,
     SKILL_ENGINEERING,
     SKILL_ENCHANTING,
@@ -74,11 +75,12 @@ pub const FINKLE_IS_EINHORN: u32 = 16_710;
 /// knives that skin.
 pub fn tool_missing(p: &Player, s: &SpellTemplate, tool: u32) -> Option<u8> {
     use crate::game::map::spells::checks::fail;
-    if p.count_of(tool) > 0 {
+    if p.carried_count_of(tool) > 0 {
         return None;
     }
     if SKINNING_TOOLS.contains(&tool) && s.has_effect(EFFECT_SKINNING) {
-        return (!SKINNING_TOOLS.iter().any(|t| p.count_of(*t) > 0)).then_some(fail::EQUIPPED_ITEM);
+        return (!SKINNING_TOOLS.iter().any(|t| p.carried_count_of(*t) > 0))
+            .then_some(fail::EQUIPPED_ITEM);
     }
     Some(fail::TOTEMS)
 }
@@ -105,14 +107,20 @@ pub const BOBBER: u32 = 35591;
 const BITE_DELAYS_MS: [u64; 4] = [13_000, 17_000, 23_000, 27_000];
 const CATCH_WINDOW: Duration = Duration::from_secs(5);
 const FISHING_HOLE_RANGE: f32 = 22.0;
+/// How near an object a lock spell is cast from (Thistle Tea's
+/// `ObjectTarget`, the interaction range).
+const LOCK_YARDS: f32 = 5.0;
 
 // `SpellCastResult`s.
+const FAIL_ALREADY_OPEN: u8 = 0x06;
 const FAIL_BAD_TARGETS: u8 = 0x0a;
 const FAIL_CANT_BE_DISENCHANTED: u8 = 0x0c;
 const FAIL_CHEST_IN_USE: u8 = 0x15;
-const FAIL_ITEM_NOT_FOUND: u8 = 0x27;
+const FAIL_ITEM_GONE: u8 = 0x26;
 const FAIL_LOW_CASTLEVEL: u8 = 0x2c;
+const FAIL_NOT_FISHABLE: u8 = 0x34;
 const FAIL_ONLY_STEALTHED: u8 = 0x57;
+const FAIL_OUT_OF_RANGE: u8 = 0x59;
 pub const FAIL_REQUIRES_SPELL_FOCUS: u8 = 0x5e;
 const FAIL_TARGETS_DEAD: u8 = 0x65;
 const FAIL_TARGET_NOT_DEAD: u8 = 0x6e;
@@ -168,37 +176,130 @@ fn object_lock(data: &GameData, entry: u32) -> u32 {
         .unwrap_or(0)
 }
 
-/// What opening a lock takes: (skill, its value with the spell's bonus,
-/// the value needed), or an error.
+/// What opening a lock comes to: the skill it took, with its value and
+/// the value needed, and whether the attempt may raise it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Opening {
+    pub skill: Option<u32>,
+    pub value: u32,
+    pub required: u32,
+    pub gain: bool,
+}
+
+/// Blasting's lock type (the seaforium charges): no skill, but the
+/// charge's strength against the lock's need.
+const LOCK_BLASTING: u32 = 16;
+
+/// How `s`'s effect `index` opens `lock`, cast from an item of
+/// `cast_item` or by hand, as Thistle Tea's `OpenLock.resolve`: the lock's
+/// ways in order, the first that fits deciding. An item way is the item
+/// cast; a skill way the player's skill and the spell's points over one
+/// (an item cast has only its own), short of the need too low.
 pub fn resolve_lock(
     data: &GameData,
     p: &Player,
     s: &SpellTemplate,
     index: usize,
     lock: u32,
-) -> Result<(Option<u32>, u32, u32), u8> {
+    cast_item: Option<u32>,
+) -> Result<Opening, u8> {
     let Some(keys) = data.crafts.locks.get(&lock) else {
-        return Ok((None, 0, 0));
+        return Err(FAIL_BAD_TARGETS);
     };
-    let lock_type = s.effects[index].misc_value.max(0) as u32;
-    let bonus = crate::game::map::spells::points(s, index, 1).max(0) as u32;
-    let mut failed = FAIL_BAD_TARGETS;
+    let e = &s.effects[index];
+    let lock_type = e.misc_value.max(0) as u32;
+    let bonus = (e.base_points + 1).max(0) as u32;
     for k in keys {
         match k.kind {
-            LOCK_KEY_ITEM if k.index != 0 && p.count_of(k.index) > 0 => return Ok((None, 0, 0)),
+            LOCK_KEY_ITEM if k.index != 0 && cast_item == Some(k.index) => {
+                return Ok(Opening::default());
+            }
             LOCK_KEY_SKILL if k.index == lock_type => {
                 let skill = lock_skill(lock_type);
-                let value = skill.map_or(0, |sk| skill_value(p, sk)) + bonus;
-                let required = if skill.is_some() { k.skill } else { 0 };
-                if value >= required {
-                    return Ok((skill, value, required));
+                let known = skill.is_some_and(|sk| skills::value(p, sk).is_some_and(|v| v > 0));
+                let own = match (cast_item, skill) {
+                    (None, Some(sk)) => skill_value(p, sk),
+                    _ => 0,
+                };
+                let value = own + bonus;
+                let required = if skill.is_some() || lock_type == LOCK_BLASTING {
+                    k.skill
+                } else {
+                    0
+                };
+                if value < required {
+                    return Err(FAIL_LOW_CASTLEVEL);
                 }
-                failed = FAIL_LOW_CASTLEVEL;
+                return Ok(Opening {
+                    skill,
+                    value,
+                    required,
+                    gain: cast_item.is_none() && known,
+                });
             }
             _ => {}
         }
     }
-    Err(failed)
+    Err(FAIL_BAD_TARGETS)
+}
+
+/// Whether an attempt at a lock of gathering or lockpicking takes: the
+/// skill rolled from 25 below to 37 above must reach the need, but herbs
+/// and ore can't be missed from 300 (Thistle Tea's `Gathering.attempt?`).
+fn attempt_takes(o: &Opening) -> bool {
+    let Some(skill) = o
+        .skill
+        .filter(|sk| matches!(*sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING))
+    else {
+        return true;
+    };
+    let roll = o.value as i32 - 26 + rand::rng().random_range(1..=63);
+    (matches!(skill, SKILL_HERBALISM | SKILL_MINING) && o.value >= 300) || o.required as i32 <= roll
+}
+
+/// A lock's skill raised, by the learned skill against the need.
+fn lock_skill_up(map: &mut Map, caster: Guid, o: &Opening) -> bool {
+    let Some(skill) = o.skill.filter(|_| o.gain) else {
+        return false;
+    };
+    let learned = map
+        .players
+        .get(&caster)
+        .and_then(|p| skills::value(p, skill))
+        .unwrap_or(0);
+    try_raise(
+        map,
+        caster,
+        skill,
+        gather_gain_chance(skill, learned, o.required, 1),
+    )
+}
+
+/// The item a cast was from, by its entry, among `p`'s.
+fn entry_of(p: &Player, item: Option<Guid>) -> Option<u32> {
+    let g = item?;
+    p.items.iter().find(|i| i.guid == g).map(|i| i.entry)
+}
+
+/// Why a lock spell can't be cast at the lockbox `item` (Thistle Tea's
+/// `target_lock` and `ItemOpening.validate_unlock`): gone, already open,
+/// or the lock too much.
+fn lockbox_fails(
+    data: &GameData,
+    p: &Player,
+    s: &SpellTemplate,
+    index: usize,
+    item: Guid,
+    cast_item: Option<u32>,
+) -> Option<u8> {
+    let Some(item) = p.items.iter().find(|i| i.guid == item && i.carried()) else {
+        return Some(FAIL_ITEM_GONE);
+    };
+    let lock = data.item(item.entry).map_or(0, |t| t.lock_id);
+    if lock == 0 || item.fields.get_u32(ITEM_FIELD_FLAGS) & ITEM_FLAG_UNLOCKED != 0 {
+        return Some(FAIL_ALREADY_OPEN);
+    }
+    resolve_lock(data, p, s, index, lock, cast_item).err()
 }
 
 /// The skill a creature's skin needs.
@@ -210,24 +311,24 @@ pub fn skinning_required(level: u32, skill: u32) -> u32 {
     }
 }
 
-/// A gathering skill's chance to rise, in percent (Thistle Tea's
-/// `Gathering.gain_chance`).
-pub fn gather_gain_chance(skill: u32, value: u32, required: u32, multiplier: u32) -> u32 {
+/// A gathering skill's chance to rise, in percent, not rounded (Thistle
+/// Tea's `Gathering.gain_chance`).
+pub fn gather_gain_chance(skill: u32, value: u32, required: u32, multiplier: u32) -> f64 {
     let chance = if value >= required + 100 {
-        0
+        0.0
     } else if value >= required + 50 {
-        25
+        25.0
     } else if value >= required + 25 {
-        75
+        75.0
     } else {
-        100
+        100.0
     };
     let divisor = if matches!(skill, SKILL_MINING | SKILL_SKINNING) {
-        1 << (value / 75).min(8)
+        f64::from(1u32 << (value / 75).min(8))
     } else {
-        1
+        1.0
     };
-    (chance * multiplier / divisor).min(100)
+    (chance * f64::from(multiplier) / divisor).min(100.0)
 }
 
 /// A recipe's chance to raise its skill: orange, yellow, green, grey.
@@ -243,9 +344,10 @@ pub fn craft_gain_chance(value: u32, yellow: u32, gray: u32) -> u32 {
     }
 }
 
-/// Raise `skill` by one, `chance` percent of the time.
-pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: u32) -> bool {
-    let roll = rand::rng().random_range(0..100);
+/// Raise `skill` by one, `chance` percent of the time (a roll in
+/// `[0, 100)` under it, as Thistle Tea rolls).
+pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: f64) -> bool {
+    let roll = rand::rng().random_range(0.0..100.0);
     roll < chance
         && map
             .players
@@ -281,13 +383,27 @@ pub fn handles(data: &GameData, s: &SpellTemplate, index: usize) -> bool {
     }
 }
 
-/// Why `caster` can't cast `s` at `t` for its profession's sake: a spell
-/// focus not near, tools not carried, a lock beyond the skill, a target
-/// that can't be skinned, picked or disenchanted.
-pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<u8> {
+/// Why `caster` can't cast `s` at `t` (from `cast_item`, if an item cast
+/// it) for its profession's sake: a spell focus not near, tools not
+/// carried, a lock beyond the skill, a target that can't be skinned,
+/// picked or disenchanted.
+pub fn check(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    cast_item: Option<Guid>,
+) -> Option<u8> {
     let data = &map.realm.data;
     let p = map.players.get(&caster)?;
-    if s.requires_spell_focus != 0 && !focus_near(map, p.position(), s.requires_spell_focus) {
+    let cast_item = entry_of(p, cast_item);
+    // Skinning's corpse before its knife (Thistle Tea's `Skinning.validate`).
+    if s.has_effect(EFFECT_SKINNING)
+        && let Some(code) = skinning_fails(map, p, t)
+    {
+        return Some(code);
+    }
+    if s.requires_spell_focus != 0 && !focus_near(map, caster, s.requires_spell_focus) {
         return Some(FAIL_REQUIRES_SPELL_FOCUS);
     }
     if let Some(code) = s
@@ -300,65 +416,34 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
     }
     for (index, e) in s.effects.iter().enumerate() {
         match e.effect {
-            EFFECT_OPEN_LOCK => {
-                let Some(object) = t.object else {
-                    continue;
-                };
-                let o = map.gameobject(object)?;
-                if o.loot.as_ref().is_some_and(|l| !l.looters.is_empty()) {
-                    return Some(FAIL_CHEST_IN_USE);
-                }
-                let lock = object_lock(data, o.entry);
-                if let Err(code) = resolve_lock(data, p, s, index, lock) {
+            // A lockbox in the bags: Pick Lock's, or a key's.
+            EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM if t.item.is_some() => {
+                if let Some(code) = t
+                    .item
+                    .and_then(|item| lockbox_fails(data, p, s, index, item, cast_item))
+                {
                     return Some(code);
                 }
             }
-            // On a game object (a Quintessence on a rune), as any opening.
-            EFFECT_OPEN_LOCK_ITEM if t.item.is_none() && t.object.is_some() => {
+            // A chest, node or door (or a rune a Quintessence douses): near,
+            // not in use, locked, and the lock not too much.
+            EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM if t.object.is_some() => {
                 let o = t.object.and_then(|g| map.gameobject(g))?;
+                if dist(p.position(), o.position) > LOCK_YARDS {
+                    return Some(FAIL_OUT_OF_RANGE);
+                }
                 if o.loot.as_ref().is_some_and(|l| !l.looters.is_empty()) {
                     return Some(FAIL_CHEST_IN_USE);
                 }
                 let lock = object_lock(data, o.entry);
-                if let Err(code) = resolve_lock(data, p, s, index, lock) {
-                    return Some(code);
-                }
-            }
-            EFFECT_OPEN_LOCK_ITEM => {
-                let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
-                let Some(item) = item else {
-                    return Some(FAIL_ITEM_NOT_FOUND);
-                };
-                let lock = data.item(item.entry).map_or(0, |t| t.lock_id);
                 if lock == 0 {
-                    return Some(FAIL_BAD_TARGETS);
+                    return Some(FAIL_ALREADY_OPEN);
                 }
-                if let Err(code) = resolve_lock(data, p, s, index, lock) {
+                if let Err(code) = resolve_lock(data, p, s, index, lock, cast_item) {
                     return Some(code);
                 }
             }
-            EFFECT_SKINNING => {
-                let c = t.unit.and_then(|u| map.creature(u));
-                let Some(c) = c else {
-                    return Some(FAIL_BAD_TARGETS);
-                };
-                if c.alive() {
-                    return Some(FAIL_TARGET_NOT_DEAD);
-                }
-                if !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE) {
-                    let looted = c.loot.as_ref().is_none_or(|l| l.is_empty());
-                    return Some(if looted {
-                        FAIL_TARGET_UNSKINNABLE
-                    } else {
-                        FAIL_TARGET_NOT_LOOTED
-                    });
-                }
-                let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
-                let skill = skill_value(p, SKILL_SKINNING);
-                if skill == 0 || skinning_required(level, skill) > skill {
-                    return Some(FAIL_LOW_CASTLEVEL);
-                }
-            }
+            EFFECT_OPEN_LOCK_ITEM => return Some(FAIL_ITEM_GONE),
             EFFECT_PICKPOCKET => {
                 if !p.auras.has(AURA_MOD_STEALTH) {
                     return Some(FAIL_ONLY_STEALTHED);
@@ -377,22 +462,31 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
                     return Some(FAIL_TARGET_NO_POCKETS);
                 }
             }
+            // Thistle Tea's `Disenchant.validate_item`: an enchanter, and a
+            // single carried item that may be.
             EFFECT_DISENCHANT => {
-                let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
+                if skills::value(p, SKILL_ENCHANTING).unwrap_or(0) == 0 {
+                    return Some(FAIL_LOW_CASTLEVEL);
+                }
+                let item = t
+                    .item
+                    .and_then(|g| p.items.iter().find(|i| i.guid == g && i.carried()));
                 let ok = item.is_some_and(|i| {
                     i.count() == 1
                         && data.item(i.entry).is_some_and(|t| {
                             t.disenchant_id != 0 && t.flags & ITEM_FLAG_NO_DISENCHANT == 0
                         })
                 });
-                if !ok || skill_value(p, SKILL_ENCHANTING) == 0 {
+                if !ok {
                     return Some(FAIL_CANT_BE_DISENCHANTED);
                 }
             }
             EFFECT_ENCHANT_ITEM | EFFECT_ENCHANT_ITEM_TEMPORARY => {
-                let item = t.item.and_then(|g| p.items.iter().find(|i| i.guid == g));
+                let item = t
+                    .item
+                    .and_then(|g| p.items.iter().find(|i| i.guid == g && i.carried()));
                 let Some(item) = item else {
-                    return Some(FAIL_ITEM_NOT_FOUND);
+                    return Some(FAIL_ITEM_GONE);
                 };
                 let fits = data.item(item.entry).is_some_and(|it| {
                     (s.equipped_item_class < 0 || it.class as i32 == s.equipped_item_class)
@@ -411,25 +505,85 @@ pub fn check(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<
     None
 }
 
-/// A spell focus of `focus` within its reach of `at`.
-fn focus_near(map: &Map, at: Vector3d, focus: u32) -> bool {
+/// Whether a corpse has a skin still on it: its kind has skins, and it
+/// isn't skinned.
+fn has_skin(data: &GameData, c: &crate::game::map::creature::Creature) -> bool {
+    data.creature_template(c.entry)
+        .is_some_and(|t| t.skinning_loot_id != 0)
+        && !c
+            .loot
+            .as_ref()
+            .is_some_and(|l| l.kind == LootKind::Skinning)
+}
+
+/// Why a corpse can't be skinned, in Thistle Tea's order: not a wild
+/// creature's, alive, without a skin, still with its loot, beyond the
+/// skill.
+fn skinning_fails(map: &Map, p: &Player, t: &Targets) -> Option<u8> {
     let data = &map.realm.data;
+    let Some(c) = t
+        .unit
+        .and_then(|u| map.creature(u))
+        .filter(|c| c.owner.is_none())
+    else {
+        return Some(FAIL_BAD_TARGETS);
+    };
+    if c.alive() {
+        return Some(FAIL_TARGET_NOT_DEAD);
+    }
+    if !has_skin(data, c) {
+        return Some(FAIL_TARGET_UNSKINNABLE);
+    }
+    if c.loot.as_ref().is_some_and(|l| !l.is_empty()) {
+        return Some(FAIL_TARGET_NOT_LOOTED);
+    }
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    let skill = skill_value(p, SKILL_SKINNING);
+    if skill == 0 || skinning_required(level, skill) > skill {
+        return Some(FAIL_LOW_CASTLEVEL);
+    }
+    None
+}
+
+/// A spell focus of `focus` within its reach of `caster`: closer than its
+/// radius and both bodies' (Thistle Tea's `Focus.range`, mangos's
+/// `IsWithinDistInMap`).
+pub fn focus_near(map: &Map, caster: Guid, focus: u32) -> bool {
+    const OBJECT_RADIUS: f32 = 0.389;
+    let data = &map.realm.data;
+    let Some((at, own)) = map
+        .unit_fields(caster)
+        .zip(map.position_of(caster))
+        .map(|(f, at)| {
+            let r = f.get_f32(UNIT_FIELD_BOUNDINGRADIUS);
+            (at, if r > 0.0 { r } else { OBJECT_RADIUS })
+        })
+    else {
+        return false;
+    };
     map.grid
-        .around(at.x, at.y, 30.0)
+        .around(at.x, at.y, 50.0)
         .filter(|g| guid::is_game_object(*g))
         .filter_map(|g| map.gameobject(g))
         .any(|o| {
             data.gameobject_templates.get(&o.entry).is_some_and(|t| {
                 t.kind == GO_SPELL_FOCUS
                     && t.data[0] == focus
-                    && dist(o.position, at) <= (t.data[1] as f32).max(5.0)
+                    && dist(o.position, at) < t.data[1] as f32 + own + OBJECT_RADIUS
             })
         })
 }
 
 /// Run `s`'s profession effects at `t`; the effects run are returned as a
-/// mask, and a recipe raises its skill.
-pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u8 {
+/// mask. An enchantment made by hand raises its skill (Thistle Tea's
+/// `advance_skill`); one from an item, or for a time, doesn't.
+pub fn execute(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    cast_item: Option<u32>,
+) -> u8 {
     let data = map.realm.data.clone();
     let mut done = 0u8;
     for index in 0..3 {
@@ -438,14 +592,14 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
         }
         done |= 1 << index;
         match s.effects[index].effect {
-            EFFECT_OPEN_LOCK => {
-                if let Some(object) = t.object {
-                    open_lock(map, caster, s, index, object);
-                }
-            }
+            EFFECT_OPEN_LOCK => match (t.item, t.object) {
+                (Some(item), _) => open_lock_item(map, caster, s, index, item, cast_item),
+                (None, Some(object)) => open_lock(map, caster, s, index, object, cast_item),
+                _ => {}
+            },
             EFFECT_OPEN_LOCK_ITEM => match (t.item, t.object) {
-                (Some(item), _) => open_lock_item(map, caster, s, index, item),
-                (None, Some(object)) => open_lock(map, caster, s, index, object),
+                (Some(item), _) => open_lock_item(map, caster, s, index, item, cast_item),
+                (None, Some(object)) => open_lock(map, caster, s, index, object, cast_item),
                 _ => {}
             },
             EFFECT_SKINNING => {
@@ -460,7 +614,7 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
             }
             EFFECT_DISENCHANT => {
                 if let Some(item) = t.item {
-                    disenchant(map, caster, item);
+                    disenchant(map, caster, item, s.id);
                 }
             }
             EFFECT_ENCHANT_ITEM | EFFECT_ENCHANT_ITEM_TEMPORARY => {
@@ -473,78 +627,93 @@ pub fn execute(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> u
                                 data.crafts.enchant_charges.get(&s.id).copied().unwrap_or(0);
                             (secs * 1000, charges)
                         });
-                    crate::game::map::enchant::enchant_item(map, caster, item, id, temporary);
+                    let enchanted =
+                        crate::game::map::enchant::enchant_item(map, caster, item, id, temporary);
+                    if enchanted && temporary.is_none() && cast_item.is_none() {
+                        recipe_skill_up(map, caster, s);
+                    }
                 }
             }
             EFFECT_TRANS_DOOR => cast_line(map, caster, s, index),
             _ => {}
         }
     }
-    recipe_skill_up(map, caster, s);
     done
 }
 
-/// A recipe crafted: its skill may rise, by the recipe's colour.
+/// A recipe made: its skill may rise, by the recipe's colour. The first of
+/// its rows a craft names counts (Thistle Tea's `Skill.recipe`).
 pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     let data = map.realm.data.clone();
-    let Some(abilities) = data.spells.skill_abilities.get(&s.id) else {
+    let Some(a) = data.spells.skill_abilities.get(&s.id).and_then(|rows| {
+        rows.iter()
+            .find(|a| CRAFTS.contains(&a.skill) && a.trivial_high > 0)
+    }) else {
         return;
     };
-    for a in abilities
-        .iter()
-        .filter(|a| CRAFTS.contains(&a.skill) && a.trivial_high > 0)
-    {
-        let Some(value) = map
-            .players
-            .get(&caster)
-            .and_then(|p| skills::value(p, a.skill))
-        else {
-            continue;
-        };
-        let chance = craft_gain_chance(value, a.trivial_low, a.trivial_high);
-        try_raise(map, caster, a.skill, chance);
-    }
+    let Some(value) = map
+        .players
+        .get(&caster)
+        .and_then(|p| skills::value(p, a.skill))
+    else {
+        return;
+    };
+    let chance = craft_gain_chance(value, a.trivial_low, a.trivial_high);
+    try_raise(map, caster, a.skill, f64::from(chance));
 }
 
 /// Gathering, lockpicking or a plain opening: a lock opened with skill
 /// may fail, and may raise the skill; a chest or node then shows its loot,
 /// a door opens.
-fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, object: Guid) {
+fn open_lock(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    object: Guid,
+    cast_item: Option<u32>,
+) {
     let data = map.realm.data.clone();
     let Some((entry, kind)) = map.gameobject(object).map(|o| (o.entry, o.kind)) else {
         return;
     };
+    // Another's window opened on it in the meantime (Thistle Tea's check
+    // at completion, mangos's too).
+    if map.gameobject(object).is_some_and(|o| {
+        o.loot
+            .as_ref()
+            .is_some_and(|l| l.looters.iter().any(|g| *g != caster))
+    }) {
+        send_failure(map, caster, s.id, FAIL_CHEST_IN_USE);
+        return;
+    }
     let lock = object_lock(&data, entry);
     let Some(p) = map.players.get(&caster) else {
         return;
     };
-    let (skill, value, required) = match resolve_lock(&data, p, s, index, lock) {
-        Ok(r) => r,
+    let opening = match resolve_lock(&data, p, s, index, lock, cast_item) {
+        Ok(o) => o,
         Err(code) => {
             send_failure(map, caster, s.id, code);
             return;
         }
     };
-    if let Some(skill) =
-        skill.filter(|sk| matches!(*sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING))
-    {
-        let roll = value as i32 - 26 + rand::rng().random_range(1..=63);
-        let sure = matches!(skill, SKILL_HERBALISM | SKILL_MINING) && value >= 300;
-        if !sure && (required as i32) > roll {
-            send_failure(map, caster, s.id, FAIL_TRY_AGAIN);
-            return;
-        }
-        let learned = map
-            .players
-            .get(&caster)
-            .and_then(|p| skills::value(p, skill))
-            .unwrap_or(0);
-        try_raise(
-            map,
-            caster,
-            skill,
-            gather_gain_chance(skill, learned, required, 1),
-        );
+    if !attempt_takes(&opening) {
+        send_failure(map, caster, s.id, FAIL_TRY_AGAIN);
+        return;
+    }
+    // Once a spawn for each player (Thistle Tea's `skilled_players`).
+    let skilled = map
+        .loot_state
+        .skilled
+        .get(&object)
+        .is_some_and(|who| who.contains(&caster));
+    if !skilled && lock_skill_up(map, caster, &opening) {
+        map.loot_state
+            .skilled
+            .entry(object)
+            .or_default()
+            .insert(caster);
     }
     match kind {
         GO_DOOR | GO_BUTTON => {
@@ -562,23 +731,37 @@ fn open_lock(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, objec
     }
 }
 
-/// A lockbox picked: it can be opened now.
-fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, item: Guid) {
+/// A lockbox picked (Thistle Tea's `unlock_item`): the attempt may fail,
+/// as at a chest; picked, it is unlocked and opens at once, and the skill
+/// may rise.
+fn open_lock_item(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    item: Guid,
+    cast_item: Option<u32>,
+) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&caster) else {
         return;
     };
-    let Some(entry) = p.items.iter().find(|i| i.guid == item).map(|i| i.entry) else {
+    if let Some(code) = lockbox_fails(&data, p, s, index, item, cast_item) {
+        send_failure(map, caster, s.id, code);
+        return;
+    }
+    let Some(i) = p.items.iter().position(|i| i.guid == item) else {
         return;
     };
+    let (bag, slot, entry) = (p.items[i].bag, p.items[i].slot, p.items[i].entry);
     let lock = data.item(entry).map_or(0, |t| t.lock_id);
-    let (skill, _value, required) = match resolve_lock(&data, p, s, index, lock) {
-        Ok(r) => r,
-        Err(code) => {
-            send_failure(map, caster, s.id, code);
-            return;
-        }
+    let Ok(opening) = resolve_lock(&data, p, s, index, lock, cast_item) else {
+        return;
     };
+    if !attempt_takes(&opening) {
+        send_failure(map, caster, s.id, FAIL_TRY_AGAIN);
+        return;
+    }
     if let Some(p) = map.players.get_mut(&caster)
         && let Some(i) = p.items.iter_mut().find(|i| i.guid == item)
     {
@@ -586,19 +769,8 @@ fn open_lock_item(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, 
         i.fields
             .set_u32(ITEM_FIELD_FLAGS, flags | ITEM_FLAG_UNLOCKED);
     }
-    if let Some(skill) = skill {
-        let learned = map
-            .players
-            .get(&caster)
-            .and_then(|p| skills::value(p, skill))
-            .unwrap_or(0);
-        try_raise(
-            map,
-            caster,
-            skill,
-            gather_gain_chance(skill, learned, required, 1),
-        );
-    }
+    lock_skill_up(map, caster, &opening);
+    crate::game::map::items_misc::open_as(map, caster, bag, slot, LootKind::Opened);
 }
 
 /// Skinning a corpse: its skins, and the skill.
@@ -606,9 +778,13 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     let data = map.realm.data.clone();
     let Some((entry, level)) = map
         .creature(creature)
-        .filter(|c| c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE))
+        .filter(|c| {
+            !c.alive() && has_skin(&data, c) && c.loot.as_ref().is_none_or(|l| l.is_empty())
+        })
         .map(|c| (c.entry, c.fields.get_u32(UNIT_FIELD_LEVEL)))
     else {
+        // Skinned by another first (Thistle Tea's check at completion).
+        send_failure(map, caster, spell, FAIL_TARGET_UNSKINNABLE);
         return;
     };
     let Some(t) = data.creature_template(entry) else {
@@ -705,7 +881,7 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
 }
 
 /// Disenchanting an item: it goes, and its dust and shards are looted.
-fn disenchant(map: &mut Map, caster: Guid, item: Guid) {
+fn disenchant(map: &mut Map, caster: Guid, item: Guid, spell: u32) {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&caster) else {
         return;
@@ -716,10 +892,17 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid) {
     let Some(t) = data.item(p.items[i].entry) else {
         return;
     };
-    let Some(table) = data.loot.disenchant.get(&t.disenchant_id) else {
+    // Nothing to roll, or nothing rolled: try again, the item kept
+    // (Thistle Tea's).
+    let loot = data
+        .loot
+        .disenchant
+        .get(&t.disenchant_id)
+        .map(|table| loot::personal(&data, table, caster, &[], LootKind::Disenchant));
+    let Some(loot) = loot.filter(|l| !l.items.is_empty()) else {
+        send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
     };
-    let loot = loot::personal(&data, table, caster, &[], LootKind::Disenchant);
     crate::game::map::inventory::take_item(map, caster, i, 1);
     let value = map
         .players
@@ -732,7 +915,7 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid) {
         20.. => 75,
         _ => 100,
     };
-    try_raise(map, caster, SKILL_ENCHANTING, chance);
+    try_raise(map, caster, SKILL_ENCHANTING, f64::from(chance));
     loot::show_item_loot(map, caster, item, loot);
 }
 
@@ -748,14 +931,16 @@ fn cast_line(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize) {
         return;
     };
     let (pos, o, zone, area) = (p.position(), p.movement.orientation, p.zone, p.area);
+    // Where the cast found water; without a navmesh, ahead at the
+    // player's height.
+    let at = map
+        .loot_state
+        .fishing_spots
+        .remove(&caster)
+        .unwrap_or_else(|| line_reach(pos, o));
+    // The zone and area are the water's (Thistle Tea's, mangos's).
+    let (zone, area) = crate::game::map::world::zone_and_area(map, at).unwrap_or((zone, area));
     let mut rng = rand::rng();
-    let reach = 10.0 + rng.random_range(0.0f32..10.0);
-    let angle = o + rng.random_range(-0.25f32..0.25);
-    let at = Vector3d {
-        x: pos.x + reach * angle.cos(),
-        y: pos.y + reach * angle.sin(),
-        z: pos.z,
-    };
     let counter = map.next_creature_counter;
     map.next_creature_counter += 1;
     let mut go = GameObject::from_spawn(
@@ -801,8 +986,86 @@ fn cast_line(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize) {
         zone,
         area,
     });
+    // The channel lasts as long as the line is out (Thistle Tea's
+    // `adjust_channel`).
+    let lasts = bite + CATCH_WINDOW;
     if let Some(p) = map.players.get_mut(&caster) {
         p.fields.set_guid(UNIT_FIELD_CHANNEL_OBJECT, g);
+        if let Some(c) = p.caster.casting.as_mut().filter(|c| c.spell == s.id) {
+            c.ends = now + lasts;
+            c.channel_until = Some(now + lasts);
+            c.duration = lasts.as_millis() as u32;
+        }
+        p.outbound.send(&MSG_CHANNEL_UPDATE_Server {
+            time: lasts.as_millis() as u32,
+        });
+    }
+}
+
+/// Where a line cast from `at` facing `o` lands: ten to twenty yards
+/// ahead, a little to either side (Thistle Tea's `cast_position`).
+fn line_reach(at: Vector3d, o: f32) -> Vector3d {
+    let mut rng = rand::rng();
+    let reach = 10.0 + rng.random_range(0.0f32..10.0);
+    let angle = o + rng.random_range(-0.25f32..0.25);
+    Vector3d {
+        x: at.x + reach * angle.cos(),
+        y: at.y + reach * angle.sin(),
+        z: at.z,
+    }
+}
+
+/// As a fishing cast begins: where its line will land, on the surface of
+/// water a yard deep at least and in sight; else it isn't fishable
+/// (Thistle Tea's `prepare_cast`). Without a navmesh to say, it lands.
+pub fn fishing_spot(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    let fishing =
+        (0..3).any(|i| s.effects[i].effect == EFFECT_TRANS_DOOR && handles(&map.realm.data, s, i));
+    if !fishing {
+        return None;
+    }
+    let (pos, o) = map
+        .players
+        .get(&caster)
+        .map(|p| (p.position(), p.movement.orientation))?;
+    let nav = map.nav.as_mut()?;
+    let to = line_reach(pos, o);
+    let surface = nav.liquid_surface(Vector3d {
+        z: pos.z + 1.0,
+        ..to
+    });
+    let spot = surface.and_then(|surface| {
+        let floor = nav.floor_under(to.x, to.y, surface).unwrap_or(surface);
+        let at = Vector3d { z: surface, ..to };
+        (surface - floor >= 1.0 && nav.line_of_sight(pos, at)).then_some(at)
+    });
+    match spot {
+        Some(at) => {
+            map.loot_state.fishing_spots.insert(caster, at);
+            None
+        }
+        None => Some(FAIL_NOT_FISHABLE),
+    }
+}
+
+/// A fishing channel ended, cancelled or run out: its line comes out of
+/// the water, unhooked if its time was up (Thistle Tea's despawn and
+/// `fishing_expire`).
+pub fn line_ended(map: &mut Map, player: Guid) {
+    let now = map.now;
+    let lines: Vec<(Guid, bool)> = map
+        .loot_state
+        .bobbers
+        .iter()
+        .filter(|b| b.owner == player)
+        .map(|b| (b.guid, b.gone_at <= now))
+        .collect();
+    for (g, timed_out) in lines {
+        map.loot_state.bobbers.retain(|b| b.guid != g);
+        map.remove_gameobject(g);
+        if timed_out && let Some(p) = map.players.get(&player) {
+            p.outbound.send(&SMSG_FISH_NOT_HOOKED {});
+        }
     }
 }
 
@@ -869,7 +1132,12 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         .get(&player)
         .and_then(|p| skills::value(p, SKILL_FISHING))
         .unwrap_or(0);
-    try_raise(map, player, SKILL_FISHING, fishing_gain_chance(learned));
+    try_raise(
+        map,
+        player,
+        SKILL_FISHING,
+        f64::from(fishing_gain_chance(learned)),
+    );
     let wanted = map
         .players
         .get(&player)
@@ -879,10 +1147,20 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         Some((hole, table)) => {
             let mut l = loot::personal(&data, &table, player, &wanted, LootKind::Fishing);
             l.gold = 0;
-            let max = data
+            // Between its least and most, rolled for the spawn (Thistle
+            // Tea's, mangos's).
+            let (least, most) = data
                 .gameobject_templates
                 .get(&map.gameobject(hole).map_or(0, |o| o.entry))
-                .map_or(1, |t| t.data[3].max(t.data[2]).max(1));
+                .map_or((1, 1), |t| {
+                    let least = t.data[2].max(1);
+                    (least, t.data[3].max(least))
+                });
+            let max = *map
+                .loot_state
+                .hole_uses
+                .entry(hole)
+                .or_insert_with(|| rand::rng().random_range(least..=most));
             let uses = {
                 let u = map.loot_state.node_uses.entry(hole).or_insert(0);
                 *u += 1;
@@ -985,12 +1263,10 @@ pub fn object_looted(map: &mut Map, player: Guid, object: Guid) {
         .and_then(|keys| keys.iter().find(|k| k.kind == LOCK_KEY_SKILL))
         .map(|k| (k.index, k.skill));
     let gathered = lock_type.is_some_and(|(ty, _)| matches!(ty, 2 | 3));
-    let consumable = t.data[3] != 0;
-    if !gathered && !consumable {
-        // An ordinary chest fills again for the next one.
-        if let Some(o) = map.gameobject_mut(object) {
-            o.loot = None;
-        }
+    if !gathered {
+        // Any other chest emptied goes until its spawn's time (Thistle
+        // Tea's `Chest`).
+        despawn(map, object);
         return;
     }
     let uses = {
@@ -1031,6 +1307,8 @@ pub fn replenish(uses: u32, min: u32, max: u32, skill: u32, required: u32, roll:
 fn despawn(map: &mut Map, object: Guid) {
     let data = map.realm.data.clone();
     map.loot_state.node_uses.remove(&object);
+    map.loot_state.skilled.remove(&object);
+    map.loot_state.hole_uses.remove(&object);
     let Some(o) = map.remove_gameobject(object) else {
         return;
     };
@@ -1092,6 +1370,9 @@ pub fn respawn_nodes(map: &mut Map) {
     for (g, owner) in gone {
         map.loot_state.bobbers.retain(|b| b.guid != g);
         map.remove_gameobject(g);
+        if let Some(p) = map.players.get(&owner) {
+            p.outbound.send(&SMSG_FISH_NOT_HOOKED {});
+        }
         end_channel(map, owner);
     }
     if map.loot_state.respawns.is_empty() {
@@ -1145,9 +1426,9 @@ mod tests {
         assert_eq!(craft_gain_chance(15, 15, 35), 75);
         assert_eq!(craft_gain_chance(25, 15, 35), 25);
         assert_eq!(craft_gain_chance(35, 15, 35), 0);
-        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 1, 0, 1), 100);
-        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1), 25);
-        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1), 12);
+        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 1, 0, 1), 100.0);
+        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1), 25.0);
+        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1), 12.5);
         assert_eq!(fishing_gain_chance(150), 25);
         assert!(catch_landed(100, 0, 100));
         assert!(!catch_landed(30, 50, 1));

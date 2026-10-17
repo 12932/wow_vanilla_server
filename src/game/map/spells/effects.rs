@@ -6,10 +6,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{
-    Area as WireArea, Power, SMSG_BINDPOINTUPDATE, SMSG_RESURRECT_REQUEST, SMSG_SPELLENERGIZELOG,
-    Vector3d,
-};
+use wow_world_messages::vanilla::{Power, SMSG_SPELLENERGIZELOG, Vector3d};
 
 use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::fields::*;
@@ -707,22 +704,8 @@ fn effect(
             }
         }
         EFFECT_BIND => {
-            let key = map.key;
-            if let Some(p) = map.players.get_mut(&target) {
-                let pos = p.position();
-                p.row.state.bind = Some(crate::game::store::Bind {
-                    map: key.map,
-                    zone: p.zone,
-                    x: pos.x,
-                    y: pos.y,
-                    z: pos.z,
-                });
-                p.outbound.send(&SMSG_BINDPOINTUPDATE {
-                    position: pos,
-                    map: crate::game::map::movement::map_enum(key.map),
-                    area: WireArea::try_from(p.zone).unwrap_or_default(),
-                });
-            }
+            let to = lands_on(map, caster, target, &e, t);
+            crate::game::map::npc::bind_home(map, to, caster);
         }
         EFFECT_LEAP => {
             if let Some(me) = map.unit_view(caster) {
@@ -753,14 +736,21 @@ fn effect(
         }
         EFFECT_KNOCK_BACK => knock_back(map, caster, target, e.misc_value, amount),
         EFFECT_CREATE_ITEM if e.item_type != 0 => {
-            let item = super::scripts::created_item(map, caster, s, e.item_type);
-            let _ = crate::game::map::inventory::add_item(
-                map,
-                caster,
-                item,
-                amount.max(1) as u32,
-                true,
-            );
+            if let Some(to) = created_for(map, caster, target, &e, t) {
+                let item = super::scripts::created_item(map, caster, s, e.item_type);
+                // A player's own make is created; another's gift received.
+                let count = amount.max(1) as u32;
+                let made = if to == caster {
+                    crate::game::map::inventory::add_created_item(map, to, item, count)
+                } else {
+                    crate::game::map::inventory::add_item(map, to, item, count, true)
+                };
+                // A recipe's skill rises once its product is stored (Thistle
+                // Tea's `commit_store`, mangos's `UpdateCraftSkill`).
+                if made.is_ok() {
+                    crate::game::map::professions::recipe_skill_up(map, caster, s);
+                }
+            }
         }
         EFFECT_LEARN_SPELL if e.trigger_spell != 0 => learn(map, target, e.trigger_spell),
         EFFECT_TRIGGER_SPELL if e.trigger_spell != 0 => {
@@ -853,16 +843,45 @@ fn effect(
                 .players
                 .get(&caster)
                 .map(|p| p.name.to_string())
+                .or_else(|| {
+                    let c = map.creature(caster)?;
+                    Some(
+                        map.realm
+                            .data
+                            .creature_templates
+                            .get(&c.entry)?
+                            .name
+                            .clone(),
+                    )
+                })
                 .unwrap_or_default();
             if let Some(p) = map.players.get_mut(&target)
                 && p.death != crate::game::map::death::Death::Alive
+                && p.resurrect_offer.is_none()
             {
-                p.resurrect_offer = Some((caster, amount.clamp(1, 100) as u32));
-                p.outbound.send(&SMSG_RESURRECT_REQUEST {
-                    guid: caster,
-                    name,
-                    player: true,
-                });
+                // `RESURRECT` gives a share of health and mana; the newer
+                // effect, health and the misc value's mana (Thistle Tea's,
+                // mangos's).
+                let (health, mana) = if e.effect == EFFECT_RESURRECT_NEW {
+                    (amount.max(1) as u32, e.misc_value.max(0) as u32)
+                } else {
+                    let share = amount.max(0) as f32 / 100.0;
+                    (
+                        ((p.fields.get_u32(UNIT_FIELD_MAXHEALTH) as f32 * share) as u32).max(1),
+                        (p.fields.get_u32(UNIT_FIELD_MAXPOWER1) as f32 * share) as u32,
+                    )
+                };
+                p.resurrect_offer = Some((caster, health, mana));
+                // As 1.12 lays it out: the name, not from a spirit healer,
+                // and whether the reclaim delay holds.
+                let mut b = crate::game::data::items::Body::default();
+                b.u64(caster.guid())
+                    .u32(name.len() as u32 + 1)
+                    .cstr(&name)
+                    .u8(0)
+                    .u8(u8::from(!s.attr(3, sd::ATTR_EX3_NO_RES_TIMER)));
+                p.outbound
+                    .send_frame(b.frame(SMSG_RESURRECT_REQUEST_OPCODE));
             }
         }
         EFFECT_SKILL | EFFECT_SKILL_STEP => {
@@ -1005,6 +1024,44 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
     super::log::dispel_failed(map, caster, target, held);
     if !taken.is_empty() {
         super::class_scripts::dispelled(map, caster, s);
+    }
+}
+
+/// Who a create-item effect gives its item to, as Thistle Tea and mangos
+/// give it: the player it lands on ([`lands_on`]: an innkeeper's Bind gives
+/// the one it binds the Hearthstone). One landing on a creature gives the
+/// caster the item only if it names the caster too (an Empty Phial filled
+/// at one).
+fn created_for(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    e: &crate::game::data::spells::SpellEffect,
+    t: &Targets,
+) -> Option<Guid> {
+    let to = lands_on(map, caster, target, e, t);
+    let to = if !map.players.contains_key(&to) && (e.target_a == 1 || e.target_b == 1) {
+        caster
+    } else {
+        to
+    };
+    map.players.contains_key(&to).then_some(to)
+}
+
+/// Whom an effect lands on for the effects that follow Thistle Tea's
+/// targeting where wvs's differs: one naming no target, cast by a creature
+/// at a unit, lands on that unit rather than the caster.
+fn lands_on(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    e: &crate::game::data::spells::SpellEffect,
+    t: &Targets,
+) -> Guid {
+    if e.target_a == 0 && e.target_b == 0 && !map.players.contains_key(&caster) {
+        t.unit.unwrap_or(target)
+    } else {
+        target
     }
 }
 

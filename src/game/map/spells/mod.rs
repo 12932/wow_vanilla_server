@@ -70,6 +70,9 @@ pub const EFFECT_BIND: u32 = 11;
 pub const EFFECT_QUEST_COMPLETE: u32 = 16;
 pub const EFFECT_WEAPON_DAMAGE_NOSCHOOL: u32 = 17;
 pub const EFFECT_RESURRECT: u32 = 18;
+/// `SMSG_RESURRECT_REQUEST`, laid out by hand: wow_messages has its last
+/// two bytes as one.
+pub const SMSG_RESURRECT_REQUEST_OPCODE: u16 = 0x15B;
 pub const EFFECT_CREATE_ITEM: u32 = 24;
 pub const EFFECT_WEAPON: u32 = 25;
 pub const EFFECT_PERSISTENT_AREA_AURA: u32 = 27;
@@ -795,6 +798,11 @@ fn execute(
 ) {
     let now = map.now;
     let m = mods::for_spell(map, caster, s);
+    // The item cast from, by its entry, before it is spent.
+    let cast_entry = item.and_then(|g| {
+        let p = map.players.get(&caster)?;
+        p.item_by_guid(g).map(|i| p.items[i].entry)
+    });
     // What the cast cost, for a refund if an ability is avoided.
     let mut paid = 0;
     if !triggered {
@@ -826,11 +834,11 @@ fn execute(
         for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
             let mut left = *count;
             while left > 0 {
-                let Some(i) = map
-                    .players
-                    .get(&caster)
-                    .and_then(|p| p.items.iter().position(|it| it.entry == *reagent))
-                else {
+                let Some(i) = map.players.get(&caster).and_then(|p| {
+                    p.items
+                        .iter()
+                        .position(|it| it.entry == *reagent && it.carried())
+                }) else {
                     break;
                 };
                 let n = map.players[&caster].items[i].count().min(left);
@@ -911,7 +919,7 @@ fn execute(
     // A pet's feeding and abilities, and the professions' effects (which
     // run on their own and are skipped below).
     crate::game::map::pets::before_effects(map, caster, s, &targets);
-    let professions = crate::game::map::professions::execute(map, caster, s, &targets);
+    let professions = crate::game::map::professions::execute(map, caster, s, &targets, cast_entry);
     // The objects the cast is at, for the quests asking for it there.
     let at_objects = if triggered || crate::game::map::objects::opens_lock(s) {
         Vec::new()
@@ -1515,6 +1523,7 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
         p.outbound.send(&MSG_CHANNEL_UPDATE_Server { time: 0 });
     }
     crate::game::map::objects::channel_ended(map, g, casting.spell);
+    crate::game::map::professions::line_ended(map, g);
 }
 
 /// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a
@@ -1722,16 +1731,22 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    let Some((caster, percent)) = p.resurrect_offer.take() else {
+    let Some((caster, health, mana)) = p.resurrect_offer else {
         return;
     };
-    if caster != from || !accept {
+    // Declined, it is gone; accepted, it must be the one offered (Thistle
+    // Tea's `Resurrection.respond`).
+    if !accept {
+        p.resurrect_offer = None;
+        return;
+    }
+    if caster != from {
         return;
     }
     let to = map.position_of(caster);
-    let fraction = (percent as f32 / 100.0).clamp(0.05, 1.0);
-    crate::game::map::death::resurrect(map, player, fraction);
-    if let Some(pos) = to {
+    if crate::game::map::death::resurrect_with(map, player, health, mana)
+        && let Some(pos) = to
+    {
         map.teleport(player, map.key, pos, 0.0);
     }
 }

@@ -760,7 +760,7 @@ fn speed(map: &mut Map, g: Guid) {
     let mut told: Vec<(u16, f32)> = Vec::new();
     if let Some(p) = map.players.get_mut(&g) {
         let pct = p.auras.speed_percent(mounted);
-        let speed = (7.0 * (1.0 + pct as f32 / 100.0)).max(0.5);
+        let speed = (7.0 * p.speed_rate * (1.0 + pct as f32 / 100.0)).max(0.5);
         let ghost = p.death != crate::game::map::death::Death::Alive;
         if !ghost && (speed - p.speeds.run).abs() > 0.01 {
             p.speeds.run = speed;

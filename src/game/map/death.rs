@@ -8,6 +8,7 @@ use ahash::AHashSet;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
+use crate::game::data::GameData;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::grid::{CellKey, cell_of};
@@ -62,7 +63,7 @@ pub struct Corpse {
 
 impl Corpse {
     /// A corpse of `p` at `pos`, facing `orientation`.
-    pub fn new(p: &Player, pos: Vector3d, orientation: f32) -> Self {
+    pub fn new(data: &GameData, p: &Player, pos: Vector3d, orientation: f32) -> Self {
         let g = guid::corpse(guid::counter(p.guid));
         let mut f = Fields::new(TypeId::Corpse, g, 0);
         f.set_guid(CORPSE_FIELD_OWNER, p.guid);
@@ -74,13 +75,16 @@ impl Corpse {
             CORPSE_FIELD_DISPLAY_ID,
             p.fields.get_u32(UNIT_FIELD_NATIVEDISPLAYID),
         );
+        // What is worn, as its look and its inventory type over it
+        // (Thistle Tea's and mangos's corpse items).
         for slot in 0..19u16 {
             let entry = p
                 .fields
                 .get_u32(PLAYER_VISIBLE_ITEM_1_0 + slot * VISIBLE_ITEM_SIZE);
             if entry != 0 {
                 let display = p.item_display_id(entry);
-                f.set_u32(CORPSE_FIELD_ITEM + slot, display);
+                let kind = crate::game::map::player::item_display(data, entry).map_or(0, |d| d.1);
+                f.set_u32(CORPSE_FIELD_ITEM + slot, display | kind << 24);
             }
         }
         let r = &p.row;
@@ -186,7 +190,7 @@ pub fn release(map: &mut Map, g: Guid) {
     if !matches!(p.death, Death::Dead { .. }) {
         return;
     }
-    let corpse = Corpse::new(p, p.position(), p.movement.orientation);
+    let corpse = Corpse::new(&map.realm.data, p, p.position(), p.movement.orientation);
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
@@ -203,6 +207,7 @@ pub fn release(map: &mut Map, g: Guid) {
     become_ghost(p, now);
     let (pos, zone, team) = (p.position(), p.zone, p.team);
     map.add_corpse(corpse);
+    speeds_to_observers(map, g);
     // In a battleground, the fallen wait at their side's start.
     if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
         crate::game::map::battleground::released(map, g);
@@ -260,8 +265,10 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
     }
 }
 
-/// Bring a player back, with `fraction` of their health and mana.
-pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
+/// Bring a player back, with `fraction` of their health, mana and
+/// energy, and no rage (Thistle Tea's `Death.resurrect`). Whether they
+/// rose.
+pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     // A fighter fallen in Gurubashi Arena's battle stays fallen until it
     // ends.
     if crate::game::map::arena::blocks_resurrection(map, g) {
@@ -271,16 +278,18 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
                 "You have fallen in the arena's battle: you rise when it ends.",
             );
         }
-        return;
+        return false;
     }
     let Some(p) = map.players.get_mut(&g) else {
-        return;
+        return false;
     };
     if p.death == Death::Alive {
-        return;
+        return false;
     }
     let was_ghost = matches!(p.death, Death::Ghost { .. });
     p.death = Death::Alive;
+    // An offer from before is spent.
+    p.resurrect_offer = None;
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
@@ -289,12 +298,21 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     p.row.state.dead = false;
     p.row.state.released_at = 0;
     let corpse = p.row.state.corpse.take();
+    // A share of each, but at least one of what there is any of.
+    let share = |max: u32| {
+        if max == 0 {
+            0
+        } else {
+            ((max as f32 * fraction) as u32).max(1)
+        }
+    };
     let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
-    p.fields
-        .set_u32(UNIT_FIELD_HEALTH, ((max as f32 * fraction) as u32).max(1));
-    let max_mana = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
-    p.fields
-        .set_u32(UNIT_FIELD_POWER1, (max_mana as f32 * fraction) as u32);
+    p.fields.set_u32(UNIT_FIELD_HEALTH, share(max).max(1));
+    for power in [0u16, 3] {
+        let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + power);
+        p.fields.set_u32(UNIT_FIELD_POWER1 + power, share(max));
+    }
+    p.fields.set_u32(UNIT_FIELD_POWER1 + 1, 0);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST, false);
     if p.fields.get_u32(UNIT_FIELD_AURA) == SPELL_GHOST {
         p.fields.set_u32(UNIT_FIELD_AURA, 0);
@@ -316,6 +334,9 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
             move_event: 0,
             speed: p.speeds.swim,
         });
+    }
+    if was_ghost {
+        speeds_to_observers(map, g);
     }
     if corpse.is_some() {
         map.remove_corpse(guid::corpse(guid::counter(g)));
@@ -343,6 +364,35 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     for o in observers {
         map.visibility_dirty.insert(o);
     }
+    true
+}
+
+/// Bring a player back with `health` and `mana` (a spell's, or a
+/// self-resurrection's), full energy and no rage (Thistle Tea's
+/// `Death.resurrect_with`). Whether they rose.
+pub fn resurrect_with(map: &mut Map, g: Guid, health: u32, mana: u32) -> bool {
+    if !resurrect(map, g, 1.0) {
+        return false;
+    }
+    if let Some(p) = map.players.get_mut(&g) {
+        let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        p.fields
+            .set_u32(UNIT_FIELD_HEALTH, health.clamp(1, max.max(1)));
+        let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
+        p.fields.set_u32(UNIT_FIELD_POWER1, mana.min(max));
+    }
+    true
+}
+
+/// A ghost's run and swim speeds, or the risen's, to those who see the
+/// player, at the change (Thistle Tea's ghost auras change them so).
+fn speeds_to_observers(map: &Map, g: Guid) {
+    use crate::game::map::misc::{MSG_MOVE_SET_RUN_SPEED, MSG_MOVE_SET_SWIM_SPEED};
+    let Some(speeds) = map.players.get(&g).map(|p| p.speeds) else {
+        return;
+    };
+    crate::game::map::misc::speed_to_observers(map, g, MSG_MOVE_SET_RUN_SPEED, speeds.run);
+    crate::game::map::misc::speed_to_observers(map, g, MSG_MOVE_SET_SWIM_SPEED, speeds.swim);
 }
 
 /// `CMSG_RECLAIM_CORPSE`: a ghost near their corpse, after the delay.
@@ -365,7 +415,14 @@ pub fn reclaim(map: &mut Map, g: Guid) {
     if d2 > RECLAIM_YARDS * RECLAIM_YARDS {
         return;
     }
-    resurrect(map, g, 0.5);
+    // In a battleground, whole, and only while the battle is on (Thistle
+    // Tea's `restore_percent`; mangos's whole too).
+    let fraction = match &map.battleground {
+        Some(m) if m.phase == crate::game::map::battleground::Phase::Playing => 1.0,
+        Some(_) => return,
+        None => 0.5,
+    };
+    resurrect(map, g, fraction);
 }
 
 /// `MSG_CORPSE_QUERY`: where a ghost's corpse is, for their map: in a
@@ -413,18 +470,18 @@ pub fn spirit_healer_hello(map: &Map, g: Guid, healer: Guid) -> bool {
     true
 }
 
-/// `CMSG_SPIRIT_HEALER_ACTIVATE`: resurrected where the ghost stands.
+/// `CMSG_SPIRIT_HEALER_ACTIVATE`: a ghost resurrected where they stand, by
+/// a living spirit healer within reach (Thistle Tea's `valid_healer?`).
 pub fn spirit_healer_activate(map: &mut Map, g: Guid, healer: Guid) {
-    let near = match (map.players.get(&g), map.creature(healer)) {
-        (Some(p), Some(c)) => {
-            let (a, b) = (p.position(), c.position);
-            (a.x - b.x).powi(2) + (a.y - b.y).powi(2) <= 15.0 * 15.0
-                && c.fields.get_u32(UNIT_NPC_FLAGS) & NPC_FLAG_SPIRIT_HEALER != 0
-        }
-        _ => false,
-    };
-    if near {
-        resurrect(map, g, 0.5);
+    let ghost = map
+        .players
+        .get(&g)
+        .is_some_and(|p| matches!(p.death, Death::Ghost { .. }));
+    if !ghost || crate::game::map::npc::npc_entry(map, g, healer, NPC_FLAG_SPIRIT_HEALER).is_none()
+    {
+        return;
+    }
+    if resurrect(map, g, 0.5) {
         // Everything carried wears a quarter (Thistle Tea's `SpiritHealer`).
         crate::game::map::vendor::wear_carried(map, g, 0.25);
         resurrection_sickness(map, g);

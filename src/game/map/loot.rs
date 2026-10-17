@@ -68,16 +68,20 @@ pub enum LootKind {
     Fishing,
     Disenchant,
     Skinning,
+    /// Behind a lock: a chest picked or gathered, a lockbox unlocked.
+    Opened,
 }
 
 impl LootKind {
     fn wire(self) -> u8 {
         match self {
             LootKind::Corpse => 1,
-            // The client has no skinning type: pickpocketing's window.
-            LootKind::Pickpocket | LootKind::Skinning => 2,
+            // The client has no skinning type: pickpocketing's window, as
+            // a lock opened shows too.
+            LootKind::Pickpocket | LootKind::Skinning | LootKind::Opened => 2,
             LootKind::Fishing => 3,
-            LootKind::Disenchant => 4,
+            // An item's loot shows as Thistle Tea and mangos show it.
+            LootKind::Disenchant => 2,
         }
     }
 }
@@ -124,6 +128,9 @@ pub struct Loot {
     pub kind: LootKind,
     /// Who has the window open.
     pub looters: AHashSet<Guid>,
+    /// Behind a lock: those who opened it, till they close the window
+    /// (Thistle Tea's `opened_by`).
+    pub opened_by: AHashSet<Guid>,
 }
 
 impl Loot {
@@ -133,6 +140,9 @@ impl Loot {
 
     /// Whether `g` may open it.
     pub fn may_loot(&self, g: Guid) -> bool {
+        if self.kind == LootKind::Opened && !self.opened_by.contains(&g) {
+            return false;
+        }
         if !self.allowed.is_empty() {
             return self.allowed.contains(&g)
                 && (self.method != Some(GroupLootSetting::RoundRobin)
@@ -167,9 +177,17 @@ pub struct MapLoot {
     pub items_tick_at: Option<Instant>,
     /// A node's successful gatherings since it spawned.
     pub node_uses: ahash::AHashMap<Guid, u32>,
+    /// Those whose skill an object's lock has raised since it spawned:
+    /// once each (Thistle Tea's `skilled_players`).
+    pub skilled: ahash::AHashMap<Guid, AHashSet<Guid>>,
     /// Creatures whose pockets are picked this life.
     pub picked: AHashSet<Guid>,
     pub bobbers: Vec<crate::game::map::professions::Bobber>,
+    /// Where each player's line will land, chosen as the cast began.
+    pub fishing_spots: ahash::AHashMap<Guid, wow_world_messages::vanilla::Vector3d>,
+    /// How many catches a school of fish holds this spawn, rolled at its
+    /// first.
+    pub hole_uses: ahash::AHashMap<Guid, u32>,
     /// Loot on an item: a disenchanted one, an opened container.
     pub item_loot: ahash::AHashMap<Guid, Loot>,
 }
@@ -925,6 +943,15 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
         return;
     };
     if !loot.may_loot(player) {
+        // A lock not opened by them: the window shuts (Thistle Tea's).
+        if loot.kind == LootKind::Opened
+            && let Some(p) = map.players.get(&player)
+        {
+            p.outbound.send(&SMSG_LOOT_RELEASE_RESPONSE {
+                guid: target,
+                unknown1: 1,
+            });
+        }
         return;
     }
     loot.looters.insert(player);
@@ -1099,6 +1126,8 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
     let (empty, kind) = match loot_mut(map, target) {
         Some(l) => {
             l.looters.remove(&player);
+            // Closed, a lock must be opened again.
+            l.opened_by.remove(&player);
             (l.is_empty(), l.kind)
         }
         None => return,
@@ -1120,7 +1149,12 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
         if empty && kind == LootKind::Corpse {
             crate::game::map::professions::corpse_looted(map, target);
         }
-    } else if empty {
+    } else if empty
+        || map
+            .gameobject(target)
+            .is_some_and(|o| o.kind == crate::game::map::professions::GO_FISHING_NODE)
+    {
+        // A bobber goes with its window, caught or left (Thistle Tea's).
         crate::game::map::professions::object_looted(map, player, target);
     }
 }
@@ -1161,13 +1195,25 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         } else {
             t.gold_min
         };
+        // A chest behind a lock shows as one opened (Thistle Tea's
+        // `Gathering`, mangos's chests).
+        let kind = if t.kind == crate::game::map::professions::GO_CHEST && t.data[0] != 0 {
+            LootKind::Opened
+        } else {
+            LootKind::Corpse
+        };
         if let Some(o) = map.gameobject_mut(object) {
             o.loot = Some(Loot {
                 items,
                 gold,
+                kind,
                 ..Default::default()
             });
         }
+    }
+    // Opened, by lock or by hand: theirs to look at.
+    if let Some(l) = map.gameobject_mut(object).and_then(|o| o.loot.as_mut()) {
+        l.opened_by.insert(player);
     }
     open(map, player, object);
 }
