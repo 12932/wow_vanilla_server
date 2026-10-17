@@ -1045,7 +1045,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     );
     let items = death_items(map, target, left);
     if left > 0 {
-        combat::deal_damage(map, caster, target, left);
+        combat::deal_damage_by(map, caster, target, left, 1, Some(s.id));
     }
     give_death_items(map, target, items);
     super::threat(map, caster, target, s, left as f32, &l.mods);
