@@ -1,8 +1,9 @@
 //! Creatures helping each other, as Thistle Tea has them
 //! (`Combat.Assistance`, `World.Combat.CallForHelp`): a creature drawn into
-//! a fight calls those of its faction template within 10 yards that answer
-//! calls, who come a second and a half later if it still fights; while it
-//! fights more than 10 yards from its spawn it calls its friends within its
+//! a fight calls those of its faction template within `[creatures]
+//! assistance_radius` (mangos's 5 yards) that answer calls, who come a
+//! second and a half later if it still fights; while it fights more than
+//! 10 yards from its spawn it calls its friends within its
 //! call-for-help range each second; a faction that flees from calls runs
 //! from the enemy instead. And creatures' reaction modes: a passive one
 //! neither looks for a fight nor takes a victim, a defensive one only
@@ -23,7 +24,7 @@ use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
 
 /// The reach of a creature's call for help when it is drawn in, by
 /// default (`[creatures] assistance_radius`).
-pub const CALL_RADIUS: f32 = 10.0;
+pub const CALL_RADIUS: f32 = 5.0;
 /// How long the called take to come, by default (`[creatures]
 /// assistance_delay_ms`).
 pub const ASSIST_DELAY: Duration = Duration::from_millis(1500);
@@ -214,7 +215,8 @@ fn call_range(map: &Map, g: Guid) -> f32 {
 }
 
 /// `caller` is drawn into a fight with `enemy`: if it calls for help at
-/// all, those that answer within 10 yards are told to come, a moment on.
+/// all, those that answer within `[creatures] assistance_radius` are told
+/// to come, a moment on.
 pub fn drawn_in(map: &mut Map, caller: Guid, enemy: Guid) {
     if call_range(map, caller) <= 0.0 || enemy.is_zero() {
         return;

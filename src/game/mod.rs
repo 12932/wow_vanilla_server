@@ -74,6 +74,8 @@ mod tests_items3;
 #[cfg(test)]
 mod tests_loot;
 #[cfg(test)]
+mod tests_mangos_defaults;
+#[cfg(test)]
 mod tests_misc;
 #[cfg(test)]
 mod tests_misc2;

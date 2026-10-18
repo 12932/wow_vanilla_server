@@ -34,7 +34,7 @@ honor_reset_weekday = 2
 
 [visibility]
 continents_yards = 100.0
-instances_yards = 100.0
+instances_yards = 170.0
 # Further in a battleground, so a battle's far side is in view.
 battleground_yards = 400.0
 

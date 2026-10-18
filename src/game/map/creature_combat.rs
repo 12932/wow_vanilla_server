@@ -27,7 +27,7 @@ use crate::game::map::creature::Motion;
 
 /// The leash's reach around where the fight began, by default
 /// (`[creatures] leash_radius`).
-pub const THREAT_RADIUS: f32 = 50.0;
+pub const THREAT_RADIUS: f32 = 30.0;
 /// Without a hostile act this long, a creature beyond its threat radius
 /// goes home, by default (`[creatures] leash_timeout_secs`).
 pub const LEASH_TIMEOUT: Duration = Duration::from_secs(12);

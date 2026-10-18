@@ -96,10 +96,9 @@ honor_reset_weekday = 2
 # Default 100.0. Range 20 to 500, clamped. Changes at a reload. mangos: Visibility.Distance.Continents.
 continents_yards = 100.0
 
-# In dungeons and raids (mangos's default is 170; here as far as
-# the continents, as before this key).
-# Default 100.0. Range 20 to 500, clamped. Changes at a reload. mangos: Visibility.Distance.Instances.
-instances_yards = 100.0
+# In dungeons and raids.
+# Default 170.0. Range 20 to 500, clamped. Changes at a reload. mangos: Visibility.Distance.Instances.
+instances_yards = 170.0
 
 # In battlegrounds: further, so a battle's far side is in view.
 # Default 400.0. Range 20 to 500, clamped. Changes at a reload. mangos: Visibility.Distance.BGArenas.
@@ -229,9 +228,9 @@ skill_chance_grey = 0
 aggro_rate = 1.0
 
 # Yards from where a fight began that a creature chases before it
-# may give up (mangos's default is 30).
-# Default 50.0. Range 5 to 500, clamped. Changes at a reload. mangos: LeashRadius.
-leash_radius = 50.0
+# may give up.
+# Default 30.0. Range 5 to 500, clamped. Changes at a reload. mangos: LeashRadius.
+leash_radius = 30.0
 
 # Seconds beyond its leash without a hostile act before a creature
 # goes home.
@@ -243,10 +242,9 @@ leash_timeout_secs = 12
 # Default 24. Range 1 to 600, clamped. Changes at a reload.
 unreachable_timeout_secs = 24
 
-# Yards a creature drawn into a fight calls its kind from
-# (mangos's default is 5).
-# Default 10.0. Range 0 to 100, clamped. Changes at a reload. mangos: CreatureFamilyAssistanceRadius.
-assistance_radius = 10.0
+# Yards a creature drawn into a fight calls its kind from.
+# Default 5.0. Range 0 to 100, clamped. Changes at a reload. mangos: CreatureFamilyAssistanceRadius.
+assistance_radius = 5.0
 
 # Milliseconds the called take to come.
 # Default 1500. Range 0 to 60000, clamped. Changes at a reload. mangos: CreatureFamilyAssistanceDelay.
@@ -261,21 +259,21 @@ flee_assistance_radius = 30.0
 # Default 300. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.NORMAL.
 corpse_decay_normal = 300
 
-# Seconds a rare's corpse lies (mangos's default is 900).
-# Default 300. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.RARE.
-corpse_decay_rare = 300
+# Seconds a rare's corpse lies.
+# Default 900. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.RARE.
+corpse_decay_rare = 900
 
 # Seconds an elite's corpse lies.
 # Default 600. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.ELITE.
 corpse_decay_elite = 600
 
-# Seconds a rare elite's corpse lies (mangos's default is 1200).
-# Default 600. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.RAREELITE.
-corpse_decay_rare_elite = 600
+# Seconds a rare elite's corpse lies.
+# Default 1200. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.RAREELITE.
+corpse_decay_rare_elite = 1200
 
-# Seconds a boss's corpse lies (mangos's default is 3600).
-# Default 600. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.WORLDBOSS.
-corpse_decay_world_boss = 600
+# Seconds a boss's corpse lies.
+# Default 3600. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.WORLDBOSS.
+corpse_decay_world_boss = 3600
 
 # New characters, the level cap, and the realm's type.
 [players]
