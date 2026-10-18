@@ -158,6 +158,14 @@ the questions waiting for you.
     Tea does, even if it took less: 100 threat can come back as 820. mangos gives back only what Fade took. Follow
     mangos? The fix is one line, but it changes a parity test that pins Thistle Tea's behaviour.
 
+47. **Quest-log slot visibility** (from 4b). Every observer can see the ids of a player's quest-log slots in wvs.
+    mangos-classic shows them to the group only, and Thistle Tea to no one. Follow mangos, which needs group-only
+    update fields, or Thistle Tea?
+48. **Druid form attack power** (from 4b). Which is 1.12's?
+    - Thistle Tea gives no share by level.
+    - mangos-classic gives level × 3 for every druid.
+    - wvs now gives level × 2 plus agility in Cat Form, and level × 3 in Bear Form.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -642,6 +650,17 @@ the questions waiting for you.
         per-unit index of who holds them would fix it.
       - **Twelve minor ones** are in the findings file.
 
+44. **4b's choices** (the core: stats, skills, wands, movement):
+    - **A percentage of damage done that wants an item** counts only for a hand whose weapon fits it, and never for
+      spells, as mangos has it. Before, Wand Specialization raised every spell by 25%.
+    - **A wand's Shoot** stops for any cast that isn't triggered, or when its target goes out of range. Auto Shot
+      waits through both.
+    - **Animal forms** make a player a beast: cat, bear, travel, aquatic and Ghost Wolf.
+    - **Rounding:**
+      - an ability's armor cut rounds to a whole number, as Thistle Tea has it;
+      - a fall after Slow Fall counts from where the player last was.
+    - **Creatures** carry 0x10 in `UNIT_FIELD_BYTES_2`.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -689,6 +708,9 @@ the questions waiting for you.
 | 3o: the loaders (100 rows) | merged | b9f364f |
 | 3m: spells and classes | merged | d70cd01 |
 | 3r: creatures, pets and world systems | merged | 2d71df2 |
+| 4b: the core (stats, skills, wands, movement) | merged | fd5b963 |
+| Review 2 (map core) and review 3 (combat, spells, auras) | merged | f90d87f, 1e8c8a5 |
+| The race's client crash (create splines) | fixed | 12c055a |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 

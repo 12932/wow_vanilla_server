@@ -152,7 +152,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Pets:**
   - A pet takes crowd-controlled targets, and doesn't hold off while on Stay.
   - Auto Shot isn't cancelled by pacify or range, and its dead zone is measured centre to centre.
-  - A wand's shot takes no damage-done or school bonuses.
 - **Swings:** errors repeat each second, and the off hand rolls the main hand's weapon skill.
 
 ### Quests and events
