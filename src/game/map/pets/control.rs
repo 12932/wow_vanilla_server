@@ -395,8 +395,10 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                     return feedback(map, player, PetFeedback::CantAttackTarget);
                 }
                 ai::attack(map, pet, target);
+                let now = map.now;
                 if let Some(s) = state_mut(map, pet) {
                     s.commanded = Some(target);
+                    s.commanded_at = Some(now);
                 }
             }
             COMMAND_DISMISS if map.players.contains_key(&pet) => possess::release(map, pet),

@@ -180,6 +180,9 @@ pub struct PetState {
     /// The victim its master's Attack named, which a staying pet goes
     /// after (any other it fights only where it stands).
     pub commanded: Option<Guid>,
+    /// When its master last sent it to attack: crowd control older than
+    /// that it was sent to break (mangos's `GetPetLastAttackCommandTime`).
+    pub commanded_at: Option<Instant>,
 }
 
 impl PetState {
@@ -218,6 +221,7 @@ impl PetState {
             returning: false,
             charm_cooldowns: Vec::new(),
             commanded: None,
+            commanded_at: None,
         }
     }
 }
