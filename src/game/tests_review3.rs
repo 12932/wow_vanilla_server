@@ -622,3 +622,57 @@ async fn an_aura_replaced_starts_the_cooldown_waiting_for_it() {
     assert!(!out.3, "rank 1 waits no more");
     assert!(out.4, "its cooldown started as it went");
 }
+
+/// A pet area aura of two effects (Soul Link's damage done and split,
+/// Stalker's Ally's two powers) puts both on the pet, in one holder.
+#[tokio::test]
+async fn a_pet_area_aura_of_two_effects_puts_both_on_the_pet() {
+    use crate::game::data::spells::SpellEffect;
+    use crate::game::map::auras::{AURA_MOD_RESISTANCE, AURA_MOD_STAT};
+    use crate::game::map::pets::EFFECT_APPLY_AREA_AURA_PET;
+    use crate::game::tests_pets::{
+        BOAR, CALL_PET, DISMISS_PET, TAME_BEAST, cast, data, enter, learn, pet_bar, place,
+    };
+    const LINK: u32 = 990_395;
+    let mut d = data();
+    let mut link = bare(LINK, 0);
+    link.duration_index = LASTS_LONG;
+    for (i, (kind, misc, amount)) in [(AURA_MOD_STAT, 0, 10), (AURA_MOD_RESISTANCE, 1, 100)]
+        .into_iter()
+        .enumerate()
+    {
+        effect(
+            &mut link,
+            i,
+            SpellEffect {
+                effect: EFFECT_APPLY_AREA_AURA_PET,
+                ..aura(kind, misc, amount, 1)
+            },
+        );
+    }
+    insert(&mut d, [link]);
+    let realm = crate::game::harness::realm_with(d);
+    let (mut h, gh, map) = enter(&realm, "R3PA", "Linked", Race::Dwarf, Class::Hunter).await;
+    learn(&map, gh, &[TAME_BEAST, CALL_PET, DISMISS_PET, LINK]);
+    let boar = place(&map, gh, BOAR, 0x70_0001, 4.0).await;
+    h.sees(boar).await;
+    cast(&h, TAME_BEAST, Some(boar)).await;
+    let pet = pet_bar(&mut h).await;
+    let kinds = map
+        .query(move |m| {
+            use super::tests_p3_spells_kit::{cast_fresh, holder};
+            cast_fresh(m, gh, LINK, at(gh));
+            holder(m, pet, LINK).map(|h| {
+                let mut k: Vec<u32> = h.effects.iter().map(|x| x.kind).collect();
+                k.sort_unstable();
+                k
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        kinds,
+        Some(vec![AURA_MOD_RESISTANCE, AURA_MOD_STAT]),
+        "both effects on the pet"
+    );
+}

@@ -258,6 +258,7 @@ pub fn run(
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let mut aura_effects = Vec::new();
     let mut weapon = Vec::new();
+    let mut pet_aura = Vec::new();
     for index in 0..3 {
         if !which[index] {
             continue;
@@ -289,6 +290,12 @@ pub fn run(
             | EFFECT_WEAPON_DAMAGE_NOSCHOOL
             | EFFECT_NORMALIZED_WEAPON_DMG
             | EFFECT_WEAPON_PERCENT_DAMAGE => weapon.push((index, points)),
+            // On the pet together, after (`pets::area_aura`).
+            crate::game::map::pets::EFFECT_APPLY_AREA_AURA_PET
+                if !crate::game::map::battleground::plants(s) =>
+            {
+                pet_aura.push((index, points))
+            }
             _ => effect(map, caster, target, s, index, points, &here, item, t),
         }
         if e.chain_target > 1 {
@@ -301,6 +308,9 @@ pub fn run(
     }
     if !weapon.is_empty() {
         weapon_damage(map, caster, target, s, &weapon, l);
+    }
+    if !pet_aura.is_empty() {
+        crate::game::map::pets::area_aura(map, caster, s, &pet_aura);
     }
     if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);

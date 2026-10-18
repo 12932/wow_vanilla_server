@@ -799,7 +799,9 @@ pub enum Refused {
     Immune,
 }
 
-/// Put `spell`'s effect `index` on `target`.
+/// Put `spell`'s effect `index` on `target` (the tests' shorthand: a
+/// spell's effects go on together, by [`apply_spell`]).
+#[cfg(test)]
 pub fn apply(
     map: &mut Map,
     caster: Guid,

@@ -416,14 +416,25 @@ pub fn effect(
         EFFECT_SUMMON_POSSESSED => {
             totems::summon_possessed(map, caster, e.misc_value.max(0) as u32, s)
         }
-        EFFECT_APPLY_AREA_AURA_PET => {
-            if let Some(pet) = pet_of(map, caster)
-                && map.unit_view(pet).is_some_and(|u| u.alive)
-            {
-                crate::game::map::auras::apply(map, caster, pet, s, index, amount);
-            }
-        }
+        EFFECT_APPLY_AREA_AURA_PET => area_aura(map, caster, s, &[(index, amount)]),
         _ => {}
+    }
+}
+
+/// A pet area aura's effects (each index and amount) on `caster`'s pet,
+/// as one holder: a spell of two (Soul Link) puts both on.
+pub fn area_aura(map: &mut Map, caster: Guid, s: &SpellTemplate, effects: &[(usize, i32)]) {
+    if let Some(pet) = pet_of(map, caster)
+        && map.unit_view(pet).is_some_and(|u| u.alive)
+    {
+        let _ = crate::game::map::auras::apply_spell(
+            map,
+            caster,
+            pet,
+            s,
+            effects,
+            crate::game::map::auras::Context::default(),
+        );
     }
 }
 
