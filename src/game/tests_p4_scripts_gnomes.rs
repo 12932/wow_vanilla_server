@@ -344,3 +344,217 @@ async fn zul_farraks_pyramid_waves() {
         "once a copy"
     );
 }
+
+const ULD_FROZEN: u32 = 0x0200_0300;
+
+fn frozen(m: &Map, g: wow_world_messages::Guid) -> bool {
+    unit_flags(m, g) & ULD_FROZEN == ULD_FROZEN
+}
+
+/// Uldaman: players can't work its doors (but the Keystone); Ironaya
+/// stands as stone till the Keystone's seal opens, twenty-seven seconds
+/// on (once), and wakes then; the Stone Keepers wake one at a time, the
+/// next as one dies, and all dead open the temple door; Archaedas wakes at
+/// his altar, wakes the earthen on the wall one at a time as his fight
+/// asks, calls his guardians and the chamber's warders and sends the outer
+/// ones away; giving up opens the temple door and his chamber goes back to
+/// sleep; his death opens the vault and crumbles the earthen left.
+#[tokio::test]
+#[ignore = "extended"]
+async fn uldamans_keystone_keepers_and_archaedas() {
+    const SEAL: u32 = 124372;
+    const KEEPERS_DOOR: u32 = 124367;
+    const VAULT: u32 = 124369;
+    const TEMPLE_DOOR: u32 = 141869;
+    const KEYSTONE: u32 = 124371;
+    const IRONAYA: u32 = 7228;
+    const KEEPER: u32 = 4857;
+    const ARCHAEDAS: u32 = 2748;
+    const CUSTODIAN: u32 = 7309;
+    const GUARDIAN: u32 = 7076;
+    const WARDER: u32 = 10120;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = inside(&realm, "Ironaya", 70, IRONAYA).await;
+    // Wait for the spawned events: Ironaya turned to stone.
+    assert!(
+        until(&map, 3000, |m| first(m, IRONAYA).is_some_and(|g| frozen(
+            m, g
+        ) && has(
+            m, g, 10255
+        )))
+        .await,
+        "Ironaya as stone"
+    );
+    map.query(move |m| {
+        for (e, scripted) in [
+            (SEAL, true),
+            (KEEPERS_DOOR, true),
+            (VAULT, true),
+            (TEMPLE_DOOR, true),
+            (KEYSTONE, false),
+        ] {
+            let g = m
+                .gameobjects
+                .iter()
+                .find(|(_, o)| o.entry == e)
+                .map(|(_, o)| o.guid)
+                .unwrap_or_else(|| panic!("{e}"));
+            assert_eq!(instance_script::scripted_door(m, g), scripted, "{e}");
+        }
+        let ironaya = first(m, IRONAYA).unwrap();
+        instance_script::object_used(m, KEYSTONE);
+        instance_script::object_used(m, KEYSTONE);
+        assert_eq!(
+            m.instance.timers.iter().filter(|(_, k)| *k == 1400).count(),
+            1
+        );
+        assert_eq!(respawned(m, &[SEAL]), vec![Some(1)], "shut till then");
+        hurry_copy(m, Duration::from_millis(26_900));
+        assert_eq!(door(m, SEAL), Some(1));
+        hurry_copy(m, Duration::from_millis(200));
+        assert_eq!(
+            (door(m, SEAL), data(m, 0)),
+            (Some(0), DONE),
+            "the seal opens"
+        );
+        assert!(!frozen(m, ironaya), "Ironaya wakes");
+        assert_eq!(faction(m, ironaya), 415);
+        assert_eq!(respawned(m, &[SEAL]), vec![Some(0)]);
+        // The Stone Keepers.
+        let keepers = living(m, KEEPER);
+        assert!(keepers.len() >= 2);
+        assert!(keepers.iter().all(|k| frozen(m, *k)));
+        set(m, 1, IN_PROGRESS);
+        for n in 0..keepers.len() {
+            hurry_copy(m, Duration::from_millis(50));
+            let awake: Vec<_> = living(m, KEEPER)
+                .into_iter()
+                .filter(|k| !frozen(m, *k))
+                .collect();
+            assert_eq!(awake.len(), 1, "one at a time ({n})");
+            assert_eq!(faction(m, awake[0]), 470);
+            hurry_copy(m, Duration::from_millis(50));
+            assert_eq!(
+                living(m, KEEPER)
+                    .into_iter()
+                    .filter(|k| !frozen(m, *k))
+                    .count(),
+                1,
+                "the next waits for it"
+            );
+            assert_eq!(door(m, KEEPERS_DOOR), Some(1));
+            kill(m, me, awake[0]);
+        }
+        hurry_copy(m, Duration::from_millis(50));
+        assert_eq!(
+            (data(m, 1), door(m, KEEPERS_DOOR)),
+            (DONE, Some(0)),
+            "all fallen"
+        );
+    })
+    .await
+    .unwrap();
+    // The keepers turn back to stone when the awake one gives up.
+    let (_c, me, map) = inside(&realm, "Keepers", 70, KEEPER).await;
+    assert!(
+        until(&map, 3000, |m| living(m, KEEPER)
+            .iter()
+            .all(|k| frozen(m, *k)))
+        .await
+    );
+    map.query(move |m| {
+        set(m, 1, IN_PROGRESS);
+        hurry_copy(m, Duration::from_millis(50));
+        let a = living(m, KEEPER)
+            .into_iter()
+            .find(|k| !frozen(m, *k))
+            .unwrap();
+        kill(m, me, a);
+        hurry_copy(m, Duration::from_millis(50));
+        let b = living(m, KEEPER)
+            .into_iter()
+            .find(|k| !frozen(m, *k))
+            .unwrap();
+        instance_script::creature_event(m, b, Event::Evade);
+        assert_eq!(data(m, 1), FAILED);
+        assert!(frozen(m, b), "back to stone");
+        assert!(
+            m.creature(a).is_some_and(|c| c.alive()),
+            "the dead one back"
+        );
+    })
+    .await
+    .unwrap();
+    // Archaedas.
+    let (_c, me, map) = inside(&realm, "Archaedas", 70, ARCHAEDAS).await;
+    assert!(
+        until(&map, 3000, |m| !living(m, CUSTODIAN).is_empty()
+            && living(m, CUSTODIAN).iter().all(|g| frozen(m, *g)))
+        .await
+    );
+    map.query(move |m| {
+        set(m, 2, IN_PROGRESS);
+        assert_eq!(data(m, 11), IN_PROGRESS, "his challengers shut in");
+        let wall = living(m, CUSTODIAN).len();
+        for n in 1..=2.min(wall) {
+            set(m, 2, IN_PROGRESS);
+            hurry_copy(m, Duration::from_millis(50));
+            let awake = living(m, CUSTODIAN)
+                .into_iter()
+                .filter(|g| !frozen(m, *g))
+                .count();
+            assert_eq!(awake, n, "one more of the wall");
+        }
+        // His guardians, and the chamber's warders.
+        set(m, 13, IN_PROGRESS);
+        set(m, 13, IN_PROGRESS);
+        assert_eq!(
+            m.instance.timers.iter().filter(|(_, k)| *k == 1403).count(),
+            1
+        );
+        hurry_copy(m, Duration::from_millis(50));
+        assert!(
+            living(m, GUARDIAN).iter().all(|g| !frozen(m, *g)),
+            "the guardians"
+        );
+        let warders = living(m, WARDER).len();
+        set(m, 14, IN_PROGRESS);
+        hurry_copy(m, Duration::from_millis(50));
+        let left = living(m, WARDER);
+        assert!(left.len() < warders, "the outer warders sent away");
+        assert!(left.iter().all(|g| !frozen(m, *g) && faction(m, *g) == 415));
+        // He gives up: the door opens, his chamber sleeps again.
+        let a = first(m, ARCHAEDAS).unwrap();
+        instance_script::creature_event(m, a, Event::Evade);
+        assert_eq!(door(m, TEMPLE_DOOR), Some(0), "the temple door");
+        set(m, 2, 0);
+        hurry_copy(m, Duration::from_millis(50));
+        assert!(
+            living(m, CUSTODIAN).iter().all(|g| frozen(m, *g)),
+            "the wall asleep again"
+        );
+        set(m, 2, IN_PROGRESS);
+        set(m, 2, IN_PROGRESS);
+        hurry_copy(m, Duration::from_millis(50));
+        assert_eq!(
+            living(m, CUSTODIAN)
+                .into_iter()
+                .filter(|g| !frozen(m, *g))
+                .count(),
+            1,
+            "woken again"
+        );
+        // His death.
+        kill(m, me, a);
+        assert_eq!(data(m, 2), DONE);
+        assert_eq!((door(m, VAULT), door(m, TEMPLE_DOOR)), (Some(0), Some(0)));
+        hurry_copy(m, Duration::from_millis(50));
+        assert!(living(m, CUSTODIAN).is_empty(), "the earthen crumble");
+        set(m, 2, IN_PROGRESS);
+        assert_eq!(data(m, 2), DONE);
+    })
+    .await
+    .unwrap();
+}
