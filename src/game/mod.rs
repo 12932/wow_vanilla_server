@@ -88,6 +88,8 @@ mod tests_p3_aura2_dispel;
 #[cfg(test)]
 mod tests_p3_aura2_immunity;
 #[cfg(test)]
+mod tests_p3_aura2_periodic;
+#[cfg(test)]
 mod tests_p3_aura2_real;
 #[cfg(test)]
 mod tests_p3_aura2_spells;

@@ -851,6 +851,27 @@ pub fn apply_spell(
             return Err(Refused::Immune);
         }
     }
+    // Effects of an aura kind kept off don't go on, whoever the target
+    // (mangos's `IsImmuneToSpellEffect`, Thistle Tea's state immunity on a
+    // self-cast harmful aura); with none left the aura is refused.
+    let kept_off: Vec<(usize, i32)>;
+    let effects = if !spell.attr(0, sd::ATTR_NO_IMMUNITIES)
+        && effects
+            .iter()
+            .any(|(i, _)| existing.state_immune(spell.effects[*i].aura))
+    {
+        kept_off = effects
+            .iter()
+            .copied()
+            .filter(|(i, _)| !existing.state_immune(spell.effects[*i].aura))
+            .collect();
+        if kept_off.is_empty() {
+            return Err(Refused::Immune);
+        }
+        &kept_off[..]
+    } else {
+        effects
+    };
     // A dispel type kept off, helpful or not: Faerie Fire's keeps stealth
     // and invisibility off (mangos's `IsImmuneToSpell`).
     if !spell.attr(0, sd::ATTR_NO_IMMUNITIES) && existing.dispel_immune(spell.dispel) {
