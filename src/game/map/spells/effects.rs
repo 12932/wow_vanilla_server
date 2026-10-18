@@ -1493,6 +1493,7 @@ pub fn proficiency(map: &Map, player: Guid, s: &SpellTemplate) {
 
 /// The effects with no unit: a persistent area at the destination, a
 /// missile's spell there, an object to open.
+#[allow(clippy::too_many_arguments)]
 pub fn run_untargeted(
     map: &mut Map,
     caster: Guid,

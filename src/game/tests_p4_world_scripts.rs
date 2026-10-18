@@ -101,7 +101,7 @@ async fn the_real_creature_teleports_are_loaded() {
                     .map(move |s| (*id, s.datalong[0], [s.x, s.y, s.z, s.o]))
             })
             .collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v.sort_by_key(|a| a.0);
         v
     };
     let s = &d.scripts;
