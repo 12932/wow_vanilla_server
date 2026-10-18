@@ -152,3 +152,89 @@ async fn bank_bag_slots_bought_survive_a_relog() {
     assert_eq!(slots, 3, "the three slots bought");
     drop(a);
 }
+
+fn aboard(position: Vector3d, offset: Vector3d) -> MSG_MOVE_HEARTBEAT_Client {
+    MSG_MOVE_HEARTBEAT_Client {
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::empty().set_on_transport(
+                MovementInfo_MovementFlags_OnTransport {
+                    transport: TransportInfo {
+                        guid: crate::game::guid::make(
+                            crate::game::guid::HighGuid::MoTransport,
+                            0,
+                            20808,
+                        ),
+                        position: offset,
+                        orientation: 0.0,
+                        timestamp: 0,
+                    },
+                },
+            ),
+            timestamp: 0,
+            position,
+            orientation: 0.0,
+            fall_time: 0.0,
+        },
+    }
+}
+
+/// A place on a transport's deck that no deck has (NaN, or a mile off) is
+/// dropped, as mangos's `VerifyMovementInfo` drops it: not taken, relayed
+/// to those watching, or saved for the next login.
+#[tokio::test]
+async fn a_place_on_deck_off_any_deck_is_dropped() {
+    let realm = realm(GameData::empty(), true, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(g).await;
+    let map = map_of(&realm, g);
+    let at = on(&map, move |m| m.players[&g].position()).await;
+    let nan = Vector3d {
+        x: f32::NAN,
+        y: 0.0,
+        z: 0.0,
+    };
+    let far = Vector3d {
+        x: 5000.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    for offset in [nan, far] {
+        a.send(aboard(at, offset)).await;
+    }
+    // A good one after: taken, so the bad ones were looked at first.
+    let deck = Vector3d {
+        x: 2.0,
+        y: -1.0,
+        z: 3.0,
+    };
+    a.send(aboard(at, deck)).await;
+    // What Bob is told of Alice's moves, in order, up to the good one.
+    let mut relayed = Vec::new();
+    loop {
+        let offset = b
+            .wait_for("Alice's heartbeat", |m| match m {
+                ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(h) if h.guid == g => {
+                    h.info.flags.get_on_transport().map(|t| t.transport.position)
+                }
+                _ => None,
+            })
+            .await;
+        relayed.push(offset.x);
+        if offset.x == deck.x {
+            break;
+        }
+    }
+    assert_eq!(relayed, vec![deck.x], "only the deck's place was relayed");
+    let kept = on(&map, move |m| {
+        m.players[&g]
+            .movement
+            .flags
+            .get_on_transport()
+            .map(|t| t.transport.position.x)
+    })
+    .await;
+    assert_eq!(kept, Some(deck.x));
+}
