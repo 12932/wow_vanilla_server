@@ -191,3 +191,156 @@ async fn thermaplugg_and_his_bomb_faces() {
     .await
     .unwrap();
 }
+
+const ZF_CREW: [u32; 5] = [7604, 7605, 7606, 7607, 7608];
+const ZF_ALIVE: u32 = 10;
+const ZF_AT_BASE: u32 = 11;
+const ZF_TROLLS: [u32; 7] = [7787, 7788, 7789, 8876, 8877, 7275, 7796];
+
+fn zf_list(m: &Map, key: u32) -> Vec<wow_world_messages::Guid> {
+    m.instance.lists.get(&key).cloned().unwrap_or_default()
+}
+
+/// Summoned trolls of the pyramid's waves living here.
+fn zf_summoned(m: &Map) -> Vec<wow_world_messages::Guid> {
+    m.creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && c.spawn_guid.is_none() && ZF_TROLLS.contains(&c.entry))
+        .map(|(_, c)| c.guid)
+        .collect()
+}
+
+fn home_of(m: &Map, entry: u32) -> Option<(f32, f32)> {
+    first(m, entry)
+        .and_then(|g| m.creature(g))
+        .map(|c| (c.home.x, c.home.y))
+}
+
+/// Zul'Farrak's pyramid: a cage opened frees the crew to the top of the
+/// stairs, once; Weegli at the stairs gathers the first wave of
+/// twenty-three below (once), each troll in it once it has come; groups
+/// go up the stairs every ten seconds, larger each time, none slain sent;
+/// a database troll joins no wave, and a wave isn't cleared while one of
+/// it lives; each cleared wave brings the next (the second ten seconds
+/// on, the third with its leaders at once and the crew down the stairs
+/// five after), and the last sends the crew to the floor. The end door
+/// blown stays open, and Gahz'rilla rises once a copy.
+#[tokio::test]
+#[ignore = "extended"]
+async fn zul_farraks_pyramid_waves() {
+    const T_SEND: u32 = 1300;
+    const T_WAVE_2: u32 = 1301;
+    const T_WAVE_3: u32 = 1302;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = inside(&realm, "Pyramid", 209, 7607).await;
+    map.query(|m| {
+        instance_script::object_used(m, 141072);
+        assert_eq!(data(m, 1), 1);
+        assert_eq!(home_of(m, 7607), Some((1883.87, 1263.49)), "Weegli up top");
+        for e in ZF_CREW {
+            let g = first(m, e).unwrap();
+            assert_eq!(faction(m, g), 250, "{e} freed");
+        }
+        instance_script::object_used(m, 141070);
+        assert_eq!(data(m, 1), 1, "once");
+        set(m, 1, 2);
+        assert_eq!(data(m, 1), 3, "the first wave");
+        set(m, 1, 2);
+    })
+    .await
+    .unwrap();
+    assert!(
+        until(&map, 3000, |m| zf_list(m, ZF_ALIVE).len() == 23).await,
+        "twenty-three come"
+    );
+    map.query(move |m| {
+        assert_eq!(zf_summoned(m).len(), 23, "once");
+        // A database troll joins none.
+        let db = m
+            .creatures
+            .iter()
+            .find(|(_, c)| c.alive() && c.spawn_guid.is_some() && c.entry == 7789)
+            .map(|(_, c)| c.guid);
+        if let Some(db) = db {
+            instance_script::creature_event(m, db, Event::Spawned);
+            assert_eq!(zf_list(m, ZF_ALIVE).len(), 23);
+            kill(m, me, db);
+            assert_eq!(zf_list(m, ZF_ALIVE).len(), 23);
+        }
+        // The first slain is never sent.
+        let base = zf_list(m, ZF_AT_BASE);
+        kill(m, me, base[0]);
+        hurry_copy(m, Duration::from_millis(1050));
+        assert_eq!(zf_list(m, ZF_AT_BASE), base[3..], "two sent, the slain not");
+        hurry_copy(m, Duration::from_millis(10_050));
+        assert_eq!(zf_list(m, ZF_AT_BASE), base[6..], "then three");
+        // One left: not cleared.
+        let alive = zf_list(m, ZF_ALIVE);
+        let (last, rest) = alive.split_last().unwrap();
+        for g in rest {
+            kill(m, me, *g);
+        }
+        assert_eq!(data(m, 1), 3, "one lives");
+        kill(m, me, *last);
+        assert_eq!(data(m, 1), 4, "cleared");
+        assert!(!m.instance.timers.iter().any(|(_, k)| *k == T_SEND));
+        assert!(m.instance.timers.iter().any(|(_, k)| *k == T_WAVE_2));
+        hurry_copy(m, Duration::from_millis(10_050));
+        assert_eq!(data(m, 1), 5, "the second");
+    })
+    .await
+    .unwrap();
+    assert!(until(&map, 3000, |m| zf_list(m, ZF_ALIVE).len() == 24).await);
+    map.query(move |m| {
+        for g in zf_list(m, ZF_ALIVE) {
+            kill(m, me, g);
+        }
+        assert_eq!(data(m, 1), 6);
+        assert_eq!(
+            living(m, 7275).len() + living(m, 7796).len(),
+            2,
+            "its leaders"
+        );
+        assert!(m.instance.timers.iter().any(|(_, k)| *k == T_WAVE_3));
+        hurry_copy(m, Duration::from_millis(5050));
+        assert_eq!(data(m, 1), 7, "the crew comes down");
+        assert_eq!(home_of(m, 7607), Some((1878.02, 1227.65)));
+    })
+    .await
+    .unwrap();
+    assert!(until(&map, 3000, |m| zf_list(m, ZF_ALIVE).len() == 7).await);
+    map.query(move |m| {
+        for g in zf_list(m, ZF_ALIVE) {
+            kill(m, me, g);
+        }
+        assert_eq!(data(m, 1), 8, "all dead");
+        assert_eq!(home_of(m, 7607), Some((1877.52, 1199.63)), "to the floor");
+        // The end door.
+        assert_eq!(door(m, 146084), Some(1));
+        set(m, 3, DONE);
+        assert_eq!(door(m, 146084), Some(0));
+        assert_eq!(respawned(m, &[146084]), vec![Some(0)]);
+        set(m, 3, 0);
+        assert_eq!(data(m, 3), DONE, "for good");
+        // Gahz'rilla.
+        let at = m.position_of(me).unwrap();
+        summon(m, 7273, at, 0.0);
+    })
+    .await
+    .unwrap();
+    assert!(
+        until(&map, 3000, |m| data(m, 2) == IN_PROGRESS).await,
+        "he rises"
+    );
+    map.query(move |m| {
+        let at = m.position_of(me).unwrap();
+        summon(m, 7273, at, 0.0);
+    })
+    .await;
+    assert!(
+        until(&map, 3000, |m| living(m, 7273).len() == 1).await,
+        "once a copy"
+    );
+}
