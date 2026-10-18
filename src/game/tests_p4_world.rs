@@ -270,3 +270,53 @@ async fn a_totem_and_a_spells_area_fade_as_they_go() {
         c.forgets(area).await;
     }
 }
+
+const BONFIRE: u32 = 98_030;
+
+/// Thistle Tea's "a database spawn leaves without one when its event
+/// ends": a spawned object (an event's bonfire) goes from sight without the
+/// despawn animation a summoned one plays.
+#[tokio::test]
+async fn a_spawned_object_goes_without_the_despawn_animation() {
+    let mut d = data();
+    d.gameobject_templates
+        .insert(BONFIRE, object(BONFIRE, 8, "Bonfire", &[]));
+    let start = crate::game::tests_p3_combat::START;
+    d.gameobject_spawns.insert(
+        0,
+        vec![crate::game::data::GameObjectSpawn {
+            guid: 9,
+            entry: BONFIRE,
+            map: 0,
+            x: start.0 + 3.0,
+            y: start.1,
+            z: start.2,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        }],
+    );
+    let (_realm, mut a, _g, map) = setup_with(d, Class::Warrior).await;
+    let fire = on(&map, |m| {
+        m.gameobjects
+            .iter()
+            .find(|(_, o)| o.entry == BONFIRE)
+            .map(|(_, o)| o.guid)
+    })
+    .await
+    .expect("the bonfire");
+    a.sees(fire).await;
+    a.clear();
+    on(&map, move |m| crate::game::map::objects::despawn(m, fire)).await;
+    a.forgets(fire).await;
+    let anim = a
+        .gets(crate::game::tests_p3_entity::NONE_WITHIN, |m| {
+            match m {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GAMEOBJECT_DESPAWN_ANIM(
+                d,
+            ) if d.guid == fire => Some(()),
+            _ => None,
+        }
+        })
+        .await;
+    assert!(anim.is_none(), "no despawn animation");
+}

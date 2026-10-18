@@ -211,3 +211,65 @@ async fn a_scorpid_surprise_poisons_one_time_in_eleven() {
     assert_eq!(fed, 2_200, "fed every time");
     assert!((120..300).contains(&poisoned), "one in eleven: {poisoned}");
 }
+
+const SNOWBALL: u32 = 21343;
+const SNOWBALL_KNOCKDOWN: u32 = 21167;
+
+/// Thistle Tea's "applies its effects only while both players share a
+/// group": a snowball knocks down a player of its thrower's group, and
+/// no one else.
+#[tokio::test]
+async fn a_snowball_knocks_down_only_one_of_its_throwers_group() {
+    let mut d = world();
+    d.spells.spells.insert(
+        SNOWBALL,
+        spell(
+            SNOWBALL,
+            &[SpellEffect {
+                effect: 77,
+                target_a: 25,
+                ..Default::default()
+            }],
+        ),
+    );
+    let mut knockdown = marker(SNOWBALL_KNOCKDOWN);
+    knockdown.effects[0].target_a = 1;
+    d.spells.spells.insert(SNOWBALL_KNOCKDOWN, knockdown);
+    let (realm, mut a, g, map) = setup_with(d, Class::Warrior).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    let gb = b.enter("Bea", Race::Human, Class::Warrior).await;
+    let mut c = crate::game::harness::Client::connect(&realm, "C");
+    let gc = c.enter("Cid", Race::Human, Class::Warrior).await;
+    let throw = |at: Guid| {
+        let map = map.clone();
+        async move {
+            on(&map, move |m| {
+                crate::game::map::spells::cast_triggered(m, g, SNOWBALL, Some(at));
+                let down = has(m, at, SNOWBALL_KNOCKDOWN);
+                auras::remove_spell(m, at, SNOWBALL_KNOCKDOWN, None);
+                down
+            })
+            .await
+        }
+    };
+    assert!(!throw(gb).await, "not grouped: no knockdown");
+    a.send(CMSG_GROUP_INVITE { name: "Bea".into() }).await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GROUP_INVITE(_)
+        )
+        .then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("the roster", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GROUP_LIST(l) => {
+            (!l.members.is_empty()).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    assert!(throw(gb).await, "grouped: down");
+    assert!(!throw(gc).await, "one outside the group: not");
+}
