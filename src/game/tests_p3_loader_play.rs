@@ -1527,3 +1527,70 @@ async fn real_skills_bring_their_spells_and_talents_their_ranks() {
         "Mortal Strike's ranks are the talent's; a mage's talent isn't a warrior's"
     );
 }
+
+const BATTLEMASTER: u32 = 14_981;
+const MOUNT_TRAINER: u32 = 4732;
+const STORMWIND: u32 = 72;
+
+/// Thistle Tea's gossip on the real data (`gossip_vmangos_test.exs`): a
+/// battlemaster whose menu has no options of its own offers the default
+/// menu's "I wish to join the battle!", as mangos's `PrepareGossipMenu`;
+/// Moonglade's flight options each for their own side's druids; and a
+/// race's mount trainer for that race, or another exalted with his
+/// faction (`gossip_test.exs`'s `trainer_of?`).
+#[tokio::test]
+async fn real_gossip_defaults_side_conditions_and_mount_trainers() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut a, alliance, kalimdor) =
+        enter(&realm, "P3JGOSS1", "Gossa", Race::NightElf, Class::Druid).await;
+    let (_h, horde, _) = enter(&realm, "P3JGOSS2", "Gossb", Race::Tauren, Class::Druid).await;
+    let master = on(&kalimdor, move |m| {
+        dummy(m, alliance, BATTLEMASTER, 60, 2.0)
+    })
+    .await;
+    a.sees(master).await;
+    a.send(CMSG_GOSSIP_HELLO { guid: master }).await;
+    let gossips = a
+        .wait_for("the battlemaster's menu", |msg| match msg {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) => {
+                Some(g.gossips.clone())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(
+        gossips
+            .iter()
+            .any(|g| g.id == 10 && g.message == "I wish to join the battle!"),
+        "{gossips:?}"
+    );
+    let sides = on(&kalimdor, move |m| {
+        let met = |id, g| crate::game::map::conditions::met(m, id, Some(g), Some(g));
+        [
+            met(232, alliance),
+            met(232, horde),
+            met(206, horde),
+            met(206, alliance),
+        ]
+    })
+    .await;
+    assert_eq!(sides, [true, false, true, false], "each side's flight");
+    // Randal Hunter's horses: for humans, a dwarf only at exalted with
+    // Stormwind.
+    let (_hu, human, eastern) =
+        enter(&realm, "P3JGOSS3", "Gossc", Race::Human, Class::Warrior).await;
+    let (_dw, dwarf, _) = enter(&realm, "P3JGOSS4", "Gossd", Race::Dwarf, Class::Warrior).await;
+    let trained = on(&eastern, move |m| {
+        let data = m.realm.data.clone();
+        let randal = data.creature_template(MOUNT_TRAINER).unwrap();
+        let trains = |m: &Map, g| crate::game::map::npc::trains(&data, &m.players[&g], randal);
+        let before = (trains(m, human), trains(m, dwarf));
+        crate::game::map::reputation::modify(m, dwarf, STORMWIND, 42_000, false);
+        (before, trains(m, dwarf))
+    })
+    .await;
+    assert_eq!(trained, ((true, false), true), "his race's, or the exalted");
+}

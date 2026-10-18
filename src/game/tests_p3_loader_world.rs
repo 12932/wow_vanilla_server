@@ -131,3 +131,107 @@ fn the_real_graveyards_link_their_zones_sides_and_facings() {
     assert_eq!(pick(d, 389, 2437, ALLIANCE, inside), Some(32));
     assert_eq!(pick(d, 999, 0, HORDE, at(0.0, 0.0, 0.0)), None);
 }
+
+/// The option of `menu` with id `id`.
+fn option(d: &GameData, menu: u32, id: u32) -> &crate::game::data::npc::GossipOption {
+    d.npc.gossip_menus[&menu]
+        .options
+        .iter()
+        .find(|o| o.id == id)
+        .unwrap_or_else(|| panic!("menu {menu} option {id}"))
+}
+
+/// Thistle Tea's `gossip_vmangos_test.exs` loading on the real data: a
+/// hunter trainer's class menu leading to the talent reset (16), a pet
+/// trainer's untraining (17), Innkeeper Farley's home (8), Moonglade's
+/// flights by side, Olivia Burnside's deposit box, a battlemaster's menu
+/// with none of its own (the default's, played out in
+/// `tests_p3_loader_play`), the Tamed Kodo's greeting script, and
+/// Tharnariun's lost trap option with its condition and item.
+#[test]
+fn the_real_gossip_menus_load_as_thistle_tea_reads_them() {
+    let Some(d) = real() else {
+        return;
+    };
+    let template = |e: u32| d.creature_template(e).unwrap();
+    // A hunter's class trainer, and a pet trainer that isn't one.
+    let (hunter, pets) = (template(5515), template(10_090));
+    assert_eq!((hunter.trainer_type, hunter.trainer_class), (0, 3));
+    assert_eq!(pets.trainer_type, 3);
+    assert_eq!(option(d, hunter.gossip_menu_id, 1).action_menu, 4461);
+    let reset = option(d, 4461, 0);
+    assert_eq!((reset.kind, reset.npc_flag), (16, 0x10));
+    let untrain = d.npc.gossip_menus[&pets.gossip_menu_id]
+        .options
+        .iter()
+        .find(|o| o.kind == 17)
+        .unwrap();
+    assert_eq!(untrain.npc_flag, 0x10);
+    let farley = template(295);
+    let home = d.npc.gossip_menus[&farley.gossip_menu_id]
+        .options
+        .iter()
+        .find(|o| o.kind == 8)
+        .unwrap();
+    assert_eq!(home.npc_flag, 0x80);
+    // Moonglade: each side's flight, a script's SEND_TAXI_PATH.
+    for (menu, condition, path) in [(4041, 232, 315), (4042, 206, 316)] {
+        let o = option(d, menu, 0);
+        assert_eq!(o.condition, condition, "{menu}");
+        let steps = &d.scripts.gossip[&o.script];
+        assert_eq!(
+            (steps[0].command, steps[0].datalong[0]),
+            (30, path),
+            "{menu}"
+        );
+    }
+    let bank = option(d, 699, 0);
+    assert_eq!(template(2455).gossip_menu_id, 699);
+    assert_eq!(
+        (bank.kind, bank.icon, bank.text.as_str()),
+        (9, 6, "I would like to check my deposit box.")
+    );
+    let battlemaster = template(14_981);
+    assert_eq!(battlemaster.gossip_menu_id, 6460);
+    assert!(
+        d.npc
+            .gossip_menus
+            .get(&6460)
+            .is_none_or(|m| m.options.is_empty())
+    );
+    let join = option(d, 0, 10);
+    assert_eq!(
+        (join.kind, join.npc_flag, join.icon, join.text.as_str()),
+        (12, 2048, 9, "I wish to join the battle!")
+    );
+    assert!(battlemaster.npc_flags & 2048 != 0);
+    // The Tamed Kodo's greeting: credit, then its aura off, on the player.
+    let kodo = template(11_627).gossip_menu_id;
+    let steps = &d.scripts.gossip[&d.scripts.gossip_menu_script[&kodo]];
+    let kinds: Vec<(u32, u32)> = steps.iter().map(|s| (s.command, s.data_flags)).collect();
+    assert_eq!(kinds, vec![(83, 1), (14, 1)]);
+    assert!(steps[0].condition != 0);
+    assert_eq!(steps[1].datalong[0], 18_172);
+    // Tharnariun: another trap, to one on the quest who has lost it.
+    let trap = option(d, 269, 0);
+    assert_eq!(template(3701).gossip_menu_id, 269);
+    assert_eq!(
+        (
+            trap.kind,
+            trap.action_menu,
+            trap.text.as_str(),
+            trap.condition
+        ),
+        (
+            1,
+            -1,
+            "Tharnariun, I have lost the trap. Could you please give me another?",
+            1094
+        )
+    );
+    let give = &d.scripts.gossip[&trap.script][0];
+    assert_eq!(
+        (give.command, give.datalong[0], give.datalong[1]),
+        (17, 7586, 1)
+    );
+}
