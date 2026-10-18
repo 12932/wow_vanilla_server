@@ -168,7 +168,7 @@ async fn seals_proc_on_blows_that_land_and_seal_of_light_heals_its_paladin() {
             }
             let on_kobold = has(m, kobold, SEAL_OF_LIGHT_HEAL);
             // Retribution Aura strikes back at a blow, and stays.
-            kit::apply(m, p, p, RETRIBUTION_AURA);
+            spells::cast_triggered(m, p, RETRIBUTION_AURA, Some(p));
             let before = health(m, kobold);
             procs::damage_shields(m, kobold, p);
             let retribution = (before - health(m, kobold), has(m, p, RETRIBUTION_AURA));
