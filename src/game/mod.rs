@@ -94,6 +94,8 @@ mod tests_p3_combat3_assist;
 #[cfg(test)]
 mod tests_p3_combat3_block;
 #[cfg(test)]
+mod tests_p3_combat3_combo;
+#[cfg(test)]
 mod tests_p3_combat3_control;
 #[cfg(test)]
 mod tests_p3_combat3_defense;
