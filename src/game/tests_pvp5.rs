@@ -92,13 +92,28 @@ fn mounds(m: &crate::game::map::Map) -> Vec<(Guid, Vector3d)> {
 
 /// The next second's world PvP, now.
 async fn tick(map: &MapHandle) {
-    map.query(|m| {
-        if let Some(o) = m.outdoor.as_mut() {
+    let before = map
+        .query(|m| {
+            let o = m.outdoor.as_mut()?;
             o.next_tick = Some(Instant::now());
+            o.last_tick
+        })
+        .await
+        .flatten();
+    // Until the map's update has run it, however late a busy machine's
+    // update comes.
+    let deadline = Instant::now() + harness::WAIT;
+    while Instant::now() < deadline {
+        let ran = map
+            .query(move |m| m.outdoor.as_ref().is_some_and(|o| o.last_tick != before))
+            .await
+            .unwrap_or(false);
+        if ran {
+            return;
         }
-    })
-    .await;
-    tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the outdoor tick never ran");
 }
 
 #[tokio::test]
@@ -199,10 +214,15 @@ async fn a_cancelled_carry_drops_it_and_a_mound_picked_up_is_gone() {
     assert_eq!(left, 0, "picked up, it's gone");
 }
 
-async fn state_of(c: &mut Client, field: u32) -> u32 {
+/// `c` told world state `field` is `value`: a tick's before it, a busy
+/// machine's in the update the test's came in after, may tell it first of
+/// another value.
+async fn told(c: &mut Client, field: u32, value: u32) {
     c.wait_for("the world state", |m| match m {
-        ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w) if w.state.state == field => {
-            Some(w.state.value)
+        ServerOpcodeMessage::SMSG_UPDATE_WORLD_STATE(w)
+            if w.state.state == field && w.state.value == value =>
+        {
+            Some(())
         }
         _ => None,
     })
@@ -221,7 +241,7 @@ async fn silithus_tallies_go_to_those_in_it_and_the_favor_to_its_living_winners(
     })
     .await;
     tick(&map).await;
-    assert_eq!(state_of(&mut a, 2313).await, 7);
+    told(&mut a, 2313, 7).await;
     let favored = map
         .query(move |m| m.players[&g].auras.has_spell(FAVOR))
         .await
@@ -232,7 +252,7 @@ async fn silithus_tallies_go_to_those_in_it_and_the_favor_to_its_living_winners(
     map.query(move |m| m.players.get_mut(&g).unwrap().zone = 440)
         .await;
     tick(&map).await;
-    assert_eq!(state_of(&mut a, 2313).await, 0);
+    told(&mut a, 2313, 0).await;
     let favored = map
         .query(move |m| m.players[&g].auras.has_spell(FAVOR))
         .await
@@ -356,7 +376,7 @@ async fn the_towers_wear_their_holders_colours_and_their_buff_follows_the_zones(
     map.query(move |m| m.players.get_mut(&g).unwrap().zone = 12)
         .await;
     tick(&map).await;
-    assert_eq!(state_of(&mut a, 2327).await, 0);
+    told(&mut a, 2327, 0).await;
     let buffed = map
         .query(move |m| m.players[&g].auras.has_spell(11413))
         .await
