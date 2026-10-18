@@ -1339,10 +1339,11 @@ pub fn destroy(map: &mut Map, g: Guid, at: (u8, u8), count: u32) {
         send_fail(p, Fail::NotFound, Guid::zero());
         return;
     };
+    // On the bag bar or in the bank's (mangos's `IsNotEmptyBag`).
+    let slot = p.items[i].slot;
     let bag_with_items = p.items[i].bag == BAG_PLAYER
-        && p.items
-            .iter()
-            .any(|x| x.bag == p.items[i].slot && (BAG_START..BAG_END).contains(&p.items[i].slot));
+        && ((BAG_START..BAG_END).contains(&slot) || (BANK_BAG_START..BANK_BAG_END).contains(&slot))
+        && p.items.iter().any(|x| x.bag == slot);
     if bag_with_items {
         send_fail(p, Fail::OnlyEmptyBags, p.items[i].guid);
         return;

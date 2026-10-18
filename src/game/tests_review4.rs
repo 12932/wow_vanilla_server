@@ -245,3 +245,59 @@ async fn a_stack_added_onto_shows_its_new_count() {
     assert_eq!(held.map(|h| h.2), Some(6), "the server's stack grew");
     assert_eq!(count, Some(6), "and the client is told");
 }
+
+const SATCHEL: u32 = 990_402;
+
+/// R4-3. A bag in the bank's bag slots with something in it isn't
+/// destroyed (mangos's `IsNotEmptyBag`), as one on the bag bar isn't,
+/// rather than leaving what it held in a bag that is gone.
+#[tokio::test]
+async fn a_full_bank_bag_is_not_destroyed() {
+    use crate::game::map::inventory::BANK_BAG_START;
+    let realm = harness::realm_with({
+        let mut d = data();
+        let mut satchel = item(SATCHEL);
+        satchel.class = 1;
+        satchel.inventory_type = 18;
+        satchel.container_slots = 4;
+        d.items.insert(SATCHEL, satchel);
+        d
+    });
+    let mut a = Client::connect(&realm, "R4BG");
+    let g = a.enter("Banker", Race::Human, Class::Warrior).await;
+    let (bag, widget) = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, SATCHEL, 1, false).unwrap();
+        crate::game::map::inventory::add_item(m, g, WIDGET, 1, false).unwrap();
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        p.fields.set_byte(crate::game::fields::PLAYER_BYTES_2, 2, 1);
+        let b = p.items.iter().position(|i| i.entry == SATCHEL).unwrap();
+        (p.items[b].bag, p.items[b].slot) = (BAG_PLAYER, BANK_BAG_START);
+        let w = p.items.iter().position(|i| i.entry == WIDGET).unwrap();
+        (p.items[w].bag, p.items[w].slot) = (BANK_BAG_START, 0);
+        p.refresh_inventory(&d);
+        (p.items[b].guid, p.items[w].guid)
+    })
+    .await;
+    a.send(CMSG_DESTROYITEM {
+        bag: BAG_PLAYER,
+        slot: BANK_BAG_START,
+        amount: 0,
+        unknown1: 0,
+        unknown2: 0,
+        unknown3: 0,
+    })
+    .await;
+    handled(&mut a).await;
+    let (b, w) = on_map(&realm, move |m| (place(m, g, bag), place(m, g, widget))).await;
+    assert_eq!(
+        b.map(|b| (b.0, b.1)),
+        Some((BAG_PLAYER, BANK_BAG_START)),
+        "the bag stays"
+    );
+    assert_eq!(
+        w.map(|w| (w.0, w.1)),
+        Some((BANK_BAG_START, 0)),
+        "with what it holds"
+    );
+}
