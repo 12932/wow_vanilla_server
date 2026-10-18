@@ -94,6 +94,8 @@ mod tests_p3_combat3_assist;
 #[cfg(test)]
 mod tests_p3_combat3_power;
 #[cfg(test)]
+mod tests_p3_combat3_immune;
+#[cfg(test)]
 mod tests_p3_combat3_regen;
 #[cfg(test)]
 mod tests_p3_combat3_share;

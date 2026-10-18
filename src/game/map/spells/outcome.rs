@@ -314,9 +314,14 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     let Some(a) = auras::auras(map, target) else {
         return Hit::Hit;
     };
+    // A spell that pierces school immunities still meets an immunity to
+    // damage (mangos's `CanPierceImmuneAura` against `IsImmuneToDamage`,
+    // Thistle Tea's `DamageImmunity`).
+    let mask = s.school_mask();
     if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-        && !s.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES)
-        && a.school_immune(s.school_mask())
+        && ((!s.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES)
+            && a.immune_by(AURA_SCHOOL_IMMUNITY, mask))
+            || a.immune_by(AURA_DAMAGE_IMMUNITY, mask))
     {
         return Hit::Immune;
     }

@@ -601,6 +601,14 @@ impl Auras {
             .any(|(_, a)| (a.misc as u32) & mask != 0 && mask != 0)
     }
 
+    /// Whether a school `mask` is stopped by an immunity of `kind` alone
+    /// (`AURA_SCHOOL_IMMUNITY`, which a spell may pierce, or
+    /// `AURA_DAMAGE_IMMUNITY`, which it may not).
+    pub fn immune_by(&self, kind: u32, mask: u32) -> bool {
+        self.of(kind)
+            .any(|(_, a)| (a.misc as u32) & mask != 0 && mask != 0)
+    }
+
     /// Whether a mechanic is stopped.
     pub fn mechanic_immune(&self, mechanic: u32) -> bool {
         mechanic != 0
@@ -2395,7 +2403,10 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         | AURA_PERIODIC_DAMAGE_PERCENT
         | AURA_PERIODIC_MANA_LEECH
         | AURA_POWER_BURN_MANA
-            if auras(map, target).is_some_and(|x| x.school_immune(h.school)) =>
+            if auras(map, target).is_some_and(|x| x.school_immune(h.school))
+                && !map.realm.data.spells.get(h.spell).is_some_and(|s| {
+                    s.attr(0, crate::game::data::spells::ATTR_NO_IMMUNITIES)
+                }) =>
         {
             // A tick on one immune to its school (Divine Shield, Ice Block).
             crate::game::map::spells::log::immune(map, h.caster, target, h.spell);
