@@ -1398,8 +1398,9 @@ fn land(
             }
             let mechanic = s.effects[i].mechanic;
             if mechanic != 0
-                && !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-                && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic))
+                && ((!s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                    && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic)))
+                    || crate::game::map::creature_combat::effect_immune(map, aim, caster, mechanic))
             {
                 *on = false;
                 immune = true;
@@ -1792,6 +1793,11 @@ pub fn heal_crit(
     periodic: bool,
     crit: bool,
 ) {
+    // Down in a linked feign death, nothing heals it (Thistle Tea's
+    // fallen pose).
+    if crate::game::map::event_ai::feigning(map, target) {
+        return;
+    }
     let Some(f) = map.unit_fields_mut(target) else {
         return;
     };

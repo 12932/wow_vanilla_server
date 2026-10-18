@@ -381,6 +381,9 @@ impl Creature {
         fields.set_u32(UNIT_FIELD_DISPLAYID, display);
         fields.set_u32(UNIT_FIELD_NATIVEDISPLAYID, display);
         fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, template.mount_display_id);
+        // Weapons out, unless its addon says otherwise (mangos's
+        // `InitEntry`, Thistle Tea's sheath of 1).
+        fields.set_byte(UNIT_FIELD_BYTES_2, 0, 1);
         let attack = if template.base_attack_time > 0 {
             template.base_attack_time
         } else {
@@ -583,9 +586,10 @@ impl Creature {
                     .set_u32(UNIT_FIELD_NATIVEDISPLAYID, addon.display_id);
                 own_display = false;
             }
-            if addon.mount_display_id != 0 {
+            // Its own mount, none, or (-1) its template's.
+            if addon.mount_display_id >= 0 {
                 c.fields
-                    .set_u32(UNIT_FIELD_MOUNTDISPLAYID, addon.mount_display_id);
+                    .set_u32(UNIT_FIELD_MOUNTDISPLAYID, addon.mount_display_id as u32);
             }
             if addon.equipment_id > 0 {
                 equipment = addon.equipment_id as u32;

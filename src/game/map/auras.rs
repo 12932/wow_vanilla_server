@@ -839,10 +839,27 @@ pub fn apply_spell(
     let Some(existing) = auras(map, target) else {
         return Ok(());
     };
-    // A creature's template's immunities.
+    // A creature's template's immunities: the spell's, and each effect's
+    // own mechanic's, which keeps that effect off.
     if crate::game::map::creature_combat::spell_immune(map, target, caster, spell) {
         return Err(Refused::Immune);
     }
+    let kept: Vec<(usize, i32)> = effects
+        .iter()
+        .copied()
+        .filter(|(i, _)| {
+            !crate::game::map::creature_combat::effect_immune(
+                map,
+                target,
+                caster,
+                spell.effects[*i].mechanic,
+            )
+        })
+        .collect();
+    if kept.is_empty() && !effects.is_empty() {
+        return Err(Refused::Immune);
+    }
+    let effects = &kept[..];
     // Immunities: a harmful spell's mechanic or school.
     if !pos && !spell.attr(0, sd::ATTR_NO_IMMUNITIES) {
         let mechanic_immune = existing.mechanic_immune(spell.mechanic)

@@ -1032,7 +1032,7 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let (spawn, entry) = (c.spawn_guid, c.entry);
+    let (spawn, entry, alive) = (c.spawn_guid, c.entry, c.alive());
     let summoner = c.scripted.as_deref().and_then(|s| s.summoner);
     crate::game::map::combat::leave_combat(map, g);
     stop_for(map, g);
@@ -1047,6 +1047,10 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
             crate::game::map::ai::quiet_death_for(map, g, respawn);
             if let Some(s) = summoner {
                 event_ai::summoned_despawned(map, s, g, entry);
+            }
+            // Gone, its slaves flagged to go with it go too.
+            if alive {
+                crate::game::map::creature_groups::despawned(map, g);
             }
         }
     }
@@ -1888,12 +1892,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         42 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_melee = d1 == 0;
+                s.melee_on = d1 != 0;
             }
             true
         }
         43 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_combat_movement = d1 == 0;
+                s.combat_movement_on = d1 != 0;
             }
             true
         }
@@ -2003,7 +2009,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         // React state: 0 passive, 1 defensive, 2 aggressive.
+        // React state: 0 passive, 1 defensive, 2 aggressive; another, or
+        // a source not a creature, fails (Thistle Tea's `set_react_state`).
         59 => {
+            if d1 > 2 || map.creature(source).is_none() {
+                return false;
+            }
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 use crate::game::map::assistance::Reaction;
                 s.passive = d1 == 0;

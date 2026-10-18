@@ -144,7 +144,8 @@ pub struct CreatureSpawn {
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatureAddon {
     pub display_id: u32,
-    pub mount_display_id: u32,
+    /// The mount it rides: -1 its template's, 0 none.
+    pub mount_display_id: i32,
     pub equipment_id: i32,
     pub stand_state: u8,
     pub sheath_state: u8,

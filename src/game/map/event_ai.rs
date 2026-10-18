@@ -45,6 +45,10 @@ pub struct Scripted {
     pub clock: Option<Instant>,
     pub no_melee: bool,
     pub no_combat_movement: bool,
+    /// A script turned melee, or combat movement, on: over its template's
+    /// default (a no-melee or sessile creature's).
+    pub melee_on: bool,
+    pub combat_movement_on: bool,
     /// Health it can't be brought below, as a script set it (None: its
     /// template's, a floor of 1 for one that is unkillable).
     pub invincible_hp: Option<u32>,
@@ -1102,7 +1106,7 @@ pub fn death_heard(map: &mut Map, g: Guid) {
     // The dead hear nothing (Thistle Tea's `{:member_died, ..}`).
     let alive = |map: &Map, m: Guid| map.creature(m).is_some_and(|c| c.alive());
     for m in members.into_iter().filter(|m| *m != g) {
-        if !alive(map, m) {
+        if !alive(map, m) || !crate::game::map::creature_groups::hears_death(map, m, g) {
             continue;
         }
         fire(
@@ -1601,13 +1605,30 @@ pub fn phase(map: &Map, g: Guid) -> u32 {
 
 /// Whether a script (or a main-ranged spell) stopped the creature chasing
 /// or swinging.
+/// A sessile creature doesn't chase unless a script lets it (mangos's
+/// `SetAIImmobilizedState`, Thistle Tea's `combat_movement?`).
 pub fn combat_movement(map: &Map, g: Guid) -> bool {
-    !scripted(map, g).is_some_and(|s| s.no_combat_movement)
+    let s = scripted(map, g);
+    !s.is_some_and(|s| s.no_combat_movement)
+        && (s.is_some_and(|s| s.combat_movement_on)
+            || !crate::game::map::creature_motion::sessile(map, g))
         && !crate::game::map::spells::lists::holding(map, g)
 }
 
+/// `static_flags1`: it doesn't swing (mangos's `NO_MELEE_FLEE`, the
+/// combat dummies').
+const STATIC_NO_MELEE: u32 = 0x0010_0000;
+
+/// A creature whose template bars melee doesn't swing unless a script
+/// lets it (Thistle Tea's `melee_enabled?`).
 pub fn melee(map: &Map, g: Guid) -> bool {
-    !scripted(map, g).is_some_and(|s| s.no_melee)
+    let s = scripted(map, g);
+    let barred = map
+        .creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .is_some_and(|t| t.static_flags1 & STATIC_NO_MELEE != 0);
+    !s.is_some_and(|s| s.no_melee)
+        && (s.is_some_and(|s| s.melee_on) || !barred)
         && !crate::game::map::spells::lists::holding(map, g)
 }
 

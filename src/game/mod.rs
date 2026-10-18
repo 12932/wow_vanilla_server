@@ -150,6 +150,8 @@ mod tests_p3_core_strat;
 #[cfg(test)]
 mod tests_p3_core_trade;
 #[cfg(test)]
+mod tests_p3_creature2;
+#[cfg(test)]
 mod tests_p3_entity;
 #[cfg(test)]
 mod tests_p3_entity_effects;
