@@ -65,8 +65,8 @@ const SHADOW_PORTAL_ROOMS: [u32; 6] = [17863, 17939, 17943, 17944, 17946, 17948]
 /// looks (by its holder and spell).
 #[derive(Debug, Default)]
 pub struct State {
-    separation: AHashMap<(Guid, u32), Instant>,
-    next: Option<Instant>,
+    pub(crate) separation: AHashMap<(Guid, u32), Instant>,
+    pub(crate) next: Option<Instant>,
 }
 
 /// The data the mechanics need that the DBC leaves out: the whirl's cones

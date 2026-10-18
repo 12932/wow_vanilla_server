@@ -633,3 +633,110 @@ async fn the_real_proc_chances_by_the_bow_and_the_talents() {
     assert_eq!(hawk, vec![0.0, 1.0, 5.0]);
     assert_eq!(grasp, (35, 35.0, 100.0));
 }
+
+/// Thistle Tea's Separation Anxiety (23487 on Gehennas's adds, its buff
+/// 23492; 21094 on Garr's, 21095): every five seconds, an add 100 yards
+/// plus both bounding radii (1.5 and 2) or more from its boss, in three
+/// dimensions, grows stronger; nearer it doesn't, and a buff it has runs
+/// out. A dead or missing boss empowers nothing.
+#[tokio::test]
+#[ignore = "extended"]
+async fn separation_anxiety_empowers_an_add_far_from_its_boss() {
+    use crate::game::map::boss_mechanics;
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, w, map) = player(&realm, "P5D11", "Anxiousa", Race::Human, Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            ready(m, w, 60, &[]);
+            let boss = dummy(m, w, 60, 5.0);
+            let add = dummy(m, w, 60, 6.0);
+            for (g, r) in [(add, 1.5f32), (boss, 2.0)] {
+                if let Some(f) = m.unit_fields_mut(g) {
+                    f.set_f32(UNIT_FIELD_BOUNDINGRADIUS, r);
+                }
+            }
+            let at = m.creature(boss).unwrap().position;
+            // Five seconds of checks, from a fresh start: whether `buff` came.
+            let check = |m: &mut Map, buff: u32| {
+                auras::remove_spell(m, add, buff, None);
+                m.bosses.separation.clear();
+                m.bosses.next = None;
+                boss_mechanics::update(m);
+                m.now += Duration::from_secs(5);
+                m.bosses.next = None;
+                boss_mechanics::update(m);
+                has(m, add, buff)
+            };
+            apply(m, boss, add, 23_487);
+            let mut far = Vec::new();
+            // Straight up a hair past it: a height of 187 holds 103.5 short in f32.
+            for (dx, dz) in [
+                (103.499f32, 0.0f32),
+                (103.5, 0.0),
+                (0.0, 103.51),
+                (90.0, 40.0),
+            ] {
+                crate::game::map::scripts::place(
+                    m,
+                    add,
+                    Vector3d {
+                        x: at.x + dx,
+                        y: at.y,
+                        z: at.z + dz,
+                    },
+                    0.0,
+                );
+                far.push(check(m, 23_492));
+            }
+            // Garr's: near, its buff runs out unrefreshed.
+            auras::remove_spell(m, add, 23_487, None);
+            apply(m, boss, add, 21_094);
+            crate::game::map::scripts::place(
+                m,
+                add,
+                Vector3d {
+                    x: at.x + 10.0,
+                    ..at
+                },
+                0.0,
+            );
+            apply(m, add, add, 21_095);
+            let lasts = holder(m, add, 21_095).and_then(|h| h.duration).unwrap_or(0);
+            m.bosses.next = None;
+            boss_mechanics::update(m);
+            pass(m, u64::from(lasts));
+            m.bosses.next = None;
+            boss_mechanics::update(m);
+            let near = (has(m, add, 21_095), has(m, add, 21_094));
+            // A dead boss, then none.
+            crate::game::map::scripts::place(
+                m,
+                add,
+                Vector3d {
+                    x: at.x + 150.0,
+                    ..at
+                },
+                0.0,
+            );
+            crate::game::map::combat::deal_damage(m, w, boss, 10_000_000);
+            let dead = check(m, 21_095);
+            (far, near, dead)
+        })
+        .await
+        .unwrap();
+    let (far, near, dead) = got;
+    assert_eq!(
+        far,
+        vec![false, true, true, false],
+        "the strict boundary, in three dimensions"
+    );
+    assert_eq!(
+        near,
+        (false, true),
+        "near, the buff runs out; the anxiety stays"
+    );
+    assert!(!dead, "a dead boss empowers nothing");
+}

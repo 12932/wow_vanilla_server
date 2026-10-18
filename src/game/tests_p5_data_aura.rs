@@ -1405,3 +1405,80 @@ async fn tracking_auras_set_the_players_fields_bits_and_flag() {
     assert_eq!(outside.0, 0, "kinds outside the field");
     assert_eq!((hidden, shown), (0x0A, 0x08));
 }
+
+/// Cat form; a root of its mechanic with a tick of damage; a snare of
+/// its mechanic; snares of the mechanics a form can't shake off; a root of
+/// no mechanic.
+const CAT: u32 = 96_806;
+const ROOTS: u32 = 96_807;
+const SNARE: u32 = 96_808;
+const SNARES_KEPT: u32 = 96_810;
+const KEPT_MECHANICS: [u32; 13] = [0, 1, 2, 5, 8, 12, 13, 18, 20, 23, 24, 27, 30];
+const PLAIN_ROOT: u32 = 96_830;
+
+fn form_data() -> GameData {
+    let mut d = data();
+    let harmful = |id: u32, effects: &[(u32, i32, u32)], mechanic: u32| {
+        let mut s = aura_spell(id, Some(20_000), effects);
+        s.mechanic = mechanic;
+        for e in s.effects.iter_mut().filter(|e| e.effect != 0) {
+            e.target_a = 6;
+        }
+        s
+    };
+    let mut all = vec![
+        aura_spell(CAT, None, &[(AURA_MOD_SHAPESHIFT, FORM_CAT as i32, 0)]),
+        harmful(
+            ROOTS,
+            &[(AURA_MOD_ROOT, 0, 0), (AURA_PERIODIC_DAMAGE, 0, 3_000)],
+            7,
+        ),
+        harmful(SNARE, &[(AURA_MOD_DECREASE_SPEED, 0, 0)], 11),
+        harmful(PLAIN_ROOT, &[(AURA_MOD_ROOT, 0, 0)], 0),
+    ];
+    for (i, m) in KEPT_MECHANICS.iter().enumerate() {
+        all.push(harmful(
+            SNARES_KEPT + i as u32,
+            &[(AURA_MOD_DECREASE_SPEED, 0, 0)],
+            *m,
+        ));
+    }
+    add_spells(&mut d, all);
+    d
+}
+
+/// Thistle Tea's form change: cat form shakes off a root of its mechanic
+/// (its tick of damage with it) and a snare of its own; not a snare of a
+/// mechanic a form can't escape (or of none), nor a root of no mechanic.
+#[tokio::test]
+async fn a_druid_form_shakes_off_roots_and_snares_of_their_mechanics() {
+    let (_realm, _a, ga, map) = setup_with(form_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 1, 3.0);
+            let mut spells = vec![ROOTS, SNARE, PLAIN_ROOT];
+            spells.extend((0..KEPT_MECHANICS.len() as u32).map(|i| SNARES_KEPT + i));
+            for s in &spells {
+                let amounts = if *s == ROOTS { vec![0, 5] } else { vec![-50] };
+                let _ = put(m, brute, ga, *s, &amounts);
+            }
+            let before: Vec<bool> = spells
+                .iter()
+                .map(|s| auras::auras(m, ga).is_some_and(|a| a.has_spell(*s)))
+                .collect();
+            let _ = put(m, ga, ga, CAT, &[FORM_CAT as i32]);
+            let after: Vec<(u32, bool)> = spells
+                .iter()
+                .map(|s| (*s, auras::auras(m, ga).is_some_and(|a| a.has_spell(*s))))
+                .collect();
+            (before, after)
+        })
+        .await
+        .unwrap();
+    let (before, after) = got;
+    assert!(before.iter().all(|b| *b), "all on: {before:?}");
+    for (spell, on) in after {
+        let shaken = matches!(spell, ROOTS | SNARE);
+        assert_eq!(on, !shaken, "{spell}");
+    }
+}
