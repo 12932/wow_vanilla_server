@@ -61,7 +61,7 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 - **Parity:**
   - Thistle Tea's 8,850 tests were mapped to wvs tests ([parity/README.md](parity/README.md)).
   - Five rounds of stages ported them, fixing wvs where it differed, checked against mangos-classic.
-  - The matrix went from 21% to 61% covered or accepted. Where Thistle Tea isn't 1.12, wvs keeps mangos's behaviour
+  - The matrix went from 21% to 63.4% covered or accepted. Where Thistle Tea isn't 1.12, wvs keeps mangos's behaviour
     and the row says why (46 rows).
 - **The kobold's reach:** fixed.
 - **Robustness:** the supervision above, packet guards, and chaos tests. wow_messages' crash bugs were guarded in wvs
@@ -88,10 +88,12 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - a 400-yard battleground view distance;
   - Tracy;
   - the client-code harness;
-  - the whole-world load test.
+  - the whole-world load test;
+  - dead bodies that stay put, and `.spawn` with its creature's weapons and stats;
+  - ahash's maps only, enforced by clippy.
 
 ## What's left
-- **Parity:** 3,224 rows are still gap. The biggest areas:
+- **Parity:** 3,015 rows are still gap. The biggest areas:
   - the player, about 370;
   - spells, about 300;
   - combat, about 300;
@@ -110,8 +112,9 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - the rest are listed there.
 - **Performance:** the whole-world fixes in `work/perf2`: staggered timers, the awake set once per update, navmesh
   tiles loaded off the map's thread and unloaded when unused.
-- **Load-only test failures:** flaky1 is fixing the walks and tests that fail under load (Nightmare Manifests,
-  Stratholme's bosses, Silithus's tallies, a sessile creature's swing, a forced-friendly fight, a dead master's guardian, creatures spreading round a victim).
+- **Flaky tests:** flaky1 fixed the ones that failed under load ([TESTING.md](TESTING.md), "Under load"). Two
+  remain: Stratholme's bosses fail about 1 run in 3 even alone, and `creatures_spread_round_their_victim` about 1 in
+  60–80 in the fast suite.
 
 ## How the work was run
 - **Isolation:** each stage was an agent on its own git worktree and branch (`<worktree>/<stage>`). It worked from a

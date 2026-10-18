@@ -819,5 +819,43 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Weapon enchantments** take their wielder's chance modifiers (Improved Poisons).
     - **The Gnomish transporter** does nothing for the dead.
 
+54. **flaky1** (the tests that failed only under load). Two were wvs bugs:
+    - **A creature attacked keeps fighting.** One with an empty threat list fights whoever is attacking it, and puts
+      them on its list, as mangos's `SelectHostileTarget` has it. This departs from Thistle Tea, which has no such
+      rule: Remulos evaded when his last phantasm died before Eranikus's breath reached him.
+    - **A creature's cast at a target it may no longer attack fails** as it ends, as a player's does and as mangos
+      and Thistle Tea have it. Remulos's Starfire had landed on the redeemed Eranikus.
+    - The rest were tests budgeting by looks or seconds; `docs/TESTING.md`'s "Under load" has the rules.
+
+55. **4d's choices** (items, quests, Alterac Valley, objects, honor, professions and events; 234 rows):
+    - **Purchases** are refused with mangos's codes (`DoesntGoIntoBag`, and `InventoryFull` for a two-hander bought
+      with full bags).
+    - **Item changes:**
+      - a change into a two-hander puts the off hand away, as Thistle Tea does (mangos refuses);
+      - an item may replace itself though unique;
+      - a failed change sends an inventory failure, where mangos is silent.
+    - **Gear spells:** only passive equip spells (519 of 562) outlast death and can't be cancelled; a non-passive one
+      such as Argent Dawn Commission still drops at death. Enchantments' equip spells aren't held to forms or the
+      outdoors.
+    - **Enchanting:** items saved bound by an earlier enchantment stay bound, with no migration.
+    - **Racial leaders** are worth 488 honor, as Thistle Tea has it; mangos has 398, with a comment doubting it.
+    - **Captured animals** follow Thistle Tea, as mangos has no such mechanic: when the player dies the animal goes
+      after 2 s, not 1, and leaving the map ends a capture at once.
+    - **Using objects:**
+      - the immunity bar applies to quest givers and quest objects only, not doors or buttons;
+      - a newer state cancels an older reset timer, as Thistle Tea has it (in mangos a scripted state change doesn't
+        cancel a door's reset).
+    - **Engineering:** the gadgets keep Thistle Tea's outcome weights where mangos differs (the Universal Remote,
+      the Mind Control Cap, the Net-o-Matic). The second-disenchant refusal comes when the cast goes off, not at its
+      check.
+    - **Omen** is a two-hour summon, so he leaves at two hours even mid-fight.
+    - **Left as gaps:**
+      - unlearning a profession and its quests (question 56);
+      - the cheer speaker's fireworks (about 480 lines of launch sites);
+      - the Scourge Invasion's camps, which wvs doesn't have at all (shards, finders, minions, rares, cultists);
+      - auto-rewarded quests (flag 0x400; the data has one, 9378).
+    - **A lead:** mangos adds the Death Ray's damage left after absorbs to its charge; wvs, like Thistle Tea, adds
+      the base amount.
+
 
 ## Left for later, and why

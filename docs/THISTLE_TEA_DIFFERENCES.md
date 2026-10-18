@@ -85,7 +85,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 
 - A dispel by mechanic (effect 108) skips passive auras and matches effects' mechanics. Thistle Tea matches only the
   spell's own mechanic, passive or not.
-- Gear's spells aren't held to the outdoors, as Thistle Tea's `EquipmentSpells.eligible?` also holds them.
+- Enchantments' spells aren't held to the outdoors or to forms; items' and sets' are, as Thistle Tea's
+  `EquipmentSpells.eligible?` holds them.
 - Extra attacks leave the swing timer alone; Thistle Tea and vmangos restart the main hand's after them.
 - A dead master's guardian isn't removed for distance (Thistle Tea: beyond 120 yards).
 - A channel's cost per second (Health Funnel's health, others' mana) isn't charged; Thistle Tea charges it each tick.
@@ -114,8 +115,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
     Thistle Tea opens each with the key carried, and refuses without it.
   - **Crafts.** A craft's focus, tools and reagents aren't checked again when it completes. A craft that doesn't fit
     makes nothing and says nothing.
-  - **Disenchanting.** What's left on a disenchanted item is lost with its window; Thistle Tea stores it or shows it
-    again.
+  - **Disenchanting.** What's left on a disenchanted item is lost only when its window is closed, and a second
+    disenchant while it is open is refused; Thistle Tea stores it or shows it again.
   - **Unlearning a profession** doesn't check that it may be unlearned, nor drop the quests that need it.
   - **The spirit healer** confirms at a ghost's hello, with no gossip menu. Ghosts don't see Thistle Tea's ghost-only
     creatures, and the living see spirit healers.
