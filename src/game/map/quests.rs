@@ -805,7 +805,9 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
         },
         ..Default::default()
     });
-    refresh_log(p, &data);
+    // Its log entry goes out with `check`, which reads it as it was, not
+    // yet complete: one taken done is told so (Thistle Tea's
+    // `force_accept`).
     if source > 0 {
         let _ = inventory::add_item(map, player, q.source_item, source, true);
     }
@@ -1530,6 +1532,8 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
     };
     p.journal.clear(usize::from(slot));
     refresh_log(p, &data);
+    // The auras its being taken gave go with it.
+    crate::game::map::spell_areas::reconcile(map, player);
 }
 
 /// Whether `item` is a bag, worn or in the bank's bag slots, with

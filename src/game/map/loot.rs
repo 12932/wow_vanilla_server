@@ -1202,7 +1202,11 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
     }
     let (empty, kind) = match loot_mut(map, target) {
         Some(l) => {
-            l.looters.remove(&player);
+            // Only a window of one's own closes: another's release would
+            // take a rogue's pockets from under them.
+            if !l.looters.remove(&player) {
+                return;
+            }
             // Closed, a lock must be opened again.
             l.opened_by.remove(&player);
             (l.is_empty(), l.kind)

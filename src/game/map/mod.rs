@@ -858,6 +858,11 @@ impl Map {
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);
+        // A loot window open closes, as at a logout: a lock opened is shut
+        // again, a pocket's leftovers kept, an item's loot gone.
+        if let Some(target) = self.players.get(&guid).and_then(|p| p.looting) {
+            loot::release(self, guid, target);
+        }
         duel::left(self, guid, true);
         trade::cancel(
             self,

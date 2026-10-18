@@ -824,6 +824,7 @@ fn store(
         last = Some((i, u32::MAX));
     }
     let mut batch = update::Batch::new();
+    let first_new = p.items.len();
     for (bag, slot, n) in new_slots {
         let counter = realm
             .next_item
@@ -848,10 +849,9 @@ fn store(
         p.outbound.send_frame(frame);
     }
     // The new items are known; their slots go out with the next update.
-    for item in p.items.iter_mut() {
-        if item.entry == entry {
-            item.fields.clear_dirty();
-        }
+    // The stacks they joined are told their counts then.
+    for item in &mut p.items[first_new..] {
+        item.fields.clear_dirty();
     }
     p.refresh_inventory(&data);
     let notify = alert;
@@ -997,6 +997,12 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         return;
     };
     if from == to {
+        return;
+    }
+    // A sold item is the vendor's until bought back (mangos's
+    // `IsValidPos` on the source).
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
         return;
     }
     let Some(a) = p.item_at(from.0, from.1) else {
@@ -1196,6 +1202,10 @@ pub fn stow(map: &mut Map, g: Guid, from: (u8, u8), slots: &[(u8, u8)], full: Fa
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
@@ -1265,6 +1275,10 @@ pub fn split(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8), count: u32) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
@@ -1325,10 +1339,11 @@ pub fn destroy(map: &mut Map, g: Guid, at: (u8, u8), count: u32) {
         send_fail(p, Fail::NotFound, Guid::zero());
         return;
     };
+    // On the bag bar or in the bank's (mangos's `IsNotEmptyBag`).
+    let slot = p.items[i].slot;
     let bag_with_items = p.items[i].bag == BAG_PLAYER
-        && p.items
-            .iter()
-            .any(|x| x.bag == p.items[i].slot && (BAG_START..BAG_END).contains(&p.items[i].slot));
+        && ((BAG_START..BAG_END).contains(&slot) || (BANK_BAG_START..BANK_BAG_END).contains(&slot))
+        && p.items.iter().any(|x| x.bag == slot);
     if bag_with_items {
         send_fail(p, Fail::OnlyEmptyBags, p.items[i].guid);
         return;

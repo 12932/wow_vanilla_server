@@ -557,6 +557,15 @@ pub fn buyback(map: &mut Map, player: Guid, npc: Guid, slot: BuybackSlot) {
     // Tea's merge put it, the bought back item gone; else a free slot.
     let (entry, count) = (p.items[i].entry, p.items[i].count());
     let stack = data.item(entry).map_or(1, |t| t.stackable.max(1));
+    // Within its unique limit (mangos's `CanStoreItem`): sold, it was
+    // counted out, and another may have been had since.
+    if data
+        .item(entry)
+        .is_some_and(|t| t.max_count > 0 && p.count_of(entry) + count > t.max_count)
+    {
+        inventory::send_fail(p, Fail::CantCarryMore, Guid::zero());
+        return;
+    }
     let onto = p.items.iter().position(|x| {
         x.entry == entry
             && x.guid != p.items[i].guid

@@ -1359,6 +1359,16 @@ pub fn petition_rename(realm: &Realm, me: &Online, item: Guid, name: &str) {
 /// `CMSG_TURN_IN_PETITION`: enough signatures make the guild.
 pub fn petition_turn_in(map: &mut Map, g: Guid, item: Guid) {
     let realm = map.realm.clone();
+    // The charter in hand (mangos's `HandleTurnInPetitionOpcode`): one
+    // sold or destroyed founds nothing.
+    if map
+        .players
+        .get(&g)
+        .and_then(|p| p.item_by_guid(item))
+        .is_none()
+    {
+        return;
+    }
     let needed = realm.config.petition_signatures as usize;
     let petition = {
         let guilds = realm.social.guilds.lock();

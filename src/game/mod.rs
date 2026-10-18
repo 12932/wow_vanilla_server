@@ -416,6 +416,8 @@ mod tests_review2;
 #[cfg(test)]
 mod tests_review3;
 #[cfg(test)]
+mod tests_review4;
+#[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
 mod tests_rules;
@@ -607,6 +609,13 @@ impl Realm {
                     limit.as_secs()
                 );
             }
+        }
+        // Honor earned since the last sweep (a kill, a battleground's win)
+        // is kept too: the sweep that writes it runs only every so often.
+        let honor = self.social.honor.lock().take_dirty();
+        for e in honor {
+            self.store
+                .put_record(crate::game::honor::KIND, u64::from(e.guid), &e);
         }
         if tokio::time::timeout(limit, self.store.flush())
             .await
