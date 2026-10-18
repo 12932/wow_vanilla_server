@@ -730,8 +730,21 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
         .map(|a| a.id)
         .collect();
     for id in owned {
-        auctions.auctions.remove(&id);
-        realm.store.delete_record(KIND_AUCTION, u64::from(id));
+        let Some(a) = auctions.auctions.remove(&id) else {
+            continue;
+        };
+        // A bid on it is paid back, as a cancel pays it, in one
+        // transaction with the auction's end.
+        let mut records = Records::new();
+        records.delete(KIND_AUCTION, u64::from(id));
+        if a.bidder > 0 {
+            mail::post_in(
+                realm,
+                mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+                &mut records,
+            );
+        }
+        realm.store.save_together(Vec::new(), records);
     }
     for a in auctions
         .auctions

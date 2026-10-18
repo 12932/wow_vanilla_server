@@ -446,3 +446,33 @@ fn a_big_bids_cut_doesnt_overflow() {
     let paid: Vec<u32> = mails_to(&realm, 1).iter().map(|m| m.money).collect();
     assert_eq!(paid, vec![255_000_000], "the bid less 15%");
 }
+
+/// R4-8. A seller deleted with a bid on their auction: the bid is mailed
+/// back to its bidder, as a cancel mails it, rather than lost with the
+/// auction.
+#[test]
+fn a_deleted_sellers_bidder_is_paid_back() {
+    use crate::game::social::auction::{self, Auction};
+    let realm = harness::realm_with(GameData::empty());
+    realm.social.auctions.lock().auctions.insert(
+        8,
+        Auction {
+            id: 8,
+            market: 2,
+            house: 2,
+            owner: 1,
+            start_bid: 1,
+            bid: 500,
+            bidder: 2,
+            expires_at: i64::MAX,
+            ..Default::default()
+        },
+    );
+    auction::character_deleted(&realm, 1);
+    let refund: Vec<u32> = mails_to(&realm, 2).iter().map(|m| m.money).collect();
+    assert!(
+        realm.social.auctions.lock().auctions.is_empty(),
+        "the auction went"
+    );
+    assert_eq!(refund, vec![500], "and the bid went back");
+}
