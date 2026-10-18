@@ -4,12 +4,15 @@
 //! walked on the real world.
 
 use std::io::Read;
+use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use super::tests_p3_scripts::*;
 use crate::game::data::scripts::ScriptStep;
+use crate::game::fields::*;
 use crate::game::map::Map;
 
 /// The events Thistle Tea's dump has for `entry`, by id.
@@ -177,4 +180,144 @@ async fn a_chicken_offers_cluck_to_a_lucky_chicken_and_takes_it_back_for_a_cheer
         until(&map, 3_000, move |m| npc_flags(m, cheered) & QUEST_GIVER != 0).await,
         "the /cheer"
     );
+}
+
+const PLUCKY: u32 = 6626;
+const TEXT_EMOTE_BECKON: u32 = 7;
+const GOSSIP: u32 = 0x1;
+
+/// Plucky Johnson, a chicken until shown otherwise: a /beckon from one not
+/// on Get the Scoop leaves him one; a /chicken from anyone turns him back,
+/// and he waves; and while he is himself, emotes change nothing (Thistle
+/// Tea's port of vmangos's `npc_plucky_johnson`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn plucky_johnson_turns_back_for_a_chicken_but_not_a_stranger_s_beckon() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Plucker").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let plucky = summon_near(&map, PLUCKY, off(at, 2.0, 0.0)).await;
+    c.sees(plucky).await;
+    let emote = |e: u32| CMSG_TEXT_EMOTE {
+        text_emote: TextEmote::try_from(e).unwrap(),
+        emote: 0,
+        target: plucky,
+    };
+    let chicken = map
+        .query(move |m| (faction(m, plucky), npc_flags(m, plucky) & GOSSIP))
+        .await
+        .unwrap();
+    c.send(emote(TEXT_EMOTE_BECKON)).await;
+    sleep_ms(300).await;
+    let after_beckon = map
+        .query(move |m| (faction(m, plucky), npc_flags(m, plucky) & GOSSIP))
+        .await
+        .unwrap();
+    assert_eq!(after_beckon, chicken, "a stranger's /beckon: still a chicken");
+    assert_eq!(chicken.1, 0, "no talk from a chicken");
+    c.clear();
+    c.send(emote(TEXT_EMOTE_CHICKEN)).await;
+    assert!(
+        until(&map, 3_000, move |m| npc_flags(m, plucky) & GOSSIP != 0).await,
+        "a /chicken turns him back"
+    );
+    let waved = c
+        .gets(Duration::from_secs(2), |m| match m {
+            ServerOpcodeMessage::SMSG_EMOTE(e) if e.guid == plucky => Some(e.emote),
+            _ => None,
+        })
+        .await;
+    assert_eq!(waved, Some(Emote::OneshotWave));
+    // Himself, he answers no emote.
+    let himself = map
+        .query(move |m| (faction(m, plucky), npc_flags(m, plucky)))
+        .await
+        .unwrap();
+    c.clear();
+    c.send(emote(TEXT_EMOTE_BECKON)).await;
+    c.send(emote(TEXT_EMOTE_CHICKEN)).await;
+    sleep_ms(300).await;
+    let still = map
+        .query(move |m| (faction(m, plucky), npc_flags(m, plucky)))
+        .await
+        .unwrap();
+    assert_eq!(still, himself);
+    let again = c
+        .gets(Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::SMSG_EMOTE(e) if e.guid == plucky => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(again.is_none(), "no second wave");
+}
+
+const YENNIKU: u32 = 2530;
+const YENNIKUS_RELEASE: u32 = 3607;
+const SAVING_YENNIKU: u32 = 592;
+
+/// The emote `g` shows now: its state, else its last one-shot.
+fn emote_state(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g)
+        .map_or(0, |f| f.get_u32(UNIT_NPC_EMOTESTATE))
+}
+
+/// The Soul Gem does nothing to Yenniku for one off Saving Yenniku; for
+/// one on it, it stuns him and turns him friendly, out of the fight, and a
+/// second gem then changes nothing; when he evades he stops looking
+/// stunned (Thistle Tea's port of vmangos's `npc_yenniku`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_soul_gem_tames_yenniku_only_for_one_on_the_quest() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = hero(&realm, "Gemmer").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let yenniku = summon_near(&map, YENNIKU, off(at, 3.0, 0.0)).await;
+    let read = move |m: &Map| {
+        (
+            crate::game::map::event_ai::phase(m, yenniku),
+            faction(m, yenniku),
+            fighting(m, yenniku),
+        )
+    };
+    let (off_quest, start) = map
+        .query(move |m| {
+            crate::game::map::ai::attacked(m, yenniku, me);
+            let start = read(m);
+            crate::game::map::event_ai::spell_hit(m, yenniku, me, YENNIKUS_RELEASE, 1);
+            (read(m), start)
+        })
+        .await
+        .unwrap();
+    assert_eq!(off_quest, start, "off the quest: nothing");
+    assert!(start.2, "fighting");
+    let (on_quest, stunned) = map
+        .query(move |m| {
+            crate::game::tests_p3_entity::take_quest(m, me, SAVING_YENNIKU);
+            crate::game::map::event_ai::spell_hit(m, yenniku, me, YENNIKUS_RELEASE, 1);
+            (read(m), emote_state(m, yenniku))
+        })
+        .await
+        .unwrap();
+    assert_eq!(on_quest, (1, 83, false), "the second phase, Horde, at peace");
+    assert_eq!(stunned, 64, "he looks stunned");
+    let again = map
+        .query(move |m| {
+            crate::game::map::event_ai::spell_hit(m, yenniku, me, YENNIKUS_RELEASE, 1);
+            (read(m), emote_state(m, yenniku))
+        })
+        .await
+        .unwrap();
+    assert_eq!(again, (on_quest, 64), "a second gem: nothing new");
+    let evaded = map
+        .query(move |m| {
+            crate::game::map::event_ai::evade(m, yenniku);
+            emote_state(m, yenniku)
+        })
+        .await
+        .unwrap();
+    assert_eq!(evaded, 0, "no longer stunned-looking");
 }
