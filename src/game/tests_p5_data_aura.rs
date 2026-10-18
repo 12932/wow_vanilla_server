@@ -1559,19 +1559,19 @@ async fn slows_stand_together_and_speeds_come_back_when_they_go() {
         .unwrap();
     let (plain, both, after, dead) = got;
     let run = plain.0;
-    assert_eq!(both.0, true, "both on");
+    assert!(both.0, "both on");
     assert!(
         (both.1 - run * 0.3).abs() < 0.01,
         "the strongest: {}",
         both.1
     );
-    assert_eq!(after.0, true);
+    assert!(after.0);
     assert!(
         (after.1 - run * 0.5).abs() < 0.01,
         "the daze again: {}",
         after.1
     );
-    assert_eq!(dead.0, false, "dead, no slow");
+    assert!(!dead.0, "dead, no slow");
     assert!((dead.1 - run).abs() < 0.01, "the run whole: {}", dead.1);
 }
 

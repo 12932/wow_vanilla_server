@@ -452,7 +452,7 @@ pub fn check(
             return Some(r);
         }
         // Power, reagents, tools, focus, gear.
-        let cost = spell_cost(map, caster, s, &m);
+        let cost = spell_cost(map, caster, s, m);
         if let Some(r) = unpayable(map, caster, s, cost) {
             return Some(r);
         }
