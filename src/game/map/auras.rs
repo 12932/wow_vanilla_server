@@ -876,6 +876,27 @@ pub fn apply_spell(
             return Err(Refused::Immune);
         }
     }
+    // Effects of an aura kind kept off don't go on, whoever the target
+    // (mangos's `IsImmuneToSpellEffect`, Thistle Tea's state immunity on a
+    // self-cast harmful aura); with none left the aura is refused.
+    let kept_off: Vec<(usize, i32)>;
+    let effects = if !spell.attr(0, sd::ATTR_NO_IMMUNITIES)
+        && effects
+            .iter()
+            .any(|(i, _)| existing.state_immune(spell.effects[*i].aura))
+    {
+        kept_off = effects
+            .iter()
+            .copied()
+            .filter(|(i, _)| !existing.state_immune(spell.effects[*i].aura))
+            .collect();
+        if kept_off.is_empty() {
+            return Err(Refused::Immune);
+        }
+        &kept_off[..]
+    } else {
+        effects
+    };
     // A dispel type kept off, helpful or not: Faerie Fire's keeps stealth
     // and invisibility off (mangos's `IsImmuneToSpell`).
     if !spell.attr(0, sd::ATTR_NO_IMMUNITIES) && existing.dispel_immune(spell.dispel) {
@@ -2409,22 +2430,16 @@ pub fn update(map: &mut Map) {
             .holders
             .iter()
             .any(|h| h.expires.is_some_and(|t| t <= now));
-        let mut ticks = due_ticks(a, now);
+        let ticks = due_ticks(a, now);
         // Nothing ticks or ends, so nothing changes before the crowd
         // control's look, and that would find nothing due either.
         if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
             continue;
         }
-        // An update late by more than an interval runs every tick it
-        // missed, up to the aura's end (Thistle Tea's `Aura.tick` catching
-        // up), so a stalled map loses none.
-        for _ in 0..MAX_CATCH_UP {
-            if ticks.is_empty() {
-                break;
-            }
-            run_ticks(map, g, ticks, now);
-            ticks = auras(map, g).map_or_else(Vec::new, |a| due_ticks(a, now));
-        }
+        // One tick an update, each on its aura's own cadence: an update
+        // late by more than an interval leaves the next tick due at once,
+        // for the next update (mangos's `Aura::Update`).
+        run_ticks(map, g, ticks, now);
         if expired {
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
@@ -2432,16 +2447,10 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// The most rounds of missed ticks one update runs.
-const MAX_CATCH_UP: usize = 64;
-
-/// The ticks due on a unit's auras by `now`: none after its holder's end.
+/// The ticks due on a unit's auras by `now`.
 fn due_ticks(a: &Auras, now: Instant) -> Vec<(Holder, Aura)> {
     a.effects()
-        .filter(|(h, x)| {
-            x.next_tick
-                .is_some_and(|t| t <= now && h.expires.is_none_or(|end| t <= end))
-        })
+        .filter(|(_, x)| x.next_tick.is_some_and(|t| t <= now))
         .map(|(h, x)| (h.clone(), x.clone()))
         .collect()
 }
@@ -3007,6 +3016,11 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
     // Its Hunter's Mark on another goes with it.
     crate::game::map::spells::single_target::caster_died(map, g);
     crate::game::map::spells::interrupt(map, g);
+    // Death forgets its diminishing returns (mangos's `ClearDiminishings`
+    // at `JUST_DIED`).
+    if let Some(c) = map.caster_mut(g) {
+        c.diminishing.clear();
+    }
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
     remove_where(map, g, |h| {

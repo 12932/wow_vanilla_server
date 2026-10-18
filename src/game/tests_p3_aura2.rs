@@ -34,6 +34,13 @@ const ENERGIZE_RAGE: u32 = 96_106;
 const SHIELD: u32 = 96_107;
 /// Blood Craze: a percentage of the maximum health a tick.
 const BLOOD_CRAZE: u32 = 96_108;
+/// A tenth of the maximum mana a tick for five seconds, with no
+/// amplitude; one of four seconds' amplitude; one that stacks to three;
+/// one broken by standing.
+const RECOVERY: u32 = 96_112;
+const RECOVERY_SLOW: u32 = 96_113;
+const RECOVERY_STACKS: u32 = 96_114;
+const RECOVERY_SEATED: u32 = 96_115;
 /// Food and drink as Thistle Tea's fixtures: no amplitude, broken by
 /// standing.
 const FOOD: u32 = 96_109;
@@ -164,6 +171,10 @@ pub(crate) fn data() -> GameData {
         ),
         aura_spell(SHIELD, Some(30_000), &[(AURA_SCHOOL_ABSORB, 1, 0)]),
         aura_spell(BLOOD_CRAZE, Some(6_000), &[(AURA_OBS_MOD_HEALTH, 0, 3000)]),
+        aura_spell(RECOVERY, Some(5_000), &[(AURA_OBS_MOD_MANA, 0, 0)]),
+        aura_spell(RECOVERY_SLOW, Some(8_000), &[(AURA_OBS_MOD_MANA, 0, 4000)]),
+        aura_spell(RECOVERY_STACKS, Some(5_000), &[(AURA_OBS_MOD_MANA, 0, 0)]),
+        aura_spell(RECOVERY_SEATED, Some(5_000), &[(AURA_OBS_MOD_MANA, 0, 0)]),
         aura_spell(FOOD, Some(18_000), &[(AURA_MOD_REGEN, 0, 0)]),
         aura_spell(DRINK, Some(18_000), &[(AURA_MOD_POWER_REGEN, 0, 0)]),
         aura_spell(
@@ -185,7 +196,8 @@ pub(crate) fn data() -> GameData {
                 s.school = 5;
                 s.effects[0].multiple_value = 2.0;
             }
-            FOOD | DRINK => s.aura_interrupt_flags = INTERRUPT_NOT_SEATED,
+            FOOD | DRINK | RECOVERY_SEATED => s.aura_interrupt_flags = INTERRUPT_NOT_SEATED,
+            RECOVERY_STACKS => s.stack_amount = 3,
             RENEW => s.school = 1,
             _ => {}
         }
@@ -498,11 +510,12 @@ async fn a_victims_aura_takes_from_its_schools_spells_chance_to_hit() {
 }
 
 /// Thistle Tea's `tick/2`: a periodic aura doesn't tick before its
-/// amplitude has gone by, and does as it has; a call late by seven
-/// intervals catches up all seven, its next tick still ahead. Reapplied,
-/// the interval starts again from then.
+/// amplitude has gone by, and does as it has. Reapplied, the interval
+/// starts again from then. An update late by seven intervals ticks once,
+/// on the aura's own cadence, the next tick due at once (mangos's
+/// `Aura::Update`, one tick an update).
 #[tokio::test]
-async fn a_dot_ticks_on_its_amplitude_catches_up_and_restarts_when_reapplied() {
+async fn a_dot_ticks_on_its_amplitude_and_restarts_when_reapplied() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
     let got = map
         .query(move |m| {
@@ -513,11 +526,11 @@ async fn a_dot_ticks_on_its_amplitude_catches_up_and_restarts_when_reapplied() {
             pass(m, 1);
             let first = health(m, brute);
             pass(m, 7_000);
-            let caught_up = (health(m, brute), next_tick(m, brute, DOT));
+            let late = (health(m, brute), next_tick(m, brute, DOT));
             pass(m, 500);
             put(m, ga, brute, DOT, &[10]).unwrap();
             let restarted = next_tick(m, brute, DOT);
-            (early, first, caught_up, restarted)
+            (early, first, late, restarted)
         })
         .await
         .unwrap();
@@ -525,8 +538,8 @@ async fn a_dot_ticks_on_its_amplitude_catches_up_and_restarts_when_reapplied() {
     assert_eq!(got.1, 99_990);
     assert_eq!(
         got.2,
-        (99_920, Some(Duration::from_millis(1000))),
-        "seven ticks at once, the next a second on"
+        (99_980, Some(Duration::ZERO)),
+        "one tick an update, the next due"
     );
     assert_eq!(got.3, Some(Duration::from_millis(1000)));
 }
@@ -1023,4 +1036,140 @@ async fn a_linked_child_runs_its_own_time_within_its_parents() {
         [(SHORT_PARENT, true, false), (SHORT_CHILD, false, true)]
     );
     assert_eq!(got.1, [(SHORT_PARENT, true, false)]);
+}
+
+fn mana_log(m: &ServerOpcodeMessage) -> Option<u32> {
+    match m {
+        ServerOpcodeMessage::SMSG_PERIODICAURALOG(l) => match l.auras.first()?.aura_type {
+            AuraLog_AuraType::ObsModMana { damage3, .. } => Some(damage3),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Thistle Tea's `PercentManaRecoveryTest`: with no amplitude a tick a
+/// second, a tenth of the maximum mana of the moment, logged, half of
+/// what it gave its caster's threat (none for nothing gained), capped at
+/// the maximum; stacks multiply it, a percentage of none gives none, one
+/// without mana or dead gets nothing; it ticks at its end before it goes;
+/// an explicit amplitude restarts on a refresh; standing, cancelling and
+/// death stop it.
+#[tokio::test]
+async fn percent_mana_recovery_ticks_a_share_of_the_maximum() {
+    let (_realm, mut a, ga, map) = setup_with(data(), Class::Priest).await;
+    a.clear();
+    let got = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 5.0);
+            crate::game::map::ai::add_threat(m, brute, ga, 1.0);
+            let threat = |m: &Map| {
+                m.creature(brute)
+                    .and_then(|c| c.threat.iter().find(|(t, _)| *t == ga).map(|(_, v)| *v))
+                    .unwrap_or(0.0)
+            };
+            let mana = |m: &Map| get(m, ga, UNIT_FIELD_POWER1);
+            // The aura on, then the pools (its going on works out the
+            // player's maximum again).
+            let fresh = |m: &mut Map, have: u32, spell: u32, amount: i32| {
+                auras::remove_where(m, ga, |_| true);
+                put(m, ga, ga, spell, &[amount]).unwrap();
+                set(m, ga, UNIT_FIELD_MAXPOWER1, 1_000);
+                set(m, ga, UNIT_FIELD_POWER1, have);
+            };
+            fresh(m, 100, RECOVERY, 10);
+            pass(m, 999);
+            let early = mana(m);
+            pass(m, 1);
+            let first = (mana(m), threat(m));
+            set(m, ga, UNIT_FIELD_MAXPOWER1, 2_000);
+            pass(m, 1_000);
+            let bigger = mana(m);
+            // Capped, the threat of what it gave.
+            fresh(m, 970, RECOVERY, 10);
+            let before = threat(m);
+            pass(m, 1_000);
+            let capped = (mana(m), threat(m) - before);
+            let before = threat(m);
+            pass(m, 1_000);
+            let full = threat(m) - before;
+            // Its last tick at its end, then gone: five ticks of the
+            // priest's own maximum (the aura's going works it out again).
+            auras::remove_where(m, ga, |_| true);
+            put(m, ga, ga, RECOVERY, &[10]).unwrap();
+            let own = get(m, ga, UNIT_FIELD_MAXPOWER1);
+            set(m, ga, UNIT_FIELD_POWER1, 0);
+            for _ in 0..5 {
+                pass(m, 1_000);
+            }
+            let last = (mana(m) == own / 10 * 5, has(m, ga, RECOVERY));
+            // Stacks, and nothing.
+            fresh(m, 100, RECOVERY_STACKS, 10);
+            put(m, ga, ga, RECOVERY_STACKS, &[10]).unwrap();
+            set(m, ga, UNIT_FIELD_MAXPOWER1, 1_000);
+            set(m, ga, UNIT_FIELD_POWER1, 100);
+            pass(m, 1_000);
+            let stacked = mana(m);
+            let mut none = Vec::new();
+            for amount in [0, -10] {
+                fresh(m, 100, RECOVERY, amount);
+                pass(m, 1_000);
+                none.push(mana(m));
+            }
+            // A refresh of an explicit amplitude restarts it.
+            fresh(m, 100, RECOVERY_SLOW, 10);
+            pass(m, 3_000);
+            put(m, ga, ga, RECOVERY_SLOW, &[10]).unwrap();
+            set(m, ga, UNIT_FIELD_MAXPOWER1, 1_000);
+            pass(m, 1_000);
+            let refreshed = mana(m);
+            pass(m, 3_000);
+            let slow = mana(m);
+            // Standing, cancelling.
+            fresh(m, 100, RECOVERY_SEATED, 10);
+            m.now += Duration::from_millis(500);
+            auras::interrupt(m, ga, INTERRUPT_NOT_SEATED);
+            pass(m, 500);
+            let stood = (mana(m), has(m, ga, RECOVERY_SEATED));
+            fresh(m, 100, RECOVERY, 10);
+            m.now += Duration::from_millis(500);
+            auras::cancel(m, ga, RECOVERY);
+            pass(m, 500);
+            let cancelled = mana(m);
+            // No mana: nothing.
+            fresh(m, 0, RECOVERY, 10);
+            set(m, ga, UNIT_FIELD_MAXPOWER1, 0);
+            pass(m, 1_000);
+            let manaless = mana(m);
+            (
+                (early, first, bigger),
+                (capped, full),
+                last,
+                (stacked, none),
+                (refreshed, slow),
+                (stood, cancelled, manaless),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        got.0,
+        (100, (200, 51.0), 400),
+        "a tenth a second, of the maximum"
+    );
+    assert_eq!(
+        got.1,
+        ((1_000, 15.0), 0.0),
+        "capped, the threat of what it gave"
+    );
+    assert_eq!(got.2, (true, false), "five ticks, the last at its end");
+    assert_eq!(
+        got.3,
+        (300, vec![100, 100]),
+        "stacks, and nothing of nothing"
+    );
+    assert_eq!(got.4, (100, 200), "the refresh restarts its four seconds");
+    assert_eq!(got.5, ((100, false), 100, 0), "stood, cancelled, manaless");
+    let told = a.wait_for("SMSG_PERIODICAURALOG", mana_log).await;
+    assert_eq!(told, 100);
 }
