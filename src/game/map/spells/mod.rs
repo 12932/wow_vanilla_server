@@ -2168,6 +2168,9 @@ pub fn update(map: &mut Map) {
         );
     }
     for g in done {
+        // The Death Ray's hurt has its last tick while its channel is
+        // still under way.
+        crate::game::map::item_scripts::channel_running_out(map, g);
         let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
             continue;
         };

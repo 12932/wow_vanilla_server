@@ -261,6 +261,9 @@ fn dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, item: Opt
                 trigger(map, caster, o, target);
             }
         }
+        // The control devices do nothing to the dead (Thistle Tea's
+        // `Engineering`; mangos's targeting has none dead).
+        UNIVERSAL_REMOTE | MIND_CONTROL_CAP if !map.unit_view(target).is_some_and(|u| u.alive) => {}
         UNIVERSAL_REMOTE => match pick(&[(1, 8345), (1, 8346), (1, 8599)]) {
             Some(8599) => trigger(map, target, 8599, target),
             Some(o) => trigger(map, caster, o, target),
@@ -339,6 +342,20 @@ pub fn periodic_damage(map: &mut Map, target: Guid, h: &Holder, amount: u32) -> 
         p.gadgets.death_ray = p.gadgets.death_ray.saturating_add(amount);
     }
     amount
+}
+
+/// `g`'s channel runs its course now: the Death Ray's hurt, ending with
+/// it, has its last tick first, and that counts (mangos's
+/// `GDRPeriodicDamage` counts every tick; Thistle Tea's delivers the last
+/// before the channel ends).
+pub fn channel_running_out(map: &mut Map, g: Guid) {
+    let death_ray = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .is_some_and(|c| c.spell == DEATH_RAY_CHANNEL && c.channel_until.is_some());
+    if death_ray {
+        crate::game::map::auras::run_due(map, g, DEATH_RAY_PERIODIC, g);
+    }
 }
 
 /// A holder came off `target`: the Death Ray's run out lets loose what it

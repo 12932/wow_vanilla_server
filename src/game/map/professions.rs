@@ -925,6 +925,15 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid, spell: u32) {
         send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
     };
+    // Not with a disenchanted item's dust still in its window: the new
+    // window would take its place, and the dust be lost (Thistle Tea's
+    // `already_open`). The item is kept.
+    if p.looting
+        .is_some_and(|l| map.loot_state.item_loot.contains_key(&l))
+    {
+        send_failure(map, caster, spell, FAIL_ALREADY_OPEN);
+        return;
+    }
     crate::game::map::inventory::take_item(map, caster, i, 1);
     let value = map
         .players

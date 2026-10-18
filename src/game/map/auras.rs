@@ -2540,6 +2540,23 @@ fn periodic_log(map: &mut Map, h: &Holder, target: Guid, aura_type: AuraLog_Aura
     }
 }
 
+/// Run the ticks of `spell` from `caster` on `target` that are due now, on
+/// their cadence as an update runs them (so that the update doesn't run
+/// them again): another spell's last tick that a channel's end would
+/// otherwise come before.
+pub fn run_due(map: &mut Map, target: Guid, spell: u32, caster: Guid) {
+    let now = map.now;
+    let due: Vec<(Holder, Aura)> = auras(map, target)
+        .map(|a| {
+            due_ticks(a, now)
+                .into_iter()
+                .filter(|(h, _)| h.spell == spell && h.caster == caster)
+                .collect()
+        })
+        .unwrap_or_default();
+    run_ticks(map, target, due, now);
+}
+
 /// Run the ticks of `spell` from `caster` on `target` that are due now: a
 /// channel's last tick, as the channel ends.
 pub fn tick_due(map: &mut Map, target: Guid, spell: u32, caster: Guid) {
