@@ -996,6 +996,11 @@ pub fn summon(
     template_stats(&data, &mut c, template, level);
     c.hostile_to_players =
         crate::game::map::ai::hostile_to_players(&data, template.faction, template.civilian);
+    // Its template's weapons, as a spawn's (Thistle Tea builds a summon as
+    // it does a spawn).
+    if let Some(items) = data.creature_equipment.get(&template.equipment_id) {
+        c.set_equipment(&data, *items);
+    }
     let mut c = c.with_base();
     let s = c.scripted.get_or_insert_with(Default::default);
     s.summoner = Some(summoner);
