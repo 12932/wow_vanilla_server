@@ -1,2 +1,6 @@
 [build]
 rustflags = ["-Ctarget-cpu=native"]
+
+[alias]
+# The extended suite: every test, the real world's too (docs/TESTING.md).
+extended = "nextest run --lib --profile extended --run-ignored all"
