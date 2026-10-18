@@ -337,6 +337,34 @@ fn intellect_mana(intellect: u32) -> u32 {
     intellect.min(20) + intellect.saturating_sub(20) * 15
 }
 
+/// The percentages of `kind` on stat `misc` (or all, -1), each `100 +
+/// amount` with its stacks, no less than nothing.
+fn factors(a: &Auras, kind: u32, misc: i32) -> Vec<i64> {
+    a.effects()
+        .filter(|(_, x)| x.kind == kind && (x.misc == misc || x.misc == -1))
+        .map(|(h, x)| i64::from((100 + x.amount * h.stacks.max(1) as i32).max(0)))
+        .collect()
+}
+
+/// A stat from its base and gear (`own`): scaled by the base percentages
+/// (`pct`, each `100 + amount`), the flat auras added, then scaled by the
+/// totals, in whole numbers as Thistle Tea's `scaled_stat` divides them:
+/// four percent of a hundred is four, where a float's 1.04 makes 103.99.
+pub fn scaled_stat(own: i32, pct: &[i64], flat: i32, total: &[i64]) -> u32 {
+    let (mut num, mut den) = (1i128, 1i128);
+    for f in pct {
+        num *= i128::from(*f);
+        den *= 100;
+    }
+    let (mut tnum, mut tden) = (1i128, 1i128);
+    for f in total {
+        tnum *= i128::from(*f);
+        tden *= 100;
+    }
+    let value = i128::from(own) * num + i128::from(flat) * den;
+    (value * tnum / (den * tden)).clamp(0, i128::from(u32::MAX)) as u32
+}
+
 /// `SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT`: a share of intellect (the
 /// only stat it takes in 1.12) as armor or resistance.
 const AURA_MOD_RESISTANCE_OF_STAT_PERCENT: u32 = 182;
@@ -470,11 +498,13 @@ pub fn player(p: &mut Player, data: &GameData) {
     let f = &mut p.fields;
     let mut stat = [0u32; 5];
     for (i, value) in stat.iter_mut().enumerate() {
-        let own = (base.stats[i] as i32 + g.stats[i]) as f32;
-        let v = (own * a.product_misc(AURA_MOD_PERCENT_STAT, i as i32)
-            + a.sum_misc(AURA_MOD_STAT, i as i32) as f32)
-            * a.product_misc(AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32);
-        *value = v.max(0.0) as u32;
+        let own = base.stats[i] as i32 + g.stats[i];
+        *value = scaled_stat(
+            own,
+            &factors(a, AURA_MOD_PERCENT_STAT, i as i32),
+            a.sum_misc(AURA_MOD_STAT, i as i32),
+            &factors(a, AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32),
+        );
         let s = i as u16;
         f.set_u32(UNIT_FIELD_STAT0 + s, *value);
         let diff = *value as i32 - base.stats[i] as i32;
