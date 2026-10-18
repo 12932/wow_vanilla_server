@@ -465,3 +465,96 @@ async fn a_distraction_holds_only_a_creature_that_can_heed_it_and_ends_with_a_fi
     assert!(!fought);
     assert_eq!(cleared, None);
 }
+
+const KEEPS_MOVING: u32 = 3713;
+
+#[tokio::test]
+async fn a_talk_pause_holds_a_wanderer_or_a_patroller_three_minutes_but_never_less_than_it_waits() {
+    use crate::game::map::creature::{MOVEMENT_IDLE, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT};
+    use crate::game::map::creature_motion::{MOVEMENT_CYCLIC, TALK_PAUSE, talk_pause};
+    let mut d = data();
+    let mut t = template(KEEPS_MOVING, 7);
+    t.flags_extra = 0x20;
+    d.creature_templates.insert(KEEPS_MOVING, t);
+    let (_realm, _a, g, map) = setup_with(d, Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let now = m.now;
+            let make = |m: &mut Map, entry: u32, kind: u8, yards: f32| {
+                let c = spawn(m, g, entry, 20, yards);
+                m.creature_mut(c).unwrap().movement_type = kind;
+                let to = {
+                    let p = m.creature(c).unwrap().position;
+                    Vector3d { x: p.x + 20.0, ..p }
+                };
+                let (now, id) = (m.now, m.next_spline_id);
+                m.next_spline_id += 1;
+                let from = m.creature(c).unwrap().position;
+                let _ = m
+                    .creature_mut(c)
+                    .unwrap()
+                    .walk(vec![from, to], true, now, id);
+                c
+            };
+            let held = |m: &Map, c: Guid| match m.creature(c).unwrap().motion {
+                Motion::Idle { until: Some(t) } => Some(t.duration_since(now)),
+                _ => None,
+            };
+            // A wanderer, walking: it stops for three minutes.
+            let wanderer = make(m, BRUTE, MOVEMENT_RANDOM, 2.0);
+            let was_walking = matches!(m.creature(wanderer).unwrap().motion, Motion::Moving(_));
+            talk_pause(m, wanderer);
+            let wanderer_held = held(m, wanderer);
+            // A patroller keeps the point it was bound for.
+            let patroller = make(m, BRUTE, MOVEMENT_WAYPOINT, 3.0);
+            m.creature_mut(patroller).unwrap().waypoint = 4;
+            talk_pause(m, patroller);
+            let patrol = (held(m, patroller), m.creature(patroller).unwrap().waypoint);
+            // A longer wait stands.
+            let waiting = make(m, BRUTE, MOVEMENT_RANDOM, 4.0);
+            let longer = now + TALK_PAUSE + Duration::from_secs(60);
+            m.creature_mut(waiting).unwrap().motion = Motion::Idle {
+                until: Some(longer),
+            };
+            talk_pause(m, waiting);
+            let kept = held(m, waiting);
+            // A cyclic path, one standing, one fighting, one that keeps
+            // moving, one on a script's move: none stops.
+            let mut untouched = Vec::new();
+            for (entry, kind) in [
+                (BRUTE, MOVEMENT_CYCLIC),
+                (BRUTE, MOVEMENT_IDLE),
+                (BRUTE, MOVEMENT_RANDOM),
+                (KEEPS_MOVING, MOVEMENT_RANDOM),
+            ] {
+                let c = make(m, entry, kind, 5.0 + untouched.len() as f32);
+                if untouched.len() == 2 {
+                    m.creature_mut(c).unwrap().combat.attacking = true;
+                }
+                let before = held(m, c);
+                talk_pause(m, c);
+                untouched.push(held(m, c) == before);
+            }
+            let scripted = spawn(m, g, BRUTE, 20, 9.0);
+            m.creature_mut(scripted).unwrap().movement_type = MOVEMENT_RANDOM;
+            let to = {
+                let p = m.creature(scripted).unwrap().position;
+                Vector3d { x: p.x + 20.0, ..p }
+            };
+            scripts::move_to(m, scripted, to, false);
+            talk_pause(m, scripted);
+            untouched.push(matches!(
+                m.creature(scripted).unwrap().motion,
+                Motion::Moving(_)
+            ));
+            (was_walking, wanderer_held, patrol, kept, untouched)
+        })
+        .await
+        .unwrap();
+    let (was_walking, wanderer_held, patrol, kept, untouched) = r;
+    assert!(was_walking);
+    assert_eq!(wanderer_held, Some(TALK_PAUSE));
+    assert_eq!(patrol, (Some(TALK_PAUSE), 4));
+    assert_eq!(kept, Some(TALK_PAUSE + Duration::from_secs(60)));
+    assert_eq!(untouched, vec![true; 5]);
+}

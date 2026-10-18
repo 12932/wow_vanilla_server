@@ -312,6 +312,8 @@ mod tests_p4_core_spell;
 #[cfg(test)]
 mod tests_p4_core_stats;
 #[cfg(test)]
+mod tests_p4_core_walk;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
