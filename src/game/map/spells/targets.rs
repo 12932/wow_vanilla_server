@@ -376,6 +376,16 @@ pub fn effect_targets(
         (GameObject, _) | (Location, _) => Vec::new(),
         (Other(_), _) => t.unit.into_iter().collect(),
     };
+    // A second target of the caster's master adds the master to the first's
+    // (mangos's `SetTargetMap` of both; Thistle Tea's mixed enemy and
+    // master spells): a pet's buff at its enemy and its master.
+    if b == CasterMaster
+        && a != CasterMaster
+        && let Some(owner) = map.creature(caster).and_then(|c| c.owner)
+        && !out.contains(&owner)
+    {
+        out.push(owner);
+    }
     limit(map, &mut out, s.max_affected_targets as usize, t.unit);
     out
 }

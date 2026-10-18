@@ -400,6 +400,8 @@ mod tests_p5_spell_cost;
 #[cfg(test)]
 mod tests_p5_spell_dbc;
 #[cfg(test)]
+mod tests_p5_spell_effects;
+#[cfg(test)]
 mod tests_p5_spell_enchant;
 #[cfg(test)]
 mod tests_p5_spell_holiday;
