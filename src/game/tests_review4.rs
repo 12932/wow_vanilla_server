@@ -720,3 +720,30 @@ async fn a_spawn_a_script_brought_out_still_comes_back() {
     .await;
     assert_eq!(back, vec![true, true, true], "out, and back as it was due");
 }
+
+/// R4-14. A charter turned in must be in hand (mangos's
+/// `HandleTurnInPetitionOpcode`): one sold or destroyed, its GUID sent
+/// again, founds no guild.
+#[tokio::test]
+async fn a_charter_not_held_founds_no_guild() {
+    use crate::game::social::guilds::Petition;
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4PT");
+    let g = a.enter("Founder", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "R4PT2");
+    let signer = b.enter("Signer", Race::Human, Class::Warrior).await;
+    let charter = guid::item(990_490);
+    realm.social.guilds.lock().petitions.insert(
+        990_490,
+        Petition {
+            id: 990_490,
+            owner: guid::counter(g),
+            name: "Gone Charter".into(),
+            signers: vec![guid::counter(signer)],
+        },
+    );
+    a.send(CMSG_TURN_IN_PETITION { petition: charter }).await;
+    handled(&mut a).await;
+    let founded = realm.social.guilds.lock().of(g).is_some();
+    assert!(!founded, "no guild without its charter");
+}
