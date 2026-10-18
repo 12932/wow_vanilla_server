@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::registry::Team;
 use crate::game::social::send_to;
-use crate::game::store::ItemRow;
+use crate::game::store::{ItemRow, Records};
 
 pub const KIND_MAIL: &str = "mail";
 pub const KIND_TEXT: &str = "text";
@@ -129,7 +129,16 @@ fn save(realm: &Realm, m: &Mail) {
 }
 
 /// Post a mail; the receiver hears of it if it's due and they're online.
-pub fn post(realm: &Realm, mut m: Mail) -> u32 {
+pub fn post(realm: &Realm, m: Mail) -> u32 {
+    let mut records = Records::new();
+    let id = post_in(realm, m, &mut records);
+    realm.store.save_together(Vec::new(), records);
+    id
+}
+
+/// Post a mail whose record is saved with `records`: with what it holds
+/// taken from a character, or with the auction it settles.
+pub fn post_in(realm: &Realm, mut m: Mail, records: &mut Records) -> u32 {
     let mut mails = realm.social.mail.lock();
     if m.id == 0 {
         m.id = mails.next_id();
@@ -137,7 +146,7 @@ pub fn post(realm: &Realm, mut m: Mail) -> u32 {
     let id = m.id;
     let due = m.deliver_at <= now();
     let receiver = guid::player(m.receiver);
-    save(realm, &m);
+    records.put(KIND_MAIL, u64::from(id), &m);
     if !due {
         mails.pending.push(id);
     }
@@ -370,7 +379,8 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
     } else {
         0
     };
-    let id = post(
+    let mut records = Records::new();
+    let id = post_in(
         &realm,
         Mail {
             kind: NORMAL,
@@ -385,7 +395,11 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
             expires_at: now + delay + if cod > 0 { 3 * DAY } else { 30 * DAY },
             ..Default::default()
         },
+        &mut records,
     );
+    // The mail and the sender's bags and money in one transaction
+    // (mangos's `HandleSendMail`).
+    map.save_together(&[g], records);
     result(
         map,
         g,
@@ -397,27 +411,37 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
 /// The player's own mail, delivered, by id.
 fn with_mail<T>(map: &Map, g: Guid, id: u32, f: impl FnOnce(&mut Mail) -> T) -> Option<T> {
     let mut mails = map.realm.social.mail.lock();
-    let m = mails
+    own_mail(&mut mails, g, id).map(f)
+}
+
+/// The player's own mail, delivered, by id, in the mail already locked.
+fn own_mail(mails: &mut Mails, g: Guid, id: u32) -> Option<&mut Mail> {
+    mails
         .mails
         .get_mut(&id)
-        .filter(|m| m.receiver == guid::counter(g) && m.deliver_at <= now())?;
-    Some(f(m))
+        .filter(|m| m.receiver == guid::counter(g) && m.deliver_at <= now())
 }
 
 /// `CMSG_MAIL_TAKE_MONEY`.
 pub fn take_money(map: &mut Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
-    let Some(money) = with_mail(map, g, id, |m| {
-        let money = std::mem::take(&mut m.money);
-        save(&realm, m);
-        money
-    }) else {
+    let mut mails = realm.social.mail.lock();
+    let Some(m) = own_mail(&mut mails, g, id) else {
         return;
     };
-    if let Some(p) = map.players.get_mut(&g) {
-        let have = p.money();
-        p.set_money(have.saturating_add(money));
+    let money = std::mem::take(&mut m.money);
+    if money > 0 {
+        let mut records = Records::new();
+        records.put(KIND_MAIL, u64::from(id), m);
+        if let Some(p) = map.players.get_mut(&g) {
+            let have = p.money();
+            p.set_money(have.saturating_add(money));
+        }
+        // The mail and its taker in one transaction, sent under the mail's
+        // lock so that no later change to the mail is written before it.
+        map.save_together(&[g], records);
     }
+    drop(mails);
     result(
         map,
         g,
@@ -472,12 +496,13 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
         );
         return;
     }
+    let mut records = Records::new();
     if cod > 0 {
         if let Some(p) = map.players.get_mut(&g) {
             p.set_money(money - cod);
         }
         let now = now();
-        post(
+        post_in(
             &realm,
             Mail {
                 kind: NORMAL,
@@ -490,13 +515,19 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
                 flags: COD_PAYMENT,
                 ..Default::default()
             },
+            &mut records,
         );
     }
-    with_mail(map, g, id, |m| {
+    // The mail without its item, the payment and the taker in one
+    // transaction (mangos's `HandleMailTakeItem`).
+    let mut mails = realm.social.mail.lock();
+    if let Some(m) = own_mail(&mut mails, g, id) {
         m.item = None;
         m.cod = 0;
-        save(&realm, m);
-    });
+        records.put(KIND_MAIL, u64::from(id), m);
+    }
+    map.save_together(&[g], records);
+    drop(mails);
     result(
         map,
         g,
@@ -594,7 +625,8 @@ pub fn make_letter(map: &mut Map, g: Guid, id: u32) {
         mails.texts.insert(tid, body.clone());
         tid
     };
-    realm.store.put_record(KIND_TEXT, u64::from(text_id), &body);
+    let mut records = Records::new();
+    records.put(KIND_TEXT, u64::from(text_id), &body);
     let counter = realm
         .next_item
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -608,10 +640,14 @@ pub fn make_letter(map: &mut Map, g: Guid, id: u32) {
     if crate::game::map::inventory::attach_item(map, g, &row).is_err() {
         return;
     }
-    with_mail(map, g, id, |m| {
+    // The letter, its text and the mail marked copied, together.
+    let mut mails = realm.social.mail.lock();
+    if let Some(m) = own_mail(&mut mails, g, id) {
         m.flags |= COPIED;
-        save(&realm, m);
-    });
+        records.put(KIND_MAIL, u64::from(id), m);
+    }
+    map.save_together(&[g], records);
+    drop(mails);
     result(
         map,
         g,
