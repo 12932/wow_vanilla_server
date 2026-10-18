@@ -370,6 +370,11 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
             return Hit::Reflect;
         }
     }
+    // A spell of no damage class never misses (mangos-classic's
+    // `SpellHitResult`, Thistle Tea's unclassified spells): no magic roll.
+    if s.dmg_class == 0 {
+        return Hit::Hit;
+    }
     let chance = spell_hit_chance(map, caster, target, s, m);
     if roll_strict(map, chance) {
         Hit::Hit

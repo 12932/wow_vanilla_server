@@ -1274,7 +1274,7 @@ fn launch_failed(map: &Map, caster: Guid, spell: u32, code: u8) {
 
 /// How long something at `speed` yards a second takes from `caster` to
 /// `target`: at least five yards' worth.
-fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
+pub(crate) fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
     match (map.position_of(caster), map.position_of(target)) {
         (Some(a), Some(b)) => {
             let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();

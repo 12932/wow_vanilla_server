@@ -32,6 +32,7 @@ fn data() -> GameData {
         id: GROUND,
         name: "Ground".into(),
         school: 5,
+        dmg_class: 1,
         equipped_item_class: -1,
         range_index: 1,
         duration_index: 5_000,
@@ -49,6 +50,7 @@ fn data() -> GameData {
     };
     let mut dot = aura_spell(DOT, Some(5_000), &[(AURA_PERIODIC_DAMAGE, 0, 1000)]);
     dot.school = 5;
+    dot.dmg_class = 1;
     dot.effects[0].target_a = 6;
     add_spells(
         &mut d,
