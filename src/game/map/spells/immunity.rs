@@ -46,6 +46,15 @@ pub fn applied(map: &mut Map, target: Guid, h: &Holder) {
         if o.spell == spell || o.passive {
             return false;
         }
+        // What ignores immunities isn't purged by one (mangos's
+        // `RemoveAurasAtMechanicImmunity`).
+        if data
+            .spells
+            .get(o.spell)
+            .is_some_and(|t| t.attr(0, crate::game::data::spells::ATTR_NO_IMMUNITIES))
+        {
+            return false;
+        }
         // A dispel immunity takes the helpful of its type too: Faerie
         // Fire's, stealth and invisibility.
         if o.positive {

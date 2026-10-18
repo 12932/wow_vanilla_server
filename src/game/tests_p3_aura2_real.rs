@@ -96,7 +96,7 @@ async fn vampiric_embrace_heals_a_fifth_of_the_priests_shadow_damage() {
             ready(m, other, 60, &[]);
             let kobold = dummy(m, priest, 60, 5.0);
             apply(m, priest, kobold, VAMPIRIC_EMBRACE);
-            let mut healed = |m: &mut Map, e: Event| {
+            let healed = |m: &mut Map, e: Event| {
                 set_health(m, priest, 100);
                 procs::trigger(m, e);
                 health(m, priest) - 100
@@ -142,7 +142,7 @@ async fn magic_absorption_gives_mana_for_a_resisted_spell_once_a_second() {
             apply(m, mage, mage, MAGIC_ABSORPTION);
             apply(m, mage, mage, RESIST_ALL);
             let kobold = dummy(m, mage, 60, 5.0);
-            let mut gained = |m: &mut Map, after: u64| {
+            let gained = |m: &mut Map, after: u64| {
                 m.now += Duration::from_millis(after);
                 set_power(m, mage, 0, 100);
                 spells::cast_triggered(m, kobold, FROSTBOLT, Some(mage));
@@ -179,7 +179,7 @@ async fn illumination_gives_back_a_crit_heals_base_cost() {
             ready(m, paladin, 60, &[]);
             apply(m, paladin, paladin, ILLUMINATION);
             let cost = m.realm.data.spells.get(HOLY_LIGHT).unwrap().mana_cost;
-            let mut gained = |m: &mut Map, ex: u32| {
+            let gained = |m: &mut Map, ex: u32| {
                 set_power(m, paladin, 0, 100);
                 procs::trigger(
                     m,
@@ -410,4 +410,61 @@ async fn ignite_is_one_burn_the_first_mages_whoever_crits() {
     assert_eq!((stacks, amount), (2, 40));
     assert!(rhythm, "on its first rhythm");
     assert_eq!(dealt, 40);
+}
+
+const BESTIAL_WRATH: u32 = 19574;
+const BESTIAL_WRATH_IMMUNITIES: [u32; 4] = [24395, 24396, 24397, 26592];
+
+/// Thistle Tea's boosts: Bestial Wrath's immunities come with it, the
+/// hunter's, on the beast it's on; they go as it goes (taken off, run out,
+/// or the beast dead); one taken off isn't back until Bestial Wrath is
+/// cast again.
+#[tokio::test]
+#[ignore = "extended"]
+async fn bestial_wraths_immunities_come_and_go_with_it() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, hunter, map) = player(&realm, "P3Q12", "Wrathone", Race::Dwarf, Class::Hunter).await;
+    let got = map
+        .query(move |m| {
+            ready(m, hunter, 60, &[]);
+            let beast = dummy(m, hunter, 60, 5.0);
+            let boosts = |m: &Map| {
+                holders(m, beast)
+                    .into_iter()
+                    .filter(|(s, _)| BESTIAL_WRATH_IMMUNITIES.contains(s))
+                    .collect::<Vec<_>>()
+            };
+            apply(m, hunter, beast, BESTIAL_WRATH);
+            let on = boosts(m);
+            auras::remove_spell(m, beast, BESTIAL_WRATH_IMMUNITIES[0], None);
+            pass(m, 1_000);
+            let one_off = boosts(m).len();
+            apply(m, hunter, beast, BESTIAL_WRATH);
+            let back = boosts(m).len();
+            auras::remove_spell(m, beast, BESTIAL_WRATH, None);
+            let removed = boosts(m).len();
+            apply(m, hunter, beast, BESTIAL_WRATH);
+            pass(m, 18_000);
+            let ran_out = (has(m, beast, BESTIAL_WRATH), boosts(m).len());
+            apply(m, hunter, beast, BESTIAL_WRATH);
+            auras::clear_on_death(m, beast);
+            let dead = boosts(m).len();
+            (on, one_off, back, removed, ran_out, dead)
+        })
+        .await
+        .unwrap();
+    let (on, one_off, back, removed, ran_out, dead) = got;
+    assert_eq!(
+        on,
+        BESTIAL_WRATH_IMMUNITIES.map(|s| (s, hunter)).to_vec(),
+        "all four, the hunter's"
+    );
+    assert_eq!(one_off, 3, "one taken off stays off");
+    assert_eq!(back, 4, "back with Bestial Wrath again");
+    assert_eq!(removed, 0);
+    assert_eq!(ran_out, (false, 0));
+    assert_eq!(dead, 0);
 }

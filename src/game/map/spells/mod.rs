@@ -1393,7 +1393,8 @@ fn land(
                 *on = false;
                 immune = true;
             } else if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-                && auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+                && (auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+                    || crate::game::map::extra_effects::effect_immune(map, aim, s, i))
             {
                 // An aura of a kind kept off (mangos's `IsImmuneToSpellEffect`).
                 *on = false;

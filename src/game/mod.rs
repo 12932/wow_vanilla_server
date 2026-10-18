@@ -82,6 +82,8 @@ mod tests_p3_ai_scripts;
 #[cfg(test)]
 mod tests_p3_aura2;
 #[cfg(test)]
+mod tests_p3_aura2_immunity;
+#[cfg(test)]
 mod tests_p3_aura2_real;
 #[cfg(test)]
 mod tests_p3_combat;

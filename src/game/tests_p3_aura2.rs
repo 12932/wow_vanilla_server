@@ -70,6 +70,17 @@ const DISPEL_CURSE: u32 = 96_137;
 const DISPEL_TWO: u32 = 96_138;
 /// The crowd control kinds, each breakable by damage and not.
 const CC_BASE: u32 = 96_150;
+/// Linked auras: a parent of 12 seconds holding a child of 20 (a fifth
+/// less physical damage taken); its second rank, with none; a parent
+/// whose child holds a grandchild; and a parent with a child of a second.
+const PARENT: u32 = 96_400;
+const CHILD: u32 = 96_401;
+const PARENT_2: u32 = 96_402;
+const NESTED: u32 = 96_403;
+const NESTED_CHILD: u32 = 96_404;
+const GRANDCHILD: u32 = 96_405;
+const SHORT_PARENT: u32 = 96_406;
+const SHORT_CHILD: u32 = 96_407;
 
 /// The crowd control kinds Thistle Tea's test tries: the first three are
 /// what a pet leaves be when damage would break them.
@@ -85,7 +96,7 @@ const CC_KINDS: [u32; 7] = [
 
 /// A spell of aura effects (each its aura, misc value and amplitude),
 /// lasting `ms` (none for no end), on its caster.
-fn aura_spell(id: u32, ms: Option<u32>, effects: &[(u32, i32, u32)]) -> SpellTemplate {
+pub(crate) fn aura_spell(id: u32, ms: Option<u32>, effects: &[(u32, i32, u32)]) -> SpellTemplate {
     let mut s = SpellTemplate {
         id,
         name: format!("Aura {id}"),
@@ -110,7 +121,7 @@ fn aura_spell(id: u32, ms: Option<u32>, effects: &[(u32, i32, u32)]) -> SpellTem
 }
 
 /// A proc aura of `flags` that casts `trigger`, always.
-fn proc_spell(id: u32, flags: u32, trigger: u32) -> SpellTemplate {
+pub(crate) fn proc_spell(id: u32, flags: u32, trigger: u32) -> SpellTemplate {
     let mut s = aura_spell(id, None, &[(AURA_PROC_TRIGGER_SPELL, 0, 0)]);
     s.effects[0].trigger_spell = trigger;
     s.proc_flags = flags;
@@ -118,7 +129,7 @@ fn proc_spell(id: u32, flags: u32, trigger: u32) -> SpellTemplate {
     s
 }
 
-fn proc_event(ex: u32, cooldown: u32) -> ProcEvent {
+pub(crate) fn proc_event(ex: u32, cooldown: u32) -> ProcEvent {
     ProcEvent {
         ex,
         cooldown,
@@ -126,7 +137,7 @@ fn proc_event(ex: u32, cooldown: u32) -> ProcEvent {
     }
 }
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = base::data();
     // A human priest and warrior of level 1 with 20 in each stat.
     for class in [1u8, 5] {
@@ -288,7 +299,52 @@ fn data() -> GameData {
             all.push(s);
         }
     }
-    for s in all.into_iter().chain(strikes) {
+    // Linked auras.
+    let link = |id: u32, ms: u32, child: u32| {
+        let mut s = aura_spell(id, Some(ms), &[(AURA_LINKED, 0, 0)]);
+        s.effects[0].trigger_spell = child;
+        s
+    };
+    let mut child = aura_spell(
+        CHILD,
+        Some(20_000),
+        &[(AURA_MOD_DAMAGE_PERCENT_TAKEN, 1, 0)],
+    );
+    child.effects[0].base_points = -21;
+    let mut nested_child = link(NESTED_CHILD, 20_000, GRANDCHILD);
+    nested_child.effects[1] = child.effects[0];
+    let mut short_child = child.clone();
+    short_child.id = SHORT_CHILD;
+    short_child.duration_index = 1_000;
+    let mut grandchild = child.clone();
+    grandchild.id = GRANDCHILD;
+    all.extend([
+        link(PARENT, 12_000, CHILD),
+        child,
+        aura_spell(PARENT_2, Some(12_000), &[(AURA_MOD_STAT, 0, 0)]),
+        link(NESTED, 12_000, NESTED_CHILD),
+        nested_child,
+        grandchild,
+        link(SHORT_PARENT, 12_000, SHORT_CHILD),
+        short_child,
+    ]);
+    for (id, rank) in [(PARENT, 1), (PARENT_2, 2)] {
+        d.spells.ranks.insert(
+            id,
+            crate::game::data::spells::SpellRank {
+                first: PARENT,
+                rank,
+                ..Default::default()
+            },
+        );
+    }
+    add_spells(&mut d, all.into_iter().chain(strikes));
+    d
+}
+
+/// Spells into the data, each duration index its milliseconds.
+pub(crate) fn add_spells(d: &mut GameData, spells: impl IntoIterator<Item = SpellTemplate>) {
+    for s in spells {
         if s.duration_index != 0 {
             d.spells.durations.insert(
                 s.duration_index,
@@ -300,49 +356,54 @@ fn data() -> GameData {
         }
         d.spells.spells.insert(s.id, s);
     }
-    d
 }
 
 /// Put `id` on `target` from `caster`, its effects each with an amount.
-fn put(m: &mut Map, caster: Guid, target: Guid, id: u32, amounts: &[i32]) -> Result<(), Refused> {
+pub(crate) fn put(
+    m: &mut Map,
+    caster: Guid,
+    target: Guid,
+    id: u32,
+    amounts: &[i32],
+) -> Result<(), Refused> {
     let s = m.realm.data.spells.get(id).cloned().expect("the spell");
     let effects: Vec<(usize, i32)> = amounts.iter().copied().enumerate().collect();
     auras::apply_spell(m, caster, target, &s, &effects, Context::default())
 }
 
-fn has(m: &Map, g: Guid, spell: u32) -> bool {
+pub(crate) fn has(m: &Map, g: Guid, spell: u32) -> bool {
     auras::auras(m, g).is_some_and(|a| a.has_spell(spell))
 }
 
 /// Whether `g` has `spell`, taken off as it is told.
-fn took(m: &mut Map, g: Guid, spell: u32) -> bool {
+pub(crate) fn took(m: &mut Map, g: Guid, spell: u32) -> bool {
     let had = has(m, g, spell);
     auras::remove_spell(m, g, spell, None);
     had
 }
 
-fn health(m: &Map, g: Guid) -> u32 {
+pub(crate) fn health(m: &Map, g: Guid) -> u32 {
     m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
 }
 
-fn set(m: &mut Map, g: Guid, index: u16, v: u32) {
+pub(crate) fn set(m: &mut Map, g: Guid, index: u16, v: u32) {
     if let Some(f) = m.unit_fields_mut(g) {
         f.set_u32(index, v);
     }
 }
 
-fn get(m: &Map, g: Guid, index: u16) -> u32 {
+pub(crate) fn get(m: &Map, g: Guid, index: u16) -> u32 {
     m.unit_fields(g).map_or(0, |f| f.get_u32(index))
 }
 
 /// Time passes on the map: its auras run out and tick.
-fn pass(m: &mut Map, ms: u64) {
+pub(crate) fn pass(m: &mut Map, ms: u64) {
     m.now += Duration::from_millis(ms);
     auras::update(m);
 }
 
 /// The next tick of `g`'s `spell`, from now.
-fn next_tick(m: &Map, g: Guid, spell: u32) -> Option<Duration> {
+pub(crate) fn next_tick(m: &Map, g: Guid, spell: u32) -> Option<Duration> {
     let now = m.now;
     auras::auras(m, g)?
         .holders
@@ -831,4 +892,135 @@ async fn a_dispel_takes_its_count_of_its_kind_or_nothing() {
         .await
         .unwrap();
     assert_eq!(got, ((true, true), (false, false)));
+}
+
+/// `g`'s holders: each spell, whether it has a slot, and whether it is
+/// passive.
+pub(crate) fn shown(m: &Map, g: Guid) -> Vec<(u32, bool, bool)> {
+    auras::auras(m, g).map_or_else(Vec::new, |a| {
+        a.holders
+            .iter()
+            .map(|h| (h.spell, h.slot.is_some(), h.passive))
+            .collect()
+    })
+}
+
+/// The share of physical and fire damage `g` takes.
+fn taken_share(m: &Map, g: Guid) -> (f32, f32) {
+    auras::auras(m, g).map_or((1.0, 1.0), |a| {
+        (
+            a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, 1),
+            a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, SCHOOL_FIRE_MASK),
+        )
+    })
+}
+
+const SCHOOL_FIRE_MASK: u32 = 0x4;
+
+/// Thistle Tea's `Linked`: a parent's child is hidden (no slot), passive,
+/// and does its work (a fifth less physical damage, none less fire); a
+/// refresh keeps one child, not two of its effect; a copy of the child's
+/// spell on its own stays when the parent goes. A blocked parent gives no
+/// child. The child goes as the parent goes, cancelled, run out (the
+/// child's own 20 seconds longer than the parent's 12) or dead, and so do
+/// nested children; a child taken off isn't made again until the parent
+/// is.
+#[tokio::test]
+async fn a_linked_child_is_hidden_and_goes_with_its_parent() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let mut out = Vec::new();
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            out.push((shown(m, ga), taken_share(m, ga)));
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            out.push((shown(m, ga), taken_share(m, ga)));
+            auras::remove_where(m, ga, |_| true);
+            // A copy of its own stays.
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            put(m, ga, ga, CHILD, &[-20]).unwrap();
+            auras::remove_spell(m, ga, PARENT, None);
+            let copy = shown(m, ga);
+            auras::remove_where(m, ga, |_| true);
+            // A blocked parent.
+            put(m, ga, ga, PARENT_2, &[5]).unwrap();
+            let blocked = put(m, ga, ga, PARENT, &[0]);
+            let after_block = shown(m, ga);
+            auras::remove_where(m, ga, |_| true);
+            // Cancelled, run out, dead.
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            auras::cancel(m, ga, PARENT);
+            let cancelled = shown(m, ga);
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            pass(m, 12_000);
+            let ran_out = shown(m, ga);
+            put(m, ga, ga, NESTED, &[0]).unwrap();
+            let nested = shown(m, ga);
+            auras::remove_spell(m, ga, NESTED, None);
+            let nested_gone = shown(m, ga);
+            // Taken off: not again until the parent is.
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            auras::remove_spell(m, ga, CHILD, None);
+            pass(m, 1_000);
+            let not_again = shown(m, ga);
+            put(m, ga, ga, PARENT, &[0]).unwrap();
+            let again = shown(m, ga);
+            auras::clear_on_death(m, ga);
+            let dead = shown(m, ga);
+            (
+                out,
+                copy,
+                (blocked, after_block),
+                (cancelled, ran_out),
+                (nested, nested_gone),
+                (not_again, again, dead),
+            )
+        })
+        .await
+        .unwrap();
+    let (out, copy, blocked, gone, nested, again) = got;
+    let pair = vec![(PARENT, true, false), (CHILD, false, true)];
+    assert_eq!(out[0], (pair.clone(), (0.8, 1.0)), "hidden, and at work");
+    assert_eq!(out[1], (pair.clone(), (0.8, 1.0)), "one child on a refresh");
+    assert_eq!(copy, [(CHILD, true, false)], "the copy of its own stays");
+    assert_eq!(
+        blocked,
+        (Err(Refused::Bounced), vec![(PARENT_2, true, false)]),
+        "no child from a blocked parent"
+    );
+    assert_eq!(gone, (vec![], vec![]), "cancelled and run out");
+    assert_eq!(
+        nested.0,
+        [
+            (NESTED, true, false),
+            (NESTED_CHILD, false, true),
+            (GRANDCHILD, false, true)
+        ]
+    );
+    assert_eq!(nested.1, [], "nested children leave with their root");
+    assert_eq!(again.0, [(PARENT, true, false)], "not made again");
+    assert_eq!(again.1, pair, "until the parent is");
+    assert_eq!(again.2, [], "death takes both");
+}
+
+/// Thistle Tea's `Linked`: a child shorter than its parent runs out on
+/// its own time and isn't made again while the parent lasts.
+#[tokio::test]
+async fn a_linked_child_runs_its_own_time_within_its_parents() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            put(m, ga, ga, SHORT_PARENT, &[0]).unwrap();
+            let both = shown(m, ga);
+            pass(m, 1_000);
+            pass(m, 1_000);
+            (both, shown(m, ga))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        got.0,
+        [(SHORT_PARENT, true, false), (SHORT_CHILD, false, true)]
+    );
+    assert_eq!(got.1, [(SHORT_PARENT, true, false)]);
 }
