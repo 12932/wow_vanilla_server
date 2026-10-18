@@ -1192,6 +1192,7 @@ pub fn auto_store(map: &mut Map, g: Guid, from: (u8, u8), bag: u8) {
 /// takes it; or, if not all of it fits, nowhere, and `full` told.
 pub fn stow(map: &mut Map, g: Guid, from: (u8, u8), slots: &[(u8, u8)], full: Fail) {
     let data = map.realm.data.clone();
+    let now = map.now;
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -1199,6 +1200,22 @@ pub fn stow(map: &mut Map, g: Guid, from: (u8, u8), slots: &[(u8, u8)], full: Fa
         return;
     };
     let item = p.items[a].clone();
+    // Taken off in a fight only what changes in one, as [`move_item`]
+    // has it: an armor's piece or a trinket stays on (Thistle Tea's
+    // auto-store, mangos's `CanUnequipItem`).
+    if from.0 == BAG_PLAYER
+        && from.1 < EQUIPMENT_END
+        && let Some(f) = crate::game::map::spells::class_scripts::combat_change_refused(
+            p,
+            &data,
+            Some(item.entry),
+            None,
+            now,
+        )
+    {
+        send_fail(p, f, item.guid);
+        return;
+    }
     let stack = data.item(item.entry).map_or(1, |t| t.stackable.max(1));
     let worn = from.0 == BAG_PLAYER && from.1 < BAG_END;
     let mut left = item.count();
@@ -1385,6 +1402,9 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
         return;
     };
     p.gear_dirty = false;
+    // What the gear gives, worked out again: gear broken or mended by wear
+    // or a spell, which moves no item, changes it too.
+    p.apply_stats(&data);
     let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
     let in_form = |spell: u32| {
         data.spells

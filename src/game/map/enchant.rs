@@ -440,6 +440,14 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     else {
         return;
     };
+    // A broken weapon isn't struck with (mangos's `GetWeaponForAttack` of
+    // a usable one): its enchantments and spells don't go off, nor spend
+    // a charge.
+    if item.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+        && item.fields.get_u32(ITEM_FIELD_DURABILITY) == 0
+    {
+        return;
+    }
     let item_guid = item.guid;
     let delay = data.item(item.entry).map_or(2000, |t| t.delay.max(1));
     // An extra attack doesn't bring more extra attacks.

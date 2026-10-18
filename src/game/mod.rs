@@ -184,6 +184,8 @@ mod tests_p3_player;
 #[cfg(test)]
 mod tests_p3_player2_ammo;
 #[cfg(test)]
+mod tests_p3_player2_gear;
+#[cfg(test)]
 mod tests_p3_player2_npc;
 #[cfg(test)]
 mod tests_p3_player_chat;
