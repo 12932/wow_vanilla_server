@@ -392,6 +392,8 @@ mod tests_p5_ai_pets;
 #[cfg(test)]
 mod tests_p5_ai_pet_targets;
 #[cfg(test)]
+mod tests_p5_ai_scripts;
+#[cfg(test)]
 mod tests_p5_ai_summons;
 #[cfg(test)]
 mod tests_p5_player;
