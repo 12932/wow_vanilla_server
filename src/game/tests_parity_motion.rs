@@ -392,6 +392,7 @@ async fn wanders(map: &MapHandle, g: Guid, tries: usize) -> (Vec<Vector3d>, Vec<
 /// spawn, as Thistle Tea pulls in the navmesh's random point
 /// (`Pathfinding.find_random_point_around_circle`).
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_wanderer_keeps_within_its_radius() {
     let mut d = world();
     d.creature_templates
@@ -418,6 +419,7 @@ async fn a_wanderer_keeps_within_its_radius() {
 /// The real navmesh: a wanderer the navmesh has no point for waits two to
 /// six seconds, rather than walking to a spot in the air.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_wanderer_with_no_point_waits() {
     let mut d = world();
     d.creature_templates
@@ -680,6 +682,7 @@ async fn confusion_keeps_about_where_it_began() {
 /// The real navmesh: a feared creature runs to points the navmesh has,
 /// along its paths, no more than thirty yards.
 #[tokio::test]
+#[ignore = "extended"]
 async fn fear_runs_where_the_navmesh_goes() {
     let mut d = with_spells(world());
     d.creature_templates
@@ -739,6 +742,7 @@ async fn fear_runs_where_the_navmesh_goes() {
 /// The real navmesh: a feared player is run to points the navmesh has, no
 /// more than thirty yards, as a creature is.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_feared_players_runs_keep_to_the_navmesh() {
     let mut d = with_spells(world());
     d.creature_templates

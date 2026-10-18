@@ -73,6 +73,7 @@ fn a_meter_stops_on_a_tie_keeping_its_progress_adds_up_split_ticks_and_caps_a_cr
 }
 
 #[test]
+#[ignore = "extended"]
 fn the_real_capture_points_have_their_timings_and_slider_fields() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

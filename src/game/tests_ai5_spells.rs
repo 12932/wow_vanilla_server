@@ -37,7 +37,7 @@ fn realm() -> Option<Arc<Realm>> {
     if !dir.join("vmangos.sqlite").exists() {
         return None;
     }
-    Some(harness::realm_with(crate::game::data::load::load(dir)))
+    Some(harness::realm_with(crate::game::harness::load_real(dir)))
 }
 
 /// A player at the start, out of the intro, whom nothing aggroes.
@@ -517,6 +517,7 @@ async fn taerars_shades_are_his_guardians(map: &MapHandle) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn creature_spell_lists_and_summons_on_the_real_data() {
     let Some(realm) = realm() else {
         return;

@@ -662,6 +662,7 @@ async fn twilight_corrupter(realm: &Arc<Realm>) {
 
 /// The raid bosses, on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn raid_bosses_fight_as_thistle_tea_scripts_them() {
     let Some(realm) = realm() else {
         return;

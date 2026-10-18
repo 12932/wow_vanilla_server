@@ -453,12 +453,13 @@ async fn a_pooled_node_comes_back_as_one_of_its_pool() {
 /// The real data: Thistle Tea's creature scripts all come in, and the
 /// bosses' encounters with them.
 #[test]
+#[ignore = "extended"]
 fn the_real_thistle_tea_scripts_come_in_whole() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let mut data = crate::game::data::load::load(dir);
+    let mut data = crate::game::harness::load_real(dir);
     // Onyxia, Ragnaros, Majordomo, Garr, Shazzrah, Omokk, Gandling.
     for entry in [10184, 11502, 12018, 12057, 12264, 9196, 1853] {
         assert!(
@@ -1117,12 +1118,13 @@ async fn blackfathom_fires_call_waves_and_open_the_portal() {
 /// The real data: Thistle Tea's scripted bosses in their own copies fight
 /// a player for a while without trouble, and Onyxia takes to the air.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_scripted_bosses_fight_without_trouble() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let realm = harness::realm_with(data);
     let (mut a, me) = enter(&realm).await;
     // Onyxia, at 64 percent.

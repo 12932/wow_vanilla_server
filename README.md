@@ -113,7 +113,8 @@ is done and what is left, phase by phase, is in the plan's progress section.
 
 ```sh
 cargo clippy --all-targets    # must be clean
-cargo test --lib
+cargo nextest run --lib       # the fast suite
+cargo extended                # every test, on the real world (WVS_DATA); see docs/TESTING.md
 ```
 
 [AGENTS.md](AGENTS.md) describes the design and the conventions.

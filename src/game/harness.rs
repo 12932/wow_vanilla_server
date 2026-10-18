@@ -26,12 +26,104 @@ pub const WAIT: Duration = Duration::from_secs(20);
 /// `WVS_DATA` if it is set, else `data/` in the checkout. A test whose data
 /// isn't there passes without running.
 pub fn real_data(what: &str) -> std::path::PathBuf {
+    extended_only(what);
     std::env::var_os("WVS_DATA")
         .map_or_else(
             || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data"),
             std::path::PathBuf::from,
         )
         .join(what)
+}
+
+/// The real world is for the extended suite only: under nextest, any other
+/// profile fails the test that asks for it, so that a test needing the real
+/// world is never quietly in the fast suite (or quietly passing there
+/// without running). See docs/TESTING.md.
+fn extended_only(what: &str) {
+    if let Ok(profile) = std::env::var("NEXTEST_PROFILE")
+        && profile != "extended"
+    {
+        panic!(
+            "this test reads the real world (data/{what}), which is for the extended suite only \
+             (nextest profile `{profile}`): mark it `#[ignore = \"extended\"]` and run it with \
+             `cargo extended` (`cargo nextest run --lib --profile extended --run-ignored all`); \
+             see docs/TESTING.md"
+        );
+    }
+}
+
+/// [`load::load`](crate::game::data::load::load) of the real world in `dir`
+/// (`real_data("db")`), for the tests: from a snapshot of an earlier test's
+/// load, when one was made from these databases by this test binary. Each
+/// test is a process of its own, and the snapshot reads in a fraction of
+/// the load's time.
+///
+/// The snapshot's name is a hash of the databases' paths, sizes and
+/// modification times and the test binary's, so a change to either (a
+/// rebuild, for one to the loader) is a new snapshot, made by the first
+/// test to want it while the others wait on its lock. It is kept beside the
+/// test binary, in `target/`, and older ones are removed.
+pub fn load_real(dir: &std::path::Path) -> GameData {
+    use crate::game::data::load::load;
+    let Some((at, name)) = snapshot_path(dir) else {
+        return load(dir);
+    };
+    let path = at.join(&name);
+    let read = || {
+        let bytes = std::fs::read(&path).ok()?;
+        postcard::from_bytes::<GameData>(&bytes).ok()
+    };
+    if let Some(data) = read() {
+        return data;
+    }
+    // One test loads and writes it; any others wanting it meanwhile wait.
+    let Ok(lock) = std::fs::File::create(at.join("wvs-real-world.lock")) else {
+        return load(dir);
+    };
+    if lock.lock().is_err() {
+        return load(dir);
+    }
+    if let Some(data) = read() {
+        return data;
+    }
+    let data = load(dir);
+    if let Ok(bytes) = postcard::to_stdvec(&data) {
+        let tmp = at.join(format!("{name}.{}", std::process::id()));
+        if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+            // The snapshots of earlier builds, or databases, are stale.
+            for old in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+                let n = old.file_name();
+                let n = n.to_string_lossy();
+                if n.starts_with("wvs-real-world-") && n.ends_with(".bin") && *n != *name {
+                    let _ = std::fs::remove_file(old.path());
+                }
+            }
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    data
+}
+
+/// Where the snapshot of the real world in `dir` is (the test binary's
+/// directory) and its name; `None` if a file it is keyed on can't be read.
+fn snapshot_path(dir: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
+    use std::hash::{Hash, Hasher};
+    let exe = std::env::current_exe().ok()?;
+    let mut h = std::hash::DefaultHasher::new();
+    for file in [
+        dir.join("vmangos.sqlite"),
+        dir.join("dbc.sqlite"),
+        exe.clone(),
+    ] {
+        let file = std::fs::canonicalize(file).ok()?;
+        let meta = std::fs::metadata(&file).ok()?;
+        file.hash(&mut h);
+        meta.len().hash(&mut h);
+        meta.modified().ok()?.hash(&mut h);
+    }
+    let at = exe.parent()?.to_path_buf();
+    Some((at, format!("wvs-real-world-{:016x}.bin", h.finish())))
 }
 
 pub fn test_config() -> RealmConfig {
@@ -424,4 +516,49 @@ pub fn values(m: &ServerOpcodeMessage) -> Vec<(Guid, UpdateMask)> {
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// The real world's snapshot is a new one when either database changes,
+    /// in size or in time, so a snapshot never outlives what it was made
+    /// from (the test binary is keyed the same way).
+    #[test]
+    fn a_real_world_snapshot_is_keyed_on_the_databases() {
+        let dir = std::env::temp_dir().join(format!("wvs-snapshot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |db: &str, body: &str, secs: u64| {
+            let path = dir.join(db);
+            std::fs::write(&path, body).unwrap();
+            let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        };
+        write("vmangos.sqlite", "world", 1_000);
+        write("dbc.sqlite", "client", 1_000);
+        let key = || super::snapshot_path(&dir).map(|(_, name)| name);
+        let first = key().expect("keyed");
+        assert!(
+            first.starts_with("wvs-real-world-") && first.ends_with(".bin"),
+            "{first}"
+        );
+        assert_eq!(key().as_ref(), Some(&first), "the same files, the same key");
+        write("vmangos.sqlite", "world!", 1_000);
+        let resized = key().unwrap();
+        assert_ne!(resized, first, "a database's size");
+        write("vmangos.sqlite", "world", 2_000);
+        let retimed = key().unwrap();
+        assert_ne!(retimed, first, "a database's time");
+        assert_ne!(retimed, resized);
+        write("vmangos.sqlite", "world", 1_000);
+        write("dbc.sqlite", "client", 2_000);
+        assert_ne!(key().unwrap(), first, "the client's database too");
+        std::fs::remove_file(dir.join("dbc.sqlite")).unwrap();
+        assert_eq!(key(), None, "no snapshot without its databases");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

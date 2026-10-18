@@ -22,7 +22,7 @@ fn realm() -> Option<Arc<Realm>> {
     if !dir.join("vmangos.sqlite").exists() {
         return None;
     }
-    Some(harness::realm_with(crate::game::data::load::load(dir)))
+    Some(harness::realm_with(crate::game::harness::load_real(dir)))
 }
 
 async fn player(realm: &Arc<Realm>, name: &str) -> (Client, Guid, MapHandle) {
@@ -340,6 +340,7 @@ async fn spawn_addon_auras(realm: &Arc<Realm>) {
 
 /// The mechanics on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_encounter_mechanics() {
     let Some(realm) = realm() else {
         return;

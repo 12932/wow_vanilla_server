@@ -441,7 +441,7 @@ fn have_data() -> bool {
 }
 
 fn real_realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 const BAG_PLAYER: u8 = crate::game::store::BAG_PLAYER;
@@ -534,6 +534,7 @@ fn refused(r: &(Option<String>, Option<u32>), why: &str) -> bool {
 /// vmangos and Thistle Tea have it, not at level 20; without it, equipped
 /// as it comes, it goes to the main hand.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_weapon_in_the_off_hand_takes_dual_wield() {
     if !have_data() {
         return;
@@ -584,6 +585,7 @@ async fn a_weapon_in_the_off_hand_takes_dual_wield() {
 /// Tea's and mangos's have it, not by class and level: a warrior learns
 /// Polearms, a hunter of 40 Mail, and anyone Fishing for a fishing pole.
 #[tokio::test]
+#[ignore = "extended"]
 async fn proficiency_is_learned_not_had_by_level() {
     if !have_data() {
         return;
@@ -618,6 +620,7 @@ async fn proficiency_is_learned_not_had_by_level() {
 /// engineer's goggles want Engineering at 100 (short of it, mangos's "not
 /// skilled enough"), a goblin engineer's ripper the Goblin Engineer too.
 #[tokio::test]
+#[ignore = "extended"]
 async fn gear_asks_for_its_skill_and_spell() {
     if !have_data() {
         return;
@@ -653,11 +656,12 @@ async fn gear_asks_for_its_skill_and_spell() {
 /// What every race and class starts with, it can wear with the spells it
 /// starts with (the dwarven mage, who has no start, aside).
 #[test]
+#[ignore = "extended"]
 fn every_start_wears_its_gear() {
     if !have_data() {
         return;
     }
-    let data = crate::game::data::load::load(DB.as_path());
+    let data = crate::game::harness::load_real(DB.as_path());
     let mut checked = 0;
     for ((race, class), start) in &data.start {
         if start.spells.is_empty() {
@@ -686,6 +690,7 @@ fn every_start_wears_its_gear() {
 /// no room, in its mail, as mangos's `_LoadInventory` takes off what it
 /// can't equip.
 #[tokio::test]
+#[ignore = "extended"]
 async fn gear_not_learned_comes_off_on_login() {
     if !have_data() {
         return;
@@ -764,6 +769,7 @@ async fn gear_not_learned_comes_off_on_login() {
 /// points say, as on login (mangos's `addSpell` learns a spell's skill
 /// with it): it is no passive, so it waited for the next login.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_profession_learned_gives_its_skill_at_once() {
     if !have_data() {
         return;

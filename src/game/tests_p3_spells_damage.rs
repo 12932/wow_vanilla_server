@@ -30,6 +30,7 @@ fn taken(m: &mut Map, g: Guid, id: u32, schools: i32, amount: i32) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_spells_flat_damage_taken_goes_by_its_coefficient_and_takes_at_most_half() {
     if !have_data() {
         return;
@@ -136,6 +137,7 @@ fn unmodified_spells(d: &mut crate::game::data::GameData) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_spell_that_ignores_its_casters_modifiers_takes_no_power_percent_or_damage_crit() {
     if !have_data() {
         return;
@@ -202,6 +204,7 @@ fn hurt_by(m: &mut Map, kobold: Guid, ms: u64, step: u64) -> Vec<u64> {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_ground_spell_ticks_a_period_in_and_has_its_last_tick_as_it_ends() {
     if !have_data() {
         return;
@@ -268,6 +271,7 @@ async fn a_ground_spell_ticks_a_period_in_and_has_its_last_tick_as_it_ends() {
 const DRAIN_LIFE: u32 = 689;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_leech_heals_no_more_than_the_health_it_took() {
     if !have_data() {
         return;
@@ -302,6 +306,7 @@ async fn a_leech_heals_no_more_than_the_health_it_took() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_damage_over_time_keeps_its_cadence_through_late_updates_and_its_last_tick() {
     if !have_data() {
         return;
@@ -355,6 +360,7 @@ const LESSER_HEAL: u32 = 2050;
 const COUNTERSPELL: u32 = 2139;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn spells_do_what_their_effects_say() {
     if !have_data() {
         return;
@@ -524,6 +530,7 @@ const DIVINE_SHIELD: u32 = 642;
 const CURE_DISEASE: u32 = 528;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_percent_damage_tick_takes_its_share_of_the_health_there_is_room_for() {
     if !have_data() {
         return;

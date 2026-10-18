@@ -25,7 +25,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A Kobold Vermin at `level`, `yards` in front of `g`, hardy and without
@@ -116,6 +116,7 @@ fn apply(m: &mut Map, caster: Guid, target: Guid, id: u32) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn warrior_and_druid_damage_scripts() {
     if !have_data() {
         return;
@@ -202,6 +203,7 @@ async fn warrior_and_druid_damage_scripts() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn shields_bubbles_and_bandages_leave_their_marks() {
     if !have_data() {
         return;
@@ -250,6 +252,7 @@ async fn shields_bubbles_and_bandages_leave_their_marks() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn heals_sacrifices_and_procs() {
     if !have_data() {
         return;
@@ -349,6 +352,7 @@ async fn heals_sacrifices_and_procs() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn auras_targets_and_timers_the_scripts_keep() {
     if !have_data() {
         return;
@@ -452,6 +456,7 @@ async fn auras_targets_and_timers_the_scripts_keep() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn spells_travel_and_ranks_supersede() {
     if !have_data() {
         return;
@@ -509,6 +514,7 @@ async fn spells_travel_and_ranks_supersede() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_combat_log_packets() {
     if !have_data() {
         return;
@@ -596,6 +602,7 @@ async fn the_combat_log_packets() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn vanish_and_blade_flurry() {
     if !have_data() {
         return;

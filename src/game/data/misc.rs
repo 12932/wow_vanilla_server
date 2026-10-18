@@ -7,6 +7,7 @@ use ahash::AHashMap;
 /// A faction players have a standing with (`Faction.dbc` with a
 /// reputation index).
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct FactionDef {
     pub id: u32,
     /// Its slot among the 64 a client knows.
@@ -35,6 +36,7 @@ impl FactionDef {
 /// `reputation_spillover_template`: a gain with one faction spills to
 /// another at a rate, up to a rank.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Spillover {
     pub faction: u32,
     pub rate: f32,
@@ -43,6 +45,7 @@ pub struct Spillover {
 
 /// `creature_onkill_reputation`: what killing a creature is worth.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct KillReputation {
     pub faction: u32,
     pub value: i32,
@@ -55,6 +58,7 @@ pub struct KillReputation {
 
 /// A quest's mail when it's done (`RewMailTemplateId`).
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct QuestMail {
     pub template: u32,
     pub delay_secs: u32,
@@ -63,6 +67,7 @@ pub struct QuestMail {
 
 /// A meeting stone: who may queue at it, and for where.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct MeetingStone {
     pub min_level: u32,
     pub max_level: u32,
@@ -70,6 +75,7 @@ pub struct MeetingStone {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct MiscData {
     pub factions: AHashMap<u32, FactionDef>,
     /// Reputation index → faction.

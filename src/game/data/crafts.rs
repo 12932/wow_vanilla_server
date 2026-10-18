@@ -13,6 +13,7 @@ pub const LOCK_KEY_SKILL: u8 = 2;
 /// One way to open a lock: an item, or a lock type with the skill it
 /// needs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct LockKey {
     pub kind: u8,
     /// The item for an item key; the lock type for a skill key.
@@ -22,6 +23,7 @@ pub struct LockKey {
 
 /// `ItemSet`: the set's items, and the spells it gives at each count.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ItemSet {
     pub id: u32,
     pub items: Vec<u32>,
@@ -33,6 +35,7 @@ pub struct ItemSet {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CraftData {
     /// `Lock`: its keys, in order.
     pub locks: AHashMap<u32, Vec<LockKey>>,

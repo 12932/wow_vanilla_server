@@ -5,6 +5,7 @@ use ahash::AHashMap;
 
 /// One of a spell's three effects.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellEffect {
     pub effect: u32,
     pub die_sides: i32,
@@ -30,6 +31,7 @@ pub struct SpellEffect {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellTemplate {
     pub id: u32,
     pub school: u32,
@@ -224,6 +226,7 @@ impl SpellTemplate {
 
 /// `spell_proc_event`: when a proc aura goes off, over the spell's own.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ProcEvent {
     pub school_mask: u32,
     pub family: u32,
@@ -238,6 +241,7 @@ pub struct ProcEvent {
 
 /// `spell_chain`: a spell's rank among its kind.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellRank {
     pub prev: u32,
     pub first: u32,
@@ -248,6 +252,7 @@ pub struct SpellRank {
 
 /// `SpellItemEnchantment`: up to three effects an enchantment gives.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Enchantment {
     pub id: u32,
     pub effects: [(u32, i32, i32, u32); 3],
@@ -255,6 +260,7 @@ pub struct Enchantment {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellDuration {
     pub base: i32,
     pub per_level: i32,
@@ -262,6 +268,7 @@ pub struct SpellDuration {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellData {
     pub spells: AHashMap<u32, SpellTemplate>,
     /// `SpellCastTimes`: index → base milliseconds.
@@ -316,6 +323,7 @@ pub struct SpellData {
 
 /// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SkillAbility {
     pub skill: u32,
     pub spell: u32,
@@ -329,6 +337,7 @@ pub struct SkillAbility {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct TalentInfo {
     pub id: u32,
     pub tab: u32,
@@ -343,6 +352,7 @@ pub struct TalentInfo {
 /// target's parameters, its cast flags, its delays (in milliseconds, from
 /// the table's seconds), and the `creature_spells_scripts` its cast starts.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatureSpell {
     pub spell: u32,
     pub probability: u32,

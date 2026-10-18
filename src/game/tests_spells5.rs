@@ -27,7 +27,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A Kobold Vermin at `level`, `yards` in front of `g`, hardy and without
@@ -121,6 +121,7 @@ fn apply_as(m: &mut Map, caster: Guid, target: Guid, id: u32, triggered: bool) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn triggered_worth_and_crowd_control_timings() {
     if !have_data() {
         return;
@@ -187,6 +188,7 @@ async fn triggered_worth_and_crowd_control_timings() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn revival_weapon_lock_and_heart_of_the_wild() {
     if !have_data() {
         return;
@@ -269,6 +271,7 @@ async fn revival_weapon_lock_and_heart_of_the_wild() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn addon_auras_custom_flags_and_single_targets() {
     if !have_data() {
         return;
@@ -408,6 +411,7 @@ fn plain_aura_done(id: u32) -> crate::game::data::spells::SpellTemplate {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn facing_pushback_and_temporary_health() {
     if !have_data() {
         return;
@@ -498,6 +502,7 @@ fn hammer(m: &mut Map, caster: Guid, target: Guid) -> Option<u32> {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn dispels_by_the_stack_diminishing_recovery_and_shared_areas() {
     if !have_data() {
         return;
@@ -584,6 +589,7 @@ async fn dispels_by_the_stack_diminishing_recovery_and_shared_areas() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn effect_mechanics_taunts_and_fade() {
     if !have_data() {
         return;
@@ -678,6 +684,7 @@ async fn effect_mechanics_taunts_and_fade() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn auras_end_on_mounting_concealment_teleports_and_flights() {
     if !have_data() {
         return;

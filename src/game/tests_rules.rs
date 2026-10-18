@@ -738,6 +738,7 @@ fn a_zone_bound_item_is_allowed_only_in_its_zone() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_zone_bound_item_goes_outside_its_zone_by_the_terrain() {
     let dir = crate::game::harness::real_data("terrain");
     if !dir.is_dir() {

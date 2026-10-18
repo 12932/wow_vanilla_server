@@ -29,6 +29,7 @@ pub const PATCH: i64 = 10;
 
 /// A creature's template.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatureTemplate {
     pub entry: u32,
     pub name: String,
@@ -120,6 +121,7 @@ pub const SPAWN_FLAG_DEAD: u32 = 0x80;
 
 /// A creature spawn.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatureSpawn {
     pub guid: u32,
     /// The entries it may be, one picked at each spawn.
@@ -139,6 +141,7 @@ pub struct CreatureSpawn {
 
 /// Extra state a spawn starts with.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatureAddon {
     pub display_id: u32,
     pub mount_display_id: u32,
@@ -150,6 +153,7 @@ pub struct CreatureAddon {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Waypoint {
     /// Its number on the path (`point`, `pointid`; from 0 along a path a
     /// script gives): what movement informs and script steps name it by.
@@ -170,6 +174,7 @@ pub fn waypoint_facing(o: f32) -> Option<f32> {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ClassLevelStats {
     pub health: u32,
     pub mana: u32,
@@ -186,6 +191,7 @@ pub struct ClassLevelStats {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct DisplayInfo {
     /// The display's own size: CreatureDisplayInfo's scale by its model's.
     pub scale: f32,
@@ -199,6 +205,7 @@ pub struct DisplayInfo {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GameObjectTemplate {
     pub entry: u32,
     pub kind: u8,
@@ -217,6 +224,7 @@ pub struct GameObjectTemplate {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GameObjectSpawn {
     pub guid: u32,
     pub entry: u32,
@@ -237,6 +245,7 @@ pub struct GameObjectSpawn {
 
 /// An area or zone, from `AreaTable`.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct AreaInfo {
     pub id: u32,
     pub map: u32,
@@ -257,6 +266,7 @@ pub const AREA_FLAG_SANCTUARY: u32 = 0x800;
 
 /// An area trigger: where it is and, if it teleports, where to.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct AreaTrigger {
     pub id: u32,
     pub map: u32,
@@ -272,6 +282,7 @@ pub struct AreaTrigger {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Teleport {
     pub required_level: u8,
     pub message: String,
@@ -283,6 +294,7 @@ pub struct Teleport {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct MapInfo {
     pub id: u32,
     pub internal_name: String,
@@ -292,6 +304,7 @@ pub struct MapInfo {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Tele {
     pub name: String,
     pub map: u32,
@@ -303,6 +316,7 @@ pub struct Tele {
 
 /// What a race and class start with.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct StartInfo {
     pub map: u32,
     pub zone: u32,
@@ -320,6 +334,7 @@ pub struct StartInfo {
 
 /// A graveyard, and the zone whose dead it takes.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Graveyard {
     pub id: u32,
     pub map: u32,
@@ -335,6 +350,7 @@ pub struct Graveyard {
 /// A faction template, from `FactionTemplate`: who a unit of it is friends
 /// and enemies with.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct FactionTemplate {
     pub id: u32,
     pub faction: u32,
@@ -382,6 +398,7 @@ impl FactionTemplate {
 
 /// A loot table's row.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct LootEntry {
     pub item: u32,
     /// Percent; negative for a quest item, dropped only for its quest.
@@ -394,6 +411,7 @@ pub struct LootEntry {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct LootTables {
     pub creature: AHashMap<u32, Vec<LootEntry>>,
     pub gameobject: AHashMap<u32, Vec<LootEntry>>,
@@ -407,6 +425,7 @@ pub struct LootTables {
 
 /// An item a vendor sells.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct VendorItem {
     pub slot: u32,
     pub item: u32,
@@ -420,6 +439,7 @@ pub struct VendorItem {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct RaceInfo {
     pub male_display: u32,
     pub female_display: u32,
@@ -431,6 +451,7 @@ pub struct RaceInfo {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GameData {
     /// The looks the client has textures for.
     pub appearances: appearance::Appearances,
@@ -629,6 +650,7 @@ impl GameData {
 
 /// A race, class and level's base stats.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct BaseStats {
     pub stats: [u32; 5],
     pub health: u32,
@@ -709,6 +731,7 @@ impl GameData {
 
 /// A battleground's rules from `battleground_template`.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct BgTemplate {
     pub id: u32,
     pub min_players: u32,
@@ -725,6 +748,7 @@ pub struct BgTemplate {
 /// A battleground's portal in the world: the battleground, the team it
 /// admits, and where a player leaving the battleground comes out.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct BgEntrance {
     pub trigger: u32,
     pub bg: u32,
@@ -736,6 +760,7 @@ pub struct BgEntrance {
 
 /// A boat or zeppelin: its object, and how long its round takes.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct TransportRoute {
     pub entry: u32,
     pub name: String,
@@ -745,6 +770,7 @@ pub struct TransportRoute {
 /// A seasonal event: from `start` to `end` (Unix seconds), `length`
 /// minutes in every `occurence`.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GameEvent {
     pub id: u32,
     pub name: String,

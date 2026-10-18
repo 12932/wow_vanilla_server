@@ -2446,12 +2446,13 @@ mod real {
     }
 
     #[tokio::test]
+    #[ignore = "extended"]
     async fn every_class_fights_with_its_starting_spells() {
         let dir = &crate::game::harness::real_data("db");
         if !dir.join("vmangos.sqlite").exists() {
             return;
         }
-        let realm = harness::realm_with(crate::game::data::load::load(dir));
+        let realm = harness::realm_with(crate::game::harness::load_real(dir));
         let classes = [
             ("Wara", Race::Human, Class::Warrior),
             ("Pala", Race::Human, Class::Paladin),

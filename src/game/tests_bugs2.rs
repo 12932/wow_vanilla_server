@@ -28,7 +28,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A creature of `entry` at `level`, `yards` in front of `g`, hardy and
@@ -124,6 +124,7 @@ const BLOODRAGE: u32 = 2687;
 const HEALTH_FUNNEL: u32 = 755;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_health_cost_is_paid_in_health() {
     if !have_data() {
         return;
@@ -196,6 +197,7 @@ async fn a_health_cost_is_paid_in_health() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_creature_casts_its_list_without_rage_or_energy() {
     if !have_data() {
         return;
@@ -226,6 +228,7 @@ async fn a_creature_casts_its_list_without_rage_or_energy() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn dazed_is_no_exclusive_snare() {
     if !have_data() {
         return;
@@ -249,6 +252,7 @@ async fn dazed_is_no_exclusive_snare() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn hellfire_burns_about_the_warlock() {
     if !have_data() {
         return;
@@ -279,6 +283,7 @@ async fn hellfire_burns_about_the_warlock() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn plague_spreads_through_the_raid_it_is_on() {
     if !have_data() {
         return;
@@ -317,6 +322,7 @@ async fn plague_spreads_through_the_raid_it_is_on() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_teleport_within_a_copy_stays_in_it() {
     if !have_data() {
         return;
@@ -365,6 +371,7 @@ const RELENTLESS_STRIKES: u32 = 14179;
 const EVISCERATE: u32 = 2098;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn relentless_strikes_goes_by_the_combo_points() {
     if !have_data() {
         return;
@@ -405,6 +412,7 @@ async fn relentless_strikes_goes_by_the_combo_points() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn health_regeneration_auras_give_their_health_in_and_out_of_combat() {
     if !have_data() {
         return;
@@ -446,6 +454,7 @@ async fn health_regeneration_auras_give_their_health_in_and_out_of_combat() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_spell_with_no_global_cooldown_starts_none() {
     if !have_data() {
         return;
@@ -467,6 +476,7 @@ async fn a_spell_with_no_global_cooldown_starts_none() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_higher_rank_keeps_its_first_ranks_proc_rule() {
     if !have_data() {
         return;
@@ -510,6 +520,7 @@ async fn a_higher_rank_keeps_its_first_ranks_proc_rule() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_modifier_touches_only_its_mask_past_32_bits() {
     if !have_data() {
         return;
@@ -536,6 +547,7 @@ async fn a_modifier_touches_only_its_mask_past_32_bits() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn permafrost_slows_frostbolt_more() {
     if !have_data() {
         return;
@@ -566,6 +578,7 @@ async fn permafrost_slows_frostbolt_more() {
 const FIRE_SHIELD: u32 = 2947;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_party_members_spell_lands_only_on_a_party_member() {
     if !have_data() {
         return;
@@ -607,6 +620,7 @@ async fn a_party_members_spell_lands_only_on_a_party_member() {
 const CANNIBALIZE: u32 = 20577;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn cannibalize_wants_a_corpse_that_isnt_a_friends() {
     if !have_data() {
         return;
@@ -638,6 +652,7 @@ async fn cannibalize_wants_a_corpse_that_isnt_a_friends() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_area_spares_the_creature_types_its_spell_doesnt_name() {
     if !have_data() {
         return;
@@ -664,6 +679,7 @@ async fn an_area_spares_the_creature_types_its_spell_doesnt_name() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_channel_on_the_pet_ends_on_the_pet() {
     if !have_data() {
         return;
@@ -698,6 +714,7 @@ async fn a_channel_on_the_pet_ends_on_the_pet() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn who_may_attack_whom() {
     if !have_data() {
         return;
@@ -771,6 +788,7 @@ async fn who_may_attack_whom() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn melee_damage_taken_auras_touch_abilities() {
     if !have_data() {
         return;
@@ -803,6 +821,7 @@ async fn melee_damage_taken_auras_touch_abilities() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn mana_shield_absorbs_what_its_mana_pays_for_after_other_absorbs() {
     if !have_data() {
         return;
@@ -852,6 +871,7 @@ async fn mana_shield_absorbs_what_its_mana_pays_for_after_other_absorbs() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_dots_threat_is_of_its_school() {
     if !have_data() {
         return;
@@ -897,6 +917,7 @@ fn procs_a_minute_go_past_a_sure_chance_before_their_modifiers() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_dots_threat_takes_its_spells_threat_modifiers() {
     if !have_data() {
         return;

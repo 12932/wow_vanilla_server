@@ -110,3 +110,8 @@ debug = 0
 # server goes on.
 lto = "thin"
 codegen-units = 1
+
+[dev-dependencies]
+# The real world's snapshot for the extended tests (`harness::real_world`).
+ahash = { version = "0.8.12", features = ["serde"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }

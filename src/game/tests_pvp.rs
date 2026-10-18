@@ -817,13 +817,14 @@ async fn a_plaguelands_tower_falls_to_those_standing_at_it() {
 /// Valley node's banner in its first state, its generals but not their
 /// captains' graves.
 #[test]
+#[ignore = "extended"]
 fn the_real_battlegrounds_start_with_their_first_events() {
     use crate::game::map::battleground::{ab, av, initial_events};
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let on = |bg: u32, bindings: Option<&Vec<(u8, u8)>>| {
         let ev = initial_events(bg);
         bindings.is_none_or(|b| b.iter().any(|(e, s)| ev.get(e) == Some(&Some(*s))))

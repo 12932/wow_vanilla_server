@@ -360,10 +360,11 @@ async fn majordomo(realm: &Arc<Realm>) -> (Client, Guid, crate::game::map::MapHa
     hurry(&map, boss, 28.2).await;
     let rag = map.query(|m| first(m, RAGNAROS)).await.flatten();
     let rag = rag.expect("Ragnaros called up");
+    // His spawned events, which hold him there, run at the map's next
+    // update (`event_ai::spawned`), not at once: an idle machine got here
+    // before it.
     assert!(
-        map.query(move |m| !event_ai::combat_movement(m, rag))
-            .await
-            .unwrap(),
+        until(&map, 1000, move |m| !event_ai::combat_movement(m, rag)).await,
         "Ragnaros stays where he rose"
     );
     hurry(&map, boss, 47.0).await;
@@ -508,6 +509,7 @@ async fn ragnaros(mut c: Client, me: Guid, map: crate::game::map::MapHandle, rag
 
 /// Molten Core's encounters, on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn molten_cores_encounters_run_as_thistle_tea_scripts_them() {
     let Some(realm) = realm() else {
         return;

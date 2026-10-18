@@ -28,7 +28,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A Kobold Vermin at `level`, `yards` in front of `g`, hardy and without
@@ -135,6 +135,7 @@ const LIGHTNING_HIDE: u32 = 7273;
 const PURGE: u32 = 8012;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_dispel_takes_a_passive_aura_of_its_kind() {
     if !have_data() {
         return;
@@ -174,6 +175,7 @@ const CAT_FORM: u32 = 768;
 const BEAR_FORM: u32 = 5487;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_weapons_feral_attack_power_holds_only_in_the_forms_it_names() {
     if !have_data() {
         return;
@@ -225,6 +227,7 @@ const FLASH_HEAL: u32 = 2061;
 const RENEW: u32 = 6078;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn flat_healing_taken_goes_by_the_spells_coefficient() {
     if !have_data() {
         return;
@@ -259,6 +262,7 @@ async fn flat_healing_taken_goes_by_the_spells_coefficient() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_heal_over_time_takes_healing_taken_at_each_tick() {
     if !have_data() {
         return;
@@ -290,6 +294,7 @@ const RITUAL_OF_DOOM_SACRIFICE: u32 = 20625;
 const DEATH_TOUCH: u32 = 5;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_killing_spell_without_durability_loss_spares_the_gear() {
     if !have_data() {
         return;
@@ -352,6 +357,7 @@ const NET_BACKFIRE_MARKER: u32 = 13139;
 const NET_ON_THROWER: u32 = 13138;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_net_o_matics_backfire_nets_its_thrower_and_leaves_no_marker() {
     if !have_data() {
         return;
@@ -385,6 +391,7 @@ const PREMEDITATION: u32 = 14183;
 const RUTHLESSNESS: u32 = 14157;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn premeditations_points_come_off_when_it_runs_out_unless_a_builder_kept_them() {
     if !have_data() {
         return;
@@ -432,6 +439,7 @@ async fn premeditations_points_come_off_when_it_runs_out_unless_a_builder_kept_t
 const SILITHYST: u32 = 29519;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_silithyst_carriers_pulse_keeps_them_contested() {
     if !have_data() {
         return;

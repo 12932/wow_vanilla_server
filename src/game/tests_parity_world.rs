@@ -932,7 +932,7 @@ fn have_data() -> bool {
 }
 
 fn real_realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 type Map = crate::game::map::Map;
@@ -1478,6 +1478,7 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
 
 /// The Nightmare Manifests, walked through on the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_nightmare_manifests_is_done_end_to_end() {
     if !have_data() {
         return;
@@ -2118,6 +2119,7 @@ async fn the_balance_of_light_and_shadow(realm: &Arc<Realm>) {
 /// The Gizelton Caravan's two quests, walked on the real world (on its
 /// own, for its long road).
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_gizelton_caravan_is_done_end_to_end() {
     if !have_data() {
         return;
@@ -2129,20 +2131,35 @@ async fn the_gizelton_caravan_is_done_end_to_end() {
 /// The event quests Thistle Tea builds in code, walked through on the real
 /// world: Freedom for All Creatures, The Great Masquerade, The Balance of
 /// Light and Shadow (and the Gizelton Caravan, on its own).
-#[tokio::test]
-async fn the_imported_event_quests_are_done_end_to_end() {
-    if !have_data() {
-        return;
+/// Each a test of its own, on a realm of its own, so that they run at once.
+mod the_imported_event_quests_are_done_end_to_end {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "extended"]
+    async fn freedom_for_all_creatures() {
+        if !have_data() || !wanted("freedom") {
+            return;
+        }
+        super::freedom_for_all_creatures(&real_realm()).await;
     }
-    let realm = real_realm();
-    if wanted("freedom") {
-        freedom_for_all_creatures(&realm).await;
+
+    #[tokio::test]
+    #[ignore = "extended"]
+    async fn the_great_masquerade() {
+        if !have_data() || !wanted("masquerade") {
+            return;
+        }
+        super::the_great_masquerade(&real_realm()).await;
     }
-    if wanted("masquerade") {
-        the_great_masquerade(&realm).await;
-    }
-    if wanted("balance") {
-        the_balance_of_light_and_shadow(&realm).await;
+
+    #[tokio::test]
+    #[ignore = "extended"]
+    async fn the_balance_of_light_and_shadow() {
+        if !have_data() || !wanted("balance") {
+            return;
+        }
+        super::the_balance_of_light_and_shadow(&real_realm()).await;
     }
 }
 
@@ -2493,6 +2510,7 @@ fn event_sources(data: &GameData) -> std::collections::BTreeMap<u32, Vec<String>
 /// but the five no one raises: its area trigger, the script that credits
 /// it and what starts that, the spell and what casts it, its escort.
 #[test]
+#[ignore = "extended"]
 fn every_real_event_quest_has_its_source() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
@@ -2921,11 +2939,48 @@ async fn quest_start_once(realm: &Arc<Realm>, quest: u32, horde: bool) -> Result
     }
 }
 
+/// The long walks are split in shards, a test each, that nextest runs at
+/// once: shard `shard` walks every `SHARDS`th of them, on a realm of its
+/// own. The walks as one test took minutes.
+const SHARDS: usize = 8;
+const _: () = assert!(SHARDS == 8, "shards! names a test for each shard");
+
+/// Shard `shard`'s part of `walks`.
+fn shard_of<T>(walks: Vec<T>, shard: usize) -> Vec<T> {
+    walks
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % SHARDS == shard)
+        .map(|(_, w)| w)
+        .collect()
+}
+
+/// The extended tests `shard_1` to `shard_8` (as many as [`SHARDS`]), each
+/// awaiting `$walk` of its shard.
+macro_rules! shards {
+    ($walk:path) => {
+        shards!($walk; shard_1 0, shard_2 1, shard_3 2, shard_4 3, shard_5 4, shard_6 5,
+            shard_7 6, shard_8 7);
+    };
+    ($walk:path; $($name:ident $shard:literal),*) => {
+        $(
+            #[tokio::test]
+            #[ignore = "extended"]
+            async fn $name() {
+                $walk($shard).await;
+            }
+        )*
+    };
+}
+
 /// The event quests the world database raises by an area trigger, a
 /// gossip option or a quest's start script, walked one by one on the real
 /// world: each in a fresh hero's log, its source set off, its credit seen.
-#[tokio::test]
-async fn the_real_database_event_quests_are_walked() {
+mod the_real_database_event_quests_are_walked {
+    shards!(super::the_real_database_event_quests);
+}
+
+async fn the_real_database_event_quests(shard: usize) {
     if !have_data() {
         return;
     }
@@ -2979,6 +3034,7 @@ async fn the_real_database_event_quests_are_walked() {
         let only: Vec<u32> = only.split(',').filter_map(|q| q.parse().ok()).collect();
         walks.retain(|(q, _, _)| only.contains(q));
     }
+    let walks = shard_of(walks, shard);
     // A few at a time, each its own hero.
     let mut broken = Vec::new();
     let mut running = tokio::task::JoinSet::new();
@@ -3284,8 +3340,11 @@ async fn walk_escort(
 }
 
 /// The escort and follower quests, walked one by one on the real world.
-#[tokio::test]
-async fn the_real_escort_quests_are_walked() {
+mod the_real_escort_quests_are_walked {
+    shards!(super::the_real_escort_quests);
+}
+
+async fn the_real_escort_quests(shard: usize) {
     if !have_data() {
         return;
     }
@@ -3322,6 +3381,7 @@ async fn the_real_escort_quests_are_walked() {
         let only: Vec<u32> = only.split(',').filter_map(|q| q.parse().ok()).collect();
         walks.retain(|(q, _, _)| only.contains(q));
     }
+    let walks = shard_of(walks, shard);
     let _ = &data;
     // A few at a time, each its own hero, but never two of an escortee.
     let mut broken = Vec::new();
@@ -3371,6 +3431,7 @@ async fn the_real_escort_quests_are_walked() {
 /// credited within the walk's 1,500 updates however long they take: a
 /// follower keeps up with the player's lead each update.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_tooga_is_led_to_torta() {
     if !have_data() {
         return;

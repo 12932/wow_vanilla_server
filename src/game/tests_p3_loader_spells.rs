@@ -40,6 +40,7 @@ fn exclusive(d: &GameData, id: u32) -> Option<Exclusive> {
 /// warlock's and hunter's spells, a forced reaction, and trainers' own
 /// greetings.
 #[test]
+#[ignore = "extended"]
 fn the_real_spells_load_as_thistle_tea_reads_them() {
     let Some(d) = real() else {
         return;
@@ -371,6 +372,7 @@ fn aura_points(s: &SpellTemplate, aura: u32) -> Option<(usize, i32, i32)> {
 /// world buff isn't; damage a share of health, and its cadence; mana
 /// burns, and every Mana Shield's two mana a point.
 #[test]
+#[ignore = "extended"]
 fn the_real_aura_amounts_load_as_thistle_tea_reads_them() {
     let Some(d) = real() else {
         return;
@@ -476,6 +478,7 @@ fn the_real_aura_amounts_load_as_thistle_tea_reads_them() {
 /// drinks, both, and Well Fed; flasks by their `spell_elixir` mask, and no
 /// rule for an ordinary elixir's 0.
 #[test]
+#[ignore = "extended"]
 fn the_real_exclusive_kinds_are_thistle_teas() {
     let Some(d) = real() else {
         return;
@@ -537,6 +540,7 @@ fn the_real_exclusive_kinds_are_thistle_teas() {
 /// in order; Chain Lightning's and Chain Heal's jumps and falloff; and
 /// every Flamestrike rank kept, none superseding another.
 #[test]
+#[ignore = "extended"]
 fn the_real_talents_and_chains_load_as_thistle_tea_reads_them() {
     let Some(d) = real() else {
         return;

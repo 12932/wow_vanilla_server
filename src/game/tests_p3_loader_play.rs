@@ -25,7 +25,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A character of `race` and `class` in the world, and their map.
@@ -126,6 +126,7 @@ const SAND_TRAP: u32 = 25_648;
 /// health their spells give; a quest's egg and a sand trap are summoned
 /// wild for their spells' two minutes and one.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_traps_totems_and_wild_objects_keep_their_kinds() {
     if !have_data() {
         return;
@@ -246,6 +247,7 @@ fn enemies(m: &mut Map, a: Guid, b: Guid) {
 /// warrior from an enemy, whom a rank of Detect Invisibility as strong as
 /// it lets see him.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_reflection_detect_magic_and_invisibility() {
     if !have_data() {
         return;
@@ -342,6 +344,7 @@ fn threat(m: &Map, c: Guid, g: Guid) -> f32 {
 /// `spell_effect_mod`); and each stance's passives, the last's gone with
 /// it.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_warrior_threat_stacks_and_stances() {
     if !have_data() {
         return;
@@ -408,11 +411,12 @@ const BANISH: u32 = 24_466;
 /// its spot, and a banishment to its `spell_target_position`; each turned
 /// to the caster's facing negated.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_teleports_to_a_caster_land_where_their_targets_say() {
     if !have_data() {
         return;
     }
-    let mut d = crate::game::data::load::load(DB.as_path());
+    let mut d = crate::game::harness::load_real(DB.as_path());
     let spot = Vector3d {
         x: -8_949.95 + 30.0,
         y: -132.493,
@@ -465,6 +469,7 @@ async fn real_teleports_to_a_caster_land_where_their_targets_say() {
 /// trained rank (Mortal Strike's) to one without the talent, and those
 /// ranks to one with it.
 #[tokio::test]
+#[ignore = "extended"]
 async fn debug_spells_teach_trainers_and_class_quests_but_no_talents() {
     if !have_data() {
         return;
@@ -597,6 +602,7 @@ const FIRE_ELEMENTAL: u32 = 575;
 /// soaks a fire swing; Blessing of Sacrifice and Soul Link send their
 /// share to their caster once.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_damage_taken_auras_shares_and_wards() {
     if !have_data() {
         return;
@@ -776,6 +782,7 @@ const FLASH_OF_LIGHT: u32 = 19_750;
 /// real healing cuts, and Mortal Wound's ten stacks to nothing; a Flash
 /// of Light that heals; and the Mechanical Patch Kit's 700 on a machine.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_healing_bonuses_cuts_and_machines() {
     if !have_data() {
         return;
@@ -947,6 +954,7 @@ const SLAYING: [(u32, &[u32], u32, u32); 4] = [
 /// school masks; base armor and resistances; and slaying's attack power
 /// against its creature types alone.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_resistances_penetration_and_slaying() {
     if !have_data() {
         return;
@@ -1102,6 +1110,7 @@ const SHADOW_BOLT: u32 = 686;
 /// the spell power; and the slaying gear's and potions' spell power (aura
 /// 180) against theirs alone, none of it shown as spell power.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_slaying_damage_and_spell_power_by_creature_type() {
     if !have_data() {
         return;
@@ -1227,6 +1236,7 @@ fn come_due(m: &mut Map, g: Guid, spell: u32, ticks: u32) {
 /// mana a second; Fel Energy's and Resurgence's slower ticks; Renew and
 /// Corruption cast again starting their interval over.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_shields_food_and_periodic_cadence() {
     if !have_data() {
         return;
@@ -1348,6 +1358,7 @@ enum Then {
 /// Blessing of Might by its first rank's group; and an ordinary elixir
 /// beside a greater one.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_spell_groups_replace_and_block_by_their_order() {
     if !have_data() {
         return;
@@ -1430,6 +1441,7 @@ fn skill(m: &Map, g: Guid, id: u32) -> Option<(u32, u32)> {
 /// talent's, to wipe with it; and a class learns only its own tabs'
 /// talents.
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_skills_bring_their_spells_and_talents_their_ranks() {
     if !have_data() {
         return;
@@ -1539,6 +1551,7 @@ const STORMWIND: u32 = 72;
 /// race's mount trainer for that race, or another exalted with his
 /// faction (`gossip_test.exs`'s `trainer_of?`).
 #[tokio::test]
+#[ignore = "extended"]
 async fn real_gossip_defaults_side_conditions_and_mount_trainers() {
     if !have_data() {
         return;

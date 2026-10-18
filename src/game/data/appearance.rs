@@ -13,6 +13,7 @@ const HAIR: u8 = 3;
 
 /// A character's look, as `CMSG_CHAR_CREATE` and the store keep it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Look {
     pub skin: u8,
     pub face: u8,
@@ -22,6 +23,7 @@ pub struct Look {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Appearances {
     /// (race, gender, kind, variation, colour) of every section a player may
     /// have.

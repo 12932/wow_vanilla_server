@@ -201,7 +201,7 @@ pub fn real_data() -> Option<&'static GameData> {
     DATA.get_or_init(|| {
         let dir = &crate::game::harness::real_data("db");
         let db = dir.join("vmangos.sqlite");
-        (db.exists() && !lfs_pointer(&db)).then(|| load(dir))
+        (db.exists() && !lfs_pointer(&db)).then(|| crate::game::harness::load_real(dir))
     })
     .as_ref()
 }
@@ -2478,6 +2478,7 @@ mod tests {
     /// client had are refused, and the one the tests make every character
     /// with is good for every race.
     #[test]
+    #[ignore = "extended"]
     fn the_looks_the_client_has_textures_for() {
         use crate::game::data::appearance::Look;
         let Some(d) = real_data() else {
@@ -2555,6 +2556,12 @@ mod tests {
         );
         assert!(log.contains("dbc.sqlite is a Git LFS pointer"), "{log}");
         assert!(!log.contains("not a database"), "{log}");
+    }
+
+    /// The real database, where it is, isn't a Git LFS pointer.
+    #[test]
+    #[ignore = "extended"]
+    fn the_real_database_is_not_a_git_lfs_pointer() {
         let real = crate::game::harness::real_data("db").join("vmangos.sqlite");
         if real.exists() {
             assert!(!lfs_pointer(&real), "{} is a pointer", real.display());
@@ -2563,6 +2570,7 @@ mod tests {
 
     /// Against the real databases, when they are here (they aren't in CI).
     #[test]
+    #[ignore = "extended"]
     fn vmangos_loads_with_patch_ten_spawns() {
         let Some(data) = real_data() else {
             return;
@@ -2589,6 +2597,7 @@ mod tests {
     /// Every spell a trainer teaches up to level 20 has only effects,
     /// auras and targets the server knows.
     #[test]
+    #[ignore = "extended"]
     fn trainers_teach_only_what_the_server_can_cast_to_twenty() {
         use crate::game::map::{auras, spells};
         let Some(data) = real_data() else {
@@ -2636,6 +2645,7 @@ mod tests {
 
     /// The boats, events and weather of the real data.
     #[test]
+    #[ignore = "extended"]
     fn boats_events_and_weather_load() {
         let Some(data) = real_data() else {
             return;

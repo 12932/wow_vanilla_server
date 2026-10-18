@@ -9,6 +9,7 @@ use super::load::rows;
 
 /// `points_of_interest`: a spot a gossip option marks on the map.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Poi {
     pub x: f32,
     pub y: f32,
@@ -20,6 +21,7 @@ pub struct Poi {
 
 /// `game_event_creature_data`: how a spawn looks while an event runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct EventCreature {
     pub event: u32,
     pub entry: u32,
@@ -31,6 +33,7 @@ pub struct EventCreature {
 
 /// `script_waypoint`: a point of an escort's path.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptPoint {
     pub point: u32,
     pub x: f32,
@@ -41,6 +44,7 @@ pub struct ScriptPoint {
 
 /// `TransportAnimation`: where a moving object's model is at a time.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct AnimationFrame {
     pub time_ms: u32,
     pub x: f32,
@@ -49,6 +53,7 @@ pub struct AnimationFrame {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct WorldData {
     pub pois: AHashMap<u32, Poi>,
     /// Quest → the event it is offered in.

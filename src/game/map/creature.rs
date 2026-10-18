@@ -876,6 +876,7 @@ mod tests {
     /// (2.0 of a 1.8 display, 23.4 yards at 1.8) reaches 26 yards, not 47;
     /// Hogger and a Kobold Miner are their displays' 1.15.
     #[test]
+    #[ignore = "extended"]
     fn a_creature_is_its_displays_size_and_reaches_from_it() {
         let Some(data) = crate::game::data::load::real_data() else {
             return;

@@ -26,6 +26,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.4",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -2918,6 +2919,7 @@ dependencies = [
  "md-5",
  "mimalloc",
  "parking_lot",
+ "postcard",
  "pprof",
  "rand 0.10.1",
  "rayon",

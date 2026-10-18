@@ -1021,6 +1021,7 @@ async fn quests_wait_on_the_quests_they_hang_on() {
 /// loot, the operator's quest tied to the gifts, the groups of the
 /// Greatfather's quests.
 #[test]
+#[ignore = "extended"]
 fn the_real_winter_veil_loads() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

@@ -544,6 +544,7 @@ fn place_and_check(m: &mut Map, g: Guid, at: Vector3d) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_terrains_water_ends_what_water_breaks_without_the_swimming_flag() {
     let Some(realm) = terrain_realm() else {
         return;
@@ -1904,6 +1905,7 @@ fn nav_realm() -> Option<Arc<Realm>> {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_line_lands_only_in_water_and_fishes_the_waters_zone() {
     let Some(realm) = nav_realm() else {
         return;

@@ -565,6 +565,7 @@ fn a_flight_is_stitched_where_its_paths_meet() {
 /// The real tables: forbidden items off vendors and out of loot, flights'
 /// transitions, objects' boxes, and the quests that want a spell cast.
 #[test]
+#[ignore = "extended"]
 fn the_real_tables_load() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

@@ -311,7 +311,7 @@ async fn the_booty_runs_chest_falls_with_its_event_and_not_before() {
 
 /// The pit's floor and stands, from the navmesh (run by hand).
 #[test]
-#[ignore]
+#[ignore = "a probe, run by hand"]
 fn probe_the_pit() {
     let dir = &crate::game::harness::real_data("nav");
     let Some(mut nav) = crate::game::map::nav::Nav::open(dir, "Azeroth") else {

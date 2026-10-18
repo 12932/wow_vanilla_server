@@ -803,6 +803,7 @@ async fn a_door_waits_on_its_guard_and_a_spell_works_a_lever() {
 /// The real objects: the portals, campfire, traps and rituals load as
 /// their spells want them.
 #[test]
+#[ignore = "extended"]
 fn the_real_objects_load() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

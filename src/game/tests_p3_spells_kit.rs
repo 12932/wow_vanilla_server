@@ -32,7 +32,7 @@ pub fn realm() -> Arc<Realm> {
 /// A realm on the real data, with what `f` adds to it (spells made up for
 /// a test).
 pub fn realm_plus(f: impl FnOnce(&mut GameData)) -> Arc<Realm> {
-    let mut data = crate::game::data::load::load(DB.as_path());
+    let mut data = crate::game::harness::load_real(DB.as_path());
     f(&mut data);
     harness::realm_with(data)
 }
