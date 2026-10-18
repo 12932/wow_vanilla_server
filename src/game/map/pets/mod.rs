@@ -177,6 +177,9 @@ pub struct PetState {
     /// A charmed creature's charm spells and the cooldowns rolled for them
     /// (`creature_charm_spells`), in place of their own: milliseconds.
     pub charm_cooldowns: Vec<(u32, u32)>,
+    /// The victim its master's Attack named, which a staying pet goes
+    /// after (any other it fights only where it stands).
+    pub commanded: Option<Guid>,
 }
 
 impl PetState {
@@ -214,6 +217,7 @@ impl PetState {
             eyes: None,
             returning: false,
             charm_cooldowns: Vec::new(),
+            commanded: None,
         }
     }
 }

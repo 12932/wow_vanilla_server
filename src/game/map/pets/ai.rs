@@ -634,6 +634,16 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
         }
         return;
     }
+    // Told to stay, it chases only the victim its master's Attack named;
+    // another that leaves its reach it lets go where it stands (Thistle
+    // Tea's `Targeting.within_stay_range?`).
+    let stays =
+        state(map, g).is_some_and(|s| s.command == COMMAND_STAY && s.commanded != Some(victim));
+    if stays {
+        stop(map, g);
+        face(map, g, victim);
+        return;
+    }
     let stale = map.creature(g).is_some_and(|c| {
         c.chase_target_at
             .is_none_or(|at| dist(at, them.position) > REPATH_YARDS)

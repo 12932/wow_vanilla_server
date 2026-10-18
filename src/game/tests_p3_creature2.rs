@@ -1845,3 +1845,711 @@ async fn a_hunters_pet_keeps_its_mood_growth_stance_and_autocast_put_away_and_go
     .await;
     assert_eq!(away, (true, true), "gone, to come back");
 }
+
+/// Thistle Tea's `AreaTriggerCooldown.claim`: a trigger with a cooldown
+/// runs its script for the first through and rests until its cooldown is
+/// over (vmangos's `m_areaTriggerCooldowns`); one without a cooldown never
+/// rests. Each copy of a map has its own (`Map::trigger_cooldowns`).
+#[tokio::test]
+async fn an_area_trigger_with_a_cooldown_rests_after_it_fires() {
+    use wow_world_messages::vanilla::CMSG_AREATRIGGER;
+    let mut d = data();
+    let (x, y, z) = crate::game::tests_p3_combat::START;
+    for (id, cooldown) in [(9_001, Some(30)), (9_002, None)] {
+        d.area_triggers.insert(
+            id,
+            crate::game::data::AreaTrigger {
+                id,
+                map: 0,
+                x,
+                y,
+                z,
+                radius: 5.0,
+                ..Default::default()
+            },
+        );
+        // Each run summons a brute.
+        let mut summon = crate::game::tests_p3_entity::step(10, [BRUTE, 60_000, 0, 0]);
+        summon.x = x + 3.0;
+        summon.y = y;
+        summon.z = z;
+        d.scripts.areatrigger.insert(id, vec![summon]);
+        if let Some(secs) = cooldown {
+            d.scripts.areatrigger_cooldown.insert(id, secs);
+        }
+    }
+    let (_realm, a, ga, map) = setup_with(d, Class::Warrior).await;
+    on(&map, move |m| hardy(m, ga)).await;
+    let brutes = |m: &Map| m.creatures.iter().filter(|(_, c)| c.entry == BRUTE).count();
+    let mut runs = Vec::new();
+    for id in [9_001, 9_001, 9_002, 9_002] {
+        let before = on(&map, move |m| brutes(m)).await;
+        a.send(CMSG_AREATRIGGER { trigger_id: id }).await;
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        runs.push(on(&map, move |m| brutes(m)).await - before);
+    }
+    assert_eq!(
+        runs,
+        [1, 0, 1, 1],
+        "the cooled trigger rests; the other doesn't"
+    );
+    // Its cooldown over, it runs again.
+    on(&map, move |m| {
+        let now = m.now;
+        m.trigger_cooldowns.insert(9_001, now);
+    })
+    .await;
+    let before = on(&map, move |m| brutes(m)).await;
+    a.send(CMSG_AREATRIGGER { trigger_id: 9_001 }).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(
+        on(&map, move |m| brutes(m)).await - before,
+        1,
+        "rested, it runs again"
+    );
+}
+
+const GROUNDING: u32 = 97_950;
+const MAGIC_BOLT: u32 = 97_951;
+const MAGIC_SLOW: u32 = 97_952;
+const A_TOTEM: u32 = 3_800;
+
+fn magnets() -> GameData {
+    use crate::game::data::spells::SpellEffect;
+    let mut d = data();
+    let mut totem = template(A_TOTEM, 11);
+    totem.faction = crate::game::tests_p3_combat::HUMANS;
+    d.creature_templates.insert(A_TOTEM, totem);
+    let mut grounding = crate::game::tests_p3_entity::spell(
+        GROUNDING,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_SPELL_MAGNET,
+            0,
+            0,
+            1,
+        )],
+    );
+    grounding.duration_index = 9;
+    let mut bolt = crate::game::tests_p3_entity::spell(
+        MAGIC_BOLT,
+        &[SpellEffect {
+            effect: 2,
+            base_points: 99,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            ..Default::default()
+        }],
+    );
+    bolt.dmg_class = 1;
+    bolt.attributes[3] |= crate::game::data::spells::ATTR_EX3_ALWAYS_HIT;
+    let mut slow = crate::game::tests_p3_entity::spell(
+        MAGIC_SLOW,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_MOD_DECREASE_SPEED,
+            -30,
+            0,
+            6,
+        )],
+    );
+    slow.dmg_class = 1;
+    slow.duration_index = 9;
+    slow.attributes[0] |= crate::game::data::spells::ATTR_DEBUFF;
+    slow.attributes[3] |= crate::game::data::spells::ATTR_EX3_ALWAYS_HIT;
+    for s in [grounding, bolt, slow] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d.spells.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 60_000,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's `SpellMagnets.redirect` (Grounding Totem, mangos's
+/// `SelectMagnetTarget`): a harmful magic spell at one under a magnet goes
+/// to its source, a spell that only slows as well; its one charge spent,
+/// the next lands where it was aimed. Abilities, poisons, area and helpful
+/// spells aren't pulled aside; nor is anything by a dead source, or one
+/// whose magnet is gone.
+#[tokio::test]
+async fn a_spell_magnet_pulls_one_harmful_spell_aside_and_is_spent() {
+    use crate::game::data::spells::SpellEffect;
+    use crate::game::map::spells::magnet_eligible;
+    let (_realm, _a, ga, map) = setup_with(magnets(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let ground = |m: &mut Map, totem: Guid| {
+            let s = m.realm.data.spells.get(GROUNDING).cloned().unwrap();
+            for on in [ga, totem] {
+                crate::game::map::auras::apply(m, totem, on, &s, 0, 0);
+            }
+            // An aura on her works out her health again.
+            hardy(m, ga);
+        };
+        let health = |m: &Map, g: Guid| m.unit_fields(g).unwrap().get_u32(UNIT_FIELD_HEALTH);
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        let totem = spawn(m, ga, A_TOTEM, 20, 2.0);
+        ground(m, totem);
+        let (alice, totem_hp) = (health(m, ga), health(m, totem));
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_BOLT, Some(ga));
+        // Whole: its magnet gone, her health is worked out again, so she
+        // is judged by her whole health, not its number.
+        let whole = |m: &Map| {
+            let f = m.unit_fields(ga).unwrap();
+            f.get_u32(UNIT_FIELD_HEALTH) == f.get_u32(UNIT_FIELD_MAXHEALTH)
+        };
+        let _ = alice;
+        let first = (whole(m), health(m, totem) < totem_hp);
+        let spent = crate::game::map::auras::auras(m, ga).is_some_and(|a| a.has_spell(GROUNDING));
+        hardy(m, ga);
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_BOLT, Some(ga));
+        let second = !whole(m);
+        // A slow, pulled aside.
+        let totem2 = spawn(m, ga, A_TOTEM, 20, 3.0);
+        ground(m, totem2);
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_SLOW, Some(ga));
+        let slowed = |m: &Map, g: Guid| {
+            crate::game::map::auras::auras(m, g).is_some_and(|a| a.has_spell(MAGIC_SLOW))
+        };
+        let slow = (slowed(m, ga), slowed(m, totem2));
+        // A dead source pulls nothing aside.
+        let totem3 = spawn(m, ga, A_TOTEM, 20, 3.5);
+        ground(m, totem3);
+        crate::game::map::combat::deal_damage(m, brute, totem3, 10_000_000);
+        ground(m, totem3);
+        let before = health(m, ga);
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_BOLT, Some(ga));
+        let dead = health(m, ga) < before || !whole(m);
+        (first, spent, second, slow, dead)
+    })
+    .await;
+    assert_eq!(out.0, (true, true), "the bolt went to the totem");
+    assert!(!out.1, "the magnet spent");
+    assert!(out.2, "the next bolt lands");
+    assert_eq!(out.3, (false, true), "the slow pulled aside too");
+    assert!(out.4, "a dead totem pulls nothing aside");
+    // What is never pulled aside.
+    let d = magnets();
+    let bolt = d.spells.get(MAGIC_BOLT).unwrap().clone();
+    assert!(magnet_eligible(&bolt));
+    let mut ability = bolt.clone();
+    ability.dmg_class = 2;
+    let mut poison = bolt.clone();
+    poison.dispel = 4;
+    let mut area = bolt.clone();
+    area.effects[0].target_a = 22;
+    area.effects[0].target_b = 15;
+    area.effects[0].radius_index = 1;
+    let mut heal = bolt.clone();
+    heal.effects[0] = SpellEffect {
+        effect: 10,
+        target_a: 21,
+        ..Default::default()
+    };
+    let mut no_redirect = bolt.clone();
+    no_redirect.attributes[1] |= 0x8;
+    for (what, s) in [
+        ("an ability", ability),
+        ("a poison", poison),
+        ("an area spell", area),
+        ("a heal", heal),
+        ("no redirection", no_redirect),
+    ] {
+        assert!(!magnet_eligible(&s), "{what}");
+    }
+}
+
+/// A channel notice of `kind` on `channel` within a moment: the bytes
+/// after its name.
+async fn channel_notice(
+    c: &mut crate::game::harness::Client,
+    kind: u8,
+    channel: &str,
+) -> Option<Vec<u8>> {
+    let name = channel.as_bytes().to_vec();
+    let pick = move |b: &[u8]| {
+        b.first() == Some(&kind)
+            && b.get(1..1 + name.len()) == Some(&name[..])
+            && b.get(1 + name.len()) == Some(&0)
+    };
+    let f = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        c.wait_frame("", crate::game::social::channels::SMSG_CHANNEL_NOTIFY, pick),
+    )
+    .await
+    .ok()?;
+    Some(f[2 + channel.len()..].to_vec())
+}
+
+/// Whether `c` hears `text` in a channel within a moment, and its tag.
+async fn channel_heard(
+    c: &mut crate::game::harness::Client,
+    text: &str,
+) -> Option<wow_world_messages::vanilla::PlayerChatTag> {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let text = text.to_owned();
+    c.gets(std::time::Duration::from_millis(300), move |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(x) if x.message == text => Some(x.tag),
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's `ChatChannels.join`, `say` and `invite`, through the
+/// protocol: joining a built-in channel again is silent, a custom one
+/// answers "already a member"; a password keeps out who hasn't it; a
+/// member ignoring the speaker doesn't hear them, unless the speaker is a
+/// moderator (mangos's `Channel::Say`); the speaker's tag is theirs now;
+/// and an invitation to one ignoring the inviter is told to the inviter
+/// only.
+#[tokio::test]
+async fn a_channel_answers_joins_passwords_ignores_and_invitations() {
+    use crate::game::harness::Client;
+    use crate::game::social::channels::*;
+    use wow_world_messages::vanilla::*;
+    let mut cfg = crate::game::harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, data(), None);
+    let mut people = Vec::new();
+    for (acct, name) in [("A", "Alice"), ("B", "Bob"), ("C", "Carol"), ("D", "Dave")] {
+        let mut c = Client::connect(&realm, acct);
+        c.enter(name, Race::Human, Class::Warrior).await;
+        people.push(c);
+    }
+    let [mut a, mut b, mut c, mut d] = people.try_into().ok().unwrap();
+    let join = |name: &str, password: &str| CMSG_JOIN_CHANNEL {
+        channel_name: name.into(),
+        channel_password: password.into(),
+    };
+    let say = |text: &str| CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Channel {
+            channel: "Brew".into(),
+        },
+        language: Language::Common,
+        message: text.into(),
+    };
+    // Joined twice: the built-in silent, the custom one answers.
+    for name in ["General - Elwynn Forest", "Brew"] {
+        a.send(join(name, "")).await;
+        assert!(
+            channel_notice(&mut a, YOU_JOINED, name).await.is_some(),
+            "{name}"
+        );
+        a.send(join(name, "")).await;
+    }
+    assert!(
+        channel_notice(&mut a, PLAYER_ALREADY_MEMBER, "General - Elwynn Forest")
+            .await
+            .is_none(),
+        "the built-in channel is silent"
+    );
+    assert!(
+        channel_notice(&mut a, PLAYER_ALREADY_MEMBER, "Brew")
+            .await
+            .is_some()
+    );
+    // A password: the wrong one refused, the right one let in.
+    a.send(CMSG_CHANNEL_PASSWORD {
+        channel_name: "Brew".into(),
+        channel_password: "tea".into(),
+    })
+    .await;
+    b.send(join("Brew", "coffee")).await;
+    assert!(
+        channel_notice(&mut b, WRONG_PASSWORD, "Brew")
+            .await
+            .is_some()
+    );
+    for cl in [&mut b, &mut c] {
+        cl.send(join("Brew", "tea")).await;
+        assert!(channel_notice(cl, YOU_JOINED, "Brew").await.is_some());
+    }
+    // Carol ignores Bob: she doesn't hear him, unless he moderates.
+    c.send(CMSG_ADD_IGNORE { name: "Bob".into() }).await;
+    c.wait_frame("the ignore", 0x068, |_| true).await;
+    b.send(say("filtered")).await;
+    assert!(channel_heard(&mut a, "filtered").await.is_some());
+    assert!(channel_heard(&mut c, "filtered").await.is_none(), "ignored");
+    a.send(CMSG_CHANNEL_MODERATOR {
+        channel_name: "Brew".into(),
+        player_name: "Bob".into(),
+    })
+    .await;
+    channel_notice(&mut b, MODE_CHANGE, "Brew").await;
+    b.send(say("moderator")).await;
+    assert!(
+        channel_heard(&mut c, "moderator").await.is_some(),
+        "a moderator is heard by all"
+    );
+    // Her tag as it is now.
+    a.send(CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Afk,
+        language: Language::Common,
+        message: "".into(),
+    })
+    .await;
+    a.send(say("away")).await;
+    assert_eq!(
+        channel_heard(&mut b, "away").await,
+        Some(PlayerChatTag::Afk)
+    );
+    // An invitation to Dave, who ignores Bob: Bob told, Dave not.
+    d.send(CMSG_ADD_IGNORE { name: "Bob".into() }).await;
+    d.wait_frame("the ignore", 0x068, |_| true).await;
+    b.send(CMSG_CHANNEL_INVITE {
+        channel_name: "Brew".into(),
+        player_name: "Dave".into(),
+    })
+    .await;
+    assert!(
+        channel_notice(&mut b, PLAYER_INVITED, "Brew")
+            .await
+            .is_some()
+    );
+    assert!(
+        channel_notice(&mut d, INVITE, "Brew").await.is_none(),
+        "Dave not asked"
+    );
+}
+
+/// A brute's hold on its path (script command 201), driven by hand: the
+/// creature, and its hold's state.
+fn hold(m: &mut Map, g: Guid, ms: u32, signal: bool, release: u32, expired: u32) {
+    let mut step = crate::game::tests_p3_entity::step(
+        scripts::C_HOLD_WAYPOINTS,
+        [ms, u32::from(signal), 0, 0],
+    );
+    step.dataint = [release as i32, expired as i32, 0, 0];
+    scripts::execute(m, &step, g, Guid::zero());
+}
+
+fn holding(m: &Map, g: Guid) -> bool {
+    event_ai::scripted(m, g).is_some_and(|s| s.hold.is_some())
+}
+
+/// Thistle Tea's `wait_until_waypoint_ready` and `WaypointHold`: a hold
+/// waits until the summons made since it began are gone, those alive
+/// before it not counted, then runs its release script; a signal hold
+/// waits for its release; one that runs out unreleased runs its expired
+/// script instead, and a summons hold that runs out lets go all the same.
+#[tokio::test]
+async fn a_held_path_waits_on_its_summons_or_its_signal_and_runs_its_release() {
+    use crate::game::data::scripts::ScriptStep;
+    let mut d = data();
+    // Scripts 1 and 2 set the creature's phase to 1 and 2.
+    for id in [1u32, 2] {
+        d.scripts.generic.insert(
+            id,
+            vec![ScriptStep {
+                id,
+                command: 44,
+                datalong: [id, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let at = |m: &Map, g: Guid| m.creature(g).unwrap().position;
+        let tick = |m: &mut Map, g: Guid| {
+            let now = m.now;
+            if let Some(h) = event_ai::scripted_mut(m, g).and_then(|s| s.hold.as_mut()) {
+                h.ready_at = now;
+            }
+            event_ai::hold_tick(m, g);
+        };
+        let phase = |m: &Map, g: Guid| event_ai::phase(m, g);
+        let runs_out = |m: &mut Map, g: Guid| {
+            let now = m.now;
+            if let Some(h) = event_ai::scripted_mut(m, g).and_then(|s| s.hold.as_mut()) {
+                h.until = now;
+            }
+            event_ai::hold_tick(m, g);
+        };
+        // Summons: an earlier companion, then an ambusher since.
+        let g = spawn(m, ga, BRUTE, 20, 10.0);
+        let p = at(m, g);
+        let companion = scripts::summon(m, g, BRUTE, p, 0.0, None).unwrap();
+        hold(m, g, 400_000, false, 1, 0);
+        let ambusher = scripts::summon(m, g, BRUTE, p, 0.0, None).unwrap();
+        tick(m, g);
+        let waits = holding(m, g);
+        crate::game::map::combat::deal_damage(m, ga, ambusher, 10_000_000);
+        tick(m, g);
+        let released = (
+            !holding(m, g),
+            phase(m, g),
+            m.creature(companion).is_some_and(|c| c.alive()),
+        );
+        // A signal hold.
+        let s = spawn(m, ga, BRUTE, 20, 11.0);
+        hold(m, s, 600_000, true, 1, 2);
+        tick(m, s);
+        let signal_waits = holding(m, s);
+        let release = crate::game::tests_p3_entity::step(scripts::C_RELEASE_WAYPOINTS, [0; 4]);
+        scripts::execute(m, &release, s, Guid::zero());
+        event_ai::hold_tick(m, s);
+        let signal_released = (!holding(m, s), phase(m, s));
+        // A signal hold run out, unreleased: the expired script.
+        let e = spawn(m, ga, BRUTE, 20, 12.0);
+        hold(m, e, 5_000, true, 1, 2);
+        runs_out(m, e);
+        let expired = (!holding(m, e), phase(m, e));
+        // A summons hold run out lets go.
+        let o = spawn(m, ga, BRUTE, 20, 13.0);
+        hold(m, o, 5_000, false, 0, 0);
+        let _ = scripts::summon(m, o, BRUTE, at(m, o), 0.0, None).unwrap();
+        runs_out(m, o);
+        (
+            waits,
+            released,
+            signal_waits,
+            signal_released,
+            expired,
+            !holding(m, o),
+        )
+    })
+    .await;
+    assert!(out.0, "held while its ambusher lives");
+    assert_eq!(
+        out.1,
+        (true, 1, true),
+        "released, the companion not waited on"
+    );
+    assert!(out.2, "a signal hold waits");
+    assert_eq!(out.3, (true, 1), "released by its signal");
+    assert_eq!(out.4, (true, 2), "run out unreleased: the expired script");
+    assert!(out.5, "a summons hold run out lets go");
+}
+
+/// A pack that answers calls, hostile to humans, calling within 5 yards.
+const CALLERS: u32 = 41;
+const CALLER: u32 = 3_801;
+const SILENT_CALLER: u32 = 3_802;
+
+/// Thistle Tea's `call_for_help_step`: a creature dragged more than ten
+/// yards from its spawn calls its friends near each second; near its
+/// spawn, or between pulses, it is quiet; with no victim, or no range to
+/// call over, it calls no one.
+#[tokio::test]
+async fn a_creature_dragged_from_its_spawn_calls_for_help_each_second() {
+    let mut d = data();
+    let mut f = crate::game::tests_p3_combat::faction(CALLERS, 0x2, 0x1);
+    f.flags |= 0x1;
+    d.faction_templates.insert(CALLERS, f);
+    for (entry, range) in [(CALLER, 5.0), (SILENT_CALLER, 0.0)] {
+        let mut t = template(entry, 7);
+        t.faction = CALLERS;
+        t.call_for_help_range = range;
+        d.creature_templates.insert(entry, t);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        // A caller and a friend beside it; `away` yards from its spawn.
+        let pair = |m: &mut Map, entry: u32, yards: f32, away: f32| {
+            let g = spawn(m, ga, entry, 20, yards);
+            let h = spawn(m, ga, CALLER, 20, yards + 2.0);
+            crate::game::map::ai::attacked(m, g, ga);
+            if let Some(c) = m.creature_mut(g) {
+                c.home.x += away;
+                c.engagement.pulse_at = None;
+            }
+            (g, h)
+        };
+        let joined = |m: &Map, h: Guid| m.creature(h).is_some_and(|c| c.combat.attacking);
+        // Each pull's own call, made at once, is not what's asked: a
+        // helper put in after it.
+        let dragged = pair(m, CALLER, 3.0, 20.0);
+        let near = pair(m, CALLER, 8.0, 5.0);
+        let silent = pair(m, SILENT_CALLER, 13.0, 20.0);
+        let waiting = pair(m, CALLER, 18.0, 20.0);
+        for (_, h) in [dragged, near, silent, waiting] {
+            crate::game::map::combat::leave_combat(m, h);
+            crate::game::map::ai::enter_evade(m, h);
+            if let Some(c) = m.creature_mut(h) {
+                c.evading = false;
+            }
+        }
+        let now = m.now;
+        m.creature_mut(waiting.0).unwrap().engagement.pulse_at =
+            Some(now + std::time::Duration::from_secs(1));
+        crate::game::map::assistance::update(m);
+        let pulsed = m.creature(dragged.0).unwrap().engagement.pulse_at;
+        (
+            [dragged, near, silent, waiting].map(|(_, h)| joined(m, h)),
+            pulsed.map(|t| t.duration_since(now)),
+        )
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        [true, false, false, false],
+        "dragged, it calls; near its spawn, with no range, or between pulses, not"
+    );
+    assert_eq!(
+        out.1,
+        Some(std::time::Duration::from_secs(1)),
+        "again in a second"
+    );
+}
+
+/// Thistle Tea's `PetBT` with Stay (`return_test.exs`): Attack keeps a
+/// staying pet's Stay and its spot, and it goes after the victim named;
+/// that victim dead, it goes back to its spot. A victim it took up of
+/// itself there it doesn't chase when it leaves its reach.
+#[tokio::test]
+async fn a_staying_pet_goes_after_its_masters_victim_and_back_but_chases_no_other() {
+    use crate::game::map::pets::{self, ACT_COMMAND, COMMAND_ATTACK, COMMAND_STAY};
+    use crate::game::tests_pets::{WOLF, tamed};
+    use wow_world_messages::vanilla::CMSG_PET_ACTION;
+    let (_realm, h, gh, map, pet, wolf) = tamed().await;
+    on(&map, move |m| {
+        crate::game::map::combat::leave_combat(m, gh);
+        crate::game::map::combat::leave_combat(m, pet);
+        crate::game::map::combat::leave_combat(m, wolf);
+    })
+    .await;
+    let order = |command: u8, target: Guid| CMSG_PET_ACTION {
+        pet,
+        data: pets::button(u32::from(command), ACT_COMMAND),
+        target,
+    };
+    h.send(order(COMMAND_STAY, Guid::zero())).await;
+    until(&map, "staying", move |m| {
+        pets::state(m, pet).is_some_and(|s| s.command == COMMAND_STAY)
+    })
+    .await;
+    let spot = on(&map, move |m| pets::state(m, pet).unwrap().stay_at)
+        .await
+        .unwrap();
+    h.send(order(COMMAND_ATTACK, wolf)).await;
+    until(&map, "the pet goes for the wolf", move |m| {
+        crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot) > 2.0
+    })
+    .await;
+    let kept = on(&map, move |m| {
+        let s = pets::state(m, pet).unwrap();
+        (s.command, s.stay_at)
+    })
+    .await;
+    assert_eq!(kept, (COMMAND_STAY, Some(spot)), "Stay and its spot kept");
+    on(&map, move |m| {
+        crate::game::map::combat::deal_damage(m, gh, wolf, 10_000_000)
+    })
+    .await;
+    until(&map, "back at its spot", move |m| {
+        crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot) < 1.0
+            && !m.creature(pet).unwrap().combat.attacking
+    })
+    .await;
+    // A wolf that came at it, then backs off out of its reach.
+    let other = crate::game::tests_pets::place(&map, gh, WOLF, 0x70_0009, 0.0).await;
+    on(&map, move |m| {
+        let at = m.position_of(pet).unwrap();
+        let c = m.creature_mut(other).unwrap();
+        c.position = at;
+        c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 10_000_000);
+        c.fields.set_u32(UNIT_FIELD_HEALTH, 10_000_000);
+        crate::game::map::ai::attacked(m, other, pet);
+    })
+    .await;
+    until(&map, "it fights back", move |m| {
+        m.creature(pet).unwrap().combat.attacking
+    })
+    .await;
+    on(&map, move |m| {
+        let c = m.creature_mut(other).unwrap();
+        c.position.x += 15.0;
+        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+        let a = crate::game::map::auras::AURA_MOD_ROOT;
+        aura_of(m, other, 97_960, a, 0, 0);
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let moved = on(&map, move |m| {
+        crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot)
+    })
+    .await;
+    let fighting = on(&map, move |m| {
+        m.creature(pet).unwrap().combat.victim == other
+    })
+    .await;
+    assert!(fighting, "still its victim");
+    assert!(
+        moved < 1.0,
+        "it doesn't chase one it took up itself: {moved}"
+    );
+}
+
+const WATCHFUL: u32 = 3_803;
+const FRIENDLY_WATCHER: u32 = 3_804;
+
+/// Thistle Tea's `Proximity.hear`: a hostile creature near a player
+/// notices them; not one on a taxi, until they land; and a friendly one
+/// never does.
+#[tokio::test]
+async fn a_creature_notices_a_player_near_unless_on_a_taxi_or_friendly() {
+    let mut d = data();
+    // The friend's side: of the humans', at war with no one.
+    d.faction_templates
+        .insert(43, crate::game::tests_p3_combat::faction(43, 0x8, 0));
+    for (entry, faction) in [
+        (WATCHFUL, crate::game::tests_p3_combat::PACK),
+        (FRIENDLY_WATCHER, 43),
+    ] {
+        let mut t = template(entry, 7);
+        t.faction = faction;
+        t.detection_range = 15.0;
+        t.level_min = 1;
+        t.level_max = 1;
+        d.creature_templates.insert(entry, t);
+    }
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    const TAXI: u32 = 0x0010_0000;
+    let (watcher, friend) = on(&map, move |m| {
+        hardy(m, ga);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, TAXI, true);
+        (
+            spawn(m, ga, WATCHFUL, 1, 6.0),
+            spawn(m, ga, FRIENDLY_WATCHER, 1, 6.0),
+        )
+    })
+    .await;
+    a.sees(watcher).await;
+    let fighting = move |m: &Map| {
+        [watcher, friend].map(|g| {
+            let c = m.creature(g).unwrap();
+            c.combat.attacking && c.combat.victim == ga
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert_eq!(
+        on(&map, move |m| fighting(m)).await,
+        [false, false],
+        "on a taxi, unnoticed"
+    );
+    on(&map, move |m| {
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, TAXI, false);
+    })
+    .await;
+    until(&map, "landed, noticed", move |m| fighting(m)[0]).await;
+    assert!(
+        !on(&map, move |m| fighting(m)[1]).await,
+        "the friendly one never"
+    );
+}
