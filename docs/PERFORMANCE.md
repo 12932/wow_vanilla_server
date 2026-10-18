@@ -261,8 +261,7 @@ Since:
   34 ms once its tiles are in, from 56 to 59. Kalimdor with the navmesh needs more memory than this round had.
 - **The beat is gone**, and with it most updates over 50 ms. The median rises, by up to 3 ms at 100%: creatures now
   look for enemies every 500 ms, as the constant says, where on the beat they looked every 550 to 680 ms.
-- **No read of a tile waits in the map**: logins, teleports and populating no longer stall, and the watchdog no
-  longer calls a map hung. Taking a tile in and building its collision stay on the map's thread.
+- **No read of a tile waits in the map**: logins, teleports and populating no longer stall. Taking a tile in and building its collision stay on the map's thread.
 - **Walking at 100% nearly keeps it**: 0% to 2% of updates go over 50 ms of CPU, against 1% to 6% before, with p99
   at 42 to 55 ms.
 - **Memory**: tiles no one is near are let go (`[world] tile_unload_secs`), so a walking crowd's memory stays level,
@@ -459,7 +458,7 @@ tile is read from disk on the map's thread the first time anything needs it, and
 then. At 100%, a few hundred observers reach one in the same second. With 30 GB shared by several agents, the page
 cache doesn't keep the 6.8 GB of the continents' navmesh, so the reads go to the disk. The same thing makes the logins
 slow: a worldport's or teleport's acknowledgement took 200 to 450 ms while its first visibility loaded tiles. The
-continents took up to 16 s to populate under load, and the watchdog called them hung meanwhile.
+continents took up to 16 s to populate under load, their players frozen meanwhile.
 
 **Memory.** A tile, once loaded, stays loaded. The two continents' navmesh is 2.8 GB (Azeroth, 687 tiles) and 4.0 GB
 (Kalimdor, 1,018) on disk, and the process holds 2.7 GB with 20 observers. Peak RSS was 6.4 GB with 300 observers, 8.9 GB
@@ -536,7 +535,6 @@ the update's debug checks kept, or extended.
      a loaded tile at the next update.
    - Cost: a few days. Rustigator's map is used through `&mut`, so a tile has to be built apart from it and handed
      over.
-   - It would also stop the watchdog's false "hung" alarms during population.
 3. **Memory: tiles never unloaded** (13 GB at 100%; it bounds a load test on a shared machine, and a server's host).
    - The fix: unload a tile that no player or awake creature has been near for some minutes. Rustigator has
      `unload_adt`.
@@ -678,12 +676,12 @@ goes from 3.6 and 4.6 ms an update to 1.4 and 1.8, and p99 from 36 and 41 ms to 
 
 The stalls, alternated, 194 observers with the navmesh:
 
-| | Populated | Observers in place | Events over 200 ms, updates over 1 s | Watchdog alarms | Peak RSS |
-|---|---|---|---|---|---|
-| Standing, before | 4.1 s | 14.0 s | 18 | 0 | 5.3 GB |
-| Standing, after | 0.1 s | 0.1 s | 0 | 0 | 6.0 GB |
-| Walking, before | 4.5 s | 20.1 s | 41 | 1 | 6.0 GB |
-| Walking, after | 0.2 s | 0.2 s | 0 | 0 | 6.7 GB |
+| | Populated | Observers in place | Events over 200 ms, updates over 1 s | Peak RSS |
+|---|---|---|---|---|
+| Standing, before | 4.1 s | 14.0 s | 18 | 5.3 GB |
+| Standing, after | 0.1 s | 0.1 s | 0 | 6.0 GB |
+| Walking, before | 4.5 s | 20.1 s | 41 | 6.0 GB |
+| Walking, after | 0.2 s | 0.2 s | 0 | 6.7 GB |
 
 | Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
 |---|---|---|---|---|---|---|

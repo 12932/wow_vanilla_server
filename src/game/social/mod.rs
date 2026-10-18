@@ -96,12 +96,11 @@ pub fn same_side(a: &Online, b: &Online) -> bool {
 /// How often mail and auctions are swept for what has come due.
 pub const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The sweeps, while the realm lasts, and the watchdog.
+/// The sweeps, while the realm lasts.
 pub fn start_timers(realm: &Arc<Realm>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
-    crate::game::supervisor::start_watchdog(realm);
     let weak = Arc::downgrade(realm);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_EVERY);

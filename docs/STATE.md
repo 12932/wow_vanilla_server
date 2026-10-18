@@ -14,8 +14,7 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 - **Supervision, some of Erlang's in Rust** ([RELIABILITY.md](RELIABILITY.md)):
   - a panic costs the step, creature turn or packet it happened in;
   - a creature that keeps panicking is restarted, then quarantined;
-  - a map that keeps panicking is rebuilt, its players saved;
-  - a watchdog thread reports a map that hangs or can't keep up.
+  - a map that keeps panicking is rebuilt, its players saved.
 - **The update's hooks:** the update looks only at creatures a player sees or that are fighting, and at what
   changed. New code goes through the hooks ([PERFORMANCE.md](PERFORMANCE.md)); debug builds assert it.
 

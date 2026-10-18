@@ -523,53 +523,6 @@ async fn a_map_whose_actor_has_gone_is_started_again() {
     assert_eq!(try_login(&mut a, g).await, Ok(()));
 }
 
-/// The watchdog says when a map has been in one event or update too long
-/// (an endless loop), and when it is going again; and when a map's
-/// mailbox grows past what it can keep up with.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_watchdog_sees_a_map_hang_and_a_mailbox_swell() {
-    use crate::game::supervisor::{Alarm, Limits, Watched};
-    let mut watched = Watched::default();
-    let mut check =
-        |realm: &Realm, limits| crate::game::supervisor::check(realm, limits, &mut watched);
-    let realm = harness::realm();
-    let key = MapKey::world(0);
-    let map = realm.maps.get(&realm, key);
-    map.query(|_| ()).await.unwrap();
-    let limits = Limits {
-        hung_after: Duration::from_millis(500),
-        mailbox: 500,
-    };
-    assert_eq!(check(&realm, limits), []);
-    // Stuck in one event for a second.
-    map.call(|_| std::thread::sleep(Duration::from_millis(1200)));
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    let alarms = check(&realm, limits);
-    assert!(
-        matches!(alarms[..], [Alarm::Hung(k, _)] if k == key),
-        "{alarms:?}"
-    );
-    assert_eq!(check(&realm, limits), [], "said once");
-    map.query(|_| ()).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    assert_eq!(check(&realm, limits), [Alarm::Back(key)]);
-    // Sent more than it can get through: each event takes a millisecond.
-    for _ in 0..2_000 {
-        map.call(|_| std::thread::sleep(Duration::from_millis(1)));
-    }
-    tokio::time::sleep(Duration::from_millis(700)).await;
-    let alarms = check(&realm, limits);
-    assert!(
-        alarms
-            .iter()
-            .any(|a| matches!(a, Alarm::Swamped(k, n) if *k == key && *n >= 500)),
-        "{alarms:?}"
-    );
-    map.query(|_| ()).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    assert!(check(&realm, limits).contains(&Alarm::Drained(key)));
-}
-
 /// The panic hook logs a panic through tracing with where it happened, and
 /// a backtrace the first time at that place only.
 #[test]
