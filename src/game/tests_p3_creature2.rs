@@ -1051,3 +1051,184 @@ async fn an_evade_sheds_all_but_a_players_timed_buffs_and_the_exceptions() {
     );
     assert_eq!(out.2, [97_925], "the keeper keeps its own buff");
 }
+
+/// A town hating humans; its peon, that calls the guards and starts no
+/// fight; a peon of the humans' side that calls them; a town brute that
+/// calls them and fights on sight (though it notices no one); and the
+/// town's guard, waiting to be called.
+const TOWN: u32 = 29;
+const PEON: u32 = 3_793;
+const FRIENDLY_PEON: u32 = 3_794;
+const TOWN_BRUTE: u32 = 3_795;
+const TOWN_GUARD: u32 = 3_796;
+const CALLS_GUARDS: u32 = 0x0800_0000;
+
+fn town() -> GameData {
+    let mut d = data();
+    d.faction_templates
+        .insert(TOWN, crate::game::tests_p3_combat::faction(TOWN, 0x4, 0x1));
+    for (entry, faction, extra, calls, x, y) in [
+        (PEON, TOWN, 0x2, true, 4.0, 0.0),
+        (
+            FRIENDLY_PEON,
+            crate::game::tests_p3_combat::HUMANS,
+            0x2,
+            true,
+            0.0,
+            4.0,
+        ),
+        (TOWN_BRUTE, TOWN, 0, true, 0.0, -4.0),
+        (TOWN_GUARD, TOWN, 0x400 | 0x2, false, -15.0, 0.0),
+    ] {
+        let mut t = template(entry, 7);
+        t.faction = faction;
+        t.flags_extra = extra;
+        t.civilian = extra & 0x2 != 0;
+        if calls {
+            t.static_flags1 |= CALLS_GUARDS;
+        }
+        t.detection_range = if entry == TOWN_BRUTE { 0.1 } else { 10.0 };
+        d.creature_templates.insert(entry, t);
+        let (sx, sy, sz) = crate::game::tests_p3_combat::START;
+        d.creature_spawns
+            .entry(0)
+            .or_default()
+            .push(crate::game::data::CreatureSpawn {
+                guid: entry,
+                entries: vec![entry],
+                map: 0,
+                x: sx + x,
+                y: sy + y,
+                z: sz,
+                respawn_min: 300,
+                respawn_max: 300,
+                ..Default::default()
+            });
+    }
+    d
+}
+
+fn town_unit(entry: u32) -> Guid {
+    crate::game::guid::unit(entry, entry)
+}
+
+/// Thistle Tea's `GuardCall.watch_range`, `answered` and `sees?`: a peon
+/// seeing an enemy calls the guards once; answered, it holds; with a guard
+/// it summoned alive it waits, and the guard dead it may call again; back
+/// from the dead it may too. A peon of the player's own side doesn't call,
+/// and one that fights on sight leaves it to its aggro until it fights.
+#[tokio::test]
+async fn a_peons_call_waits_on_its_answer_and_only_enemies_rouse_it() {
+    use crate::game::map::creature_combat::GuardCall;
+    let (_realm, mut a, ga, map) = setup_with(town(), Class::Warrior).await;
+    let (peon, guard) = (town_unit(PEON), town_unit(TOWN_GUARD));
+    a.sees(guard).await;
+    on(&map, move |m| hardy(m, ga)).await;
+    until(&map, "the guard roused", move |m| {
+        m.creature(guard)
+            .is_some_and(|c| c.combat.attacking && c.combat.victim == ga)
+    })
+    .await;
+    let calls = on(&map, move |m| {
+        [PEON, FRIENDLY_PEON, TOWN_BRUTE]
+            .map(|e| m.creature(town_unit(e)).unwrap().engagement.guard_call)
+    })
+    .await;
+    assert_eq!(
+        calls,
+        [Some(GuardCall::Held), None, None],
+        "only the peon of the town, that starts no fight, called"
+    );
+    // Answered, it holds: the guard sent home isn't called again.
+    let look = move |m: &mut Map| {
+        for e in [PEON, FRIENDLY_PEON, TOWN_BRUTE] {
+            m.creature_mut(town_unit(e)).unwrap().engagement.watch_at = None;
+        }
+    };
+    on(&map, move |m| {
+        crate::game::map::ai::enter_evade(m, guard);
+        look(m);
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        !on(&map, move |m| m.creature(guard).unwrap().combat.attacking).await,
+        "held: no second call"
+    );
+    // A guard of its own alive, it waits; that guard dead, it calls.
+    let summoned = on(&map, move |m| {
+        let g = spawn(m, ga, TOWN_GUARD, 20, 30.0);
+        m.creature_mut(peon).unwrap().engagement.guard_call = Some(GuardCall::Summoned(g));
+        crate::game::map::ai::quiet_death(m, guard);
+        crate::game::map::ai::respawn_now(m, guard);
+        look(m);
+        g
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        !on(&map, move |m| m.creature(guard).unwrap().combat.attacking).await,
+        "its guard alive, it waits"
+    );
+    on(&map, move |m| {
+        crate::game::map::ai::quiet_death(m, summoned);
+        look(m);
+    })
+    .await;
+    until(&map, "called again", move |m| {
+        m.creature(guard).is_some_and(|c| c.combat.attacking)
+    })
+    .await;
+    // Back from the dead, it may call again.
+    let back = on(&map, move |m| {
+        crate::game::map::ai::quiet_death(m, peon);
+        crate::game::map::ai::respawn_now(m, peon);
+        m.creature(peon).map(|c| c.engagement.guard_call)
+    })
+    .await;
+    assert_eq!(back, Some(None), "its call forgotten");
+    // The brute in a fight calls.
+    on(&map, move |m| {
+        crate::game::map::ai::enter_evade(m, guard);
+        crate::game::map::ai::attacked(m, town_unit(TOWN_BRUTE), ga);
+    })
+    .await;
+    let brute = on(&map, move |m| {
+        m.creature(town_unit(TOWN_BRUTE))
+            .unwrap()
+            .engagement
+            .guard_call
+    })
+    .await;
+    assert_eq!(
+        brute,
+        Some(GuardCall::Held),
+        "the brute calls once it fights"
+    );
+}
+
+/// Thistle Tea's `GuardPost.recharge`: a post regains a charge for each
+/// whole minute and keeps the remainder toward the next; and never holds
+/// more than ten.
+#[test]
+fn a_guard_post_regains_whole_minutes_and_at_most_ten_charges() {
+    use crate::game::map::guard_posts::{Post, take_from};
+    let t0 = std::time::Instant::now();
+    let secs = std::time::Duration::from_secs;
+    let mut post = Post {
+        charges: 3,
+        cooldown_until: None,
+        recharged_at: t0,
+    };
+    assert!(take_from(&mut post, t0 + secs(150)));
+    assert_eq!(post.charges, 4, "two minutes regained, one spent");
+    assert_eq!(post.recharged_at, t0 + secs(120), "the half minute kept");
+    let mut full = Post {
+        charges: 8,
+        cooldown_until: None,
+        recharged_at: t0,
+    };
+    assert!(take_from(&mut full, t0 + secs(900)));
+    assert_eq!(full.charges, 9, "ten at most, one spent");
+    assert_eq!(full.recharged_at, t0 + secs(900));
+}

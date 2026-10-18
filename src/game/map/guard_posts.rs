@@ -132,10 +132,10 @@ pub fn text(area: u32, faction: u32) -> Option<u32> {
 
 /// A post's charges.
 #[derive(Debug, Clone, Copy)]
-struct Post {
-    charges: u32,
-    cooldown_until: Option<Instant>,
-    recharged_at: Instant,
+pub(crate) struct Post {
+    pub(crate) charges: u32,
+    pub(crate) cooldown_until: Option<Instant>,
+    pub(crate) recharged_at: Instant,
 }
 
 /// Guard posts by map, copy and area.
@@ -160,7 +160,7 @@ pub fn take(key: (u32, u32, u32), now: Instant) -> bool {
     take_from(post, now)
 }
 
-fn take_from(post: &mut Post, now: Instant) -> bool {
+pub(crate) fn take_from(post: &mut Post, now: Instant) -> bool {
     // Charges come back by the minute, counted from the request.
     let gained =
         (now.saturating_duration_since(post.recharged_at).as_secs() / RECHARGE.as_secs()) as u32;
