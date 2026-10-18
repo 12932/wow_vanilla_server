@@ -342,3 +342,33 @@ async fn another_players_release_leaves_a_rogues_pockets() {
     assert!(!filed, "and not the closer's to find");
     assert_eq!(still, Some(target), "the rogue still looks in them");
 }
+
+/// R4-5. A player leaving the map (a disconnect, a map change) with a loot
+/// window open has it closed, as a logout does: an item's loot goes with
+/// it, rather than staying on the map for good.
+#[tokio::test]
+async fn a_loot_window_closes_with_its_looter_leaving() {
+    use crate::game::map::loot::Loot;
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4LW");
+    let g = a.enter("Leaver", Race::Human, Class::Warrior).await;
+    let item = guid::item(987_654);
+    on_map(&realm, move |m| {
+        crate::game::map::loot::show_item_loot(
+            m,
+            g,
+            item,
+            Loot {
+                gold: 5,
+                owner: Some(g),
+                ..Default::default()
+            },
+        );
+        assert_eq!(m.players[&g].looting, Some(item));
+        // Gone from the map, as a disconnect takes them.
+        let _ = m.take_player(g);
+    })
+    .await;
+    let left = on_map(&realm, move |m| m.loot_state.item_loot.contains_key(&item)).await;
+    assert!(!left, "the item's loot went with the window");
+}
