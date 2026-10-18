@@ -179,8 +179,12 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         }
         return;
     }
-    c.combat_start = Some(now);
-    c.engagement.origin = Some(c.position);
+    // A fight's start and its leash's origin are where it began, not
+    // where it turned to another (its victim feigning death, vanishing).
+    if first {
+        c.combat_start = Some(now);
+        c.engagement.origin = Some(c.position);
+    }
     c.engagement.last_hostile = Some(now);
     c.combat.victim = attacker;
     c.combat.attacking = true;
@@ -250,7 +254,7 @@ pub fn forget(map: &mut Map, g: Guid) {
 pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
     for c in fighting {
         crate::game::map::spells::threat_sync::removed(map, c, g);
-        let next = {
+        {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
             };
@@ -259,11 +263,9 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             if cr.combat.victim != g {
                 continue;
             }
-            cr.threat
-                .iter()
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(t, _)| *t)
-        };
+        }
+        // The next it may fight: not one it can't reach or see.
+        let next = pick_victim(map, c);
         combat::stop_attack(map, c);
         match next {
             Some(t) => {
@@ -763,8 +765,14 @@ pub fn update_creatures(map: &mut Map) {
 fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
     // Under control, its leash is kept.
     crate::game::map::creature_combat::maintain_leash(map, g);
-    // Its timed events wait while it walks home.
-    if !map.creatures.get(key).is_some_and(|c| c.evading) {
+    // Its timed events wait while it walks home, and while it lies in a
+    // linked feign death (its fight's flag kept, they would fire on).
+    if !map.creatures.get(key).is_some_and(|c| {
+        c.evading
+            || c.scripted
+                .as_deref()
+                .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+    }) {
         crate::game::map::event_ai::tick(map, g);
     }
     let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {

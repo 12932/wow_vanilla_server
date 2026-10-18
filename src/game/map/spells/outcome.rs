@@ -1154,7 +1154,8 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     );
     let items = death_items(map, target, left);
     if left > 0 {
-        combat::deal_damage_by(map, caster, target, left, 1, Some(s.id));
+        // Its threat by the auras of its school (`super::threat`).
+        combat::deal_damage_by(map, caster, target, left, s.school_mask(), Some(s.id));
     }
     give_death_items(map, target, items);
     super::threat(map, caster, target, s, left as f32, &l.mods);

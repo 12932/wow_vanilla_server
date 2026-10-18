@@ -823,6 +823,22 @@ pub fn cast(
         crate::game::map::ranged::start(map, caster, spell, targets);
         return true;
     }
+    // A spell cast while channelling ends the channel, unless either may
+    // be cast with another (mangos's `SetCurrentCastedSpell`).
+    let channel = map
+        .caster(caster)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell);
+    if let Some(channel) = channel
+        && !s.attr(4, sd::ATTR_EX4_ALLOW_CAST_WHILE_CASTING)
+        && !data
+            .spells
+            .get(channel)
+            .is_some_and(|c| c.attr(4, sd::ATTR_EX4_ALLOW_CAST_WHILE_CASTING))
+    {
+        interrupt(map, caster);
+    }
     let now = map.now;
     let time = cast_time(map, caster, s, &m);
     // A spell of the ranged slot shows its projectile (mangos's
@@ -1612,8 +1628,10 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
     }
 }
 
-/// Threat a spell's damage (or effect) adds beyond the damage itself: its
-/// `spell_threat`, the threat modifiers and the caster's threat auras.
+/// Threat a spell's damage (or effect) adds beyond what the damage itself
+/// made (its school's threat auras on it, `deal_damage`'s): its
+/// `spell_threat`, the threat modifiers, the auras on those too, as Thistle
+/// Tea's `SpellThreat.multiplier` has it.
 pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: f32, m: &Mods) {
     if !guid::is_unit(target) || s.attr(1, sd::ATTR_EX_NO_THREAT) {
         return;
@@ -1626,11 +1644,10 @@ pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dama
         .get(&s.id)
         .copied()
         .unwrap_or((0, 1.0));
-    let pct = m.pct[mods::OP_THREAT]
-        + auras::auras(map, caster)
-            .map_or(0, |a| a.sum_mask(auras::AURA_MOD_THREAT, s.school_mask()));
-    let total = (damage * mult.max(0.0) + flat as f32) * (100 + pct).max(0) as f32 / 100.0;
-    let extra = total - damage;
+    let auras = crate::game::map::combat::threat_multiplier(map, caster, s.school_mask());
+    let pct = m.pct[mods::OP_THREAT];
+    let total = (damage * mult.max(0.0) + flat as f32) * auras * (100 + pct).max(0) as f32 / 100.0;
+    let extra = total - damage * auras;
     if extra.abs() > 0.01 {
         crate::game::map::ai::add_threat(map, target, caster, extra);
     }
@@ -1881,7 +1898,6 @@ pub fn interrupt(map: &mut Map, g: Guid) {
                 c.other_gcds.retain(|(cat, _)| *cat != category);
             }
         }
-        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
     }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {

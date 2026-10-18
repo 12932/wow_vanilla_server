@@ -799,7 +799,9 @@ pub enum Refused {
     Immune,
 }
 
-/// Put `spell`'s effect `index` on `target`.
+/// Put `spell`'s effect `index` on `target` (the tests' shorthand: a
+/// spell's effects go on together, by [`apply_spell`]).
+#[cfg(test)]
 pub fn apply(
     map: &mut Map,
     caster: Guid,
@@ -1092,10 +1094,13 @@ pub fn apply_spell(
             clear_slot(map, target, slot);
         }
     }
+    // Taken off as any removal takes it off (`remove_where`): its returns
+    // recover, a cooldown waiting for it starts, a channel it was ends.
     for h in gone {
         for x in &h.effects {
             ended(map, target, &h, x);
         }
+        removed(map, target, &h);
     }
     // A slot for the new holder.
     let mut index =
@@ -1364,6 +1369,34 @@ fn write_slot(map: &mut Map, target: Guid, index: usize) {
         h.stacks.clamp(1, 255) - 1
     };
     set_slot_fields(map, target, slot, h.spell, flags, h.level, apps);
+}
+
+/// `caster`'s holder of `spell` (from `item`) on `target` at `stacks` (a
+/// saved aura's, at login): its slot shows them and the stats count them.
+pub fn set_stacks(
+    map: &mut Map,
+    target: Guid,
+    spell: u32,
+    caster: Guid,
+    item: Option<Guid>,
+    stacks: u32,
+) {
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let Some(i) = a
+        .holders
+        .iter()
+        .position(|h| h.spell == spell && h.caster == caster && h.item == item)
+    else {
+        return;
+    };
+    if a.holders[i].stacks == stacks {
+        return;
+    }
+    a.holders[i].stacks = stacks;
+    write_slot(map, target, i);
+    recalc(map, target);
 }
 
 fn clear_slot(map: &mut Map, target: Guid, slot: usize) {

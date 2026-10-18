@@ -336,6 +336,7 @@ pub fn restore(map: &mut Map, player: Guid) {
         }
         let caster = Guid::new(a.caster);
         let caster = if caster.is_zero() { player } else { caster };
+        let item = (a.item != 0).then(|| Guid::new(a.item));
         // Its ticks as its caster's modifiers have them now.
         let m = super::mods::for_spell(map, caster, s);
         let _ = auras::apply_spell(
@@ -345,7 +346,7 @@ pub fn restore(map: &mut Map, player: Guid) {
             s,
             &effects,
             auras::Context {
-                item: (a.item != 0).then(|| Guid::new(a.item)),
+                item,
                 equipped: false,
                 combo: a.combo,
                 duration: Some(a.left),
@@ -358,13 +359,8 @@ pub fn restore(map: &mut Map, player: Guid) {
                 ),
             },
         );
-        if let Some(h) = auras::auras_mut(map, player).and_then(|x| {
-            x.holders
-                .iter_mut()
-                .find(|h| h.spell == a.spell && h.caster == caster)
-        }) {
-            h.stacks = a.stacks.max(1);
-        }
+        // Its stacks, on its bar and in the stats.
+        auras::set_stacks(map, player, a.spell, caster, item, a.stacks.max(1));
     }
     send(map, player, &cooldowns);
 }

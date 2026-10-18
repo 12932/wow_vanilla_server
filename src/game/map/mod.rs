@@ -784,6 +784,13 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        // Their cast or channel ends, and the creatures they fought forget
+        // them (mangos's `RemoveFromWorld`: the cast interrupted, the
+        // hostile references deleted), as a death has them forgotten.
+        if self.caster(guid).is_some_and(|c| c.casting.is_some()) {
+            spells::interrupt(self, guid);
+        }
+        ai::forget(self, guid);
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);

@@ -164,6 +164,9 @@ pub const ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS: u32 = 0x100;
 pub const ATTR_EX4_NO_HELPFUL_THREAT: u32 = 0x8;
 /// No threat when it first lands.
 pub const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
+/// It may be cast while another spell is channelled, or channelled while
+/// another is cast (mangos's `SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING`).
+pub const ATTR_EX4_ALLOW_CAST_WHILE_CASTING: u32 = 0x80;
 
 impl SpellTemplate {
     pub fn passive(&self) -> bool {
