@@ -1307,6 +1307,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     c.i32(&format!("RewRepValue{}", i + 1)),
                 )
             }),
+            reputation_no_spillover: c.u32("RewRepSpilloverMask"),
             required_min_rep: (c.u32("RequiredMinRepFaction"), c.i32("RequiredMinRepValue")),
             required_max_rep: (c.u32("RequiredMaxRepFaction"), c.i32("RequiredMaxRepValue")),
             rep_objective: (c.u32("RepObjectiveFaction"), c.i32("RepObjectiveValue")),

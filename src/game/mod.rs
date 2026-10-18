@@ -160,6 +160,8 @@ mod tests_p3_items_quests;
 #[cfg(test)]
 mod tests_p3_loader2_procs;
 #[cfg(test)]
+mod tests_p3_loader2_quests;
+#[cfg(test)]
 mod tests_p3_loader_play;
 #[cfg(test)]
 mod tests_p3_loader_spells;

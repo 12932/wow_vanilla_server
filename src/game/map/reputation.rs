@@ -458,17 +458,23 @@ pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest)
     };
     let level = q.level_for(p.level());
     let plevel = u32::from(p.level());
-    let grants: Vec<(u32, i32)> = q
+    // A reward its mask marks spills nowhere.
+    let grants: Vec<(u32, i32, bool)> = q
         .reputation_rewards
         .iter()
-        .filter(|(f, v)| *f != 0 && *v != 0)
-        .map(|(f, v)| {
+        .enumerate()
+        .filter(|(_, (f, v))| *f != 0 && *v != 0)
+        .map(|(i, (f, v))| {
             let rate = level_rate(false, *v, plevel, level);
-            (*f, gain(p, &data, *v, rate, *f, Source::Quest))
+            (
+                *f,
+                gain(p, &data, *v, rate, *f, Source::Quest),
+                q.reputation_no_spillover & (1 << i) == 0,
+            )
         })
         .collect();
-    for (faction, delta) in grants {
-        modify(map, g, faction, delta, true);
+    for (faction, delta, spillover) in grants {
+        modify(map, g, faction, delta, spillover);
     }
 }
 

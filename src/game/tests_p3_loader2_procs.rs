@@ -10,7 +10,6 @@ use wow_world_messages::vanilla::*;
 use crate::game::Realm;
 use crate::game::data::GameData;
 use crate::game::data::spells::ProcEvent;
-use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::procs::{self, *};
 use crate::game::map::{Map, MapHandle, MapKey, auras, spells};
