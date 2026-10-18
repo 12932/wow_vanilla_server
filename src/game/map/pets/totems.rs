@@ -450,6 +450,12 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
         t.level_min
     };
     let (at, o) = before(map, owner, 1.5);
+    let now = map.now;
+    let duration = map
+        .realm
+        .data
+        .spells
+        .duration(s, u32::from(level_of(map, owner)));
     let g = summon::spawn(map, owner, entry, Kind::Critter, level.max(1), at, o);
     if let Some(c) = map.creature_mut(g) {
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
@@ -462,6 +468,9 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
             st.summon_spell = s.id;
             st.react = REACT_PASSIVE;
             st.angle = std::f32::consts::PI;
+            // A spell with a time calls it for that long (mangos's
+            // `SetDuration(m_duration)`).
+            st.expires = duration.map(|ms| now + Duration::from_millis(u64::from(ms)));
         }
     }
     if let Some(p) = map.players.get_mut(&owner) {

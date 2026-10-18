@@ -390,6 +390,8 @@ mod tests_p4_world_spells;
 #[cfg(test)]
 mod tests_p5_ai_pets;
 #[cfg(test)]
+mod tests_p5_ai_summons;
+#[cfg(test)]
 mod tests_p5_player;
 #[cfg(test)]
 mod tests_p5_player_items;

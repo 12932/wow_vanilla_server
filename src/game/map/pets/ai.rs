@@ -81,6 +81,12 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     if !alive {
+        // A totem struck down sinks at once, leaving no corpse and its slot
+        // free (mangos's `Totem::Update`, Thistle Tea's totem stop).
+        if kind == Kind::Totem {
+            summon::remove(map, g);
+            return;
+        }
         let stays = if kind == Kind::Hunter {
             CORPSE_STAYS
         } else {
