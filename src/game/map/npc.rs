@@ -104,6 +104,20 @@ fn send(map: &Map, player: Guid, m: &impl ServerMessage) {
 
 /// `CMSG_GOSSIP_HELLO`: the NPC's menu with its quests, or its one service
 /// at once.
+/// The menu an NPC opens with: its script's, else its template's.
+fn creature_menu(map: &Map, npc: Guid) -> u32 {
+    let entry = map.creature(npc).map_or(0, |c| c.entry);
+    crate::game::map::event_ai::scripted(map, npc)
+        .and_then(|s| s.gossip_menu)
+        .or_else(|| {
+            map.realm
+                .data
+                .creature_template(entry)
+                .map(|t| t.gossip_menu_id)
+        })
+        .unwrap_or(0)
+}
+
 pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
     if crate::game::map::death::spirit_healer_hello(map, player, npc)
         || crate::game::map::battleground::gossip_hello(map, player, npc)
@@ -152,7 +166,10 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
     show_menu(map, player, npc, menu_id, flags);
 }
 
-/// The options of a menu this NPC offers.
+/// The options of a menu this NPC offers. An NPC's own menu with no
+/// options of its own offers the default menu's (0) its flags allow, as
+/// mangos's `PrepareGossipMenu` and Thistle Tea's inherited defaults: a
+/// battlemaster's "I wish to join the battle!".
 fn menu_options(
     map: &Map,
     menu_id: u32,
@@ -160,38 +177,34 @@ fn menu_options(
     player: Guid,
     npc: Guid,
 ) -> Vec<GossipOption> {
-    map.realm
-        .data
-        .npc
-        .gossip_menus
+    let menus = &map.realm.data.npc.gossip_menus;
+    let own_menu = !crate::game::guid::is_game_object(npc) && menu_id == creature_menu(map, npc);
+    let menu = menus
         .get(&menu_id)
-        .map(|m| {
-            m.options
-                .iter()
-                // An object's menu shows its gossip options alone, whatever
-                // their NPC flag (mangos's `PrepareGossipMenu`, Thistle
-                // Tea's `npc_flag_allowed?`).
-                .filter(|o| {
-                    if crate::game::guid::is_game_object(npc) {
-                        o.kind == 1
-                    } else {
-                        o.npc_flag == 0 || o.npc_flag & npc_flags != 0
-                    }
-                })
-                .filter(|o| {
-                    o.condition == 0
-                        || !map.realm.data.scripts.conditions.contains_key(&o.condition)
-                        || crate::game::map::conditions::met(
-                            map,
-                            o.condition,
-                            Some(npc),
-                            Some(player),
-                        )
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
+        .filter(|m| !m.options.is_empty())
+        .or_else(|| (menu_id != 0 && own_menu).then(|| menus.get(&0)).flatten());
+    menu.map(|m| {
+        m.options
+            .iter()
+            // An object's menu shows its gossip options alone, whatever
+            // their NPC flag (mangos's `PrepareGossipMenu`, Thistle
+            // Tea's `npc_flag_allowed?`).
+            .filter(|o| {
+                if crate::game::guid::is_game_object(npc) {
+                    o.kind == 1
+                } else {
+                    o.npc_flag == 0 || o.npc_flag & npc_flags != 0
+                }
+            })
+            .filter(|o| {
+                o.condition == 0
+                    || !map.realm.data.scripts.conditions.contains_key(&o.condition)
+                    || crate::game::map::conditions::met(map, o.condition, Some(npc), Some(player))
+            })
+            .cloned()
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// A menu's greeting for `player`, as Thistle Tea picks it: of the texts
