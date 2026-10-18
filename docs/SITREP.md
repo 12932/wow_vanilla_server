@@ -131,6 +131,9 @@ the questions waiting for you.
 39. **New weapon skills** (from 3j). wvs starts them at their cap; mangos and Thistle Tea start them at 1. Changing
     it means every level-60 combat test needs its skills raised. Change it?
 
+40. **How a creature a player controls heals** out of combat (from 3p), whether charmed or a pet: Thistle Tea's spirit ×
+    4, mangos-classic's 13% of its health, or wvs's current twentieth?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -442,6 +445,18 @@ the questions waiting for you.
     - **A disarmed unit** can't parry, even with an off-hand weapon.
     - **Merge note:** 3q renews a parent's linked auras on a refresh, and 3o's test has a link back to its parent.
       Together they recursed until the stack overflowed. A refresh made by a link no longer renews its own links.
+34. **3p's choices** (combat and power, finished):
+    - **A polymorphed player** heals a tenth of their health a tick, in a fight too, as Thistle Tea has it. mangos
+      has no rule of its own; Polymorph's tooltip says the target "will regenerate very quickly".
+    - **Damage sharing** (Blessing of Sacrifice, Soul Link) now takes its share of swings, shots and ticks too, after
+      shields, as mangos's `CalculateDamageAbsorbAndResist` does. Before, only direct spells were shared.
+    - **Burns and drains** take only a pool the target shows, from the living. A burn with a multiplier of 0 burns
+      mana and does no damage. A drain gives nothing back for a power the caster doesn't use.
+    - **Costs:** a percentage cost is added to the flat one instead of replacing it, and god mode pays nothing.
+    - **Silence and pacify** go by the spell's prevention type, so a wand's Shoot works under silence.
+    - **A flaky test, left as it was:** `tests_p3_ai_scripts::a_checked_event_whose_actions_fail_fires_again_until_they_succeed`
+      failed 1 run in 12, at different points.
+
 31. **The agents ran the machine out of memory** (30 GB). the orchestrator stopped all seven agent agents when memory ran
     short. Their committed work is merged above, and their branches and worktrees are kept. How to resume them, with
     fewer at once and a cap on each agent's memory, is waiting on you.
@@ -525,6 +540,7 @@ the questions waiting for you.
 | Quest 1560's walk | merged | 8dc7a49 |
 | Fast and extended test suites | merged | eef0000 |
 | Round 3 (3m to 3r), the work committed before the agents stopped | merged | 208be0b |
+| 3p: combat and power (179 rows) | merged | 1e01c85 |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
 ## Left for later, and why
