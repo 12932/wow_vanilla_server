@@ -404,6 +404,38 @@ mod tests_p5_player_real;
 #[cfg(test)]
 mod tests_p5_player_vendor;
 #[cfg(test)]
+mod tests_p5_spell;
+#[cfg(test)]
+mod tests_p5_spell_blocks;
+#[cfg(test)]
+mod tests_p5_spell_channel;
+#[cfg(test)]
+mod tests_p5_spell_checks;
+#[cfg(test)]
+mod tests_p5_spell_cost;
+#[cfg(test)]
+mod tests_p5_spell_dbc;
+#[cfg(test)]
+mod tests_p5_spell_effects;
+#[cfg(test)]
+mod tests_p5_spell_enchant;
+#[cfg(test)]
+mod tests_p5_spell_holiday;
+#[cfg(test)]
+mod tests_p5_spell_hunter;
+#[cfg(test)]
+mod tests_p5_spell_items;
+#[cfg(test)]
+mod tests_p5_spell_paladin;
+#[cfg(test)]
+mod tests_p5_spell_procs;
+#[cfg(test)]
+mod tests_p5_spell_swiftmend;
+#[cfg(test)]
+mod tests_p5_spell_targets;
+#[cfg(test)]
+mod tests_p5_spell_warlock;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

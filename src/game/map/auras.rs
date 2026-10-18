@@ -2854,6 +2854,18 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             } else {
                 target
             };
+            // A spell at an enemy with no enemy to go at goes nowhere, not
+            // at the one the aura is on (Thistle Tea's
+            // `redirect_trigger_target`).
+            let at_enemy = map
+                .realm
+                .data
+                .spells
+                .get(a.trigger)
+                .is_some_and(|t| implicit(t.effects[0].target_a) == Implicit::Enemy);
+            if at_enemy && aim == h.caster {
+                return;
+            }
             crate::game::map::spells::cast_triggered(map, h.caster, a.trigger, Some(aim));
         }
         _ => {}

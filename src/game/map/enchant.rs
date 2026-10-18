@@ -475,6 +475,12 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
                 _ if amount > 0 => amount as f32,
                 _ => delay as f32 * 1.8 / 1000.0,
             };
+            // The wielder's talents for the spell's chance (Improved
+            // Poisons), as mangos's `CastItemCombatSpell` applies them.
+            let chance = data.spells.get(spell).map_or(chance, |s| {
+                crate::game::map::spells::mods::for_spell(map, e.actor, s)
+                    .apply(crate::game::map::spells::mods::OP_CHANCE_OF_SUCCESS, chance)
+            });
             if rng.random_range(0.0f32..100.0) < chance {
                 casts.push((spell, (s == TEMP_SLOT && en.charges > 0).then_some(s)));
             }

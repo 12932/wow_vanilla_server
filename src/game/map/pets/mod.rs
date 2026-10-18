@@ -454,7 +454,26 @@ pub fn effect(
 
 /// A pet area aura's effects (each index and amount) on `caster`'s pet,
 /// as one holder: a spell of two (Soul Link) puts both on.
+/// One a pet casts (Soul Link's 25228, on itself) is on the pet and its
+/// master both, from the pet, as mangos's pet area aura of a pet reaches
+/// its owner: the warlock's damage then splits to the demon.
 pub fn area_aura(map: &mut Map, caster: Guid, s: &SpellTemplate, effects: &[(usize, i32)]) {
+    let owner = master(map, caster);
+    if owner != caster {
+        for target in [caster, owner] {
+            if map.unit_view(target).is_some_and(|u| u.alive) {
+                let _ = crate::game::map::auras::apply_spell(
+                    map,
+                    caster,
+                    target,
+                    s,
+                    effects,
+                    crate::game::map::auras::Context::default(),
+                );
+            }
+        }
+        return;
+    }
     if let Some(pet) = pet_of(map, caster)
         && map.unit_view(pet).is_some_and(|u| u.alive)
     {
@@ -467,6 +486,30 @@ pub fn area_aura(map: &mut Map, caster: Guid, s: &SpellTemplate, effects: &[(usi
             crate::game::map::auras::Context::default(),
         );
     }
+}
+
+/// A dummy of a spell `spell_pet_auras` names (Soul Link, 19028) at its
+/// caster's pet: the pet casts the aura it names for its kind on itself
+/// (mangos's `AddPetAura` from `EffectDummy`, Thistle Tea's pet auras);
+/// whether it was one.
+pub fn pet_aura_dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> bool {
+    if target == caster || master(map, target) != caster {
+        return false;
+    }
+    let entry = map.creature(target).map_or(0, |c| c.entry);
+    let aura = map
+        .realm
+        .data
+        .pets
+        .owner_auras
+        .iter()
+        .find(|(spell, for_pet, _)| *spell == s.id && (*for_pet == 0 || *for_pet == entry))
+        .map(|(_, _, aura)| *aura);
+    let Some(aura) = aura else {
+        return false;
+    };
+    crate::game::map::spells::cast_triggered(map, target, aura, Some(target));
+    true
 }
 
 /// Before a spell's effects go off: what needs the cast's targets (Feed

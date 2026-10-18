@@ -1134,6 +1134,7 @@ fn effect(
                 p.gear_dirty = true;
             }
         }
+        EFFECT_DUMMY if crate::game::map::pets::pet_aura_dummy(map, caster, target, s) => {}
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
             if !super::class_scripts::dummy(map, caster, target, s, index, amount)
                 && !super::holiday::effect(map, caster, target, s)
@@ -1153,25 +1154,7 @@ fn effect(
 /// diseases either way. A passive aura goes like any other, as in Thistle
 /// Tea and mangos (a creature's Fire Shield): its dispel type decides.
 fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i32, count: u32) {
-    // An enemy's buffs, a friend's afflictions.
-    let positive = combat::can_attack(map, caster, target);
-    let matches = |dispel: u32, holder_positive: bool| {
-        let kind_ok = if kind == 7 || kind < 0 {
-            matches!(dispel, 1..=4)
-        } else {
-            dispel == kind as u32
-        };
-        kind_ok && (!matches!(dispel, 1 | 4) || holder_positive == positive)
-    };
-    let mut candidates: Vec<(u32, Guid, u32)> = auras::auras(map, target)
-        .map(|a| {
-            a.holders
-                .iter()
-                .filter(|h| h.dispel != 0 && matches(h.dispel, h.positive))
-                .map(|h| (h.spell, h.caster, h.stacks.max(1)))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut candidates = dispellable(map, caster, target, kind);
     let data = map.realm.data.clone();
     let mut taken: Vec<(u32, Guid, u32)> = Vec::new();
     let mut held = Vec::new();
@@ -1214,6 +1197,37 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
     if !taken.is_empty() {
         super::class_scripts::dispelled(map, caster, s);
     }
+}
+
+/// What a dispel of `kind` from `caster` may take off `target`: each aura
+/// (its spell, caster and stacks) of the dispel type, or any of the four
+/// for all (7, or below 0); magic and poison only an enemy's buffs or a
+/// friend's afflictions.
+pub(crate) fn dispellable(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    kind: i32,
+) -> Vec<(u32, Guid, u32)> {
+    // An enemy's buffs, a friend's afflictions.
+    let positive = combat::can_attack(map, caster, target);
+    let matches = |dispel: u32, holder_positive: bool| {
+        let kind_ok = if kind == 7 || kind < 0 {
+            matches!(dispel, 1..=4)
+        } else {
+            dispel == kind as u32
+        };
+        kind_ok && (!matches!(dispel, 1 | 4) || holder_positive == positive)
+    };
+    auras::auras(map, target)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| h.dispel != 0 && matches(h.dispel, h.positive))
+                .map(|h| (h.spell, h.caster, h.stacks.max(1)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Who a create-item effect gives its item to, as Thistle Tea and mangos

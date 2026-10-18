@@ -1039,7 +1039,13 @@ fn execute(
     // What the cast cost, for a refund if an ability is avoided.
     let mut paid = 0;
     if !triggered {
-        let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
+        // An item's spell costs no power (mangos's `TakePower`, Thistle
+        // Tea's item casts): no mana spent, so no five-second rule.
+        let cost = if item.is_some() {
+            0
+        } else {
+            m.apply_ms(mods::OP_COST, power_cost(map, caster, s))
+        };
         paid = cost;
         if let Some(r) = checks::at_launch(map, caster, s, cost) {
             return launch_failed(map, caster, s.id, r);
@@ -1513,9 +1519,13 @@ fn land(
         crate::game::map::quests::cast_credit(map, caster, &[aim], s.id);
     }
     contact(map, caster, aim, s, l, true);
+    let alive_before = map.unit_view(aim).is_some_and(|u| u.alive);
     effects::run(
         map, caster, aim, s, effects, &landing, chain, l.item, &l.targets,
     );
+    if alive_before {
+        crate::game::map::procs::target_triggers(map, caster, aim, s.id, l.combo);
+    }
     class_scripts::landed(map, caster, aim, s);
     crate::game::map::event_ai::spell_hit(map, aim, caster, s.id, s.school_mask());
     // A script for the spell, and the events it sends.
@@ -1523,8 +1533,17 @@ fn land(
         if !effects[i] {
             continue;
         }
+        // A pet aura's dummy is the pet's to answer, not a script's
+        // (Soul Link's old link, Thistle Tea's preference).
         if matches!(e.effect, EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT)
             && map.realm.data.scripts.spell.contains_key(&s.id)
+            && !map
+                .realm
+                .data
+                .pets
+                .owner_auras
+                .iter()
+                .any(|(spell, ..)| *spell == s.id)
         {
             crate::game::map::scripts::start(
                 map,
@@ -1535,12 +1554,25 @@ fn land(
             );
         }
         if e.effect == 61 && e.misc_value > 0 {
+            // An event with no target of its own lands once, on its caster,
+            // and is aimed at the object, else the unit picked, else at
+            // nothing (vmangos's `EffectSendEvent`, Thistle Tea's
+            // `SendEvent.target`).
+            let at = if e.target_a == 0 && e.target_b == 0 {
+                [l.targets.object, l.targets.unit]
+                    .into_iter()
+                    .flatten()
+                    .find(|g| !g.is_zero() && *g != caster)
+                    .unwrap_or(Guid::zero())
+            } else {
+                aim
+            };
             crate::game::map::scripts::start(
                 map,
                 crate::game::data::scripts::ScriptTable::Event,
                 e.misc_value as u32,
                 caster,
-                aim,
+                at,
             );
         }
     }
@@ -2204,16 +2236,23 @@ pub fn update(map: &mut Map) {
         );
     }
     for g in done {
-        let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
-            continue;
-        };
-        if casting.channel_until.is_some() {
-            // A channel run its course still has its last tick.
+        // A channel run its course still has its last tick, while it is
+        // still the caster's channel (its trigger aims at its target).
+        if let Some(casting) = map
+            .caster(g)
+            .and_then(|c| c.casting.clone())
+            .filter(|c| c.channel_until.is_some())
+        {
             let target = casting.targets.unit.unwrap_or(g);
             auras::tick_due(map, target, casting.spell, g);
             if target != g {
                 auras::tick_due(map, g, casting.spell, g);
             }
+        }
+        let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
+            continue;
+        };
+        if casting.channel_until.is_some() {
             end_channel(map, g, &casting);
             // A taming rod's, run its course, tames its beast.
             crate::game::map::pets::rods::channel_done(map, g, casting.spell, casting.targets.unit);

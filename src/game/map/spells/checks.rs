@@ -451,8 +451,13 @@ pub fn check(
         if let Some(r) = crate::game::map::professions::fishing_spot(map, caster, s) {
             return Some(r);
         }
-        // Power, reagents, tools, focus, gear.
-        let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
+        // Power (none for an item's spell: mangos's `CheckPower`), reagents,
+        // tools, focus, gear.
+        let cost = if item.is_some() {
+            0
+        } else {
+            m.apply_ms(mods::OP_COST, power_cost(map, caster, s))
+        };
         if let Some(r) = unpayable(map, caster, s, cost) {
             return Some(r);
         }
@@ -610,6 +615,21 @@ pub fn for_the_dead(s: &SpellTemplate) -> bool {
 }
 
 /// The target's checks.
+/// Whether every effect of `s` is a dispel at the unit picked, none an
+/// area's.
+fn dispels_only(s: &SpellTemplate) -> bool {
+    let mut effects = s.effects.iter().filter(|e| e.effect != 0).peekable();
+    effects.peek().is_some()
+        && effects.all(|e| {
+            e.effect == 38
+                && e.radius_index == 0
+                && matches!(
+                    targets::implicit(e.target_a),
+                    Implicit::Enemy | Implicit::Ally | Implicit::AnyUnit | Implicit::Caster
+                )
+        })
+}
+
 fn check_target(
     map: &mut Map,
     caster: Guid,
@@ -716,6 +736,32 @@ fn check_target(
     }
     if let Some(e) = super::class_scripts::check_target(map, caster, s, target) {
         return Some(e);
+    }
+    // A spell that is all dispels at the unit (Dispel Magic, Cleanse, not
+    // Shield Slam's nor Abolish Poison's, not an area's) wants something on
+    // it for one of them to take (mangos's classic-only `CheckCast` check,
+    // Thistle Tea's `nothing_to_dispel`).
+    // A player's drain or burn of a power the target hasn't (Mana Burn at
+    // a warrior), as mangos's `CheckCast` refuses it.
+    if target != caster && map.players.contains_key(&caster) {
+        let power = map
+            .unit_fields(target)
+            .map_or(0, |f| i32::from(f.get_byte(UNIT_FIELD_BYTES_0, 3)));
+        if s.effects
+            .iter()
+            .any(|e| matches!(e.effect, 8 | 62) && e.misc_value != power)
+        {
+            return Some(fail::BAD_TARGETS);
+        }
+    }
+    if !triggered && dispels_only(s) {
+        let any =
+            s.effects.iter().filter(|e| e.effect != 0).any(|e| {
+                !super::effects::dispellable(map, caster, target, e.misc_value).is_empty()
+            });
+        if !any {
+            return Some(fail::NOTHING_TO_DISPEL);
+        }
     }
     // Mechanic immunity of a harmful spell.
     if harmful
