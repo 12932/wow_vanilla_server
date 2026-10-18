@@ -559,3 +559,77 @@ async fn holy_power_procs_on_its_heals_with_its_charges_and_cooldown() {
     assert!(!cooling, "within its cooldown");
     assert!(own && gone, "on herself, and its charges spent");
 }
+
+/// A bow of three seconds, for the rates a minute.
+const SLOW_BOW: u32 = 96_900;
+
+/// Thistle Tea's real proc chances: the ranged procs a minute (23578's
+/// two, 26480's ten) are 10% and 50% by a bow of three seconds; Aspect of
+/// the Hawk's own chance is none, Improved Aspect of the Hawk's ranks give
+/// it 1% and 5% at once, and once; Nature's Grasp's 35% on a blow taken is
+/// sure with Improved Nature's Grasp.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_real_proc_chances_by_the_bow_and_the_talents() {
+    use crate::game::map::combat::Hand;
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        d.items.insert(
+            SLOW_BOW,
+            crate::game::data::items::ItemTemplate {
+                entry: SLOW_BOW,
+                class: 2,
+                subclass: 2,
+                name: "Slow Bow".into(),
+                display_id: 1000,
+                inventory_type: 15,
+                delay: 3000,
+                stackable: 1,
+                ..Default::default()
+            },
+        );
+    });
+    let (_c, h, map) = player(&realm, "P5D9", "Hawka", Race::Dwarf, Class::Hunter).await;
+    let (_d, dr, map1) = player(&realm, "P5D10", "Graspa", Race::NightElf, Class::Druid).await;
+    let got = map
+        .query(move |m| {
+            ready(m, h, 60, &[]);
+            crate::game::tests_p3_combat::equip(m, h, SLOW_BOW, 17);
+            let data = m.realm.data.clone();
+            let chance = |m: &Map, id: u32| {
+                let s = data.spells.get(id).unwrap();
+                crate::game::map::procs::chance(m, h, s, Hand::Ranged, true)
+            };
+            let rates = (chance(m, 23_578), chance(m, 26_480));
+            apply(m, h, h, 13_165);
+            let mut hawk = vec![chance(m, 13_165)];
+            for talent in [19_552, 19_556] {
+                apply(m, h, h, talent);
+                fresh(m, h);
+                spells::cast_triggered(m, h, 13_165, Some(h));
+                hawk.push(chance(m, 13_165));
+                auras::remove_spell(m, h, talent, None);
+            }
+            (rates, hawk)
+        })
+        .await
+        .unwrap();
+    let grasp = map1
+        .query(move |m| {
+            ready(m, dr, 60, &[]);
+            let data = m.realm.data.clone();
+            let s = data.spells.get(16_689).unwrap().clone();
+            let chance = |m: &Map| crate::game::map::procs::chance(m, dr, &s, Hand::Main, false);
+            let plain = chance(m);
+            apply(m, dr, dr, 17_249);
+            (s.proc_chance, plain, chance(m))
+        })
+        .await
+        .unwrap();
+    let (rates, hawk) = got;
+    assert_eq!(rates, (10.0, 50.0));
+    assert_eq!(hawk, vec![0.0, 1.0, 5.0]);
+    assert_eq!(grasp, (35, 35.0, 100.0));
+}

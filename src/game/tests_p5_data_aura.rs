@@ -837,3 +837,306 @@ async fn an_auras_worth_goes_by_its_source_family_and_rank() {
         WORTH_RANKS.iter().map(|r| Some(r.1)).collect::<Vec<_>>()
     );
 }
+
+/// A rogue's proc of 10%, six a minute out and 7% in by its rule; talents
+/// of 5 more, half again, 150 less and a hundred more to its chance; a
+/// main hand of two seconds, an off hand of one, a bow of three.
+const PROC_AURA: u32 = 96_780;
+const CHANCE_MORE: u32 = 96_781;
+const CHANCE_HALF: u32 = 96_782;
+const CHANCE_LESS: u32 = 96_783;
+const CHANCE_SURE: u32 = 96_784;
+const MAIN: u32 = 96_785;
+const OFF: u32 = 96_786;
+const BOW: u32 = 96_787;
+
+fn chance_data() -> GameData {
+    let mut d = data();
+    let mut aura = aura_spell(PROC_AURA, None, &[(AURA_DUMMY, 0, 0)]);
+    aura.family_name = 8;
+    aura.family_flags = 1;
+    aura.proc_chance = 10;
+    let talent = |id: u32, kind: u32| {
+        let mut s = aura_spell(id, None, &[(kind, 18, 0)]);
+        s.family_name = 8;
+        s.effects[0].item_type = 1;
+        s
+    };
+    add_spells(
+        &mut d,
+        [
+            aura,
+            talent(CHANCE_MORE, AURA_ADD_FLAT_MODIFIER),
+            talent(CHANCE_HALF, AURA_ADD_PCT_MODIFIER),
+            talent(CHANCE_LESS, AURA_ADD_FLAT_MODIFIER),
+            talent(CHANCE_SURE, AURA_ADD_FLAT_MODIFIER),
+        ],
+    );
+    d.spells.proc_events.insert(
+        PROC_AURA,
+        crate::game::data::spells::ProcEvent {
+            ppm: 6.0,
+            chance: 7.0,
+            ..Default::default()
+        },
+    );
+    for (entry, subclass, inventory_type, delay) in
+        [(MAIN, 7, 13, 2000), (OFF, 7, 13, 1000), (BOW, 2, 15, 3000)]
+    {
+        d.items.insert(
+            entry,
+            crate::game::data::items::ItemTemplate {
+                entry,
+                class: 2,
+                subclass,
+                name: format!("Weapon {entry}"),
+                display_id: 1000,
+                inventory_type,
+                delay,
+                stackable: 1,
+                ..Default::default()
+            },
+        );
+    }
+    d
+}
+
+/// Thistle Tea's proc chances: six a minute out is 20% by a main hand of
+/// two seconds, 10% by an off hand of one, 30% by a bow of three, 10% in
+/// cat form and 25% in bear or dire bear form; in, the rule's 7% (the
+/// spell's 10% without it). The bearer's modifiers go on after, flat then
+/// percent ((20 + 5) × 1.5, (7 + 5) × 1.5), uncapped first (60 a minute,
+/// 200%, less 150: 50%), and as they are when it rolls; a pet's are its
+/// master's.
+#[tokio::test]
+async fn a_procs_chance_goes_by_the_hand_or_form_then_the_bearers_modifiers() {
+    use crate::game::map::combat::Hand;
+    use crate::game::map::procs;
+    let (_realm, _a, ga, map) = setup_with(chance_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            crate::game::tests_p3_combat::equip(m, ga, MAIN, 15);
+            crate::game::tests_p3_combat::equip(m, ga, OFF, 16);
+            crate::game::tests_p3_combat::equip(m, ga, BOW, 17);
+            let s = m.realm.data.spells.get(PROC_AURA).cloned().unwrap();
+            let chance =
+                |m: &Map, g: Guid, hand: Hand, out: bool| procs::chance(m, g, &s, hand, out);
+            let hands = (
+                chance(m, ga, Hand::Main, true),
+                chance(m, ga, Hand::Off, true),
+                chance(m, ga, Hand::Ranged, true),
+                chance(m, ga, Hand::Main, false),
+            );
+            let mut forms = Vec::new();
+            for form in [FORM_CAT, FORM_BEAR, FORM_DIREBEAR] {
+                if let Some(f) = m.unit_fields_mut(ga) {
+                    f.set_byte(UNIT_FIELD_BYTES_1, 2, form);
+                }
+                forms.push(chance(m, ga, Hand::Main, true));
+            }
+            if let Some(f) = m.unit_fields_mut(ga) {
+                f.set_byte(UNIT_FIELD_BYTES_1, 2, 0);
+            }
+            let _ = put(m, ga, ga, CHANCE_MORE, &[5]);
+            let _ = put(m, ga, ga, CHANCE_HALF, &[50]);
+            let modified = (
+                chance(m, ga, Hand::Main, true),
+                chance(m, ga, Hand::Main, false),
+            );
+            auras::remove_spell(m, ga, CHANCE_MORE, None);
+            auras::remove_spell(m, ga, CHANCE_HALF, None);
+            // Sixty a minute: 200%, less 150.
+            let uncapped = procs::ppm_chance(60.0, 2000);
+            let _ = put(m, ga, ga, CHANCE_LESS, &[-150]);
+            let less = m.realm.data.spells.get(PROC_AURA).map(|s| {
+                crate::game::map::spells::mods::for_spell(m, ga, s).apply(
+                    crate::game::map::spells::mods::OP_CHANCE_OF_SUCCESS,
+                    uncapped,
+                )
+            });
+            auras::remove_spell(m, ga, CHANCE_LESS, None);
+            // A pet's are its master's, as they are now.
+            let pet = spawn(m, ga, BRUTE, 1, 3.0);
+            m.creature_mut(pet).unwrap().owner = Some(ga);
+            m.creature_mut(pet).unwrap().pet =
+                Some(Box::new(crate::game::map::pets::PetState::new(
+                    crate::game::map::pets::Kind::Hunter,
+                    ga,
+                    m.now,
+                )));
+            let _ = put(m, ga, ga, CHANCE_SURE, &[100]);
+            let pets = chance(m, pet, Hand::Main, false);
+            auras::remove_spell(m, ga, CHANCE_SURE, None);
+            let pets_after = chance(m, pet, Hand::Main, false);
+            (hands, forms, modified, uncapped, less, pets, pets_after)
+        })
+        .await
+        .unwrap();
+    let (hands, forms, modified, uncapped, less, pets, pets_after) = got;
+    assert_eq!(hands, (20.0, 10.0, 30.0, 7.0));
+    assert_eq!(forms, vec![10.0, 25.0, 25.0]);
+    assert_eq!(modified, (37.5, 18.0));
+    assert_eq!((uncapped, less), (200.0, Some(50.0)));
+    assert_eq!(
+        (pets, pets_after),
+        (107.0, 7.0),
+        "the master's, as they are"
+    );
+}
+
+/// Procs that cast a mark on their bearer, of two charges: one of twenty a
+/// minute and five seconds' cooldown on ranged attacks; one of 10% in by
+/// its rule on blows and spells taken; one of no chance of its own on
+/// kills, blows and ranged attacks, a rogue's for the talents.
+const RANGED_PROC: u32 = 96_790;
+const TAKEN_PROC: u32 = 96_791;
+const TALENTED_PROC: u32 = 96_792;
+const PROC_MARK: u32 = 96_793;
+
+fn charged_data() -> GameData {
+    use crate::game::map::procs::*;
+    let mut d = chance_data();
+    let charged = |id: u32, flags: u32, chance: u32| {
+        let mut s = crate::game::tests_p3_aura2::proc_spell(id, flags, PROC_MARK);
+        s.proc_chance = chance;
+        s.proc_charges = 2;
+        s.family_name = 8;
+        s.family_flags = 1;
+        s
+    };
+    add_spells(
+        &mut d,
+        [
+            aura_spell(PROC_MARK, Some(30_000), &[(AURA_DUMMY, 0, 0)]),
+            charged(RANGED_PROC, PROC_DONE_RANGED, 0),
+            charged(TAKEN_PROC, PROC_TAKEN_MELEE | PROC_TAKEN_NEGATIVE_SPELL, 0),
+            charged(
+                TALENTED_PROC,
+                PROC_KILL | PROC_DONE_MELEE | PROC_DONE_RANGED,
+                0,
+            ),
+        ],
+    );
+    d.spells.proc_events.insert(
+        RANGED_PROC,
+        crate::game::data::spells::ProcEvent {
+            ppm: 20.0,
+            cooldown: 5_000,
+            ..Default::default()
+        },
+    );
+    d.spells.proc_events.insert(
+        TAKEN_PROC,
+        crate::game::data::spells::ProcEvent {
+            ppm: 0.01,
+            chance: 10.0,
+            cooldown: 5_000,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's charges and cooldowns: a ranged attack procs twenty a
+/// minute by the bow's three seconds (sure), a charge spent and five
+/// seconds to wait; within them it doesn't, after them it does and the
+/// aura is spent. Taken, a rate a minute counts not: the rule's 10% with
+/// the bearer's live modifiers (90 more: sure; 10 less: never), for a blow
+/// and a spell. A talent's chance gone, its proc of none goes off no more
+/// and spends no charge.
+#[tokio::test]
+async fn procs_spend_their_charges_wait_their_cooldowns_and_follow_live_talents() {
+    use crate::game::map::procs::{self, *};
+    let (_realm, _a, ga, map) = setup_with(charged_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            crate::game::tests_p3_combat::equip(m, ga, BOW, 17);
+            let brute = spawn(m, ga, BRUTE, 1, 5.0);
+            let marked = |m: &mut Map| {
+                let had = auras::auras(m, ga).is_some_and(|a| a.has_spell(PROC_MARK));
+                auras::remove_spell(m, ga, PROC_MARK, None);
+                had
+            };
+            let charges = |m: &Map, spell: u32| {
+                auras::auras(m, ga).and_then(|a| {
+                    a.holders
+                        .iter()
+                        .find(|h| h.spell == spell)
+                        .map(|h| h.charges)
+                })
+            };
+            let event = |actor, target, actor_flags, target_flags, spell| Event {
+                actor,
+                target,
+                actor_flags,
+                target_flags,
+                ex: EX_NORMAL_HIT,
+                spell,
+                damage: 30,
+                school: 1,
+                ranged: actor_flags & PROC_DONE_RANGED != 0,
+                ..Default::default()
+            };
+            // Ranged.
+            let _ = put(m, ga, ga, RANGED_PROC, &[0]);
+            let shot = event(ga, brute, PROC_DONE_RANGED, 0, None);
+            procs::trigger(m, shot);
+            let first = (marked(m), charges(m, RANGED_PROC));
+            m.now += Duration::from_secs(1);
+            procs::trigger(m, shot);
+            let cooling = marked(m);
+            m.now += Duration::from_secs(4);
+            procs::trigger(m, shot);
+            let spent = (marked(m), charges(m, RANGED_PROC));
+            // Taken.
+            let mut taken = Vec::new();
+            for (flags, spell) in [
+                (PROC_TAKEN_MELEE, None),
+                (PROC_TAKEN_NEGATIVE_SPELL, Some(133)),
+            ] {
+                let hit = event(brute, ga, 0, flags, spell);
+                let _ = put(m, ga, ga, TAKEN_PROC, &[0]);
+                let _ = put(m, ga, ga, CHANCE_SURE, &[90]);
+                procs::trigger(m, hit);
+                let sure = (marked(m), charges(m, TAKEN_PROC));
+                auras::remove_spell(m, ga, CHANCE_SURE, None);
+                auras::remove_spell(m, ga, TAKEN_PROC, None);
+                let _ = put(m, ga, ga, TAKEN_PROC, &[0]);
+                let _ = put(m, ga, ga, CHANCE_LESS, &[-10]);
+                procs::trigger(m, hit);
+                let never = (marked(m), charges(m, TAKEN_PROC));
+                auras::remove_spell(m, ga, CHANCE_LESS, None);
+                auras::remove_spell(m, ga, TAKEN_PROC, None);
+                taken.push((sure, never));
+            }
+            // A talent's chance.
+            let mut talented = Vec::new();
+            for flags in [PROC_KILL, PROC_DONE_MELEE, PROC_DONE_RANGED] {
+                let e = event(ga, brute, flags, 0, None);
+                let _ = put(m, ga, ga, TALENTED_PROC, &[0]);
+                let _ = put(m, ga, ga, CHANCE_SURE, &[100]);
+                procs::trigger(m, e);
+                let with = (marked(m), charges(m, TALENTED_PROC));
+                auras::remove_spell(m, ga, CHANCE_SURE, None);
+                procs::trigger(m, e);
+                let without = (marked(m), charges(m, TALENTED_PROC));
+                auras::remove_spell(m, ga, TALENTED_PROC, None);
+                talented.push((with, without));
+            }
+            (first, cooling, spent, taken, talented)
+        })
+        .await
+        .unwrap();
+    let (first, cooling, spent, taken, talented) = got;
+    assert_eq!(first, (true, Some(1)), "sure, a charge spent");
+    assert!(!cooling, "within its cooldown");
+    assert_eq!(spent, (true, None), "after it, the last charge");
+    for (sure, never) in taken {
+        assert_eq!(sure, (true, Some(1)));
+        assert_eq!(never, (false, Some(2)));
+    }
+    for (with, without) in talented {
+        assert_eq!(with, (true, Some(1)));
+        assert_eq!(without, (false, Some(1)), "no proc, no charge");
+    }
+}

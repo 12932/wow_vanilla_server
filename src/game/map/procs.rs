@@ -202,8 +202,17 @@ fn hand_of(e: &Event) -> Hand {
     }
 }
 
-/// A weapon's speed in milliseconds, for procs a minute.
+/// A weapon's speed in milliseconds, for procs a minute, before haste: a
+/// druid's paws in cat form (a second) or bear form (two and a half),
+/// else the hand's weapon (Thistle Tea's `AttackSpeed.base_ms`).
 fn weapon_speed(map: &Map, g: Guid, hand: Hand) -> u32 {
+    if hand != Hand::Ranged && map.players.contains_key(&g) {
+        match auras::form(map, g) {
+            auras::FORM_CAT => return 1000,
+            auras::FORM_BEAR | auras::FORM_DIREBEAR => return 2500,
+            _ => {}
+        }
+    }
     combat::hand_weapon(map, g, hand)
         .map(|w| w.delay)
         .filter(|d| *d > 0)
@@ -362,14 +371,7 @@ fn run(
         if e.extra_attack && grants_extra_attacks(&data, &h) {
             continue;
         }
-        let chance = match pe {
-            Some(p) if p.ppm > 0.0 && outgoing => ppm_chance(p.ppm, weapon_speed(map, owner, hand)),
-            Some(p) if p.chance > 0.0 => p.chance,
-            _ => s.proc_chance as f32,
-        };
-        // The bearer's modifiers to its chance (Thistle Tea's `ProcChance`).
-        let chance = crate::game::map::spells::mods::for_spell(map, owner, s)
-            .apply(crate::game::map::spells::mods::OP_CHANCE_OF_SUCCESS, chance);
+        let chance = chance(map, owner, s, hand, outgoing);
         if chance <= 0.0 || (chance < 100.0 && rng.random_range(0.0f32..100.0) >= chance) {
             continue;
         }
@@ -402,6 +404,22 @@ fn run(
             auras::spend_charge(map, owner, h.spell, h.caster);
         }
     }
+}
+
+/// The chance, in percent, that `owner`'s aura of `s` procs on what it
+/// does (`outgoing`) with `hand` or has done to it: an outgoing rate a
+/// minute by the hand's speed, else `spell_proc_event`'s chance or the
+/// spell's own; then the bearer's modifiers to it, flat then percent,
+/// uncapped (Thistle Tea's `ProcChance`).
+pub fn chance(map: &Map, owner: Guid, s: &SpellTemplate, hand: Hand, outgoing: bool) -> f32 {
+    let pe = map.realm.data.spells.proc_events.get(&s.id);
+    let chance = match pe {
+        Some(p) if p.ppm > 0.0 && outgoing => ppm_chance(p.ppm, weapon_speed(map, owner, hand)),
+        Some(p) if p.chance > 0.0 => p.chance,
+        _ => s.proc_chance as f32,
+    };
+    crate::game::map::spells::mods::for_spell(map, owner, s)
+        .apply(crate::game::map::spells::mods::OP_CHANCE_OF_SUCCESS, chance)
 }
 
 /// When `h`'s proc may go off again.

@@ -112,14 +112,29 @@ pub fn touches(family: u32, mask: u64, s: &SpellTemplate) -> bool {
     family != 0 && family == s.family_name && mask & s.family_flags != 0
 }
 
-/// The modifiers `caster`'s auras put on `s`.
+/// Whose modifiers `caster`'s spells take: a player's pet's or totem's are
+/// its master's (mangos's `GetSpellModOwner`, Thistle Tea's pet's
+/// `owner_spell_modifiers`); a charmed creature's are its own.
+fn mod_owner(map: &Map, caster: Guid) -> Guid {
+    use crate::game::map::pets::Kind;
+    map.creature(caster)
+        .and_then(|c| {
+            let kind = c.pet.as_ref()?.kind;
+            let owner = c.owner.filter(|o| crate::game::guid::is_player(*o))?;
+            (!matches!(kind, Kind::Charmed | Kind::Possessed)).then_some(owner)
+        })
+        .unwrap_or(caster)
+}
+
+/// The modifiers `caster`'s auras (its master's, for a pet) put on `s`.
 pub fn for_spell(map: &Map, caster: Guid, s: &SpellTemplate) -> Mods {
     let mut m = Mods::default();
     if s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS) || s.family_name == 0 {
         return m;
     }
     let data = &map.realm.data;
-    let Some(a) = auras::auras(map, caster) else {
+    let bearer = mod_owner(map, caster);
+    let Some(a) = auras::auras(map, bearer) else {
         return m;
     };
     for h in &a.holders {
@@ -143,7 +158,10 @@ pub fn for_spell(map: &Map, caster: Guid, s: &SpellTemplate) -> Mods {
             } else {
                 m.pct[op] += v;
             }
-            if used && h.charges > 0 && !m.charged.iter().any(|c| c.0 == h.spell && c.1 == h.caster)
+            if used
+                && bearer == caster
+                && h.charges > 0
+                && !m.charged.iter().any(|c| c.0 == h.spell && c.1 == h.caster)
             {
                 m.charged.push((h.spell, h.caster, op));
             }
