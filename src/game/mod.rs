@@ -94,6 +94,8 @@ mod tests_p3_combat3_assist;
 #[cfg(test)]
 mod tests_p3_combat3_block;
 #[cfg(test)]
+mod tests_p3_combat3_defense;
+#[cfg(test)]
 mod tests_p3_combat3_disarm;
 #[cfg(test)]
 mod tests_p3_combat3_immune;
