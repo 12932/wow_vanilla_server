@@ -170,6 +170,13 @@ the questions waiting for you.
     - mangos-classic gives level × 3 for every druid.
     - wvs now gives level × 2 plus agility in Cat Form, and level × 3 in Bear Form.
 
+49. **Fresh creature guids for each dungeon copy?** (from 4a). wvs builds a copy's creature guids from the database's,
+    so two copies' creatures share guids. No client sees two copies at once. Thistle Tea gives each copy fresh ones.
+50. **Nerub'enkan's scarabs** (from 4a). vmangos's own EventAI (1057701) despawns a Crypt Scarab within 5 yards of its
+    victim, so his swarm vanishes on arrival, in Thistle Tea too. Keep it, or exempt his summons?
+51. **A creature-owned pet's death** (from 4c). What does its killer get? Nothing (mangos-classic), or three quarters
+    of the XP and the credits (Thistle Tea, vmangos)? wvs gives nothing.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -665,6 +672,33 @@ the questions waiting for you.
       - a fall after Slow Fall counts from where the player last was.
     - **Creatures** carry 0x10 in `UNIT_FIELD_BYTES_2`.
 
+45. **The client-code harness** (your idea; `tools/client_check/`, `docs/TESTING.md`).
+    - **What it is:** `WoW.exe` itself, under the Unicorn emulator. It runs the client's own parsers on what wvs
+      sends: update objects and their creates, movement blocks and splines, monster moves.
+    - **What fails it:** a fault, a read past a packet's end, or an absurd count.
+    - **The proof:** it reproduces every crash captured so far. The gorilla's spline gives -1 at `0x6194DD`, the
+      forgotten object a null read at `0x45353C`, plus a 41-word mask overrun and a read past an end. The padded
+      spline passes, and live traffic gives no false positives.
+    - **The test:** the extended suite's `tests_client_emu::the_packets_wvs_sends_pass_the_client` runs it on a
+      crowd's capture.
+    - **Out of its reach:** the bad-look crash, which happens in drawing rather than in parsing.
+46. **4a's choices** (encounter scripts and instances, 171 rows):
+    - **Blackrock Spire's alcoves** follow mangos-classic's roster (`DoSortRoomEventMobs`): a spawn by a rune that
+      rolled a summoner or veteran guards it too.
+    - **Stage 3h's leads:** Doom'rel's failure was the test racing the map, and Nerub'enkan's missing scarabs are the
+      data's own EventAI (question 50).
+47. **4c's choices** (world entities and the network):
+    - **Chairs** seat one, on the nearest seat at the chair's height (`SIT_LOW_CHAIR` and up), from 3 yards. Before,
+      a chair sat everyone at its centre on the ground.
+    - **Guardians:** a second cast of a guardian sends its kind away, and a triggered one adds to them.
+    - **Wild summons** (a Field Repair Bot, fireworks) are creatures of their own.
+    - **Auction notices:** the outbid were told "You won". The client also read past the end of a refused shot's cast
+      result. Both are fixed.
+    - **Skinning:** a skin with an empty loot table is skinned once.
+    - **Spell hits:** a harmful spell of damage class 0 never misses, as in mangos.
+    - **Rifts** replace an invader that despawned.
+    - **Demonic Sacrifice** ends with a new demon.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -715,6 +749,11 @@ the questions waiting for you.
 | 4b: the core (stats, skills, wands, movement) | merged | fd5b963 |
 | Review 2 (map core) and review 3 (combat, spells, auras) | merged | f90d87f, 1e8c8a5 |
 | The race's client crash (create splines) | fixed | 12c055a |
+| 4a: encounter scripts and instances (171 rows) | merged | f91c46b |
+| Battleground view distance, 400 yards | done | c380d54 |
+| The client-code harness | merged | eb9b73b |
+| 4c: world entities and the network (77 rows) | merged | afc079c |
+| The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
