@@ -561,12 +561,14 @@ pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mo
     let Some(u) = map.unit_view(target) else {
         return Some(fail::BAD_TARGETS);
     };
-    if !map.players.contains_key(&caster) {
-        return None;
-    }
     if !u.alive && !for_the_dead(s) && !resurrects(s) {
         return Some(fail::TARGETS_DEAD);
     }
+    // A creature's too: a harmful cast at one made friendly or out of
+    // reach of attack as it was cast fails, as mangos's `Spell::cast`
+    // checks it again and Thistle Tea's `CastTarget.validate` does at
+    // launch (Keeper Remulos's Starfire, begun at Eranikus, landed after
+    // his redemption and drew him back into a fight).
     let requires_enemy = s
         .effects
         .iter()
@@ -576,6 +578,9 @@ pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mo
         && !s.has_effect(95)
     {
         return Some(fail::TARGET_FRIENDLY);
+    }
+    if !map.players.contains_key(&caster) {
+        return None;
     }
     let me = map.unit_view(caster)?;
     let (_, max) = map.realm.data.spells.range(s);

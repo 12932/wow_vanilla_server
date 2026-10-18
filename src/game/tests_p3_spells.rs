@@ -195,6 +195,40 @@ async fn a_creatures_cast_isnt_pushed_back_and_pushback_may_be_resisted() {
     );
 }
 
+/// A creature's harmful cast at one it may no longer attack as the cast
+/// ends fails, as a player's does (mangos's `Spell::cast` checks it
+/// again): Keeper Remulos's Starfire, begun at Eranikus, landed after his
+/// redemption and drew him back into the fight.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_creatures_cast_at_one_it_may_no_longer_attack_fails() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, mage, map) = player(&realm, "P3P9", "Pushnine", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            let kobold = dummy(m, mage, 60, 5.0);
+            spells::cast(m, kobold, FROSTBOLT, at(mage), None);
+            let began = casting(m, kobold);
+            if let Some(f) = m.unit_fields_mut(mage) {
+                let flags = f.get_u32(crate::game::fields::UNIT_FIELD_FLAGS);
+                f.set_u32(crate::game::fields::UNIT_FIELD_FLAGS, flags | 0x2);
+            }
+            let before = health(m, mage);
+            m.now += Duration::from_secs(5);
+            spells::update(m);
+            (began, casting(m, kobold), health(m, mage) == before)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, Some(FROSTBOLT), "the Frostbolt began");
+    assert_eq!(out.1, None, "and ended");
+    assert!(out.2, "without landing");
+}
+
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_channel_is_cut_short_by_others_harm_alone_and_its_auras_with_it() {
