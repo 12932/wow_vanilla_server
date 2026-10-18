@@ -200,6 +200,10 @@ pub struct PetsState {
     /// What untraining the pet last cost, and when (Unix seconds).
     pub untrain_cost: u32,
     pub untrain_at: i64,
+    /// The names the warlock's demons drew, by entry: each keeps its own
+    /// when summoned again (mangos's `character_pet`, Thistle Tea's
+    /// remembered names).
+    pub demon_names: Vec<(u32, String)>,
 }
 
 /// A flight's rest: the points still to fly, where it lands, and the

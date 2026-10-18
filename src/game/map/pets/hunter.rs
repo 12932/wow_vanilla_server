@@ -117,6 +117,17 @@ pub fn tame(map: &mut Map, hunter: Guid, beast: Guid, spell: u32) {
         .copied()
         .filter(|s| data.spells.get(*s).is_some_and(control::autocastable))
         .collect();
+    // What it knows is paid for out of the points its loyalty will bring:
+    // a fresh pet owes them (mangos's `InitPetCreateSpells`, `SetTP(-used)`;
+    // Thistle Tea's spell profile).
+    let owed: i32 = spells
+        .iter()
+        .map(|s| {
+            ability_entries(&data, *s)
+                .first()
+                .map_or(0, |a| a.cost as i32)
+        })
+        .sum();
     let r = PetRecord {
         number,
         entry,
@@ -126,7 +137,7 @@ pub fn tame(map: &mut Map, hunter: Guid, beast: Guid, spell: u32) {
         happiness: TAMED_HAPPINESS,
         loyalty: 1,
         loyalty_points: 1_000,
-        training_points: 0,
+        training_points: -owed,
         bar: control::default_bar(&data, &spells, &autocast, false).to_vec(),
         spells,
         autocast,

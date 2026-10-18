@@ -65,15 +65,20 @@ pub fn spawn(
         .unwrap_or(t.faction);
     // Under a player's control if its owner is: a player, or one of theirs
     // (mangos copies the caster's flag, Thistle Tea's `attach_owner` sets
-    // it for a player's). A creature's keeps its template's flags.
+    // it for a player's). A creature's keeps its template's flags. A pet
+    // with a bar has that flag alone (mangos's `Pet`); a guardian, totem
+    // or companion keeps its template's beside it (mangos's `SetFlag`,
+    // Thistle Tea's `attach_owner`).
     let controlled = guid::is_player(owner)
         || map
             .unit_fields(owner)
             .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED));
     let f = &mut c.fields;
     f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
-    if controlled {
+    if controlled && kind.controlled() {
         f.set_u32(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
+    } else if controlled {
+        f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED, true);
     }
     // A companion keeps its template's: some give quests, as Children's
     // Week's orphans (mangos's `EffectSummonCritter`); the others none.
@@ -574,11 +579,31 @@ pub fn summon_demon(map: &mut Map, owner: Guid, entry: u32, spell: u32) {
         .copied()
         .filter(|s| data.spells.get(*s).is_some_and(control::autocastable))
         .collect();
+    // The name this demon drew before, else a new one, kept.
+    let kept = map.players.get(&owner).and_then(|p| {
+        p.row
+            .state
+            .pets
+            .demon_names
+            .iter()
+            .find(|(e, _)| *e == entry)
+            .map(|(_, n)| n.clone())
+    });
+    let name = match kept {
+        Some(n) => n,
+        None => {
+            let drawn = demon_name(&data, entry);
+            if let (Some(n), Some(p)) = (&drawn, map.players.get_mut(&owner)) {
+                p.row.state.pets.demon_names.push((entry, n.clone()));
+            }
+            drawn.unwrap_or_else(|| t.name.clone())
+        }
+    };
     let r = PetRecord {
         number,
         entry,
         kind: KIND_DEMON,
-        name: demon_name(&data, entry).unwrap_or_else(|| t.name.clone()),
+        name,
         level,
         bar: control::default_bar(&data, &spells, &autocast, false).to_vec(),
         spells,
