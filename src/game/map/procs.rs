@@ -340,27 +340,65 @@ fn run(
         if chance <= 0.0 || (chance < 100.0 && rng.random_range(0.0f32..100.0) >= chance) {
             continue;
         }
-        if let Some(p) = pe.filter(|p| p.cooldown > 0)
-            && let Some(a) = auras::auras_mut(map, owner)
-            && let Some(x) = a
-                .holders
-                .iter_mut()
-                .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
-        {
-            x.proc_ready_at = Some(now + std::time::Duration::from_millis(u64::from(p.cooldown)));
+        // The cooldown starts before the proc goes off, so what it casts
+        // can't set it off again, and is taken back if nothing came of it.
+        if let Some(p) = pe.filter(|p| p.cooldown > 0) {
+            let ready = now + std::time::Duration::from_millis(u64::from(p.cooldown));
+            set_ready(map, owner, &h, Some(ready));
         }
         if crate::game::map::trinkets::proc(map, owner, &h, e) {
             continue;
         }
         let script = crate::game::map::proc_scripts::fire(map, owner, other, &h, e);
-        if script == crate::game::map::proc_scripts::Outcome::Unhandled {
-            fire(map, owner, other, &h);
-            crate::game::map::spells::class_scripts::proc(map, owner, other, &h, e.spell, outgoing);
+        let went_off = script != crate::game::map::proc_scripts::Outcome::Unhandled || {
+            let fired = fire(map, owner, other, &h);
+            let answered = crate::game::map::spells::class_scripts::proc(
+                map, owner, other, &h, e.spell, outgoing,
+            );
+            fired || answered || (h.charges > 0 && !answers_alone(&h))
+        };
+        // A proc that came to nothing (a class script's dead victim, an
+        // armor with no answer to the school) spends neither its cooldown
+        // nor a charge, as mangos's `SPELL_AURA_PROC_FAILED` and Thistle
+        // Tea's reactions have it.
+        if !went_off {
+            set_ready(map, owner, &h, h.proc_ready_at);
+            continue;
         }
         if h.charges > 0 && script != crate::game::map::proc_scripts::Outcome::DoneOwnCharges {
             auras::spend_charge(map, owner, h.spell, h.caster);
         }
     }
+}
+
+/// When `h`'s proc may go off again.
+fn set_ready(map: &mut Map, owner: Guid, h: &Holder, at: Option<std::time::Instant>) {
+    if let Some(a) = auras::auras_mut(map, owner)
+        && let Some(x) = a
+            .holders
+            .iter_mut()
+            .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+    {
+        x.proc_ready_at = at;
+    }
+}
+
+/// Whether a holder's charges go only when it answers: a class script's,
+/// a healing power's or a reactive armor's, or a spell modifier's (spent
+/// by the casts it changes), as Thistle Tea's
+/// `spends_charge_without_trigger?` leaves them out. Any other holder with
+/// charges spends one whenever it procs (Fear Ward's by the fear it keeps
+/// off).
+fn answers_alone(h: &Holder) -> bool {
+    crate::game::map::spells::class_scripts::answers(h.spell)
+        || h.effects.iter().any(|x| {
+            matches!(
+                x.kind,
+                auras::AURA_OVERRIDE_CLASS_SCRIPTS
+                    | auras::AURA_ADD_FLAT_MODIFIER
+                    | auras::AURA_ADD_PCT_MODIFIER
+            )
+        })
 }
 
 fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool {
@@ -374,14 +412,17 @@ fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool 
 }
 
 /// A holder went off: its trigger spells cast, its damage dealt, and the
-/// class scripts the data can't say (Thistle Tea's `Core.Class`).
-fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
+/// class scripts the data can't say (Thistle Tea's `Core.Class`). Whether
+/// anything came of it.
+fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) -> bool {
+    let mut fired = false;
     for x in &h.effects {
         match x.kind {
             auras::AURA_DUMMY => {
                 if let Some((_, strike)) = RIGHTEOUSNESS.iter().find(|(s, _)| *s == h.spell)
                     && x.effect == 0
                 {
+                    fired = true;
                     let speed = (weapon_speed(map, owner, Hand::Main) as f32 / 1000.0).max(1.5);
                     let amount = (x.amount * h.stacks.max(1) as i32) as f32;
                     let damage = amount / 87.0
@@ -396,7 +437,14 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
                     );
                 }
             }
-            auras::AURA_OVERRIDE_CLASS_SCRIPTS if NIGHTFALL.contains(&h.spell) => {
+            // Its victim must be alive, as a class script's (mangos's
+            // `HandleOverrideClassScriptAuraProc`): a killing tick gives
+            // no trance.
+            auras::AURA_OVERRIDE_CLASS_SCRIPTS
+                if NIGHTFALL.contains(&h.spell)
+                    && map.unit_view(other).is_some_and(|u| u.alive) =>
+            {
+                fired = true;
                 crate::game::map::spells::cast_triggered(map, owner, SHADOW_TRANCE, Some(owner));
             }
             auras::AURA_PROC_TRIGGER_SPELL => {
@@ -405,24 +453,28 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) {
                     .find(|(s, _)| *s == h.spell)
                     .map_or(x.trigger, |(_, t)| *t);
                 let trigger = crate::game::map::spells::class_scripts::proc_spell(h.spell, trigger);
-                if trigger != 0
-                    && !crate::game::map::proc_scripts::deep_wounds(map, owner, other, trigger)
-                {
-                    crate::game::map::spells::cast_triggered(map, owner, trigger, Some(other));
+                if trigger != 0 {
+                    fired = true;
+                    if !crate::game::map::proc_scripts::deep_wounds(map, owner, other, trigger) {
+                        crate::game::map::spells::cast_triggered(map, owner, trigger, Some(other));
+                    }
                 }
             }
             auras::AURA_PROC_TRIGGER_DAMAGE => {
+                fired = true;
                 let amount = (x.amount * h.stacks.max(1) as i32).max(0);
                 proc_damage(map, owner, other, h, x.effect as usize, amount);
             }
             _ => {}
         }
     }
+    fired
 }
 
 /// A proc aura's damage, as Thistle Tea's `ProcDamage` makes it: a school
-/// damage spell of its own effect's points with its spell power share, its
-/// hit rolled, never a crit or reflected.
+/// damage spell of its own effect's points with its spell power share,
+/// never a crit or reflected. Its hit is rolled only for a harmful magic
+/// aura's.
 fn proc_damage(map: &mut Map, owner: Guid, other: Guid, h: &Holder, index: usize, amount: i32) {
     let data = map.realm.data.clone();
     let Some(t) = data.spells.get(h.spell).filter(|_| index < 3) else {
@@ -441,6 +493,13 @@ fn proc_damage(map: &mut Map, owner: Guid, other: Guid, h: &Holder, index: usize
     s.attributes[0] &= !sd::ATTR_PASSIVE;
     s.attributes[1] |= sd::ATTR_EX_NO_REFLECTION;
     s.attributes[2] |= sd::ATTR_EX2_CANT_CRIT;
+    // A helpful aura's damage (Holy Shield's, Blessing of Sanctuary's), or
+    // one not of magic (a shield spike's), can't miss, though immunities
+    // still keep it off: Thistle Tea's `ProcDamage.hit?`, and mangos's
+    // `SpellHitResult` with the aura's own spell.
+    if t.dmg_class != 1 || auras::positive(t) {
+        s.attributes[3] |= sd::ATTR_EX3_ALWAYS_HIT;
+    }
     s.speed = 0.0;
     crate::game::map::spells::scripts::cast_template_with_points(
         map,

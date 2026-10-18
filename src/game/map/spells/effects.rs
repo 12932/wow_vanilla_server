@@ -328,6 +328,10 @@ pub fn run(
             charges,
             triggered: l.triggered,
             linked: false,
+            activation: (
+                l.mods.flat[mods::OP_ACTIVATION_TIME],
+                l.mods.pct[mods::OP_ACTIVATION_TIME],
+            ),
         };
         if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
             && caster != target

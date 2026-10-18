@@ -1660,23 +1660,6 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     }) {
         map.send_to_observers(target, &frame, true);
     }
-    crate::game::map::procs::trigger(
-        map,
-        crate::game::map::procs::Event {
-            actor: h.caster,
-            target,
-            actor_flags: crate::game::map::procs::PROC_DONE_PERIODIC,
-            target_flags: crate::game::map::procs::PROC_TAKEN_PERIODIC
-                | crate::game::map::procs::PROC_TAKEN_DAMAGE,
-            ex: crate::game::map::procs::EX_NORMAL_HIT,
-            spell: Some(h.spell),
-            damage: left,
-            school: h.school,
-            offhand: false,
-            ranged: false,
-            extra_attack: false,
-        },
-    );
     let items = outcome::death_items(map, target, left);
     // A leech takes no more than the health there was (mangos's
     // `PeriodicTick`: `min(pdamage, victim's health)`).
@@ -1703,6 +1686,31 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         }
     }
     outcome::give_death_items(map, target, items);
+    // The tick's procs come after its damage, as mangos's `PeriodicTick`
+    // has them: a killing tick's victim is dead to them (Nightfall gives no
+    // trance), and has none of its own.
+    let lives = map.unit_view(target).is_some_and(|u| u.alive);
+    crate::game::map::procs::trigger(
+        map,
+        crate::game::map::procs::Event {
+            actor: h.caster,
+            target,
+            actor_flags: crate::game::map::procs::PROC_DONE_PERIODIC,
+            target_flags: if lives {
+                crate::game::map::procs::PROC_TAKEN_PERIODIC
+                    | crate::game::map::procs::PROC_TAKEN_DAMAGE
+            } else {
+                0
+            },
+            ex: crate::game::map::procs::EX_NORMAL_HIT,
+            spell: Some(h.spell),
+            damage: left,
+            school: h.school,
+            offhand: false,
+            ranged: false,
+            extra_attack: false,
+        },
+    );
     if leech {
         let mult = s
             .effects

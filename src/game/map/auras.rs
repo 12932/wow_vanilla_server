@@ -735,6 +735,49 @@ pub struct Context {
     /// of its own, going with the aura that holds it (Thistle Tea's linked
     /// holders).
     pub linked: bool,
+    /// The cast's activation-time modifiers (op 19), flat and percent: what
+    /// they make of a periodic aura's interval.
+    pub activation: (i32, i32),
+}
+
+/// Whether an aura of `kind` ticks (Thistle Tea's `Effect.periodic?`).
+pub fn ticks(kind: u32) -> bool {
+    matches!(
+        kind,
+        AURA_PERIODIC_DAMAGE
+            | AURA_PERIODIC_HEAL
+            | AURA_OBS_MOD_HEALTH
+            | AURA_OBS_MOD_MANA
+            | AURA_PERIODIC_TRIGGER_SPELL
+            | AURA_PERIODIC_ENERGIZE
+            | AURA_PERIODIC_LEECH
+            | AURA_PERIODIC_HEALTH_FUNNEL
+            | AURA_PERIODIC_MANA_LEECH
+            | AURA_PERIODIC_DAMAGE_PERCENT
+            | AURA_POWER_BURN_MANA
+    )
+}
+
+/// An aura effect's interval: its amplitude, or a second for a percentage
+/// of mana that has none (mangos's `HandleAuraModTotalManaPercentRegen`).
+/// A periodic aura's takes the activation-time modifiers `(flat, pct)`,
+/// and is at least a millisecond (mangos's `Aura` with
+/// `SPELLMOD_ACTIVATION_TIME`, Thistle Tea's `Modifiers.periodic_interval`).
+pub fn interval(e: &sd::SpellEffect, activation: (i32, i32)) -> Option<Duration> {
+    let amplitude = match e.amplitude {
+        0 if e.aura == AURA_OBS_MOD_MANA => 1000,
+        a => a,
+    };
+    if amplitude == 0 {
+        return None;
+    }
+    let ms = if ticks(e.aura) {
+        let (flat, pct) = activation;
+        ((i64::from(amplitude) + i64::from(flat)) * i64::from((100 + pct).max(0)) / 100).max(1)
+    } else {
+        i64::from(amplitude)
+    };
+    Some(Duration::from_millis(ms as u64))
 }
 
 /// Why an aura couldn't be applied.
@@ -871,7 +914,7 @@ pub fn apply_spell(
     let mut aura_effects = Vec::new();
     for &(index, amount) in effects {
         let e = spell.effects[index];
-        let period = (e.amplitude > 0).then(|| Duration::from_millis(u64::from(e.amplitude)));
+        let period = interval(&e, ctx.activation);
         aura_effects.push(Aura {
             effect: index as u8,
             kind: e.aura,
@@ -2388,18 +2431,30 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA | AURA_MOD_POWER_REGEN => {
-            let power = a.misc.clamp(0, 4) as u16;
+            // A percentage of mana is of mana, and does nothing for one with
+            // none (mangos's `PeriodicTick`, Thistle Tea's
+            // `restore_percent_mana`).
+            let percent = a.kind == AURA_OBS_MOD_MANA;
+            let power = if percent {
+                0
+            } else {
+                a.misc.clamp(0, 4) as u16
+            };
             let Some(f) = map.unit_fields_mut(target) else {
                 return;
             };
             let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
-            let add = if a.kind == AURA_OBS_MOD_MANA {
+            if percent && max == 0 {
+                return;
+            }
+            let add = if percent {
                 max * (a.amount * stacks).max(0) as u32 / 100
             } else {
                 (a.amount * stacks).max(0) as u32
             };
             let now = f.get_u32(UNIT_FIELD_POWER1 + power);
-            f.set_u32(UNIT_FIELD_POWER1 + power, (now + add).min(max));
+            let after = now.saturating_add(add).min(max);
+            f.set_u32(UNIT_FIELD_POWER1 + power, after);
             // Logged as its own aura with its power, as mangos's
             // SendPeriodicAuraLog and Thistle Tea log a tick; a regeneration
             // isn't.
@@ -2416,6 +2471,19 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             };
             if let Some(aura_type) = logged {
                 periodic_log(map, h, target, aura_type);
+            }
+            // Half of what it gave is its caster's threat on those fighting
+            // the target, as a heal's is (mangos's `threatAssist`): a
+            // percentage of mana's, and an energize's of rage or energy
+            // (Bloodrage's). Thistle Tea's energize of mana makes none.
+            if percent || (a.kind == AURA_PERIODIC_ENERGIZE && power != 0) {
+                crate::game::map::combat::heal_threat(
+                    map,
+                    h.caster,
+                    target,
+                    h.spell,
+                    after.saturating_sub(now),
+                );
             }
         }
         AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA => {

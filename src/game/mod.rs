@@ -46,6 +46,8 @@ mod tests_bugs3;
 #[cfg(test)]
 mod tests_bugs4;
 #[cfg(test)]
+mod tests_bugs5;
+#[cfg(test)]
 mod tests_combat;
 #[cfg(test)]
 mod tests_combat2;

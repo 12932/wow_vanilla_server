@@ -325,6 +325,8 @@ pub fn restore(map: &mut Map, player: Guid) {
         }
         let caster = Guid::new(a.caster);
         let caster = if caster.is_zero() { player } else { caster };
+        // Its ticks as its caster's modifiers have them now.
+        let m = super::mods::for_spell(map, caster, s);
         let _ = auras::apply_spell(
             map,
             caster,
@@ -339,6 +341,10 @@ pub fn restore(map: &mut Map, player: Guid) {
                 charges: Some(a.charges),
                 triggered: a.triggered,
                 linked: false,
+                activation: (
+                    m.flat[super::mods::OP_ACTIVATION_TIME],
+                    m.pct[super::mods::OP_ACTIVATION_TIME],
+                ),
             },
         );
         if let Some(h) = auras::auras_mut(map, player).and_then(|x| {
