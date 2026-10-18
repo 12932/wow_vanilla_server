@@ -111,3 +111,44 @@ async fn a_dungeon_copy_left_is_kept_however_long_since_it_changed() {
 }
 
 
+/// Log `c` out by going away, and back in on a new connection.
+async fn relog(realm: &Arc<Realm>, c: Client) -> Client {
+    let (g, account) = (c.guid, c.account.clone());
+    c.disconnect();
+    for _ in 0..500 {
+        if realm.registry.online(g).is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(realm.registry.online(g).is_none(), "logged out");
+    realm.store.flush().await;
+    let mut c = Client::connect(realm, &account);
+    c.login(g).await;
+    c.sees(g).await;
+    c
+}
+
+/// The bank's bag slots bought are kept: they are saved, and come back at
+/// the next login (mangos keeps them in `playerBytes2`).
+#[tokio::test]
+async fn bank_bag_slots_bought_survive_a_relog() {
+    let realm = realm(GameData::empty(), true, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    on(&map_of(&realm, g), move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .fields
+            .set_byte(PLAYER_BYTES_2, 2, 3)
+    })
+    .await;
+    let a = relog(&realm, a).await;
+    let slots = on(&map_of(&realm, g), move |m| {
+        crate::game::map::inventory::bank_bag_slots(&m.players[&g])
+    })
+    .await;
+    assert_eq!(slots, 3, "the three slots bought");
+    drop(a);
+}
