@@ -284,3 +284,139 @@ async fn grimstone_calls_the_rings_packs_and_champion() {
     .await
     .unwrap();
 }
+
+/// `g` at `pct` percent and its events looked at, out of any cast.
+fn hurt_to(m: &mut Map, g: Guid, pct: u32) {
+    set_pct(m, g, pct);
+    crate::game::map::spells::interrupt(m, g);
+    if let Some(s) = event_ai::scripted_mut(m, g) {
+        s.next_tick = None;
+    }
+    event_ai::tick(m, g);
+}
+
+/// A boss of `entry` pulled by `me`, its events started.
+async fn pulled(map: &MapHandle, entry: u32, me: Guid) -> Guid {
+    let g = boss(map, entry, 5.0).await;
+    map.query(move |m| ai::attacked(m, g, me)).await;
+    assert!(
+        until(map, 2000, move |m| event_ai::scripted(m, g)
+            .is_some_and(|s| !s.timers.is_empty()))
+        .await,
+        "{entry}'s events started"
+    );
+    g
+}
+
+/// Stratholme's bosses: Timmy enrages once below a tenth; Ramstein's
+/// Knockout takes his victim's threat; Dathrohan becomes Balnazzar at 40
+/// percent and is Dathrohan again once he leaves the fight, and his death
+/// raises a skeleton at each of 32 posts; Willey calls three riflemen.
+#[tokio::test]
+#[ignore = "extended"]
+async fn stratholmes_bosses_fight_as_thistle_tea_scripts_them() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = arena(&realm, "Strath").await;
+    // Timmy.
+    let timmy = pulled(&map, 10808, me).await;
+    c.sees(timmy).await;
+    c.clear();
+    map.query(move |m| hurt_to(m, timmy, 9)).await;
+    assert!(
+        cast_of(&mut c, timmy, 8599, Duration::from_secs(2))
+            .await
+            .is_some(),
+        "Timmy enrages"
+    );
+    c.clear();
+    map.query(move |m| hurt_to(m, timmy, 8)).await;
+    assert!(
+        cast_of(&mut c, timmy, 8599, Duration::from_millis(600))
+            .await
+            .is_none(),
+        "once"
+    );
+    clear(&map, vec![timmy]);
+    // Ramstein's Knockout.
+    let ramstein = pulled(&map, 10439, me).await;
+    let knockout = map
+        .query(move |m| event_with(m, 10439, 12000))
+        .await
+        .unwrap();
+    map.query(move |m| ai::add_threat(m, ramstein, me, 1000.0))
+        .await;
+    c.clear();
+    map.query(move |m| {
+        if let Some(cr) = m.caster_mut(ramstein) {
+            cr.gcd_until = None;
+        }
+        due(m, ramstein, knockout);
+    })
+    .await;
+    assert_eq!(
+        cast_any_of(&mut c, ramstein, 17307, Duration::from_secs(3)).await,
+        Some(me),
+        "Knockout"
+    );
+    assert!(
+        until(&map, 3000, move |m| threat(m, ramstein, me) < 1000.0).await,
+        "his victim's threat taken"
+    );
+    clear(&map, vec![ramstein]);
+    // Dathrohan, and Balnazzar.
+    let dathrohan = pulled(&map, 10812, me).await;
+    map.query(move |m| hurt_to(m, dathrohan, 39)).await;
+    assert!(
+        until(&map, 3000, move |m| m.creature(dathrohan).map(|c| c.entry)
+            == Some(10813))
+        .await,
+        "Balnazzar"
+    );
+    map.query(move |m| ai::enter_evade(m, dathrohan)).await;
+    assert!(
+        until(&map, 6000, move |m| m.creature(dathrohan).map(|c| c.entry)
+            == Some(10812))
+        .await,
+        "Dathrohan again, out of the fight"
+    );
+    let before = map
+        .query(|m| living(m, 10390).len() + living(m, 10391).len())
+        .await
+        .unwrap();
+    map.query(move |m| {
+        ai::attacked(m, dathrohan, me);
+        kill(m, me, dathrohan);
+    })
+    .await;
+    assert!(
+        until(&map, 3000, move |m| living(m, 10390).len()
+            + living(m, 10391).len()
+            == before + 32)
+        .await,
+        "32 skeletons"
+    );
+    // Willey's riflemen.
+    let willey = pulled(&map, 10997, me).await;
+    let call = map
+        .query(move |m| {
+            m.realm.data.scripts.ai_events[&10997]
+                .iter()
+                .find(|e| e.params[0] == 5000 && e.params[1] == 5000)
+                .map(|e| e.id)
+                .unwrap()
+        })
+        .await
+        .unwrap();
+    let riflemen = map.query(|m| living(m, 11054).len()).await.unwrap();
+    map.query(move |m| {
+        crate::game::map::spells::interrupt(m, willey);
+        due(m, willey, call);
+    })
+    .await;
+    assert!(
+        until(&map, 2000, move |m| living(m, 11054).len() == riflemen + 3).await,
+        "three riflemen"
+    );
+}
