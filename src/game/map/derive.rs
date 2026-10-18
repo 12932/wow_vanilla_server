@@ -469,6 +469,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 100);
         return;
     };
+    crate::game::map::skills::set_bonuses(p);
     let g = gear(p, data);
     let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
     let disarmed = p.auras.has(AURA_MOD_DISARM);
