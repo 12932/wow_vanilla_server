@@ -345,17 +345,21 @@ pub(super) async fn timed_cast(
         "{id}: first in {t:?}, not {first:?}"
     );
     c.clear();
-    // Out of the last cast's global cooldown.
-    map.query(move |m| {
-        if let Some(cr) = m.caster_mut(g) {
-            cr.gcd_until = None;
-        }
-    })
-    .await;
-    fire(map, g, id).await;
-    let t = timer(map, g, id).await;
+    // Out of the last cast's global cooldown, made due, and its timer as
+    // that set it, all at once: the map's clock runs on between queries,
+    // seconds on a busy machine.
+    let t = map
+        .query(move |m| {
+            if let Some(cr) = m.caster_mut(g) {
+                cr.gcd_until = None;
+            }
+            due(m, g, id);
+            left(m, g, id)
+        })
+        .await
+        .flatten();
     // A next swing's ability goes with the swing.
-    let aimed = cast_any_of(c, g, spell, Duration::from_millis(3500))
+    let aimed = cast_any_of(c, g, spell, crate::game::harness::WAIT)
         .await
         .unwrap_or_else(|| panic!("{id}: {spell} cast"));
     if let Some(at) = at {
@@ -761,7 +765,7 @@ async fn geddon(realm: &Arc<Realm>) {
     })
     .await;
     assert!(
-        cast_of(&mut c, boss, 20478, Duration::from_secs(2))
+        cast_of(&mut c, boss, 20478, crate::game::harness::WAIT)
             .await
             .is_some(),
         "Armageddon"

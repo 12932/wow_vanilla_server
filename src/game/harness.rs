@@ -20,6 +20,11 @@ use crate::game::{Realm, RealmConfig, session};
 /// once) can take seconds over a character creation.
 pub const WAIT: Duration = Duration::from_secs(20);
 
+/// How many of a map's updates a test waits for what the map does at once
+/// to reach a client ([`Client::sees_on`]): 20 s of a quiet map's time,
+/// for a busy machine's updates that come slowly.
+pub const UPDATES: u64 = 400;
+
 /// The real world's data for the tests that read it, laid out as the server
 /// looks for it under `data/`: `db` (`vmangos.sqlite` and `dbc.sqlite`),
 /// `nav` (a rustigator bake) and `terrain` (Thistle Tea's tiles). From
@@ -422,6 +427,28 @@ impl Client {
         assert!(
             self.sees_within(object, WAIT).await,
             "{}: never told of {object}",
+            self.account
+        );
+    }
+
+    /// [`Client::sees`], on a map a busy machine may slow: it waits until
+    /// this client is told of `object`, or both [`WAIT`] has gone by and
+    /// `map` has run [`UPDATES`] updates since, however long they take.
+    pub async fn sees_on(&mut self, map: &crate::game::map::MapHandle, object: Guid) {
+        let updates = || map.query(|m| m.stats.updates);
+        let from = updates().await.unwrap_or(0);
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            if self.sees_within(object, Duration::from_millis(100)).await {
+                return;
+            }
+            let ran = updates().await.unwrap_or(u64::MAX).saturating_sub(from);
+            if ran >= UPDATES && tokio::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        panic!(
+            "{}: never told of {object} in {UPDATES} updates",
             self.account
         );
     }

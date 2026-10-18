@@ -620,6 +620,9 @@ async fn a_faction_forced_friendly_stops_the_fight_with_it() {
         let brute = spawn(m, ga, BRUTE, 20, 2.0);
         crate::game::map::combat::start_attack(m, ga, brute);
         crate::game::map::ai::attacked(m, brute, ga);
+        // The brute's first blow kills her, if an update comes before the
+        // next query (on a busy machine): she takes none.
+        m.players.get_mut(&ga).unwrap().misc.god = true;
         brute
     })
     .await;

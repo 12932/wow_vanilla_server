@@ -138,3 +138,19 @@ their paths, a crowd of players coming into view at once (so a create batch arri
 every frame its clients receive (`Client::captured`), and runs the checker over them, failing if the client would.
 It is `#[ignore = "extended"]` (it emulates x86 through `uv`, so it is slow) but needs no real world: it builds its
 own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than passing quietly.
+
+## Under load
+
+The extended suite runs on a shared machine, beside other suites (a load average of 15 to 40), where a map's 20 Hz
+update and a client's reads come late. A test that budgets by looks or by seconds passes on an idle machine and fails
+there. So:
+
+- **A walk counts the map's updates** (`m.stats.updates`), not its looks, and hurries the timers by each update since
+  its last look, not by each look: the Nightmare walk (`the_nightmare_manifests`) and the escorts' (`walk_escort`).
+- **What a look keeps safe, it keeps safe between looks too**: the player in god mode (`p.misc.god`) rather than only
+  healed at each look; a creature with a floor of health (`invincible_hp`).
+- **A look leaves a fight alone once it matters**: the Nightmare walk took Remulos out of his fights while he walked,
+  and on a late look, out of the one with Eranikus too.
+- **A wait for what the server sends ends when it comes**: up to `harness::WAIT` (20 s), or, for what a map does at
+  once, `Client::sees_on`, which waits for `harness::UPDATES` (400) of the map's updates as well. A wait for nothing
+  keeps its short window.

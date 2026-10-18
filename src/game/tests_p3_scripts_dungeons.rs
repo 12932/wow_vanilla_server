@@ -15,6 +15,13 @@ use crate::game::fields::*;
 use crate::game::harness::Client;
 use crate::game::map::{Map, MapHandle, ai, event_ai};
 
+/// How long to wait for what a step brings: what the map does at once,
+/// and its client hears, comes within an update or two on a quiet
+/// machine and in seconds on a busy one. The waits end as soon as it
+/// comes.
+const SOON: Duration = crate::game::harness::WAIT;
+const SOON_MS: u64 = SOON.as_millis() as u64;
+
 /// Ragnaros's lair, in a copy of Molten Core: nothing about.
 const ARENA: Vector3d = Vector3d {
     x: 840.0,
@@ -32,6 +39,30 @@ async fn boss(map: &MapHandle, entry: u32, dx: f32) -> Guid {
             s.no_combat_movement = true;
         }
         g
+    })
+    .await
+    .unwrap()
+}
+
+/// [`boss`], and its timers `ids` as its first look at its events rolls
+/// them, read with it: the map's clock runs on between queries, seconds
+/// on a busy machine.
+async fn boss_timed(
+    map: &MapHandle,
+    entry: u32,
+    dx: f32,
+    ids: &'static [u32],
+) -> (Guid, Vec<Option<Duration>>) {
+    map.query(move |m| {
+        let g = summon(m, entry, off(ARENA, dx, 0.0), std::f32::consts::PI);
+        tough(m, g);
+        if let Some(s) = event_ai::scripted_mut(m, g) {
+            s.no_combat_movement = true;
+        }
+        // Its first look at its events, which the next update would take,
+        // rolls them.
+        event_ai::tick(m, g);
+        (g, ids.iter().map(|id| left(m, g, *id)).collect())
     })
     .await
     .unwrap()
@@ -63,12 +94,21 @@ fn living_of(m: &Map, entries: &[u32]) -> Vec<Guid> {
 /// times (from, to, in seconds), and whether it goes at the player.
 type Cast = (u32, u32, (f32, f32), (f32, f32), bool);
 
-/// Each of `g`'s timed casts in turn, as `timed_cast` checks them: (event,
-/// spell, first, repeat, at the player or not).
+/// `g` pulled by `me`, and each of its timed casts in turn, as
+/// `timed_cast` checks them: (event, spell, first, repeat, at the player
+/// or not).
 async fn kit(c: &mut Client, map: &MapHandle, g: Guid, me: Guid, casts: &[Cast]) {
-    // Each first timer as the pull set it, before any goes.
-    for (id, _, first, _, _) in casts.iter().copied() {
-        let t = timer(map, g, id).await;
+    // Each first timer as the pull set it, read with the pull: the map's
+    // clock runs on between queries, seconds on a busy machine.
+    let ids: Vec<u32> = casts.iter().map(|c| c.0).collect();
+    let firsts = map
+        .query(move |m| {
+            ai::attacked(m, g, me);
+            ids.iter().map(|id| left(m, g, *id)).collect::<Vec<_>>()
+        })
+        .await
+        .unwrap();
+    for ((id, _, first, _, _), t) in casts.iter().copied().zip(firsts) {
         assert!(
             between(t, first.0, first.1),
             "{id}: first in {t:?}, not {first:?}"
@@ -100,7 +140,6 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
     // Gerstahn.
     let g = boss(&map, 9018, 2.0).await;
     c.sees(g).await;
-    pull(&map, g, me).await;
     kit(
         &mut c,
         &map,
@@ -120,29 +159,33 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
     c.sees(g).await;
     pull(&map, g, me).await;
     c.clear();
-    map.query(move |m| hurt_to(m, g, 50)).await;
+    let again = map
+        .query(move |m| {
+            hurt_to(m, g, 50);
+            left(m, g, 902802)
+        })
+        .await
+        .flatten();
     assert!(
-        cast_of(&mut c, g, 8269, Duration::from_millis(2500))
-            .await
-            .is_some(),
+        cast_of(&mut c, g, 8269, SOON).await.is_some(),
         "Grizzle's Frenzy below half"
     );
-    assert!(
-        emoted(&mut c, "Grizzle", Duration::from_millis(600))
-            .await
-            .is_some()
-    );
-    assert!(about(timer(&map, g, 902802).await, 15.0), "every fifteen");
+    assert!(emoted(&mut c, "Grizzle", SOON).await.is_some());
+    assert!(about(again, 15.0), "every fifteen: {again:?}");
     clear(&map, vec![g]);
     // Angerforge.
     let g = boss(&map, 9033, 2.0).await;
     c.sees(g).await;
     pull(&map, g, me).await;
-    map.query(move |m| hurt_to(m, g, 29)).await;
+    let again = map
+        .query(move |m| {
+            hurt_to(m, g, 29);
+            left(m, g, 903302)
+        })
+        .await
+        .flatten();
     assert!(
-        emoted(&mut c, "General Angerforge", Duration::from_secs(1))
-            .await
-            .is_some(),
+        emoted(&mut c, "General Angerforge", SOON).await.is_some(),
         "his alarm"
     );
     let (reserves, medics) = map
@@ -154,30 +197,30 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
         (8, 2),
         "eight reservists and two medics"
     );
-    assert!(
-        about(timer(&map, g, 903302).await, 180.0),
-        "again three minutes on"
-    );
+    assert!(about(again, 180.0), "again three minutes on: {again:?}");
     let mut gone = map.query(|m| living_of(m, &[8901, 8894])).await.unwrap();
     gone.push(g);
     clear(&map, gone);
     // Plugger, at peace.
-    let g = boss(&map, 9499, 2.0).await;
+    let (g, firsts) = boss_timed(&map, 9499, 2.0, &[949905, 949906]).await;
     c.sees(g).await;
-    assert!(about(timer(&map, g, 949905).await, 1.0));
-    assert!(about(timer(&map, g, 949906).await, 10.0));
+    assert!(about(firsts[0], 1.0), "{firsts:?}");
+    assert!(about(firsts[1], 10.0), "{firsts:?}");
     fire(&map, g, 949905).await;
     assert!(
-        until(&map, 1000, move |m| has(m, g, 13787)).await,
+        until(&map, SOON_MS, move |m| has(m, g, 13787)).await,
         "his demon armor"
     );
     c.clear();
-    fire(&map, g, 949906).await;
-    assert!(
-        heard(&mut c, g, Duration::from_secs(1)).await.is_some(),
-        "his grumbling"
-    );
-    assert!(between(timer(&map, g, 949906).await, 30.0, 35.0));
+    let again = map
+        .query(move |m| {
+            due(m, g, 949906);
+            left(m, g, 949906)
+        })
+        .await
+        .flatten();
+    assert!(heard(&mut c, g, SOON).await.is_some(), "his grumbling");
+    assert!(between(again, 30.0, 35.0), "{again:?}");
     clear(&map, vec![g]);
     // The Emperor and Moira.
     let emperor = boss(&map, 9019, 2.0).await;
@@ -185,14 +228,9 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
     let friend = boss(&map, 9033, 60.0).await;
     c.sees(emperor).await;
     pull(&map, emperor, me).await;
+    assert!(heard(&mut c, emperor, SOON).await.is_some(), "his yell");
     assert!(
-        heard(&mut c, emperor, Duration::from_secs(1))
-            .await
-            .is_some(),
-        "his yell"
-    );
-    assert!(
-        until(&map, 2000, move |m| fighting(m, friend)).await,
+        until(&map, SOON_MS, move |m| fighting(m, friend)).await,
         "his call brings a friend from sixty yards"
     );
     // Moira mends a friend's wounds.
@@ -205,7 +243,7 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
     c.clear();
     fire(&map, moira, 892904).await;
     assert_eq!(
-        cast_any_of(&mut c, moira, 15586, Duration::from_secs(1)).await,
+        cast_any_of(&mut c, moira, 15586, SOON).await,
         Some(friend),
         "Moira's heal on the injured"
     );
@@ -214,12 +252,24 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
     // His death: Moira gives up the fight.
     c.clear();
     map.query(move |m| kill(m, me, emperor)).await;
-    assert!(
-        emoted(&mut c, "Princess Moira Bronzebeard", Duration::from_secs(1))
-            .await
-            .is_some(),
-        "Moira, shaken"
-    );
+    let shaken = emoted(&mut c, "Princess Moira Bronzebeard", SOON).await;
+    if shaken.is_none() {
+        // What she and the player were, for whoever has to work it out.
+        let state = map
+            .query(move |m| {
+                let at = m.players[&me].position();
+                m.creature(moira).map(|c| {
+                    (
+                        c.alive(),
+                        c.evading,
+                        faction(m, moira),
+                        crate::game::map::combat::dist(c.position, at),
+                    )
+                })
+            })
+            .await;
+        panic!("Moira, shaken: (alive, evading, faction, yards off) {state:?}");
+    }
     // Her evade may be over already: she is out of the fight either way.
     let after = map
         .query(move |m| (faction(m, moira), fighting(m, moira)))
@@ -239,7 +289,6 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     let (mut c, me, map) = hero_in(realm, "Spire", 409, ARENA, 120.0, &[]).await;
     let g = boss(&map, 9196, 2.0).await;
     c.sees(g).await;
-    pull(&map, g, me).await;
     kit(
         &mut c,
         &map,
@@ -273,9 +322,7 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     c.clear();
     fire(&map, g, 923706).await;
     assert!(
-        cast_any_of(&mut c, g, 16075, Duration::from_secs(2))
-            .await
-            .is_some(),
+        cast_any_of(&mut c, g, 16075, SOON).await.is_some(),
         "the first axe"
     );
     let one = map.query(arms).await.unwrap();
@@ -286,15 +333,13 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     c.clear();
     fire(&map, g, 923707).await;
     assert!(
-        cast_any_of(&mut c, g, 16075, Duration::from_secs(2))
-            .await
-            .is_some(),
+        cast_any_of(&mut c, g, 16075, SOON).await.is_some(),
         "the second"
     );
     let none = map.query(arms).await.unwrap();
     assert_eq!(none, (0, 0, 2), "barehanded");
     assert!(
-        until(&map, 1000, move |m| has(m, g, 16076)).await,
+        until(&map, SOON_MS, move |m| has(m, g, 16076)).await,
         "his barehanded fighting"
     );
     map.query(move |m| ai::enter_evade(m, g)).await;
@@ -310,7 +355,7 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     pull(&map, g, me).await;
     map.query(move |m| hurt_to(m, g, 50)).await;
     assert!(
-        until(&map, 1000, |m| living(m, 9216).len() == 1
+        until(&map, SOON_MS, |m| living(m, 9216).len() == 1
             && living(m, 9268).len() == 1)
         .await,
         "a warlord and a berserker"
@@ -326,20 +371,15 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     pull(&map, g, me).await;
     c.clear();
     map.query(move |m| kill(m, me, g)).await;
-    assert!(
-        emoted(&mut c, "Halycon", Duration::from_secs(1))
-            .await
-            .is_some(),
-        "her howl"
-    );
+    assert!(emoted(&mut c, "Halycon", SOON).await.is_some(), "her howl");
     let gizrul = map.query(|m| first(m, 10268)).await.flatten();
     let gizrul = gizrul.expect("Gizrul comes");
     assert!(
-        until(&map, 2000, move |m| m.creature(gizrul).is_some_and(|c| [
-            me, other
-        ]
-        .iter()
-        .all(|p| c.threat.iter().any(|(t, _)| t == p))))
+        until(&map, SOON_MS, move |m| m.creature(gizrul).is_some_and(
+            |c| [me, other]
+                .iter()
+                .all(|p| c.threat.iter().any(|(t, _)| t == p))
+        ))
         .await,
         "for the whole party"
     );
@@ -348,13 +388,21 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     let g = boss(&map, 10430, 20.0).await;
     c.sees(g).await;
     assert!(
-        until(&map, 1000, move |m| has(m, g, 15506)).await,
+        until(&map, SOON_MS, move |m| has(m, g, 15506)).await,
         "its fiery aura from its spawn"
     );
     c.clear();
-    pull(&map, g, me).await;
+    // Its next timer as the pull set it, before the map's clock runs on
+    // while the charge is waited for.
+    let next = map
+        .query(move |m| {
+            ai::attacked(m, g, me);
+            left(m, g, 1043006)
+        })
+        .await
+        .flatten();
     assert_eq!(
-        cast_any_of(&mut c, g, 16636, Duration::from_secs(2)).await,
+        cast_any_of(&mut c, g, 16636, SOON).await,
         Some(me),
         "at its victim, at once"
     );
@@ -362,14 +410,14 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
         map.query(move |m| spent(m, g, 1043005)).await.unwrap(),
         "once"
     );
-    assert!(between(timer(&map, g, 1043006).await, 15.0, 20.0));
+    assert!(between(next, 15.0, 20.0), "{next:?}");
     map.query(move |m| {
         crate::game::map::auras::remove_spell(m, g, 15506, None);
         ai::enter_evade(m, g);
     })
     .await;
     assert!(
-        until(&map, 15_000, move |m| at_peace(m, g) && has(m, g, 15506)).await,
+        until(&map, SOON_MS, move |m| at_peace(m, g) && has(m, g, 15506)).await,
         "the aura again, home"
     );
     clear(&map, vec![g]);
@@ -379,7 +427,7 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     c.clear();
     pull(&map, g, me).await;
     assert_eq!(
-        cast_any_of(&mut c, g, 15749, Duration::from_secs(2)).await,
+        cast_any_of(&mut c, g, 15749, SOON).await,
         Some(me),
         "a shield charge at its victim"
     );
@@ -394,7 +442,6 @@ async fn stratholme(realm: &Arc<Realm>) {
     // Barthilas.
     let g = boss(&map, 10435, 2.0).await;
     c.sees(g).await;
-    pull(&map, g, me).await;
     kit(
         &mut c,
         &map,
@@ -411,16 +458,20 @@ async fn stratholme(realm: &Arc<Realm>) {
     // A blow that can't land (his victim away) waits its time all the same.
     map.query(move |m| put(m, me, off(ARENA, -25.0, 0.0))).await;
     c.clear();
-    fire(&map, g, 1043502).await;
+    // Its timer as the blow set it, before the wait for nothing.
+    let again = map
+        .query(move |m| {
+            due(m, g, 1043502);
+            left(m, g, 1043502)
+        })
+        .await
+        .flatten();
     assert!(
         cast_of(&mut c, g, 16793, Duration::from_millis(600))
             .await
             .is_none()
     );
-    assert!(
-        about(timer(&map, g, 1043502).await, 15.0),
-        "restarted all the same"
-    );
+    assert!(about(again, 15.0), "restarted all the same: {again:?}");
     map.query(move |m| put(m, me, ARENA)).await;
     clear(&map, vec![g]);
     // Anastari's curse.
@@ -429,11 +480,7 @@ async fn stratholme(realm: &Arc<Realm>) {
     pull(&map, g, me).await;
     c.clear();
     fire(&map, g, 1043602).await;
-    assert_eq!(
-        cast_of(&mut c, g, 16867, Duration::from_secs(1)).await,
-        Some(me),
-        "the curse"
-    );
+    assert_eq!(cast_of(&mut c, g, 16867, SOON).await, Some(me), "the curse");
     c.clear();
     fire(&map, g, 1043602).await;
     assert!(

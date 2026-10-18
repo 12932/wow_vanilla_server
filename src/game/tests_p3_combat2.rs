@@ -322,3 +322,63 @@ async fn a_creature_turns_from_a_victim_it_can_no_longer_fight_and_with_none_lef
     assert_eq!(alone, (true, 0));
     assert!(empty);
 }
+
+/// With its list empty, a creature that another is attacking, one that
+/// hasn't harmed it yet and so isn't on the list, fights that one rather
+/// than going home (mangos's `Unit::SelectHostileTarget`): Keeper
+/// Remulos, his phantasm dead before Eranikus's first breath reached him.
+#[tokio::test]
+async fn a_creature_with_none_left_on_its_list_fights_one_attacking_it() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let (evading, victim, listed, waiting) = map
+        .query(move |m| {
+            // One fighting another `brute`, which isn't on its list (too
+            // far off to have struck it yet).
+            let attacking = |m: &mut Map, brute: Guid| {
+                let attacker = spawn(m, ga, HELPER, 20, 25.0);
+                let c = m.creature_mut(attacker).unwrap();
+                c.combat.victim = brute;
+                c.combat.attacking = true;
+                m.note_fighting(attacker);
+                attacker
+            };
+            let a = spawn(m, ga, HELPER, 20, 1.5);
+            let brute = fighting(m, ga, a, &[(a, 100.0)]);
+            let attacker = attacking(m, brute);
+            combat::deal_damage(m, ga, a, 1_000_000);
+            ai::update_creatures(m);
+            let c = m.creature(brute).unwrap();
+            let fights = (
+                c.evading,
+                c.combat.victim == attacker,
+                threat(m, brute, attacker),
+            );
+            // In the fight but attacking no one (its victim dead, its
+            // attack stopped), the same.
+            let b = spawn(m, ga, HELPER, 20, 1.5);
+            let idle = fighting(m, ga, Guid::zero(), &[(b, 100.0)]);
+            m.unit_fields_mut(idle).unwrap().set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                true,
+            );
+            // Seen, so it has its turn though it fights no one.
+            crate::game::map::visibility::introduce(m, ga, idle);
+            let other = attacking(m, idle);
+            combat::deal_damage(m, ga, b, 1_000_000);
+            ai::update_creatures(m);
+            let c = m.creature(idle).unwrap();
+            let waiting = (c.evading, threat(m, idle, other).is_some());
+            (fights.0, fights.1, fights.2, waiting)
+        })
+        .await
+        .unwrap();
+    assert!(!evading, "not gone home");
+    assert!(victim, "the attacker its victim");
+    assert!(listed.is_some(), "and on its list");
+    assert_eq!(
+        waiting,
+        (false, true),
+        "waiting, not gone home, it on its list"
+    );
+}
