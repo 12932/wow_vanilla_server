@@ -539,13 +539,15 @@ fn data() -> GameData {
             ..ev(EVENT_SUMMONED_JUST_DIED, [MINION as i32, 0, 0, 0], 0, 120)
         });
     }
-    // The chiefs' group: 11 leads, 12 and 13 follow, the listener too.
+    // The chiefs' group: 11 leads, 12 and 13 follow, the listener too;
+    // its members hear of any death.
     d.scripts.groups.insert(
         11,
         [11, 12, 13, 10]
             .into_iter()
             .map(|guid| GroupMember {
                 guid,
+                flags: GROUP_INFORM_MEMBERS_ON_ANY_DIED,
                 ..Default::default()
             })
             .collect(),

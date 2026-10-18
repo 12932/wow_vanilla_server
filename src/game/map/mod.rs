@@ -366,6 +366,9 @@ pub struct Map {
     /// Formations whose leader died, by the leader's spawn: the member
     /// leading their patrol meanwhile.
     pub acting_leaders: AHashMap<u32, Guid>,
+    /// Linked slaves' spawns held back by their master's life, to come in
+    /// once it allows (vmangos's `CanSpawn`, Thistle Tea's `:held`).
+    pub held_slaves: ahash::AHashSet<u32>,
     /// The spawn pools here, by their root: what each has picked.
     pub pools: AHashMap<u32, pools::PoolState>,
     /// Scripted map events under way.
@@ -593,6 +596,7 @@ impl Map {
             object_resets: Vec::new(),
             script_groups: AHashMap::new(),
             acting_leaders: AHashMap::new(),
+            held_slaves: Default::default(),
             pools: AHashMap::new(),
             map_events: Default::default(),
             spells: Default::default(),

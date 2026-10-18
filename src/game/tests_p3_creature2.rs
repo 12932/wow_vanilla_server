@@ -384,3 +384,321 @@ async fn a_linked_slave_spawns_as_its_masters_life_allows() {
     assert_eq!(out.0, [true, false, true, true, true], "the master alive");
     assert_eq!(out.1, [false, true, false, true, true], "the master dead");
 }
+
+/// Thistle Tea's `CreatureGroups` holding a slave: one that can't spawn
+/// while its master lies dead is held, and comes in once its master is
+/// back; one that can't while its master lives comes in once it dies.
+#[tokio::test]
+async fn a_held_slave_comes_in_once_its_master_allows() {
+    use crate::game::data::scripts::*;
+    let d = linked(&[
+        (171, 170, LINK_CANT_SPAWN_IF_BOSS_DEAD),
+        (173, 172, LINK_CANT_SPAWN_IF_BOSS_ALIVE),
+    ]);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(170)).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        // The second's slave was held at the start, its master alive.
+        let held_at_start = alive(m, 173);
+        die(m, ga, 170);
+        die(m, ga, 171);
+        crate::game::map::ai::respawn_now(m, of(171));
+        let held = alive(m, 171);
+        crate::game::map::ai::respawn_now(m, of(170));
+        let let_in = alive(m, 171);
+        // The second's slave, once its master is dead.
+        crate::game::map::ai::respawn_now(m, of(173));
+        die(m, ga, 172);
+        (held_at_start, held, let_in, alive(m, 173))
+    })
+    .await;
+    assert_eq!(
+        out,
+        (false, false, true, true),
+        "held, then let in as its master allows"
+    );
+}
+
+/// A world of brutes in groups of `groups` (leader spawn, members, every
+/// member's flags), in a row beside Alice; a brute yells "member" when it
+/// hears a member died, and "leader" when its leader did.
+fn grouped(groups: &[(u32, &[u32], u32)]) -> GameData {
+    use crate::game::data::scripts::*;
+    let mut d = linked(&[]);
+    let mut i = 0;
+    for (leader, members, flags) in groups {
+        for guid in std::iter::once(leader).chain(members.iter()) {
+            d.creature_spawns
+                .entry(0)
+                .or_default()
+                .push(crate::game::data::CreatureSpawn {
+                    guid: *guid,
+                    entries: vec![BRUTE],
+                    map: 0,
+                    x: crate::game::tests_p3_combat::START.0 + 2.0 + i as f32,
+                    y: crate::game::tests_p3_combat::START.1,
+                    z: crate::game::tests_p3_combat::START.2,
+                    respawn_min: 300,
+                    respawn_max: 300,
+                    ..Default::default()
+                });
+            i += 1;
+            d.scripts.group_of.insert(*guid, *leader);
+        }
+        d.scripts.groups.insert(
+            *leader,
+            std::iter::once(GroupMember {
+                guid: *leader,
+                ..Default::default()
+            })
+            .chain(members.iter().map(|m| GroupMember {
+                guid: *m,
+                flags: *flags,
+                ..Default::default()
+            }))
+            .collect(),
+        );
+    }
+    for (id, line, of_leader) in [(1u32, "member", 0), (2, "leader", 1)] {
+        d.npc.broadcast_texts.insert(
+            900 + id,
+            crate::game::data::npc::BroadcastText {
+                male: line.into(),
+                chat_type: 1,
+                ..Default::default()
+            },
+        );
+        d.scripts.ai_scripts.insert(
+            id,
+            vec![ScriptStep {
+                id,
+                command: 0,
+                dataint: [900 + id as i32, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+        d.scripts.ai_events.entry(BRUTE).or_default().push(AiEvent {
+            id,
+            creature: BRUTE,
+            kind: EVENT_GROUP_MEMBER_DIED,
+            chance: 100,
+            flags: EF_REPEATABLE,
+            params: [0, of_leader, 0, 0],
+            actions: [id, 0, 0],
+            ..Default::default()
+        });
+    }
+    d
+}
+
+/// Who yelled what, sorted: (line, the yeller's spawn).
+async fn yells(c: &mut crate::game::harness::Client) -> Vec<(String, u32)> {
+    use wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let mut out = Vec::new();
+    while let Some(y) = c
+        .gets(std::time::Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => match &c.chat_type {
+                SMSG_MESSAGECHAT_ChatType::MonsterYell { sender1, .. } => {
+                    Some((c.message.clone(), sender1.guid() as u32 & 0xFF_FFFF))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .await
+    {
+        out.push(y);
+    }
+    out.sort();
+    out
+}
+
+/// Thistle Tea's `CreatureGroup.actions` on a death: a group that informs
+/// its leader tells it of a member's death, and one that informs its
+/// members tells the rest of anyone's, the leader's as the leader's; the
+/// dead hear nothing.
+#[tokio::test]
+async fn a_groups_death_notices_go_as_its_flags_say() {
+    use crate::game::data::scripts::*;
+    let d = grouped(&[
+        (210, &[211, 212], GROUP_INFORM_LEADER_ON_MEMBER_DIED),
+        (220, &[221, 222], GROUP_INFORM_MEMBERS_ON_ANY_DIED),
+        (230, &[231, 232], 0),
+    ]);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(232)).await;
+    a.clear();
+    on(&map, move |m| {
+        hardy(m, ga);
+        die(m, ga, 211);
+    })
+    .await;
+    assert_eq!(
+        yells(&mut a).await,
+        [("member".into(), 210)],
+        "the leader told"
+    );
+    on(&map, move |m| die(m, ga, 221)).await;
+    assert_eq!(
+        yells(&mut a).await,
+        [("member".into(), 222)],
+        "the other member told, not the leader"
+    );
+    on(&map, move |m| die(m, ga, 220)).await;
+    assert_eq!(
+        yells(&mut a).await,
+        [("leader".into(), 222)],
+        "the leader's death, as the leader's, to the living"
+    );
+    on(&map, move |m| die(m, ga, 231)).await;
+    assert_eq!(yells(&mut a).await, [], "no flags, no notices");
+}
+
+/// Thistle Tea's `CreatureGroup.actions` on an evade and a respawn, and
+/// `dead?`: a member evading takes its leader, fighting, with it when they
+/// evade together, and its dead come back when the leader evades (or when
+/// any does, with the other flag); a member back brings its dead back with
+/// it when they respawn together; and the group is dead to one of it when
+/// the others here are. One that fights together does.
+#[tokio::test]
+async fn a_groups_evade_respawn_and_death_go_together_as_flagged() {
+    use crate::game::data::scripts::*;
+    let d = grouped(&[
+        (
+            240,
+            &[241, 242],
+            GROUP_EVADE_TOGETHER | GROUP_RESPAWN_ON_LEADER_EVADE,
+        ),
+        (250, &[251, 252], GROUP_RESPAWN_ON_LEADER_EVADE),
+        (260, &[261, 262], GROUP_RESPAWN_ON_EVADE),
+        (270, &[271, 272], GROUP_RESPAWN_TOGETHER),
+        (280, &[281, 282], 0),
+        (300, &[301], GROUP_AGGRO_TOGETHER),
+    ]);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(301)).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let evade = |m: &mut Map, s| crate::game::map::ai::enter_evade(m, of(s));
+        // Evading together, and the leader alive: its dead back.
+        die(m, ga, 242);
+        crate::game::map::ai::attacked(m, of(240), ga);
+        crate::game::map::ai::attacked(m, of(241), ga);
+        evade(m, 241);
+        let together = (
+            m.creature(of(240)).is_some_and(|c| c.evading),
+            alive(m, 242),
+        );
+        // Only on the leader's evade.
+        die(m, ga, 252);
+        crate::game::map::ai::attacked(m, of(251), ga);
+        evade(m, 251);
+        let member = alive(m, 252);
+        crate::game::map::ai::attacked(m, of(250), ga);
+        evade(m, 250);
+        let leader = alive(m, 252);
+        // On any.
+        die(m, ga, 262);
+        crate::game::map::ai::attacked(m, of(261), ga);
+        evade(m, 261);
+        let any = alive(m, 262);
+        // Respawning together.
+        die(m, ga, 270);
+        die(m, ga, 271);
+        crate::game::map::ai::respawn_now(m, of(271));
+        let respawn = alive(m, 270);
+        // Even a living member made new brings its dead.
+        die(m, ga, 272);
+        crate::game::map::ai::respawn_forced(m, of(270), true);
+        let respawn = (respawn, alive(m, 272));
+        // Fighting together.
+        crate::game::map::ai::attacked(m, of(300), ga);
+        let aggro = fighting(m, 301);
+        // The group dead to one of it.
+        let all = |m: &Map, s| crate::game::map::creature_groups::all_dead(m, of(s));
+        let before = all(m, 280);
+        die(m, ga, 281);
+        die(m, ga, 282);
+        let dead = (before, all(m, 280), all(m, 281));
+        (together, (member, leader), any, respawn, dead, aggro)
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        (true, true),
+        "the leader evades with it, its dead back"
+    );
+    assert_eq!(out.1, (false, true), "back on the leader's evade only");
+    assert!(out.2, "back on any evade");
+    assert_eq!(out.3, (true, true), "back with a member respawning");
+    assert!(out.5, "the group fights together");
+    assert_eq!(
+        out.4,
+        (false, true, false),
+        "dead to the one left, not to one with it alive"
+    );
+}
+
+/// Thistle Tea's `CreatureGroup.on_death` and `CreatureGroups.formation`:
+/// a patrolling formation's leader dead, a survivor leads it on along the
+/// leader's path, and another when that one dies; none left, none leads;
+/// and the leader back, it leads again, the survivor behind it.
+#[tokio::test]
+async fn a_formation_is_led_on_by_its_survivors_until_its_leader_is_back() {
+    use crate::game::data::scripts::*;
+    let mut d = grouped(&[(290, &[291, 292], GROUP_FORMATION)]);
+    let (x, y, z) = crate::game::tests_p3_combat::START;
+    d.waypoints.insert(
+        290,
+        (0..2)
+            .map(|i| crate::game::data::Waypoint {
+                point: i,
+                x: x + 2.0 + 10.0 * i as f32,
+                y,
+                z,
+                ..Default::default()
+            })
+            .collect(),
+    );
+    if let Some(s) = d
+        .creature_spawns
+        .get_mut(&0)
+        .and_then(|v| v.iter_mut().find(|s| s.guid == 290))
+    {
+        s.movement_type = 2;
+    }
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(292)).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let acting = |m: &Map| m.acting_leaders.get(&290).copied();
+        die(m, ga, 290);
+        let first = (
+            acting(m),
+            crate::game::map::creature_groups::following(m, of(291)),
+        );
+        die(m, ga, 291);
+        let second = acting(m);
+        crate::game::map::ai::respawn_now(m, of(290));
+        let back = (
+            acting(m),
+            crate::game::map::creature_groups::following(m, of(292)),
+        );
+        crate::game::map::ai::respawn_now(m, of(291));
+        for s in [291, 292, 290] {
+            die(m, ga, s);
+        }
+        (first, second, back, acting(m))
+    })
+    .await;
+    assert_eq!(out.0, (Some(of(291)), false), "the first survivor leads");
+    assert_eq!(out.1, Some(of(292)), "then the next");
+    assert_eq!(
+        out.2,
+        (None, true),
+        "the leader back, the survivor follows again"
+    );
+    assert_eq!(out.3, None, "none left, none leads");
+}

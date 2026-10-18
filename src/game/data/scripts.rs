@@ -182,6 +182,9 @@ pub const GROUP_RESPAWN_TOGETHER: u32 = 0x8;
 /// lives and they evade together); when any of it evades.
 pub const GROUP_RESPAWN_ON_LEADER_EVADE: u32 = 0x10;
 pub const GROUP_RESPAWN_ON_EVADE: u32 = 0x20;
+/// Its leader hears of a member's death; its members hear of any death.
+pub const GROUP_INFORM_LEADER_ON_MEMBER_DIED: u32 = 0x40;
+pub const GROUP_INFORM_MEMBERS_ON_ANY_DIED: u32 = 0x80;
 
 /// `creature_linking` flags.
 pub const LINK_AGGRO_ON_AGGRO: u32 = 0x0001;

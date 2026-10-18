@@ -1102,7 +1102,7 @@ pub fn death_heard(map: &mut Map, g: Guid) {
     // The dead hear nothing (Thistle Tea's `{:member_died, ..}`).
     let alive = |map: &Map, m: Guid| map.creature(m).is_some_and(|c| c.alive());
     for m in members.into_iter().filter(|m| *m != g) {
-        if !alive(map, m) {
+        if !alive(map, m) || !crate::game::map::creature_groups::hears_death(map, m, g) {
             continue;
         }
         fire(

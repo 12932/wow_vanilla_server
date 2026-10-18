@@ -569,8 +569,10 @@ fn spawn_creature_with(
     }
     crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
     if !crate::game::map::creature_groups::may_spawn(map, spawn.guid) {
+        map.held_slaves.insert(spawn.guid);
         return;
     }
+    map.held_slaves.remove(&spawn.guid);
     let on = crate::game::events::current(&map.realm);
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
