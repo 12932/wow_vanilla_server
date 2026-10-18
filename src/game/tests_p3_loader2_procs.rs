@@ -281,3 +281,40 @@ fn the_real_proc_rules_load_as_thistle_tea_reads_them() {
     // Its second rank has no row of its own, and takes the first's.
     assert_eq!(pe(d, 18_073).family_mask, split.family_mask);
 }
+
+/// Thistle Tea's talent chains (`class_script_dbc_test.exs`): Improved
+/// Blizzard's, Nightfall's and Improved Mend Pet's later ranks are their
+/// talent's after its first, and take its proc rule; Improved Mend Pet's cleanse is a
+/// dispel of type 7, as the DBC has it.
+#[test]
+#[ignore = "extended"]
+fn the_real_talent_ranks_take_their_first_ranks_rules() {
+    let Some(d) = real() else {
+        return;
+    };
+    for (id, first) in [
+        (12_487, 11_185),
+        (12_488, 11_185),
+        (18_095, 18_094),
+        (19_573, 19_572),
+    ] {
+        let t = d
+            .spells
+            .talents
+            .values()
+            .find(|t| t.ranks.contains(&id))
+            .unwrap();
+        assert_eq!(t.ranks[0], first, "{id}");
+        let (p, f) = (pe(d, id), pe(d, first));
+        assert_eq!(
+            (p.family, p.family_mask, p.flags, p.ex),
+            (f.family, f.family_mask, f.flags, f.ex),
+            "{id}"
+        );
+    }
+    for (id, chance) in [(18_094, 2), (18_095, 4)] {
+        assert_eq!(d.spells.get(id).unwrap().proc_chance, chance, "{id}");
+    }
+    let cleanse = d.spells.get(24_406).unwrap().effects[0];
+    assert_eq!((cleanse.effect, cleanse.misc_value), (38, 7));
+}

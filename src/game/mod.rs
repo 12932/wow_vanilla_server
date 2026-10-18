@@ -216,6 +216,8 @@ mod tests_p3_loader2_items;
 #[cfg(test)]
 mod tests_p3_loader2_mobs;
 #[cfg(test)]
+mod tests_p3_loader2_pets;
+#[cfg(test)]
 mod tests_p3_loader2_procs;
 #[cfg(test)]
 mod tests_p3_loader2_quests;
