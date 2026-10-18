@@ -400,6 +400,8 @@ mod tests_parity_spells;
 #[cfg(test)]
 mod tests_parity_world;
 #[cfg(test)]
+mod tests_perf2;
+#[cfg(test)]
 mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
@@ -443,8 +445,6 @@ mod tests_spells4;
 mod tests_spells5;
 #[cfg(test)]
 mod tests_taming;
-#[cfg(test)]
-mod tests_perf2;
 #[cfg(test)]
 mod tests_terrain;
 #[cfg(test)]

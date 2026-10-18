@@ -446,10 +446,11 @@ pub struct Map {
     /// Creatures that may be awake: seen by a player, or in a fight
     /// (attacking, attacked, evading, or down in a feign death). Every
     /// creature that is, and some that were: a player coming to know one
-    /// adds it, as does [`Map::note_fighting`], and [`Map::awake_where`]
-    /// lets go of those no longer awake. The update's looks for what only
-    /// an awake creature could be go through it, not every creature.
-    pub awake: ahash::AHashSet<Guid>,
+    /// adds it, as does [`Map::note_fighting`], and the first of an
+    /// update's looks lets go of those no longer awake. The update's looks
+    /// for what only an awake creature could be go through it
+    /// ([`Map::awake_where`]), not every creature.
+    pub awake: Awake,
     /// Creatures that may have auras: every creature that has, and some
     /// that had. An aura is only ever added through `auras::auras_mut`,
     /// which adds its creature, as `Map::add_creature` adds one that
@@ -478,6 +479,104 @@ pub struct Map {
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
+}
+
+/// The creatures that may be awake (`Map::awake`), and their keys in key
+/// order for the update's looks. The set is pruned once an update, at its
+/// first look, into `keys`; what is added after (a creature drawn into a
+/// fight by another's turn, one summoned) goes into `added`, and is merged
+/// into `keys` at the next look. So every look finds every creature awake
+/// as it looks, as a look through every creature would, without each
+/// re-checking and sorting tens of thousands of members.
+#[derive(Debug, Default)]
+pub struct Awake {
+    set: ahash::AHashSet<Guid>,
+    /// The members' keys, sorted and without repeats: with `added`'s,
+    /// every member's. Some may be stale (a creature gone, its key taken
+    /// by another); a look takes only creatures awake, and keys of a slab.
+    keys: Vec<usize>,
+    /// Members added since `keys` was made, or added again under a new key.
+    added: Vec<Guid>,
+    /// The update (`MapStats::updates`) the set was last pruned in.
+    pruned: Option<u64>,
+}
+
+impl Awake {
+    /// `g` may be awake from now.
+    pub fn insert(&mut self, g: Guid) {
+        if self.set.insert(g) {
+            self.added.push(g);
+        }
+    }
+
+    /// `g` arrives in the map, awake, under a key of its own (perhaps a
+    /// member before, under another).
+    fn arrive(&mut self, g: Guid) {
+        self.set.insert(g);
+        self.added.push(g);
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    pub fn contains(&self, g: &Guid) -> bool {
+        self.set.contains(g)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Guid> {
+        self.set.iter()
+    }
+
+    /// The members' keys, in key order, for a look in update `update`:
+    /// pruned of those no longer awake if this is the update's first look,
+    /// else with those added since merged in.
+    fn keys(
+        &mut self,
+        update: u64,
+        creatures: &Slab<Creature>,
+        by_guid: &AHashMap<Guid, usize>,
+    ) -> &[usize] {
+        if self.pruned != Some(update) {
+            self.pruned = Some(update);
+            self.added.clear();
+            self.keys.clear();
+            let keys = &mut self.keys;
+            self.set.retain(
+                |g| match by_guid.get(g).and_then(|&k| Some((k, creatures.get(k)?))) {
+                    Some((k, c)) if awake(c) => {
+                        keys.push(k);
+                        true
+                    }
+                    _ => false,
+                },
+            );
+            self.keys.sort_unstable();
+        } else if !self.added.is_empty() {
+            let few = self.added.len() <= 32;
+            let added = self
+                .added
+                .drain(..)
+                .filter_map(|g| by_guid.get(&g).copied());
+            // A few go in where they belong; many, all at once.
+            if few {
+                for k in added {
+                    if let Err(i) = self.keys.binary_search(&k) {
+                        self.keys.insert(i, k);
+                    }
+                }
+            } else {
+                self.keys.extend(added);
+                self.keys.sort_unstable();
+                self.keys.dedup();
+            }
+        }
+        &self.keys
+    }
 }
 
 /// What `out` makes of each creature of `set` that `pred` takes, in key
@@ -738,7 +837,7 @@ impl Map {
             map_events: Default::default(),
             spells: Default::default(),
             rare: Default::default(),
-            awake: ahash::AHashSet::new(),
+            awake: Awake::default(),
             with_auras: ahash::AHashSet::new(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
@@ -1427,21 +1526,22 @@ impl Map {
 
     /// What `out` makes of each awake creature `pred` takes, in the order
     /// of a look through every creature, which is what debug builds check
-    /// it finds (so `pred` takes only creatures that are awake). Those no
-    /// longer awake are let go.
+    /// it finds (so `pred` takes only creatures that are awake). The
+    /// update's first look lets go of those no longer awake ([`Awake`]).
     pub fn awake_where<T: PartialEq + std::fmt::Debug>(
         &mut self,
         pred: impl Fn(&Creature) -> bool,
         out: impl Fn(usize, &Creature) -> T,
     ) -> Vec<T> {
-        let found = members_where(
-            &mut self.awake,
-            &self.creatures,
-            &self.creature_by_guid,
-            awake,
-            &pred,
-            &out,
-        );
+        let creatures = &self.creatures;
+        let found: Vec<T> = self
+            .awake
+            .keys(self.stats.updates, creatures, &self.creature_by_guid)
+            .iter()
+            .filter_map(|&k| Some((k, creatures.get(k)?)))
+            .filter(|(_, c)| pred(c))
+            .map(|(k, c)| out(k, c))
+            .collect();
         debug_assert_eq!(
             found,
             every_creature_where(&self.creatures, &pred, &out),
@@ -1502,8 +1602,10 @@ impl Map {
             self.ai_spawned.push(guid);
         }
         self.rare.note(&c);
-        if awake(&c) {
-            self.awake.insert(guid);
+        // Under its new key (a member before under another, it may be woken
+        // later by `insert`, which would add nothing).
+        if awake(&c) || self.awake.contains(&guid) {
+            self.awake.arrive(guid);
         }
         if !c.auras.is_empty() {
             self.with_auras.insert(guid);
