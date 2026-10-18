@@ -1,7 +1,8 @@
 //! Duels, as mangos-zero runs them: the Duel spell plants a flag between
 //! the two, the challenged accepts, a three-second countdown, and the
 //! fight until one would fall (they kneel at 1 health instead), yields, or
-//! stays more than 10 seconds beyond 75 yards of the flag.
+//! stays more than 10 seconds beyond 75 yards of the flag (back within
+//! 70).
 
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,8 @@ pub const FLAG_ENTRY: u32 = 21680;
 pub const SPELL_GROVEL: u32 = 7267;
 pub const COUNTDOWN: Duration = Duration::from_secs(3);
 pub const BOUNDS_YARDS: f32 = 75.0;
+/// How near the flag one out of bounds must come to be back in them.
+pub const INBOUNDS_YARDS: f32 = 70.0;
 pub const OUT_OF_BOUNDS_FOR: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -301,24 +304,27 @@ pub fn update(map: &mut Map) {
                 let Some(pos) = map.players.get(&g).map(|p| p.position()) else {
                     continue;
                 };
-                let out = dist(pos, flag) > BOUNDS_YARDS;
+                // Out past the bounds, back in only well inside them
+                // (Thistle Tea's outbound and inbound radii, as mangos has
+                // two).
+                let distance = dist(pos, flag);
                 let Some(p) = map.players.get_mut(&g) else {
                     continue;
                 };
                 let Some(duel) = p.duel.as_mut() else {
                     continue;
                 };
-                match (out, duel.out_of_bounds_since) {
-                    (true, None) => {
+                match duel.out_of_bounds_since {
+                    None if distance > BOUNDS_YARDS => {
                         duel.out_of_bounds_since = Some(now);
                         p.outbound.send(&SMSG_DUEL_OUTOFBOUNDS {});
                     }
-                    (true, Some(since)) if now.duration_since(since) >= OUT_OF_BOUNDS_FOR => {
-                        end(map, g, Some(DuelWinnerReason::Fled));
-                    }
-                    (false, Some(_)) => {
+                    Some(_) if distance <= INBOUNDS_YARDS => {
                         duel.out_of_bounds_since = None;
                         p.outbound.send(&SMSG_DUEL_INBOUNDS {});
+                    }
+                    Some(since) if now.duration_since(since) >= OUT_OF_BOUNDS_FOR => {
+                        end(map, g, Some(DuelWinnerReason::Fled));
                     }
                     _ => {}
                 }

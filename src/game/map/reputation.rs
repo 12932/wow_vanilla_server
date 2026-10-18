@@ -367,11 +367,17 @@ fn gain(
         return 0;
     }
     let v = value as f32 * rate * level_rate * (100 + bonus) as f32 / 100.0;
-    let dither: f32 = rand::random();
+    dither(v, rand::random())
+}
+
+/// `v` to a whole number by `roll` (in 0..1): a whole `v` as it is, a
+/// fraction up as often as it is of a whole, so that on average it is
+/// what it was (Thistle Tea's `Math.dither/2`); a loss as a gain is.
+pub fn dither(v: f32, roll: f32) -> i32 {
     if v < 0.0 {
-        -((v.abs() + dither).floor() as i32)
+        -((v.abs() + roll).floor() as i32)
     } else {
-        (v + dither).floor() as i32
+        (v + roll).floor() as i32
     }
 }
 
@@ -485,6 +491,11 @@ pub fn temporary_war(map: &mut Map, player: Guid, creature: Guid) {
     let Some(faction) = faction_of(map, creature) else {
         return;
     };
+    temporary_war_with(map, player, faction);
+}
+
+/// [`temporary_war`], with the creature's faction.
+pub fn temporary_war_with(map: &mut Map, player: Guid, faction: u32) {
     let data = map.realm.data.clone();
     let Some(def) = data.misc.faction(faction) else {
         return;

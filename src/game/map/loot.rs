@@ -455,18 +455,19 @@ fn setup_group(map: &mut Map, loot: &mut Loot, creature: Guid, tapper: Guid, nea
         let Some(g) = groups.group_of_mut(tapper) else {
             return;
         };
+        // The next member near, after the last looter in the group's
+        // order, those away passed over (mangos's `UpdateLooterGuid`,
+        // Thistle Tea's `update_looter/3`).
         let assigned = (g.loot_method == GroupLootSetting::RoundRobin).then(|| {
-            let order: Vec<Guid> = g
-                .members
-                .iter()
-                .map(|m| m.guid)
-                .filter(|m| near.contains(m))
-                .collect();
-            let next = order
+            let order: Vec<Guid> = g.members.iter().map(|m| m.guid).collect();
+            let after = order
                 .iter()
                 .position(|m| *m == g.round_robin)
-                .map(|i| order[(i + 1) % order.len()])
-                .unwrap_or(order[0]);
+                .map_or(0, |i| i + 1);
+            let next = (0..order.len())
+                .map(|k| order[(after + k) % order.len()])
+                .find(|m| near.contains(m))
+                .unwrap_or(tapper);
             g.round_robin = next;
             next
         });

@@ -102,6 +102,36 @@ mod tests_p3_combat8;
 #[cfg(test)]
 mod tests_p3_combat9;
 #[cfg(test)]
+mod tests_p3_core_auction;
+#[cfg(test)]
+mod tests_p3_core_aura;
+#[cfg(test)]
+mod tests_p3_core_condition;
+#[cfg(test)]
+mod tests_p3_core_death;
+#[cfg(test)]
+mod tests_p3_core_guild;
+#[cfg(test)]
+mod tests_p3_core_instance;
+#[cfg(test)]
+mod tests_p3_core_inventory;
+#[cfg(test)]
+mod tests_p3_core_misc;
+#[cfg(test)]
+mod tests_p3_core_party;
+#[cfg(test)]
+mod tests_p3_core_pvp;
+#[cfg(test)]
+mod tests_p3_core_reputation;
+#[cfg(test)]
+mod tests_p3_core_social;
+#[cfg(test)]
+mod tests_p3_core_stone;
+#[cfg(test)]
+mod tests_p3_core_strat;
+#[cfg(test)]
+mod tests_p3_core_trade;
+#[cfg(test)]
 mod tests_p3_entity;
 #[cfg(test)]
 mod tests_p3_entity_effects;
