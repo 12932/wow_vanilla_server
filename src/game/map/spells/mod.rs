@@ -1780,6 +1780,11 @@ pub fn heal_crit(
     periodic: bool,
     crit: bool,
 ) {
+    // Down in a linked feign death, nothing heals it (Thistle Tea's
+    // fallen pose).
+    if crate::game::map::event_ai::feigning(map, target) {
+        return;
+    }
     let Some(f) = map.unit_fields_mut(target) else {
         return;
     };

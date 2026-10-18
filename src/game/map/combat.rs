@@ -2433,6 +2433,12 @@ fn deal_damage_with(
         return;
     };
     let left = f.get_u32(UNIT_FIELD_HEALTH).saturating_sub(damage);
+    // A linked feign death keeps it down, not dead: a killing blow, before
+    // any floor holds it up (Thistle Tea's `LinkedFeignDeath.prevent`, ahead
+    // of the invincibility threshold).
+    if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
+        return;
+    }
     // A script can keep a creature from falling below a floor, and an
     // unkillable one (vmangos's `CREATURE_STATIC_FLAG_UNKILLABLE`) never
     // falls below one health unless a script's floor lets it (Thistle
@@ -2446,10 +2452,6 @@ fn deal_damage_with(
     } else {
         left
     };
-    // A linked feign death keeps it down, not dead.
-    if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
-        return;
-    }
     // A priest with Spirit of Redemption becomes a spirit instead: in a
     // battleground, defeated all the same, the death to come (Thistle Tea's
     // `count_death?: false`).

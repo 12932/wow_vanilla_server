@@ -1222,6 +1222,7 @@ pub fn regenerate(map: &mut Map) {
         .filter(|(_, c)| c.alive() && !c.evading && c.owner.is_none_or(|o| !guid::is_player(o)))
         .filter(|(_, c)| c.engagement.regen_at.is_none_or(|t| t <= now))
         .map(|(_, c)| c.guid)
+        .filter(|&g| !crate::game::map::event_ai::feigning(map, g))
         .collect();
     for &g in &due {
         let stats = regenerated_stats(map, g);
