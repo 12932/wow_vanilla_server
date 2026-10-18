@@ -945,6 +945,16 @@ fn passive_fight(map: &mut Map, g: Guid) {
         .threat
         .iter()
         .any(|(t, _)| map.unit_view(*t).is_some_and(|u| u.alive) && combat::can_attack(map, g, *t));
+    // With none left, it doesn't go home while a creature it may fight is
+    // attacking it, as in [`fight_step`]: that one is put on its list.
+    // (Keeper Remulos, his phantasm dead and his attack stopped, waited
+    // here.)
+    if !left && let Some(a) = attacker_of(map, g) {
+        if let Some(c) = map.creature_mut(g) {
+            c.threat.push((a, 0.0));
+        }
+        return;
+    }
     if !left {
         // One on a script's walk (a peasant fleeing for Eris Havenfire's
         // light under the Scourge's arrows) leaves the fight where it is
