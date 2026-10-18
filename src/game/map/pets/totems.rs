@@ -431,7 +431,9 @@ pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate
 }
 
 /// A companion: it follows, and fights nothing. Summoning the one out
-/// sends it away.
+/// sends it away. Its level is its template's, not its owner's, and it is
+/// immune to players and creatures both, over its template's flags
+/// (mangos's `EffectSummonCritter`, Thistle Tea's `build_mini_pet`).
 pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate) {
     let old = map.players.get(&owner).and_then(|p| p.owned.critter);
     if let Some(old) = old {
@@ -441,12 +443,21 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
             return;
         }
     }
-    let level = level_of(map, owner);
+    let t = summon::template(&map.realm.data, entry);
+    let level = if t.level_max > t.level_min {
+        rand::RngExt::random_range(&mut rand::rng(), t.level_min..=t.level_max)
+    } else {
+        t.level_min
+    };
     let (at, o) = before(map, owner, 1.5);
-    let g = summon::spawn(map, owner, entry, Kind::Critter, level, at, o);
+    let g = summon::spawn(map, owner, entry, Kind::Critter, level.max(1), at, o);
     if let Some(c) = map.creature_mut(g) {
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
-        c.fields.set_u32(UNIT_FIELD_FLAGS, 0);
+        let flags = c.fields.get_u32(UNIT_FIELD_FLAGS)
+            | t.unit_flags
+            | crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_PLAYER
+            | crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_NPC;
+        c.fields.set_u32(UNIT_FIELD_FLAGS, flags);
         if let Some(st) = c.pet.as_deref_mut() {
             st.summon_spell = s.id;
             st.react = REACT_PASSIVE;

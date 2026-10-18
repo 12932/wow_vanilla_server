@@ -317,16 +317,19 @@ pub fn capture_self_res(map: &mut Map, g: Guid) {
             .map(|(_, res)| *res)
     });
     // Reincarnation off its cooldown (its own or its category's), with
-    // its Ankh carried.
+    // its Ankh carried, and a self-resurrection of its own to offer
+    // (Thistle Tea's "malformed" spell offers nothing).
     let reincarnation = p.spells.contains(&REINCARNATION_PASSIVE)
         && data.spells.get(REINCARNATION).is_some_and(|s| {
-            let cooling = p.caster.cooldowns.get(&s.id).is_some_and(|t| *t > now)
-                || (s.category != 0
-                    && p.caster
-                        .category_cooldowns
-                        .get(&s.category)
-                        .is_some_and(|t| *t > now));
-            !cooling && has_reagents(p, s)
+            s.has_effect(94) && {
+                let cooling = p.caster.cooldowns.get(&s.id).is_some_and(|t| *t > now)
+                    || (s.category != 0
+                        && p.caster
+                            .category_cooldowns
+                            .get(&s.category)
+                            .is_some_and(|t| *t > now));
+                !cooling && has_reagents(p, s)
+            }
         });
     let spell = stone.unwrap_or(if reincarnation { REINCARNATION } else { 0 });
     p.fields.set_u32(PLAYER_SELF_RES_SPELL, spell);

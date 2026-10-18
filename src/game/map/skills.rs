@@ -195,6 +195,26 @@ pub fn init(p: &mut Player, data: &GameData) {
     }
 }
 
+/// The language a language spell learned teaches, at 300 (mangos's
+/// `addSpell`, which gives a spell's race-or-class skill as it is learned,
+/// of whatever race; Thistle Tea's `Spells.learn`).
+pub fn learn_language(p: &mut Player, data: &GameData, spell: u32) {
+    let languages: Vec<u32> = data
+        .spells
+        .skill_abilities
+        .get(&spell)
+        .into_iter()
+        .flatten()
+        .filter(|a| a.acquire == 2 && LANGUAGES.contains(&a.skill))
+        .map(|a| a.skill)
+        .collect();
+    for skill in languages {
+        if slot_of(p, skill).is_none() {
+            learn_skill(p, skill, 1);
+        }
+    }
+}
+
 /// The skills a spell's skill effects teach, each at the step its points
 /// say: on login, and as the spell is learned (mangos's `addSpell` learns
 /// a spell's skill with it; a profession's rank is no passive).

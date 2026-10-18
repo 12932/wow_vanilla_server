@@ -974,6 +974,7 @@ pub mod testing {
         pet_xp_to_level, show_training_points, tame, tick,
     };
     pub use super::summon::{
-        UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, from_record, record_of, spawn, summon_demon,
+        UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, die, from_record, record_of, spawn,
+        summon_demon,
     };
 }

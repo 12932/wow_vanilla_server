@@ -1783,6 +1783,8 @@ async fn a_dispel_takes_its_kind_a_stack_a_try_unless_held_on() {
         .query(move |m| {
             ready(m, w, 60, &[]);
             ready(m, priest, 60, &[]);
+            // Out of the Battle Stance a warrior logs in in.
+            auras::remove_spell(m, w, crate::game::map::spells::BATTLE_STANCE, None);
             let k1 = dummy(m, w, 60, 5.0);
             let k2 = dummy(m, w, 60, 6.0);
             let stacks = |m: &Map| holder(m, w, DEADLY_POISON).map_or(0, |h| h.stacks);

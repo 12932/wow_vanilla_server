@@ -62,6 +62,7 @@ pub mod fail {
     pub const REQUIRES_SPELL_FOCUS: u8 = 0x5e;
     pub const SILENCED: u8 = 0x60;
     pub const SPELL_IN_PROGRESS: u8 = 0x61;
+    pub const SPELL_LEARNED: u8 = 0x62;
     pub const STUNNED: u8 = 0x64;
     pub const TARGETS_DEAD: u8 = 0x65;
     pub const TARGET_AFFECTING_COMBAT: u8 = 0x66;

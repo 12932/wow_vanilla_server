@@ -182,6 +182,27 @@ fn buy_failed(map: &Map, player: Guid, npc: Guid, item: u32, result: BuyResult) 
 
 /// `CMSG_BUY_ITEM`: `amount` stacks of an item's buy count.
 pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
+    buy_to(
+        map,
+        player,
+        npc,
+        item,
+        amount,
+        inventory::Destination::Anywhere,
+    );
+}
+
+/// [`buy`], the new items put `to`: refused, with nothing spent, where
+/// they can't go (mangos's `BuyItemFromVendor`, after the vendor's and the
+/// money's checks).
+fn buy_to(
+    map: &mut Map,
+    player: Guid,
+    npc: Guid,
+    item: u32,
+    amount: u8,
+    to: inventory::Destination,
+) {
     // The dead buy nothing, and are told nothing; a vendor out of reach
     // (or dead, or not one) is too far (mangos's `BuyItemFromVendor`).
     let alive = map
@@ -259,7 +280,7 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         buy_failed(map, player, npc, item, BuyResult::NotEnoughtMoney);
         return;
     }
-    if let Err(f) = inventory::add_item(map, player, item, count, true) {
+    if let Err(f) = inventory::add_item_to(map, player, item, count, to) {
         if let Some(p) = map.players.get(&player) {
             inventory::send_fail(p, f, Guid::zero());
         }
@@ -289,11 +310,15 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
     }
 }
 
-/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, and a new item put
-/// where the client dropped it: a slot of the backpack (the bag is the
-/// player) or of a bag worn, or (slot 255) anywhere in that bag, as
-/// mangos's BuyItemFromVendor stores it at the position asked and Thistle
-/// Tea's `buy_in_slot` sends it.
+/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, into where the client
+/// dropped it: the bag is the player's own (the backpack and what they
+/// wear) or a bag worn on the bag bar; another is no bag of theirs, and
+/// nothing is done (mangos's `HandleBuyItemInSlotOpcode`). Slot 255 is
+/// anywhere in that bag, first; an equipment slot or one of the bag bar
+/// wears it; any other slot takes it, onto a stack of its own, the rest
+/// going into that bag, then anywhere. A slot that is the bank's, taken
+/// by another item, or can't wear it refuses the purchase, and nothing is
+/// spent (mangos's `BuyItemFromVendor`, Thistle Tea's `buy_in_slot`).
 pub fn buy_in_slot(
     map: &mut Map,
     player: Guid,
@@ -303,7 +328,7 @@ pub fn buy_in_slot(
     bag: Guid,
     slot: u8,
 ) {
-    let data = map.realm.data.clone();
+    use inventory::Destination;
     let Some(p) = map.players.get(&player) else {
         return;
     };
@@ -320,40 +345,14 @@ pub fn buy_in_slot(
     let Some(bag) = bag else {
         return;
     };
-    let before: Vec<Guid> = p
-        .items
-        .iter()
-        .filter(|i| i.entry == item)
-        .map(|i| i.guid)
-        .collect();
-    buy(map, player, npc, item, amount);
-    let Some(p) = map.players.get(&player) else {
-        return;
-    };
-    let Some(new) = p
-        .items
-        .iter()
-        .find(|i| i.entry == item && !before.contains(&i.guid))
-        .map(|i| (i.bag, i.slot))
-    else {
-        return;
-    };
-    let (first, end) = if bag == BAG_PLAYER {
-        (inventory::PACK_START, inventory::PACK_END)
-    } else {
-        (0, p.bag_size(&data, bag))
-    };
     let to = if slot == u8::MAX {
-        (first..end).find(|s| p.item_at(bag, *s).is_none())
+        Destination::Bag(bag, None)
+    } else if bag == BAG_PLAYER && slot < BAG_END {
+        Destination::Worn(slot)
     } else {
-        Some(slot).filter(|s| (first..end).contains(s) && p.item_at(bag, *s).is_none())
+        Destination::Bag(bag, Some(slot))
     };
-    if let Some(to) = to
-        && new != (bag, to)
-        && !(slot == u8::MAX && new.0 == bag)
-    {
-        inventory::move_item(map, player, new, (bag, to));
-    }
+    buy_to(map, player, npc, item, amount, to);
 }
 
 /// Whether an item is carried: in the backpack, a bag, or a bag slot.
@@ -736,6 +735,14 @@ pub fn worn(max: u32, now: u32, amount: i32, pct: bool) -> u32 {
     (i64::from(now) - i64::from(amount)).clamp(0, i64::from(max)) as u32
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's roll (a percentage) and equipment slot for a blow's wear,
+    /// in place of the dice.
+    pub static FORCED_WEAR: std::cell::Cell<Option<(f32, u8)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// A blow between `attacker` and `victim` (Thistle Tea's `hit_loss`): each
 /// player of the two, one time in two hundred, loses a point off a random
 /// equipment slot's item.
@@ -745,10 +752,15 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
     }
     let mut rng = rand::rng();
     for g in [victim, attacker] {
-        if !guid::is_player(g) || rng.random_range(0.0f32..100.0) >= HIT_WEAR_CHANCE {
+        let (roll, slot) = (
+            rng.random_range(0.0f32..100.0),
+            rng.random_range(0..WEAR_SLOTS),
+        );
+        #[cfg(test)]
+        let (roll, slot) = FORCED_WEAR.with(|f| f.get()).unwrap_or((roll, slot));
+        if !guid::is_player(g) || roll >= HIT_WEAR_CHANCE {
             continue;
         }
-        let slot = rng.random_range(0..WEAR_SLOTS);
         let Some(p) = map.players.get_mut(&g) else {
             continue;
         };

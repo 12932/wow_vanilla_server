@@ -22,7 +22,7 @@ const GROWL: u32 = 2649;
 const DEMONIC_SACRIFICE_SCRIPT: i32 = 2228;
 
 /// A template, or a stand-in for an entry the data lacks.
-fn template(data: &GameData, entry: u32) -> CreatureTemplate {
+pub(super) fn template(data: &GameData, entry: u32) -> CreatureTemplate {
     data.creature_template(entry)
         .cloned()
         .unwrap_or_else(|| CreatureTemplate {
