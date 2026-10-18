@@ -1345,6 +1345,34 @@ fn write_slot(map: &mut Map, target: Guid, index: usize) {
     set_slot_fields(map, target, slot, h.spell, flags, h.level, apps);
 }
 
+/// `caster`'s holder of `spell` (from `item`) on `target` at `stacks` (a
+/// saved aura's, at login): its slot shows them and the stats count them.
+pub fn set_stacks(
+    map: &mut Map,
+    target: Guid,
+    spell: u32,
+    caster: Guid,
+    item: Option<Guid>,
+    stacks: u32,
+) {
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let Some(i) = a
+        .holders
+        .iter()
+        .position(|h| h.spell == spell && h.caster == caster && h.item == item)
+    else {
+        return;
+    };
+    if a.holders[i].stacks == stacks {
+        return;
+    }
+    a.holders[i].stacks = stacks;
+    write_slot(map, target, i);
+    recalc(map, target);
+}
+
 fn clear_slot(map: &mut Map, target: Guid, slot: usize) {
     set_slot_fields(map, target, slot, 0, 0, 0, 0);
 }

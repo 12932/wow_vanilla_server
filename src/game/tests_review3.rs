@@ -506,3 +506,59 @@ async fn a_creature_down_in_a_linked_feign_death_runs_no_timed_events() {
     assert_eq!(out.2, out.1, "its timer waits while it lies there");
     assert!(out.3, "still down");
 }
+
+/// A stacked aura saved at logout comes back at login with its stacks on
+/// its bar and in the stats it gives, not one stack's.
+#[tokio::test]
+async fn a_restored_aura_shows_and_gives_its_stacks() {
+    use crate::game::fields::{UNIT_FIELD_AURAAPPLICATIONS, UNIT_FIELD_STAT0};
+    use crate::game::map::spells::cooldowns;
+    const MIGHT: u32 = 990_360;
+    let realm = fast_realm(|d| {
+        let mut might = bare(MIGHT, 0);
+        might.duration_index = LASTS_LONG;
+        might.stack_amount = 5;
+        effect(
+            &mut might,
+            0,
+            aura(crate::game::map::auras::AURA_MOD_STAT, 0, 10, 1),
+        );
+        insert(d, [might]);
+    });
+    let (_c, warrior, map) = human(&realm, "R3ST", "Stacked", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            use super::tests_p3_spells_kit::{apply_template, holder};
+            ready(m, warrior, 60, &[]);
+            let shown = |m: &crate::game::map::Map| {
+                let f = m.unit_fields(warrior).unwrap();
+                (
+                    f.get_u32(UNIT_FIELD_STAT0),
+                    (0..12)
+                        .map(|i| f.get_u32(UNIT_FIELD_AURAAPPLICATIONS + i))
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let bare = shown(m).0;
+            let t = m.realm.data.spells.get(MIGHT).unwrap().clone();
+            for _ in 0..5 {
+                apply_template(m, warrior, warrior, &t);
+            }
+            let stacked = shown(m);
+            let saved = cooldowns::saved_auras(&m.players[&warrior], m.now);
+            crate::game::map::auras::remove_spell(m, warrior, MIGHT, None);
+            m.players.get_mut(&warrior).unwrap().row.state.auras = saved;
+            cooldowns::restore(m, warrior);
+            (
+                bare,
+                stacked,
+                shown(m),
+                holder(m, warrior, MIGHT).map(|h| h.stacks),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.1.0, out.0 + 50, "five stacks of ten strength");
+    assert_eq!(out.3, Some(5), "five stacks back");
+    assert_eq!(out.2, out.1, "shown and given as before the logout");
+}
