@@ -318,3 +318,121 @@ async fn a_channel_triggers_at_its_start_and_not_its_ticks() {
     assert!(!later, "none from its ticks");
     assert!(!still, "the channel ran out");
 }
+
+const ON_SPELL: u32 = 990_220;
+const ON_SPELL_MARK: u32 = 990_221;
+const CUSTOM: u32 = 990_222;
+const CUSTOM_MARK: u32 = 990_223;
+const QUIET_BOLT: u32 = 990_224;
+const LOUD_BOLT: u32 = 990_225;
+
+fn rules(d: &mut GameData) {
+    use crate::game::data::spells::{ATTR_EX3_SUPPRESS_CASTER_PROCS, ProcEvent};
+    use crate::game::map::auras::AURA_PROC_TRIGGER_SPELL;
+    use crate::game::map::procs::{PROC_DONE_NEGATIVE_SPELL, PROC_TAKEN_NEGATIVE_SPELL};
+    let proc_on = |id: u32, mark: u32, flags: u32, chance: u32| {
+        let mut s = bare(id, 0);
+        s.duration_index = LASTS_LONG;
+        s.proc_flags = flags;
+        s.proc_chance = chance;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                trigger_spell: mark,
+                ..aura(AURA_PROC_TRIGGER_SPELL, 0, 0, 1)
+            },
+        );
+        s
+    };
+    let mark = |id: u32| {
+        let mut s = bare(id, 0);
+        s.duration_index = LASTS_LONG;
+        effect(&mut s, 0, aura(AURA_DUMMY, 0, 0, 1));
+        s
+    };
+    let bolt = |id: u32, quiet: bool| {
+        let mut s = bare(id, 5);
+        s.attributes[3] |= crate::game::data::spells::ATTR_EX3_ALWAYS_HIT;
+        if quiet {
+            s.attributes[3] |= ATTR_EX3_SUPPRESS_CASTER_PROCS;
+        }
+        effect(&mut s, 0, damage(1));
+        s
+    };
+    insert(
+        d,
+        [
+            proc_on(
+                ON_SPELL,
+                ON_SPELL_MARK,
+                PROC_DONE_NEGATIVE_SPELL | PROC_TAKEN_NEGATIVE_SPELL,
+                100,
+            ),
+            mark(ON_SPELL_MARK),
+            proc_on(CUSTOM, CUSTOM_MARK, PROC_DONE_NEGATIVE_SPELL, 100),
+            mark(CUSTOM_MARK),
+            bolt(QUIET_BOLT, true),
+            bolt(LOUD_BOLT, false),
+        ],
+    );
+    d.spells.proc_events.insert(
+        CUSTOM,
+        ProcEvent {
+            chance: 10.0,
+            ..Default::default()
+        },
+    );
+}
+
+/// A spell that suppresses its caster's procs still procs its target's
+/// (Thistle Tea's "caster suppression leaves victim-side procs eligible");
+/// `spell_proc_event`'s chance over the DBC's (its "prefers VMangos custom
+/// chance").
+#[tokio::test]
+async fn a_casters_suppression_spares_the_target_and_vmangos_chance_comes_first() {
+    let realm = fast_realm(|d| {
+        kit(d);
+        rules(d);
+    });
+    let (_c, g, map) = human(&realm, "P5TD", "Suppressor", Class::Mage).await;
+    let (_d, v, _) = human(&realm, "P5TE", "Victim", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, g, 60, &[]);
+            kit::ready(m, v, 60, &[]);
+            kit::apply(m, g, g, ON_SPELL);
+            kit::apply(m, v, v, ON_SPELL);
+            let mut seen = Vec::new();
+            for bolt in [QUIET_BOLT, LOUD_BOLT] {
+                for x in [g, v] {
+                    auras::remove_spell(m, x, ON_SPELL_MARK, None);
+                }
+                fresh(m, g);
+                spells::cast_triggered(m, g, bolt, Some(v));
+                seen.push((has(m, g, ON_SPELL_MARK), has(m, v, ON_SPELL_MARK)));
+            }
+            // The custom chance: a tenth, not the DBC's whole.
+            auras::remove_spell(m, g, ON_SPELL, None);
+            kit::apply(m, g, g, CUSTOM);
+            let custom = (0..1_000)
+                .filter(|_| {
+                    auras::remove_spell(m, g, CUSTOM_MARK, None);
+                    fresh(m, g);
+                    spells::cast_triggered(m, g, LOUD_BOLT, Some(v));
+                    has(m, g, CUSTOM_MARK)
+                })
+                .count();
+            (seen, custom)
+        })
+        .await
+        .unwrap();
+    let (seen, custom) = out;
+    assert_eq!(
+        seen[0],
+        (false, true),
+        "the caster's suppressed, the target's not"
+    );
+    assert_eq!(seen[1], (true, true), "both, unsuppressed");
+    assert!((50..=160).contains(&custom), "a tenth of 1000: {custom}");
+}
