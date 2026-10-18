@@ -14,10 +14,18 @@ progress are in [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md), and what Thist
 ```sh
 cargo check
 cargo clippy --all-targets          # must be clean before a commit
-cargo test --lib                    # the harness tests run the real sessions and maps
+cargo nextest run --lib             # the fast suite: every test that doesn't need the real world
+cargo extended                      # the extended suite: every test, before a merge or a push
 cargo build --release --bin wow_vanilla_server
 cargo run --release --bin wvs-setup  # data/nav and data/terrain from a WoW client
 ```
+
+Tests run under nextest, never `cargo test`. The fast suite takes about 25 s on 16 cores. `cargo extended` is an
+alias for `cargo nextest run --lib --profile extended --run-ignored all`; it takes about 3 minutes, and needs the
+real world: `WVS_DATA` points at a `data/` with `db` (`vmangos.sqlite`, `dbc.sqlite`), `nav` and `terrain` (else the
+checkout's `data/`, whose databases are Git LFS pointers until pulled). A test that reads the real world (through
+`harness::real_data`, `harness::load_real` or `load::real_data()`) is marked `#[ignore = "extended"]`; unmarked, it
+fails in the fast suite and says so. Details in [docs/TESTING.md](docs/TESTING.md).
 
 ## The design
 
@@ -82,6 +90,8 @@ There is no world tick.
 - **Never block a map**: no `.await`, no file or database work in a handler; the store is fire-and-forget.
 - **Tests go through the protocol** (`src/game/harness.rs`): connect clients to a realm, send real messages, and
   read what comes back with wow_messages.
+- **The fast suite stays fast**: a test that needs the real world is `#[ignore = "extended"]`; one that waits seconds
+  in real time skips the map's clock instead where it can. A long walk is split into tests nextest runs at once.
 
 ## Configuration
 
@@ -92,10 +102,11 @@ There is no world tick.
 | `WOW_REALM_ADDRESS` | `host:port` in the realm list. Defaults to `localhost:8085`. |
 | `WOW_TRACY` | `1` starts the Tracy profiler. |
 | `RUST_LOG` | the log filter. |
+| `WVS_DATA` | the tests' real world: a `data/` with `db`, `nav` and `terrain` (the extended suite's). |
 
 ## Pull-request checklist
 
-- [ ] `cargo clippy --all-targets` clean, `cargo test --lib` passing.
+- [ ] `cargo clippy --all-targets` clean, `cargo nextest run --lib` and `cargo extended` passing.
 - [ ] A harness test for each packet a change handles.
 - [ ] A schema change is a new entry in `MIGRATIONS`, never an edit to an old one.
 - [ ] Phase work updates [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md)'s progress.
