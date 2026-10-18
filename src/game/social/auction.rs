@@ -490,6 +490,11 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
 /// the seller pays the cut and the bidder is paid back.
 pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     let realm = map.realm.clone();
+    // At an auctioneer, as any other auction command (mangos's
+    // `HandleAuctionRemoveItem`).
+    if house_at(map, g, m.auctioneer).is_none() {
+        return;
+    }
     let mut auctions = realm.social.auctions.lock();
     let Some(a) = auctions
         .auctions

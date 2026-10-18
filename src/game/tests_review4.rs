@@ -747,3 +747,34 @@ async fn a_charter_not_held_founds_no_guild() {
     let founded = realm.social.guilds.lock().of(g).is_some();
     assert!(!founded, "no guild without its charter");
 }
+
+/// R4-15. An auction is cancelled at an auctioneer, as every other auction
+/// command is (mangos's `HandleAuctionRemoveItem`), not from anywhere.
+#[tokio::test]
+async fn an_auction_is_cancelled_only_at_an_auctioneer() {
+    use crate::game::social::auction::Auction;
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4AC");
+    let g = a.enter("Canceller", Race::Human, Class::Warrior).await;
+    realm.social.auctions.lock().auctions.insert(
+        9,
+        Auction {
+            id: 9,
+            market: 2,
+            house: 2,
+            owner: guid::counter(g),
+            start_bid: 1,
+            expires_at: i64::MAX,
+            ..Default::default()
+        },
+    );
+    // The vendor is no auctioneer.
+    a.send(CMSG_AUCTION_REMOVE_ITEM {
+        auctioneer: vendor_guid(),
+        auction_id: 9,
+    })
+    .await;
+    handled(&mut a).await;
+    let still = realm.social.auctions.lock().auctions.contains_key(&9);
+    assert!(still, "not cancelled away from the house");
+}
