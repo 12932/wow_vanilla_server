@@ -120,16 +120,21 @@ async fn nerubenkan_raises_his_scarabs() {
         assert!(at_me, "round {round}: set on his attacker");
         // A crypt scarab that reaches him goes.
         if n.0 > 0 {
-            map.query(move |m| {
-                let s = summoned_by(m, g, 10577)[0];
-                let at = m.position_of(me).unwrap();
-                if let Some(c) = m.creature_mut(s) {
-                    c.position = off(at, 2.0, 0.0);
-                }
-            })
-            .await;
+            // One brought beside him (again at each look, as it moves
+            // on its own).
             assert!(
-                until(&map, 2000, move |m| summoned_by(m, g, 10577).len() < n.0).await,
+                until(&map, 5000, move |m| {
+                    let left = summoned_by(m, g, 10577);
+                    if left.len() < n.0 {
+                        return true;
+                    }
+                    let at = m.position_of(me).unwrap();
+                    if let Some(c) = m.creature_mut(left[0]) {
+                        c.position = off(at, 2.0, 0.0);
+                    }
+                    false
+                })
+                .await,
                 "a crypt scarab gone as it reaches its victim"
             );
         }

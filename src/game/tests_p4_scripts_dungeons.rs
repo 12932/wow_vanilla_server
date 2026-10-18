@@ -343,9 +343,15 @@ async fn maraudons_redeemed_spirit_waits_for_the_cursed() {
         return;
     };
     let (_c, me, map) = inside(&realm, "Celebras", 349, CURSED).await;
+    // Hidden as he spawns: at the copy's first update.
+    assert!(
+        until(&map, 3000, |m| first(m, REDEEMED)
+            .is_some_and(|r| concealed(m, r)))
+        .await,
+        "hidden"
+    );
     map.query(move |m| {
         let r = first(m, REDEEMED).expect("the redeemed spirit");
-        assert!(concealed(m, r), "hidden");
         kill_all(m, me, CURSED);
         assert_eq!(data(m, 1), DONE);
         assert!(!concealed(m, r), "shown once the Cursed falls");
