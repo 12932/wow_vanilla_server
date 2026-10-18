@@ -1374,7 +1374,7 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     }
     // Take what the quest needed.
     for (item, count) in q.required_items.iter().filter(|(i, _)| *i != 0) {
-        take_items(map, player, *item, *count);
+        take_items(map, player, *item, *count, false);
     }
     for (item, count) in &rewards {
         let _ = inventory::add_item(map, player, *item, (*count).max(1), true);
@@ -1460,9 +1460,11 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     }
 }
 
-/// Take `count` of `item` from wherever the player carries it, not the
-/// bank (mangos's `DestroyItemCount`).
-fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32) {
+/// Take `count` of `item` from wherever the player carries it, the bank
+/// too if `banked` (an abandoned quest's items, as Thistle Tea's
+/// `QuestItems.abandon`); a turn-in's from what is carried alone
+/// (mangos's `DestroyItemCount`).
+fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32, banked: bool) {
     while count > 0 {
         let Some(p) = map.players.get(&player) else {
             return;
@@ -1470,7 +1472,7 @@ fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32) {
         let Some(i) = p
             .items
             .iter()
-            .position(|it| it.entry == item && it.carried())
+            .position(|it| it.entry == item && (banked || it.carried()))
         else {
             return;
         };
@@ -1512,7 +1514,7 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
         {
             return inventory::send_fail(p, inventory::Fail::OnlyEmptyBags, bag.guid);
         }
-        take_items(map, player, q.source_item, q.source_item_count.max(1));
+        take_items(map, player, q.source_item, q.source_item_count.max(1), true);
     }
     let Some(p) = map.players.get_mut(&player) else {
         return;
