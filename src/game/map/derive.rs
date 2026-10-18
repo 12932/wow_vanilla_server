@@ -230,6 +230,11 @@ fn pct_for(a: &Auras, bit: u32, w: Option<&Weapon>) -> f32 {
         })
 }
 
+/// The physical percentages of damage done that apply to the weapon `w`.
+pub fn physical_pct_for(a: &Auras, w: Option<&Weapon>) -> f32 {
+    pct_for(a, 1, w)
+}
+
 /// A spell's percentages of damage done on school `bit`: those that ask
 /// for no weapon or item.
 pub fn spell_pct(a: &Auras, bit: u32) -> f32 {

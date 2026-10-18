@@ -1503,6 +1503,13 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         crate::game::map::items::on_equip(&data, &mut p.items[a]);
     }
     p.refresh_inventory(&data);
+    // A weapon put in a hand, either way round the swap went, starts its
+    // swing over.
+    for (bag, slot) in [to, from] {
+        if bag == BAG_PLAYER {
+            crate::game::map::combat::weapon_put_in_hand(map, g, slot);
+        }
+    }
     for (entry, item) in [equipped, swapped].into_iter().flatten() {
         crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
         crate::game::map::items::equipped(map, g, item);

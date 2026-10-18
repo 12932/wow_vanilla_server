@@ -1396,6 +1396,15 @@ fn land(
     if hit == Hit::Immune {
         spend_immunity(map, target, s);
     }
+    // A melee or ranged ability trains its weapon as a swing does.
+    if outcome::physical(s)
+        && matches!(
+            hit,
+            Hit::Hit | Hit::Block | Hit::Miss | Hit::Dodge | Hit::Parry
+        )
+    {
+        crate::game::map::combat::ability_skill_gains(map, caster, target, s);
+    }
     let mut aim = target;
     if hit == Hit::Reflect {
         // Back at the caster; the reflector's procs see it reflected, and
@@ -1857,14 +1866,19 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             .map(|e| e.multiple_value)
             .filter(|v| *v > 0.0)
             .unwrap_or(1.0);
-        heal(
+        // What it gives back is healing the caster takes, by their
+        // modifiers (mangos's `SpellHealingBonusTaken` on the beneficiary).
+        let gain = outcome::spell_healing_taken(
             map,
             h.caster,
-            h.caster,
-            h.spell,
-            (left.min(had) as f32 * mult) as u32,
-            true,
-        );
+            left.min(had) as f32 * mult,
+            &s,
+            index,
+            outcome::Kind::Dot,
+            h.stacks,
+            1.0,
+        ) as u32;
+        leech_heal(map, h.caster, h.spell, gain, true);
     }
 }
 
@@ -1883,6 +1897,26 @@ pub fn heal_crit(
     amount: u32,
     periodic: bool,
     crit: bool,
+) {
+    heal_with(map, caster, target, spell, amount, periodic, crit, true);
+}
+
+/// A leech's heal of its caster: no threat for it (mangos's `PeriodicTick`
+/// and `EffectHealthLeech`, which leave `threatAssist` out).
+pub fn leech_heal(map: &mut Map, caster: Guid, spell: u32, amount: u32, periodic: bool) {
+    heal_with(map, caster, caster, spell, amount, periodic, false, false);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn heal_with(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    spell: u32,
+    amount: u32,
+    periodic: bool,
+    crit: bool,
+    threat: bool,
 ) {
     // Down in a linked feign death, nothing heals it (Thistle Tea's
     // fallen pose).
@@ -1926,7 +1960,9 @@ pub fn heal_crit(
             p.outbound.send_frame(frame);
         }
     }
-    combat::heal_threat(map, caster, target, spell, gained);
+    if threat {
+        combat::heal_threat(map, caster, target, spell, gained);
+    }
 }
 
 /// The category most spells' global cooldown is of.
@@ -2156,15 +2192,15 @@ pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
 /// `Attributes`: not to be cast in a fight.
 const ATTR_NOT_IN_COMBAT: u32 = 0x1000_0000;
 
-/// `g` went into a fight: a cast that isn't for one (the Hearthstone, a
-/// mount) stops, as mangos's `SetInCombatState` and Thistle Tea's
-/// `CombatState.enter` have it.
+/// `g` went into a fight: a cast or a channel that isn't for one (the
+/// Hearthstone, a mount) stops, as mangos's `SetInCombatState` and Thistle
+/// Tea's `CombatState.enter` have it; an instant one is already done.
 pub fn combat_began(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
     let stops = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
-        .filter(|c| c.channel_until.is_none() && c.duration > 0)
+        .filter(|c| c.channel_until.is_some() || c.duration > 0)
         .and_then(|c| data.spells.get(c.spell))
         .is_some_and(|s| s.attr(0, ATTR_NOT_IN_COMBAT));
     if stops {

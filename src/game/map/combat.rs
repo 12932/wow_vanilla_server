@@ -16,7 +16,7 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
     SMSG_ATTACKSTART, SMSG_ATTACKSTOP, SMSG_ATTACKSWING_BADFACING, SMSG_ATTACKSWING_CANT_ATTACK,
     SMSG_ATTACKSWING_DEADTARGET, SMSG_ATTACKSWING_NOTINRANGE, SMSG_ATTACKSWING_NOTSTANDING,
-    Vector3d,
+    SMSG_STANDSTATE_UPDATE, UnitStandState, Vector3d,
 };
 
 use crate::game::conn::encode;
@@ -1306,7 +1306,7 @@ pub fn weapon_damage(
         };
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
-        damage += a
+        let mut flat = a
             .effects()
             .filter(|(h, x)| {
                 x.kind == AURA_MOD_DAMAGE_DONE
@@ -1317,7 +1317,7 @@ pub fn weapon_damage(
             .sum::<f32>();
         let kind = creature_type_mask(map, victim);
         if kind != 0 {
-            damage += a.sum_mask(AURA_MOD_DAMAGE_DONE_CREATURE, kind) as f32;
+            flat += a.sum_mask(AURA_MOD_DAMAGE_DONE_CREATURE, kind) as f32;
             let ap = a.sum_mask(
                 if hand == Hand::Ranged {
                     AURA_MOD_RANGED_ATTACK_POWER_VERSUS
@@ -1326,7 +1326,21 @@ pub fn weapon_damage(
                 },
                 kind,
             );
-            damage += ap as f32 / 14.0 * speed;
+            flat += ap as f32 / 14.0 * speed;
+        }
+        // A player's flat bonuses take the hand's percentages, as its
+        // weapon's damage in the fields has: damage done, and the off
+        // hand's half and its bonus (mangos's `TOTAL_VALUE` under the
+        // hand's `TOTAL_PCT`, and `MeleeDamageBonusDone`'s target bonuses).
+        if is_player {
+            let mut pct = crate::game::map::derive::physical_pct_for(a, weapon.as_ref());
+            if hand == Hand::Off {
+                pct *= 0.5 * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+            }
+            flat *= pct;
+        }
+        damage += flat;
+        if kind != 0 {
             damage *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, kind);
         }
         damage *= school_pct;
@@ -1730,6 +1744,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     // A blow on the immune trains nothing (Thistle Tea's `CombatSkills`).
     if !immune {
         skill_gains(map, attacker, victim, hand);
+        stand_struck(map, victim);
     }
     if left > 0 {
         // A blow on a caster pushes its cast back.
@@ -1957,6 +1972,45 @@ pub fn parry_haste(map: &mut Map, g: Guid) {
     *slot = Some(now + Duration::from_millis(shortened as u64));
 }
 
+/// A weapon put in the main or off hand in a fight starts that hand's
+/// swing over, a whole period of the new weapon away, hasted as the hand
+/// is (mangos's `Player::EquipItem` and `resetAttackTimer`, Thistle Tea's
+/// `AttackTimers.equipment_changed`). The other hand, the ranged slot and a
+/// weapon taken off leave the timers as they are, as mangos has them.
+pub fn weapon_put_in_hand(map: &mut Map, g: Guid, slot: u8) {
+    use crate::game::map::inventory::{SLOT_MAIN_HAND, SLOT_OFF_HAND};
+    if slot != SLOT_MAIN_HAND && slot != SLOT_OFF_HAND {
+        return;
+    }
+    let now = map.now;
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let fighting = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    let weapon = p
+        .item_at(crate::game::store::BAG_PLAYER, slot)
+        .and_then(|i| data.item(p.items[i].entry))
+        .is_some_and(|t| t.class == 2);
+    if !fighting || !weapon || p.death != Death::Alive {
+        return;
+    }
+    let field = if slot == SLOT_OFF_HAND {
+        UNIT_FIELD_BASEATTACKTIME + 1
+    } else {
+        UNIT_FIELD_BASEATTACKTIME
+    };
+    let period = p.fields.get_u32(field).max(100);
+    let at = Some(now + Duration::from_millis(u64::from(period)));
+    if let Some(c) = map.combat_mut(g) {
+        if slot == SLOT_OFF_HAND {
+            c.next_offhand = at;
+        } else {
+            c.next_swing = at;
+        }
+    }
+}
+
 /// `CMSG_SETSHEATHED` (Thistle Tea's `Sheath.request`): weapons out or
 /// away; a channel and the auras that sheathing breaks end first.
 pub fn sheathe(map: &mut Map, g: Guid, state: u8) {
@@ -2137,7 +2191,32 @@ pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: 
     (3.0 * diff * cap.saturating_sub(value) as f32 / player_level.max(1) as f32).min(100.0)
 }
 
-/// Weapon and defense skills that a blow against a creature trains.
+/// A critter's creature type.
+pub const CREATURE_TYPE_CRITTER: u32 = 8;
+
+/// A melee or ranged ability that hit, or was missed, dodged, parried or
+/// blocked, trains the skill of the weapon it was made with and the
+/// target's defense, once, as a swing does (mangos's
+/// `ProcSkillsAndReactives` on a melee-based proc; Thistle Tea's
+/// `CombatSkills.resolve` for abilities).
+pub fn ability_skill_gains(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+) {
+    let hand = if s.dmg_class == 3 {
+        Hand::Ranged
+    } else if s.attr(3, crate::game::data::spells::ATTR_EX3_REQ_OFFHAND) {
+        Hand::Off
+    } else {
+        Hand::Main
+    };
+    skill_gains(map, caster, target, hand);
+}
+
+/// Weapon and defense skills that a blow against a creature trains; a
+/// critter trains nothing (mangos's `ProcSkillsAndReactives`).
 fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
     let mut rng = rand::rng();
     let (weapon_by, defense_by) = (
@@ -2145,29 +2224,54 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
         map.cfg.rates.skill_gain_defense,
     );
     let trains = |map: &Map, g: Guid| {
-        map.creature(g)
-            .is_some_and(|c| c.owner.is_none_or(|o| !guid::is_player(o)))
+        map.creature(g).is_some_and(|c| {
+            c.owner.is_none_or(|o| !guid::is_player(o))
+                && map
+                    .realm
+                    .data
+                    .creature_template(c.entry)
+                    .is_none_or(|t| t.creature_type != CREATURE_TYPE_CRITTER)
+        })
     };
     // The attacker's weapon.
     if map.players.contains_key(&attacker) && trains(map, victim) {
         let mob_level = map.unit_view(victim).map_or(1, |u| u.level);
-        let skill = hand_weapon(map, attacker, hand)
-            .map_or(162, |w| crate::game::map::derive::weapon_skill(w.subclass));
-        let gained = map.players.get_mut(&attacker).is_some_and(|p| {
-            let level = u32::from(p.level());
-            if mob_level <= gray_level(level) {
-                return false;
-            }
-            let Some(value) = crate::game::map::skills::value(p, skill) else {
-                return false;
-            };
-            let cap = level * 5;
-            if value >= cap {
-                return false;
-            }
-            let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
-            rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
-                && raise_skill(p, skill, weapon_by)
+        // The weapon it can use: none in cat or bear form, nor in a
+        // disarmed main hand, which trains unarmed; an empty off hand or
+        // ranged slot trains nothing (mangos's `GetWeaponSkillIdForAttack`
+        // and `CanUseEquippedWeapon`).
+        let (feral, disarmed) = map.players.get(&attacker).map_or((false, false), |p| {
+            (
+                matches!(
+                    p.fields.get_byte(UNIT_FIELD_BYTES_1, 2),
+                    auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
+                ),
+                p.auras.has(AURA_MOD_DISARM),
+            )
+        });
+        let usable = !feral && !(hand == Hand::Main && disarmed);
+        let skill = match hand_weapon(map, attacker, hand).filter(|_| usable) {
+            Some(w) => Some(crate::game::map::derive::weapon_skill(w.subclass)),
+            None if hand == Hand::Main => Some(162),
+            None => None,
+        };
+        let gained = skill.is_some_and(|skill| {
+            map.players.get_mut(&attacker).is_some_and(|p| {
+                let level = u32::from(p.level());
+                if mob_level <= gray_level(level) {
+                    return false;
+                }
+                let Some(value) = crate::game::map::skills::value(p, skill) else {
+                    return false;
+                };
+                let cap = level * 5;
+                if value >= cap {
+                    return false;
+                }
+                let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
+                rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
+                    && raise_skill(p, skill, weapon_by)
+            })
         });
         if gained {
             auras::recalc(map, attacker);
@@ -2408,6 +2512,29 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
     }
 }
 
+/// A seated, sleeping or kneeling player struck stands up, and what wants
+/// them seated ends (food, drink): any blow, a miss or one absorbed whole
+/// too, but no periodic tick (mangos's `DealDamage`, since 1.5; Thistle
+/// Tea's `Emote.on_damage`). A creature stands as it enters the fight
+/// ([`crate::game::map::creature_combat::stand_up`]).
+pub fn stand_struck(map: &mut Map, victim: Guid) {
+    if crate::game::map::gm_dev::invulnerable(map, victim) {
+        return;
+    }
+    let Some(p) = map.players.get_mut(&victim) else {
+        return;
+    };
+    // Standing, or dead (7).
+    if matches!(p.stand_state(), 0 | 7) || p.death != Death::Alive {
+        return;
+    }
+    p.set_stand_state(0);
+    p.outbound.send(&SMSG_STANDSTATE_UPDATE {
+        state: UnitStandState::Stand,
+    });
+    auras::interrupt(map, victim, INTERRUPT_NOT_SEATED);
+}
+
 /// Damage a unit: rage, threat, health, death.
 pub fn deal_damage(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
     deal_damage_school(map, attacker, victim, damage, 1);
@@ -2434,6 +2561,9 @@ pub fn deal_damage_by(
     school: u32,
     spell: Option<u32>,
 ) {
+    if map.unit_view(victim).is_some_and(|u| u.alive) {
+        stand_struck(map, victim);
+    }
     deal_damage_with(map, attacker, victim, damage, school, spell, true);
 }
 
@@ -2613,26 +2743,11 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             f.set_u32(UNIT_FIELD_AURASTATE, cleared);
         }
     }
-    // A kill a player's on-kill procs count (Thistle Tea's
-    // `KillFeedback.eligible?`): not grey, and no pet, totem or creature
-    // worth no XP; a creature's kills all count.
-    let worth = if guid::is_player(killer) {
-        let (kl, vl) = (
-            map.unit_view(killer).map_or(1, |u| u.level),
-            map.unit_view(victim).map_or(1, |u| u.level),
-        );
-        let rewarding = map.creature(victim).is_none_or(|c| {
-            c.pet.is_none()
-                && map
-                    .realm
-                    .data
-                    .creature_template(c.entry)
-                    .is_none_or(|t| t.xp_rate() != 0.0 && t.static_flags1 & 0x2 == 0)
-        });
-        rewarding && vl > gray_level(kl)
-    } else {
-        true
-    };
+    let worth = kill_procs(map, killer, victim);
+    // A pet's kill is its master's too (mangos's `Unit::Kill` procs the
+    // killer's owner as well).
+    let master = crate::game::map::pets::master(map, killer);
+    let master_worth = master != killer && kill_procs(map, master, victim);
     if guid::is_unit(killer) {
         crate::game::map::event_ai::kill(map, killer, victim);
     }
@@ -2692,6 +2807,18 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         crate::game::map::ai::die_by(map, victim, tapper, killer);
     }
     if killer != victim {
+        if master_worth && master != victim {
+            procs::trigger(
+                map,
+                procs::Event {
+                    actor: master,
+                    target: victim,
+                    actor_flags: procs::PROC_KILL,
+                    ex: procs::EX_NORMAL_HIT,
+                    ..Default::default()
+                },
+            );
+        }
         procs::trigger(
             map,
             procs::Event {
@@ -2704,6 +2831,29 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             },
         );
     }
+}
+
+/// Whether `killer`'s on-kill procs count the kill of `victim` (Thistle
+/// Tea's `KillFeedback.eligible?`, mangos's `isHonorOrXPTarget`): for a
+/// player, a victim not grey and no pet, totem or creature worth no XP; a
+/// creature's kills all count.
+fn kill_procs(map: &Map, killer: Guid, victim: Guid) -> bool {
+    if !guid::is_player(killer) {
+        return true;
+    }
+    let (kl, vl) = (
+        map.unit_view(killer).map_or(1, |u| u.level),
+        map.unit_view(victim).map_or(1, |u| u.level),
+    );
+    let rewarding = map.creature(victim).is_none_or(|c| {
+        c.pet.is_none()
+            && map
+                .realm
+                .data
+                .creature_template(c.entry)
+                .is_none_or(|t| t.xp_rate() != 0.0 && t.static_flags1 & 0x2 == 0)
+    });
+    rewarding && vl > gray_level(kl)
 }
 
 /// How near a corpse a member must be for a share of the kill.
