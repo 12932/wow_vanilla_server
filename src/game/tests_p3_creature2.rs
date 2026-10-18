@@ -702,3 +702,352 @@ async fn a_formation_is_led_on_by_its_survivors_until_its_leader_is_back() {
     );
     assert_eq!(out.3, None, "none left, none leads");
 }
+
+const SHEEP: u32 = 3_792;
+
+/// Critters; one spawned 3 yards from Alice.
+fn critters() -> GameData {
+    let mut d = data();
+    let mut sheep = template(SHEEP, 8);
+    sheep.faction = crate::game::tests_p3_combat::PACK;
+    d.creature_templates.insert(SHEEP, sheep);
+    let (x, y, z) = crate::game::tests_p3_combat::START;
+    d.creature_spawns
+        .entry(0)
+        .or_default()
+        .push(crate::game::data::CreatureSpawn {
+            guid: 400,
+            entries: vec![SHEEP],
+            map: 0,
+            x: x + 3.0,
+            y,
+            z,
+            respawn_min: 300,
+            respawn_max: 300,
+            ..Default::default()
+        });
+    d
+}
+
+fn spawned_sheep() -> Guid {
+    crate::game::guid::unit(SHEEP, 400)
+}
+
+/// Escape's end, the flee's (from whom, until), and the fleeing flag.
+fn escape(
+    m: &Map,
+    g: Guid,
+) -> (
+    Option<std::time::Instant>,
+    Option<(Guid, std::time::Instant)>,
+    bool,
+) {
+    let c = m.creature(g).unwrap();
+    (
+        c.engagement.escape_at,
+        c.engagement.flee.map(|f| (f.from, f.until)),
+        c.fields
+            .has_flag(UNIT_FIELD_FLAGS, crate::game::map::auras::UNIT_FLAG_FLEEING),
+    )
+}
+
+/// A hit on `g` by `by`, as a blow lands.
+fn hit(m: &mut Map, by: Guid, g: Guid, damage: u32) {
+    crate::game::map::combat::deal_damage(m, by, g, damage);
+    if m.creature(g).is_some_and(|c| c.alive()) {
+        crate::game::map::ai::attacked(m, g, by);
+    }
+}
+
+fn flee_flag(m: &Map, g: Guid) -> bool {
+    escape(m, g).2
+}
+
+/// Thistle Tea's `Critter.react` through `Entity.take_damage`: a critter
+/// struck runs from the one who struck it, for thirty seconds; a later
+/// blow from another lengthens the escape but leaves the run as it was. A
+/// killing blow ends the run and keeps its tap, and it comes back clean. An
+/// ordinary creature, or a critter someone owns, doesn't run.
+#[tokio::test]
+async fn a_critter_runs_from_its_first_foe_and_later_blows_only_lengthen_its_escape() {
+    let (realm, mut a, ga, map) = setup_with(critters(), Class::Warrior).await;
+    let (_b, gb) = crate::game::tests_p3_entity::bob(&realm, ga).await;
+    a.sees(spawned_sheep()).await;
+    let (s, first) = on(&map, move |m| {
+        let s = spawned_sheep();
+        hit(m, ga, s, 10);
+        (s, escape(m, s))
+    })
+    .await;
+    let (at, (from, until), fleeing) = (first.0.unwrap(), first.1.unwrap(), first.2);
+    assert_eq!(from, ga, "from Alice");
+    assert!(fleeing, "fleeing");
+    let target = on(&map, move |m| {
+        m.creature(s).unwrap().fields.get_guid(UNIT_FIELD_TARGET)
+    })
+    .await;
+    assert!(target.is_zero(), "with no one selected");
+    assert_eq!(until, at, "running as long as its escape");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let second = on(&map, move |m| {
+        hit(m, gb, s, 10);
+        escape(m, s)
+    })
+    .await;
+    assert!(second.0.unwrap() > at, "the escape lengthened");
+    assert_eq!(second.1, Some((ga, until)), "the run as it was");
+    let dead = on(&map, move |m| {
+        hit(m, ga, s, 10_000_000);
+        let c = m.creature(s).unwrap();
+        (c.alive(), c.tapped_by, c.threat.is_empty(), escape(m, s))
+    })
+    .await;
+    assert_eq!(
+        (dead.0, dead.1, dead.2, dead.3.1, dead.3.2),
+        (false, Some(ga), true, None, false),
+        "dead: its run over, its tap kept"
+    );
+    let back = on(&map, move |m| {
+        crate::game::map::ai::respawn_now(m, s);
+        m.creature(s)
+            .map(|c| (c.alive(), c.engagement.escape_at.is_none(), flee_flag(m, s)))
+    })
+    .await;
+    assert_eq!(back, Some((true, true, false)), "back clean");
+    let others = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 4.0);
+        let owned = spawn(m, ga, SHEEP, 20, 5.0);
+        m.creature_mut(owned).unwrap().owner = Some(ga);
+        hit(m, gb, brute, 10);
+        hit(m, gb, owned, 10);
+        [brute, owned].map(|g| m.creature(g).unwrap().engagement.escape_at.is_none())
+    })
+    .await;
+    assert_eq!(others, [true, true], "neither runs");
+}
+
+const CURSE: u32 = 97_910;
+const PREVENT_FLEEING: u32 = 97_911;
+
+/// Thistle Tea's critter `SpellEffect.receive`: a harmful debuff cast on a
+/// critter sends it running though it takes no harm.
+#[tokio::test]
+async fn a_cursed_critter_runs_unharmed() {
+    let mut d = critters();
+    let mut curse = crate::game::tests_p3_entity::spell(
+        CURSE,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_MOD_ATTACK_POWER,
+            -10,
+            0,
+            6,
+        )],
+    );
+    curse.range_index = 1;
+    curse.attributes[0] |= crate::game::data::spells::ATTR_DEBUFF;
+    d.spells.spells.insert(CURSE, curse);
+    let (_realm, a, ga, map) = setup_with(d, Class::Warrior).await;
+    crate::game::tests_pets::learn(&map, ga, &[CURSE]);
+    let s = on(&map, move |m| spawn(m, ga, SHEEP, 20, 3.0)).await;
+    crate::game::tests_pets::cast(&a, CURSE, Some(s)).await;
+    until(&map, "the curse on it", move |m| {
+        crate::game::map::auras::auras(m, s).is_some_and(|a| a.has_spell(CURSE))
+    })
+    .await;
+    let out = on(&map, move |m| {
+        let c = m.creature(s).unwrap();
+        (
+            c.fields.get_u32(UNIT_FIELD_HEALTH) == c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+            escape(m, s),
+        )
+    })
+    .await;
+    assert!(out.0, "unharmed");
+    assert!(out.1.0.is_some() && out.1.2, "and running");
+}
+
+/// Thistle Tea's `BehaviorRunner.tick` on a critter's escape: when its run
+/// is over it waits out a lengthened escape without fighting; rooted, it
+/// doesn't run, but its escape ends all the same; and its escape over, it
+/// forgets the fight, sheds what was put on it, heals, loses its tap and
+/// goes home.
+#[tokio::test]
+async fn an_escaped_critter_waits_its_escape_out_then_heals_forgets_and_goes_home() {
+    let (_realm, _a, ga, map) = setup_with(critters(), Class::Warrior).await;
+    let s = on(&map, move |m| {
+        let s = spawn(m, ga, SHEEP, 20, 3.0);
+        hit(m, ga, s, 10);
+        // Its run over, its escape not.
+        let now = m.now;
+        let c = m.creature_mut(s).unwrap();
+        c.engagement.escape_at = Some(now + std::time::Duration::from_secs(30));
+        if let Some(f) = c.engagement.flee.as_mut() {
+            f.until = now;
+        }
+        s
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let waiting = on(&map, move |m| {
+        let c = m.creature(s).unwrap();
+        (
+            c.engagement.escape_at.is_some(),
+            !c.fields.get_guid(UNIT_FIELD_TARGET).is_zero(),
+            c.evading,
+            flee_flag(m, s),
+            m.players[&ga].fields.get_u32(UNIT_FIELD_HEALTH)
+                == m.players[&ga].fields.get_u32(UNIT_FIELD_MAXHEALTH),
+        )
+    })
+    .await;
+    assert_eq!(
+        waiting,
+        (true, false, false, false, true),
+        "waiting its escape out, not fighting"
+    );
+    // Rooted; then its escape over.
+    on(&map, move |m| {
+        aura_of(
+            m,
+            s,
+            PREVENT_FLEEING,
+            crate::game::map::auras::AURA_MOD_ROOT,
+            0,
+            0,
+        );
+        let now = m.now;
+        m.creature_mut(s).unwrap().engagement.escape_at = Some(now);
+    })
+    .await;
+    until(&map, "home again", move |m| {
+        let c = m.creature(s).unwrap();
+        c.engagement.escape_at.is_none() && !c.evading
+    })
+    .await;
+    let home = on(&map, move |m| {
+        let c = m.creature(s).unwrap();
+        (
+            c.threat.is_empty(),
+            c.tapped_by,
+            c.auras.holders.is_empty(),
+            c.fields.get_u32(UNIT_FIELD_HEALTH) == c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+            flee_flag(m, s),
+        )
+    })
+    .await;
+    assert_eq!(
+        home,
+        (true, None, true, true, false),
+        "the fight forgotten, the root shed, healed, untapped"
+    );
+}
+
+/// An aura of resistance, `positive` or not, `timed` (ten seconds) or
+/// not; `kept` marked to stay over an evade.
+fn ward(
+    id: u32,
+    positive: bool,
+    timed: bool,
+    kept: bool,
+) -> crate::game::data::spells::SpellTemplate {
+    let mut s = crate::game::tests_p3_entity::spell(
+        id,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_MOD_RESISTANCE,
+            if positive { 10 } else { -10 },
+            1,
+            1,
+        )],
+    );
+    if !positive {
+        s.attributes[0] |= crate::game::data::spells::ATTR_DEBUFF;
+    }
+    if timed {
+        s.duration_index = 9;
+    }
+    if kept {
+        s.custom_flags |= crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE;
+    }
+    s
+}
+
+/// Thistle Tea's `Aura.remove_on_evade`: an evade keeps a player's timed
+/// buffs and what is marked to stay, and sheds the rest (a player's buff
+/// without an end, a debuff, the creature's own buff); a creature whose
+/// template says so keeps every buff.
+#[tokio::test]
+async fn an_evade_sheds_all_but_a_players_timed_buffs_and_the_exceptions() {
+    let mut d = critters();
+    d.spells.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 10_000,
+            ..Default::default()
+        },
+    );
+    for (id, positive, timed, kept) in [
+        (97_920, true, true, false),
+        (97_921, true, false, false),
+        (97_922, false, true, false),
+        (97_923, true, true, false),
+        (97_924, false, false, true),
+        (97_925, true, false, false),
+    ] {
+        d.spells.spells.insert(id, ward(id, positive, timed, kept));
+    }
+    let mut keeper = template(BRUTE + 50, 7);
+    keeper.flags_extra |= 0x1000;
+    d.creature_templates.insert(BRUTE + 50, keeper);
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let put = |m: &mut Map, by: Guid, on: Guid, id: u32| {
+            let t = m.realm.data.spells.get(id).cloned().unwrap();
+            crate::game::map::auras::apply(
+                m,
+                by,
+                on,
+                &t,
+                0,
+                if t.attributes[0] & crate::game::data::spells::ATTR_DEBUFF != 0 {
+                    -10
+                } else {
+                    10
+                },
+            );
+        };
+        let held = |m: &Map, g: Guid| {
+            let mut v: Vec<u32> = m
+                .creature(g)
+                .unwrap()
+                .auras
+                .holders
+                .iter()
+                .map(|h| h.spell)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let brute = spawn(m, ga, BRUTE, 20, 4.0);
+        for id in [97_920, 97_921, 97_922, 97_924] {
+            put(m, ga, brute, id);
+        }
+        put(m, brute, brute, 97_923);
+        let keeper = spawn(m, ga, BRUTE + 50, 20, 5.0);
+        put(m, keeper, keeper, 97_925);
+        put(m, ga, keeper, 97_922);
+        let before = (held(m, brute), held(m, keeper));
+        for g in [brute, keeper] {
+            crate::game::map::ai::attacked(m, g, ga);
+            crate::game::map::ai::enter_evade(m, g);
+        }
+        (before, held(m, brute), held(m, keeper))
+    })
+    .await;
+    assert_eq!(out.0.0.len(), 5, "all five on it: {:?}", out.0);
+    assert_eq!(
+        out.1,
+        [97_920, 97_924],
+        "the player's timed buff and the exception"
+    );
+    assert_eq!(out.2, [97_925], "the keeper keeps its own buff");
+}

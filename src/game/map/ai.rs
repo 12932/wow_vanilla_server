@@ -185,7 +185,10 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     c.combat.victim = attacker;
     c.combat.attacking = true;
     c.combat.next_swing.get_or_insert(now);
-    c.fields.set_guid(UNIT_FIELD_TARGET, attacker);
+    // A critter runs with no one selected (Thistle Tea's `target: 0`).
+    if !critter {
+        c.fields.set_guid(UNIT_FIELD_TARGET, attacker);
+    }
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
     if first {
@@ -395,6 +398,15 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
+    // A run ends with its death: a critter's escape, a flight for help
+    // (Thistle Tea's `Critter.clear` and `flee_until` at death).
+    c.engagement.flee = None;
+    c.engagement.escape_at = None;
+    c.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::auras::UNIT_FLAG_FLEEING,
+        false,
+    );
     c.tapped_by = Some(tapper);
     let pos = c.position;
     let (spawn, locks_raid) = (
@@ -744,8 +756,14 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
         c.scripted.as_deref().is_some_and(|s| s.hold.is_some()),
         c.evading,
     );
+    let escaped = c.engagement.escape_at.is_some_and(|t| t <= now);
     if holding {
         crate::game::map::event_ai::hold_tick(map, g);
+    }
+    // A critter's escape runs out whatever holds it: a root or a stun
+    // doesn't keep it in the fight (Thistle Tea's escape timer).
+    if !evading && escaped && crate::game::map::creature_motion::critter_step(map, g) {
+        return;
     }
     // Feared, confused or fleeing: it moves as that has it.
     if !evading && crate::game::map::creature_combat::controlled_step(map, g) {
