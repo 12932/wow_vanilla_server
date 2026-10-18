@@ -1061,80 +1061,70 @@ fn wanted(name: &str) -> bool {
     yes
 }
 
+/// The extended tests `$name`, each the walk `$walk` (named `$what` for
+/// `EVENTS_ONLY`) on a realm of its own, so that they run at once.
+macro_rules! walks {
+    ($($name:ident $what:literal;)*) => {
+        $(
+            #[tokio::test]
+            #[ignore = "extended"]
+            async fn $name() {
+                if !super::have_data() || !super::wanted($what) {
+                    return;
+                }
+                super::$name(&super::realm()).await;
+            }
+        )*
+    };
+}
+
+/// Curing the Sick, for the Tauren and for the Night Elves.
+async fn curing_the_sick_both(realm: &Arc<Realm>) {
+    curing_the_sick(
+        realm,
+        "TAUREN",
+        Race::Tauren,
+        6129,
+        3448,
+        &[6128],
+        12296,
+        12297,
+    )
+    .await;
+    curing_the_sick(
+        realm,
+        "ELF",
+        Race::NightElf,
+        6124,
+        3702,
+        &[6123],
+        12298,
+        12299,
+    )
+    .await;
+}
+
 /// Creatures, gossip, objects, spells and places.
-#[tokio::test]
-#[ignore = "extended"]
-async fn event_quests_are_done_as_thistle_tea_does_them() {
-    if !have_data() {
-        return;
-    }
-    let realm = realm();
-    if wanted("sick") {
-        curing_the_sick(
-            &realm,
-            "TAUREN",
-            Race::Tauren,
-            6129,
-            3448,
-            &[6128],
-            12296,
-            12297,
-        )
-        .await;
-        curing_the_sick(
-            &realm,
-            "ELF",
-            Race::NightElf,
-            6124,
-            3702,
-            &[6123],
-            12298,
-            12299,
-        )
-        .await;
-    }
-    if wanted("scoop") {
-        get_the_scoop(&realm).await;
-    }
-    if wanted("spider") {
-        the_spider_god(&realm).await;
-    }
-    if wanted("bartleby") {
-        beat_bartleby(&realm).await;
-    }
-    if wanted("tribute") {
-        honoring_a_hero(&realm).await;
-    }
-    if wanted("places") {
-        reaching_a_place(&realm).await;
-    }
-    if wanted("children") {
-        childrens_week(&realm).await;
+mod event_quests_are_done_as_thistle_tea_does_them {
+    walks! {
+        curing_the_sick_both "sick";
+        get_the_scoop "scoop";
+        the_spider_god "spider";
+        beat_bartleby "bartleby";
+        honoring_a_hero "tribute";
+        reaching_a_place "places";
+        childrens_week "children";
     }
 }
 
 /// Map events: a doctor's patients, an escort, defenses and a brawl.
-#[tokio::test]
-#[ignore = "extended"]
-async fn event_quests_with_their_map_events_are_done() {
-    if !have_data() {
-        return;
-    }
-    let realm = realm();
-    if wanted("triage") {
-        triage(&realm).await;
-    }
-    if wanted("stinky") {
-        stinkys_escape(&realm).await;
-    }
-    if wanted("defenses") {
-        defenses(&realm).await;
-    }
-    if wanted("dashel") {
-        dashels_brawl(&realm).await;
-    }
-    if wanted("database") {
-        the_databases_own(&realm).await;
+mod event_quests_with_their_map_events_are_done {
+    walks! {
+        triage "triage";
+        stinkys_escape "stinky";
+        defenses "defenses";
+        dashels_brawl "dashel";
+        the_databases_own "database";
     }
 }
 
