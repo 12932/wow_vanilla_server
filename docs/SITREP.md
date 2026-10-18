@@ -134,6 +134,9 @@ the questions waiting for you.
 40. **How a creature a player controls heals** out of combat (from 3p), whether charmed or a pet: Thistle Tea's spirit ×
     4, mangos-classic's 13% of its health, or wvs's current twentieth?
 
+41. **Cancelling Stealth while Vanish is on** (from 3q). Should both come off, as Thistle Tea has it? mangos's
+    `CMSG_CANCEL_AURA` takes only the spell named, so Vanish keeps the rogue stealthed. wvs follows mangos for now.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -511,6 +514,31 @@ the questions waiting for you.
     - **A flaky test, left as it was:** `tests_p3_ai_scripts::a_checked_event_whose_actions_fail_fires_again_until_they_succeed`
       failed 1 run in 12, at different points.
 
+35. **3q's choices** (auras, finished):
+    - **Periodic ticks** run one an update, on the aura's own cadence, as mangos's `Aura::Update` does. After a
+      stalled update, the missed ticks follow over the next updates, so none is lost. Thistle Tea runs them all at
+      once.
+    - **A player's cast is checked again as it ends:** range with mangos's tolerance (a tenth, at most 3 yards),
+      facing, life, and still a foe. One that fails there costs no mana and starts no cooldown.
+    - **Ignite** keeps one burn a target, its first mage's, whoever crits after.
+    - **A victim killed by a blow** procs only its death, as mangos's `canProcVictim` has it. So Blessed Recovery
+      doesn't go off on a killing crit.
+    - **Death clears diminishing returns**, as mangos's `ClearDiminishings` does.
+36. **3n's choices** (the player, finished):
+    - **The ammunition chosen** is kept over a logout, in the character's saved state.
+    - **A vendor out of reach** is told so. A broken weapon's enchantments don't go off.
+    - **A scripted route** is refused in a fight or far from its first node.
+    - **A shared quest's offer** ends with the sharer's quest, group or presence.
+    - **Starting items** come in whole stacks.
+    - **The lava test's fragility had a cause:** a gear sync worked a player's stats out afresh every time. It now
+      does so only when an item breaks or is mended.
+37. **3o's choices** (the loaders, finished):
+    - **A tamed beast** owes its spells' training points.
+    - **A demon** keeps the name it drew, kept in its saved state.
+    - **A player's guardian** keeps its template's flags.
+    - **Not copied from Thistle Tea**, where mangos sets nothing: Ghost Wolf's 0.8 scale and reach, and a
+      disguise's scale.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -553,6 +581,10 @@ the questions waiting for you.
 | Round 3 (3m to 3r), the work committed before the agents stopped | merged | 208be0b |
 | 3p: combat and power (179 rows) | merged | 1e01c85 |
 | Review fix 1: trades, mail and auctions saved together; the reconnect answer | merged | 70cd32f |
+| 3q: auras (167 rows) | merged | d437cd0 |
+| 3n: the player (68 rows) | merged | a3d93c0 |
+| 3o: the loaders (100 rows) | merged | b9f364f |
+| The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
 ## Left for later, and why

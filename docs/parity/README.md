@@ -13,8 +13,8 @@ feature in [FINDINGS.md](FINDINGS.md).
 
 | Area | Covered or accepted / applicable | | The rest |
 |---|---|---|---|
-| game/core | 2874 / 5398 | 53.2% | gap 2500, not-applicable 275, wrong-for-1.12 24 |
-| game/world | 1127 / 2565 | 43.9% | gap 1428, not-applicable 156, wrong-for-1.12 10 |
+| game/core | 2926 / 5398 | 54.2% | gap 2446, not-applicable 275, wrong-for-1.12 26 |
+| game/world | 1152 / 2565 | 44.9% | gap 1403, not-applicable 156, wrong-for-1.12 10 |
 | game/network | 222 / 261 | 85.1% | gap 38, not-applicable 6, wrong-for-1.12 1 |
 | game/inbound | 101 / 119 | 84.9% | gap 16, not-applicable 1, wrong-for-1.12 2 |
 | . | 17 / 20 | 85.0% | gap 3, not-applicable 1 |
@@ -26,7 +26,7 @@ feature in [FINDINGS.md](FINDINGS.md).
 | db/mangos | 0 / 4 | 0.0% | gap 4 |
 | native | 0 / 0 | 100.0% | not-applicable 3 |
 | web/utils | 0 / 0 | 100.0% | not-applicable 2 |
-| **all** | 4348 / 8385 | 51.9% | gap 4000, not-applicable 465, wrong-for-1.12 37 |
+| **all** | 4425 / 8385 | 52.8% | gap 3921, not-applicable 465, wrong-for-1.12 39 |
 
 ## The columns
 
