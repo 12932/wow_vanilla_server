@@ -138,3 +138,35 @@ async fn a_spells_threat_takes_the_threat_auras_once() {
         out[2]
     );
 }
+
+/// A cast interrupted is told its caster once (mangos's `Spell::cancel`
+/// sends one `SMSG_CAST_RESULT`).
+#[tokio::test]
+async fn an_interrupted_cast_is_told_once() {
+    const SPELL: u32 = 990_330;
+    let realm = fast_realm(|d| {
+        let mut s = bare(SPELL, 2);
+        s.casting_time_index = CAST_2S;
+        effect(&mut s, 0, damage(100));
+        insert(d, [s]);
+    });
+    let (mut c, mage, map) = human(&realm, "R3IN", "Interrupted", Class::Mage).await;
+    map.query(move |m| {
+        ready(m, mage, 60, &[SPELL]);
+        let k = dummy(m, mage, 60, 3.0);
+        assert!(spells::cast(m, mage, SPELL, at(k), None));
+        spells::interrupt(m, mage);
+    })
+    .await
+    .unwrap();
+    let interrupted = |b: &[u8]| {
+        b.len() >= 6 && b[..4] == SPELL.to_le_bytes() && b[4] == 2 && b[5] == 0x23
+    };
+    c.wait_frame("the cast interrupted", 0x130, interrupted).await;
+    let again = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        c.wait_frame("told again", 0x130, interrupted),
+    )
+    .await;
+    assert!(again.is_err(), "told twice");
+}

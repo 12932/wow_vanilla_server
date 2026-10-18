@@ -1882,7 +1882,6 @@ pub fn interrupt(map: &mut Map, g: Guid) {
                 c.other_gcds.retain(|(cat, _)| *cat != category);
             }
         }
-        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
     }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
