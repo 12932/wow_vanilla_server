@@ -189,7 +189,7 @@ async fn blocks_and_absorbs_set_off_what_landing_or_blocking_sets_off() {
     let out = map
         .query(move |m| {
             level(m, g, 60);
-            equip(m, g, SHIELD, OFF_HAND as u8);
+            equip(m, g, SHIELD, OFF_HAND);
             let brute = spawn(m, g, BRUTE, 20, 2.0);
             let partly = blow(m, brute, g, Outcome::Block, 200.0, 0);
             let wholly = blow(m, brute, g, Outcome::Block, 1.0, 0);
@@ -222,7 +222,7 @@ async fn retaliation_spends_a_charge_on_a_partial_block_not_a_whole_one() {
     let out = map
         .query(move |m| {
             level(m, g, 60);
-            equip(m, g, SHIELD, OFF_HAND as u8);
+            equip(m, g, SHIELD, OFF_HAND);
             let brute = spawn(m, g, BRUTE, 20, 2.0);
             put(m, g, RETALIATION);
             let start = charges(m, g, RETALIATION);
