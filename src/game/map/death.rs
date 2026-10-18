@@ -1,6 +1,8 @@
 //! Death: a player who dies can release their spirit to the nearest
 //! graveyard as a ghost, leaving a corpse; run back and reclaim it; or ask
-//! a spirit healer. Ghosts see the living; the living don't see ghosts.
+//! a spirit healer. A ghost walks on water, and sees only what is near its
+//! corpse, its group and the ghosts of its side; the living see ghosts only
+//! in their group.
 
 use std::time::{Duration, Instant};
 
@@ -268,6 +270,11 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
         move_event: 0,
         speed: p.speeds.swim,
     });
+    // A ghost walks on water (mangos's `HandleAuraGhost`: `SetWaterWalk`).
+    p.outbound.send(&SMSG_MOVE_WATER_WALK {
+        guid: p.guid,
+        counter: 0,
+    });
     let left = crate::game::map::corpses::remaining_ms(p, unix);
     if left > 0 {
         crate::game::map::corpses::send_delay(p, left as u32);
@@ -346,6 +353,16 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     }
     if was_ghost {
         speeds_to_observers(map, g);
+        // Back on land, unless an aura has them walk on water (mangos's
+        // `HandleAuraGhost` on removal).
+        if !water_walk_aura(map, g)
+            && let Some(p) = map.players.get(&g)
+        {
+            p.outbound.send(&SMSG_MOVE_LAND_WALK {
+                guid: g,
+                counter: 0,
+            });
+        }
     }
     if corpse.is_some() {
         map.remove_corpse(guid::corpse(guid::counter(g)));
@@ -391,6 +408,36 @@ pub fn resurrect_with(map: &mut Map, g: Guid, health: u32, mana: u32) -> bool {
         p.fields.set_u32(UNIT_FIELD_POWER1, mana.min(max));
     }
     true
+}
+
+/// Whether `g` is a released ghost.
+pub fn is_ghost(map: &Map, g: Guid) -> bool {
+    map.players
+        .get(&g)
+        .is_some_and(|p| matches!(p.death, Death::Ghost { .. }))
+}
+
+fn water_walk_aura(map: &Map, g: Guid) -> bool {
+    crate::game::map::auras::auras(map, g)
+        .is_some_and(|a| a.has(crate::game::map::auras::AURA_WATER_WALK))
+}
+
+/// Whether `g` walks on water: a ghost, or with a water-walking aura.
+pub fn walks_on_water(map: &Map, g: Guid) -> bool {
+    is_ghost(map, g) || water_walk_aura(map, g)
+}
+
+/// A client that has loaded a new map has lost its water walking: it is
+/// told again (mangos's `SendInitialPacketsAfterAddToMap`).
+pub fn resend_water_walk(map: &Map, g: Guid) {
+    if walks_on_water(map, g)
+        && let Some(p) = map.players.get(&g)
+    {
+        p.outbound.send(&SMSG_MOVE_WATER_WALK {
+            guid: g,
+            counter: 0,
+        });
+    }
 }
 
 /// A ghost's run and swim speeds, or the risen's, to those who see the
@@ -605,25 +652,35 @@ pub fn graveyard_for(
     pick(&|gy| gy.zone == zone).or_else(|| pick(&|gy| gy.map == here))
 }
 
-/// How near its corpse a ghost sees the living (Thistle Tea's
-/// `@corpse_sight_range`; mangos's `(20 + 25) * Rate.Creature.Aggro`).
+/// How near its corpse a ghost sees (mangos's `(20 + 25) *
+/// Rate.Creature.Aggro`, Thistle Tea's `@corpse_sight_range`).
 pub const CORPSE_SIGHT_YARDS: f32 = 45.0;
 
-/// Whether player `observer` sees creature `c` (Thistle Tea's
-/// `Visibility.Filter`, mangos-classic's `IsVisibleInGridForPlayer` and
-/// `isInvisibleForAlive`): the living see all but the spirit healers and
-/// guides; a ghost sees those, the creatures its kind are shown to (type
-/// flag 0x2), and the living within 45 yards of its corpse.
+/// Whether `at` is within [`CORPSE_SIGHT_YARDS`] of `observer`'s corpse
+/// in this map. A ghost whose corpse is elsewhere sees nothing by it
+/// (mangos's `IsWithinDistInMap`).
+fn near_corpse(map: &Map, observer: Guid, at: Vector3d) -> bool {
+    map.corpses
+        .get(&guid::corpse(guid::counter(observer)))
+        .is_some_and(|k| {
+            let a = k.position;
+            (a.x - at.x).powi(2) + (a.y - at.y).powi(2) + (a.z - at.z).powi(2)
+                <= CORPSE_SIGHT_YARDS * CORPSE_SIGHT_YARDS
+        })
+}
+
+/// Whether player `observer` sees creature `c` (mangos-classic's
+/// `Creature::IsVisibleInGridForPlayer` and `isInvisibleForAlive`,
+/// Thistle Tea's `Visibility.Filter`): the living see all but the spirit
+/// healers and guides; a ghost sees those, the creatures shown to ghosts
+/// (type flag 0x2), wherever they are, and the living within 45 yards of
+/// its corpse.
 fn creature_seen(map: &Map, observer: Guid, c: &crate::game::map::creature::Creature) -> bool {
     let spirit = c.fields.get_u32(UNIT_NPC_FLAGS)
         & (crate::game::map::npc::NPC_FLAG_SPIRITHEALER
             | crate::game::map::npc::NPC_FLAG_SPIRITGUIDE)
         != 0;
-    let ghost = map
-        .players
-        .get(&observer)
-        .is_some_and(|p| matches!(p.death, Death::Ghost { .. }));
-    if !ghost {
+    if !is_ghost(map, observer) {
         return !spirit;
     }
     let shown_to_ghosts = map
@@ -634,16 +691,63 @@ fn creature_seen(map: &Map, observer: Guid, c: &crate::game::map::creature::Crea
     if spirit || shown_to_ghosts {
         return true;
     }
-    let corpse = map.corpses.get(&guid::corpse(guid::counter(observer)));
-    c.alive()
-        && corpse.is_some_and(|k| {
-            let (a, b) = (k.position, c.position);
-            (a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)
-                <= CORPSE_SIGHT_YARDS * CORPSE_SIGHT_YARDS
-        })
+    c.alive() && near_corpse(map, observer, c.position)
 }
 
-/// Whether `observer` may see `object`: the living don't see ghosts.
+/// Whether player `observer` sees player `object`, as mangos-classic's
+/// `Player::IsVisibleInGridForPlayer`: the living (and the dead not yet
+/// released) see all but ghosts; a group or raid sees its own, ghosts or
+/// not; a ghost sees the ghosts of its side, and the living within 45
+/// yards of its corpse.
+fn player_seen(map: &Map, observer: Guid, object: Guid) -> bool {
+    let (seer, seen) = (is_ghost(map, observer), is_ghost(map, object));
+    if !seer && !seen {
+        return true;
+    }
+    if crate::game::map::objects::same_group(map, observer, object) {
+        return true;
+    }
+    if !seer {
+        return false;
+    }
+    let (Some(o), Some(p)) = (map.players.get(&observer), map.players.get(&object)) else {
+        return false;
+    };
+    if seen {
+        return o.team == p.team;
+    }
+    p.death == Death::Alive && near_corpse(map, observer, p.position())
+}
+
+/// Whether a ghost `observer` sees an object other than a unit (a game
+/// object, a corpse, a spell's area): only within 45 yards of its corpse,
+/// but its own corpse and the transports anywhere.
+fn object_seen_by_ghost(map: &Map, observer: Guid, object: Guid) -> bool {
+    if map.globals.contains(&object) {
+        return true;
+    }
+    if guid::is_corpse(object) {
+        if let Some(k) = map.corpses.get(&object) {
+            return k.owner == observer || near_corpse(map, observer, k.position);
+        }
+        return false;
+    }
+    if let Some(o) = map.gameobject(object)
+        && matches!(o.kind, GO_TYPE_TRANSPORT | GO_TYPE_MO_TRANSPORT)
+    {
+        return true;
+    }
+    map.position_of(object)
+        .is_some_and(|at| near_corpse(map, observer, at))
+}
+
+/// Game object types a ghost may ride wherever it is: an elevator, a boat.
+const GO_TYPE_TRANSPORT: u8 = 11;
+const GO_TYPE_MO_TRANSPORT: u8 = 15;
+
+/// Whether `observer` may see `object`. A ghost sees only near its corpse:
+/// see [`creature_seen`], [`player_seen`] and [`object_seen_by_ghost`]. A
+/// game master sees everything.
 pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
     let gm = |g: Guid| {
         map.players.get(&g).is_some_and(|p| {
@@ -667,21 +771,14 @@ pub fn can_see(map: &Map, observer: Guid, object: Guid) -> bool {
     if guid::is_game_object(object) && !crate::game::map::objects::seen_by(map, observer, object) {
         return false;
     }
-    if let Some(c) = map.creature(object)
-        && !gm(observer)
-    {
+    if observer == object || gm(observer) {
+        return true;
+    }
+    if let Some(c) = map.creature(object) {
         return creature_seen(map, observer, c);
     }
-    if !guid::is_player(object) || observer == object {
-        return true;
+    if guid::is_player(object) {
+        return player_seen(map, observer, object);
     }
-    let ghost = |g: Guid| {
-        map.players
-            .get(&g)
-            .is_some_and(|p| matches!(p.death, Death::Ghost { .. }))
-    };
-    if !ghost(object) {
-        return true;
-    }
-    ghost(observer) || gm(observer)
+    !is_ghost(map, observer) || object_seen_by_ghost(map, observer, object)
 }

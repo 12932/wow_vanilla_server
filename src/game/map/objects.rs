@@ -199,7 +199,8 @@ fn ritual_of(t: &GameObjectTemplate, owner: Option<Guid>, target: Option<Guid>) 
     }
 }
 
-fn same_group(map: &Map, a: Guid, b: Guid) -> bool {
+/// Whether `a` and `b` are one player or in one group or raid.
+pub fn same_group(map: &Map, a: Guid, b: Guid) -> bool {
     a == b
         || map
             .realm
