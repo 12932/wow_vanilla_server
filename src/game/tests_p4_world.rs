@@ -320,3 +320,65 @@ async fn a_spawned_object_goes_without_the_despawn_animation() {
         .await;
     assert!(anim.is_none(), "no despawn animation");
 }
+
+const FIRE_RIFT: u32 = 179_666;
+const OTHER_OBJECT: u32 = 1_822;
+const FIRE_INVADER: u32 = 14_460;
+
+/// Thistle Tea's "only an invasion rift keeps invaders" and "forgets
+/// invaders that die or leave so the next upkeep replaces them": a fire
+/// rift calls out its stage's three invaders and another object none; one
+/// slain, or gone from the map another way, the rift's next upkeep calls
+/// out another in its place.
+#[tokio::test]
+async fn a_rift_keeps_its_invaders_and_replaces_those_lost() {
+    let mut d = data();
+    for (entry, name) in [(FIRE_RIFT, "Elemental Rift"), (OTHER_OBJECT, "A Chair")] {
+        d.gameobject_templates
+            .insert(entry, object(entry, 5, name, &[]));
+    }
+    let mut invader = crate::game::tests_p3_combat::template(FIRE_INVADER, 4);
+    invader.name = "Blazing Invader".into();
+    d.creature_templates.insert(FIRE_INVADER, invader);
+    let (realm, _a, g, map) = setup_with(d, Class::Warrior).await;
+    realm.social.elemental.lock().stages = [1; 4];
+    let upkeep = |m: &mut Map| {
+        m.rifts_checked_at = None;
+        for r in m.rifts.values_mut() {
+            r.next_upkeep = None;
+        }
+        crate::game::elemental::update(m);
+        let mut v: Vec<Guid> = m
+            .rifts
+            .values()
+            .flat_map(|r| r.invaders.iter().copied())
+            .collect();
+        v.sort();
+        v
+    };
+    let out = on(&map, move |m| {
+        let at = m.players[&g].position();
+        let rift = crate::game::map::objects::summon(m, None, FIRE_RIFT, at, 0.0, 0, 0, 0, None);
+        let chair =
+            crate::game::map::objects::summon(m, None, OTHER_OBJECT, at, 0.0, 0, 0, 0, None);
+        let first = upkeep(m);
+        let rifts: Vec<Guid> = m.rifts.keys().copied().collect();
+        crate::game::map::combat::kill(m, g, first[0]);
+        let slain = upkeep(m);
+        m.remove_creature(slain[0]);
+        let gone = upkeep(m);
+        (rift, chair, rifts, first, slain, gone)
+    })
+    .await;
+    let (rift, chair, rifts, first, slain, gone) = out;
+    assert_eq!(
+        rifts,
+        vec![rift.unwrap()],
+        "the rift alone keeps invaders, not {chair:?}"
+    );
+    assert_eq!(first.len(), 3, "the first stage's three");
+    assert_eq!(slain.len(), 3, "the slain replaced");
+    assert!(!slain.contains(&first[0]));
+    assert_eq!(gone.len(), 3, "the one gone replaced");
+    assert!(!gone.contains(&slain[0]));
+}

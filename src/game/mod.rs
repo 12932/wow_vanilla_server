@@ -320,6 +320,8 @@ mod tests_p4_world_loot;
 #[cfg(test)]
 mod tests_p4_world_net;
 #[cfg(test)]
+mod tests_p4_world_real;
+#[cfg(test)]
 mod tests_p4_world_rewards;
 #[cfg(test)]
 mod tests_p4_world_spells;
