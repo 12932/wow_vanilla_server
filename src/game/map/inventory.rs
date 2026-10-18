@@ -824,6 +824,7 @@ fn store(
         last = Some((i, u32::MAX));
     }
     let mut batch = update::Batch::new();
+    let first_new = p.items.len();
     for (bag, slot, n) in new_slots {
         let counter = realm
             .next_item
@@ -848,10 +849,9 @@ fn store(
         p.outbound.send_frame(frame);
     }
     // The new items are known; their slots go out with the next update.
-    for item in p.items.iter_mut() {
-        if item.entry == entry {
-            item.fields.clear_dirty();
-        }
+    // The stacks they joined are told their counts then.
+    for item in &mut p.items[first_new..] {
+        item.fields.clear_dirty();
     }
     p.refresh_inventory(&data);
     let notify = alert;

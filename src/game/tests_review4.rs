@@ -71,6 +71,14 @@ fn data() -> GameData {
     let mut widget = item(WIDGET);
     widget.stackable = 20;
     d.items.insert(WIDGET, widget);
+    d.vendors.insert(
+        VENDOR,
+        vec![VendorItem {
+            slot: 0,
+            item: WIDGET,
+            ..Default::default()
+        }],
+    );
     d
 }
 
@@ -196,4 +204,44 @@ async fn a_sold_item_leaves_its_buyback_slot_only_bought_back() {
     .await;
     assert_eq!(now_at, Some((BAG_PLAYER, slot, 10)), "still sold");
     assert_eq!(carried, 0, "none of it back for nothing");
+}
+
+/// R4-2. Items added onto a stack the client knows show it grown: the
+/// stack's new count goes out with the next update, rather than its dirty
+/// bit cleared with the new items'.
+#[tokio::test]
+async fn a_stack_added_onto_shows_its_new_count() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4ST");
+    let g = a.enter("Stacker", Race::Human, Class::Warrior).await;
+    a.sees(vendor_guid()).await;
+    let stack = on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1000);
+        crate::game::map::inventory::add_item(m, g, WIDGET, 5, false).unwrap();
+        let p = &m.players[&g];
+        p.items.iter().find(|i| i.entry == WIDGET).unwrap().guid
+    })
+    .await;
+    a.sees(stack).await;
+    a.clear();
+    a.send(CMSG_BUY_ITEM {
+        vendor: vendor_guid(),
+        item: WIDGET,
+        amount: 1,
+        unknown1: 0,
+    })
+    .await;
+    let count = a
+        .gets(Duration::from_secs(2), |m| {
+            harness::values(m)
+                .into_iter()
+                .find_map(|(o, mask)| match mask {
+                    UpdateMask::Item(i) if o == stack => i.item_stack_count(),
+                    _ => None,
+                })
+        })
+        .await;
+    let held = on_map(&realm, move |m| place(m, g, stack)).await;
+    assert_eq!(held.map(|h| h.2), Some(6), "the server's stack grew");
+    assert_eq!(count, Some(6), "and the client is told");
 }
