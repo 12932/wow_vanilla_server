@@ -47,12 +47,8 @@ async fn async_main(start: Start) -> u8 {
     let _ = dotenvy::dotenv();
 
     // Tracy only with `WOW_TRACY=1`: without it the profiler stays dormant
-    // and opens no port.
-    let tracy_enabled = matches!(std::env::var("WOW_TRACY").as_deref(), Ok("1"));
-    if tracy_enabled {
-        let _ = tracy_client::Client::start();
-    }
-    let tracy_layer = tracy_enabled.then(tracing_tracy::TracyLayer::default);
+    // and opens no port (docs/PROFILING.md).
+    crate::tracy::start_from_env();
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -66,7 +62,7 @@ async fn async_main(start: Start) -> u8 {
                         .unwrap_or_else(|_| EnvFilter::new("info,landmark=off,wow_mpq=warn")),
                 ),
         )
-        .with(tracy_layer)
+        .with(crate::tracy::messages())
         .init();
     // Panics in the log, with where they happened, once.
     crate::game::supervisor::install_panic_hook();

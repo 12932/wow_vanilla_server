@@ -278,6 +278,46 @@ pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What Tracy shows of a map (docs/PROFILING.md): its updates, a frame
+/// each, and four plots, once a second.
+struct MapProfile {
+    frame: crate::tracy::FrameName,
+    players: crate::tracy::Plot,
+    awake: crate::tracy::Plot,
+    mailbox: crate::tracy::Plot,
+    outbound: crate::tracy::Plot,
+    plot_at: Instant,
+}
+
+impl MapProfile {
+    /// `None` while Tracy is off. A map by its name, a copy by its name and
+    /// instance id.
+    fn new(key: MapKey, realm: &Realm) -> Option<Self> {
+        use crate::tracy::{Format, FrameName, Plot};
+        if !crate::tracy::on() {
+            return None;
+        }
+        let name = realm
+            .data
+            .maps
+            .get(&key.map)
+            .map_or_else(|| format!("map {}", key.map), |m| m.name.clone());
+        let name = if key.instance == 0 {
+            name
+        } else {
+            format!("{name} #{}", key.instance)
+        };
+        Some(Self {
+            frame: FrameName::new(&name),
+            players: Plot::new(&format!("{name}: players"), Format::Number),
+            awake: Plot::new(&format!("{name}: creatures awake"), Format::Number),
+            mailbox: Plot::new(&format!("{name}: mailbox"), Format::Number),
+            outbound: Plot::new(&format!("{name}: outbound queued"), Format::Bytes),
+            plot_at: Instant::now(),
+        })
+    }
+}
+
 /// Per-map counters, for `.maps` and the logs.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MapStats {
@@ -408,6 +448,8 @@ pub struct Map {
     pub leashes: creature_combat::Leashes,
     /// Who has panicked lately, and when the map has had enough.
     pub health: supervise::Health,
+    /// What Tracy shows of the map, while Tracy is on.
+    profile: Option<MapProfile>,
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
@@ -506,7 +548,10 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
 
 /// Run a map's actor until it is told to stop.
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
-    guarded(&mut map, "populating", world::populate);
+    guarded(&mut map, "populating", |m| {
+        let _z = crate::zone!("populate");
+        world::populate(m)
+    });
     let mut report_at = Instant::now() + REPORT_EVERY;
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -548,6 +593,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     report_at = map.now + REPORT_EVERY;
                     map.report(rx.len());
                 }
+                map.plot(rx.len());
             }
         }
     }
@@ -595,6 +641,7 @@ impl Map {
     pub fn new(key: MapKey, realm: Arc<Realm>, handle: MapHandle) -> Self {
         let now = Instant::now();
         let instance = instance_script::State::for_map(&realm.data, key.map, key.instance);
+        let profile = MapProfile::new(key, &realm);
         Self {
             key,
             realm,
@@ -651,6 +698,7 @@ impl Map {
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
             health: Default::default(),
+            profile,
             #[cfg(test)]
             faults: Default::default(),
         }
@@ -666,16 +714,26 @@ impl Map {
     fn handle_event(&mut self, event: MapEvent) -> bool {
         self.stats.events += 1;
         match event {
-            MapEvent::Arrive(a) => self.arrive(*a),
+            MapEvent::Arrive(a) => {
+                let _z = crate::zone!("arrival");
+                self.arrive(*a)
+            }
             MapEvent::Packet(guid, msg) => {
+                let _z = crate::tracy::Zone::named("packet", msg.message_name());
                 #[cfg(test)]
                 if self.faults.any() {
                     self.faults.check(&format!("packets of {guid}"));
                 }
                 self.handle_packet(guid, msg)
             }
-            MapEvent::Disconnect(guid) => self.handle_disconnect(guid),
-            MapEvent::Call(f) => f(self),
+            MapEvent::Disconnect(guid) => {
+                let _z = crate::zone!("disconnect");
+                self.handle_disconnect(guid)
+            }
+            MapEvent::Call(f) => {
+                let _z = crate::zone!("call");
+                f(self)
+            }
             MapEvent::Stop => return true,
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
@@ -854,6 +912,26 @@ impl Map {
 
     /// The map's numbers for the last while: players, creatures, update
     /// times and the events waiting.
+    /// Tracy's plots of the map, once a second while Tracy is on.
+    fn plot(&mut self, queued: usize) {
+        let Some(p) = &mut self.profile else {
+            return;
+        };
+        if self.now < p.plot_at {
+            return;
+        }
+        p.plot_at = self.now + Duration::from_secs(1);
+        let outbound: usize = self
+            .players
+            .values()
+            .map(|p| p.outbound.queued_bytes())
+            .sum();
+        p.players.set(self.players.len() as f64);
+        p.awake.set(self.awake.len() as f64);
+        p.mailbox.set(queued as f64);
+        p.outbound.set(outbound as f64);
+    }
+
     fn report(&mut self, queued: usize) {
         let s = &mut self.stats;
         if self.players.is_empty() && s.window_max < UPDATE_INTERVAL {
@@ -991,6 +1069,8 @@ impl Map {
     /// The update: timers, visibility, and the changed fields of
     /// everything, to every client that should hear of them.
     pub fn update(&mut self) {
+        let _frame = crate::tracy::Frame::begin(self.profile.as_ref().map(|p| p.frame));
+        let _z = crate::zone!("update");
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;

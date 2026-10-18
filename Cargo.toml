@@ -7,7 +7,8 @@ default-run = "wow_vanilla_server"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+# Tracy is in the release binary, dormant until `WOW_TRACY=1` (docs/PROFILING.md).
+default = ["tracy"]
 # When set, every outgoing/incoming opcode is serialized to a test-case string
 # and appended to `tests.wowm` (or the matching wowm source). Useful for
 # expanding the wow_messages crate's test corpus from a live session, but
@@ -17,6 +18,11 @@ wowm-capture = []
 # permissions): with `WVS_PPROF=<prefix>` the server profiles a window and
 # writes a flame graph and its top functions (`src/profile.rs`).
 pprof = ["dep:pprof"]
+# Tracy, the frame profiler: with `WOW_TRACY=1` the server's maps, packets and
+# store show in Tracy's profiler, and without it they cost a flag's load
+# (`src/tracy.rs`, docs/PROFILING.md). Off, with `--no-default-features`, the
+# helpers are nothing and Tracy's C++ isn't built.
+tracy = ["dep:tracy-client"]
 
 [dependencies]
 tokio = { version = "1.52.3", features = [
@@ -43,21 +49,20 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
 ahash = "0.8.12"
-tracing-tracy = { version = "0.11.4", default-features = false, features = [
-    "enable",
-    "system-tracing",
-    "sampling",
-    "callstack-inlines",
-    "manual-lifetime",
-] }
 rayon = "1.12.0"
 slab = "0.4.12"
-tracy-client = { version = "0.18.4", default-features = false, features = [
+# Tracy's protocol is that of the profiler v0.13.1 (docs/PROFILING.md). On
+# demand: it records only while a profiler is connected. Only on localhost:
+# the profile (the call stacks, the log's warnings) is no one else's.
+# No `system-tracing` (it needs root, or an administrator on Windows) and no
+# `broadcast`; sampling stays, for those who run it with the rights for it.
+tracy-client = { version = "0.18.4", optional = true, default-features = false, features = [
     "enable",
-    "system-tracing",
+    "manual-lifetime",
+    "ondemand",
+    "only-localhost",
     "sampling",
     "callstack-inlines",
-    "manual-lifetime",
 ] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 rand = "0.10.1"
