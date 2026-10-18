@@ -99,6 +99,10 @@ pub struct Runner {
     depth: u32,
 }
 
+/// How deep scripts may start scripts at once (a relay, a step's script
+/// for those near, an object's scripts on its use).
+const MAX_DEPTH: u32 = 32;
+
 impl Runner {
     fn sweep(&mut self) {
         if self.depth == 0 {
@@ -123,6 +127,16 @@ pub fn start_checked(
     checked: Option<(Guid, usize)>,
 ) {
     if id == 0 || !map.realm.data.scripts.table(table).contains_key(&id) {
+        return;
+    }
+    // A script that starts itself (or a ring of them) at once, with no
+    // delay between, would run on until the stack is gone: a start that
+    // deep is a loop in the data, and goes no further.
+    if map.scripts.depth >= MAX_DEPTH {
+        tracing::debug!(
+            "{}: script {id} ({table:?}) started {MAX_DEPTH} deep: dropped",
+            map.key
+        );
         return;
     }
     let now = map.now;

@@ -372,3 +372,32 @@ async fn a_loot_window_closes_with_its_looter_leaving() {
     let left = on_map(&realm, move |m| m.loot_state.item_loot.contains_key(&item)).await;
     assert!(!left, "the item's loot went with the window");
 }
+
+/// R4-6. A script that starts itself at once (a relay to its own id with
+/// no delay, a bad row) stops at a depth, rather than running until the
+/// stack overflows and the server aborts.
+#[tokio::test]
+async fn a_script_starting_itself_at_once_stops() {
+    use crate::game::data::scripts::{ScriptStep, ScriptTable};
+    const LOOP: u32 = 990_450;
+    let realm = harness::realm_with({
+        let mut d = data();
+        d.scripts.generic.insert(
+            LOOP,
+            vec![ScriptStep {
+                command: 39,
+                datalong: [LOOP, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+        d
+    });
+    let mut a = Client::connect(&realm, "R4SC");
+    let g = a.enter("Looper", Race::Human, Class::Warrior).await;
+    let left = on_map(&realm, move |m| {
+        crate::game::map::scripts::start(m, ScriptTable::Generic, LOOP, g, g);
+        m.scripts.runs.len()
+    })
+    .await;
+    assert_eq!(left, 0, "it ran to its end, and was swept");
+}
