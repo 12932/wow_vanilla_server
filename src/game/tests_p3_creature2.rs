@@ -1384,3 +1384,134 @@ async fn a_summons_despawn_type_decides_its_time_its_death_and_its_corpse() {
         assert_eq!(*row, want, "despawn type {}", want.0);
     }
 }
+
+const SNARE: u32 = 97_930;
+
+/// Thistle Tea's `MovementStats.recompute` and `Entity.take_damage` on
+/// wounds: a creature's wounds and a snare both slow it, one on the other;
+/// healed, only the snare slows it, and the snare gone, it runs whole. Its
+/// health regenerated, its wounds slow it no more; nor dead, nor back from
+/// the dead.
+#[tokio::test]
+async fn wounds_slow_a_creature_with_its_snares_and_go_with_its_health() {
+    let d = linked(&[(321, 320, 0)]);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(321)).await;
+    let out = on(&map, move |m| {
+        let g = of(320);
+        let whole = m.creature(g).unwrap().speeds.run;
+        let set_health = |m: &mut Map, g: Guid, pct: u32| {
+            let c = m.creature_mut(g).unwrap();
+            let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, max * pct / 100);
+            crate::game::map::combat::sync_aura_state(m, g);
+        };
+        let run = |m: &Map, g: Guid| m.creature(g).unwrap().speeds.run / whole;
+        set_health(m, g, 5);
+        aura_of(
+            m,
+            g,
+            SNARE,
+            crate::game::map::auras::AURA_MOD_DECREASE_SPEED,
+            0,
+            -50,
+        );
+        let both = run(m, g);
+        set_health(m, g, 100);
+        let snared = run(m, g);
+        crate::game::map::auras::remove_spell(m, g, SNARE, None);
+        let free = run(m, g);
+        // Regenerated out of a fight.
+        let h = of(321);
+        set_health(m, h, 5);
+        let wounded = run(m, h);
+        let now = m.now;
+        for _ in 0..2 {
+            m.creature_mut(h).unwrap().engagement.regen_at = Some(now);
+            crate::game::map::creature_combat::regenerate(m);
+        }
+        let regenerated = run(m, h);
+        // Dead, and back.
+        set_health(m, h, 5);
+        die(m, ga, 321);
+        let dead = run(m, h);
+        crate::game::map::ai::respawn_now(m, h);
+        (both, snared, free, wounded, regenerated, dead, run(m, h))
+    })
+    .await;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(near(out.0, 0.25), "wounds and the snare: {}", out.0);
+    assert!(near(out.1, 0.5), "the snare alone: {}", out.1);
+    assert!(near(out.2, 1.0), "whole: {}", out.2);
+    assert!(near(out.3, 0.5), "wounded: {}", out.3);
+    assert!(near(out.4, 1.0), "regenerated: {}", out.4);
+    assert!(near(out.5, 1.0), "dead: {}", out.5);
+    assert!(near(out.6, 1.0), "back: {}", out.6);
+}
+
+/// Thistle Tea's `Posture`: a spawn's addon sets how it rests, rides and
+/// holds its weapons, and its template's mount is ridden unless the addon
+/// names another or none (0; -1 is the template's); one with no addon
+/// stands with its weapons out (mangos's `InitEntry`). Home from a fight,
+/// it takes its posture back.
+#[tokio::test]
+async fn a_spawns_addon_sets_its_posture_and_it_takes_it_back_at_home() {
+    let mut d = linked(&[(331, 330, 0), (333, 332, 0), (335, 334, 0)]);
+    let mounted = BRUTE + 60;
+    let mut t = template(mounted, 7);
+    t.mount_display_id = 14_575;
+    d.creature_templates.insert(mounted, t);
+    for s in d.creature_spawns.get_mut(&0).unwrap().iter_mut() {
+        if [331, 332, 333].contains(&s.guid) {
+            s.entries = vec![mounted];
+        }
+    }
+    let addon = |stand, sheath, emote, mount| crate::game::data::CreatureAddon {
+        stand_state: stand,
+        sheath_state: sheath,
+        emote_state: emote,
+        mount_display_id: mount,
+        ..Default::default()
+    };
+    d.creature_addons.insert(330, addon(3, 0, 69, 2_410));
+    d.creature_addons.insert(331, addon(0, 1, 0, -1));
+    d.creature_addons.insert(332, addon(0, 1, 0, 0));
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    let mounted_of = move |s: u32| crate::game::guid::unit(mounted, s);
+    a.sees(of(330)).await;
+    let out = on(&map, move |m| {
+        let posture = |m: &Map, g: Guid| {
+            let f = &m.creature(g).unwrap().fields;
+            (
+                f.get_byte(UNIT_FIELD_BYTES_1, 0),
+                f.get_byte(UNIT_FIELD_BYTES_2, 0),
+                f.get_u32(UNIT_NPC_EMOTESTATE),
+                f.get_u32(UNIT_FIELD_MOUNTDISPLAYID),
+            )
+        };
+        let rested = posture(m, of(330));
+        let rides = [331, 332, 333].map(|s| posture(m, mounted_of(s)).3);
+        let bare = posture(m, of(334));
+        // Roused by a fight, then home.
+        crate::game::map::ai::attacked(m, of(330), ga);
+        let roused = posture(m, of(330));
+        crate::game::map::ai::enter_evade(m, of(330));
+        (rested, rides, bare, roused)
+    })
+    .await;
+    assert_eq!(out.0, (3, 0, 69, 2_410), "its addon's posture");
+    assert_eq!(
+        out.1,
+        [14_575, 0, 14_575],
+        "the template's mount, none, the template's"
+    );
+    assert_eq!(out.2, (0, 1, 0, 0), "no addon: standing, weapons out");
+    assert_ne!(out.3, out.0, "a fight stands it up");
+    until(&map, "home and rested", move |m| {
+        let c = m.creature(of(330)).unwrap();
+        !c.evading
+            && c.fields.get_byte(UNIT_FIELD_BYTES_1, 0) == 3
+            && c.fields.get_u32(UNIT_NPC_EMOTESTATE) == 69
+    })
+    .await;
+}

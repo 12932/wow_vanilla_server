@@ -637,7 +637,7 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             c.i64("patch"),
             CreatureAddon {
                 display_id: c.u32("display_id"),
-                mount_display_id: c.u32("mount_display_id"),
+                mount_display_id: c.i32("mount_display_id"),
                 equipment_id: c.i32("equipment_id"),
                 stand_state: c.u8("stand_state"),
                 sheath_state: c.u8("sheath_state"),
