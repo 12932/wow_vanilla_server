@@ -354,9 +354,12 @@ pub fn say(
     }) else {
         return;
     };
+    // A moderator's words reach even those ignoring them (mangos's
+    // `Channel::Say`, Thistle Tea's).
+    let heard_by_all = c.moderator(me.guid);
     let lists = realm.social.lists.lock();
     for member in &c.members {
-        if !lists.ignores(member.guid, me.guid) {
+        if heard_by_all || !lists.ignores(member.guid, me.guid) {
             send_frame(realm, member.guid, &frame);
         }
     }

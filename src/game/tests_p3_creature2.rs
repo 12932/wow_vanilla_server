@@ -2049,3 +2049,157 @@ async fn a_spell_magnet_pulls_one_harmful_spell_aside_and_is_spent() {
         assert!(!magnet_eligible(&s), "{what}");
     }
 }
+
+/// A channel notice of `kind` on `channel` within a moment: the bytes
+/// after its name.
+async fn channel_notice(
+    c: &mut crate::game::harness::Client,
+    kind: u8,
+    channel: &str,
+) -> Option<Vec<u8>> {
+    let name = channel.as_bytes().to_vec();
+    let pick = move |b: &[u8]| {
+        b.first() == Some(&kind)
+            && b.get(1..1 + name.len()) == Some(&name[..])
+            && b.get(1 + name.len()) == Some(&0)
+    };
+    let f = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        c.wait_frame("", crate::game::social::channels::SMSG_CHANNEL_NOTIFY, pick),
+    )
+    .await
+    .ok()?;
+    Some(f[2 + channel.len()..].to_vec())
+}
+
+/// Whether `c` hears `text` in a channel within a moment, and its tag.
+async fn channel_heard(
+    c: &mut crate::game::harness::Client,
+    text: &str,
+) -> Option<wow_world_messages::vanilla::PlayerChatTag> {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let text = text.to_owned();
+    c.gets(std::time::Duration::from_millis(300), move |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(x) if x.message == text => Some(x.tag),
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's `ChatChannels.join`, `say` and `invite`, through the
+/// protocol: joining a built-in channel again is silent, a custom one
+/// answers "already a member"; a password keeps out who hasn't it; a
+/// member ignoring the speaker doesn't hear them, unless the speaker is a
+/// moderator (mangos's `Channel::Say`); the speaker's tag is theirs now;
+/// and an invitation to one ignoring the inviter is told to the inviter
+/// only.
+#[tokio::test]
+async fn a_channel_answers_joins_passwords_ignores_and_invitations() {
+    use crate::game::harness::Client;
+    use crate::game::social::channels::*;
+    use wow_world_messages::vanilla::*;
+    let mut cfg = crate::game::harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, data(), None);
+    let mut people = Vec::new();
+    for (acct, name) in [("A", "Alice"), ("B", "Bob"), ("C", "Carol"), ("D", "Dave")] {
+        let mut c = Client::connect(&realm, acct);
+        c.enter(name, Race::Human, Class::Warrior).await;
+        people.push(c);
+    }
+    let [mut a, mut b, mut c, mut d] = people.try_into().ok().unwrap();
+    let join = |name: &str, password: &str| CMSG_JOIN_CHANNEL {
+        channel_name: name.into(),
+        channel_password: password.into(),
+    };
+    let say = |text: &str| CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Channel {
+            channel: "Brew".into(),
+        },
+        language: Language::Common,
+        message: text.into(),
+    };
+    // Joined twice: the built-in silent, the custom one answers.
+    for name in ["General - Elwynn Forest", "Brew"] {
+        a.send(join(name, "")).await;
+        assert!(
+            channel_notice(&mut a, YOU_JOINED, name).await.is_some(),
+            "{name}"
+        );
+        a.send(join(name, "")).await;
+    }
+    assert!(
+        channel_notice(&mut a, PLAYER_ALREADY_MEMBER, "General - Elwynn Forest")
+            .await
+            .is_none(),
+        "the built-in channel is silent"
+    );
+    assert!(
+        channel_notice(&mut a, PLAYER_ALREADY_MEMBER, "Brew")
+            .await
+            .is_some()
+    );
+    // A password: the wrong one refused, the right one let in.
+    a.send(CMSG_CHANNEL_PASSWORD {
+        channel_name: "Brew".into(),
+        channel_password: "tea".into(),
+    })
+    .await;
+    b.send(join("Brew", "coffee")).await;
+    assert!(
+        channel_notice(&mut b, WRONG_PASSWORD, "Brew")
+            .await
+            .is_some()
+    );
+    for cl in [&mut b, &mut c] {
+        cl.send(join("Brew", "tea")).await;
+        assert!(channel_notice(cl, YOU_JOINED, "Brew").await.is_some());
+    }
+    // Carol ignores Bob: she doesn't hear him, unless he moderates.
+    c.send(CMSG_ADD_IGNORE { name: "Bob".into() }).await;
+    c.wait_frame("the ignore", 0x068, |_| true).await;
+    b.send(say("filtered")).await;
+    assert!(channel_heard(&mut a, "filtered").await.is_some());
+    assert!(channel_heard(&mut c, "filtered").await.is_none(), "ignored");
+    a.send(CMSG_CHANNEL_MODERATOR {
+        channel_name: "Brew".into(),
+        player_name: "Bob".into(),
+    })
+    .await;
+    channel_notice(&mut b, MODE_CHANGE, "Brew").await;
+    b.send(say("moderator")).await;
+    assert!(
+        channel_heard(&mut c, "moderator").await.is_some(),
+        "a moderator is heard by all"
+    );
+    // Her tag as it is now.
+    a.send(CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Afk,
+        language: Language::Common,
+        message: "".into(),
+    })
+    .await;
+    a.send(say("away")).await;
+    assert_eq!(
+        channel_heard(&mut b, "away").await,
+        Some(PlayerChatTag::Afk)
+    );
+    // An invitation to Dave, who ignores Bob: Bob told, Dave not.
+    d.send(CMSG_ADD_IGNORE { name: "Bob".into() }).await;
+    d.wait_frame("the ignore", 0x068, |_| true).await;
+    b.send(CMSG_CHANNEL_INVITE {
+        channel_name: "Brew".into(),
+        player_name: "Dave".into(),
+    })
+    .await;
+    assert!(
+        channel_notice(&mut b, PLAYER_INVITED, "Brew")
+            .await
+            .is_some()
+    );
+    assert!(
+        channel_notice(&mut d, INVITE, "Brew").await.is_none(),
+        "Dave not asked"
+    );
+}
