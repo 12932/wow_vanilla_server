@@ -15,7 +15,7 @@ use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::inventory::{
-    self, BAG_END, BANK_BAG_END, BANK_BAG_START, BANK_END, BANK_START, EQUIPMENT_END,
+    self, BAG_END, BANK_BAG_END, BANK_BAG_START, BANK_END, BANK_START,
 };
 use crate::game::map::items::ITEM_FLAG_SOULBOUND;
 use crate::game::map::loot::{self, Loot, LootKind};
@@ -596,7 +596,9 @@ fn equip_to(map: &mut Map, g: Guid, item: Guid, slot: u8) {
     let Some(i) = p.item_by_guid(item) else {
         return;
     };
-    if slot >= EQUIPMENT_END {
+    // The equipment and the bag bar (mangos's `IsEquipmentPos`); nothing
+    // past them.
+    if slot >= inventory::BAG_END {
         return;
     }
     let from = (p.items[i].bag, p.items[i].slot);

@@ -460,6 +460,7 @@ impl Player {
         for i in 0..7 {
             f.set_f32(PLAYER_FIELD_MOD_DAMAGE_DONE_PCT + i, 1.0);
         }
+        f.set_u32(PLAYER_AMMO_ID, row.state.ammo);
         self.apply_stats(data);
         let health = if self.row.state.health == 0 && !self.row.state.dead {
             self.fields.get_u32(UNIT_FIELD_MAXHEALTH)
@@ -630,6 +631,7 @@ impl Player {
         }
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
         row.state.drunk = self.drunk.value;
+        row.state.ammo = f.get_u32(PLAYER_AMMO_ID);
         // What's sold stays to be bought back this session only (Thistle
         // Tea's `Buyback.logout`).
         row.items = self

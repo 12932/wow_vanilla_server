@@ -415,7 +415,9 @@ impl Session {
                 ..Default::default()
             });
         }
-        place_items(&self.realm.data, &mut row.items);
+        place_items(&self.realm.data, &mut row.items, || {
+            self.realm.next_item.fetch_add(1, Ordering::Relaxed)
+        });
         for (button, action, kind) in &start.actions {
             row.actions.push(crate::game::store::ActionRow {
                 button: *button,
@@ -650,35 +652,85 @@ fn reap(realm: &Arc<Realm>, ghost: Arc<Online>) {
 /// Give each starting item a slot: its equipment slot if it is equipment
 /// and the slot is free, else the next free backpack slot. Items the
 /// starting data already placed keep their slot.
-fn place_items(data: &crate::game::data::GameData, items: &mut Vec<ItemRow>) {
+///
+/// From vmangos's tables (not `wow_world_base`'s), a starting item
+/// without a template isn't given, and one given in more than a stack
+/// holds is merged with the rest of it and dealt out in stacks, each its
+/// own item (`next_guid`), as mangos's `StoreNewItemInBestSlots` and
+/// Thistle Tea's `Characters` store a grant: whole, or not at all.
+fn place_items(
+    data: &crate::game::data::GameData,
+    items: &mut Vec<ItemRow>,
+    mut next_guid: impl FnMut() -> u32,
+) {
+    let vmangos = !data.start.is_empty();
+    let stack_of = |entry: u32| data.item(entry).map_or(1, |t| t.stackable.max(1));
+    if vmangos {
+        items.retain(|i| data.item(i.entry).is_some());
+        let mut merged: Vec<ItemRow> = Vec::with_capacity(items.len());
+        for item in items.drain(..) {
+            let stack = stack_of(item.entry);
+            match merged
+                .iter_mut()
+                .find(|m| stack > 1 && m.entry == item.entry && m.slot == u8::MAX)
+            {
+                Some(m) if item.slot == u8::MAX => m.count += item.count,
+                _ => merged.push(item),
+            }
+        }
+        *items = merged;
+    }
     let mut used = std::collections::HashSet::new();
     for item in items.iter() {
         if item.slot != u8::MAX {
             used.insert(item.slot);
         }
     }
-    let mut next_pack = 23u8;
+    let free_pack = |used: &std::collections::HashSet<u8>| (23u8..39).find(|s| !used.contains(s));
     let mut placed = Vec::with_capacity(items.len());
     for mut item in items.drain(..) {
-        if item.slot == u8::MAX {
-            let equip = data
-                .item(item.entry)
-                .and_then(|t| t.equipment_slot())
-                .filter(|s| !used.contains(s));
-            item.slot = match equip {
-                Some(s) => s,
-                None => {
-                    while used.contains(&next_pack) && next_pack < 39 {
-                        next_pack += 1;
-                    }
-                    if next_pack >= 39 {
-                        continue;
-                    }
-                    next_pack
-                }
-            };
-            used.insert(item.slot);
+        if item.slot != u8::MAX {
+            placed.push(item);
+            continue;
         }
+        let stack = stack_of(item.entry);
+        if vmangos && item.count > stack {
+            // Into the backpack in stacks, if all of them fit.
+            let stacks = item.count.div_ceil(stack) as usize;
+            let room = (23u8..39).filter(|s| !used.contains(s)).count();
+            if stacks > room {
+                continue;
+            }
+            let mut left = item.count;
+            let mut guid = item.guid;
+            while left > 0 {
+                let Some(slot) = free_pack(&used) else {
+                    break;
+                };
+                let n = left.min(stack);
+                left -= n;
+                used.insert(slot);
+                placed.push(ItemRow {
+                    guid,
+                    slot,
+                    count: n,
+                    ..item.clone()
+                });
+                if left > 0 {
+                    guid = next_guid();
+                }
+            }
+            continue;
+        }
+        let equip = data
+            .item(item.entry)
+            .and_then(|t| t.equipment_slot())
+            .filter(|s| !used.contains(s));
+        item.slot = match equip.or_else(|| free_pack(&used)) {
+            Some(s) => s,
+            None => continue,
+        };
+        used.insert(item.slot);
         placed.push(item);
     }
     *items = placed;

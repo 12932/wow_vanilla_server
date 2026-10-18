@@ -144,6 +144,8 @@ pub struct CharacterState {
     pub watched_faction: Option<u32>,
     /// How drunk the player was at logout (`map::intoxication`).
     pub drunk: u32,
+    /// The ammunition chosen (`PLAYER_AMMO_ID`), as mangos keeps `ammoId`.
+    pub ammo: u32,
     /// Rested XP waiting, and the rest the player was in at logout.
     pub rest_bonus: f32,
     pub rest_type: Option<crate::game::map::rest::RestType>,

@@ -786,7 +786,15 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     let source = match (source > 0).then(|| inventory::room_for(p, &data, q.source_item, source)) {
         Some(Err(inventory::Fail::CantCarryMore)) | None => 0,
         Some(Ok(())) => source,
-        Some(Err(fail)) => return inventory::send_fail(p, fail, Guid::zero()),
+        Some(Err(fail)) => {
+            inventory::send_fail(p, fail, Guid::zero());
+            // A shared offer not taken goes, the sharer told (Thistle
+            // Tea's `QuestSharing.accept`).
+            if shared {
+                crate::game::map::questshare::refused(map, player, giver);
+            }
+            return;
+        }
     };
     p.journal.add(Logged {
         quest,

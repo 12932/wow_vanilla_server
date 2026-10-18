@@ -182,7 +182,17 @@ fn buy_failed(map: &Map, player: Guid, npc: Guid, item: u32, result: BuyResult) 
 
 /// `CMSG_BUY_ITEM`: `amount` stacks of an item's buy count.
 pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
+    // The dead buy nothing, and are told nothing; a vendor out of reach
+    // (or dead, or not one) is too far (mangos's `BuyItemFromVendor`).
+    let alive = map
+        .players
+        .get(&player)
+        .is_some_and(|p| p.death == crate::game::map::death::Death::Alive);
+    if !alive {
+        return;
+    }
     let Some(entry) = vendor_entry(map, player, npc, NPC_FLAG_VENDOR) else {
+        buy_failed(map, player, npc, item, BuyResult::DistanceTooFar);
         return;
     };
     let data = map.realm.data.clone();
@@ -528,7 +538,12 @@ pub fn buyback(map: &mut Map, player: Guid, npc: Guid, slot: BuybackSlot) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    let Some(i) = p.item_at(BAG_PLAYER, slot) else {
+    // Nothing there: mangos's `HandleBuybackItem` says it can't be found.
+    let Some(i) = p
+        .item_at(BAG_PLAYER, slot)
+        .filter(|_| (BUYBACK_START..BUYBACK_END).contains(&slot))
+    else {
+        buy_failed(map, player, npc, 0, BuyResult::CantFindItem);
         return;
     };
     let n = u16::from(slot - BUYBACK_START);

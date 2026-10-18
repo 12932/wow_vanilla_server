@@ -228,6 +228,18 @@ mod tests_p3_network_wire;
 #[cfg(test)]
 mod tests_p3_player;
 #[cfg(test)]
+mod tests_p3_player2_ammo;
+#[cfg(test)]
+mod tests_p3_player2_chars;
+#[cfg(test)]
+mod tests_p3_player2_gear;
+#[cfg(test)]
+mod tests_p3_player2_npc;
+#[cfg(test)]
+mod tests_p3_player2_quests;
+#[cfg(test)]
+mod tests_p3_player2_taxi;
+#[cfg(test)]
 mod tests_p3_player_chat;
 #[cfg(test)]
 mod tests_p3_player_class;
