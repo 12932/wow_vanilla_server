@@ -74,3 +74,56 @@ async fn a_pull_stands_a_creature_up_an_evade_clears_the_fight_and_death_keeps_t
     assert_eq!(refused, evaded, "no fight on the way home");
     assert_eq!(dead, (Some(ga), 0, false), "the tap kept for the loot");
 }
+
+/// Thistle Tea's "a missing victim stops an attack before combat has
+/// begun", "stops an old auto-attack when the same mob guid has respawned"
+/// and "prunes a stale ref when the same mob guid respawns before combat
+/// drops": an attack on a creature gone from the world stops at its next
+/// swing, and the attacker is told; one on a creature killed stops at its
+/// death, so it doesn't take up the creature that respawns with its guid.
+#[tokio::test]
+async fn an_attack_stops_when_its_victim_is_gone_or_dies_and_stays_stopped_at_a_respawn() {
+    let (_realm, mut a, ga, map) = setup(Class::Warrior).await;
+    let brute = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 30.0);
+            combat::start_attack(m, ga, brute);
+            brute
+        })
+        .await
+        .unwrap();
+    a.clear();
+    let gone = map
+        .query(move |m| {
+            m.remove_creature(brute);
+            combat::try_swing(m, ga);
+            m.players[&ga].combat.attacking
+        })
+        .await
+        .unwrap();
+    assert!(!gone, "stopped");
+    a.wait_for("the attack stop", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_ATTACKSTOP(s)
+            if s.player == ga && s.enemy == brute =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    let (killed, respawned) = map
+        .query(move |m| {
+            let other = spawn(m, ga, BRUTE, 20, 2.0);
+            combat::start_attack(m, ga, other);
+            ai::attacked(m, other, ga);
+            combat::deal_damage(m, ga, other, 1_000_000);
+            let killed = m.players[&ga].combat.attacking;
+            ai::respawn_now(m, other);
+            let respawned = m.players[&ga].combat.attacking;
+            (killed, respawned)
+        })
+        .await
+        .unwrap();
+    assert!(!killed, "stopped at its death");
+    assert!(!respawned, "not taken up again");
+}
