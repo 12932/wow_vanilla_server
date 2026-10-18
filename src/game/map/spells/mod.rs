@@ -1003,7 +1003,13 @@ fn execute(
     // What the cast cost, for a refund if an ability is avoided.
     let mut paid = 0;
     if !triggered {
-        let cost = m.apply_ms(mods::OP_COST, power_cost(map, caster, s));
+        // An item's spell costs no power (mangos's `TakePower`, Thistle
+        // Tea's item casts): no mana spent, so no five-second rule.
+        let cost = if item.is_some() {
+            0
+        } else {
+            m.apply_ms(mods::OP_COST, power_cost(map, caster, s))
+        };
         paid = cost;
         if let Some(r) = checks::at_launch(map, caster, s, cost) {
             return launch_failed(map, caster, s.id, r);
