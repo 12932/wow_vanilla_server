@@ -6,8 +6,8 @@ review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS
 question and decision in full; this page is the index.
 
 ## In short
-- **Parity:** 5,541 of Thistle Tea's 8,375 applicable tests have a wvs test that checks the same behaviour, or an
-  accepted difference (66.2%, from 21% when the matrix was first mapped). The rest are listed by area in
+- **Parity:** 5,651 of Thistle Tea's 8,373 applicable tests have a wvs test that checks the same behaviour, or an
+  accepted difference (67.5%, from 21% when the matrix was first mapped). The rest are listed by area in
   [parity/matrix.csv](parity/matrix.csv).
 - **The kobold:** fixed. A unit no longer swings from beyond its reach; two running units get the client's 8/3 yards.
 - **Robustness:**
@@ -159,7 +159,8 @@ Until you answer, wvs keeps what the line says.
 | 5c: combat | 64.5% | a8bb809 |
 | perf2: the whole world awake, round two | merged | its merge |
 | 5d: auras and objective carriers | 66.2% | ce71ae1 |
+| 5e: pets and creature scripts | 67.5% | 145daf9 |
 
-**Still running as of this writing:** 5e.
+**Running now:** nothing. Round 5 is in, and no new stages are started (your pause).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

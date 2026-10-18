@@ -83,6 +83,9 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   - A charmed creature released stops only its auto-repeat and melee spells, not a prepared cast or a channel.
   - A spell modifier gives an aura whole points.
   - A victim of a persistent area aura's pure periodic damage gets a debuff slot.
+  - A dead pet is refused the stable; Thistle Tea stables it dead.
+  - A pet's happiness scales only a hunter pet's weapon damage and flat damage buffs, not its abilities or periodic
+    damage.
 
 ## Not yet matching
 

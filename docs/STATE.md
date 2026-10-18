@@ -61,7 +61,7 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 - **Parity:**
   - Thistle Tea's 8,850 tests were mapped to wvs tests ([parity/README.md](parity/README.md)).
   - Five rounds of stages ported them, fixing wvs where it differed, checked against mangos-classic.
-  - The matrix went from 21% to 64.5% covered or accepted. Where Thistle Tea isn't 1.12, wvs keeps mangos's behaviour
+  - The matrix went from 21% to 67.5% covered or accepted. Where Thistle Tea isn't 1.12, wvs keeps mangos's behaviour
     and the row says why (46 rows).
 - **The kobold's reach:** fixed.
 - **Robustness:** the supervision above, packet guards, and chaos tests. wow_messages' crash bugs were guarded in wvs
@@ -93,15 +93,16 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - ahash's maps only, enforced by clippy.
 
 ## What's left
-- **Parity:** 2,914 rows are still gap. The biggest areas:
-  - the player, about 370;
-  - spells, about 300;
-  - combat, about 300;
-  - auras and loaders, about 400;
-  - creature scripts, pets and behaviour trees, about 400.
+- **Parity:** 2,652 rows are still gap. The biggest areas:
+  - the world's entities (players, creatures and objects in the world), about 590;
+  - creature AI and scripts, about 340;
+  - spells, about 490 (core and world);
+  - the world's loaders, about 240;
+  - combat, about 210;
+  - pets and creatures, about 155.
 
-  Round 5's stages (5c, 5d, 5e) are on some of them. Some rows wait on a question, and some on a system wvs doesn't
-  have, such as Scourge camps, the Lunar Festival's fireworks, or a movement-acknowledgement system.
+  Round 5 is in. Some rows wait on a question, and some on a system wvs doesn't have, such as Scourge camps, the
+  Lunar Festival's fireworks, or a movement-acknowledgement system.
 - **Open questions:** 50 or so, in [SITREP.md](SITREP.md). Each says what wvs does until you answer.
 - **The hard findings** ([CODE_REVIEW.md](CODE_REVIEW.md)):
   - a client claiming a transport skips the speed check;

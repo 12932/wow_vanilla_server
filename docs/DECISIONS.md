@@ -912,4 +912,20 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Left:** about 290 aura rows (breakable control, capacity, caster modifiers, dispel, linked, persistent area,
       stealth detection and more) and all the world loader rows.
 
+59. **5e's choices** (pets, pet behaviour trees and creature scripts, 116 rows):
+    - **Pet stats:** a hunter's or warlock's pet's stat auras raise its stats: 10 health a stamina point over its
+      level's, 15 mana an intellect point, as mangos-zero has it (mangos-classic softens the first 20 stamina).
+    - **Crowd control and a pet's attack:** a pet lets its victim be once crowd control that damage would break is
+      put on it after its master's Attack; Thistle Tea's narrower rule is kept, that the Attack overrides crowd
+      control only on the target it named.
+    - **A dead pet** is refused the stable, as mangos-classic has it; Thistle Tea stables it dead.
+    - **A totem or ward** goes with its owner's death, a creature owner's too (mangos-classic's `Totem::Update`;
+      question 31 stands).
+    - **Happiness** scales only a hunter pet's main-hand weapon damage and its flat damage buffs, not its abilities
+      or periodic damage (three rows `wrong-for-1.12`).
+    - **A script's cast of a passive spell** puts it on, as vmangos's `DoCastSpellIfCan` does.
+    - **Left:** Obsidion's Smash and Knockback never went in its runs (row left gap); Bly's Revenge's cast isn't
+      asserted; about 320 rows untouched (the Eranikus, Gizelton, Stormwind Rendezvous, Alterac Valley and Scourge
+      Invasion walks, mob and distancing behaviour trees, charmed and possessed players, guardians).
+
 ## Left for later, and why
