@@ -212,18 +212,16 @@ fn roles_of(realm: &Realm, members: &[Guid]) -> Vec<Role> {
         .collect()
 }
 
-/// The queued player alone who best fills what `have` lacks.
+/// The queued player alone who best fills what `have` lacks; none for a
+/// place the party has filled: no second tank or healer, no fourth damage
+/// dealer (mangos's `LFGQueue` roles, Thistle Tea's matchmaking).
 fn best_for(have: &[Role], solos: &[&Queued]) -> Option<Guid> {
     let wants = |r: Role| match r {
         Role::Tank => !have.contains(&Role::Tank),
         Role::Healer => !have.contains(&Role::Healer),
         Role::Damage => have.iter().filter(|x| **x == Role::Damage).count() < 3,
     };
-    solos
-        .iter()
-        .find(|q| wants(role(q.class)))
-        .or(solos.first())
-        .map(|q| q.guid)
+    solos.iter().find(|q| wants(role(q.class))).map(|q| q.guid)
 }
 
 /// Match each dungeon's queue: parties take who they lack, and players

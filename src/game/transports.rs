@@ -693,6 +693,16 @@ fn cross(realm: &Arc<Realm>, route: &Route, pose: Pose) {
             })
             .collect();
         for (p, offset, o) in aboard {
+            // One dead on deck and not released rises, whole, before the
+            // ship takes them to another map, as mangos's
+            // `Transport::TeleportTransport` and Thistle Tea raise them.
+            let fallen = m
+                .players
+                .get(&p)
+                .is_some_and(|x| matches!(x.death, crate::game::map::death::Death::Dead { .. }));
+            if fallen {
+                crate::game::map::death::resurrect(m, p, 1.0);
+            }
             let (at, facing) = passenger_world(offset, o, &pose);
             m.teleport_aboard(p, target, at, facing, entry, offset);
         }

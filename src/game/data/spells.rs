@@ -272,6 +272,8 @@ pub struct SpellData {
     pub target_positions: AHashMap<u32, (u32, f32, f32, f32, f32)>,
     /// `Talent`: talent id → its ranks' spells.
     pub talents: AHashMap<u32, TalentInfo>,
+    /// `TalentTab`: tab → the classes (a mask) whose tree it is.
+    pub talent_tab_classes: AHashMap<u32, u32>,
     /// `creature_spells`: list → its spells.
     pub creature_spells: AHashMap<u32, Vec<CreatureSpell>>,
     /// Spells by the skill line they teach (`SkillLineAbility`): spell → skill.

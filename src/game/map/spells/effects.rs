@@ -209,7 +209,9 @@ fn aura_amount(
         AURA_PERIODIC_HEAL => {
             let mut h =
                 base as f32 + outcome::bonus(map, caster, target, s, index, Kind::Dot, &l.mods);
-            if let Some(a) = auras::auras(map, caster) {
+            if let Some(a) = auras::auras(map, caster)
+                && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+            {
                 h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
             }
             l.mods.apply(mods::OP_DOT, h).max(0.0) as i32
@@ -302,6 +304,8 @@ pub fn run(
     }
     if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);
+        // The target's returns before, should the aura not go on.
+        let returns = map.caster(target).map(|c| c.diminishing.clone());
         let duration = if auras::positive(s) || target == caster {
             Some(duration)
         } else {
@@ -311,8 +315,11 @@ pub fn run(
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
             return;
         };
-        let charges =
-            (s.proc_charges > 0).then(|| l.mods.apply_ms(mods::OP_CHARGES, s.proc_charges).max(1));
+        // The caster's charge modifiers, whether the spell has charges or
+        // not; none left is no limit (mangos's `SpellAuraHolder`, Thistle
+        // Tea's `Application`).
+        let charges = (s.proc_charges > 0 || l.mods.any(mods::OP_CHARGES))
+            .then(|| l.mods.apply_ms(mods::OP_CHARGES, s.proc_charges));
         let ctx = auras::Context {
             item,
             equipped: false,
@@ -321,11 +328,28 @@ pub fn run(
             charges,
             triggered: l.triggered,
             linked: false,
+            activation: (
+                l.mods.flat[mods::OP_ACTIVATION_TIME],
+                l.mods.pct[mods::OP_ACTIVATION_TIME],
+            ),
         };
         if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
             && caster != target
         {
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
+        }
+        // An aura that didn't go on (a full bar refused it) spends none of
+        // its target's returns, as Thistle Tea's refusal comes before them.
+        let on = auras::auras(map, target).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == s.id && h.caster == caster)
+        });
+        if !on
+            && let Some(before) = returns
+            && let Some(c) = map.caster_mut(target)
+        {
+            c.diminishing = before;
         }
         if !auras::positive(s) {
             let (done, taken) = outcome::proc_flags(s);
@@ -732,8 +756,11 @@ fn effect(
             let to = lands_on(map, caster, target, &e, t);
             crate::game::map::npc::bind_home(map, to, caster);
         }
+        // A leap: a player's client is sent there, a creature put there;
+        // not one on a flight (mangos's `EffectLeap`, Thistle Tea's `Leap`).
         EFFECT_LEAP => {
-            if let Some(me) = map.unit_view(caster) {
+            let flying = map.players.get(&caster).is_some_and(|p| p.flight.is_some());
+            if let Some(me) = map.unit_view(caster).filter(|_| !flying) {
                 let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
                 let o = me.orientation + leap_angle(e.target_a, e.target_b);
                 let want = Vector3d {
@@ -742,7 +769,11 @@ fn effect(
                     z: me.position.z,
                 };
                 let to = first_clear(map, me.position, want);
-                map.teleport(caster, map.key, to, me.orientation);
+                if map.players.contains_key(&caster) {
+                    map.teleport(caster, map.key, to, me.orientation);
+                } else {
+                    super::super::scripts::place(map, caster, to, me.orientation);
+                }
             }
         }
         // A run to the target, and a swing there if it is a harmful spell
@@ -810,12 +841,24 @@ fn effect(
             });
         }
         EFFECT_INTERRUPT_CAST => {
-            // The interrupted school is locked out for the spell's time.
+            // A cast a silence could stop is interrupted (mangos's
+            // `IsInterruptible`: its interrupt flag 0x8 and prevention 1),
+            // not the Hearthstone; its school locked out for the spell's
+            // time.
             let interrupted = map
                 .caster(target)
                 .and_then(|c| c.casting.as_ref())
-                .map(|c| c.spell);
-            super::interrupt(map, target);
+                .map(|c| c.spell)
+                .filter(|id| {
+                    map.realm
+                        .data
+                        .spells
+                        .get(*id)
+                        .is_some_and(|t| t.interrupt_flags & 0x8 != 0 && t.prevention_type == 1)
+                });
+            if interrupted.is_some() {
+                super::interrupt(map, target);
+            }
             if let Some(spell) = interrupted {
                 super::log::interrupt(map, caster, s.id, target, spell);
                 let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
@@ -1427,8 +1470,10 @@ pub fn run_untargeted(
                     at,
                     radius,
                     ends: now + Duration::from_millis(u64::from(ms)),
+                    // A periodic one's first tick a period in (mangos's
+                    // PersistentAreaAura); a slow on those inside at once.
                     next_tick: now
-                        + if s.channeled() {
+                        + if s.channeled() || periodic_area(e.aura) {
                             period
                         } else {
                             Duration::ZERO
@@ -1468,29 +1513,24 @@ pub fn run_untargeted(
 /// a helpful one, friend) inside.
 pub fn tick_areas(map: &mut Map) {
     let now = map.now;
-    let ended: Vec<Guid> = map
-        .spells
-        .areas
-        .iter()
-        .filter(|a| a.ends <= now)
-        .map(|a| a.object)
-        .collect();
-    for g in ended {
-        super::dynamic::remove(map, g);
-    }
-    map.spells.areas.retain(|a| a.ends > now);
     map.spells
         .area_ticked
         .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
+    // The tick due as an area ends is had before it goes (mangos's
+    // `Aura::Update` keeps the last tick): Blizzard's eighth wave.
     let due: Vec<usize> = (0..map.spells.areas.len())
-        .filter(|i| map.spells.areas[*i].next_tick <= now)
+        .filter(|i| {
+            let a = &map.spells.areas[*i];
+            a.next_tick <= now && (a.next_tick <= a.ends || a.ends > now)
+        })
         .collect();
     let data = map.realm.data.clone();
     for i in due {
         let Some(area) = map.spells.areas.get(i).cloned() else {
             continue;
         };
-        map.spells.areas[i].next_tick = now + area.period;
+        // On its own cadence, so a late update doesn't lose its last.
+        map.spells.areas[i].next_tick = area.next_tick + area.period;
         let Some(s) = data.spells.get(area.spell) else {
             continue;
         };
@@ -1586,6 +1626,28 @@ pub fn tick_areas(map: &mut Map) {
             }
         }
     }
+    let ended: Vec<Guid> = map
+        .spells
+        .areas
+        .iter()
+        .filter(|a| a.ends <= now)
+        .map(|a| a.object)
+        .collect();
+    for g in ended {
+        super::dynamic::remove(map, g);
+    }
+    map.spells.areas.retain(|a| a.ends > now);
+}
+
+/// Whether a ground area's aura ticks (damage, healing, a trigger).
+fn periodic_area(aura: u32) -> bool {
+    matches!(
+        aura,
+        AURA_PERIODIC_DAMAGE
+            | AURA_PERIODIC_LEECH
+            | AURA_PERIODIC_HEAL
+            | AURA_PERIODIC_TRIGGER_SPELL
+    )
 }
 
 fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {

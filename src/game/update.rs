@@ -267,6 +267,10 @@ pub fn create_block(c: &Create, visibility: Visibility) -> Vec<u8> {
 /// A values block with `fields`' dirty fields that `visibility` may see,
 /// or `None` if there are none.
 pub fn values_block(guid: Guid, fields: &Fields, visibility: Visibility) -> Option<Vec<u8>> {
+    // Nothing changed, so nothing to say (and nothing to allocate for).
+    if !fields.is_dirty() {
+        return None;
+    }
     let (mask, values) = fields.select(visibility, true);
     let only_type = values.len() == 1
         && mask.len() == 1

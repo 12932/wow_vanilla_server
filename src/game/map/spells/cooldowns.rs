@@ -67,6 +67,7 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
     }
     let ms = recovery.max(category_recovery);
     send(map, caster, &[(s.id, ms)]);
+    send_to_master(map, caster, &[(s.id, ms)]);
     if item.is_some()
         && let Some(p) = map.players.get(&caster)
     {
@@ -84,6 +85,33 @@ pub fn send(map: &Map, player: Guid, cooldowns: &[(u32, u32)]) {
     {
         p.outbound.send(&SMSG_SPELL_COOLDOWN {
             guid: player,
+            cooldowns: cooldowns
+                .iter()
+                .map(|(id, ms)| SpellCooldownStatus {
+                    id: *id,
+                    cooldown_time: Duration::from_millis(u64::from(*ms)),
+                })
+                .collect(),
+        });
+    }
+}
+
+/// `SMSG_SPELL_COOLDOWN` for a creature's cooldowns, under its own GUID, to
+/// the player whose pet, charm or possession it is, for its bar (mangos's
+/// `Creature::AddCooldown`, Thistle Tea's cooldowns of a charmed mob).
+fn send_to_master(map: &Map, unit: Guid, cooldowns: &[(u32, u32)]) {
+    use crate::game::map::pets::Kind;
+    let Some(master) = crate::game::map::pets::state(map, unit)
+        .filter(|s| !matches!(s.kind, Kind::Guardian | Kind::Totem | Kind::Critter))
+        .map(|s| s.owner)
+    else {
+        return;
+    };
+    if let Some(p) = map.players.get(&master)
+        && !cooldowns.is_empty()
+    {
+        p.outbound.send(&SMSG_SPELL_COOLDOWN {
+            guid: unit,
             cooldowns: cooldowns
                 .iter()
                 .map(|(id, ms)| SpellCooldownStatus {
@@ -297,6 +325,8 @@ pub fn restore(map: &mut Map, player: Guid) {
         }
         let caster = Guid::new(a.caster);
         let caster = if caster.is_zero() { player } else { caster };
+        // Its ticks as its caster's modifiers have them now.
+        let m = super::mods::for_spell(map, caster, s);
         let _ = auras::apply_spell(
             map,
             caster,
@@ -311,6 +341,10 @@ pub fn restore(map: &mut Map, player: Guid) {
                 charges: Some(a.charges),
                 triggered: a.triggered,
                 linked: false,
+                activation: (
+                    m.flat[super::mods::OP_ACTIVATION_TIME],
+                    m.pct[super::mods::OP_ACTIVATION_TIME],
+                ),
             },
         );
         if let Some(h) = auras::auras_mut(map, player).and_then(|x| {

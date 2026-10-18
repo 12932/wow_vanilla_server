@@ -146,6 +146,7 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
         }
         return;
     }
+    map.rare.charge = true;
     let Some(c) = map.creature_mut(caster) else {
         return;
     };
@@ -211,12 +212,22 @@ pub fn update(map: &mut Map) {
             finish(map, g, !taken && alive);
         }
     }
+    if !map.rare.charge {
+        debug_assert!(
+            map.creatures
+                .iter()
+                .all(|(_, c)| c.engagement.charge.is_none()),
+            "a creature charges unnoted (RareStates)"
+        );
+        return;
+    }
     let creatures: Vec<Guid> = map
         .creatures
         .iter()
         .filter(|(_, c)| c.engagement.charge.is_some())
         .map(|(_, c)| c.guid)
         .collect();
+    map.rare.charge = !creatures.is_empty();
     for g in creatures {
         step(map, g);
     }

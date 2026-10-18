@@ -604,6 +604,7 @@ impl Player {
     /// The character as it now is, to store.
     pub fn to_row(&mut self, now: Instant) -> CharacterRow {
         self.count_played(now);
+        crate::game::map::rest::accrue(self, now);
         // A flight already flown is a landing at its end (Thistle Tea's
         // `Taxi.pause` of an elapsed flight), not a flight to take up.
         let landed = self
@@ -628,6 +629,7 @@ impl Player {
             row.state.powers[i] = f.get_u32(UNIT_FIELD_POWER1 + i as u16);
         }
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
+        row.state.drunk = self.drunk.value;
         // What's sold stays to be bought back this session only (Thistle
         // Tea's `Buyback.logout`).
         row.items = self

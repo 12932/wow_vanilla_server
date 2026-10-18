@@ -968,15 +968,19 @@ async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
         info: info(MovementInfo_MovementFlags::new_root()),
     };
     a.send(root()).await;
-    let rooted = b.wait_frame("MSG_MOVE_ROOT", 0x0EC, |_| true).await;
-    assert_eq!(&rooted[..packed(ga).len()], &packed(ga)[..]);
+    let rooted = b
+        .wait_for("MSG_MOVE_ROOT", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_ROOT(r) => Some(r.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(rooted.player, ga);
+    assert_eq!(rooted.info.position, there);
     settled(&mut a).await;
     let now = on_map(&realm, move |m| m.players[&ga].position()).await;
     assert_eq!(now.x, there.x, "where the client says");
-    // Again, already rooted: stale. (wow_messages reads no MSG_MOVE_ROOT:
-    // it comes raw.)
+    // Again, already rooted: stale.
     b.clear();
-    b.raw.clear();
     a.send(root()).await;
     settled(&mut a).await;
     a.send(CMSG_FORCE_MOVE_UNROOT_ACK {
@@ -985,12 +989,16 @@ async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
         info: info(MovementInfo_MovementFlags::empty()),
     })
     .await;
-    b.wait_frame("MSG_MOVE_UNROOT", 0x0ED, |_| true).await;
+    b.wait_for("MSG_MOVE_UNROOT", |m| match m {
+        ServerOpcodeMessage::MSG_MOVE_UNROOT(u) if u.player == ga => Some(()),
+        _ => None,
+    })
+    .await;
     settled(&mut b).await;
     let roots = b
-        .raw
+        .backlog
         .iter()
-        .filter(|f| u16::from_le_bytes([f[2], f[3]]) == 0x0EC)
+        .filter(|m| matches!(m, ServerOpcodeMessage::MSG_MOVE_ROOT(_)))
         .count();
     assert_eq!(roots, 0, "the stale root told no one");
 }

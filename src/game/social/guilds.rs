@@ -330,15 +330,16 @@ pub fn create(realm: &Realm, me: &Online, name: &str) {
         );
         return;
     }
-    if found(realm, name, me.guid, &[]).is_none() {
-        command_result(
-            realm,
-            me.guid,
-            GuildCommand::Create,
-            name,
-            GuildCommandResult::GuildNameExistsS,
-        );
-    }
+    // One guild a founder, then a name of its own (Thistle Tea's
+    // `Guild.create/3`).
+    let result = if realm.social.guilds.lock().of(me.guid).is_some() {
+        GuildCommandResult::AlreadyInGuild
+    } else if found(realm, name, me.guid, &[]).is_none() {
+        GuildCommandResult::GuildNameExistsS
+    } else {
+        return;
+    };
+    command_result(realm, me.guid, GuildCommand::Create, name, result);
 }
 
 pub fn valid_name(name: &str) -> bool {
@@ -880,6 +881,7 @@ pub fn set_note(realm: &Realm, me: &Online, name: &str, note: &str, officer: boo
 /// `CMSG_GUILD_RANK`, `CMSG_GUILD_ADD_RANK` and `CMSG_GUILD_DEL_RANK`: the
 /// leader's.
 pub fn edit_rank(realm: &Realm, me: &Online, edit: RankEdit) {
+    let mut moved = Vec::new();
     let mut guilds = realm.social.guilds.lock();
     let Some(g) = guilds.of_mut(me.guid) else {
         return;
@@ -896,10 +898,12 @@ pub fn edit_rank(realm: &Realm, me: &Online, edit: RankEdit) {
     }
     match edit {
         RankEdit::Set { rank, rights, name } => {
-            // The leader's rank keeps every right.
-            if rank == 0 || rank as usize >= g.ranks.len() {
+            if rank as usize >= g.ranks.len() {
                 return;
             }
+            // The leader's rank may be renamed, and keeps every right
+            // (mangos's `HandleGuildRankOpcode`, Thistle Tea's).
+            let rights = if rank == 0 { RIGHT_ALL } else { rights };
             g.ranks[rank as usize] = Rank {
                 name: name.chars().take(15).collect(),
                 rights: rights | RIGHT_EMPTY,
@@ -916,15 +920,36 @@ pub fn edit_rank(realm: &Realm, me: &Online, edit: RankEdit) {
         }
         RankEdit::DeleteLowest => {
             let lowest = g.ranks.len() as u32 - 1;
-            if g.ranks.len() <= MIN_RANKS || g.members.iter().any(|m| m.rank == lowest) {
+            if g.ranks.len() <= MIN_RANKS {
                 return;
             }
             g.ranks.pop();
+            // Its members drop to the rank now lowest (Thistle Tea's
+            // `delete_rank`; mangos leaves them a rank that is gone).
+            for m in g.members.iter_mut().filter(|m| m.rank == lowest) {
+                m.rank = lowest - 1;
+                moved.push(guid::player(m.guid));
+            }
         }
     }
     save(realm, g);
+    let id = g.id;
     drop(guilds);
+    for m in moved {
+        set_fields(realm, m, id, lowest_after(realm, id));
+    }
     roster(realm, me);
+}
+
+/// A guild's lowest rank.
+fn lowest_after(realm: &Realm, id: u32) -> u32 {
+    realm
+        .social
+        .guilds
+        .lock()
+        .guilds
+        .get(&id)
+        .map_or(0, |g| g.ranks.len() as u32 - 1)
 }
 
 pub enum RankEdit {

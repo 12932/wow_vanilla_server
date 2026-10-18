@@ -665,6 +665,8 @@ impl Map {
         if self.players.contains_key(&g) {
             return self.players.get_mut(&g).map(|p| &mut p.combat);
         }
+        // What changes a creature's fight may put it in one.
+        self.note_fighting(g);
         self.creature_mut(g).map(|c| &mut c.combat)
     }
 
@@ -1686,7 +1688,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     }
     if left > 0 {
         // A blow on a caster pushes its cast back.
-        crate::game::map::spells::pushback(map, victim);
+        crate::game::map::spells::pushback_by(map, victim, attacker);
         deal_damage_school(map, attacker, victim, left, school);
     }
     let mut ex = if immune {
@@ -2774,12 +2776,20 @@ pub fn update_players(map: &mut Map) {
         sync_aura_state(map, g);
     }
     let data = map.realm.data.clone();
-    let threatened: ahash::AHashSet<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.alive() && c.combat.attacking)
-        .flat_map(|(_, c)| c.threat.iter().map(|(t, _)| *t))
-        .collect();
+    // Who creatures fighting hold a threat on: it keeps a player in a
+    // fight, so it matters only if someone is in one (and saves a look at
+    // every creature when no one is).
+    let threatened: ahash::AHashSet<Guid> =
+        if map.players.values().any(|p| p.combat.last_action.is_some()) {
+            let fighting = map.awake_where(|c| c.alive() && c.combat.attacking, |k, _| k);
+            fighting
+                .into_iter()
+                .filter_map(|k| map.creatures.get(k))
+                .flat_map(|c| c.threat.iter().map(|(t, _)| *t))
+                .collect()
+        } else {
+            Default::default()
+        };
     for p in map.players.values_mut() {
         if threatened.contains(&p.guid) && p.combat.last_action.is_some() {
             p.combat.last_action = Some(now);
@@ -2815,12 +2825,10 @@ pub fn update_players(map: &mut Map) {
 /// The aura states of creatures in a fight: below a fifth of health
 /// (Execute), and their reactive windows.
 pub fn update_creatures(map: &mut Map) {
-    let fighting: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.alive() && (c.combat.attacking || !c.combat.attackers.is_empty()))
-        .map(|(_, c)| c.guid)
-        .collect();
+    let fighting: Vec<Guid> = map.awake_where(
+        |c| c.alive() && (c.combat.attacking || !c.combat.attackers.is_empty()),
+        |_, c| c.guid,
+    );
     for g in fighting {
         expire_windows(map, g);
         sync_aura_state(map, g);

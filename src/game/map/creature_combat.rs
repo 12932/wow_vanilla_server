@@ -63,6 +63,8 @@ pub struct Engagement {
     pub last_hostile: Option<Instant>,
     /// Since when its victim has been out of reach.
     pub unreachable_since: Option<Instant>,
+    /// Set it only with `Map::rare.flee` noted (see [`RareStates`]); so
+    /// with `charge` and `assist`.
     pub flee: Option<Flee>,
     pub regen_at: Option<Instant>,
     /// When fear or confusion next moves it.
@@ -233,6 +235,34 @@ fn sweep_leashes(map: &mut Map) {
         .filter_map(|(_, c)| c.engagement.clock)
         .collect();
     map.leashes.clocks.retain(|id, _| held.contains(id));
+}
+
+/// Which of the rarer states some creature of the map may be in: a
+/// charge, a flight, a call for help on its way, a cast, being a pet. The
+/// update looks at every creature for one only while one may be in it,
+/// and the look clears it when it finds none. So whatever puts a creature
+/// in one notes it here first (`Map::add_creature` notes what a creature
+/// arrives with, and `Map::caster_mut` notes a cast); debug builds check
+/// that a look skipped would have found nothing.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RareStates {
+    pub charge: bool,
+    pub flee: bool,
+    pub assist: bool,
+    pub casting: bool,
+    pub pet: bool,
+}
+
+impl RareStates {
+    /// The states `c` is in, noted.
+    pub fn note(&mut self, c: &crate::game::map::creature::Creature) {
+        let e = &c.engagement;
+        self.charge |= e.charge.is_some();
+        self.flee |= e.flee.is_some();
+        self.assist |= !e.assist.is_empty();
+        self.casting |= c.caster.casting.is_some();
+        self.pet |= c.pet.is_some();
+    }
 }
 
 /// A civilian's call for the guards, answered: it makes one at a time.
@@ -619,6 +649,7 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
     };
     emote(map, g, "%s attempts to run away in fear!");
     crate::game::map::spells::interrupt(map, g);
+    map.rare.flee = true;
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -968,10 +999,9 @@ fn answered(map: &mut Map, caller: Guid, answer: GuardCall) {
 fn watch_for_enemies(map: &mut Map) {
     let now = map.now;
     let data = map.realm.data.clone();
-    let watching: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| {
+    // Only a creature some player sees watches.
+    let watching: Vec<Guid> = map.awake_where(
+        |c| {
             c.alive()
                 && !c.evading
                 && c.pet.is_none()
@@ -981,9 +1011,9 @@ fn watch_for_enemies(map: &mut Map) {
                 && data
                     .creature_template(c.entry)
                     .is_some_and(|t| t.static_flags1 & STATIC_CALLS_GUARDS != 0)
-        })
-        .map(|(_, c)| c.guid)
-        .collect();
+        },
+        |_, c| c.guid,
+    );
     for g in watching {
         if let Some(c) = map.creature_mut(g) {
             c.engagement.watch_at = Some(now + WATCH_EVERY);
@@ -1183,15 +1213,14 @@ fn regenerated_stats(map: &Map, g: Guid) -> u32 {
 /// intellect outside the five-second rule.
 pub fn regenerate(map: &mut Map) {
     let now = map.now;
+    // Health or mana short first: few are, and it is answered from the
+    // creature itself, not its fields' values.
     let due: Vec<Guid> = map
         .creatures
         .iter()
+        .filter(|(_, c)| c.fields.below_max())
         .filter(|(_, c)| c.alive() && !c.evading && c.owner.is_none_or(|o| !guid::is_player(o)))
         .filter(|(_, c)| c.engagement.regen_at.is_none_or(|t| t <= now))
-        .filter(|(_, c)| {
-            c.fields.get_u32(UNIT_FIELD_HEALTH) < c.fields.get_u32(UNIT_FIELD_MAXHEALTH)
-                || c.fields.get_u32(UNIT_FIELD_POWER1) < c.fields.get_u32(UNIT_FIELD_MAXPOWER1)
-        })
         .map(|(_, c)| c.guid)
         .collect();
     for &g in &due {
@@ -1248,12 +1277,28 @@ pub fn update(map: &mut Map) {
     watch_for_enemies(map);
     crate::game::map::assistance::update(map);
     let now = map.now;
-    let pulses: Vec<(Guid, Guid)> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.engagement.zone_pulse_at.is_some_and(|t| t <= now))
-        .map(|(_, c)| (c.guid, c.combat.victim))
-        .collect();
+    // Only in a dungeon or a raid does a creature pulse its map (as
+    // `zone_fighter` has it), so only there is every creature looked at.
+    let dungeon = matches!(
+        crate::game::instances::instance_type(&map.realm, map.key.map),
+        1 | 2
+    );
+    let pulses: Vec<(Guid, Guid)> = if dungeon {
+        map.creatures
+            .iter()
+            .filter(|(_, c)| c.engagement.zone_pulse_at.is_some_and(|t| t <= now))
+            .map(|(_, c)| (c.guid, c.combat.victim))
+            .collect()
+    } else {
+        debug_assert!(
+            map.creatures
+                .iter()
+                .all(|(_, c)| c.engagement.zone_pulse_at.is_none()),
+            "{}: a creature pulses a map that is no dungeon",
+            map.key
+        );
+        Vec::new()
+    };
     for (g, victim) in pulses {
         let fighting = map.creature(g).is_some_and(|c| c.combat.attacking);
         if let Some(c) = map.creature_mut(g) {
@@ -1264,12 +1309,27 @@ pub fn update(map: &mut Map) {
             zone_pulse(map, g, false);
         }
     }
-    let over: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.engagement.flee.is_some_and(|f| f.until <= now))
-        .map(|(_, c)| c.guid)
-        .collect();
+    let mut over: Vec<Guid> = Vec::new();
+    if map.rare.flee {
+        let mut any = false;
+        over = map
+            .creatures
+            .iter()
+            .filter(|(_, c)| {
+                any |= c.engagement.flee.is_some();
+                c.engagement.flee.is_some_and(|f| f.until <= now)
+            })
+            .map(|(_, c)| c.guid)
+            .collect();
+        map.rare.flee = any;
+    } else {
+        debug_assert!(
+            map.creatures
+                .iter()
+                .all(|(_, c)| c.engagement.flee.is_none()),
+            "a creature flees unnoted (RareStates)"
+        );
+    }
     for g in over {
         end_flee(map, g);
     }

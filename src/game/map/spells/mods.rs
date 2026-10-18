@@ -159,10 +159,22 @@ fn used_by(op: usize, s: &SpellTemplate, data: &crate::game::data::GameData) -> 
             .effects
             .iter()
             .any(|e| matches!(e.effect, 2 | 9 | 10 | 17 | 31 | 58 | 121)),
-        OP_DOT | OP_ACTIVATION_TIME => s.effects.iter().any(|e| e.amplitude > 0),
+        OP_DOT => s.effects.iter().any(|e| e.amplitude > 0),
+        // A periodic aura's interval (Thistle Tea's
+        // `operation_used_by_spell?(:activation_time)`).
+        OP_ACTIVATION_TIME => s
+            .effects
+            .iter()
+            .any(|e| auras::ticks(e.aura) && auras::interval(e, (0, 0)).is_some()),
         OP_SPEED | OP_HASTE | OP_ATTACK_POWER => {
             s.effects.iter().any(|e| aura_op(e.aura) == Some(op))
         }
+        // Charges are an aura's (mangos asks for them only as its holder is
+        // made).
+        OP_CHARGES => s
+            .effects
+            .iter()
+            .any(|e| matches!(e.effect, 6 | 35) && e.aura != 0),
         _ => true,
     }
 }

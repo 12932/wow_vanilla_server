@@ -100,19 +100,22 @@ pub fn movement_bytes(guid: Guid, info: &MovementInfo) -> Vec<u8> {
     frame[4..].to_vec()
 }
 
-pub const MSG_MOVE_ROOT: u16 = 0x0EC;
-pub const MSG_MOVE_UNROOT: u16 = 0x0ED;
-
 fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
-    let was = map
-        .players
-        .get(&g)
-        .is_some_and(|p| p.movement.flags.get_root());
-    if was == root {
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.movement.flags.get_root() == root {
         return;
     }
-    let opcode = if root { MSG_MOVE_ROOT } else { MSG_MOVE_UNROOT };
-    relay(map, g, info, opcode, &[]);
+    p.movement = info.clone();
+    let frame = if root {
+        encode(&MSG_MOVE_ROOT_Server { player: g, info })
+    } else {
+        encode(&MSG_MOVE_UNROOT_Server { player: g, info })
+    };
+    if let Some(frame) = frame {
+        map.send_to_observers(g, &frame, false);
+    }
 }
 
 fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
@@ -471,12 +474,32 @@ pub fn talent_wipe_cost(last: u32, last_at: i64, now: i64) -> u32 {
     (last + 5 * GOLD).min(50 * GOLD)
 }
 
+/// Whether `npc` may reset `g`'s talents: a living trainer of their class
+/// within reach, for a player of level ten or more (mangos's
+/// `CanTrainAndResetTalentsOf`, Thistle Tea's `TalentReset.confirm`).
+fn resets_talents(map: &Map, g: Guid, npc: Guid) -> bool {
+    let Some(entry) =
+        crate::game::map::npc::npc_entry(map, g, npc, crate::game::map::npc::NPC_FLAG_TRAINER)
+    else {
+        return false;
+    };
+    let (Some(p), Some(t)) = (map.players.get(&g), map.realm.data.creature_template(entry)) else {
+        return false;
+    };
+    p.level() >= 10 && t.trainer_type == 0 && t.trainer_class == p.row.class
+}
+
 /// The trainer's offer to reset the player's talents (gossip option 16).
 pub fn talent_wipe_offer(map: &mut Map, g: Guid, npc: Guid) {
     let now = chrono::Utc::now().timestamp();
+    let resets = resets_talents(map, g, npc);
     let Some(p) = map.players.get(&g) else {
         return;
     };
+    if !resets {
+        p.outbound.send(&SMSG_GOSSIP_COMPLETE {});
+        return;
+    }
     let cost = talent_wipe_cost(p.row.state.talent_wipes, p.row.state.last_talent_wipe, now);
     p.outbound.send(&SMSG_GOSSIP_COMPLETE {});
     p.outbound.send(&MSG_TALENT_WIPE_CONFIRM_Server {
@@ -523,23 +546,31 @@ pub fn forget_spells(map: &mut Map, g: Guid, spells: &[u32]) {
     }
 }
 
-/// `MSG_TALENT_WIPE_CONFIRM`: paid for, the talents are unlearned.
+/// `MSG_TALENT_WIPE_CONFIRM`: paid for, the talents are unlearned. Asked
+/// of one who may not reset them, nothing; too little money is told as a
+/// failed purchase, then as nothing reset, as mangos's
+/// `HandleTalentWipeConfirmOpcode` answers, and an empty allocation as
+/// nothing reset.
 fn talent_wipe(map: &mut Map, g: Guid, npc: Guid) {
     let data = map.realm.data.clone();
     let now = chrono::Utc::now().timestamp();
-    let near = match (map.players.get(&g), map.creature(npc)) {
-        (Some(p), Some(c)) => {
-            crate::game::map::combat::dist(p.position(), c.position) <= 10.0
-                && c.fields.get_u32(UNIT_NPC_FLAGS) & crate::game::map::npc::NPC_FLAG_TRAINER != 0
-        }
-        _ => false,
-    };
+    if !resets_talents(map, g, npc) {
+        return;
+    }
     let Some(p) = map.players.get(&g) else {
         return;
     };
     let cost = talent_wipe_cost(p.row.state.talent_wipes, p.row.state.last_talent_wipe, now);
     let spells = talent_spells(p, &data);
-    if !near || spells.is_empty() || p.money() < cost {
+    let poor = p.money() < cost;
+    if spells.is_empty() || poor {
+        if poor && !spells.is_empty() {
+            p.outbound.send(&SMSG_BUY_FAILED {
+                guid: Guid::zero(),
+                item: 0,
+                result: BuyResult::NotEnoughtMoney,
+            });
+        }
         p.outbound.send(&MSG_TALENT_WIPE_CONFIRM_Server {
             wiping_npc: Guid::zero(),
             cost_in_copper: 0,

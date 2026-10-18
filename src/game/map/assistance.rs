@@ -226,6 +226,7 @@ pub fn drawn_in(map: &mut Map, caller: Guid, enemy: Guid) {
         return;
     }
     let due = map.now + ASSIST_DELAY;
+    map.rare.assist = true;
     if let Some(c) = map.creature_mut(caller) {
         c.engagement.assist.push(Assist {
             due,
@@ -298,20 +299,35 @@ fn flee_from_help(map: &mut Map, g: Guid, enemy: Guid) {
 /// from their spawns.
 pub fn update(map: &mut Map) {
     let now = map.now;
-    let due: Vec<(Guid, Assist)> = map
-        .creatures
-        .iter_mut()
-        .filter(|(_, c)| c.engagement.assist.iter().any(|a| a.due <= now))
-        .flat_map(|(_, c)| {
-            let g = c.guid;
-            let (ready, wait): (Vec<Assist>, Vec<Assist>) =
-                std::mem::take(&mut c.engagement.assist)
-                    .into_iter()
-                    .partition(|a| a.due <= now);
-            c.engagement.assist = wait;
-            ready.into_iter().map(move |a| (g, a))
-        })
-        .collect();
+    let mut due: Vec<(Guid, Assist)> = Vec::new();
+    if map.rare.assist {
+        let mut any = false;
+        due = map
+            .creatures
+            .iter_mut()
+            .filter(|(_, c)| {
+                any |= !c.engagement.assist.is_empty();
+                c.engagement.assist.iter().any(|a| a.due <= now)
+            })
+            .flat_map(|(_, c)| {
+                let g = c.guid;
+                let (ready, wait): (Vec<Assist>, Vec<Assist>) =
+                    std::mem::take(&mut c.engagement.assist)
+                        .into_iter()
+                        .partition(|a| a.due <= now);
+                c.engagement.assist = wait;
+                ready.into_iter().map(move |a| (g, a))
+            })
+            .collect();
+        map.rare.assist = any;
+    } else {
+        debug_assert!(
+            map.creatures
+                .iter()
+                .all(|(_, c)| c.engagement.assist.is_empty()),
+            "a creature calls for help unnoted (RareStates)"
+        );
+    }
     for (caller, a) in due {
         // It must still be in the fight it called about.
         let still = map
@@ -330,18 +346,16 @@ pub fn update(map: &mut Map) {
             }
         }
     }
-    let pulses: Vec<(Guid, Guid)> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| {
+    let pulses: Vec<(Guid, Guid)> = map.awake_where(
+        |c| {
             c.alive()
                 && c.combat.attacking
                 && !c.evading
                 && c.engagement.pulse_at.is_none_or(|t| t <= now)
                 && dist(c.position, c.home) > PULSE_FROM_SPAWN
-        })
-        .map(|(_, c)| (c.guid, c.combat.victim))
-        .collect();
+        },
+        |_, c| (c.guid, c.combat.victim),
+    );
     for (g, victim) in pulses {
         let range = call_range(map, g);
         if let Some(c) = map.creature_mut(g) {

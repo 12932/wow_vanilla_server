@@ -113,6 +113,11 @@ fn roll(map: &Map) -> i32 {
     }
 }
 
+/// Whether `e` puts on an aura of a kind the auras `a` keep off.
+pub fn state_immune(a: &auras::Auras, e: &crate::game::data::spells::SpellEffect) -> bool {
+    matches!(e.effect, 6 | 27 | 35) && a.state_immune(e.aura)
+}
+
 /// Whether a `chance` (in percent) comes up.
 pub fn chance(map: &Map, chance: f32) -> bool {
     if chance >= 100.0 {
@@ -319,14 +324,15 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
             )
             .filter(|m| *m != 0)
             .collect();
-        !mechanics.is_empty()
-            && s.effects.iter().filter(|e| e.effect != 0).all(|e| {
-                a.mechanic_immune(if e.mechanic != 0 {
-                    e.mechanic
-                } else {
-                    s.mechanic
-                })
-            })
+        // An aura of a kind the target is immune to counts as immune too.
+        let any = !mechanics.is_empty() || s.effects.iter().any(|e| state_immune(a, e));
+        any && s.effects.iter().filter(|e| e.effect != 0).all(|e| {
+            a.mechanic_immune(if e.mechanic != 0 {
+                e.mechanic
+            } else {
+                s.mechanic
+            }) || state_immune(a, e)
+        })
     };
     if all_mechanics_immune && !s.attr(0, sd::ATTR_NO_IMMUNITIES) {
         return Hit::Immune;
@@ -739,8 +745,13 @@ pub fn bonus(
     p * c + m.flat[mods::OP_SPELL_BONUS_DAMAGE] as f32
 }
 
-/// The caster's multiplier on damage of `s`'s school done to `target`.
+/// The caster's multiplier on damage of `s`'s school done to `target`:
+/// none for a spell that ignores its caster's modifiers (Thaddius's
+/// charges).
 pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate) -> f32 {
+    if s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS) {
+        return 1.0;
+    }
     let Some(a) = auras::auras(map, caster) else {
         return 1.0;
     };
@@ -762,13 +773,41 @@ pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate)
     m
 }
 
-/// Damage `target` takes of `s`: its flat and percent modifiers.
+/// Damage `target` takes of `s`: its flat and percent modifiers, the flat
+/// whole.
 pub fn taken(map: &Map, target: Guid, s: &SpellTemplate, damage: f32) -> f32 {
+    taken_with(map, target, s, damage, None)
+}
+
+/// Damage `target` takes of effect `index` of `s`, a direct hit's or a
+/// tick's (`kind`) of `stacks`: a spell's flat modifiers (Dampen Magic,
+/// Judgement of the Crusader) by its coefficient and taking at most half,
+/// as Thistle Tea's `DamageReceived` and mangos's `SpellDamageBonusTaken`
+/// have them; an ability's whole; then the percent modifiers.
+pub fn taken_of(
+    map: &Map,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    kind: Kind,
+    stacks: u32,
+    damage: f32,
+) -> f32 {
+    let scale = (!matches!(s.dmg_class, 2 | 3))
+        .then(|| coefficient(map, s, index.min(2), kind) * stacks.max(1) as f32);
+    taken_with(map, target, s, damage, scale)
+}
+
+fn taken_with(map: &Map, target: Guid, s: &SpellTemplate, damage: f32, scale: Option<f32>) -> f32 {
     let Some(a) = auras::auras(map, target) else {
         return damage;
     };
     let mask = s.school_mask();
-    let mut d = damage + a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
+    let flat = a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
+    let mut d = match scale {
+        Some(c) => damage + (flat * c).max(-damage.max(0.0) / 2.0),
+        None => damage + flat,
+    };
     d *= a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, mask);
     // A melee or ranged ability takes the melee or ranged damage taken
     // auras, whatever their school (theirs is 0: Stoneskin, Windwall), as
@@ -823,7 +862,7 @@ pub fn damage(
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
     if !fixed {
-        d = taken(map, target, s, d);
+        d = taken_of(map, target, s, index, Kind::Direct, 1, d);
     }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
@@ -887,7 +926,9 @@ pub fn healing(
 ) -> u32 {
     let mut h = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
     h *= if l.chain > 0.0 { l.chain } else { 1.0 };
-    if let Some(a) = auras::auras(map, caster) {
+    if let Some(a) = auras::auras(map, caster)
+        && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+    {
         h *= a.product(AURA_MOD_HEALING_DONE_PERCENT);
     }
     h = l.mods.apply(mods::OP_DAMAGE, h);
@@ -1023,8 +1064,10 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     {
         p.outbound.send_frame(frame);
     }
-    super::pushback(map, target);
     if left > 0 {
+        // What an absorb took pushes nothing back (Thistle Tea's
+        // `take_unblocked_damage`, mangos's `DealDamage`).
+        super::pushback_by(map, target, caster);
         auras::interrupt(map, target, INTERRUPT_DAMAGE | INTERRUPT_DIRECT_DAMAGE);
     }
     let mut ex = l.hit.proc_ex();
@@ -1113,10 +1156,16 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
     let target_level = level(map, target);
     let creature = map.creature(target);
     // A soul shard only from a death worth something to its caster (Thistle
-    // Tea's `DeathItem.eligible?`): not grey, a player or tapped, not a
-    // pet or a totem.
-    let shard_target = creature
-        .is_none_or(|c| c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none());
+    // Tea's `DeathItem.eligible?`, mangos's `isHonorOrXPTarget`): not grey,
+    // a player or tapped, not a pet or a totem, nor a creature worth no
+    // experience.
+    let shard_target = creature.is_none_or(|c| {
+        c.pet.is_none()
+            && crate::game::map::pets::owner_of(map, target).is_none()
+            && data
+                .creature_template(c.entry)
+                .is_none_or(|t| t.xp_rate() > 0.0 && t.static_flags1 & 0x2 == 0)
+    });
     let mut items: Vec<(Guid, u32, u32)> = Vec::new();
     for (h, x) in a.effects() {
         let item = u32::try_from(x.mask).unwrap_or(0);

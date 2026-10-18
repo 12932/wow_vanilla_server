@@ -1876,7 +1876,8 @@ async fn a_reward_is_all_or_nothing_and_cast_once() {
     assert!(!rewarded(&mut a, 62).await, "no scales");
     assert!(!on_map(&realm, blessed).await, "nor its spell");
     give(&realm, g, SCALE, 2).await;
-    // One slot left for two rewards.
+    // The scales' slot alone for two rewards (the slot the scales leave
+    // counts, as Thistle Tea's turn-in plan has it).
     on_map(&realm, move |m| {
         let d = m.realm.data.clone();
         let p = &m.players[&g];
@@ -1885,7 +1886,7 @@ async fn a_reward_is_all_or_nothing_and_cast_once() {
             .iter()
             .filter(|(b, s)| p.item_at(*b, *s).is_none())
             .count() as u32;
-        crate::game::map::inventory::add_item(m, g, FILLER, free - 1, false).unwrap();
+        crate::game::map::inventory::add_item(m, g, FILLER, free, false).unwrap();
     })
     .await;
     a.clear();

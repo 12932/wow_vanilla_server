@@ -721,21 +721,36 @@ fn who(strings: u32) -> Vec<u8> {
         .0
 }
 
-/// Packets wow_messages would reserve gigabytes for, from a count in the
-/// packet, are refused before it reads them; those it reads in reason
-/// pass.
+/// Packets wow_messages would once have reserved gigabytes for, from a
+/// count in the packet (a `/who` claiming 4 billion strings asked for
+/// 96 GB, and the failed allocation aborted the process), are refused as
+/// parse errors now, or read for what they hold: it reserves no more than
+/// the body could hold. Those it reads in reason pass.
 #[test]
 fn packets_that_would_have_wow_messages_reserve_gigabytes_are_refused() {
-    use crate::game::conn::fits;
-    assert!(fits(0x062, &who(1)));
-    assert!(!fits(0x062, &who(u32::MAX)), "a /who's strings");
+    use wow_world_messages::errors::ExpectedOpcodeError;
+    use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage as C;
+    // As the connection's reader hands a packet to wow_messages.
+    let read = |opcode: u32, body: &[u8]| {
+        let mut plain = ((body.len() + 4) as u16).to_be_bytes().to_vec();
+        plain.extend(opcode.to_le_bytes());
+        plain.extend(body);
+        C::read_unencrypted(&plain[..])
+    };
+    let refused =
+        |opcode: u32, body: &[u8]| matches!(read(opcode, body), Err(ExpectedOpcodeError::Parse(_)));
+    assert!(matches!(read(0x062, &who(1)), Ok(C::CMSG_WHO(_))));
+    assert!(refused(0x062, &who(u32::MAX)), "a /who's strings");
     let express = |n: u32| Body::default().bytes(&[0; 12]).u32(n).u32(1).u32(2).0;
-    assert!(fits(0x312, &express(2)));
+    assert!(matches!(
+        read(0x312, &express(2)),
+        Ok(C::CMSG_ACTIVATETAXIEXPRESS(m)) if m.nodes == [1, 2]
+    ));
     assert!(
-        !fits(0x312, &express(u32::MAX)),
+        refused(0x312, &express(u32::MAX)),
         "an express flight's nodes"
     );
-    assert!(!fits(0x264, &express(1 << 30)), "a bidder's items");
+    assert!(refused(0x264, &express(1 << 30)), "a bidder's items");
     let bug = |n: u32| {
         Body::default()
             .u32(0)
@@ -745,10 +760,12 @@ fn packets_that_would_have_wow_messages_reserve_gigabytes_are_refused() {
             .string("y")
             .0
     };
-    assert!(fits(0x1CA, &bug(2)));
-    assert!(!fits(0x1CA, &bug(0)), "a bug report's length, less one");
-    assert!(!fits(0x1CA, &bug(u32::MAX)));
-    let auth = |size: u32| {
+    assert!(matches!(read(0x1CA, &bug(2)), Ok(C::CMSG_BUG(m)) if m.content == "x"));
+    assert!(refused(0x1CA, &bug(0)), "a bug report's length, less one");
+    assert!(refused(0x1CA, &bug(u32::MAX)));
+    // An empty zlib stream.
+    const EMPTY: [u8; 8] = [0x78, 0x9C, 3, 0, 0, 0, 0, 1];
+    let auth = |size: u32, addons: &[u8]| {
         Body::default()
             .u32(5875)
             .u32(0)
@@ -756,15 +773,20 @@ fn packets_that_would_have_wow_messages_reserve_gigabytes_are_refused() {
             .u32(7)
             .bytes(&[0; 20])
             .u32(size)
-            .bytes(&[0x78, 0x9C, 3, 0, 0, 0, 0, 1])
+            .bytes(addons)
             .0
     };
-    assert!(fits(0x1ED, &auth(300)));
-    assert!(
-        !fits(0x1ED, &auth(u32::MAX)),
-        "an auth session's addon data"
-    );
-    let ticket = |category: u8, size: u32| {
+    for size in [300, u32::MAX] {
+        assert!(
+            matches!(
+                read(0x1ED, &auth(size, &EMPTY)),
+                Ok(C::CMSG_AUTH_SESSION(m)) if m.addon_info.is_empty()
+            ),
+            "an auth session's addon data, {size} bytes claimed, is what it holds"
+        );
+    }
+    assert!(refused(0x1ED, &auth(u32::MAX, b"not zlib at all")));
+    let ticket = |category: u8, size: u32, chat: &[u8]| {
         Body::default()
             .u8(category)
             .u32(0)
@@ -773,16 +795,36 @@ fn packets_that_would_have_wow_messages_reserve_gigabytes_are_refused() {
             .string("")
             .u32(3)
             .u32(size)
+            .bytes(chat)
             .0
     };
-    assert!(fits(0x205, &ticket(2, 100)));
+    assert!(matches!(
+        read(0x205, &ticket(2, 100, &EMPTY)),
+        Ok(C::CMSG_GMTICKET_CREATE(_))
+    ));
     assert!(
-        fits(0x205, &ticket(1, u32::MAX)),
+        matches!(
+            read(0x205, &ticket(1, u32::MAX, &[])),
+            Ok(C::CMSG_GMTICKET_CREATE(_))
+        ),
         "only harassment has chat"
     );
-    assert!(!fits(0x205, &ticket(2, u32::MAX)), "a ticket's chat");
-    assert!(!fits(0x2E7, &[1, 2]), "warden data shorter than its size");
-    assert!(fits(0x4B, &[]));
+    assert!(
+        matches!(
+            read(0x205, &ticket(2, u32::MAX, &EMPTY)),
+            Ok(C::CMSG_GMTICKET_CREATE(_))
+        ),
+        "a ticket's chat is what it holds"
+    );
+    assert!(refused(0x205, &ticket(2, u32::MAX, b"not zlib at all")));
+    assert!(
+        matches!(
+            read(0x2E7, &[1, 2]),
+            Ok(C::CMSG_WARDEN_DATA(m)) if m.encrypted_data == [1, 2]
+        ),
+        "warden data shorter than a size is read whole"
+    );
+    assert!(matches!(read(0x4B, &[]), Ok(C::CMSG_LOGOUT_REQUEST)));
 }
 
 /// A connection is handed paired crypto, as an authenticated client's is.
@@ -803,10 +845,10 @@ fn paired_crypto() -> (
 }
 
 /// A connection's reader drops a packet that would have aborted the
-/// process (a `/who` that asks for 96 GB), and one wow_messages panics on
-/// (a ticket's chat that isn't zlib), and goes on reading. Before, the
-/// first aborted the server (`memory allocation of 103079215080 bytes
-/// failed`), and the second ended the connection.
+/// process (a `/who` that asks for 96 GB), and one wow_messages panicked
+/// on (a ticket's chat that isn't zlib), each a parse error now, and goes
+/// on reading. Before, the first aborted the server (`memory allocation of
+/// 103079215080 bytes failed`), and the second ended the connection.
 #[tokio::test]
 async fn a_packet_that_would_abort_the_server_is_dropped() {
     use tokio::io::AsyncWriteExt;
@@ -850,8 +892,8 @@ async fn a_packet_that_would_abort_the_server_is_dropped() {
 
 /// The world handshake over a socket: the login server's session key for
 /// the account, a client's `CMSG_AUTH_SESSION`, and the encrypted answer.
-/// One whose addon data claims gigabytes is refused, and the server goes
-/// on.
+/// One whose addon data claims gigabytes is read for what it holds, or
+/// refused if it isn't zlib, and the server goes on.
 #[tokio::test]
 async fn the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -906,29 +948,55 @@ async fn the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one() {
         })
     };
 
-    // One whose addon data claims 4 GB: the connection closes.
+    // An auth session by hand, its proof right for the server's seed, its
+    // addon data claiming 4 GB uncompressed.
+    let by_hand = async |stream: &mut tokio::net::TcpStream, addons: &[u8]| {
+        let seed = tokio_expect_server_message::<SMSG_AUTH_CHALLENGE, _>(&mut *stream)
+            .await
+            .unwrap()
+            .server_seed;
+        let client_seed = ProofSeed::new();
+        let client_seed_value = client_seed.seed();
+        let (client_proof, crypto) =
+            client_seed.into_client_header_crypto(&name(), session_key, seed);
+        let mut body = Body::default()
+            .u32(5875)
+            .u32(0)
+            .string("ALICE")
+            .u32(client_seed_value)
+            .bytes(&client_proof)
+            .u32(u32::MAX)
+            .bytes(addons)
+            .0;
+        let mut packet = ((body.len() + 4) as u16).to_be_bytes().to_vec();
+        packet.extend(0x1EDu32.to_le_bytes());
+        packet.append(&mut body);
+        stream.write_all(&packet).await.unwrap();
+        crypto
+    };
+
+    // Its addon data not zlib: refused, and the connection closes.
     let mut bad = tokio::net::TcpStream::connect(at).await.unwrap();
-    let seed = tokio_expect_server_message::<SMSG_AUTH_CHALLENGE, _>(&mut bad)
-        .await
-        .unwrap()
-        .server_seed;
-    let (client_proof, _) = ProofSeed::new().into_client_header_crypto(&name(), session_key, seed);
-    let mut body = Body::default()
-        .u32(5875)
-        .u32(0)
-        .string("ALICE")
-        .u32(1)
-        .bytes(&client_proof)
-        .u32(u32::MAX)
-        .bytes(&[0x78, 0x9C, 3, 0, 0, 0, 0, 1])
-        .0;
-    let mut packet = ((body.len() + 4) as u16).to_be_bytes().to_vec();
-    packet.extend(0x1EDu32.to_le_bytes());
-    packet.append(&mut body);
-    bad.write_all(&packet).await.unwrap();
+    by_hand(&mut bad, b"not zlib at all").await;
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(WAIT, bad.read_to_end(&mut rest)).await;
     assert!(matches!(closed, Ok(Ok(0))), "{closed:?}");
+
+    // An empty zlib stream: read for what it holds, nothing like 4 GB
+    // reserved, and the world answers.
+    let mut empty = tokio::net::TcpStream::connect(at).await.unwrap();
+    let mut crypto = by_hand(&mut empty, &[0x78, 0x9C, 3, 0, 0, 0, 0, 1]).await;
+    let answer = tokio_expect_server_message_encryption::<SMSG_AUTH_RESPONSE, _>(
+        &mut empty,
+        crypto.decrypter(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(answer.result, SMSG_AUTH_RESPONSE_WorldResult::AuthOk { .. }),
+        "{answer:?}"
+    );
+    drop(empty);
 
     // A real one: the world answers, encrypted.
     let mut good = tokio::net::TcpStream::connect(at).await.unwrap();
@@ -1318,10 +1386,6 @@ mod chaos {
                         .collect(),
                 };
                 let body = self.body(rng, &shape);
-                // What the connection's reader would drop unread.
-                if !crate::game::conn::fits(opcode, &body) {
-                    continue;
-                }
                 match parse(opcode, &body) {
                     Ok(Some(m)) => {
                         let shapes = self.shapes.entry(opcode).or_default();

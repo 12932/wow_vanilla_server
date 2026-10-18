@@ -167,6 +167,10 @@ pub struct PetState {
     pub was_hostile: bool,
     /// Under Eyes of the Beast: the react and command it had before.
     pub eyes: Option<(u8, u8)>,
+    /// Called back by Follow: on its way to its master, it takes no
+    /// fight up until it is back (mangos's `IsRetreating`, Thistle Tea's
+    /// recall).
+    pub returning: bool,
 }
 
 impl PetState {
@@ -202,6 +206,7 @@ impl PetState {
             was_faction: 0,
             was_hostile: false,
             eyes: None,
+            returning: false,
         }
     }
 }
@@ -684,6 +689,7 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
         .map(|p| p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
         .unwrap_or(0);
     let data = map.realm.data.clone();
+    map.rare.pet = true;
     let Some(c) = map.creature_mut(unit) else {
         return;
     };
@@ -855,12 +861,21 @@ pub fn move_possessed(
 /// Run what every player controls.
 pub fn update(map: &mut Map) {
     let now = map.now;
-    let controlled: Vec<Guid> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.pet.is_some())
-        .map(|(_, c)| c.guid)
-        .collect();
+    let mut controlled: Vec<Guid> = Vec::new();
+    if map.rare.pet {
+        controlled = map
+            .creatures
+            .iter()
+            .filter(|(_, c)| c.pet.is_some())
+            .map(|(_, c)| c.guid)
+            .collect();
+        map.rare.pet = !controlled.is_empty();
+    } else {
+        debug_assert!(
+            map.creatures.iter().all(|(_, c)| c.pet.is_none()),
+            "a pet unnoted (RareStates)"
+        );
+    }
     for g in controlled {
         ai::step(map, g, now);
     }
@@ -888,4 +903,15 @@ mod tests {
         assert_eq!(control::button(3110, ACT_ENABLED), 0xC100_0C26);
         assert_eq!(control::unpack(0xC100_0C26), (3110, ACT_ENABLED));
     }
+}
+
+/// What the tests reach of a hunter's pet and the summons.
+#[cfg(test)]
+pub mod testing {
+    pub use super::control::good_name;
+    pub use super::hunter::{
+        HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,
+        show_training_points, tick,
+    };
+    pub use super::summon::{UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, from_record, spawn};
 }
