@@ -2195,6 +2195,30 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         let _ = build;
         pets.spell_lists.insert(list, spells);
     }
+    // Cooldowns are seconds, but for a few in milliseconds already (as
+    // Thistle Tea reads them: 1000 or more).
+    let ms = |v: u32| if v >= 1000 { v } else { v * 1000 };
+    for (entry, c) in rows(
+        db,
+        "SELECT * FROM creature_charm_spells \
+         WHERE patch_min <= 10 AND patch_max >= 10 AND availability > 0 AND slot <= 3 \
+         ORDER BY entry, slot, spell_id",
+        |c| {
+            let (a, b) = (c.u32("cooldown_min"), c.u32("cooldown_max"));
+            (
+                c.u32("entry"),
+                super::pets::CharmSpell {
+                    slot: c.u32("slot"),
+                    spell: c.u32("spell_id"),
+                    availability: c.f32("availability"),
+                    cooldown_min_ms: ms(a.min(b)),
+                    cooldown_max_ms: ms(a.max(b)),
+                },
+            )
+        },
+    ) {
+        pets.charm_spells.entry(entry).or_default().push(c);
+    }
     for (entry, list) in rows(
         db,
         "SELECT entry, pet_spell_list_id FROM creature_template WHERE pet_spell_list_id > 0",

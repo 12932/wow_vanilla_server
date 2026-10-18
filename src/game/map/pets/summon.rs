@@ -295,6 +295,41 @@ pub fn family_passives(data: &GameData, family: u32) -> Vec<u32> {
 }
 
 /// The spells a charmed creature can be told to cast.
+/// A charmed creature's abilities from `creature_charm_spells`, if it has
+/// any: one roll a slot picks at most one by its availability, which
+/// recovers over a time rolled from its slot's range (Thistle Tea's
+/// `CharmSpells.select`); a spell that charms or possesses isn't offered.
+/// (spell, cooldown in milliseconds), in slot order.
+pub fn pick_charm_spells(
+    data: &GameData,
+    entry: u32,
+    rng: &mut impl rand::Rng,
+) -> Option<Vec<(u32, u32)>> {
+    let options = data.pets.charm_spells.get(&entry)?;
+    let controls = |id: u32| {
+        data.spells.get(id).is_some_and(|s| {
+            s.has_aura(crate::game::map::auras::AURA_MOD_CHARM)
+                || s.has_aura(crate::game::map::auras::AURA_MOD_POSSESS)
+        })
+    };
+    let mut out = Vec::new();
+    for slot in 0..4 {
+        let roll = rng.random_range(0.0f32..1.0) * 100.0;
+        let mut sum = 0.0;
+        let picked = options.iter().filter(|o| o.slot == slot).find(|o| {
+            let hit = roll > sum && roll <= sum + o.availability;
+            sum += o.availability;
+            hit
+        });
+        if let Some(o) = picked.filter(|o| data.spells.get(o.spell).is_some() && !controls(o.spell))
+        {
+            let cooldown = rng.random_range(o.cooldown_min_ms..=o.cooldown_max_ms);
+            out.push((o.spell, cooldown));
+        }
+    }
+    Some(out)
+}
+
 pub fn charm_spells(data: &GameData, entry: u32) -> Vec<u32> {
     if let Some(list) = data
         .pets

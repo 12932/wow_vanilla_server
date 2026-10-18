@@ -171,6 +171,9 @@ pub struct PetState {
     /// fight up until it is back (mangos's `IsRetreating`, Thistle Tea's
     /// recall).
     pub returning: bool,
+    /// A charmed creature's charm spells and the cooldowns rolled for them
+    /// (`creature_charm_spells`), in place of their own: milliseconds.
+    pub charm_cooldowns: Vec<(u32, u32)>,
 }
 
 impl PetState {
@@ -207,6 +210,7 @@ impl PetState {
             was_hostile: false,
             eyes: None,
             returning: false,
+            charm_cooldowns: Vec::new(),
         }
     }
 }
@@ -709,7 +713,13 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
         .creature_template(c.entry)
         .map(|t| t.name.clone())
         .unwrap_or_default();
-    s.spells = summon::charm_spells(&data, c.entry);
+    match summon::pick_charm_spells(&data, c.entry, &mut rand::rng()) {
+        Some(picked) => {
+            s.spells = picked.iter().map(|(spell, _)| *spell).collect();
+            s.charm_cooldowns = picked;
+        }
+        None => s.spells = summon::charm_spells(&data, c.entry),
+    }
     s.bar = control::default_bar(&data, &s.spells, &[], possess);
     s.react = if possess {
         REACT_PASSIVE
