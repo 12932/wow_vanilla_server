@@ -82,6 +82,8 @@ mod tests_p3_ai_scripts;
 #[cfg(test)]
 mod tests_p3_cast;
 #[cfg(test)]
+mod tests_p3_cast2;
+#[cfg(test)]
 mod tests_p3_cast_kit;
 #[cfg(test)]
 mod tests_p3_combat;
