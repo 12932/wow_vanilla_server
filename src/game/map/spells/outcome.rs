@@ -410,11 +410,15 @@ pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate
     } else {
         0.0
     } + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
+    // The target's own change to the chance of its attackers' spells of the
+    // school (mangos's `MagicSpellHitChance`, Thistle Tea's
+    // `attacker_spell_hit_chance`).
+    let versus = a.sum_mask(AURA_MOD_ATTACKER_SPELL_HIT_CHANCE, s.school_mask()) as f32;
     magic_hit_chance(
         caster_level,
         target_level,
         guid::is_player(target),
-        hit_bonus - aoe,
+        hit_bonus + versus - aoe,
         mechanic,
         binary_resist,
     )

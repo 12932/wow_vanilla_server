@@ -1659,6 +1659,16 @@ pub fn tick_areas(map: &mut Map) {
         for g in inside {
             match e.aura {
                 AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
+                    // Each tick of a ground area rolls its hit on whom it
+                    // finds, a resisted one dealing nothing and the area
+                    // going on (mangos's `PeriodicTick` for a persistent
+                    // area, Thistle Tea's ground ticks); an aura's DoT
+                    // doesn't.
+                    let hit = outcome::roll_hit(map, area.caster, g, s, &Mods::default());
+                    if !hit.lands() {
+                        outcome::send_miss(map, area.caster, g, area.spell, hit);
+                        continue;
+                    }
                     let h = area_holder(&area, s);
                     periodic_damage(
                         map,

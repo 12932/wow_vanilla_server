@@ -1405,7 +1405,8 @@ fn land(
                 *on = false;
                 immune = true;
             } else if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-                && auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+                && (auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+                    || crate::game::map::extra_effects::effect_immune(map, aim, s, i))
             {
                 // An aura of a kind kept off (mangos's `IsImmuneToSpellEffect`).
                 *on = false;
@@ -2164,17 +2165,20 @@ pub fn update(map: &mut Map) {
         let Some(s) = data.spells.get(casting.spell) else {
             continue;
         };
-        // The target must still be here.
-        if let Some(t) = casting.targets.unit
-            && t != g
-            && map.unit_view(t).is_none()
-        {
-            if let Some(p) = map.players.get(&g) {
-                p.outbound.send(&SMSG_SPELL_FAILURE {
-                    guid: g,
-                    spell: casting.spell,
-                    result: SpellCastResult::BadTargets,
-                });
+        // The target must still be here; a player's still alive, a foe, in
+        // range and in front as the cast ends, or it fails before it costs.
+        let m = mods::for_spell(map, g, s);
+        if let Some(code) = checks::at_finish(map, g, s, &casting.targets, &m) {
+            if code == checks::fail::BAD_TARGETS {
+                if let Some(p) = map.players.get(&g) {
+                    p.outbound.send(&SMSG_SPELL_FAILURE {
+                        guid: g,
+                        spell: casting.spell,
+                        result: SpellCastResult::BadTargets,
+                    });
+                }
+            } else {
+                launch_failed(map, g, casting.spell, code);
             }
             continue;
         }

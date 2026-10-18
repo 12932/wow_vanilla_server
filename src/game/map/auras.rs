@@ -194,6 +194,9 @@ pub const AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS: u32 = 180;
 /// Changes to the hit and crit chance of those who attack the unit.
 pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
 pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
+/// A change to the chance of spells of the schools of its mask to hit the
+/// unit (Heightened Senses' 2% less).
+pub const AURA_MOD_ATTACKER_SPELL_HIT_CHANCE: u32 = 186;
 pub const AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE: u32 = 187;
 pub const AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE: u32 = 188;
 /// vmangos's own: the trigger spell's auras held while this one lasts
@@ -1144,6 +1147,17 @@ pub fn apply_spell(
         }
     }
     let h = auras(map, target).map(|a| a.holders[index].clone());
+    // A refresh renews the children it links, or makes again one taken off
+    // (Thistle Tea's `Linked`).
+    if let Some(h) = &h
+        && refreshed.is_some()
+    {
+        for x in h.effects.iter().filter(|x| x.kind == AURA_LINKED) {
+            linked(map, target, h, x.trigger);
+        }
+        // And what the scripts add with it (Bestial Wrath's immunities).
+        crate::game::map::spells::class_scripts::aura_applied(map, target, h);
+    }
     if let Some(h) = h
         && refreshed.is_none()
     {
@@ -1527,9 +1541,17 @@ fn linked(map: &mut Map, target: Guid, h: &Holder, spell: u32) {
         .filter(|i| s.effects[*i].effect == 6 && s.effects[*i].aura != 0)
         .map(|i| (i, crate::game::map::spells::points(s, i, h.level)))
         .collect();
+    // Its own duration, cut short by what the linked aura has left: a child
+    // shorter than its parent runs out on its own and isn't made again
+    // until the parent is (Thistle Tea's `Linked`).
     let left = h
         .expires
         .map(|t| t.saturating_duration_since(map.now).as_millis() as u32);
+    let own = data.spells.duration(s, h.level);
+    let left = match (own, left) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
     let ctx = Context {
         item: h.item,
         duration: Some(left),
@@ -1822,7 +1844,11 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             a.amount,
             false,
         ),
-        AURA_LINKED => remove_spell(map, target, a.trigger, Some(h.caster)),
+        // The child it holds goes with it; a copy of its spell on its own
+        // stays (Thistle Tea's `Linked`).
+        AURA_LINKED => remove_where(map, target, |x| {
+            x.spell == a.trigger && x.caster == h.caster && x.passive
+        }),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             // A logout's countdown holds the player as a stun does (Thistle
             // Tea's `MovementSync` keeps the logout's restriction).
@@ -2381,37 +2407,61 @@ pub fn update(map: &mut Map) {
             .holders
             .iter()
             .any(|h| h.expires.is_some_and(|t| t <= now));
-        let ticks: Vec<(Holder, Aura)> = a
-            .effects()
-            .filter(|(_, x)| x.next_tick.is_some_and(|t| t <= now))
-            .map(|(h, x)| (h.clone(), x.clone()))
-            .collect();
+        let mut ticks = due_ticks(a, now);
         // Nothing ticks or ends, so nothing changes before the crowd
         // control's look, and that would find nothing due either.
         if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
             continue;
         }
-        for (h, t) in ticks {
-            if let Some(a) = auras_mut(map, g)
-                && let Some(x) = a
-                    .holders
-                    .iter_mut()
-                    .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
-                    .and_then(|x| x.effects.iter_mut().find(|e| e.effect == t.effect))
-                && let Some(p) = x.period
-            {
-                // On the aura's own cadence, an update late or not, so a
-                // late one doesn't lose the last tick (mangos's
-                // `m_periodicTimer += periodictime`).
-                x.next_tick = Some(x.next_tick.unwrap_or(now) + p);
-                x.ticks += 1;
+        // An update late by more than an interval runs every tick it
+        // missed, up to the aura's end (Thistle Tea's `Aura.tick` catching
+        // up), so a stalled map loses none.
+        for _ in 0..MAX_CATCH_UP {
+            if ticks.is_empty() {
+                break;
             }
-            tick(map, g, &h, &t);
+            run_ticks(map, g, ticks, now);
+            ticks = auras(map, g).map_or_else(Vec::new, |a| due_ticks(a, now));
         }
         if expired {
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
         crate::game::map::spells::heartbeat::update(map, g);
+    }
+}
+
+/// The most rounds of missed ticks one update runs.
+const MAX_CATCH_UP: usize = 64;
+
+/// The ticks due on a unit's auras by `now`: none after its holder's end.
+fn due_ticks(a: &Auras, now: Instant) -> Vec<(Holder, Aura)> {
+    a.effects()
+        .filter(|(h, x)| {
+            x.next_tick
+                .is_some_and(|t| t <= now && h.expires.is_none_or(|end| t <= end))
+        })
+        .map(|(h, x)| (h.clone(), x.clone()))
+        .collect()
+}
+
+/// Run `ticks` on `g`, each moving its aura's next tick on by its interval.
+fn run_ticks(map: &mut Map, g: Guid, ticks: Vec<(Holder, Aura)>, now: Instant) {
+    for (h, t) in ticks {
+        if let Some(a) = auras_mut(map, g)
+            && let Some(x) = a
+                .holders
+                .iter_mut()
+                .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+                .and_then(|x| x.effects.iter_mut().find(|e| e.effect == t.effect))
+            && let Some(p) = x.period
+        {
+            // On the aura's own cadence, an update late or not, so a
+            // late one doesn't lose the last tick (mangos's
+            // `m_periodicTimer += periodictime`).
+            x.next_tick = Some(x.next_tick.unwrap_or(now) + p);
+            x.ticks += 1;
+        }
+        tick(map, g, &h, &t);
     }
 }
 
@@ -2493,6 +2543,13 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     )
                 } else {
                     0.0
+                };
+                // Ignite's amount is its crits' shares summed already
+                // (Thistle Tea's `base_amount` for it).
+                let stacks = if h.spell == crate::game::map::proc_scripts::IGNITE_BURN {
+                    1
+                } else {
+                    stacks
                 };
                 ((a.amount * stacks).max(0) as f32 + ramp).round().max(0.0) as u32
             };

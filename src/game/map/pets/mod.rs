@@ -29,6 +29,9 @@ mod summon;
 mod totems;
 mod wild;
 
+/// Whether a unit is held by crowd control a pet leaves be.
+#[cfg(test)]
+pub(crate) use ai::breakable_cc;
 /// A pet sent at a target, or stopped where it is: for scripts.
 pub use ai::{attack as attack_target, stop as stop_where};
 pub use control::{button, handle, learn, send_spells};
