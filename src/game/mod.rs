@@ -348,6 +348,22 @@ mod tests_p4_core_walk;
 #[cfg(test)]
 mod tests_p4_core_wand;
 #[cfg(test)]
+mod tests_p4_scripts_bosses;
+#[cfg(test)]
+mod tests_p4_scripts_brd;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons2;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons3;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons;
+#[cfg(test)]
+mod tests_p4_scripts_gnomes;
+#[cfg(test)]
+mod tests_p4_scripts_instances;
+#[cfg(test)]
+mod tests_p4_scripts_strat;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
