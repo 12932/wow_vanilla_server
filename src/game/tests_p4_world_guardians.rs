@@ -1,6 +1,7 @@
 //! Phase 3's fourth round of the guardians, ported from Thistle Tea's
 //! `test/game/world/entity/guardian_owner_test.exs` (docs/parity/matrix.csv):
-//! how a player's guardians come, add up and go, and a creature's.
+//! how a player's guardians come, add up and go, a creature's, and a
+//! player's wild summons.
 
 use std::time::Duration;
 
@@ -294,4 +295,63 @@ async fn a_creatures_guardian_is_at_its_level_less_the_offset() {
     })
     .await;
     assert_eq!(levels, [60, 55, 20, 20]);
+}
+
+const BOT: u32 = 98_202;
+const TWO_BOTS: u32 = 98_214;
+
+/// Thistle Tea's "ordinary summons keep their template faction level and
+/// independent lifetime" and "repeated casts create independent actors
+/// without replacing companions", as mangos-classic's `EffectSummonWild`:
+/// a player's wild summon (a Field Repair Bot) is a creature of its own,
+/// of its template's faction and level, made by the spell, no one's pet
+/// and following no one; a second cast makes two more beside the two.
+#[tokio::test]
+async fn a_players_wild_summons_are_their_own_and_add_up() {
+    let mut d = world();
+    let mut bot = template(BOT, 9);
+    bot.faction = 35;
+    bot.level_min = 30;
+    bot.level_max = 30;
+    d.creature_templates.insert(BOT, bot);
+    let mut s = summoning(TWO_BOTS, BOT, 2);
+    s.effects[0].effect = crate::game::map::pets::EFFECT_SUMMON_WILD;
+    d.spells.spells.insert(TWO_BOTS, s);
+    let (_realm, _a, g, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        cast(m, g, TWO_BOTS);
+        let first = guardians(m, g);
+        cast(m, g, TWO_BOTS);
+        let all = guardians(m, g);
+        let looks: Vec<_> = all
+            .iter()
+            .map(|(x, _)| {
+                let c = m.creature(*x).unwrap();
+                (
+                    c.fields
+                        .get_u32(crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE),
+                    c.fields.get_u32(crate::game::fields::UNIT_FIELD_LEVEL),
+                    c.fields.get_u32(crate::game::fields::UNIT_CREATED_BY_SPELL),
+                    c.pet.is_some() || c.owner.is_some(),
+                    c.scripted.as_deref().and_then(|s| s.follow).is_some(),
+                )
+            })
+            .collect();
+        let kept = first.iter().all(|(x, _)| m.creature(*x).is_some());
+        (
+            first.len(),
+            all.len(),
+            kept,
+            looks,
+            m.players[&g].owned.guardians.len(),
+        )
+    })
+    .await;
+    let (first, all, kept, looks, owned) = out;
+    assert_eq!((first, all), (2, 4), "two a cast, adding up");
+    assert!(kept, "the first two stay");
+    for look in looks {
+        assert_eq!(look, (35, 30, TWO_BOTS, false, false));
+    }
+    assert_eq!(owned, 0, "none of them a guardian");
 }

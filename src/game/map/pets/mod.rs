@@ -403,9 +403,12 @@ pub fn effect(
         | EFFECT_SUMMON_DEMON => {
             let count = amount.clamp(1, 5) as usize;
             // A creature's wild summons and guardians are creatures of
-            // their own.
-            if matches!(e.effect, EFFECT_SUMMON_WILD | EFFECT_SUMMON_GUARDIAN)
-                && wild::by_creature(map, caster)
+            // their own, and so is a player's wild summon: of its
+            // template's faction, each cast another (mangos-classic's
+            // `EffectSummonWild`, Thistle Tea's `WildSummon`). A Field
+            // Repair Bot stands where it is put.
+            if e.effect == EFFECT_SUMMON_WILD
+                || (e.effect == EFFECT_SUMMON_GUARDIAN && wild::by_creature(map, caster))
             {
                 wild::summon(map, caster, e.misc_value.max(0) as u32, s, index, count);
                 return;
