@@ -1895,3 +1895,157 @@ async fn an_area_trigger_with_a_cooldown_rests_after_it_fires() {
         "rested, it runs again"
     );
 }
+
+const GROUNDING: u32 = 97_950;
+const MAGIC_BOLT: u32 = 97_951;
+const MAGIC_SLOW: u32 = 97_952;
+const A_TOTEM: u32 = 3_800;
+
+fn magnets() -> GameData {
+    use crate::game::data::spells::SpellEffect;
+    let mut d = data();
+    let mut totem = template(A_TOTEM, 11);
+    totem.faction = crate::game::tests_p3_combat::HUMANS;
+    d.creature_templates.insert(A_TOTEM, totem);
+    let mut grounding = crate::game::tests_p3_entity::spell(
+        GROUNDING,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_SPELL_MAGNET,
+            0,
+            0,
+            1,
+        )],
+    );
+    grounding.duration_index = 9;
+    let mut bolt = crate::game::tests_p3_entity::spell(
+        MAGIC_BOLT,
+        &[SpellEffect {
+            effect: 2,
+            base_points: 99,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            ..Default::default()
+        }],
+    );
+    bolt.dmg_class = 1;
+    bolt.attributes[3] |= crate::game::data::spells::ATTR_EX3_ALWAYS_HIT;
+    let mut slow = crate::game::tests_p3_entity::spell(
+        MAGIC_SLOW,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_MOD_DECREASE_SPEED,
+            -30,
+            0,
+            6,
+        )],
+    );
+    slow.dmg_class = 1;
+    slow.duration_index = 9;
+    slow.attributes[0] |= crate::game::data::spells::ATTR_DEBUFF;
+    slow.attributes[3] |= crate::game::data::spells::ATTR_EX3_ALWAYS_HIT;
+    for s in [grounding, bolt, slow] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d.spells.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 60_000,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's `SpellMagnets.redirect` (Grounding Totem, mangos's
+/// `SelectMagnetTarget`): a harmful magic spell at one under a magnet goes
+/// to its source, a spell that only slows as well; its one charge spent,
+/// the next lands where it was aimed. Abilities, poisons, area and helpful
+/// spells aren't pulled aside; nor is anything by a dead source, or one
+/// whose magnet is gone.
+#[tokio::test]
+async fn a_spell_magnet_pulls_one_harmful_spell_aside_and_is_spent() {
+    use crate::game::data::spells::SpellEffect;
+    use crate::game::map::spells::magnet_eligible;
+    let (_realm, _a, ga, map) = setup_with(magnets(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let ground = |m: &mut Map, totem: Guid| {
+            let s = m.realm.data.spells.get(GROUNDING).cloned().unwrap();
+            for on in [ga, totem] {
+                crate::game::map::auras::apply(m, totem, on, &s, 0, 0);
+            }
+            // An aura on her works out her health again.
+            hardy(m, ga);
+        };
+        let health = |m: &Map, g: Guid| m.unit_fields(g).unwrap().get_u32(UNIT_FIELD_HEALTH);
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        let totem = spawn(m, ga, A_TOTEM, 20, 2.0);
+        ground(m, totem);
+        let (alice, totem_hp) = (health(m, ga), health(m, totem));
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_BOLT, Some(ga));
+        // Whole: its magnet gone, her health is worked out again, so she
+        // is judged by her whole health, not its number.
+        let whole = |m: &Map| {
+            let f = m.unit_fields(ga).unwrap();
+            f.get_u32(UNIT_FIELD_HEALTH) == f.get_u32(UNIT_FIELD_MAXHEALTH)
+        };
+        let _ = alice;
+        let first = (whole(m), health(m, totem) < totem_hp);
+        let spent = crate::game::map::auras::auras(m, ga).is_some_and(|a| a.has_spell(GROUNDING));
+        hardy(m, ga);
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_BOLT, Some(ga));
+        let second = !whole(m);
+        // A slow, pulled aside.
+        let totem2 = spawn(m, ga, A_TOTEM, 20, 3.0);
+        ground(m, totem2);
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_SLOW, Some(ga));
+        let slowed = |m: &Map, g: Guid| {
+            crate::game::map::auras::auras(m, g).is_some_and(|a| a.has_spell(MAGIC_SLOW))
+        };
+        let slow = (slowed(m, ga), slowed(m, totem2));
+        // A dead source pulls nothing aside.
+        let totem3 = spawn(m, ga, A_TOTEM, 20, 3.5);
+        ground(m, totem3);
+        crate::game::map::combat::deal_damage(m, brute, totem3, 10_000_000);
+        ground(m, totem3);
+        let before = health(m, ga);
+        crate::game::map::spells::cast_triggered(m, brute, MAGIC_BOLT, Some(ga));
+        let dead = health(m, ga) < before || !whole(m);
+        (first, spent, second, slow, dead)
+    })
+    .await;
+    assert_eq!(out.0, (true, true), "the bolt went to the totem");
+    assert!(!out.1, "the magnet spent");
+    assert!(out.2, "the next bolt lands");
+    assert_eq!(out.3, (false, true), "the slow pulled aside too");
+    assert!(out.4, "a dead totem pulls nothing aside");
+    // What is never pulled aside.
+    let d = magnets();
+    let bolt = d.spells.get(MAGIC_BOLT).unwrap().clone();
+    assert!(magnet_eligible(&bolt));
+    let mut ability = bolt.clone();
+    ability.dmg_class = 2;
+    let mut poison = bolt.clone();
+    poison.dispel = 4;
+    let mut area = bolt.clone();
+    area.effects[0].target_a = 22;
+    area.effects[0].target_b = 15;
+    area.effects[0].radius_index = 1;
+    let mut heal = bolt.clone();
+    heal.effects[0] = SpellEffect {
+        effect: 10,
+        target_a: 21,
+        ..Default::default()
+    };
+    let mut no_redirect = bolt.clone();
+    no_redirect.attributes[1] |= 0x8;
+    for (what, s) in [
+        ("an ability", ability),
+        ("a poison", poison),
+        ("an area spell", area),
+        ("a heal", heal),
+        ("no redirection", no_redirect),
+    ] {
+        assert!(!magnet_eligible(&s), "{what}");
+    }
+}
