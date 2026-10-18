@@ -855,27 +855,30 @@ fn taken_with(map: &Map, target: Guid, s: &SpellTemplate, damage: f32, scale: Op
         return damage;
     };
     let mask = s.school_mask();
-    let flat = a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
-    let mut d = match scale {
-        Some(c) => damage + (flat * c).max(-damage.max(0.0) / 2.0),
-        None => damage + flat,
-    };
-    d *= a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, mask);
+    let mut flat = a.sum_mask(AURA_MOD_DAMAGE_TAKEN, mask) as f32;
+    let mut pct = a.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, mask);
     // A melee or ranged ability takes the melee or ranged damage taken
-    // auras, whatever their school (theirs is 0: Stoneskin, Windwall), as
-    // a swing does (Thistle Tea's `AttackDamageTaken.spell_amount`).
+    // auras too, whatever their school (theirs is 0: Stoneskin, Windwall),
+    // as a swing does: every flat before every percentage, and nothing
+    // added to no damage at all (mangos's `MeleeDamageBonusTaken`, Thistle
+    // Tea's `AttackDamageTaken.spell_amount`).
     match s.dmg_class {
         2 => {
-            d += a.sum(AURA_MOD_MELEE_DAMAGE_TAKEN) as f32;
-            d *= a.product(AURA_MOD_MELEE_DAMAGE_TAKEN_PCT);
+            flat += a.sum(AURA_MOD_MELEE_DAMAGE_TAKEN) as f32;
+            pct *= a.product(AURA_MOD_MELEE_DAMAGE_TAKEN_PCT);
         }
         3 => {
-            d += a.sum(AURA_MOD_RANGED_DAMAGE_TAKEN) as f32;
-            d *= a.product(AURA_MOD_RANGED_DAMAGE_TAKEN_PCT);
+            flat += a.sum(AURA_MOD_RANGED_DAMAGE_TAKEN) as f32;
+            pct *= a.product(AURA_MOD_RANGED_DAMAGE_TAKEN_PCT);
         }
         _ => {}
     }
-    d.max(0.0)
+    let d = match scale {
+        Some(c) => damage + (flat * c).max(-damage.max(0.0) / 2.0),
+        None if damage <= 0.0 => return 0.0,
+        None => damage + flat,
+    };
+    (d * pct).max(0.0)
 }
 
 /// What an effect's damage comes to: bonus, done and taken modifiers, the
@@ -909,12 +912,9 @@ pub fn damage(
         d *= done_multiplier(map, caster, target, s);
         d = l.mods.apply(mods::OP_DAMAGE, d);
     }
-    if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
-        // What armor takes off, whole, as a white blow's (Thistle Tea's
-        // `armor_reduced_damage`): 1000 at 14.003% leaves 860, not 859.
-        let armor = resistance(map, caster, target, 0);
-        d -= (d * combat::armor_reduction(armor as u32, level(map, caster))).trunc();
-    }
+    // The target's modifiers, the crit, then armor (mangos's
+    // `CalculateSpellDamage`; Thistle Tea's "physical spells apply target
+    // bonuses and critical damage before armor").
     if !fixed {
         d = taken_of(map, caster, target, s, index, Kind::Direct, 1, d);
     }
@@ -928,6 +928,12 @@ pub fn damage(
             d * 0.5 * (1.0 + pct)
         };
         d += bonus;
+    }
+    if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
+        // What armor takes off, whole, as a white blow's (Thistle Tea's
+        // `armor_reduced_damage`): 1000 at 14.003% leaves 860, not 859.
+        let armor = resistance(map, caster, target, 0);
+        d -= (d * combat::armor_reduction(armor as u32, level(map, caster))).trunc();
     }
     let mut blocked = 0;
     if l.hit == Hit::Block {
