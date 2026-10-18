@@ -2404,9 +2404,12 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         | AURA_PERIODIC_MANA_LEECH
         | AURA_POWER_BURN_MANA
             if auras(map, target).is_some_and(|x| x.school_immune(h.school))
-                && !map.realm.data.spells.get(h.spell).is_some_and(|s| {
-                    s.attr(0, crate::game::data::spells::ATTR_NO_IMMUNITIES)
-                }) =>
+                && !map
+                    .realm
+                    .data
+                    .spells
+                    .get(h.spell)
+                    .is_some_and(|s| s.attr(0, crate::game::data::spells::ATTR_NO_IMMUNITIES)) =>
         {
             // A tick on one immune to its school (Divine Shield, Ice Block).
             crate::game::map::spells::log::immune(map, h.caster, target, h.spell);

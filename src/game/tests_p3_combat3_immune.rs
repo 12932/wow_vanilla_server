@@ -88,7 +88,11 @@ fn data() -> GameData {
     add(heal);
     add(spell(DOT, 0, effect(6, AURA_PERIODIC_DAMAGE, 20, 6)));
     add(spell(LEECH, 0, effect(6, AURA_PERIODIC_LEECH, 20, 6)));
-    add(spell(MANA_LEECH, 0, effect(6, AURA_PERIODIC_MANA_LEECH, 20, 6)));
+    add(spell(
+        MANA_LEECH,
+        0,
+        effect(6, AURA_PERIODIC_MANA_LEECH, 20, 6),
+    ));
     let mut dot = spell(DOT_UNSTOPPABLE, 0, effect(6, AURA_PERIODIC_DAMAGE, 20, 6));
     dot.attributes[0] = ATTR_NO_IMMUNITIES;
     add(dot);
@@ -200,9 +204,7 @@ async fn the_immune_take_neither_a_swing_nor_harm_nor_control_but_heals_and_othe
             out.push(a.has_spell(DOT) as u32 + a.has_spell(ROOT) as u32);
             out.push(hit(m, g, FIREBOLT, c));
             // A heal lands.
-            m.unit_fields_mut(c)
-                .unwrap()
-                .set_u32(UNIT_FIELD_HEALTH, 50);
+            m.unit_fields_mut(c).unwrap().set_u32(UNIT_FIELD_HEALTH, 50);
             crate::game::map::spells::cast_triggered(m, g, HEAL, Some(c));
             out.push(health(m, c));
             out
@@ -223,7 +225,11 @@ async fn ticks_already_on_pause_under_an_immunity_unless_they_pierce_it_and_resu
                 crate::game::map::spells::cast_triggered(m, g, spell, Some(c));
                 protect(m, c, 95_610, AURA_DAMAGE_IMMUNITY, PHYSICAL);
                 tick_now(m, c, spell);
-                let paused = (health(m, c), mana(m, c), auras::auras(m, c).unwrap().has_spell(spell));
+                let paused = (
+                    health(m, c),
+                    mana(m, c),
+                    auras::auras(m, c).unwrap().has_spell(spell),
+                );
                 auras::remove_spell(m, c, 95_610, None);
                 tick_now(m, c, spell);
                 out.push((paused, (health(m, c), mana(m, c))));
@@ -264,7 +270,8 @@ async fn an_immunity_lasts_while_any_of_its_auras_does_and_ends_with_the_last_or
             let d = target(m, g);
             protect(m, d, 95_610, AURA_DAMAGE_IMMUNITY, PHYSICAL);
             combat::deal_damage(m, g, d, 1000);
-            let after_death = auras::auras(m, d).is_some_and(|a| a.immune_by(AURA_DAMAGE_IMMUNITY, 1));
+            let after_death =
+                auras::auras(m, d).is_some_and(|a| a.immune_by(AURA_DAMAGE_IMMUNITY, 1));
             (one_left, none_left, after_death)
         })
         .await

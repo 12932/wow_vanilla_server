@@ -92,9 +92,11 @@ mod tests_p3_combat3;
 #[cfg(test)]
 mod tests_p3_combat3_assist;
 #[cfg(test)]
-mod tests_p3_combat3_power;
+mod tests_p3_combat3_block;
 #[cfg(test)]
 mod tests_p3_combat3_immune;
+#[cfg(test)]
+mod tests_p3_combat3_power;
 #[cfg(test)]
 mod tests_p3_combat3_regen;
 #[cfg(test)]
