@@ -53,14 +53,18 @@ rayon = "1.12.0"
 slab = "0.4.12"
 # Tracy's protocol is that of the profiler v0.13.1 (docs/PROFILING.md). On
 # demand: it records only while a profiler is connected. Only on localhost:
-# the profile (the call stacks, the log's warnings) is no one else's.
-# No `system-tracing` (it needs root, or an administrator on Windows) and no
-# `broadcast`; sampling stays, for those who run it with the rights for it.
+# the profile (the call stacks, the log's warnings) is no one else's. System
+# tracing stays because Tracy's call-stack sampling is part of it: both need
+# an administrator on Windows (or root on Linux), and without one they do
+# nothing; on Windows they are the only sampling profiler at hand. No
+# `broadcast` (announcing the server on the network), no `code-transfer`,
+# no `context-switch-tracing`.
 tracy-client = { version = "0.18.4", optional = true, default-features = false, features = [
     "enable",
     "manual-lifetime",
     "ondemand",
     "only-localhost",
+    "system-tracing",
     "sampling",
     "callstack-inlines",
 ] }

@@ -100,7 +100,7 @@ There is no world tick.
 | Var | Purpose |
 |---|---|
 | `WOW_REALM_ADDRESS` | `host:port` in the realm list. Defaults to `localhost:8085`. |
-| `WOW_TRACY` | `1` starts the Tracy profiler. |
+| `WOW_TRACY` | `1` starts Tracy: a frame per map update, a zone per step, packet and save ([docs/PROFILING.md](docs/PROFILING.md)). |
 | `RUST_LOG` | the log filter. |
 | `WVS_DATA` | the tests' real world: a `data/` with `db`, `nav` and `terrain` (the extended suite's). |
 
