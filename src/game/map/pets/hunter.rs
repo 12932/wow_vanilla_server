@@ -399,6 +399,14 @@ pub fn revive(map: &mut Map, hunter: Guid, percent: i32) {
     if let Some(pet) = map.players.get(&hunter).and_then(|p| p.owned.pet)
         && map.unit_view(pet).is_some_and(|u| !u.alive)
     {
+        // A corpse two yards off or more comes to its master's side
+        // (mangos's `EffectSummonDeadPet`).
+        if let (Some(a), Some(b)) = (map.position_of(hunter), map.position_of(pet))
+            && crate::game::map::combat::dist(a, b) >= 2.0
+        {
+            let (at, o) = summon::beside(map, hunter);
+            crate::game::map::scripts::place(map, pet, at, o);
+        }
         summon::resurrect(map, pet, fraction);
         sync_record(map, hunter);
         return;

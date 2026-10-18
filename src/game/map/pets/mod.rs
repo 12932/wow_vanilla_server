@@ -283,6 +283,17 @@ pub fn owner_of(map: &Map, unit: Guid) -> Option<Guid> {
 }
 
 /// The state of controlled creature `g`.
+/// What a hunter's pet's happiness makes of its melee damage (1 for any
+/// other unit).
+pub fn happiness_damage(map: &Map, g: Guid) -> f32 {
+    match map.creature(g) {
+        Some(c) if c.pet.as_deref().is_some_and(|s| s.kind == Kind::Hunter) => {
+            hunter::damage_multiplier(c.fields.get_u32(UNIT_FIELD_POWER1 + POWER_HAPPINESS))
+        }
+        _ => 1.0,
+    }
+}
+
 pub fn state(map: &Map, g: Guid) -> Option<&PetState> {
     map.creature(g).and_then(|c| c.pet.as_deref())
 }

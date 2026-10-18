@@ -1306,6 +1306,15 @@ pub fn weapon_damage(
         };
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
+        // A hunter's pet's mood scales its flat damage done with its
+        // weapon's, as its fields already have it (mangos's
+        // `Pet::GetConditionalTotalPhysicalDamageModifier` over the
+        // `TOTAL_VALUE` the flat auras hold).
+        let mood = if hand == Hand::Main {
+            crate::game::map::pets::happiness_damage(map, attacker)
+        } else {
+            1.0
+        };
         damage += a
             .effects()
             .filter(|(h, x)| {
@@ -1314,7 +1323,8 @@ pub fn weapon_damage(
                     && (!is_player || crate::game::map::derive::fits(h, weapon.as_ref()))
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
-            .sum::<f32>();
+            .sum::<f32>()
+            * mood;
         let kind = creature_type_mask(map, victim);
         if kind != 0 {
             damage += a.sum_mask(AURA_MOD_DAMAGE_DONE_CREATURE, kind) as f32;
