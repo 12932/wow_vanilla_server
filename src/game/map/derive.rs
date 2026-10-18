@@ -71,6 +71,9 @@ pub struct UnitBase {
     pub attack_power: u32,
     pub ranged_attack_power: u32,
     pub run_speed: f32,
+    /// Strength to spirit: a pet's, which its auras raise (mangos's
+    /// `Pet::UpdateStats`).
+    pub stats: [u32; 5],
 }
 
 impl UnitBase {
@@ -91,6 +94,7 @@ impl UnitBase {
             attack_power: f.get_u32(UNIT_FIELD_ATTACK_POWER),
             ranged_attack_power: f.get_u32(UNIT_FIELD_RANGED_ATTACK_POWER),
             run_speed,
+            stats: std::array::from_fn(|i| f.get_u32(UNIT_FIELD_STAT0 + i as u16)),
         }
     }
 }
@@ -870,7 +874,33 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
     let b = c.base;
     let a = &c.auras;
     let f = &mut c.fields;
-    let health = ((b.max_health as f32 + a.sum(AURA_MOD_INCREASE_HEALTH) as f32)
+    // A pet with a bar has stats its auras raise, and its stamina and
+    // intellect over its level's give it ten health and fifteen mana a
+    // point (mangos-zero's `Pet::UpdateMaxHealth` and `UpdateMaxPower`,
+    // Thistle Tea's creature stat model). Other creatures' stats are
+    // their template's.
+    let mut stamina_health = 0.0;
+    if c.pet.as_deref().is_some_and(|s| s.kind.controlled()) {
+        for i in 0..5 {
+            let value = scaled_stat(
+                b.stats[i] as i32,
+                &factors(a, AURA_MOD_PERCENT_STAT, i as i32),
+                a.sum_misc(AURA_MOD_STAT, i as i32),
+                &factors(a, AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32),
+            );
+            f.set_u32(UNIT_FIELD_STAT0 + i as u16, value);
+        }
+        stamina_health = (f.get_u32(UNIT_FIELD_STAT0 + 2) as f32 - b.stats[2] as f32) * 10.0;
+        let intellect_mana = (f.get_u32(UNIT_FIELD_STAT0 + 3) as f32 - b.stats[3] as f32) * 15.0;
+        if b.max_mana > 0 {
+            let mana = (b.max_mana as f32 + intellect_mana).max(0.0) as u32;
+            f.set_u32(UNIT_FIELD_MAXPOWER1, mana);
+            if f.get_u32(UNIT_FIELD_POWER1) > mana {
+                f.set_u32(UNIT_FIELD_POWER1, mana);
+            }
+        }
+    }
+    let health = ((b.max_health as f32 + stamina_health + a.sum(AURA_MOD_INCREASE_HEALTH) as f32)
         * a.product(AURA_MOD_INCREASE_HEALTH_PERCENT))
     .max(1.0) as u32;
     f.set_u32(UNIT_FIELD_MAXHEALTH, health);

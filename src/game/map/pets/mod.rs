@@ -180,6 +180,9 @@ pub struct PetState {
     /// The victim its master's Attack named, which a staying pet goes
     /// after (any other it fights only where it stands).
     pub commanded: Option<Guid>,
+    /// When its master last sent it to attack: crowd control older than
+    /// that it was sent to break (mangos's `GetPetLastAttackCommandTime`).
+    pub commanded_at: Option<Instant>,
 }
 
 impl PetState {
@@ -218,6 +221,7 @@ impl PetState {
             returning: false,
             charm_cooldowns: Vec::new(),
             commanded: None,
+            commanded_at: None,
         }
     }
 }
@@ -283,6 +287,17 @@ pub fn owner_of(map: &Map, unit: Guid) -> Option<Guid> {
 }
 
 /// The state of controlled creature `g`.
+/// What a hunter's pet's happiness makes of its melee damage (1 for any
+/// other unit).
+pub fn happiness_damage(map: &Map, g: Guid) -> f32 {
+    match map.creature(g) {
+        Some(c) if c.pet.as_deref().is_some_and(|s| s.kind == Kind::Hunter) => {
+            hunter::damage_multiplier(c.fields.get_u32(UNIT_FIELD_POWER1 + POWER_HAPPINESS))
+        }
+        _ => 1.0,
+    }
+}
+
 pub fn state(map: &Map, g: Guid) -> Option<&PetState> {
     map.creature(g).and_then(|c| c.pet.as_deref())
 }
@@ -1017,7 +1032,7 @@ pub mod testing {
     pub use super::control::good_name;
     pub use super::hunter::{
         HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,
-        pet_xp_to_level, show_training_points, tame, tick,
+        pet_xp_to_level, revive, show_training_points, tame, tick, train_check, untrain,
     };
     pub use super::summon::{
         UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, die, from_record, record_of, spawn,

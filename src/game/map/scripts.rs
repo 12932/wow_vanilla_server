@@ -3213,7 +3213,15 @@ pub fn cast(map: &mut Map, caster: Guid, target: Guid, spell: u32, flags: u32) -
     if casting && flags & 0x1 != 0 {
         crate::game::map::spells::interrupt(map, caster);
     }
-    if flags & 0x2 != 0 || guid::is_game_object(caster) {
+    // A passive spell (an ooze's Wither Touch) a player can't cast, but a
+    // script puts it on, as vmangos's `DoCastSpellIfCan` does.
+    let passive = map
+        .realm
+        .data
+        .spells
+        .get(spell)
+        .is_some_and(|s| s.passive());
+    if flags & 0x2 != 0 || guid::is_game_object(caster) || passive {
         crate::game::map::spells::cast_triggered(map, caster, spell, Some(target));
         return true;
     }

@@ -81,6 +81,12 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     if !alive {
+        // A totem struck down sinks at once, leaving no corpse and its slot
+        // free (mangos's `Totem::Update`, Thistle Tea's totem stop).
+        if kind == Kind::Totem {
+            summon::remove(map, g);
+            return;
+        }
         let stays = if kind == Kind::Hunter {
             CORPSE_STAYS
         } else {
@@ -173,11 +179,14 @@ fn act(map: &mut Map, g: Guid, now: Instant) {
     };
     let (owner, react, returning) = (s.owner, s.react, s.returning);
     let guardian = s.kind == Kind::Guardian;
+    // A victim put under crowd control since its master's last Attack it
+    // lets be (mangos's `PetAI::UpdateAI`, `HasAuraPetShouldAvoidBreaking`).
     let current = map
         .combat(g)
         .filter(|c| c.attacking)
         .map(|c| c.victim)
-        .filter(|v| still_fights(map, g, owner, *v));
+        .filter(|v| still_fights(map, g, owner, *v))
+        .filter(|v| !avoids_breaking(map, g, *v));
     // Called back, it takes nothing new up on the way.
     let victim = current.or_else(|| {
         if (react == REACT_PASSIVE && !guardian) || returning {
@@ -241,6 +250,7 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
 /// (Polymorph, Sap, Gouge): a pet leaves it be of its own accord, but an
 /// aggressive guardian (Thistle Tea's `Targeting.crowd_control_allowed?`,
 /// mangos's `HasAuraPetShouldAvoidBreaking`).
+#[cfg(test)]
 pub(crate) fn breakable_cc(map: &Map, v: Guid) -> bool {
     use crate::game::map::auras::{
         AURA_MOD_CONFUSE, AURA_MOD_STUN, AURA_TRANSFORM, INTERRUPT_DAMAGE,
@@ -253,14 +263,49 @@ pub(crate) fn breakable_cc(map: &Map, v: Guid) -> bool {
     })
 }
 
+/// Whether pet `g` leaves `v` be for its crowd control: one that damage
+/// would break, put on since its master last sent it to attack, and not by
+/// its own channel (Seduction). An aggressive guardian breaks it (mangos's
+/// `HasAuraPetShouldAvoidBreaking`, Thistle Tea's
+/// `Targeting.crowd_control_allowed?`).
+fn avoids_breaking(map: &Map, g: Guid, v: Guid) -> bool {
+    use crate::game::map::auras::{
+        AURA_MOD_CONFUSE, AURA_MOD_STUN, AURA_TRANSFORM, INTERRUPT_DAMAGE,
+    };
+    let Some(s) = state(map, g) else {
+        return false;
+    };
+    if s.kind == Kind::Guardian && s.react == REACT_AGGRESSIVE {
+        return false;
+    }
+    // The override is for the victim the Attack named, not for the next
+    // (Thistle Tea's "an explicit command does not carry its override into
+    // a protected next target"; mangos applies the time to any).
+    let since = s.commanded_at.filter(|_| s.commanded == Some(v));
+    let channel = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .map(|c| c.spell);
+    crate::game::map::auras::auras(map, v).is_some_and(|a| {
+        a.holders.iter().any(|h| {
+            let applied = match (h.expires, h.duration) {
+                (Some(t), Some(ms)) => t.checked_sub(Duration::from_millis(u64::from(ms))),
+                _ => None,
+            };
+            h.interrupt_flags & INTERRUPT_DAMAGE != 0
+                && (h.has(AURA_MOD_CONFUSE) || h.has(AURA_MOD_STUN) || h.has(AURA_TRANSFORM))
+                && Some(h.spell) != channel
+                && since.is_none_or(|t| applied.is_none_or(|a| a >= t))
+        })
+    })
+}
+
 fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
-    let breaks_cc =
-        state(map, g).is_some_and(|s| s.kind == Kind::Guardian && s.react == REACT_AGGRESSIVE);
     let pos = map.position_of(g)?;
     let nearest = |list: Vec<Guid>| {
         list.into_iter()
             .filter(|v| *v != g && *v != owner && still_fights(map, g, owner, *v))
-            .filter(|v| breaks_cc || !breakable_cc(map, *v))
+            .filter(|v| !avoids_breaking(map, g, *v))
             .filter(|v| {
                 map.combat(*v).is_some_and(|c| {
                     c.attackers.contains(&owner) || c.attackers.contains(&g) || c.attacking
@@ -312,7 +357,7 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
                 .position_of(*v)
                 .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
                 && combat::can_attack(map, g, *v)
-                && (breaks_cc || !breakable_cc(map, *v))
+                && !avoids_breaking(map, g, *v)
         })
         .min_by(|a, b| {
             let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, pos));

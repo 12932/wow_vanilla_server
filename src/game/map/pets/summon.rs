@@ -1,7 +1,7 @@
 //! Making controlled creatures and taking them away: a pet from its record
 //! or a template, its stats for its level, its spellbook, and its going.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rand::RngExt;
 use wow_world_messages::Guid;
@@ -388,7 +388,7 @@ pub fn next_number(map: &mut Map, owner: Guid) -> u32 {
 }
 
 /// Where a pet appears: at its master's side.
-fn beside(map: &Map, owner: Guid) -> (Vector3d, f32) {
+pub(super) fn beside(map: &Map, owner: Guid) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))
@@ -876,6 +876,7 @@ pub fn temporary(map: &mut Map, owner: Guid) {
 
 /// Bring a dead pet up again where it is, at `fraction` of its health.
 pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
+    let now = map.now;
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -883,8 +884,13 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     c.fields
         .set_u32(UNIT_FIELD_HEALTH, ((max as f32 * fraction) as u32).max(1));
+    // Its regeneration, hunger and loyalty start their intervals afresh:
+    // none fell due while it lay dead (Thistle Tea's `Regen.initialize`,
+    // `PetLoyalty` and `PetHappiness` after a revival).
     if let Some(s) = c.pet.as_deref_mut() {
         s.dead_at = None;
+        s.regen_at = now + Duration::from_secs(2);
+        s.happiness_at = now + hunter::HAPPINESS_TICK;
+        s.loyalty_at = now + hunter::LOYALTY_TICK;
     }
-    let _ = Instant::now();
 }
