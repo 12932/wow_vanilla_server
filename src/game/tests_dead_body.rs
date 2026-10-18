@@ -81,3 +81,36 @@ fn kill_of(g: Guid) -> impl FnOnce(&mut crate::game::map::Map) + Send + 'static 
         death::kill(m, g);
     }
 }
+
+/// The 1.12 client won't send a dead player's /say (its own
+/// `ERR_CHAT_WHILE_DEAD`), so a dead GM's command comes some other way: a
+/// "." line is a command on any chat type, a whisper to oneself too.
+#[tokio::test]
+async fn a_dead_gm_commands_by_whisper() {
+    let realm = harness::realm_with(GameData::empty());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(kill_of(g)).await;
+    rooted(&mut a, g, true).await;
+    a.send(CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Whisper {
+            target_player: "Alice".into(),
+        },
+        language: Language::Universal,
+        message: ".revive".into(),
+    })
+    .await;
+    let mut alive = false;
+    for _ in 0..200 {
+        alive = map
+            .query(move |m| m.players[&g].death == death::Death::Alive)
+            .await
+            .unwrap_or(false);
+        if alive {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(alive, "revived by a whispered .revive");
+}
