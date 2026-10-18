@@ -735,6 +735,14 @@ pub fn worn(max: u32, now: u32, amount: i32, pct: bool) -> u32 {
     (i64::from(now) - i64::from(amount)).clamp(0, i64::from(max)) as u32
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's roll (a percentage) and equipment slot for a blow's wear,
+    /// in place of the dice.
+    pub static FORCED_WEAR: std::cell::Cell<Option<(f32, u8)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// A blow between `attacker` and `victim` (Thistle Tea's `hit_loss`): each
 /// player of the two, one time in two hundred, loses a point off a random
 /// equipment slot's item.
@@ -744,10 +752,15 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
     }
     let mut rng = rand::rng();
     for g in [victim, attacker] {
-        if !guid::is_player(g) || rng.random_range(0.0f32..100.0) >= HIT_WEAR_CHANCE {
+        let (roll, slot) = (
+            rng.random_range(0.0f32..100.0),
+            rng.random_range(0..WEAR_SLOTS),
+        );
+        #[cfg(test)]
+        let (roll, slot) = FORCED_WEAR.with(|f| f.get()).unwrap_or((roll, slot));
+        if !guid::is_player(g) || roll >= HIT_WEAR_CHANCE {
             continue;
         }
-        let slot = rng.random_range(0..WEAR_SLOTS);
         let Some(p) = map.players.get_mut(&g) else {
             continue;
         };

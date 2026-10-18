@@ -209,3 +209,90 @@ async fn a_stanceless_warrior_logs_in_in_battle_stance() {
     let warrior = on(&map, move |m| stance(m, ga)).await;
     assert_eq!(warrior, (vec![71], 18), "kept");
 }
+
+/// A chest piece of fifty durability.
+const CHEST: u32 = 64_600;
+
+fn wear_world() -> crate::game::data::GameData {
+    let mut d = crate::game::tests_p3_combat::data();
+    d.items.insert(
+        CHEST,
+        crate::game::data::ItemTemplate {
+            entry: CHEST,
+            class: 4,
+            subclass: 1,
+            name: "Chest".into(),
+            display_id: 1000,
+            inventory_type: 5,
+            max_durability: 50,
+            stackable: 1,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's `Durability` "nonlethal combat rolls independently for
+/// attacker and victim" and "absorbed and nonlethal environmental damage
+/// do not wear gear": a blow between two players wears a point off each
+/// one's rolled slot when the roll comes under half a percent; a
+/// creature's blow wears only its victim; a roll over it, a blow of
+/// nothing, and one's own harm (the world's) wear nothing.
+#[tokio::test]
+async fn a_blow_wears_each_player_by_their_own_roll() {
+    use crate::game::map::combat::deal_damage;
+    use crate::game::map::vendor::FORCED_WEAR;
+    use crate::game::store::BAG_PLAYER;
+    let (realm, _a, ga, map) =
+        crate::game::tests_p3_combat::setup_with(wear_world(), Class::Warrior).await;
+    let (_b, gb) = crate::game::tests_p3_entity::bob(&realm, ga).await;
+    let worn = on(&map, move |m| {
+        for g in [ga, gb] {
+            crate::game::tests_p3_combat::equip(m, g, CHEST, 4);
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_MAXHEALTH, 100_000);
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_HEALTH, 100_000);
+        }
+        let brute = crate::game::tests_p3_combat::spawn(
+            m,
+            ga,
+            crate::game::tests_p3_combat::BRUTE,
+            20,
+            30.0,
+        );
+        let durability = |m: &crate::game::map::Map, g: Guid| {
+            let p = &m.players[&g];
+            let i = p.item_at(BAG_PLAYER, 4).unwrap();
+            p.items[i].fields.get_u32(ITEM_FIELD_DURABILITY)
+        };
+        let mut out = Vec::new();
+        for (roll, attacker, victim, damage) in [
+            (0.1, ga, gb, 10),
+            (0.1, brute, gb, 10),
+            (0.5, ga, gb, 10),
+            (0.1, ga, gb, 0),
+            (0.1, gb, gb, 10),
+        ] {
+            FORCED_WEAR.with(|f| f.set(Some((roll, 4))));
+            deal_damage(m, attacker, victim, damage);
+            out.push((durability(m, ga), durability(m, gb)));
+        }
+        FORCED_WEAR.with(|f| f.set(None));
+        out
+    })
+    .await;
+    assert_eq!(
+        worn,
+        [(49, 49), (49, 48), (49, 48), (49, 48), (49, 48)],
+        "both; the victim alone; over the roll; nothing dealt; one's own harm"
+    );
+}
