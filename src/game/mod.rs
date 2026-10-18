@@ -98,6 +98,8 @@ mod tests_p3_aura2_spells;
 #[cfg(test)]
 mod tests_p3_aura2_sync;
 #[cfg(test)]
+mod tests_p3_cast;
+#[cfg(test)]
 mod tests_p3_cast2;
 #[cfg(test)]
 mod tests_p3_cast3;
@@ -113,8 +115,6 @@ mod tests_p3_cast7;
 mod tests_p3_cast8;
 #[cfg(test)]
 mod tests_p3_cast9;
-#[cfg(test)]
-mod tests_p3_cast;
 #[cfg(test)]
 mod tests_p3_cast_class;
 #[cfg(test)]
@@ -352,11 +352,11 @@ mod tests_p4_scripts_bosses;
 #[cfg(test)]
 mod tests_p4_scripts_brd;
 #[cfg(test)]
+mod tests_p4_scripts_dungeons;
+#[cfg(test)]
 mod tests_p4_scripts_dungeons2;
 #[cfg(test)]
 mod tests_p4_scripts_dungeons3;
-#[cfg(test)]
-mod tests_p4_scripts_dungeons;
 #[cfg(test)]
 mod tests_p4_scripts_gnomes;
 #[cfg(test)]
