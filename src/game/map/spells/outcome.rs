@@ -171,9 +171,17 @@ pub fn binary(s: &SpellTemplate) -> bool {
 }
 
 /// A spell a reflection may turn back: single-target magic whose
-/// attributes don't forbid it.
+/// attributes don't forbid it, not an ability, a passive or a spell past
+/// immunities (mangos's `IsReflectableSpell`, Thistle Tea's
+/// `reflectable?`).
 pub fn reflectable(s: &SpellTemplate) -> bool {
-    !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION)
+    !area(s)
+        && s.dmg_class == 1
+        && !s.attr(1, sd::ATTR_EX_NO_REFLECTION)
+        && !s.attr(
+            0,
+            sd::ATTR_ABILITY | sd::ATTR_PASSIVE | sd::ATTR_NO_IMMUNITIES,
+        )
 }
 
 /// A spell that hits an area.
@@ -580,7 +588,7 @@ pub fn frozen(map: &Map, g: Guid) -> bool {
 
 /// Shatter's crit chance against the frozen, from the caster's override
 /// class scripts 849 to 913.
-fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
+pub fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
     let data = &map.realm.data;
     auras::auras(map, caster).map_or(0.0, |a| {
         a.effects()

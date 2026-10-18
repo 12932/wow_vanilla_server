@@ -80,6 +80,20 @@ mod tests_p3_ai_pets;
 #[cfg(test)]
 mod tests_p3_ai_scripts;
 #[cfg(test)]
+mod tests_p3_cast;
+#[cfg(test)]
+mod tests_p3_cast2;
+#[cfg(test)]
+mod tests_p3_cast3;
+#[cfg(test)]
+mod tests_p3_cast4;
+#[cfg(test)]
+mod tests_p3_cast_class;
+#[cfg(test)]
+mod tests_p3_cast_kit;
+#[cfg(test)]
+mod tests_p3_cast_priest;
+#[cfg(test)]
 mod tests_p3_combat;
 #[cfg(test)]
 mod tests_p3_combat10;

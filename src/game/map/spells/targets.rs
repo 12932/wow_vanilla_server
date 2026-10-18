@@ -153,12 +153,20 @@ fn units_around(
     v.into_iter().map(|(g, _)| g).collect()
 }
 
-/// Whether `g` is in front of `caster`, within `degrees`.
-fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
+/// Whether `g` is in front of `caster`, within `degrees`; behind it, for a
+/// negative cone (Onyxia's Tail Sweep's -120, as mangos's `PUSH_CONE` takes
+/// it with `isInBack`).
+pub(crate) fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
     let (Some(me), Some(p)) = (map.unit_view(caster), map.position_of(g)) else {
         return false;
     };
-    let a = (p.y - me.position.y).atan2(p.x - me.position.x) - me.orientation;
+    let facing = if degrees < 0 {
+        me.orientation + std::f32::consts::PI
+    } else {
+        me.orientation
+    };
+    let degrees = degrees.abs();
+    let a = (p.y - me.position.y).atan2(p.x - me.position.x) - facing;
     let a = a.sin().atan2(a.cos()).abs();
     a <= degrees as f32 * std::f32::consts::PI / 360.0
 }
@@ -353,7 +361,7 @@ pub fn effect_targets(
 /// No more than `max` of `out` (0 for no limit), as Thistle Tea's
 /// `TargetLimit` and target resolver pick them: each once, a random few
 /// when there are too many, the one aimed at among them if it is there.
-fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<Guid>) {
+pub(crate) fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<Guid>) {
     let mut seen = ahash::AHashSet::new();
     out.retain(|g| seen.insert(*g));
     if max == 0 || out.len() <= max {

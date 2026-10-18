@@ -618,10 +618,12 @@ fn check_target(
                 Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
             )
         });
-        if (requires_enemy || harmful && !resurrects(s))
-            && !combat::can_attack(map, caster, target)
-            && !s.has_effect(95)
-        {
+        let attackable = if u.alive {
+            combat::can_attack(map, caster, target)
+        } else {
+            combat::can_attack_dead(map, caster, target)
+        };
+        if (requires_enemy || harmful && !resurrects(s)) && !attackable && !s.has_effect(95) {
             return Some(fail::TARGET_FRIENDLY);
         }
         if requires_friend && combat::can_attack(map, caster, target) {
@@ -665,6 +667,26 @@ fn check_target(
         })
     {
         return Some(fail::IMMUNE);
+    }
+    // A helpful spell whose every effect the target is immune to by its
+    // mechanic (a shield on a Weakened Soul) is refused before it costs
+    // anything, as mangos's `CheckCast` has it.
+    if !harmful
+        && !triggered
+        && auras::auras(map, target).is_some_and(|a| {
+            let mut effects = s.effects.iter().filter(|e| e.effect != 0).peekable();
+            effects.peek().is_some()
+                && effects.all(|e| {
+                    let mechanic = if e.mechanic != 0 {
+                        e.mechanic
+                    } else {
+                        s.mechanic
+                    };
+                    mechanic != 0 && a.mechanic_immune(mechanic)
+                })
+        })
+    {
+        return Some(fail::TARGET_AURASTATE);
     }
     if target != caster && !triggered {
         let me = map.unit_view(caster)?;
