@@ -382,3 +382,86 @@ async fn a_rift_keeps_its_invaders_and_replaces_those_lost() {
     assert_eq!(gone.len(), 3, "the one gone replaced");
     assert!(!gone.contains(&slain[0]));
 }
+
+const BENCH: u32 = 98_040;
+const STOOL: u32 = 98_041;
+
+/// Thistle Tea's "selects the nearest slot and applies the configured
+/// chair height", "uses the object center when the template has no
+/// slots" and "rejects a player farther than three yards from the nearest
+/// slot", as mangos-classic's chair (`GetClosestChairSlotPosition`, a
+/// stand state of `SIT_LOW_CHAIR` and the chair's height): a bench of
+/// three seats two yards apart seats one on the seat nearest, at the
+/// bench's facing, sat as high as the bench; one with no seats at its
+/// centre; and one more than three yards from a seat not at all. A chair
+/// sat everyone at its centre, on the ground's sit, from ten yards.
+#[tokio::test]
+async fn a_chair_seats_one_on_its_nearest_seat_at_its_height() {
+    use crate::game::map::world::chair_seat;
+    let at = wow_world_messages::vanilla::Vector3d {
+        x: 10.0,
+        y: 20.0,
+        z: 4.0,
+    };
+    let user = |x: f32, y: f32| wow_world_messages::vanilla::Vector3d { x, y, z: 4.0 };
+    let seat = chair_seat(at, 0.0, 3, 2.0, user(10.0, 22.2));
+    assert!(
+        (seat.x - 10.0).abs() < 1e-4 && (seat.y - 22.0).abs() < 1e-4,
+        "{seat:?}"
+    );
+    assert_eq!(
+        chair_seat(at, 1.0, 0, 1.0, user(11.0, 20.0)),
+        at,
+        "no seats: its centre"
+    );
+    let mut d = data();
+    let mut bench = object(BENCH, 7, "Bench", &[(0, 3), (1, 1)]);
+    bench.size = 2.0;
+    d.gameobject_templates.insert(BENCH, bench);
+    d.gameobject_templates
+        .insert(STOOL, object(STOOL, 7, "Stool", &[(0, 1)]));
+    let (_realm, mut a, g, map) = setup_with(d, Class::Warrior).await;
+    let (bench, stool, start) = on(&map, move |m| {
+        let p = m.players[&g].position();
+        let at = |dx: f32| wow_world_messages::vanilla::Vector3d { x: p.x + dx, ..p };
+        let bench = crate::game::map::objects::summon(m, None, BENCH, at(0.0), 0.0, 0, 0, 0, None);
+        let stool = crate::game::map::objects::summon(m, None, STOOL, at(4.0), 0.0, 0, 0, 0, None);
+        (bench.unwrap(), stool.unwrap(), p)
+    })
+    .await;
+    a.clear();
+    // Beside the bench's left seat.
+    a.heartbeat(start.x, start.y + 2.2, start.z).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: bench }).await;
+    let to = a
+        .wait_for("the teleport to the seat", |m| match m {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => {
+                Some(t.info.position)
+            }
+            _ => None,
+        })
+        .await;
+    let sat = (to, on(&map, move |m| m.players[&g].stand_state()).await);
+    assert!(
+        (sat.0.y - (start.y + 2.0)).abs() < 1e-3,
+        "the left seat: {:?}",
+        sat.0
+    );
+    assert!((sat.0.x - start.x).abs() < 1e-3);
+    assert_eq!(sat.1, 5, "sat as high as the bench");
+    // The stool, four yards off the seat: not sat on.
+    on(&map, move |m| {
+        if let Some(pl) = m.players.get_mut(&g) {
+            pl.set_stand_state(0);
+        }
+    })
+    .await;
+    a.heartbeat(start.x, start.y, start.z).await;
+    a.send(CMSG_GAMEOBJ_USE { guid: stool }).await;
+    crate::game::harness::Client::gets(&mut a, crate::game::tests_p3_entity::NONE_WITHIN, |_| {
+        None::<()>
+    })
+    .await;
+    let stood = on(&map, move |m| m.players[&g].stand_state()).await;
+    assert_eq!(stood, 0, "too far from its seat");
+}
