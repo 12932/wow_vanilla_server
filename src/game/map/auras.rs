@@ -189,6 +189,8 @@ pub const AURA_MOD_MOUNTED_SPEED_NOT_STACK: u32 = 172;
 pub const AURA_ALLOW_CHAMPION_SPELLS: u32 = 173;
 pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
+/// Spell damage against creature types (`misc` their mask).
+pub const AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS: u32 = 180;
 /// Changes to the hit and crit chance of those who attack the unit.
 pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
 pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
@@ -230,7 +232,9 @@ pub const POSITIVE_SLOTS: usize = 32;
 /// Every aura type the server knows: those with an effect here or in the
 /// stats, and those it keeps on the unit with no effect of their own.
 pub fn supported(aura: u32) -> bool {
-    (aura <= 175 && !matches!(aura, 46 | 48 | 63 | 119 | 164)) || aura == AURA_LINKED
+    (aura <= 175 && !matches!(aura, 46 | 48 | 63 | 119 | 164))
+        || aura == AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
+        || aura == AURA_LINKED
 }
 
 /// One aura effect of a holder.
@@ -897,10 +901,14 @@ pub fn apply_spell(
                     .is_some_and(|(a, b)| a.rank > b.rank)
                 && (h.caster == caster || !cross_caster_coexist(spell, h, effects))
         });
-        let group_blocked = group_relation(&data, existing, spell) == Some(GroupRelation::Blocked);
-        if blocked || group_blocked {
+        if blocked {
             return Err(Refused::Bounced);
         }
+    }
+    // A weaker spell of a group that keeps its highest (rule 3), helpful
+    // or harmful: a lesser Demoralizing Shout under a Demoralizing Roar.
+    if !passive && group_relation(&data, existing, spell) == Some(GroupRelation::Blocked) {
+        return Err(Refused::Bounced);
     }
     let mut aura_effects = Vec::new();
     for &(index, amount) in effects {
@@ -1179,7 +1187,8 @@ enum GroupRelation {
 }
 
 /// How `spell` stands to the spells of its groups already on the unit:
-/// rule 1 replaces, rule 3 keeps the higher of the group's order.
+/// rule 1 replaces, rule 3 keeps the higher in the group's order
+/// (`group_spell_id`).
 fn group_relation(
     data: &crate::game::data::GameData,
     a: &Auras,
@@ -1197,7 +1206,8 @@ fn group_relation(
             match data.spells.group_rules.get(g).copied().unwrap_or(0) {
                 1 => return Some(GroupRelation::Replaces),
                 3 => {
-                    return Some(if h.spell > spell.id {
+                    let order = |id| data.spells.group_order(*g, id);
+                    return Some(if order(h.spell) > order(spell.id) {
                         GroupRelation::Blocked
                     } else {
                         GroupRelation::Replaces
@@ -1259,7 +1269,10 @@ fn replaces(
             for g in mine.iter().filter(|g| theirs.contains(g)) {
                 match data.spells.group_rules.get(g).copied().unwrap_or(0) {
                     1 => return true,
-                    3 => return old.spell <= new.spell,
+                    3 => {
+                        return data.spells.group_order(*g, old.spell)
+                            <= data.spells.group_order(*g, new.spell);
+                    }
                     _ => {}
                 }
             }

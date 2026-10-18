@@ -728,15 +728,48 @@ fn effect(
                 map.teleport(target, crate::game::map::MapKey::world(m), pos, o);
             }
         }
+        // To the caster, as mangos's `EffectTeleUnitsFaceCaster` and
+        // Thistle Tea's `TeleportNearCaster` have it: the spell's place in
+        // `spell_target_position` on this map (a database location, 17),
+        // the caster's own spot (18), or ahead of the caster by the
+        // effect's radius (47, the front), past both their sizes else;
+        // turned to the caster's facing negated.
         EFFECT_TELEPORT_UNITS_FACE_CASTER => {
             if let Some(me) = map.unit_view(caster) {
-                let at = Vector3d {
-                    x: me.position.x + 2.0 * me.orientation.cos(),
-                    y: me.position.y + 2.0 * me.orientation.sin(),
-                    z: me.position.z,
+                let (from, o) = (me.position, me.orientation);
+                let size = |map: &Map, g: Guid| {
+                    map.unit_fields(g)
+                        .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
                 };
-                let o = me.orientation + std::f32::consts::PI;
-                map.teleport(target, map.key, at, o);
+                let radius = map.realm.data.spells.radius(e.radius_index);
+                let ahead = |d: f32| Vector3d {
+                    x: from.x + d * o.cos(),
+                    y: from.y + d * o.sin(),
+                    z: from.z,
+                };
+                let selectors = [e.target_a, e.target_b];
+                let stored = map
+                    .realm
+                    .data
+                    .spells
+                    .target_positions
+                    .get(&s.id)
+                    .filter(|(m, ..)| *m == map.key.map)
+                    .map(|&(_, x, y, z, _)| Vector3d { x, y, z });
+                let at = if selectors.contains(&17)
+                    && let Some(at) = stored
+                {
+                    at
+                } else if selectors.contains(&18) {
+                    from
+                } else if selectors.contains(&47) && !selectors.contains(&17) {
+                    first_clear(map, from, ahead(radius))
+                } else {
+                    let d = radius + size(map, target) + size(map, caster);
+                    first_clear(map, from, ahead(d))
+                };
+                let facing = (-o).rem_euclid(std::f32::consts::TAU);
+                map.teleport(target, map.key, at, facing);
             }
         }
         // Back to where it last stood on the ground (Thistle Tea's

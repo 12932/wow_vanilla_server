@@ -17,6 +17,14 @@ fn slot_of(p: &Player, skill: u32) -> Option<u16> {
     (0..SLOTS).find(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF == skill)
 }
 
+/// The skills the player has.
+pub fn ids(p: &Player) -> Vec<u32> {
+    (0..SLOTS)
+        .map(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF)
+        .filter(|s| *s != 0)
+        .collect()
+}
+
 /// The skill's value, if the player has it.
 pub fn value(p: &Player, skill: u32) -> Option<u32> {
     slot_of(p, skill).map(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3 + 1) & 0xFFFF)
@@ -138,6 +146,7 @@ pub fn init(p: &mut Player, data: &GameData) {
     );
     for spell in spells {
         learn_from_spell(p, data, spell);
+        learn_from_line(p, data, spell);
         let languages: Vec<u32> = data
             .spells
             .skill_abilities
@@ -174,6 +183,69 @@ pub fn learn_from_spell(p: &mut Player, data: &GameData, spell: u32) {
     {
         let points = e.base_points + e.base_dice.max(1);
         learn_skill(p, e.misc_value.max(0) as u32, points.max(1) as u32);
+    }
+}
+
+/// The spells `skill` gives as it is learned, for a player of `race` and
+/// `class`: its `SkillLineAbility` rows learned on getting the skill
+/// (acquire method 1), as mangos's `learnSkillRewardedSpells` and Thistle
+/// Tea's `Skill.reward_spells`.
+pub fn rewards(data: &GameData, skill: u32, race: u8, class: u8) -> Vec<u32> {
+    if skill == 0 {
+        return Vec::new();
+    }
+    let (class_bit, race_bit) = (1u32 << (class.max(1) - 1), 1u32 << (race.max(1) - 1));
+    let mut out: Vec<u32> = data
+        .spells
+        .skill_abilities
+        .values()
+        .flatten()
+        .filter(|a| {
+            a.skill == skill
+                && a.acquire == 1
+                && (a.class_mask == 0 || a.class_mask & class_bit != 0)
+                && (a.race_mask == 0 || a.race_mask & race_bit != 0)
+        })
+        .map(|a| a.spell)
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Lockpicking and Poisons: skills a rogue's spell of their line brings
+/// (Pick Lock, Poisons), with no skill effect, as mangos's `addSpell`'s
+/// special cases have it; from 1, as they rise with use.
+const TRAINED_BY_USE: [u32; 2] = [40, 633];
+
+/// The skills `spell`'s `SkillLineAbility` rows bring a player of their
+/// race and class, though it has no skill effect: Lockpicking with Pick
+/// Lock, Poisons with Poisons (Thistle Tea's `initial_skills` of a rogue's
+/// base abilities), each from 1 up to five a level.
+pub fn learn_from_line(p: &mut Player, data: &GameData, spell: u32) {
+    let (class_bit, race_bit) = (
+        1u32 << (p.row.class.max(1) - 1),
+        1u32 << (p.row.race.max(1) - 1),
+    );
+    let skills: Vec<u32> = data
+        .spells
+        .skill_abilities
+        .get(&spell)
+        .into_iter()
+        .flatten()
+        .filter(|a| {
+            TRAINED_BY_USE.contains(&a.skill)
+                && a.trivial_high == 0
+                && (a.class_mask == 0 || a.class_mask & class_bit != 0)
+                && (a.race_mask == 0 || a.race_mask & race_bit != 0)
+        })
+        .map(|a| a.skill)
+        .collect();
+    for skill in skills {
+        if slot_of(p, skill).is_none() {
+            learn_skill(p, skill, 1);
+            set_value(p, skill, 1);
+        }
     }
 }
 

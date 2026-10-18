@@ -811,17 +811,60 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     }
 }
 
-/// The spells a player's class trainers teach up to their level.
+/// The class spells quests give, with the level each is had at (Thistle
+/// Tea's `ClassSpell` `@quest_reward_spells`): the warrior's stances, the
+/// hunter's pet spells, the shaman's totems, the warlock's demons and the
+/// druid's forms.
+const QUEST_CLASS_SPELLS: &[(u8, &[(u32, u8)])] = &[
+    (1, &[(71, 10), (2458, 30)]),
+    (
+        3,
+        &[
+            (1515, 10),
+            (883, 10),
+            (2641, 10),
+            (6991, 10),
+            (982, 10),
+            (136, 12),
+        ],
+    ),
+    (7, &[(8071, 4), (3599, 10), (5394, 20), (8512, 30)]),
+    (
+        9,
+        &[
+            (688, 1),
+            (697, 10),
+            (712, 20),
+            (691, 30),
+            (1122, 50),
+            (18_540, 60),
+        ],
+    ),
+    (11, &[(5487, 10), (1066, 16), (768, 20)]),
+];
+
+/// The spells a player's class trainers teach up to their level, and those
+/// the class's quests give, as Thistle Tea's `ClassSpell.trainable_spell_ids`:
+/// a talent's rank only to one who has a rank of it.
 fn trainer_spells(map: &Map, g: Guid) -> Vec<u32> {
     let data = &map.realm.data;
     let Some(p) = map.players.get(&g) else {
         return Vec::new();
     };
     let level = p.level();
+    let class = p.row.class;
+    let quests = QUEST_CLASS_SPELLS
+        .iter()
+        .filter(|(c, _)| *c == class)
+        .flat_map(|(_, spells)| spells.iter())
+        .filter(|(_, at)| *at <= level)
+        .map(|(spell, _)| *spell);
+    let talent_of = |spell: u32| data.spells.talent_of(spell);
+    let known_talents: Vec<u32> = p.spells.iter().filter_map(|s| talent_of(*s)).collect();
     let mut out: Vec<u32> = data
         .creature_templates
         .values()
-        .filter(|t| t.trainer_class == p.row.class && t.trainer_type == 0)
+        .filter(|t| t.trainer_class == class && t.trainer_type == 0)
         .flat_map(|t| {
             data.npc
                 .trainers
@@ -832,6 +875,8 @@ fn trainer_spells(map: &Map, g: Guid) -> Vec<u32> {
         })
         .filter(|s| s.required_level <= level && s.required_skill == 0)
         .map(|s| crate::game::map::spells::learns(data, s.spell))
+        .chain(quests)
+        .filter(|s| talent_of(*s).is_none_or(|t| known_talents.contains(&t)))
         .filter(|s| !p.spells.contains(s))
         .collect();
     out.sort_unstable();

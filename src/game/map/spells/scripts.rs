@@ -178,7 +178,7 @@ pub fn dummy(
         && s.effects[index].effect == EFFECT_SCRIPT_EFFECT
     {
         let holy_light = s.family_flags & 0x8000_0000 != 0;
-        let bonus = blessing_of_light(map, target, if holy_light { 0 } else { 1 });
+        let bonus = blessing_of_light_bonus(map, target, holy_light);
         let heal = if holy_light { 19968 } else { 19993 };
         cast_with_points(
             map,
@@ -348,7 +348,22 @@ pub fn dummy(
     }
 }
 
-/// Blessing of Light's bonus to Holy Light (effect 0) or Flash of Light
+/// What Blessing of Light on `target` adds to a Holy Light (or a Flash of
+/// Light): its effect's points by the heal's coefficient (0.714 or 0.429),
+/// as mangos's `SpellHealingBonusTaken` takes it through
+/// `SpellBonusWithCoeffs` and Thistle Tea's `HealingReceived`.
+pub fn blessing_of_light_bonus(map: &Map, target: Guid, holy_light: bool) -> i32 {
+    let (index, heal) = if holy_light { (0, 19968) } else { (1, 19993) };
+    let c = map
+        .realm
+        .data
+        .spells
+        .get(heal)
+        .map_or(1.0, |h| h.effects[0].bonus_coefficient.max(0.0));
+    (blessing_of_light(map, target, index) as f32 * c) as i32
+}
+
+/// Blessing of Light's points for Holy Light (effect 0) or Flash of Light
 /// (effect 1) on `target`.
 fn blessing_of_light(map: &Map, target: Guid, index: u8) -> i32 {
     let data = &map.realm.data;

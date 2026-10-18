@@ -1699,6 +1699,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     let Some(dbc) = dbc else {
         s.inherit_proc_events();
+        s.inherit_groups();
         return;
     };
     for (id, base) in rows(dbc, "SELECT * FROM SpellCastTimes", |c| {
@@ -1781,6 +1782,8 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
         s.enchantments.insert(e.id, e);
     }
     s.inherit_proc_events();
+    s.inherit_groups();
+    s.index_talent_lines();
 }
 
 /// vmangos's corrections to `spell_template` (`spell_mod` and
@@ -1996,11 +1999,16 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     }) {
         s.threat.insert(id, t);
     }
-    for (group, spell) in rows(db, &format!("SELECT * FROM spell_group {in_build}"), |c| {
-        (c.u32("group_id"), c.u32("spell_id"))
+    for (group, order, spell) in rows(db, &format!("SELECT * FROM spell_group {in_build}"), |c| {
+        (
+            c.u32("group_id"),
+            c.u32("group_spell_id"),
+            c.u32("spell_id"),
+        )
     }) {
         if spell != 0 {
             s.groups.entry(spell).or_default().push(group);
+            s.group_orders.insert((group, spell), order);
         }
     }
     for (group, rule) in rows(db, "SELECT * FROM spell_group_stack_rules", |c| {

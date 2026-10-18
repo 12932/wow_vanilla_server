@@ -268,6 +268,7 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     if spell == 0 || p.spells.contains(&spell) {
         return;
     }
+    let skills_before = crate::game::map::skills::ids(p);
     // A higher rank takes the lower's place on the bars; a talent's rank
     // takes it in the spellbook too.
     let (old, talent) = supersedes(&map.realm.data, &p.spells, spell);
@@ -289,6 +290,19 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     let data = map.realm.data.clone();
     if let Some(p) = map.players.get_mut(&player) {
         crate::game::map::skills::learn_from_spell(p, &data, spell);
+        crate::game::map::skills::learn_from_line(p, &data, spell);
+    }
+    // The spells a skill it brought comes with (Mining's Find Minerals and
+    // Smelt Copper, Bows' Shoot Bow).
+    let rewards: Vec<u32> = map.players.get(&player).map_or_else(Vec::new, |p| {
+        crate::game::map::skills::ids(p)
+            .into_iter()
+            .filter(|s| !skills_before.contains(s))
+            .flat_map(|s| crate::game::map::skills::rewards(&data, s, p.row.race, p.row.class))
+            .collect()
+    });
+    for r in rewards {
+        learn(map, player, r);
     }
     let with = map
         .realm
@@ -1310,8 +1324,27 @@ fn land(
     }
     let mut aim = target;
     if hit == Hit::Reflect {
-        // Back at the caster.
+        // Back at the caster; the reflector's procs see it reflected, and
+        // a reflection of charges spends one (Sheen of Zanza's first, as
+        // mangos's victim proc of `PROC_EX_REFLECT`).
         outcome::send_miss(map, caster, target, s.id, Hit::Reflect);
+        let (_, taken) = outcome::proc_flags(s);
+        crate::game::map::procs::trigger(
+            map,
+            crate::game::map::procs::Event {
+                actor: caster,
+                target,
+                actor_flags: 0,
+                target_flags: taken,
+                ex: crate::game::map::procs::EX_REFLECT,
+                spell: Some(s.id),
+                damage: 0,
+                school: s.school_mask(),
+                offhand: false,
+                ranged: false,
+                extra_attack: false,
+            },
+        );
         aim = caster;
         hit = Hit::Hit;
     }
@@ -1635,6 +1668,7 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         .unwrap_or(0);
     let amount = outcome::taken_of(
         map,
+        h.caster,
         target,
         &s,
         index,

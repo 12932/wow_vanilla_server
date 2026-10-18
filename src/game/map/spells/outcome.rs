@@ -170,6 +170,12 @@ pub fn binary(s: &SpellTemplate) -> bool {
         })
 }
 
+/// A spell a reflection may turn back: single-target magic whose
+/// attributes don't forbid it.
+pub fn reflectable(s: &SpellTemplate) -> bool {
+    !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION)
+}
+
 /// A spell that hits an area.
 pub fn area(s: &SpellTemplate) -> bool {
     s.effects.iter().any(|e| {
@@ -343,8 +349,7 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     if physical(s) {
         return melee_roll(map, caster, target, s, m).0;
     }
-    // Reflection of a single-target magic spell.
-    if !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION) {
+    if reflectable(s) {
         let reflect = a.sum(AURA_REFLECT_SPELLS)
             + a.sum_mask(AURA_REFLECT_SPELLS_SCHOOL, s.school_mask())
             + ward_reflect(map, target, s);
@@ -710,11 +715,15 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
     if creature_type > 0
         && let Some(a) = auras::auras(map, caster)
     {
+        // Gear's and potions' spell damage against a creature type (aura
+        // 180, "up to", as spell power: Thistle Tea's `TargetSpellPower`).
         p += a
             .effects()
             .filter(|(_, x)| {
-                x.kind == AURA_MOD_DAMAGE_DONE_CREATURE
-                    && (x.misc as u32) & (1 << (creature_type - 1).min(31)) != 0
+                matches!(
+                    x.kind,
+                    AURA_MOD_DAMAGE_DONE_CREATURE | AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
+                ) && (x.misc as u32) & (1 << (creature_type - 1).min(31)) != 0
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
             .sum::<f32>();
@@ -779,13 +788,41 @@ pub fn taken(map: &Map, target: Guid, s: &SpellTemplate, damage: f32) -> f32 {
     taken_with(map, target, s, damage, None)
 }
 
-/// Damage `target` takes of effect `index` of `s`, a direct hit's or a
-/// tick's (`kind`) of `stacks`: a spell's flat modifiers (Dampen Magic,
-/// Judgement of the Crusader) by its coefficient and taking at most half,
-/// as Thistle Tea's `DamageReceived` and mangos's `SpellDamageBonusTaken`
-/// have them; an ability's whole; then the percent modifiers.
+/// The share of a target's flat damage taken (Dampen and Amplify Magic) a
+/// magic effect gets, as mangos's `SpellBonusWithCoeffs` on the taken part
+/// and Thistle Tea's `DamageReceived` have it: its bonus coefficient for a
+/// player's (or a player's pet's) spell, a creature's whole unless its
+/// table says otherwise; a melee or ranged ability's whole.
+pub fn taken_coefficient(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    kind: Kind,
+) -> f32 {
+    if physical(s) || s.custom(sd::CUSTOM_FIXED_DAMAGE) {
+        return 1.0;
+    }
+    let creature =
+        map.creature(caster).is_some() && crate::game::map::pets::master(map, caster) == caster;
+    let table = s.effects[index.min(2)].bonus_coefficient;
+    if creature {
+        if table > 0.0 { table } else { 1.0 }
+    } else {
+        coefficient(map, s, index.min(2), kind)
+    }
+}
+
+/// Damage `target` takes of `caster`'s effect `index` of `s`, a direct
+/// hit's or a tick's (`kind`) of `stacks`: a spell's flat modifiers (Dampen
+/// Magic, Judgement of the Crusader) by [`taken_coefficient`] and taking at
+/// most half, as Thistle Tea's `DamageReceived` and mangos's
+/// `SpellDamageBonusTaken` have them; an ability's whole; then the percent
+/// modifiers.
+#[allow(clippy::too_many_arguments)]
 pub fn taken_of(
     map: &Map,
+    caster: Guid,
     target: Guid,
     s: &SpellTemplate,
     index: usize,
@@ -793,12 +830,17 @@ pub fn taken_of(
     stacks: u32,
     damage: f32,
 ) -> f32 {
-    let scale = (!matches!(s.dmg_class, 2 | 3))
-        .then(|| coefficient(map, s, index.min(2), kind) * stacks.max(1) as f32);
+    let scale = (!physical(s) && !s.custom(sd::CUSTOM_FIXED_DAMAGE))
+        .then(|| taken_coefficient(map, caster, s, index, kind) * stacks.max(1) as f32);
     taken_with(map, target, s, damage, scale)
 }
 
+/// Nothing for a spell whose attributes ignore the target's modifiers
+/// (Decimate's, mangos's `IGNORE_DAMAGE_TAKEN_MODIFIERS`).
 fn taken_with(map: &Map, target: Guid, s: &SpellTemplate, damage: f32, scale: Option<f32>) -> f32 {
+    if s.attr(4, sd::ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS) {
+        return damage.max(0.0);
+    }
     let Some(a) = auras::auras(map, target) else {
         return damage;
     };
@@ -862,7 +904,7 @@ pub fn damage(
         d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
     }
     if !fixed {
-        d = taken_of(map, target, s, index, Kind::Direct, 1, d);
+        d = taken_of(map, caster, target, s, index, Kind::Direct, 1, d);
     }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
