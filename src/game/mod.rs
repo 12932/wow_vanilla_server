@@ -392,6 +392,8 @@ mod tests_p5_data_aura;
 #[cfg(test)]
 mod tests_p5_data_carrier;
 #[cfg(test)]
+mod tests_p5_data_procs;
+#[cfg(test)]
 mod tests_p5_data_real;
 #[cfg(test)]
 mod tests_p5_player;
