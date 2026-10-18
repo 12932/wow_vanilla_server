@@ -285,3 +285,22 @@ async fn a_ban_too_long_to_count_is_for_good() {
     assert_eq!(reply, "FOREVER is banned.");
     assert!(accounts.banned("FOREVER"), "and banned");
 }
+
+/// `.levelup` by more levels than there are is the last level, where the
+/// sum overflowed (a panic in a debug build, level 1 in a release one).
+#[tokio::test]
+async fn levelup_by_too_many_is_the_last_level() {
+    let realm = realm(GameData::empty(), true, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.say(".levelup 2147483647").await;
+    let mut level = 1;
+    for _ in 0..100 {
+        level = on(&map_of(&realm, g), move |m| m.players[&g].level()).await;
+        if level != 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(level, 60);
+}

@@ -159,7 +159,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             let data = map.realm.data.clone();
             let target = target_or_self(map, guid);
             let level = map.players.get_mut(&target).map(|p| {
-                let level = (i32::from(p.level()) + n).clamp(1, 60) as u8;
+                let level = i32::from(p.level()).saturating_add(n).clamp(1, 60) as u8;
                 crate::game::map::stats::set_level(p, &data, level);
                 level
             });
