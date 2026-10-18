@@ -498,7 +498,8 @@ pub fn check(
 
 /// What a cast pays for, checked again as it goes off (mangos's
 /// `CheckCast` at the cast, Thistle Tea's launch): the power it costs (a
-/// caster drained while casting has none to pay), its reagents, and room
+/// caster drained while casting has none to pay), its reagents (carried,
+/// where they are taken from: not banked meanwhile), and room
 /// for what it makes. Why it fails, if it does.
 pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
     if let Some(why) = super::unpayable(map, caster, s, cost) {
@@ -508,7 +509,7 @@ pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Optio
         && !p.gm
         && s.reagents
             .iter()
-            .any(|(r, n)| *r != 0 && p.count_of(*r) < *n)
+            .any(|(r, n)| *r != 0 && p.carried_count_of(*r) < *n)
     {
         return Some(fail::REAGENTS);
     }
