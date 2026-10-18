@@ -14,7 +14,7 @@ the questions waiting for you.
 **Answered (2026-10-18):**
 - **#10:** keep swinging on arrival.
 - **#18:** keep moving unusable gear at login.
-- **#27:** snares stack, as mangos-classic has them: they coexist and the strongest counts (being done).
+- **#27:** snares stack, as mangos-classic has them: they coexist and the strongest counts. Done.
 - **#20:** explained; waiting on your go to switch to Thistle Tea's and mangos's model.
 
 1. **Death's wear, three small differences** (from 2a). Should they be aligned with Thistle Tea? Until you say so,

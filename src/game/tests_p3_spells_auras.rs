@@ -1292,8 +1292,11 @@ fn slow_spells(d: &mut crate::game::data::GameData) {
     }
 }
 
+/// Snares stack, as mangos-classic has them: each stays on as long as it
+/// lasts, and the strongest slows. Attack-speed slows don't: a weaker or
+/// shorter one is passed over (Thistle Tea's `Slow`, after vmangos).
 #[tokio::test]
-async fn a_slow_takes_a_weaker_ones_place_never_a_strongers() {
+async fn snares_stack_and_the_strongest_slows_but_attack_speed_slows_dont() {
     if !have_data() {
         return;
     }
@@ -1309,39 +1312,45 @@ async fn a_slow_takes_a_weaker_ones_place_never_a_strongers() {
                 for (by, s) in list {
                     apply(m, *by, w, *s);
                 }
-                spells_on(m, w)
+                let mut on = spells_on(m, w);
+                on.sort_unstable();
+                (on, run_speed(m, w))
             };
-            let stronger = on(m, &[(a, 990_900), (b, 990_901)]);
-            let weaker = on(m, &[(a, 990_901), (b, 990_900)]);
-            // As strong: the one lasting less is passed over.
-            let shorter = on(m, &[(a, 990_902), (b, 990_903)]);
-            let longer = on(m, &[(a, 990_903), (b, 990_902)]);
-            // Attack speed's slows likewise.
-            let haste = on(m, &[(a, 990_904), (b, 990_905), (a, 990_904)]);
-            // A Frostbolt on one slowed more: its damage, not its chill.
+            let both = on(m, &[(a, 990_900), (b, 990_901)]);
+            let either_order = on(m, &[(a, 990_901), (b, 990_900)]);
+            let haste = on(m, &[(a, 990_904), (b, 990_905), (a, 990_904)]).0;
+            // One snare gone, the other slows on.
+            clear(m, w);
+            apply(m, a, w, 990_900);
+            apply(m, b, w, 990_901);
+            auras::remove_spell(m, w, 990_901, None);
+            let left = (spells_on(m, w), run_speed(m, w));
+            // Frostbolt on one already snared: its chill goes on too.
             clear(m, w);
             apply(m, a, w, 990_901);
             let before = health(m, w);
             spells::cast_triggered(m, a, FROSTBOLT, Some(w));
-            let frostbolt = (health(m, w) < before, spells_on(m, w));
-            (stronger, weaker, shorter, longer, haste, frostbolt)
+            let frostbolt = (health(m, w) < before, spells_on(m, w).len());
+            (both, either_order, haste, left, frostbolt)
         })
         .await
         .unwrap();
-    let (stronger, weaker, shorter, longer, haste, frostbolt) = out;
-    assert_eq!(stronger, vec![990_901], "a stronger slow takes its place");
-    assert_eq!(weaker, vec![990_901], "a weaker one is passed over");
-    assert_eq!(shorter, vec![990_902], "as strong but shorter, passed over");
-    assert_eq!(
-        longer,
-        vec![990_902],
-        "as strong and longer, it takes its place"
+    let (both, either_order, haste, left, frostbolt) = out;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    assert_eq!(both.0, vec![990_900, 990_901], "both snares on");
+    assert!(
+        near(both.1, 7.0 * 0.3),
+        "the strongest, -70%, slows: {}",
+        both.1
     );
+    assert_eq!(either_order, both, "whichever came first");
     assert_eq!(haste, vec![990_905], "the stronger attack-speed slow stays");
+    assert_eq!(left.0, vec![990_900], "the other stays");
+    assert!(near(left.1, 7.0 * 0.6), "and slows by its -40%: {}", left.1);
     assert_eq!(
         frostbolt,
-        (true, vec![990_901]),
-        "Frostbolt hurts, its chill passed over"
+        (true, 2),
+        "Frostbolt hurts and chills beside the snare"
     );
 }
 

@@ -279,7 +279,6 @@ pub enum Exclusive {
     GuardianElixir,
     Flask,
     NegativeHaste,
-    Snare,
     GeneralsWarcry,
 }
 
@@ -435,11 +434,8 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         {
             return Some(Exclusive::NegativeHaste);
         }
-        // A snare, but not a daze (the second attributes' 0x0004_0000, as
-        // Thistle Tea's `Slow.daze?` tells one).
-        if only(AURA_MOD_DECREASE_SPEED) && s.attributes[1] & 0x0004_0000 == 0 {
-            return Some(Exclusive::Snare);
-        }
+        // Snares aren't exclusive: they stack, each on as long as it
+        // lasts, and the strongest slows (mangos's `UpdateSpeed`).
     }
     None
 }
@@ -859,16 +855,11 @@ pub fn apply_spell(
         return Err(Refused::Immune);
     }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
-    // A weaker slow doesn't take a stronger one's place, nor one as strong
-    // that lasts less: it is passed over, the rest of its spell landing
-    // (Thistle Tea's `Slow`, after vmangos; in mangos the strongest of them
-    // counts).
-    if let Some(kind @ (Exclusive::Snare | Exclusive::NegativeHaste)) = excl {
-        let aura = if kind == Exclusive::Snare {
-            AURA_MOD_DECREASE_SPEED
-        } else {
-            AURA_MOD_HASTE
-        };
+    // A weaker attack-speed slow doesn't take a stronger one's place, nor
+    // one as strong that lasts less: it is passed over, the rest of its
+    // spell landing (Thistle Tea's `Slow`, after vmangos).
+    if let Some(kind @ Exclusive::NegativeHaste) = excl {
+        let aura = AURA_MOD_HASTE;
         let mine = effects
             .iter()
             .filter(|(i, _)| spell.effects[*i].aura == aura)

@@ -52,6 +52,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Gear a character can't use comes off at login,** to the bags or else by mail, as mangos's `_LoadInventory` has
   it. Thistle Tea checks only at a talent reset.
 - **The weather's season** follows the server's local date, as mangos does; Thistle Tea uses UTC.
+- **Snares stack,** as mangos-classic has them: each stays on as long as it lasts, and the strongest slows. Thistle
+  Tea and vmangos keep one, passing over a weaker or shorter one. (Attack-speed slows keep Thistle Tea's rule.)
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
