@@ -12,6 +12,8 @@ the questions waiting for you.
 ## Questions for you
 
 **Answered (2026-10-18):**
+- **Battleground view distance:** 400 yards, against the world's 100, done in `c380d54` (`[world]
+  battleground_visibility_yards`).
 - **Ghosts:** a ghost walks on water, and sees only what is within 45 yards of its corpse, players too, as mangos has
   it. This replaces bugs3's "ghosts see every player". A agent stage (`fix/ghost`) is on it.
 - **Wrong passwords:** no lockout. **Account creation:** keep `auto`, with the name as the password. Both are
