@@ -126,3 +126,86 @@ async fn honor_is_inspected_in_its_layout_from_friends_alone() {
     .await;
     assert_eq!(inspected(&mut a, gb).await, None, "one logged out");
 }
+
+/// Battle and Defensive Stance as a test world has them: a shapeshift aura
+/// to forms 17 and 18.
+fn stances() -> crate::game::data::GameData {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut d = crate::game::data::GameData::empty();
+    for (id, form) in [(crate::game::map::spells::BATTLE_STANCE, 17), (71, 18)] {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Stance {form}"),
+            equipped_item_class: -1,
+            ..Default::default()
+        };
+        s.effects[0] = SpellEffect {
+            effect: 6,
+            aura: crate::game::map::auras::AURA_MOD_SHAPESHIFT,
+            misc_value: form,
+            target_a: 1,
+            ..Default::default()
+        };
+        d.spells.spells.insert(id, s);
+    }
+    d
+}
+
+/// Log `c` out and back in.
+async fn relog(c: &mut Client) {
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE
+        )
+        .then_some(())
+    })
+    .await;
+    c.clear();
+    let g = c.guid;
+    c.login(g).await;
+    crate::game::tests_p3_player2_ammo::handled(c).await;
+}
+
+/// Thistle Tea's `Spells.apply_default_auras` "starts a stanceless warrior
+/// in battle stance", "preserves an existing warrior stance" and "does not
+/// apply battle stance to another class": a warrior in no stance logs in
+/// in Battle Stance (mangos's `_LoadAuras`); one in Defensive Stance keeps
+/// it; a mage who somehow knows Battle Stance isn't put in it.
+#[tokio::test]
+async fn a_stanceless_warrior_logs_in_in_battle_stance() {
+    use crate::game::map::spells::BATTLE_STANCE;
+    let realm = harness::realm_with(stances());
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Mage).await;
+    for g in [ga, gb] {
+        on(&map, move |m| {
+            m.players.get_mut(&g).unwrap().spells.push(BATTLE_STANCE)
+        })
+        .await;
+    }
+    relog(&mut a).await;
+    relog(&mut b).await;
+    let stance = move |m: &mut crate::game::map::Map, g: Guid| {
+        let p = &m.players[&g];
+        (
+            p.auras.holders.iter().map(|h| h.spell).collect::<Vec<_>>(),
+            crate::game::map::auras::form(m, g),
+        )
+    };
+    let (warrior, mage) = on(&map, move |m| (stance(m, ga), stance(m, gb))).await;
+    assert_eq!(warrior, (vec![BATTLE_STANCE], 17), "the warrior");
+    assert_eq!(mage, (Vec::new(), 0), "the mage");
+    // Defensive Stance, kept over a relog.
+    on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, ga, 71, Some(ga));
+    })
+    .await;
+    relog(&mut a).await;
+    let warrior = on(&map, move |m| stance(m, ga)).await;
+    assert_eq!(warrior, (vec![71], 18), "kept");
+}

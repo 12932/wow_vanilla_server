@@ -351,7 +351,28 @@ pub fn apply_passives(map: &mut Map, player: Guid) {
         apply_passive(map, player, spell);
     }
     cooldowns::restore(map, player);
+    default_stance(map, player);
     mods::send(map, player);
+}
+
+/// Battle Stance, the warrior's first.
+pub const BATTLE_STANCE: u32 = 2457;
+
+/// A warrior in no stance at login takes Battle Stance, if they know it
+/// (mangos's `_LoadAuras`, Thistle Tea's `apply_default_auras`): a new
+/// one, or one whose stance was lost; one in another keeps it.
+fn default_stance(map: &mut Map, player: Guid) {
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    if p.row.class != 1
+        || !p.spells.contains(&BATTLE_STANCE)
+        || p.auras.has(auras::AURA_MOD_SHAPESHIFT)
+        || p.death != crate::game::map::death::Death::Alive
+    {
+        return;
+    }
+    cast_triggered(map, player, BATTLE_STANCE, Some(player));
 }
 
 /// A passive spell's effects on its owner.
