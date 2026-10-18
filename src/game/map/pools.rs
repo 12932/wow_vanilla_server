@@ -278,7 +278,10 @@ fn pooled_here(map: &Map, on: &AHashSet<u32>) -> AHashMap<u32, (Vec<Member>, AHa
         let (all, available) = out.entry(root(s, *pool)).or_default();
         let m = Member::Creature(c.guid);
         all.push(m);
-        if crate::game::events::spawned(data.event_creatures.get(&c.guid).copied(), on) {
+        if crate::game::events::spawned(
+            crate::game::events::ties(&data.event_creatures, c.guid),
+            on,
+        ) {
             available.insert(m);
         }
     }
@@ -295,7 +298,10 @@ fn pooled_here(map: &Map, on: &AHashSet<u32>) -> AHashMap<u32, (Vec<Member>, AHa
         let m = Member::Object(o.guid);
         all.push(m);
         if !o.despawned
-            && crate::game::events::spawned(data.event_objects.get(&o.guid).copied(), on)
+            && crate::game::events::spawned(
+                crate::game::events::ties(&data.event_objects, o.guid),
+                on,
+            )
         {
             available.insert(m);
         }

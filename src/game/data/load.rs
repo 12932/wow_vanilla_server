@@ -1452,12 +1452,12 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     for (guid, event) in rows(db, "SELECT * FROM game_event_creature", |c| {
         (c.u32("guid"), c.i64("event") as i32)
     }) {
-        data.event_creatures.insert(guid, event);
+        data.event_creatures.entry(guid).or_default().push(event);
     }
     for (guid, event) in rows(db, "SELECT * FROM game_event_gameobject", |c| {
         (c.u32("guid"), c.i64("event") as i32)
     }) {
-        data.event_objects.insert(guid, event);
+        data.event_objects.entry(guid).or_default().push(event);
     }
     for (guid, req) in rows(db, "SELECT * FROM gameobject_requirement", |c| {
         (c.u32("guid"), (c.u8("reqType"), c.u32("reqGuid")))

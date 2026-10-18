@@ -54,7 +54,10 @@ pub fn populate(map: &mut Map) {
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
             if s.spawn_flags & crate::game::data::SPAWN_FLAG_DISABLED != 0
-                || !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
+                || !crate::game::events::spawned(
+                    crate::game::events::ties(&data.event_creatures, s.guid),
+                    &on,
+                )
                 || !crate::game::map::battleground::spawn_allowed(map, true, s.guid)
                 || skip_creatures.contains(&s.guid)
             {
@@ -95,7 +98,10 @@ pub fn populate(map: &mut Map) {
         for s in spawns {
             if s.despawned
                 || s.spawn_flags & crate::game::data::SPAWN_FLAG_DISABLED != 0
-                || !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
+                || !crate::game::events::spawned(
+                    crate::game::events::ties(&data.event_objects, s.guid),
+                    &on,
+                )
                 || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
                 || skip_objects.contains(&s.guid)
             {

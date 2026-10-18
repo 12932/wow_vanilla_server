@@ -504,3 +504,36 @@ async fn an_empty_locked_channel_goes() {
     let after = realm.social.channels.lock().count();
     assert_eq!(after, before, "none of them is left");
 }
+
+/// R4-10. A spawn tied to more than one event is out in any of those it is
+/// tied to, and kept out by any it is kept out of, rather than tied to
+/// whichever row came last: New Year's Eve's and the Lunar Festival's
+/// fireworks, the Faire's building and the Faire.
+#[test]
+fn a_spawn_tied_to_two_events_follows_both() {
+    use crate::game::events::spawned;
+    let on = |ids: &[u32]| ids.iter().copied().collect::<ahash::AHashSet<u32>>();
+    assert!(spawned(&[], &on(&[])), "tied to none, always out");
+    assert!(spawned(&[34, 38], &on(&[34])), "in the first");
+    assert!(spawned(&[34, 38], &on(&[38])), "in the second");
+    assert!(!spawned(&[34, 38], &on(&[])), "in neither, not out");
+    assert!(spawned(&[-23, -4], &on(&[])), "kept out of neither");
+    assert!(!spawned(&[-23, -4], &on(&[23])), "kept out by the first");
+    assert!(!spawned(&[-23, -4], &on(&[4])), "kept out by the second");
+}
+
+/// R4-10, in the real world: both rows of a spawn tied to two events are
+/// loaded.
+#[test]
+#[ignore = "extended"]
+fn the_real_spawns_keep_every_event_they_are_tied_to() {
+    let Some(d) = crate::game::data::load::real_data() else {
+        return;
+    };
+    let mut objects = d.event_objects.get(&363_477).cloned().unwrap_or_default();
+    objects.sort_unstable();
+    assert_eq!(objects, vec![34, 38], "fireworks for two new years");
+    let mut faire = d.event_creatures.get(&80_360).cloned().unwrap_or_default();
+    faire.sort_unstable();
+    assert_eq!(faire, vec![-23, -4], "away for the Faire and its building");
+}

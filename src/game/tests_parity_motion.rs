@@ -1438,8 +1438,8 @@ async fn pools_pick_to_their_limit_and_again_on_respawn() {
 async fn an_events_pooled_spawns_keep_to_their_pool() {
     let pair: &[(u32, f32)] = &[(100, 0.0), (101, 0.0)];
     let mut d = pool_world(&[(6, 1, pair, &[])]);
-    d.event_creatures.insert(100, 77);
-    d.event_creatures.insert(101, 77);
+    d.event_creatures.insert(100, vec![77]);
+    d.event_creatures.insert(101, vec![77]);
     let (_realm, _a, _ga, map) = enter(d).await;
     let (before, during, after) = map
         .query(|m| {
