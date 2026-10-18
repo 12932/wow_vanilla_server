@@ -46,11 +46,11 @@ records to a file: `tracy-capture -o run.tracy -a 127.0.0.1 -s 120` for two minu
 zone statistics: `tracy-csvexport run.tracy` (each zone's total, count, mean and maximum), `-e` for self times, `-u`
 for every zone and plot point.
 
-**Sampling.** Tracy also samples call stacks, which shows where the time goes inside a zone, and records context
-switches. Both are Tracy's system tracing, and need the server run as an administrator on Windows (where they are the
-only sampling profiler at hand: pprof is for Unix), or as root on Linux. Without those rights there are no samples,
-and everything else works. `TRACY_NO_SYS_TRACE=1` in the environment keeps them off even with the rights. Tracy samples at
-8 kHz on Windows and 10 kHz on Linux.
+**Sampling.** Tracy also samples call stacks, which shows where the time goes inside a zone. Sampling is part of
+Tracy's system tracing, and needs the server run as an administrator on Windows (where it is the only sampling
+profiler at hand: pprof is for Unix), or as root on Linux. Without those rights there are no samples, and everything
+else works. `TRACY_NO_SYS_TRACE=1` in the environment keeps it off even with the rights. Tracy samples at 8 kHz on
+Windows and 10 kHz on Linux.
 
 ### What it shows
 
@@ -153,8 +153,8 @@ The two are within each other's noise: no cost to be measured. The fast suite's
 `helpers_off_emit_nothing_and_cost_a_flag` checks it at the scale of one zone (a million zones off, unoptimized,
 under a microsecond each).
 
-**On, with a profiler connected,** a zone costs Tracy's few tens of nanoseconds; an update has about 60, and the map
-handles a few hundred packets a second, each one zone. A zone named at run time also takes a short lock to find its
+**On, with a profiler connected,** a zone costs what Tracy's own do, tens of nanoseconds at most (not measured
+here); an update has about 60, and a map handles a few hundred packets a second, each one zone. A zone named at run time also takes a short lock to find its
 name's location.
 
 The `tracy` feature is on by default, so the release binary a player builds can be profiled by setting `WOW_TRACY=1`,
@@ -163,7 +163,7 @@ on Windows as on Linux, without a rebuild, at the cost of a flag's load per zone
 ### What a capture showed
 
 A capture of peon's cluster scenario (`--mode random --spread cluster --mix wanderer=1`), 100 bots ramped over 60 s,
-of which 96 to 99 got in, all in one spot on Eastern Kingdoms, with Kalimdor empty; Tracy's `capture` for 230 s,
+of which 96 to 99 logged in, all in one spot on Eastern Kingdoms, with Kalimdor empty; Tracy's `capture` for 230 s,
 then `csvexport -u` and a script that charges each zone to its map by the `update` zone around it. Over the 110 s
 of the hold, each continent ran its 20 updates a second (2,200 each):
 
@@ -185,9 +185,9 @@ of the hold, each continent ran its 20 updates a second (2,200 each):
 So most of an update, crowded or empty, is the looks through every creature of the continent that are left (23,350
 and 27,361 of them): the three of `despawns` (each a deref of every scripted creature's box), the creatures' dirty
 flags, regeneration, and the auras' set. They cost the same with no one on: the crowded continent's update is only
-0.5 ms longer than the empty one's, mostly the pets' look (NPCs' pets are out there), visibility and the traps. Between updates, Eastern Kingdoms' actor handled 293
-heartbeats a second at 46 µs each (13 ms a second), and the other movement packets 2 ms a second; everything else
-(queries, chat, emotes) under 0.1 ms a second.
+0.5 ms longer than the empty one's, mostly the pets' look (NPCs' pets are out there), visibility and the traps.
+Between updates, Eastern Kingdoms' actor handled 293 heartbeats a second at 46 µs each (13 ms a second), and the
+other movement packets 2 ms a second; everything else (queries, chat, emotes) under 0.1 ms a second.
 
 Outside the hold: the first updates of each continent were the slowest of the run, 791 ms and 346 ms (and 165 ms
 when the first bots arrived), and the zones say why: 15 `navmesh tile` reads of 20 to 116 ms each, under `despawn
@@ -208,6 +208,7 @@ The earlier setup opened no zone of its own, and sent every log line to Tracy, t
   warnings and errors only.
 - `broadcast` (announcing the server on the network), `code-transfer` and `context-switch-tracing` are off.
   `system-tracing` stays, as Tracy's sampling is part of it: inert without an administrator's (or root's) rights.
+  (The captures above were taken without it; a later one with it, unprivileged, was the same.)
 - `ondemand` and `only-localhost` are on, for the reasons above.
 
 ## pprof
