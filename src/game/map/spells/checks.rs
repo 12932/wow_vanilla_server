@@ -311,6 +311,16 @@ pub fn check(
                     .get(&s.category)
                     .is_some_and(|t| *t > now))
             || c.pending_cooldowns.contains(&s.id)
+            // A cooldown waiting for its event holds its category too, as
+            // mangos's permanent cooldown and Thistle Tea's pending one do.
+            || (s.category != 0
+                && c.pending_cooldowns.iter().any(|p| {
+                    map.realm
+                        .data
+                        .spells
+                        .get(*p)
+                        .is_some_and(|t| t.category == s.category)
+                }))
         {
             return Some(if s.attr(0, 0x200_0000) {
                 fail::DONT_REPORT
