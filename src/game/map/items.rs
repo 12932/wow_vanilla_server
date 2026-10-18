@@ -272,8 +272,10 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
     if t.bonding == BIND_ON_USE {
         bind(&mut p.items[i]);
     }
-    // Charges: each charged spell spends one; with none left, an item
-    // whose charges count down from below zero is used up.
+    // Charges: each charged spell spends one; an item with a spell whose
+    // charges count down from below zero is used up when its last charged
+    // spell has none left (mangos's `TakeCastItem` and Thistle Tea's
+    // `spend_charge` each take `withoutCharges` from the last such spell).
     let mut expendable = false;
     let mut exhausted = false;
     for (k, ks) in t.spells.iter().enumerate() {
@@ -287,7 +289,7 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
             p.items[i].fields.set_i32(field, left);
         }
         expendable |= ks.charges < 0;
-        exhausted |= left == 0;
+        exhausted = left == 0;
     }
     // An item its spell changes into another is replaced, not used up as
     // well: mangos's EffectSummonChangeItem lets go of the cast item before

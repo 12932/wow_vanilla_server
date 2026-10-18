@@ -97,6 +97,12 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (kind, id)
     );
     "#,
+    // 3: an item's spell charges, five numbers apart by spaces as mangos's
+    // `item_instance.charges`; NULL for an item saved before, which loads
+    // with its template's.
+    r#"
+    ALTER TABLE character_items ADD COLUMN charges TEXT;
+    "#,
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -275,6 +281,29 @@ pub struct ItemRow {
     pub durability: u32,
     pub flags: u32,
     pub data: String,
+    /// The charges left of each of the item's five spells
+    /// (`ITEM_FIELD_SPELL_CHARGES`); `None` for an item kept before they
+    /// were, which has its template's.
+    pub charges: Option<[i32; 5]>,
+}
+
+impl ItemRow {
+    /// `charges` as the store's column keeps them: `"a b c d e"`.
+    pub fn charges_text(&self) -> Option<String> {
+        self.charges
+            .map(|c| c.iter().map(i32::to_string).collect::<Vec<_>>().join(" "))
+    }
+
+    /// The column read back: five numbers, or none (mangos's
+    /// `LoadFromDB` takes them only when there are five).
+    pub fn parse_charges(text: Option<&str>) -> Option<[i32; 5]> {
+        let v: Vec<i32> = text?
+            .split_whitespace()
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .ok()?;
+        v.try_into().ok()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1000,11 +1029,12 @@ fn row_from(r: &rusqlite::Row) -> rusqlite::Result<CharacterRow> {
 
 fn fill_children(conn: &Connection, row: &mut CharacterRow) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
-        "SELECT guid, entry, bag, slot, count, durability, flags, data FROM character_items \
-         WHERE owner = ?1",
+        "SELECT guid, entry, bag, slot, count, durability, flags, data, charges \
+         FROM character_items WHERE owner = ?1",
     )?;
     row.items = stmt
         .query_map(params![row.guid], |r| {
+            let charges: Option<String> = r.get(8)?;
             Ok(ItemRow {
                 guid: r.get(0)?,
                 entry: r.get(1)?,
@@ -1014,6 +1044,7 @@ fn fill_children(conn: &Connection, row: &mut CharacterRow) -> rusqlite::Result<
                 durability: r.get(5)?,
                 flags: r.get(6)?,
                 data: r.get(7)?,
+                charges: ItemRow::parse_charges(charges.as_deref()),
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -1097,7 +1128,7 @@ fn save_row(conn: &Connection, row: &CharacterRow) -> rusqlite::Result<()> {
         .execute(params![row.guid])?;
     let mut insert = conn.prepare_cached(
         "INSERT OR REPLACE INTO character_items (guid, owner, entry, bag, slot, count, \
-         durability, flags, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         durability, flags, data, charges) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?;
     for i in &row.items {
         insert.execute(params![
@@ -1109,7 +1140,8 @@ fn save_row(conn: &Connection, row: &CharacterRow) -> rusqlite::Result<()> {
             i.count,
             i.durability,
             i.flags,
-            i.data
+            i.data,
+            i.charges_text(),
         ])?;
     }
     conn.prepare_cached("DELETE FROM character_spells WHERE owner = ?1")?
@@ -1199,6 +1231,64 @@ mod tests {
         assert!(store.load(1).await.is_none());
         drop(store);
         let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A store of version 2 (no charges) migrates: its items load with no
+    /// charges stored, and a save after keeps them.
+    #[tokio::test]
+    async fn a_store_before_charges_migrates_and_keeps_them_after() {
+        let path = std::env::temp_dir().join(format!("wvs-store-v2-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            for (i, sql) in MIGRATIONS[..2].iter().enumerate() {
+                conn.execute_batch(&format!(
+                    "BEGIN; {sql}; PRAGMA user_version = {}; COMMIT;",
+                    i + 1
+                ))
+                .unwrap();
+            }
+            conn.execute_batch(
+                "INSERT INTO characters (guid, account, name, race, class, gender, skin, face, \
+                 hair_style, hair_color, facial_hair, level, xp, money, map, x, y, z, \
+                 orientation, zone, played_total, played_level, logout_time, at_login, state) \
+                 VALUES (1, 'ACC', 'Alice', 1, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, \
+                 0, 0, 0, 0, '{}'); \
+                 INSERT INTO character_items (guid, owner, entry, bag, slot, count, durability, \
+                 flags, data) VALUES (10, 1, 25, 255, 15, 1, 0, 0, '');",
+            )
+            .unwrap();
+        }
+        let (store, _) = Store::open(&path).unwrap();
+        let loaded = store.load(1).await.expect("Alice");
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.items[0].charges, None, "none stored before");
+        let mut r = loaded;
+        r.items[0].charges = Some([1, -2, 0, 0, 0]);
+        store.save(r);
+        store.flush().await;
+        drop(store);
+        let (store, _) = Store::open(&path).unwrap();
+        let loaded = store.load(1).await.expect("Alice");
+        assert_eq!(loaded.items[0].charges, Some([1, -2, 0, 0, 0]));
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn charges_are_kept_as_mangos_keeps_them() {
+        let row = ItemRow {
+            charges: Some([1, -2, 0, 0, 0]),
+            ..Default::default()
+        };
+        assert_eq!(row.charges_text().as_deref(), Some("1 -2 0 0 0"));
+        assert_eq!(
+            ItemRow::parse_charges(Some("1 -2 0 0 0 ")),
+            Some([1, -2, 0, 0, 0])
+        );
+        assert_eq!(ItemRow::parse_charges(Some("1 2")), None, "not five");
+        assert_eq!(ItemRow::parse_charges(Some("a b c d e")), None);
+        assert_eq!(ItemRow::parse_charges(None), None);
     }
 
     /// A save together lands whole or not at all: with one bad part, none
