@@ -797,6 +797,17 @@ the questions waiting for you.
     - **peon:** it drove 350 bots across the world on this machine at 0.24 cores of server. Memory, not CPU, was the
       limit (question 55).
 
+52. **5a's changes** (the player, 70 rows). Its session ended before its report, so these are from its commits:
+    - **Warriors log in in Battle Stance** when they had none, as mangos's `_LoadAuras` has it.
+    - **NPCs serve no one while fighting or charmed.** A stable master serves hunters alone.
+    - **A purchase dropped on a slot goes there,** spills into that bag, or is worn.
+    - **Items:** one is used only by who may use it, and a book teaching what is known is refused, not spent.
+    - **Talents and languages:**
+      - a talent rank learned past the next unlearns the others;
+      - a language's spell gives its language at once.
+    - **Reincarnation** isn't offered without a self-resurrection.
+    - **Companions** have their template's level and flags.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -856,6 +867,7 @@ the questions waiting for you.
 | Review 4 (the world's systems) | merged | de5cf4a |
 | Configurable settings | merged | 287d03a |
 | The whole-world-awake load test | merged | a1e8835 |
+| 5a: the player | merged | (this merge) |
 | The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
