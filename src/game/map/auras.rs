@@ -2441,6 +2441,13 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 } else {
                     0.0
                 };
+                // Ignite's amount is its crits' shares summed already
+                // (Thistle Tea's `base_amount` for it).
+                let stacks = if h.spell == crate::game::map::proc_scripts::IGNITE_BURN {
+                    1
+                } else {
+                    stacks
+                };
                 ((a.amount * stacks).max(0) as f32 + ramp).round().max(0.0) as u32
             };
             let amount = crate::game::map::item_scripts::periodic_damage(map, target, h, amount);

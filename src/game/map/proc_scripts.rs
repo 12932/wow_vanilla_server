@@ -353,16 +353,19 @@ fn ignite(map: &mut Map, owner: Guid, target: Guid, tick: i32) {
     if tick <= 0 || !map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }
+    // One burn on a target, whoever crits: another mage's crit adds to the
+    // first mage's, which stays theirs (Thistle Tea's `upsert_ignite`,
+    // vmangos's shared Ignite).
     let current = auras::auras(map, target).and_then(|a| {
         a.holders
             .iter()
-            .find(|h| h.spell == IGNITE_BURN && h.caster == owner)
-            .map(|h| (h.effects.first().map_or(0, |x| x.amount), h.combo))
+            .find(|h| h.spell == IGNITE_BURN)
+            .map(|h| (h.effects.first().map_or(0, |x| x.amount), h.combo, h.caster))
     });
-    let (amount, stacks) = match current {
-        Some((amount, stacks)) if stacks < IGNITE_MAX_STACKS => (amount + tick, stacks + 1),
-        Some((amount, stacks)) => (amount, stacks),
-        None => (tick, 1),
+    let (amount, stacks, owner) = match current {
+        Some((amount, stacks, by)) if stacks < IGNITE_MAX_STACKS => (amount + tick, stacks + 1, by),
+        Some((amount, stacks, by)) => (amount, stacks, by),
+        None => (tick, 1, owner),
     };
     let data = map.realm.data.clone();
     let Some(s) = data.spells.get(IGNITE_BURN) else {
