@@ -346,3 +346,52 @@ async fn the_world_takes_a_proof_over_the_session_key_and_refuses_others() {
         );
     }
 }
+
+/// A ban outlasts the session made before it: the reconnect the 1.12
+/// client tries after the ban's kick is told the account is banned, as a
+/// logon is, and the world won't take the old session key (mangos's
+/// HandleAuthSession answers AUTH_BANNED), where both went on as before.
+#[tokio::test]
+async fn a_ban_outlasts_the_session_made_before_it() {
+    accounts().set_password("OUTLAW", "SECRET").unwrap();
+    let users = users();
+    let mut s = login_server(users.clone()).await;
+    log_in(&mut s, "OUTLAW", "SECRET").await;
+    drop(s);
+    assert!(accounts().ban("OUTLAW", -1, "testing"));
+    for protocol in [3u8, 8] {
+        let mut s = login_server(users.clone()).await;
+        let mut c = challenge(2, "OUTLAW");
+        c[1] = protocol;
+        s.write_all(&c).await.unwrap();
+        assert_eq!(
+            rest(&mut s).await,
+            vec![2, 3],
+            "protocol {protocol}: FailBanned"
+        );
+    }
+    let key = session(&users, "OUTLAW");
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(
+        crate::game::harness::test_config(),
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        Some(users),
+    );
+    let mut s = world_server(realm).await;
+    let server_seed = auth_challenge(&mut s).await;
+    let seed = ProofSeed::new();
+    let client_seed = seed.seed();
+    let (proof, _) = seed.into_client_header_crypto(
+        &NormalizedString::new("OUTLAW").unwrap(),
+        key,
+        server_seed,
+    );
+    auth_session(&mut s, "OUTLAW", client_seed, proof).await;
+    assert_eq!(
+        rest(&mut s).await,
+        vec![0, 3, 0xEE, 0x01, 28],
+        "AUTH_BANNED, in the clear"
+    );
+}

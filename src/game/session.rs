@@ -119,6 +119,16 @@ async fn handshake(
         let mut users = crate::auth::users_lock(users);
         users.get_mut(&account).map(|srp| *srp.session_key())
     });
+    // Banned since its login: the session key doesn't outlast the ban
+    // (mangos's HandleAuthSession answers AUTH_BANNED).
+    if crate::auth::banned(&account) {
+        let _ = SMSG_AUTH_RESPONSE {
+            result: SMSG_AUTH_RESPONSE_WorldResult::AuthBanned,
+        }
+        .tokio_write_unencrypted_server(&mut *stream)
+        .await;
+        return Err(format!("{account} is banned").into());
+    }
     let crypto = match (session_key, NormalizedString::new(&account)) {
         (Some(key), Ok(name)) => seed
             .into_server_header_crypto(&name, key, c.client_proof, c.client_seed)
