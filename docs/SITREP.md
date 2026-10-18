@@ -177,6 +177,9 @@ the questions waiting for you.
 51. **A creature-owned pet's death** (from 4c). What does its killer get? Nothing (mangos-classic), or three quarters
     of the XP and the credits (Thistle Tea, vmangos)? wvs gives nothing.
 
+52. **`.honor week`** (from review 4, R4-23). The GM command loses the rest of that week's honor. When should the
+    week re-rank: at the real week's end, which decays rank points twice, or the day after the command?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -718,6 +721,37 @@ the questions waiting for you.
       - The worst hitches are navmesh tiles loaded during an update, at 20 to 116 ms each. Loading them ahead, or off
         the map's thread, is the next performance lead.
 
+49. **Review 4, the world's systems** (findings in `runs/review/review4.md`). Fixed, each with a test:
+    - **Money from nothing:** an item sold to a vendor could be moved, used or mailed out of its buyback slot, the
+      money kept.
+    - **A crash:** a script starting itself with no delay recursed until the stack overflowed.
+    - **Items and loot:**
+      - stacks added to weren't told their new count;
+      - a bank bag with items in it could be destroyed;
+      - any player could close another's loot window, taking a rogue's pick-pocket loot, and leaving didn't close
+        one.
+    - **Auctions:**
+      - a big bid's cut overflowed;
+      - a deleted seller's bidders lost their money;
+      - an auction could be cancelled away from an auctioneer.
+    - **Channels:** empty locked channels were never removed.
+    - **Event spawns:** a spawn tied to several events kept only one (849 in the shipped data).
+    - **Quests:**
+      - a quest taken already done wasn't told complete;
+      - an abandoned quest's area aura stayed.
+    - **Objects:** a scripted object lost its respawn.
+    - **Guilds:** a charter could be turned in unheld.
+    - **Buyback:** it skipped an item's unique limit.
+    - **Honor:** honor in a shutdown's last 5 s was lost.
+    - **Left, the harder ones:**
+      - **R4-18:** round-robin loot lets only the assigned looter open the corpse, so the others' quest drops and gold
+        wait.
+      - **R4-19:** groups aren't saved, so a restart dissolves them.
+      - **R4-20:** a general killed without a player's credit doesn't end Alterac Valley.
+      - **R4-21:** a race between taking a mail's item and its expiry sweep can duplicate the item.
+      - **R4-22:** a destroyed charter keeps its name reserved.
+      - **Minor ones,** and four speed leads, are in the findings file.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -774,6 +808,7 @@ the questions waiting for you.
 | 4c: world entities and the network (77 rows) | merged | afc079c |
 | Ghosts: water walking, sight by the corpse | merged | 7aa9d29 |
 | Tracy reworked | merged | 479b728 |
+| Review 4 (the world's systems) | merged | de5cf4a |
 | The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
