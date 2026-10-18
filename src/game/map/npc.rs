@@ -899,6 +899,19 @@ fn flight_packet(g: Guid, from: Vector3d, walk: &Walk, spline_id: u32) -> Arc<[u
     b.frame(crate::game::map::ai::SMSG_MONSTER_MOVE)
 }
 
+/// The creature whose look a flight from node `from` takes: the side's
+/// own mount, else the other side's (mangos's `GetTaxiMountDisplayId`).
+fn taxi_mount(data: &crate::game::data::GameData, from: u32, team: Team) -> u32 {
+    let ours = usize::from(team != Team::Alliance);
+    data.npc.taxi_nodes.get(&from).map_or(0, |n| {
+        if n.mounts[ours] != 0 {
+            n.mounts[ours]
+        } else {
+            n.mounts[1 - ours]
+        }
+    })
+}
+
 /// A script sends `player` along taxi path `path`, free (`SCRIPT_COMMAND_SEND_TAXI_PATH`).
 pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
     let data = map.realm.data.clone();
@@ -918,6 +931,36 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
         .find(|(_, (p, _))| *p == path)
         .map(|((f, t), _)| (*f, *t))
         .unwrap_or((0, 0));
+    // Not in a fight, and from near the path's first node if it has a
+    // place, as mangos's `ActivateTaxiPathTo` without a flight master
+    // has it (free: the fare is a flight master's).
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    let fighting = p.fields.has_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+    );
+    let far = data.npc.taxi_nodes.get(&from).is_some_and(|n| {
+        let placed = n.x != 0.0 || n.y != 0.0 || n.z != 0.0;
+        let at = Vector3d {
+            x: n.x,
+            y: n.y,
+            z: n.z,
+        };
+        placed && (n.map != map.key.map || dist(p.position(), at) > TAXI_START_YARDS)
+    });
+    let refusal = if fighting {
+        Some(ActivateTaxiReply::PlayerBusy)
+    } else if far {
+        Some(ActivateTaxiReply::TooFarAway)
+    } else {
+        None
+    };
+    if let Some(reply) = refusal {
+        p.outbound.send(&SMSG_ACTIVATETAXIREPLY { reply });
+        return;
+    }
     let now = map.now;
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
@@ -925,12 +968,7 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    let mount_creature = data
-        .npc
-        .taxi_nodes
-        .get(&from)
-        .map(|n| n.mounts[if p.team == Team::Alliance { 0 } else { 1 }])
-        .unwrap_or(0);
+    let mount_creature = taxi_mount(&data, from, p.team);
     let mount = data
         .creature_template(mount_creature)
         .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
@@ -1086,12 +1124,7 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    let mount_creature = data
-        .npc
-        .taxi_nodes
-        .get(&from)
-        .map(|n| n.mounts[if p.team == Team::Alliance { 0 } else { 1 }])
-        .unwrap_or(0);
+    let mount_creature = taxi_mount(&data, from, p.team);
     let mount = data
         .creature_template(mount_creature)
         .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
