@@ -1757,7 +1757,14 @@ pub fn blow(
     kept: f32,
 ) -> (u32, u32, u32, u32) {
     match outcome {
-        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
+        // A swing's own flag with the miss, as mangos's
+        // `CalculateMeleeDamage` starts every swing (Thistle Tea's 0x12).
+        Outcome::Miss => (
+            HITINFO_NORMALSWING2 | HITINFO_MISS,
+            VICTIMSTATE_UNAFFECTED,
+            0,
+            0,
+        ),
         Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
         Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
         Outcome::Block => {
@@ -2412,6 +2419,14 @@ fn deal_damage_with(
     // to a corpse doesn't kill it again.
     if crate::game::map::gm_dev::invulnerable(map, victim)
         || map.unit_view(victim).is_none_or(|u| !u.alive)
+    {
+        return;
+    }
+    // A spirit of redemption takes nothing, unattackable (mangos's
+    // `SPELL_AURA_MOD_UNATTACKABLE`, Thistle Tea's absorbing it all), but
+    // the death its end brings.
+    if crate::game::map::spells::redemption::spirit(map, victim)
+        && !map.spells.redeemed.contains(&victim)
     {
         return;
     }

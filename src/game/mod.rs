@@ -296,6 +296,10 @@ mod tests_p3_world_pvp;
 #[cfg(test)]
 mod tests_p3_world_travel;
 #[cfg(test)]
+mod tests_p4_core_combat;
+#[cfg(test)]
+mod tests_p4_core_entity;
+#[cfg(test)]
 mod tests_p4_core_fields;
 #[cfg(test)]
 mod tests_p4_core_skills;
