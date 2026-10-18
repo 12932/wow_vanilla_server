@@ -36,10 +36,13 @@ pub fn load(path: &Path) -> Result<ServerConfig, String> {
             tracing::info!("loaded config from {}", path.display());
             cfg
         }
-        Err(_) => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             tracing::info!("no config file at {}; using defaults", path.display());
             ServerConfig::default()
         }
+        // There, but unreadable: an error, not the defaults (another
+        // character store, everyone's accounts made at first login).
+        Err(e) => return Err(format!("{}: {e}", path.display())),
     };
     cfg.world.default_dirs();
     Ok(cfg)
@@ -226,5 +229,20 @@ mod tests {
     #[test]
     fn an_unknown_key_is_an_error() {
         assert!(toml::from_str::<ServerConfig>("[world]\nvisibilty_yards = 3\n").is_err());
+    }
+
+    /// No file is the defaults; a file there but unreadable (here a
+    /// directory, as a permission or a bad byte would be) is an error, not
+    /// the defaults.
+    #[test]
+    fn a_config_that_cant_be_read_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("wvs-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load(&dir.join("absent.toml")).is_ok(), "none: the defaults");
+        assert!(load(&dir).is_err(), "unreadable: an error");
+        let bad = dir.join("bad.toml");
+        std::fs::write(&bad, [0xFF, 0xFE, b'\n']).unwrap();
+        assert!(load(&bad).is_err(), "not UTF-8: an error");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

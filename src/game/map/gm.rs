@@ -67,8 +67,13 @@ fn ban(map: &Map, args: &[&str]) -> String {
     let until = if time.eq_ignore_ascii_case("perm") {
         -1
     } else {
+        // Past the end of time is for good, not a wrap into the past (no
+        // ban at all).
         match time.parse::<i64>() {
-            Ok(m) if m > 0 => chrono::Utc::now().timestamp() + m * 60,
+            Ok(m) if m > 0 => m
+                .checked_mul(60)
+                .and_then(|s| chrono::Utc::now().timestamp().checked_add(s))
+                .unwrap_or(-1),
             _ => return "Use: .ban <account> <minutes|perm> [reason]".into(),
         }
     };
@@ -154,7 +159,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             let data = map.realm.data.clone();
             let target = target_or_self(map, guid);
             let level = map.players.get_mut(&target).map(|p| {
-                let level = (i32::from(p.level()) + n).clamp(1, 60) as u8;
+                let level = i32::from(p.level()).saturating_add(n).clamp(1, 60) as u8;
                 crate::game::map::stats::set_level(p, &data, level);
                 level
             });

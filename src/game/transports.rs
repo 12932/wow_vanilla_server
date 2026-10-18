@@ -295,6 +295,11 @@ impl Route {
             splines.push(spline);
             start = index;
         }
+        // No stretch long enough to sail (a map change after the first
+        // frame): no route, rather than one whose pose can't be found.
+        if splines.is_empty() {
+            return None;
+        }
         let first_distance = frames[0].distance_from_previous;
         frames[count - 1].next_distance_from_previous = first_distance;
         // Distances from the last stop and to the next.
@@ -807,6 +812,26 @@ mod tests {
         // The other map comes round, and the round comes round.
         assert!((0..r.period).step_by(500).any(|t| r.pose_at(t).map == 1));
         assert_eq!(r.pose_at(r.period + 10).map, r.pose_at(10).map);
+    }
+
+    /// A path whose only frames are a map change apart has nothing to sail:
+    /// no route, where it made one whose pose panicked (at boot, outside
+    /// the clock's guard).
+    #[test]
+    fn a_path_with_no_stretch_to_sail_is_no_route() {
+        let nodes = path(&[
+            (0, 0.0, 0.0, 0, 0),
+            (0, 50.0, 0.0, 0, 0),
+            (0, 100.0, 0.0, 1, 0),
+            (1, 1000.0, 0.0, 0, 0),
+            (1, 1050.0, 0.0, 0, 0),
+            (1, 1100.0, 0.0, 0, 0),
+        ]);
+        let route = Route::build(7, 0, &nodes, 10.0, 2.0);
+        if let Some(r) = &route {
+            let _ = r.pose_at(0);
+        }
+        assert!(route.is_none());
     }
 
     #[test]

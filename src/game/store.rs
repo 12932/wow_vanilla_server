@@ -114,6 +114,8 @@ pub struct CharacterState {
     #[serde(skip)]
     pub caches: Vec<(u8, Vec<u8>)>,
     pub action_bar_toggles: u8,
+    /// The bank's bag slots bought (`PLAYER_BYTES_2`'s third byte).
+    pub bank_bag_slots: u8,
     pub explored_zones: Vec<u32>,
     pub taxi_mask: Vec<u32>,
     pub bind: Option<Bind>,

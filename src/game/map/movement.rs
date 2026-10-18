@@ -78,13 +78,23 @@ pub fn movement_of(msg: ClientOpcodeMessage) -> Result<(MovementInfo, Relay), Cl
 
 fn finite(info: &MovementInfo) -> bool {
     let p = info.position;
-    p.x.is_finite()
+    let in_world = p.x.is_finite()
         && p.y.is_finite()
         && p.z.is_finite()
         && info.orientation.is_finite()
         && p.x.abs() < 20_000.0
         && p.y.abs() < 20_000.0
-        && p.z.abs() < 20_000.0
+        && p.z.abs() < 20_000.0;
+    // A place on deck is on a deck: within 50 yards across and 100 up, as
+    // mangos's `VerifyMovementInfo` has it (NaN is on none).
+    in_world
+        && info.flags.get_on_transport().is_none_or(|t| {
+            let d = t.transport.position;
+            d.x.abs() <= 50.0
+                && d.y.abs() <= 50.0
+                && d.z.abs() <= 100.0
+                && t.transport.orientation.is_finite()
+        })
 }
 
 /// A movement packet from `guid`'s client.

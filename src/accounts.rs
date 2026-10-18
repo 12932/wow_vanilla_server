@@ -273,6 +273,18 @@ mod tests {
     }
 
     #[test]
+    fn a_gm_command_finds_an_account_in_any_case() {
+        let a = Accounts::in_memory(Creation::Auto, false);
+        a.set_password("alice", "pw").unwrap();
+        assert!(a.ban("alice", -1, "testing"), "banned in lower case");
+        assert_eq!(a.login("Alice").err(), Some(Refused::Banned));
+        assert!(a.ban("aLiCe", 0, ""), "unbanned in mixed case");
+        assert!(a.login("ALICE").is_ok());
+        assert!(a.set_gm_level("alice", GAME_MASTER));
+        assert_eq!(a.gm_level("Alice"), GAME_MASTER);
+    }
+
+    #[test]
     fn a_ban_holds_until_it_ends_and_gm_levels_add_up() {
         let a = Accounts::in_memory(Creation::Auto, false);
         a.set_password("ALICE", "PW").unwrap();

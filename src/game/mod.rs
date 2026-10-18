@@ -348,6 +348,8 @@ mod tests_pvp4;
 #[cfg(test)]
 mod tests_pvp5;
 #[cfg(test)]
+mod tests_review2;
+#[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
 mod tests_rules;
