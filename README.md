@@ -75,7 +75,7 @@ without running. How the setup came about is in [docs/DATA_SETUP_PLAN.md](docs/D
 
 `config.toml` next to the working directory; every key is optional and the defaults are in `src/config.rs`. An
 unknown key is an error. The environment (or `.env`) sets `WOW_REALM_ADDRESS` (the realm list's `host:port`),
-`WOW_TRACY=1` (the Tracy profiler) and `RUST_LOG`.
+`WOW_TRACY=1` (the Tracy profiler, [docs/PROFILING.md](docs/PROFILING.md)) and `RUST_LOG`.
 
 Characters are kept in `characters.sqlite` (`[world] characters_db`), saved at logout, every five minutes, and for
 everyone on SIGTERM or Ctrl-C.

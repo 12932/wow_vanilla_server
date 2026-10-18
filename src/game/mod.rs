@@ -652,6 +652,9 @@ pub async fn run(users: crate::auth::UserCache) {
     for m in [0, 1] {
         realm.maps.get(&realm, map::MapKey::world(m));
     }
+    if crate::tracy::on() {
+        tokio::spawn(plot_realm(realm.clone()));
+    }
     let listener = TcpListener::bind("0.0.0.0:8085")
         .await
         .expect("bind the world listener on 0.0.0.0:8085");
@@ -688,6 +691,34 @@ pub async fn run(users: crate::auth::UserCache) {
     info!("shutting down: saving everyone");
     realm.shutdown().await;
     info!("saved; exiting");
+}
+
+/// Tracy's plots of the realm, once a second while Tracy is on: who is
+/// online, packets in and out a second, and the store's queue.
+async fn plot_realm(realm: Arc<Realm>) {
+    use crate::tracy::{Format, Plot};
+    use std::sync::atomic::Ordering::Relaxed;
+    let online = Plot::new("realm: players online", Format::Number);
+    let packets_in = Plot::new("realm: packets in a second", Format::Number);
+    let packets_out = Plot::new("realm: packets out a second", Format::Number);
+    let store = Plot::new("realm: store queue", Format::Number);
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    let (mut last_in, mut last_out) = (
+        conn::PACKETS_IN.load(Relaxed),
+        conn::PACKETS_OUT.load(Relaxed),
+    );
+    loop {
+        ticker.tick().await;
+        let (now_in, now_out) = (
+            conn::PACKETS_IN.load(Relaxed),
+            conn::PACKETS_OUT.load(Relaxed),
+        );
+        online.set(realm.registry.online_count() as f64);
+        packets_in.set(now_in.saturating_sub(last_in) as f64);
+        packets_out.set(now_out.saturating_sub(last_out) as f64);
+        store.set(realm.store.queued() as f64);
+        (last_in, last_out) = (now_in, now_out);
+    }
 }
 
 async fn shutdown_signal() {

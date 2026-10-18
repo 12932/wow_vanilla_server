@@ -750,6 +750,10 @@ pub fn update_creatures(map: &mut Map) {
         },
         |k, _| k,
     );
+    // One zone for every turn, with their count: a zone a creature would
+    // be thousands an update.
+    let z = crate::zone!("creatures' turns");
+    z.value(keys.len() as u64);
     for key in keys {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;

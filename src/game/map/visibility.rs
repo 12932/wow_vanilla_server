@@ -50,6 +50,8 @@ pub fn refresh_dirty(map: &mut Map) {
         return;
     }
     let dirty: Vec<Guid> = map.visibility_dirty.drain().collect();
+    let z = crate::zone!("objects refreshed");
+    z.value(dirty.len() as u64);
     for g in dirty {
         refresh(map, g);
     }

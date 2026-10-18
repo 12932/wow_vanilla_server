@@ -2468,6 +2468,8 @@ pub fn update(map: &mut Map) {
         .map(|p| p.guid)
         .collect();
     units.extend(map.with_auras_where(|c| !c.auras.is_empty(), |_, c| c.guid));
+    let z = crate::zone!("units with auras");
+    z.value(units.len() as u64);
     for g in units {
         let Some(a) = auras(map, g) else {
             continue;

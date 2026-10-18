@@ -2323,17 +2323,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-tracy"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eaa1852afa96e0fe9e44caa53dc0bd2d9d05e0f2611ce09f97f8677af56e4ba"
-dependencies = [
- "tracing-core",
- "tracing-subscriber",
- "tracy-client",
-]
-
-[[package]]
 name = "tracy-client"
 version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2934,7 +2923,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "tracing-tracy",
  "tracy-client",
  "walkdir",
  "windows-sys 0.61.2",

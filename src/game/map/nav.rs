@@ -56,6 +56,7 @@ impl Nav {
         }
         let tile = tile_of(x, y);
         if self.tried.insert(tile) {
+            let _z = crate::zone!("navmesh tile");
             let _ = self.map.ensure_adt_loaded_at(x, y);
         }
     }

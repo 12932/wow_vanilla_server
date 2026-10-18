@@ -948,6 +948,7 @@ pub fn summon_died(map: &mut Map, g: Guid) {
 /// despawns scripts put off.
 pub fn update_despawns(map: &mut Map) {
     let now = map.now;
+    let z = crate::zone!("scripts' despawns");
     let put_off: Vec<(Guid, Option<Duration>)> = map
         .creatures
         .iter()
@@ -962,6 +963,8 @@ pub fn update_despawns(map: &mut Map) {
         }
         scripts::despawn_with(map, g, respawn);
     }
+    drop(z);
+    let z = crate::zone!("orphaned guardians");
     // A creature's guardians go with it, as Thistle Tea's `owner_stopped`.
     let orphans: Vec<Guid> = map
         .creatures
@@ -974,6 +977,8 @@ pub fn update_despawns(map: &mut Map) {
     for g in orphans {
         scripts::despawn(map, g);
     }
+    drop(z);
+    let _z = crate::zone!("despawn timers");
     let due: Vec<Guid> = map
         .creatures
         .iter()

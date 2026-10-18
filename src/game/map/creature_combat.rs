@@ -1278,10 +1278,22 @@ pub fn regenerate(map: &mut Map) {
 
 /// The creatures' flight timers, and their regeneration.
 pub fn update(map: &mut Map) {
-    regenerate(map);
-    sweep_leashes(map);
-    watch_for_enemies(map);
-    crate::game::map::assistance::update(map);
+    {
+        let _z = crate::zone!("regeneration");
+        regenerate(map);
+    }
+    {
+        let _z = crate::zone!("leashes");
+        sweep_leashes(map);
+    }
+    {
+        let _z = crate::zone!("watching for enemies");
+        watch_for_enemies(map);
+    }
+    {
+        let _z = crate::zone!("assistance");
+        crate::game::map::assistance::update(map);
+    }
     let now = map.now;
     // Only in a dungeon or a raid does a creature pulse its map (as
     // `zone_fighter` has it), so only there is every creature looked at.
