@@ -336,6 +336,22 @@ pub fn effect_targets(
             }
         }
         (EnemyLocation, _) => t.unit.into_iter().collect(),
+        // Every script unit in a cone before the caster (60), as mangos's
+        // `TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60`.
+        (ScriptUnits, _) if e.target_a == 60 => {
+            let degrees = map
+                .realm
+                .data
+                .spells
+                .cones
+                .get(&s.id)
+                .copied()
+                .unwrap_or(60);
+            script_area(map, caster, center(map, caster, t, false), s, r)
+                .into_iter()
+                .filter(|g| *g != about && in_cone(map, caster, *g, degrees))
+                .collect()
+        }
         (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, t, r),
         // vmangos's script units about the source (7) or the destination
         // (8): every one of them there, as Separation Anxiety and
@@ -433,10 +449,18 @@ pub fn script_target(
     g: Guid,
 ) -> bool {
     let data = &map.realm.data.spells;
+    // A creature row (1) names the living, a dead one's (2) corpses
+    // (vmangos's `SPELL_TARGET_TYPE_CREATURE` and `_DEAD`).
+    let alive = map.creature(g).map(|c| c.alive());
     data.script_targets.get(&spell).is_some_and(|v| {
         v.iter().any(|(k, e)| {
             kinds.contains(k)
                 && *e == entry
+                && match (*k, alive) {
+                    (1, Some(alive)) => alive,
+                    (2, Some(alive)) => !alive,
+                    _ => true,
+                }
                 && data
                     .script_target_conditions
                     .get(&(spell, *k, *e))
@@ -456,7 +480,7 @@ fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius:
     }
     units_around(map, at, radius, |g| {
         map.creature(g)
-            .is_some_and(|c| c.alive() && script_target(map, caster, s.id, &[1, 2], c.entry, g))
+            .is_some_and(|c| script_target(map, caster, s.id, &[1, 2], c.entry, g))
     })
 }
 

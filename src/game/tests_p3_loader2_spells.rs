@@ -653,3 +653,106 @@ async fn a_linked_aura_cycle_is_cut_and_a_missing_link_brings_nothing() {
         "{after:?}"
     );
 }
+
+const CANNON: u32 = 24_933;
+const CANNON_TARGET: u32 = 15_328;
+const COLLECT_PHIAL: u32 = 11_513;
+const IRRADIATED_INVADER: u32 = 6213;
+const HENZE_FAULK_SPELL: u32 = 8593;
+const HENZE_FAULK: u32 = 6172;
+
+/// The units effect `index` of real spell `id` lands on, cast by `caster`
+/// with no target picked.
+fn lands_on(m: &Map, caster: Guid, id: u32, index: usize) -> Vec<Guid> {
+    let s = m.realm.data.spells.get(id).unwrap().clone();
+    let mods = mods::for_spell(m, caster, &s);
+    spells::targets::effect_targets(m, caster, &s, index, &spells::Targets::default(), &mods)
+}
+
+/// Thistle Tea's unit targets (`spell_unit_target_dbc_test.exs`,
+/// `spell_unit_target_vmangos_test.exs`): the targets the real spells
+/// name, by mangos's numbers; the Cannon's script units in its cone (60)
+/// are those before the caster (its one target the one ahead, not a
+/// nearer one behind); a phial collects from
+/// the living or the dead its rows name, and Henze Faulk's spell, whose
+/// row names his corpse alone, never from him alive.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_unit_targets_name_places_cones_and_corpses() {
+    if !have_data() {
+        return;
+    }
+    use spells::targets::{Implicit, implicit, wants_unit};
+    let d = real().unwrap();
+    let ab = |id: u32, i: usize| {
+        let e = spell(d, id).effects[i];
+        (e.effect, implicit(e.target_a), implicit(e.target_b))
+    };
+    // At the picked unit's place; an area there.
+    assert_eq!(ab(22_421, 0), (41, Implicit::EnemyLocation, Implicit::None));
+    assert!(wants_unit(53));
+    assert_eq!(
+        ab(26_789, 0),
+        (2, Implicit::EnemyLocation, Implicit::AoeEnemyAtDest)
+    );
+    assert_eq!(
+        ab(28_401, 0),
+        (5, Implicit::Caster, Implicit::EnemyLocation)
+    );
+    // The database's places (17), for summons, a ground aura, a teleport.
+    for (id, effect) in [(18_634, 42), (29_237, 41), (22_191, 27)] {
+        assert_eq!(spell(d, id).effects[0].target_a, 17, "{id}");
+        assert_eq!(ab(id, 0).0, effect, "{id}");
+    }
+    assert_eq!(spell(d, 3561).effects[0].target_b, 17);
+    // Script places near the caster (46), and an object's (40).
+    assert_eq!(spell(d, 9082).effects[0].target_a, 46);
+    assert_eq!(spell(d, 12_699).effects[0].target_b, 46);
+    assert_eq!(spell(d, 26_286).effects[0].target_a, 40);
+    assert_eq!(spell(d, 26_344).effects[0].target_a, 46);
+    // Script areas (7, 8) and the cone (60).
+    assert_eq!(spell(d, 5628).effects[0].target_b, 7);
+    assert_eq!(spell(d, 26_393).effects[0].target_b, 8);
+    assert_eq!(implicit(60), Implicit::ScriptUnits);
+    // Nearest-creature selections (38), with the caster's effects beside.
+    assert_eq!(spell(d, COLLECT_PHIAL).effects[0].item_type, 9284);
+    assert_eq!(
+        (ab(COLLECT_PHIAL, 0).1, ab(COLLECT_PHIAL, 0).2),
+        (Implicit::CreatureNearCaster, Implicit::Caster)
+    );
+    assert_eq!(
+        (ab(7393, 0).1, ab(7393, 1).1),
+        (Implicit::CreatureNearCaster, Implicit::Caster)
+    );
+    assert_eq!(ab(HENZE_FAULK_SPELL, 0).1, Implicit::CreatureNearCaster);
+
+    let realm = realm();
+    let (_c, g, map) = enter(&realm, "P3OUNIT", "Unita", Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let ahead = dummy(m, g, CANNON_TARGET, 60, 6.0);
+        let behind = dummy(m, g, CANNON_TARGET, 60, -3.0);
+        let cone = lands_on(m, g, CANNON, 0);
+        let cone = (cone.contains(&ahead), cone.contains(&behind));
+        for c in [ahead, behind] {
+            crate::game::map::scripts::despawn(m, c);
+        }
+        let invader = dummy(m, g, IRRADIATED_INVADER, 30, 4.0);
+        let alive = lands_on(m, g, COLLECT_PHIAL, 0).contains(&invader);
+        crate::game::map::combat::kill(m, g, invader);
+        let dead = lands_on(m, g, COLLECT_PHIAL, 0).contains(&invader);
+        crate::game::map::scripts::despawn(m, invader);
+        let henze = dummy(m, g, HENZE_FAULK, 30, 4.0);
+        let henze_alive = lands_on(m, g, HENZE_FAULK_SPELL, 0).contains(&henze);
+        crate::game::map::combat::kill(m, g, henze);
+        let henze_dead = lands_on(m, g, HENZE_FAULK_SPELL, 0).contains(&henze);
+        (cone, (alive, dead), (henze_alive, henze_dead))
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        (true, false),
+        "the one before, not the nearer behind"
+    );
+    assert_eq!(out.1, (true, true), "the living or the dead");
+    assert_eq!(out.2, (false, true), "his corpse alone");
+}
