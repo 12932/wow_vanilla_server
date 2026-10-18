@@ -357,14 +357,20 @@ pub fn dummy(
 /// as mangos's `SpellHealingBonusTaken` takes it through
 /// `SpellBonusWithCoeffs` and Thistle Tea's `HealingReceived`.
 pub fn blessing_of_light_bonus(map: &Map, target: Guid, holy_light: bool) -> i32 {
-    let (index, heal) = if holy_light { (0, 19968) } else { (1, 19993) };
+    let heal = if holy_light { 19968 } else { 19993 };
     let c = map
         .realm
         .data
         .spells
         .get(heal)
         .map_or(1.0, |h| h.effects[0].bonus_coefficient.max(0.0));
-    (blessing_of_light(map, target, index) as f32 * c) as i32
+    (blessing_of_light_points(map, target, holy_light) as f32 * c) as i32
+}
+
+/// Blessing of Light's points on `target` for a Holy Light or a Flash of
+/// Light, before any coefficient.
+pub fn blessing_of_light_points(map: &Map, target: Guid, holy_light: bool) -> i32 {
+    blessing_of_light(map, target, if holy_light { 0 } else { 1 })
 }
 
 /// Blessing of Light's points for Holy Light (effect 0) or Flash of Light

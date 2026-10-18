@@ -1016,7 +1016,14 @@ pub fn spell_healing_taken(
     let Some(a) = auras::auras(map, target).filter(|_| matches!(s.dmg_class, 1..=3)) else {
         return healing_taken(map, target, amount);
     };
-    let benefit = a.sum_mask(AURA_MOD_HEALING, s.school_mask()) as f32;
+    let mut benefit = a.sum_mask(AURA_MOD_HEALING, s.school_mask()) as f32;
+    // Blessing of Light: more taken from a Holy Light or a Flash of Light
+    // (1.12's direct heals of the paladins' family), by its coefficient
+    // (mangos's `SpellHealingBonusTaken`).
+    if kind == Kind::Direct && s.family_name == 10 && s.family_flags & 0xC000_0000 != 0 {
+        let holy_light = s.family_flags & 0x8000_0000 != 0;
+        benefit += super::scripts::blessing_of_light_points(map, target, holy_light) as f32;
+    }
     let flat = (benefit * coefficient(map, s, index, kind) * stacks.max(1) as f32 * chain)
         .max(-amount / 2.0);
     // Healing Way: more from each Healing Wave on the target.
