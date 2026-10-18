@@ -438,6 +438,7 @@ impl Store {
     /// Open (or create) the store at `path`, migrate it, and start its
     /// thread. `:memory:` gives a store that lasts as long as the process.
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<(Store, Startup)> {
+        let _z = crate::zone!("load: the character store");
         let conn = Connection::open(path.as_ref())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;

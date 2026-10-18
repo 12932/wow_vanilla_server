@@ -210,53 +210,69 @@ pub fn real_data() -> Option<&'static GameData> {
 /// `dbc.sqlite`. A missing database gives the empty world, with a warning.
 pub fn load(dir: &Path) -> GameData {
     let started = Instant::now();
-    let _z = crate::zone!("the world's data");
+    let _z = crate::zone!("load");
     let mut data = GameData::empty();
     let dbc = open(&dir.join("dbc.sqlite"));
     if let Some(dbc) = &dbc {
-        let _z = crate::zone!("dbc");
+        let _z = crate::zone!("load: dbc");
         load_dbc(dbc, &mut data);
     }
     if let Some(db) = open(&dir.join("vmangos.sqlite")) {
         // A zone a stage, so a slow start shows which.
-        macro_rules! stage {
-            ($name:literal, $e:expr) => {{
-                let _z = crate::zone!($name);
-                $e
-            }};
+        {
+            let _z = crate::zone!("load: vmangos");
+            load_vmangos(&db, &mut data);
         }
-        stage!("vmangos", load_vmangos(&db, &mut data));
-        stage!("npcs", load_npcs(&db, dbc.as_ref(), &mut data));
-        stage!("spells", load_spells(&db, dbc.as_ref(), &mut data));
-        stage!(
-            "boss fixups",
-            crate::game::map::boss_mechanics::fixups(&mut data)
-        );
-        stage!(
-            "crafts",
-            super::crafts::load(&db, dbc.as_ref(), &mut data.crafts)
-        );
-        stage!("pets", load_pets(&db, dbc.as_ref(), &mut data));
-        stage!("misc", load_misc(&db, dbc.as_ref(), &mut data));
-        stage!("scripts", super::scripts_load::load(&db, &mut data));
-        stage!(
-            "world",
-            super::world::load(&db, dbc.as_ref(), &mut data.world)
-        );
-        stage!("spell-only nodes", spell_only_nodes(&mut data));
-        stage!("Thistle Tea's scripts", {
+        {
+            let _z = crate::zone!("load: npcs");
+            load_npcs(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: spells");
+            load_spells(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: boss fixups");
+            crate::game::map::boss_mechanics::fixups(&mut data);
+        }
+        {
+            let _z = crate::zone!("load: crafts");
+            super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
+        }
+        {
+            let _z = crate::zone!("load: pets");
+            load_pets(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: misc");
+            load_misc(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: scripts");
+            super::scripts_load::load(&db, &mut data);
+        }
+        {
+            let _z = crate::zone!("load: world");
+            super::world::load(&db, dbc.as_ref(), &mut data.world);
+        }
+        {
+            let _z = crate::zone!("load: spell-only nodes");
+            spell_only_nodes(&mut data);
+        }
+        {
+            let _z = crate::zone!("load: Thistle Tea's scripts");
             let _ = super::tt_scripts::install(&mut data);
-        });
+        }
         // Alterac Valley's NPCs as the battleground drives them, over the
         // general import.
-        stage!(
-            "Alterac Valley",
-            crate::game::map::battleground::av_scripts::install(&mut data)
-        );
-        stage!(
-            "linking templates",
-            super::scripts_load::link_templates(&mut data)
-        );
+        {
+            let _z = crate::zone!("load: Alterac Valley");
+            crate::game::map::battleground::av_scripts::install(&mut data);
+        }
+        {
+            let _z = crate::zone!("load: linking templates");
+            super::scripts_load::link_templates(&mut data);
+        }
     }
     let spawns: usize = data.creature_spawns.values().map(Vec::len).sum();
     let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();

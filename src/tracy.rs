@@ -488,6 +488,7 @@ mod tests {
         let realm = harness::realm();
         let mut a = Client::connect(&realm, "A");
         a.enter("Alice", Race::Human, Class::Warrior).await;
+        a.heartbeat(-8949.0, -132.0, 83.5).await;
         a.say("hello").await;
         a.wait_for("the say", |m| match m {
             ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == "hello" => Some(()),
@@ -502,6 +503,9 @@ mod tests {
             "populate",
             "arrival",
             "CMSG_MESSAGECHAT",
+            // A movement packet by its opcode, not wow_messages's
+            // `MSG_MOVE_HEARTBEAT_Client`.
+            "MSG_MOVE_HEARTBEAT",
             "update",
             "players",
             "gear",
@@ -509,6 +513,11 @@ mod tests {
             "creatures' turns",
             "visibility",
             "values",
+            "values: players",
+            "values: creatures",
+            "regeneration",
+            "despawn timers",
+            "units with auras",
             "batches",
         ] {
             assert!(zones.contains(&z), "no zone {z:?} in {zones:?}");

@@ -719,7 +719,13 @@ impl Map {
                 self.arrive(*a)
             }
             MapEvent::Packet(guid, msg) => {
-                let _z = crate::tracy::Zone::named("packet", msg.message_name());
+                // wow_messages names a movement packet from the client
+                // `MSG_MOVE_HEARTBEAT_Client`; the opcode is `MSG_MOVE_HEARTBEAT`.
+                let name = msg.message_name();
+                let _z = crate::tracy::Zone::named(
+                    "packet",
+                    name.strip_suffix("_Client").unwrap_or(name),
+                );
                 #[cfg(test)]
                 if self.faults.any() {
                     self.faults.check(&format!("packets of {guid}"));
@@ -1070,7 +1076,8 @@ impl Map {
     /// everything, to every client that should hear of them.
     pub fn update(&mut self) {
         let _frame = crate::tracy::Frame::begin(self.profile.as_ref().map(|p| p.frame));
-        let _z = crate::zone!("update");
+        let z = crate::zone!("update");
+        z.value(u64::from(self.key.map));
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;
@@ -1195,6 +1202,7 @@ impl Map {
 
     fn flush_values(&mut self) {
         let batches = &mut self.batches;
+        let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
             if p.awaiting_worldport {
                 continue;
@@ -1222,6 +1230,8 @@ impl Map {
             }
             p.fields.clear_dirty();
         }
+        drop(z);
+        let z = crate::zone!("values: game objects");
         // Only a game object changed since the last flush can have dirty
         // fields; in key order, as a look through every one goes.
         let mut touched = std::mem::take(&mut self.touched_objects);
@@ -1248,6 +1258,9 @@ impl Map {
             "{}: a game object changed, but not through Map::gameobject_mut",
             self.key
         );
+        drop(z);
+        // Every creature, for its dirty flag.
+        let z = crate::zone!("values: creatures");
         // Creatures whose tap their observers see anew: taken or gone, or
         // their flags sent again to those outside it.
         let mut taps = Vec::new();
@@ -1273,6 +1286,7 @@ impl Map {
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
+        drop(z);
         for (g, all) in taps {
             tap::tell(self, g, all);
         }
