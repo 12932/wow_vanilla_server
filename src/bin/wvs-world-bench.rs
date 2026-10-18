@@ -702,7 +702,7 @@ impl Report {
                 // steps' (for what comes and goes with time).
                 "series": mine.iter().map(|s| {
                     let mut top = s.steps.clone();
-                    top.sort_by(|a, b| b.1.cmp(&a.1));
+                    top.sort_by_key(|s| std::cmp::Reverse(s.1));
                     top.truncate(3);
                     serde_json::json!([
                         (ms(s.cpu) * 100.0).round() / 100.0,

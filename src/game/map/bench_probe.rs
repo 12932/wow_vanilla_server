@@ -119,7 +119,7 @@ pub(super) fn update_done(map: &Map, wall: Duration, start: Start) {
     let steps = STEPS.with(|s| std::mem::take(&mut *s.borrow_mut()));
     if wall >= SLOW_UPDATE {
         let mut top = steps.clone();
-        top.sort_by(|a, b| b.1.cmp(&a.1));
+        top.sort_by_key(|s| std::cmp::Reverse(s.1));
         top.truncate(3);
         eprintln!(
             "{}: an update took {} ms ({} ms of CPU, {} waits, {} preemptions; {} players, {awake} creatures awake); its steps' CPU: {top:?}",
