@@ -400,6 +400,8 @@ mod tests_p5_player_pets;
 #[cfg(test)]
 mod tests_p5_player_quests;
 #[cfg(test)]
+mod tests_p5_player_real;
+#[cfg(test)]
 mod tests_p5_player_vendor;
 #[cfg(test)]
 mod tests_parity_combat;

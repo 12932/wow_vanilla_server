@@ -418,3 +418,44 @@ async fn each_hand_procs_its_own_weapon_and_an_extra_attack_no_more() {
         "the main hand's; the off hand's; the off hand's but the extra attacks'"
     );
 }
+
+/// Thistle Tea's `Spells.learn` "publishes language skill changes on
+/// learning": a language's spell learned gives its language at 300, for
+/// a player of any race (mangos's `addSpell`), not only at the next login.
+#[tokio::test]
+async fn a_language_learned_is_spoken_at_once() {
+    use crate::game::data::spells::SkillAbility;
+    const DWARVEN: u32 = 672;
+    const DWARVEN_SKILL: u32 = 111;
+    let mut d = crate::game::data::GameData::empty();
+    d.spells.spells.insert(
+        DWARVEN,
+        crate::game::data::spells::SpellTemplate {
+            id: DWARVEN,
+            name: "Language Dwarven".into(),
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    d.spells.skill_abilities.insert(
+        DWARVEN,
+        vec![SkillAbility {
+            skill: DWARVEN_SKILL,
+            race_mask: 1 << 2,
+            acquire: 2,
+            ..Default::default()
+        }],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let spoken = on(&map, move |m| {
+        crate::game::map::spells::learn(m, g, DWARVEN);
+        let p = &m.players[&g];
+        crate::game::map::skills::value(p, DWARVEN_SKILL)
+            .zip(crate::game::map::skills::max_value(p, DWARVEN_SKILL))
+    })
+    .await;
+    assert_eq!(spoken, Some((300, 300)));
+}

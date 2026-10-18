@@ -293,6 +293,7 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     if let Some(p) = map.players.get_mut(&player) {
         crate::game::map::skills::learn_from_spell(p, &data, spell);
         crate::game::map::skills::learn_from_line(p, &data, spell);
+        crate::game::map::skills::learn_language(p, &data, spell);
     }
     // The spells a skill it brought comes with (Mining's Find Minerals and
     // Smelt Copper, Bows' Shoot Bow).
