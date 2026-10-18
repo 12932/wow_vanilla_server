@@ -24,6 +24,23 @@ pub struct Sample {
     pub players: u32,
     /// Each step's CPU time.
     pub steps: Vec<(&'static str, Duration)>,
+    /// The update thread's voluntary and involuntary context switches over
+    /// the update.
+    pub switches: (u64, u64),
+}
+
+/// What [`update_done`] needs of the update's start.
+pub struct Start {
+    pub cpu: Duration,
+    pub switches: (u64, u64),
+}
+
+pub(super) fn start() -> Start {
+    STEPS.with(|s| s.borrow_mut().clear());
+    Start {
+        cpu: thread_cpu(),
+        switches: thread_switches(),
+    }
 }
 
 static ON: AtomicBool = AtomicBool::new(false);
@@ -57,6 +74,16 @@ pub fn take() -> (Vec<Sample>, AHashMap<MapKey, (u64, Duration)>) {
     (samples, events)
 }
 
+/// This thread's context switches: voluntary (it waited: on the disk, a
+/// lock) and involuntary (the kernel ran something else).
+pub fn thread_switches() -> (u64, u64) {
+    // SAFETY: an all-zero rusage is valid, and getrusage writes into it.
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `ru` is a valid rusage to write to.
+    unsafe { libc::getrusage(libc::RUSAGE_THREAD, &mut ru) };
+    (ru.ru_nvcsw as u64, ru.ru_nivcsw as u64)
+}
+
 /// This thread's CPU time.
 pub fn thread_cpu() -> Duration {
     let mut ts = libc::timespec {
@@ -72,11 +99,13 @@ pub(super) fn step_done(name: &'static str, cpu: Duration) {
     STEPS.with(|s| s.borrow_mut().push((name, cpu)));
 }
 
-pub(super) fn update_started() {
-    STEPS.with(|s| s.borrow_mut().clear());
-}
-
-pub(super) fn update_done(map: &Map, wall: Duration, cpu: Duration) {
+pub(super) fn update_done(map: &Map, wall: Duration, start: Start) {
+    let cpu = thread_cpu().saturating_sub(start.cpu);
+    let (v, i) = thread_switches();
+    let switches = (
+        v.saturating_sub(start.switches.0),
+        i.saturating_sub(start.switches.1),
+    );
     let awake = map
         .awake
         .iter()
@@ -93,10 +122,12 @@ pub(super) fn update_done(map: &Map, wall: Duration, cpu: Duration) {
         top.sort_by(|a, b| b.1.cmp(&a.1));
         top.truncate(3);
         eprintln!(
-            "{}: an update took {} ms ({} ms of CPU; {} players, {awake} creatures awake); its steps' CPU: {top:?}",
+            "{}: an update took {} ms ({} ms of CPU, {} waits, {} preemptions; {} players, {awake} creatures awake); its steps' CPU: {top:?}",
             map.key,
             wall.as_millis(),
             cpu.as_millis(),
+            switches.0,
+            switches.1,
             map.players.len()
         );
     }
@@ -107,6 +138,7 @@ pub(super) fn update_done(map: &Map, wall: Duration, cpu: Duration) {
         awake,
         players: map.players.len() as u32,
         steps,
+        switches,
     });
 }
 
@@ -114,12 +146,24 @@ pub(super) fn update_done(map: &Map, wall: Duration, cpu: Duration) {
 const SLOW_EVENT: Duration = Duration::from_millis(200);
 const SLOW_UPDATE: Duration = Duration::from_millis(1000);
 
-pub(super) fn event_done(key: MapKey, cpu: Duration, wall: Duration, kind: &str) {
+/// [`start`] for an event: the steps' record is the update's.
+pub(super) fn event_start() -> Start {
+    Start {
+        cpu: thread_cpu(),
+        switches: thread_switches(),
+    }
+}
+
+pub(super) fn event_done(key: MapKey, start: &Start, wall: Duration, kind: &str) {
+    let cpu = thread_cpu().saturating_sub(start.cpu);
     if wall >= SLOW_EVENT {
+        let (v, i) = thread_switches();
         eprintln!(
-            "{key}: {kind} took {} ms ({} ms of CPU)",
+            "{key}: {kind} took {} ms ({} ms of CPU, {} waits, {} preemptions)",
             wall.as_millis(),
-            cpu.as_millis()
+            cpu.as_millis(),
+            v.saturating_sub(start.switches.0),
+            i.saturating_sub(start.switches.1)
         );
     }
     let mut e = EVENTS.lock();

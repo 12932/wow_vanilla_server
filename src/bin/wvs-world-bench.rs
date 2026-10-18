@@ -140,9 +140,6 @@ async fn run(args: Args) -> std::process::ExitCode {
             EnvFilter::new("warn,wow_vanilla_server::game::map=error,landmark=off")
         }))
         .init();
-    #[cfg(feature = "pprof")]
-    wow_vanilla_server::profile::start_from_env();
-
     let cfg = match wow_vanilla_server::config::load(&args.config) {
         Ok(c) => c,
         Err(e) => {
@@ -283,12 +280,24 @@ async fn run(args: Args) -> std::process::ExitCode {
     BYTES_IN.store(0, Ordering::Relaxed);
     FRAMES_IN.store(0, Ordering::Relaxed);
     let cpu0 = process_cpu();
+    let io0 = process_io();
     let t0 = Instant::now();
+    // With the `pprof` feature and `WVS_PPROF=<prefix>`, a profile of the
+    // measurement (`WVS_PPROF_SECS`, which it should match).
+    #[cfg(feature = "pprof")]
+    {
+        if let Ok(prefix) = std::env::var("WVS_PPROF") {
+            let _ = std::fs::remove_file(format!("{prefix}.txt"));
+        }
+        wow_vanilla_server::profile::start_from_env();
+    }
     tokio::time::sleep(Duration::from_secs(args.secs)).await;
     let (samples, events) = bench_probe::take();
     bench_probe::disable();
     let elapsed = t0.elapsed().as_secs_f64();
     let cores_used = (process_cpu() - cpu0) / elapsed;
+    let io1 = process_io();
+    let io = ((io1.0 - io0.0) / elapsed, (io1.1 - io0.1) / elapsed / 1e6);
     let bytes = BYTES_IN.load(Ordering::Relaxed);
     let frames = FRAMES_IN.load(Ordering::Relaxed);
     let load_after = loadavg();
@@ -303,6 +312,7 @@ async fn run(args: Args) -> std::process::ExitCode {
         cores_used,
         rss,
         (bytes, frames),
+        io,
         (load_before.trim(), load_after.trim()),
     );
     report.print();
@@ -317,6 +327,17 @@ async fn run(args: Args) -> std::process::ExitCode {
     }
     draining.store(false, Ordering::Relaxed);
     let _ = drainer.join();
+    // The profile's files, written once its time is up.
+    #[cfg(feature = "pprof")]
+    if let Ok(prefix) = std::env::var("WVS_PPROF") {
+        let txt = PathBuf::from(format!("{prefix}.txt"));
+        for _ in 0..120 {
+            if txt.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
     std::process::exit(0);
 }
 
@@ -499,6 +520,25 @@ fn process_cpu() -> f64 {
     (ticks(11) + ticks(12)) / hz
 }
 
+/// The process's major page faults (each a wait for the disk), and the
+/// bytes it has had read from the disk (`/proc/self/io`'s `read_bytes`).
+fn process_io() -> (f64, f64) {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let rest = stat.rsplit_once(')').map_or("", |(_, r)| r);
+    let majflt = rest
+        .split_whitespace()
+        .nth(9)
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let read = std::fs::read_to_string("/proc/self/io")
+        .unwrap_or_default()
+        .lines()
+        .find_map(|l| l.strip_prefix("read_bytes:"))
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .unwrap_or(0.0);
+    (majflt, read)
+}
+
 /// The process's peak resident memory, in MB.
 fn peak_rss_mb() -> f64 {
     std::fs::read_to_string("/proc/self/status")
@@ -533,6 +573,7 @@ impl Report {
         cores: f64,
         rss_mb: f64,
         (bytes, frames): (u64, u64),
+        (faults, read_mb): (f64, f64),
         (load_before, load_after): (&str, &str),
     ) -> Self {
         use std::fmt::Write;
@@ -617,6 +658,28 @@ impl Report {
                 .map(|(k, v)| format!("{k} {v:.2} ({:.0}%)", v / total.max(1e-9) * 100.0))
                 .collect();
             let _ = writeln!(text, "    steps, CPU ms an update: {}", top.join(", "));
+            // Where an update's wall time off the CPU went: waits (the disk,
+            // a lock) or preemption (the machine busy).
+            let waits = mine.iter().map(|s| s.switches.0).sum::<u64>() as f64 / mine.len() as f64;
+            let preempted =
+                mine.iter().map(|s| s.switches.1).sum::<u64>() as f64 / mine.len() as f64;
+            let wall_total: f64 = wall.iter().sum();
+            let off_cpu = (wall_total - cpu.iter().sum::<f64>()).max(0.0) / wall_total.max(1e-9);
+            let slow: Vec<&&Sample> = mine.iter().filter(|s| ms(s.wall) > 50.0).collect();
+            let slow_off = if slow.is_empty() {
+                0.0
+            } else {
+                slow.iter()
+                    .map(|s| (ms(s.wall) - ms(s.cpu)).max(0.0))
+                    .sum::<f64>()
+                    / slow.iter().map(|s| ms(s.wall)).sum::<f64>()
+            };
+            let _ = writeln!(
+                text,
+                "    off the CPU: {:.0}% of the update's wall time ({:.0}% of the updates over 50 ms'); a mean {waits:.2} waits and {preempted:.2} preemptions an update",
+                off_cpu * 100.0,
+                slow_off * 100.0
+            );
             maps.push(serde_json::json!({
                 "map": key.map,
                 "players": players,
@@ -630,14 +693,33 @@ impl Report {
                 "events_per_sec": ev_n as f64 / elapsed,
                 "events_cpu_ms_per_sec": ms(ev_cpu) / elapsed,
                 "busy": busy,
+                "off_cpu": off_cpu,
+                "slow_off_cpu": slow_off,
+                "waits_per_update": waits,
+                "preemptions_per_update": preempted,
                 "steps_ms": steps.iter().map(|(k, v)| (k.to_string(), *v)).collect::<std::collections::BTreeMap<_, _>>(),
+                // Each update in turn: its CPU ms, and its three dearest
+                // steps' (for what comes and goes with time).
+                "series": mine.iter().map(|s| {
+                    let mut top = s.steps.clone();
+                    top.sort_by(|a, b| b.1.cmp(&a.1));
+                    top.truncate(3);
+                    serde_json::json!([
+                        (ms(s.cpu) * 100.0).round() / 100.0,
+                        top.iter().map(|(k, d)| (k.to_string(), (ms(*d) * 100.0).round() / 100.0)).collect::<Vec<_>>(),
+                    ])
+                }).collect::<Vec<_>>(),
             }));
         }
         let _ = writeln!(
             text,
-            "process: {cores:.2} cores, peak RSS {rss_mb:.0} MB; to the observers {:.1} MB/s in {:.0} frames/s",
-            bytes as f64 / elapsed / 1e6,
+            "process: {cores:.2} cores, peak RSS {rss_mb:.0} MB; to the observers {:.0} kB/s in {:.0} frames/s",
+            bytes as f64 / elapsed / 1e3,
             frames as f64 / elapsed
+        );
+        let _ = writeln!(
+            text,
+            "the disk: {faults:.0} major page faults a second, {read_mb:.1} MB/s read"
         );
         let json = serde_json::json!({
             "observers": n,
@@ -648,6 +730,8 @@ impl Report {
             "peak_rss_mb": rss_mb,
             "bytes_per_sec": bytes as f64 / elapsed,
             "frames_per_sec": frames as f64 / elapsed,
+            "major_faults_per_sec": faults,
+            "disk_read_mb_per_sec": read_mb,
             "load_before": load_before,
             "load_after": load_after,
             "maps": maps,
