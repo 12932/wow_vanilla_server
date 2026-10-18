@@ -5,8 +5,12 @@
 
 use std::io::Read;
 
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::*;
+
 use super::tests_p3_scripts::*;
 use crate::game::data::scripts::ScriptStep;
+use crate::game::map::Map;
 
 /// The events Thistle Tea's dump has for `entry`, by id.
 fn dumped_events(entry: u32) -> Vec<u32> {
@@ -97,4 +101,80 @@ async fn the_ported_scripts_stand_over_their_creatures_own_ai() {
     for entry in [14484, 14485, 14486, 14489, 12923, 12937, 14528, 14503, 3694] {
         assert!(d.creature_template(entry).is_some(), "{entry}");
     }
+}
+
+const CHICKEN: u32 = 620;
+const CLUCK: u32 = 3861;
+const SPECIAL_CHICKEN_FEED: u32 = 11109;
+const TEXT_EMOTE_CHEER: u32 = 21;
+const TEXT_EMOTE_CHICKEN: u32 = 22;
+const QUEST_GIVER: u32 = 0x2;
+
+/// `player`'s text emote `emote` at `creature`, `times` over: whether it
+/// gave quests after.
+fn emoted_at(m: &mut Map, creature: Guid, player: Guid, emote: u32, times: u32) -> bool {
+    for _ in 0..times {
+        crate::game::map::event_ai::receive_emote(m, creature, player, emote);
+        if npc_flags(m, creature) & QUEST_GIVER != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// A chicken offers no quest as it spawns; a /chicken now and then (three
+/// in a hundred) from one who never took CLUCK! has it offer it, but never
+/// for one who has; and a /cheer from one with the feed in hand has it
+/// take the quest back (Thistle Tea's chicken script, vmangos's
+/// `npc_chicken_cluck`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_chicken_offers_cluck_to_a_lucky_chicken_and_takes_it_back_for_a_cheer() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Clucker").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let [lucky, taken, cheered] = map
+        .query(move |m| [1.0, 2.0, 3.0].map(|d| summon(m, CHICKEN, off(at, d, 0.0), 0.0)))
+        .await
+        .unwrap();
+    assert!(
+        until(&map, 3_000, move |m| [lucky, taken, cheered]
+            .iter()
+            .all(|g| npc_flags(m, *g) & QUEST_GIVER == 0))
+        .await,
+        "no quest as it spawns"
+    );
+    // The chicken's three in a hundred: 400 tries miss once in 200,000.
+    let offered = map
+        .query(move |m| emoted_at(m, lucky, me, TEXT_EMOTE_CHICKEN, 400))
+        .await
+        .unwrap();
+    assert!(offered, "a lucky /chicken");
+    let after_taking = map
+        .query(move |m| {
+            crate::game::map::quests::accept_asked(m, me, lucky, CLUCK);
+            assert!(m.players[&me].journal.has(CLUCK), "taken");
+            emoted_at(m, taken, me, TEXT_EMOTE_CHICKEN, 400)
+        })
+        .await
+        .unwrap();
+    assert!(!after_taking, "never for one who has the quest");
+    // The feed in hand, and a /cheer through the client.
+    map.query(move |m| {
+        crate::game::map::inventory::add_item(m, me, SPECIAL_CHICKEN_FEED, 1, false).unwrap();
+    })
+    .await;
+    c.sees(cheered).await;
+    c.send(CMSG_TEXT_EMOTE {
+        text_emote: TextEmote::try_from(TEXT_EMOTE_CHEER).unwrap(),
+        emote: 0,
+        target: cheered,
+    })
+    .await;
+    assert!(
+        until(&map, 3_000, move |m| npc_flags(m, cheered) & QUEST_GIVER != 0).await,
+        "the /cheer"
+    );
 }
