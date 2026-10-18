@@ -296,6 +296,8 @@ mod tests_p3_world_pvp;
 #[cfg(test)]
 mod tests_p3_world_travel;
 #[cfg(test)]
+mod tests_p4_scripts_bosses;
+#[cfg(test)]
 mod tests_p4_scripts_brd;
 #[cfg(test)]
 mod tests_p4_scripts_dungeons;
