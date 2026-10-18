@@ -90,3 +90,51 @@ process, 8.4 s in a debug build, and a few walked for minutes: the escorts (340 
   did the same on this machine when idle: it checked Ragnaros the moment he was summoned, before the update that runs
   his spawned events (`event_ai::spawned`). It now waits up to a second for that update. The walks' polls would want
   the same: each waiting on a map update rather than on 10 ms.
+
+## The client-emulation check
+
+Several times a packet wvs sent, one that `wow_messages` (and so every harness test) read without complaint, has
+crashed the real 1.12.1 client in its own handling of it: a creature's two-point spline copied as a count of −1
+(`0x6194DD`), an update naming an object just forgotten, a look with no texture. `tools/client_check/` runs what wvs
+sends through `WoW.exe`'s own parsing code, so such a packet fails a test before it reaches a client.
+
+- **How.** `emu.py` maps `WoW.exe` (1.12.1, build 5875; in `tools/client_check/`) under the [Unicorn](https://www.unicorn-engine.org)
+  CPU emulator and calls the client's handlers on a `CDataStore` laid out as the network layer hands one over. The
+  client's bytes are only ever run inside the emulator, never natively. A handler that faults, reads past the
+  packet, or builds an absurd array is reported with the client address, like a crash log.
+- **What is stubbed.** The allocator and the clock; the object manager (finding, making and forgetting objects is
+  modelled in Python); and the renderer and world — a create's post-init, and the main pass that re-applies each
+  block to the renderer. The checks drive the *parse*: the create pass (which reads every block), the movement
+  reader and its spline, and the spline copy into a unit, which is where the `0x6194DD` crash was.
+- **The checks** (`check.py` routes a frame by opcode): `SMSG_UPDATE_OBJECT` and `SMSG_COMPRESSED_UPDATE_OBJECT`
+  (the whole create pass, plus each create's movement run through the unit copy, `movement.py`); and
+  `SMSG_MONSTER_MOVE` / `..._TRANSPORT` (`monster_move.py`, the spline reader a flyer's hand-built move goes
+  through). Adding a check for another handler means finding its address (the registration table at `0x465140` /
+  `0x6035C0`, or `tools/client_check` notes), driving it from a `Client`, and stubbing what it reaches outside the
+  parse.
+- **Its limits.** It drives parsing, not the renderer or the world, so it catches faults, over-reads, absurd counts
+  and the spline copy, not a field wrongly applied. It does not model a fully initialised object, so a self-player
+  create's private field groups are read short of the packet's end; an under-read is therefore a note, not a
+  failure (each packet is its own buffer, so trailing bytes are harmless). The main-pass per-type apply is not run.
+
+### Running it
+
+```sh
+# Prove it against the spline crash (no outside files needed):
+uv run --python 3.14 --with unicorn --with pefile python -I tools/client_check/selftest.py
+
+# Check a frame capture, or a packet carved from a dump (opcode-first):
+uv run --python 3.14 --with unicorn --with pefile python -I tools/client_check/check.py capture.bin
+uv run ... python -I tools/client_check/check.py --raw packet.bin
+```
+
+A frame capture is server frames back to back, each `[size u16 BE][opcode u16 LE][body]`, as the writer task frames
+one. `crash-analysis`' `upd.py` and friends carve a packet out of a `.dmp` for `--raw`.
+
+### The extended test
+
+`tests_client_emu::the_packets_wvs_sends_pass_the_client` plays out a scenario with movement in it — flyers on
+their paths, a crowd of players coming into view at once (so a create batch arrives compressed), one leaving — keeps
+every frame its clients receive (`Client::captured`), and runs the checker over them, failing if the client would.
+It is `#[ignore = "extended"]` (it emulates x86 through `uv`, so it is slow) but needs no real world: it builds its
+own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than passing quietly.
