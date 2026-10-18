@@ -932,7 +932,7 @@ fn have_data() -> bool {
 }
 
 fn real_realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 type Map = crate::game::map::Map;

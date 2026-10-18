@@ -441,7 +441,7 @@ fn have_data() -> bool {
 }
 
 fn real_realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 const BAG_PLAYER: u8 = crate::game::store::BAG_PLAYER;
@@ -661,7 +661,7 @@ fn every_start_wears_its_gear() {
     if !have_data() {
         return;
     }
-    let data = crate::game::data::load::load(DB.as_path());
+    let data = crate::game::harness::load_real(DB.as_path());
     let mut checked = 0;
     for ((race, class), start) in &data.start {
         if start.spells.is_empty() {

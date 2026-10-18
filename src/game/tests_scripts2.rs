@@ -459,7 +459,7 @@ fn the_real_thistle_tea_scripts_come_in_whole() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let mut data = crate::game::data::load::load(dir);
+    let mut data = crate::game::harness::load_real(dir);
     // Onyxia, Ragnaros, Majordomo, Garr, Shazzrah, Omokk, Gandling.
     for entry in [10184, 11502, 12018, 12057, 12264, 9196, 1853] {
         assert!(
@@ -1124,7 +1124,7 @@ async fn the_real_scripted_bosses_fight_without_trouble() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let realm = harness::realm_with(data);
     let (mut a, me) = enter(&realm).await;
     // Onyxia, at 64 percent.

@@ -681,7 +681,7 @@ fn the_real_eventai_uses_known_event_types() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let events: Vec<&AiEvent> = data.scripts.ai_events.values().flatten().collect();
     assert!(events.len() > 6_000, "{}", events.len());
     let known = events.iter().filter(|e| event_supported(e.kind)).count();
@@ -728,7 +728,7 @@ async fn the_real_deadmines_opens_rhahkzors_door() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let boss = data
         .creature_spawns
         .get(&36)

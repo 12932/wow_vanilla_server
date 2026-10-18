@@ -8,6 +8,7 @@ use ahash::AHashMap;
 /// A pet's stats at a level (`pet_levelstats`; entry 1 is every hunter
 /// pet's).
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct PetLevel {
     pub health: u32,
     pub mana: u32,
@@ -18,6 +19,7 @@ pub struct PetLevel {
 
 /// A creature family (`CreatureFamily`).
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Family {
     pub id: u32,
     pub name: String,
@@ -52,6 +54,7 @@ impl Family {
 
 /// A spell of a pet skill line (`SkillLineAbility`).
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct PetAbility {
     pub spell: u32,
     pub skill: u32,
@@ -63,6 +66,7 @@ pub struct PetAbility {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct PetData {
     pub levels: AHashMap<(u32, u8), PetLevel>,
     /// Name halves by creature entry: (word, half), half 0 the start.

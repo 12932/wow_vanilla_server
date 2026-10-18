@@ -789,7 +789,7 @@ fn the_real_valley_is_scripted_as_thistle_tea_scripts_it() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     for entry in [
         11948, 11946, 13236, 13256, 13419, 13284, 14943, 13441, 14762,
     ] {

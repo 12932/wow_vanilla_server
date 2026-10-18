@@ -5,12 +5,14 @@ use ahash::{AHashMap, AHashSet};
 
 /// A gossip menu: its texts (each with a condition) and options.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GossipMenu {
     pub texts: Vec<(u32, u32)>,
     pub options: Vec<GossipOption>,
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GossipOption {
     pub id: u32,
     pub icon: u8,
@@ -32,12 +34,14 @@ pub struct GossipOption {
 
 /// One of an NPC text's eight choices: its broadcast text and probability.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct NpcTextChoice {
     pub broadcast: u32,
     pub probability: f32,
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct BroadcastText {
     pub male: String,
     pub female: String,
@@ -51,6 +55,7 @@ pub struct BroadcastText {
 
 /// A spell a trainer teaches.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct TrainerSpell {
     pub spell: u32,
     pub cost: u32,
@@ -60,6 +65,7 @@ pub struct TrainerSpell {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct TaxiNode {
     pub id: u32,
     pub map: u32,
@@ -72,6 +78,7 @@ pub struct TaxiNode {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct TaxiPathNode {
     pub map: u32,
     pub x: f32,
@@ -83,6 +90,7 @@ pub struct TaxiPathNode {
 
 /// A quest, from `quest_template`.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Quest {
     pub id: u32,
     pub method: u32,
@@ -183,6 +191,7 @@ pub const QUEST_SPECIAL_REPEATABLE: u32 = 0x1;
 pub const QUEST_SPECIAL_EXPLORATION_OR_EVENT: u32 = 0x2;
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct NpcData {
     pub gossip_menus: AHashMap<u32, GossipMenu>,
     pub npc_texts: AHashMap<u32, [NpcTextChoice; 8]>,
@@ -217,12 +226,14 @@ pub struct NpcData {
     /// The quests that need each one done first: quest → those after it.
     pub quests_after: AHashMap<u32, Vec<u32>>,
     /// The quests' dependencies, worked out from `quests` when first asked.
+    #[cfg_attr(test, serde(skip))]
     pub graph: std::sync::OnceLock<QuestGraph>,
 }
 
 /// A quest that must be rewarded (or, `current`, in the log) first; with a
 /// negative exclusive group, all of its group must be.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Prerequisite {
     pub quest: u32,
     pub current: bool,
@@ -234,6 +245,7 @@ pub struct Prerequisite {
 /// it is; the others of its exclusive group; the chain around it; and the
 /// breadcrumbs that lead to it, or the quests it leads to.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct QuestGraph {
     pub prerequisites: AHashMap<u32, Vec<Prerequisite>>,
     pub exclusive: AHashMap<u32, Vec<u32>>,

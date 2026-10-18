@@ -201,7 +201,7 @@ pub fn real_data() -> Option<&'static GameData> {
     DATA.get_or_init(|| {
         let dir = &crate::game::harness::real_data("db");
         let db = dir.join("vmangos.sqlite");
-        (db.exists() && !lfs_pointer(&db)).then(|| load(dir))
+        (db.exists() && !lfs_pointer(&db)).then(|| crate::game::harness::load_real(dir))
     })
     .as_ref()
 }

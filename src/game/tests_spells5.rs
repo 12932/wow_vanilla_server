@@ -27,7 +27,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> std::sync::Arc<crate::game::Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A Kobold Vermin at `level`, `yards` in front of `g`, hardy and without

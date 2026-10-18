@@ -824,7 +824,7 @@ fn the_real_battlegrounds_start_with_their_first_events() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let on = |bg: u32, bindings: Option<&Vec<(u8, u8)>>| {
         let ev = initial_events(bg);
         bindings.is_none_or(|b| b.iter().any(|(e, s)| ev.get(e) == Some(&Some(*s))))

@@ -113,7 +113,7 @@ async fn outdoors_mounts_magnets_sight_areas_and_shields() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "PRIEST");
     let g = c.enter("Priesta", Race::Human, Class::Priest).await;
     let mut d = Client::connect(&realm, "MAGE");
@@ -353,7 +353,7 @@ async fn spirit_of_redemption_heals_on_then_dies() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "SPIRIT");
     let g = c.enter("Priesta", Race::Human, Class::Priest).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -451,7 +451,7 @@ async fn eating_still_level_scaled_costs_and_spell_areas() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "AREAS");
     let g = c.enter("Areana", Race::Human, Class::Warlock).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -555,7 +555,7 @@ async fn a_meteor_is_shared_among_those_it_falls_on() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "METEOR1");
     let a = c.enter("Meteora", Race::Human, Class::Warrior).await;
     let mut d = Client::connect(&realm, "METEOR2");
@@ -610,7 +610,7 @@ async fn a_buff_too_high_for_its_target_goes_on_at_a_lower_rank() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "RANK1");
     let g = c.enter("Rankpriest", Race::Human, Class::Priest).await;
     let mut d = Client::connect(&realm, "RANK2");
@@ -658,7 +658,7 @@ async fn hallows_end_tricks_treats_and_costumes() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "HALLOW1");
     let a = c.enter("Hallowa", Race::Human, Class::Warrior).await;
     let mut d = Client::connect(&realm, "HALLOW2");

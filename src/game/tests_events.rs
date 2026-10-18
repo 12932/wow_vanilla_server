@@ -23,7 +23,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A player of `race` and `class` at `level`, in the world.

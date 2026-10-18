@@ -1307,7 +1307,7 @@ async fn a_new_character_has_their_languages_as_skills() {
     if !db.join("vmangos.sqlite").exists() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(db));
+    let realm = harness::realm_with(crate::game::harness::load_real(db));
     let mut a = Client::connect(&realm, "TONGUES");
     let human = a.enter("Tonguesa", Race::Human, Class::Warrior).await;
     let mut b = Client::connect(&realm, "TONGUESB");

@@ -770,7 +770,7 @@ fn the_real_pets_know_their_spells() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let data = crate::game::data::load::load(dir);
+    let data = crate::game::harness::load_real(dir);
     let imp = pets::spellbook(&data, IMP, 20, false, 23);
     assert!(
         imp.contains(&7800) && !imp.contains(&3110) && !imp.contains(&7801),

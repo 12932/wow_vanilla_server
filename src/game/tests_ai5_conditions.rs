@@ -750,7 +750,7 @@ async fn the_real_conditions() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(dir));
+    let realm = harness::realm_with(crate::game::harness::load_real(dir));
     let data = realm.data.clone();
     // Each tier of the tribute is a reference with its condition on
     // instance data field 15.

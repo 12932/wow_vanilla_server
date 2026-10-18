@@ -115,7 +115,7 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "MAGE");
     let g = c.enter("Maga", Race::Human, Class::Mage).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -234,7 +234,7 @@ async fn a_rogues_eviscerate_scales_with_combo_points_and_spends_them() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "ROGUE");
     let g = c.enter("Rogua", Race::Human, Class::Rogue).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -429,7 +429,7 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
     if !have_data() {
         return;
     }
-    let data = crate::game::data::load::load(DB.as_path());
+    let data = crate::game::harness::load_real(DB.as_path());
     let all = player_spells(&data);
     assert!(all.len() > 3000, "{}", all.len());
     // Effects other modules run, and the passives that need nothing.
@@ -503,7 +503,7 @@ async fn auras_cooldowns_and_crowd_control_hold_as_they_should() {
     if !have_data() {
         return;
     }
-    let realm = harness::realm_with(crate::game::data::load::load(DB.as_path()));
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
     let mut c = Client::connect(&realm, "PALA");
     let g = c.enter("Pala", Race::Human, Class::Paladin).await;
     let map = realm.maps.get(&realm, MapKey::world(0));

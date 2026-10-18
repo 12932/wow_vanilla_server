@@ -9,6 +9,7 @@ use crate::game::update::frame;
 pub const SMSG_ITEM_QUERY_SINGLE_RESPONSE: u16 = 0x058;
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ItemSpell {
     pub id: u32,
     pub trigger: u32,
@@ -20,6 +21,7 @@ pub struct ItemSpell {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ItemTemplate {
     pub entry: u32,
     pub class: u32,
@@ -80,6 +82,7 @@ pub struct ItemTemplate {
 
 /// A little-endian packet body.
 #[derive(Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Body(pub Vec<u8>);
 
 impl Body {

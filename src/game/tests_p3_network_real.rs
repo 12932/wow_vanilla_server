@@ -25,7 +25,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// The real world with players who aren't GMs, to be refused what a GM
@@ -38,7 +38,7 @@ fn players_realm() -> Arc<Realm> {
         cfg,
         store,
         startup,
-        crate::game::data::load::load(DB.as_path()),
+        crate::game::harness::load_real(DB.as_path()),
         None,
     )
 }

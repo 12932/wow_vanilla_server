@@ -8,6 +8,7 @@ use ahash::AHashMap;
 
 /// One step of a DB script.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptStep {
     pub id: u32,
     /// After the script starts, in milliseconds.
@@ -31,6 +32,7 @@ pub struct ScriptStep {
 
 /// A code-built step's extras, as Thistle Tea's `ScriptStep` has them.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct StepExt {
     /// Lines to say, one at random, in place of broadcast texts.
     pub texts: Vec<InlineText>,
@@ -53,6 +55,7 @@ pub struct StepExt {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct InlineText {
     pub text: String,
     pub chat_type: u32,
@@ -63,6 +66,7 @@ pub struct InlineText {
 /// A summon's count: a number, or one that scales with the living
 /// players on the summoner's threat list (ratio, at least, at most).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub enum SummonCount {
     Fixed(u32),
     ThreatPlayers(f32, u32, u32),
@@ -82,6 +86,7 @@ pub const SF_ABORT_ON_FAILURE: u32 = 0x8;
 
 /// One EventAI event of a creature.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct AiEvent {
     pub id: u32,
     pub creature: u32,
@@ -147,6 +152,7 @@ pub fn event_supported(kind: u32) -> bool {
 
 /// A condition (`conditions`).
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Condition {
     pub entry: u32,
     pub kind: i32,
@@ -159,6 +165,7 @@ pub const CF_SWAP_TARGETS: u32 = 0x2;
 
 /// A creature group's member (`creature_groups`).
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct GroupMember {
     pub guid: u32,
     pub distance: f32,
@@ -192,6 +199,7 @@ pub const LINK_EVADE_ON_EVADE: u32 = 0x4000;
 /// A spawn pool (`pool_template`): at most `max_limit` of its members up
 /// at once.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Pool {
     pub entry: u32,
     pub max_limit: u32,
@@ -205,6 +213,7 @@ pub struct Pool {
 
 /// A `spell_area` row: `spell` belongs in `area` for players who match.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellArea {
     pub spell: u32,
     pub area: u32,
@@ -226,6 +235,7 @@ pub struct SpellArea {
 /// `map_template`: a map's instance script and reset, and for a dungeon
 /// the dungeon it is in and where its entrance is outside.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct MapTemplate {
     pub map: u32,
     pub map_type: u32,
@@ -241,6 +251,7 @@ pub struct MapTemplate {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptData {
     /// EventAI events, by creature entry.
     pub ai_events: AHashMap<u32, Vec<AiEvent>>,
@@ -324,6 +335,7 @@ impl ScriptData {
 
 /// Which script table a script comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub enum ScriptTable {
     CreatureAi,
     Generic,

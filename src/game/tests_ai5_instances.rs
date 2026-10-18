@@ -776,7 +776,7 @@ async fn the_real_instances() {
     if !dir.join("vmangos.sqlite").exists() {
         return;
     }
-    let realm = non_gm(crate::game::data::load::load(dir));
+    let realm = non_gm(crate::game::harness::load_real(dir));
     let data = realm.data.clone();
     // Player limits, from the templates.
     assert_eq!(instances::limit(&data, 230), 5, "Blackrock Depths");

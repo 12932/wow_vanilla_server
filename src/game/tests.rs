@@ -2452,7 +2452,7 @@ mod real {
         if !dir.join("vmangos.sqlite").exists() {
             return;
         }
-        let realm = harness::realm_with(crate::game::data::load::load(dir));
+        let realm = harness::realm_with(crate::game::harness::load_real(dir));
         let classes = [
             ("Wara", Race::Human, Class::Warrior),
             ("Pala", Race::Human, Class::Paladin),

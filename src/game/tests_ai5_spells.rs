@@ -37,7 +37,7 @@ fn realm() -> Option<Arc<Realm>> {
     if !dir.join("vmangos.sqlite").exists() {
         return None;
     }
-    Some(harness::realm_with(crate::game::data::load::load(dir)))
+    Some(harness::realm_with(crate::game::harness::load_real(dir)))
 }
 
 /// A player at the start, out of the intro, whom nothing aggroes.

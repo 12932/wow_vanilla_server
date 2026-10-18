@@ -25,7 +25,7 @@ fn have_data() -> bool {
 }
 
 fn realm() -> Arc<Realm> {
-    harness::realm_with(crate::game::data::load::load(DB.as_path()))
+    harness::realm_with(crate::game::harness::load_real(DB.as_path()))
 }
 
 /// A character of `race` and `class` in the world, and their map.
@@ -416,7 +416,7 @@ async fn real_teleports_to_a_caster_land_where_their_targets_say() {
     if !have_data() {
         return;
     }
-    let mut d = crate::game::data::load::load(DB.as_path());
+    let mut d = crate::game::harness::load_real(DB.as_path());
     let spot = Vector3d {
         x: -8_949.95 + 30.0,
         y: -132.493,
