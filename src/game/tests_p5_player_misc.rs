@@ -109,7 +109,9 @@ async fn honor_is_inspected_in_its_layout_from_friends_alone() {
                 .fields
                 .set_flag(UNIT_FIELD_FLAGS, pvp, true);
         }
-        m.players.get_mut(&gc).map(|p| p.movement.position = at);
+        if let Some(p) = m.players.get_mut(&gc) {
+            p.movement.position = at;
+        }
         crate::game::map::combat::can_attack(m, ga, gc)
     })
     .await;
