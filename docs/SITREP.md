@@ -808,6 +808,17 @@ the questions waiting for you.
     - **Reincarnation** isn't offered without a self-resurrection.
     - **Companions** have their template's level and flags.
 
+53. **5b's changes** (spells and classes, 139 rows; from its commits, as its session ended before its report):
+    - **Target triggers** roll once per cast's impact on each target, after its effects.
+    - **A send-event effect** with no target of its own is aimed as mangos aims it.
+    - **An item's spell** costs no power and starts no five-second rule.
+    - **A dispel** wants something to take, else "nothing to dispel".
+    - **A channel's last tick** runs while it is still the caster's channel.
+    - **Pets:** Soul Link, and a pet's own area aura on it and its master.
+    - **Blessing of Light** adds by the heal's coefficient.
+    - **Weapon enchantments** take their wielder's chance modifiers (Improved Poisons).
+    - **The Gnomish transporter** does nothing for the dead.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -867,7 +878,8 @@ the questions waiting for you.
 | Review 4 (the world's systems) | merged | de5cf4a |
 | Configurable settings | merged | 287d03a |
 | The whole-world-awake load test | merged | a1e8835 |
-| 5a: the player | merged | (this merge) |
+| 5a: the player | merged | 15aee3f |
+| 5b: spells and classes | merged | (this merge) |
 | The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
