@@ -328,24 +328,39 @@ fn an_ability_on_a_seated_player_crits_before_avoidance_unless_it_cant_crit() {
         ..even(60)
     };
     // The roll would land in the dodge.
-    assert_eq!(combat::roll_special(&seated, 9_999, 9_999), combat::Outcome::Crit);
+    assert_eq!(
+        combat::roll_special(&seated, 9_999, 9_999),
+        combat::Outcome::Crit
+    );
     let cant = combat::Roll {
         can_crit: false,
         ..seated
     };
     assert_ne!(combat::roll_special(&cant, 9_999, 0), combat::Outcome::Crit);
-    let no_chance = combat::Roll { crit: 0.0, ..seated };
-    assert_ne!(combat::roll_special(&no_chance, 9_999, 0), combat::Outcome::Crit);
+    let no_chance = combat::Roll {
+        crit: 0.0,
+        ..seated
+    };
+    assert_ne!(
+        combat::roll_special(&no_chance, 9_999, 0),
+        combat::Outcome::Crit
+    );
     // A creature's base crit stands in: it crits a seated player.
     let creature = combat::Roll {
         attacker_is_player: false,
         crit: 0.0,
         ..seated
     };
-    assert_eq!(combat::roll_special(&creature, 9_999, 9_999), combat::Outcome::Crit);
+    assert_eq!(
+        combat::roll_special(&creature, 9_999, 9_999),
+        combat::Outcome::Crit
+    );
     let standing = combat::Roll {
         standing: true,
         ..seated
     };
-    assert_eq!(combat::roll_special(&standing, 9_999, 9_999), combat::Outcome::Dodge);
+    assert_eq!(
+        combat::roll_special(&standing, 9_999, 9_999),
+        combat::Outcome::Dodge
+    );
 }

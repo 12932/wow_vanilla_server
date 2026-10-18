@@ -1354,6 +1354,15 @@ fn land(
     if hit == Hit::Immune {
         spend_immunity(map, target, s);
     }
+    // A melee or ranged ability trains its weapon as a swing does.
+    if outcome::physical(s)
+        && matches!(
+            hit,
+            Hit::Hit | Hit::Block | Hit::Miss | Hit::Dodge | Hit::Parry
+        )
+    {
+        crate::game::map::combat::ability_skill_gains(map, caster, target, s);
+    }
     let mut aim = target;
     if hit == Hit::Reflect {
         // Back at the caster; the reflector's procs see it reflected, and

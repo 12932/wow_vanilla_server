@@ -8,10 +8,10 @@ use wow_world_messages::vanilla::*;
 
 use crate::game::data::*;
 use crate::game::fields::*;
+use crate::game::map::Map;
 use crate::game::map::auras::{self, *};
 use crate::game::map::combat::{self, Hand};
 use crate::game::map::inventory::{SLOT_MAIN_HAND, SLOT_OFF_HAND};
-use crate::game::map::Map;
 use crate::game::tests_p3_combat::{self as base, *};
 
 const ELEMENTAL: u32 = 3720;
@@ -42,7 +42,8 @@ fn data() -> GameData {
 
 fn stacked(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32, stacks: u32) {
     aura_of(m, g, id, kind, misc, amount);
-    if let Some(h) = auras::auras_mut(m, g).and_then(|a| a.holders.iter_mut().find(|h| h.spell == id))
+    if let Some(h) =
+        auras::auras_mut(m, g).and_then(|a| a.holders.iter_mut().find(|h| h.spell == id))
     {
         h.stacks = stacks;
     }
@@ -140,7 +141,11 @@ async fn a_flat_bonus_takes_the_hands_percentages_and_the_off_hands_half() {
         })
         .await
         .unwrap();
-    assert_eq!(r.0, (154, 143), "(100 + 20 x 2) x 1.1; (100 + 20 x 2 x 0.75) x 1.1");
+    assert_eq!(
+        r.0,
+        (154, 143),
+        "(100 + 20 x 2) x 1.1; (100 + 20 x 2 x 0.75) x 1.1"
+    );
     assert_eq!(r.1, (120, 115), "100 + 10 x 2; 100 + 10 x 2 x 0.75");
 }
 

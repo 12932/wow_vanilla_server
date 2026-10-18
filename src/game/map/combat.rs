@@ -2191,7 +2191,32 @@ pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: 
     (3.0 * diff * cap.saturating_sub(value) as f32 / player_level.max(1) as f32).min(100.0)
 }
 
-/// Weapon and defense skills that a blow against a creature trains.
+/// A critter's creature type.
+pub const CREATURE_TYPE_CRITTER: u32 = 8;
+
+/// A melee or ranged ability that hit, or was missed, dodged, parried or
+/// blocked, trains the skill of the weapon it was made with and the
+/// target's defense, once, as a swing does (mangos's
+/// `ProcSkillsAndReactives` on a melee-based proc; Thistle Tea's
+/// `CombatSkills.resolve` for abilities).
+pub fn ability_skill_gains(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+) {
+    let hand = if s.dmg_class == 3 {
+        Hand::Ranged
+    } else if s.attr(3, crate::game::data::spells::ATTR_EX3_REQ_OFFHAND) {
+        Hand::Off
+    } else {
+        Hand::Main
+    };
+    skill_gains(map, caster, target, hand);
+}
+
+/// Weapon and defense skills that a blow against a creature trains; a
+/// critter trains nothing (mangos's `ProcSkillsAndReactives`).
 fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
     let mut rng = rand::rng();
     let (weapon_by, defense_by) = (
@@ -2199,29 +2224,54 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
         map.cfg.rates.skill_gain_defense,
     );
     let trains = |map: &Map, g: Guid| {
-        map.creature(g)
-            .is_some_and(|c| c.owner.is_none_or(|o| !guid::is_player(o)))
+        map.creature(g).is_some_and(|c| {
+            c.owner.is_none_or(|o| !guid::is_player(o))
+                && map
+                    .realm
+                    .data
+                    .creature_template(c.entry)
+                    .is_none_or(|t| t.creature_type != CREATURE_TYPE_CRITTER)
+        })
     };
     // The attacker's weapon.
     if map.players.contains_key(&attacker) && trains(map, victim) {
         let mob_level = map.unit_view(victim).map_or(1, |u| u.level);
-        let skill = hand_weapon(map, attacker, hand)
-            .map_or(162, |w| crate::game::map::derive::weapon_skill(w.subclass));
-        let gained = map.players.get_mut(&attacker).is_some_and(|p| {
-            let level = u32::from(p.level());
-            if mob_level <= gray_level(level) {
-                return false;
-            }
-            let Some(value) = crate::game::map::skills::value(p, skill) else {
-                return false;
-            };
-            let cap = level * 5;
-            if value >= cap {
-                return false;
-            }
-            let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
-            rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
-                && raise_skill(p, skill, weapon_by)
+        // The weapon it can use: none in cat or bear form, nor in a
+        // disarmed main hand, which trains unarmed; an empty off hand or
+        // ranged slot trains nothing (mangos's `GetWeaponSkillIdForAttack`
+        // and `CanUseEquippedWeapon`).
+        let (feral, disarmed) = map.players.get(&attacker).map_or((false, false), |p| {
+            (
+                matches!(
+                    p.fields.get_byte(UNIT_FIELD_BYTES_1, 2),
+                    auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
+                ),
+                p.auras.has(AURA_MOD_DISARM),
+            )
+        });
+        let usable = !feral && !(hand == Hand::Main && disarmed);
+        let skill = match hand_weapon(map, attacker, hand).filter(|_| usable) {
+            Some(w) => Some(crate::game::map::derive::weapon_skill(w.subclass)),
+            None if hand == Hand::Main => Some(162),
+            None => None,
+        };
+        let gained = skill.is_some_and(|skill| {
+            map.players.get_mut(&attacker).is_some_and(|p| {
+                let level = u32::from(p.level());
+                if mob_level <= gray_level(level) {
+                    return false;
+                }
+                let Some(value) = crate::game::map::skills::value(p, skill) else {
+                    return false;
+                };
+                let cap = level * 5;
+                if value >= cap {
+                    return false;
+                }
+                let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
+                rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
+                    && raise_skill(p, skill, weapon_by)
+            })
         });
         if gained {
             auras::recalc(map, attacker);

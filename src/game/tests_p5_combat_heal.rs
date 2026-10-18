@@ -19,7 +19,8 @@ use crate::game::tests_p3_combat::*;
 /// deep.
 fn stacked(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32, stacks: u32) {
     aura_of(m, g, id, kind, misc, amount);
-    if let Some(h) = auras::auras_mut(m, g).and_then(|a| a.holders.iter_mut().find(|h| h.spell == id))
+    if let Some(h) =
+        auras::auras_mut(m, g).and_then(|a| a.holders.iter_mut().find(|h| h.spell == id))
     {
         h.stacks = stacks;
     }
@@ -429,9 +430,7 @@ async fn drained_health_direct_heals_and_lay_on_hands_take_the_healers_cut() {
             crate::game::map::spells::cast_triggered(m, ga, MEND, Some(ga));
             let mended = (health(m, ga) - before.0, threat_of(m) - before.1);
             // Lay on Hands, nearly dead.
-            m.unit_fields_mut(ga)
-                .unwrap()
-                .set_u32(UNIT_FIELD_HEALTH, 1);
+            m.unit_fields_mut(ga).unwrap().set_u32(UNIT_FIELD_HEALTH, 1);
             crate::game::map::spells::cast_triggered(m, ga, LAY_ON_HANDS, Some(ga));
             let laid = health(m, ga) - 1;
             (max, drained, siphoned, mended, laid)
@@ -443,7 +442,11 @@ async fn drained_health_direct_heals_and_lay_on_hands_take_the_healers_cut() {
     assert_eq!(siphoned, (50, 0.0), "a siphon, halved, no threat");
     assert_eq!(mended.0, 100, "a heal, halved");
     // Half of it, split between the two creatures fighting the healer.
-    assert!((mended.1 - 25.0).abs() < 0.01, "a quarter of the heal: {}", mended.1);
+    assert!(
+        (mended.1 - 25.0).abs() < 0.01,
+        "a quarter of the heal: {}",
+        mended.1
+    );
     assert_eq!(laid, max / 2, "Lay on Hands, halved");
     let logged = a
         .wait_for("the heal's log", |m| match m {
