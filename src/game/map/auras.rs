@@ -1746,15 +1746,8 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             crate::game::map::spells::interrupts::mounted(map, target, h.spell);
         }
-        AURA_TRACK_CREATURES => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_CREATURES, 1 << (misc - 1).clamp(0, 31));
-            }
-        }
-        AURA_TRACK_RESOURCES => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_RESOURCES, 1 << (misc - 1).clamp(0, 31));
-            }
+        AURA_TRACK_CREATURES | AURA_TRACK_RESOURCES | AURA_TRACK_STEALTHED => {
+            tracking(map, target);
         }
         AURA_MOD_SCALE => {
             if let Some(f) = map.unit_fields_mut(target) {
@@ -1982,15 +1975,8 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             crate::game::map::spells::interrupts::dismounted(map, target);
         }
-        AURA_TRACK_CREATURES if !still(map, AURA_TRACK_CREATURES) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_CREATURES, 0);
-            }
-        }
-        AURA_TRACK_RESOURCES if !still(map, AURA_TRACK_RESOURCES) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_RESOURCES, 0);
-            }
+        AURA_TRACK_CREATURES | AURA_TRACK_RESOURCES | AURA_TRACK_STEALTHED => {
+            tracking(map, target);
         }
         AURA_MOD_SCALE => {
             if let Some(f) = map.unit_fields_mut(target) {
@@ -2114,6 +2100,32 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         _ => {}
+    }
+}
+
+/// A player's tracking fields from its auras (Thistle Tea's `PlayerSync`):
+/// each creature and resource kind's bit (a kind outside the field's 32
+/// none), and Track Hidden's flag (mangos's `PLAYER_FIELD_BYTE_TRACK_STEALTHED`).
+fn tracking(map: &mut Map, target: Guid) {
+    let Some(a) = map.players.get(&target).map(|p| &p.auras) else {
+        return;
+    };
+    let bits = |kind: u32| {
+        a.effects()
+            .filter(|(_, x)| x.kind == kind && (1..=32).contains(&x.misc))
+            .fold(0u32, |b, (_, x)| b | 1 << (x.misc - 1))
+    };
+    let (creatures, resources) = (bits(AURA_TRACK_CREATURES), bits(AURA_TRACK_RESOURCES));
+    let hidden = a.has(AURA_TRACK_STEALTHED);
+    if let Some(f) = map.unit_fields_mut(target) {
+        f.set_u32(PLAYER_TRACK_CREATURES, creatures);
+        f.set_u32(PLAYER_TRACK_RESOURCES, resources);
+        let flags = f.get_byte(PLAYER_FIELD_BYTES, 0);
+        f.set_byte(
+            PLAYER_FIELD_BYTES,
+            0,
+            if hidden { flags | 0x02 } else { flags & !0x02 },
+        );
     }
 }
 

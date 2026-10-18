@@ -1140,3 +1140,268 @@ async fn procs_spend_their_charges_wait_their_cooldowns_and_follow_live_talents(
         assert_eq!(without, (false, Some(1)), "no proc, no charge");
     }
 }
+
+/// Health of 100 more; Last Stand's temporary health (300); bear form with
+/// 400 more health.
+const MORE_HEALTH: u32 = 96_795;
+const LAST_STAND: u32 = 12_976;
+const BEAR: u32 = 96_796;
+
+fn health_data() -> GameData {
+    let mut d = data();
+    let mut bear = aura_spell(
+        BEAR,
+        None,
+        &[
+            (AURA_MOD_SHAPESHIFT, FORM_BEAR as i32, 0),
+            (AURA_MOD_INCREASE_HEALTH, 0, 0),
+        ],
+    );
+    bear.effects[1].base_points = 399;
+    add_spells(
+        &mut d,
+        [
+            aura_spell(
+                MORE_HEALTH,
+                Some(60_000),
+                &[(AURA_MOD_INCREASE_HEALTH, 0, 0)],
+            ),
+            aura_spell(
+                LAST_STAND,
+                Some(20_000),
+                &[(AURA_MOD_INCREASE_HEALTH, 0, 0)],
+            ),
+            bear,
+        ],
+    );
+    d
+}
+
+/// Thistle Tea's health through auras: more maximum health heals nothing,
+/// and its going takes none; Last Stand's health comes and goes with it,
+/// leaving one injured below it at one, and the dead dead; bear form keeps
+/// the share of health, ten times over without drifting.
+#[tokio::test]
+async fn health_follows_temporary_health_and_bear_form_but_not_a_buff() {
+    let (_realm, _a, ga, map) = setup_with(health_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let hp = |m: &Map| {
+                let f = m.unit_fields(ga).unwrap();
+                (
+                    f.get_u32(UNIT_FIELD_HEALTH),
+                    f.get_u32(UNIT_FIELD_MAXHEALTH),
+                )
+            };
+            let set_health = |m: &mut Map, v: u32| {
+                if let Some(f) = m.unit_fields_mut(ga) {
+                    f.set_u32(UNIT_FIELD_HEALTH, v);
+                }
+            };
+            let (_, max) = hp(m);
+            set_health(m, max / 2);
+            let start = hp(m);
+            let _ = put(m, ga, ga, MORE_HEALTH, &[100]);
+            let buffed = hp(m);
+            auras::remove_spell(m, ga, MORE_HEALTH, None);
+            let unbuffed = hp(m);
+            let _ = put(m, ga, ga, LAST_STAND, &[300]);
+            let stand = hp(m);
+            set_health(m, 100);
+            auras::remove_spell(m, ga, LAST_STAND, None);
+            let injured = hp(m);
+            set_health(m, start.0);
+            let mut bear = Vec::new();
+            for _ in 0..10 {
+                let _ = put(m, ga, ga, BEAR, &[FORM_BEAR as i32, 400]);
+                let shifted = hp(m);
+                auras::remove_spell(m, ga, BEAR, None);
+                bear.push((shifted, hp(m)));
+            }
+            // Dead with Last Stand on: dead after it.
+            let _ = put(m, ga, ga, LAST_STAND, &[300]);
+            set_health(m, 0);
+            auras::remove_spell(m, ga, LAST_STAND, None);
+            let dead = hp(m).0;
+            (start, buffed, unbuffed, stand, injured, bear, dead)
+        })
+        .await
+        .unwrap();
+    let (start, buffed, unbuffed, stand, injured, bear, dead) = got;
+    let (health, max) = start;
+    assert_eq!(buffed, (health, max + 100), "a buff heals nothing");
+    assert_eq!(unbuffed, start, "nor takes any going");
+    assert_eq!(
+        stand,
+        (health + 300, max + 300),
+        "Last Stand's health comes"
+    );
+    assert_eq!(injured, (1, max), "and goes, leaving the injured at one");
+    for (shifted, back) in bear {
+        let share = shifted.0 as f32 / shifted.1 as f32;
+        assert!(
+            (share - health as f32 / max as f32).abs() < 0.01,
+            "{shifted:?}"
+        );
+        assert_eq!(back, start, "back as it was");
+    }
+    assert_eq!(dead, 0, "the dead stay dead");
+}
+
+/// Invisibility of kinds 0 and 1, its detection of kind 1, drunken
+/// invisibility, an aura that losing sight ends, and invisibility that a
+/// cast breaks.
+const INVISIBLE: u32 = 96_797;
+const SEES_KIND_1: u32 = 96_798;
+const DRUNK_HIDDEN: u32 = 96_799;
+const LOST_SIGHT: u32 = 96_800;
+const CAST_BREAKS: u32 = 96_801;
+const WORLD_BOSS: u32 = 96_802;
+
+fn invisible_data() -> GameData {
+    let mut d = data();
+    let mut lost = aura_spell(LOST_SIGHT, Some(60_000), &[(AURA_DUMMY, 0, 0)]);
+    lost.aura_interrupt_flags = 0x10_0000;
+    let mut breaks = aura_spell(CAST_BREAKS, Some(60_000), &[(AURA_MOD_INVISIBILITY, 0, 0)]);
+    breaks.aura_interrupt_flags = INTERRUPT_CAST;
+    add_spells(
+        &mut d,
+        [
+            aura_spell(
+                INVISIBLE,
+                None,
+                &[(AURA_MOD_INVISIBILITY, 0, 0), (AURA_MOD_INVISIBILITY, 1, 0)],
+            ),
+            aura_spell(
+                SEES_KIND_1,
+                None,
+                &[(AURA_MOD_INVISIBILITY_DETECTION, 1, 0)],
+            ),
+            aura_spell(DRUNK_HIDDEN, None, &[(AURA_MOD_INVISIBILITY, 6, 0)]),
+            lost,
+            breaks,
+        ],
+    );
+    let mut boss = crate::game::tests_p3_combat::template(WORLD_BOSS, 7);
+    boss.rank = 3;
+    d.creature_templates.insert(WORLD_BOSS, boss);
+    d
+}
+
+/// Thistle Tea's invisibility: seeing through one of its kinds is enough;
+/// a world boss sees every kind; the drunk see drunken invisibility as
+/// drunk as it, the sober not. Going invisible ends what losing sight
+/// ends; a cast ends invisibility that a cast breaks.
+#[tokio::test]
+async fn invisibility_is_seen_by_any_kind_bosses_and_the_drunk() {
+    use crate::game::map::spells::stealth::sees;
+    let (_realm, _a, ga, map) = setup_with(invisible_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let hidden = spawn(m, ga, BRUTE, 1, 3.0);
+            let watcher = spawn(m, ga, BRUTE, 1, 4.0);
+            let boss = spawn(m, ga, WORLD_BOSS, 1, 5.0);
+            let _ = put(m, ga, ga, INVISIBLE, &[200, 1_000]);
+            let unseen = sees(m, watcher, ga);
+            let _ = put(m, watcher, watcher, SEES_KIND_1, &[1_000]);
+            let one_kind = sees(m, watcher, ga);
+            let by_boss = sees(m, boss, ga);
+            auras::remove_spell(m, ga, INVISIBLE, None);
+            let _ = put(m, hidden, hidden, DRUNK_HIDDEN, &[512]);
+            let sober = sees(m, ga, hidden);
+            m.players.get_mut(&ga).unwrap().drunk.value = 512;
+            let drunk = sees(m, ga, hidden);
+            m.players.get_mut(&ga).unwrap().drunk.value = 0;
+            // Going invisible; then a cast.
+            let _ = put(m, ga, ga, LOST_SIGHT, &[0]);
+            let _ = put(m, ga, ga, CAST_BREAKS, &[100]);
+            let sight_lost = !auras::auras(m, ga).is_some_and(|a| a.has_spell(LOST_SIGHT));
+            auras::interrupt(m, ga, INTERRUPT_CAST);
+            let broken = !auras::auras(m, ga).is_some_and(|a| a.has_spell(CAST_BREAKS));
+            (unseen, one_kind, by_boss, sober, drunk, sight_lost, broken)
+        })
+        .await
+        .unwrap();
+    assert_eq!(got, (false, true, true, false, true, true, true));
+}
+
+/// Tracking: resources of kinds 2 and 7, creatures of 1 and 7, kinds
+/// outside the field (0, −1, 33), and Track Hidden.
+const TRACKING: u32 = 96_803;
+const TRACKING_OUTSIDE: u32 = 96_804;
+const TRACK_HIDDEN: u32 = 96_805;
+
+fn tracking_data() -> GameData {
+    let mut d = data();
+    let tracking = aura_spell(
+        TRACKING,
+        None,
+        &[
+            (AURA_TRACK_RESOURCES, 2, 0),
+            (AURA_TRACK_RESOURCES, 7, 0),
+            (AURA_TRACK_CREATURES, 1, 0),
+        ],
+    );
+    let second = aura_spell(TRACKING + 10, None, &[(AURA_TRACK_CREATURES, 7, 0)]);
+    add_spells(
+        &mut d,
+        [
+            tracking,
+            second,
+            aura_spell(
+                TRACKING_OUTSIDE,
+                None,
+                &[
+                    (AURA_TRACK_RESOURCES, 0, 0),
+                    (AURA_TRACK_RESOURCES, -1, 0),
+                    (AURA_TRACK_RESOURCES, 33, 0),
+                ],
+            ),
+            aura_spell(TRACK_HIDDEN, None, &[(AURA_TRACK_STEALTHED, 0, 0)]),
+        ],
+    );
+    d
+}
+
+/// Thistle Tea's tracking fields: the kinds' bits together (0x42, 0x41)
+/// and cleared when they go; kinds outside the field none; Track Hidden's
+/// flag beside the field's others, and back off.
+#[tokio::test]
+async fn tracking_auras_set_the_players_fields_bits_and_flag() {
+    let (_realm, _a, ga, map) = setup_with(tracking_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let fields = |m: &Map| {
+                let f = m.unit_fields(ga).unwrap();
+                (
+                    f.get_u32(PLAYER_TRACK_RESOURCES),
+                    f.get_u32(PLAYER_TRACK_CREATURES),
+                    f.get_byte(PLAYER_FIELD_BYTES, 0),
+                )
+            };
+            let _ = put(m, ga, ga, TRACKING, &[0, 0, 0]);
+            let _ = put(m, ga, ga, TRACKING + 10, &[0]);
+            let tracked = fields(m);
+            auras::remove_spell(m, ga, TRACKING, None);
+            auras::remove_spell(m, ga, TRACKING + 10, None);
+            let cleared = fields(m);
+            let _ = put(m, ga, ga, TRACKING_OUTSIDE, &[0, 0, 0]);
+            let outside = fields(m);
+            auras::remove_spell(m, ga, TRACKING_OUTSIDE, None);
+            if let Some(f) = m.unit_fields_mut(ga) {
+                f.set_byte(PLAYER_FIELD_BYTES, 0, 0x08);
+            }
+            let _ = put(m, ga, ga, TRACK_HIDDEN, &[0]);
+            let hidden = fields(m).2;
+            auras::remove_spell(m, ga, TRACK_HIDDEN, None);
+            let shown = fields(m).2;
+            (tracked, cleared, outside, hidden, shown)
+        })
+        .await
+        .unwrap();
+    let (tracked, cleared, outside, hidden, shown) = got;
+    assert_eq!((tracked.0, tracked.1), (0x42, 0x41));
+    assert_eq!((cleared.0, cleared.1), (0, 0));
+    assert_eq!(outside.0, 0, "kinds outside the field");
+    assert_eq!((hidden, shown), (0x0A, 0x08));
+}
