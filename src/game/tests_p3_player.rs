@@ -430,7 +430,7 @@ async fn rest_while_logged_out_is_a_rest_areas_rate_or_a_quarter_in_the_wild_and
             p.row.state.rest_bonus = bonus;
             p.row.state.rest_type = kind;
             p.row.logout_time = if away == 0 { 0 } else { wall - away };
-            rest::restore(p, now);
+            rest::restore(p, now, &Default::default());
             out.push((
                 p.row.state.rest_bonus,
                 p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING),
@@ -468,7 +468,7 @@ async fn rest_while_logged_out_is_a_rest_areas_rate_or_a_quarter_in_the_wild_and
         p.row.state.rest_bonus = 0.0;
         p.row.state.rest_type = Some(RestType::City);
         p.row.logout_time = wall - 86_400;
-        rest::restore(p, now);
+        rest::restore(p, now, &Default::default());
         let spent = rest::spend(p, 100, now + Duration::from_secs(3_600));
         (
             p.row.state.rest_bonus,

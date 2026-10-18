@@ -341,6 +341,7 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         if (bound && !me.gm)
             || bag_with_items
             || item.bag == crate::game::store::BAG_PLAYER && item.slot < 19
+            || crate::game::map::vendor::in_buyback(item.bag, item.slot)
         {
             fail(map, Two::ErrMailAttachmentInvalid);
             return;
@@ -369,7 +370,7 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
     let item = item_at.and_then(|i| crate::game::map::inventory::detach_item(map, g, i));
     let other_account = to.account != me.account;
     let delay = if other_account && (item.is_some() || money > 0) {
-        realm.config.mail_delay.as_secs() as i64
+        realm.config().mail_delay.as_secs() as i64
     } else {
         0
     };

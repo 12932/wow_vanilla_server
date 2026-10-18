@@ -237,6 +237,18 @@ pub fn update(map: &mut Map) {
         .collect();
     map.rifts
         .retain(|g, _| rifts.iter().any(|(r, _, _)| r == g));
+    // An invader gone from the map otherwise than by dying (a script's
+    // despawn) is forgotten too, to be called out again (Thistle Tea's
+    // `summoned_just_despawn`).
+    let gone: Vec<Guid> = map
+        .rifts
+        .values()
+        .flat_map(|r| r.invaders.iter().copied())
+        .filter(|g| map.creature(*g).is_none())
+        .collect();
+    for r in map.rifts.values_mut() {
+        r.invaders.retain(|g| !gone.contains(g));
+    }
     let stages = map.realm.social.elemental.lock().stages;
     for (rift, i, at) in rifts {
         let due = {

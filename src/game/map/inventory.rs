@@ -76,6 +76,10 @@ pub enum Fail {
     BankFull,
     /// Not ammunition, where only ammunition goes.
     OnlyAmmo,
+    /// More than one bought into an equipment slot.
+    CantBeEquipped,
+    /// An equipment slot already taken.
+    NoSlot,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -213,6 +217,16 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::OnlyAmmo => R::OnlyAmmoCanGoHere {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::CantBeEquipped => R::ItemCantBeEquipped {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::NoSlot => R::NoEquipmentSlotAvailable {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -487,6 +501,45 @@ pub fn proficient(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<()
     Ok(())
 }
 
+/// Whether `p` may use an item of `t` at all (mangos's `CanUseItem`): of
+/// its classes and races, the skill at its rank and the spell it asks for,
+/// its level, its honor rank, the weapon's or armor's proficiency (the
+/// item's own skill, mangos's `CanUseItem(Item*)`) and its standing.
+pub fn can_use(p: &Player, data: &GameData, t: &ItemTemplate) -> Result<(), Fail> {
+    let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
+    if !allows(t.allowable_class, p.row.class) || !allows(t.allowable_race, p.row.race) {
+        return Err(Fail::NeverUse);
+    }
+    if t.required_skill != 0 {
+        match crate::game::map::skills::value(p, t.required_skill) {
+            None | Some(0) => return Err(Fail::NoProficiency),
+            Some(v) if v < t.required_skill_rank => return Err(Fail::Skill),
+            Some(_) => {}
+        }
+    }
+    if t.required_spell != 0 && !p.spells.contains(&t.required_spell) {
+        return Err(Fail::NoProficiency);
+    }
+    if !crate::game::map::pvp::rank_allows_use(p, t) {
+        return Err(Fail::Rank);
+    }
+    if u32::from(p.level()) < t.required_level {
+        return Err(Fail::Level(t.required_level as u8));
+    }
+    proficient(p, &Proficiency::of(p, data), t)?;
+    if t.required_reputation_faction != 0
+        && !crate::game::map::reputation::meets(
+            p,
+            data,
+            t.required_reputation_faction,
+            t.required_reputation_rank,
+        )
+    {
+        return Err(Fail::Reputation);
+    }
+    Ok(())
+}
+
 /// Whether an item in the off hand is a weapon, so wants Dual Wield: a
 /// one-hander or an off-hand weapon (mangos's `CanEquipItem`).
 fn wants_dual_wield(t: &ItemTemplate) -> bool {
@@ -499,19 +552,6 @@ pub fn can_equip(p: &Player, prof: &Proficiency, t: &ItemTemplate, slot: u8) -> 
     if !slots_for(t.inventory_type).contains(&slot) {
         return Err(Fail::DoesntGoToSlot);
     }
-    can_use(p, prof, t)?;
-    // A weapon in the off hand takes Dual Wield, learned (Thistle Tea's
-    // and vmangos's `dual_wield?`), not a level.
-    if slot == SLOT_OFF_HAND && wants_dual_wield(t) && !prof.dual_wield {
-        return Err(Fail::CantDualWield);
-    }
-    Ok(())
-}
-
-/// Whether `p`, of proficiency `prof`, may use an item of template `t`, as
-/// it is put on and as it is used (mangos's `CanUseItem`, Thistle Tea's
-/// `ItemEligibility`): its class and race, level, honor rank, and skill.
-pub fn can_use(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<(), Fail> {
     if t.allowable_class != -1
         && t.allowable_class != 0
         && t.allowable_class & (1 << (p.row.class - 1)) == 0
@@ -530,7 +570,13 @@ pub fn can_use(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<(), F
     if !crate::game::map::pvp::rank_allows_use(p, t) {
         return Err(Fail::Rank);
     }
-    proficient(p, prof, t)
+    proficient(p, prof, t)?;
+    // A weapon in the off hand takes Dual Wield, learned (Thistle Tea's
+    // and vmangos's `dual_wield?`), not a level.
+    if slot == SLOT_OFF_HAND && wants_dual_wield(t) && !prof.dual_wield {
+        return Err(Fail::CantDualWield);
+    }
+    Ok(())
 }
 
 /// Gear worn that its wearer can no longer use (a character made when
@@ -696,96 +742,259 @@ fn plan_rest(
     left
 }
 
-/// [`plan`] from where the client dropped a new item (a purchase's bag and
-/// slot): that slot first, empty or a stack of its kind with room; then
-/// that bag's stacks and free slots (slot 255: those alone); then wherever
-/// [`plan`] puts the rest. A slot that isn't one, holds something else or
-/// a full stack, or a bag not made for the item, refuses it. As mangos's
-/// `_CanStoreItem` searches, and Thistle Tea's explicit destinations.
+/// [`plan`] for a purchase dropped at `(bag, slot)` (mangos's
+/// `CanStoreNewItem` at a position): the slot asked for first, onto its
+/// stack or into it empty, else refused; what is left onto the stacks and
+/// into the free slots of that bag; then of any carried. With no slot,
+/// that bag first. A slot not carried (the bank's, the bag bar) doesn't
+/// take it.
 #[allow(clippy::type_complexity)]
-fn plan_to(
+fn plan_at(
     p: &Player,
     data: &GameData,
     t: &ItemTemplate,
     count: u32,
-    to: (u8, u8),
+    bag: u8,
+    slot: Option<u8>,
 ) -> Result<(Vec<(usize, u32)>, Vec<(u8, u8, u32)>), Fail> {
-    use crate::game::map::items::{KEYRING_START, fits_bag, is_key, keyring_size};
-    let (bag, slot) = to;
-    if t.max_count > 0 && p.count_of(t.entry) + count > t.max_count {
+    let entry = t.entry;
+    let stack = t.stackable.max(1);
+    if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
         return Err(Fail::CantCarryMore);
     }
-    let stack = t.stackable.max(1);
-    let slots: Vec<u8> = if bag == BAG_PLAYER {
-        let keys = if is_key(t) {
-            KEYRING_START..KEYRING_START + keyring_size(p.level())
-        } else {
-            0..0
-        };
-        keys.chain(PACK_START..PACK_END).collect()
-    } else if (BAG_START..BAG_END).contains(&bag) && p.bag_size(data, bag) > 0 {
-        (0..p.bag_size(data, bag)).collect()
-    } else {
-        return Err(Fail::DoesntGoToSlot);
-    };
-    if slot != u8::MAX && !slots.contains(&slot) {
-        return Err(Fail::DoesntGoToSlot);
-    }
-    if bag != BAG_PLAYER && !fits_bag(data, p, bag, Some(t)) {
+    // A worn bag not made for it refuses it, any slot of it or one named
+    // (mangos's `_CanStoreItem_InBag`); a slot past its end isn't one.
+    if (BAG_START..BAG_END).contains(&bag)
+        && p.bag_size(data, bag) > 0
+        && slot.is_none_or(|s| s < p.bag_size(data, bag))
+        && !crate::game::map::items::fits_bag(data, p, bag, Some(t))
+    {
         return Err(Fail::DoesntGoIntoBag);
     }
+    let places = crate::game::map::items::carry_slots(data, p, Some(t));
+    let in_bag: Vec<(u8, u8)> = places.iter().filter(|(b, _)| *b == bag).copied().collect();
     let mut left = count;
-    let (mut onto, mut new_slots) = (Vec::new(), Vec::new());
-    if slot != u8::MAX {
+    let mut onto: Vec<(usize, u32)> = Vec::new();
+    let mut new_slots: Vec<(u8, u8, u32)> = Vec::new();
+    if let Some(slot) = slot {
+        if !in_bag.contains(&(bag, slot)) {
+            return Err(if bag != BAG_PLAYER && slot_exists(p, data, bag, slot) {
+                Fail::DoesntGoIntoBag
+            } else {
+                Fail::DoesntGoToSlot
+            });
+        }
         match p.item_at(bag, slot) {
+            Some(i)
+                if p.items[i].entry == entry
+                    && p.items[i].count() < stack
+                    && mergeable(p, &p.items[i]) =>
+            {
+                let add = (stack - p.items[i].count()).min(left);
+                onto.push((i, add));
+                left -= add;
+            }
+            Some(_) => return Err(Fail::CantStack),
             None => {
                 let n = left.min(stack);
                 new_slots.push((bag, slot, n));
                 left -= n;
             }
-            Some(i)
-                if p.items[i].entry == t.entry
-                    && p.items[i].count() < stack
-                    && mergeable(p, &p.items[i]) =>
+        }
+    }
+    for candidates in [&in_bag, &places] {
+        for at in candidates.iter() {
+            if left == 0 {
+                break;
+            }
+            if let Some(i) = p.item_at(at.0, at.1)
+                && p.items[i].entry == entry
+                && !onto.iter().any(|(k, _)| *k == i)
+                && mergeable(p, &p.items[i])
             {
-                let n = (stack - p.items[i].count()).min(left);
-                onto.push((i, n));
+                let room = stack.saturating_sub(p.items[i].count());
+                let add = room.min(left);
+                if add > 0 {
+                    onto.push((i, add));
+                    left -= add;
+                }
+            }
+        }
+        for at in candidates.iter() {
+            if left == 0 {
+                break;
+            }
+            if p.item_at(at.0, at.1).is_none() && !new_slots.iter().any(|(b, s, _)| (*b, *s) == *at)
+            {
+                let n = left.min(stack);
+                new_slots.push((at.0, at.1, n));
                 left -= n;
             }
-            Some(_) => return Err(Fail::CantStack),
         }
     }
-    // That bag's stacks, then its free slots.
-    for &s in &slots {
-        if left == 0 {
-            break;
-        }
-        if let Some(i) = p.item_at(bag, s)
-            && p.items[i].entry == t.entry
-            && p.items[i].count() < stack
-            && !onto.iter().any(|(k, _)| *k == i)
-            && mergeable(p, &p.items[i])
-        {
-            let n = (stack - p.items[i].count()).min(left);
-            onto.push((i, n));
-            left -= n;
-        }
-    }
-    for &s in &slots {
-        if left == 0 {
-            break;
-        }
-        if p.item_at(bag, s).is_none() && !new_slots.iter().any(|(b, x, _)| (*b, *x) == (bag, s)) {
-            let n = left.min(stack);
-            new_slots.push((bag, s, n));
-            left -= n;
-        }
-    }
-    let left = plan_rest(p, data, t, left, &mut onto, &mut new_slots);
     if left > 0 {
         return Err(Fail::InventoryFull);
     }
     Ok((onto, new_slots))
+}
+
+/// Where a new item bought into equipment slot `slot` goes: there, if it
+/// is one item, the slot is free and the player may wear it (mangos's
+/// `CanEquipNewItem`); a fight's rules too.
+pub fn may_equip_new(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+    slot: u8,
+    now: std::time::Instant,
+) -> Result<(), Fail> {
+    if count != 1 {
+        return Err(Fail::CantBeEquipped);
+    }
+    if p.item_at(BAG_PLAYER, slot).is_some() {
+        return Err(Fail::NoSlot);
+    }
+    can_equip(p, &Proficiency::of(p, data), t, slot)?;
+    if t.required_reputation_faction != 0
+        && !crate::game::map::reputation::meets(
+            p,
+            data,
+            t.required_reputation_faction,
+            t.required_reputation_rank,
+        )
+    {
+        return Err(Fail::Reputation);
+    }
+    if slot == SLOT_OFF_HAND
+        && p.item_at(BAG_PLAYER, SLOT_MAIN_HAND)
+            .and_then(|i| data.item(p.items[i].entry))
+            .is_some_and(|m| m.inventory_type == 17)
+    {
+        return Err(Fail::TwoHanded);
+    }
+    off_hand_put_away(p, data, t, slot)?;
+    if let Some(f) = crate::game::map::spells::class_scripts::combat_change_refused(
+        p,
+        data,
+        None,
+        Some(t.entry),
+        now,
+    ) {
+        return Err(f);
+    }
+    Ok(())
+}
+
+/// Where what the off hand holds goes as a new two-hander is put on in
+/// the main hand `slot`: the item and a free carried slot for it (mangos's
+/// `CanEquipItem` stores it, `AutoUnequipOffhandIfNeed` puts it there);
+/// with none free, the two-hander isn't put on ("inventory is full").
+#[allow(clippy::type_complexity)]
+fn off_hand_put_away(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    slot: u8,
+) -> Result<Option<(usize, (u8, u8))>, Fail> {
+    let Some(off) = p.item_at(BAG_PLAYER, SLOT_OFF_HAND) else {
+        return Ok(None);
+    };
+    if slot != SLOT_MAIN_HAND || t.inventory_type != 17 {
+        return Ok(None);
+    }
+    crate::game::map::items::carry_slots(data, p, data.item(p.items[off].entry))
+        .into_iter()
+        .find(|s| p.item_at(s.0, s.1).is_none())
+        .map(|place| Some((off, place)))
+        .ok_or(Fail::InventoryFull)
+}
+
+/// Where a purchase goes: anywhere, into a bag (a slot of it, or any), or
+/// worn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Destination {
+    Anywhere,
+    Bag(u8, Option<u8>),
+    Worn(u8),
+}
+
+/// Whether `count` of `t` may go to `to`, as [`add_item_to`] would put
+/// it.
+pub fn room_to(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+    to: Destination,
+    now: std::time::Instant,
+) -> Result<(), Fail> {
+    match to {
+        Destination::Anywhere => plan(p, data, t, count).map(|_| ()),
+        Destination::Bag(bag, slot) => plan_at(p, data, t, count, bag, slot).map(|_| ()),
+        Destination::Worn(slot) => may_equip_new(p, data, t, count, slot, now),
+    }
+}
+
+/// [`add_item`], to `to`: a new item worn is bound if it binds on equip,
+/// and starts its use spells' equip cooldown, as one put on; a two-hander
+/// puts what the off hand holds away first.
+pub fn add_item_to(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    to: Destination,
+) -> Result<(), Fail> {
+    let Destination::Worn(slot) = to else {
+        let at = match to {
+            Destination::Bag(bag, slot) => Some((bag, slot)),
+            _ => None,
+        };
+        return store_at(
+            map,
+            g,
+            entry,
+            count,
+            true,
+            NewItemCreationType::Received,
+            0,
+            at,
+        );
+    };
+    let data = map.realm.data.clone();
+    let now = map.now;
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    let p = map.players.get(&g).ok_or(Fail::NotFound)?;
+    may_equip_new(p, &data, t, count, slot, now)?;
+    if let Some((off, (bag, at))) = off_hand_put_away(p, &data, t, slot)? {
+        let p = map.players.get_mut(&g).ok_or(Fail::NotFound)?;
+        p.items[off].bag = bag;
+        p.items[off].slot = at;
+        p.refresh_inventory(&data);
+    }
+    store_planned(
+        map,
+        g,
+        entry,
+        count,
+        true,
+        NewItemCreationType::Received,
+        0,
+        (Vec::new(), vec![(BAG_PLAYER, slot, 1)]),
+    )?;
+    let Some(p) = map.players.get_mut(&g) else {
+        return Ok(());
+    };
+    let Some(i) = p.item_at(BAG_PLAYER, slot) else {
+        return Ok(());
+    };
+    crate::game::map::items::on_equip(&data, &mut p.items[i]);
+    let item = p.items[i].guid;
+    p.refresh_inventory(&data);
+    crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
+    crate::game::map::items::equipped(map, g, item);
+    Ok(())
 }
 
 /// Whether taking `removals` (entries and counts, from what is carried)
@@ -923,41 +1132,6 @@ pub fn add_created_item(map: &mut Map, g: Guid, entry: u32, count: u32) -> Resul
     store(map, g, entry, count, true, NewItemCreationType::Created, 0)
 }
 
-/// Whether `count` of item `entry` fits from where the client dropped it,
-/// `to` (a bag and slot, slot 255 for anywhere in the bag), as
-/// [`add_item_to`] would put it.
-pub fn room_at(
-    p: &Player,
-    data: &GameData,
-    entry: u32,
-    count: u32,
-    to: (u8, u8),
-) -> Result<(), Fail> {
-    let t = data.item(entry).ok_or(Fail::NotFound)?;
-    plan_to(p, data, t, count, to).map(|_| ())
-}
-
-/// [`add_item`] from where the client dropped the item, `to`: that slot,
-/// then that bag, then anywhere it goes ([`plan_to`]).
-pub fn add_item_to(
-    map: &mut Map,
-    g: Guid,
-    entry: u32,
-    count: u32,
-    to: (u8, u8),
-) -> Result<(), Fail> {
-    store_at(
-        map,
-        g,
-        entry,
-        count,
-        true,
-        NewItemCreationType::Received,
-        0,
-        Some(to),
-    )
-}
-
 fn store(
     map: &mut Map,
     g: Guid,
@@ -970,6 +1144,7 @@ fn store(
     store_at(map, g, entry, count, alert, creation, property, None)
 }
 
+/// [`store`], to `(bag, slot)` as [`plan_at`] has it when `at` is given.
 #[allow(clippy::too_many_arguments)]
 fn store_at(
     map: &mut Map,
@@ -979,20 +1154,41 @@ fn store_at(
     alert: bool,
     creation: NewItemCreationType,
     property: u32,
-    to: Option<(u8, u8)>,
+    at: Option<(u8, Option<u8>)>,
 ) -> Result<(), Fail> {
     let data = map.realm.data.clone();
-    let Some(t) = data.item(entry).cloned() else {
+    let Some(t) = data.item(entry) else {
         return Err(Fail::NotFound);
     };
+    let Some(p) = map.players.get(&g) else {
+        return Err(Fail::NotFound);
+    };
+    let planned = match at {
+        None => plan(p, &data, t, count)?,
+        Some((bag, slot)) => plan_at(p, &data, t, count, bag, slot)?,
+    };
+    store_planned(map, g, entry, count, alert, creation, property, planned)
+}
+
+/// Put `count` of `entry` where `planned` says: onto those stacks, into
+/// those slots.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn store_planned(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    alert: bool,
+    creation: NewItemCreationType,
+    property: u32,
+    planned: (Vec<(usize, u32)>, Vec<(u8, u8, u32)>),
+) -> Result<(), Fail> {
+    let data = map.realm.data.clone();
     let realm = map.realm.clone();
     let Some(p) = map.players.get_mut(&g) else {
         return Err(Fail::NotFound);
     };
-    let (onto, new_slots) = match to {
-        Some(to) => plan_to(p, &data, &t, count, to)?,
-        None => plan(p, &data, &t, count)?,
-    };
+    let (onto, new_slots) = planned;
     // Where it went, for the push: the item, and its slot; a stack it
     // joined is no one slot (-1, Thistle Tea's and mangos's).
     let mut last = None;
@@ -1002,6 +1198,7 @@ fn store_at(
         last = Some((i, u32::MAX));
     }
     let mut batch = update::Batch::new();
+    let first_new = p.items.len();
     for (bag, slot, n) in new_slots {
         let counter = realm
             .next_item
@@ -1026,10 +1223,9 @@ fn store_at(
         p.outbound.send_frame(frame);
     }
     // The new items are known; their slots go out with the next update.
-    for item in p.items.iter_mut() {
-        if item.entry == entry {
-            item.fields.clear_dirty();
-        }
+    // The stacks they joined are told their counts then.
+    for item in &mut p.items[first_new..] {
+        item.fields.clear_dirty();
     }
     p.refresh_inventory(&data);
     let notify = alert;
@@ -1172,34 +1368,6 @@ pub(crate) fn may_place(
     Ok(())
 }
 
-/// Whether a new item `entry` (a purchase) may be put on in `slot` of the
-/// equipment or the bag bar, from the carried slot it would first go to
-/// ([`move_item`]'s rules): room for it there, and for what it puts away:
-/// a two-hander over a weapon puts that where it was, and the off hand's
-/// item wants another slot (mangos's `CanEquipNewItem`, "inventory is
-/// full").
-pub fn may_equip_new(p: &Player, data: &GameData, entry: u32, slot: u8) -> Result<(), Fail> {
-    let t = data.item(entry).ok_or(Fail::NotFound)?;
-    let free: Vec<(u8, u8)> = crate::game::map::items::carry_slots(data, p, Some(t))
-        .into_iter()
-        .filter(|(b, s)| p.item_at(*b, *s).is_none())
-        .collect();
-    let Some(&(bag, at)) = free.first() else {
-        return Err(Fail::InventoryFull);
-    };
-    let new = Item::new(data, Guid::zero(), p.guid, entry, bag, at, 1);
-    may_place(p, data, &new, BAG_PLAYER, slot)?;
-    if slot == SLOT_MAIN_HAND
-        && t.inventory_type == 17
-        && p.item_at(BAG_PLAYER, SLOT_OFF_HAND).is_some()
-        && p.item_at(BAG_PLAYER, SLOT_MAIN_HAND).is_some()
-        && free.len() < 2
-    {
-        return Err(Fail::InventoryFull);
-    }
-    Ok(())
-}
-
 /// Move the item at `from` to `to`: into an empty slot, onto a stack of the
 /// same item, or swapping with what is there.
 pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
@@ -1209,6 +1377,12 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         return;
     };
     if from == to {
+        return;
+    }
+    // A sold item is the vendor's until bought back (mangos's
+    // `IsValidPos` on the source).
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
         return;
     }
     let Some(a) = p.item_at(from.0, from.1) else {
@@ -1413,6 +1587,10 @@ pub fn stow(map: &mut Map, g: Guid, from: (u8, u8), slots: &[(u8, u8)], full: Fa
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
@@ -1482,6 +1660,10 @@ pub fn split(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8), count: u32) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
@@ -1553,10 +1735,11 @@ pub fn destroy(map: &mut Map, g: Guid, at: (u8, u8), count: u32) {
         send_fail(p, Fail::NotFound, Guid::zero());
         return;
     };
+    // On the bag bar or in the bank's (mangos's `IsNotEmptyBag`).
+    let slot = p.items[i].slot;
     let bag_with_items = p.items[i].bag == BAG_PLAYER
-        && p.items
-            .iter()
-            .any(|x| x.bag == p.items[i].slot && (BAG_START..BAG_END).contains(&p.items[i].slot));
+        && ((BAG_START..BAG_END).contains(&slot) || (BANK_BAG_START..BANK_BAG_END).contains(&slot))
+        && p.items.iter().any(|x| x.bag == slot);
     if bag_with_items {
         send_fail(p, Fail::OnlyEmptyBags, p.items[i].guid);
         return;

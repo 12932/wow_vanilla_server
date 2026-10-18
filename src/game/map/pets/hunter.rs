@@ -840,8 +840,9 @@ pub fn list_stable(map: &mut Map, player: Guid, npc: Guid) {
 
 /// `CMSG_STABLE_PET`: the current pet into a free stall.
 pub fn stable(map: &mut Map, player: Guid, npc: Guid) {
+    // No master to serve them: told so (mangos's `CheckStableMaster`).
     if !stable_master(map, player, npc) {
-        return;
+        return stable_result(map, player, StableResult::ErrStable);
     }
     if let Some(pet) = map.players.get(&player).and_then(|p| p.owned.pet) {
         if !map.unit_view(pet).is_some_and(|u| u.alive) {
@@ -873,8 +874,9 @@ pub fn stable(map: &mut Map, player: Guid, npc: Guid) {
 
 /// `CMSG_UNSTABLE_PET`: a stabled pet out, with no current one.
 pub fn unstable(map: &mut Map, player: Guid, npc: Guid, number: u32) {
+    // No master to serve them: told so (mangos's `CheckStableMaster`).
     if !stable_master(map, player, npc) {
-        return;
+        return stable_result(map, player, StableResult::ErrStable);
     }
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -895,8 +897,9 @@ pub fn unstable(map: &mut Map, player: Guid, npc: Guid, number: u32) {
 
 /// `CMSG_STABLE_SWAP_PET`: the current pet and a stabled one change places.
 pub fn swap(map: &mut Map, player: Guid, npc: Guid, number: u32) {
+    // No master to serve them: told so (mangos's `CheckStableMaster`).
     if !stable_master(map, player, npc) {
-        return;
+        return stable_result(map, player, StableResult::ErrStable);
     }
     if let Some(pet) = map.players.get(&player).and_then(|p| p.owned.pet) {
         if !map.unit_view(pet).is_some_and(|u| u.alive) {
@@ -932,8 +935,9 @@ pub fn swap(map: &mut Map, player: Guid, npc: Guid, number: u32) {
 
 /// `CMSG_BUY_STABLE_SLOT`: a stall more, for its price.
 pub fn buy_slot(map: &mut Map, player: Guid, npc: Guid) {
+    // No master to serve them: told so (mangos's `CheckStableMaster`).
     if !stable_master(map, player, npc) {
-        return;
+        return stable_result(map, player, StableResult::ErrStable);
     }
     let prices = map.realm.data.pets.stable_prices.clone();
     let Some(p) = map.players.get_mut(&player) else {

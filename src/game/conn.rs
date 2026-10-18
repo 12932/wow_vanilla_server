@@ -40,6 +40,8 @@ pub struct Outbound {
 struct OutboundInner {
     tx: kanal::AsyncSender<Arc<[u8]>>,
     budget: Arc<Semaphore>,
+    /// The budget's bytes, all of them.
+    capacity: usize,
     overflowed: AtomicBool,
 }
 
@@ -56,6 +58,7 @@ impl Outbound {
         Self {
             inner: Arc::new(OutboundInner {
                 tx,
+                capacity: budget.available_permits(),
                 budget,
                 overflowed: AtomicBool::new(false),
             }),
@@ -102,6 +105,13 @@ impl Outbound {
     /// queued, and the connection closes.
     pub fn close(&self) {
         let _ = self.inner.tx.close();
+    }
+
+    /// Bytes queued for the writer, not yet written.
+    pub fn queued_bytes(&self) -> usize {
+        self.inner
+            .capacity
+            .saturating_sub(self.inner.budget.available_permits())
     }
 
     pub fn is_closed(&self) -> bool {

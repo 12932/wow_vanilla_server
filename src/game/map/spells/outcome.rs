@@ -100,7 +100,7 @@ pub struct Landing {
 /// Whether spell outcomes are rolled (production), or fixed: always a hit,
 /// never a crit or a partial resist below a certain chance (tests).
 pub fn rolling(map: &Map) -> bool {
-    map.spells.rolls.unwrap_or(map.realm.config.spell_rolls)
+    map.spells.rolls.unwrap_or(map.cfg.spell_rolls)
 }
 
 /// A roll from 0 to 9,999, hundredths of a percent.
@@ -369,6 +369,11 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
         if reflect > 0 && chance(map, reflect as f32) {
             return Hit::Reflect;
         }
+    }
+    // A spell of no damage class never misses (mangos-classic's
+    // `SpellHitResult`, Thistle Tea's unclassified spells): no magic roll.
+    if s.dmg_class == 0 {
+        return Hit::Hit;
     }
     let chance = spell_hit_chance(map, caster, target, s, m);
     if roll_strict(map, chance) {

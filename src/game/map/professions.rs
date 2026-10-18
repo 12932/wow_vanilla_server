@@ -270,11 +270,13 @@ fn lock_skill_up(map: &mut Map, caster: Guid, o: &Opening) -> bool {
         .get(&caster)
         .and_then(|p| skills::value(p, skill))
         .unwrap_or(0);
-    try_raise(
+    let by = map.cfg.rates.skill_gain_gathering;
+    try_raise_by(
         map,
         caster,
         skill,
         gather_gain_chance(skill, learned, o.required, 1),
+        by,
     )
 }
 
@@ -336,26 +338,42 @@ pub fn gather_gain_chance(skill: u32, value: u32, required: u32, multiplier: u32
 
 /// A recipe's chance to raise its skill: orange, yellow, green, grey.
 pub fn craft_gain_chance(value: u32, yellow: u32, gray: u32) -> u32 {
+    craft_gain_chance_at(value, yellow, gray, &Default::default())
+}
+
+/// [`craft_gain_chance`] at the server's chances (`[rates]
+/// skill_chance_*`).
+pub fn craft_gain_chance_at(
+    value: u32,
+    yellow: u32,
+    gray: u32,
+    rates: &crate::config::RatesConfig,
+) -> u32 {
     if value >= gray {
-        0
+        rates.skill_chance_grey
     } else if value >= (yellow + gray) / 2 {
-        25
+        rates.skill_chance_green
     } else if value >= yellow {
-        75
+        rates.skill_chance_yellow
     } else {
-        100
+        rates.skill_chance_orange
     }
 }
 
 /// Raise `skill` by one, `chance` percent of the time (a roll in
 /// `[0, 100)` under it, as Thistle Tea rolls).
 pub fn try_raise(map: &mut Map, player: Guid, skill: u32, chance: f64) -> bool {
+    try_raise_by(map, player, skill, chance, 1)
+}
+
+/// [`try_raise`], by `by` points (`[rates] skill_gain_*`).
+pub fn try_raise_by(map: &mut Map, player: Guid, skill: u32, chance: f64, by: u32) -> bool {
     let roll = rand::rng().random_range(0.0..100.0);
     roll < chance
         && map
             .players
             .get_mut(&player)
-            .is_some_and(|p| skills::raise(p, skill, 1))
+            .is_some_and(|p| skills::raise(p, skill, by.max(1)))
 }
 
 fn send_failure(map: &Map, player: Guid, spell: u32, code: u8) {
@@ -668,8 +686,10 @@ pub fn recipe_skill_up(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     else {
         return;
     };
-    let chance = craft_gain_chance(value, a.trivial_low, a.trivial_high);
-    try_raise(map, caster, a.skill, f64::from(chance));
+    let rates = &map.cfg.rates;
+    let chance = craft_gain_chance_at(value, a.trivial_low, a.trivial_high, rates);
+    let by = rates.skill_gain_crafting;
+    try_raise_by(map, caster, a.skill, f64::from(chance), by);
 }
 
 /// Gathering, lockpicking or a plain opening: a lock opened with skill
@@ -812,9 +832,13 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     let Some(t) = data.creature_template(entry) else {
         return;
     };
-    let Some(table) = data.loot.skinning.get(&t.skinning_loot_id) else {
-        return;
-    };
+    // A skin of no rows yields nothing, and is skinned all the same (Thistle
+    // Tea's empty skinning table): not left to be tried for ever.
+    let table = data
+        .loot
+        .skinning
+        .get(&t.skinning_loot_id)
+        .map_or(&[][..], |t| &t[..]);
     // The attempt may fail: the skill rolled from 25 below to 37 above
     // must reach the corpse's need (Thistle Tea's `Skinning.attempt?`).
     let skill = map
@@ -827,7 +851,14 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
         return;
     }
     let wanted = crate::game::map::quests::wanted(map, caster);
-    let loot = loot::personal(&data, table, caster, &wanted, LootKind::Skinning);
+    let loot = loot::personal(
+        &data,
+        table,
+        caster,
+        &wanted,
+        LootKind::Skinning,
+        &map.cfg.rates,
+    );
     let elite = matches!(t.rank, 1..=3);
     // Skinning the Beast frees the hunter it swallowed.
     if entry == THE_BEAST {
@@ -849,7 +880,8 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
         level * 5
     };
     let chance = gather_gain_chance(SKILL_SKINNING, learned, required, if elite { 2 } else { 1 });
-    try_raise(map, caster, SKILL_SKINNING, chance);
+    let by = map.cfg.rates.skill_gain_gathering;
+    try_raise_by(map, caster, SKILL_SKINNING, chance, by);
     loot::show(map, caster, creature);
 }
 
@@ -880,7 +912,14 @@ fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     let wanted = crate::game::map::quests::wanted(map, caster);
     let player_level = map.players.get(&caster).map_or(1, |p| u32::from(p.level()));
     let mut loot = match data.loot.pickpocket.get(&t.pickpocket_loot_id) {
-        Some(table) => loot::personal(&data, table, caster, &wanted, LootKind::Pickpocket),
+        Some(table) => loot::personal(
+            &data,
+            table,
+            caster,
+            &wanted,
+            LootKind::Pickpocket,
+            &map.cfg.rates,
+        ),
         None => Loot {
             owner: Some(caster),
             kind: LootKind::Pickpocket,
@@ -916,11 +955,16 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid, spell: u32) {
     };
     // Nothing to roll, or nothing rolled: try again, the item kept
     // (Thistle Tea's).
-    let loot = data
-        .loot
-        .disenchant
-        .get(&t.disenchant_id)
-        .map(|table| loot::personal(&data, table, caster, &[], LootKind::Disenchant));
+    let loot = data.loot.disenchant.get(&t.disenchant_id).map(|table| {
+        loot::personal(
+            &data,
+            table,
+            caster,
+            &[],
+            LootKind::Disenchant,
+            &map.cfg.rates,
+        )
+    });
     let Some(loot) = loot.filter(|l| !l.items.is_empty()) else {
         send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
@@ -1172,7 +1216,14 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
     let wanted = crate::game::map::quests::wanted(map, player);
     let loot = match hole_near(map, object) {
         Some((hole, table)) => {
-            let mut l = loot::personal(&data, &table, player, &wanted, LootKind::Fishing);
+            let mut l = loot::personal(
+                &data,
+                &table,
+                player,
+                &wanted,
+                LootKind::Fishing,
+                &map.cfg.rates,
+            );
             l.gold = 0;
             // Between its least and most, rolled for the spawn (Thistle
             // Tea's, mangos's).
@@ -1206,7 +1257,14 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
                 .or_else(|| data.loot.fishing.get(&b.zone))
                 .cloned()
                 .unwrap_or_default();
-            loot::personal(&data, &table, player, &wanted, LootKind::Fishing)
+            loot::personal(
+                &data,
+                &table,
+                player,
+                &wanted,
+                LootKind::Fishing,
+                &map.cfg.rates,
+            )
         }
     };
     if let Some(o) = map.gameobject_mut(object) {

@@ -39,7 +39,6 @@ pub const SPELL_DESERTER: u32 = 26013;
 /// Waiting to Resurrect: a ghost in the match, for the next wave.
 pub const SPELL_WAITING_TO_RESURRECT: u32 = 2584;
 pub const RESURRECT_EVERY: Duration = Duration::from_secs(30);
-pub const CLOSE_AFTER: Duration = Duration::from_secs(120);
 /// How near a kill a side's players must be to share its honorable kill.
 pub const KILL_SHARE_YARDS: f32 = 74.0;
 
@@ -479,7 +478,8 @@ pub fn reward_team_honor(map: &mut Map, s: usize, amount: u32) {
         if let Some(m) = map.battleground.as_mut()
             && let Some(score) = m.scores.get_mut(&g)
         {
-            score.bonus_honor += amount;
+            // As the honor itself, at the server's rate.
+            score.bonus_honor += crate::config::scaled(amount, map.cfg.rates.honor);
         }
         crate::game::map::pvp::bonus_honor(map, g, amount);
     }
@@ -502,7 +502,7 @@ pub fn team_kill_credit(map: &mut Map, s: usize, entry: u32) {
 /// A player in the match's map.
 pub fn arrived(map: &mut Map, g: Guid) {
     let now = map.now;
-    let delay = map.realm.config.bg_start_delay;
+    let delay = map.cfg.bg_start_delay;
     let key = map.key;
     let realm = map.realm.clone();
     let Some(team) = map.players.get(&g).map(|p| side(p.team)) else {
@@ -586,7 +586,7 @@ pub fn update(map: &mut Map) {
                 start(map);
             }
         }
-        Phase::Ended { at, .. } if now.duration_since(at) >= CLOSE_AFTER => {
+        Phase::Ended { at, .. } if now.duration_since(at) >= map.cfg.bg_auto_leave => {
             let everyone: Vec<Guid> = map.players.keys().copied().collect();
             for g in everyone {
                 battlegrounds::leave(map, g);

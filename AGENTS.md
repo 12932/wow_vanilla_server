@@ -95,12 +95,18 @@ There is no world tick.
 
 ## Configuration
 
-`config.toml` (every key optional; an unknown key is an error), and the environment:
+`config.toml` (every key optional; an unknown key is an error), with the environment over it, as described in
+[docs/CONFIG.md](docs/CONFIG.md). Each key is declared once, in a `settings!` block in `src/config.rs` (its type,
+default, range, whether a reload changes it, its mangos name and its meaning); `config.example.toml` is generated from
+those (`cargo run --bin wow_vanilla_server -- --print-config --defaults > config.example.toml`), and a test fails when
+it drifts. Maps read the live settings as `map.cfg` (taken once an update); elsewhere, `realm.config()`. A tunable
+that is policy, not 1.12's rule, goes there rather than in a constant.
 
 | Var | Purpose |
 |---|---|
+| `WVS__SECTION__KEY` | any config key, over the file: `WVS__RATES__XP_KILL=2`. An unknown one is an error. |
 | `WOW_REALM_ADDRESS` | `host:port` in the realm list. Defaults to `localhost:8085`. |
-| `WOW_TRACY` | `1` starts the Tracy profiler. |
+| `WOW_TRACY` | `1` starts Tracy: a frame per map update, a zone per step, packet and save ([docs/PROFILING.md](docs/PROFILING.md)). |
 | `RUST_LOG` | the log filter. |
 | `WVS_DATA` | the tests' real world: a `data/` with `db`, `nav` and `terrain` (the extended suite's). |
 

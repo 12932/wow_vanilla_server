@@ -19,10 +19,6 @@ use crate::game::map::player::{PLAYER_FLAGS_GM, UNIT_FLAG_IN_COMBAT};
 
 /// How often an idle hostile creature looks for players.
 const AGGRO_SCAN_EVERY: Duration = Duration::from_millis(500);
-/// How long a corpse lies before it goes (Thistle Tea's `@corpse_decay_ms`):
-/// an elite's, ranks one to three, twice as long.
-const CORPSE_DECAY: Duration = Duration::from_secs(300);
-const ELITE_CORPSE_DECAY: Duration = Duration::from_secs(600);
 /// The shortest wait before a creature respawns.
 const MIN_RESPAWN: Duration = Duration::from_secs(5);
 /// `UNIT_DYNAMIC_FLAGS`: the creature is tapped by someone else.
@@ -83,7 +79,7 @@ pub fn aggro_reach(detection: f32, creature_level: u32, unit_level: u32, modifie
 
 /// How near `t` `g` notices it (Thistle Tea's `Acquisition.radius`): its
 /// aggro radius at `t`'s level (a pet's, its master's), with its own
-/// detect-range auras.
+/// detect-range auras, at the server's rate (`[creatures] aggro_rate`).
 pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
     use crate::game::map::auras::AURA_MOD_DETECT_RANGE;
     let Some(c) = map.creature(g) else {
@@ -105,7 +101,7 @@ pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
     let lv = map
         .unit_fields(who)
         .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
-    aggro_reach(detection, level, lv, modifier)
+    aggro_reach(detection, level, lv, modifier) * map.cfg.creatures.aggro_rate
 }
 
 /// The unit flags that put a unit out of any fight: not attackable (both),
@@ -312,8 +308,13 @@ pub fn taunt_ended(map: &mut Map, creature: Guid, by: Guid) {
 }
 
 /// How long spawn `spawn` waits to come back: its time, rolled in its
-/// range (five minutes for none), at least five seconds.
-pub fn respawn_delay(data: &crate::game::data::GameData, spawn: Option<u32>) -> Duration {
+/// range (five minutes for none), at `rate` (`[rates] respawn_time`), at
+/// least five seconds.
+pub fn respawn_delay(
+    data: &crate::game::data::GameData,
+    spawn: Option<u32>,
+    rate: f32,
+) -> Duration {
     spawn
         .and_then(|g| {
             data.creature_spawns
@@ -331,6 +332,7 @@ pub fn respawn_delay(data: &crate::game::data::GameData, spawn: Option<u32>) -> 
             Duration::from_secs(u64::from(secs))
         })
         .unwrap_or(Duration::from_secs(300))
+        .mul_f32(rate)
         .max(MIN_RESPAWN)
 }
 
@@ -372,20 +374,19 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     let now = map.now;
     let data = map.realm.data.clone();
     let spline_id = map.next_spline_id;
+    let cfg = map.cfg.clone();
     crate::game::map::spells::threat_sync::wiped(map, creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
     let template = data.creature_template(c.entry);
-    let elite = template.is_some_and(|t| matches!(t.rank, 1..=3));
-    let respawn = respawn_delay(&data, c.spawn_guid);
+    // How long its corpse lies, by its rank (Thistle Tea's
+    // `@corpse_decay_ms`, an elite's twice a normal's; mangos's
+    // `Corpse.Decay.*`).
+    let decay = cfg.creatures.corpse_decay(template.map_or(0, |t| t.rank));
+    let respawn = respawn_delay(&data, c.spawn_guid, cfg.rates.respawn_time);
     let Some(c) = map.creature_mut(creature) else {
         return;
-    };
-    let decay = if elite {
-        ELITE_CORPSE_DECAY
-    } else {
-        CORPSE_DECAY
     };
     c.life = Life::Dead {
         corpse_until: now + decay.min(respawn),
@@ -751,6 +752,10 @@ pub fn update_creatures(map: &mut Map) {
         },
         |k, _| k,
     );
+    // One zone for every turn, with their count: a zone a creature would
+    // be thousands an update.
+    let z = crate::zone!("creatures' turns");
+    z.value(keys.len() as u64);
     for key in keys {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
@@ -900,7 +905,7 @@ fn aggro_scan(map: &mut Map, g: Guid) {
         .map(|t| t.detection_range)
         .unwrap_or(20.0);
     let modifier = c.auras.sum(AURA_MOD_DETECT_RANGE) as f32;
-    let search = aggro_reach(detection, level, 0, modifier);
+    let search = aggro_reach(detection, level, 0, modifier) * map.cfg.creatures.aggro_rate;
     if search <= 0.0 {
         return;
     }

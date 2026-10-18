@@ -18,9 +18,11 @@ pub const KIND_HUNTER: u8 = 1;
 pub const KIND_DEMON: u8 = 2;
 /// Growl, rank 1: every hunter's pet knows it.
 const GROWL: u32 = 2649;
+/// The class script Demonic Sacrifice's buffs carry.
+const DEMONIC_SACRIFICE_SCRIPT: i32 = 2228;
 
 /// A template, or a stand-in for an entry the data lacks.
-fn template(data: &GameData, entry: u32) -> CreatureTemplate {
+pub(super) fn template(data: &GameData, entry: u32) -> CreatureTemplate {
     data.creature_template(entry)
         .cloned()
         .unwrap_or_else(|| CreatureTemplate {
@@ -566,6 +568,16 @@ pub fn summon_demon(map: &mut Map, owner: Guid, entry: u32, spell: u32) {
     if let Some(old) = pet_of(map, owner) {
         dismiss(map, old);
     }
+    // A demon summoned ends what Demonic Sacrifice gave for the last
+    // (its buffs' class script 2228), as mangos-classic's `EffectSummonPet`.
+    if guid::is_player(owner) {
+        crate::game::map::auras::remove_where(map, owner, |h| {
+            h.effects.iter().any(|x| {
+                x.kind == crate::game::map::auras::AURA_OVERRIDE_CLASS_SCRIPTS
+                    && x.misc == DEMONIC_SACRIFICE_SCRIPT
+            })
+        });
+    }
     let level = map
         .unit_view(owner)
         .map(|u| u.level)
@@ -687,6 +699,15 @@ pub fn remove(map: &mut Map, g: Guid) {
     let totem = state(map, g).map(|s| s.kind) == Some(Kind::Totem);
     if totem {
         totems::lift_auras(map, g);
+        // Those who see it watch it sink, as mangos-classic's
+        // `Totem::UnSummon` and Thistle Tea's totem show it go.
+        if let Some(frame) =
+            crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_DESPAWN_ANIM {
+                guid: g,
+            })
+        {
+            map.send_to_observers(g, &frame, false);
+        }
     }
     if let Some(owner) = owner
         && let Some(p) = map.players.get_mut(&owner)

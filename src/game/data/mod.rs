@@ -521,8 +521,10 @@ pub struct GameData {
     pub events: AHashMap<u32, GameEvent>,
     /// Creature and object spawns tied to an event: during it (a positive
     /// id) or outside it (negative).
-    pub event_creatures: AHashMap<u32, i32>,
-    pub event_objects: AHashMap<u32, i32>,
+    /// A spawn may be tied to more than one (Hallow's End's and the
+    /// Harvest Festival's, the Darkmoon Faire's building and the Faire).
+    pub event_creatures: AHashMap<u32, Vec<i32>>,
+    pub event_objects: AHashMap<u32, Vec<i32>>,
     /// `gameobject_requirement`: spawn → (0 a creature dead, 1 an object
     /// open; its spawn).
     pub object_requirements: AHashMap<u32, (u8, u32)>,

@@ -821,7 +821,7 @@ async fn an_elemental_rift_calls_out_its_invaders() {
             ..Default::default()
         }],
     );
-    d.event_objects.insert(60, 68);
+    d.event_objects.insert(60, vec![68]);
     let mut invader = d.creature_templates[&GIVER].clone();
     invader.entry = 14_460;
     invader.name = "Blazing Invader".into();

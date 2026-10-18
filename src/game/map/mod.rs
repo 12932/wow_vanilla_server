@@ -9,6 +9,8 @@ pub mod assistance;
 pub mod auction;
 pub mod auras;
 pub mod battleground;
+#[cfg(all(feature = "world-bench", unix))]
+pub mod bench_probe;
 pub mod boss_mechanics;
 pub mod captured;
 pub mod charge;
@@ -279,6 +281,46 @@ pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What Tracy shows of a map (docs/PROFILING.md): its updates, a frame
+/// each, and four plots, once a second.
+struct MapProfile {
+    frame: crate::tracy::FrameName,
+    players: crate::tracy::Plot,
+    awake: crate::tracy::Plot,
+    mailbox: crate::tracy::Plot,
+    outbound: crate::tracy::Plot,
+    plot_at: Instant,
+}
+
+impl MapProfile {
+    /// `None` while Tracy is off. A map by its name, a copy by its name and
+    /// instance id.
+    fn new(key: MapKey, realm: &Realm) -> Option<Self> {
+        use crate::tracy::{Format, FrameName, Plot};
+        if !crate::tracy::on() {
+            return None;
+        }
+        let name = realm
+            .data
+            .maps
+            .get(&key.map)
+            .map_or_else(|| format!("map {}", key.map), |m| m.name.clone());
+        let name = if key.instance == 0 {
+            name
+        } else {
+            format!("{name} #{}", key.instance)
+        };
+        Some(Self {
+            frame: FrameName::new(&name),
+            players: Plot::new(&format!("{name}: players"), Format::Number),
+            awake: Plot::new(&format!("{name}: creatures awake"), Format::Number),
+            mailbox: Plot::new(&format!("{name}: mailbox"), Format::Number),
+            outbound: Plot::new(&format!("{name}: outbound queued"), Format::Bytes),
+            plot_at: Instant::now(),
+        })
+    }
+}
+
 /// Per-map counters, for `.maps` and the logs.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MapStats {
@@ -302,6 +344,9 @@ pub struct MapStats {
 pub struct Map {
     pub key: MapKey,
     pub realm: Arc<Realm>,
+    /// The realm's settings, taken at the start of each update: a reload
+    /// is seen whole, between updates, never mid-step.
+    pub cfg: Arc<crate::game::RealmConfig>,
     pub handle: MapHandle,
     pub players: AHashMap<Guid, Player>,
     pub creatures: Slab<Creature>,
@@ -409,6 +454,8 @@ pub struct Map {
     pub leashes: creature_combat::Leashes,
     /// Who has panicked lately, and when the map has had enough.
     pub health: supervise::Health,
+    /// What Tracy shows of the map, while Tracy is on.
+    profile: Option<MapProfile>,
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
@@ -494,6 +541,20 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
         MapEvent::Packet(g, _) => Some(*g),
         _ => None,
     };
+    #[cfg(all(feature = "world-bench", unix))]
+    let _probe = bench_probe::enabled().then(|| {
+        let kind = match &event {
+            MapEvent::Arrive(a) => match a.kind {
+                ArrivalKind::Login(_) => "a login",
+                ArrivalKind::Transfer(_) => "a transfer",
+            },
+            MapEvent::Packet(_, m) => m.message_name(),
+            MapEvent::Disconnect(_) => "a disconnect",
+            MapEvent::Call(_) => "a call",
+            MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
+        };
+        EventProbe(map.key, bench_probe::event_start(), Instant::now(), kind)
+    });
     match guarded(map, "an event", |m| m.handle_event(event)) {
         Some(stop) => stop,
         None => {
@@ -505,9 +566,23 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
     }
 }
 
+/// An event's CPU time, for the world benchmark, when it is dropped.
+#[cfg(all(feature = "world-bench", unix))]
+struct EventProbe(MapKey, bench_probe::Start, Instant, &'static str);
+
+#[cfg(all(feature = "world-bench", unix))]
+impl Drop for EventProbe {
+    fn drop(&mut self) {
+        bench_probe::event_done(self.0, &self.1, self.2.elapsed(), self.3);
+    }
+}
+
 /// Run a map's actor until it is told to stop.
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
-    guarded(&mut map, "populating", world::populate);
+    guarded(&mut map, "populating", |m| {
+        let _z = crate::zone!("populate");
+        world::populate(m)
+    });
     let mut report_at = Instant::now() + REPORT_EVERY;
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -549,6 +624,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     report_at = map.now + REPORT_EVERY;
                     map.report(rx.len());
                 }
+                map.plot(rx.len());
             }
         }
     }
@@ -596,8 +672,10 @@ impl Map {
     pub fn new(key: MapKey, realm: Arc<Realm>, handle: MapHandle) -> Self {
         let now = Instant::now();
         let instance = instance_script::State::for_map(&realm.data, key.map, key.instance);
+        let profile = MapProfile::new(key, &realm);
         Self {
             key,
+            cfg: realm.config_arc(),
             realm,
             handle,
             players: AHashMap::new(),
@@ -652,6 +730,7 @@ impl Map {
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
             health: Default::default(),
+            profile,
             #[cfg(test)]
             faults: Default::default(),
         }
@@ -667,16 +746,32 @@ impl Map {
     fn handle_event(&mut self, event: MapEvent) -> bool {
         self.stats.events += 1;
         match event {
-            MapEvent::Arrive(a) => self.arrive(*a),
+            MapEvent::Arrive(a) => {
+                let _z = crate::zone!("arrival");
+                self.arrive(*a)
+            }
             MapEvent::Packet(guid, msg) => {
+                // wow_messages names a movement packet from the client
+                // `MSG_MOVE_HEARTBEAT_Client`; the opcode is `MSG_MOVE_HEARTBEAT`.
+                let name = msg.message_name();
+                let _z = crate::tracy::Zone::named(
+                    "packet",
+                    name.strip_suffix("_Client").unwrap_or(name),
+                );
                 #[cfg(test)]
                 if self.faults.any() {
                     self.faults.check(&format!("packets of {guid}"));
                 }
                 self.handle_packet(guid, msg)
             }
-            MapEvent::Disconnect(guid) => self.handle_disconnect(guid),
-            MapEvent::Call(f) => f(self),
+            MapEvent::Disconnect(guid) => {
+                let _z = crate::zone!("disconnect");
+                self.handle_disconnect(guid)
+            }
+            MapEvent::Call(f) => {
+                let _z = crate::zone!("call");
+                f(self)
+            }
             MapEvent::Stop => return true,
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
@@ -796,6 +891,11 @@ impl Map {
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);
+        // A loot window open closes, as at a logout: a lock opened is shut
+        // again, a pocket's leftovers kept, an item's loot gone.
+        if let Some(target) = self.players.get(&guid).and_then(|p| p.looting) {
+            loot::release(self, guid, target);
+        }
         duel::left(self, guid, true);
         trade::cancel(
             self,
@@ -838,7 +938,7 @@ impl Map {
             pets::sync_record(self, guid);
             if let Some(p) = self.players.get_mut(&guid) {
                 rows.push(p.to_row(now));
-                p.save_at = now + self.realm.config.save_interval;
+                p.save_at = now + self.cfg.save_interval;
             }
         }
         self.realm.store.save_together(rows, records);
@@ -849,9 +949,29 @@ impl Map {
         let now = self.now;
         if let Some(p) = self.players.get_mut(&guid) {
             let row = p.to_row(now);
-            p.save_at = now + self.realm.config.save_interval;
+            p.save_at = now + self.cfg.save_interval;
             self.realm.store.save(row);
         }
+    }
+
+    /// Tracy's plots of the map, once a second while Tracy is on.
+    fn plot(&mut self, queued: usize) {
+        let Some(p) = &mut self.profile else {
+            return;
+        };
+        if self.now < p.plot_at {
+            return;
+        }
+        p.plot_at = self.now + Duration::from_secs(1);
+        let outbound: usize = self
+            .players
+            .values()
+            .map(|p| p.outbound.queued_bytes())
+            .sum();
+        p.players.set(self.players.len() as f64);
+        p.awake.set(self.awake.len() as f64);
+        p.mailbox.set(queued as f64);
+        p.outbound.set(outbound as f64);
     }
 
     /// The map's numbers for the last while: players, creatures, update
@@ -904,7 +1024,7 @@ impl Map {
         let since = *self.empty_since.get_or_insert(self.now);
         // One its raid's reset took goes at once.
         if crate::game::instances::expired(&self.realm, self.key)
-            || self.now.duration_since(since) >= self.realm.config.instance_unload
+            || self.now.duration_since(since) >= self.cfg.instance_unload
         {
             self.realm.maps.stop(self.key);
             crate::game::instances::unloaded(&self.realm, self.key);
@@ -993,9 +1113,19 @@ impl Map {
     /// The update: timers, visibility, and the changed fields of
     /// everything, to every client that should hear of them.
     pub fn update(&mut self) {
+        let _frame = crate::tracy::Frame::begin(self.profile.as_ref().map(|p| p.frame));
+        let z = crate::zone!("update");
+        z.value(u64::from(self.key.map));
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;
+        // A reload's settings, if there was one: one pointer load.
+        let cfg = self.realm.config();
+        if !Arc::ptr_eq(&cfg, &self.cfg) {
+            self.cfg = arc_swap::Guard::into_inner(cfg);
+        }
+        #[cfg(all(feature = "world-bench", unix))]
+        let probe = bench_probe::enabled().then(bench_probe::start);
 
         // Each step under its own guard: one that panics costs itself,
         // this once, and the rest (the flushes most of all) go on.
@@ -1049,6 +1179,10 @@ impl Map {
         self.stats.window_total += took;
         self.stats.window_max = self.stats.window_max.max(took);
         self.stats.max_update = self.stats.max_update.max(took);
+        #[cfg(all(feature = "world-bench", unix))]
+        if let Some(start) = probe {
+            bench_probe::update_done(self, took, start);
+        }
         if took > UPDATE_INTERVAL {
             warn!(
                 "{} update took {} ms ({} players, {} creatures)",
@@ -1117,6 +1251,7 @@ impl Map {
 
     fn flush_values(&mut self) {
         let batches = &mut self.batches;
+        let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
             if p.awaiting_worldport {
                 continue;
@@ -1144,6 +1279,8 @@ impl Map {
             }
             p.fields.clear_dirty();
         }
+        drop(z);
+        let z = crate::zone!("values: game objects");
         // Only a game object changed since the last flush can have dirty
         // fields; in key order, as a look through every one goes.
         let mut touched = std::mem::take(&mut self.touched_objects);
@@ -1170,6 +1307,9 @@ impl Map {
             "{}: a game object changed, but not through Map::gameobject_mut",
             self.key
         );
+        drop(z);
+        // Every creature, for its dirty flag.
+        let z = crate::zone!("values: creatures");
         // Creatures whose tap their observers see anew: taken or gone, or
         // their flags sent again to those outside it.
         let mut taps = Vec::new();
@@ -1195,6 +1335,7 @@ impl Map {
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
+        drop(z);
         for (g, all) in taps {
             tap::tell(self, g, all);
         }

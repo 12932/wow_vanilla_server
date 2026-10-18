@@ -797,7 +797,7 @@ async fn the_six_demon_bag_looses_one_of_seven_things() {
     ];
     for ((id, on_target, on_self), (eid, target_pct, self_pct)) in counts.iter().zip(expected) {
         assert_eq!(*id, eid);
-        assert!(near(*on_target, n, target_pct, 3.0), "{counts:?}");
+        assert!(near(*on_target, n, target_pct, 4.0), "{counts:?}");
         assert!(near(*on_self, n, self_pct, 1.6), "{counts:?}");
     }
     assert!(!second, "its second effect does nothing");

@@ -44,6 +44,7 @@ pub fn xp(data: &GameData, level: u32, area_level: u32) -> u32 {
 /// `CheckAreaExploreAndOutdoor`, Thistle Tea's `discover_area`).
 pub fn entered(map: &mut Map, g: Guid, area: u32) {
     let data = map.realm.data.clone();
+    let rate = map.cfg.rates.xp_explore;
     let Some(info) = data.area(area) else {
         return;
     };
@@ -67,10 +68,10 @@ pub fn entered(map: &mut Map, g: Guid, area: u32) {
     p.fields
         .set_u32(PLAYER_EXPLORED_ZONES_1 + word as u16, value);
     let level = u32::from(p.level());
-    let gain = if level >= u32::from(crate::game::map::stats::MAX_LEVEL) {
+    let gain = if level >= u32::from(crate::game::map::stats::max_level()) {
         0
     } else {
-        xp(&data, level, info.level)
+        crate::config::scaled(xp(&data, level, info.level), rate)
     };
     p.outbound.send(&SMSG_EXPLORATION_EXPERIENCE {
         area: Area::try_from(area).unwrap_or_default(),

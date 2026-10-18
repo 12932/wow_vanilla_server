@@ -129,6 +129,7 @@ fn snapshot_path(dir: &std::path::Path) -> Option<(std::path::PathBuf, String)> 
 pub fn test_config() -> RealmConfig {
     RealmConfig {
         visibility_yards: 100.0,
+        instance_visibility_yards: 100.0,
         battleground_visibility_yards: 400.0,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
@@ -144,12 +145,19 @@ pub fn test_config() -> RealmConfig {
         logout_delay: Duration::ZERO,
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
+        bg_auto_leave: crate::game::battlegrounds::AUTO_LEAVE,
+        bg_invite_for: crate::game::battlegrounds::INVITE_FOR,
         pvp_realm: false,
         max_packets_per_sec: 200,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         spell_rolls: false,
         spell_travel: false,
         arena: Default::default(),
+        rates: Default::default(),
+        creatures: Default::default(),
+        players: Default::default(),
+        anticheat: Default::default(),
+        gm: Default::default(),
     }
 }
 
@@ -174,6 +182,10 @@ pub struct Client {
     pub raw: Vec<Arc<[u8]>>,
     /// Every frame, parsed or not, for [`Client::wait_frame`].
     frames: Vec<Arc<[u8]>>,
+    /// Every frame ever received, kept for the client-emulation check
+    /// (`tools/client_check`): the raw bytes as the writer framed them.
+    /// Unlike `frames`, [`Client::clear`] does not drop these.
+    captured: Vec<Arc<[u8]>>,
     /// Creates and forgets received and not yet waited for, by object:
     /// one packet can carry many.
     created: ahash::AHashMap<Guid, u32>,
@@ -197,6 +209,7 @@ impl Client {
             backlog: Vec::new(),
             raw: Vec::new(),
             frames: Vec::new(),
+            captured: Vec::new(),
             created: ahash::AHashMap::new(),
             forgot: ahash::AHashMap::new(),
         }
@@ -240,6 +253,7 @@ impl Client {
     fn drain(&mut self) {
         while let Ok(Some(frame)) = self.rx.try_recv() {
             self.frames.push(frame.clone());
+            self.captured.push(frame.clone());
             let parsed = ServerOpcodeMessage::read_unencrypted(&frame[..]);
             match parsed {
                 Ok(m) => {
@@ -345,6 +359,14 @@ impl Client {
         self.drain();
         self.backlog.clear();
         self.frames.clear();
+    }
+
+    /// Every frame this client has received, as the writer task framed it
+    /// (`[size u16 BE][opcode u16 LE][body]`), for the client-emulation
+    /// check. Drains the socket first, so it catches up to now.
+    pub fn captured(&mut self) -> Vec<Arc<[u8]>> {
+        self.drain();
+        self.captured.clone()
     }
 
     /// Create a character and log it in, waiting for the world.

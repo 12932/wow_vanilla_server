@@ -377,6 +377,8 @@ async fn an_energize_of_rage_threatens_and_one_of_mana_doesnt() {
     let out = map
         .query(move |m| {
             ready(m, warrior, 60, &[]);
+            // Out of the Battle Stance a warrior logs in in, and its threat.
+            auras::remove_spell(m, warrior, crate::game::map::spells::BATTLE_STANCE, None);
             let kobold = dummy(m, warrior, 60, 5.0);
             crate::game::map::ai::attacked(m, kobold, warrior);
             let threat = |m: &Map| {

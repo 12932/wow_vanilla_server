@@ -21,7 +21,7 @@ use crate::game::map::{Map, MapKey, visibility};
 pub fn populate(map: &mut Map) {
     let started = Instant::now();
     let data = map.realm.data.clone();
-    if let Some(dir) = map.realm.config.nav_dir.as_ref() {
+    if let Some(dir) = map.cfg.nav_dir.as_ref() {
         let name = data
             .maps
             .get(&map.key.map)
@@ -36,7 +36,7 @@ pub fn populate(map: &mut Map) {
             map.nav = Nav::open(dir, &name);
         }
     }
-    if let Some(dir) = map.realm.config.terrain_dir.as_ref() {
+    if let Some(dir) = map.cfg.terrain_dir.as_ref() {
         map.terrain = crate::game::map::terrain::Terrain::open(dir, map.key.map);
     }
     let on = crate::game::events::current(&map.realm);
@@ -54,7 +54,10 @@ pub fn populate(map: &mut Map) {
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
             if s.spawn_flags & crate::game::data::SPAWN_FLAG_DISABLED != 0
-                || !crate::game::events::spawned(data.event_creatures.get(&s.guid).copied(), &on)
+                || !crate::game::events::spawned(
+                    crate::game::events::ties(&data.event_creatures, s.guid),
+                    &on,
+                )
                 || !crate::game::map::battleground::spawn_allowed(map, true, s.guid)
                 || skip_creatures.contains(&s.guid)
             {
@@ -95,7 +98,10 @@ pub fn populate(map: &mut Map) {
         for s in spawns {
             if s.despawned
                 || s.spawn_flags & crate::game::data::SPAWN_FLAG_DISABLED != 0
-                || !crate::game::events::spawned(data.event_objects.get(&s.guid).copied(), &on)
+                || !crate::game::events::spawned(
+                    crate::game::events::ties(&data.event_objects, s.guid),
+                    &on,
+                )
                 || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
                 || skip_objects.contains(&s.guid)
             {
@@ -590,6 +596,45 @@ pub const GO_SPELLCASTER: u8 = 22;
 
 /// `CMSG_GAMEOBJ_USE`: a door or button flips, a chest opens, a chair is
 /// sat on.
+/// How near the seat of a chair one must be to sit on it (mangos-classic's
+/// `GameObject::IsUseableBy`).
+const CHAIR_REACH: f32 = 3.0;
+/// The stand state of one sat on a low chair: a higher chair's is this
+/// and its height (1.12's `UNIT_STAND_STATE_SIT_LOW_CHAIR` to `HIGH`).
+const STAND_STATE_SIT_LOW_CHAIR: u8 = 4;
+
+/// The seat of a chair at `at`, facing `orientation`, of `slots` seats a
+/// `size` apart along the line across its facing, nearest `user`: its
+/// centre with no slots (mangos-classic's `GetClosestChairSlotPosition`,
+/// Thistle Tea's `Chair.seat`).
+pub fn chair_seat(
+    at: Vector3d,
+    orientation: f32,
+    slots: u32,
+    size: f32,
+    user: Vector3d,
+) -> Vector3d {
+    if slots == 0 {
+        return at;
+    }
+    let across = orientation + std::f32::consts::FRAC_PI_2;
+    let (s, c) = across.sin_cos();
+    (0..slots)
+        .map(|i| {
+            let d = size * i as f32 - size * (slots - 1) as f32 / 2.0;
+            Vector3d {
+                x: at.x + d * c,
+                y: at.y + d * s,
+                z: at.z,
+            }
+        })
+        .min_by(|a, b| {
+            let d = |p: &Vector3d| (p.x - user.x).powi(2) + (p.y - user.y).powi(2);
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap_or(at)
+}
+
 pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     // Not one flagged against use, nor a door a copy's script works.
     let inert = map.gameobject(object).is_some_and(|o| {
@@ -684,9 +729,26 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
             }
         }
         GO_CHAIR => {
-            map.teleport(player, map.key, position, orientation);
+            let (slots, height) = map
+                .realm
+                .data
+                .gameobject_templates
+                .get(&map.gameobject(object).map_or(0, |o| o.entry))
+                .map_or((0, 0), |t| (t.data[0], t.data[1]));
+            let size = map.gameobject(object).map_or(1.0, |o| {
+                o.fields.get_f32(crate::game::fields::OBJECT_FIELD_SCALE_X)
+            });
+            let Some(at) = map.players.get(&player).map(|p| p.position()) else {
+                return;
+            };
+            let seat = chair_seat(position, orientation, slots, size, at);
+            let (dx, dy, dz) = (at.x - seat.x, at.y - seat.y, at.z - seat.z);
+            if dx * dx + dy * dy + dz * dz > CHAIR_REACH * CHAIR_REACH {
+                return;
+            }
+            map.teleport(player, map.key, seat, orientation);
             if let Some(p) = map.players.get_mut(&player) {
-                p.set_stand_state(crate::game::map::player::STAND_STATE_SIT);
+                p.set_stand_state(STAND_STATE_SIT_LOW_CHAIR.saturating_add(height.min(3) as u8));
             }
         }
         _ => {}

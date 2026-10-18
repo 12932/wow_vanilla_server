@@ -2363,6 +2363,9 @@ mod real {
             // What the last spell left (Grovel kneels, and holds) goes, and
             // so does its fight.
             auras::clear_on_death(m, g);
+            // So does the spell's own aura: a warrior logs in in Battle
+            // Stance, which death keeps.
+            auras::remove_spell(m, g, spell, None);
             crate::game::map::combat::leave_combat(m, g);
             let s = data.spells.get(spell).unwrap();
             let counter = m.next_creature_counter;
@@ -4283,8 +4286,8 @@ mod world_around {
             .unwrap()
             .extend([spawn(20, 1.0), spawn(21, 2.0)]);
         // 20 comes with the event, 21 goes with it.
-        d.event_creatures.insert(20, 9);
-        d.event_creatures.insert(21, -9);
+        d.event_creatures.insert(20, vec![9]);
+        d.event_creatures.insert(21, vec![-9]);
         d.weather.insert(12, [[100, 0, 0]; 4]);
         d
     }

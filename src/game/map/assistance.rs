@@ -21,11 +21,14 @@ use crate::game::map::auras;
 use crate::game::map::combat::dist;
 use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
 
-/// The reach of a creature's call for help when it is drawn in.
+/// The reach of a creature's call for help when it is drawn in, by
+/// default (`[creatures] assistance_radius`).
 pub const CALL_RADIUS: f32 = 10.0;
-/// How long the called take to come.
+/// How long the called take to come, by default (`[creatures]
+/// assistance_delay_ms`).
 pub const ASSIST_DELAY: Duration = Duration::from_millis(1500);
-/// How far a fleeing creature looks for help.
+/// How far a fleeing creature looks for help, by default (`[creatures]
+/// flee_assistance_radius`).
 pub const SEEK_RADIUS: f32 = 30.0;
 /// How often a creature fighting away from its spawn calls its friends,
 /// and how far from it it must be.
@@ -219,13 +222,14 @@ pub fn drawn_in(map: &mut Map, caller: Guid, enemy: Guid) {
     if crate::game::map::creature_motion::critter(map, caller) {
         return;
     }
-    let helpers = around(map, caller, CALL_RADIUS, |m, h| {
+    let radius = map.cfg.creatures.assistance_radius;
+    let helpers = around(map, caller, radius, |m, h| {
         eligible(m, h, caller, enemy, false)
     });
     if helpers.is_empty() {
         return;
     }
-    let due = map.now + ASSIST_DELAY;
+    let due = map.now + Duration::from_millis(map.cfg.creatures.assistance_delay_ms);
     map.rare.assist = true;
     if let Some(c) = map.creature_mut(caller) {
         c.engagement.assist.push(Assist {
@@ -370,7 +374,8 @@ pub fn update(map: &mut Map) {
 pub fn nearest_helper(map: &mut Map, g: Guid) -> Option<Guid> {
     let enemy = map.creature(g)?.combat.victim;
     let at = map.creature(g)?.position;
-    let mut near = around(map, g, SEEK_RADIUS, |m, h| eligible(m, h, g, enemy, false));
+    let radius = map.cfg.creatures.flee_assistance_radius;
+    let mut near = around(map, g, radius, |m, h| eligible(m, h, g, enemy, false));
     near.sort_by(|a, b| {
         let d = |x: &Guid| map.creature(*x).map_or(f32::MAX, |c| dist(c.position, at));
         d(a).total_cmp(&d(b)).then(a.guid().cmp(&b.guid()))

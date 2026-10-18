@@ -182,19 +182,27 @@ fn buy_failed(map: &Map, player: Guid, npc: Guid, item: u32, result: BuyResult) 
 
 /// `CMSG_BUY_ITEM`: `amount` stacks of an item's buy count.
 pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
-    buy_to(map, player, npc, item, amount, None);
+    buy_to(
+        map,
+        player,
+        npc,
+        item,
+        amount,
+        inventory::Destination::Anywhere,
+    );
 }
 
-/// [`buy`], the item stored from `to` (a bag and slot) if one is given
-/// ([`inventory::add_item_to`]). Whether it was bought.
+/// [`buy`], the new items put `to`: refused, with nothing spent, where
+/// they can't go (mangos's `BuyItemFromVendor`, after the vendor's and the
+/// money's checks).
 fn buy_to(
     map: &mut Map,
     player: Guid,
     npc: Guid,
     item: u32,
     amount: u8,
-    to: Option<(u8, u8)>,
-) -> bool {
+    to: inventory::Destination,
+) {
     // The dead buy nothing, and are told nothing; a vendor out of reach
     // (or dead, or not one) is too far (mangos's `BuyItemFromVendor`).
     let alive = map
@@ -202,26 +210,26 @@ fn buy_to(
         .get(&player)
         .is_some_and(|p| p.death == crate::game::map::death::Death::Alive);
     if !alive {
-        return false;
+        return;
     }
     let Some(entry) = vendor_entry(map, player, npc, NPC_FLAG_VENDOR) else {
         buy_failed(map, player, npc, item, BuyResult::DistanceTooFar);
-        return false;
+        return;
     };
     let data = map.realm.data.clone();
     let list = data.vendor_items(entry);
     let Some((index, v)) = list.iter().enumerate().find(|(_, v)| v.item == item) else {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
-        return false;
+        return;
     };
     if v.condition != 0
         && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player))
     {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
-        return false;
+        return;
     }
     let Some(t) = data.item(item) else {
-        return false;
+        return;
     };
     // A standing short of the item's: its own faction's, else the
     // vendor's (mangos's `BuyItemFromVendor`, Thistle Tea's
@@ -234,7 +242,7 @@ fn buy_to(
         !crate::game::map::reputation::meets(p, &data, faction, t.required_reputation_rank)
     }) {
         buy_failed(map, player, npc, item, BuyResult::ReputationRequire);
-        return false;
+        return;
     }
     if map
         .players
@@ -242,7 +250,7 @@ fn buy_to(
         .is_some_and(|p| !crate::game::map::pvp::rank_allows_buy(p, t))
     {
         buy_failed(map, player, npc, item, BuyResult::RankRequire);
-        return false;
+        return;
     }
     // A standing the item asks for: with its faction, or the vendor's if
     // it names a rank alone, as mangos's BuyItemFromVendor and Thistle
@@ -259,28 +267,24 @@ fn buy_to(
         })
     {
         buy_failed(map, player, npc, item, BuyResult::ReputationRequire);
-        return false;
+        return;
     }
     let count = u32::from(amount.max(1)) * t.buy_count.max(1);
     let left = stock_left(map, npc, v, t.buy_count);
     if left != u32::MAX && left < count {
         buy_failed(map, player, npc, item, BuyResult::ItemAlreadySold);
-        return false;
+        return;
     }
     let cost = crate::game::map::reputation::price(map, player, npc, price(t, count));
     if map.players.get(&player).is_none_or(|p| p.money() < cost) {
         buy_failed(map, player, npc, item, BuyResult::NotEnoughtMoney);
-        return false;
+        return;
     }
-    let added = match to {
-        Some(to) => inventory::add_item_to(map, player, item, count, to),
-        None => inventory::add_item(map, player, item, count, true),
-    };
-    if let Err(f) = added {
+    if let Err(f) = inventory::add_item_to(map, player, item, count, to) {
         if let Some(p) = map.players.get(&player) {
             inventory::send_fail(p, f, Guid::zero());
         }
-        return false;
+        return;
     }
     // A purchase starts the restock interval over.
     let new_left = if v.max_count > 0 {
@@ -304,17 +308,17 @@ fn buy_to(
             amount_bought: count,
         });
     }
-    true
 }
 
-/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, and put where the
-/// client dropped it: into that slot of the backpack (the bag is the
-/// player) or of a bag worn, empty or a stack of its kind; then the rest in
-/// that bag, then anywhere (slot 255: anywhere in that bag first), as
-/// mangos's `BuyItemFromVendor` stores it at the position asked and Thistle
-/// Tea's explicit destinations. Dropped on an equipment or bag slot, it is
-/// put on there (a two-hander putting the off hand's item away), and not
-/// bought if it can't be.
+/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, into where the client
+/// dropped it: the bag is the player's own (the backpack and what they
+/// wear) or a bag worn on the bag bar; another is no bag of theirs, and
+/// nothing is done (mangos's `HandleBuyItemInSlotOpcode`). Slot 255 is
+/// anywhere in that bag, first; an equipment slot or one of the bag bar
+/// wears it; any other slot takes it, onto a stack of its own, the rest
+/// going into that bag, then anywhere. A slot that is the bank's, taken
+/// by another item, or can't wear it refuses the purchase, and nothing is
+/// spent (mangos's `BuyItemFromVendor`, Thistle Tea's `buy_in_slot`).
 pub fn buy_in_slot(
     map: &mut Map,
     player: Guid,
@@ -324,7 +328,7 @@ pub fn buy_in_slot(
     bag: Guid,
     slot: u8,
 ) {
-    let data = map.realm.data.clone();
+    use inventory::Destination;
     let Some(p) = map.players.get(&player) else {
         return;
     };
@@ -341,40 +345,14 @@ pub fn buy_in_slot(
     let Some(bag) = bag else {
         return;
     };
-    let worn = bag == BAG_PLAYER && slot < BAG_END;
-    if !worn {
-        buy_to(map, player, npc, item, amount, Some((bag, slot)));
-        return;
-    }
-    // Put on (mangos's `CanEquipNewItem`): one item, that may go there.
-    let count = u32::from(amount.max(1)) * data.item(item).map_or(1, |t| t.buy_count.max(1));
-    let ready = if count != 1 {
-        Err(Fail::DoesntGoToSlot)
+    let to = if slot == u8::MAX {
+        Destination::Bag(bag, None)
+    } else if bag == BAG_PLAYER && slot < BAG_END {
+        Destination::Worn(slot)
     } else {
-        inventory::may_equip_new(p, &data, item, slot)
+        Destination::Bag(bag, Some(slot))
     };
-    if let Err(f) = ready {
-        inventory::send_fail(p, f, Guid::zero());
-        return;
-    }
-    let before: Vec<Guid> = p
-        .items
-        .iter()
-        .filter(|i| i.entry == item)
-        .map(|i| i.guid)
-        .collect();
-    if !buy_to(map, player, npc, item, amount, None) {
-        return;
-    }
-    let new = map.players.get(&player).and_then(|p| {
-        p.items
-            .iter()
-            .find(|i| i.entry == item && !before.contains(&i.guid))
-            .map(|i| (i.bag, i.slot))
-    });
-    if let Some(new) = new {
-        inventory::move_item(map, player, new, (BAG_PLAYER, slot));
-    }
+    buy_to(map, player, npc, item, amount, to);
 }
 
 /// Whether an item is carried: in the backpack, a bag, or a bag slot.
@@ -578,6 +556,15 @@ pub fn buyback(map: &mut Map, player: Guid, npc: Guid, slot: BuybackSlot) {
     // Tea's merge put it, the bought back item gone; else a free slot.
     let (entry, count) = (p.items[i].entry, p.items[i].count());
     let stack = data.item(entry).map_or(1, |t| t.stackable.max(1));
+    // Within its unique limit (mangos's `CanStoreItem`): sold, it was
+    // counted out, and another may have been had since.
+    if data
+        .item(entry)
+        .is_some_and(|t| t.max_count > 0 && p.count_of(entry) + count > t.max_count)
+    {
+        inventory::send_fail(p, Fail::CantCarryMore, Guid::zero());
+        return;
+    }
     let onto = p.items.iter().position(|x| {
         x.entry == entry
             && x.guid != p.items[i].guid
@@ -748,6 +735,14 @@ pub fn worn(max: u32, now: u32, amount: i32, pct: bool) -> u32 {
     (i64::from(now) - i64::from(amount)).clamp(0, i64::from(max)) as u32
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's roll (a percentage) and equipment slot for a blow's wear,
+    /// in place of the dice.
+    pub static FORCED_WEAR: std::cell::Cell<Option<(f32, u8)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// A blow between `attacker` and `victim` (Thistle Tea's `hit_loss`): each
 /// player of the two, one time in two hundred, loses a point off a random
 /// equipment slot's item.
@@ -757,10 +752,15 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
     }
     let mut rng = rand::rng();
     for g in [victim, attacker] {
-        if !guid::is_player(g) || rng.random_range(0.0f32..100.0) >= HIT_WEAR_CHANCE {
+        let (roll, slot) = (
+            rng.random_range(0.0f32..100.0),
+            rng.random_range(0..WEAR_SLOTS),
+        );
+        #[cfg(test)]
+        let (roll, slot) = FORCED_WEAR.with(|f| f.get()).unwrap_or((roll, slot));
+        if !guid::is_player(g) || roll >= HIT_WEAR_CHANCE {
             continue;
         }
-        let slot = rng.random_range(0..WEAR_SLOTS);
         let Some(p) = map.players.get_mut(&g) else {
             continue;
         };

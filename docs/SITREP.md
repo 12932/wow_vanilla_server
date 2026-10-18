@@ -170,6 +170,41 @@ the questions waiting for you.
     - mangos-classic gives level × 3 for every druid.
     - wvs now gives level × 2 plus agility in Cat Form, and level × 3 in Bear Form.
 
+49. **Fresh creature guids for each dungeon copy?** (from 4a). wvs builds a copy's creature guids from the database's,
+    so two copies' creatures share guids. No client sees two copies at once. Thistle Tea gives each copy fresh ones.
+50. **Nerub'enkan's scarabs** (from 4a). vmangos's own EventAI (1057701) despawns a Crypt Scarab within 5 yards of its
+    victim, so his swarm vanishes on arrival, in Thistle Tea too. Keep it, or exempt his summons?
+51. **A creature-owned pet's death** (from 4c). What does its killer get? Nothing (mangos-classic), or three quarters
+    of the XP and the credits (Thistle Tea, vmangos)? wvs gives nothing.
+
+52. **`.honor week`** (from review 4, R4-23). The GM command loses the rest of that week's honor. When should the
+    week re-rank: at the real week's end, which decays rank points twice, or the day after the command?
+
+53. **The listen address** (from the config stage). Login (3724) and the world (8085) listen on every interface,
+    hard-coded. With the shipped `creation = "auto"` and `everyone_gm = true`, anyone who can reach those ports gets
+    an administrator, and now `.reload config` too. Add `[network] bind_address`?
+    - **Defaulting to 127.0.0.1** is safe, but your remote client then needs `0.0.0.0` set in `config.toml`.
+    - **Defaulting to 0.0.0.0** keeps today's behaviour.
+54. **Defaults that differ from mangos** (from the config stage). Kept as wvs had them:
+    - instance view distance: 100, mangos 170;
+    - leash radius: 50, mangos 30;
+    - assistance radius: 10, mangos 5;
+    - corpse decay for rares, rare elites and bosses.
+
+    Switch to mangos's?
+55. **The whole world awake** (from the load test). With every creature on both continents awake, from 6,471
+    observers, a continent's update needs 25 to 29 ms of CPU at p50, but 81 to 87 ms at p99, and 20 to 25% of
+    updates go over 50 ms. The fixes, cheapest first:
+    1. **Stagger the 500 ms aggro and environment timers,** which run in step and spike every tenth update. Hours.
+    2. **Prune the awake set once per update,** saving about 11%. A day.
+    3. **Load navmesh tiles ahead of players, on a background thread,** where they now stall the map's thread. A few
+       days.
+    4. **Unload unused tiles,** as memory reaches 13 GB at 100%. A day or two.
+
+    1, 2 and 3 should bring a fully awake continent to 27 to 34 ms, evenly spread. Past that, a continent needs
+    regions with their own update loops, or creature turns run in parallel: weeks, and not needed for a realm of a
+    few thousand mostly in cities. Do 1 to 4?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -293,8 +328,9 @@ the questions waiting for you.
     - **`SMSG_GROUP_LIST`** ends with a byte, as Thistle Tea and mangos-classic send it (mangos-zero omits it).
     - **The equipped-item-class cast result** carries the real inventory-type mask, as mangos-zero does; Thistle Tea
       sends 0.
-    - **Ghosts** see every player, as in Thistle Tea; mangos limits this. Ghosts see only creatures within 45 yards
-      of their corpse.
+    - **Ghosts** (replaced at your word, `fix/ghost`): a ghost sees only what is within 45 yards of its corpse. The
+      exceptions are its group, its side's ghosts, spirit healers, its own corpse, and boats and elevators. A ghost
+      walks on water. Its group's living members see it, as in mangos.
     - **Single-target auras** end when their caster leaves the world, as mangos and Thistle Tea have it.
     - **Spawn flags:** disabled spawns (0x2) stay out, hidden ones (0x40) are concealed, and dead ones (0x80) lie as
       corpses.
@@ -665,6 +701,113 @@ the questions waiting for you.
       - a fall after Slow Fall counts from where the player last was.
     - **Creatures** carry 0x10 in `UNIT_FIELD_BYTES_2`.
 
+45. **The client-code harness** (your idea; `tools/client_check/`, `docs/TESTING.md`).
+    - **What it is:** `WoW.exe` itself, under the Unicorn emulator. It runs the client's own parsers on what wvs
+      sends: update objects and their creates, movement blocks and splines, monster moves.
+    - **What fails it:** a fault, a read past a packet's end, or an absurd count.
+    - **The proof:** it reproduces every crash captured so far. The gorilla's spline gives -1 at `0x6194DD`, the
+      forgotten object a null read at `0x45353C`, plus a 41-word mask overrun and a read past an end. The padded
+      spline passes, and live traffic gives no false positives.
+    - **The test:** the extended suite's `tests_client_emu::the_packets_wvs_sends_pass_the_client` runs it on a
+      crowd's capture.
+    - **Out of its reach:** the bad-look crash, which happens in drawing rather than in parsing.
+46. **4a's choices** (encounter scripts and instances, 171 rows):
+    - **Blackrock Spire's alcoves** follow mangos-classic's roster (`DoSortRoomEventMobs`): a spawn by a rune that
+      rolled a summoner or veteran guards it too.
+    - **Stage 3h's leads:** Doom'rel's failure was the test racing the map, and Nerub'enkan's missing scarabs are the
+      data's own EventAI (question 50).
+47. **4c's choices** (world entities and the network):
+    - **Chairs** seat one, on the nearest seat at the chair's height (`SIT_LOW_CHAIR` and up), from 3 yards. Before,
+      a chair sat everyone at its centre on the ground.
+    - **Guardians:** a second cast of a guardian sends its kind away, and a triggered one adds to them.
+    - **Wild summons** (a Field Repair Bot, fireworks) are creatures of their own.
+    - **Auction notices:** the outbid were told "You won". The client also read past the end of a refused shot's cast
+      result. Both are fixed.
+    - **Skinning:** a skin with an empty loot table is skinned once.
+    - **Spell hits:** a harmful spell of damage class 0 never misses, as in mangos.
+    - **Rifts** replace an invader that despawned.
+    - **Demonic Sacrifice** ends with a new demon.
+
+48. **Tracy, reworked** (your ask; `docs/PROFILING.md`). Set `WOW_TRACY=1` and connect Tracy v0.13.1.
+    - **What you see:**
+      - a frame per map update, named by the map;
+      - a zone per update step, packet (by opcode), store transaction and load stage;
+      - plots once a second, of each map's players, creatures awake, mailbox and outbound, and the realm's;
+      - warnings and errors as messages.
+    - **Off:** it costs nothing measurable. It records only while a profiler is connected, and listens on localhost
+      only.
+    - **Your calls:**
+      - The `tracy` feature is on by default, so a release build can be profiled with no rebuild. That costs a C++
+        build once.
+      - System tracing stays: Tracy's sampling comes with it, and it needs administrator rights to do anything.
+    - **What 100 bots showed:**
+      - An Eastern Kingdoms update takes 2.8 ms, most of it the despawn steps' three looks through every creature
+        (1 ms).
+      - The worst hitches are navmesh tiles loaded during an update, at 20 to 116 ms each. Loading them ahead, or off
+        the map's thread, is the next performance lead.
+
+49. **Review 4, the world's systems** (findings in `runs/review/review4.md`). Fixed, each with a test:
+    - **Money from nothing:** an item sold to a vendor could be moved, used or mailed out of its buyback slot, the
+      money kept.
+    - **A crash:** a script starting itself with no delay recursed until the stack overflowed.
+    - **Items and loot:**
+      - stacks added to weren't told their new count;
+      - a bank bag with items in it could be destroyed;
+      - any player could close another's loot window, taking a rogue's pick-pocket loot, and leaving didn't close
+        one.
+    - **Auctions:**
+      - a big bid's cut overflowed;
+      - a deleted seller's bidders lost their money;
+      - an auction could be cancelled away from an auctioneer.
+    - **Channels:** empty locked channels were never removed.
+    - **Event spawns:** a spawn tied to several events kept only one (849 in the shipped data).
+    - **Quests:**
+      - a quest taken already done wasn't told complete;
+      - an abandoned quest's area aura stayed.
+    - **Objects:** a scripted object lost its respawn.
+    - **Guilds:** a charter could be turned in unheld.
+    - **Buyback:** it skipped an item's unique limit.
+    - **Honor:** honor in a shutdown's last 5 s was lost.
+    - **Left, the harder ones:**
+      - **R4-18:** round-robin loot lets only the assigned looter open the corpse, so the others' quest drops and gold
+        wait.
+      - **R4-19:** groups aren't saved, so a restart dissolves them.
+      - **R4-20:** a general killed without a player's credit doesn't end Alterac Valley.
+      - **R4-21:** a race between taking a mail's item and its expiry sweep can duplicate the item.
+      - **R4-22:** a destroyed charter keeps its name reserved.
+      - **Minor ones,** and four speed leads, are in the findings file.
+
+50. **The config stage** (your ask; `docs/CONFIG.md`).
+    - **The file:** `config.toml` in sections (`[network]`, `[world]`, `[visibility]`, `[rates]`, `[creatures]`,
+      `[players]`, `[battleground]`, `[anticheat]`, `[accounts]`, `[gm]`, `[spawn]`, `[arena]`). Keys are named after
+      mangos's where it has them (`Rate.XP.Kill` is `[rates] xp_kill`).
+    - **Overrides:** any key from the environment, as `WVS__RATES__XP_KILL=2`.
+    - **Reference:** `--print-config`, and a `config.example.toml` generated from the code.
+    - **Hot reload:** `.reload config` or SIGHUP for rates, distances, timers and the MOTD; ports and paths need a
+      restart.
+    - **Moved in at their old defaults:** XP, drops by quality, money, honor, reputation, rest, respawn and corpse
+      decay, skill gains, aggro, leash and assistance, start level and money, the level cap, battleground timers,
+      the speed check, and GM command levels.
+    - **Old keys still load.**
+51. **The whole-world-awake load test** (`docs/PERFORMANCE.md`, "The whole world awake").
+    - **The tools:**
+      - `tools/world_points.py` (cover points, `docs/world_points.csv`);
+      - `wvs-world-bench` (behind the `world-bench` feature);
+      - peon's `--spread world --points` (peon `b4fe387`).
+    - **peon:** it drove 350 bots across the world on this machine at 0.24 cores of server. Memory, not CPU, was the
+      limit (question 55).
+
+52. **5a's changes** (the player, 70 rows). Its session ended before its report, so these are from its commits:
+    - **Warriors log in in Battle Stance** when they had none, as mangos's `_LoadAuras` has it.
+    - **NPCs serve no one while fighting or charmed.** A stable master serves hunters alone.
+    - **A purchase dropped on a slot goes there,** spills into that bag, or is worn.
+    - **Items:** one is used only by who may use it, and a book teaching what is known is refused, not spent.
+    - **Talents and languages:**
+      - a talent rank learned past the next unlearns the others;
+      - a language's spell gives its language at once.
+    - **Reincarnation** isn't offered without a self-resurrection.
+    - **Companions** have their template's level and flags.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -715,6 +858,17 @@ the questions waiting for you.
 | 4b: the core (stats, skills, wands, movement) | merged | fd5b963 |
 | Review 2 (map core) and review 3 (combat, spells, auras) | merged | f90d87f, 1e8c8a5 |
 | The race's client crash (create splines) | fixed | 12c055a |
+| 4a: encounter scripts and instances (171 rows) | merged | f91c46b |
+| Battleground view distance, 400 yards | done | c380d54 |
+| The client-code harness | merged | eb9b73b |
+| 4c: world entities and the network (77 rows) | merged | afc079c |
+| Ghosts: water walking, sight by the corpse | merged | 7aa9d29 |
+| Tracy reworked | merged | 479b728 |
+| Review 4 (the world's systems) | merged | de5cf4a |
+| Configurable settings | merged | 287d03a |
+| The whole-world-awake load test | merged | a1e8835 |
+| 5a: the player | merged | (this merge) |
+| The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 

@@ -18,6 +18,15 @@ pub const REGEN_INTERVAL: Duration = Duration::from_secs(2);
 pub const FIVE_SECOND_RULE: Duration = Duration::from_secs(5);
 pub const MAX_LEVEL: u8 = 60;
 
+/// The highest level a player reaches here: `[players] max_level`, no
+/// higher than [`MAX_LEVEL`], 1.12's.
+pub fn max_level() -> u8 {
+    crate::config::config()
+        .players
+        .max_level
+        .clamp(1, MAX_LEVEL)
+}
+
 const CLASS_WARRIOR: u8 = 1;
 const CLASS_PALADIN: u8 = 2;
 const CLASS_HUNTER: u8 = 3;
@@ -210,7 +219,7 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    if p.level() >= MAX_LEVEL {
+    if p.level() >= max_level() {
         return;
     }
     let now = map.now;
@@ -226,14 +235,14 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
     loop {
         let level = p.level();
         let next = data.xp_to_level(level);
-        if level >= MAX_LEVEL || next == 0 || xp < next {
+        if level >= max_level() || next == 0 || xp < next {
             break;
         }
         xp -= next;
         set_level(p, &data, level + 1);
         levels += 1;
     }
-    if p.level() >= MAX_LEVEL {
+    if p.level() >= max_level() {
         xp = 0;
     }
     p.fields.set_u32(PLAYER_XP, xp);
@@ -246,7 +255,7 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
 /// Set a player's level: their stats for it, full health and mana, and the
 /// level-up message.
 pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) {
-    let level = level.clamp(1, MAX_LEVEL);
+    let level = level.clamp(1, max_level());
     let changed = p.level() != level;
     let before: Vec<u32> = (0..5)
         .map(|i| p.fields.get_u32(UNIT_FIELD_STAT0 + i))
@@ -290,7 +299,7 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
         intellect: gain(3),
         spirit: gain(4),
     });
-    if level >= MAX_LEVEL {
+    if level >= max_level() {
         p.fields.set_u32(PLAYER_XP, 0);
         // No more rest at the top: the pool goes (Thistle Tea's
         // `Stats.apply` with no next level).

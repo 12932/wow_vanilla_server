@@ -48,6 +48,8 @@ mod tests_bugs4;
 #[cfg(test)]
 mod tests_bugs5;
 #[cfg(test)]
+mod tests_client_emu;
+#[cfg(test)]
 mod tests_combat;
 #[cfg(test)]
 mod tests_combat2;
@@ -56,9 +58,13 @@ mod tests_combat3;
 #[cfg(test)]
 mod tests_combat5;
 #[cfg(test)]
+mod tests_config;
+#[cfg(test)]
 mod tests_creatures4;
 #[cfg(test)]
 mod tests_events;
+#[cfg(test)]
+mod tests_ghost;
 #[cfg(test)]
 mod tests_gifts;
 #[cfg(test)]
@@ -390,6 +396,40 @@ mod tests_p4_scripts_instances;
 #[cfg(test)]
 mod tests_p4_scripts_strat;
 #[cfg(test)]
+mod tests_p4_world;
+#[cfg(test)]
+mod tests_p4_world_guardians;
+#[cfg(test)]
+mod tests_p4_world_items;
+#[cfg(test)]
+mod tests_p4_world_loot;
+#[cfg(test)]
+mod tests_p4_world_net;
+#[cfg(test)]
+mod tests_p4_world_real;
+#[cfg(test)]
+mod tests_p4_world_rewards;
+#[cfg(test)]
+mod tests_p4_world_scripts;
+#[cfg(test)]
+mod tests_p4_world_spells;
+#[cfg(test)]
+mod tests_p5_player;
+#[cfg(test)]
+mod tests_p5_player_items;
+#[cfg(test)]
+mod tests_p5_player_misc;
+#[cfg(test)]
+mod tests_p5_player_npc;
+#[cfg(test)]
+mod tests_p5_player_pets;
+#[cfg(test)]
+mod tests_p5_player_quests;
+#[cfg(test)]
+mod tests_p5_player_real;
+#[cfg(test)]
+mod tests_p5_player_vendor;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
@@ -419,6 +459,8 @@ mod tests_pvp5;
 mod tests_review2;
 #[cfg(test)]
 mod tests_review3;
+#[cfg(test)]
+mod tests_review4;
 #[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
@@ -465,10 +507,14 @@ use crate::game::map::{MapEvent, Maps};
 use crate::game::registry::{NameEntry, Registry};
 use crate::game::store::{Startup, Store};
 
-/// The settings maps and sessions read, copied out of the config.
+/// The settings maps and sessions read, from the config. The realm holds
+/// it behind an atomically swapped pointer ([`Realm::config`]), so a
+/// reload puts in a new one; a map takes it once an update ([`map::Map::cfg`]).
 #[derive(Debug, Clone)]
 pub struct RealmConfig {
     pub visibility_yards: f32,
+    /// In dungeons and raids.
+    pub instance_visibility_yards: f32,
     pub battleground_visibility_yards: f32,
     pub save_interval: Duration,
     pub motd: String,
@@ -485,6 +531,10 @@ pub struct RealmConfig {
     /// Players a side needs for a match, over the template's.
     pub bg_min_players: Option<u32>,
     pub bg_start_delay: Duration,
+    /// How long after a match ends everyone is sent home.
+    pub bg_auto_leave: Duration,
+    /// How long an invitation to a match stands.
+    pub bg_invite_for: Duration,
     pub pvp_realm: bool,
     /// Packets a client may send a second, sustained.
     pub max_packets_per_sec: u32,
@@ -496,33 +546,105 @@ pub struct RealmConfig {
     /// once).
     pub spell_travel: bool,
     pub arena: crate::game::map::arena::ArenaConfig,
+    pub rates: crate::config::RatesConfig,
+    pub creatures: crate::config::CreaturesConfig,
+    pub players: crate::config::PlayersConfig,
+    pub anticheat: crate::config::AnticheatConfig,
+    pub gm: crate::config::GmConfig,
 }
 
 impl RealmConfig {
+    /// From a config checked at load (`crate::config::resolve`).
     pub fn from_config(c: &crate::config::ServerConfig) -> Self {
+        let b = &c.battleground;
         Self {
-            visibility_yards: c.world.visibility_yards.clamp(20.0, 500.0),
-            battleground_visibility_yards: c.world.battleground_visibility_yards.clamp(20.0, 500.0),
+            visibility_yards: c.visibility.continents_yards,
+            instance_visibility_yards: c.visibility.instances_yards,
+            battleground_visibility_yards: c.visibility.battleground_yards,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,
-            max_characters_per_account: c.world.max_characters_per_account,
+            max_characters_per_account: c.players.characters_per_realm,
             nav_dir: c.world.nav_dir.clone(),
             terrain_dir: c.world.terrain_dir.clone(),
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
             instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,
             logout_delay: crate::game::map::login::LOGOUT_DELAY,
-            bg_min_players: None,
-            bg_start_delay: Duration::from_secs(120),
-            pvp_realm: c.world.pvp_realm,
+            bg_min_players: (b.min_players > 0).then_some(b.min_players),
+            bg_start_delay: Duration::from_secs(b.start_delay_secs),
+            bg_auto_leave: Duration::from_secs(b.auto_leave_secs),
+            bg_invite_for: Duration::from_secs(b.invitation_secs),
+            pvp_realm: c.players.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
             spell_travel: true,
             arena: c.arena.clone(),
+            rates: c.rates.clone(),
+            creatures: c.creatures.clone(),
+            players: c.players.clone(),
+            anticheat: c.anticheat.clone(),
+            gm: c.gm.clone(),
         }
     }
+
+    /// This config after a reload to `applied` (whose keys that need a
+    /// restart are as they were): what the config doesn't set kept.
+    pub fn reloaded(&self, applied: &crate::config::ServerConfig) -> Self {
+        Self {
+            instance_unload: self.instance_unload,
+            logout_delay: self.logout_delay,
+            spell_rolls: self.spell_rolls,
+            spell_travel: self.spell_travel,
+            ..Self::from_config(applied)
+        }
+    }
+}
+
+impl Default for RealmConfig {
+    fn default() -> Self {
+        Self::from_config(&crate::config::ServerConfig::default())
+    }
+}
+
+/// What a reload changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReloadReport {
+    /// Keys whose new values are in, as `[section] key`.
+    pub applied: Vec<String>,
+    /// Keys changed in the file that wait for a restart.
+    pub restart: Vec<String>,
+    /// Values out of range, and what was used instead.
+    pub warnings: Vec<String>,
+}
+
+impl std::fmt::Display for ReloadReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.applied.is_empty() {
+            write!(f, "Config reloaded: nothing changed that a reload changes.")?;
+        } else {
+            write!(f, "Config reloaded: {}.", self.applied.join(", "))?;
+        }
+        if !self.restart.is_empty() {
+            write!(f, " Needs a restart: {}.", self.restart.join(", "))?;
+        }
+        for w in &self.warnings {
+            write!(f, " {w}.")?;
+        }
+        Ok(())
+    }
+}
+
+/// Read `config.toml` and the environment again, off the map's threads,
+/// and put in what is safe to change live.
+pub async fn reload_from_disk(realm: Arc<Realm>) -> Result<ReloadReport, String> {
+    let loaded = tokio::task::spawn_blocking(|| {
+        crate::config::load_full(std::path::Path::new(crate::config::PATH))
+    })
+    .await
+    .map_err(|e| format!("the reload stopped: {e}"))??;
+    Ok(realm.reload(loaded))
 }
 
 /// How long the shutdown waits for the maps to save their players.
@@ -530,7 +652,12 @@ pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
 /// What every map and session shares.
 pub struct Realm {
-    pub config: RealmConfig,
+    /// The live settings; read them through [`Realm::config`], or in a map
+    /// through `Map::cfg`.
+    config: arc_swap::ArcSwap<RealmConfig>,
+    /// The config file's settings the live ones came from, for a reload's
+    /// comparison.
+    source: parking_lot::Mutex<crate::config::ServerConfig>,
     pub store: Store,
     pub data: Arc<GameData>,
     pub registry: Registry,
@@ -570,7 +697,8 @@ impl Realm {
             });
         }
         let realm = Arc::new(Self {
-            config,
+            config: arc_swap::ArcSwap::from_pointee(config),
+            source: parking_lot::Mutex::new(crate::config::ServerConfig::default()),
             store,
             data: Arc::new(data),
             registry,
@@ -584,6 +712,46 @@ impl Realm {
         social::start_timers(&realm);
         transports::start(&realm);
         realm
+    }
+
+    /// The live settings (an atomic load: a map takes them once an update
+    /// instead).
+    pub fn config(&self) -> arc_swap::Guard<Arc<RealmConfig>> {
+        self.config.load()
+    }
+
+    /// The live settings, to keep.
+    pub fn config_arc(&self) -> Arc<RealmConfig> {
+        self.config.load_full()
+    }
+
+    /// The config file's settings the live ones came from.
+    pub fn set_source(&self, source: crate::config::ServerConfig) {
+        *self.source.lock() = source;
+    }
+
+    /// Put in `loaded`'s values for what is safe to change live (rates,
+    /// distances, timers, the MOTD); say which keys changed, and which of
+    /// them need a restart. Maps see it at their next update.
+    pub fn reload(&self, loaded: crate::config::Loaded) -> ReloadReport {
+        let mut source = self.source.lock();
+        let changes = crate::config::changes(&source, &loaded.config);
+        let applied = crate::config::live_part(&source, &loaded.config);
+        let next = self.config().reloaded(&applied);
+        self.config.store(Arc::new(next));
+        *source = applied;
+        let mut report = ReloadReport {
+            warnings: loaded.warnings,
+            ..Default::default()
+        };
+        for (key, reload) in changes {
+            match reload {
+                crate::config::Reload::Live => report.applied.push(key),
+                crate::config::Reload::Restart => report.restart.push(key),
+            }
+        }
+        info!("{report}");
+        report
     }
 
     /// Save everyone in every map, and wait for the store to write it.
@@ -611,6 +779,13 @@ impl Realm {
                     limit.as_secs()
                 );
             }
+        }
+        // Honor earned since the last sweep (a kill, a battleground's win)
+        // is kept too: the sweep that writes it runs only every so often.
+        let honor = self.social.honor.lock().take_dirty();
+        for e in honor {
+            self.store
+                .put_record(crate::game::honor::KIND, u64::from(e.guid), &e);
         }
         if tokio::time::timeout(limit, self.store.flush())
             .await
@@ -651,10 +826,15 @@ pub async fn run(users: crate::auth::UserCache) {
         data,
         Some(users),
     );
+    realm.set_source(cfg.clone());
+    reload_on_hangup(realm.clone());
     // The continents start now, so the first player in doesn't wait for
     // their spawns.
     for m in [0, 1] {
         realm.maps.get(&realm, map::MapKey::world(m));
+    }
+    if crate::tracy::on() {
+        tokio::spawn(plot_realm(realm.clone()));
     }
     let listener = TcpListener::bind("0.0.0.0:8085")
         .await
@@ -692,6 +872,54 @@ pub async fn run(users: crate::auth::UserCache) {
     info!("shutting down: saving everyone");
     realm.shutdown().await;
     info!("saved; exiting");
+}
+
+/// Tracy's plots of the realm, once a second while Tracy is on: who is
+/// online, packets in and out a second, and the store's queue.
+async fn plot_realm(realm: Arc<Realm>) {
+    use crate::tracy::{Format, Plot};
+    use std::sync::atomic::Ordering::Relaxed;
+    let online = Plot::new("realm: players online", Format::Number);
+    let packets_in = Plot::new("realm: packets in a second", Format::Number);
+    let packets_out = Plot::new("realm: packets out a second", Format::Number);
+    let store = Plot::new("realm: store queue", Format::Number);
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    let (mut last_in, mut last_out) = (
+        conn::PACKETS_IN.load(Relaxed),
+        conn::PACKETS_OUT.load(Relaxed),
+    );
+    loop {
+        ticker.tick().await;
+        let (now_in, now_out) = (
+            conn::PACKETS_IN.load(Relaxed),
+            conn::PACKETS_OUT.load(Relaxed),
+        );
+        online.set(realm.registry.online_count() as f64);
+        packets_in.set(now_in.saturating_sub(last_in) as f64);
+        packets_out.set(now_out.saturating_sub(last_out) as f64);
+        store.set(realm.store.queued() as f64);
+        (last_in, last_out) = (now_in, now_out);
+    }
+}
+
+/// SIGHUP reloads the config, as `.reload config` does.
+fn reload_on_hangup(realm: Arc<Realm>) {
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        let Ok(mut hup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        else {
+            warn!("no SIGHUP handler: reload the config with .reload config");
+            return;
+        };
+        while hup.recv().await.is_some() {
+            info!("SIGHUP: reloading the config");
+            if let Err(e) = reload_from_disk(realm.clone()).await {
+                warn!("the config wasn't reloaded: {e}");
+            }
+        }
+    });
+    #[cfg(not(unix))]
+    let _ = realm;
 }
 
 async fn shutdown_signal() {

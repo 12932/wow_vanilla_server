@@ -810,7 +810,9 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
         },
         ..Default::default()
     });
-    refresh_log(p, &data);
+    // Its log entry goes out with `check`, which reads it as it was, not
+    // yet complete: one taken done is told so (Thistle Tea's
+    // `force_accept`).
     if source > 0 {
         let _ = inventory::add_item(map, player, q.source_item, source, true);
     }
@@ -1394,12 +1396,13 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
         let _ = inventory::add_item(map, player, *item, (*count).max(1), true);
     }
     let level = map.players.get(&player).map(|p| p.level()).unwrap_or(1);
-    let xp = if level >= crate::game::map::stats::MAX_LEVEL {
+    let max_level = crate::game::map::stats::max_level();
+    let xp = if level >= max_level {
         0
     } else {
-        quest_xp(&q, level)
+        crate::config::scaled(quest_xp(&q, level), map.cfg.rates.xp_quest)
     };
-    let money = if level >= crate::game::map::stats::MAX_LEVEL {
+    let money = if level >= max_level {
         q.reward_money.max(0) as u32 + q.reward_money_max_level
     } else {
         q.reward_money.max(0) as u32
@@ -1535,6 +1538,8 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
     };
     p.journal.clear(usize::from(slot));
     refresh_log(p, &data);
+    // The auras its being taken gave go with it.
+    crate::game::map::spell_areas::reconcile(map, player);
 }
 
 /// Whether `item` is a bag, worn or in the bank's bag slots, with

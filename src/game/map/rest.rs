@@ -35,7 +35,7 @@ pub const AREA_FLAG_CAPITAL: u32 = 0x100;
 /// The XP to the next level, the pool's measure: none at the top level,
 /// so nothing rests there (Thistle Tea's `Rest`, a 0 `next_level_xp`).
 fn next_level_xp(p: &Player) -> f32 {
-    if p.level() >= crate::game::map::stats::MAX_LEVEL {
+    if p.level() >= crate::game::map::stats::max_level() {
         return 0.0;
     }
     p.fields.get_u32(PLAYER_NEXT_LEVEL_XP) as f32
@@ -68,22 +68,24 @@ pub fn add_bonus(p: &mut Player, amount: f32) {
 pub fn accrue(p: &mut Player, now: Instant) {
     if let (Some(_), Some(since)) = (p.row.state.rest_type, p.misc.rest_since) {
         let secs = now.saturating_duration_since(since).as_secs_f32();
-        let gained = secs * next_level_xp(p) / ACCRUAL_DIVISOR;
+        let gained = secs * next_level_xp(p) / ACCRUAL_DIVISOR * p.misc.rest_rate.unwrap_or(1.0);
         let bonus = p.row.state.rest_bonus + gained;
         set_bonus(p, bonus);
         p.misc.rest_since = Some(now);
     }
 }
 
-/// At login: what the time logged out earned, and the fields.
-pub fn restore(p: &mut Player, now: Instant) {
+/// At login: what the time logged out earned, at `rates`' offline
+/// rates, and the fields.
+pub fn restore(p: &mut Player, now: Instant, rates: &crate::config::RatesConfig) {
+    p.misc.rest_rate = Some(rates.rest_in_game);
     let logged_out = p.row.logout_time;
     let wall = chrono::Utc::now().timestamp();
     if logged_out > 0 && wall > logged_out {
         let rate = if p.row.state.rest_type.is_some() {
-            1.0
+            rates.rest_offline_in_tavern_or_city
         } else {
-            0.25
+            0.25 * rates.rest_offline_in_wilderness
         };
         let gained = (wall - logged_out) as f32 * next_level_xp(p) / ACCRUAL_DIVISOR * rate;
         let bonus = p.row.state.rest_bonus + gained;
@@ -158,6 +160,7 @@ fn friendly_capital(data: &GameData, team: Team, zone: u32) -> bool {
 pub fn update(map: &mut Map) {
     let now = map.now;
     let data = map.realm.data.clone();
+    let rate = map.cfg.rates.rest_in_game;
     let mut left_inn = Vec::new();
     for p in map.players.values_mut() {
         if p.misc
@@ -167,6 +170,11 @@ pub fn update(map: &mut Map) {
             continue;
         }
         p.misc.rest_checked_at = Some(now);
+        // A reload's rate from now on; what was earned before at the old.
+        if p.misc.rest_rate != Some(rate) {
+            accrue(p, now);
+            p.misc.rest_rate = Some(rate);
+        }
         let capital = friendly_capital(&data, p.team, p.zone);
         match p.row.state.rest_type {
             Some(RestType::City) if !capital => stop(p, now),

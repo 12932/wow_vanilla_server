@@ -858,7 +858,7 @@ pub fn sweep(realm: &Realm) {
     };
     expire(realm, &due);
     let unload =
-        (realm.config.instance_unload.as_secs() as i64).max(UNLOAD_EMPTY_AFTER.as_secs() as i64);
+        (realm.config().instance_unload.as_secs() as i64).max(UNLOAD_EMPTY_AFTER.as_secs() as i64);
     let online = realm.registry.all_online();
     let stale: Vec<u32> = {
         let inst = realm.social.instances.lock();

@@ -355,6 +355,8 @@ async fn real_warrior_threat_stacks_and_stances() {
     let out = on(&map, move |m| {
         ready(m, w, 60, &[]);
         ready(m, mage, 60, &[]);
+        // Out of the Battle Stance a warrior logs in in, and its threat.
+        auras::remove_spell(m, w, BATTLE_STANCE, None);
         let mut threats = Vec::new();
         for (who, spell) in [(w, HEROIC_STRIKE), (w, REVENGE), (mage, 133)] {
             let kobold = dummy(m, w, KOBOLD_VERMIN, 60, 2.0);

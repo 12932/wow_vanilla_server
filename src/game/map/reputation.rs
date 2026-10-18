@@ -347,8 +347,9 @@ pub fn reward_rate(data: &GameData, faction: u32, source: Source) -> f32 {
         })
 }
 
-/// A gain's size after its rate, the level rate and auras' bonuses,
-/// dithered to a whole point (Thistle Tea's `calculate_gain`).
+/// A gain's size after its rate, the level rate, auras' bonuses and the
+/// server's rate (`server_rate`, for gains only), dithered to a whole
+/// point (Thistle Tea's `calculate_gain`).
 fn gain(
     p: &Player,
     data: &GameData,
@@ -356,6 +357,7 @@ fn gain(
     level_rate: f32,
     faction: u32,
     source: Source,
+    server_rate: f32,
 ) -> i32 {
     let rate = reward_rate(data, faction, source);
     let bonus = if value > 0 {
@@ -366,7 +368,8 @@ fn gain(
     if rate <= 0.0 || 100 + bonus <= 0 {
         return 0;
     }
-    let v = value as f32 * rate * level_rate * (100 + bonus) as f32 / 100.0;
+    let server_rate = if value > 0 { server_rate } else { 1.0 };
+    let v = value as f32 * rate * level_rate * (100 + bonus) as f32 / 100.0 * server_rate;
     dither(v, rand::random())
 }
 
@@ -385,6 +388,7 @@ pub fn dither(v: f32, roll: f32) -> i32 {
 /// group near the corpse.
 pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
     let data = map.realm.data.clone();
+    let server_rate = map.cfg.rates.reputation_gain;
     let Some(c) = map.creature(creature) else {
         return;
     };
@@ -420,6 +424,7 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
                 level_rate(true, r.value, plevel, level),
                 r.faction,
                 Source::Kill,
+                server_rate,
             );
             if rank(p, &data, r.faction) <= r.max_rank {
                 grants.push((r.faction, delta, true));
@@ -446,13 +451,22 @@ pub fn spell_reward(map: &mut Map, g: Guid, faction: u32, value: i32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let delta = gain(p, &data, value, 1.0, faction, Source::Spell);
+    let delta = gain(
+        p,
+        &data,
+        value,
+        1.0,
+        faction,
+        Source::Spell,
+        map.cfg.rates.reputation_gain,
+    );
     modify(map, g, faction, delta, true);
 }
 
 /// A quest rewarded: its reputation.
 pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest) {
     let data = map.realm.data.clone();
+    let server_rate = map.cfg.rates.reputation_gain;
     let Some(p) = map.players.get(&g) else {
         return;
     };
@@ -468,7 +482,7 @@ pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest)
             let rate = level_rate(false, *v, plevel, level);
             (
                 *f,
-                gain(p, &data, *v, rate, *f, Source::Quest),
+                gain(p, &data, *v, rate, *f, Source::Quest, server_rate),
                 q.reputation_no_spillover & (1 << i) == 0,
             )
         })

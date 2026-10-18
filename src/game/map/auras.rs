@@ -2042,7 +2042,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
         }
-        AURA_WATER_WALK if !still(map, AURA_WATER_WALK) => {
+        // A ghost goes on walking on water.
+        AURA_WATER_WALK
+            if !still(map, AURA_WATER_WALK) && !crate::game::map::death::is_ghost(map, target) =>
+        {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_LAND_WALK {
                     guid: target,
@@ -2473,6 +2476,8 @@ pub fn update(map: &mut Map) {
         .map(|p| p.guid)
         .collect();
     units.extend(map.with_auras_where(|c| !c.auras.is_empty(), |_, c| c.guid));
+    let z = crate::zone!("units with auras");
+    z.value(units.len() as u64);
     for g in units {
         let Some(a) = auras(map, g) else {
             continue;

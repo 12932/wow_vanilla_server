@@ -273,12 +273,20 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     let skills_before = crate::game::map::skills::ids(p);
     // A higher rank takes the lower's place on the bars; a talent's rank
     // takes it in the spellbook too.
-    let (old, talent) = supersedes(&map.realm.data, &p.spells, spell);
+    let data = map.realm.data.clone();
+    let (old, talent) = supersedes(&data, &p.spells, spell);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    if talent && let Some(old) = old {
-        p.spells.retain(|s| *s != old);
+    if talent && old.is_some() {
+        let ranks: Vec<u32> = data
+            .spells
+            .talents
+            .values()
+            .find(|t| t.ranks.contains(&spell))
+            .map(|t| t.ranks.to_vec())
+            .unwrap_or_default();
+        p.spells.retain(|s| *s == spell || !ranks.contains(s));
     }
     p.spells.push(spell);
     if let Some(old) = old {
@@ -293,6 +301,7 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     if let Some(p) = map.players.get_mut(&player) {
         crate::game::map::skills::learn_from_spell(p, &data, spell);
         crate::game::map::skills::learn_from_line(p, &data, spell);
+        crate::game::map::skills::learn_language(p, &data, spell);
     }
     // The spells a skill it brought comes with (Mining's Find Minerals and
     // Smelt Copper, Bows' Shoot Bow).
@@ -323,9 +332,15 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
 /// it (the skill line's `superseded_by`, or a talent's ranks), and whether
 /// it is a talent's.
 fn supersedes(data: &GameData, known: &[u32], spell: u32) -> (Option<u32>, bool) {
+    // A talent's rank: the highest other rank known, below or above it
+    // (mangos's `addSpell` unlearns every other rank).
     let talent = data.spells.talents.values().find_map(|t| {
-        let i = t.ranks.iter().position(|r| *r == spell)?;
-        (i > 0 && known.contains(&t.ranks[i - 1])).then(|| t.ranks[i - 1])
+        t.ranks.iter().position(|r| *r == spell)?;
+        t.ranks
+            .iter()
+            .rev()
+            .find(|r| **r != 0 && **r != spell && known.contains(r))
+            .copied()
     });
     if talent.is_some() {
         return (talent, true);
@@ -351,7 +366,28 @@ pub fn apply_passives(map: &mut Map, player: Guid) {
         apply_passive(map, player, spell);
     }
     cooldowns::restore(map, player);
+    default_stance(map, player);
     mods::send(map, player);
+}
+
+/// Battle Stance, the warrior's first.
+pub const BATTLE_STANCE: u32 = 2457;
+
+/// A warrior in no stance at login takes Battle Stance, if they know it
+/// (mangos's `_LoadAuras`, Thistle Tea's `apply_default_auras`): a new
+/// one, or one whose stance was lost; one in another keeps it.
+fn default_stance(map: &mut Map, player: Guid) {
+    let Some(p) = map.players.get(&player) else {
+        return;
+    };
+    if p.row.class != 1
+        || !p.spells.contains(&BATTLE_STANCE)
+        || p.auras.has(auras::AURA_MOD_SHAPESHIFT)
+        || p.death != crate::game::map::death::Death::Alive
+    {
+        return;
+    }
+    cast_triggered(map, player, BATTLE_STANCE, Some(player));
 }
 
 /// A passive spell's effects on its owner.
@@ -1181,7 +1217,7 @@ fn execute(
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
+    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions, triggered);
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however
@@ -1272,7 +1308,7 @@ pub struct InFlight {
 /// Whether spells take time to get where they go (tests land them at
 /// once).
 fn travels(map: &Map) -> bool {
-    map.spells.travel.unwrap_or(map.realm.config.spell_travel)
+    map.spells.travel.unwrap_or(map.cfg.spell_travel)
 }
 
 /// A cast that can't go off as it ends (its power, ammunition, reagents
@@ -1294,7 +1330,7 @@ fn launch_failed(map: &Map, caster: Guid, spell: u32, code: u8) {
 
 /// How long something at `speed` yards a second takes from `caster` to
 /// `target`: at least five yards' worth.
-fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
+pub(crate) fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
     match (map.position_of(caster), map.position_of(target)) {
         (Some(a), Some(b)) => {
             let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
@@ -2384,7 +2420,11 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let Some(i) = p.item_at(bag, slot) else {
+    // Not one sold, in the vendor's buyback slots.
+    let Some(i) = p
+        .item_at(bag, slot)
+        .filter(|_| !crate::game::map::vendor::in_buyback(bag, slot))
+    else {
         return;
     };
     let item = &p.items[i];
@@ -2392,28 +2432,6 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     let Some(template) = data.items.get(&item.entry) else {
         return;
     };
-    // Used only by whom it may be worn by: its class and race, level, honor
-    // rank, skill and standing (mangos's `CanUseItem` at
-    // `HandleUseItemOpcode`, Thistle Tea's `ItemEligibility`).
-    let prof = crate::game::map::inventory::Proficiency::of(p, &data);
-    let usable = crate::game::map::inventory::can_use(p, &prof, template).and_then(|()| {
-        if template.required_reputation_faction != 0
-            && !crate::game::map::reputation::meets(
-                p,
-                &data,
-                template.required_reputation_faction,
-                template.required_reputation_rank,
-            )
-        {
-            Err(crate::game::map::inventory::Fail::Reputation)
-        } else {
-            Ok(())
-        }
-    });
-    if let Err(f) = usable {
-        crate::game::map::inventory::send_fail(p, f, item_guid);
-        return;
-    }
     // Trigger 0: on use.
     let Some((index, spell)) = template
         .spells
@@ -2423,6 +2441,36 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     else {
         return;
     };
+    // Gear is used worn; and an item by one who may use it: of its class
+    // and race, level, skill and spell, standing and rank (mangos's
+    // `HandleUseItemOpcode` and `CanUseItem`).
+    let worn = item.bag == crate::game::store::BAG_PLAYER
+        && item.slot < crate::game::map::inventory::EQUIPMENT_END;
+    let usable = if template.inventory_type != 0 && !worn {
+        Err(crate::game::map::inventory::Fail::NotFound)
+    } else {
+        crate::game::map::inventory::can_use(p, &data, template)
+    };
+    if let Err(f) = usable {
+        crate::game::map::inventory::send_fail(p, f, item_guid);
+        return;
+    }
+    // A book that teaches only what is known is refused, not spent.
+    let teaches: Vec<u32> = data
+        .spells
+        .get(spell.id)
+        .map(|s| {
+            s.effects
+                .iter()
+                .filter(|e| e.effect == EFFECT_LEARN_SPELL && e.trigger_spell != 0)
+                .map(|e| e.trigger_spell)
+                .collect()
+        })
+        .unwrap_or_default();
+    if !teaches.is_empty() && teaches.iter().all(|t| p.spells.contains(t)) {
+        send_cast_result(map, player, spell.id, Some(fail::SPELL_LEARNED));
+        return;
+    }
     if let Some(code) = crate::game::map::items::check_use(map, player, item_guid, index) {
         crate::game::map::items::send_failure(map, player, spell.id, code);
         return;
