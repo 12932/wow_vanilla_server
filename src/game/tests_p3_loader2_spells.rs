@@ -296,3 +296,360 @@ fn the_real_modifier_masks_and_interrupt_flags_load_as_thistle_tea_reads_them() 
     assert_eq!(spell(d, 28_204).aura_interrupt_flags, 0x8_0000);
     assert_eq!(spell(d, 24_322).aura_interrupt_flags, 0);
 }
+
+const BARKSKIN: u32 = 22_812;
+const BARKSKIN_EFFECT: u32 = 22_839;
+const WRATH: u32 = 5176;
+const KOBOLD_VERMIN: u32 = 6;
+
+/// `g` hits for exactly `damage` with each hand.
+fn hits_for(m: &mut Map, g: Guid, damage: f32) {
+    let f = m.unit_fields_mut(g).unwrap();
+    for (lo, hi) in [
+        (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_MAXDAMAGE),
+        (UNIT_FIELD_MINRANGEDDAMAGE, UNIT_FIELD_MAXRANGEDDAMAGE),
+    ] {
+        f.set_f32(lo, damage);
+        f.set_f32(hi, damage);
+    }
+}
+
+/// Thistle Tea's Barkskin (`spell_linked_aura_dbc_test.exs`,
+/// `spell_linked_aura_vmangos_test.exs`): vmangos's row links it (aura
+/// 192) to 22839 for its 15 seconds, which slows swings by a quarter and
+/// takes a fifth off physical blows; Barkskin itself adds a second to
+/// Wrath's cast and holds a cast against pushback; at its end all of it
+/// goes, and a blow pushes Wrath back again.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_barkskin_brings_its_linked_aura_for_its_duration() {
+    if !have_data() {
+        return;
+    }
+    let d = real().unwrap();
+    let barkskin = spell(d, BARKSKIN);
+    assert!(
+        barkskin
+            .effects
+            .iter()
+            .any(|e| e.aura == auras::AURA_LINKED && e.trigger_spell == BARKSKIN_EFFECT)
+    );
+    let linked = spell(d, BARKSKIN_EFFECT);
+    assert_eq!(d.spells.duration(linked, 60), Some(15_000));
+    assert_eq!(spells::points(linked, 0, 60), -25);
+    assert_eq!(
+        (spells::points(linked, 1, 60), linked.effects[1].misc_value),
+        (-20, 1)
+    );
+
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P3OBARK");
+    let druid = c.enter("Barka", Race::NightElf, Class::Druid).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let out = on(&map, move |m| {
+        ready(m, druid);
+        let brute = dummy(m, druid, KOBOLD_VERMIN, 60, 3.0);
+        hits_for(m, brute, 100.0);
+        let swing = |m: &Map| m.players[&druid].fields.get_u32(UNIT_FIELD_BASEATTACKTIME);
+        let blow = |m: &Map| {
+            crate::game::map::combat::weapon_damage(
+                m,
+                brute,
+                druid,
+                crate::game::map::combat::Hand::Main,
+                &mut rand::rng(),
+            )
+            .0
+        };
+        let data = m.realm.data.clone();
+        let wrath = data.spells.get(WRATH).unwrap().clone();
+        let cast_time = |m: &Map| {
+            let mods = mods::for_spell(m, druid, &wrath);
+            spells::cast_time(m, druid, &wrath, &mods)
+        };
+        // A cast of Wrath under way, and a blow: how far it is put off.
+        let pushed = |m: &mut Map| {
+            let now = m.now;
+            if let Some(c) = m.caster_mut(druid) {
+                c.casting = None;
+                c.gcd_until = None;
+            }
+            spells::cast(
+                m,
+                druid,
+                WRATH,
+                spells::Targets {
+                    unit: Some(brute),
+                    ..Default::default()
+                },
+                None,
+            );
+            let ends = |m: &Map| {
+                m.caster(druid)
+                    .and_then(|c| c.casting.as_ref())
+                    .map(|c| c.ends)
+            };
+            // A second in, so that there is time to put back.
+            m.now += Duration::from_secs(1);
+            let before = ends(m);
+            spells::pushback_by(m, druid, brute);
+            let after = ends(m);
+            if let Some(c) = m.caster_mut(druid) {
+                c.casting = None;
+            }
+            let _ = now;
+            before.zip(after).map(|(b, a)| a.duration_since(b))
+        };
+        let base = (swing(m), blow(m), cast_time(m), pushed(m));
+        apply_real(m, druid, druid, BARKSKIN);
+        let holders = spells_on(m, druid);
+        let on = (swing(m), blow(m), cast_time(m), pushed(m));
+        let t0 = m.now;
+        m.now = t0 + Duration::from_millis(15_100);
+        auras::update(m);
+        let after = (swing(m), blow(m), cast_time(m), pushed(m));
+        let left = spells_on(m, druid);
+        (base, holders, on, after, left)
+    })
+    .await;
+    let (base, holders, on, after, left) = out;
+    assert!(
+        holders.contains(&BARKSKIN) && holders.contains(&BARKSKIN_EFFECT),
+        "{holders:?}"
+    );
+    assert_eq!(on.0, (base.0 as f32 * 1.25) as u32, "swings slowed");
+    assert_eq!(on.1, base.1 * 4 / 5, "a fifth off");
+    assert_eq!(on.2, base.2 + 1000, "a second on Wrath");
+    assert!(base.3.is_some_and(|d| d > Duration::ZERO), "{base:?}");
+    assert_eq!(on.3, Some(Duration::ZERO), "no pushback");
+    assert_eq!(after, base, "all as it was");
+    assert!(
+        !left.contains(&BARKSKIN) && !left.contains(&BARKSKIN_EFFECT),
+        "{left:?}"
+    );
+}
+
+const SEAL_OF_THE_CRUSADER: u32 = 21_082;
+const THUNDER_CLAP: u32 = 6343;
+const MALGENS_LONG_BOW: u32 = 22_318;
+
+/// Thistle Tea's two hastes (`spell_linked_aura_dbc_test.exs`): Seal of
+/// the Crusader's attack speed (aura 9) is every attack's, Thunder Clap's
+/// melee haste (138) the swing's alone.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_attack_speed_is_every_attacks_and_melee_haste_the_swings() {
+    if !have_data() {
+        return;
+    }
+    let d = real().unwrap();
+    assert!(spell(d, SEAL_OF_THE_CRUSADER).has_aura(auras::AURA_MOD_ATTACKSPEED));
+    assert!(spell(d, THUNDER_CLAP).has_aura(auras::AURA_MOD_HASTE));
+    let realm = realm();
+    let (_h, hunter, map) = enter(&realm, "P3OHAST", "Hasta", Class::Hunter).await;
+    let out = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let counter = m
+            .realm
+            .next_item
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = m.players.get_mut(&hunter).unwrap();
+        p.items.push(crate::game::map::player::Item::new(
+            &data,
+            guid::item(counter),
+            hunter,
+            MALGENS_LONG_BOW,
+            crate::game::store::BAG_PLAYER,
+            17,
+            1,
+        ));
+        p.refresh_inventory(&data);
+        crate::game::map::inventory::sync_gear(m, hunter);
+        crate::game::map::derive::unit(m, hunter);
+        let times = |m: &Map| {
+            let f = &m.players[&hunter].fields;
+            (
+                f.get_u32(UNIT_FIELD_BASEATTACKTIME),
+                f.get_u32(UNIT_FIELD_RANGEDATTACKTIME),
+            )
+        };
+        let base = times(m);
+        let mut out = vec![base];
+        for id in [SEAL_OF_THE_CRUSADER, THUNDER_CLAP] {
+            apply_real(m, hunter, hunter, id);
+            crate::game::map::derive::unit(m, hunter);
+            out.push(times(m));
+            auras::remove_spell(m, hunter, id, None);
+            crate::game::map::derive::unit(m, hunter);
+        }
+        out
+    })
+    .await;
+    let (base, seal, clap) = (out[0], out[1], out[2]);
+    assert!(seal.0 != base.0 && seal.1 != base.1, "{out:?}");
+    assert!(clap.0 > base.0 && clap.1 == base.1, "{out:?}");
+}
+
+const CREATURE_BEAR_FORM: u32 = 19_030;
+const GHOST_WOLF: u32 = 2645;
+const ORB_OF_DECEPTION: u32 = 16_739;
+
+/// Thistle Tea's looks (`spell_appearance_dbc_test.exs`): a creature's
+/// bear form is the creature bear's (902), and its own model comes back;
+/// Ghost Wolf is the wolf's (4613); the Orb of Deception takes every race
+/// and sex to the other side's, each to its own model, and back.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_forms_and_the_orb_of_deception_change_the_look() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_s, shaman, kalimdor) = {
+        let mut c = Client::connect(&realm, "P3OLOOK0");
+        let g = c.enter("Looka", Race::Orc, Class::Shaman).await;
+        (c, g, realm.maps.get(&realm, MapKey::world(1)))
+    };
+    let (bear, wolf) = on(&kalimdor, move |m| {
+        ready(m, shaman);
+        let display = |m: &Map, g: Guid| m.unit_fields(g).unwrap().get_u32(UNIT_FIELD_DISPLAYID);
+        let c = dummy(m, shaman, KOBOLD_VERMIN, 60, 3.0);
+        let own = display(m, c);
+        apply_real(m, c, c, CREATURE_BEAR_FORM);
+        let bear = display(m, c);
+        auras::remove_spell(m, c, CREATURE_BEAR_FORM, None);
+        let back = display(m, c);
+        apply_real(m, shaman, shaman, GHOST_WOLF);
+        let wolf = display(m, shaman);
+        ((own, bear, back), wolf)
+    })
+    .await;
+    assert_eq!((bear.1, bear.2), (902, bear.0));
+    assert_eq!(wolf, 4613);
+
+    let mut looks = Vec::new();
+    // Each race's own models, male and female, and the orb's for each.
+    for (i, (race, native, want)) in [
+        (Race::Human, [49, 50], [10_137, 10_138]),
+        (Race::Orc, [51, 52], [10_139, 10_140]),
+        (Race::Dwarf, [53, 54], [10_141, 10_142]),
+        (Race::NightElf, [55, 56], [10_143, 10_144]),
+        (Race::Undead, [57, 58], [10_146, 10_145]),
+        (Race::Tauren, [59, 60], [10_136, 10_147]),
+        (Race::Gnome, [1563, 1564], [10_148, 10_149]),
+        (Race::Troll, [1478, 1479], [10_135, 10_134]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut c = Client::connect(&realm, &format!("P3OLOOK{}", i + 1));
+        let g = c
+            .enter(
+                &format!("Orb{}", (b'a' + i as u8) as char),
+                race,
+                Class::Warrior,
+            )
+            .await;
+        let map = realm.registry.online(g).unwrap().map();
+        let seen = on(&map, move |m| {
+            let display = |m: &Map| m.unit_fields(g).unwrap().get_u32(UNIT_FIELD_DISPLAYID);
+            native.map(|model| {
+                let f = m.unit_fields_mut(g).unwrap();
+                f.set_u32(UNIT_FIELD_NATIVEDISPLAYID, model);
+                f.set_u32(UNIT_FIELD_DISPLAYID, model);
+                apply_real(m, g, g, ORB_OF_DECEPTION);
+                let orb = display(m);
+                auras::remove_spell(m, g, ORB_OF_DECEPTION, None);
+                (orb, display(m) == model)
+            })
+        })
+        .await;
+        looks.push((race, seen, want));
+        drop(c);
+    }
+    assert!(
+        looks
+            .iter()
+            .all(|(_, seen, want)| seen[0] == (want[0], true) && seen[1] == (want[1], true)),
+        "{looks:?}"
+    );
+}
+
+/// A spell of `effects` (effect, aura, points, trigger) for the linked
+/// auras' test, lasting `duration_index`'s time.
+fn linking(id: u32, effects: &[(u32, u32, i32, u32)]) -> SpellTemplate {
+    let mut s = SpellTemplate {
+        id,
+        name: format!("Link {id}"),
+        duration_index: 1,
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    for (i, (effect, aura, points, trigger)) in effects.iter().enumerate() {
+        s.effects[i].effect = *effect;
+        s.effects[i].aura = *aura;
+        s.effects[i].base_points = *points - 1;
+        s.effects[i].base_dice = 1;
+        s.effects[i].target_a = 1;
+        s.effects[i].trigger_spell = *trigger;
+    }
+    s
+}
+
+/// Thistle Tea's linked auras' edges (`spell_linked_aura_dbc_test.exs`):
+/// a link back to its parent is cut, the linked spell's own effects kept
+/// (its haste on), and a link to a spell there isn't brings nothing.
+#[tokio::test]
+async fn a_linked_aura_cycle_is_cut_and_a_missing_link_brings_nothing() {
+    let mut d = GameData::empty();
+    d.spells.durations.insert(
+        1,
+        crate::game::data::spells::SpellDuration {
+            base: 15_000,
+            per_level: 0,
+            max: 15_000,
+        },
+    );
+    let (parent, child, lonely) = (90_001, 90_002, 90_003);
+    for s in [
+        linking(parent, &[(6, auras::AURA_LINKED, 0, child)]),
+        linking(
+            child,
+            &[
+                (6, auras::AURA_MOD_HASTE, -25, 0),
+                (6, auras::AURA_LINKED, 0, parent),
+            ],
+        ),
+        linking(lonely, &[(6, auras::AURA_LINKED, 0, 999_999)]),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let realm = harness::realm_with(d);
+    let mut c = Client::connect(&realm, "P3OLINK");
+    let g = c.enter("Linka", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = on(&map, move |m| {
+        apply_real(m, g, g, parent);
+        let cycle = spells_on(m, g);
+        let haste = auras::auras(m, g).map_or(0, |a| a.sum(auras::AURA_MOD_HASTE));
+        apply_real(m, g, g, lonely);
+        (cycle, haste, spells_on(m, g))
+    })
+    .await;
+    let (cycle, haste, after) = out;
+    assert_eq!(
+        cycle.iter().filter(|s| **s == parent).count(),
+        1,
+        "{cycle:?}"
+    );
+    assert_eq!(
+        cycle.iter().filter(|s| **s == child).count(),
+        1,
+        "{cycle:?}"
+    );
+    assert_eq!(haste, -25);
+    assert!(
+        after.contains(&lonely) && !after.contains(&999_999),
+        "{after:?}"
+    );
+}
