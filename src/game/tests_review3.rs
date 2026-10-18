@@ -676,3 +676,38 @@ async fn a_pet_area_aura_of_two_effects_puts_both_on_the_pet() {
         "both effects on the pet"
     );
 }
+
+/// A creature whose victim it forgets turns to the highest on its list it
+/// may fight: not to one above it it can't attack.
+#[tokio::test]
+async fn a_creature_forgetting_its_victim_turns_to_one_it_may_fight() {
+    let realm = fast_realm(|_| {});
+    let (_c, rogue, map) = human(&realm, "R3NX", "Vanisher", Class::Rogue).await;
+    let (_c2, mage, _) = human(&realm, "R3NY", "Untouchable", Class::Mage).await;
+    let (_c3, priest, _) = human(&realm, "R3NZ", "Next", Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            use crate::game::map::ai;
+            let k = dummy(m, rogue, 60, 3.0);
+            ai::attacked(m, k, rogue);
+            ai::add_threat(m, k, rogue, 100.0);
+            ai::add_threat(m, k, mage, 50.0);
+            ai::add_threat(m, k, priest, 10.0);
+            // The mage beyond its reach (immune to creatures).
+            m.unit_fields_mut(mage).unwrap().set_flag(
+                crate::game::fields::UNIT_FIELD_FLAGS,
+                crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_NPC,
+                true,
+            );
+            ai::forget(m, rogue);
+            let c = m.creature(k).unwrap();
+            (c.combat.victim == priest, c.combat.victim == mage)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, false),
+        "the priest, not the mage it can't touch"
+    );
+}

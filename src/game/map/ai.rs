@@ -254,7 +254,7 @@ pub fn forget(map: &mut Map, g: Guid) {
 pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
     for c in fighting {
         crate::game::map::spells::threat_sync::removed(map, c, g);
-        let next = {
+        {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
             };
@@ -263,11 +263,9 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             if cr.combat.victim != g {
                 continue;
             }
-            cr.threat
-                .iter()
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(t, _)| *t)
-        };
+        }
+        // The next it may fight: not one it can't reach or see.
+        let next = pick_victim(map, c);
         combat::stop_attack(map, c);
         match next {
             Some(t) => {
