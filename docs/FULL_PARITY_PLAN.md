@@ -12,6 +12,28 @@ Thistle Tea's web server stays out of scope.
   nothing differs that isn't explained.
 - **The differences list is only the accepted ones.**
 
+## Where it stands (2026-10-18)
+
+| Phase | State |
+|---|---|
+| 1a, the matrix | done: every test mapped ([parity/](parity/)) |
+| 1b, the packet diff | not started |
+| 1c, keeping up with Thistle Tea | the process is in [parity/README.md](parity/README.md); the pin is `0426f0d6` |
+| 2, the known differences | done |
+| 3, the matrix area by area | five rounds: 61% covered or accepted (5,110 of 8,380), from 21% |
+| 4, the packet diff to zero | waits on 1b |
+| 5, data and the protocol library | the fork is done; the data's provenance not started |
+| 6, the accepted differences | the open questions in [SITREP.md](SITREP.md) |
+| 7, sign-off | not started |
+
+Of the 3,224 rows left:
+- Most are work in the areas round 5 was on: the player, spells, combat, auras and loaders, scripts, pets.
+- Some wait on a question in [SITREP.md](SITREP.md).
+- Some wait on a system wvs doesn't have yet: Scourge camps, the Lunar Festival's fireworks, a movement
+  acknowledgement system.
+
+Each row's note says which. [STATE.md](STATE.md) has the rest.
+
 ## Phase 1: the measure
 
 **1a, the test matrix.**

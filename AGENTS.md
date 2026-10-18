@@ -92,6 +92,21 @@ There is no world tick.
   read what comes back with wow_messages.
 - **The fast suite stays fast**: a test that needs the real world is `#[ignore = "extended"]`; one that waits seconds
   in real time skips the map's clock instead where it can. A long walk is split into tests nextest runs at once.
+- **Don't race the map**: a harness test queries a map whose own update runs on real time. Wait for what you check,
+  with a short poll up to a limit, or count the map's updates (`m.stats.updates`). Never assume an update has or
+  hasn't happened between two queries. Every test that failed only under load was this.
+- **The client mustn't crash**: a change to a packet or a create runs the client check (`tools/client_check/`,
+  [docs/TESTING.md](docs/TESTING.md)), which runs `WoW.exe`'s own parsers on what wvs sends.
+
+## Where things are written down
+
+- [docs/STATE.md](docs/STATE.md): where wvs stands, how to run, test and measure it, and what's left.
+- [docs/SITREP.md](docs/SITREP.md): the open questions for the user, by subject. [docs/DECISIONS.md](docs/DECISIONS.md)
+  has each in full, with every decision made and why.
+- [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md) and [docs/review/](docs/review/): what the reviews fixed and left.
+- [docs/parity/](docs/parity/): the matrix of Thistle Tea's tests; [docs/THISTLE_TEA_DIFFERENCES.md](docs/THISTLE_TEA_DIFFERENCES.md).
+- [docs/RELIABILITY.md](docs/RELIABILITY.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md),
+  [docs/PROFILING.md](docs/PROFILING.md), [docs/TESTING.md](docs/TESTING.md), [docs/CONFIG.md](docs/CONFIG.md).
 
 ## Configuration
 
