@@ -396,6 +396,8 @@ mod tests_p5_spell_checks;
 #[cfg(test)]
 mod tests_p5_spell_cost;
 #[cfg(test)]
+mod tests_p5_spell_enchant;
+#[cfg(test)]
 mod tests_p5_spell_holiday;
 #[cfg(test)]
 mod tests_p5_spell_hunter;
