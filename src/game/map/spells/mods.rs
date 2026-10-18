@@ -131,7 +131,10 @@ pub fn for_spell(map: &Map, caster: Guid, s: &SpellTemplate) -> Mods {
                 continue;
             }
             let op = x.misc.clamp(0, OPS as i32 - 1) as usize;
-            if !touches(family, x.mask, s) || !used_by(op, s, data) {
+            let used = used_by(op, s, data);
+            // Damage's modifier holds for a script's amount too (a dummy's),
+            // but only a direct amount spends its charge.
+            if !touches(family, x.mask, s) || (!used && op != OP_DAMAGE) {
                 continue;
             }
             let v = x.amount * h.stacks.max(1) as i32;
@@ -140,7 +143,8 @@ pub fn for_spell(map: &Map, caster: Guid, s: &SpellTemplate) -> Mods {
             } else {
                 m.pct[op] += v;
             }
-            if h.charges > 0 && !m.charged.iter().any(|c| c.0 == h.spell && c.1 == h.caster) {
+            if used && h.charges > 0 && !m.charged.iter().any(|c| c.0 == h.spell && c.1 == h.caster)
+            {
                 m.charged.push((h.spell, h.caster, op));
             }
         }
@@ -159,7 +163,24 @@ fn used_by(op: usize, s: &SpellTemplate, data: &crate::game::data::GameData) -> 
             .effects
             .iter()
             .any(|e| matches!(e.effect, 2 | 9 | 10 | 17 | 31 | 58 | 121)),
-        OP_DOT => s.effects.iter().any(|e| e.amplitude > 0),
+        // A tick of damage or healing, as the amount over time takes it
+        // (`effects::aura_amount`; mangos's `SPELLMOD_DOT` in the damage
+        // and healing done): not a mana leech's or a trigger's.
+        OP_DOT => s.effects.iter().any(|e| {
+            e.amplitude > 0
+                && matches!(
+                    e.aura,
+                    auras::AURA_PERIODIC_DAMAGE
+                        | auras::AURA_PERIODIC_LEECH
+                        | auras::AURA_PERIODIC_HEAL
+                )
+        }),
+        // A direct amount: damage, a heal, a drain or a burn, not a gain of
+        // power or a tick (Thistle Tea's `operation_used_by_spell?(:damage)`).
+        OP_DAMAGE => s.effects.iter().any(|e| {
+            matches!(e.effect, 2 | 8 | 9 | 10 | 17 | 31 | 58 | 62 | 121)
+                || (e.effect == 6 && e.aura == auras::AURA_POWER_BURN_MANA)
+        }),
         // A periodic aura's interval (Thistle Tea's
         // `operation_used_by_spell?(:activation_time)`).
         OP_ACTIVATION_TIME => s
