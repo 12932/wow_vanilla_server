@@ -96,6 +96,8 @@ mod tests_p3_aura2_real;
 #[cfg(test)]
 mod tests_p3_aura2_spells;
 #[cfg(test)]
+mod tests_p3_aura2_sync;
+#[cfg(test)]
 mod tests_p3_combat;
 #[cfg(test)]
 mod tests_p3_combat10;
