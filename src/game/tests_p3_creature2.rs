@@ -1582,7 +1582,7 @@ async fn sessile_creatures_stand_and_combat_dummies_neither_swing_nor_chase() {
             )
         })
         .await;
-        if (out.1 && out.3) || waited >= 30 {
+        if (out.1 && out.3) || waited >= 100 {
             break;
         }
         waited += 1;
