@@ -523,3 +523,191 @@ async fn an_abandoned_pet_goes_with_its_bar_and_record_not_the_stable() {
     .await;
     assert_eq!(after, (true, None, true, false, stabled));
 }
+
+/// A pet trainer whose menu offers to untrain a pet.
+const PET_TRAINER: u32 = 963_103;
+const PET_TRAINER_MENU: u32 = 963_103;
+/// Two abilities the wolf was trained in, and its family's own.
+const TRAINED: [u32; 2] = [95_600, 95_601];
+const FAMILY: u32 = 95_602;
+
+fn untraining_world() -> GameData {
+    use crate::game::data::npc::{GossipMenu, GossipOption};
+    let mut d = data();
+    d.creature_templates.insert(
+        PET_TRAINER,
+        CreatureTemplate {
+            entry: PET_TRAINER,
+            name: "Pet Trainer".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 30,
+            level_max: 30,
+            faction: 35,
+            unit_class: 1,
+            creature_type: 7,
+            health_multiplier: 1.0,
+            damage_multiplier: 1.0,
+            base_attack_time: 2000,
+            health_max: 500,
+            gossip_menu_id: PET_TRAINER_MENU,
+            npc_flags: crate::game::map::npc::NPC_FLAG_GOSSIP
+                | crate::game::map::npc::NPC_FLAG_TRAINER,
+            trainer_type: 3,
+            ..Default::default()
+        },
+    );
+    d.npc.gossip_menus.insert(
+        PET_TRAINER_MENU,
+        GossipMenu {
+            texts: vec![(100, 0)],
+            options: vec![GossipOption {
+                id: 0,
+                kind: 17,
+                text: "I wish to untrain my pet.".into(),
+                ..Default::default()
+            }],
+        },
+    );
+    d
+}
+
+/// The offer `c` is told on choosing to untrain at `npc`: whether the
+/// window closed, and the pet and price.
+async fn offered(c: &mut Client, npc: Guid) -> (bool, Option<(Guid, u32)>) {
+    c.clear();
+    c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+    c.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: npc,
+        gossip_list_id: 0,
+        unknown: None,
+    })
+    .await;
+    handled(c).await;
+    let closed = c
+        .gets(std::time::Duration::from_millis(1), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+        })
+        .await
+        .is_some();
+    let offer = c
+        .gets(std::time::Duration::from_millis(1), |m| match m {
+            ServerOpcodeMessage::SMSG_PET_UNLEARN_CONFIRM(o) => Some((o.pet, o.talent_reset_cost)),
+            _ => None,
+        })
+        .await;
+    (closed, offer)
+}
+
+/// Thistle Tea's `PetUntraining` "quotes the current pet without charging
+/// or clearing abilities", "requires an eligible owner and a nearby live
+/// pet trainer", "charges once, projects the empty bar, and retains reset
+/// history on suspension" and "leaves abilities and payment intact when
+/// funds are insufficient": the trainer's option closes the window and
+/// quotes the pet's price, charging nothing; out of reach, or dead, it
+/// quotes nothing. Short of the price, the untraining is refused and the
+/// pet keeps its abilities; paid, they go but its family's, its training
+/// points come back, and the next price is higher.
+#[tokio::test]
+async fn a_pet_is_untrained_for_its_price_at_a_trainer_in_reach() {
+    use crate::game::map::creature::Life;
+    let realm = harness::realm_with(untraining_world());
+    let mut a = Client::connect(&realm, "H");
+    let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
+    let map = map_of(&realm, h);
+    let (wolf, trainer) = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&h).unwrap();
+        crate::game::map::stats::set_level(p, &data, 20);
+        p.set_money(10_000);
+        let at = p.position();
+        let wolf = hunter::spawn(m, h, WOLF, Kind::Hunter, 20, at, 0.0);
+        m.players.get_mut(&h).unwrap().owned.pet = Some(wolf);
+        let s = m.creature_mut(wolf).unwrap().pet.as_deref_mut().unwrap();
+        s.family_spells = vec![FAMILY];
+        s.spells = vec![FAMILY, TRAINED[0], TRAINED[1]];
+        s.training_points = 0;
+        let trainer = crate::game::tests_p3_combat::spawn(m, h, PET_TRAINER, 30, 2.0);
+        let f = &mut m.creature_mut(trainer).unwrap().fields;
+        f.set_u32(
+            UNIT_NPC_FLAGS,
+            crate::game::map::npc::NPC_FLAG_GOSSIP | crate::game::map::npc::NPC_FLAG_TRAINER,
+        );
+        (wolf, trainer)
+    })
+    .await;
+    a.sees(trainer).await;
+    let spells = move |m: &mut Map| {
+        let c = m.creature(wolf).unwrap();
+        let s = c.pet.as_deref().unwrap();
+        (s.spells.clone(), m.players[&h].money())
+    };
+    let (closed, offer) = offered(&mut a, trainer).await;
+    assert!(closed, "the window closes");
+    let (pet, price) = offer.expect("a price");
+    assert_eq!(pet, wolf);
+    assert_eq!(
+        on(&map, spells).await,
+        (vec![FAMILY, TRAINED[0], TRAINED[1]], 10_000),
+        "nothing charged, nothing forgotten"
+    );
+    let at = |yards: f32| {
+        move |m: &mut Map| {
+            let at = m.players[&h].position();
+            m.creature_mut(trainer).unwrap().position = Vector3d {
+                x: at.x + yards,
+                ..at
+            };
+        }
+    };
+    on(&map, at(10.0)).await;
+    assert_eq!(offered(&mut a, trainer).await.1, None, "out of reach");
+    on(&map, at(2.0)).await;
+    on(&map, move |m| {
+        let later = m.now + std::time::Duration::from_secs(60);
+        m.creature_mut(trainer).unwrap().life = Life::Dead {
+            corpse_until: later,
+            respawn_at: later,
+        };
+    })
+    .await;
+    assert_eq!(offered(&mut a, trainer).await.1, None, "dead");
+    // Short of the price.
+    on(&map, move |m| {
+        m.creature_mut(trainer).unwrap().life = Life::Alive;
+        m.players.get_mut(&h).unwrap().set_money(price - 1);
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_PET_UNLEARN { pet: wolf }).await;
+    let refused = a
+        .wait_for("SMSG_BUY_FAILED", |m| match m {
+            ServerOpcodeMessage::SMSG_BUY_FAILED(f) => Some(f.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(refused, BuyResult::NotEnoughtMoney);
+    let (kept, _) = on(&map, spells).await;
+    assert_eq!(kept, vec![FAMILY, TRAINED[0], TRAINED[1]], "kept");
+    // Paid: another's pet first, then hers.
+    on(&map, move |m| {
+        m.players.get_mut(&h).unwrap().set_money(10_000)
+    })
+    .await;
+    a.send(CMSG_PET_UNLEARN {
+        pet: crate::game::guid::player(4242),
+    })
+    .await;
+    handled(&mut a).await;
+    assert_eq!(on(&map, spells).await.1, 10_000, "not her pet");
+    a.send(CMSG_PET_UNLEARN { pet: wolf }).await;
+    handled(&mut a).await;
+    let (left, money) = on(&map, spells).await;
+    assert_eq!(
+        (left, money),
+        (vec![FAMILY], 10_000 - price),
+        "untrained, once paid"
+    );
+    let (_, again) = offered(&mut a, trainer).await;
+    assert!(again.expect("a price").1 > price, "dearer the next time");
+}

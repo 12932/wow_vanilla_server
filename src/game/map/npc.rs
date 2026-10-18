@@ -375,7 +375,12 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         12 => battlemaster_hello(map, player, npc),
         13 => auction_hello(map, player, npc),
         14 => crate::game::map::pets::list_stable(map, player, npc),
-        17 => crate::game::map::pets::untrain_offer(map, player),
+        // The window closes, and the client asks to confirm (mangos's
+        // `GOSSIP_OPTION_UNLEARNPETSKILLS`).
+        17 => {
+            send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            crate::game::map::pets::untrain_offer(map, player)
+        }
         15 => vendor::list(map, player, npc),
         16 => crate::game::map::misc::talent_wipe_offer(map, player, npc),
         _ => send(map, player, &SMSG_GOSSIP_COMPLETE {}),
