@@ -27,7 +27,8 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
 2. **Robustness: what a restarted map does with its players.** Its players are saved and sent to the character
    screen. Should they go straight back into the fresh map instead?
 3. **Robustness: should a hung map abort the server,** so systemd or Docker restarts the whole process (OTP's
-   top-level "let it crash")? Today the watchdog only logs it, since a hung task can't be killed from inside.
+   top-level "let it crash")? Answered 2026-10-19: the watchdog is removed completely, so a hung map is no longer
+   reported (decision 61).
 4. **wow_messages' crash bugs.** The robustness work found that wow_messages reserves memory from counts in the
    packet before reading them: a `/who` claiming 4 billion strings asks for 96 GB and aborts the process. It also
    `unwrap`s zlib and underflows sizes in `CMSG_WARDEN_DATA` and `CMSG_BUG`. wvs now guards against all of these
@@ -927,5 +928,22 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Left:** Obsidion's Smash and Knockback never went in its runs (row left gap); Bly's Revenge's cast isn't
       asserted; about 320 rows untouched (the Eranikus, Gizelton, Stormwind Rendezvous, Alterac Valley and Scourge
       Invasion walks, mob and distancing behaviour trees, charmed and possessed players, guardians).
+
+60. **Item charges saved** (question 13; `fix/charges`). Each item's five spell charges are saved wherever an item is:
+    carried, in bags, the bank, the buyback, mail and auctions.
+    - **The store:** migration 3 adds `character_items.charges`, five numbers separated by spaces as mangos-classic's
+      `item_instance.charges` has them. A row saved before it loads with its template's charges. Mail and auctions
+      keep their items as JSON, so they carry the field without a migration.
+    - **Used up:** an item is used up by its last charged spell, as mangos's `TakeCastItem` and Thistle Tea's
+      `spend_charge` have it; wvs destroyed it when any charged spell reached 0.
+
+61. **The watchdog removed, and mangos's defaults** (questions 3 and 54; `chore/ops`).
+    - **The watchdog** is gone: its thread, pulses, alarms and test. It never had config keys. Supervision stays (a
+      panic costs one step, creature or packet; a map that keeps panicking restarts with its back-off). A hung map is
+      no longer reported.
+    - **Defaults:** `[visibility] instances_yards` 170, `[creatures] leash_radius` 30, `assistance_radius` 5, and
+      rare, rare elite and boss corpses 900, 1200 and 3600 s. The harness takes its view distances from the defaults.
+    - **Left as wvs has it:** a corpse is cut short at its whole respawn, where mangos cuts it at 90%, and mangos's
+      own per-template `CorpseDelay` and encounter bosses' times aren't read.
 
 ## Left for later, and why

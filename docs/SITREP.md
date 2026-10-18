@@ -12,7 +12,7 @@ question and decision in full; this page is the index.
 - **The kobold:** fixed. A unit no longer swings from beyond its reach; two running units get the client's 8/3 yards.
 - **Robustness:**
   - a panic costs one step, creature turn or packet, not the server;
-  - a map that keeps panicking restarts, and a watchdog reports a hung one;
+  - a map that keeps panicking restarts;
   - items and money that move between characters and records are saved in one transaction;
   - four code reviews fixed about 60 bugs.
 - **Performance:**
@@ -103,13 +103,15 @@ Until you answer, wvs keeps what the line says.
 - **Ghosts:** water walking, and sight only within 45 yards of the corpse, for every kind of object.
 - **Battlegrounds:** a 400-yard view distance.
 - **#55** the world-awake fixes landed (perf2, DECISIONS 57).
+- **2026-10-19, done:**
+  - **#3** the watchdog is removed (DECISIONS 61).
+  - **#13** item charges are saved (DECISIONS 60).
+  - **#54** mangos's defaults: instance view 170, leash 30, assistance 5, rare corpses 900, 1200 and 3600 s
+    (DECISIONS 61).
 - **2026-10-19, being done now:**
   - **#11** fix the packet order: nothing reaches a client about an object before its create.
-  - **#3** remove the watchdog completely.
-  - **#13** save item charges.
   - **#33** a teleport within the map ends the player's fight.
   - **#20** the player combat timer as mangos and Thistle Tea have it.
-  - **#54** mangos's defaults: instance view distance 170, leash 30, assistance 5, and its rare corpse decay.
   - **#39** new weapon skills start at 1.
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
@@ -121,7 +123,7 @@ Until you answer, wvs keeps what the line says.
 | Phase 1a: the matrix of Thistle Tea's tests, mapped | 1,781 of 8,429 covered (21%) | f9bad00 |
 | Bugs found while mapping, batches 1 to 5 | merged | 25ecb91 … f09cc53 |
 | Phase 2 (2a to 2i): spells, movement, combat, scripts, instances, world | merged | 099722e … ef1db26 |
-| Robustness: supervision, guards, watchdog, chaos tests | merged | 5f53bef |
+| Robustness: supervision, guards, chaos tests (the watchdog since removed) | merged | 5f53bef |
 | wow_messages fork: stop layout, crash bugs, seven layouts | merged | 2bed07d, 3eacdd1 |
 | Performance, round 1 | merged | 8775d80 |
 | Phase 3, rounds 1 and 2 (3a to 3l) | 45.1% | b8e080f |

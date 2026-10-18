@@ -21,7 +21,7 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 | Systems | all of Thistle Tea's: spells and auras to 60, pets, procs, professions, group loot, quests and events, the three battlegrounds, honor, outdoor PvP, instances and their scripts, raid bosses' mechanics, transports, social | the same |
 | Persistence | SQLite, versioned, saved at logout, on a timer and on SIGTERM | none: a restart loses every character |
 | Security | SRP accounts, GM levels, bans, movement checks, rate limits | every session is a GM; positions trusted |
-| Reliability | a panic costs its update step, creature turn or packet; a creature restarts from its spawn, and is quarantined if it keeps panicking; a map that keeps panicking restarts from the data; background loops back off and retry; a watchdog logs hung maps ([RELIABILITY.md](RELIABILITY.md)) | OTP supervisors: a process per player and creature, restarted when it crashes |
+| Reliability | a panic costs its update step, creature turn or packet; a creature restarts from its spawn, and is quarantined if it keeps panicking; a map that keeps panicking restarts from the data; background loops back off and retry ([RELIABILITY.md](RELIABILITY.md)) | OTP supervisors: a process per player and creature, restarted when it crashes |
 | Under load (peon, 100 bots; wvs at 3425257) | 0.16 cores idle, 0.43 in a crowd, 0.22 in the arena pit, 0.15 for the Gurubashi last man standing; every run valid | 6 cores in a crowd and in the pit |
 
 ## Different on purpose
@@ -60,6 +60,7 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   Concussive Shot and Piercing Howl are dazes, not snares; Blessed Sunfruit Juice and Alterac Spring Water aren't
   Well Fed; Blood Siphon and Blood Funnel are a heal and a hit, not funnels.
 - **New weapon skills** start at their cap; Thistle Tea and mangos start them at 1.
+- **mangos's defaults:** a creature's leash is 30 yards (Thistle Tea's is 50) and its call for help reaches 5 yards.
 - **Lower ranks of rage and energy spells** stay in the spellbook; mangos takes them out.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
 - **Pets, as mangos has them:** a pet on Stay answers an attacker from afar (`PetAI::AttackedBy`), though of its own
