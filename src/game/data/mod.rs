@@ -203,6 +203,9 @@ pub struct DisplayInfo {
     /// Its model's height (`CreatureModelData`'s collision height), at
     /// object scale one: where the head is, for the breath; 0 for unknown.
     pub height: f32,
+    /// The model's gender (`creature_display_info_addon`'s: 0 male, 1
+    /// female, 2 none), where vmangos gives one.
+    pub gender: Option<u8>,
 }
 
 #[derive(Debug, Clone, Default)]

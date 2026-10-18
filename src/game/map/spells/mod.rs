@@ -13,8 +13,8 @@ pub mod dynamic;
 mod effects;
 
 pub use effects::{
-    add_combo_points, dr_aura_gone, release_retained_combo_points, retained_combo_points_expired,
-    shown_power,
+    add_combo_points, combo_duration, dr_aura_gone, release_retained_combo_points,
+    retained_combo_points_expired, shown_power,
 };
 pub mod environment;
 pub mod health_sync;
@@ -839,6 +839,10 @@ pub fn cast(
     {
         interrupt(map, caster);
     }
+    // Another spell cast stops a wand (mangos's `SetCurrentCastedSpell`,
+    // `SPELL_ATTR_EX3_CASTING_CANCELS_AUTOREPEAT` on Shoot); Auto Shot
+    // goes on.
+    crate::game::map::ranged::cast_begun(map, caster);
     let now = map.now;
     let time = cast_time(map, caster, s, &m);
     // A spell of the ranged slot shows its projectile (mangos's

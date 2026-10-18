@@ -567,15 +567,12 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
 
 /// More crit against a creature type (Monster Slaying, Humanoid Slaying).
 pub fn crit_versus(map: &Map, caster: Guid, target: Guid) -> f32 {
-    let creature_type = map
-        .creature(target)
-        .and_then(|c| map.realm.data.creature_template(c.entry))
-        .map(|t| t.creature_type)
-        .unwrap_or(7);
-    if creature_type == 0 {
+    // Its type's bit: a player's a humanoid's, or a beast's in a beast's
+    // form (`combat::creature_type_mask`).
+    let bit = combat::creature_type_mask(map, target);
+    if bit == 0 {
         return 0.0;
     }
-    let bit = 1u32 << (creature_type - 1).min(31);
     auras::auras(map, caster).map_or(0.0, |a| {
         a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, bit) as f32
     })
@@ -724,12 +721,8 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
         return (done + from_spirit.max(0)) as f32;
     }
     let mut p = d.spell_power[school_index(s)] as f32;
-    let creature_type = map
-        .creature(target)
-        .and_then(|c| map.realm.data.creature_template(c.entry))
-        .map(|t| t.creature_type)
-        .unwrap_or(7);
-    if creature_type > 0
+    let bit = combat::creature_type_mask(map, target);
+    if bit != 0
         && let Some(a) = auras::auras(map, caster)
     {
         // Gear's and potions' spell damage against a creature type (aura
@@ -740,7 +733,7 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
                 matches!(
                     x.kind,
                     AURA_MOD_DAMAGE_DONE_CREATURE | AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
-                ) && (x.misc as u32) & (1 << (creature_type - 1).min(31)) != 0
+                ) && (x.misc as u32) & bit != 0
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
             .sum::<f32>();
@@ -785,15 +778,10 @@ pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate)
     let mut m = if physical(s) && s.school == 0 {
         1.0
     } else {
-        a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, s.school_mask())
+        crate::game::map::derive::spell_pct(a, s.school_mask())
     };
-    let creature_type = map
-        .creature(target)
-        .and_then(|c| map.realm.data.creature_template(c.entry))
-        .map(|t| t.creature_type)
-        .unwrap_or(7);
-    if creature_type > 0 {
-        let bit = 1 << (creature_type - 1).min(31);
+    let bit = combat::creature_type_mask(map, target);
+    if bit != 0 {
         m *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, bit);
     }
     m
@@ -917,8 +905,10 @@ pub fn damage(
         d = l.mods.apply(mods::OP_DAMAGE, d);
     }
     if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
+        // What armor takes off, whole, as a white blow's (Thistle Tea's
+        // `armor_reduced_damage`): 1000 at 14.003% leaves 860, not 859.
         let armor = resistance(map, caster, target, 0);
-        d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
+        d -= (d * combat::armor_reduction(armor as u32, level(map, caster))).trunc();
     }
     if !fixed {
         d = taken_of(map, caster, target, s, index, Kind::Direct, 1, d);

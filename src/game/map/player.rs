@@ -641,6 +641,7 @@ impl Player {
         row.state.bank_bag_slots = f.get_byte(PLAYER_BYTES_2, 2);
         row.state.drunk = self.drunk.value;
         row.state.ammo = f.get_u32(PLAYER_AMMO_ID);
+        row.state.bank_bag_slots = f.get_byte(PLAYER_BYTES_2, 2);
         // What's sold stays to be bought back this session only (Thistle
         // Tea's `Buyback.logout`).
         row.items = self

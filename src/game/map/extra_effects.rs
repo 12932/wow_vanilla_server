@@ -88,7 +88,16 @@ fn pull(map: &mut Map, caster: Guid, target: Guid, speed: f32) {
     let Some(p) = map.players.get(&target) else {
         return;
     };
-    if !them.alive || p.flight.is_some() || p.auras.has(auras::AURA_MOD_ROOT) {
+    // As a knockback: not the dead, nor one rooted or stunned, on a
+    // flight, or on a move the server drives (Thistle Tea's `pull`
+    // shares the launch's restrictions).
+    if !them.alive
+        || p.flight.is_some()
+        || p.driven.is_some()
+        || p.charge.is_some()
+        || p.auras.has(auras::AURA_MOD_ROOT)
+        || p.auras.has(auras::AURA_MOD_STUN)
+    {
         return;
     }
     let radius = |g: Guid| {
@@ -109,9 +118,11 @@ fn pull(map: &mut Map, caster: Guid, target: Guid, speed: f32) {
     let angle = dy.atan2(dx);
     crate::game::map::spells::interrupt(map, target);
     crate::game::map::ranged::cancel(map, target, true);
-    let Some(p) = map.players.get(&target) else {
+    let Some(p) = map.players.get_mut(&target) else {
         return;
     };
+    // The flight begins a fall of its own.
+    p.fall_from = None;
     let mut b = crate::game::data::items::Body::default();
     crate::game::update::write_packed_guid(&mut b.0, target);
     b.u32(0)

@@ -279,7 +279,14 @@ fn height(info: &MovementInfo) -> (f32, Guid) {
 fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Option<f32> {
     let falling = info.flags.get_jumping().is_some() || info.flags.get_fallingfar();
     let (z, transport) = height(info);
-    if info.flags.get_swimming().is_some() {
+    // Swimming ends a fall, and so does slowing it: what was fallen before
+    // Slow Fall (or a hover) took hold doesn't count once it is gone
+    // (Thistle Tea's `Falling` discards it).
+    use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER};
+    if info.flags.get_swimming().is_some()
+        || p.auras.has(AURA_FEATHER_FALL)
+        || p.auras.has(AURA_HOVER)
+    {
         p.fall_from = None;
         p.misc.fall_far = false;
         return None;

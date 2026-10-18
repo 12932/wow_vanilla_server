@@ -42,6 +42,32 @@ pub fn value_with_bonuses(p: &Player, skill: u32) -> u32 {
     })
 }
 
+/// Each skill's bonuses into its slot's third word, apart from its value:
+/// the temporary ones (`SPELL_AURA_MOD_SKILL`) in the low half, the
+/// permanent (`SPELL_AURA_MOD_SKILL_TALENT`) in the high, signed, each
+/// aura by its stacks, as mangos's `SetSkill` bonuses and Thistle Tea's
+/// `Skills.bonuses` have them. The client shows them as the skill's "+".
+pub fn set_bonuses(p: &mut Player) {
+    use crate::game::map::auras::{AURA_MOD_SKILL, AURA_MOD_SKILL_TALENT};
+    for i in 0..SLOTS {
+        let base = PLAYER_SKILL_INFO_1_1 + i * 3;
+        let skill = (p.fields.get_u32(base) & 0xFFFF) as i32;
+        if skill == 0 {
+            continue;
+        }
+        let sum = |kind: u32| {
+            p.auras
+                .effects()
+                .filter(|(_, a)| a.kind == kind && a.misc == skill)
+                .map(|(h, a)| a.amount * h.stacks.max(1) as i32)
+                .sum::<i32>()
+                .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16 as u16
+        };
+        let word = u32::from(sum(AURA_MOD_SKILL)) | u32::from(sum(AURA_MOD_SKILL_TALENT)) << 16;
+        p.fields.set_u32(base + 2, word);
+    }
+}
+
 /// The armor skills (`SkillLine` category 8): one point, at every level
 /// (mangos's `SKILL_RANGE_MONO`, Thistle Tea's `:mono`).
 const ARMOR: &[u32] = &[293, 413, 414, 415, 433];

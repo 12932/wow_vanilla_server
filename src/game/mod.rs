@@ -322,6 +322,32 @@ mod tests_p3_world_pvp;
 #[cfg(test)]
 mod tests_p3_world_travel;
 #[cfg(test)]
+mod tests_p4_core_ap;
+#[cfg(test)]
+mod tests_p4_core_combat;
+#[cfg(test)]
+mod tests_p4_core_entity;
+#[cfg(test)]
+mod tests_p4_core_fields;
+#[cfg(test)]
+mod tests_p4_core_mob;
+#[cfg(test)]
+mod tests_p4_core_motion;
+#[cfg(test)]
+mod tests_p4_core_pen;
+#[cfg(test)]
+mod tests_p4_core_skills;
+#[cfg(test)]
+mod tests_p4_core_spell;
+#[cfg(test)]
+mod tests_p4_core_stats;
+#[cfg(test)]
+mod tests_p4_core_versus;
+#[cfg(test)]
+mod tests_p4_core_walk;
+#[cfg(test)]
+mod tests_p4_core_wand;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

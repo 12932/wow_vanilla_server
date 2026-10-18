@@ -103,6 +103,9 @@ pub struct Combat {
     pub queued: Option<u32>,
     /// Auto Shot, Shoot: repeating at the ranged weapon's speed.
     pub auto_repeat: Option<AutoRepeat>,
+    /// When the ranged weapon is ready again after its last shot, kept
+    /// though the repeat stops.
+    pub ranged_ready_at: Option<Instant>,
     /// Main-hand attacks owed at once, and Reckoning's banked ones.
     pub extra_attacks: u32,
     pub held_extra_attacks: u32,
@@ -1080,8 +1083,16 @@ pub fn derived(map: &Map, g: Guid) -> crate::game::map::derive::Derived {
 /// The unit's creature type as a mask, for the auras against one: a player
 /// is a humanoid.
 pub fn creature_type_mask(map: &Map, g: Guid) -> u32 {
-    if map.players.contains_key(&g) {
-        return 1 << 6;
+    if let Some(p) = map.players.get(&g) {
+        // A player is a humanoid, but in a form `SpellShapeshiftForm` makes
+        // a beast (cat, bear, dire bear, travel, aquatic, ghost wolf), as
+        // mangos's `GetCreatureType` and Thistle Tea's have it.
+        let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
+        return if matches!(form, 1 | 3 | 4 | 5 | 8 | 14 | 15 | 16) {
+            1
+        } else {
+            1 << 6
+        };
     }
     map.creature(g)
         .and_then(|c| map.realm.data.creature_template(c.entry))
@@ -1774,7 +1785,14 @@ pub fn blow(
     kept: f32,
 ) -> (u32, u32, u32, u32) {
     match outcome {
-        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
+        // A swing's own flag with the miss, as mangos's
+        // `CalculateMeleeDamage` starts every swing (Thistle Tea's 0x12).
+        Outcome::Miss => (
+            HITINFO_NORMALSWING2 | HITINFO_MISS,
+            VICTIMSTATE_UNAFFECTED,
+            0,
+            0,
+        ),
         Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
         Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
         Outcome::Block => {
@@ -2442,6 +2460,14 @@ fn deal_damage_with(
     // to a corpse doesn't kill it again.
     if crate::game::map::gm_dev::invulnerable(map, victim)
         || map.unit_view(victim).is_none_or(|u| !u.alive)
+    {
+        return;
+    }
+    // A spirit of redemption takes nothing, unattackable (mangos's
+    // `SPELL_AURA_MOD_UNATTACKABLE`, Thistle Tea's absorbing it all), but
+    // the death its end brings.
+    if crate::game::map::spells::redemption::spirit(map, victim)
+        && !map.spells.redeemed.contains(&victim)
     {
         return;
     }
