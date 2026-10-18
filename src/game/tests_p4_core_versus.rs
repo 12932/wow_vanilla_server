@@ -271,3 +271,97 @@ async fn a_flat_ability_takes_no_weapon_speed_bonus_from_attack_power_versus_its
         .unwrap();
     assert_eq!(r, 100);
 }
+
+const SHADOW_BOLT: u32 = 98_240;
+
+#[tokio::test]
+async fn spell_power_versus_types_adds_each_types_stacked_and_the_schools_own_and_a_cat_is_a_beast()
+{
+    use crate::game::map::spells::outcome::power;
+    let (realm, _a, g, map) = setup_with(world(), Class::Warlock).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            level(m, g, 60);
+            let ghoul = spawn(m, g, GHOUL, 60, 2.0);
+            let beast = spawn(m, g, BEAST, 60, 3.0);
+            // Shadow 13, fire 7; 20 against demons and undead of two
+            // stacks, 10 more against demons, 48 against the undead.
+            aura_of(m, g, 98_241, auras::AURA_MOD_DAMAGE_DONE, 32, 13);
+            aura_of(m, g, 98_242, auras::AURA_MOD_DAMAGE_DONE, 4, 7);
+            aura_of(
+                m,
+                g,
+                98_243,
+                auras::AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS,
+                36,
+                20,
+            );
+            stacked(m, g, 98_243, 2);
+            aura_of(
+                m,
+                g,
+                98_244,
+                auras::AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS,
+                4,
+                10,
+            );
+            aura_of(
+                m,
+                g,
+                98_245,
+                auras::AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS,
+                32,
+                48,
+            );
+            crate::game::map::derive::unit(m, g);
+            let shadow = SpellTemplate {
+                id: SHADOW_BOLT,
+                school: 5,
+                ..Default::default()
+            };
+            let fire = SpellTemplate {
+                school: 2,
+                ..shadow.clone()
+            };
+            let against = [ghoul, beast].map(|t| power(m, g, t, &shadow, false));
+            let fire_undead = power(m, g, ghoul, &fire, false);
+            for id in [98_243, 98_244, 98_245] {
+                auras::remove_spell(m, g, id, None);
+            }
+            // 30 against humanoids, 10 against beasts.
+            aura_of(
+                m,
+                g,
+                98_246,
+                auras::AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS,
+                64,
+                30,
+            );
+            aura_of(
+                m,
+                g,
+                98_247,
+                auras::AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS,
+                1,
+                10,
+            );
+            crate::game::map::derive::unit(m, g);
+            let player = power(m, g, bob, &shadow, false);
+            m.players.get_mut(&bob).unwrap().fields.set_byte(
+                UNIT_FIELD_BYTES_1,
+                2,
+                auras::FORM_CAT,
+            );
+            let cat = power(m, g, bob, &shadow, false);
+            (against, fire_undead, player, cat)
+        })
+        .await
+        .unwrap();
+    let (against, fire_undead, player, cat) = r;
+    assert_eq!(against, [13.0 + 40.0 + 48.0, 13.0]);
+    assert_eq!(fire_undead, 7.0 + 40.0 + 48.0);
+    assert_eq!(player, 13.0 + 30.0);
+    assert_eq!(cat, 13.0 + 10.0);
+}
