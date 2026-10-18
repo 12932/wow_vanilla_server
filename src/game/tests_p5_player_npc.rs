@@ -493,4 +493,26 @@ async fn a_trainer_lists_only_alive_and_within_reach() {
     })
     .await;
     assert!(!listed(&mut a, t).await, "dead");
+    // Fighting, or charmed: not now (mangos's `CanInteractNow`).
+    on(&map, move |m| {
+        m.creature_mut(t).unwrap().life = Life::Alive;
+        let c = m.combat_mut(t).unwrap();
+        c.attacking = true;
+        c.victim = ga;
+    })
+    .await;
+    assert!(!listed(&mut a, t).await, "fighting");
+    on(&map, move |m| {
+        m.combat_mut(t).unwrap().attacking = false;
+        let f = &mut m.creature_mut(t).unwrap().fields;
+        f.set_guid(UNIT_FIELD_CHARMEDBY, ga);
+    })
+    .await;
+    assert!(!listed(&mut a, t).await, "charmed");
+    on(&map, move |m| {
+        let f = &mut m.creature_mut(t).unwrap().fields;
+        f.set_guid(UNIT_FIELD_CHARMEDBY, Guid::zero());
+    })
+    .await;
+    assert!(listed(&mut a, t).await, "free again");
 }
