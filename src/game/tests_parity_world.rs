@@ -1366,8 +1366,8 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
     // and the map's timers `by` on for each update since the last look
     // (`last`, the update it was in): so the walk goes at the pace of the
     // map's updates, however many looks a busy machine fits between them.
-    // In the fight (`fight`), Eranikus is struck once an update, so each
-    // of his health events has an update to fire in.
+    // In the fight (`fight`), Eranikus is struck an eighth of his health
+    // for each update since the last look.
     let look = move |m: &mut Map, by: Duration, fight: bool, last: Option<u64>| -> State {
         let update = m.stats.updates;
         let updates = last.map_or(1, |l| update.saturating_sub(l));
@@ -1422,9 +1422,13 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
             && updates > 0
             && let Some(e) = eranikus
         {
+            // An eighth of his health for each update since the last look
+            // (his invincibility holds him at a fifth): the fight lasts
+            // the same few updates however few looks come between them.
             let (hp, max) = health(m, e);
+            let blows = u32::try_from(updates.min(8)).unwrap_or(8);
             if hp > max / 5 {
-                crate::game::map::combat::deal_damage(m, g, e, (max / 8).max(1));
+                crate::game::map::combat::deal_damage(m, g, e, (max / 8).max(1) * blows);
             }
         }
         if updates > 0 {
@@ -1494,7 +1498,7 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
     // 3,000 updates (it takes about 40).
     let mut updates = 0;
     while updates < 3000 {
-        // Struck down to a fifth, an update a blow; then the redemption
+        // Struck down to a fifth, a blow an update; then the redemption
         // hurried.
         let by = Duration::from_secs(if s.phase == Some(1) { 2 } else { 0 });
         s = map.query(move |m| look(m, by, true, last)).await.unwrap();
