@@ -2191,16 +2191,23 @@ pub fn update(map: &mut Map) {
         );
     }
     for g in done {
-        let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
-            continue;
-        };
-        if casting.channel_until.is_some() {
-            // A channel run its course still has its last tick.
+        // A channel run its course still has its last tick, while it is
+        // still the caster's channel (its trigger aims at its target).
+        if let Some(casting) = map
+            .caster(g)
+            .and_then(|c| c.casting.clone())
+            .filter(|c| c.channel_until.is_some())
+        {
             let target = casting.targets.unit.unwrap_or(g);
             auras::tick_due(map, target, casting.spell, g);
             if target != g {
                 auras::tick_due(map, g, casting.spell, g);
             }
+        }
+        let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
+            continue;
+        };
+        if casting.channel_until.is_some() {
             end_channel(map, g, &casting);
             // A taming rod's, run its course, tames its beast.
             crate::game::map::pets::rods::channel_done(map, g, casting.spell, casting.targets.unit);
