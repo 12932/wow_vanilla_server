@@ -99,3 +99,53 @@ async fn a_profession_learned_brings_its_rank_and_recipes_and_an_active_spell_no
     .await;
     assert_eq!(again, (Some((1, 75)), true), "learned again from the start");
 }
+
+/// Thistle Tea's `Spells.apply_passives` "replaces lower talent ranks
+/// instead of stacking their modifiers": Improved Fireball's fifth rank
+/// learned over its first leaves the fifth's aura alone, and the first's
+/// spell gone.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_talents_rank_replaces_the_one_below() {
+    const RANK_ONE: u32 = 11_070;
+    const RANK_FIVE: u32 = 16_766;
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let mut c = Client::connect(&realm, "A");
+    let g = c.enter("Pyro", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    let out = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let (talent, ranks) = data
+            .spells
+            .talents
+            .iter()
+            .find(|(_, t)| t.ranks.contains(&RANK_ONE))
+            .map(|(id, t)| (*id, t.ranks))
+            .expect("Improved Fireball");
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &data, 60);
+        spells::learn_talent(m, g, talent, 0);
+        let first = m.players[&g].auras.has_spell(RANK_ONE);
+        let five = ranks.iter().position(|r| *r == RANK_FIVE).unwrap() as u32;
+        spells::learn_talent(m, g, talent, five);
+        let p = &m.players[&g];
+        let on: Vec<u32> = p
+            .auras
+            .holders
+            .iter()
+            .map(|h| h.spell)
+            .filter(|s| ranks.contains(s))
+            .collect();
+        (
+            first,
+            on,
+            p.spells.contains(&RANK_ONE),
+            p.spells.contains(&RANK_FIVE),
+        )
+    })
+    .await;
+    assert_eq!(out, (true, vec![RANK_FIVE], false, true));
+}
