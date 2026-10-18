@@ -179,17 +179,23 @@ async fn doomrel_calls_his_voidwalkers_at_half_health() {
         .await
     );
     c.clear();
-    map.query(move |m| {
-        set_pct(m, g, 49);
-        crate::game::map::spells::interrupt(m, g);
-        if let Some(s) = event_ai::scripted_mut(m, g) {
-            s.next_tick = None;
-        }
-        event_ai::tick(m, g);
-    })
-    .await;
+    // Below half, in his fight (pulled again if a loaded machine let him
+    // slip out of it): the event goes, once.
     assert!(
-        cast_of(&mut c, g, 15092, Duration::from_secs(2))
+        until(&map, 5000, move |m| {
+            if !spent(m, g, id) {
+                if !fighting(m, g) {
+                    ai::attacked(m, g, me);
+                }
+                hurt_to(m, g, 49);
+            }
+            spent(m, g, id)
+        })
+        .await,
+        "his half-health event"
+    );
+    assert!(
+        cast_of(&mut c, g, 15092, Duration::from_secs(3))
             .await
             .is_some(),
         "his voidwalkers"
@@ -290,6 +296,27 @@ async fn grimstone_calls_the_rings_packs_and_champion() {
     .unwrap();
 }
 
+/// `g`'s timed event `id` made due, in its fight with `me` (pulled again if
+/// a loaded machine let it slip out), out of any cast, until it goes: its
+/// timer set anew.
+async fn fire_in_fight(map: &MapHandle, g: Guid, me: Guid, id: u32) {
+    assert!(
+        until(map, 5000, move |m| {
+            if !fighting(m, g) {
+                ai::attacked(m, g, me);
+            }
+            crate::game::map::spells::interrupt(m, g);
+            if let Some(cr) = m.caster_mut(g) {
+                cr.gcd_until = None;
+            }
+            due(m, g, id);
+            left(m, g, id).is_some_and(|t| t > Duration::from_millis(500))
+        })
+        .await,
+        "event {id} goes"
+    );
+}
+
 /// `g` at `pct` percent and its events looked at, out of any cast.
 fn hurt_to(m: &mut Map, g: Guid, pct: u32) {
     set_pct(m, g, pct);
@@ -353,13 +380,7 @@ async fn stratholmes_bosses_fight_as_thistle_tea_scripts_them() {
     map.query(move |m| ai::add_threat(m, ramstein, me, 1000.0))
         .await;
     c.clear();
-    map.query(move |m| {
-        if let Some(cr) = m.caster_mut(ramstein) {
-            cr.gcd_until = None;
-        }
-        due(m, ramstein, knockout);
-    })
-    .await;
+    fire_in_fight(&map, ramstein, me, knockout).await;
     assert_eq!(
         cast_any_of(&mut c, ramstein, 17307, Duration::from_secs(3)).await,
         Some(me),
@@ -415,11 +436,7 @@ async fn stratholmes_bosses_fight_as_thistle_tea_scripts_them() {
         .await
         .unwrap();
     let riflemen = map.query(|m| living(m, 11054).len()).await.unwrap();
-    map.query(move |m| {
-        crate::game::map::spells::interrupt(m, willey);
-        due(m, willey, call);
-    })
-    .await;
+    fire_in_fight(&map, willey, me, call).await;
     assert!(
         until(&map, 2000, move |m| living(m, 11054).len() == riflemen + 3).await,
         "three riflemen"
