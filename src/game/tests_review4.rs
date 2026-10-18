@@ -646,3 +646,77 @@ async fn an_abandoned_quests_area_aura_goes() {
     assert!(!taken, "abandoned");
     assert!(!still, "and the blessing with it");
 }
+
+/// R4-13. A used-up spawn a script brings out for a while (command 9) comes
+/// back as it was due to, once the script takes it in again, rather than
+/// its return, come due while the script held it out, lost: the spawn gone
+/// until the map starts again.
+#[tokio::test]
+async fn a_spawn_a_script_brought_out_still_comes_back() {
+    use crate::game::data::scripts::{ScriptStep, ScriptTable};
+    const CHEST: u32 = 990_480;
+    const SPAWN: u32 = 990_481;
+    const BRING: u32 = 990_482;
+    let realm = harness::realm_with({
+        let mut d = data();
+        d.gameobject_templates.insert(
+            CHEST,
+            GameObjectTemplate {
+                entry: CHEST,
+                kind: 3,
+                name: "Chest".into(),
+                display_id: 10,
+                size: 1.0,
+                ..Default::default()
+            },
+        );
+        d.gameobject_spawns.insert(
+            0,
+            vec![GameObjectSpawn {
+                guid: SPAWN,
+                entry: CHEST,
+                map: 0,
+                x: START.0 - 5.0,
+                y: START.1,
+                z: START.2,
+                state: 1,
+                respawn_min: 60,
+                respawn_max: 60,
+                ..Default::default()
+            }],
+        );
+        d.scripts.generic.insert(
+            BRING,
+            vec![ScriptStep {
+                command: 9,
+                datalong: [SPAWN, 90, 0, 0],
+                ..Default::default()
+            }],
+        );
+        d
+    });
+    let mut a = Client::connect(&realm, "R4OB");
+    let g = a.enter("Watcher", Race::Human, Class::Warrior).await;
+    let back = on_map(&realm, move |m| {
+        use crate::game::map::{objects, scripts};
+        let out = |m: &Map| scripts::object_of_spawn(m, SPAWN);
+        let chest = out(m).expect("the chest is out");
+        // Used up: back in a minute.
+        objects::despawn(m, chest);
+        assert!(out(m).is_none());
+        let t0 = m.now;
+        scripts::start(m, ScriptTable::Generic, BRING, g, g);
+        assert!(out(m).is_some(), "brought out");
+        let mut seen = Vec::new();
+        // Due back at 60 while the script holds it out until 90.
+        for secs in [61, 91, 200] {
+            m.now = t0 + Duration::from_secs(secs);
+            scripts::update_objects(m);
+            objects::update(m);
+            seen.push(out(m).is_some());
+        }
+        seen
+    })
+    .await;
+    assert_eq!(back, vec![true, true, true], "out, and back as it was due");
+}
