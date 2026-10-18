@@ -582,6 +582,36 @@ the questions waiting for you.
     - **Your client's crash** was at the same spot as the earlier bad-look ones (`0x006194DD`, texture compositing).
       It is waiting on its `.dmp` and the build's commit.
 
+41. **The client crash at `0x006194DD`** (your race, 2026-10-18; fixed in `12c055a`). A creature walking a two-point
+    path that came into view crashed the client.
+    - **Why:** the 1.12 client counts a create's spline segments as its points less three, then copies that count
+      unchecked. mangos sends its spline's padded array: a linear path's last point again, and a smooth path's
+      extrapolated first point too. wvs sent the bare path, so two points became a count of -1.
+    - **The fix:** creates now carry mangos's array.
+    - **Next:** a agent stage (`work/clientemu`) is building your idea, a test that runs what wvs sends through
+      `WoW.exe`'s own parsing code under an emulator, so the next such packet fails a test before it reaches a client.
+42. **Review 2, the map core** (findings in `runs/review/review2.md`). Fixed, each with a test:
+    - **Copies and bags:**
+      - an empty dungeon copy lost its save in seconds, so a group back after a wipe got a fresh copy;
+      - bank bag slots bought were lost at every login.
+    - **Bans:**
+      - a `.ban`'s kick let the client straight back in on its cached session key;
+      - `.ban` and `.levelup` with huge numbers overflowed;
+      - GM account commands now find a name in any case.
+    - **Movement:**
+      - a NaN or far transport offset was relayed and saved;
+      - the first move after a login went unchecked.
+    - **Config:** an unreadable `config.toml` silently ran on the defaults.
+    - **Copies stopping:** a player sent into a stopping copy was lost.
+    - **Left for you, the hard ones:**
+      - **H1. Transport-flag teleport:** a client claiming to be on a transport skips the speed check, so it can
+        teleport. A fix checks the transport's GUID and where it is on its route.
+      - **M1. Height:** the speed check ignores height.
+      - **M2. Copy race:** two group members entering at once can get different copies.
+      - **M3. Shutdown:** shutdown can miss a player mid-transfer.
+      - **M4. Empty pools:** health or mana saved at 0 load as full, so a relog refills a mage.
+      - **Eleven minor ones** are in the findings file.
+
 ## Progress
 
 | Stage | State | Commit |
