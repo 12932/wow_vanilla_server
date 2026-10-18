@@ -285,7 +285,8 @@ settings! {
         drop_item_quest: f32 = 1.0, Clamp(0.0, 100.0), Live, "Rate.Drop.Item.Quest";
         /// Money dropped by creatures and found in chests.
         drop_money: f32 = 1.0, Clamp(0.0, 100.0), Live, "Rate.Drop.Money";
-        /// Honor from kills and battlegrounds.
+        /// Honor from kills and battlegrounds (a dishonorable kill costs
+        /// what it costs).
         honor: f32 = 1.0, Clamp(0.0, 100.0), Live, "Rate.Honor";
         /// Reputation gained from kills, quests and spells (losses are as
         /// they are).
@@ -521,6 +522,15 @@ settings! {
     }
 }
 
+/// `v` at `rate`, rounded down (as mangos scales); at 1, `v` itself.
+pub fn scaled(v: u32, rate: f32) -> u32 {
+    if rate == 1.0 {
+        v
+    } else {
+        (v as f64 * f64::from(rate)) as u32
+    }
+}
+
 /// The whole config: a field per section, named as its section.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -559,9 +569,12 @@ pub fn section(name: &str) -> Option<&'static Section> {
     SECTIONS.iter().copied().find(|s| s.name == name)
 }
 
+/// A key's place: its section and its name.
+pub type Place = (&'static str, &'static str);
+
 /// Keys that moved, by their old place: still read there, into their new
 /// ones.
-pub const MOVED: &[((&str, &str), &[(&str, &str)])] = &[
+pub const MOVED: &[(Place, &[Place])] = &[
     (
         ("world", "visibility_yards"),
         &[
@@ -580,7 +593,7 @@ pub const MOVED: &[((&str, &str), &[(&str, &str)])] = &[
     (("world", "pvp_realm"), &[("players", "pvp_realm")]),
 ];
 
-fn moved(section: &str, key: &str) -> Option<&'static [(&'static str, &'static str)]> {
+fn moved(section: &str, key: &str) -> Option<&'static [Place]> {
     MOVED
         .iter()
         .find(|((s, k), _)| *s == section && *k == key)
@@ -919,7 +932,7 @@ pub fn render(cfg: &ServerConfig, title: &str) -> String {
     let defaults = defaults_table();
     let mut out = String::new();
     for line in title.lines() {
-        out.push_str(&format!("# {line}").trim_end().to_owned());
+        out.push_str(format!("# {line}").trim_end());
         out.push('\n');
     }
     for sec in SECTIONS {
@@ -1160,7 +1173,10 @@ mod tests {
         let e = parse("[gm]\ncommand_levels = { kick = 7 }\n").unwrap_err();
         assert!(e.contains("kick") && e.contains("0 to 3"), "{e}");
         assert!(parse("[rates]\nxp_kill = nan\n").is_err());
-        assert!(parse("[rates]\nxp_kill = \"two\"\n").is_err(), "a type wrong");
+        assert!(
+            parse("[rates]\nxp_kill = \"two\"\n").is_err(),
+            "a type wrong"
+        );
         // Every refusing range names the key, as a clamp does.
         for sec in SECTIONS {
             for key in sec.keys {
@@ -1234,6 +1250,28 @@ mod tests {
         );
     }
 
+    /// docs/CONFIG.md's tables have every section and key.
+    #[test]
+    fn the_docs_list_every_key() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/CONFIG.md");
+        let docs = std::fs::read_to_string(path).unwrap();
+        for sec in SECTIONS {
+            let at = docs
+                .find(&format!("### `[{}]`", sec.name))
+                .unwrap_or_else(|| panic!("docs/CONFIG.md has no [{}]", sec.name));
+            let table = &docs[at..];
+            let table = &table[..table[4..].find("\n### ").map_or(table.len(), |e| e + 4)];
+            for key in sec.keys {
+                assert!(
+                    table.contains(&format!("| `{}` |", key.name)),
+                    "docs/CONFIG.md's [{}] has no {}",
+                    sec.name,
+                    key.name
+                );
+            }
+        }
+    }
+
     /// Every section is described, and every key a section serializes.
     #[test]
     fn every_key_is_described() {
@@ -1253,7 +1291,10 @@ mod tests {
             }
         }
         for ((s, k), to) in MOVED {
-            assert!(section(s).and_then(|x| x.key(k)).is_none(), "{s}.{k} is both");
+            assert!(
+                section(s).and_then(|x| x.key(k)).is_none(),
+                "{s}.{k} is both"
+            );
             for (ns, nk) in *to {
                 assert!(section(ns).and_then(|x| x.key(nk)).is_some(), "{ns}.{nk}");
             }

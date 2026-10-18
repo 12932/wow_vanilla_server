@@ -56,6 +56,8 @@ mod tests_combat3;
 #[cfg(test)]
 mod tests_combat5;
 #[cfg(test)]
+mod tests_config;
+#[cfg(test)]
 mod tests_creatures4;
 #[cfg(test)]
 mod tests_events;

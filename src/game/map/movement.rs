@@ -122,13 +122,15 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     }
     // Faster than the player can go: pulled back to where they were.
     let now = map.now;
+    let check = &map.cfg.anticheat;
     if let Some((last, at)) = p.move_check
+        && check.speed_check
         && !p.gm
         && info.flags.get_on_transport().is_none()
     {
         let dt = now.duration_since(at).as_secs_f32();
         let speed = p.speeds.run.max(p.speeds.swim).max(7.0);
-        let allowed = speed * SPEED_TOLERANCE * (dt + LATENCY_ALLOWANCE) + 3.0;
+        let allowed = speed * check.speed_tolerance * (dt + check.latency_allowance_secs) + 3.0;
         if horizontal(last, info.position) > allowed {
             let o = p.movement.orientation;
             tracing::debug!("{} moved too fast; pulled back", p.name);
@@ -248,10 +250,6 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
     crate::game::map::auras::interrupt(map, g, mask);
 }
 
-/// How much faster than their speed a player may seem to go, and the
-/// lag a packet may carry.
-const SPEED_TOLERANCE: f32 = 1.25;
-const LATENCY_ALLOWANCE: f32 = 0.5;
 /// vmangos's safe fall: below this many yards a fall doesn't hurt.
 const SAFE_FALL: f32 = 14.57;
 

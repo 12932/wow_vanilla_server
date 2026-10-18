@@ -356,7 +356,8 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
                 return Err(Refused::InvalidInstance);
             };
             for e in who {
-                m.invited.insert(e.guid, (team, now + realm.config().bg_invite_for));
+                m.invited
+                    .insert(e.guid, (team, now + realm.config().bg_invite_for));
             }
             Some(m.id)
         } else {
@@ -458,8 +459,10 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
             for team in [Team::Alliance, Team::Horde] {
                 let room = (max as usize).saturating_sub(m.count(team));
                 for q in take(queue, team, room) {
-                    m.invited
-                        .insert(q.guid, (team, Instant::now() + realm.config().bg_invite_for));
+                    m.invited.insert(
+                        q.guid,
+                        (team, Instant::now() + realm.config().bg_invite_for),
+                    );
                     invites.push((q.guid, m.bg, m.id));
                 }
             }
@@ -480,8 +483,10 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
             };
             for team in [Team::Alliance, Team::Horde] {
                 for q in take(queue, team, max as usize) {
-                    m.invited
-                        .insert(q.guid, (team, Instant::now() + realm.config().bg_invite_for));
+                    m.invited.insert(
+                        q.guid,
+                        (team, Instant::now() + realm.config().bg_invite_for),
+                    );
                     invites.push((q.guid, bg, id));
                 }
             }
@@ -539,7 +544,11 @@ pub fn port(map: &mut Map, g: Guid, enter: bool) {
         (
             m.key(),
             team,
-            (m.bg, m.bracket, m.in_progress_frame(Instant::now(), realm.config().bg_auto_leave)),
+            (
+                m.bg,
+                m.bracket,
+                m.in_progress_frame(Instant::now(), realm.config().bg_auto_leave),
+            ),
         )
     };
     if !enter {
@@ -740,7 +749,8 @@ pub fn logged_out(realm: &Realm, g: Guid) {
         for m in bgs.matches.values_mut() {
             if let Some(team) = m.members.remove(&g) {
                 if !m.ended {
-                    m.invited.insert(g, (team, Instant::now() + realm.config().bg_invite_for));
+                    m.invited
+                        .insert(g, (team, Instant::now() + realm.config().bg_invite_for));
                 }
             } else if m.invited.remove(&g).is_some() {
                 refill.push((m.bg, m.bracket));

@@ -478,7 +478,8 @@ pub fn reward_team_honor(map: &mut Map, s: usize, amount: u32) {
         if let Some(m) = map.battleground.as_mut()
             && let Some(score) = m.scores.get_mut(&g)
         {
-            score.bonus_honor += amount;
+            // As the honor itself, at the server's rate.
+            score.bonus_honor += crate::config::scaled(amount, map.cfg.rates.honor);
         }
         crate::game::map::pvp::bonus_honor(map, g, amount);
     }

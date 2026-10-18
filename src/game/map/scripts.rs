@@ -1042,8 +1042,13 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
             map.remove_creature(g);
         }
         Some(_) => {
-            let respawn = respawn
-                .unwrap_or_else(|| crate::game::map::ai::respawn_delay(&map.realm.data, spawn));
+            let respawn = respawn.unwrap_or_else(|| {
+                crate::game::map::ai::respawn_delay(
+                    &map.realm.data,
+                    spawn,
+                    map.cfg.rates.respawn_time,
+                )
+            });
             crate::game::map::ai::quiet_death_for(map, g, respawn);
             if let Some(s) = summoner {
                 event_ai::summoned_despawned(map, s, g, entry);

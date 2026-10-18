@@ -155,7 +155,8 @@ drop_item_quest = 1.0
 # Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Drop.Money.
 drop_money = 1.0
 
-# Honor from kills and battlegrounds.
+# Honor from kills and battlegrounds (a dishonorable kill costs
+# what it costs).
 # Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Honor.
 honor = 1.0
 

@@ -2095,7 +2095,7 @@ pub fn gain_rage(map: &mut Map, g: Guid, damage: u32, taken: bool) {
 }
 
 /// Raise a player's skill by a point, if below its cap.
-fn raise_skill(p: &mut crate::game::map::player::Player, skill: u32) -> bool {
+fn raise_skill(p: &mut crate::game::map::player::Player, skill: u32, by: u32) -> bool {
     for i in 0..128u16 {
         let base = PLAYER_SKILL_INFO_1_1 + i * 3;
         if p.fields.get_u32(base) & 0xFFFF != skill {
@@ -2106,7 +2106,8 @@ fn raise_skill(p: &mut crate::game::map::player::Player, skill: u32) -> bool {
         if value >= max {
             return false;
         }
-        p.fields.set_u32(base + 1, (value + 1) | (max << 16));
+        p.fields
+            .set_u32(base + 1, (value + by.max(1)).min(max) | (max << 16));
         return true;
     }
     false
@@ -2139,6 +2140,10 @@ pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: 
 /// Weapon and defense skills that a blow against a creature trains.
 fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
     let mut rng = rand::rng();
+    let (weapon_by, defense_by) = (
+        map.cfg.rates.skill_gain_weapon,
+        map.cfg.rates.skill_gain_defense,
+    );
     let trains = |map: &Map, g: Guid| {
         map.creature(g)
             .is_some_and(|c| c.owner.is_none_or(|o| !guid::is_player(o)))
@@ -2162,7 +2167,7 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
             }
             let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
             rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
-                && raise_skill(p, skill)
+                && raise_skill(p, skill, weapon_by)
         });
         if gained {
             auras::recalc(map, attacker);
@@ -2181,7 +2186,7 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
             value < cap
                 && rng.random_range(0.0f32..100.0)
                     < defense_skill_chance(value, cap, level, mob_level)
-                && raise_skill(p, skill)
+                && raise_skill(p, skill, defense_by)
         });
         if gained {
             auras::recalc(map, victim);
@@ -2788,7 +2793,7 @@ fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
             continue;
         }
         let xp = if top.is_some_and(|t| m.1 <= t) {
-            share
+            crate::config::scaled(share, map.cfg.rates.xp_kill)
         } else {
             0
         };

@@ -83,7 +83,7 @@ async fn rest_logged_out_is_earned_by_where_one_left() {
             p.row.state.rest_bonus = 0.0;
             p.row.state.rest_type = kind;
             p.row.logout_time = wall_now() - 8 * 3600;
-            rest::restore(p, now);
+            rest::restore(p, now, &Default::default());
             earned.push((
                 p.row.state.rest_bonus,
                 p.fields.get_u32(PLAYER_REST_STATE_EXPERIENCE),
