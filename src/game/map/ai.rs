@@ -870,10 +870,13 @@ fn aggro_scan(map: &mut Map, g: Guid) {
         return;
     }
     let data = map.realm.data.clone();
+    // On its own phase of the interval: creatures that came into view
+    // together don't all look again in the same update.
+    let next = crate::game::map::next_beat(map.started, g, AGGRO_SCAN_EVERY, now);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    c.aggro_check_at = now + AGGRO_SCAN_EVERY;
+    c.aggro_check_at = next;
     if crate::game::map::assistance::reaction(map, g)
         != crate::game::map::assistance::Reaction::Aggressive
     {

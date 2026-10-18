@@ -444,6 +444,8 @@ mod tests_spells5;
 #[cfg(test)]
 mod tests_taming;
 #[cfg(test)]
+mod tests_perf2;
+#[cfg(test)]
 mod tests_terrain;
 #[cfg(test)]
 mod tests_world;

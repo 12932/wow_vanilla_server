@@ -280,6 +280,26 @@ pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The first of `g`'s beats of period `every` after `now`, counted from
+/// `start` (the map's). Each object keeps to a phase of its own in the
+/// period, from its guid, so timers set going in the same update don't
+/// stay in step: were each next time `now + every`, an update would take
+/// every timer that came due since the last, and the timers would gather
+/// on the slow updates, a beat that costs every tenth update twice the
+/// others. On its phase a timer's period is `every` still; only the first
+/// wait after it starts is shorter, by up to `every`.
+pub fn next_beat(start: Instant, g: Guid, every: Duration, now: Instant) -> Instant {
+    let period = every.as_millis().max(1) as u64;
+    // A guid's phase: Fibonacci hashing, so consecutive counters spread.
+    let phase = (g.guid().wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) % period;
+    let anchor = start + Duration::from_millis(phase);
+    if now < anchor {
+        return anchor;
+    }
+    let beats = (now - anchor).as_millis() as u64 / period + 1;
+    anchor + Duration::from_millis(beats * period)
+}
+
 /// What Tracy shows of a map (docs/PROFILING.md): its updates, a frame
 /// each, and four plots, once a second.
 struct MapProfile {
