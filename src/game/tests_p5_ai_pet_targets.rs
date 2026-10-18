@@ -188,3 +188,65 @@ fn s_at(m: &mut Map, pet: Guid, at: Vector3d) {
         s.stay_at = Some(at);
     }
 }
+
+/// A passive pet takes nothing up, even struck; a defensive one keeps the
+/// living victim it has when another strikes it, and turns on the other
+/// once it is dead. An aggressive guardian, unlike a pet, breaks crowd
+/// control (Thistle Tea's `Targeting.automatic_allowed?`, `retaliation?`
+/// "keeps a living victim and permits replacement after its death", and
+/// "aggressive guardians retain their uncontrolled attack behavior";
+/// mangos's `PetAI::AttackedBy`).
+#[tokio::test]
+async fn a_passive_pet_fights_nothing_and_a_pet_keeps_its_living_victim() {
+    let (_realm, _h, gh, map, pet, far) = tamed_with(data()).await;
+    let a = place(&map, gh, WOLF, 0x70_0010, 3.0).await;
+    let b = place(&map, gh, WOLF, 0x70_0011, 5.0).await;
+    let c = place(&map, gh, WOLF, 0x70_0012, 7.0).await;
+    let picks = map
+        .query(move |m| {
+            for g in [gh, pet, far] {
+                combat::leave_combat(m, g);
+            }
+            sturdy(m, &[a, b, c]);
+            let mut picks = Vec::new();
+            pets::state_mut(m, pet).unwrap().react = pets::REACT_PASSIVE;
+            attacks(m, a, pet);
+            think(m, 2);
+            picks.push(victim(m, pet));
+            pets::state_mut(m, pet).unwrap().react = pets::REACT_DEFENSIVE;
+            think(m, 1);
+            picks.push(victim(m, pet));
+            attacks(m, b, pet);
+            think(m, 2);
+            picks.push(victim(m, pet));
+            ai::die(m, a, gh);
+            think(m, 1);
+            picks.push(victim(m, pet));
+            // A guardian, aggressive, beside a sapped wolf fighting its
+            // master.
+            ai::die(m, b, gh);
+            let at = m.players[&gh].position();
+            let guardian = crate::game::map::pets::testing::spawn(
+                m,
+                gh,
+                WOLF,
+                pets::Kind::Guardian,
+                1,
+                at,
+                0.0,
+            );
+            pets::state_mut(m, guardian).unwrap().react = REACT_AGGRESSIVE;
+            attacks(m, c, gh);
+            sap(m, gh, c);
+            think(m, 1);
+            picks.push(victim(m, guardian));
+            picks
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        picks,
+        [None, Some(a), Some(a), Some(b), Some(c)],
+        "passive; defensive, its attacker; kept; the other; the guardian breaks the sap"
+    );
+}
