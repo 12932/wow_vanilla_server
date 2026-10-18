@@ -26,6 +26,10 @@ const ONE: u32 = 9_401;
 const OTHER: u32 = 9_402;
 const FESTIVE: u32 = 9_403;
 const FESTIVAL: u32 = 940;
+/// A quest that gives a token, and a filler for the bags.
+const SUPPLIED: u32 = 9_404;
+const TOKEN: u32 = 64_500;
+const FILLER: u32 = 64_501;
 
 fn world() -> GameData {
     let mut d = crate::game::tests_p3_combat::data();
@@ -48,6 +52,32 @@ fn world() -> GameData {
         );
     }
     d.world.event_quests.insert(FESTIVE, FESTIVAL);
+    d.npc.quests.insert(
+        SUPPLIED,
+        Quest {
+            id: SUPPLIED,
+            title: "Supplied".into(),
+            flags: QUEST_FLAGS_SHARABLE,
+            min_level: 1,
+            source_item: TOKEN,
+            source_item_count: 1,
+            ..Default::default()
+        },
+    );
+    for entry in [TOKEN, FILLER] {
+        d.items.insert(
+            entry,
+            crate::game::data::ItemTemplate {
+                entry,
+                name: format!("Item {entry}"),
+                display_id: 1000,
+                stackable: 1,
+                allowable_class: -1,
+                allowable_race: -1,
+                ..Default::default()
+            },
+        );
+    }
     d
 }
 
@@ -71,7 +101,7 @@ async fn party() -> (Arc<Realm>, Client, Guid, Client, Guid, MapHandle) {
     let map = realm.maps.get(&realm, MapKey::world(0));
     on(&map, move |m| {
         let p = m.players.get_mut(&ga).unwrap();
-        for quest in [PLAIN, ONE, FESTIVE] {
+        for quest in [PLAIN, ONE, FESTIVE, SUPPLIED] {
             p.journal.add(Logged {
                 quest,
                 ..Default::default()
@@ -205,4 +235,73 @@ async fn an_offer_goes_when_the_member_leaves_the_group() {
     b.send(CMSG_GROUP_DISBAND {}).await;
     handled(&mut b).await;
     assert!(!take(&mut b, &map, ga, gb, PLAIN).await, "out of the group");
+}
+
+/// Fill `g`'s bags.
+fn fill(m: &mut Map, g: Guid) {
+    let d = m.realm.data.clone();
+    let p = &m.players[&g];
+    let free = p
+        .carry_slots(&d)
+        .iter()
+        .filter(|(b, s)| p.item_at(*b, *s).is_none())
+        .count() as u32;
+    crate::game::map::inventory::add_item(m, g, FILLER, free, false).unwrap();
+}
+
+/// Thistle Tea's "accepts with full bags when the source item is already
+/// in the bank" and "does not add a quest or acknowledge acceptance when
+/// source items cannot fit", as mangos's `CanAddQuest` has them: with the
+/// quest's token in the bank, a member with full bags takes it, given no
+/// second token, and abandoning it takes the banked one; with no token
+/// and no room, the quest isn't taken, the offer goes, and the sharer
+/// hears it can't be.
+#[tokio::test]
+async fn a_shared_quests_item_is_given_only_if_wanted_and_room_is_had() {
+    let (_realm, mut a, ga, mut b, gb, map) = party().await;
+    on(&map, move |m| {
+        crate::game::map::inventory::add_item(m, gb, TOKEN, 1, false).unwrap();
+        let p = m.players.get_mut(&gb).unwrap();
+        let i = p.items.iter().position(|i| i.entry == TOKEN).unwrap();
+        p.items[i].slot = crate::game::map::inventory::BANK_START;
+        fill(m, gb);
+    })
+    .await;
+    assert!(share(&mut a, &map, gb, SUPPLIED).await);
+    b.clear();
+    assert!(
+        take(&mut b, &map, ga, gb, SUPPLIED).await,
+        "taken, bags full"
+    );
+    assert_eq!(on(&map, move |m| m.players[&gb].count_of(TOKEN)).await, 1);
+    let pushed = b
+        .gets(std::time::Duration::from_millis(1), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(_)).then_some(())
+        })
+        .await;
+    assert!(pushed.is_none(), "no second token");
+    assert_eq!(heard(&mut a).await, vec![QuestPartyMessage::AcceptQuest]);
+    b.send(CMSG_QUESTLOG_REMOVE_QUEST { slot: 0 }).await;
+    handled(&mut b).await;
+    assert_eq!(
+        on(&map, move |m| m.players[&gb].count_of(TOKEN)).await,
+        0,
+        "the banked token goes with the quest"
+    );
+    assert!(share(&mut a, &map, gb, SUPPLIED).await);
+    b.clear();
+    assert!(
+        !take(&mut b, &map, ga, gb, SUPPLIED).await,
+        "no room for it"
+    );
+    b.wait_for("the inventory failure", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_)).then_some(())
+    })
+    .await;
+    assert_eq!(
+        on(&map, move |m| offer(m, gb)).await,
+        None,
+        "the offer gone"
+    );
+    assert_eq!(heard(&mut a).await, vec![QuestPartyMessage::CantTakeQuest]);
 }

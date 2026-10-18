@@ -171,6 +171,15 @@ pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Option<i64> {
     Some(expires)
 }
 
+/// A shared quest admitted but not taken after all (no room for its
+/// items): the offer goes, and the sharer hears it can't be taken.
+pub fn refused(map: &mut Map, g: Guid, sharer: Guid) {
+    if let Some(p) = map.players.get_mut(&g) {
+        p.misc.quest_shared = None;
+    }
+    result(map, sharer, g, QuestPartyMessage::CantTakeQuest);
+}
+
 /// `MSG_QUEST_PUSH_RESULT` from a member: told to the one sharing with
 /// them, and only what a member may answer; that they took it the server
 /// says (mangos's `HandleQuestPushResult`, Thistle Tea's
