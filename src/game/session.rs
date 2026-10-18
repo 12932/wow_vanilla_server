@@ -151,10 +151,10 @@ async fn handshake(
     Ok((account, crypto))
 }
 
-/// Read the client's `CMSG_AUTH_SESSION`, refusing one too big, or whose
-/// addon data claims a size that would have wow_messages reserve
-/// gigabytes (an allocation that fails aborts the process), and catching a
-/// panic in wow_messages (on addon data that isn't zlib).
+/// Read the client's `CMSG_AUTH_SESSION`, refusing one too big or that
+/// wow_messages can't read (its addon data not zlib), and catching a panic
+/// in wow_messages as a backstop. However much addon data one claims,
+/// wow_messages reserves no more than its zlib could hold.
 async fn read_auth_session(
     stream: &mut TcpStream,
 ) -> Result<CMSG_AUTH_SESSION, Box<dyn std::error::Error + Send + Sync>> {
@@ -169,9 +169,6 @@ async fn read_auth_session(
     let mut plain = vec![0u8; 2 + size];
     plain[..6].copy_from_slice(&header);
     stream.read_exact(&mut plain[6..]).await?;
-    if !conn::fits(opcode, &plain[6..]) {
-        return Err("an auth session that asks for more than it holds".into());
-    }
     match crate::game::supervisor::catch(|| ClientOpcodeMessage::read_unencrypted(&plain[..])) {
         Ok(Ok(ClientOpcodeMessage::CMSG_AUTH_SESSION(c))) => Ok(c),
         Ok(Ok(other)) => Err(format!("expected an auth session, got {other}").into()),

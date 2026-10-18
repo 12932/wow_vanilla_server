@@ -231,8 +231,10 @@ pub fn gain_xp(map: &mut Map, pet: Guid, amount: u32, owner_level: u8) {
         level += 1;
         levels += 1;
     }
+    // At its master's level, what is over is lost (mangos's and vmangos's
+    // `GivePetXP`, Thistle Tea's `PetProgression.gain`).
     if level >= cap {
-        xp = xp.min(pet_xp_to_level(&data, level).saturating_sub(1));
+        xp = 0;
     }
     c.fields.set_u32(UNIT_FIELD_PETEXPERIENCE, xp);
     if levels > 0 {

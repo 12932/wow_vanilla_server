@@ -199,7 +199,7 @@ async fn a_logout_waits_twenty_seconds_outside_an_inn_and_can_be_cancelled() {
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = crate::game::Realm::new(cfg, store, startup, Default::default(), None);
     let mut a = Client::connect(&realm, "A");
-    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
     a.send(CMSG_LOGOUT_REQUEST {}).await;
     let speed = a
         .wait_for("SMSG_LOGOUT_RESPONSE", |m| match m {
@@ -208,11 +208,10 @@ async fn a_logout_waits_twenty_seconds_outside_an_inn_and_can_be_cancelled() {
         })
         .await;
     assert_eq!(speed, LogoutSpeed::Delayed);
-    a.wait_frame(
-        "a root",
-        crate::game::map::movement::SMSG_FORCE_MOVE_ROOT,
-        |_| true,
-    )
+    a.wait_for("a root", |m| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_ROOT(r) if r.guid == g => Some(()),
+        _ => None,
+    })
     .await;
     a.send(CMSG_LOGOUT_CANCEL {}).await;
     a.wait_for("SMSG_LOGOUT_CANCEL_ACK", |m| {
@@ -3085,6 +3084,14 @@ mod commerce {
             .flatten()
     }
 
+    /// How many of `entry` `g` has.
+    async fn jerky_of(realm: &std::sync::Arc<crate::game::Realm>, g: Guid) -> u32 {
+        map0(realm)
+            .query(move |m| m.players.get(&g).map_or(0, |p| p.count_of(117)))
+            .await
+            .unwrap_or(0)
+    }
+
     async fn holds(realm: &std::sync::Arc<crate::game::Realm>, g: Guid, item: Guid) -> bool {
         map0(realm)
             .query(move |m| {
@@ -3365,7 +3372,8 @@ mod commerce {
             _ => None,
         })
         .await;
-        assert!(holds(&realm, gb, jerky).await);
+        // Onto Bob's own four, as mangos stacks what comes.
+        assert_eq!(jerky_of(&realm, gb).await, 8);
         assert!(!holds(&realm, ga, jerky).await);
         // Bob paid 50 and took 100.
         assert_eq!(money_of(&realm, gb).await, 1050);
@@ -3524,7 +3532,8 @@ mod commerce {
             })
             .await;
         }
-        assert!(holds(&realm, gb, jerky).await);
+        // Onto Bob's own four, as mangos stacks what comes.
+        assert_eq!(jerky_of(&realm, gb).await, 8);
         assert!(!holds(&realm, ga, jerky).await);
         assert_eq!(money_of(&realm, ga).await, 700);
         assert_eq!(money_of(&realm, gb).await, 300);

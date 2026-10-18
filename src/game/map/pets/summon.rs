@@ -369,6 +369,10 @@ fn beside(map: &Map, owner: Guid) -> (Vector3d, f32) {
     )
 }
 
+/// A hunter's pet's flags for its frame's Rename and Abandon.
+pub const UNIT_FLAG_PET_RENAME: u32 = 0x10;
+pub const UNIT_FLAG_PET_ABANDON: u32 = 0x20;
+
 /// `owner`'s pet from its record, at their side.
 pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     let data = map.realm.data.clone();
@@ -401,6 +405,12 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     c.fields.set_u32(UNIT_FIELD_PET_NAME_TIMESTAMP, unix);
     c.fields.set_u32(UNIT_CREATED_BY_SPELL, r.summon_spell);
     if kind == Kind::Hunter {
+        // The pet frame's Rename (until it is named) and Abandon (mangos's
+        // `UNIT_FLAG_PET_RENAME` and `UNIT_FLAG_PET_ABANDON`).
+        c.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PET_RENAME, !r.renamed);
+        c.fields
+            .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PET_ABANDON, true);
         c.fields.set_u32(
             UNIT_FIELD_POWER1 + POWER_HAPPINESS,
             r.happiness.min(HAPPINESS_MAX),

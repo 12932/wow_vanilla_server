@@ -22,6 +22,8 @@ pub const KIND_AUCTION: &str = "auction";
 /// The shortest auction, which deposits are counted in.
 pub const MIN_AUCTION_SECS: u32 = 2 * 3600;
 pub const PAGE: usize = 50;
+/// The most an auction may ask: mangos's `MAX_MONEY_AMOUNT`.
+const MAX_PRICE: u32 = 0x7FFF_FFFE;
 
 // The mail an auction sends: `item:0:answer`.
 const OUTBID: u32 = 0;
@@ -220,7 +222,12 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
         fail(map, R2::ErrDatabase);
         return;
     }
-    if m.buyout > 0 && m.buyout < m.starting_bid {
+    // No price past the most a player may hold (mangos's
+    // `MAX_MONEY_AMOUNT`), nor a buyout under the bid.
+    if m.starting_bid > MAX_PRICE
+        || m.buyout > MAX_PRICE
+        || (m.buyout > 0 && m.buyout < m.starting_bid)
+    {
         fail(map, R2::ErrDatabase);
         return;
     }
@@ -351,9 +358,28 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         fail(map, R::ErrItemNotFound);
         return;
     };
-    if a.owner == me {
+    // Not one's own, nor another of one's account's characters'
+    // (mangos's `HandleAuctionPlaceBid`).
+    let account = |c: u32| {
+        realm
+            .registry
+            .name(guid::player(c))
+            .map(|n| n.account.clone())
+    };
+    if a.owner == me || account(a.owner).is_some_and(|o| Some(o) == account(me)) {
         drop(auctions);
         fail(map, R::ErrBidOwn);
+        return;
+    }
+    // No more than the bid there is, as mangos tells it.
+    if a.bid > 0 && price <= a.bid {
+        let higher = R::ErrHigherBid {
+            auction_outbid2: a.outbid(),
+            higher_bidder: guid::player(a.bidder),
+            new_bid: a.bid,
+        };
+        drop(auctions);
+        fail(map, higher);
         return;
     }
     let least = if a.bid > 0 {

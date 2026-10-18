@@ -172,7 +172,10 @@ pub struct Caster {
     pub casting: Option<Casting>,
     pub cooldowns: AHashMap<u32, Instant>,
     pub category_cooldowns: AHashMap<u32, Instant>,
+    /// The global cooldown of the spells' category (133).
     pub gcd_until: Option<Instant>,
+    /// Global cooldowns of other categories: (category, until).
+    pub other_gcds: Vec<(u32, Instant)>,
     /// For a creature: its spell list's timers in the fight it is in.
     pub spell_list: Option<Box<lists::ListState>>,
     pub combo_target: Guid,
@@ -221,6 +224,9 @@ pub struct MapSpells {
     /// Threat held for a while: (creature, unit) to its amount (taunts,
     /// Fade).
     pub temp_threat: AHashMap<(Guid, Guid), f32>,
+    /// When each channel's caster next pays its spell's cost a second
+    /// (Health Funnel's health).
+    pub channel_costs: AHashMap<Guid, Instant>,
 }
 
 /// A persistent area aura on the ground.
@@ -679,6 +685,8 @@ impl Map {
         if self.players.contains_key(&g) {
             return self.players.get_mut(&g).map(|p| &mut p.caster);
         }
+        // Every cast begins here (see `RareStates`).
+        self.rare.casting = true;
         self.creature_mut(g).map(|c| &mut c.caster)
     }
 
@@ -690,21 +698,44 @@ impl Map {
     }
 }
 
-/// `CMSG_CAST_SPELL`.
+/// `CMSG_CAST_SPELL`: a spell the player knows. Only the client's request
+/// asks that (mangos's `HandleCastSpellOpcode`); a script's or an item's
+/// cast is the player's whether they know it or not.
 pub fn cast_request(map: &mut Map, caster: Guid, spell: u32, t: &SpellCastTargets) {
+    if map
+        .players
+        .get(&caster)
+        .is_some_and(|p| !p.spells.contains(&spell))
+    {
+        send_cast_result(map, caster, spell, Some(fail::NOT_KNOWN));
+        return;
+    }
     let targets = targets_of(t);
     cast(map, caster, spell, targets, None);
 }
 
 /// The cast time of `s` for `caster`: its own, with modifiers, and the
 /// caster's cast speed for spells (abilities don't haste).
-fn cast_time(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods) -> u32 {
+pub(crate) fn cast_time(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods) -> u32 {
     let base = map.realm.data.spells.cast_time(s);
     if base == 0 {
         return 0;
     }
     let t = m.apply(mods::OP_CASTING_TIME, base as f32);
-    let speed = if s.ability() || s.attr(0, sd::ATTR_TRADESKILL) {
+    let speed = if s.attr(0, sd::ATTR_RANGED) && !s.auto_repeat() {
+        // A ranged ability (Aimed Shot, Multi-Shot) by the ranged haste
+        // (mangos's `GetSpellCastTime`: `m_modAttackSpeedPct[RANGED]`).
+        auras::auras(map, caster).map_or(1.0, |a| {
+            crate::game::map::derive::period_multiplier(
+                a,
+                &[
+                    auras::AURA_MOD_RANGED_HASTE,
+                    auras::AURA_MOD_ATTACKSPEED,
+                    auras::AURA_MOD_RANGED_AMMO_HASTE,
+                ],
+            )
+        })
+    } else if s.ability() || s.attr(0, sd::ATTR_TRADESKILL) {
         1.0
     } else {
         map.unit_fields(caster)
@@ -742,6 +773,16 @@ pub fn cast(
             }
             _ => {}
         }
+    }
+    // A finisher aimed at no one, or at its caster (Slice and Dice), is at
+    // the unit its combo points are on.
+    if s.finisher()
+        && targets.unit.is_none_or(|u| u == caster)
+        && let Some(c) = map.caster(caster)
+        && c.combo_points > 0
+        && map.unit_view(c.combo_target).is_some()
+    {
+        targets.unit = Some(c.combo_target);
     }
     let m = mods::for_spell(map, caster, s);
     if crate::game::map::mounts::dismissed(map, caster, s) {
@@ -799,7 +840,14 @@ pub fn cast(
         && gcd > 0
         && let Some(c) = map.caster_mut(caster)
     {
-        c.gcd_until = Some(now + Duration::from_millis(u64::from(gcd)));
+        let until = now + Duration::from_millis(u64::from(gcd));
+        if s.start_recovery_category == GCD_SPELLS {
+            c.gcd_until = Some(until);
+        } else {
+            c.other_gcds
+                .retain(|(cat, t)| *cat != s.start_recovery_category && *t > now);
+            c.other_gcds.push((s.start_recovery_category, until));
+        }
     }
     if time == 0 {
         execute(map, caster, s, targets, item, false);
@@ -1024,6 +1072,11 @@ fn execute(
                 duration: ms,
             });
         }
+        if s.mana_per_second > 0 || s.mana_per_second_per_level > 0 {
+            map.spells
+                .channel_costs
+                .insert(caster, now + Duration::from_secs(1));
+        }
     }
     // A pet's feeding and abilities, and the professions' effects (which
     // run on their own and are skipped below).
@@ -1123,6 +1176,40 @@ fn execute(
             auras::remove_where(map, caster, breaks);
         }
         crate::game::map::combat::spell_launched(map, caster, s);
+    }
+}
+
+/// A mechanic immunity with charges kept `s` off `target`: a charge of it
+/// goes, as Thistle Tea's `EffectImmunity` spends Fear Ward's.
+fn spend_immunity(map: &mut Map, target: Guid, s: &SpellTemplate) {
+    let mechanics: Vec<u32> = std::iter::once(s.mechanic)
+        .chain(
+            s.effects
+                .iter()
+                .filter(|e| e.effect != 0)
+                .map(|e| e.mechanic),
+        )
+        .filter(|m| *m != 0)
+        .collect();
+    let charged = auras::auras(map, target).and_then(|a| {
+        a.holders
+            .iter()
+            .find(|h| {
+                h.charges > 0
+                    && h.effects.iter().any(|x| {
+                        mechanics.iter().any(|m| match x.kind {
+                            auras::AURA_MECHANIC_IMMUNITY => x.misc as u32 == *m,
+                            auras::AURA_MECHANIC_IMMUNITY_MASK => {
+                                (x.misc as u32) & (1 << (m - 1).min(31)) != 0
+                            }
+                            _ => false,
+                        })
+                    })
+            })
+            .map(|h| (h.spell, h.caster))
+    });
+    if let Some((spell, caster)) = charged {
+        auras::spend_charge(map, target, spell, caster);
     }
 }
 
@@ -1231,6 +1318,10 @@ fn land(
     if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
         hit = Hit::Immune;
     }
+    // A charged immunity that keeps it off is spent (Fear Ward).
+    if hit == Hit::Immune {
+        spend_immunity(map, target, s);
+    }
     let mut aim = target;
     if hit == Hit::Reflect {
         // Back at the caster; the reflector's procs see it reflected, and
@@ -1301,9 +1392,18 @@ fn land(
             {
                 *on = false;
                 immune = true;
+            } else if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                && auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+            {
+                // An aura of a kind kept off (mangos's `IsImmuneToSpellEffect`).
+                *on = false;
+                immune = true;
             } else if outcome::effect_resisted(map, aim, s, i) {
                 *on = false;
             }
+        }
+        if immune {
+            spend_immunity(map, aim, s);
         }
         if before > 0 && !effects.iter().any(|e| *e) {
             let why = if immune { Hit::Immune } else { Hit::Resist };
@@ -1316,7 +1416,12 @@ fn land(
         .effects
         .iter()
         .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
+    // Damage that ignores its caster's modifiers ignores their crit too
+    // (mangos's `CalculateCritAmount`); a heal's may still crit.
+    let unmodified = s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
+        && !s.effects.iter().any(|e| matches!(e.effect, 10 | 67 | 75));
     let crit = deals
+        && !unmodified
         && if outcome::physical(s) {
             outcome::melee_roll(map, caster, aim, s, &l.m).1
         } else {
@@ -1555,12 +1660,22 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         .position(|e| {
             matches!(
                 e.aura,
-                auras::AURA_PERIODIC_DAMAGE | auras::AURA_PERIODIC_LEECH
+                auras::AURA_PERIODIC_DAMAGE
+                    | auras::AURA_PERIODIC_LEECH
+                    | auras::AURA_PERIODIC_DAMAGE_PERCENT
             )
         })
         .unwrap_or(0);
-    let c = outcome::taken_coefficient(map, h.caster, &s, index, outcome::Kind::Dot);
-    let amount = outcome::taken_scaled(map, target, &s, amount as f32, c) as u32;
+    let amount = outcome::taken_of(
+        map,
+        h.caster,
+        target,
+        &s,
+        index,
+        outcome::Kind::Dot,
+        h.stacks,
+        amount as f32,
+    ) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
     let (left, absorbed) = auras::absorb(map, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
@@ -1579,24 +1694,12 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
     }) {
         map.send_to_observers(target, &frame, true);
     }
-    crate::game::map::procs::trigger(
-        map,
-        crate::game::map::procs::Event {
-            actor: h.caster,
-            target,
-            actor_flags: crate::game::map::procs::PROC_DONE_PERIODIC,
-            target_flags: crate::game::map::procs::PROC_TAKEN_PERIODIC
-                | crate::game::map::procs::PROC_TAKEN_DAMAGE,
-            ex: crate::game::map::procs::EX_NORMAL_HIT,
-            spell: Some(h.spell),
-            damage: left,
-            school: h.school,
-            offhand: false,
-            ranged: false,
-            extra_attack: false,
-        },
-    );
     let items = outcome::death_items(map, target, left);
+    // A leech takes no more than the health there was (mangos's
+    // `PeriodicTick`: `min(pdamage, victim's health)`).
+    let had = map
+        .unit_fields(target)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
         // Its threat is of its school, and has the spell's threat
@@ -1617,6 +1720,31 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         }
     }
     outcome::give_death_items(map, target, items);
+    // The tick's procs come after its damage, as mangos's `PeriodicTick`
+    // has them: a killing tick's victim is dead to them (Nightfall gives no
+    // trance), and has none of its own.
+    let lives = map.unit_view(target).is_some_and(|u| u.alive);
+    crate::game::map::procs::trigger(
+        map,
+        crate::game::map::procs::Event {
+            actor: h.caster,
+            target,
+            actor_flags: crate::game::map::procs::PROC_DONE_PERIODIC,
+            target_flags: if lives {
+                crate::game::map::procs::PROC_TAKEN_PERIODIC
+                    | crate::game::map::procs::PROC_TAKEN_DAMAGE
+            } else {
+                0
+            },
+            ex: crate::game::map::procs::EX_NORMAL_HIT,
+            spell: Some(h.spell),
+            damage: left,
+            school: h.school,
+            offhand: false,
+            ranged: false,
+            extra_attack: false,
+        },
+    );
     if leech {
         let mult = s
             .effects
@@ -1630,7 +1758,7 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             h.caster,
             h.caster,
             h.spell,
-            (left as f32 * mult) as u32,
+            (left.min(had) as f32 * mult) as u32,
             true,
         );
     }
@@ -1692,7 +1820,25 @@ pub fn heal_crit(
     combat::heal_threat(map, caster, target, spell, gained);
 }
 
-/// A unit's cast is interrupted.
+/// The category most spells' global cooldown is of.
+pub const GCD_SPELLS: u32 = 133;
+
+/// Whether `c` is within the global cooldown of `category`.
+pub fn on_gcd(c: &Caster, category: u32, now: Instant) -> bool {
+    if category == 0 {
+        return false;
+    }
+    if category == GCD_SPELLS {
+        return c.gcd_until.is_some_and(|t| t > now);
+    }
+    c.other_gcds
+        .iter()
+        .any(|(cat, t)| *cat == category && *t > now)
+}
+
+/// A unit's cast is interrupted. One still being cast gives back its
+/// global cooldown and tells its caster it was interrupted (mangos's
+/// `Spell::cancel`: `ResetGCD`, `SendCastResult`).
 pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(c) = map.caster_mut(g) else {
         return;
@@ -1701,6 +1847,22 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(casting) = c.casting.take() else {
         return;
     };
+    if casting.channel_until.is_none() {
+        let category = map
+            .realm
+            .data
+            .spells
+            .get(casting.spell)
+            .map_or(0, |s| s.start_recovery_category);
+        if let Some(c) = map.caster_mut(g) {
+            if category == GCD_SPELLS {
+                c.gcd_until = None;
+            } else {
+                c.other_gcds.retain(|(cat, _)| *cat != category);
+            }
+        }
+        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
+    }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
             guid: g,
@@ -1714,8 +1876,13 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     }) {
         map.send_to_observers(g, &frame, false);
     }
+    // The caster's client is told why too, and lets the button go, but
+    // for a channel (mangos's `Spell::cancel`, Thistle Tea's interrupted
+    // cast result).
     if casting.channel_until.is_some() {
         end_channel(map, g, &casting);
+    } else {
+        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
     }
 }
 
@@ -1755,11 +1922,19 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     crate::game::map::professions::line_ended(map, g);
 }
 
-/// Damage taken while casting, as Thistle Tea's `CastPushback` has it: a
-/// player's cast whose interrupt flags say so is pushed back half a second
-/// (twice at most) or cancelled, and a channel cut short by a quarter or
-/// cancelled; talents and auras may resist the pushback.
+/// Damage taken while casting, from no one in particular: [`pushback_by`].
 pub fn pushback(map: &mut Map, g: Guid) {
+    pushback_by(map, g, Guid::zero());
+}
+
+/// Damage taken while casting, dealt by `from`, as Thistle Tea's
+/// `CastPushback` and mangos's `InterruptOrDelaySpell` have it: a player's
+/// cast whose interrupt flags say so is cancelled (a mount, the
+/// Hearthstone, gathering) or else pushed back, and a channel cut short or
+/// else cancelled (a bandage); talents and auras may resist the pushback.
+/// A channel isn't cut short by its caster's own harm, the world's
+/// included (falling, lava).
+pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
     let data = map.realm.data.clone();
     if !map.players.contains_key(&g) {
         return;
@@ -1774,20 +1949,28 @@ pub fn pushback(map: &mut Map, g: Guid) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    let (delays, cancels) = if channel {
-        (
-            s.channel_interrupt_flags & 0x4000 != 0,
-            s.channel_interrupt_flags & 0x2 != 0,
-        )
+    if channel {
+        // A channel cut short isn't cancelled too.
+        let delays = s.channel_interrupt_flags & 0x4000 != 0;
+        if delays && from == g {
+            return;
+        }
+        if !delays && s.channel_interrupt_flags & 0x2 != 0 {
+            interrupt(map, g);
+            return;
+        }
+        if !delays {
+            return;
+        }
     } else {
-        (s.interrupt_flags & 0x2 != 0, s.interrupt_flags & 0x10 != 0)
-    };
-    if cancels && !delays {
-        interrupt(map, g);
-        return;
-    }
-    if !delays {
-        return;
+        // A cast that damage cancels isn't pushed back too.
+        if s.interrupt_flags & 0x10 != 0 {
+            interrupt(map, g);
+            return;
+        }
+        if s.interrupt_flags & 0x2 == 0 {
+            return;
+        }
     }
     let m = mods::for_spell(map, g, s);
     let resist = auras::auras(map, g).map_or(0, |a| {
@@ -1914,18 +2097,36 @@ pub fn moved(map: &mut Map, g: Guid) {
 pub fn update(map: &mut Map) {
     let now = map.now;
     let data = map.realm.data.clone();
+    // Areas first: a channel's area has its last tick before the channel,
+    // run out, takes it away.
+    effects::tick_areas(map);
+    channel_costs(map);
     let mut done: Vec<Guid> = map
         .players
         .values()
         .filter(|p| p.caster.casting.as_ref().is_some_and(|c| c.ends <= now))
         .map(|p| p.guid)
         .collect();
-    done.extend(
-        map.creatures
-            .iter()
-            .filter(|(_, c)| c.caster.casting.as_ref().is_some_and(|x| x.ends <= now))
-            .map(|(_, c)| c.guid),
-    );
+    if map.rare.casting {
+        let mut any = false;
+        done.extend(
+            map.creatures
+                .iter()
+                .filter(|(_, c)| {
+                    any |= c.caster.casting.is_some();
+                    c.caster.casting.as_ref().is_some_and(|x| x.ends <= now)
+                })
+                .map(|(_, c)| c.guid),
+        );
+        map.rare.casting = any;
+    } else {
+        debug_assert!(
+            map.creatures
+                .iter()
+                .all(|(_, c)| c.caster.casting.is_none()),
+            "a creature casts unnoted (RareStates)"
+        );
+    }
     for g in done {
         let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) else {
             continue;
@@ -1961,7 +2162,6 @@ pub fn update(map: &mut Map) {
         }
         execute(map, g, s, casting.targets, casting.item, false);
     }
-    effects::tick_areas(map);
     effects::refresh_area_auras(map);
     land_arrivals(map);
     dynamic::update(map);
@@ -1971,6 +2171,51 @@ pub fn update(map: &mut Map) {
         p.caster
             .diminishing
             .retain(|(_, _, reset)| reset.is_none_or(|r| r > now));
+    }
+}
+
+/// Channels that cost a second pay it, as mangos's `SpellAuraHolder`
+/// update has the caster pay its spell's per-second cost: Health Funnel's
+/// health, a channel without the health for it ending.
+fn channel_costs(map: &mut Map) {
+    let now = map.now;
+    let due: Vec<Guid> = map
+        .spells
+        .channel_costs
+        .iter()
+        .filter(|(_, t)| **t <= now)
+        .map(|(g, _)| *g)
+        .collect();
+    let data = map.realm.data.clone();
+    for g in due {
+        let spell = map
+            .caster(g)
+            .and_then(|c| c.casting.as_ref())
+            .filter(|c| c.channel_until.is_some())
+            .and_then(|c| data.spells.get(c.spell));
+        let Some(s) = spell else {
+            map.spells.channel_costs.remove(&g);
+            continue;
+        };
+        map.spells
+            .channel_costs
+            .insert(g, now + Duration::from_secs(1));
+        let level = map.unit_view(g).map(|u| u.level).unwrap_or(1);
+        let cost = s.mana_per_second + s.mana_per_second_per_level * level;
+        if cost == 0 {
+            continue;
+        }
+        let health = map
+            .unit_fields(g)
+            .map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH));
+        if s.power_type == POWER_HEALTH && health <= cost {
+            map.spells.channel_costs.remove(&g);
+            if let Some(casting) = map.caster_mut(g).and_then(|c| c.casting.take()) {
+                end_channel(map, g, &casting);
+            }
+            continue;
+        }
+        pay(map, g, s, cost);
     }
 }
 
@@ -2035,8 +2280,10 @@ pub fn refresh_talent_points(p: &mut crate::game::map::player::Player, data: &Ga
     p.fields.set_u32(PLAYER_CHARACTER_POINTS1, free);
 }
 
-/// `CMSG_LEARN_TALENT`: the next rank of a talent, if the player has a
-/// point, the row is open and the talent it needs is learned.
+/// `CMSG_LEARN_TALENT`: a rank of a talent of the player's class above
+/// the one they have, if they have the points to reach it (a point a rank,
+/// as mangos's `LearnTalent` and Thistle Tea's `Talents.validate` count
+/// a jump), the row is open and the talent it needs is learned.
 pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     let data = map.realm.data.clone();
     let Some(t) = data.spells.talents.get(&talent) else {
@@ -2045,6 +2292,11 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     let Some(p) = map.players.get(&player) else {
         return;
     };
+    if let Some(classes) = data.spells.talent_tab_classes.get(&t.tab)
+        && classes & (1 << (p.row.class.max(1) - 1)) == 0
+    {
+        return;
+    }
     let have = t
         .ranks
         .iter()
@@ -2053,13 +2305,7 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
     let Some(&spell) = t.ranks.get(rank as usize) else {
         return;
     };
-    if rank != have || spell == 0 || free_talent_points(p, &data) == 0 {
-        return;
-    }
-    // Only the class's own tabs (mangos's `TalentTab` class mask).
-    if let Some(classes) = data.spells.talent_tabs.get(&t.tab)
-        && classes & (1u32 << (p.row.class.max(1) - 1)) == 0
-    {
+    if rank < have || spell == 0 || free_talent_points(p, &data) < rank + 1 - have {
         return;
     }
     if spent_talent_points(p, &data, Some(t.tab)) < t.row * 5 {
@@ -2076,8 +2322,8 @@ pub fn learn_talent(map: &mut Map, player: Guid, talent: u32, rank: u32) {
         return;
     }
     // A talent's new rank takes the old one's place.
-    if rank > 0 {
-        let old = t.ranks[rank as usize - 1];
+    if have > 0 {
+        let old = t.ranks[have as usize - 1];
         auras::remove_spell(map, player, old, Some(player));
     }
     learn(map, player, spell);

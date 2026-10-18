@@ -283,7 +283,6 @@ pub enum Exclusive {
     GuardianElixir,
     Flask,
     NegativeHaste,
-    Snare,
     GeneralsWarcry,
 }
 
@@ -439,11 +438,8 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         {
             return Some(Exclusive::NegativeHaste);
         }
-        // A snare, but not a daze (the second attributes' 0x0004_0000, as
-        // Thistle Tea's `Slow.daze?` tells one).
-        if only(AURA_MOD_DECREASE_SPEED) && s.attributes[1] & 0x0004_0000 == 0 {
-            return Some(Exclusive::Snare);
-        }
+        // Snares aren't exclusive: they stack, each on as long as it
+        // lasts, and the strongest slows (mangos's `UpdateSpeed`).
     }
     None
 }
@@ -598,23 +594,6 @@ impl Auras {
             .unwrap_or(0)
     }
 
-    /// The speed multiplier the auras give, as a percentage change: the
-    /// best haste, and the worst slow.
-    pub fn speed_percent(&self, mounted: bool) -> i32 {
-        let mut up = self
-            .max(AURA_MOD_INCREASE_SPEED)
-            .max(self.max(AURA_MOD_SPEED_ALWAYS))
-            .max(self.max(AURA_MOD_SPEED_NOT_STACK));
-        if mounted {
-            up += self
-                .max(AURA_MOD_INCREASE_MOUNTED_SPEED)
-                .max(self.max(AURA_MOD_MOUNTED_SPEED_ALWAYS))
-                .max(self.max(AURA_MOD_MOUNTED_SPEED_NOT_STACK));
-        }
-        let down = self.min(AURA_MOD_DECREASE_SPEED);
-        up + down
-    }
-
     /// Whether `spell`, a school `mask`, is stopped by an immunity.
     pub fn school_immune(&self, mask: u32) -> bool {
         self.of(AURA_SCHOOL_IMMUNITY)
@@ -631,6 +610,15 @@ impl Auras {
                 || self
                     .of(AURA_MECHANIC_IMMUNITY_MASK)
                     .any(|(_, a)| (a.misc as u32) & (1 << (mechanic - 1).min(31)) != 0))
+    }
+
+    /// Whether auras of `kind` are kept off (`SPELL_AURA_STATE_IMMUNITY`:
+    /// Thickskull's stuns, Fearless's fears, a boss's taunts).
+    pub fn state_immune(&self, kind: u32) -> bool {
+        kind != 0
+            && self
+                .of(AURA_STATE_IMMUNITY)
+                .any(|(_, a)| a.misc as u32 == kind)
     }
 
     pub fn dispel_immune(&self, dispel: u32) -> bool {
@@ -716,6 +704,10 @@ pub fn auras_mut(map: &mut Map, g: Guid) -> Option<&mut Auras> {
     if map.players.contains_key(&g) {
         return map.players.get_mut(&g).map(|p| &mut p.auras);
     }
+    // Every aura a creature gets comes by here (see `Map::with_auras`).
+    if map.creature_by_guid.contains_key(&g) {
+        map.with_auras.insert(g);
+    }
     map.creature_mut(g).map(|c| &mut c.auras)
 }
 
@@ -743,6 +735,49 @@ pub struct Context {
     /// of its own, going with the aura that holds it (Thistle Tea's linked
     /// holders).
     pub linked: bool,
+    /// The cast's activation-time modifiers (op 19), flat and percent: what
+    /// they make of a periodic aura's interval.
+    pub activation: (i32, i32),
+}
+
+/// Whether an aura of `kind` ticks (Thistle Tea's `Effect.periodic?`).
+pub fn ticks(kind: u32) -> bool {
+    matches!(
+        kind,
+        AURA_PERIODIC_DAMAGE
+            | AURA_PERIODIC_HEAL
+            | AURA_OBS_MOD_HEALTH
+            | AURA_OBS_MOD_MANA
+            | AURA_PERIODIC_TRIGGER_SPELL
+            | AURA_PERIODIC_ENERGIZE
+            | AURA_PERIODIC_LEECH
+            | AURA_PERIODIC_HEALTH_FUNNEL
+            | AURA_PERIODIC_MANA_LEECH
+            | AURA_PERIODIC_DAMAGE_PERCENT
+            | AURA_POWER_BURN_MANA
+    )
+}
+
+/// An aura effect's interval: its amplitude, or a second for a percentage
+/// of mana that has none (mangos's `HandleAuraModTotalManaPercentRegen`).
+/// A periodic aura's takes the activation-time modifiers `(flat, pct)`,
+/// and is at least a millisecond (mangos's `Aura` with
+/// `SPELLMOD_ACTIVATION_TIME`, Thistle Tea's `Modifiers.periodic_interval`).
+pub fn interval(e: &sd::SpellEffect, activation: (i32, i32)) -> Option<Duration> {
+    let amplitude = match e.amplitude {
+        0 if e.aura == AURA_OBS_MOD_MANA => 1000,
+        a => a,
+    };
+    if amplitude == 0 {
+        return None;
+    }
+    let ms = if ticks(e.aura) {
+        let (flat, pct) = activation;
+        ((i64::from(amplitude) + i64::from(flat)) * i64::from((100 + pct).max(0)) / 100).max(1)
+    } else {
+        i64::from(amplitude)
+    };
+    Some(Duration::from_millis(ms as u64))
 }
 
 /// Why an aura couldn't be applied.
@@ -809,10 +844,14 @@ pub fn apply_spell(
         if mechanic_immune
             || (!spell.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES)
                 && existing.school_immune(spell.school_mask()))
-            || existing.dispel_immune(spell.dispel)
         {
             return Err(Refused::Immune);
         }
+    }
+    // A dispel type kept off, helpful or not: Faerie Fire's keeps stealth
+    // and invisibility off (mangos's `IsImmuneToSpell`).
+    if !spell.attr(0, sd::ATTR_NO_IMMUNITIES) && existing.dispel_immune(spell.dispel) {
+        return Err(Refused::Immune);
     }
     // A shield, a bandage or a bubble too soon after the last: Weakened
     // Soul, Recently Bandaged and Forbearance are immunities to its kind.
@@ -820,6 +859,35 @@ pub fn apply_spell(
         return Err(Refused::Immune);
     }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
+    // A weaker attack-speed slow doesn't take a stronger one's place, nor
+    // one as strong that lasts less: it is passed over, the rest of its
+    // spell landing (Thistle Tea's `Slow`, after vmangos).
+    if let Some(kind @ Exclusive::NegativeHaste) = excl {
+        let aura = AURA_MOD_HASTE;
+        let mine = effects
+            .iter()
+            .filter(|(i, _)| spell.effects[*i].aura == aura)
+            .map(|(_, a)| *a)
+            .min()
+            .unwrap_or(0);
+        let weaker = existing.holders.iter().any(|h| {
+            if h.exclusive != Some(kind) || (h.spell == spell.id && h.caster == caster) {
+                return false;
+            }
+            let theirs = h
+                .effects
+                .iter()
+                .filter(|x| x.kind == aura)
+                .map(|x| x.amount)
+                .min()
+                .unwrap_or(0);
+            theirs < mine
+                || (theirs == mine && duration.unwrap_or(u32::MAX) < h.duration.unwrap_or(u32::MAX))
+        });
+        if weaker {
+            return Ok(());
+        }
+    }
     // A stronger rank of a helpful spell already there blocks a weaker.
     if pos && !passive {
         let blocked = existing.holders.iter().any(|h| {
@@ -845,15 +913,7 @@ pub fn apply_spell(
     let mut aura_effects = Vec::new();
     for &(index, amount) in effects {
         let e = spell.effects[index];
-        // A share of mana a tick with no period of its own ticks each
-        // second (mangos's `HandleAuraModTotalManaPercentRegen`): the food
-        // that is drink too.
-        let amplitude = if e.amplitude == 0 && e.aura == AURA_OBS_MOD_MANA {
-            1000
-        } else {
-            e.amplitude
-        };
-        let period = (amplitude > 0).then(|| Duration::from_millis(u64::from(amplitude)));
+        let period = interval(&e, ctx.activation);
         aura_effects.push(Aura {
             effect: index as u8,
             kind: e.aura,
@@ -1460,7 +1520,13 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let kind = a.kind;
     let misc = a.misc;
     match kind {
-        AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
+        AURA_FORCE_REACTION => crate::game::map::reputation::forced_reaction_changed(
+            map,
+            target,
+            misc.max(0) as u32,
+            a.amount,
+            true,
+        ),
         AURA_LINKED => linked(map, target, h, a.trigger),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             crate::game::map::combat::stop_attack(map, target);
@@ -1528,17 +1594,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             shapeshift(map, target, misc.max(0) as u8, h.spell);
         }
         AURA_TRANSFORM => {
-            let display = map
-                .realm
-                .data
-                .creature_template(misc.max(0) as u32)
-                .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
-                .unwrap_or(0);
-            if display != 0
-                && let Some(f) = map.unit_fields_mut(target)
-            {
-                f.set_u32(UNIT_FIELD_DISPLAYID, display);
-            }
+            sync_display(map, target);
             crate::game::map::spells::interrupts::transformed(map, target, h.spell, a.effect);
         }
         AURA_MOUNTED => {
@@ -1601,17 +1657,40 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_MOD_STEALTH | AURA_MOD_INVISIBILITY => {
             crate::game::map::combat::stop_attack(map, target);
+            // Stealth's creep flag is of the visibility byte (3), not the
+            // form's (2): mangos's `UNIT_VIS_FLAG_CREEP`.
             if kind == AURA_MOD_STEALTH
                 && let Some(f) = map.unit_fields_mut(target)
             {
                 f.set_byte(
                     UNIT_FIELD_BYTES_1,
-                    2,
-                    0x02 | f.get_byte(UNIT_FIELD_BYTES_1, 2),
+                    VIS_FLAGS,
+                    VIS_FLAG_CREEP | f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS),
                 );
+            }
+            // A player's own client shows them stealthed, or glowing
+            // invisible (mangos's `PLAYER_FIELD_BYTE2_STEALTH` and
+            // `INVISIBILITY_GLOW`).
+            if let Some(p) = map.players.get_mut(&target) {
+                let flag = if kind == AURA_MOD_STEALTH {
+                    BYTE2_STEALTH
+                } else {
+                    BYTE2_INVISIBILITY_GLOW
+                };
+                let had = p.fields.get_byte(PLAYER_FIELD_BYTES2, 1);
+                p.fields.set_byte(PLAYER_FIELD_BYTES2, 1, had | flag);
             }
             crate::game::map::visibility::stealth_changed(map, target);
             crate::game::map::spells::interrupts::concealed(map, target, h.spell);
+        }
+        AURA_UNTRACKABLE => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_byte(
+                    UNIT_FIELD_BYTES_1,
+                    VIS_FLAGS,
+                    VIS_FLAG_UNTRACKABLE | f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS),
+                );
+            }
         }
         AURA_WATER_WALK | AURA_FEATHER_FALL | AURA_HOVER => {
             if let Some(p) = map.players.get(&target) {
@@ -1700,10 +1779,22 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
 fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let still = |map: &Map, k: u32| auras(map, target).is_some_and(|x| x.has(k));
     match a.kind {
-        AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
+        AURA_FORCE_REACTION => crate::game::map::reputation::forced_reaction_changed(
+            map,
+            target,
+            a.misc.max(0) as u32,
+            a.amount,
+            false,
+        ),
         AURA_LINKED => remove_spell(map, target, a.trigger, Some(h.caster)),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
-            let stunned = still(map, AURA_MOD_STUN);
+            // A logout's countdown holds the player as a stun does (Thistle
+            // Tea's `MovementSync` keeps the logout's restriction).
+            let logging_out = map
+                .players
+                .get(&target)
+                .is_some_and(|p| p.misc.logout_rooted);
+            let stunned = still(map, AURA_MOD_STUN) || logging_out;
             let rooted = stunned || still(map, AURA_MOD_ROOT);
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(
@@ -1743,12 +1834,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_SHAPESHIFT if !still(map, AURA_MOD_SHAPESHIFT) => {
             shapeshift(map, target, 0, h.spell);
         }
-        AURA_TRANSFORM if !still(map, AURA_TRANSFORM) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                let native = f.get_u32(UNIT_FIELD_NATIVEDISPLAYID);
-                f.set_u32(UNIT_FIELD_DISPLAYID, native);
-            }
-        }
+        AURA_TRANSFORM => sync_display(map, target),
         AURA_MOUNTED if !still(map, AURA_MOUNTED) => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_u32(UNIT_FIELD_MOUNTDISPLAYID, 0);
@@ -1795,11 +1881,31 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             {
                 f.set_byte(
                     UNIT_FIELD_BYTES_1,
-                    2,
-                    f.get_byte(UNIT_FIELD_BYTES_1, 2) & !0x02,
+                    VIS_FLAGS,
+                    f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS) & !VIS_FLAG_CREEP,
                 );
             }
+            let flag = if a.kind == AURA_MOD_STEALTH {
+                BYTE2_STEALTH
+            } else {
+                BYTE2_INVISIBILITY_GLOW
+            };
+            if !still(map, a.kind)
+                && let Some(p) = map.players.get_mut(&target)
+            {
+                let had = p.fields.get_byte(PLAYER_FIELD_BYTES2, 1);
+                p.fields.set_byte(PLAYER_FIELD_BYTES2, 1, had & !flag);
+            }
             crate::game::map::visibility::stealth_changed(map, target);
+        }
+        AURA_UNTRACKABLE if !still(map, AURA_UNTRACKABLE) => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_byte(
+                    UNIT_FIELD_BYTES_1,
+                    VIS_FLAGS,
+                    f.get_byte(UNIT_FIELD_BYTES_1, VIS_FLAGS) & !VIS_FLAG_UNTRACKABLE,
+                );
+            }
         }
         AURA_WATER_WALK if !still(map, AURA_WATER_WALK) => {
             if let Some(p) = map.players.get(&target) {
@@ -1919,18 +2025,29 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
     if expired && h.has(AURA_RETAIN_COMBO_POINTS) {
         crate::game::map::spells::retained_combo_points_expired(map, target, h);
     }
-    // A channel's aura gone ends the channel.
-    if let Some(c) = map.caster(h.caster)
+    // A channel's aura taken off the unit it is channelled at (not run
+    // out) ends the channel, the caster's own included (Evocation, a
+    // bandage), as mangos's `RemoveSpellAuraHolder` and Thistle Tea's
+    // channel have it.
+    if !expired
+        && let Some(c) = map.caster(h.caster)
         && let Some(casting) = &c.casting
         && casting.spell == h.spell
         && casting.channel_until.is_some()
-        && h.caster != target
-        && !h.positive
+        && casting.targets.unit.unwrap_or(h.caster) == target
     {
         let caster = h.caster;
         crate::game::map::spells::interrupt(map, caster);
     }
 }
+
+/// `UNIT_FIELD_BYTES_1`'s visibility byte, and its flags.
+const VIS_FLAGS: u8 = 3;
+const VIS_FLAG_CREEP: u8 = 0x02;
+const VIS_FLAG_UNTRACKABLE: u8 = 0x04;
+/// `PLAYER_FIELD_BYTES2`'s second byte: stealthed, and invisible.
+const BYTE2_STEALTH: u8 = 0x20;
+const BYTE2_INVISIBILITY_GLOW: u8 = 0x40;
 
 pub const UNIT_FLAG_SILENCED: u32 = 0x0000_2000;
 pub const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
@@ -1945,7 +2062,11 @@ pub const FORM_TREE: u8 = 2;
 pub const FORM_TRAVEL: u8 = 3;
 pub const FORM_AQUA: u8 = 4;
 pub const FORM_BEAR: u8 = 5;
+pub const FORM_GHOUL: u8 = 7;
 pub const FORM_DIREBEAR: u8 = 8;
+pub const FORM_CREATURE_BEAR: u8 = 14;
+pub const FORM_GHOST_WOLF: u8 = 16;
+pub const FORM_SPIRIT_OF_REDEMPTION: u8 = 32;
 pub const FORM_STEALTH: u8 = 30;
 pub const FORM_MOONKIN: u8 = 31;
 pub const FORM_BATTLE: u8 = 17;
@@ -1978,6 +2099,7 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
     if let Some(f) = map.unit_fields_mut(target) {
         f.set_byte(UNIT_FIELD_BYTES_1, 2, form);
     }
+    sync_display(map, target);
     let data = map.realm.data.clone();
     // A form left ends the unit's own auras that hang on forms (Thistle
     // Tea's `Shapeshift.interrupt_holders`); the new form's come back
@@ -2066,6 +2188,74 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
     }
 }
 
+/// The look a form gives a unit of `race`, as mangos's
+/// `HandleAuraModShapeshift` has them: the Horde's own cat, bear and
+/// moonkin; none for the forms that keep the unit's own.
+fn form_display(form: u8, race: u8) -> u32 {
+    let horde = matches!(race, 2 | 5 | 6 | 8);
+    match form {
+        FORM_CAT if horde => 8571,
+        FORM_CAT => 892,
+        FORM_TREE => 864,
+        FORM_TRAVEL => 632,
+        FORM_AQUA => 2428,
+        FORM_BEAR | FORM_DIREBEAR if horde => 2289,
+        FORM_BEAR | FORM_DIREBEAR => 2281,
+        FORM_GHOUL if !horde => 10045,
+        FORM_CREATURE_BEAR => 902,
+        FORM_GHOST_WOLF => 4613,
+        FORM_MOONKIN if horde => 15375,
+        FORM_MOONKIN => 15374,
+        FORM_SPIRIT_OF_REDEMPTION => 16031,
+        _ => 0,
+    }
+}
+
+/// The look a unit shows: its newest transform's (a harmful one's before
+/// any helpful), else its form's, else its own, as mangos's
+/// `RestoreDisplayId` and Thistle Tea's `Appearance` work it out whenever
+/// a transform or a form comes or goes.
+fn sync_display(map: &mut Map, target: Guid) {
+    let data = map.realm.data.clone();
+    let Some(a) = auras(map, target) else {
+        return;
+    };
+    let transforms: Vec<(bool, u32)> = a
+        .holders
+        .iter()
+        .flat_map(|h| {
+            h.effects
+                .iter()
+                .filter(|x| x.kind == AURA_TRANSFORM)
+                .map(move |x| (h.positive, x.misc))
+        })
+        .filter_map(|(positive, misc)| {
+            data.creature_template(misc.max(0) as u32)
+                .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
+                .map(|d| (positive, d))
+        })
+        .collect();
+    let transform = transforms
+        .iter()
+        .rev()
+        .find(|(positive, _)| !positive)
+        .or(transforms.last())
+        .map(|(_, d)| *d);
+    let Some(f) = map.unit_fields_mut(target) else {
+        return;
+    };
+    let form = form_display(
+        f.get_byte(UNIT_FIELD_BYTES_1, 2),
+        f.get_byte(UNIT_FIELD_BYTES_0, 0),
+    );
+    let display = transform
+        .or((form != 0).then_some(form))
+        .unwrap_or_else(|| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
+    if display != 0 && f.get_u32(UNIT_FIELD_DISPLAYID) != display {
+        f.set_u32(UNIT_FIELD_DISPLAYID, display);
+    }
+}
+
 /// The unit's form.
 pub fn form(map: &Map, g: Guid) -> u8 {
     map.unit_fields(g)
@@ -2112,12 +2302,7 @@ pub fn update(map: &mut Map) {
         .filter(|p| !p.auras.is_empty())
         .map(|p| p.guid)
         .collect();
-    units.extend(
-        map.creatures
-            .iter()
-            .filter(|(_, c)| !c.auras.is_empty())
-            .map(|(_, c)| c.guid),
-    );
+    units.extend(map.with_auras_where(|c| !c.auras.is_empty(), |_, c| c.guid));
     for g in units {
         let Some(a) = auras(map, g) else {
             continue;
@@ -2131,6 +2316,11 @@ pub fn update(map: &mut Map) {
             .filter(|(_, x)| x.next_tick.is_some_and(|t| t <= now))
             .map(|(h, x)| (h.clone(), x.clone()))
             .collect();
+        // Nothing ticks or ends, so nothing changes before the crowd
+        // control's look, and that would find nothing due either.
+        if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
+            continue;
+        }
         for (h, t) in ticks {
             if let Some(a) = auras_mut(map, g)
                 && let Some(x) = a
@@ -2140,7 +2330,10 @@ pub fn update(map: &mut Map) {
                     .and_then(|x| x.effects.iter_mut().find(|e| e.effect == t.effect))
                 && let Some(p) = x.period
             {
-                x.next_tick = Some(now + p);
+                // On the aura's own cadence, an update late or not, so a
+                // late one doesn't lose the last tick (mangos's
+                // `m_periodicTimer += periodictime`).
+                x.next_tick = Some(x.next_tick.unwrap_or(now) + p);
                 x.ticks += 1;
             }
             tick(map, g, &h, &t);
@@ -2260,6 +2453,28 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 _ => amount,
             };
             crate::game::map::spells::heal(map, h.caster, target, h.spell, amount, true);
+            // A heal's tick procs what goes off on a periodic heal (Improved
+            // Mend Pet, the Dreamwalker's Rejuvenation), as mangos's
+            // `PeriodicTick` and Thistle Tea's periodic heal raise it.
+            if a.kind == AURA_PERIODIC_HEAL {
+                crate::game::map::procs::trigger(
+                    map,
+                    crate::game::map::procs::Event {
+                        actor: h.caster,
+                        target,
+                        actor_flags: crate::game::map::procs::PROC_DONE_PERIODIC,
+                        target_flags: crate::game::map::procs::PROC_TAKEN_PERIODIC,
+                        ex: crate::game::map::procs::EX_NORMAL_HIT
+                            | crate::game::map::procs::EX_PERIODIC_POSITIVE,
+                        spell: Some(h.spell),
+                        damage: 0,
+                        school: h.school,
+                        offhand: false,
+                        ranged: false,
+                        extra_attack: false,
+                    },
+                );
+            }
         }
         AURA_PERIODIC_HEALTH_FUNNEL => {
             // The caster pays health for the target's.
@@ -2278,18 +2493,30 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA | AURA_MOD_POWER_REGEN => {
-            let power = a.misc.clamp(0, 4) as u16;
+            // A percentage of mana is of mana, and does nothing for one with
+            // none (mangos's `PeriodicTick`, Thistle Tea's
+            // `restore_percent_mana`).
+            let percent = a.kind == AURA_OBS_MOD_MANA;
+            let power = if percent {
+                0
+            } else {
+                a.misc.clamp(0, 4) as u16
+            };
             let Some(f) = map.unit_fields_mut(target) else {
                 return;
             };
             let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
-            let add = if a.kind == AURA_OBS_MOD_MANA {
+            if percent && max == 0 {
+                return;
+            }
+            let add = if percent {
                 max * (a.amount * stacks).max(0) as u32 / 100
             } else {
                 (a.amount * stacks).max(0) as u32
             };
             let now = f.get_u32(UNIT_FIELD_POWER1 + power);
-            f.set_u32(UNIT_FIELD_POWER1 + power, (now + add).min(max));
+            let after = now.saturating_add(add).min(max);
+            f.set_u32(UNIT_FIELD_POWER1 + power, after);
             // Logged as its own aura with its power, as mangos's
             // SendPeriodicAuraLog and Thistle Tea log a tick; a regeneration
             // isn't.
@@ -2306,6 +2533,19 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             };
             if let Some(aura_type) = logged {
                 periodic_log(map, h, target, aura_type);
+            }
+            // Half of what it gave is its caster's threat on those fighting
+            // the target, as a heal's is (mangos's `threatAssist`): a
+            // percentage of mana's, and an energize's of rage or energy
+            // (Bloodrage's). Thistle Tea's energize of mana makes none.
+            if percent || (a.kind == AURA_PERIODIC_ENERGIZE && power != 0) {
+                crate::game::map::combat::heal_threat(
+                    map,
+                    h.caster,
+                    target,
+                    h.spell,
+                    after.saturating_sub(now),
+                );
             }
         }
         AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA => {

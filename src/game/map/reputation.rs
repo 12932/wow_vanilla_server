@@ -169,6 +169,58 @@ pub fn send_forced_reactions(map: &Map, g: Guid) {
     }
 }
 
+/// A forced reaction to `faction` at `forced` came (`applied`) or went:
+/// the player is told them all again, and friendly now, forced so or by
+/// their own standing once the force is gone, they and their pet stop
+/// fighting the faction's units, and its units stop fighting them
+/// (mangos's `HandleForceReaction` and `StopAttackFaction`, Thistle Tea's
+/// `stop_attack_factions`).
+pub fn forced_reaction_changed(map: &mut Map, g: Guid, faction: u32, forced: i32, applied: bool) {
+    send_forced_reactions(map, g);
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let friendly = if applied {
+        forced >= misc::RANK_FRIENDLY as i32
+    } else {
+        rank(p, &data, faction) >= misc::RANK_FRIENDLY
+    };
+    if friendly && faction != 0 {
+        stop_attacking_faction(map, g, faction);
+    }
+}
+
+fn stop_attacking_faction(map: &mut Map, g: Guid, faction: u32) {
+    let data = map.realm.data.clone();
+    let of_faction = |map: &Map, u: Guid| {
+        map.unit_fields(u)
+            .and_then(|f| {
+                data.faction_templates
+                    .get(&f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+            })
+            .is_some_and(|t| t.faction == faction)
+    };
+    let pet = crate::game::map::pets::pet_of(map, g);
+    for unit in std::iter::once(g).chain(pet) {
+        let victim = map.combat(unit).filter(|c| c.attacking).map(|c| c.victim);
+        if let Some(v) = victim
+            && of_faction(map, v)
+        {
+            crate::game::map::combat::stop_attack(map, unit);
+            crate::game::map::spells::interrupt(map, unit);
+        }
+        let fighting: Vec<Guid> = map
+            .creatures
+            .iter()
+            .filter(|(_, c)| c.threat.iter().any(|(t, _)| *t == unit))
+            .map(|(_, c)| c.guid)
+            .filter(|c| of_faction(map, *c))
+            .collect();
+        crate::game::map::ai::forget_by(map, unit, fighting);
+    }
+}
+
 /// The reputation packets a client gets at login.
 pub fn send_login(p: &mut Player, data: &GameData) {
     init(p, data);
@@ -228,6 +280,7 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
     }
     changes.push((faction, delta));
     let mut sent = Vec::new();
+    let mut shown = Vec::new();
     for (faction, delta) in changes {
         let Some(def) = data.misc.faction(faction) else {
             continue;
@@ -236,13 +289,21 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
         let s = entry(p, def);
         let total = (base + s.standing + delta).clamp(misc::STANDING_MIN, misc::STANDING_MAX);
         s.standing = total - base;
-        if s.flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED) == 0 {
+        if s.flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED | FLAG_VISIBLE) == 0 {
             s.flags |= FLAG_VISIBLE;
+            shown.push(def.index);
         }
         if misc::rank(total) <= misc::RANK_HOSTILE {
             s.flags |= FLAG_AT_WAR;
         }
         sent.push((def.index, s.standing));
+    }
+    // A faction newly shown is told before its standing (mangos's
+    // `SetOneFactionReputation` makes it visible first).
+    for index in shown {
+        let mut b = Body::default();
+        b.u32(index);
+        p.outbound.send_frame(b.frame(SMSG_SET_FACTION_VISIBLE));
     }
     if !sent.is_empty() {
         p.outbound.send_frame(standing_frame(&sent));
@@ -306,11 +367,17 @@ fn gain(
         return 0;
     }
     let v = value as f32 * rate * level_rate * (100 + bonus) as f32 / 100.0;
-    let dither: f32 = rand::random();
+    dither(v, rand::random())
+}
+
+/// `v` to a whole number by `roll` (in 0..1): a whole `v` as it is, a
+/// fraction up as often as it is of a whole, so that on average it is
+/// what it was (Thistle Tea's `Math.dither/2`); a loss as a gain is.
+pub fn dither(v: f32, roll: f32) -> i32 {
     if v < 0.0 {
-        -((v.abs() + dither).floor() as i32)
+        -((v.abs() + roll).floor() as i32)
     } else {
-        (v + dither).floor() as i32
+        (v + roll).floor() as i32
     }
 }
 
@@ -424,6 +491,11 @@ pub fn temporary_war(map: &mut Map, player: Guid, creature: Guid) {
     let Some(faction) = faction_of(map, creature) else {
         return;
     };
+    temporary_war_with(map, player, faction);
+}
+
+/// [`temporary_war`], with the creature's faction.
+pub fn temporary_war_with(map: &mut Map, player: Guid, faction: u32) {
     let data = map.realm.data.clone();
     let Some(def) = data.misc.faction(faction) else {
         return;

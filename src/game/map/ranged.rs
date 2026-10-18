@@ -424,7 +424,7 @@ fn resolve(
     }
     combat::engage(map, g, target);
     if left > 0 {
-        crate::game::map::spells::pushback(map, target);
+        crate::game::map::spells::pushback_by(map, target, g);
         combat::deal_damage_school(map, g, target, left, school);
     }
     let mut ex = combat::outcome_ex(outcome);

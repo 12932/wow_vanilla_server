@@ -441,6 +441,43 @@ pub fn reset_cooldowns(
         }
         super::cooldowns::send_clear(map, caster, id);
     }
+    // A spell whose wait is its category's alone (Vanish, Evasion, Frost
+    // Nova) is kept by the category: those of the caster's spells go too.
+    let except_category = data.spells.get(except).map_or(0, |t| t.category);
+    let known: Vec<u32> = map
+        .players
+        .get(&caster)
+        .map(|p| p.spells.clone())
+        .unwrap_or_default();
+    let cooling: Vec<u32> = map
+        .caster(caster)
+        .map(|c| c.category_cooldowns.keys().copied().collect())
+        .unwrap_or_default();
+    for category in cooling
+        .into_iter()
+        .filter(|c| *c != 0 && *c != except_category)
+    {
+        let of: Vec<u32> = known
+            .iter()
+            .copied()
+            .filter(|id| {
+                *id != except
+                    && data
+                        .spells
+                        .get(*id)
+                        .is_some_and(|t| t.category == category && which(t))
+            })
+            .collect();
+        if of.is_empty() {
+            continue;
+        }
+        if let Some(c) = map.caster_mut(caster) {
+            c.category_cooldowns.remove(&category);
+        }
+        for id in of {
+            super::cooldowns::send_clear(map, caster, id);
+        }
+    }
 }
 
 /// A druid changed form: Furor's chance of rage or energy, and Leader of

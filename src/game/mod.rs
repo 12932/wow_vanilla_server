@@ -46,6 +46,8 @@ mod tests_bugs3;
 #[cfg(test)]
 mod tests_bugs4;
 #[cfg(test)]
+mod tests_bugs5;
+#[cfg(test)]
 mod tests_combat;
 #[cfg(test)]
 mod tests_combat2;
@@ -70,6 +72,14 @@ mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
+mod tests_p3_ai_commands;
+#[cfg(test)]
+mod tests_p3_ai_events;
+#[cfg(test)]
+mod tests_p3_ai_pets;
+#[cfg(test)]
+mod tests_p3_ai_scripts;
+#[cfg(test)]
 mod tests_p3_combat;
 #[cfg(test)]
 mod tests_p3_combat10;
@@ -91,6 +101,54 @@ mod tests_p3_combat7;
 mod tests_p3_combat8;
 #[cfg(test)]
 mod tests_p3_combat9;
+#[cfg(test)]
+mod tests_p3_core_auction;
+#[cfg(test)]
+mod tests_p3_core_aura;
+#[cfg(test)]
+mod tests_p3_core_condition;
+#[cfg(test)]
+mod tests_p3_core_death;
+#[cfg(test)]
+mod tests_p3_core_guild;
+#[cfg(test)]
+mod tests_p3_core_instance;
+#[cfg(test)]
+mod tests_p3_core_inventory;
+#[cfg(test)]
+mod tests_p3_core_misc;
+#[cfg(test)]
+mod tests_p3_core_party;
+#[cfg(test)]
+mod tests_p3_core_pvp;
+#[cfg(test)]
+mod tests_p3_core_reputation;
+#[cfg(test)]
+mod tests_p3_core_social;
+#[cfg(test)]
+mod tests_p3_core_stone;
+#[cfg(test)]
+mod tests_p3_core_strat;
+#[cfg(test)]
+mod tests_p3_core_trade;
+#[cfg(test)]
+mod tests_p3_entity;
+#[cfg(test)]
+mod tests_p3_entity_effects;
+#[cfg(test)]
+mod tests_p3_entity_env;
+#[cfg(test)]
+mod tests_p3_entity_eventai;
+#[cfg(test)]
+mod tests_p3_entity_mob;
+#[cfg(test)]
+mod tests_p3_entity_objects;
+#[cfg(test)]
+mod tests_p3_entity_pets;
+#[cfg(test)]
+mod tests_p3_entity_player;
+#[cfg(test)]
+mod tests_p3_entity_scripts;
 #[cfg(test)]
 mod tests_p3_items;
 #[cfg(test)]
@@ -121,6 +179,34 @@ mod tests_p3_network_pets;
 mod tests_p3_network_real;
 #[cfg(test)]
 mod tests_p3_network_wire;
+#[cfg(test)]
+mod tests_p3_player;
+#[cfg(test)]
+mod tests_p3_player_chat;
+#[cfg(test)]
+mod tests_p3_player_class;
+#[cfg(test)]
+mod tests_p3_player_death;
+#[cfg(test)]
+mod tests_p3_player_honor;
+#[cfg(test)]
+mod tests_p3_player_items;
+#[cfg(test)]
+mod tests_p3_player_pet;
+#[cfg(test)]
+mod tests_p3_player_social;
+#[cfg(test)]
+mod tests_p3_player_stats;
+#[cfg(test)]
+mod tests_p3_player_world;
+#[cfg(test)]
+mod tests_p3_spells;
+#[cfg(test)]
+mod tests_p3_spells_auras;
+#[cfg(test)]
+mod tests_p3_spells_damage;
+#[cfg(test)]
+mod tests_p3_spells_kit;
 #[cfg(test)]
 mod tests_p3_world_bg;
 #[cfg(test)]

@@ -275,8 +275,8 @@ pub struct SpellData {
     pub target_positions: AHashMap<u32, (u32, f32, f32, f32, f32)>,
     /// `Talent`: talent id → its ranks' spells.
     pub talents: AHashMap<u32, TalentInfo>,
-    /// `TalentTab`: a talent tab → the classes (a mask) it is for.
-    pub talent_tabs: AHashMap<u32, u32>,
+    /// `TalentTab`: tab → the classes (a mask) whose tree it is.
+    pub talent_tab_classes: AHashMap<u32, u32>,
     /// A talent's rank or a rank trained after it (Mortal Strike's from the
     /// trainer, by the skill line's `superseded_by`) → the talent.
     pub talent_lines: AHashMap<u32, u32>,

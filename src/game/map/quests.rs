@@ -1307,19 +1307,20 @@ pub fn offer_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
 }
 
 /// The XP a quest gives a player of `level` (vmangos: less as the player
-/// outlevels it).
+/// outlevels it), rounded up, as mangos's `Quest::XPValue` and Thistle
+/// Tea's `Experience.quest_xp` round it.
 pub fn quest_xp(q: &Quest, level: u8) -> u32 {
     let qlevel = q.level_for(level);
     let diff = i64::from(level) - i64::from(qlevel);
-    let pct = match diff {
-        i64::MIN..=5 => 100,
-        6 => 80,
-        7 => 60,
-        8 => 40,
-        9 => 20,
-        _ => 10,
+    let share = match diff {
+        i64::MIN..=5 => 1.0,
+        6 => 0.8,
+        7 => 0.6,
+        8 => 0.4,
+        9 => 0.2,
+        _ => 0.1,
     };
-    q.reward_xp * pct / 100
+    (f64::from(q.reward_xp) * share).ceil() as u32
 }
 
 /// `CMSG_QUESTGIVER_CHOOSE_REWARD`: the quest is done.
@@ -1354,17 +1355,27 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
             None => return,
         }
     }
-    let free = p
-        .carry_slots(&data)
+    // What it takes and gives, as one change: the rewards in the room the
+    // taken items leave, onto stacks, within their unique limits; what it
+    // takes carried, not banked (Thistle Tea's turn-in plan, mangos's
+    // "quest items in bank").
+    let required: Vec<(u32, u32)> = q
+        .required_items
         .iter()
-        .filter(|(b, s)| p.item_at(*b, *s).is_none())
-        .count();
-    if free < rewards.len() {
-        return invalid(p, QuestFailedReason::QuestFailedInventoryFull);
+        .copied()
+        .filter(|(i, _)| *i != 0)
+        .collect();
+    let given: Vec<(u32, u32)> = rewards.iter().map(|(i, n)| (*i, (*n).max(1))).collect();
+    match inventory::plan_change(p, &data, &required, &given) {
+        Ok(()) => {}
+        Err(inventory::Fail::InventoryFull) => {
+            return invalid(p, QuestFailedReason::QuestFailedInventoryFull);
+        }
+        Err(f) => return inventory::send_fail(p, f, Guid::zero()),
     }
     // Take what the quest needed.
     for (item, count) in q.required_items.iter().filter(|(i, _)| *i != 0) {
-        take_items(map, player, *item, *count);
+        take_items(map, player, *item, *count, false);
     }
     for (item, count) in &rewards {
         let _ = inventory::add_item(map, player, *item, (*count).max(1), true);
@@ -1450,13 +1461,20 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
     }
 }
 
-/// Take `count` of `item` from wherever the player carries it.
-fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32) {
+/// Take `count` of `item` from wherever the player carries it, the bank
+/// too if `banked` (an abandoned quest's items, as Thistle Tea's
+/// `QuestItems.abandon`); a turn-in's from what is carried alone
+/// (mangos's `DestroyItemCount`).
+fn take_items(map: &mut Map, player: Guid, item: u32, mut count: u32, banked: bool) {
     while count > 0 {
         let Some(p) = map.players.get(&player) else {
             return;
         };
-        let Some(i) = p.items.iter().position(|it| it.entry == item) else {
+        let Some(i) = p
+            .items
+            .iter()
+            .position(|it| it.entry == item && (banked || it.carried()))
+        else {
             return;
         };
         let n = p.items[i].count().min(count);
@@ -1497,7 +1515,7 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
         {
             return inventory::send_fail(p, inventory::Fail::OnlyEmptyBags, bag.guid);
         }
-        take_items(map, player, q.source_item, q.source_item_count.max(1));
+        take_items(map, player, q.source_item, q.source_item_count.max(1), true);
     }
     let Some(p) = map.players.get_mut(&player) else {
         return;

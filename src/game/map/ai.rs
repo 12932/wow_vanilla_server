@@ -154,6 +154,7 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     let passive = !critter
         && crate::game::map::assistance::reaction(map, creature)
             == crate::game::map::assistance::Reaction::Passive;
+    map.note_fighting(creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
@@ -239,6 +240,11 @@ pub fn forget(map: &mut Map, g: Guid) {
         .filter(|(_, c)| c.threat.iter().any(|(t, _)| *t == g))
         .map(|(_, c)| c.guid)
         .collect();
+    forget_by(map, g, fighting);
+}
+
+/// [`forget`], by the creatures `fighting` alone.
+pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
     for c in fighting {
         crate::game::map::spells::threat_sync::removed(map, c, g);
         let next = {
@@ -262,6 +268,7 @@ pub fn forget(map: &mut Map, g: Guid) {
                     cr.combat.attacking = false;
                 }
                 attacked(map, c, t);
+                map.note_fighting(c);
                 if let Some(cr) = map.creature_mut(c) {
                     cr.combat.victim = t;
                     cr.combat.attacking = true;
@@ -658,6 +665,9 @@ pub fn quiet_death_for(map: &mut Map, g: Guid, respawn: Duration) {
     c.combat = Default::default();
     c.evading = false;
     c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    // Its selection goes with it, as at a death (mangos's
+    // `Creature::SetDeathState`, Thistle Tea's `Respawn.despawn`).
+    c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.despawned = true;
     map.dead_creatures.push(g);
     despawn_from_view(map, g);
@@ -685,21 +695,19 @@ pub fn lie_dead(map: &mut Map, g: Guid, respawn_in: Option<Duration>) {
 /// Run the creatures some player sees, or that are fighting.
 pub fn update_creatures(map: &mut Map) {
     let now = map.now;
-    let keys: Vec<usize> = map
-        .creatures
-        .iter()
-        .filter(|(_, c)| c.pet.is_none())
-        .filter(|(_, c)| {
-            c.alive()
+    let keys: Vec<usize> = map.awake_where(
+        |c| {
+            c.pet.is_none()
+                && c.alive()
                 && (!c.observers.is_empty()
                     || c.combat.attacking
                     || c.evading
                     || c.scripted
                         .as_deref()
                         .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some())))
-        })
-        .map(|(k, _)| k)
-        .collect();
+        },
+        |k, _| k,
+    );
     for key in keys {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
@@ -1545,35 +1553,8 @@ fn evade(map: &mut Map, g: Guid) {
         .unwrap_or_default();
     combat::stop_attack(map, g);
     crate::game::map::spells::interrupt(map, g);
-    // What an evade takes, as Thistle Tea's `remove_on_evade` has it: all
-    // but what vmangos marks to stay, a player's timed buffs, and (for a
-    // creature whose template says so) its buffs.
-    let data = map.realm.data.clone();
-    let keeps_buffs = map
-        .creature(g)
-        .and_then(|c| data.creature_template(c.entry))
-        .is_some_and(|t| t.flags_extra & 0x1000 != 0);
-    let held: Vec<(u32, Guid)> = map
-        .creature(g)
-        .map(|c| {
-            c.auras
-                .holders
-                .iter()
-                .filter(|h| {
-                    let stays =
-                        data.spells.get(h.spell).is_some_and(|s| {
-                            s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
-                        }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
-                            || (keeps_buffs && h.positive);
-                    !stays
-                })
-                .map(|h| (h.spell, h.caster))
-                .collect()
-        })
-        .unwrap_or_default();
-    for (spell, caster) in held {
-        crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
-    }
+    shed_on_evade(map, g);
+    map.note_fighting(g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -1621,6 +1602,38 @@ fn evade(map: &mut Map, g: Guid) {
     if map.creature(g).is_some_and(|c| !c.evading) {
         crate::game::map::creature_combat::rest(map, g);
         crate::game::map::spawn_auras::restore(map, g);
+    }
+}
+
+/// What an evade takes from a creature, as Thistle Tea's `remove_on_evade`
+/// has it: all its auras but what vmangos marks to stay, a player's timed
+/// buffs, and (for a creature whose template says so) its buffs.
+pub fn shed_on_evade(map: &mut Map, g: Guid) {
+    let data = map.realm.data.clone();
+    let keeps_buffs = map
+        .creature(g)
+        .and_then(|c| data.creature_template(c.entry))
+        .is_some_and(|t| t.flags_extra & 0x1000 != 0);
+    let shed: Vec<(u32, Guid)> = map
+        .creature(g)
+        .map(|c| {
+            c.auras
+                .holders
+                .iter()
+                .filter(|h| {
+                    let stays =
+                        data.spells.get(h.spell).is_some_and(|s| {
+                            s.custom(crate::game::data::spells::CUSTOM_NOT_REMOVED_ON_EVADE)
+                        }) || (h.positive && h.expires.is_some() && guid::is_player(h.caster))
+                            || (keeps_buffs && h.positive);
+                    !stays
+                })
+                .map(|h| (h.spell, h.caster))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (spell, caster) in shed {
+        crate::game::map::auras::remove_spell(map, g, spell, Some(caster));
     }
 }
 

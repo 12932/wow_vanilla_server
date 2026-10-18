@@ -11,6 +11,12 @@ the questions waiting for you.
 
 ## Questions for you
 
+**Answered (2026-10-18):**
+- **#10:** keep swinging on arrival.
+- **#18:** keep moving unusable gear at login.
+- **#27:** snares stack, as mangos-classic has them: they coexist and the strongest counts. Done.
+- **#20:** explained; waiting on your go to switch to Thistle Tea's and mangos's model.
+
 1. **Death's wear, three small differences** (from 2a). Should they be aligned with Thistle Tea? Until you say so,
    they stay documented and unchanged.
    - Spirit of Redemption: wvs wears gear down when the spirit ends. Thistle Tea does at the fatal blow, and only if
@@ -92,6 +98,20 @@ the questions waiting for you.
 25. **Fixing the wow_messages fork** (from 3f and robustness). An agent is fixing the layouts wvs hand-encodes, and
     the crash bugs, in your fork. Nothing is reported upstream without your say.
 26. **The reconnect protocol version** (from 3f). Both 2 and 3 are accepted. Which does the 1.12.1 client send?
+
+27. **Snares** (from 3a). wvs now follows Thistle Tea and vmangos: one snare at a time, and a weaker or shorter
+    one is passed over. mangos-classic lets snares coexist, with the strongest counting. Which?
+28. **A charm or Mind Control ending** (from 3a). Should the freed creature's cast or channel be interrupted
+    (Thistle Tea), or carry on (mangos's `Uncharm`, and wvs today)?
+29. **Talent reset decay** (from 3d). After one reset, should the cost fall back to 1 gold after a month (Thistle
+    Tea), or stay at 5 gold (mangos, and wvs)?
+30. **Melee attack-speed slows** (from 3d). They don't stack, as vmangos and Thistle Tea have it (done); mangos-classic
+    multiplies them. Keep?
+
+31. **A creature-owned totem when its owner dies** (from 3i). Should it outlive its owner until it expires (Thistle
+    Tea), or go with it (mangos, and wvs)?
+32. **A scripted follower's evade** (from 3i). Should it evade where it stands (Thistle Tea), or to its place by its
+    leader (mangos)? wvs walks it to its spawn.
 
 ## Decisions made (override any)
 
@@ -287,6 +307,45 @@ the questions waiting for you.
     - **Merge notes:** escort quest walks now wait for the escortee to come back as a quest giver before turning in.
       3c's giver check needs the quest-giver flag, which an escort clears while it runs.
 
+19. **3a's and 3d's choices:**
+    - **Kick and Counterspell** stop only what a silence could (interrupt flag 0x8 and prevention 1, mangos's
+      `IsInterruptible`), so they can't stop a Hearthstone. On an interrupt, the cast result goes before the failure,
+      in Thistle Tea's order.
+    - **Run speed** follows mangos's `UpdateSpeed`: when mounted, only the mount's bonus counts; the worst slow
+      multiplies; a normal-speed aura caps the bonuses.
+    - **Damage-over-time timing.** DoTs and ground spells keep their own cadence through late updates. Before, they
+      lost their last tick: Corruption did 3 of 4, and Blizzard 7 waves of 8.
+    - **Stealth's flag** goes in the visibility byte. Before, it was written into the form byte, so a prowling cat
+      read as Travel Form.
+    - **Parry** needs a weapon in hand, as mangos has it.
+    - **AFK** is refused in combat, as mangos has it, and party members see AFK and DND.
+    - **Pet names** may be in any one script, not ASCII only.
+    - **Merge note:** the 3f, 3d and 3a tests that waited for a parsed unroot now look for its frame, since its
+      packed guid is hand-encoded until the wow_messages repin.
+
+20. **Performance's hook rules** (docs/PERFORMANCE.md). The update now looks only at creatures a player sees or that
+    are fighting, and only at objects and auras that changed. New code must go through the hooks:
+    - `combat_mut` or `note_fighting` to put a creature in a fight;
+    - `map.rare.*` for charges, flights and calls for help;
+    - `caster_mut`, `auras_mut` and `gameobject_mut`.
+
+    Debug builds, and so every test, name a missed hook. Release builds would silently skip that creature.
+    - **Other choices:** dependencies build at opt-level 2 in dev, which costs one rebuild. An optional `pprof`
+      feature adds a profiler.
+    - **Left for later:** four looks through every creature remain (despawn timers, regeneration, pets, the
+      creature half of flushing values). So does the 2 KB `Creature` struct, whose split would make them cheap.
+    - **peon's release binary** was built before the appearance fix, which is why 11-19% of bots failed character
+      creation in these runs. Rebuild it.
+
+21. **3i's choices:**
+    - **EventAI actions** run their steps at once and ignore step delays, as Thistle Tea does. No row in the data
+      has one.
+    - **Command 83** now credits the step's creature or object. Before, it credited entry 0, so the 11 rows using it
+      gave no quest credit.
+    - **Pets** choose targets as mangos and Thistle Tea do: their own attackers, then their master's victim, then
+      their master's attackers.
+    - **A pet recalled to Follow** takes no new fight until it's back.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -308,12 +367,14 @@ the questions waiting for you.
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
-| Performance | running | |
-| 3a: matrix gaps, spells and auras | running | |
+| wow_messages fork round 2 (crash bugs, 7 layouts), repinned everywhere | merged | 3eacdd1 |
+| Performance (CPU −77% idle, −55% arena, −38% crowd; load ×10 faster) | merged | 8775d80 |
+| 3a: matrix gaps, spells and auras (195 rows) | merged | 5e26640 |
 | 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
 | 3f: matrix gaps, network and inbound (232 rows) | merged | |
+| 3i: matrix gaps, creature AI, EventAI, scripts, pets (263 rows) | merged | 0877908 |
 | 3c: matrix gaps, items, quests, loot, professions (241 rows) | merged | |
-| 3d: matrix gaps, player systems | running | |
+| 3d: matrix gaps, player systems (311 rows) | merged | 5e26640 |
 | 3e: matrix gaps, world systems (140 rows) | merged | |
 
 ## Left for later, and why

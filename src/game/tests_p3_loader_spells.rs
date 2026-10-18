@@ -470,8 +470,9 @@ fn the_real_aura_amounts_load_as_thistle_tea_reads_them() {
 
 /// Thistle Tea's exclusive kinds on the real spells
 /// (`slow_exclusivity_dbc_test.exs`, `consumable_stacking_dbc_test.exs`,
-/// `spell_elixir_test.exs`): class snares one at a time and a melee speed
-/// penalty its own, but a daze or a spell with other auras none; foods,
+/// `spell_elixir_test.exs`): a melee speed penalty its own, but a spell
+/// with other auras none, and snares none either (they stack, the user's
+/// call over Thistle Tea's one at a time, as mangos-classic); foods,
 /// drinks, both, and Well Fed; flasks by their `spell_elixir` mask, and no
 /// rule for an ordinary elixir's 0.
 #[test]
@@ -480,10 +481,10 @@ fn the_real_exclusive_kinds_are_thistle_teas() {
         return;
     };
     for id in [116, 120, 1715, 2974, 3409, 3600, 8056, 11_201] {
-        assert_eq!(exclusive(d, id), Some(Exclusive::Snare), "{id}");
+        assert_eq!(exclusive(d, id), None, "{id}");
     }
     // vmangos's spell_mod gives Concussive Shot and Piercing Howl the daze
-    // attribute: as a daze, no snare's.
+    // attribute.
     for id in [5116, 12_323] {
         assert!(spell(d, id).attributes[1] & 0x4_0000 != 0, "{id}");
         assert_eq!(exclusive(d, id), None, "{id}");
@@ -542,7 +543,7 @@ fn the_real_talents_and_chains_load_as_thistle_tea_reads_them() {
     };
     let tabs = |class: u32| {
         d.spells
-            .talent_tabs
+            .talent_tab_classes
             .values()
             .filter(|mask| **mask & (1 << (class - 1)) != 0)
             .count()

@@ -127,16 +127,18 @@ taken from the packet before they read what it counts. Those are a `/who`'s zone
 flight's nodes, a bidder's item list, a bug report's text, and the uncompressed size of an auth session's addon
 data or a ticket's chat. An absurd count asks for gigabytes. A `/who` that claims 4 billion search strings asks for
 96 GB, the allocation fails, and the process aborts (`memory allocation of 103079215080 bytes failed`). No guard can
-catch that, so one packet from any logged-in client took the whole server down. The reader now checks those counts
-against the packet's length (`conn::fits`) and drops the packet unread if it can't hold what it claims. The world
-handshake reads its `CMSG_AUTH_SESSION` the same way, so a client that hasn't authenticated yet can't make it
+catch that, so one packet from any logged-in client took the whole server down. The reader checked those counts
+against the packet's length (`conn::fits`) and dropped the packet unread. Since 12932's wow_messages fork at
+5b7f7f6, wow_messages reserves no more than the rest of the body could hold (decompressed data, no more than zlib
+could inflate it to), so such a packet is a parse error, or is read for what it holds, and the check is gone. That
+goes for the world handshake's `CMSG_AUTH_SESSION` too, so a client that hasn't authenticated yet can't make it
 reserve 4 GB either. (`a_packet_that_would_abort_the_server_is_dropped`,
 `packets_that_would_have_wow_messages_reserve_gigabytes_are_refused`,
 `the_world_handshake_reads_an_auth_session_and_refuses_an_absurd_one`)
 
 **A panic** in wow_messages' parser (compressed data that isn't zlib, or a body shorter than its own size field)
-used to end the reader task, and with it the connection. The parse is now guarded, so the packet is dropped and
-counts as a bad packet. Any other panic in the reader still ends the task. Its channel to the session is dropped,
+used to end the reader task, and with it the connection. Those are parse errors in the fork now; the parse is still
+guarded, as a backstop, so a panic drops the packet and counts as a bad packet. Any other panic in the reader still ends the task. Its channel to the session is dropped,
 so the session ends and disconnects the player, saved. A panic in the writer drops the socket's write half. The
 client sees the connection close, and the reader then ends at EOF, which ends the session the same way.
 

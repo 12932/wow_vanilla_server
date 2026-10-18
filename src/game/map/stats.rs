@@ -3,9 +3,10 @@
 use std::time::{Duration, Instant};
 
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::{Level, SMSG_LEVELUP_INFO};
+use wow_world_messages::vanilla::{
+    Level, SMSG_LEVELUP_INFO, SMSG_LOG_XPGAIN, SMSG_LOG_XPGAIN_ExperienceAwardType,
+};
 
-use crate::game::data::items::Body;
 use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::death::Death;
@@ -162,21 +163,22 @@ fn regen_player(p: &mut Player, now: Instant) {
     }
 }
 
-/// `SMSG_LOG_XPGAIN`, as mangos lays it out: a kill (type 0) names its
-/// victim and goes on with the experience before the rested bonus and the
-/// group's rate; anything else (type 1) ends at its type. wow_messages has
-/// the two the other way round.
-fn xp_gain(victim: Option<Guid>, total: u32, base: u32) -> std::sync::Arc<[u8]> {
-    let mut b = Body::default();
-    b.u64(victim.unwrap_or_default().guid()).u32(total);
-    match victim {
-        Some(_) => b.u8(0).u32(base).f32(1.0),
-        None => b.u8(1),
-    };
-    b.frame(SMSG_LOG_XPGAIN)
+/// `SMSG_LOG_XPGAIN`, as mangos lays it out: a kill names its victim and
+/// goes on with the experience before the rested bonus and the group's
+/// rate; anything else ends at its type.
+fn xp_gain(victim: Option<Guid>, total: u32, base: u32) -> SMSG_LOG_XPGAIN {
+    SMSG_LOG_XPGAIN {
+        target: victim.unwrap_or_default(),
+        total_exp: total,
+        exp_type: match victim {
+            Some(_) => SMSG_LOG_XPGAIN_ExperienceAwardType::Kill {
+                experience_without_rested: base,
+                exp_group_bonus: 1.0,
+            },
+            None => SMSG_LOG_XPGAIN_ExperienceAwardType::NonKill,
+        },
+    }
 }
-
-const SMSG_LOG_XPGAIN: u16 = 0x1D0;
 
 /// Give a player experience, levelling them up as it fills. `victim` is the
 /// creature it was for, if a kill.
@@ -198,7 +200,7 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
         Some(_) => amount + crate::game::map::rest::spend(p, amount, now),
         None => amount,
     };
-    p.outbound.send_frame(xp_gain(victim, amount, base));
+    p.outbound.send(&xp_gain(victim, amount, base));
     let mut xp = p.fields.get_u32(PLAYER_XP) + amount;
     let mut levels = 0;
     loop {
@@ -225,6 +227,7 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
 /// level-up message.
 pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) {
     let level = level.clamp(1, MAX_LEVEL);
+    let changed = p.level() != level;
     let before: Vec<u32> = (0..5)
         .map(|i| p.fields.get_u32(UNIT_FIELD_STAT0 + i))
         .collect();
@@ -238,7 +241,12 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
     crate::game::map::spells::refresh_talent_points(p, data);
     p.fields
         .set_u32(PLAYER_NEXT_LEVEL_XP, data.xp_to_level(level).max(1));
-    p.row.played_level = 0;
+    // The time played so far is the old level's; the new one's starts now
+    // (Thistle Tea's `PlayedTime.level_changed`), if it is a new one.
+    if changed {
+        p.count_played(Instant::now());
+        p.row.played_level = 0;
+    }
     let max_health = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
     let max_mana = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
     p.fields.set_u32(UNIT_FIELD_HEALTH, max_health);
@@ -264,6 +272,9 @@ pub fn set_level(p: &mut Player, data: &crate::game::data::GameData, level: u8) 
     });
     if level >= MAX_LEVEL {
         p.fields.set_u32(PLAYER_XP, 0);
+        // No more rest at the top: the pool goes (Thistle Tea's
+        // `Stats.apply` with no next level).
+        crate::game::map::rest::add_bonus(p, 0.0);
     }
 }
 

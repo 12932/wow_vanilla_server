@@ -197,6 +197,10 @@ pub fn summon_totem(
             None => p.owned.loose_totems.push(g),
         }
     }
+    // Its shaman's spell modifiers from the start, for the spell it works
+    // at once (Improved Fire Nova Totem's quicker pulse), as Thistle Tea's
+    // totem takes `owner_spell_modifiers` as it is made.
+    inherit::sync(map, g);
     // A totem whose spell lasts on it (a pulse, a ward) has it from the
     // start.
     if let Some(t) = data.spells.get(spell)

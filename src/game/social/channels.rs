@@ -184,7 +184,8 @@ impl Channel {
         self.send_all(realm, &b.frame(SMSG_CHANNEL_NOTIFY));
     }
 
-    /// A member goes; ownership passes on.
+    /// A member goes; ownership passes on, to the lowest GUID left (as
+    /// mangos's members, kept by GUID, and Thistle Tea's `transfer_owner`).
     fn remove(&mut self, realm: &Realm, g: Guid) {
         let was_owner = self.owner == g;
         self.members.retain(|m| m.guid != g);
@@ -195,7 +196,7 @@ impl Channel {
         }
         if was_owner {
             self.owner = Guid::zero();
-            if let Some(next) = self.members.first().map(|m| m.guid) {
+            if let Some(next) = self.members.iter().map(|m| m.guid).min_by_key(|g| g.guid()) {
                 self.set_owner(realm, next);
             }
         }

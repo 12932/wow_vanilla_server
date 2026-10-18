@@ -468,6 +468,10 @@ fn weather(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
         _ => return Some("Usage: .weather fine|rain|snow|storm [0..1] [permanent]|auto".into()),
     };
     let grade = float(args.get(1)).unwrap_or(0.5);
+    // A grade the client may be told, or none (Thistle Tea's `Weather.set/2`).
+    if !(0.0..=1.0).contains(&grade) {
+        return Some("The weather's grade is from 0 to 1.".into());
+    }
     let permanent = args.contains(&"permanent");
     crate::game::weather::set(&realm, zone, kind, grade, permanent);
     None
@@ -505,6 +509,18 @@ fn instance(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let Ok(id) = id.parse::<u32>() else {
                 return Some("Usage: .instance switch <id>".into());
             };
+            // Only into a copy of this map there is (Thistle Tea's
+            // `join_copy/3`).
+            let known = realm
+                .social
+                .instances
+                .lock()
+                .saves
+                .get(&id)
+                .is_some_and(|s| s.map == map.key.map);
+            if !known {
+                return Some(format!("No copy {id} of map {}.", map.key.map));
+            }
             let p = map.players.get(&g)?;
             let (at, o) = (p.position(), p.movement.orientation);
             let key = MapKey {
@@ -654,6 +670,7 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             p.caster.cooldowns.clear();
             p.caster.category_cooldowns.clear();
             p.caster.gcd_until = None;
+            p.caster.other_gcds.clear();
             for id in &spells {
                 p.outbound.send(&SMSG_CLEAR_COOLDOWN {
                     id: *id,

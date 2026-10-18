@@ -303,6 +303,9 @@ fn traded(map: &Map, g: Guid) -> Vec<usize> {
 }
 
 /// `CMSG_ACCEPT_TRADE`: when both have, it goes through.
+/// The most money a player may hold.
+const MAX_MONEY: u32 = 2_147_483_647;
+
 pub fn accept(map: &mut Map, g: Guid) {
     type S = SMSG_TRADE_STATUS_TradeStatus;
     let Some(with) = partner(map, g) else {
@@ -337,17 +340,36 @@ pub fn accept(map: &mut Map, g: Guid) {
         return;
     }
     let (mine, theirs) = (traded(map, g), traded(map, with));
-    for (side, give, get) in [(g, &mine, &theirs), (with, &theirs, &mine)] {
+    let offered = |side: Guid, idx: &[usize]| {
+        map.players.get(&side).map_or(Vec::new(), |p| {
+            idx.iter()
+                .map(|i| (p.items[*i].entry, p.items[*i].count()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let (mine_items, theirs_items) = (offered(g, &mine), offered(with, &theirs));
+    let money_of = |side: Guid| {
+        map.players
+            .get(&side)
+            .and_then(|p| p.trade.as_ref())
+            .map_or(0, |t| t.money)
+    };
+    let (mine_money, theirs_money) = (money_of(g), money_of(with));
+    for (side, give, get, paid) in [
+        (g, &mine, &theirs_items, theirs_money),
+        (with, &theirs, &mine_items, mine_money),
+    ] {
         let Some(p) = map.players.get(&side) else {
             return;
         };
         let money = p.trade.as_ref().map_or(0, |t| t.money);
-        let free = p
-            .carry_slots(&data)
-            .into_iter()
-            .filter(|(b, s)| p.item_at(*b, *s).is_none())
-            .count();
-        if p.money() < money || free + give.len() < get.len() {
+        // Room for what comes, in the slots what goes leaves and on the
+        // stacks there are; the money there to pay, and not past the most
+        // a player may hold (Thistle Tea's trade plan, mangos's
+        // `CanStoreItems` and money checks).
+        let room = crate::game::map::inventory::plan_change_freeing(p, &data, give, &[], get);
+        let rich = u64::from(p.money()) + u64::from(paid) > u64::from(MAX_MONEY) + u64::from(money);
+        if p.money() < money || room.is_err() || rich {
             for s in [g, with] {
                 if let Some(t) = map.players.get_mut(&s).and_then(|p| p.trade.as_mut()) {
                     t.accepted = false;

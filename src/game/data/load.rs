@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use ahash::{AHashMap, AHashSet};
-use rusqlite::types::Value;
+use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, OpenFlags, Row};
 use tracing::{error, info, warn};
 
@@ -12,17 +12,62 @@ use super::*;
 
 /// A row's columns by name, read leniently: a number may be stored as an
 /// integer or a real.
-pub(super) struct Cols<'a, 'b>(&'a Row<'b>);
+pub(super) struct Cols<'a, 'b> {
+    row: &'a Row<'b>,
+    names: &'a ColumnNames,
+}
+
+/// A statement's columns by name, found once rather than for each value of
+/// each row (rusqlite's lookup by name scans the columns). As in rusqlite,
+/// a name matches whatever its ASCII case, and the first such column wins.
+struct ColumnNames {
+    /// Each name as the statement has it, for the first column of each
+    /// case-blind name only: an exact hit is the column rusqlite would find.
+    exact: AHashMap<String, usize>,
+    /// Each name in lower case.
+    folded: AHashMap<String, usize>,
+}
+
+impl ColumnNames {
+    fn of(stmt: &rusqlite::Statement) -> Self {
+        let (mut exact, mut folded) = (AHashMap::new(), AHashMap::new());
+        for (i, name) in stmt.column_names().into_iter().enumerate() {
+            let lower = name.to_ascii_lowercase();
+            if !folded.contains_key(&lower) {
+                folded.insert(lower, i);
+                exact.insert(name.to_owned(), i);
+            }
+        }
+        Self { exact, folded }
+    }
+
+    fn index(&self, name: &str) -> Option<usize> {
+        self.exact
+            .get(name)
+            .or_else(|| self.folded.get(&name.to_ascii_lowercase()))
+            .copied()
+    }
+}
 
 impl Cols<'_, '_> {
+    /// The value of the column `name`, borrowed; NULL if there is none.
+    fn value_ref(&self, name: &str) -> ValueRef<'_> {
+        self.names
+            .index(name)
+            .and_then(|i| self.row.get_ref(i).ok())
+            .unwrap_or(ValueRef::Null)
+    }
     pub(super) fn value(&self, name: &str) -> Value {
-        self.0.get::<_, Value>(name).unwrap_or(Value::Null)
+        Value::try_from(self.value_ref(name)).unwrap_or(Value::Null)
     }
     pub(super) fn i64(&self, name: &str) -> i64 {
-        match self.value(name) {
-            Value::Integer(i) => i,
-            Value::Real(f) => f as i64,
-            Value::Text(t) => t.trim().parse().unwrap_or(0),
+        match self.value_ref(name) {
+            ValueRef::Integer(i) => i,
+            ValueRef::Real(f) => f as i64,
+            ValueRef::Text(t) => std::str::from_utf8(t)
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+                .unwrap_or(0),
             _ => 0,
         }
     }
@@ -37,10 +82,13 @@ impl Cols<'_, '_> {
         self.i64(name).clamp(0, 255) as u8
     }
     pub(super) fn f32(&self, name: &str) -> f32 {
-        match self.value(name) {
-            Value::Integer(i) => i as f32,
-            Value::Real(f) => f as f32,
-            Value::Text(t) => t.trim().parse().unwrap_or(0.0),
+        match self.value_ref(name) {
+            ValueRef::Integer(i) => i as f32,
+            ValueRef::Real(f) => f as f32,
+            ValueRef::Text(t) => std::str::from_utf8(t)
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+                .unwrap_or(0.0),
             _ => 0.0,
         }
     }
@@ -89,8 +137,9 @@ pub(super) fn rows<T>(conn: &Connection, sql: &str, mut f: impl FnMut(&Cols) -> 
             return Vec::new();
         }
     };
+    let names = ColumnNames::of(&stmt);
     let mut out = Vec::new();
-    let result = stmt.query_map([], |r| Ok(f(&Cols(r))));
+    let result = stmt.query_map([], |row| Ok(f(&Cols { row, names: &names })));
     match result {
         Ok(iter) => {
             for r in iter.flatten() {
@@ -1694,7 +1743,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     for (tab, classes) in rows(dbc, "SELECT * FROM TalentTab", |c| {
         (c.u32("id"), c.u32("class_mask"))
     }) {
-        s.talent_tabs.insert(tab, classes);
+        s.talent_tab_classes.insert(tab, classes);
     }
     for a in rows(dbc, "SELECT * FROM SkillLineAbility", |c| SkillAbility {
         skill: c.u32("skill_line"),
@@ -2379,6 +2428,11 @@ fn load_misc(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         m.exploration_xp.insert(level, xp);
     }
+    for (key, rate) in rows(db, "SELECT * FROM player_crit_per_agility", |c| {
+        ((c.u32("class") as u8, c.u32("level") as u8), c.f32("rate"))
+    }) {
+        m.crit_per_agility.insert(key, rate);
+    }
     for (entry, stone) in rows(
         db,
         "SELECT entry, data0, data1, data2 FROM gameobject_template WHERE type = 23",
@@ -2609,6 +2663,38 @@ mod tests {
         assert!(data.event_creatures.len() > 1000);
         assert!(data.weather.len() > 20);
         assert_eq!(data.battlegrounds[&2].max_players, 10);
+    }
+
+    #[test]
+    fn columns_are_read_by_name_whatever_their_case_and_leniently() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE a (Entry INTEGER, speed REAL, name TEXT, count TEXT, raw BLOB);
+             INSERT INTO a VALUES (7, 2.75, 'Hogger', ' 12 ', x'ff');
+             CREATE TABLE b (entry INTEGER, other INTEGER);
+             INSERT INTO b VALUES (99, 3);",
+        )
+        .unwrap();
+        let got = rows(&db, "SELECT * FROM a, b", |c| {
+            (
+                (c.u32("Entry"), c.u32("entry"), c.u32("ENTRY")),
+                (c.i64("speed"), c.f32("speed"), c.u8("missing")),
+                (c.string("name"), c.string("entry"), c.string("speed")),
+                (c.i32("count"), c.f32("count"), c.i64("raw")),
+                (c.value("raw"), c.value("nothing"), c.u32("other")),
+            )
+        });
+        assert_eq!(
+            got,
+            vec![(
+                // Of two columns named alike, the first.
+                (7, 7, 7),
+                (2, 2.75, 0),
+                ("Hogger".to_owned(), "7".to_owned(), String::new()),
+                (12, 12.0, 0),
+                (Value::Blob(vec![0xff]), Value::Null, 3),
+            )]
+        );
     }
 
     #[test]

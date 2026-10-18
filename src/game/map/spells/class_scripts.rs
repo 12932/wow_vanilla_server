@@ -220,6 +220,23 @@ pub fn check_target(map: &Map, caster: Guid, s: &SpellTemplate, target: Guid) ->
     {
         return Some(fail::TARGET_AURASTATE);
     }
+    // Conflagrate wants the caster's Immolate on its target (Thistle Tea's
+    // `check_warlock_target`).
+    if script(s, "spell_warlock_conflagrate")
+        && !auras::auras(map, target).is_some_and(|a| {
+            a.holders.iter().any(|h| {
+                h.caster == caster
+                    && map
+                        .realm
+                        .data
+                        .spells
+                        .get(h.spell)
+                        .is_some_and(|t| family_flag(t, FAMILY_WARLOCK, 0x4))
+            })
+        })
+    {
+        return Some(fail::TARGET_AURASTATE);
+    }
     // Mongoose Bite and Counterattack are at whoever opened their window.
     let window = if script(s, "spell_hunter_mongoose_bite") {
         map.combat(caster).and_then(|c| c.defense_window)
@@ -877,12 +894,20 @@ const REACTIVE_ARMOR: [(u32, [u32; 7]); 2] = [
     (ADAPTIVE_WARDING, [0, 0, 28765, 28768, 28766, 28769, 28770]),
 ];
 
+/// Whether `spell`'s procs are a script's answers alone: Holy Power's,
+/// Totemic Power's and the reactive armors'.
+pub fn answers(spell: u32) -> bool {
+    HEALING_POWER.iter().any(|(id, _)| *id == spell)
+        || REACTIVE_ARMOR.iter().any(|(id, _)| *id == spell)
+}
+
 /// A proc of `h` (on `owner`, `other` its other side) that a script says
 /// more of, as Thistle Tea's `ClassScript`, `HealingPower` and
 /// `ReactiveArmor` have it: Improved Blizzard's chill, Improved Mend Pet's
 /// cleanse, Corrupted Healing, the druid set's Rejuvenation and Regrowth
 /// gifts; Holy Power and Totemic Power for the healed one's class; and a
-/// school's answer from Obsidian Armor or Adaptive Warding.
+/// school's answer from Obsidian Armor or Adaptive Warding. Whether it
+/// answered.
 pub fn proc(
     map: &mut Map,
     owner: Guid,
@@ -890,12 +915,12 @@ pub fn proc(
     h: &Holder,
     spell: Option<u32>,
     outgoing: bool,
-) {
+) -> bool {
     let data = map.realm.data.clone();
     let by = spell.and_then(|id| data.spells.get(id));
     if !outgoing {
         let Some(answers) = REACTIVE_ARMOR.iter().find(|(id, _)| *id == h.spell) else {
-            return;
+            return false;
         };
         let armored = h.spell != ADAPTIVE_WARDING
             || auras::auras(map, owner).is_some_and(|a| {
@@ -913,11 +938,12 @@ pub fn proc(
             && answer != 0
         {
             cast_triggered(map, owner, answer, Some(owner));
+            return true;
         }
-        return;
+        return false;
     }
     if !map.unit_view(other).is_some_and(|u| u.alive) {
-        return;
+        return false;
     }
     let victim = map.unit_fields(other).map(|f| {
         (
@@ -935,9 +961,11 @@ pub fn proc(
         };
         if let Some(buff) = buff {
             cast_triggered(map, owner, buff, Some(other));
+            return true;
         }
-        return;
+        return false;
     }
+    let mut answered = false;
     for x in h
         .effects
         .iter()
@@ -971,9 +999,11 @@ pub fn proc(
             _ => None,
         };
         if let Some(trigger) = trigger {
+            answered = true;
             cast_triggered(map, owner, trigger, Some(other));
         }
     }
+    answered
 }
 
 /// `SMSG_FEIGN_DEATH_RESISTED`.

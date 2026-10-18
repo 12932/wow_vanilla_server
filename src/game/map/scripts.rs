@@ -83,6 +83,9 @@ pub struct Run {
     /// The EventAI event (its creature and index) that checks this run's
     /// result: if it fails, the event may fire again at once.
     pub checked: Option<(Guid, usize)>,
+    /// Its steps run at once, their delays aside: an EventAI event's
+    /// actions, as Thistle Tea runs them (`Run.start`'s `:direct`).
+    pub direct: bool,
 }
 
 /// The scripts running on a map.
@@ -131,6 +134,7 @@ pub fn start_checked(
         source,
         target,
         checked,
+        direct: table == ScriptTable::CreatureAi,
     });
     let i = map.scripts.runs.len() - 1;
     map.scripts.depth += 1;
@@ -175,7 +179,8 @@ fn advance(map: &mut Map, i: usize) {
             map.scripts.runs[i].next = usize::MAX;
             return;
         };
-        if run.started + Duration::from_millis(u64::from(step.delay_ms)) > map.now {
+        let delay = if run.direct { 0 } else { step.delay_ms };
+        if run.started + Duration::from_millis(u64::from(delay)) > map.now {
             return;
         }
         map.scripts.runs[i].next += 1;
@@ -548,9 +553,12 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
         26 => players_near(map, at, buddy_radius(p1))
             .into_iter()
             .find(|g| crate::game::map::combat::hostile(map, source, *g)),
+        // A friendly player, not merely one not hostile (vmangos's
+        // `AnyFriendlyUnitInObjectRangeCheck`, Thistle Tea's faction
+        // snapshot).
         27 => players_near(map, at, buddy_radius(p1))
             .into_iter()
-            .find(|g| !crate::game::map::combat::hostile(map, source, *g)),
+            .find(|g| crate::game::map::combat::friendly(map, source, *g)),
         28 => pick(
             creatures_near(map, at, p1, buddy_radius(p2), true)
                 .into_iter()
@@ -745,24 +753,6 @@ fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid, zone: Option<
     }
 }
 
-/// `SMSG_MESSAGECHAT`'s raid boss whisper, as 1.12 lays it out (mangos-zero's
-/// `BuildChatPacket`): the speaker's name, the one it whispers to, then the
-/// line. wow_messages has it without the name.
-fn boss_whisper(name: &str, target: Guid, line: &str, language: u32) -> std::sync::Arc<[u8]> {
-    const SMSG_MESSAGECHAT: u16 = 0x096;
-    const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x59;
-    let mut b = crate::game::data::items::Body::default();
-    b.u8(CHAT_MSG_RAID_BOSS_WHISPER)
-        .u32(language)
-        .u32(name.len() as u32 + 1)
-        .cstr(name)
-        .u64(target.guid())
-        .u32(line.len() as u32 + 1)
-        .cstr(line)
-        .u8(0);
-    b.frame(SMSG_MESSAGECHAT)
-}
-
 /// `speaker` says `line`, in the kind of message its chat type is: a yell
 /// (or zone yell), an emote (or zone emote), a boss emote or whisper, a
 /// whisper, or a say. Those with no sender's own guid carry the target's,
@@ -790,13 +780,12 @@ pub fn say(map: &mut Map, speaker: Guid, line: &str, chat_type: u32, language: u
             monster: target,
             monster_name: name,
         },
-        CHAT_BOSS_WHISPER => {
-            let frame = boss_whisper(&name, target, line, language);
-            if let Some(p) = map.players.get(&target) {
-                p.outbound.send_frame(frame);
-            }
-            return;
-        }
+        // 1.12's has the speaker's name before the one it whispers to
+        // (mangos-zero's `BuildChatPacket`).
+        CHAT_BOSS_WHISPER => SMSG_MESSAGECHAT_ChatType::RaidBossWhisper {
+            monster: target,
+            monster_name: name,
+        },
         _ => SMSG_MESSAGECHAT_ChatType::MonsterSay {
             sender1: speaker,
             sender_name: name,
@@ -1283,11 +1272,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // distance from it (2), or to a random point around one (3).
         // datalong2 is the travel time, datalong3 the options (1
         // pathfind, 2 walk, 4 run, 8 fly), datalong4 & 1 moves even a
-        // held creature and & 2 tells of point dataint on arrival.
+        // held or rooted creature (Thistle Tea's movement inhibition) and
+        // & 2 tells of point dataint on arrival.
         3 => {
+            let rooted = crate::game::map::auras::auras(map, source)
+                .is_some_and(|a| a.has(crate::game::map::auras::AURA_MOD_ROOT));
             if !guid::is_unit(source)
                 || !alive(map, source)
-                || (d4 & 0x1 == 0 && crate::game::map::auras::held(map, source, false))
+                || (d4 & 0x1 == 0 && (rooted || crate::game::map::auras::held(map, source, false)))
             {
                 return false;
             }
@@ -1417,22 +1409,27 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             };
             let other = if player == target { source } else { target };
             let quest = d1;
-            let near = d2 == 0
-                || map
-                    .position_of(other)
-                    .zip(map.position_of(player))
-                    .is_some_and(|(a, b)| dist(a, b) <= d2 as f32);
-            if near {
-                let players = if d3 != 0 {
-                    group_here(map, player)
+            let players = if d3 != 0 {
+                group_here(map, player)
+            } else {
+                vec![player]
+            };
+            // Each fails it for a dead creature, or out of reach, as
+            // mangos's and Thistle Tea's `QuestEventCredit` have it.
+            let dead = map.creature(other).is_some_and(|c| !c.alive());
+            for p in players {
+                let near = d2 == 0
+                    || map
+                        .position_of(other)
+                        .zip(map.position_of(p))
+                        .is_some_and(|(a, b)| dist(a, b) <= d2 as f32);
+                if dead || !near {
+                    fail_quest(map, p, quest);
                 } else {
-                    vec![player]
-                };
-                for p in players {
                     quest_explored(map, p, quest);
                 }
             }
-            near
+            true
         }
         // Kill credit, to the player or their group.
         8 => {
@@ -1630,13 +1627,22 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         // Morph to an entry's look (datalong2 0) or a display (1); 0 back.
+        // Not while dead, and an entry with no template is no look (mangos
+        // refuses the row as it loads; Thistle Tea skips it).
         23 | 24 => {
+            if !alive(map, source) {
+                return true;
+            }
             let display = if d1 == 0 {
                 0
             } else if d2 == 0 {
-                data.creature_template(d1)
+                let Some(d) = data
+                    .creature_template(d1)
                     .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
-                    .unwrap_or(0)
+                else {
+                    return true;
+                };
+                d
             } else {
                 d1
             };
@@ -1741,8 +1747,16 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             }
             !end
         }
+        // Evade: a living creature source, or the creature a player's
+        // step names (Thistle Tea's `enter_evade`); a corpse doesn't.
         33 => {
-            crate::game::map::ai::enter_evade(map, source);
+            let who = [source, target]
+                .into_iter()
+                .find(|g| map.creature(*g).is_some());
+            let Some(who) = who.filter(|g| alive(map, *g)) else {
+                return false;
+            };
+            crate::game::map::ai::enter_evade(map, who);
             true
         }
         // Home: the step's place (0), where it stands (1), or its spawn's
@@ -1964,11 +1978,22 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     hit
                 })
                 .map_or(0, |(l, _)| l);
+            if map.creature(source).is_none() {
+                return false;
+            }
+            // A list with no definition leaves the one it has (Thistle
+            // Tea's).
+            if list != 0 && !data.spells.creature_spells.contains_key(&list) {
+                return true;
+            }
             crate::game::map::spells::lists::set_list(map, source, list);
             true
         }
         // The source's guardians (of entry datalong, or all) go.
         56 => {
+            if !(guid::is_unit(source) || guid::is_player(source)) {
+                return false;
+            }
             crate::game::map::pets::remove_guardians(map, source, d1);
             true
         }
@@ -2130,13 +2155,27 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             crate::game::map::ai::respawn_forced(map, source, d1 != 0);
             true
         }
+        // Out of the fight: a creature with no victim, target or threat;
+        // a player, forgotten by the creatures that fought them (Thistle
+        // Tea's `combat_stop` and its threat drop).
         73 => {
             crate::game::map::combat::leave_combat(map, source);
             if let Some(c) = creature_mut(map, source) {
                 c.threat.clear();
+                c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+            }
+            if map.creature(source).is_some()
+                && let Some(c) = map.combat_mut(source)
+            {
+                c.victim = Guid::zero();
             }
             if map.creature(source).is_some() {
                 event_ai::combat_stopped(map, source, false);
+            } else if guid::is_player(source) {
+                if let Some(p) = map.players.get_mut(&source) {
+                    p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+                }
+                crate::game::map::ai::forget(map, source);
             }
             true
         }
@@ -2158,6 +2197,20 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             let Some(t) = data.gameobject_templates.get(&d1) else {
                 return false;
             };
+            // A coordinate the step leaves 0 is its summoner's (Thistle
+            // Tea's unspecified positions).
+            let (here, facing) = map
+                .unit_view(source)
+                .map(|u| (u.position, u.orientation))
+                .or_else(|| map.gameobject(source).map(|o| (o.position, o.orientation)))
+                .unwrap_or((pos, step.o));
+            let or = |v: f32, d: f32| if v == 0.0 { d } else { v };
+            let (x, y, z, o) = (
+                or(step.x, here.x),
+                or(step.y, here.y),
+                or(step.z, here.z),
+                or(step.o, facing),
+            );
             let counter = map.next_creature_counter;
             map.next_creature_counter += 1;
             let mut go = crate::game::map::gameobject::GameObject::from_spawn(
@@ -2166,11 +2219,11 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     guid: counter | 0x80_0000,
                     entry: d1,
                     map: map.key.map,
-                    x: step.x,
-                    y: step.y,
-                    z: step.z,
-                    orientation: step.o,
-                    rotation: [0.0, 0.0, (step.o / 2.0).sin(), (step.o / 2.0).cos()],
+                    x,
+                    y,
+                    z,
+                    orientation: o,
+                    rotation: [0.0, 0.0, (o / 2.0).sin(), (o / 2.0).cos()],
                     state: 1,
                     anim_progress: 100,
                     ..Default::default()
@@ -2219,17 +2272,18 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             set_object_state(map, o, d1);
             true
         }
-        // Quest credit: kill credit or exploration.
+        // Quest credit: the player's for the creature or object of the
+        // step, as an objective of its entry with no spell (vmangos's
+        // `RewardPlayerAndGroupAtCast`, Thistle Tea's interaction credit).
         83 => {
-            let Some(target) = script_player(source, target) else {
+            let Some(player) = script_player(source, target) else {
                 return false;
             };
-            if d2 != 0 {
-                quest_explored(map, target, d1);
-            } else {
-                let credit = guid::unit(d1, 0);
-                crate::game::map::quests::killed(map, target, credit);
+            let other = if player == target { source } else { target };
+            if !(guid::is_unit(other) || guid::is_game_object(other)) || !present(map, other) {
+                return false;
             }
+            cast_credit(map, player, 0, other);
             true
         }
         84 => {
@@ -2279,6 +2333,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // One of up to four scripts, by chance, for the source and each of
         // its group (grouped or not; a player's group is its party).
         90 => {
+            if !(guid::is_unit(source) || guid::is_player(source)) {
+                return false;
+            }
             let Some(script) = choose_script(step) else {
                 return false;
             };
@@ -2457,10 +2514,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // A pet's command: stay (its fight goes on, as vmangos's
         // HandlePetCommand and Thistle Tea's have it), follow, attack the
         // target, dismiss.
+        // A companion's command state. A creature that isn't one, or a
+        // command there is none of, changes nothing, and fails no script
+        // (Thistle Tea's).
         88 => {
-            if crate::game::map::pets::state(map, source).is_none() {
-                return false;
-            }
+            let Some(kind) = crate::game::map::pets::state(map, source).map(|s| s.kind) else {
+                return true;
+            };
             match d1 as u8 {
                 crate::game::map::pets::COMMAND_STAY => {
                     let at = map.position_of(source);
@@ -2475,6 +2535,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     if let Some(s) = crate::game::map::pets::state_mut(map, source) {
                         s.command = crate::game::map::pets::COMMAND_FOLLOW;
                         s.stay_at = None;
+                        s.returning = true;
                     }
                 }
                 crate::game::map::pets::COMMAND_ATTACK => {
@@ -2483,10 +2544,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     }
                     crate::game::map::pets::attack_target(map, source, target);
                 }
-                crate::game::map::pets::COMMAND_DISMISS => {
+                // A hunter's pet isn't dismissed so (mangos's "no action
+                // for hunter pets").
+                crate::game::map::pets::COMMAND_DISMISS
+                    if kind != crate::game::map::pets::Kind::Hunter =>
+                {
                     crate::game::map::pets::dismiss(map, source)
                 }
-                _ => return false,
+                _ => {}
             }
             true
         }
@@ -2605,13 +2670,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         }
         // The auras an evade would shed.
         C_CLEAR_AURAS => {
-            let held: Vec<u32> = map
-                .creature(source)
-                .map(|c| c.auras.holders.iter().map(|a| a.spell).collect())
-                .unwrap_or_default();
-            for spell in held {
-                crate::game::map::auras::remove_spell(map, source, spell, None);
-            }
+            crate::game::map::ai::shed_on_evade(map, source);
             true
         }
         // Linked feign death: get up after datalong ms unless every
@@ -2722,11 +2781,13 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             o = p[3];
         }
     }
+    // No place: its summoner's, and its facing (Thistle Tea's).
     if at.x == 0.0 && at.y == 0.0 && at.z == 0.0 {
         let Some(here) = map.position_of(source) else {
             return false;
         };
         at = here;
+        o = map.unit_view(source).map_or(o, |u| u.orientation);
     }
     let flags = step.dataint[0] as u32;
     // Unique: not if as many as allowed are within datalong4 yards (50
@@ -2923,17 +2984,17 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 }
             }
         }
+        // Wander x yards about its home, or (datalong2) where it stands:
+        // an anchor of its own, its home still its spawn's.
         1 => {
-            let here = map.position_of(source);
+            let here = map.position_of(source).filter(|_| d2 != 0);
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_RANDOM;
                 c.wander_distance = step.x.max(0.0);
-                if d2 != 0
-                    && let Some(h) = here
-                {
-                    c.home = h;
-                }
                 c.motion = Motion::Idle { until: Some(now) };
+            }
+            if let Some(s) = event_ai::scripted_mut(map, source) {
+                s.wander_anchor = here;
             }
         }
         // Its path (the spawn's, else the entry's), as START_WAYPOINTS
