@@ -1071,10 +1071,13 @@ pub fn apply_spell(
             clear_slot(map, target, slot);
         }
     }
+    // Taken off as any removal takes it off (`remove_where`): its returns
+    // recover, a cooldown waiting for it starts, a channel it was ends.
     for h in gone {
         for x in &h.effects {
             ended(map, target, &h, x);
         }
+        removed(map, target, &h);
     }
     // A slot for the new holder.
     let mut index =

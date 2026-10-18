@@ -562,3 +562,63 @@ async fn a_restored_aura_shows_and_gives_its_stacks() {
     assert_eq!(out.3, Some(5), "five stacks back");
     assert_eq!(out.2, out.1, "shown and given as before the logout");
 }
+
+/// An aura replaced by another (a higher rank of it) is taken off as any
+/// removal takes it: a cooldown waiting for it to go starts, rather than
+/// waiting for good with the spell never ready again.
+#[tokio::test]
+async fn an_aura_replaced_starts_the_cooldown_waiting_for_it() {
+    use crate::game::data::spells::SpellRank;
+    const RANK_1: u32 = 990_380;
+    const RANK_2: u32 = 990_381;
+    let realm = fast_realm(|d| {
+        for (id, rank) in [(RANK_1, 1), (RANK_2, 2)] {
+            let mut s = bare(id, 0);
+            s.duration_index = LASTS_LONG;
+            // Its cooldown starts when its aura goes (Stealth's way).
+            s.attributes[0] |= 0x200_0000;
+            s.recovery_time = 10_000;
+            effect(
+                &mut s,
+                0,
+                aura(crate::game::map::auras::AURA_MOD_STAT, 0, 10 * rank, 1),
+            );
+            d.spells.ranks.insert(
+                id,
+                SpellRank {
+                    first: RANK_1,
+                    rank: rank as u32,
+                    ..Default::default()
+                },
+            );
+            insert(d, [s]);
+        }
+    });
+    let (_c, rogue, map) = human(&realm, "R3RP", "Replaced", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            use super::tests_p3_spells_kit::{cast_fresh, has};
+            ready(m, rogue, 60, &[RANK_1, RANK_2]);
+            cast_fresh(m, rogue, RANK_1, at(rogue));
+            let waiting = m.caster(rogue).unwrap().pending_cooldowns.contains(&RANK_1);
+            if let Some(c) = m.caster_mut(rogue) {
+                c.gcd_until = None;
+            }
+            spells::cast(m, rogue, RANK_2, at(rogue), None);
+            let now = m.now;
+            let c = m.caster(rogue).unwrap();
+            (
+                waiting,
+                has(m, rogue, RANK_1),
+                has(m, rogue, RANK_2),
+                c.pending_cooldowns.contains(&RANK_1),
+                c.cooldowns.get(&RANK_1).is_some_and(|t| *t > now),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(out.0, "rank 1's cooldown waits for its aura");
+    assert_eq!((out.1, out.2), (false, true), "rank 2 took its place");
+    assert!(!out.3, "rank 1 waits no more");
+    assert!(out.4, "its cooldown started as it went");
+}
