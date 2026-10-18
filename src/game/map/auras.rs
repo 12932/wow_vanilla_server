@@ -2813,6 +2813,11 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
     // Its Hunter's Mark on another goes with it.
     crate::game::map::spells::single_target::caster_died(map, g);
     crate::game::map::spells::interrupt(map, g);
+    // Death forgets its diminishing returns (mangos's `ClearDiminishings`
+    // at `JUST_DIED`).
+    if let Some(c) = map.caster_mut(g) {
+        c.diminishing.clear();
+    }
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
     remove_where(map, g, |h| {
