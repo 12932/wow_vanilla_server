@@ -238,3 +238,26 @@ async fn a_place_on_deck_off_any_deck_is_dropped() {
     .await;
     assert_eq!(kept, Some(deck.x));
 }
+
+/// The first move after logging in is checked as every other is: one a
+/// long way from where the player came into the world is pulled back.
+#[tokio::test]
+async fn the_first_move_after_logging_in_is_checked() {
+    let realm = realm(GameData::empty(), false, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = map_of(&realm, g);
+    let at = on(&map, move |m| m.players[&g].position()).await;
+    a.clear();
+    a.heartbeat(at.x + 500.0, at.y, at.z).await;
+    let back = a
+        .gets(Duration::from_secs(2), |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.position),
+            _ => None,
+        })
+        .await;
+    let back = back.expect("pulled back");
+    assert!((back.x - at.x).abs() < 0.01, "to where she was: {back:?}");
+    let now = on(&map, move |m| m.players[&g].position()).await;
+    assert!((now.x - at.x).abs() < 0.01, "and there: {now:?}");
+}

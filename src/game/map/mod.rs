@@ -736,6 +736,8 @@ impl Map {
         p.observers.clear();
         p.cell = grid::cell_of(p.position().x, p.position().y);
         p.vis_anchor = p.position();
+        // The client's first move is checked from where it came in.
+        p.move_check = Some((p.position(), self.now));
         self.grid.insert(p.guid, p.cell);
         self.players.insert(p.guid, p);
     }
