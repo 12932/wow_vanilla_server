@@ -1148,9 +1148,11 @@ pub fn apply_spell(
     }
     let h = auras(map, target).map(|a| a.holders[index].clone());
     // A refresh renews the children it links, or makes again one taken off
-    // (Thistle Tea's `Linked`).
+    // (Thistle Tea's `Linked`); not one a link made, so a link back to its
+    // parent ends there rather than going round.
     if let Some(h) = &h
         && refreshed.is_some()
+        && !ctx.linked
     {
         for x in h.effects.iter().filter(|x| x.kind == AURA_LINKED) {
             linked(map, target, h, x.trigger);
