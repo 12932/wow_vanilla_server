@@ -1892,12 +1892,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         42 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_melee = d1 == 0;
+                s.melee_on = d1 != 0;
             }
             true
         }
         43 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_combat_movement = d1 == 0;
+                s.combat_movement_on = d1 != 0;
             }
             true
         }
@@ -2007,7 +2009,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         // React state: 0 passive, 1 defensive, 2 aggressive.
+        // React state: 0 passive, 1 defensive, 2 aggressive; another, or
+        // a source not a creature, fails (Thistle Tea's `set_react_state`).
         59 => {
+            if d1 > 2 || map.creature(source).is_none() {
+                return false;
+            }
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 use crate::game::map::assistance::Reaction;
                 s.passive = d1 == 0;

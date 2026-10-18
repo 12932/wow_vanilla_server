@@ -1387,8 +1387,9 @@ fn land(
             }
             let mechanic = s.effects[i].mechanic;
             if mechanic != 0
-                && !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-                && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic))
+                && ((!s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                    && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic)))
+                    || crate::game::map::creature_combat::effect_immune(map, aim, caster, mechanic))
             {
                 *on = false;
                 immune = true;

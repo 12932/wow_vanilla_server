@@ -1515,3 +1515,256 @@ async fn a_spawns_addon_sets_its_posture_and_it_takes_it_back_at_home() {
     })
     .await;
 }
+
+/// A sessile brute (`static_flags1` 0x100), and a combat dummy (sessile,
+/// and no melee: 0x100000).
+const ROOTED_BRUTE: u32 = 3_797;
+const DUMMY: u32 = 3_798;
+
+/// Thistle Tea's `BT.tick` on creature flags (`Blackboard.combat_movement?`
+/// and `melee_enabled?`, mangos's `SetAIImmobilizedState` and
+/// `NO_MELEE_FLEE`): a sessile creature doesn't chase but swings in reach;
+/// a combat dummy neither swings nor chases; and a script's say lets it do
+/// both.
+#[tokio::test]
+async fn sessile_creatures_stand_and_combat_dummies_neither_swing_nor_chase() {
+    let mut d = data();
+    for (entry, flags) in [(ROOTED_BRUTE, 0x100), (DUMMY, 0x0010_0100)] {
+        let mut t = template(entry, 7);
+        t.static_flags1 = flags;
+        d.creature_templates.insert(entry, t);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let (far, near, dummy, freed) = on(&map, move |m| {
+        hardy(m, ga);
+        let far = spawn(m, ga, ROOTED_BRUTE, 20, 15.0);
+        let near = spawn(m, ga, ROOTED_BRUTE, 20, 1.0);
+        let dummy = spawn(m, ga, DUMMY, 20, 1.0);
+        let freed = spawn(m, ga, DUMMY, 20, 15.0);
+        for g in [far, near, dummy, freed] {
+            crate::game::map::ai::attacked(m, g, ga);
+        }
+        for (command, on) in [(42, 1), (43, 1)] {
+            let step = crate::game::tests_p3_entity::step(command, [on, 0, 0, 0]);
+            scripts::execute(m, &step, freed, Guid::zero());
+        }
+        (far, near, dummy, freed)
+    })
+    .await;
+    let start = on(&map, move |m| {
+        [far, freed].map(|g| m.position_of(g).unwrap())
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let out = on(&map, move |m| {
+        let moved =
+            |g: Guid, from| crate::game::map::combat::dist(m.position_of(g).unwrap(), from) > 0.5;
+        let swung = |g: Guid| {
+            m.creature(g)
+                .unwrap()
+                .combat
+                .next_swing
+                .is_some_and(|t| t > m.now)
+        };
+        (
+            moved(far, start[0]),
+            swung(near),
+            swung(dummy),
+            moved(freed, start[1]),
+            m.creature(dummy).unwrap().combat.attacking,
+        )
+    })
+    .await;
+    assert!(!out.0, "the sessile brute doesn't chase");
+    assert!(out.1, "but swings in reach");
+    assert!(!out.2, "the dummy doesn't swing");
+    assert!(out.4, "though it's in the fight");
+    assert!(out.3, "a script's say lets one chase");
+}
+
+/// Thistle Tea's `set_react_state` (script command 59) and
+/// `CreatureReaction.set`: each mode taken, another refused (ending the
+/// script when its step aborts on failure), and from a player refused; a
+/// creature made passive in a fight keeps its victim; and its mode outlasts
+/// the fight and its respawn.
+#[tokio::test]
+async fn a_scripts_react_state_is_taken_kept_and_refused_as_it_should_be() {
+    use crate::game::map::assistance::{Reaction, reaction};
+    let d = linked(&[(341, 340, 0)]);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(341)).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let g = of(340);
+        let react = |m: &mut Map, source: Guid, mode: u32, abort: bool| {
+            let mut step = crate::game::tests_p3_entity::step(59, [mode, 0, 0, 0]);
+            if abort {
+                step.data_flags |= crate::game::data::scripts::SF_ABORT_ON_FAILURE;
+            }
+            scripts::execute(m, &step, source, Guid::zero())
+        };
+        let modes = [0, 1, 2].map(|mode| {
+            react(m, g, mode, false);
+            reaction(m, g)
+        });
+        let refused = (react(m, g, 3, true), react(m, g, 3, false), reaction(m, g));
+        let from_player = react(m, ga, 0, true);
+        // Passive mid-fight, it keeps at its victim.
+        crate::game::map::ai::attacked(m, g, ga);
+        react(m, g, 0, false);
+        let c = m.creature(g).unwrap();
+        let kept = (c.combat.attacking, c.combat.victim == ga);
+        crate::game::map::ai::enter_evade(m, g);
+        let after_fight = reaction(m, g);
+        die(m, ga, 340);
+        crate::game::map::ai::respawn_now(m, g);
+        (
+            modes,
+            refused,
+            from_player,
+            kept,
+            after_fight,
+            reaction(m, g),
+        )
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        [Reaction::Passive, Reaction::Defensive, Reaction::Aggressive]
+    );
+    assert_eq!(
+        out.1,
+        (false, true, Reaction::Aggressive),
+        "mode 3 refused, ending the script only when it aborts"
+    );
+    assert!(!out.2, "a player has no react state");
+    assert_eq!(out.3, (true, true), "passive, it keeps its victim");
+    assert_eq!(out.4, Reaction::Passive, "after the fight");
+    assert_eq!(out.5, Reaction::Passive, "and after its respawn");
+}
+
+/// A creature immune to stuns (mechanic 12) and to fire, and the spells
+/// cast at it: a blow with a stun on its second effect, the same with the
+/// stun the spell's own mechanic, that with no immunities, fire and frost
+/// blows, and a stun alone.
+const WARDED: u32 = 3_799;
+const BLOW_AND_STUN: u32 = 97_940;
+const STUNNING_BLOW: u32 = 97_941;
+const UNSTOPPABLE_BLOW: u32 = 97_942;
+const FIRE_BLOW: u32 = 97_943;
+const FROST_BLOW: u32 = 97_944;
+const STUN: u32 = 97_945;
+
+fn warded() -> GameData {
+    use crate::game::data::spells::{ATTR_EX3_ALWAYS_HIT, ATTR_NO_IMMUNITIES, SpellEffect};
+    let mut d = data();
+    let mut t = template(WARDED, 7);
+    t.mechanic_immune_mask = 1 << 11;
+    t.school_immune_mask = 0x4;
+    d.creature_templates.insert(WARDED, t);
+    let blow = SpellEffect {
+        effect: 2,
+        base_points: 99,
+        base_dice: 1,
+        die_sides: 1,
+        target_a: 6,
+        ..Default::default()
+    };
+    let stun = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_MOD_STUN,
+        mechanic: 12,
+        target_a: 6,
+        ..Default::default()
+    };
+    for (id, effects, mechanic, school, extra) in [
+        (BLOW_AND_STUN, vec![blow, stun], 0, 0, 0),
+        (STUNNING_BLOW, vec![blow, stun], 12, 0, 0),
+        (
+            UNSTOPPABLE_BLOW,
+            vec![blow, stun],
+            12,
+            0,
+            ATTR_NO_IMMUNITIES,
+        ),
+        (FIRE_BLOW, vec![blow], 0, 2, 0),
+        (FROST_BLOW, vec![blow], 0, 4, 0),
+        (STUN, vec![stun], 0, 0, 0),
+    ] {
+        let mut s = crate::game::tests_p3_entity::spell(id, &effects);
+        s.mechanic = mechanic;
+        s.school = school;
+        s.range_index = 1;
+        s.duration_index = 9;
+        s.attributes[0] |= extra;
+        s.attributes[3] |= ATTR_EX3_ALWAYS_HIT;
+        d.spells.spells.insert(id, s);
+    }
+    d.spells.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 10_000,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's `CreatureImmunity` and creature school immunity, as
+/// mangos's `Creature::IsImmuneToSpell` and `IsImmuneToSpellEffect` have
+/// them: an effect's mechanic the template is immune to keeps off that
+/// effect alone, the blow landing; the spell's own mechanic keeps off the
+/// whole spell, unless it has no immunities, when the effect's mechanic
+/// still keeps its stun off; a school it is immune to keeps off that
+/// school's spells, not another's; and a stun put on it directly is kept
+/// off too.
+#[tokio::test]
+async fn a_creatures_immunities_keep_off_a_spell_or_only_its_effect() {
+    let (_realm, _a, ga, map) = setup_with(warded(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let mut rows = Vec::new();
+        for spell in [
+            BLOW_AND_STUN,
+            STUNNING_BLOW,
+            UNSTOPPABLE_BLOW,
+            FIRE_BLOW,
+            FROST_BLOW,
+        ] {
+            let g = spawn(m, ga, WARDED, 20, 3.0);
+            let before = m.creature(g).unwrap().fields.get_u32(UNIT_FIELD_HEALTH);
+            crate::game::map::spells::cast_triggered(m, ga, spell, Some(g));
+            let c = m.creature(g).unwrap();
+            rows.push((
+                spell,
+                c.fields.get_u32(UNIT_FIELD_HEALTH) < before,
+                c.auras.has(crate::game::map::auras::AURA_MOD_STUN),
+            ));
+        }
+        let g = spawn(m, ga, WARDED, 20, 3.0);
+        let stun = m.realm.data.spells.get(STUN).cloned().unwrap();
+        let direct = crate::game::map::auras::apply_spell(
+            m,
+            ga,
+            g,
+            &stun,
+            &[(0, 0)],
+            crate::game::map::auras::Context::default(),
+        )
+        .is_err();
+        (rows, direct)
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        [
+            (BLOW_AND_STUN, true, false),
+            (STUNNING_BLOW, false, false),
+            (UNSTOPPABLE_BLOW, true, false),
+            (FIRE_BLOW, false, false),
+            (FROST_BLOW, true, false),
+        ],
+        "(spell, struck, stunned)"
+    );
+    assert!(out.1, "a stun put on it directly is refused");
+}

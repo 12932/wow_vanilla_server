@@ -596,9 +596,10 @@ pub fn school_immune(map: &Map, g: Guid, school: u32) -> bool {
     school != 0 && template(map, g).is_some_and(|t| t.school_immune_mask & school != 0)
 }
 
-/// Whether a creature's template stops `spell` from `caster`: its mechanic
-/// or an effect's, or, if harmful, its school (Thistle Tea's
-/// `CreatureImmunity.spell?`).
+/// Whether a creature's template stops `spell` from `caster`: its mechanic,
+/// or, if harmful, its school (mangos's `Creature::IsImmuneToSpell`,
+/// Thistle Tea's `CreatureImmunity.spell?`). An effect's own mechanic stops
+/// that effect alone ([`effect_immune`]).
 pub fn spell_immune(map: &Map, target: Guid, caster: Guid, spell: &SpellTemplate) -> bool {
     if target == caster
         || !guid::is_unit(target)
@@ -607,11 +608,15 @@ pub fn spell_immune(map: &Map, target: Guid, caster: Guid, spell: &SpellTemplate
         return false;
     }
     mechanic_immune(map, target, spell.mechanic)
-        || spell
-            .effects
-            .iter()
-            .any(|e| e.effect != 0 && mechanic_immune(map, target, e.mechanic))
         || (!auras::positive(spell) && school_immune(map, target, spell.school_mask()))
+}
+
+/// Whether a creature's template stops one effect of `spell` from
+/// `caster`, by the effect's mechanic, whatever the spell's attributes
+/// (mangos's `Creature::IsImmuneToSpellEffect`, Thistle Tea's
+/// `CreatureImmunity.effect?`).
+pub fn effect_immune(map: &Map, target: Guid, caster: Guid, mechanic: u32) -> bool {
+    target != caster && guid::is_unit(target) && mechanic_immune(map, target, mechanic)
 }
 
 /// Whether fleeing is barred: an aura that prevents it, feigned death,

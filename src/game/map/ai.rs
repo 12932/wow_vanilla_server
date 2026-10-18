@@ -508,6 +508,12 @@ fn respawn(map: &mut Map, g: Guid) {
         .as_deref()
         .and_then(|s| s.temp_faction)
         .filter(|t| t.flags & crate::game::map::event_ai::FACTION_RESTORE_RESPAWN == 0);
+    // So does a reaction a script set (Thistle Tea's `CreatureReaction`
+    // over `Mob.respawn`; mangos's AI keeps its react state).
+    let reaction = old
+        .scripted
+        .as_deref()
+        .and_then(|s| s.reaction.map(|r| (r, s.passive)));
     let data = map.realm.data.clone();
     let spawn = spawn_guid.and_then(|sg| {
         data.creature_spawns
@@ -548,7 +554,27 @@ fn respawn(map: &mut Map, g: Guid) {
         match m {
             // The same spawn back keeps the faction a script left it.
             Member::Creature(s) => {
-                spawn_creature_with(map, s, faction.filter(|_| s == spawn.guid));
+                let same = s == spawn.guid;
+                spawn_creature_with(map, s, faction.filter(|_| same));
+                if same
+                    && let Some((r, passive)) = reaction
+                    && let Some(g) = crate::game::map::scripts::creature_of_spawn(map, s)
+                {
+                    let hostile = map.creature(g).is_some_and(|c| c.hostile_to_players);
+                    if let Some(sc) = crate::game::map::event_ai::scripted_mut(map, g) {
+                        sc.reaction = Some(r);
+                        sc.passive = passive;
+                    }
+                    // As the script's command left it (scripts.rs, 59).
+                    use crate::game::map::assistance::Reaction;
+                    if let Some(c) = map.creature_mut(g) {
+                        c.hostile_to_players = match r {
+                            Reaction::Passive => false,
+                            Reaction::Defensive => hostile,
+                            Reaction::Aggressive => true,
+                        };
+                    }
+                }
             }
             Member::Object(s) => pools::spawn_object(map, s),
             Member::Pool(_) => {}
