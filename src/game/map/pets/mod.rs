@@ -337,7 +337,7 @@ pub fn effect(
     let e = s.effects[index];
     // The stacking trinkets' hit scripts ride the same hook.
     if crate::game::map::trinkets::handles(s) {
-        crate::game::map::trinkets::effect(map, caster, s);
+        crate::game::map::trinkets::effect(map, caster, target, s);
         return;
     }
     if teaches_pet(s, index) {
