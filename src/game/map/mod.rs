@@ -777,6 +777,23 @@ impl Map {
         self.realm.registry.go_offline(p.guid);
     }
 
+    /// Save the players and records an item or money just moved between,
+    /// in one transaction (`Store::save_together`), so that a crash after
+    /// it neither loses nor copies what moved. Each player's periodic save
+    /// waits its interval again.
+    pub fn save_together(&mut self, players: &[Guid], records: crate::game::store::Records) {
+        let now = self.now;
+        let mut rows = Vec::with_capacity(players.len());
+        for &guid in players {
+            pets::sync_record(self, guid);
+            if let Some(p) = self.players.get_mut(&guid) {
+                rows.push(p.to_row(now));
+                p.save_at = now + self.realm.config.save_interval;
+            }
+        }
+        self.realm.store.save_together(rows, records);
+    }
+
     pub fn save_player(&mut self, guid: Guid) {
         pets::sync_record(self, guid);
         let now = self.now;
