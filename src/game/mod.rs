@@ -92,6 +92,8 @@ mod tests_p3_cast_class;
 #[cfg(test)]
 mod tests_p3_cast_kit;
 #[cfg(test)]
+mod tests_p3_cast_mage;
+#[cfg(test)]
 mod tests_p3_cast_priest;
 #[cfg(test)]
 mod tests_p3_combat;
