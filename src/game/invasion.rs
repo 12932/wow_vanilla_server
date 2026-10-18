@@ -249,7 +249,20 @@ pub fn sweep(realm: &Realm) {
         let mut rng = rand::rng();
         let mut started = Vec::new();
         let mut stopped = Vec::new();
-        for z in &ZONES {
+        // Won, the invasion is over: the Scourge leave every zone and none
+        // falls again (Thistle Tea's `over?` and `reset`).
+        let over = s.victories >= LAST_VICTORY;
+        if over {
+            for z in &ZONES {
+                if s.active.remove(&z.zone) {
+                    stopped.push(*z);
+                }
+                s.attack_at.insert(z.zone, t);
+            }
+            s.remaining.clear();
+            s.bolts.clear();
+        }
+        for z in ZONES.iter().filter(|_| !over) {
             let attack_at = t + rng.random_range(FEWEST_ATTACK_SECS..=MOST_ATTACK_SECS);
             if !s.active.contains(&z.zone) {
                 if s.attack_at.get(&z.zone).copied().unwrap_or(0) < t && s.active.len() > 1 {

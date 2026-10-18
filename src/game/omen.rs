@@ -4,7 +4,10 @@
 //! cluster launchers wake the lake: the third brings his minions out, the
 //! twentieth calls Omen up from the water, unless he fell less than fifteen
 //! minutes ago. While he is out the launches go uncounted; the minions stay
-//! until he leaves the world.
+//! until he leaves the world: his corpse gone, or himself, alive, after two
+//! hours out of a fight (a summon of despawn type 9).
+
+use std::time::Duration;
 
 use wow_world_messages::Guid;
 
@@ -17,11 +20,18 @@ const MINIONS_AT: u32 = 3;
 const OMEN_AT: u32 = 20;
 const REST_SECS: i64 = 15 * 60;
 const RISES_AT: (f32, f32, f32, f32) = (7_560.01, -2_838.36, 449.575, 4.01426);
+/// Omen's time in the world, out of a fight (Thistle Tea's
+/// `@omen_lifetime_ms`, despawn type `@timed_combat_or_dead`).
+const LIFETIME: Duration = Duration::from_secs(2 * 3_600);
+const TIMED_COMBAT_OR_DEAD: i32 = 9;
 
 #[derive(Debug, Clone, Default)]
 pub struct Watch {
     pub fireworks: u32,
+    /// Omen out and alive: the launches go uncounted.
     pub omen: Option<Guid>,
+    /// Omen in the world, alive or his corpse: his minions stay with him.
+    pub body: Option<Guid>,
     pub minions: bool,
     pub rests_until: i64,
 }
@@ -72,24 +82,46 @@ pub fn use_object(map: &mut Map, object: Guid) -> bool {
         {
             c.spawn_guid = None;
             c.summoned_at = Some(map.now);
+            let s = c.scripted.get_or_insert_with(Default::default);
+            s.despawn_type = TIMED_COMBAT_OR_DEAD;
+            s.despawn_after = Some(LIFETIME);
+            s.despawn_at = Some(map.now + LIFETIME);
             let g = map.add_creature(c);
-            realm.social.omen.lock().omen = Some(g);
+            let mut w = realm.social.omen.lock();
+            w.omen = Some(g);
+            w.body = Some(g);
         }
     }
     true
 }
 
-/// A creature died: Omen fallen rests the lake, and his minions go.
+/// A creature died: Omen fallen rests the lake for fifteen minutes. His
+/// minions stay until his corpse goes.
 pub fn creature_died(map: &mut Map, entry: u32) {
+    if entry != OMEN {
+        return;
+    }
+    let mut w = map.realm.social.omen.lock();
+    w.omen = None;
+    w.rests_until = now() + REST_SECS;
+}
+
+/// A creature left the world (its corpse gone, or itself despawned): Omen
+/// gone takes his minions with him (Thistle Tea's `MinionsOfOmen.gone`).
+/// One who never fell may be called again at once.
+pub fn left(map: &mut Map, g: Guid, entry: u32) {
     if entry != OMEN {
         return;
     }
     let realm = map.realm.clone();
     {
         let mut w = realm.social.omen.lock();
+        if w.body != Some(g) {
+            return;
+        }
+        w.body = None;
         w.omen = None;
         w.minions = false;
-        w.rests_until = now() + REST_SECS;
     }
     crate::game::events::drive(&realm, MINIONS_OF_OMEN, false);
 }

@@ -1391,6 +1391,7 @@ impl Map {
         {
             event_ai::summoned_despawned(self, s, guid, c.entry);
         }
+        crate::game::omen::left(self, guid, c.entry);
         Some(c)
     }
 
