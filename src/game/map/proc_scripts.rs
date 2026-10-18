@@ -220,7 +220,12 @@ pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> O
     if let Some((_, heal)) = BLESSED_RECOVERY.iter().find(|(s, _)| *s == id) {
         let pct = amount_of(h, &[auras::AURA_PROC_TRIGGER_SPELL], 0);
         if e.damage > 0 && pct > 0 {
-            let amount = e.damage as i32 * pct / 300 + i32::from(rng.random_bool(0.5));
+            // A third of its share a tick, the fraction rounded up as often
+            // as it is of one (Thistle Tea's unbiased rounding): a whole
+            // share is never rounded.
+            let share = e.damage as i32 * pct;
+            let fraction = (share % 300) as f64 / 300.0;
+            let amount = share / 300 + i32::from(rng.random_bool(fraction));
             aura_with(map, owner, owner, *heal, amount);
         }
         return Outcome::Done;

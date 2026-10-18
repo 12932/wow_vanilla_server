@@ -468,3 +468,274 @@ async fn bestial_wraths_immunities_come_and_go_with_it() {
     assert_eq!(ran_out, (false, 0));
     assert_eq!(dead, 0);
 }
+
+const SHADOWGUARD: [(u32, u32); 6] = [
+    (18137, 28377),
+    (19308, 28378),
+    (19309, 28379),
+    (19310, 28380),
+    (19311, 28381),
+    (19312, 28382),
+];
+
+/// A melee blow from `actor` landed on `target`.
+fn blow(actor: Guid, target: Guid, ex: u32, damage: u32) -> Event {
+    Event {
+        actor,
+        target,
+        actor_flags: procs::PROC_DONE_MELEE,
+        target_flags: procs::PROC_TAKEN_MELEE,
+        ex,
+        damage,
+        school: 1,
+        ..Default::default()
+    }
+}
+
+/// Thistle Tea's `ProcSpell` for Shadowguard: each rank strikes the one
+/// who hit the priest with its own rank's bolt.
+#[tokio::test]
+#[ignore = "extended"]
+async fn shadowguard_strikes_back_at_every_rank() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, priest, map) =
+        player(&realm, "P3Q13", "Guardone", Race::Human, Class::Priest).await;
+    let hurt = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            let mut hurt = Vec::new();
+            for (rank, _) in SHADOWGUARD {
+                let kobold = dummy(m, priest, 60, 3.0);
+                apply(m, priest, priest, rank);
+                procs::trigger(m, blow(kobold, priest, procs::EX_NORMAL_HIT, 10));
+                hurt.push(health(m, kobold) < 1_000_000);
+                auras::remove_spell(m, priest, rank, None);
+            }
+            hurt
+        })
+        .await
+        .unwrap();
+    assert_eq!(hurt, [true; 6]);
+    for (_, bolt) in SHADOWGUARD {
+        assert!(saw_go(&mut c, bolt).await, "{bolt}");
+    }
+}
+
+const MANA_DRAIN_TRIGGER: u32 = 27522;
+const MANA_DRAIN_ENERGIZE: u32 = 29471;
+const MANA_DRAIN_LEECH: u32 = 27526;
+
+/// Thistle Tea's Mana Drain: a melee or ranged blow that lands gives its
+/// wearer mana and drains its target, two spells; one that misses or is
+/// dodged, or a spell, neither. With charges and a cooldown, the two
+/// spend one charge and share one cooldown.
+#[tokio::test]
+#[ignore = "extended"]
+async fn mana_drain_gives_and_drains_on_a_blow_that_lands() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        if let Some(s) = d.spells.spells.get_mut(&MANA_DRAIN_TRIGGER) {
+            s.proc_charges = 2;
+        }
+        d.spells.proc_events.insert(
+            MANA_DRAIN_TRIGGER,
+            crate::game::data::spells::ProcEvent {
+                cooldown: 1_000,
+                ..Default::default()
+            },
+        );
+    });
+    let (mut c, paladin, map) =
+        player(&realm, "P3Q14", "Drainone", Race::Human, Class::Paladin).await;
+    let got = map
+        .query(move |m| {
+            ready(m, paladin, 60, &[]);
+            let kobold = dummy(m, paladin, 60, 3.0);
+            apply(m, paladin, paladin, MANA_DRAIN_TRIGGER);
+            let charges = |m: &Map| holder(m, paladin, MANA_DRAIN_TRIGGER).map(|h| h.charges);
+            let mut out = Vec::new();
+            for ex in [procs::EX_MISS, procs::EX_DODGE] {
+                procs::trigger(m, blow(paladin, kobold, ex, 0));
+                out.push(charges(m));
+            }
+            let mut spell = blow(paladin, kobold, procs::EX_NORMAL_HIT, 10);
+            spell.actor_flags = procs::PROC_DONE_NEGATIVE_SPELL;
+            procs::trigger(m, spell);
+            out.push(charges(m));
+            procs::trigger(m, blow(paladin, kobold, procs::EX_NORMAL_HIT, 10));
+            out.push(charges(m));
+            m.now += Duration::from_millis(999);
+            procs::trigger(m, blow(paladin, kobold, procs::EX_NORMAL_HIT, 10));
+            out.push(charges(m));
+            m.now += Duration::from_millis(1);
+            procs::trigger(m, blow(paladin, kobold, procs::EX_NORMAL_HIT, 10));
+            out.push(charges(m));
+            out
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        got,
+        [Some(2), Some(2), Some(2), Some(1), Some(1), None],
+        "nothing on a miss, a dodge or a spell; a charge a blow, a second apart"
+    );
+    assert!(saw_go(&mut c, MANA_DRAIN_ENERGIZE).await);
+    assert!(saw_go(&mut c, MANA_DRAIN_LEECH).await);
+}
+
+const BLESSED_RECOVERY: [(u32, i32, u32); 3] =
+    [(27811, 8, 27813), (27815, 16, 27817), (27816, 25, 27818)];
+
+/// Thistle Tea's Blessed Recovery: a crit weapon blow taken gives each
+/// rank's heal over time a third of its share of the damage a tick (8, 16
+/// and 25 of 300), not a plain one, nor a spell's crit; the damage is
+/// what the absorbs left; a fraction is rounded up as often as it is of
+/// one; a killing blow gives none.
+#[tokio::test]
+#[ignore = "extended"]
+async fn blessed_recovery_heals_a_share_of_a_crit_blow() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        let ward = made_up(RESIST_ALL, 6, auras::AURA_SCHOOL_ABSORB, 1, 50);
+        d.spells.spells.insert(RESIST_ALL, ward);
+    });
+    let (_c, priest, map) = player(&realm, "P3Q15", "Recoverone", Race::Human, Class::Priest).await;
+    let got = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            let kobold = dummy(m, priest, 60, 3.0);
+            let amount = |m: &mut Map, heal: u32| {
+                let a = holder(m, priest, heal).map(|h| h.effects[0].amount);
+                auras::remove_spell(m, priest, heal, None);
+                a
+            };
+            let mut ranks = Vec::new();
+            for (rank, _, heal) in BLESSED_RECOVERY {
+                apply(m, priest, priest, rank);
+                procs::trigger(m, blow(kobold, priest, procs::EX_CRITICAL_HIT, 300));
+                ranks.push(amount(m, heal));
+                auras::remove_spell(m, priest, rank, None);
+            }
+            let (rank, _, heal) = BLESSED_RECOVERY[2];
+            apply(m, priest, priest, rank);
+            procs::trigger(m, blow(kobold, priest, procs::EX_NORMAL_HIT, 300));
+            let plain = amount(m, heal);
+            let mut spell = blow(kobold, priest, procs::EX_CRITICAL_HIT, 300);
+            spell.target_flags = procs::PROC_TAKEN_NEGATIVE_SPELL;
+            spell.spell = Some(FROSTBOLT);
+            procs::trigger(m, spell);
+            let by_spell = amount(m, heal);
+            // A third of 25% of 100: 8 or 9.
+            let mut fractions = std::collections::BTreeSet::new();
+            for _ in 0..64 {
+                procs::trigger(m, blow(kobold, priest, procs::EX_CRITICAL_HIT, 100));
+                fractions.insert(amount(m, heal));
+            }
+            // A real crit from the kobold of 400, fifty of it absorbed.
+            if let Some(k) = m.creature_mut(kobold) {
+                k.fields.set_f32(UNIT_FIELD_MINDAMAGE, 200.0);
+                k.fields.set_f32(UNIT_FIELD_MAXDAMAGE, 200.0);
+            }
+            apply(m, priest, priest, RESIST_ALL);
+            let full = m
+                .unit_fields(priest)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_MAXHEALTH));
+            set_health(m, priest, full);
+            crate::game::map::combat::FORCED_OUTCOME
+                .with(|f| f.set(Some(crate::game::map::combat::Outcome::Crit)));
+            let now = m.now;
+            if let Some(cb) = m.combat_mut(kobold) {
+                cb.victim = priest;
+                cb.attacking = true;
+                cb.next_swing = Some(now);
+            }
+            crate::game::map::combat::try_swing(m, kobold);
+            let lost = full - health(m, priest);
+            let absorbed = amount(m, heal);
+            // A killing crit.
+            set_health(m, priest, 1);
+            if let Some(cb) = m.combat_mut(kobold) {
+                cb.next_swing = Some(now);
+            }
+            crate::game::map::combat::try_swing(m, kobold);
+            crate::game::map::combat::FORCED_OUTCOME.with(|f| f.set(None));
+            let dead = (health(m, priest), amount(m, heal));
+            (ranks, plain, by_spell, fractions, (lost, absorbed), dead)
+        })
+        .await
+        .unwrap();
+    let (ranks, plain, by_spell, fractions, (lost, absorbed), dead) = got;
+    assert_eq!(ranks, [Some(8), Some(16), Some(25)]);
+    assert_eq!((plain, by_spell), (None, None), "a crit weapon blow alone");
+    assert_eq!(
+        fractions.into_iter().collect::<Vec<_>>(),
+        [Some(8), Some(9)],
+        "8 and a third rounded either way"
+    );
+    assert!(lost > 0);
+    let share = lost as i32 * 25;
+    assert!(
+        absorbed == Some(share / 300) || absorbed == Some(share / 300 + 1),
+        "a third of 25% of the {lost} left: {absorbed:?}"
+    );
+    assert_eq!(dead, (0, None), "nothing from a killing blow");
+}
+
+const PERSISTENT_SHIELD: u32 = 26467;
+const PERSISTENT_SHIELD_ABSORB: u32 = 26470;
+const LESSER_HEAL: u32 = 2050;
+
+/// Thistle Tea's Persistent Shield: a direct heal of 1,001 shields the
+/// healed for 15% of it, 150; not one healed dead, nor a heal of nothing,
+/// a harmful spell or a heal's tick.
+#[tokio::test]
+#[ignore = "extended"]
+async fn persistent_shield_shields_the_directly_healed() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, priest, map) = player(&realm, "P3Q16", "Shieldone", Race::Human, Class::Priest).await;
+    let (_d, friend, _) = player(&realm, "P3Q17", "Shieldtwo", Race::Human, Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            ready(m, friend, 60, &[]);
+            apply(m, priest, priest, PERSISTENT_SHIELD);
+            let shield = |m: &mut Map, flags: u32, damage: u32| {
+                procs::trigger(
+                    m,
+                    Event {
+                        actor: priest,
+                        target: friend,
+                        actor_flags: flags,
+                        ex: procs::EX_NORMAL_HIT,
+                        spell: Some(LESSER_HEAL),
+                        damage,
+                        school: 2,
+                        ..Default::default()
+                    },
+                );
+                let a = holder(m, friend, PERSISTENT_SHIELD_ABSORB).map(|h| h.effects[0].amount);
+                auras::remove_spell(m, friend, PERSISTENT_SHIELD_ABSORB, None);
+                a
+            };
+            let healed = shield(m, procs::PROC_DONE_POSITIVE_SPELL, 1_001);
+            let nothing = shield(m, procs::PROC_DONE_POSITIVE_SPELL, 0);
+            let harmful = shield(m, procs::PROC_DONE_NEGATIVE_SPELL, 1_001);
+            let tick = shield(m, procs::PROC_DONE_PERIODIC, 1_001);
+            crate::game::map::death::kill(m, friend);
+            let dead = shield(m, procs::PROC_DONE_POSITIVE_SPELL, 1_001);
+            (healed, nothing, harmful, tick, dead)
+        })
+        .await
+        .unwrap();
+    assert_eq!(got, (Some(150), None, None, None, None));
+}

@@ -147,8 +147,16 @@ pub fn trigger(map: &mut Map, e: Event) {
     if e.actor_flags != 0 {
         run(map, e.actor, e.target, e.actor_flags, &e, true, from_proc);
     }
-    if e.target_flags != 0 && e.target != e.actor {
-        run(map, e.target, e.actor, e.target_flags, &e, false, from_proc);
+    // A victim the blow killed procs nothing but its being killed (mangos's
+    // `ProcDamageAndSpell`: `canProcVictim` wants it alive): no Blessed
+    // Recovery from a killing crit.
+    let target_flags = if map.unit_view(e.target).is_some_and(|u| u.alive) {
+        e.target_flags
+    } else {
+        e.target_flags & PROC_KILLED
+    };
+    if target_flags != 0 && e.target != e.actor {
+        run(map, e.target, e.actor, target_flags, &e, false, from_proc);
     }
     if landed(e.ex) && !from_proc {
         // Weapons' enchantments and chance-on-hit spells.
