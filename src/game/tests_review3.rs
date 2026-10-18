@@ -320,3 +320,74 @@ async fn a_creature_turning_mid_fight_keeps_its_leash_origin() {
     assert!(out.2, "its leash still from where the fight began");
     assert!(out.3, "and the fight's start kept");
 }
+
+/// `g` attacking `victim` in reach, with the swings `hand_due` says due.
+fn swinging_at(
+    m: &mut crate::game::map::Map,
+    g: wow_world_messages::Guid,
+    victim: wow_world_messages::Guid,
+) {
+    let now = m.now;
+    let p = m.players.get_mut(&g).unwrap();
+    p.combat.attacking = true;
+    p.combat.victim = victim;
+    p.combat.next_swing = Some(now + std::time::Duration::from_secs(10));
+    p.combat.next_offhand = Some(now + std::time::Duration::from_secs(10));
+}
+
+/// A blow that kills its own striker (a damage shield's answer) ends its
+/// swings: the extra attacks owed don't swing from the corpse.
+#[tokio::test]
+async fn a_striker_killed_by_a_damage_shield_swings_no_more() {
+    const THORNS: u32 = 990_370;
+    let realm = fast_realm(|d| {
+        let mut thorns = bare(THORNS, 3);
+        thorns.duration_index = LASTS_LONG;
+        effect(
+            &mut thorns,
+            0,
+            aura(crate::game::map::auras::AURA_DAMAGE_SHIELD, 0, 5_000, 1),
+        );
+        insert(d, [thorns]);
+    });
+    let (_c, warrior, map) = human(&realm, "R3DS", "Thorned", Class::Warrior).await;
+    let (_c2, friend, _) = human(&realm, "R3DT", "Friend", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            use super::tests_p3_spells_kit::{apply_template, set_health};
+            use crate::game::map::combat;
+            ready(m, warrior, 60, &[]);
+            let k = dummy(m, warrior, 60, 2.0);
+            let t = m.realm.data.spells.get(THORNS).unwrap().clone();
+            apply_template(m, k, k, &t);
+            set_health(m, warrior, 100);
+            // Someone else on its list, so the striker's death doesn't send
+            // it home whole.
+            crate::game::map::ai::attacked(m, k, friend);
+            crate::game::map::ai::add_threat(m, k, friend, 1.0);
+            swinging_at(m, warrior, k);
+            m.players.get_mut(&warrior).unwrap().combat.extra_attacks = 3;
+            combat::FORCED_OUTCOME.with(|f| f.set(Some(combat::Outcome::Hit)));
+            let before = health(m, k);
+            combat::try_swing(m, warrior);
+            combat::FORCED_OUTCOME.with(|f| f.set(None));
+            let after = health(m, k);
+            // One blow's worth, against three.
+            let one = m
+                .unit_fields(warrior)
+                .map(|f| f.get_f32(crate::game::fields::UNIT_FIELD_MAXDAMAGE))
+                .unwrap_or(0.0);
+            (health(m, warrior), before - after, one)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, 0, "the shield killed the striker");
+    assert!(out.1 > 0, "its first blow landed");
+    assert!(
+        (out.1 as f32) <= out.2 + 1.0,
+        "and only the first: {} dealt, a blow at most {}",
+        out.1,
+        out.2
+    );
+}
+

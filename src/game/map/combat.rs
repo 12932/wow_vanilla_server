@@ -1530,7 +1530,7 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
             c.in_extra_attack = true;
         }
         for _ in 0..owed {
-            if !map.unit_view(victim).is_some_and(|u| u.alive) {
+            if !still_swinging(map, attacker, victim) {
                 break;
             }
             swing(map, attacker, victim, Hand::Main, true);
@@ -1554,12 +1554,23 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         crate::game::map::spells::cast_triggered(map, attacker, spell, Some(victim));
         return;
     }
-    if main_due && map.unit_view(victim).is_some_and(|u| u.alive) {
+    if main_due && still_swinging(map, attacker, victim) {
         swing(map, attacker, victim, Hand::Main, false);
     }
-    if off_due && map.unit_view(victim).is_some_and(|u| u.alive) {
+    if off_due && still_swinging(map, attacker, victim) {
         swing(map, attacker, victim, Hand::Off, false);
     }
+}
+
+/// Whether `attacker` goes on swinging at `victim` after a blow: both
+/// alive (a damage shield's answer may have killed the striker), and the
+/// attack not stopped.
+fn still_swinging(map: &Map, attacker: Guid, victim: Guid) -> bool {
+    map.unit_view(victim).is_some_and(|u| u.alive)
+        && map.unit_view(attacker).is_some_and(|u| u.alive)
+        && map
+            .combat(attacker)
+            .is_some_and(|c| c.attacking && c.victim == victim)
 }
 
 /// One swing of `hand`, landed or not. An extra attack leaves the timer
