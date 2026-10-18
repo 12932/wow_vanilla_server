@@ -74,6 +74,8 @@ pub enum Fail {
     /// A bank bag slot not bought.
     MustPurchaseBagSlot,
     BankFull,
+    /// Not ammunition, where only ammunition goes.
+    OnlyAmmo,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -206,6 +208,11 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::BankFull => R::BankFull {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::OnlyAmmo => R::OnlyAmmoCanGoHere {
             bag_type_subclass: s,
             item1: a,
             item2: b,

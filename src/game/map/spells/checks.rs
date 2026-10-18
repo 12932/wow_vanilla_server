@@ -211,7 +211,7 @@ pub(crate) fn unit_type_allowed(map: &Map, s: &SpellTemplate, g: Guid) -> bool {
 }
 
 /// Whether `caster` has the item `s` needs equipped.
-fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
+pub(crate) fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
     // No spell asks for a consumable (class 0): 0 and -1 are none.
     if s.equipped_item_class <= 0 {
         return true;
