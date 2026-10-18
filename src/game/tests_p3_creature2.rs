@@ -2203,3 +2203,114 @@ async fn a_channel_answers_joins_passwords_ignores_and_invitations() {
         "Dave not asked"
     );
 }
+
+/// A brute's hold on its path (script command 201), driven by hand: the
+/// creature, and its hold's state.
+fn hold(m: &mut Map, g: Guid, ms: u32, signal: bool, release: u32, expired: u32) {
+    let mut step = crate::game::tests_p3_entity::step(
+        scripts::C_HOLD_WAYPOINTS,
+        [ms, u32::from(signal), 0, 0],
+    );
+    step.dataint = [release as i32, expired as i32, 0, 0];
+    scripts::execute(m, &step, g, Guid::zero());
+}
+
+fn holding(m: &Map, g: Guid) -> bool {
+    event_ai::scripted(m, g).is_some_and(|s| s.hold.is_some())
+}
+
+/// Thistle Tea's `wait_until_waypoint_ready` and `WaypointHold`: a hold
+/// waits until the summons made since it began are gone, those alive
+/// before it not counted, then runs its release script; a signal hold
+/// waits for its release; one that runs out unreleased runs its expired
+/// script instead, and a summons hold that runs out lets go all the same.
+#[tokio::test]
+async fn a_held_path_waits_on_its_summons_or_its_signal_and_runs_its_release() {
+    use crate::game::data::scripts::ScriptStep;
+    let mut d = data();
+    // Scripts 1 and 2 set the creature's phase to 1 and 2.
+    for id in [1u32, 2] {
+        d.scripts.generic.insert(
+            id,
+            vec![ScriptStep {
+                id,
+                command: 44,
+                datalong: [id, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let at = |m: &Map, g: Guid| m.creature(g).unwrap().position;
+        let tick = |m: &mut Map, g: Guid| {
+            let now = m.now;
+            if let Some(h) = event_ai::scripted_mut(m, g).and_then(|s| s.hold.as_mut()) {
+                h.ready_at = now;
+            }
+            event_ai::hold_tick(m, g);
+        };
+        let phase = |m: &Map, g: Guid| event_ai::phase(m, g);
+        let runs_out = |m: &mut Map, g: Guid| {
+            let now = m.now;
+            if let Some(h) = event_ai::scripted_mut(m, g).and_then(|s| s.hold.as_mut()) {
+                h.until = now;
+            }
+            event_ai::hold_tick(m, g);
+        };
+        // Summons: an earlier companion, then an ambusher since.
+        let g = spawn(m, ga, BRUTE, 20, 10.0);
+        let p = at(m, g);
+        let companion = scripts::summon(m, g, BRUTE, p, 0.0, None).unwrap();
+        hold(m, g, 400_000, false, 1, 0);
+        let ambusher = scripts::summon(m, g, BRUTE, p, 0.0, None).unwrap();
+        tick(m, g);
+        let waits = holding(m, g);
+        crate::game::map::combat::deal_damage(m, ga, ambusher, 10_000_000);
+        tick(m, g);
+        let released = (
+            !holding(m, g),
+            phase(m, g),
+            m.creature(companion).is_some_and(|c| c.alive()),
+        );
+        // A signal hold.
+        let s = spawn(m, ga, BRUTE, 20, 11.0);
+        hold(m, s, 600_000, true, 1, 2);
+        tick(m, s);
+        let signal_waits = holding(m, s);
+        let release = crate::game::tests_p3_entity::step(scripts::C_RELEASE_WAYPOINTS, [0; 4]);
+        scripts::execute(m, &release, s, Guid::zero());
+        event_ai::hold_tick(m, s);
+        let signal_released = (!holding(m, s), phase(m, s));
+        // A signal hold run out, unreleased: the expired script.
+        let e = spawn(m, ga, BRUTE, 20, 12.0);
+        hold(m, e, 5_000, true, 1, 2);
+        runs_out(m, e);
+        let expired = (!holding(m, e), phase(m, e));
+        // A summons hold run out lets go.
+        let o = spawn(m, ga, BRUTE, 20, 13.0);
+        hold(m, o, 5_000, false, 0, 0);
+        let _ = scripts::summon(m, o, BRUTE, at(m, o), 0.0, None).unwrap();
+        runs_out(m, o);
+        (
+            waits,
+            released,
+            signal_waits,
+            signal_released,
+            expired,
+            !holding(m, o),
+        )
+    })
+    .await;
+    assert!(out.0, "held while its ambusher lives");
+    assert_eq!(
+        out.1,
+        (true, 1, true),
+        "released, the companion not waited on"
+    );
+    assert!(out.2, "a signal hold waits");
+    assert_eq!(out.3, (true, 1), "released by its signal");
+    assert_eq!(out.4, (true, 2), "run out unreleased: the expired script");
+    assert!(out.5, "a summons hold run out lets go");
+}

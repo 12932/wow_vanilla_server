@@ -1603,9 +1603,8 @@ pub fn phase(map: &Map, g: Guid) -> u32 {
     scripted(map, g).map_or(0, |s| s.phase)
 }
 
-/// Whether a script (or a main-ranged spell) stopped the creature chasing
-/// or swinging.
-/// A sessile creature doesn't chase unless a script lets it (mangos's
+/// Whether the creature chases: not if a script (or a main-ranged spell)
+/// stopped it, nor, sessile, unless a script lets it (mangos's
 /// `SetAIImmobilizedState`, Thistle Tea's `combat_movement?`).
 pub fn combat_movement(map: &Map, g: Guid) -> bool {
     let s = scripted(map, g);
