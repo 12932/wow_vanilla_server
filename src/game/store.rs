@@ -154,6 +154,9 @@ pub struct CharacterState {
     pub last_talent_wipe: i64,
     /// The hunter's pets and the warlock's demon.
     pub pets: PetsState,
+    /// The bank's bag slots bought (`PLAYER_BYTES_2`'s third byte), as
+    /// mangos keeps `bankBagSlots`.
+    pub bank_bag_slots: u8,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

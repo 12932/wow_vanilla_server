@@ -446,7 +446,15 @@ impl Player {
             row.hair_color,
         );
         // Facial hair, -, bank bag slots, rest state (normal).
-        f.set_bytes(PLAYER_BYTES_2, row.facial_hair, 0, 0, 2);
+        f.set_bytes(
+            PLAYER_BYTES_2,
+            row.facial_hair,
+            0,
+            row.state
+                .bank_bag_slots
+                .min(crate::game::map::npc::MAX_BANK_BAG_SLOTS),
+            2,
+        );
         f.set_bytes(PLAYER_BYTES_3, row.gender, 0, 0, 0);
         f.set_u32(PLAYER_XP, row.xp);
         f.set_u32(
@@ -632,6 +640,7 @@ impl Player {
         row.state.action_bar_toggles = f.get_byte(PLAYER_FIELD_BYTES, 2);
         row.state.drunk = self.drunk.value;
         row.state.ammo = f.get_u32(PLAYER_AMMO_ID);
+        row.state.bank_bag_slots = f.get_byte(PLAYER_BYTES_2, 2);
         // What's sold stays to be bought back this session only (Thistle
         // Tea's `Buyback.logout`).
         row.items = self
