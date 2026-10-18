@@ -9,6 +9,8 @@ pub mod assistance;
 pub mod auction;
 pub mod auras;
 pub mod battleground;
+#[cfg(all(feature = "world-bench", unix))]
+pub mod bench_probe;
 pub mod boss_mechanics;
 pub mod charge;
 pub mod chat;
@@ -490,6 +492,20 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
         MapEvent::Packet(g, _) => Some(*g),
         _ => None,
     };
+    #[cfg(all(feature = "world-bench", unix))]
+    let _probe = bench_probe::enabled().then(|| {
+        let kind = match &event {
+            MapEvent::Arrive(a) => match a.kind {
+                ArrivalKind::Login(_) => "a login",
+                ArrivalKind::Transfer(_) => "a transfer",
+            },
+            MapEvent::Packet(_, m) => m.message_name(),
+            MapEvent::Disconnect(_) => "a disconnect",
+            MapEvent::Call(_) => "a call",
+            MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
+        };
+        EventProbe(map.key, bench_probe::thread_cpu(), Instant::now(), kind)
+    });
     match guarded(map, "an event", |m| m.handle_event(event)) {
         Some(stop) => stop,
         None => {
@@ -498,6 +514,18 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
             }
             false
         }
+    }
+}
+
+/// An event's CPU time, for the world benchmark, when it is dropped.
+#[cfg(all(feature = "world-bench", unix))]
+struct EventProbe(MapKey, Duration, Instant, &'static str);
+
+#[cfg(all(feature = "world-bench", unix))]
+impl Drop for EventProbe {
+    fn drop(&mut self) {
+        let cpu = bench_probe::thread_cpu().saturating_sub(self.1);
+        bench_probe::event_done(self.0, cpu, self.2.elapsed(), self.3);
     }
 }
 
@@ -920,6 +948,11 @@ impl Map {
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;
+        #[cfg(all(feature = "world-bench", unix))]
+        let probe_cpu = bench_probe::enabled().then(|| {
+            bench_probe::update_started();
+            bench_probe::thread_cpu()
+        });
 
         // Each step under its own guard: one that panics costs itself,
         // this once, and the rest (the flushes most of all) go on.
@@ -973,6 +1006,10 @@ impl Map {
         self.stats.window_total += took;
         self.stats.window_max = self.stats.window_max.max(took);
         self.stats.max_update = self.stats.max_update.max(took);
+        #[cfg(all(feature = "world-bench", unix))]
+        if let Some(cpu) = probe_cpu {
+            bench_probe::update_done(self, took, bench_probe::thread_cpu().saturating_sub(cpu));
+        }
         if took > UPDATE_INTERVAL {
             warn!(
                 "{} update took {} ms ({} players, {} creatures)",
