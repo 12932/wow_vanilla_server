@@ -137,6 +137,11 @@ the questions waiting for you.
 41. **Cancelling Stealth while Vanish is on** (from 3q). Should both come off, as Thistle Tea has it? mangos's
     `CMSG_CANCEL_AURA` takes only the spell named, so Vanish keeps the rogue stealthed. wvs follows mangos for now.
 
+42. **An interrupt on a creature immune to silence** (from 3m). Should it still lock out the school? mangos-classic
+    locks it; Thistle Tea, following vmangos, spares the creature. wvs locks it.
+43. **A fear that damage may break** (from 3m). Should a fear without the damage-interrupt flag break on damage by
+    chance, as mangos-classic does? wvs doesn't break it.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -539,6 +544,17 @@ the questions waiting for you.
     - **Not copied from Thistle Tea**, where mangos sets nothing: Ghost Wolf's 0.8 scale and reach, and a
       disguise's scale.
 
+38. **3m's choices** (spells and classes, finished):
+    - **Silence and pacify** go by the spell's prevention type, as mangos-classic has it. Pacify stops a wand's
+      Shoot, and neither stops the Hearthstone.
+    - **Lower ranks stay known** beside a higher one, as mangos keeps them. Thistle Tea drops them; this is
+      question 37.
+    - **A cooldown that waits for its aura** holds its category's other spells too.
+    - **A heal's threat** goes by `spell_threat`, and a spell of no threat makes none.
+    - **Combustion and its crit** come and go together.
+    - **A wow_messages bug, found and left:** `CMSG_CAST_SPELL` reads a corpse's GUID after the location fields,
+      where 1.12 sends it before them. Fixing it means reading the packet by hand, or a fork fix like the others.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -584,6 +600,7 @@ the questions waiting for you.
 | 3q: auras (167 rows) | merged | d437cd0 |
 | 3n: the player (68 rows) | merged | a3d93c0 |
 | 3o: the loaders (100 rows) | merged | b9f364f |
+| 3m: spells and classes | merged | d70cd01 |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
