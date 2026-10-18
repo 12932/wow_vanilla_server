@@ -254,6 +254,10 @@ mod tests_p3_player2_chars;
 #[cfg(test)]
 mod tests_p3_player2_gear;
 #[cfg(test)]
+mod tests_p3_player2_gm;
+#[cfg(test)]
+mod tests_p3_player2_home;
+#[cfg(test)]
 mod tests_p3_player2_npc;
 #[cfg(test)]
 mod tests_p3_player2_quests;

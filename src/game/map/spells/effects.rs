@@ -1065,6 +1065,7 @@ fn effect(
             }
         }
         EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
+            let data = map.realm.data.clone();
             let pct = e.effect == EFFECT_DURABILITY_DAMAGE_PCT;
             let slot = e.misc_value;
             // -1 is what is worn, -2 that and what is carried in the bags
@@ -1099,13 +1100,18 @@ fn effect(
                 super::log::durability(map, caster, s.id, target, entry);
             }
             if let Some(p) = map.players.get_mut(&target) {
+                let mut turned = false;
                 for it in p.items.iter_mut().filter(|i| scoped(i)) {
                     let max = it.fields.get_u32(ITEM_FIELD_MAXDURABILITY);
                     let now = it.fields.get_u32(ITEM_FIELD_DURABILITY);
-                    it.fields.set_u32(
-                        ITEM_FIELD_DURABILITY,
-                        crate::game::map::vendor::worn(max, now, amount, pct),
-                    );
+                    let then = crate::game::map::vendor::worn(max, now, amount, pct);
+                    it.fields.set_u32(ITEM_FIELD_DURABILITY, then);
+                    turned |= max > 0 && (now == 0) != (then == 0);
+                }
+                // Gear broken or mended gives what it gives no more, or
+                // again.
+                if turned {
+                    p.apply_stats(&data);
                 }
                 p.gear_dirty = true;
             }
