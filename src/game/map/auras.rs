@@ -919,6 +919,10 @@ pub fn apply_spell(
     if pos && matches!(spell.mechanic, 16 | 19 | 25) && existing.mechanic_immune(spell.mechanic) {
         return Err(Refused::Immune);
     }
+    // A depleting trinket's bonus comes only with its trinket's aura.
+    if crate::game::map::trinkets::orphan(existing, spell.id, caster) {
+        return Err(Refused::Bounced);
+    }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
     // A weaker attack-speed slow doesn't take a stronger one's place, nor
     // one as strong that lasts less: it is passed over, the rest of its
@@ -1037,17 +1041,28 @@ pub fn apply_spell(
     let mut gone = Vec::new();
     let mut kept_slot = None;
     let mut refreshed = None;
+    // The same spell from the same caster and item: refreshed, and a stack
+    // more.
+    let same = |h: &Holder| {
+        h.spell == spell.id
+            && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
+            && h.item == ctx.item
+    };
+    let beat = existing.holders.iter().find(|h| same(h)).map(|old| {
+        crate::game::map::spells::heartbeat::refreshed(
+            map,
+            caster,
+            spell,
+            old.heartbeat,
+            holder.heartbeat,
+            holder.duration,
+        )
+    });
     {
         let Some(a) = auras_mut(map, target) else {
             return Ok(());
         };
-        // The same spell from the same caster and item: refreshed, and a
-        // stack more.
-        if let Some(i) = a.holders.iter().position(|h| {
-            h.spell == spell.id
-                && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
-                && h.item == ctx.item
-        }) {
+        if let Some(i) = a.holders.iter().position(same) {
             let old = &mut a.holders[i];
             let stacks = if spell.stack_amount > 1 {
                 (old.stacks + 1).min(spell.stack_amount)
@@ -1060,14 +1075,12 @@ pub fn apply_spell(
                 .map(|x| (x.effect, x.next_tick, x.ticks))
                 .collect();
             let slot = old.slot;
-            let beat = old.heartbeat;
             *old = Holder {
                 stacks,
                 slot,
                 ..holder.clone()
             };
-            old.heartbeat =
-                crate::game::map::spells::heartbeat::refreshed(beat, holder.heartbeat, now);
+            old.heartbeat = beat.flatten();
             // A stacking aura keeps its ticks' rhythm (and some others).
             if crate::game::map::spells::class_scripts::preserves_periodic_timer(spell) {
                 for x in old.effects.iter_mut() {
@@ -2484,6 +2497,20 @@ pub fn update(map: &mut Map) {
         if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
             continue;
         }
+        // Crowd control that breaks now breaks before its ticks due now
+        // (Thistle Tea's `Aura.Heartbeat` runs first).
+        crate::game::map::spells::heartbeat::update(map, g);
+        let ticks: Vec<(Holder, Aura)> = match auras(map, g) {
+            Some(a) => ticks
+                .into_iter()
+                .filter(|(h, _)| {
+                    a.holders
+                        .iter()
+                        .any(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         // One tick an update, each on its aura's own cadence: an update
         // late by more than an interval leaves the next tick due at once,
         // for the next update (mangos's `Aura::Update`).
@@ -2491,7 +2518,6 @@ pub fn update(map: &mut Map) {
         if expired {
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
-        crate::game::map::spells::heartbeat::update(map, g);
     }
 }
 
