@@ -2147,17 +2147,20 @@ pub fn update(map: &mut Map) {
         let Some(s) = data.spells.get(casting.spell) else {
             continue;
         };
-        // The target must still be here.
-        if let Some(t) = casting.targets.unit
-            && t != g
-            && map.unit_view(t).is_none()
-        {
-            if let Some(p) = map.players.get(&g) {
-                p.outbound.send(&SMSG_SPELL_FAILURE {
-                    guid: g,
-                    spell: casting.spell,
-                    result: SpellCastResult::BadTargets,
-                });
+        // The target must still be here; a player's still alive, a foe, in
+        // range and in front as the cast ends, or it fails before it costs.
+        let m = mods::for_spell(map, g, s);
+        if let Some(code) = checks::at_finish(map, g, s, &casting.targets, &m) {
+            if code == checks::fail::BAD_TARGETS {
+                if let Some(p) = map.players.get(&g) {
+                    p.outbound.send(&SMSG_SPELL_FAILURE {
+                        guid: g,
+                        spell: casting.spell,
+                        result: SpellCastResult::BadTargets,
+                    });
+                }
+            } else {
+                launch_failed(map, g, casting.spell, code);
             }
             continue;
         }

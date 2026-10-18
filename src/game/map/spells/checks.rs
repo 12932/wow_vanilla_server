@@ -529,6 +529,53 @@ fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
 }
 
 /// Whether `s` brings back the dead.
+/// A player's cast at a unit as it ends, before it costs anything: the
+/// unit is still there, alive (unless the spell is for the dead), still a
+/// foe for a harmful spell, in range with mangos's tolerance (a tenth of
+/// the range, at most three yards, beyond the reaches) and in front if the
+/// spell must be cast forward (mangos's `CheckCast(false)` and
+/// `CheckRange(false)`, Thistle Tea's launch checks). Why not, if not.
+pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mods) -> Option<u8> {
+    let target = t.unit.filter(|u| *u != caster)?;
+    let Some(u) = map.unit_view(target) else {
+        return Some(fail::BAD_TARGETS);
+    };
+    if !map.players.contains_key(&caster) {
+        return None;
+    }
+    if !u.alive && !for_the_dead(s) && !resurrects(s) {
+        return Some(fail::TARGETS_DEAD);
+    }
+    let requires_enemy = s
+        .effects
+        .iter()
+        .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy) || e.target_a == 53);
+    if (requires_enemy || !auras::positive(s) && !resurrects(s))
+        && !combat::can_attack(map, caster, target)
+        && !s.has_effect(95)
+    {
+        return Some(fail::TARGET_FRIENDLY);
+    }
+    let me = map.unit_view(caster)?;
+    let (_, max) = map.realm.data.spells.range(s);
+    let max = m.apply(mods::OP_RANGE, max);
+    let d = dist(me.position, u.position);
+    let reach = if s.melee_or_ranged() && max <= 5.0 {
+        combat::melee_range(&me, &u) + 1.0
+    } else {
+        max + me.combat_reach + u.combat_reach + (max * 0.1).min(3.0)
+    };
+    if max > 0.0 && d > reach {
+        return Some(fail::OUT_OF_RANGE);
+    }
+    let forward = !s.on_next_swing()
+        && (s.range_index == RANGE_MELEE || s.custom(sd::CUSTOM_FACE_TARGET) || s.auto_repeat());
+    if forward && d >= OVERLAP_DISTANCE && !facing(map, caster, target, std::f32::consts::PI) {
+        return Some(fail::UNIT_NOT_INFRONT);
+    }
+    None
+}
+
 fn resurrects(s: &SpellTemplate) -> bool {
     s.effects.iter().any(|e| matches!(e.effect, 18 | 113))
 }
