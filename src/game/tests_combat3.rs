@@ -234,9 +234,14 @@ fn data() -> GameData {
 }
 
 async fn setup() -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
+    setup_as(Class::Warrior).await
+}
+
+/// [`setup`], with a player of `class`.
+async fn setup_as(class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
-    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let ga = a.enter("Alice", Race::Human, class).await;
     a.sees(unit(DUMMY)).await;
     a.heartbeat(START.0, START.1, START.2).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -580,7 +585,8 @@ async fn a_dungeon_boss_fights_everyone_in_its_dungeon() {
 
 #[tokio::test]
 async fn lord_kazzaks_marks_heal_him_and_explode() {
-    let (_realm, _a, ga, map) = setup().await;
+    // A mage: the mark drains only a pool its bearer shows.
+    let (_realm, _a, ga, map) = setup_as(Class::Mage).await;
     let kazzak = unit(KAZZAK);
     let (healed, marked, exploded) = map
         .query(move |m| {

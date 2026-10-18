@@ -548,9 +548,15 @@ fn zero_difference(level: u32) -> u32 {
 /// Rage a warrior gets for dealing (or, with `taken`, taking) `damage`, in
 /// tenths, as the field holds it.
 pub fn rage_for(damage: u32, level: u32, taken: bool) -> u32 {
+    rage_scaled(damage, level, taken, 1.0)
+}
+
+/// [`rage_for`], scaled by `by` before it is rounded down (mangos's
+/// `Player::RewardRage`, Berserker Rage's 1.3).
+pub fn rage_scaled(damage: u32, level: u32, taken: bool, by: f32) -> u32 {
     let l = level as f32;
     let c = 0.009_110_784 * l * l + 3.225_598 * l + 4.265_291;
-    (damage as f32 / c * if taken { 2.5 } else { 7.5 } * 10.0) as u32
+    (damage as f32 / c * if taken { 2.5 } else { 7.5 } * by * 10.0) as u32
 }
 
 /// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
@@ -2030,10 +2036,12 @@ pub fn gain_rage(map: &mut Map, g: Guid, damage: u32, taken: bool) {
     if p.fields.get_byte(UNIT_FIELD_BYTES_0, 3) != 1 {
         return;
     }
-    let mut gain = rage_for(damage, u32::from(p.level()), taken);
-    if taken && p.auras.has_spell(SPELL_BERSERKER_RAGE) {
-        gain = gain * 13 / 10;
-    }
+    let by = if taken && p.auras.has_spell(SPELL_BERSERKER_RAGE) {
+        1.3
+    } else {
+        1.0
+    };
+    let gain = rage_scaled(damage, u32::from(p.level()), taken, by);
     let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 1).max(1000);
     let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
     p.fields

@@ -2390,7 +2390,11 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
     let stacks = h.stacks.max(1) as i32;
     match a.kind {
-        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_DAMAGE_PERCENT
+        AURA_PERIODIC_DAMAGE
+        | AURA_PERIODIC_LEECH
+        | AURA_PERIODIC_DAMAGE_PERCENT
+        | AURA_PERIODIC_MANA_LEECH
+        | AURA_POWER_BURN_MANA
             if auras(map, target).is_some_and(|x| x.school_immune(h.school)) =>
         {
             // A tick on one immune to its school (Divine Shield, Ice Block).
@@ -2548,9 +2552,17 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
         }
+        // A power that is one, the pool the target shows (a druid shifted
+        // out of it keeps it till they shift back), and for a leech, a
+        // caster alive to take it (mangos's `PeriodicTick`).
+        AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA
+            if !(0..5).contains(&a.misc)
+                || crate::game::map::spells::shown_power(map, target) != a.misc as u16
+                || (a.kind == AURA_PERIODIC_MANA_LEECH
+                    && !map.unit_view(h.caster).is_some_and(|u| u.alive)) => {}
         AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA => {
             let take = (a.amount * stacks).max(0) as u32;
-            let power = a.misc.clamp(0, 4) as u16;
+            let power = a.misc as u16;
             let taken = map
                 .unit_fields_mut(target)
                 .map(|f| {
@@ -2560,12 +2572,23 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     t
                 })
                 .unwrap_or(0);
-            let mult = map
-                .realm
-                .data
-                .spells
-                .get(h.spell)
-                .map_or(1.0, |s| s.effects[a.effect as usize].multiple_value);
+            // The multiplier, with the caster's modifiers as they are now;
+            // nothing back to a caster without the pool.
+            let data = map.realm.data.clone();
+            let mult = data.spells.get(h.spell).map_or(1.0, |s| {
+                crate::game::map::spells::mods::for_spell(map, h.caster, s).apply(
+                    crate::game::map::spells::mods::OP_MULTIPLE_VALUE,
+                    s.effects[a.effect as usize].multiple_value,
+                )
+            });
+            let pool = map
+                .unit_fields(h.caster)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_MAXPOWER1 + power));
+            let mult = if a.kind == AURA_PERIODIC_MANA_LEECH && pool == 0 {
+                0.0
+            } else {
+                mult.max(0.0)
+            };
             if a.kind == AURA_PERIODIC_MANA_LEECH {
                 periodic_log(
                     map,
@@ -2577,15 +2600,21 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                         misc_value2: u32::from(power),
                     },
                 );
-                let gain = (taken as f32 * mult.max(0.0)) as u32;
-                if let Some(f) = map.unit_fields_mut(h.caster) {
+                let gain = (taken as f32 * mult) as u32;
+                let gained = map.unit_fields_mut(h.caster).map_or(0, |f| {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
                     let now = f.get_u32(UNIT_FIELD_POWER1 + power);
-                    f.set_u32(UNIT_FIELD_POWER1 + power, (now + gain).min(max));
+                    let to = (now + gain).min(max);
+                    f.set_u32(UNIT_FIELD_POWER1 + power, to);
+                    to - now
+                });
+                // Half what came back is threat on the one drained.
+                if gained > 0 {
+                    crate::game::map::ai::add_threat(map, target, h.caster, gained as f32 * 0.5);
                 }
                 crate::game::map::proc_scripts::leeched(map, target, h, power);
             } else {
-                let damage = (taken as f32 * mult.max(0.0)) as u32;
+                let damage = (taken as f32 * mult) as u32;
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
             }
         }

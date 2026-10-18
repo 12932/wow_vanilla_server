@@ -659,8 +659,23 @@ fn effect(
             let h = outcome::healing_taken(map, target, max as f32) as u32;
             heal(map, caster, target, s.id, h, false);
         }
+        // Into any pool the target has, shown or not, alive, of a power
+        // that is one and never less (mangos's `EffectEnergize`, Thistle
+        // Tea's `PowerRestoration`); logged for the whole amount.
         EFFECT_ENERGIZE => {
-            let power = e.misc_value.clamp(0, 4) as u16;
+            if !(0..5).contains(&e.misc_value)
+                || amount < 0
+                || !map.unit_view(target).is_some_and(|u| u.alive)
+            {
+                return;
+            }
+            let power = e.misc_value as u16;
+            if map
+                .unit_fields(target)
+                .is_none_or(|f| f.get_u32(UNIT_FIELD_MAXPOWER1 + power) == 0)
+            {
+                return;
+            }
             if let Some(f) = map.unit_fields_mut(target) {
                 let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
                 let now = f.get_u32(UNIT_FIELD_POWER1 + power);
@@ -680,8 +695,19 @@ fn effect(
             }
             super::scripts::after_energize(map, caster, s);
         }
+        // A pool the target has shown, alive, and a power that is one
+        // (mangos's `EffectPowerDrain` and `EffectPowerBurn`, Thistle Tea's
+        // `PowerLeech` and `PowerBurn`): a druid in cat form keeps their
+        // mana from a Mana Burn.
         EFFECT_POWER_DRAIN | EFFECT_POWER_BURN => {
-            let power = e.misc_value.clamp(0, 4) as u16;
+            if !(0..5).contains(&e.misc_value) || !map.unit_view(target).is_some_and(|u| u.alive) {
+                return;
+            }
+            let power = e.misc_value as u16;
+            let shown = shown_power(map, target);
+            if shown != power && !(e.effect == EFFECT_POWER_DRAIN && power == crate::game::map::pets::POWER_HAPPINESS) {
+                return;
+            }
             let taken = map
                 .unit_fields_mut(target)
                 .map(|f| {
@@ -691,12 +717,19 @@ fn effect(
                     t
                 })
                 .unwrap_or(0);
-            let mult = if e.multiple_value > 0.0 {
-                e.multiple_value
-            } else {
-                1.0
-            };
             if e.effect == EFFECT_POWER_DRAIN {
+                // Nothing back from oneself, nor of a power one doesn't
+                // use; a multiplier of none is one (Thistle Tea's).
+                let mult = if caster == target || shown_power(map, caster) != power {
+                    0.0
+                } else {
+                    let base = if e.multiple_value > 0.0 {
+                        e.multiple_value
+                    } else {
+                        1.0
+                    };
+                    l.mods.apply(super::mods::OP_MULTIPLE_VALUE, base).max(0.0)
+                };
                 super::log::power_drain(map, caster, s.id, target, taken, power, mult);
                 if let Some(f) = map.unit_fields_mut(caster) {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
@@ -707,9 +740,21 @@ fn effect(
                     );
                 }
             } else {
-                // Mana burned is damage.
+                // What is burned is damage, by the multiplier as the
+                // caster's modifiers have it (none is none: Chains of Ice
+                // burns without harm), a crit's half more and no spell
+                // power.
+                let mult = l
+                    .mods
+                    .apply(super::mods::OP_MULTIPLE_VALUE, e.multiple_value)
+                    .max(0.0);
+                let mut damage = taken as f32 * mult;
+                if l.crit {
+                    let pct = l.mods.pct[super::mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
+                    damage += damage * 0.5 * (1.0 + pct);
+                }
                 let d = outcome::Damage {
-                    amount: (taken as f32 * mult) as u32,
+                    amount: damage as u32,
                     resisted: 0,
                     blocked: 0,
                 };
@@ -1875,4 +1920,14 @@ pub fn refresh_area_auras(map: &mut Map) {
             auras::remove_spell(map, member, spell, Some(caster));
         }
     }
+}
+
+/// The power a unit shows, as an offset from `UNIT_FIELD_POWER1`: a
+/// player's by class and form, a creature's by its field.
+pub fn shown_power(map: &Map, g: Guid) -> u16 {
+    if let Some(p) = map.players.get(&g) {
+        return u16::from(p.power_type());
+    }
+    map.unit_fields(g)
+        .map_or(0, |f| u16::from(f.get_byte(UNIT_FIELD_BYTES_0, 3)))
 }
