@@ -132,10 +132,11 @@ fn snapshot_path(dir: &std::path::Path) -> Option<(std::path::PathBuf, String)> 
 }
 
 pub fn test_config() -> RealmConfig {
+    let visibility = crate::config::VisibilityConfig::default();
     RealmConfig {
-        visibility_yards: 100.0,
-        instance_visibility_yards: 100.0,
-        battleground_visibility_yards: 400.0,
+        visibility_yards: visibility.continents_yards,
+        instance_visibility_yards: visibility.instances_yards,
+        battleground_visibility_yards: visibility.battleground_yards,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,

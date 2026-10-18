@@ -6,13 +6,13 @@ crashing. wvs runs an actor per map instead, and a handful of other tasks and th
 them and says what happens to the server, and to the players, when it panics, hangs or is overloaded. It also says
 which of OTP's properties wvs now has, and which it does not.
 
-The code is in `src/game/supervisor.rs` (catching panics, backoff, the panic hook and the watchdog) and in
+The code is in `src/game/supervisor.rs` (catching panics, backoff and the panic hook) and in
 `src/game/map/supervise.rs` (what a map does about its own panics). The tests are in `src/game/tests_robust.rs`.
 Each test makes the failure happen and shows the server recover.
 
 None of this costs anything while nothing panics. `catch_unwind` is free when there is no panic: in a release build
 of a quick timing loop, a call through it costs the same 2.8 ns as a direct call. The strike counts exist only for
-what has panicked. A map's pulse to the watchdog is two relaxed stores each time round its loop. There are no new
+what has panicked. There are no new
 locks and no new allocation per tick.
 
 ## What runs
@@ -25,7 +25,6 @@ locks and no new allocation per tick.
 | Store thread | `Store::open` (`store.rs`) | one (a `std` thread) |
 | Social sweep | `social::start_timers` | one, every 5 s |
 | Transports' clock | `transports::start` | one, every 250 ms |
-| Watchdog | `supervisor::start_watchdog` | one (a `std` thread), every 1 s |
 | Login server | `server::async_main`, `auth::auth` | one accept loop, and a task per login connection |
 | World accept loop | `game::run` | one, in the main task |
 
@@ -76,13 +75,14 @@ than leaving an online entry behind. With every event, step and turn guarded, an
 is told to. (`a_map_whose_actor_has_gone_is_started_again`)
 
 **A hang** (an endless loop in an event or an update) can't be pre-empted. The map's players freeze, and the tokio
-worker thread it runs on is lost to every other task. The watchdog (below) now logs it loudly within ten seconds,
-once, and logs again when the map is going again. A hung map also stalls the shutdown (see below).
+worker thread it runs on is lost to every other task. Nothing reports it. A hung map also stalls the shutdown (see
+below).
 
 **Overload.** The mailbox is unbounded. The actor handles up to 513 events and then runs its update, so a flood of
-events slows the update down but does not starve it. An update over 50 ms is logged. Now the watchdog also logs a
-map with 10,000 events waiting, and logs again when it has caught up. There is still no backpressure on what is
-sent to a map; each client's packets are limited by its session's rate.
+events slows the update down but does not starve it. An update over 50 ms is logged. There is no backpressure on
+what is sent to a map; each client's packets are limited by its session's rate.
+
+A GM's `.maps` shows each map's panics, quarantined creatures and restarts.
 
 ## Sessions
 
@@ -183,7 +183,7 @@ parse and went back to its defaults: quests, reputation, pets, talents and the h
 (`a_saved_field_that_wont_parse_costs_only_itself`)
 
 **A hang** (a disk that doesn't answer) stalls every save and read behind it: character screens wait, saves queue
-up. SQLite's busy timeout bounds lock waits at 5 s a statement. There is no watchdog on the store.
+up. SQLite's busy timeout bounds lock waits at 5 s a statement. Nothing reports a hung store.
 
 **Overload.** The queue is unbounded. Saves are batched up to 512 to a transaction.
 
@@ -200,7 +200,7 @@ meanwhile. (`a_sweep_that_panics_rests_and_the_others_go_on`) The services' lock
 poison. A sweep that panics while holding one releases it, though what it guards may be half changed.
 
 **A hang** in a sweep hangs the task, and its worker thread. If the sweep holds a service's lock, every map that
-takes that lock blocks too. The watchdog doesn't watch the sweep.
+takes that lock blocks too. Nothing reports it.
 
 ## Transports
 
@@ -209,18 +209,6 @@ A tokio task that moves the boats and zeppelins between maps, every 250 ms, carr
 **A panic** used to end the task: every transport stopped where it was, for good. Now each route runs under its own
 `Backoff`. (`the_transports_clock_outlives_a_panic`) A map that is restarted gets its transports back
 (`transports::restore`).
-
-## The watchdog
-
-A `std` thread, so a map that has hung a tokio worker can't hang it too. Every second it looks at each map's pulse:
-when the map last came round its loop, and how many events wait for it. It logs, once each:
-
-- a map that hasn't come round its loop in 10 s ("it has hung (an endless loop?), and its players with it"), and
-  when it is going again;
-- a map with 10,000 events waiting ("it can't keep up"), and when it is down to a tenth of that.
-
-A hung map can't be stopped, so the watchdog only tells you. (`the_watchdog_sees_a_map_hang_and_a_mailbox_swell`)
-A GM's `.maps` shows each map's panics, quarantined creatures and restarts.
 
 ## The panic hook
 
@@ -298,7 +286,7 @@ players' run found no panic in the game's own code. What it and the GMs' runs fo
 ## What OTP has and wvs does not
 
 - **Pre-emption.** An Erlang process in an endless loop is still scheduled out and can be killed. A Rust task can't
-  be pre-empted or killed, so a hung map stays hung. The watchdog only tells you.
+  be pre-empted or killed, so a hung map stays hung, and nothing reports it.
 - **Isolation of state.** An Erlang process's crash can't corrupt another's state. A panic in a map step can leave
   that map's state half changed (a player's batch half sent, say). The guards limit how far the effects reach, but
   only a restart clears them.

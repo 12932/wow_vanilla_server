@@ -37,8 +37,8 @@ const WALKER: u32 = 4005;
 const SPAWNS: &[(u32, u32, f32, f32)] = &[
     // A pack far to the east, out of the player's sight range.
     (10, WOLF, 40.0, 0.0),
-    (11, WOLF, 40.0, 7.0),
-    (12, WOLF, 40.0, 20.0),
+    (11, WOLF, 40.0, 4.0),
+    (12, WOLF, 40.0, 7.0),
     (13, LONER, 44.0, 0.0),
     // Beside the start: a defensive one, a passive one.
     (20, QUIET, 3.0, -3.0),
@@ -197,9 +197,11 @@ fn attacking(m: &Map, g: Guid) -> bool {
     m.creature(g).is_some_and(|c| c.combat.attacking)
 }
 
-/// Called into a fight, a wolf brings those of its pack within 10 yards
-/// that answer, a moment later; they call no one on; a loner, deaf to
-/// calls, stays out.
+/// Called into a fight, a wolf brings those of its pack within 5 yards
+/// (`[creatures] assistance_radius`, mangos's default) that answer, a
+/// moment later, and not one 7 yards off (within wvs's old 10); they call
+/// no one on, though that one is 3 yards from the one called; a loner,
+/// deaf to calls, stays out.
 #[tokio::test]
 async fn a_call_for_help_brings_the_near_pack_a_moment_later() {
     let (_realm, _a, ga, map) = setup().await;
@@ -222,8 +224,8 @@ async fn a_call_for_help_brings_the_near_pack_a_moment_later() {
         .query(move |m| (attacking(m, near), attacking(m, far), attacking(m, loner)))
         .await
         .unwrap();
-    assert!(near, "the one within ten yards");
-    assert!(!far, "not the one twenty off, nor by a chain");
+    assert!(near, "the one within five yards");
+    assert!(!far, "not the one seven off, nor by a chain");
     assert!(!loner, "not one deaf to calls");
 }
 

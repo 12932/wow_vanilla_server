@@ -251,9 +251,8 @@ settings! {
     pub struct VisibilityConfig in "visibility" {
         /// On the continents.
         continents_yards: f32 = 100.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.Continents";
-        /// In dungeons and raids (mangos's default is 170; here as far as
-        /// the continents, as before this key).
-        instances_yards: f32 = 100.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.Instances";
+        /// In dungeons and raids.
+        instances_yards: f32 = 170.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.Instances";
         /// In battlegrounds: further, so a battle's far side is in view.
         battleground_yards: f32 = 400.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.BGArenas";
     }
@@ -362,17 +361,16 @@ settings! {
         /// Multiplies the distance at which creatures notice players.
         aggro_rate: f32 = 1.0, Clamp(0.0, 10.0), Live, "Rate.Creature.Aggro";
         /// Yards from where a fight began that a creature chases before it
-        /// may give up (mangos's default is 30).
-        leash_radius: f32 = 50.0, Clamp(5.0, 500.0), Live, "LeashRadius";
+        /// may give up.
+        leash_radius: f32 = 30.0, Clamp(5.0, 500.0), Live, "LeashRadius";
         /// Seconds beyond its leash without a hostile act before a creature
         /// goes home.
         leash_timeout_secs: u64 = 12, Clamp(1.0, 600.0), Live, "";
         /// Seconds a creature tries for a victim it can't reach before it
         /// goes home.
         unreachable_timeout_secs: u64 = 24, Clamp(1.0, 600.0), Live, "";
-        /// Yards a creature drawn into a fight calls its kind from
-        /// (mangos's default is 5).
-        assistance_radius: f32 = 10.0, Clamp(0.0, 100.0), Live, "CreatureFamilyAssistanceRadius";
+        /// Yards a creature drawn into a fight calls its kind from.
+        assistance_radius: f32 = 5.0, Clamp(0.0, 100.0), Live, "CreatureFamilyAssistanceRadius";
         /// Milliseconds the called take to come.
         assistance_delay_ms: u64 = 1500, Clamp(0.0, 60_000.0), Live, "CreatureFamilyAssistanceDelay";
         /// Yards a fleeing creature looks for help within.
@@ -380,14 +378,14 @@ settings! {
         /// Seconds a normal creature's corpse lies (no longer than its
         /// respawn).
         corpse_decay_normal: u64 = 300, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.NORMAL";
-        /// Seconds a rare's corpse lies (mangos's default is 900).
-        corpse_decay_rare: u64 = 300, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.RARE";
+        /// Seconds a rare's corpse lies.
+        corpse_decay_rare: u64 = 900, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.RARE";
         /// Seconds an elite's corpse lies.
         corpse_decay_elite: u64 = 600, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.ELITE";
-        /// Seconds a rare elite's corpse lies (mangos's default is 1200).
-        corpse_decay_rare_elite: u64 = 600, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.RAREELITE";
-        /// Seconds a boss's corpse lies (mangos's default is 3600).
-        corpse_decay_world_boss: u64 = 600, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.WORLDBOSS";
+        /// Seconds a rare elite's corpse lies.
+        corpse_decay_rare_elite: u64 = 1200, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.RAREELITE";
+        /// Seconds a boss's corpse lies.
+        corpse_decay_world_boss: u64 = 3600, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.WORLDBOSS";
     }
 }
 

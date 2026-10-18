@@ -180,7 +180,7 @@ fn data() -> GameData {
         vec![
             spawn(DUMMY.1, DUMMY.0, 2.0, 0.0),
             spawn(WOLF_A, WOLF, 30.0, 0.0),
-            spawn(WOLF_B, WOLF, 36.0, 0.0),
+            spawn(WOLF_B, WOLF, 34.0, 0.0),
             spawn(VENDOR.1, VENDOR.0, -2.0, 0.0),
         ],
     );

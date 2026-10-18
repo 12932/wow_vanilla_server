@@ -78,7 +78,7 @@ Where mangos-classic has the same setting (`mangosd.conf`, read in `World.cpp`),
 case, less what its section already says: `Rate.XP.Kill` is `[rates] xp_kill`, `Corpse.Decay.ELITE` is `[creatures]
 corpse_decay_elite`, `StartPlayerLevel` is `[players] start_level`. The tables below and `config.example.toml` give
 the mangos key for each. A default that differs from mangos's keeps this server's behaviour, and the key's meaning
-says so (`[visibility] instances_yards` is 100 here and 170 in mangos).
+says so (`[visibility] battleground_yards` is 400 here and 533 in mangos).
 
 ## Sections and keys
 
@@ -121,7 +121,7 @@ How far players see, in yards. Further costs the server more and the client more
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `continents_yards` | On the continents. | `100.0` | 20 to 500, clamped | live | `Visibility.Distance.Continents` |
-| `instances_yards` | In dungeons and raids (mangos's default is 170; here as far as the continents, as before this key). | `100.0` | 20 to 500, clamped | live | `Visibility.Distance.Instances` |
+| `instances_yards` | In dungeons and raids. | `170.0` | 20 to 500, clamped | live | `Visibility.Distance.Instances` |
 | `battleground_yards` | In battlegrounds: further, so a battle's far side is in view. | `400.0` | 20 to 500, clamped | live | `Visibility.Distance.BGArenas` |
 
 ### `[rates]`
@@ -165,17 +165,17 @@ Creatures: how near they notice players, how far they chase, how they call for h
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `aggro_rate` | Multiplies the distance at which creatures notice players. | `1.0` | 0 to 10, clamped | live | `Rate.Creature.Aggro` |
-| `leash_radius` | Yards from where a fight began that a creature chases before it may give up (mangos's default is 30). | `50.0` | 5 to 500, clamped | live | `LeashRadius` |
+| `leash_radius` | Yards from where a fight began that a creature chases before it may give up. | `30.0` | 5 to 500, clamped | live | `LeashRadius` |
 | `leash_timeout_secs` | Seconds beyond its leash without a hostile act before a creature goes home. | `12` | 1 to 600, clamped | live |  |
 | `unreachable_timeout_secs` | Seconds a creature tries for a victim it can't reach before it goes home. | `24` | 1 to 600, clamped | live |  |
-| `assistance_radius` | Yards a creature drawn into a fight calls its kind from (mangos's default is 5). | `10.0` | 0 to 100, clamped | live | `CreatureFamilyAssistanceRadius` |
+| `assistance_radius` | Yards a creature drawn into a fight calls its kind from. | `5.0` | 0 to 100, clamped | live | `CreatureFamilyAssistanceRadius` |
 | `assistance_delay_ms` | Milliseconds the called take to come. | `1500` | 0 to 60000, clamped | live | `CreatureFamilyAssistanceDelay` |
 | `flee_assistance_radius` | Yards a fleeing creature looks for help within. | `30.0` | 0 to 100, clamped | live | `CreatureFamilyFleeAssistanceRadius` |
 | `corpse_decay_normal` | Seconds a normal creature's corpse lies (no longer than its respawn). | `300` | 1 to 86400, clamped | live | `Corpse.Decay.NORMAL` |
-| `corpse_decay_rare` | Seconds a rare's corpse lies (mangos's default is 900). | `300` | 1 to 86400, clamped | live | `Corpse.Decay.RARE` |
+| `corpse_decay_rare` | Seconds a rare's corpse lies. | `900` | 1 to 86400, clamped | live | `Corpse.Decay.RARE` |
 | `corpse_decay_elite` | Seconds an elite's corpse lies. | `600` | 1 to 86400, clamped | live | `Corpse.Decay.ELITE` |
-| `corpse_decay_rare_elite` | Seconds a rare elite's corpse lies (mangos's default is 1200). | `600` | 1 to 86400, clamped | live | `Corpse.Decay.RAREELITE` |
-| `corpse_decay_world_boss` | Seconds a boss's corpse lies (mangos's default is 3600). | `600` | 1 to 86400, clamped | live | `Corpse.Decay.WORLDBOSS` |
+| `corpse_decay_rare_elite` | Seconds a rare elite's corpse lies. | `1200` | 1 to 86400, clamped | live | `Corpse.Decay.RAREELITE` |
+| `corpse_decay_world_boss` | Seconds a boss's corpse lies. | `3600` | 1 to 86400, clamped | live | `Corpse.Decay.WORLDBOSS` |
 
 ### `[players]`
 

@@ -178,7 +178,7 @@ Each entry: where, what is wrong, how it shows, severity, and easy or hard. Fixe
 - **Where:** `src/game/mod.rs:623`; `supervisor.rs:235` `now.saturating_sub(beat)`.
 - **How it shows:** after the wrap, a map that hung before it reads as beating 0 ms ago, so the watchdog never
   reports it. Transports' server-side pose jumps (their client clock is a u32 too, so that part is protocol).
-- **Fix:** `wrapping_sub` in the watchdog.
+- **Fix:** `wrapping_sub` in the watchdog. (The watchdog has since been removed, on the user's word, 2026-10-19.)
 
 #### L4. The create cache outlives the handler that filled it (low)
 - **Where:** `src/game/map/mod.rs:1215` `public_create`, cleared only at the update's end (`:1035`).
