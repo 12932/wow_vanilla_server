@@ -705,7 +705,10 @@ fn effect(
             }
             let power = e.misc_value as u16;
             let shown = shown_power(map, target);
-            if shown != power && !(e.effect == EFFECT_POWER_DRAIN && power == crate::game::map::pets::POWER_HAPPINESS) {
+            if shown != power
+                && !(e.effect == EFFECT_POWER_DRAIN
+                    && power == crate::game::map::pets::POWER_HAPPINESS)
+            {
                 return;
             }
             let taken = map

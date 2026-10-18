@@ -143,7 +143,10 @@ fn data() -> GameData {
         (LEECHING_ENERGY, 3, 0.5),
         (LEECHING_NONE, 0, 0.0),
     ] {
-        add(spell(id, hit(6, AURA_PERIODIC_MANA_LEECH, 100, misc, mult, 6)));
+        add(spell(
+            id,
+            hit(6, AURA_PERIODIC_MANA_LEECH, 100, misc, mult, 6),
+        ));
     }
     for (id, misc, points) in [
         (ENERGIZE, 0, 50),
@@ -318,11 +321,11 @@ async fn a_spell_costs_its_mana_and_starts_the_five_second_rule_unless_free_or_f
                 ..Default::default()
             };
             reset(m);
-            spells::cast(m, g, COSTLY, me.clone(), None);
+            spells::cast(m, g, COSTLY, me, None);
             out.push((pools(m, g).1, m.players[&g].mana_spent_at.is_some()));
             // Nothing to pay: nothing paid, no rule.
             reset(m);
-            spells::cast(m, g, FREE, me.clone(), None);
+            spells::cast(m, g, FREE, me, None);
             out.push((pools(m, g).1, m.players[&g].mana_spent_at.is_some()));
             // Ten and a tenth of base mana (80): eighteen.
             reset(m);
@@ -331,7 +334,7 @@ async fn a_spell_costs_its_mana_and_starts_the_five_second_rule_unless_free_or_f
                 .unwrap()
                 .fields
                 .set_u32(UNIT_FIELD_BASE_MANA, 80);
-            spells::cast(m, g, SHARE, me.clone(), None);
+            spells::cast(m, g, SHARE, me, None);
             out.push((pools(m, g).1, m.players[&g].mana_spent_at.is_some()));
             // A god pays nothing, even what they don't have.
             reset(m);
@@ -372,7 +375,7 @@ async fn a_cost_in_health_comes_off_health_but_never_kills_and_a_channel_pays_it
             f.set_u32(UNIT_FIELD_MAXHEALTH, 100);
             f.set_u32(UNIT_FIELD_HEALTH, 100);
             fresh(m, g);
-            spells::cast(m, g, BLOOD, me.clone(), None);
+            spells::cast(m, g, BLOOD, me, None);
             out.push(pools(m, g).0);
             // Seventeen left: one.
             m.players
@@ -381,7 +384,7 @@ async fn a_cost_in_health_comes_off_health_but_never_kills_and_a_channel_pays_it
                 .fields
                 .set_u32(UNIT_FIELD_HEALTH, 17);
             fresh(m, g);
-            spells::cast(m, g, BLOOD, me.clone(), None);
+            spells::cast(m, g, BLOOD, me, None);
             out.push(pools(m, g).0);
             // A god pays none.
             m.players
@@ -391,7 +394,7 @@ async fn a_cost_in_health_comes_off_health_but_never_kills_and_a_channel_pays_it
                 .set_u32(UNIT_FIELD_HEALTH, 100);
             m.players.get_mut(&g).unwrap().misc.god = true;
             fresh(m, g);
-            spells::cast(m, g, BLOOD, me.clone(), None);
+            spells::cast(m, g, BLOOD, me, None);
             m.players.get_mut(&g).unwrap().misc.god = false;
             out.push(pools(m, g).0);
             // A channel of 33 health a second: 67 after one; at 33 it
@@ -442,12 +445,15 @@ async fn energizing_fills_any_pool_there_is_to_its_cap_and_logs_the_whole_amount
             wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELLENERGIZELOG(l)
                 if l.spell == ENERGIZE =>
             {
-                Some(l.clone())
+                Some(*l)
             }
             _ => None,
         })
         .await;
-    assert_eq!((log.victim, log.damage, log.power), (target, 50, Power::Mana));
+    assert_eq!(
+        (log.victim, log.damage, log.power),
+        (target, 50, Power::Mana)
+    );
     let got = map
         .query(move |m| {
             let mut out = vec![pools(m, target)];
@@ -468,7 +474,10 @@ async fn energizing_fills_any_pool_there_is_to_its_cap_and_logs_the_whole_amount
         })
         .await
         .unwrap();
-    assert_eq!(got, [(1000, 100, 60), (1000, 0, 60), (1000, 80, 60), (0, 80, 60)]);
+    assert_eq!(
+        got,
+        [(1000, 100, 60), (1000, 0, 60), (1000, 80, 60), (0, 80, 60)]
+    );
 }
 
 #[tokio::test]
@@ -516,7 +525,8 @@ async fn a_burn_takes_only_the_power_there_is_from_the_pool_shown_and_harms_by_i
 }
 
 #[tokio::test]
-async fn a_burns_harm_is_absorbed_crits_takes_the_conversion_modifiers_and_an_immune_target_keeps_all() {
+async fn a_burns_harm_is_absorbed_crits_takes_the_conversion_modifiers_and_an_immune_target_keeps_all()
+ {
     let (_a, g, map) = player(Class::Mage).await;
     let got = map
         .query(move |m| {
@@ -633,8 +643,9 @@ async fn a_burn_over_time_spares_a_pool_not_shown_and_the_immune_and_ends_with_i
             let c = mana_user(m, g, 0);
             trigger(m, g, BURNING, c);
             trigger(m, g, BURNING, c);
-            let holders = auras::auras(m, c)
-                .map_or(0, |a| a.holders.iter().filter(|h| h.spell == BURNING).count());
+            let holders = auras::auras(m, c).map_or(0, |a| {
+                a.holders.iter().filter(|h| h.spell == BURNING).count()
+            });
             (out, holders)
         })
         .await
