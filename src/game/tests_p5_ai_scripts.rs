@@ -13,6 +13,7 @@ use wow_world_messages::vanilla::*;
 use super::tests_p3_scripts::*;
 use crate::game::data::scripts::ScriptStep;
 use crate::game::fields::*;
+use crate::game::harness::Client;
 use crate::game::map::{Map, MapHandle};
 
 /// The events Thistle Tea's dump has for `entry`, by id.
@@ -579,6 +580,62 @@ async fn the_combat_gadgets_fight_with_their_own_spells_on_their_timers() {
         for (id, spell, first, repeat) in events {
             timed_cast(&mut c, &map, g, id, spell, first, repeat, Some(d)).await;
         }
+        clear(&map, vec![g, d]);
+    }
+}
+
+/// A timed cast of a creature's kit: its event, the spell, its first and
+/// repeat windows in seconds, and whether it goes at its victim (else
+/// itself, or no unit).
+type Timed = (u32, u32, (f32, f32), (f32, f32), bool);
+
+/// `g`'s timed casts in its fight with dummy `d`, each as [`timed_cast`]
+/// has it.
+async fn kit(c: &mut Client, map: &MapHandle, g: Guid, d: Guid, casts: &[Timed]) {
+    for (id, spell, first, repeat, at_victim) in casts.iter().copied() {
+        timed_cast(c, map, g, id, spell, first, repeat, at_victim.then_some(d)).await;
+    }
+}
+
+/// Felwood's oozes each wrap themselves in their own aura three seconds
+/// into a fight and every minute; a dead one jarred with its own jar is
+/// gone at once, but not with the other's (Thistle Tea's
+/// `felwood_ooze`, vmangos's `npc_felwood_ooze`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn felwoods_oozes_wear_their_auras_and_go_into_their_jars() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Jarrer").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    for (entry, id, aura, own_jar, other_jar) in [
+        (7086, 708601, 13483, 15698, 15699),
+        (7092, 709201, 3335, 15699, 15698),
+    ] {
+        let (g, d) = set_on_dummy(&map, entry, at).await;
+        c.sees(g).await;
+        if entry == 7086 {
+            // Wither Touch, a passive, is worn rather than seen cast.
+            assert!(about(timer(&map, g, id).await, 3.0), "three seconds in");
+            fire(&map, g, id).await;
+            assert!(map.query(move |m| has(m, g, aura)).await.unwrap(), "worn");
+            assert!(about(timer(&map, g, id).await, 60.0), "a minute on");
+        } else {
+            kit(&mut c, &map, g, d, &[(id, aura, (3.0, 3.0), (60.0, 60.0), false)]).await;
+        }
+        let (other, own) = map
+            .query(move |m| {
+                kill(m, me, g);
+                crate::game::map::event_ai::spell_hit(m, g, me, other_jar, 1);
+                let other = m.creature(g).is_some();
+                crate::game::map::event_ai::spell_hit(m, g, me, own_jar, 1);
+                (other, m.creature(g).is_none())
+            })
+            .await
+            .unwrap();
+        assert!(other, "{entry}: the other jar");
+        assert!(own, "{entry}: its own jar");
         clear(&map, vec![g, d]);
     }
 }
