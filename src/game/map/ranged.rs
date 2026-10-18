@@ -11,7 +11,6 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
-use crate::game::data::items::Body;
 use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::combat::{self, AutoRepeat, Hand, Outcome};
@@ -40,21 +39,10 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
     None
 }
 
+/// A shot's result, laid out as any cast's: a gear failure names the gear
+/// the spell wants, which the client reads after the reason.
 fn cast_result(map: &Map, g: Guid, spell: u32, failure: Option<u8>) {
-    let Some(p) = map.players.get(&g) else {
-        return;
-    };
-    let mut b = Body::default();
-    b.u32(spell);
-    match failure {
-        None => {
-            b.u8(0);
-        }
-        Some(r) => {
-            b.u8(2).u8(r);
-        }
-    }
-    p.outbound.send_frame(b.frame(spells::SMSG_CAST_RESULT));
+    spells::send_cast_result(map, g, spell, failure);
 }
 
 /// The inventory index of a carried round of the ammunition a player has
