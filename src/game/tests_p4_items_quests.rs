@@ -1589,3 +1589,206 @@ async fn a_repeatable_quest_is_shared_but_not_past_its_prerequisite_or_a_timer()
         "his timer running"
     );
 }
+
+// Alterac Valley's captured animals.
+
+const FROSTWOLF: u32 = 10981;
+const WOLF_AURA: u32 = 21827;
+
+/// A Frostwolf beside `START`, and its aura.
+fn stables() -> GameData {
+    let mut d = world();
+    d.creature_templates
+        .insert(FROSTWOLF, template(FROSTWOLF, "Frostwolf"));
+    spawn(&mut d, 0, FROSTWOLF, (START.0 + 3.0, START.1, START.2));
+    let mut aura = SpellTemplate {
+        id: WOLF_AURA,
+        name: "Frostwolf Aura DND".into(),
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    aura.effects[0] = SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_DUMMY,
+        target_a: 25,
+        ..Default::default()
+    };
+    d.spells.spells.insert(WOLF_AURA, aura);
+    d
+}
+
+fn wolf() -> Guid {
+    guid::unit(FROSTWOLF, FROSTWOLF)
+}
+
+/// Alice with the Frostwolf captured: its aura on her, from it.
+async fn captured() -> (Arc<Realm>, Client, Guid, MapHandle) {
+    let realm = realm_of(stables());
+    let (mut a, g, map) = player(&realm, "Alice").await;
+    a.sees(wolf()).await;
+    map.query(move |m| {
+        let spell = m.realm.data.spells.spells[&WOLF_AURA].clone();
+        let _ = crate::game::map::auras::apply_spell(
+            m,
+            wolf(),
+            g,
+            &spell,
+            &[(0, 0)],
+            crate::game::map::auras::Context::default(),
+        );
+    })
+    .await;
+    (realm, a, g, map)
+}
+
+/// When the capture's next look is due, from now.
+fn next_look(m: &Map, g: Guid) -> Option<Duration> {
+    let h = crate::game::map::auras::auras(m, g)?
+        .holders
+        .iter()
+        .find(|h| h.spell == WOLF_AURA)?;
+    h.effects[0]
+        .next_tick
+        .map(|t| t.saturating_duration_since(m.now))
+}
+
+/// The capture's look due now.
+fn look_now(m: &mut Map, g: Guid) {
+    let now = m.now;
+    if let Some(a) = crate::game::map::auras::auras_mut(m, g)
+        && let Some(h) = a.holders.iter_mut().find(|h| h.spell == WOLF_AURA)
+    {
+        h.effects[0].next_tick = Some(now);
+    }
+}
+
+/// When the wolf goes, from now, if it is to.
+fn wolf_goes_in(m: &Map) -> Option<Duration> {
+    let (at, _) = crate::game::map::event_ai::scripted(m, wolf())?.script_despawn?;
+    Some(at.saturating_duration_since(m.now))
+}
+
+/// Thistle Tea's "capture auras schedule two-second checks and keep the
+/// latest live creature observation": the aura looks every two seconds,
+/// and while the wolf is alive and near, sets it following the player
+/// again, the aura kept.
+#[tokio::test]
+async fn a_captured_animal_is_looked_at_every_two_seconds_and_follows() {
+    let (_realm, _a, g, map) = captured().await;
+    let first = map.query(move |m| next_look(m, g)).await.flatten();
+    assert!(
+        first.is_some_and(|t| t > Duration::from_millis(1500) && t <= CHECK),
+        "{first:?}"
+    );
+    let follow = |m: &Map| {
+        crate::game::map::event_ai::scripted(m, wolf())
+            .and_then(|s| s.follow)
+            .map(|(whom, yards, _)| (whom, yards))
+    };
+    assert_eq!(map.query(move |m| follow(m)).await.flatten(), None);
+    map.query(move |m| look_now(m, g)).await;
+    let after = until(&map, "following", move |m| {
+        let f = follow(m)?;
+        Some((f, next_look(m, g), wolf_goes_in(m)))
+    })
+    .await;
+    assert_eq!(after.0, (g, 3.0), "three yards behind her");
+    assert!(
+        after.1.is_some_and(|t| t > Duration::from_millis(1500)),
+        "the next in two seconds: {after:?}"
+    );
+    assert_eq!(after.2, None, "kept");
+}
+
+const CHECK: Duration = Duration::from_secs(2);
+
+/// Thistle Tea's "dead, missing, distant and cross-world captures are
+/// removed": the wolf dead, gone, more than fifty yards off or the player
+/// dead, the next look ends the aura and sends the wolf off in a second
+/// (or, the player dead and her auras gone with her life, two).
+#[tokio::test]
+async fn a_lost_capture_ends_and_its_animal_goes() {
+    for case in ["dead", "gone", "far", "player dead"] {
+        let (_realm, _a, g, map) = captured().await;
+        map.query(move |m| {
+            match case {
+                "dead" => crate::game::map::combat::deal_damage(m, g, wolf(), 1_000_000),
+                "gone" => {
+                    m.remove_creature(wolf());
+                }
+                "far" => place(m, g, at(START.0 + 3.0, START.1 + 50.5, START.2)),
+                _ => crate::game::map::combat::deal_damage(m, wolf(), g, 1_000_000),
+            }
+            look_now(m, g);
+        })
+        .await;
+        let goes = until(&map, "the aura gone", move |m| {
+            let gone =
+                !crate::game::map::auras::auras(m, g).is_some_and(|a| a.has_spell(WOLF_AURA));
+            gone.then(|| wolf_goes_in(m))
+        })
+        .await;
+        match case {
+            "dead" | "gone" => {}
+            "far" => assert!(
+                goes.is_some_and(|t| t <= Duration::from_millis(1000)),
+                "{case}: {goes:?}"
+            ),
+            _ => assert!(
+                goes.is_some_and(|t| t <= Duration::from_millis(2000)),
+                "{case}: {goes:?}"
+            ),
+        }
+    }
+    // Fifty yards is near enough.
+    let (_realm, _a, g, map) = captured().await;
+    map.query(move |m| {
+        place(m, g, at(START.0 + 3.0, START.1 + 49.5, START.2));
+        look_now(m, g);
+    })
+    .await;
+    let kept = until(&map, "looked at", move |m| {
+        next_look(m, g)
+            .filter(|t| *t > Duration::from_millis(1000))
+            .map(|_| wolf_goes_in(m))
+    })
+    .await;
+    assert_eq!(kept, None);
+}
+
+/// Thistle Tea's "delivery, cancellation and logout remove the aura and
+/// dismiss its creature after two seconds": the Stable Master's script
+/// takes the aura and the wolf goes two seconds after; leaving the map
+/// does the same.
+#[tokio::test]
+async fn a_delivered_capture_sends_its_animal_off() {
+    let (_realm, _a, g, map) = captured().await;
+    let goes = map
+        .query(move |m| {
+            crate::game::map::auras::remove_spell(m, g, WOLF_AURA, None);
+            wolf_goes_in(m)
+        })
+        .await
+        .flatten();
+    assert!(
+        goes.is_some_and(|t| t > Duration::from_millis(1500) && t <= CHECK),
+        "{goes:?}"
+    );
+    // Leaving the map.
+    let (realm, mut a, g, map) = captured().await;
+    map.call(move |m| m.teleport(g, MapKey::world(1), at(0.0, 0.0, 0.0), 0.0));
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    let goes = until(&map, "Alice gone", move |m| {
+        (!m.players.contains_key(&g)).then(|| wolf_goes_in(m))
+    })
+    .await;
+    assert!(
+        goes.is_some_and(|t| t > Duration::from_millis(1000) && t <= CHECK),
+        "{goes:?}"
+    );
+    let _ = realm;
+}

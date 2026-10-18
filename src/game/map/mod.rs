@@ -10,6 +10,7 @@ pub mod auction;
 pub mod auras;
 pub mod battleground;
 pub mod boss_mechanics;
+pub mod captured;
 pub mod charge;
 pub mod chat;
 pub mod cinematic;
@@ -791,6 +792,7 @@ impl Map {
             spells::interrupt(self, guid);
         }
         ai::forget(self, guid);
+        captured::leaving(self, guid);
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);

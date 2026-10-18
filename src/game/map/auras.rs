@@ -974,7 +974,8 @@ pub fn apply_spell(
     let mut aura_effects = Vec::new();
     for &(index, amount) in effects {
         let e = spell.effects[index];
-        let period = interval(&e, ctx.activation);
+        let period =
+            interval(&e, ctx.activation).or_else(|| crate::game::map::captured::period(spell.id));
         aura_effects.push(Aura {
             effect: index as u8,
             kind: e.aura,
@@ -2146,6 +2147,7 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
         crate::game::map::outdoor_pvp::carrying_ended(map, target);
     }
     dummy_flags(map, target, h.spell, false);
+    crate::game::map::captured::ended(map, h.spell, h.caster);
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
     }
@@ -2558,6 +2560,10 @@ pub fn tick_due(map: &mut Map, target: Guid, spell: u32, caster: Guid) {
 }
 
 fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
+    // A captured animal's look, the player dead or not.
+    if crate::game::map::captured::tick(map, target, h.spell, h.caster) {
+        return;
+    }
     let alive = map.unit_view(target).is_some_and(|u| u.alive);
     if !alive {
         return;
