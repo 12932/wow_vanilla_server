@@ -34,7 +34,8 @@ every build and costs nothing until it is asked for; pprof is a cargo feature.
 3. **Connect.** In the profiler, connect to `127.0.0.1`. The server records only while a profiler is connected
    (Tracy's on-demand mode), so a server left with `WOW_TRACY=1` and nobody watching keeps nothing in memory. To see
    the start-up (the world's load, the continents' spawns), click Connect before starting the server: the profiler
-   waits for it, and records from a fraction of a second in.
+   waits for it, and records from the moment it connects, a fraction of a second in (the first stage or two may be
+   missed).
 
 The server listens for the profiler on **127.0.0.1:8086 only**: a profile holds call stacks and the log's warnings,
 which are no one else's. To watch a server on another machine, tunnel to it (`ssh -L 8086:127.0.0.1:8086 host`) and
@@ -195,9 +196,9 @@ timers`, `pets` and `visibility`, the first time a creature or player needed a t
 spells` 324 ms, `load: npcs` 67 ms, `load: scripts` 40 ms). The store wrote 127 transactions, 1.6 ms on average
 (78 ms at most), on its own thread.
 
-The capture (2.8 MB, 572,832 zones) was waiting before the server started, but Tracy's on-demand mode only records
-from the moment the connection is made, a fraction of a second in: the first stages, the character store's opening
-and `load: dbc`, are not in it.
+The capture (2.8 MB, 572,832 zones) was waiting before the server started, but Tracy's on-demand mode records
+from the moment the connection is made, a fraction of a second in, so the first stages (the character store's
+opening, `load: dbc`) are not in it. In a later, shorter capture they were: the connection beat them.
 
 ### What was dropped
 
