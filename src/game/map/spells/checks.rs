@@ -600,19 +600,21 @@ pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mo
     if !u.alive && !for_the_dead(s) && !resurrects(s) {
         return Some(fail::TARGETS_DEAD);
     }
-    // A creature's too: a harmful cast at one made friendly or out of
-    // reach of attack as it was cast fails, as mangos's `Spell::cast`
-    // checks it again and Thistle Tea's `CastTarget.validate` does at
-    // launch (Keeper Remulos's Starfire, begun at Eranikus, landed after
-    // his redemption and drew him back into a fight).
+    // A creature's too: a cast at an enemy made friendly or out of reach
+    // of attack as it was cast fails, as mangos's `Spell::cast` checks it
+    // again and Thistle Tea's `CastTarget.validate` does at launch (Keeper
+    // Remulos's Starfire, begun at Eranikus, landed after his redemption
+    // and drew him back into a fight). Only at an enemy, as mangos's
+    // `CheckCast` holds a target to its effect's harmful filter alone: a
+    // script's target needn't be one (Ragnaros's Elemental Fire, at the
+    // Majordomo his summoning made friendly).
     let requires_enemy = s
         .effects
         .iter()
         .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy) || e.target_a == 53);
-    if (requires_enemy || !auras::positive(s) && !resurrects(s))
-        && !combat::can_attack(map, caster, target)
-        && !s.has_effect(95)
-    {
+    let harmful = requires_enemy
+        || map.players.contains_key(&caster) && !auras::positive(s) && !resurrects(s);
+    if harmful && !combat::can_attack(map, caster, target) && !s.has_effect(95) {
         return Some(fail::TARGET_FRIENDLY);
     }
     if !map.players.contains_key(&caster) {
