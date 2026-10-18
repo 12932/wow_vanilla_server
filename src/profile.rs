@@ -10,7 +10,7 @@
 //! kernel's tick, so a process gets about 100 samples a CPU-second,
 //! whatever the rate asked. See docs/PERFORMANCE.md.
 
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -86,11 +86,11 @@ fn short(path: &str) -> &str {
 /// charged to the innermost line of the server's own source, and by
 /// inclusive time (each function once a stack).
 fn summary(report: &pprof::Report) -> String {
-    let mut own: HashMap<String, u64> = HashMap::new();
-    let mut own_line: HashMap<String, u64> = HashMap::new();
-    let mut ours: HashMap<String, u64> = HashMap::new();
-    let mut inclusive: HashMap<String, u64> = HashMap::new();
-    let mut ours_inclusive: HashMap<String, u64> = HashMap::new();
+    let mut own: AHashMap<String, u64> = AHashMap::new();
+    let mut own_line: AHashMap<String, u64> = AHashMap::new();
+    let mut ours: AHashMap<String, u64> = AHashMap::new();
+    let mut inclusive: AHashMap<String, u64> = AHashMap::new();
+    let mut ours_inclusive: AHashMap<String, u64> = AHashMap::new();
     let mut total = 0u64;
     let manifest = env!("CARGO_MANIFEST_DIR");
     for (frames, &count) in &report.data {
@@ -117,8 +117,8 @@ fn summary(report: &pprof::Report) -> String {
             );
             *ours.entry(line).or_default() += count;
         }
-        let mut seen = HashSet::new();
-        let mut seen_ours = HashSet::new();
+        let mut seen = AHashSet::new();
+        let mut seen_ours = AHashSet::new();
         for s in &symbols {
             let file = s.filename();
             let name = format!("{} ({})", s.name(), short(&file));

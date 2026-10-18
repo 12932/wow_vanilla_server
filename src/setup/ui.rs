@@ -1,7 +1,7 @@
 //! The setup's face: questions (dialoguer), progress bars and spinners
 //! (indicatif), Ctrl-C, and logs kept clear of the bars.
 
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -201,12 +201,12 @@ fn title(name: &str) -> &str {
 struct State {
     terrain: Option<ProgressBar>,
     /// The terrain's maps not done yet.
-    terrain_left: HashSet<String>,
+    terrain_left: AHashSet<String>,
     models: Option<ProgressBar>,
-    navmesh: HashMap<String, ProgressBar>,
+    navmesh: AHashMap<String, ProgressBar>,
     /// Steps done and the total of each stage begun.
-    steps: HashMap<String, (u64, u64)>,
-    done: HashSet<String>,
+    steps: AHashMap<String, (u64, u64)>,
+    done: AHashSet<String>,
 }
 
 /// The build's bars: the whole of it, the terrain, the models, and the map
@@ -215,7 +215,7 @@ pub struct Bars {
     multi: MultiProgress,
     overall: ProgressBar,
     /// Each stage's share of the overall bar.
-    weights: HashMap<String, u64>,
+    weights: AHashMap<String, u64>,
     state: Mutex<State>,
     stop: Arc<AtomicBool>,
 }
@@ -224,7 +224,7 @@ impl Bars {
     pub fn new(todo: &Todo, stop: Arc<AtomicBool>) -> Self {
         let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
         let stages = todo.stages();
-        let weights: HashMap<String, u64> = stages.iter().map(|&(s, w)| (key(s), w)).collect();
+        let weights: AHashMap<String, u64> = stages.iter().map(|&(s, w)| (key(s), w)).collect();
         let overall = multi.add(
             ProgressBar::new(stages.iter().map(|s| s.1).sum())
                 .with_style(style(OVERALL))

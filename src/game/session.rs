@@ -708,13 +708,13 @@ fn place_items(
         }
         *items = merged;
     }
-    let mut used = std::collections::HashSet::new();
+    let mut used = ahash::AHashSet::new();
     for item in items.iter() {
         if item.slot != u8::MAX {
             used.insert(item.slot);
         }
     }
-    let free_pack = |used: &std::collections::HashSet<u8>| (23u8..39).find(|s| !used.contains(s));
+    let free_pack = |used: &ahash::AHashSet<u8>| (23u8..39).find(|s| !used.contains(s));
     let mut placed = Vec::with_capacity(items.len());
     for mut item in items.drain(..) {
         if item.slot != u8::MAX {

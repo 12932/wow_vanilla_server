@@ -1232,7 +1232,7 @@ async fn a_saved_field_that_wont_parse_costs_only_itself() {
 /// Chaos: random, well-typed client messages in random orders, from
 /// players among the real world's creatures, NPCs and objects.
 mod chaos {
-    use std::collections::HashMap;
+    use ahash::AHashMap;
 
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
@@ -1356,9 +1356,9 @@ mod chaos {
     /// afresh, or (now and then, or while it has none) a new shape tried.
     struct Generator {
         vocabulary: Vocabulary,
-        shapes: HashMap<u32, Vec<Vec<Kind>>>,
+        shapes: AHashMap<u32, Vec<Vec<Kind>>>,
         /// Bodies that made wow_messages panic, by opcode.
-        parse_panics: HashMap<u32, (u32, String)>,
+        parse_panics: AHashMap<u32, (u32, String)>,
     }
 
     impl Generator {
@@ -1655,8 +1655,8 @@ mod chaos {
         };
         let mut generator = Generator {
             vocabulary,
-            shapes: HashMap::new(),
-            parse_panics: HashMap::new(),
+            shapes: AHashMap::new(),
+            parse_panics: AHashMap::new(),
         };
         // Logging out ends the chaos for that player; the rest are fair.
         let skip = [0x4A, 0x4B];
@@ -1682,9 +1682,9 @@ mod chaos {
         let mut sent_total = 0;
         // What was sent and heard, and where the players were, to see what
         // the chaos reached.
-        let mut sent_by: HashMap<u32, u32> = HashMap::new();
-        let mut heard: HashMap<String, u32> = HashMap::new();
-        let mut whereabouts: HashMap<String, u32> = HashMap::new();
+        let mut sent_by: AHashMap<u32, u32> = AHashMap::new();
+        let mut heard: AHashMap<String, u32> = AHashMap::new();
+        let mut whereabouts: AHashMap<String, u32> = AHashMap::new();
         let started = std::time::Instant::now();
         for round in 0..rounds {
             let mut sent: Vec<String> = Vec::new();

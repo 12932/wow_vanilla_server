@@ -1,0 +1,6 @@
+# ahash's maps, not std's: SipHash is slow on the small keys (guids, ids)
+# wvs looks up on every update, and one kind of map is easier to follow.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use ahash::AHashMap" },
+    { path = "std::collections::HashSet", reason = "use ahash::AHashSet" },
+]

@@ -1042,7 +1042,7 @@ async fn the_friend_list_shows_who_is_away_and_the_ignored_are_told() {
     a.send(CMSG_FRIEND_LIST {}).await;
     let list = a.wait_frame("SMSG_FRIEND_LIST", 0x067, |_| true).await;
     assert_eq!(list[0], 3, "three friends");
-    let mut rows = std::collections::HashMap::new();
+    let mut rows = ahash::AHashMap::new();
     let mut at = 1;
     while at < list.len() {
         let g = u64_at(&list, at);

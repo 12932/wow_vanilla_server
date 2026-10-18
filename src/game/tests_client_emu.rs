@@ -12,7 +12,7 @@
 //! and `uv` on the path, and it is slow (it emulates x86). Without either
 //! it fails loudly, as the real-world tests do without their data.
 
-use std::collections::HashSet;
+use ahash::AHashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -157,7 +157,7 @@ async fn the_packets_wvs_sends_pass_the_client() {
     }
 
     // Every frame everyone saw, of a kind the checker knows, deduplicated.
-    let mut seen = HashSet::new();
+    let mut seen = AHashSet::new();
     let mut capture = Vec::new();
     let mut counts = std::collections::BTreeMap::new();
     let mut clients = vec![&mut a];
