@@ -330,3 +330,196 @@ async fn a_companion_goes_with_its_owners_death_and_departure() {
     let gone = on(&map, move |m| m.creature(c).is_none()).await;
     assert!(gone, "its owner left");
 }
+
+/// A stable master, of no side.
+const STABLE_MASTER: u32 = 963_102;
+
+fn stable_world() -> GameData {
+    let mut d = data();
+    d.creature_templates.insert(
+        STABLE_MASTER,
+        CreatureTemplate {
+            entry: STABLE_MASTER,
+            name: "Stable Master".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 30,
+            level_max: 30,
+            faction: 35,
+            unit_class: 1,
+            creature_type: 7,
+            health_multiplier: 1.0,
+            damage_multiplier: 1.0,
+            base_attack_time: 2000,
+            health_max: 500,
+            npc_flags: crate::game::map::pets::NPC_FLAG_STABLEMASTER,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// What `CMSG_BUY_STABLE_SLOT` of `npc` comes to.
+async fn buy_stall(c: &mut Client, npc: Guid) -> StableResult {
+    c.clear();
+    c.send(CMSG_BUY_STABLE_SLOT { npc }).await;
+    crate::game::tests_pets::stable_result(c).await
+}
+
+/// Thistle Tea's `PetStable` "requires a ready living hunter and a nearby
+/// live stable master" and "revalidates distance and world on every
+/// request": a stall is bought only by a living hunter from a living stable
+/// master within reach; any other is told the stable's error (mangos's
+/// `CheckStableMaster`, `GetNPCIfCanInteractWith`'s hunters alone).
+#[tokio::test]
+async fn a_stall_is_bought_by_a_living_hunter_from_a_master_in_reach() {
+    use crate::game::map::creature::Life;
+    let realm = harness::realm_with(stable_world());
+    let mut a = Client::connect(&realm, "H");
+    let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
+    let map = map_of(&realm, h);
+    let master = on(&map, move |m| {
+        m.players.get_mut(&h).unwrap().set_money(100_000);
+        crate::game::tests_p3_combat::spawn(m, h, STABLE_MASTER, 30, 2.0)
+    })
+    .await;
+    a.sees(master).await;
+    let set = move |m: &mut Map, f: &dyn Fn(&mut crate::game::map::creature::Creature)| {
+        f(m.creature_mut(master).unwrap());
+    };
+    let later = std::time::Duration::from_secs(60);
+    on(&map, move |m| {
+        let at = m.now + later;
+        set(m, &|c| {
+            c.life = Life::Dead {
+                corpse_until: at,
+                respawn_at: at,
+            }
+        })
+    })
+    .await;
+    assert_eq!(
+        buy_stall(&mut a, master).await,
+        StableResult::ErrStable,
+        "dead"
+    );
+    on(&map, move |m| {
+        set(m, &|c| {
+            c.life = Life::Alive;
+            c.fields.set_u32(UNIT_NPC_FLAGS, 0);
+        })
+    })
+    .await;
+    assert_eq!(
+        buy_stall(&mut a, master).await,
+        StableResult::ErrStable,
+        "unflagged"
+    );
+    on(&map, move |m| {
+        let at = m.players[&h].position();
+        set(m, &|c| {
+            c.fields.set_u32(
+                UNIT_NPC_FLAGS,
+                crate::game::map::pets::NPC_FLAG_STABLEMASTER,
+            );
+            c.position = Vector3d {
+                x: at.x + 8.0,
+                ..at
+            };
+        })
+    })
+    .await;
+    assert_eq!(
+        buy_stall(&mut a, master).await,
+        StableResult::ErrStable,
+        "out of reach"
+    );
+    assert_eq!(
+        buy_stall(&mut a, h).await,
+        StableResult::ErrStable,
+        "herself"
+    );
+    on(&map, move |m| {
+        let at = m.players[&h].position();
+        set(m, &|c| {
+            c.position = Vector3d {
+                x: at.x + 2.0,
+                ..at
+            }
+        });
+        death::kill(m, h);
+    })
+    .await;
+    assert_eq!(
+        buy_stall(&mut a, master).await,
+        StableResult::ErrStable,
+        "a dead hunter"
+    );
+    on(&map, move |m| death::resurrect(m, h, 1.0)).await;
+    assert_eq!(
+        buy_stall(&mut a, master).await,
+        StableResult::SuccessBuySlot,
+        "alive, in reach"
+    );
+    // A warlock beside it.
+    let mut w = Client::connect(&realm, "W");
+    let gw = w.enter("Warlock", Race::Human, Class::Warlock).await;
+    let wmap = map_of(&realm, gw);
+    let master = on(&wmap, move |m| {
+        m.players.get_mut(&gw).unwrap().set_money(100_000);
+        crate::game::tests_p3_combat::spawn(m, gw, STABLE_MASTER, 30, 2.0)
+    })
+    .await;
+    w.sees(master).await;
+    assert_eq!(
+        buy_stall(&mut w, master).await,
+        StableResult::ErrStable,
+        "not a hunter"
+    );
+}
+
+/// Thistle Tea's `Pets.abandon` "removes only the current bond, process,
+/// metadata, and client controls": abandoning another's guid does nothing;
+/// abandoning her pet removes it, its record and the bar, and leaves the
+/// stable as it was.
+#[tokio::test]
+async fn an_abandoned_pet_goes_with_its_bar_and_record_not_the_stable() {
+    let (realm, mut a, h, wolf) = hunter_and_wolf().await;
+    let map = map_of(&realm, h);
+    let stabled = on(&map, move |m| {
+        let p = m.players.get_mut(&h).unwrap();
+        let mut r = p.row.state.pets.current.clone().unwrap();
+        r.number += 100;
+        r.name = "Stabled".into();
+        p.row.state.pets.stable_slots = 1;
+        p.row.state.pets.stable.push((1, r));
+        p.row.state.pets.stable.clone()
+    })
+    .await;
+    a.send(CMSG_PET_ABANDON {
+        pet: crate::game::guid::player(4242),
+    })
+    .await;
+    handled(&mut a).await;
+    let still = on(&map, move |m| m.creature(wolf).is_some()).await;
+    assert!(still, "another's guid");
+    a.clear();
+    a.send(CMSG_PET_ABANDON { pet: wolf }).await;
+    assert_eq!(
+        crate::game::tests_pets::pet_bar(&mut a).await,
+        Guid::zero(),
+        "the bar gone"
+    );
+    let after = on(&map, move |m| {
+        let p = &m.players[&h];
+        (
+            m.creature(wolf).is_none(),
+            p.owned.pet,
+            p.row.state.pets.current.is_none(),
+            p.row.state.pets.active,
+            p.row.state.pets.stable.clone(),
+        )
+    })
+    .await;
+    assert_eq!(after, (true, None, true, false, stabled));
+}

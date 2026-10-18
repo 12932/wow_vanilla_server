@@ -90,6 +90,17 @@ pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
     if p.flight.is_some() || held || crate::game::map::combat::hostile(map, npc, player) {
         return None;
     }
+    // Not one fighting, nor one charmed (mangos's `CanInteractNow`); a
+    // stable master serves hunters alone (`GetNPCIfCanInteractWith`).
+    let fighting = map
+        .combat(npc)
+        .is_some_and(|f| f.attacking && !f.victim.is_zero());
+    if fighting || !c.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero() {
+        return None;
+    }
+    if flag == crate::game::map::pets::NPC_FLAG_STABLEMASTER && p.row.class != 3 {
+        return None;
+    }
     if !within_reach(map, player, npc) {
         return None;
     }
