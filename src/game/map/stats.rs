@@ -59,6 +59,16 @@ pub fn mana_regen(class: u8, spirit: f32) -> f32 {
 /// Regenerate everyone whose tick is due.
 pub fn regen(map: &mut Map) {
     let now = map.now;
+    // The polymorphed among those due heal fast (Thistle Tea's
+    // `Regen.regen_health`; Polymorph's tooltip: the sheep "will regenerate
+    // very quickly").
+    let sheep: Vec<Guid> = map
+        .players
+        .iter()
+        .filter(|(_, p)| p.regen_at <= now && !p.auras.is_empty())
+        .map(|(&g, _)| g)
+        .filter(|&g| crate::game::map::creature_combat::polymorphed(map, g))
+        .collect();
     for p in map.players.values_mut() {
         if p.regen_at > now {
             continue;
@@ -67,11 +77,12 @@ pub fn regen(map: &mut Map) {
         if p.death != Death::Alive {
             continue;
         }
-        regen_player(p, now);
+        let polymorphed = sheep.contains(&p.guid);
+        regen_player(p, now, polymorphed);
     }
 }
 
-fn regen_player(p: &mut Player, now: Instant) {
+fn regen_player(p: &mut Player, now: Instant, polymorphed: bool) {
     use crate::game::map::auras::*;
     let in_combat = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
     let class = p.row.class;
@@ -87,13 +98,19 @@ fn regen_player(p: &mut Player, now: Instant) {
         // five seconds), and the part of a point left from the last tick
         // (Thistle Tea's `Regen.regen_health`; mangos's
         // `Player::RegenerateHealth` adds those auras flat too).
-        let mut add = health_regen(class, spirit)
-            * if in_combat {
-                a.sum(AURA_MOD_REGEN_DURING_COMBAT) as f32 / 100.0
-            } else {
-                a.product(AURA_MOD_HEALTH_REGEN_PERCENT)
-            };
-        if p.stand_state() != 0 {
+        let mut add = if polymorphed {
+            // A tenth of their health a tick, in a fight or out, in place
+            // of spirit's share, sitting's and the percent auras'.
+            max as f32 / 10.0
+        } else {
+            health_regen(class, spirit)
+                * if in_combat {
+                    a.sum(AURA_MOD_REGEN_DURING_COMBAT) as f32 / 100.0
+                } else {
+                    a.product(AURA_MOD_HEALTH_REGEN_PERCENT)
+                }
+        };
+        if p.stand_state() != 0 && !polymorphed {
             // Sitting regenerates faster.
             add *= 1.5;
         }
@@ -132,7 +149,7 @@ fn regen_player(p: &mut Player, now: Instant) {
             .is_some_and(|t| now.duration_since(t) < FIVE_SECOND_RULE);
         // Within the five-second rule, only what auras let through.
         let share = if casting {
-            a.sum(AURA_MOD_MANA_REGEN_INTERRUPT) as f32 / 100.0
+            a.sum(AURA_MOD_MANA_REGEN_INTERRUPT).min(100) as f32 / 100.0
         } else {
             1.0
         };
@@ -148,11 +165,14 @@ fn regen_player(p: &mut Player, now: Instant) {
                 .set_u32(UNIT_FIELD_POWER1, (mana + add as u32).min(max));
         }
     }
-    // Rage decays out of combat.
+    // Rage decays out of combat, unless regeneration is stopped, and as
+    // fast as the percent auras for rage say (mangos's
+    // `Player::RegenerateAll` and `Player::Regenerate`).
     let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
-    if !in_combat && rage > 0 {
+    if !in_combat && !stopped && rage > 0 {
+        let decay = (20.0 * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 1)) as u32;
         p.fields
-            .set_u32(UNIT_FIELD_POWER1 + 1, rage.saturating_sub(20));
+            .set_u32(UNIT_FIELD_POWER1 + 1, rage.saturating_sub(decay));
     }
     let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 3);
     let energy = p.fields.get_u32(UNIT_FIELD_POWER1 + 3);

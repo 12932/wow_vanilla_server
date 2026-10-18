@@ -821,7 +821,7 @@ fn jump(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
 
 /// Health and power come back: health out of a fight, a demon's mana out
 /// of a fight, a hunter's pet's focus all the time.
-fn regen(map: &mut Map, g: Guid, now: Instant) {
+pub fn regen(map: &mut Map, g: Guid, now: Instant) {
     let due = state(map, g).is_some_and(|s| s.regen_at <= now);
     if !due {
         return;
@@ -852,9 +852,16 @@ fn regen(map: &mut Map, g: Guid, now: Instant) {
         );
     }
     if kind == Some(Kind::Hunter) {
-        // vmangos's focus: 24 every four seconds.
+        // vmangos's focus: 24 every four seconds, as fast as the percent
+        // auras for focus say (mangos's `Creature::RegeneratePower`).
+        let rate = c.auras.product_misc(
+            crate::game::map::auras::AURA_MOD_POWER_REGEN_PERCENT,
+            POWER_FOCUS as i32,
+        );
+        let f = &mut c.fields;
         let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + POWER_FOCUS);
         let focus = f.get_u32(UNIT_FIELD_POWER1 + POWER_FOCUS);
-        f.set_u32(UNIT_FIELD_POWER1 + POWER_FOCUS, (focus + 12).min(max));
+        let add = (12.0 * rate) as u32;
+        f.set_u32(UNIT_FIELD_POWER1 + POWER_FOCUS, (focus + add).min(max));
     }
 }
