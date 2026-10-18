@@ -301,3 +301,44 @@ async fn a_full_bank_bag_is_not_destroyed() {
         "with what it holds"
     );
 }
+
+/// R4-4. Only a window of one's own closes with `CMSG_LOOT_RELEASE`:
+/// another player's release of a creature a rogue is picking leaves the
+/// rogue's pocket loot where it is, rather than filing it as the other's.
+#[tokio::test]
+async fn another_players_release_leaves_a_rogues_pockets() {
+    use crate::game::map::loot::{Loot, LootKind};
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4PP");
+    let rogue = a.enter("Picker", Race::Human, Class::Rogue).await;
+    let mut b = Client::connect(&realm, "R4PP2");
+    let other = b.enter("Closer", Race::Human, Class::Warrior).await;
+    let target = vendor_guid();
+    a.sees(target).await;
+    on_map(&realm, move |m| {
+        let c = m.creature_mut(target).unwrap();
+        c.loot = Some(Loot {
+            gold: 10,
+            owner: Some(rogue),
+            kind: LootKind::Pickpocket,
+            ..Default::default()
+        });
+        crate::game::map::loot::show(m, rogue, target);
+    })
+    .await;
+    b.send(CMSG_LOOT_RELEASE { guid: target }).await;
+    handled(&mut b).await;
+    let (left, filed, still) = on_map(&realm, move |m| {
+        (
+            m.creature(target)
+                .and_then(|c| c.loot.as_ref())
+                .map(|l| l.gold),
+            m.loot_state.pockets.contains_key(&(target, other)),
+            m.players[&rogue].looting,
+        )
+    })
+    .await;
+    assert_eq!(left, Some(10), "the rogue's pockets are still open");
+    assert!(!filed, "and not the closer's to find");
+    assert_eq!(still, Some(target), "the rogue still looks in them");
+}
