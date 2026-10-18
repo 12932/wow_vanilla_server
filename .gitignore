@@ -21,6 +21,9 @@ characters.sqlite*
 /data/nav
 /data/terrain
 
+# Python bytecode cache (tools/client_check and the like).
+__pycache__/
+
 # Per-user the orchestrator state (scheduled tasks, locks, plans, etc.).
 .claude/
 
