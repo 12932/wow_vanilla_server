@@ -73,45 +73,7 @@ const ROLL_CALL: Duration = Duration::from_secs(60);
 pub const KIND_ARENA: &str = "arena";
 
 /// `[arena]` in the config.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ArenaConfig {
-    /// Minutes between scheduled battles; 0 for only those a GM starts.
-    pub every_minutes: u64,
-    pub countdown_secs: u64,
-    /// When the ring starts closing, after the fight begins.
-    pub ring_after_secs: u64,
-    /// How often it closes a step, and by how much.
-    pub ring_every_secs: u64,
-    pub ring_step_yards: f32,
-    pub ring_min_yards: f32,
-    /// The longest a battle runs: then the ring is at its smallest and
-    /// burns its hardest.
-    pub max_minutes: u64,
-    /// The champion's prize: copper, an item, and a buff.
-    pub reward_copper: u32,
-    pub reward_item: u32,
-    pub champion_spell: u32,
-    pub min_fighters: u32,
-}
-
-impl Default for ArenaConfig {
-    fn default() -> Self {
-        Self {
-            every_minutes: 0,
-            countdown_secs: 30,
-            ring_after_secs: 120,
-            ring_every_secs: 20,
-            ring_step_yards: 5.0,
-            ring_min_yards: 6.0,
-            max_minutes: 20,
-            reward_copper: 250_000,
-            reward_item: 19024,
-            champion_spell: 24425,
-            min_fighters: 2,
-        }
-    }
-}
+pub use crate::config::ArenaConfig;
 
 /// The pit's state on its map.
 #[derive(Debug, Default)]
@@ -373,7 +335,7 @@ pub fn command(map: &mut Map, g: Guid, args: &[&str]) -> String {
             if !is_arena_map(map) {
                 return "Gurubashi Arena is in Stranglethorn Vale.".into();
             }
-            let config = map.realm.config.arena.clone();
+            let config = map.cfg.arena.clone();
             let countdown = args
                 .get(1)
                 .and_then(|a| a.parse().ok())
@@ -466,7 +428,7 @@ pub fn start(map: &mut Map, countdown_secs: u64, max_minutes: u64) -> Result<usi
         return Err("A battle is already on.".into());
     }
     let now = map.now;
-    let min = map.realm.config.arena.min_fighters.max(2) as usize;
+    let min = map.cfg.arena.min_fighters.max(2) as usize;
     let mut fighters: Vec<Fighter> = map
         .grid
         .around(CENTRE.x, CENTRE.y, PIT_RADIUS + 5.0)
@@ -583,9 +545,9 @@ pub fn update(map: &mut Map) {
     if map.arena.battle.as_ref().is_some_and(|b| now >= b.cap_at) {
         // Time is up: the ring at its smallest, burning hard.
         if let Some(b) = map.arena.battle.as_mut()
-            && b.ring > map.realm.config.arena.ring_min_yards
+            && b.ring > map.cfg.arena.ring_min_yards
         {
-            b.ring = map.realm.config.arena.ring_min_yards;
+            b.ring = map.cfg.arena.ring_min_yards;
             b.ring_steps = b.ring_steps.max(10);
             yell(
                 map,
@@ -628,7 +590,7 @@ fn booty_run(map: &mut Map) {
 
 /// A scheduled battle, when it's due and the pit has its fighters.
 fn schedule(map: &mut Map) {
-    let config = map.realm.config.arena.clone();
+    let config = map.cfg.arena.clone();
     if config.every_minutes == 0 {
         return;
     }
@@ -671,7 +633,7 @@ fn countdown(map: &mut Map) {
         return;
     }
     b.phase = Phase::Fight { since: now };
-    let config = map.realm.config.arena.clone();
+    let config = map.cfg.arena.clone();
     b.next_shrink = Some(now + Duration::from_secs(config.ring_after_secs));
     b.roll_call_at = now + ROLL_CALL;
     // Everyone starts whole.
@@ -807,7 +769,7 @@ impl SinceExt for Instant {
 /// The ring closes, and burns whoever stands outside it.
 fn ring(map: &mut Map) {
     let now = map.now;
-    let config = map.realm.config.arena.clone();
+    let config = map.cfg.arena.clone();
     let Some(b) = map.arena.battle.as_mut() else {
         return;
     };
@@ -1111,7 +1073,7 @@ fn end_battle(map: &mut Map, won: Option<Option<Guid>>) {
 
 /// The champion's crowning, the standings, and the record.
 fn crown(map: &mut Map, b: &Battle, champion: Option<Guid>, seconds: u64) {
-    let config = map.realm.config.arena.clone();
+    let config = map.cfg.arena.clone();
     let mut standings: Vec<&Fighter> = b.fighters.iter().collect();
     standings.sort_by(|x, y| {
         x.place

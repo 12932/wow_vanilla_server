@@ -572,7 +572,7 @@ fn battleground(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                 };
                 m.invited.insert(
                     g,
-                    (team, std::time::Instant::now() + battlegrounds::INVITE_FOR),
+                    (team, std::time::Instant::now() + map.cfg.bg_invite_for),
                 );
                 bgs.matches.insert(id, m);
             }
@@ -580,7 +580,7 @@ fn battleground(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                 battlegrounds::map_of(bg),
                 id,
                 2,
-                battlegrounds::INVITE_FOR.as_millis() as u32,
+                map.cfg.bg_invite_for.as_millis() as u32,
                 0,
             );
             p.outbound.send_frame(frame);

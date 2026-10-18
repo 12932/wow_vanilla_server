@@ -141,7 +141,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
             );
         }
     }
-    let motd = &map.realm.config.motd;
+    let motd = &map.cfg.motd;
     if !motd.is_empty() {
         chat::send_system(&p.outbound, motd);
     }
@@ -220,7 +220,7 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         });
         return;
     }
-    let delay = map.realm.config.logout_delay;
+    let delay = map.cfg.logout_delay;
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };

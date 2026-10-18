@@ -1205,7 +1205,7 @@ pub fn petition_query(realm: &Realm, me: &Online, item: Guid) {
     let Some(p) = guilds.petitions.get(&guid::counter(item)) else {
         return;
     };
-    let needed = realm.config.petition_signatures;
+    let needed = realm.config().petition_signatures;
     me.outbound.send(&SMSG_PETITION_QUERY_RESPONSE {
         petition_id: p.id,
         charter_owner: guid::player(p.owner),
@@ -1285,7 +1285,7 @@ pub fn petition_sign(realm: &Realm, me: &Online, item: Guid) {
         );
         return;
     }
-    let full = p.signers.len() >= realm.config.petition_signatures as usize;
+    let full = p.signers.len() >= realm.config().petition_signatures as usize;
     let result = if p.owner == me_c {
         PetitionResult::CantSignOwn
     } else if full {
@@ -1359,7 +1359,7 @@ pub fn petition_rename(realm: &Realm, me: &Online, item: Guid, name: &str) {
 /// `CMSG_TURN_IN_PETITION`: enough signatures make the guild.
 pub fn petition_turn_in(map: &mut Map, g: Guid, item: Guid) {
     let realm = map.realm.clone();
-    let needed = realm.config.petition_signatures as usize;
+    let needed = realm.config().petition_signatures as usize;
     let petition = {
         let guilds = realm.social.guilds.lock();
         let Some(p) = guilds

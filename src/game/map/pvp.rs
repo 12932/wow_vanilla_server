@@ -351,7 +351,7 @@ pub fn enforced(map: &Map, team: Team, zone: u32) -> bool {
     let Some(a) = map.realm.data.area(zone) else {
         return false;
     };
-    let pvp_realm = map.realm.config.pvp_realm;
+    let pvp_realm = map.cfg.pvp_realm;
     let capital = a.flags & AREA_FLAG_CAPITAL != 0;
     match (a.team, team) {
         // AreaTable's team: 2 the Alliance's, 4 the Horde's, 0 contested.

@@ -129,6 +129,7 @@ fn snapshot_path(dir: &std::path::Path) -> Option<(std::path::PathBuf, String)> 
 pub fn test_config() -> RealmConfig {
     RealmConfig {
         visibility_yards: 100.0,
+        instance_visibility_yards: 100.0,
         battleground_visibility_yards: 400.0,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
@@ -144,12 +145,19 @@ pub fn test_config() -> RealmConfig {
         logout_delay: Duration::ZERO,
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
+        bg_auto_leave: crate::game::battlegrounds::AUTO_LEAVE,
+        bg_invite_for: crate::game::battlegrounds::INVITE_FOR,
         pvp_realm: false,
         max_packets_per_sec: 200,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         spell_rolls: false,
         spell_travel: false,
         arena: Default::default(),
+        rates: Default::default(),
+        creatures: Default::default(),
+        players: Default::default(),
+        anticheat: Default::default(),
+        gm: Default::default(),
     }
 }
 

@@ -24,7 +24,8 @@ use crate::game::registry::{Online, Team};
 use crate::game::social::send_frame;
 
 pub const SMSG_BATTLEFIELD_STATUS: u16 = 0x2D4;
-/// How long an invitation stands.
+/// How long an invitation stands, by default (`[battleground]
+/// invitation_secs`).
 pub const INVITE_FOR: Duration = Duration::from_secs(120);
 
 // Statuses.
@@ -61,7 +62,8 @@ pub fn bracket_for(bg: u32, level: u8) -> u8 {
     if bg == 1 { 0 } else { bracket_of(level) }
 }
 
-/// How long after the end everyone is sent home.
+/// How long after the end everyone is sent home, by default
+/// (`[battleground] auto_leave_secs`).
 pub const AUTO_LEAVE: Duration = Duration::from_secs(120);
 
 fn side(team: Team) -> usize {
@@ -124,10 +126,11 @@ pub struct Match {
 
 impl Match {
     /// Its `SMSG_BATTLEFIELD_STATUS` for one inside: the time left before
-    /// all are sent home (after the end), and since the battle began.
-    pub fn in_progress_frame(&self, now: Instant) -> std::sync::Arc<[u8]> {
+    /// all are sent home (`leave_after` the end), and since the battle
+    /// began.
+    pub fn in_progress_frame(&self, now: Instant, leave_after: Duration) -> std::sync::Arc<[u8]> {
         let leave = self.ended_at.map_or(0, |t| {
-            (t + AUTO_LEAVE).saturating_duration_since(now).as_millis() as u32
+            (t + leave_after).saturating_duration_since(now).as_millis() as u32
         });
         let since = self
             .began
@@ -217,7 +220,7 @@ pub fn status_frame_in(
 fn template(realm: &Realm, bg: u32) -> (u32, u32, u32, u32) {
     let t = realm.data.battlegrounds.get(&bg);
     let min = realm
-        .config
+        .config()
         .bg_min_players
         .unwrap_or_else(|| t.map_or(10, |t| t.min_players.max(1)));
     let max = t.map_or(10, |t| t.max_players.max(1));
@@ -246,7 +249,7 @@ pub fn send_status(realm: &Realm, me: &Online) {
                     until.saturating_duration_since(now).as_millis() as u32,
                     0,
                 ),
-                None => m.in_progress_frame(now),
+                None => m.in_progress_frame(now, realm.config().bg_auto_leave),
             }
         } else if let Some((bg, bracket, since)) = queued {
             status_frame_in(
@@ -353,7 +356,7 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
                 return Err(Refused::InvalidInstance);
             };
             for e in who {
-                m.invited.insert(e.guid, (team, now + INVITE_FOR));
+                m.invited.insert(e.guid, (team, now + realm.config().bg_invite_for));
             }
             Some(m.id)
         } else {
@@ -381,7 +384,7 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
                     map_of(bg),
                     id,
                     WAIT_JOIN,
-                    INVITE_FOR.as_millis() as u32,
+                    realm.config().bg_invite_for.as_millis() as u32,
                     0,
                 ),
             );
@@ -456,7 +459,7 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
                 let room = (max as usize).saturating_sub(m.count(team));
                 for q in take(queue, team, room) {
                     m.invited
-                        .insert(q.guid, (team, Instant::now() + INVITE_FOR));
+                        .insert(q.guid, (team, Instant::now() + realm.config().bg_invite_for));
                     invites.push((q.guid, m.bg, m.id));
                 }
             }
@@ -478,7 +481,7 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
             for team in [Team::Alliance, Team::Horde] {
                 for q in take(queue, team, max as usize) {
                     m.invited
-                        .insert(q.guid, (team, Instant::now() + INVITE_FOR));
+                        .insert(q.guid, (team, Instant::now() + realm.config().bg_invite_for));
                     invites.push((q.guid, bg, id));
                 }
             }
@@ -494,7 +497,7 @@ pub fn fill(realm: &Realm, bg: u32, bracket: u8) {
                 map_of(bg),
                 id,
                 WAIT_JOIN,
-                INVITE_FOR.as_millis() as u32,
+                realm.config().bg_invite_for.as_millis() as u32,
                 0,
             ),
         );
@@ -536,7 +539,7 @@ pub fn port(map: &mut Map, g: Guid, enter: bool) {
         (
             m.key(),
             team,
-            (m.bg, m.bracket, m.in_progress_frame(Instant::now())),
+            (m.bg, m.bracket, m.in_progress_frame(Instant::now(), realm.config().bg_auto_leave)),
         )
     };
     if !enter {
@@ -704,7 +707,7 @@ pub fn status_to_members(realm: &Realm, key: MapKey) {
             return;
         };
         (
-            m.in_progress_frame(Instant::now()),
+            m.in_progress_frame(Instant::now(), realm.config().bg_auto_leave),
             m.members.keys().copied().collect::<Vec<_>>(),
         )
     };
@@ -737,7 +740,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
         for m in bgs.matches.values_mut() {
             if let Some(team) = m.members.remove(&g) {
                 if !m.ended {
-                    m.invited.insert(g, (team, Instant::now() + INVITE_FOR));
+                    m.invited.insert(g, (team, Instant::now() + realm.config().bg_invite_for));
                 }
             } else if m.invited.remove(&g).is_some() {
                 refill.push((m.bg, m.bracket));

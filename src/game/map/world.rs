@@ -21,7 +21,7 @@ use crate::game::map::{Map, MapKey, visibility};
 pub fn populate(map: &mut Map) {
     let started = Instant::now();
     let data = map.realm.data.clone();
-    if let Some(dir) = map.realm.config.nav_dir.as_ref() {
+    if let Some(dir) = map.cfg.nav_dir.as_ref() {
         let name = data
             .maps
             .get(&map.key.map)
@@ -36,7 +36,7 @@ pub fn populate(map: &mut Map) {
             map.nav = Nav::open(dir, &name);
         }
     }
-    if let Some(dir) = map.realm.config.terrain_dir.as_ref() {
+    if let Some(dir) = map.cfg.terrain_dir.as_ref() {
         map.terrain = crate::game::map::terrain::Terrain::open(dir, map.key.map);
     }
     let on = crate::game::events::current(&map.realm);

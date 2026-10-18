@@ -20,9 +20,9 @@ pub const MOVE_THRESHOLD: f32 = 8.0;
 /// world's.
 pub fn radius(map: &Map) -> f32 {
     if crate::game::battlegrounds::bg_of_map(map.key.map).is_some() {
-        map.realm.config.battleground_visibility_yards
+        map.cfg.battleground_visibility_yards
     } else {
-        map.realm.config.visibility_yards
+        map.cfg.visibility_yards
     }
 }
 

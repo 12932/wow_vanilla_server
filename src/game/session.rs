@@ -194,7 +194,7 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
         mut inbound,
     } = connection;
     let (control, control_rx) = mpsc::unbounded_channel();
-    let mut rate = PacketRate::new(realm.config.max_packets_per_sec);
+    let mut rate = PacketRate::new(realm.config().max_packets_per_sec);
     let mut s = Session {
         realm,
         account: Arc::from(account),
@@ -365,12 +365,12 @@ impl Session {
             return WorldResult::CharCreateNameInUse;
         }
         let existing = self.realm.store.characters(&self.account).await;
-        if existing.len() >= self.realm.config.max_characters_per_account {
+        if existing.len() >= self.realm.config().max_characters_per_account {
             return WorldResult::CharCreateAccountLimit;
         }
         // On a PvP realm, an account's characters are all of one side.
         let team = crate::game::registry::Team::of_race(race);
-        if self.realm.config.pvp_realm
+        if self.realm.config().pvp_realm
             && existing
                 .iter()
                 .any(|r| crate::game::registry::Team::of_race(r.race) != team)
@@ -545,7 +545,7 @@ impl Session {
         };
         let key = MapKey::world(row.map);
         let map = self.realm.maps.get(&self.realm, key);
-        let gm_level = if self.realm.config.everyone_gm {
+        let gm_level = if self.realm.config().everyone_gm {
             crate::accounts::ADMINISTRATOR
         } else {
             crate::accounts::get().map_or(crate::accounts::PLAYER, |a| a.gm_level(&self.account))
