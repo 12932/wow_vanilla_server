@@ -1359,11 +1359,29 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
         explored: bool,
         event: bool,
         escort: bool,
+        update: u64,
     }
     // One look, and the hurrying: Remulos and Eranikus fast, the player at
-    // Remulos's side and unharmed, the phantasms put down as they come.
-    let look = move |m: &mut Map, by: Duration, strike: bool| -> State {
+    // Remulos's side and unharmed, the phantasms put down as they come;
+    // and the map's timers `by` on for each update since the last look
+    // (`last`, the update it was in): so the walk goes at the pace of the
+    // map's updates, however many looks a busy machine fits between them.
+    // In the fight (`fight`), Eranikus is struck once an update, so each
+    // of his health events has an update to fire in.
+    let look = move |m: &mut Map, by: Duration, fight: bool, last: Option<u64>| -> State {
+        let update = m.stats.updates;
+        let updates = last.map_or(1, |l| update.saturating_sub(l));
+        // Neither the player nor Remulos falls, however long the map runs
+        // between looks: the player in god mode, Remulos with a floor of
+        // health. (Kept whole at each look alone, the player died between
+        // looks on a busy machine.)
         hardy(m, g);
+        if let Some(p) = m.players.get_mut(&g) {
+            p.misc.god = true;
+        }
+        if let Some(s) = crate::game::map::event_ai::scripted_mut(m, remulos) {
+            s.invincible_hp = Some(1);
+        }
         let at = m.creature(remulos).map(|c| c.position);
         if let Some(c) = m.creature_mut(remulos) {
             c.speeds.walk = 60.0;
@@ -1383,25 +1401,38 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
             e.speeds.walk = 60.0;
             e.speeds.run = 60.0;
         }
-        // While the escort walks, its fights are kept off it.
+        // While the escort walks, its fights are kept off it; once
+        // Eranikus has landed, Remulos is left to his. (Taken out of it
+        // whenever Eranikus wasn't swinging, as on the look that saw him
+        // land late on a busy machine, Remulos came off Eranikus's threat
+        // list too, and with no one left on it, Eranikus evaded, which
+        // ended the map event.)
         let escorting = m.escorts.iter().any(|e| e.quest == QUEST);
-        let fighting_eranikus = eranikus
-            .and_then(|e| m.creature(e))
-            .is_some_and(|c| c.combat.attacking);
-        if escorting
-            && !fighting_eranikus
-            && m.creature(remulos).is_some_and(|c| c.combat.attacking)
-        {
+        let landed = eranikus.and_then(|e| m.creature(e)).is_some_and(|c| {
+            c.combat.attacking
+                || c.fields.get_u32(crate::game::fields::UNIT_FIELD_FLAGS)
+                    & UNIT_FLAG_NOT_ATTACKABLE
+                    == 0
+        });
+        if escorting && !landed && m.creature(remulos).is_some_and(|c| c.combat.attacking) {
             crate::game::map::ai::forget(m, remulos);
             crate::game::map::combat::leave_combat(m, remulos);
         }
-        if strike && let Some(e) = eranikus {
+        if fight
+            && updates > 0
+            && let Some(e) = eranikus
+        {
             let (hp, max) = health(m, e);
             if hp > max / 5 {
                 crate::game::map::combat::deal_damage(m, g, e, (max / 8).max(1));
             }
         }
-        skip(m, by);
+        if updates > 0 {
+            skip(
+                m,
+                by.saturating_mul(u32::try_from(updates).unwrap_or(u32::MAX)),
+            );
+        }
         let log = m.players[&g].journal.log.iter().find(|l| l.quest == QUEST);
         State {
             point: m
@@ -1427,19 +1458,24 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
             explored: log.is_some_and(|l| l.explored),
             event: crate::game::map::map_events::active(m, QUEST),
             escort: escorting,
+            update,
         }
     };
     // To the shrine, through the waves, until Eranikus lands and may be
-    // fought.
+    // fought: within 3,000 of the map's updates (it takes about 420).
     let mut s = State::default();
     let mut landed = false;
     let mut hovering = false;
-    for i in 0..3000 {
+    let (mut updates, mut last) = (0, None);
+    while updates < 3000 {
         s = map
-            .query(move |m| look(m, Duration::from_secs(2), false))
+            .query(move |m| look(m, Duration::from_secs(2), false, last))
             .await
             .unwrap();
-        if debug() && i % 25 == 0 {
+        let new = last.map_or(1, |l| s.update - l);
+        updates += new;
+        last = Some(s.update);
+        if debug() && new > 0 && updates % 25 == 0 {
             eprintln!("nightmare: {s:?}");
         }
         let unreachable = s
@@ -1454,13 +1490,18 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
     }
     assert!(landed, "Eranikus lands to fight: {s:?}");
     assert!(s.event, "the quest's map event under way: {s:?}");
-    // Beaten to a fifth, he is redeemed; Remulos credits the quest.
-    for i in 0..3000 {
-        // Struck down to a fifth at once, before anything else can come
-        // of the fight (his leash, his evade); then the redemption hurried.
+    // Beaten to a fifth, he is redeemed; Remulos credits the quest: within
+    // 3,000 updates (it takes about 40).
+    let mut updates = 0;
+    while updates < 3000 {
+        // Struck down to a fifth, an update a blow; then the redemption
+        // hurried.
         let by = Duration::from_secs(if s.phase == Some(1) { 2 } else { 0 });
-        s = map.query(move |m| look(m, by, true)).await.unwrap();
-        if debug() && i % 25 == 0 {
+        s = map.query(move |m| look(m, by, true, last)).await.unwrap();
+        let new = last.map_or(1, |l| s.update - l);
+        updates += new;
+        last = Some(s.update);
+        if debug() && new > 0 && updates % 5 == 0 {
             eprintln!("nightmare fight: {s:?}");
         }
         if s.explored {
