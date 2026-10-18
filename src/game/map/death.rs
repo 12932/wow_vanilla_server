@@ -167,6 +167,10 @@ pub fn kill(map: &mut Map, g: Guid) {
         return;
     }
     p.death = Death::Dead { since: now };
+    // The dead lie where they fell until they release or rise: rooted,
+    // as mangos's `KillPlayer` roots them (`SendMoveRoot`).
+    p.outbound
+        .send_frame(crate::game::map::movement::root_frame(g, true));
     crate::game::map::corpses::died(p, crate::game::map::corpses::unix_ms());
     p.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
@@ -201,6 +205,9 @@ pub fn release(map: &mut Map, g: Guid) {
     if !matches!(p.death, Death::Dead { .. }) {
         return;
     }
+    // A ghost walks (mangos's `BuildPlayerRepop` unroots).
+    p.outbound
+        .send_frame(crate::game::map::movement::root_frame(g, false));
     let corpse = Corpse::new(&map.realm.data, p, p.position(), p.movement.orientation);
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
@@ -303,6 +310,12 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
         return false;
     }
     let was_ghost = matches!(p.death, Death::Ghost { .. });
+    // Risen where they fell, they may walk again (mangos's
+    // `ResurrectPlayer` unroots).
+    if !was_ghost {
+        p.outbound
+            .send_frame(crate::game::map::movement::root_frame(g, false));
+    }
     p.death = Death::Alive;
     // An offer from before is spent.
     p.resurrect_offer = None;

@@ -120,6 +120,14 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if p.logout_at.is_some() {
         return;
     }
+    // The dead lie where they fell until they release or rise: a client
+    // still sending moves (one that ignores its root, as a bot may) moves
+    // the body no further than straight down, as it lands.
+    if matches!(p.death, crate::game::map::death::Death::Dead { .. })
+        && horizontal(p.position(), info.position) > 0.5
+    {
+        return;
+    }
     // Faster than the player can go: pulled back to where they were.
     let now = map.now;
     let check = &map.cfg.anticheat;

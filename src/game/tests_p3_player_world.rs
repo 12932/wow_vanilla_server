@@ -120,8 +120,9 @@ async fn the_innkeeper_binds_only_one_near_and_alive_and_the_home_is_told_at_eve
     a.clear();
     a.send(activate).await;
     assert!(!bound(&mut a).await, "out of reach");
-    // Dead: none either.
+    // Dead: none either. Back in reach first: a dead body takes no move.
     a.heartbeat(START.0, START.1, START.2).await;
+    synced(&mut a).await;
     on_map(&realm, move |m| crate::game::map::death::kill(m, g)).await;
     a.clear();
     a.send(activate).await;

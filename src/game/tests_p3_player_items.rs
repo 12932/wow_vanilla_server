@@ -254,7 +254,9 @@ async fn a_repair_mends_the_one_item_asked_from_a_living_armorer_near_and_none_f
     synced(&mut a).await;
     assert_eq!(state(&realm).await, (50, 40, 900));
     a.heartbeat(START.0, START.1, START.2).await;
-    // Dead, nothing either.
+    // Back in reach first, as a dead body takes no move; then dead, nothing
+    // either.
+    synced(&mut a).await;
     on_map(&realm, move |m| crate::game::map::death::kill(m, g)).await;
     a.send(repair(armorer, Guid::zero())).await;
     synced(&mut a).await;
