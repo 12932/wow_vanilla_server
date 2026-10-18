@@ -354,6 +354,8 @@ mod tests_p4_items_gear;
 #[cfg(test)]
 mod tests_p4_items_gear2;
 #[cfg(test)]
+mod tests_p4_items_use;
+#[cfg(test)]
 mod tests_p4_scripts_bosses;
 #[cfg(test)]
 mod tests_p4_scripts_brd;

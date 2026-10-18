@@ -431,7 +431,14 @@ pub fn update(map: &mut Map) {
                 Some(t) if t <= now => {
                     p.gadgets.party_at = Some(now + PARTY_EVERY);
                     let alive = p.death == crate::game::map::death::Death::Alive;
-                    let moving = crate::game::map::spells::checks::moving(&p.movement.flags);
+                    // Pitching and a spline's elevation are moving too
+                    // (mangos's `MOVEFLAG_MASK_MOVING`, Thistle Tea's
+                    // `MovementBlock.moving?`).
+                    let f = &p.movement.flags;
+                    let moving = crate::game::map::spells::checks::moving(f)
+                        || f.get_pitch_up()
+                        || f.get_pitch_down()
+                        || f.get_spline_elevation().is_some();
                     alive.then_some((p.guid, moving))
                 }
                 Some(_) => None,

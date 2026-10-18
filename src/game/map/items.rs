@@ -50,6 +50,20 @@ pub fn bound(item: &Item) -> bool {
     item.fields.get_u32(ITEM_FIELD_FLAGS) & ITEM_FLAG_SOULBOUND != 0
 }
 
+/// `SpellItemEnchantment`'s flags: an enchantment that binds what it is on.
+pub const ENCHANTMENT_SOULBOUND: u32 = 0x1;
+
+/// Whether `item` may not change hands: bound, or bearing an enchantment
+/// that binds it for as long as it lasts (a poison, a shaman's weapon),
+/// as mangos's `IsBoundByEnchant` and Thistle Tea's `Enchantments.bound?`
+/// have it. An ordinary enchantment doesn't bind.
+pub fn bound_now(data: &GameData, item: &Item) -> bool {
+    bound(item)
+        || crate::game::map::enchant::active(item).any(|(_, e)| {
+            data.crafts.enchant_flags.get(&e.id).copied().unwrap_or(0) & ENCHANTMENT_SOULBOUND != 0
+        })
+}
+
 fn bind(item: &mut Item) {
     let flags = item.fields.get_u32(ITEM_FIELD_FLAGS);
     item.fields

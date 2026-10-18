@@ -312,10 +312,9 @@ pub fn enchant_item(
             },
         ),
     };
+    // Enchanting doesn't bind; an enchantment flagged so binds its item
+    // while it lasts (`items::bound_now`).
     set(&mut p.items[i], slot, e);
-    // An enchanted item is bound to its owner.
-    let flags = p.items[i].fields.get_u32(ITEM_FIELD_FLAGS);
-    p.items[i].fields.set_u32(ITEM_FIELD_FLAGS, flags | 0x1);
     let worn = p.items[i].bag == BAG_PLAYER && p.items[i].slot < 19;
     if let Some((ms, _)) = temporary {
         p.outbound.send(&SMSG_ITEM_ENCHANT_TIME_UPDATE {
