@@ -525,6 +525,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             if handle_guarded(&mut map, event) {
+                                hand_on(&map, &mut rx);
                                 return;
                             }
                         }
@@ -549,6 +550,44 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
             }
         }
+    }
+    hand_on(&map, &mut rx);
+}
+
+/// What was sent to a map that has stopped (a copy unloaded or reset as a
+/// player was on their way in) isn't lost with it: a player arriving goes
+/// on into the map started afresh, or, as the server shuts down, is saved
+/// and let go. Before, they were dropped, unsaved and still online.
+fn hand_on(map: &Map, rx: &mut mpsc::UnboundedReceiver<MapEvent>) {
+    let rest: Vec<MapEvent> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter(|e| !matches!(e, MapEvent::Stop | MapEvent::Shutdown(_)))
+        .collect();
+    if !rest.iter().any(|e| matches!(e, MapEvent::Arrive(_))) {
+        return;
+    }
+    let realm = &map.realm;
+    // Shutting down, or a copy its raid's reset took (which would stop
+    // again at once): saved where they were going, and let go.
+    if realm.maps.is_closed() || crate::game::instances::expired(realm, map.key) {
+        for e in rest {
+            let MapEvent::Arrive(a) = e else { continue };
+            let Arrival { kind, online } = *a;
+            if let ArrivalKind::Transfer(mut p) = kind {
+                p.row.map = map.key.map;
+                realm.store.save(p.to_row(Instant::now()));
+            }
+            realm.registry.go_offline(online.guid);
+            let _ = online.session.send(crate::game::session::Control::Kick);
+        }
+        return;
+    }
+    warn!(
+        "{} stopped with a player on the way in; starting it again",
+        map.key
+    );
+    let next = realm.maps.get(realm, map.key);
+    for e in rest {
+        next.send(e);
     }
 }
 

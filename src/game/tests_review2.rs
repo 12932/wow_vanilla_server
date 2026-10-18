@@ -110,7 +110,6 @@ async fn a_dungeon_copy_left_is_kept_however_long_since_it_changed() {
     assert_eq!(map_of(&realm, a.guid).key, copy, "back into the same copy");
 }
 
-
 /// Log `c` out by going away, and back in on a new connection.
 async fn relog(realm: &Arc<Realm>, c: Client) -> Client {
     let (g, account) = (c.guid, c.account.clone());
@@ -216,9 +215,11 @@ async fn a_place_on_deck_off_any_deck_is_dropped() {
     loop {
         let offset = b
             .wait_for("Alice's heartbeat", |m| match m {
-                ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(h) if h.guid == g => {
-                    h.info.flags.get_on_transport().map(|t| t.transport.position)
-                }
+                ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(h) if h.guid == g => h
+                    .info
+                    .flags
+                    .get_on_transport()
+                    .map(|t| t.transport.position),
                 _ => None,
             })
             .await;
@@ -303,4 +304,48 @@ async fn levelup_by_too_many_is_the_last_level() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(level, 60);
+}
+
+/// A copy that stops (unloaded, or reset) with a player already sent its
+/// way doesn't take them with it: they go on into the copy started again,
+/// where before they were dropped, unsaved, still online and in no map.
+#[tokio::test]
+async fn a_player_on_the_way_into_a_copy_that_stops_arrives() {
+    let realm = realm(dungeon(), true, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let key = MapKey {
+        map: DUNGEON,
+        instance: 7,
+    };
+    let copy = realm.maps.get(&realm, key);
+    // Alice leaves her map for the copy; the copy stops before it has
+    // heard of her.
+    let player = on(&map_of(&realm, g), move |m| m.take_player(g))
+        .await
+        .expect("Alice");
+    let online = player.online.clone();
+    on(&copy, move |m| {
+        m.realm.maps.stop(m.key);
+        m.handle.send(crate::game::map::MapEvent::Arrive(Box::new(
+            crate::game::map::Arrival {
+                kind: crate::game::map::ArrivalKind::Transfer(Box::new(player)),
+                online,
+            },
+        )));
+    })
+    .await;
+    let mut there = false;
+    for _ in 0..200 {
+        let now = map_of(&realm, g);
+        if now.key == key
+            && !now.is_closed()
+            && now.query(move |m| m.players.contains_key(&g)).await == Some(true)
+        {
+            there = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(there, "Alice is in the copy started again");
 }
