@@ -1322,6 +1322,15 @@ pub fn hurry(map: &mut Map) {
     }
 }
 
+/// The once-a-second sweep (the leaders' leash, and who is back from the
+/// dead) runs at the next update.
+#[cfg(test)]
+pub fn sweep_soon(map: &mut Map) {
+    if let Some(st) = state_mut(map) {
+        st.next_sweep = None;
+    }
+}
+
 // The fighting, as EventAI.
 
 struct Builder<'a> {
