@@ -77,6 +77,10 @@ const SWEEPING_STRIKES: &[u32] = &[12292, 18765];
 const SWEEPING_STRIKES_DAMAGE: u32 = 12723;
 const SWEEPING_STRIKES_LOOP: &[u32] = &[12723, 26654];
 const WHIRLWIND: u32 = 1680;
+/// Flurry's haste, the warrior's ranks and the shaman's.
+const FLURRY: &[u32] = &[
+    12966, 12967, 12968, 12969, 12970, 16257, 16277, 16278, 16279, 16280,
+];
 const BLADE_FLURRY: u32 = 13877;
 const BLADE_FLURRY_DAMAGE: u32 = 22482;
 const RETALIATION: u32 = 20230;
@@ -268,6 +272,12 @@ pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> O
             sweep(map, owner, other, e.damage, radius, SWEEPING_STRIKES_DAMAGE);
             return Outcome::Done;
         }
+        return Outcome::DoneOwnCharges;
+    }
+    // Flurry's haste: an extra attack's swing spends none of its charges
+    // (mangos's `HandleDummyAuraProc`, failing the proc while extra
+    // attacks run; Thistle Tea's "extra attacks cannot proc Flurry").
+    if FLURRY.contains(&id) && e.extra_attack {
         return Outcome::DoneOwnCharges;
     }
     // Blade Flurry: the blow's damage on another enemy close by.
