@@ -406,6 +406,8 @@ mod tests_p5_combat_taken;
 #[cfg(test)]
 mod tests_p5_combat_engage;
 #[cfg(test)]
+mod tests_p5_combat_state;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

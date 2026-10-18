@@ -2124,15 +2124,15 @@ pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
 /// `Attributes`: not to be cast in a fight.
 const ATTR_NOT_IN_COMBAT: u32 = 0x1000_0000;
 
-/// `g` went into a fight: a cast that isn't for one (the Hearthstone, a
-/// mount) stops, as mangos's `SetInCombatState` and Thistle Tea's
-/// `CombatState.enter` have it.
+/// `g` went into a fight: a cast or a channel that isn't for one (the
+/// Hearthstone, a mount) stops, as mangos's `SetInCombatState` and Thistle
+/// Tea's `CombatState.enter` have it; an instant one is already done.
 pub fn combat_began(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
     let stops = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
-        .filter(|c| c.channel_until.is_none() && c.duration > 0)
+        .filter(|c| c.channel_until.is_some() || c.duration > 0)
         .and_then(|c| data.spells.get(c.spell))
         .is_some_and(|s| s.attr(0, ATTR_NOT_IN_COMBAT));
     if stops {
