@@ -403,7 +403,6 @@ async fn a_trinket_stays_on_in_a_fight_but_a_timed_one_runs_out() {
     assert_eq!(failure(&mut a).await, "NotInCombat", "put away");
     let place = on(&map, move |m| at(m, ga, charm)).await;
     assert_eq!(place, Some((BAG_PLAYER, 13)), "still on");
-    let _ = PACK_START;
     let gone = on(&map, move |m| {
         let p = m.players.get_mut(&ga).unwrap();
         let i = p.item_by_guid(fleeting).unwrap();
@@ -415,4 +414,117 @@ async fn a_trinket_stays_on_in_a_fight_but_a_timed_one_runs_out() {
     })
     .await;
     assert_eq!(gone, None, "run out in the fight");
+}
+
+/// The blade's temporary enchantment's charges, if it has one.
+fn charges(m: &Map, g: Guid, blade: Guid) -> Option<u32> {
+    let p = &m.players[&g];
+    let e = enchant::get(&p.items[p.item_by_guid(blade)?], enchant::TEMP_SLOT);
+    (e.id != 0).then_some(e.charges)
+}
+
+/// Thistle Tea's "only successful rolls consume charges and the final
+/// proc precedes removal", "offhand attacks and unequipped or broken
+/// weapons do not spend mainhand charges" and "replacement resets charges
+/// and invalidates the old expiration": a missed blow spends no charge; an
+/// off-hand blow, or one with the blade in the bags or broken, spends none
+/// of the main hand's; a new coating has its charges whole again and its
+/// time anew; the last charge's blow goes off, then the coating goes and
+/// the client is told its time is up.
+#[tokio::test]
+async fn a_coating_spends_a_charge_a_blow_landed_with_it() {
+    let (_realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let (blade, target) = on(&map, move |m| {
+        crate::game::tests_p3_combat::equip(m, ga, BLADE, 15);
+        crate::game::tests_p3_combat::equip(m, ga, BLADE, 16);
+        let p = &m.players[&ga];
+        let blade = p.items[p.item_at(BAG_PLAYER, 15).unwrap()].guid;
+        enchant::enchant_item(m, ga, blade, ENCHANT, Some((60_000, 2)));
+        (blade, spawn(m, ga, BRUTE, 20, 3.0))
+    })
+    .await;
+    let health = move |m: &Map| {
+        m.creature(target)
+            .unwrap()
+            .fields
+            .get_u32(UNIT_FIELD_HEALTH)
+    };
+    let left = on(&map, move |m| {
+        let mut left = Vec::new();
+        let missed = procs::Event {
+            actor: ga,
+            target,
+            actor_flags: procs::PROC_DONE_MELEE,
+            target_flags: procs::PROC_TAKEN_MELEE,
+            ex: procs::EX_MISS,
+            school: 1,
+            ..Default::default()
+        };
+        procs::trigger(m, missed);
+        left.push(charges(m, ga, blade));
+        procs::trigger(
+            m,
+            procs::Event {
+                offhand: true,
+                actor_flags: procs::PROC_DONE_OFFHAND,
+                ex: procs::EX_NORMAL_HIT,
+                ..missed
+            },
+        );
+        left.push(charges(m, ga, blade));
+        // In the bags.
+        let p = m.players.get_mut(&ga).unwrap();
+        let i = p.item_by_guid(blade).unwrap();
+        p.items[i].slot = PACK_START;
+        strike(m, ga, target);
+        left.push(charges(m, ga, blade));
+        let p = m.players.get_mut(&ga).unwrap();
+        let i = p.item_by_guid(blade).unwrap();
+        p.items[i].slot = 15;
+        p.items[i].fields.set_u32(ITEM_FIELD_DURABILITY, 0);
+        strike(m, ga, target);
+        left.push(charges(m, ga, blade));
+        let p = m.players.get_mut(&ga).unwrap();
+        let i = p.item_by_guid(blade).unwrap();
+        p.items[i].fields.set_u32(ITEM_FIELD_DURABILITY, 50);
+        let before = health(m);
+        strike(m, ga, target);
+        left.push(charges(m, ga, blade));
+        (left, before - health(m))
+    })
+    .await;
+    assert_eq!(left.0, vec![Some(2), Some(2), Some(2), Some(2), Some(1)]);
+    assert_eq!(left.1, 10, "the landed blow's proc");
+    // A new coating: its charges whole again, its time anew.
+    let renewed = on(&map, move |m| {
+        enchant::enchant_item(m, ga, blade, ENCHANT, Some((60_000, 2)));
+        let p = &m.players[&ga];
+        enchant::get(&p.items[p.item_by_guid(blade).unwrap()], enchant::TEMP_SLOT)
+    })
+    .await;
+    assert_eq!((renewed.charges, renewed.duration_ms), (2, 60_000));
+    a.clear();
+    let last = on(&map, move |m| {
+        let before = health(m);
+        strike(m, ga, target);
+        strike(m, ga, target);
+        let dealt = before - health(m);
+        strike(m, ga, target);
+        (dealt, before - health(m), charges(m, ga, blade))
+    })
+    .await;
+    assert_eq!(
+        last,
+        (20, 20, None),
+        "two blows, then none, and the coating gone"
+    );
+    a.wait_for("the coating's time up", |m| match m {
+        ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(x)
+            if x.item == blade && x.duration == 0 =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
 }
