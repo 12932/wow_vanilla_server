@@ -700,6 +700,24 @@ the questions waiting for you.
     - **Rifts** replace an invader that despawned.
     - **Demonic Sacrifice** ends with a new demon.
 
+48. **Tracy, reworked** (your ask; `docs/PROFILING.md`). Set `WOW_TRACY=1` and connect Tracy v0.13.1.
+    - **What you see:**
+      - a frame per map update, named by the map;
+      - a zone per update step, packet (by opcode), store transaction and load stage;
+      - plots once a second, of each map's players, creatures awake, mailbox and outbound, and the realm's;
+      - warnings and errors as messages.
+    - **Off:** it costs nothing measurable. It records only while a profiler is connected, and listens on localhost
+      only.
+    - **Your calls:**
+      - The `tracy` feature is on by default, so a release build can be profiled with no rebuild. That costs a C++
+        build once.
+      - System tracing stays: Tracy's sampling comes with it, and it needs administrator rights to do anything.
+    - **What 100 bots showed:**
+      - An Eastern Kingdoms update takes 2.8 ms, most of it the despawn steps' three looks through every creature
+        (1 ms).
+      - The worst hitches are navmesh tiles loaded during an update, at 20 to 116 ms each. Loading them ahead, or off
+        the map's thread, is the next performance lead.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -754,6 +772,8 @@ the questions waiting for you.
 | Battleground view distance, 400 yards | done | c380d54 |
 | The client-code harness | merged | eb9b73b |
 | 4c: world entities and the network (77 rows) | merged | afc079c |
+| Ghosts: water walking, sight by the corpse | merged | 7aa9d29 |
+| Tracy reworked | merged | 479b728 |
 | The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
