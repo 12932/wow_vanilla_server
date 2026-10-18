@@ -1768,3 +1768,67 @@ async fn a_creatures_immunities_keep_off_a_spell_or_only_its_effect() {
     );
     assert!(out.1, "a stun put on it directly is refused");
 }
+
+/// Thistle Tea's `Companion.remember_*` and `dismiss`: a hunter's pet put
+/// away and called back keeps its happiness, its experience, its stance and
+/// its autocast; and its master's death puts it away, kept to be called.
+#[tokio::test]
+async fn a_hunters_pet_keeps_its_mood_growth_stance_and_autocast_put_away_and_goes_at_its_masters_death()
+ {
+    use crate::game::map::pets;
+    use crate::game::tests_pets::{CALL_PET, DISMISS_PET, GORE, cast, pet_bar, tamed};
+    let (_realm, mut h, gh, map, pet, wolf) = tamed().await;
+    let read = |m: &Map, g: Guid| {
+        let c = m.creature(g).unwrap();
+        let s = pets::state(m, g).unwrap();
+        (
+            c.fields.get_u32(UNIT_FIELD_POWER1 + 4),
+            c.fields.get_u32(UNIT_FIELD_PETEXPERIENCE),
+            s.react,
+            s.autocast.clone(),
+        )
+    };
+    let before = on(&map, move |m| {
+        m.remove_creature(wolf);
+        crate::game::map::combat::leave_combat(m, gh);
+        crate::game::map::combat::leave_combat(m, pet);
+        m.creature_mut(pet)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_POWER1 + 4, 444_000);
+        m.creature_mut(pet)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_PETEXPERIENCE, 37);
+        let s = pets::state_mut(m, pet).unwrap();
+        s.react = pets::REACT_DEFENSIVE;
+        s.spells.push(GORE);
+        s.autocast.push(GORE);
+        pets::sync_record(m, gh);
+        read(m, pet)
+    })
+    .await;
+    cast(&h, DISMISS_PET, None).await;
+    assert_eq!(pet_bar(&mut h).await, Guid::zero(), "put away");
+    cast(&h, CALL_PET, None).await;
+    let called = pet_bar(&mut h).await;
+    let after = on(&map, move |m| read(m, called)).await;
+    assert_eq!(
+        after, before,
+        "its happiness, experience, stance and autocast kept"
+    );
+    // Its master dies: it is put away for a while.
+    on(&map, move |m| crate::game::map::death::kill(m, gh)).await;
+    until(&map, "put away", move |m| {
+        m.players[&gh].owned.pet.is_none()
+    })
+    .await;
+    let away = on(&map, move |m| {
+        (
+            m.creature(called).is_none(),
+            m.players[&gh].owned.unsummoned,
+        )
+    })
+    .await;
+    assert_eq!(away, (true, true), "gone, to come back");
+}
