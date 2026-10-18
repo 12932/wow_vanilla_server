@@ -212,3 +212,31 @@ async fn a_capped_hunters_pet_earns_of_kills_its_master_cant() {
     }
     assert!(a.gets(NONE_WITHIN, experience).await.is_none());
 }
+
+/// Thistle Tea's "marks the attacking mob faction temporarily at war": a
+/// creature of a faction the player is at peace with taking them on its
+/// threat list sets its faction at war with them for the fight
+/// (`SMSG_SET_FACTION_ATWAR`, the faction's index and the flag).
+#[tokio::test]
+async fn a_creature_that_takes_one_on_is_at_war_with_them_for_the_fight() {
+    let mut d = world();
+    d.faction_templates
+        .get_mut(&crate::game::tests_p3_combat::PACK)
+        .unwrap()
+        .faction = GUILD;
+    let (_realm, mut a, g, map) = setup_with(d, Class::Warrior).await;
+    a.clear();
+    let marked = on(&map, move |m| {
+        let brute = spawn(m, g, BRUTE, 20, 4.0);
+        crate::game::map::ai::attacked(m, brute, g);
+        m.players[&g].temporary_war.clone()
+    })
+    .await;
+    assert_eq!(marked, vec![GUILD]);
+    let war = a
+        .wait_frame("SMSG_SET_FACTION_ATWAR", 0x313, |_| true)
+        .await;
+    let mut want = 13u32.to_le_bytes().to_vec();
+    want.push(crate::game::map::reputation::FLAG_AT_WAR as u8);
+    assert_eq!(war, want);
+}

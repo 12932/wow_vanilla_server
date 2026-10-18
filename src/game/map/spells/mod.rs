@@ -1161,7 +1161,7 @@ fn execute(
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
+    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions, triggered);
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however
