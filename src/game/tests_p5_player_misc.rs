@@ -459,3 +459,64 @@ async fn a_language_learned_is_spoken_at_once() {
     .await;
     assert_eq!(spoken, Some((300, 300)));
 }
+
+/// Thistle Tea's `send_mail` "rejects a bound attachment without moving
+/// it or charging postage": a player (no GM) mailing a soulbound sword is
+/// told the attachment is invalid; the sword stays, and nothing is paid.
+#[tokio::test]
+async fn a_bound_item_is_not_mailed_and_costs_nothing() {
+    use crate::game::tests_p3_combat::SWORD;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let (store, startup) = crate::game::store::Store::open(":memory:").expect("a store");
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    let realm = crate::game::Realm::new(
+        cfg,
+        store,
+        startup,
+        crate::game::tests_p3_combat::data(),
+        None,
+    );
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let sword = on(&map, move |m| {
+        m.players.get_mut(&ga).unwrap().set_money(1000);
+        crate::game::map::inventory::add_item(m, ga, SWORD, 1, false).unwrap();
+        let p = m.players.get_mut(&ga).unwrap();
+        let i = p.items.iter().position(|i| i.entry == SWORD).unwrap();
+        let flags = p.items[i].fields.get_u32(ITEM_FIELD_FLAGS);
+        p.items[i].fields.set_u32(ITEM_FIELD_FLAGS, flags | 1);
+        p.items[i].guid
+    })
+    .await;
+    a.send(CMSG_SEND_MAIL {
+        mailbox: Guid::zero(),
+        receiver: "Bob".into(),
+        subject: "a sword".into(),
+        body: String::new(),
+        unknown1: 0,
+        unknown2: 0,
+        item: sword,
+        money: Gold::new(0),
+        cash_on_delivery_amount: 0,
+        unknown3: 0,
+        unknown4: 0,
+    })
+    .await;
+    let result = a
+        .wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => Some(format!("{:?}", r.action)),
+            _ => None,
+        })
+        .await;
+    assert!(result.contains("ErrMailAttachmentInvalid"), "{result}");
+    let (kept, money) = on(&map, move |m| {
+        let p = &m.players[&ga];
+        (p.item_by_guid(sword).is_some(), p.money())
+    })
+    .await;
+    assert_eq!((kept, money), (true, 1000));
+}
