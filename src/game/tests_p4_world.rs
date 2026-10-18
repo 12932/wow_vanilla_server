@@ -192,3 +192,81 @@ async fn who_sees_whom_alive_and_as_a_ghost() {
         "a corpse, by its ghost and another"
     );
 }
+
+const TOTEM: u32 = 98_020;
+const TOTEM_SPELL: u32 = 98_021;
+const BLIZZARD: u32 = 98_022;
+
+/// Thistle Tea's "totems play their despawn animation as they leave" and
+/// "dynamic objects play their despawn animation as they go", as
+/// mangos-classic's `Totem::UnSummon` and `DynamicObject::Delete` send
+/// `SMSG_GAMEOBJECT_DESPAWN_ANIM`: those who see a totem or a spell's
+/// area watch it go, before they forget it.
+#[tokio::test]
+async fn a_totem_and_a_spells_area_fade_as_they_go() {
+    let mut d = data();
+    let mut totem = crate::game::tests_p3_combat::template(TOTEM, 11);
+    totem.faction = crate::game::tests_p3_combat::HUMANS;
+    d.creature_templates.insert(TOTEM, totem);
+    d.spells.spells.insert(
+        TOTEM_SPELL,
+        spell(
+            TOTEM_SPELL,
+            &[crate::game::data::spells::SpellEffect {
+                effect: crate::game::map::pets::EFFECT_SUMMON_TOTEM_SLOT1,
+                misc_value: TOTEM as i32,
+                base_points: 4,
+                base_dice: 1,
+                target_a: 1,
+                ..Default::default()
+            }],
+        ),
+    );
+    d.spells.spells.insert(BLIZZARD, spell(BLIZZARD, &[]));
+    let (realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    b.enter("Bea", Race::Human, Class::Warrior).await;
+    let totem = on(&map, move |m| {
+        spells::cast_triggered(m, ga, TOTEM_SPELL, Some(ga));
+        m.players[&ga].owned.totems[0].expect("the totem")
+    })
+    .await;
+    let area = on(&map, move |m| {
+        let at = m.players[&ga].position();
+        crate::game::map::spells::dynamic::spawn(
+            m,
+            ga,
+            BLIZZARD,
+            crate::game::map::spells::dynamic::KIND_AREA_SPELL,
+            at,
+            8.0,
+            None,
+        )
+    })
+    .await;
+    for c in [&mut a, &mut b] {
+        c.sees(totem).await;
+        c.sees(area).await;
+    }
+    let fades = |of: Guid| {
+        move |m: &wow_world_messages::vanilla::opcodes::ServerOpcodeMessage| {
+            match m {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GAMEOBJECT_DESPAWN_ANIM(
+                d,
+            ) if d.guid == of => Some(()),
+            _ => None,
+        }
+        }
+    };
+    on(&map, move |m| {
+        crate::game::map::pets::dismiss(m, totem);
+        crate::game::map::spells::dynamic::remove(m, area);
+    })
+    .await;
+    for c in [&mut a, &mut b] {
+        c.wait_for("the totem's fade", fades(totem)).await;
+        c.wait_for("the area's fade", fades(area)).await;
+        c.forgets(totem).await;
+        c.forgets(area).await;
+    }
+}

@@ -687,6 +687,15 @@ pub fn remove(map: &mut Map, g: Guid) {
     let totem = state(map, g).map(|s| s.kind) == Some(Kind::Totem);
     if totem {
         totems::lift_auras(map, g);
+        // Those who see it watch it sink, as mangos-classic's
+        // `Totem::UnSummon` and Thistle Tea's totem show it go.
+        if let Some(frame) =
+            crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_DESPAWN_ANIM {
+                guid: g,
+            })
+        {
+            map.send_to_observers(g, &frame, false);
+        }
     }
     if let Some(owner) = owner
         && let Some(p) = map.players.get_mut(&owner)

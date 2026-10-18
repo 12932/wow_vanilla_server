@@ -104,6 +104,19 @@ pub fn remove(map: &mut Map, g: Guid) {
         return;
     };
     map.grid.remove(g, d.cell);
+    // Those who see it watch it fade, as mangos-classic's
+    // `DynamicObject::Delete` and Thistle Tea's show it go.
+    if let Some(frame) =
+        crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_DESPAWN_ANIM {
+            guid: g,
+        })
+    {
+        for o in &d.observers {
+            if let Some(p) = map.players.get(o) {
+                p.outbound.send_frame(frame.clone());
+            }
+        }
+    }
     for o in d.observers.drain() {
         if let Some(p) = map.players.get_mut(&o) {
             p.known.remove(&g);

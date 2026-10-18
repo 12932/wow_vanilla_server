@@ -117,3 +117,49 @@ async fn a_groups_empty_roster_ends_at_its_leader() {
         .await;
     assert_eq!(empty, [0u8; 14], "type, flags, no members, no leader");
 }
+
+/// Thistle Tea's "loot windows and item receipts encode the same
+/// property": a loot window's item carries its random property after its
+/// look and a zero, as mangos-zero's `LootItem` writes it (the receipt's
+/// property is `tests_bugs3::an_items_suffix_enchantment_and_charges_are_shown`'s).
+#[test]
+fn a_loot_windows_item_carries_its_random_property() {
+    use crate::game::map::loot::{Loot, LootKind, LootSlot, response};
+    let mut d = crate::game::data::GameData::empty();
+    d.items.insert(
+        1608,
+        crate::game::data::ItemTemplate {
+            entry: 1608,
+            display_id: 123,
+            ..Default::default()
+        },
+    );
+    let loot = Loot {
+        items: vec![LootSlot {
+            item: 1608,
+            count: 1,
+            random_property: 1182,
+            ..Default::default()
+        }],
+        kind: LootKind::Corpse,
+        ..Default::default()
+    };
+    let viewer = crate::game::guid::player(5);
+    let frame = response(
+        &d,
+        wow_world_messages::Guid::new(10),
+        &loot,
+        viewer,
+        &[],
+        &[],
+    );
+    let mut want = 10u64.to_le_bytes().to_vec();
+    want.push(1);
+    want.extend(0u32.to_le_bytes());
+    want.extend([1, 0]);
+    for v in [1608u32, 1, 123, 0, 1182] {
+        want.extend(v.to_le_bytes());
+    }
+    want.push(0);
+    assert_eq!(&frame[4..], &want[..]);
+}
