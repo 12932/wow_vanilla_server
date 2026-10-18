@@ -1016,6 +1016,19 @@ fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
         .map(|(t, _)| *t)
 }
 
+/// A creature attacking `g` that `g` may fight, the first by key: what
+/// keeps `g` in its fight when its threat list has no one left.
+fn attacker_of(map: &Map, g: Guid) -> Option<Guid> {
+    map.creatures
+        .iter()
+        .filter(|(_, c)| c.guid != g && c.combat.attacking && c.combat.victim == g)
+        .map(|(_, c)| c.guid)
+        .filter(|a| {
+            valid_victim(map, g, *a) && !crate::game::map::creature_combat::should_evade(map, g, *a)
+        })
+        .min_by_key(|a| a.guid())
+}
+
 /// The caster of the newest taunt on `g` it may fight (Thistle Tea's
 /// `taunt_caster`): an older one holds when the newest can't.
 fn taunter(map: &Map, g: Guid) -> Option<Guid> {
@@ -1101,9 +1114,24 @@ fn fight_step(map: &mut Map, g: Guid) {
     } else {
         pick_victim(map, g)
     };
-    let Some(victim) =
-        victim.filter(|v| !crate::game::map::creature_combat::should_evade(map, g, *v))
-    else {
+    let victim = victim.filter(|v| !crate::game::map::creature_combat::should_evade(map, g, *v));
+    // With no one left on its list, it doesn't go home while a creature
+    // it may fight is attacking it, one that hasn't harmed it yet and so
+    // isn't on the list (mangos's `Unit::SelectHostileTarget`, whose last
+    // case keeps a creature in its fight while it has attackers): it
+    // fights that one, put on its list. (Keeper Remulos, his phantasm
+    // dead before Eranikus's first breath reached him, went home, and
+    // Eranikus, his victim gone, evaded and failed The Nightmare
+    // Manifests.)
+    let victim = match victim {
+        Some(v) => Some(v),
+        None => attacker_of(map, g).inspect(|a| {
+            if let Some(c) = map.creature_mut(g) {
+                c.threat.push((*a, 0.0));
+            }
+        }),
+    };
+    let Some(victim) = victim else {
         evade(map, g);
         return;
     };

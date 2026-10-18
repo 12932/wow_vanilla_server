@@ -322,3 +322,36 @@ async fn a_creature_turns_from_a_victim_it_can_no_longer_fight_and_with_none_lef
     assert_eq!(alone, (true, 0));
     assert!(empty);
 }
+
+/// With its list empty, a creature that another is attacking, one that
+/// hasn't harmed it yet and so isn't on the list, fights that one rather
+/// than going home (mangos's `Unit::SelectHostileTarget`): Keeper
+/// Remulos, his phantasm dead before Eranikus's first breath reached him.
+#[tokio::test]
+async fn a_creature_with_none_left_on_its_list_fights_one_attacking_it() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let (evading, victim, listed) = map
+        .query(move |m| {
+            let a = spawn(m, ga, HELPER, 20, 1.5);
+            // Too far off to have struck it yet.
+            let attacker = spawn(m, ga, HELPER, 20, 25.0);
+            let brute = fighting(m, ga, a, &[(a, 100.0)]);
+            let c = m.creature_mut(attacker).unwrap();
+            c.combat.victim = brute;
+            c.combat.attacking = true;
+            m.note_fighting(attacker);
+            combat::deal_damage(m, ga, a, 1_000_000);
+            ai::update_creatures(m);
+            let c = m.creature(brute).unwrap();
+            (
+                c.evading,
+                c.combat.victim == attacker,
+                threat(m, brute, attacker),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(!evading, "not gone home");
+    assert!(victim, "the attacker its victim");
+    assert!(listed.is_some(), "and on its list");
+}
