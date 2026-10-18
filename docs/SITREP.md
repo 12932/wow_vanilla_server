@@ -12,6 +12,8 @@ the questions waiting for you.
 ## Questions for you
 
 **Answered (2026-10-18):**
+- **Ghosts:** a ghost walks on water, and sees only what is within 45 yards of its corpse, players too, as mangos has
+  it. This replaces bugs3's "ghosts see every player". A agent stage (`fix/ghost`) is on it.
 - **Wrong passwords:** no lockout. **Account creation:** keep `auto`, with the name as the password. Both are
   deferred until much later (review item 33).
 - **#10:** keep swinging on arrival.
