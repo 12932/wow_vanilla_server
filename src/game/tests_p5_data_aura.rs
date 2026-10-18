@@ -718,3 +718,122 @@ async fn costs_go_by_school_then_spell_then_school_share() {
     assert_eq!((cancelled, expired), (330, 200));
     assert_eq!(cleared, (vec![0; 7], vec![0.0; 7]));
 }
+
+/// A buff, permanent and not; stuns of each family's flags that count and
+/// of the ranked lists' first ranks (Fireball, Polymorph, Curse of
+/// Tongues, Corruption, Frostbolt, Death Coil).
+const WORTH_BUFF: u32 = 96_770;
+const WORTH_FOREVER: u32 = 96_771;
+const WORTH_FAMILY: u32 = 96_772;
+const WORTH_FAMILIES: [(u32, u64, u8); 9] = [
+    (8, 0x8, 1),
+    (8, 0x100, 2),
+    (4, 0x20, 2),
+    (7, 0x1000, 2),
+    (4, 0x4000, 3),
+    (8, 0x20_0000, 3),
+    (7, 0x2000, 3),
+    (4, 0x2_0000, 4),
+    (7, 0x8, 4),
+];
+const WORTH_RANKS: [(u32, u8); 6] = [(133, 0), (118, 0), (1714, 1), (172, 2), (116, 3), (6136, 4)];
+
+fn worth_data() -> GameData {
+    let mut d = data();
+    let mut all = vec![
+        aura_spell(WORTH_BUFF, Some(10_000), &[(AURA_MOD_STAT, 0, 0)]),
+        aura_spell(WORTH_FOREVER, None, &[(AURA_MOD_STAT, 0, 0)]),
+    ];
+    for (i, (family, flags, _)) in WORTH_FAMILIES.iter().enumerate() {
+        let mut s = cc(WORTH_FAMILY + i as u32, Some(10_000));
+        s.attributes[0] = 0;
+        s.family_name = *family;
+        s.family_flags = *flags;
+        all.push(s);
+    }
+    for (id, _) in WORTH_RANKS {
+        let mut s = cc(id, Some(10_000));
+        s.attributes[0] = 0;
+        all.push(s);
+    }
+    add_spells(&mut d, all);
+    d
+}
+
+/// Thistle Tea's priorities: a buff of one's own is worth least, then one
+/// from an item used, another's, and a permanent one most; a debuff's
+/// family flags come before its rank and its kind (a stun, worth 4 by
+/// kind, worth what its family says), and a ranked debuff keeps its rank's
+/// worth when triggered.
+#[tokio::test]
+async fn an_auras_worth_goes_by_its_source_family_and_rank() {
+    let (_realm, _a, ga, map) = setup_with(worth_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let data = m.realm.data.clone();
+            let brute = spawn(m, ga, BRUTE, 1, 5.0);
+            let worth = |m: &Map, g: Guid, spell: u32| {
+                auras::auras(m, g)
+                    .and_then(|a| a.holders.iter().find(|h| h.spell == spell).cloned())
+                    .map(|h| spells::capacity::worth(&data, g, &h))
+            };
+            let mut buffs = Vec::new();
+            let _ = put(m, ga, ga, WORTH_BUFF, &[1]);
+            buffs.push(worth(m, ga, WORTH_BUFF));
+            auras::remove_spell(m, ga, WORTH_BUFF, None);
+            let s = m.realm.data.spells.get(WORTH_BUFF).cloned().unwrap();
+            let _ = auras::apply_spell(
+                m,
+                ga,
+                ga,
+                &s,
+                &[(0, 1)],
+                Context {
+                    item: Some(Guid::new(0x4000_0000_0000_0012)),
+                    ..Default::default()
+                },
+            );
+            buffs.push(worth(m, ga, WORTH_BUFF));
+            auras::remove_spell(m, ga, WORTH_BUFF, None);
+            let _ = put(m, brute, ga, WORTH_BUFF, &[1]);
+            buffs.push(worth(m, ga, WORTH_BUFF));
+            let _ = put(m, ga, ga, WORTH_FOREVER, &[1]);
+            buffs.push(worth(m, ga, WORTH_FOREVER));
+            let mut families = Vec::new();
+            for i in 0..WORTH_FAMILIES.len() as u32 {
+                let _ = put(m, ga, brute, WORTH_FAMILY + i, &[0]);
+                families.push(worth(m, brute, WORTH_FAMILY + i));
+                auras::remove_spell(m, brute, WORTH_FAMILY + i, None);
+            }
+            let mut ranks = Vec::new();
+            for (id, _) in WORTH_RANKS {
+                let s = m.realm.data.spells.get(id).cloned().unwrap();
+                let _ = auras::apply_spell(
+                    m,
+                    ga,
+                    brute,
+                    &s,
+                    &[(0, 0)],
+                    Context {
+                        triggered: true,
+                        ..Default::default()
+                    },
+                );
+                ranks.push(worth(m, brute, id));
+                auras::remove_spell(m, brute, id, None);
+            }
+            (buffs, families, ranks)
+        })
+        .await
+        .unwrap();
+    let (buffs, families, ranks) = got;
+    assert_eq!(buffs, vec![Some(0), Some(1), Some(2), Some(3)]);
+    assert_eq!(
+        families,
+        WORTH_FAMILIES.iter().map(|f| Some(f.2)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        ranks,
+        WORTH_RANKS.iter().map(|r| Some(r.1)).collect::<Vec<_>>()
+    );
+}
