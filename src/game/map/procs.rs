@@ -202,6 +202,59 @@ fn hand_of(e: &Event) -> Hand {
     }
 }
 
+/// The hand an event was dealt with, its spell's first: an off-hand
+/// ability's off hand, a shot's or an auto-repeat spell's ranged weapon
+/// (Thistle Tea's `ProcEquipment.attack_hand`).
+fn hand_for(e: &Event, spell: Option<&SpellTemplate>) -> Hand {
+    match spell {
+        Some(s) if s.dmg_class == 2 && s.attr(3, sd::ATTR_EX3_REQ_OFFHAND) => Hand::Off,
+        Some(s) if s.dmg_class == 3 || s.auto_repeat() => Hand::Ranged,
+        _ => hand_of(e),
+    }
+}
+
+/// Whether a player's gear lets `owner`'s aura `h` of `s` proc on what it
+/// does with `hand`, as mangos's `IsTriggeredAtSpellProcEvent` checks it: a
+/// weapon aura wants the hand's weapon, whole, of its kinds, not in a feral
+/// form nor disarmed of the main hand; a shield aura a whole shield of its
+/// kinds. A creature's, or one the spell exempts, always may.
+fn equipment_allows(map: &Map, owner: Guid, s: &SpellTemplate, h: &Holder, hand: Hand) -> bool {
+    let Some(p) = map.players.get(&owner) else {
+        return true;
+    };
+    if s.attr(3, sd::ATTR_EX3_NO_PROC_EQUIP_REQUIREMENT) {
+        return true;
+    }
+    // The mask's bits as mangos reads them: none is no kind.
+    let kinds = |subclass: u32| (h.item_subclass_mask as u32) & (1 << subclass.min(31)) != 0;
+    match h.item_class {
+        2 => {
+            let form = auras::form(map, owner);
+            let feral = matches!(
+                form,
+                auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
+            );
+            let disarmed = hand == Hand::Main && p.auras.has(auras::AURA_MOD_DISARM);
+            !feral
+                && !disarmed
+                && combat::hand_weapon(map, owner, hand).is_some_and(|w| kinds(w.subclass))
+        }
+        4 => {
+            let data = &map.realm.data;
+            p.items.iter().any(|i| {
+                i.bag == crate::game::store::BAG_PLAYER
+                    && i.slot == 16
+                    && !(i.fields.get_u32(ITEM_FIELD_MAXDURABILITY) > 0
+                        && i.fields.get_u32(ITEM_FIELD_DURABILITY) == 0)
+                    && data
+                        .item(i.entry)
+                        .is_some_and(|t| t.class == 4 && kinds(t.subclass))
+            })
+        }
+        _ => true,
+    }
+}
+
 /// A weapon's speed in milliseconds, for procs a minute, before haste: a
 /// druid's paws in cat form (a second) or bear form (two and a half),
 /// else the hand's weapon (Thistle Tea's `AttackSpeed.base_ms`).
@@ -356,12 +409,8 @@ fn run(
         {
             continue;
         }
-        let hand = hand_of(e);
-        if outgoing
-            && h.item_class == 2
-            && map.players.contains_key(&owner)
-            && !crate::game::map::derive::fits(&h, combat::hand_weapon(map, owner, hand).as_ref())
-        {
+        let hand = hand_for(e, trigger_spell);
+        if outgoing && !equipment_allows(map, owner, s, &h, hand) {
             continue;
         }
         if h.proc_ready_at.is_some_and(|t| t > now) {
