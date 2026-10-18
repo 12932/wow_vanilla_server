@@ -182,7 +182,6 @@ pub fn trigger(map: &mut Map, e: Event) {
     if landed(e.ex) && !from_proc {
         // Weapons' enchantments and chance-on-hit spells.
         crate::game::map::enchant::weapon_procs(map, &e);
-        target_triggers(map, &e);
     }
     drop(deeper);
 }
@@ -586,26 +585,32 @@ pub fn spell_damage(
 /// owner's spells of the family and mask they name may cast their spell on
 /// the target. The chance is the aura's, and its effect's points a combo
 /// point for each a finisher spends (Relentless Strikes' 20%), as Thistle
-/// Tea's `TargetTrigger` rolls it.
-fn target_triggers(map: &mut Map, e: &Event) {
+/// Tea's `TargetTrigger` rolls it. Once a cast's impact on each target it
+/// landed on, after its effects, and never at a periodic tick (mangos's
+/// `ProcSpellAuraTriggers`, from the cast's targets hit); not inside a
+/// proc, nor for the trigger's own spell. One of its owner alone rolls
+/// only where the cast lands on them (Relentless Strikes, by the
+/// finisher's dummy at the rogue).
+/// `combo` is the points the cast took (before a kill clears them).
+pub fn target_triggers(map: &mut Map, caster: Guid, target: Guid, spell_id: u32, combo: u8) {
+    if DEPTH.get() > 0 {
+        return;
+    }
     let data = map.realm.data.clone();
-    let Some(spell) = e.spell.and_then(|id| data.spells.get(id)) else {
+    let Some(spell) = data.spells.get(spell_id) else {
         return;
     };
-    let combo = map
-        .caster(e.actor)
-        .filter(|c| spell.finisher() && c.combo_target == e.target)
-        .map_or(0, |c| c.combo_points);
-    let Some(a) = auras::auras(map, e.actor) else {
+    let Some(a) = auras::auras(map, caster) else {
         return;
     };
     let triggers: Vec<(u32, f32)> = a
         .holders
         .iter()
         .filter(|h| {
-            data.spells
-                .get(h.spell)
-                .is_some_and(|s| s.family_name == spell.family_name)
+            data.spells.get(h.spell).is_some_and(|s| {
+                s.family_name == spell.family_name
+                    && (target == caster || !s.attr(4, sd::ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET))
+            })
         })
         .flat_map(|h| {
             let per_combo = |index: u8| {
@@ -618,6 +623,7 @@ fn target_triggers(map: &mut Map, e: &Event) {
                 .filter(|x| {
                     x.kind == auras::AURA_ADD_TARGET_TRIGGER
                         && x.trigger != 0
+                        && x.trigger != spell.id
                         && x.mask & spell.family_flags != 0
                 })
                 .map(|x| {
@@ -630,7 +636,7 @@ fn target_triggers(map: &mut Map, e: &Event) {
     let mut rng = rand::rng();
     for (trigger, chance) in triggers {
         if chance >= 100.0 || rng.random_range(0.0f32..100.0) < chance {
-            crate::game::map::spells::cast_triggered(map, e.actor, trigger, Some(e.target));
+            crate::game::map::spells::cast_triggered(map, caster, trigger, Some(target));
         }
     }
 }

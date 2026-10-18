@@ -167,6 +167,10 @@ pub const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 /// It may be cast while another spell is channelled, or channelled while
 /// another is cast (mangos's `SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING`).
 pub const ATTR_EX4_ALLOW_CAST_WHILE_CASTING: u32 = 0x80;
+/// A target-trigger aura of it rolls only for its owner among a cast's
+/// recipients (Relentless Strikes, at the finisher's dummy on the rogue;
+/// mangos's `SPELL_ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET`).
+pub const ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET: u32 = 0x2;
 
 impl SpellTemplate {
     pub fn passive(&self) -> bool {

@@ -390,6 +390,8 @@ mod tests_p4_world_spells;
 #[cfg(test)]
 mod tests_p5_spell_holiday;
 #[cfg(test)]
+mod tests_p5_spell_procs;
+#[cfg(test)]
 mod tests_p5_spell_swiftmend;
 #[cfg(test)]
 mod tests_parity_combat;

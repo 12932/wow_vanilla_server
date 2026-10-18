@@ -1477,9 +1477,13 @@ fn land(
         crate::game::map::quests::cast_credit(map, caster, &[aim], s.id);
     }
     contact(map, caster, aim, s, l, true);
+    let alive_before = map.unit_view(aim).is_some_and(|u| u.alive);
     effects::run(
         map, caster, aim, s, effects, &landing, chain, l.item, &l.targets,
     );
+    if alive_before {
+        crate::game::map::procs::target_triggers(map, caster, aim, s.id, l.combo);
+    }
     class_scripts::landed(map, caster, aim, s);
     crate::game::map::event_ai::spell_hit(map, aim, caster, s.id, s.school_mask());
     // A script for the spell, and the events it sends.
