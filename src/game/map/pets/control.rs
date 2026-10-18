@@ -237,11 +237,14 @@ pub fn learn(map: &mut Map, pet: Guid, spell: u32) {
         }
         None => {
             s.spells.push(spell);
-            if autocastable(t) {
+            // A rank trained over another has its place already, on the
+            // bar and in the autocast (Thistle Tea's `PetTraining.learn`).
+            if autocastable(t) && !s.autocast.contains(&spell) {
                 s.autocast.push(spell);
             }
             // Onto the bar's first empty spell slot.
             if !t.passive()
+                && !s.bar.iter().any(|b| unpack(*b).0 == spell)
                 && let Some(b) = s.bar[3..7].iter_mut().find(|b| unpack(**b).0 == 0)
             {
                 *b = button(spell, spell_kind(&data, spell, &s.autocast));

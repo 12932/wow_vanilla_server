@@ -971,7 +971,7 @@ pub mod testing {
     pub use super::control::good_name;
     pub use super::hunter::{
         HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,
-        pet_xp_to_level, show_training_points, tame, tick,
+        pet_xp_to_level, revive, show_training_points, tame, tick, train_check, untrain,
     };
     pub use super::summon::{
         UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, die, from_record, record_of, spawn,
