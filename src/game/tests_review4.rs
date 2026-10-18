@@ -476,3 +476,31 @@ fn a_deleted_sellers_bidder_is_paid_back() {
     );
     assert_eq!(refund, vec![500], "and the bid went back");
 }
+
+/// R4-9. A custom channel its last member leaves goes, its password with
+/// it (mangos's `LeftChannel`, Thistle Tea's), rather than staying for
+/// good, locked and ownerless: one for every name a client locks.
+#[tokio::test]
+async fn an_empty_locked_channel_goes() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4CH");
+    a.enter("Locker", Race::Human, Class::Warrior).await;
+    let before = realm.social.channels.lock().count();
+    for i in 0..3 {
+        let name = format!("Locked{i}");
+        a.send(CMSG_JOIN_CHANNEL {
+            channel_name: name.clone(),
+            channel_password: String::new(),
+        })
+        .await;
+        a.send(CMSG_CHANNEL_PASSWORD {
+            channel_name: name.clone(),
+            channel_password: "forgotten".into(),
+        })
+        .await;
+        a.send(CMSG_LEAVE_CHANNEL { channel_name: name }).await;
+    }
+    handled(&mut a).await;
+    let after = realm.social.channels.lock().count();
+    assert_eq!(after, before, "none of them is left");
+}
