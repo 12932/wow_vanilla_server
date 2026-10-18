@@ -2423,6 +2423,36 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     else {
         return;
     };
+    // Gear is used worn; and an item by one who may use it: of its class
+    // and race, level, skill and spell, standing and rank (mangos's
+    // `HandleUseItemOpcode` and `CanUseItem`).
+    let worn = item.bag == crate::game::store::BAG_PLAYER
+        && item.slot < crate::game::map::inventory::EQUIPMENT_END;
+    let usable = if template.inventory_type != 0 && !worn {
+        Err(crate::game::map::inventory::Fail::NotFound)
+    } else {
+        crate::game::map::inventory::can_use(p, &data, template)
+    };
+    if let Err(f) = usable {
+        crate::game::map::inventory::send_fail(p, f, item_guid);
+        return;
+    }
+    // A book that teaches only what is known is refused, not spent.
+    let teaches: Vec<u32> = data
+        .spells
+        .get(spell.id)
+        .map(|s| {
+            s.effects
+                .iter()
+                .filter(|e| e.effect == EFFECT_LEARN_SPELL && e.trigger_spell != 0)
+                .map(|e| e.trigger_spell)
+                .collect()
+        })
+        .unwrap_or_default();
+    if !teaches.is_empty() && teaches.iter().all(|t| p.spells.contains(t)) {
+        send_cast_result(map, player, spell.id, Some(fail::SPELL_LEARNED));
+        return;
+    }
     if let Some(code) = crate::game::map::items::check_use(map, player, item_guid, index) {
         crate::game::map::items::send_failure(map, player, spell.id, code);
         return;

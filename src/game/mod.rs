@@ -390,6 +390,8 @@ mod tests_p4_world_spells;
 #[cfg(test)]
 mod tests_p5_player;
 #[cfg(test)]
+mod tests_p5_player_items;
+#[cfg(test)]
 mod tests_p5_player_misc;
 #[cfg(test)]
 mod tests_p5_player_npc;

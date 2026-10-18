@@ -501,6 +501,43 @@ pub fn proficient(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<()
     Ok(())
 }
 
+/// Whether `p` may use an item of `t` at all (mangos's `CanUseItem`): of
+/// its classes and races, the skill at its rank and the spell it asks for,
+/// its level, its honor rank and its standing.
+pub fn can_use(p: &Player, data: &GameData, t: &ItemTemplate) -> Result<(), Fail> {
+    let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
+    if !allows(t.allowable_class, p.row.class) || !allows(t.allowable_race, p.row.race) {
+        return Err(Fail::NeverUse);
+    }
+    if t.required_skill != 0 {
+        match crate::game::map::skills::value(p, t.required_skill) {
+            None | Some(0) => return Err(Fail::NoProficiency),
+            Some(v) if v < t.required_skill_rank => return Err(Fail::Skill),
+            Some(_) => {}
+        }
+    }
+    if t.required_spell != 0 && !p.spells.contains(&t.required_spell) {
+        return Err(Fail::NoProficiency);
+    }
+    if !crate::game::map::pvp::rank_allows_use(p, t) {
+        return Err(Fail::Rank);
+    }
+    if u32::from(p.level()) < t.required_level {
+        return Err(Fail::Level(t.required_level as u8));
+    }
+    if t.required_reputation_faction != 0
+        && !crate::game::map::reputation::meets(
+            p,
+            data,
+            t.required_reputation_faction,
+            t.required_reputation_rank,
+        )
+    {
+        return Err(Fail::Reputation);
+    }
+    Ok(())
+}
+
 /// Whether an item in the off hand is a weapon, so wants Dual Wield: a
 /// one-hander or an off-hand weapon (mangos's `CanEquipItem`).
 fn wants_dual_wield(t: &ItemTemplate) -> bool {
