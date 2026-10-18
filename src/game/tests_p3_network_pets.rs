@@ -203,7 +203,12 @@ async fn a_hunters_pet_is_named_untrained_and_runs_off_as_1_12_has_it() {
     .await;
     let invalid = h.wait_frame("SMSG_PET_NAME_INVALID", 0x178, |_| true).await;
     assert!(invalid.is_empty());
-    map.query(move |m| pets::untrain_offer(m, gh)).await;
+    // Something to forget: untraining is offered for two spells or more.
+    map.query(move |m| {
+        pets::state_mut(m, pet).unwrap().spells = vec![1, 2];
+        pets::untrain_offer(m, gh)
+    })
+    .await;
     let quote = h
         .wait_frame("SMSG_PET_UNLEARN_CONFIRM", 0x2F1, |_| true)
         .await;

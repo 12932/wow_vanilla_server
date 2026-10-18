@@ -708,6 +708,12 @@ async fn a_pet_is_untrained_for_its_price_at_a_trainer_in_reach() {
         (vec![FAMILY], 10_000 - price),
         "untrained, once paid"
     );
+    // Taught again, it has something to forget.
+    on(&map, move |m| {
+        let s = m.creature_mut(wolf).unwrap().pet.as_deref_mut().unwrap();
+        s.spells.push(TRAINED[0]);
+    })
+    .await;
     let (_, again) = offered(&mut a, trainer).await;
     assert!(again.expect("a price").1 > price, "dearer the next time");
 }
