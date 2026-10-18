@@ -2676,26 +2676,11 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             f.set_u32(UNIT_FIELD_AURASTATE, cleared);
         }
     }
-    // A kill a player's on-kill procs count (Thistle Tea's
-    // `KillFeedback.eligible?`): not grey, and no pet, totem or creature
-    // worth no XP; a creature's kills all count.
-    let worth = if guid::is_player(killer) {
-        let (kl, vl) = (
-            map.unit_view(killer).map_or(1, |u| u.level),
-            map.unit_view(victim).map_or(1, |u| u.level),
-        );
-        let rewarding = map.creature(victim).is_none_or(|c| {
-            c.pet.is_none()
-                && map
-                    .realm
-                    .data
-                    .creature_template(c.entry)
-                    .is_none_or(|t| t.xp_rate() != 0.0 && t.static_flags1 & 0x2 == 0)
-        });
-        rewarding && vl > gray_level(kl)
-    } else {
-        true
-    };
+    let worth = kill_procs(map, killer, victim);
+    // A pet's kill is its master's too (mangos's `Unit::Kill` procs the
+    // killer's owner as well).
+    let master = crate::game::map::pets::master(map, killer);
+    let master_worth = master != killer && kill_procs(map, master, victim);
     if guid::is_unit(killer) {
         crate::game::map::event_ai::kill(map, killer, victim);
     }
@@ -2755,6 +2740,18 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         crate::game::map::ai::die_by(map, victim, tapper, killer);
     }
     if killer != victim {
+        if master_worth && master != victim {
+            procs::trigger(
+                map,
+                procs::Event {
+                    actor: master,
+                    target: victim,
+                    actor_flags: procs::PROC_KILL,
+                    ex: procs::EX_NORMAL_HIT,
+                    ..Default::default()
+                },
+            );
+        }
         procs::trigger(
             map,
             procs::Event {
@@ -2767,6 +2764,29 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             },
         );
     }
+}
+
+/// Whether `killer`'s on-kill procs count the kill of `victim` (Thistle
+/// Tea's `KillFeedback.eligible?`, mangos's `isHonorOrXPTarget`): for a
+/// player, a victim not grey and no pet, totem or creature worth no XP; a
+/// creature's kills all count.
+fn kill_procs(map: &Map, killer: Guid, victim: Guid) -> bool {
+    if !guid::is_player(killer) {
+        return true;
+    }
+    let (kl, vl) = (
+        map.unit_view(killer).map_or(1, |u| u.level),
+        map.unit_view(victim).map_or(1, |u| u.level),
+    );
+    let rewarding = map.creature(victim).is_none_or(|c| {
+        c.pet.is_none()
+            && map
+                .realm
+                .data
+                .creature_template(c.entry)
+                .is_none_or(|t| t.xp_rate() != 0.0 && t.static_flags1 & 0x2 == 0)
+    });
+    rewarding && vl > gray_level(kl)
 }
 
 /// How near a corpse a member must be for a share of the kill.

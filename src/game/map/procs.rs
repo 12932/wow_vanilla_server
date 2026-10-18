@@ -327,7 +327,11 @@ fn run(
                 continue;
             }
         }
-        if !spell_allowed(pe, trigger_spell, e.school) || !outcome_allowed(pe, e.ex) {
+        // A kill procs whatever `spell_proc_event` says of schools,
+        // families and outcomes (mangos's `IsSpellProcEventCanTriggeredBy`:
+        // "always trigger" for a kill).
+        let kill = flags & PROC_KILL != 0;
+        if !kill && (!spell_allowed(pe, trigger_spell, e.school) || !outcome_allowed(pe, e.ex)) {
             continue;
         }
         // A mechanic immunity procs only on a spell of its mechanic (mangos's
