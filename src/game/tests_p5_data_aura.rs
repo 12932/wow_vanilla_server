@@ -1482,3 +1482,129 @@ async fn a_druid_form_shakes_off_roots_and_snares_of_their_mechanics() {
         assert_eq!(on, !shaken, "{spell}");
     }
 }
+
+/// A daze of half for thirty seconds, a snare of 70% for five, one of 40%
+/// for thirty; a swim speed bonus of a hundred.
+const DAZE: u32 = 96_831;
+const SNARE_70: u32 = 96_832;
+const SNARE_40: u32 = 96_833;
+const SWIM_BONUS: u32 = 96_834;
+
+fn speed_data() -> GameData {
+    let mut d = data();
+    let slow = |id: u32, ms: u32, mechanic: u32| {
+        let mut s = aura_spell(id, Some(ms), &[(AURA_MOD_DECREASE_SPEED, 0, 0)]);
+        s.effects[0].target_a = 6;
+        s.mechanic = mechanic;
+        s
+    };
+    add_spells(
+        &mut d,
+        [
+            slow(DAZE, 30_000, 27),
+            slow(SNARE_70, 5_000, 11),
+            slow(SNARE_40, 30_000, 11),
+            aura_spell(
+                SWIM_BONUS,
+                Some(60_000),
+                &[(AURA_MOD_INCREASE_SWIM_SPEED, 0, 0)],
+            ),
+        ],
+    );
+    d
+}
+
+/// Thistle Tea's slows with the user's rule (snares stack, the strongest
+/// slows): a daze stands beside a snare of another, the snare's 70%
+/// slowing while on, the daze's half after it runs out; dead, no slow is
+/// left and the run is whole again. A swim bonus doubles forward
+/// swimming only, and cancelled or dead, swimming is as it was.
+#[tokio::test]
+async fn slows_stand_together_and_speeds_come_back_when_they_go() {
+    let (_realm, _a, ga, map) = setup_with(speed_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let one = spawn(m, ga, BRUTE, 1, 3.0);
+            let two = spawn(m, ga, BRUTE, 1, 4.0);
+            let speeds = |m: &Map| {
+                let s = m.players[&ga].speeds;
+                (s.run, s.swim, s.swim_back)
+            };
+            let plain = speeds(m);
+            let _ = put(m, one, ga, DAZE, &[-50]);
+            m.now += Duration::from_secs(1);
+            let _ = put(m, two, ga, SNARE_70, &[-70]);
+            let both = (
+                auras::auras(m, ga).is_some_and(|a| a.has_spell(DAZE) && a.has_spell(SNARE_70)),
+                speeds(m).0,
+            );
+            m.now += Duration::from_secs(5);
+            auras::update(m);
+            let after = (
+                auras::auras(m, ga).is_some_and(|a| a.has_spell(DAZE) && !a.has_spell(SNARE_70)),
+                speeds(m).0,
+            );
+            auras::remove_spell(m, ga, DAZE, None);
+            // Two snares, then death.
+            let _ = put(m, one, ga, SNARE_40, &[-40]);
+            let _ = put(m, two, ga, SNARE_70, &[-70]);
+            crate::game::map::combat::deal_damage(m, one, ga, 10_000_000);
+            let dead = (
+                auras::auras(m, ga).is_some_and(|a| a.has(AURA_MOD_DECREASE_SPEED)),
+                speeds(m).0,
+            );
+            (plain, both, after, dead)
+        })
+        .await
+        .unwrap();
+    let (plain, both, after, dead) = got;
+    let run = plain.0;
+    assert_eq!(both.0, true, "both on");
+    assert!(
+        (both.1 - run * 0.3).abs() < 0.01,
+        "the strongest: {}",
+        both.1
+    );
+    assert_eq!(after.0, true);
+    assert!(
+        (after.1 - run * 0.5).abs() < 0.01,
+        "the daze again: {}",
+        after.1
+    );
+    assert_eq!(dead.0, false, "dead, no slow");
+    assert!((dead.1 - run).abs() < 0.01, "the run whole: {}", dead.1);
+}
+
+/// Thistle Tea's swim bonus: forward swimming doubled, the run and the
+/// back swim as they were; cancelled, and on a death, swimming whole again.
+#[tokio::test]
+async fn a_swim_bonus_doubles_forward_swimming_until_it_goes() {
+    let (_realm, _a, ga, map) = setup_with(speed_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let speeds = |m: &Map| {
+                let s = m.players[&ga].speeds;
+                (s.run, s.swim, s.swim_back)
+            };
+            let plain = speeds(m);
+            let _ = put(m, ga, ga, SWIM_BONUS, &[100]);
+            let boosted = speeds(m);
+            auras::remove_spell(m, ga, SWIM_BONUS, None);
+            let cancelled = speeds(m);
+            let _ = put(m, ga, ga, SWIM_BONUS, &[100]);
+            let brute = spawn(m, ga, BRUTE, 1, 3.0);
+            crate::game::map::combat::deal_damage(m, brute, ga, 10_000_000);
+            (plain, boosted, cancelled, speeds(m))
+        })
+        .await
+        .unwrap();
+    let (plain, boosted, cancelled, dead) = got;
+    assert!((boosted.1 - plain.1 * 2.0).abs() < 0.01, "{boosted:?}");
+    assert_eq!(
+        (boosted.0, boosted.2),
+        (plain.0, plain.2),
+        "only forward swimming"
+    );
+    assert_eq!(cancelled, plain);
+    assert!((dead.1 - plain.1).abs() < 0.01, "dead: {dead:?}");
+}
