@@ -633,14 +633,19 @@ fn effect(
                 1.0
             };
             let taken = before.saturating_sub(after);
-            heal(
+            // Healing the caster takes, by their modifiers, and no threat
+            // for it (mangos's `EffectHealthLeech`).
+            let gain = outcome::spell_healing_taken(
                 map,
                 caster,
-                caster,
-                s.id,
-                (taken as f32 * mult) as u32,
-                false,
-            );
+                taken as f32 * mult,
+                s,
+                index,
+                Kind::Direct,
+                1,
+                1.0,
+            ) as u32;
+            super::leech_heal(map, caster, s.id, gain, false);
         }
         EFFECT_HEAL | EFFECT_HEAL_MECHANICAL => {
             let amount = amount + super::class_scripts::swiftmend(map, target, s);

@@ -1789,14 +1789,19 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
             .map(|e| e.multiple_value)
             .filter(|v| *v > 0.0)
             .unwrap_or(1.0);
-        heal(
+        // What it gives back is healing the caster takes, by their
+        // modifiers (mangos's `SpellHealingBonusTaken` on the beneficiary).
+        let gain = outcome::spell_healing_taken(
             map,
             h.caster,
-            h.caster,
-            h.spell,
-            (left.min(had) as f32 * mult) as u32,
-            true,
-        );
+            left.min(had) as f32 * mult,
+            &s,
+            index,
+            outcome::Kind::Dot,
+            h.stacks,
+            1.0,
+        ) as u32;
+        leech_heal(map, h.caster, h.spell, gain, true);
     }
 }
 
@@ -1815,6 +1820,26 @@ pub fn heal_crit(
     amount: u32,
     periodic: bool,
     crit: bool,
+) {
+    heal_with(map, caster, target, spell, amount, periodic, crit, true);
+}
+
+/// A leech's heal of its caster: no threat for it (mangos's `PeriodicTick`
+/// and `EffectHealthLeech`, which leave `threatAssist` out).
+pub fn leech_heal(map: &mut Map, caster: Guid, spell: u32, amount: u32, periodic: bool) {
+    heal_with(map, caster, caster, spell, amount, periodic, false, false);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn heal_with(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    spell: u32,
+    amount: u32,
+    periodic: bool,
+    crit: bool,
+    threat: bool,
 ) {
     // Down in a linked feign death, nothing heals it (Thistle Tea's
     // fallen pose).
@@ -1858,7 +1883,9 @@ pub fn heal_crit(
             p.outbound.send_frame(frame);
         }
     }
-    combat::heal_threat(map, caster, target, spell, gained);
+    if threat {
+        combat::heal_threat(map, caster, target, spell, gained);
+    }
 }
 
 /// The category most spells' global cooldown is of.
