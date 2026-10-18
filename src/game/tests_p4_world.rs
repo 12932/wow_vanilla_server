@@ -10,7 +10,7 @@ use wow_world_messages::vanilla::*;
 use crate::game::data::GameData;
 use crate::game::guid;
 use crate::game::map::Map;
-use crate::game::map::death::{self, Corpse, Death};
+use crate::game::map::death::{self, Corpse};
 use crate::game::map::spells::{self, Targets, fail};
 use crate::game::tests_p3_combat::{BRUTE, data, setup_with, spawn};
 use crate::game::tests_p3_entity::spell;
@@ -122,7 +122,7 @@ fn ghost(m: &mut Map, g: Guid) {
 /// mobs near own corpse", "sees corpses and game objects", "nobody sees a
 /// concealed creature, ghost or not"), as mangos-classic's
 /// `isVisibleForInState` and `IsVisibleInGridForPlayer`: the living don't
-/// see a ghost, a ghost sees every player, a corpse and an object, and of
+/// see a ghost, a ghost sees the players by its corpse, a corpse and an object, and of
 /// the creatures by its corpse only the living; a creature a script
 /// conceals no one sees, a spirit healer as little.
 #[tokio::test]
@@ -154,9 +154,10 @@ async fn who_sees_whom_alive_and_as_a_ghost() {
             ));
         };
         look(m, "alive");
-        if let Some(p) = m.players.get_mut(&gb) {
-            p.death = Death::Ghost { since: m.now };
-        }
+        // Released beside Alice, her corpse there: a ghost sees the living
+        // only within 45 yards of its corpse (the user's rule, mangos's
+        // `IsVisibleInGridForPlayer`).
+        ghost(m, gb);
         look(m, "Bea a ghost");
         ghost(m, ga);
         let corpse = guid::corpse(guid::counter(ga));
