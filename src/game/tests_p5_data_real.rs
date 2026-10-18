@@ -740,3 +740,234 @@ async fn separation_anxiety_empowers_an_add_far_from_its_boss() {
     );
     assert!(!dead, "a dead boss empowers nothing");
 }
+
+const CANNIBALIZE_CHANNEL: u32 = 20_578;
+
+/// Thistle Tea's triggered channel, Cannibalize's (20578): it channels
+/// with nothing paid and no cooldown, its aura on; it heals 7% each two
+/// seconds, five times, the undead sat eating, then its aura and channel
+/// end and nothing more heals. A tick of damage ends the aura and channel
+/// together, the emote with them; cancelled, it heals no more.
+#[tokio::test]
+#[ignore = "extended"]
+async fn cannibalize_channels_unpaid_heals_five_times_and_ends_whole() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, u, map) = player(&realm, "P5D12", "Hungrya", Race::Undead, Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            ready(m, u, 50, &[]);
+            let max = field(m, u, UNIT_FIELD_MAXHEALTH);
+            let start = |m: &mut Map| {
+                fresh(m, u);
+                set_health(m, u, max / 10);
+                set_power(m, u, 1, 100);
+                spells::cast_triggered(m, u, CANNIBALIZE_CHANNEL, Some(u));
+            };
+            start(m);
+            let channel = (
+                field(m, u, UNIT_CHANNEL_SPELL),
+                has(m, u, CANNIBALIZE_CHANNEL),
+                m.caster(u).map(|c| c.cooldowns.is_empty()),
+                power(m, u, 1),
+            );
+            let mut heals = Vec::new();
+            for _ in 0..5 {
+                let before = health(m, u);
+                pass(m, 2_000);
+                heals.push((health(m, u) - before, field(m, u, UNIT_NPC_EMOTESTATE)));
+            }
+            pass(m, 100);
+            let ended = (
+                has(m, u, CANNIBALIZE_CHANNEL),
+                field(m, u, UNIT_CHANNEL_SPELL),
+                field(m, u, UNIT_NPC_EMOTESTATE),
+            );
+            let after = health(m, u);
+            pass(m, 4_000);
+            let later = health(m, u) - after;
+            // A tick of damage.
+            start(m);
+            let kobold = dummy(m, u, 50, 3.0);
+            apply(m, kobold, u, 589);
+            tick_now(m, u, 589);
+            let damaged = (
+                has(m, u, CANNIBALIZE_CHANNEL),
+                field(m, u, UNIT_CHANNEL_SPELL),
+                field(m, u, UNIT_NPC_EMOTESTATE),
+            );
+            auras::remove_spell(m, u, 589, None);
+            // Cancelled.
+            start(m);
+            spells::cancel(m, u);
+            let cancelled = (
+                has(m, u, CANNIBALIZE_CHANNEL),
+                field(m, u, UNIT_CHANNEL_SPELL),
+            );
+            let before = health(m, u);
+            pass(m, 4_000);
+            (
+                channel,
+                max,
+                heals,
+                ended,
+                later,
+                damaged,
+                cancelled,
+                health(m, u) - before,
+            )
+        })
+        .await
+        .unwrap();
+    let (channel, max, heals, ended, later, damaged, cancelled, after_cancel) = got;
+    assert_eq!(
+        channel,
+        (CANNIBALIZE_CHANNEL, true, Some(true), 100),
+        "unpaid, no cooldown"
+    );
+    for (i, (healed, emote)) in heals.into_iter().enumerate() {
+        assert_eq!(healed, max * 7 / 100, "7% a tick");
+        // The fifth is the channel's last, as it ends.
+        assert_eq!(emote, if i < 4 { 398 } else { 0 }, "sat eating");
+    }
+    assert_eq!(ended, (false, 0, 0), "five ticks, then over");
+    assert_eq!(later, 0, "nothing after");
+    assert_eq!(damaged, (false, 0, 0), "a tick of damage ends it all");
+    assert_eq!(cancelled, (false, 0));
+    assert_eq!(after_cancel, 0, "cancelled, nothing more");
+}
+
+const OBSIDIAN_ARMOR: u32 = 27_539;
+const ADAPTIVE_WARDING: u32 = 28_764;
+const MAGE_ARMOR_SPELL: u32 = 6117;
+/// A harmful spell of each school: Smite, Fireball, Lightning Bolt,
+/// Frostbolt, Shadow Bolt, Arcane Missile; and a physical one, Heroic
+/// Strike.
+const BY_SCHOOL: [(u32, &str); 6] = [
+    (585, "holy"),
+    (133, "fire"),
+    (403, "nature"),
+    (116, "frost"),
+    (686, "shadow"),
+    (7268, "arcane"),
+];
+
+/// Thistle Tea's reactive armors: Obsidian Armor answers each magic
+/// school with its resistance (27536 holy, 27533 fire, 27538 nature, 27534
+/// frost, 27535 shadow, 27540 arcane), not a blow; Adaptive Warding
+/// answers fire, nature, frost, shadow and arcane (28765, 28768, 28766,
+/// 28769, 28770) only under Mage Armor, never holy or a blow. A spell
+/// resisted, or a tick, answers nothing. (Made sure to proc.)
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_reactive_armors_answer_each_school_they_cover() {
+    if !have_data() {
+        return;
+    }
+    // Sure to proc, to see what they answer.
+    let realm = realm_plus(|d| {
+        for id in [OBSIDIAN_ARMOR, ADAPTIVE_WARDING] {
+            if let Some(s) = d.spells.spells.get_mut(&id) {
+                s.proc_chance = 100;
+            }
+            if let Some(p) = d.spells.proc_events.get_mut(&id) {
+                p.chance = 100.0;
+                p.cooldown = 0;
+            }
+        }
+    });
+    let (_c, mage, map) = player(&realm, "P5D13", "Armoreda", Race::Human, Class::Mage).await;
+    let got = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            let kobold = dummy(m, mage, 60, 3.0);
+            let answers = [
+                27_536, 27_533, 27_538, 27_534, 27_535, 27_540, 28_765, 28_766, 28_768, 28_769,
+                28_770,
+            ];
+            let hit = |m: &mut Map, spell: u32, flags: u32, ex: u32| {
+                procs::trigger(
+                    m,
+                    event(
+                        kobold,
+                        mage,
+                        (PROC_DONE_NEGATIVE_SPELL, flags),
+                        ex,
+                        Some(spell),
+                    ),
+                );
+                let got: Vec<u32> = answers
+                    .iter()
+                    .copied()
+                    .filter(|a| has(m, mage, *a))
+                    .collect();
+                for a in &got {
+                    auras::remove_spell(m, mage, *a, None);
+                }
+                got
+            };
+            let taken = PROC_TAKEN_NEGATIVE_SPELL | PROC_TAKEN_DAMAGE;
+            let mut out = Vec::new();
+            for (armor, warded) in [
+                (OBSIDIAN_ARMOR, false),
+                (ADAPTIVE_WARDING, false),
+                (ADAPTIVE_WARDING, true),
+            ] {
+                apply(m, mage, mage, armor);
+                if warded {
+                    apply(m, mage, mage, MAGE_ARMOR_SPELL);
+                }
+                for (spell, school) in BY_SCHOOL {
+                    out.push((armor, warded, school, hit(m, spell, taken, EX_NORMAL_HIT)));
+                }
+                let blow = {
+                    procs::trigger(
+                        m,
+                        event(
+                            kobold,
+                            mage,
+                            (PROC_DONE_MELEE, PROC_TAKEN_MELEE),
+                            EX_NORMAL_HIT,
+                            None,
+                        ),
+                    );
+                    answers
+                        .iter()
+                        .copied()
+                        .filter(|a| has(m, mage, *a))
+                        .collect::<Vec<_>>()
+                };
+                out.push((armor, warded, "a blow", blow));
+                out.push((armor, warded, "resisted", hit(m, 133, taken, EX_RESIST)));
+                out.push((
+                    armor,
+                    warded,
+                    "a tick",
+                    hit(
+                        m,
+                        133,
+                        PROC_TAKEN_PERIODIC | PROC_TAKEN_DAMAGE,
+                        EX_NORMAL_HIT,
+                    ),
+                ));
+                auras::remove_spell(m, mage, armor, None);
+                auras::remove_spell(m, mage, MAGE_ARMOR_SPELL, None);
+            }
+            out
+        })
+        .await
+        .unwrap();
+    let obsidian = [27_536, 27_533, 27_538, 27_534, 27_535, 27_540];
+    let adaptive = [0, 28_765, 28_768, 28_766, 28_769, 28_770];
+    for (armor, warded, what, got) in got {
+        let i = BY_SCHOOL.iter().position(|(_, s)| *s == what);
+        let want: Vec<u32> = match (armor, warded, i) {
+            (OBSIDIAN_ARMOR, _, Some(i)) => vec![obsidian[i]],
+            (ADAPTIVE_WARDING, true, Some(i)) if adaptive[i] != 0 => vec![adaptive[i]],
+            _ => vec![],
+        };
+        assert_eq!(got, want, "{armor} (Mage Armor: {warded}) against {what}");
+    }
+}
