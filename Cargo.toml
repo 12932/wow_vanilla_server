@@ -45,7 +45,10 @@ wow_items = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba1
 wow_srp = { git="https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163" }
 walkdir = "2.5.0"
 
-rustigator = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b", features = ["vanilla"] }
+# The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
+# decoded off the map's thread and handed in (`load_nav_file`).
+rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
+glam = "0.34"
 # The navmesh and terrain builds, for the data setup.
 rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
 tracing = "0.1.44"

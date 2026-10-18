@@ -85,6 +85,7 @@ pub mod supervise;
 pub mod tap;
 pub mod terrain;
 pub mod tickets;
+pub mod tiles;
 pub mod trade;
 pub mod trade_spells;
 pub mod trinkets;
@@ -1247,6 +1248,8 @@ impl Map {
         // Each step under its own guard: one that panics costs itself,
         // this once, and the rest (the flushes most of all) go on.
         self.step("players", Map::update_players);
+        // The tiles read since the last update, for all that follows.
+        self.step("tiles", tiles::update);
         self.step("gear", inventory::sync_gear_all);
         self.step("misc", misc::update);
         self.step("players' combat", combat::update_players);
@@ -1515,6 +1518,17 @@ impl Map {
     pub fn creature_mut(&mut self, guid: Guid) -> Option<&mut Creature> {
         let k = *self.creature_by_guid.get(&guid)?;
         self.creatures.get_mut(k)
+    }
+
+    /// The navmesh, where the tiles under `at` are in (or aren't in the
+    /// bake): `None` with no navmesh, or while one of those tiles is being
+    /// read (it is asked for), when a caller does as it would with none.
+    pub fn nav_at(
+        &mut self,
+        at: &[wow_world_messages::vanilla::Vector3d],
+    ) -> Option<&mut nav::Nav> {
+        let nav = self.nav.as_mut()?;
+        nav.ready_at(at).then_some(nav)
     }
 
     /// `g`, if a creature, may be in a fight from now (see `awake`).

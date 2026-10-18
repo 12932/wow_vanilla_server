@@ -3,12 +3,15 @@
 //! each cell's area, ground height, liquid and holes. The navmesh knows a
 //! liquid's surface but not its kind outside WMOs; these give the kind
 //! (water, ocean, magma, slime, the deep sea) and an area where the navmesh
-//! has none. Tiles are read as they are first asked for, and only a wet
-//! tile keeps its heights.
+//! has none. Tiles are read as they are first asked for (off the map's
+//! thread on the server: `map/tiles.rs`), and only a wet tile keeps its
+//! heights.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use ahash::{AHashMap, AHashSet};
+use std::collections::hash_map::Entry;
 use tracing::{info, warn};
 use wow_world_messages::vanilla::Vector3d;
 
@@ -383,29 +386,56 @@ impl LiquidGrid {
     }
 }
 
-/// A map's tiles, read as asked for.
+/// A map's tiles, read as asked for: at once, or off the map's thread
+/// (`map/tiles.rs`), when one not in yet answers as no terrain would.
 pub struct Terrain {
     dir: PathBuf,
     map: u32,
     /// The tiles the directory has for the map.
     present: AHashSet<(u8, u8)>,
-    /// Those read, `None` where one didn't decode.
-    tiles: AHashMap<(u8, u8), Option<Tile>>,
+    /// Those asked for, with when each was last used: loading (`None`), or
+    /// read (`Some(None)` where one didn't decode).
+    tiles: AHashMap<(u8, u8), Slot>,
+    /// Where tiles read off the map's thread arrive; `None` to read them at
+    /// once.
+    background: Option<(kanal::Sender<Arrival>, kanal::Receiver<Arrival>)>,
+    /// The map's time, as of its last update.
+    now: Instant,
 }
+
+#[derive(Debug)]
+struct Slot {
+    tile: Option<Option<Tile>>,
+    used: Instant,
+}
+
+type Arrival = ((u8, u8), Option<Tile>);
 
 impl std::fmt::Debug for Terrain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "Terrain({} of {} tiles read)",
-            self.tiles.len(),
+            self.tiles_read(),
             self.present.len()
         )
     }
 }
 
+/// Tile `key` of map `map` in `dir`, read; `None` if it doesn't decode.
+fn read(dir: &Path, map: u32, key: (u8, u8)) -> Option<Tile> {
+    let _z = crate::zone!("terrain tile");
+    let path = dir.join(format!("{map:04}{:02}{:02}.map", key.0, key.1));
+    let tile = std::fs::read(&path).ok().and_then(|b| Tile::decode(&b));
+    if tile.is_none() {
+        warn!("invalid terrain tile {}", path.display());
+    }
+    tile
+}
+
 impl Terrain {
-    /// The tiles in `dir` for map `map`; `None` if it has none.
+    /// The tiles in `dir` for map `map`; `None` if it has none. They are
+    /// read at once as they are asked for.
     pub fn open(dir: &Path, map: u32) -> Option<Self> {
         let prefix = format!("{map:04}");
         let present: AHashSet<(u8, u8)> = std::fs::read_dir(dir)
@@ -432,31 +462,92 @@ impl Terrain {
             map,
             present,
             tiles: AHashMap::new(),
+            background: None,
+            now: Instant::now(),
         })
     }
 
-    fn tile(&mut self, x: f32, y: f32) -> Option<&Tile> {
+    /// From now its tiles are read off the map's thread, and taken in at
+    /// [`Terrain::receive`].
+    pub fn in_background(&mut self) {
+        self.background = Some(kanal::unbounded());
+    }
+
+    fn key(x: f32, y: f32) -> Option<(u8, u8)> {
         if !x.is_finite() || !y.is_finite() {
             return None;
         }
         let (row, column) = coordinates(x, y);
-        let key = (u8::try_from(row).ok()?, u8::try_from(column).ok()?);
+        Some((u8::try_from(row).ok()?, u8::try_from(column).ok()?))
+    }
+
+    /// The tile `key`, read at once or asked for; `None` while it loads.
+    fn slot(&mut self, key: (u8, u8)) -> Option<&Tile> {
         if !self.present.contains(&key) {
             return None;
         }
+        let now = self.now;
         let (dir, map) = (&self.dir, self.map);
-        self.tiles
-            .entry(key)
-            .or_insert_with(|| {
-                let _z = crate::zone!("terrain tile");
-                let path = dir.join(format!("{map:04}{:02}{:02}.map", key.0, key.1));
-                let tile = std::fs::read(&path).ok().and_then(|b| Tile::decode(&b));
-                if tile.is_none() {
-                    warn!("invalid terrain tile {}", path.display());
-                }
-                tile
-            })
-            .as_ref()
+        let slot = match self.tiles.entry(key) {
+            Entry::Occupied(e) => {
+                let s = e.into_mut();
+                s.used = now;
+                s
+            }
+            Entry::Vacant(v) => {
+                let tile = match &self.background {
+                    Some((tx, _)) => {
+                        let (tx, dir) = (tx.clone(), dir.clone());
+                        crate::game::map::tiles::read(move || {
+                            let _ = tx.send((key, read(&dir, map, key)));
+                        });
+                        None
+                    }
+                    None => Some(read(dir, map, key)),
+                };
+                v.insert(Slot { tile, used: now })
+            }
+        };
+        slot.tile.as_ref()?.as_ref()
+    }
+
+    fn tile(&mut self, x: f32, y: f32) -> Option<&Tile> {
+        let key = Self::key(x, y)?;
+        self.slot(key)
+    }
+
+    /// The tile under the navmesh's tile `t` (`nav::tile_of`) is wanted
+    /// soon: read in the background if it isn't, and kept. Reading at
+    /// once, it is only kept.
+    pub fn want(&mut self, (tx, ty): (i32, i32)) {
+        let (Ok(row), Ok(column)) = (u8::try_from(ty), u8::try_from(tx)) else {
+            return;
+        };
+        if self.background.is_some() {
+            self.slot((row, column));
+        } else if let Some(s) = self.tiles.get_mut(&(row, column)) {
+            s.used = self.now;
+        }
+    }
+
+    /// The map's update: its time, and the tiles read since the last.
+    /// How many came in.
+    pub fn receive(&mut self, now: Instant) -> usize {
+        self.now = now;
+        let Some((_, rx)) = &self.background else {
+            return 0;
+        };
+        let arrived: Vec<Arrival> = std::iter::from_fn(|| rx.try_recv().ok().flatten()).collect();
+        let n = arrived.len();
+        for (key, tile) in arrived {
+            // One let go of meanwhile is asked for again when needed.
+            if let Some(s) = self.tiles.get_mut(&key)
+                && s.tile.is_none()
+            {
+                s.tile = Some(tile);
+            }
+        }
+        n
     }
 
     /// The terrain's liquid at a point.
@@ -469,7 +560,13 @@ impl Terrain {
         self.tile(x, y)?.area_bit(x, y)
     }
 
+    /// Tiles read (or that didn't decode).
     pub fn tiles_read(&self) -> usize {
-        self.tiles.len()
+        self.tiles.values().filter(|s| s.tile.is_some()).count()
+    }
+
+    /// Tiles being read.
+    pub fn tiles_loading(&self) -> usize {
+        self.tiles.values().filter(|s| s.tile.is_none()).count()
     }
 }

@@ -302,6 +302,24 @@ async fn run(args: Args) -> std::process::ExitCode {
     let frames = FRAMES_IN.load(Ordering::Relaxed);
     let load_after = loadavg();
     let rss = peak_rss_mb();
+    // The tiles each continent holds at the end: navmesh in and being
+    // read, terrain read.
+    let mut tiles = Vec::new();
+    for m in [0, 1] {
+        let h = realm.maps.get(&realm, MapKey::world(m));
+        if let Some(t) = h
+            .query(|map| {
+                (
+                    map.nav.as_ref().map_or(0, |n| n.tiles_in()),
+                    map.nav.as_ref().map_or(0, |n| n.tiles_loading()),
+                    map.terrain.as_ref().map_or(0, |t| t.tiles_read()),
+                )
+            })
+            .await
+        {
+            tiles.push((m, t));
+        }
+    }
 
     let report = Report::new(
         &args,
@@ -310,7 +328,8 @@ async fn run(args: Args) -> std::process::ExitCode {
         &events,
         elapsed,
         cores_used,
-        rss,
+        (rss, rss_mb()),
+        &tiles,
         (bytes, frames),
         io,
         (load_before.trim(), load_after.trim()),
@@ -541,10 +560,19 @@ fn process_io() -> (f64, f64) {
 
 /// The process's peak resident memory, in MB.
 fn peak_rss_mb() -> f64 {
+    status_mb("VmHWM:")
+}
+
+/// The process's resident memory now, in MB.
+fn rss_mb() -> f64 {
+    status_mb("VmRSS:")
+}
+
+fn status_mb(key: &str) -> f64 {
     std::fs::read_to_string("/proc/self/status")
         .unwrap_or_default()
         .lines()
-        .find_map(|l| l.strip_prefix("VmHWM:"))
+        .find_map(|l| l.strip_prefix(key))
         .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
         .map_or(0.0, |kb| kb / 1024.0)
 }
@@ -571,7 +599,8 @@ impl Report {
         events: &AHashMap<MapKey, (u64, Duration)>,
         elapsed: f64,
         cores: f64,
-        rss_mb: f64,
+        (rss_mb, rss_now_mb): (f64, f64),
+        tiles: &[(u32, (usize, usize, usize))],
         (bytes, frames): (u64, u64),
         (faults, read_mb): (f64, f64),
         (load_before, load_after): (&str, &str),
@@ -608,6 +637,7 @@ impl Report {
             wall.sort_by(f64::total_cmp);
             cpu.sort_by(f64::total_cmp);
             let over = wall.iter().filter(|w| **w > 50.0).count() as f64 / wall.len() as f64;
+            let cpu_over = cpu.iter().filter(|c| **c > 50.0).count() as f64 / cpu.len() as f64;
             let awake_mean =
                 mine.iter().map(|s| f64::from(s.awake)).sum::<f64>() / mine.len() as f64;
             let awake_max = mine.iter().map(|s| s.awake).max().unwrap_or(0);
@@ -688,6 +718,7 @@ impl Report {
                 "wall_ms": {"p50": pct(&wall, 0.5), "p95": pct(&wall, 0.95), "p99": pct(&wall, 0.99), "max": wall.last()},
                 "cpu_ms": {"p50": pct(&cpu, 0.5), "p95": pct(&cpu, 0.95), "p99": pct(&cpu, 0.99), "max": cpu.last()},
                 "over_50ms": over,
+                "cpu_over_50ms": cpu_over,
                 "awake_mean": awake_mean,
                 "awake_max": awake_max,
                 "events_per_sec": ev_n as f64 / elapsed,
@@ -711,9 +742,15 @@ impl Report {
                 }).collect::<Vec<_>>(),
             }));
         }
+        for (m, (nav_in, nav_loading, terrain)) in tiles {
+            let _ = writeln!(
+                text,
+                "map {m}'s tiles: navmesh {nav_in} in, {nav_loading} being read; terrain {terrain} read"
+            );
+        }
         let _ = writeln!(
             text,
-            "process: {cores:.2} cores, peak RSS {rss_mb:.0} MB; to the observers {:.0} kB/s in {:.0} frames/s",
+            "process: {cores:.2} cores, peak RSS {rss_mb:.0} MB (at the end {rss_now_mb:.0}); to the observers {:.0} kB/s in {:.0} frames/s",
             bytes as f64 / elapsed / 1e3,
             frames as f64 / elapsed
         );
@@ -728,6 +765,8 @@ impl Report {
             "secs": elapsed,
             "cores": cores,
             "peak_rss_mb": rss_mb,
+            "rss_end_mb": rss_now_mb,
+            "tiles": tiles.iter().map(|(m, (a, b, c))| serde_json::json!({"map": m, "nav_in": a, "nav_loading": b, "terrain_read": c})).collect::<Vec<_>>(),
             "bytes_per_sec": bytes as f64 / elapsed,
             "frames_per_sec": frames as f64 / elapsed,
             "major_faults_per_sec": faults,

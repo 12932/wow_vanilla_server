@@ -217,3 +217,137 @@ async fn the_awake_set_lets_go_of_those_no_longer_awake_at_the_next_updates_firs
     .await
     .unwrap();
 }
+
+static BAKE: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("nav"));
+static TERRAIN: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| crate::game::harness::real_data("terrain"));
+
+/// Goldshire's road, and a lake south of it (as `tests_terrain` has them).
+const GOLDSHIRE: Vector3d = Vector3d {
+    x: -9460.0,
+    y: 62.0,
+    z: 56.0,
+};
+const ELWYNN_LAKE: Vector3d = Vector3d {
+    x: -9640.0,
+    y: -1040.0,
+    z: 37.0,
+};
+
+/// Until `done`, in real time: what the readers' threads are reading takes
+/// the disk's time.
+fn until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done() {
+        assert!(Instant::now() < deadline, "{what} within 60 s");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[ignore = "extended"]
+fn a_navmesh_tile_read_off_the_maps_thread_answers_as_no_navmesh_until_it_is_in() {
+    use crate::game::map::nav::Nav;
+    let (from, to) = (
+        GOLDSHIRE,
+        Vector3d {
+            x: GOLDSHIRE.x + 30.0,
+            ..GOLDSHIRE
+        },
+    );
+    let mut at_once = Nav::open(&BAKE, "Azeroth").expect("the bake");
+    let (path, ground) = (
+        at_once.path(from, to),
+        at_once.ground(from.x, from.y, from.z),
+    );
+    assert!(path.as_ref().is_some_and(|p| p.len() >= 2) && ground.is_some());
+    let mut nav = Nav::open(&BAKE, "Azeroth").unwrap();
+    nav.in_background();
+    // Asked for, it is read meanwhile: a path is straight, a height
+    // unknown, and the way clear, as with no navmesh.
+    assert_eq!(nav.path(from, to), Some(vec![from, to]));
+    assert_eq!(nav.ground(from.x, from.y, from.z), None);
+    assert!(nav.line_of_sight(from, to));
+    assert_eq!((nav.tiles_in(), nav.tiles_loading()), (0, 1));
+    until("the tile", || {
+        nav.receive(Instant::now());
+        nav.tiles_in() == 1
+    });
+    // In, it answers as the tile read at once does.
+    assert_eq!(nav.path(from, to), path);
+    assert_eq!(nav.ground(from.x, from.y, from.z), ground);
+}
+
+#[test]
+#[ignore = "extended"]
+fn a_terrain_tile_read_off_the_maps_thread_has_no_liquid_until_it_is_in() {
+    use crate::game::map::terrain::Terrain;
+    let mut at_once = Terrain::open(&TERRAIN, 0).expect("the tiles");
+    let lake = at_once.liquid(ELWYNN_LAKE);
+    assert!(lake.is_some(), "Elwynn's lake");
+    let mut terrain = Terrain::open(&TERRAIN, 0).unwrap();
+    terrain.in_background();
+    assert_eq!(terrain.liquid(ELWYNN_LAKE), None, "being read");
+    assert_eq!(terrain.tiles_loading(), 1);
+    until("the tile", || {
+        terrain.receive(Instant::now());
+        terrain.tiles_read() == 1
+    });
+    assert_eq!(terrain.liquid(ELWYNN_LAKE), lake);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "extended"]
+async fn a_map_asks_ahead_for_the_tiles_around_its_players() {
+    let mut cfg = crate::game::harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    cfg.terrain_dir = Some(TERRAIN.clone());
+    cfg.tiles_in_background = true;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(
+        cfg,
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        None,
+    );
+    let mut a = Client::connect(&realm, "A");
+    // In Northshire, where a human starts: 117 yards from the tile to its
+    // west, and so within what they see and a margin of it.
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    let (here, ahead) = map
+        .query(move |m| {
+            let p = m.players[&g].position();
+            let reach = m.cfg.visibility_yards + 20.0;
+            (
+                crate::game::map::nav::tile_of(p.x, p.y),
+                crate::game::map::tiles::tiles_around(p.x, p.y, reach).to_vec(),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(ahead.len() >= 2 && ahead.contains(&here), "{ahead:?}");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        // Nothing near them asks about the tile to the west: they see
+        // nothing there yet.
+        let want = ahead.clone();
+        let (nav, terrain) = map
+            .query(move |m| {
+                (
+                    want.iter()
+                        .all(|t| m.nav.as_ref().is_some_and(|n| n.has_tile(*t))),
+                    m.terrain.as_ref().map_or(0, |t| t.tiles_read()),
+                )
+            })
+            .await
+            .unwrap();
+        if nav && terrain >= ahead.len() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the tiles within 60 s");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

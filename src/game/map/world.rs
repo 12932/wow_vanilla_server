@@ -39,6 +39,15 @@ pub fn populate(map: &mut Map) {
     if let Some(dir) = map.cfg.terrain_dir.as_ref() {
         map.terrain = crate::game::map::terrain::Terrain::open(dir, map.key.map);
     }
+    // Their tiles off the map's thread, on the server (`map/tiles.rs`).
+    if map.cfg.tiles_in_background {
+        if let Some(nav) = map.nav.as_mut() {
+            nav.in_background();
+        }
+        if let Some(terrain) = map.terrain.as_mut() {
+            terrain.in_background();
+        }
+    }
     let on = crate::game::events::current(&map.realm);
     let mut rng = rand::rng();
     let (skip_creatures, skip_objects) = crate::game::map::pools::populate(map, &on, &mut rng);
@@ -270,9 +279,12 @@ fn step_creature(
                         crate::game::map::event_ai::wander_center(c),
                         c.wander_distance,
                     );
+                    // Its tile still being read, it wanders as with no
+                    // navmesh.
+                    let ready = nav.as_mut().is_some_and(|n| n.ready_at(&[home]));
                     match nav.as_mut() {
-                        Some(n) => wander_point(n, home, radius, rng),
-                        None => Some(random_point(home, radius, rng)),
+                        Some(n) if ready => wander_point(n, home, radius, rng),
+                        _ => Some(random_point(home, radius, rng)),
                     }
                 }
                 _ => None,

@@ -505,6 +505,10 @@ pub struct RealmConfig {
     /// Whether bolts and missiles take time to arrive (tests land them at
     /// once).
     pub spell_travel: bool,
+    /// Whether the navmesh's and the terrain's tiles are read off the
+    /// maps' threads (`map/tiles.rs`); tests read them at once, as they
+    /// are asked for, so that what a test sees doesn't hang on the disk.
+    pub tiles_in_background: bool,
     pub arena: crate::game::map::arena::ArenaConfig,
     pub rates: crate::config::RatesConfig,
     pub creatures: crate::config::CreaturesConfig,
@@ -540,6 +544,7 @@ impl RealmConfig {
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
             spell_travel: true,
+            tiles_in_background: true,
             arena: c.arena.clone(),
             rates: c.rates.clone(),
             creatures: c.creatures.clone(),

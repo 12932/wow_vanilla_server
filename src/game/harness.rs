@@ -152,6 +152,7 @@ pub fn test_config() -> RealmConfig {
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         spell_rolls: false,
         spell_travel: false,
+        tiles_in_background: false,
         arena: Default::default(),
         rates: Default::default(),
         creatures: Default::default(),
