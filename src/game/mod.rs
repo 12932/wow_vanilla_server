@@ -352,6 +352,8 @@ mod tests_p4_items_av;
 #[cfg(test)]
 mod tests_p4_items_bags;
 #[cfg(test)]
+mod tests_p4_items_conditions;
+#[cfg(test)]
 mod tests_p4_items_gear;
 #[cfg(test)]
 mod tests_p4_items_gear2;
