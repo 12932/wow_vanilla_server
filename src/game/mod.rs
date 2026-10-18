@@ -412,6 +412,8 @@ mod tests_p5_combat_rewards;
 #[cfg(test)]
 mod tests_p5_combat_zone;
 #[cfg(test)]
+mod tests_p5_combat_defense;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
