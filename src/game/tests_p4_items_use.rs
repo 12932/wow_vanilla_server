@@ -4,9 +4,9 @@
 //! triggers in turn; Party Time!'s dances (none on the move, none once it
 //! has gone); a blow's wear on one slot; enchanting (the item, its level,
 //! the rod, the coatings) and what an enchantment binds; the Six Demon Bag,
-//! the Bending Shinbone and the Fetid Skull; a resurrection's offer; and,
-//! on the real data, the healing sets' class buffs and the reactive armors'
-//! wards and resistances.
+//! the Bending Shinbone and the Fetid Skull; a resurrection's offer. The
+//! healing sets and the reactive armors, on the real data, are in
+//! `tests_p4_items_use2`.
 
 use std::sync::Arc;
 use std::time::Duration;
