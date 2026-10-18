@@ -916,8 +916,6 @@ impl Map {
         }
     }
 
-    /// The map's numbers for the last while: players, creatures, update
-    /// times and the events waiting.
     /// Tracy's plots of the map, once a second while Tracy is on.
     fn plot(&mut self, queued: usize) {
         let Some(p) = &mut self.profile else {
@@ -938,6 +936,8 @@ impl Map {
         p.outbound.set(outbound as f64);
     }
 
+    /// The map's numbers for the last while: players, creatures, update
+    /// times and the events waiting.
     fn report(&mut self, queued: usize) {
         let s = &mut self.stats;
         if self.players.is_empty() && s.window_max < UPDATE_INTERVAL {
