@@ -786,7 +786,15 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     let source = match (source > 0).then(|| inventory::room_for(p, &data, q.source_item, source)) {
         Some(Err(inventory::Fail::CantCarryMore)) | None => 0,
         Some(Ok(())) => source,
-        Some(Err(fail)) => return inventory::send_fail(p, fail, Guid::zero()),
+        Some(Err(fail)) => {
+            inventory::send_fail(p, fail, Guid::zero());
+            // A shared offer not taken goes, the sharer told (Thistle
+            // Tea's `QuestSharing.accept`).
+            if shared {
+                crate::game::map::questshare::refused(map, player, giver);
+            }
+            return;
+        }
     };
     p.journal.add(Logged {
         quest,
@@ -797,7 +805,9 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
         },
         ..Default::default()
     });
-    refresh_log(p, &data);
+    // Its log entry goes out with `check`, which reads it as it was, not
+    // yet complete: one taken done is told so (Thistle Tea's
+    // `force_accept`).
     if source > 0 {
         let _ = inventory::add_item(map, player, q.source_item, source, true);
     }
@@ -1522,6 +1532,8 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
     };
     p.journal.clear(usize::from(slot));
     refresh_log(p, &data);
+    // The auras its being taken gave go with it.
+    crate::game::map::spell_areas::reconcile(map, player);
 }
 
 /// Whether `item` is a bag, worn or in the bank's bag slots, with

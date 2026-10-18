@@ -263,15 +263,18 @@ async fn lava_burns_after_a_second_in_it() {
         .await;
     assert_eq!(hurt.0, EnvironmentalDamageType::Lava);
     assert!((605..=610).contains(&hurt.1));
-    // A god doesn't burn.
-    let godly = on_map(&realm, move |m| {
+    // A god doesn't burn. Placed again, since the map's own updates in
+    // between may have worked the test's health out afresh.
+    let (before, godly) = on_map(&realm, move |m| {
+        place(m, g, SEARING_GORGE);
         m.players.get_mut(&g).unwrap().misc.god = true;
+        let before = m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH);
         check(m, g, Duration::from_secs(3));
         check(m, g, Duration::from_secs(3));
-        m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH)
+        (before, m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH))
     })
     .await;
-    assert_eq!(godly, after);
+    assert_eq!(godly, before);
 }
 
 #[tokio::test]

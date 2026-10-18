@@ -215,6 +215,48 @@ pub fn fits(h: &Holder, w: Option<&Weapon>) -> bool {
         && (h.item_subclass_mask <= 0 || h.item_subclass_mask & (1 << w.subclass) != 0)
 }
 
+/// The percentages of damage done on school `bit` that apply to the
+/// weapon `w` (all those that ask for none, and those it fits).
+fn pct_for(a: &Auras, bit: u32, w: Option<&Weapon>) -> f32 {
+    a.effects()
+        .filter(|(h, x)| {
+            x.kind == AURA_MOD_DAMAGE_PERCENT_DONE && (x.misc as u32) & bit != 0 && fits(h, w)
+        })
+        .fold(1.0, |m, (h, x)| {
+            m * (100 + x.amount * h.stacks.max(1) as i32).max(0) as f32 / 100.0
+        })
+}
+
+/// A spell's percentages of damage done on school `bit`: those that ask
+/// for no weapon or item.
+pub fn spell_pct(a: &Auras, bit: u32) -> f32 {
+    a.effects()
+        .filter(|(h, x)| {
+            x.kind == AURA_MOD_DAMAGE_PERCENT_DONE && (x.misc as u32) & bit != 0 && h.unrestricted()
+        })
+        .fold(1.0, |m, (h, x)| {
+            m * (100 + x.amount * h.stacks.max(1) as i32).max(0) as f32 / 100.0
+        })
+}
+
+/// A wand's: weapon subclass 19.
+pub const SUBCLASS_WAND: u32 = 19;
+
+/// What a wand's shot takes of damage done: the percentages of its school
+/// (`school_bit`) on auras that fit it, Wand Specialization's among them,
+/// each by its stacks (Thistle Tea's wand context and displayed damage).
+pub fn wand_pct(a: &Auras, school_bit: u32, w: &Weapon) -> f32 {
+    a.effects()
+        .filter(|(h, x)| {
+            x.kind == AURA_MOD_DAMAGE_PERCENT_DONE
+                && (x.misc as u32) & school_bit != 0
+                && fits(h, Some(w))
+        })
+        .fold(1.0, |m, (h, x)| {
+            m * (100 + x.amount * h.stacks.max(1) as i32).max(0) as f32 / 100.0
+        })
+}
+
 /// The sum of `kind` auras that apply to the weapon `w`.
 fn sum_for(a: &Auras, kind: u32, w: Option<&Weapon>) -> f32 {
     a.effects()
@@ -337,6 +379,34 @@ fn intellect_mana(intellect: u32) -> u32 {
     intellect.min(20) + intellect.saturating_sub(20) * 15
 }
 
+/// The percentages of `kind` on stat `misc` (or all, -1), each `100 +
+/// amount` with its stacks, no less than nothing.
+fn factors(a: &Auras, kind: u32, misc: i32) -> Vec<i64> {
+    a.effects()
+        .filter(|(_, x)| x.kind == kind && (x.misc == misc || x.misc == -1))
+        .map(|(h, x)| i64::from((100 + x.amount * h.stacks.max(1) as i32).max(0)))
+        .collect()
+}
+
+/// A stat from its base and gear (`own`): scaled by the base percentages
+/// (`pct`, each `100 + amount`), the flat auras added, then scaled by the
+/// totals, in whole numbers as Thistle Tea's `scaled_stat` divides them:
+/// four percent of a hundred is four, where a float's 1.04 makes 103.99.
+pub fn scaled_stat(own: i32, pct: &[i64], flat: i32, total: &[i64]) -> u32 {
+    let (mut num, mut den) = (1i128, 1i128);
+    for f in pct {
+        num *= i128::from(*f);
+        den *= 100;
+    }
+    let (mut tnum, mut tden) = (1i128, 1i128);
+    for f in total {
+        tnum *= i128::from(*f);
+        tden *= 100;
+    }
+    let value = i128::from(own) * num + i128::from(flat) * den;
+    (value * tnum / (den * tden)).clamp(0, i128::from(u32::MAX)) as u32
+}
+
 /// `SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT`: a share of intellect (the
 /// only stat it takes in 1.12) as armor or resistance.
 const AURA_MOD_RESISTANCE_OF_STAT_PERCENT: u32 = 182;
@@ -441,6 +511,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 100);
         return;
     };
+    crate::game::map::skills::set_bonuses(p);
     let g = gear(p, data);
     let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
     let disarmed = p.auras.has(AURA_MOD_DISARM);
@@ -470,11 +541,13 @@ pub fn player(p: &mut Player, data: &GameData) {
     let f = &mut p.fields;
     let mut stat = [0u32; 5];
     for (i, value) in stat.iter_mut().enumerate() {
-        let own = (base.stats[i] as i32 + g.stats[i]) as f32;
-        let v = (own * a.product_misc(AURA_MOD_PERCENT_STAT, i as i32)
-            + a.sum_misc(AURA_MOD_STAT, i as i32) as f32)
-            * a.product_misc(AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32);
-        *value = v.max(0.0) as u32;
+        let own = base.stats[i] as i32 + g.stats[i];
+        *value = scaled_stat(
+            own,
+            &factors(a, AURA_MOD_PERCENT_STAT, i as i32),
+            a.sum_misc(AURA_MOD_STAT, i as i32),
+            &factors(a, AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32),
+        );
         let s = i as u16;
         f.set_u32(UNIT_FIELD_STAT0 + s, *value);
         let diff = *value as i32 - base.stats[i] as i32;
@@ -567,7 +640,10 @@ pub fn player(p: &mut Player, data: &GameData) {
     let rap = ((rap_base as i32 + rap_mods) as f32 * rap_mult).max(0.0);
     // Weapon damage and speed: a druid in cat or bear form fights with
     // the form's paws.
-    let physical_pct = a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, 1);
+    // A percentage that asks for a weapon (a weapon specialization's)
+    // counts for the hand whose weapon fits it, as mangos's
+    // `_ApplyWeaponDependentAuraDamageMod`.
+    let physical_pct = |w: Option<&Weapon>| pct_for(a, 1, w);
     let (main, main_delay) = match (class, form) {
         (DRUID, auras::FORM_CAT) => (None, 1000),
         (DRUID, auras::FORM_BEAR | auras::FORM_DIREBEAR) => (None, 2500),
@@ -586,8 +662,9 @@ pub fn player(p: &mut Player, data: &GameData) {
     };
     let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
     let bonus = ap / 14.0 * main_delay as f32 / 1000.0;
-    f.set_f32(UNIT_FIELD_MINDAMAGE, (min + bonus) * physical_pct);
-    f.set_f32(UNIT_FIELD_MAXDAMAGE, (max + bonus) * physical_pct);
+    let main_pct = physical_pct(main.as_ref());
+    f.set_f32(UNIT_FIELD_MINDAMAGE, (min + bonus) * main_pct);
+    f.set_f32(UNIT_FIELD_MAXDAMAGE, (max + bonus) * main_pct);
     f.set_u32(
         UNIT_FIELD_BASEATTACKTIME,
         ((main_delay as f32 * haste) as u32).max(100),
@@ -596,7 +673,8 @@ pub fn player(p: &mut Player, data: &GameData) {
     match g.off.filter(|_| dual_wield) {
         Some(w) => {
             let bonus = ap / 14.0 * w.delay as f32 / 1000.0;
-            let pct = physical_pct * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+            let pct =
+                physical_pct(Some(&w)) * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
             f.set_f32(UNIT_FIELD_MINOFFHANDDAMAGE, (w.min + bonus) * 0.5 * pct);
             f.set_f32(UNIT_FIELD_MAXOFFHANDDAMAGE, (w.max + bonus) * 0.5 * pct);
             f.set_u32(
@@ -611,6 +689,19 @@ pub fn player(p: &mut Player, data: &GameData) {
         }
     }
     match g.ranged {
+        // A wand: its own damage and school, without attack power, by its
+        // school's percentages that fit it (Thistle Tea's wand).
+        Some(w) if w.subclass == SUBCLASS_WAND => {
+            let school = data.item(w.entry).map_or(0, |t| t.damages[0].2).min(6);
+            let pct = wand_pct(a, 1 << school, &w);
+            f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, w.min * pct);
+            f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, w.max * pct);
+            let ranged_haste = period_multiplier(a, &[AURA_MOD_RANGED_HASTE, AURA_MOD_ATTACKSPEED]);
+            f.set_u32(
+                UNIT_FIELD_RANGEDATTACKTIME,
+                ((w.delay as f32 * ranged_haste) as u32).max(100),
+            );
+        }
         Some(w) => {
             let ammo = if w.ammo_type != 0 {
                 let id = f.get_u32(PLAYER_AMMO_ID);
@@ -621,8 +712,9 @@ pub fn player(p: &mut Player, data: &GameData) {
                 0.0
             };
             let bonus = (rap / 14.0 + ammo) * w.delay as f32 / 1000.0;
-            f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, (w.min + bonus) * physical_pct);
-            f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, (w.max + bonus) * physical_pct);
+            let pct = physical_pct(Some(&w));
+            f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, (w.min + bonus) * pct);
+            f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, (w.max + bonus) * pct);
             let mut kinds = vec![AURA_MOD_RANGED_HASTE, AURA_MOD_ATTACKSPEED];
             if w.ammo_type != 0 {
                 kinds.push(AURA_MOD_RANGED_AMMO_HASTE);
@@ -655,10 +747,9 @@ pub fn player(p: &mut Player, data: &GameData) {
             });
         f.set_u32(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, pos as u32);
         f.set_u32(PLAYER_FIELD_MOD_DAMAGE_DONE_NEG + i, neg as u32);
-        f.set_f32(
-            PLAYER_FIELD_MOD_DAMAGE_DONE_PCT + i,
-            a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, bit),
-        );
+        // A spell's share: none that asks for a weapon (mangos's
+        // `SpellDamageBonusDone` leaves those out).
+        f.set_f32(PLAYER_FIELD_MOD_DAMAGE_DONE_PCT + i, spell_pct(a, bit));
     }
     // The chances.
     let max_skill = level * 5;

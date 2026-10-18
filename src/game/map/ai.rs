@@ -179,13 +179,20 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         }
         return;
     }
-    c.combat_start = Some(now);
-    c.engagement.origin = Some(c.position);
+    // A fight's start and its leash's origin are where it began, not
+    // where it turned to another (its victim feigning death, vanishing).
+    if first {
+        c.combat_start = Some(now);
+        c.engagement.origin = Some(c.position);
+    }
     c.engagement.last_hostile = Some(now);
     c.combat.victim = attacker;
     c.combat.attacking = true;
     c.combat.next_swing.get_or_insert(now);
-    c.fields.set_guid(UNIT_FIELD_TARGET, attacker);
+    // A critter runs with no one selected (Thistle Tea's `target: 0`).
+    if !critter {
+        c.fields.set_guid(UNIT_FIELD_TARGET, attacker);
+    }
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
     if first {
@@ -247,7 +254,7 @@ pub fn forget(map: &mut Map, g: Guid) {
 pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
     for c in fighting {
         crate::game::map::spells::threat_sync::removed(map, c, g);
-        let next = {
+        {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
             };
@@ -256,11 +263,9 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             if cr.combat.victim != g {
                 continue;
             }
-            cr.threat
-                .iter()
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(t, _)| *t)
-        };
+        }
+        // The next it may fight: not one it can't reach or see.
+        let next = pick_victim(map, c);
         combat::stop_attack(map, c);
         match next {
             Some(t) => {
@@ -395,6 +400,15 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
+    // A run ends with its death: a critter's escape, a flight for help
+    // (Thistle Tea's `Critter.clear` and `flee_until` at death).
+    c.engagement.flee = None;
+    c.engagement.escape_at = None;
+    c.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::auras::UNIT_FLAG_FLEEING,
+        false,
+    );
     c.tapped_by = Some(tapper);
     let pos = c.position;
     let (spawn, locks_raid) = (
@@ -496,6 +510,12 @@ fn respawn(map: &mut Map, g: Guid) {
         .as_deref()
         .and_then(|s| s.temp_faction)
         .filter(|t| t.flags & crate::game::map::event_ai::FACTION_RESTORE_RESPAWN == 0);
+    // So does a reaction a script set (Thistle Tea's `CreatureReaction`
+    // over `Mob.respawn`; mangos's AI keeps its react state).
+    let reaction = old
+        .scripted
+        .as_deref()
+        .and_then(|s| s.reaction.map(|r| (r, s.passive)));
     let data = map.realm.data.clone();
     let spawn = spawn_guid.and_then(|sg| {
         data.creature_spawns
@@ -536,7 +556,27 @@ fn respawn(map: &mut Map, g: Guid) {
         match m {
             // The same spawn back keeps the faction a script left it.
             Member::Creature(s) => {
-                spawn_creature_with(map, s, faction.filter(|_| s == spawn.guid));
+                let same = s == spawn.guid;
+                spawn_creature_with(map, s, faction.filter(|_| same));
+                if same
+                    && let Some((r, passive)) = reaction
+                    && let Some(g) = crate::game::map::scripts::creature_of_spawn(map, s)
+                {
+                    let hostile = map.creature(g).is_some_and(|c| c.hostile_to_players);
+                    if let Some(sc) = crate::game::map::event_ai::scripted_mut(map, g) {
+                        sc.reaction = Some(r);
+                        sc.passive = passive;
+                    }
+                    // As the script's command left it (scripts.rs, 59).
+                    use crate::game::map::assistance::Reaction;
+                    if let Some(c) = map.creature_mut(g) {
+                        c.hostile_to_players = match r {
+                            Reaction::Passive => false,
+                            Reaction::Defensive => hostile,
+                            Reaction::Aggressive => true,
+                        };
+                    }
+                }
             }
             Member::Object(s) => pools::spawn_object(map, s),
             Member::Pool(_) => {}
@@ -569,8 +609,10 @@ fn spawn_creature_with(
     }
     crate::game::instances::spawn_back(&map.realm, map.key, spawn.guid);
     if !crate::game::map::creature_groups::may_spawn(map, spawn.guid) {
+        map.held_slaves.insert(spawn.guid);
         return;
     }
+    map.held_slaves.remove(&spawn.guid);
     let on = crate::game::events::current(&map.realm);
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
@@ -708,6 +750,10 @@ pub fn update_creatures(map: &mut Map) {
         },
         |k, _| k,
     );
+    // One zone for every turn, with their count: a zone a creature would
+    // be thousands an update.
+    let z = crate::zone!("creatures' turns");
+    z.value(keys.len() as u64);
     for key in keys {
         let Some(g) = map.creatures.get(key).map(|c| c.guid) else {
             continue;
@@ -723,8 +769,14 @@ pub fn update_creatures(map: &mut Map) {
 fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
     // Under control, its leash is kept.
     crate::game::map::creature_combat::maintain_leash(map, g);
-    // Its timed events wait while it walks home.
-    if !map.creatures.get(key).is_some_and(|c| c.evading) {
+    // Its timed events wait while it walks home, and while it lies in a
+    // linked feign death (its fight's flag kept, they would fire on).
+    if !map.creatures.get(key).is_some_and(|c| {
+        c.evading
+            || c.scripted
+                .as_deref()
+                .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+    }) {
         crate::game::map::event_ai::tick(map, g);
     }
     let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
@@ -742,8 +794,14 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
         c.scripted.as_deref().is_some_and(|s| s.hold.is_some()),
         c.evading,
     );
+    let escaped = c.engagement.escape_at.is_some_and(|t| t <= now);
     if holding {
         crate::game::map::event_ai::hold_tick(map, g);
+    }
+    // A critter's escape runs out whatever holds it: a root or a stun
+    // doesn't keep it in the fight (Thistle Tea's escape timer).
+    if !evading && escaped && crate::game::map::creature_motion::critter_step(map, g) {
+        return;
     }
     // Feared, confused or fleeing: it moves as that has it.
     if !evading && crate::game::map::creature_combat::controlled_step(map, g) {

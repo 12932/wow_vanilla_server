@@ -137,6 +137,9 @@ pub struct Quest {
     pub choice_rewards: [(u32, u32); 6],
     pub rewards: [(u32, u32); 4],
     pub reputation_rewards: [(u32, i32); 5],
+    /// `RewRepSpilloverMask`: bit `i` keeps reward `i`'s gain from spilling
+    /// to related factions (vmangos's `RewardReputation`).
+    pub reputation_no_spillover: u32,
     /// A standing the player must have (at least, and below) to take it.
     pub required_min_rep: (u32, i32),
     pub required_max_rep: (u32, i32),

@@ -465,9 +465,16 @@ async fn a_checked_event_whose_actions_fail_fires_again_until_they_succeed() {
             let mut agree = true;
             for i in 0..30 {
                 event_ai::set_phase(m, random, 0);
+                // Its events' state is there once its script has started,
+                // at its first tick or the map's next update, whichever
+                // came first.
                 if let Some(s) = event_ai::scripted_mut(m, random) {
-                    s.disabled[0] = false;
-                    s.timers[0] = None;
+                    if let Some(d) = s.disabled.get_mut(0) {
+                        *d = false;
+                    }
+                    if let Some(t) = s.timers.get_mut(0) {
+                        *t = None;
+                    }
                     s.next_tick = None;
                 }
                 tick(m, random, i * 10);

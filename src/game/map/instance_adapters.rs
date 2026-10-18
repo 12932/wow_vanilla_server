@@ -1802,6 +1802,8 @@ const BRS_ROOMS: [(u32, &[u32]); 7] = [
     (175196, &[40270, 45832]),
     (175194, &[40277, 40455]),
 ];
+/// Blackhand Summoners and Veterans: who guards a rune.
+const BRS_GUARDIANS: [u32; 2] = [9818, 9819];
 const BRS_SLAIN: u32 = 1;
 const BRS_WAVE: u32 = 1;
 const BRS_BRAZIERS: [(u32, u32); 3] = [(175528, 175529), (175530, 175531), (175532, 175533)];
@@ -1838,7 +1840,7 @@ fn brs_set(map: &mut Map, field: u32, value: u32) {
 fn brs_settle(map: &mut Map) {
     let guards: Vec<u32> = BRS_ROOMS
         .iter()
-        .flat_map(|(_, g)| g.iter().copied())
+        .flat_map(|(rune, _)| brs_guards(map, *rune))
         .collect();
     for spawn in dead_spawns(map, &guards) {
         mark(map, BRS_SLAIN, spawn);
@@ -1857,12 +1859,53 @@ fn brs_settle(map: &mut Map) {
     }
 }
 
-fn brs_room_clear(map: &Map, rune: u32) -> bool {
-    let slain = seen(map, BRS_SLAIN);
-    BRS_ROOMS
+/// The spawns that guard an alcove's rune: Thistle Tea's roster, and, as
+/// mangos-classic sorts them, any spawn within ten yards of the rune that
+/// came up a summoner or a veteran (some spawns roll one of two entries).
+fn brs_guards(map: &Map, rune: u32) -> Vec<u32> {
+    let mut guards: Vec<u32> = BRS_ROOMS
         .iter()
         .find(|(r, _)| *r == rune)
-        .is_some_and(|(_, guards)| guards.iter().all(|g| slain.contains(g)))
+        .map(|(_, g)| g.to_vec())
+        .unwrap_or_default();
+    let Some(at) = map
+        .gameobjects
+        .iter()
+        .find(|(_, o)| o.entry == rune)
+        .map(|(_, o)| o.position)
+    else {
+        return guards;
+    };
+    let spawns = map.realm.data.creature_spawns.get(&map.key.map);
+    for (_, c) in map.creatures.iter() {
+        let Some(spawn) = c.spawn_guid.filter(|s| !guards.contains(s)) else {
+            continue;
+        };
+        if !BRS_GUARDIANS.contains(&c.entry) {
+            continue;
+        }
+        let near = spawns
+            .and_then(|v| v.iter().find(|x| x.guid == spawn))
+            .is_some_and(|x| {
+                dist(
+                    Vector3d {
+                        x: x.x,
+                        y: x.y,
+                        z: x.z,
+                    },
+                    at,
+                ) < 10.0
+            });
+        if near {
+            guards.push(spawn);
+        }
+    }
+    guards
+}
+
+fn brs_room_clear(map: &Map, rune: u32) -> bool {
+    let slain = seen(map, BRS_SLAIN);
+    brs_guards(map, rune).iter().all(|g| slain.contains(g))
 }
 
 fn brs_object(map: &mut Map, entry: u32) {
@@ -1876,12 +1919,16 @@ fn brs_creature(map: &mut Map, spawn: Option<u32>, event: Event) {
     let (Event::Death, Some(spawn)) = (event, spawn) else {
         return;
     };
-    let Some((rune, _)) = BRS_ROOMS.iter().find(|(_, guards)| guards.contains(&spawn)) else {
+    let Some(rune) = BRS_ROOMS
+        .iter()
+        .map(|(r, _)| *r)
+        .find(|r| brs_guards(map, *r).contains(&spawn))
+    else {
         return;
     };
     mark(map, BRS_SLAIN, spawn);
-    if brs_room_clear(map, *rune) {
-        operate(map, *rune, Act::Close);
+    if brs_room_clear(map, rune) {
+        operate(map, rune, Act::Close);
         if BRS_ROOMS.iter().all(|(r, _)| brs_room_clear(map, *r)) {
             brs_set(map, 0, DONE);
         }

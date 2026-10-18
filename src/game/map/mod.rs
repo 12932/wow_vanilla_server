@@ -280,6 +280,46 @@ pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What Tracy shows of a map (docs/PROFILING.md): its updates, a frame
+/// each, and four plots, once a second.
+struct MapProfile {
+    frame: crate::tracy::FrameName,
+    players: crate::tracy::Plot,
+    awake: crate::tracy::Plot,
+    mailbox: crate::tracy::Plot,
+    outbound: crate::tracy::Plot,
+    plot_at: Instant,
+}
+
+impl MapProfile {
+    /// `None` while Tracy is off. A map by its name, a copy by its name and
+    /// instance id.
+    fn new(key: MapKey, realm: &Realm) -> Option<Self> {
+        use crate::tracy::{Format, FrameName, Plot};
+        if !crate::tracy::on() {
+            return None;
+        }
+        let name = realm
+            .data
+            .maps
+            .get(&key.map)
+            .map_or_else(|| format!("map {}", key.map), |m| m.name.clone());
+        let name = if key.instance == 0 {
+            name
+        } else {
+            format!("{name} #{}", key.instance)
+        };
+        Some(Self {
+            frame: FrameName::new(&name),
+            players: Plot::new(&format!("{name}: players"), Format::Number),
+            awake: Plot::new(&format!("{name}: creatures awake"), Format::Number),
+            mailbox: Plot::new(&format!("{name}: mailbox"), Format::Number),
+            outbound: Plot::new(&format!("{name}: outbound queued"), Format::Bytes),
+            plot_at: Instant::now(),
+        })
+    }
+}
+
 /// Per-map counters, for `.maps` and the logs.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MapStats {
@@ -368,6 +408,9 @@ pub struct Map {
     /// Formations whose leader died, by the leader's spawn: the member
     /// leading their patrol meanwhile.
     pub acting_leaders: AHashMap<u32, Guid>,
+    /// Linked slaves' spawns held back by their master's life, to come in
+    /// once it allows (vmangos's `CanSpawn`, Thistle Tea's `:held`).
+    pub held_slaves: ahash::AHashSet<u32>,
     /// The spawn pools here, by their root: what each has picked.
     pub pools: AHashMap<u32, pools::PoolState>,
     /// Scripted map events under way.
@@ -407,6 +450,8 @@ pub struct Map {
     pub leashes: creature_combat::Leashes,
     /// Who has panicked lately, and when the map has had enough.
     pub health: supervise::Health,
+    /// What Tracy shows of the map, while Tracy is on.
+    profile: Option<MapProfile>,
     /// Panics a test arms.
     #[cfg(test)]
     pub faults: crate::game::supervisor::Faults,
@@ -530,7 +575,10 @@ impl Drop for EventProbe {
 
 /// Run a map's actor until it is told to stop.
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
-    guarded(&mut map, "populating", world::populate);
+    guarded(&mut map, "populating", |m| {
+        let _z = crate::zone!("populate");
+        world::populate(m)
+    });
     let mut report_at = Instant::now() + REPORT_EVERY;
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -549,6 +597,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             if handle_guarded(&mut map, event) {
+                                hand_on(&map, &mut rx);
                                 return;
                             }
                         }
@@ -571,8 +620,47 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     report_at = map.now + REPORT_EVERY;
                     map.report(rx.len());
                 }
+                map.plot(rx.len());
             }
         }
+    }
+    hand_on(&map, &mut rx);
+}
+
+/// What was sent to a map that has stopped (a copy unloaded or reset as a
+/// player was on their way in) isn't lost with it: a player arriving goes
+/// on into the map started afresh, or, as the server shuts down, is saved
+/// and let go. Before, they were dropped, unsaved and still online.
+fn hand_on(map: &Map, rx: &mut mpsc::UnboundedReceiver<MapEvent>) {
+    let rest: Vec<MapEvent> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter(|e| !matches!(e, MapEvent::Stop | MapEvent::Shutdown(_)))
+        .collect();
+    if !rest.iter().any(|e| matches!(e, MapEvent::Arrive(_))) {
+        return;
+    }
+    let realm = &map.realm;
+    // Shutting down, or a copy its raid's reset took (which would stop
+    // again at once): saved where they were going, and let go.
+    if realm.maps.is_closed() || crate::game::instances::expired(realm, map.key) {
+        for e in rest {
+            let MapEvent::Arrive(a) = e else { continue };
+            let Arrival { kind, online } = *a;
+            if let ArrivalKind::Transfer(mut p) = kind {
+                p.row.map = map.key.map;
+                realm.store.save(p.to_row(Instant::now()));
+            }
+            realm.registry.go_offline(online.guid);
+            let _ = online.session.send(crate::game::session::Control::Kick);
+        }
+        return;
+    }
+    warn!(
+        "{} stopped with a player on the way in; starting it again",
+        map.key
+    );
+    let next = realm.maps.get(realm, map.key);
+    for e in rest {
+        next.send(e);
     }
 }
 
@@ -580,6 +668,7 @@ impl Map {
     pub fn new(key: MapKey, realm: Arc<Realm>, handle: MapHandle) -> Self {
         let now = Instant::now();
         let instance = instance_script::State::for_map(&realm.data, key.map, key.instance);
+        let profile = MapProfile::new(key, &realm);
         Self {
             key,
             realm,
@@ -620,6 +709,7 @@ impl Map {
             object_resets: Vec::new(),
             script_groups: AHashMap::new(),
             acting_leaders: AHashMap::new(),
+            held_slaves: Default::default(),
             pools: AHashMap::new(),
             map_events: Default::default(),
             spells: Default::default(),
@@ -635,6 +725,7 @@ impl Map {
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
             health: Default::default(),
+            profile,
             #[cfg(test)]
             faults: Default::default(),
         }
@@ -650,16 +741,32 @@ impl Map {
     fn handle_event(&mut self, event: MapEvent) -> bool {
         self.stats.events += 1;
         match event {
-            MapEvent::Arrive(a) => self.arrive(*a),
+            MapEvent::Arrive(a) => {
+                let _z = crate::zone!("arrival");
+                self.arrive(*a)
+            }
             MapEvent::Packet(guid, msg) => {
+                // wow_messages names a movement packet from the client
+                // `MSG_MOVE_HEARTBEAT_Client`; the opcode is `MSG_MOVE_HEARTBEAT`.
+                let name = msg.message_name();
+                let _z = crate::tracy::Zone::named(
+                    "packet",
+                    name.strip_suffix("_Client").unwrap_or(name),
+                );
                 #[cfg(test)]
                 if self.faults.any() {
                     self.faults.check(&format!("packets of {guid}"));
                 }
                 self.handle_packet(guid, msg)
             }
-            MapEvent::Disconnect(guid) => self.handle_disconnect(guid),
-            MapEvent::Call(f) => f(self),
+            MapEvent::Disconnect(guid) => {
+                let _z = crate::zone!("disconnect");
+                self.handle_disconnect(guid)
+            }
+            MapEvent::Call(f) => {
+                let _z = crate::zone!("call");
+                f(self)
+            }
             MapEvent::Stop => return true,
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
@@ -759,6 +866,8 @@ impl Map {
         p.observers.clear();
         p.cell = grid::cell_of(p.position().x, p.position().y);
         p.vis_anchor = p.position();
+        // The client's first move is checked from where it came in.
+        p.move_check = Some((p.position(), self.now));
         self.grid.insert(p.guid, p.cell);
         self.players.insert(p.guid, p);
     }
@@ -766,9 +875,21 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        // Their cast or channel ends, and the creatures they fought forget
+        // them (mangos's `RemoveFromWorld`: the cast interrupted, the
+        // hostile references deleted), as a death has them forgotten.
+        if self.caster(guid).is_some_and(|c| c.casting.is_some()) {
+            spells::interrupt(self, guid);
+        }
+        ai::forget(self, guid);
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);
+        // A loot window open closes, as at a logout: a lock opened is shut
+        // again, a pocket's leftovers kept, an item's loot gone.
+        if let Some(target) = self.players.get(&guid).and_then(|p| p.looting) {
+            loot::release(self, guid, target);
+        }
         duel::left(self, guid, true);
         trade::cancel(
             self,
@@ -800,6 +921,23 @@ impl Map {
         self.realm.registry.go_offline(p.guid);
     }
 
+    /// Save the players and records an item or money just moved between,
+    /// in one transaction (`Store::save_together`), so that a crash after
+    /// it neither loses nor copies what moved. Each player's periodic save
+    /// waits its interval again.
+    pub fn save_together(&mut self, players: &[Guid], records: crate::game::store::Records) {
+        let now = self.now;
+        let mut rows = Vec::with_capacity(players.len());
+        for &guid in players {
+            pets::sync_record(self, guid);
+            if let Some(p) = self.players.get_mut(&guid) {
+                rows.push(p.to_row(now));
+                p.save_at = now + self.realm.config.save_interval;
+            }
+        }
+        self.realm.store.save_together(rows, records);
+    }
+
     pub fn save_player(&mut self, guid: Guid) {
         pets::sync_record(self, guid);
         let now = self.now;
@@ -808,6 +946,26 @@ impl Map {
             p.save_at = now + self.realm.config.save_interval;
             self.realm.store.save(row);
         }
+    }
+
+    /// Tracy's plots of the map, once a second while Tracy is on.
+    fn plot(&mut self, queued: usize) {
+        let Some(p) = &mut self.profile else {
+            return;
+        };
+        if self.now < p.plot_at {
+            return;
+        }
+        p.plot_at = self.now + Duration::from_secs(1);
+        let outbound: usize = self
+            .players
+            .values()
+            .map(|p| p.outbound.queued_bytes())
+            .sum();
+        p.players.set(self.players.len() as f64);
+        p.awake.set(self.awake.len() as f64);
+        p.mailbox.set(queued as f64);
+        p.outbound.set(outbound as f64);
     }
 
     /// The map's numbers for the last while: players, creatures, update
@@ -851,6 +1009,11 @@ impl Map {
         if !self.players.is_empty() {
             self.empty_since = None;
             return;
+        }
+        // Just emptied: the save is touched, so the realm's sweep counts
+        // its empty time from now, as this copy's own clock does.
+        if self.empty_since.is_none() {
+            crate::game::instances::touch(&self.realm, self.key);
         }
         let since = *self.empty_since.get_or_insert(self.now);
         // One its raid's reset took goes at once.
@@ -944,6 +1107,9 @@ impl Map {
     /// The update: timers, visibility, and the changed fields of
     /// everything, to every client that should hear of them.
     pub fn update(&mut self) {
+        let _frame = crate::tracy::Frame::begin(self.profile.as_ref().map(|p| p.frame));
+        let z = crate::zone!("update");
+        z.value(u64::from(self.key.map));
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;
@@ -1074,6 +1240,7 @@ impl Map {
 
     fn flush_values(&mut self) {
         let batches = &mut self.batches;
+        let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
             if p.awaiting_worldport {
                 continue;
@@ -1101,6 +1268,8 @@ impl Map {
             }
             p.fields.clear_dirty();
         }
+        drop(z);
+        let z = crate::zone!("values: game objects");
         // Only a game object changed since the last flush can have dirty
         // fields; in key order, as a look through every one goes.
         let mut touched = std::mem::take(&mut self.touched_objects);
@@ -1127,6 +1296,9 @@ impl Map {
             "{}: a game object changed, but not through Map::gameobject_mut",
             self.key
         );
+        drop(z);
+        // Every creature, for its dirty flag.
+        let z = crate::zone!("values: creatures");
         // Creatures whose tap their observers see anew: taken or gone, or
         // their flags sent again to those outside it.
         let mut taps = Vec::new();
@@ -1152,6 +1324,7 @@ impl Map {
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
+        drop(z);
         for (g, all) in taps {
             tap::tell(self, g, all);
         }

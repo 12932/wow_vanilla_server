@@ -47,7 +47,8 @@ look the client has no texture for (`appearances.valid`): 11 to 19 of 100 bots a
 depending on the slots. With a fresh character store each run, the final comparison gives both builds the same slots,
 so the same bots: 84 or 85 in pvp-arena, 86 in cluster.
 
-**Profiling.** `perf_event_paranoid` is 2 here, and neither `perf` nor `samply` will record, so there is now a
+**Profiling.** (Tracy, the frame profiler, and this pprof feature are both described in
+[PROFILING.md](PROFILING.md).) `perf_event_paranoid` is 2 here, and neither `perf` nor `samply` will record, so there is now a
 `pprof` cargo feature (off by default; `src/profile.rs`). It is driven by SIGPROF, which needs no permissions:
 
 ```sh

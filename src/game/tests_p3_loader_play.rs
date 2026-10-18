@@ -716,7 +716,7 @@ async fn real_damage_taken_auras_shares_and_wards() {
             apply_real(m, priest, warrior, id);
             let before = health(m, priest);
             let s = data.spells.get(SMITE_8).unwrap();
-            let left = outcome::split(m, brute, warrior, s, 100);
+            let left = auras::share(m, brute, warrior, 100, s.school_mask());
             shared.push((id, left, before - health(m, priest), share));
             auras::remove_spell(m, warrior, id, None);
         }

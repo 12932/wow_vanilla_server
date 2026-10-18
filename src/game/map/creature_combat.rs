@@ -596,9 +596,10 @@ pub fn school_immune(map: &Map, g: Guid, school: u32) -> bool {
     school != 0 && template(map, g).is_some_and(|t| t.school_immune_mask & school != 0)
 }
 
-/// Whether a creature's template stops `spell` from `caster`: its mechanic
-/// or an effect's, or, if harmful, its school (Thistle Tea's
-/// `CreatureImmunity.spell?`).
+/// Whether a creature's template stops `spell` from `caster`: its mechanic,
+/// or, if harmful, its school (mangos's `Creature::IsImmuneToSpell`,
+/// Thistle Tea's `CreatureImmunity.spell?`). An effect's own mechanic stops
+/// that effect alone ([`effect_immune`]).
 pub fn spell_immune(map: &Map, target: Guid, caster: Guid, spell: &SpellTemplate) -> bool {
     if target == caster
         || !guid::is_unit(target)
@@ -607,11 +608,15 @@ pub fn spell_immune(map: &Map, target: Guid, caster: Guid, spell: &SpellTemplate
         return false;
     }
     mechanic_immune(map, target, spell.mechanic)
-        || spell
-            .effects
-            .iter()
-            .any(|e| e.effect != 0 && mechanic_immune(map, target, e.mechanic))
         || (!auras::positive(spell) && school_immune(map, target, spell.school_mask()))
+}
+
+/// Whether a creature's template stops one effect of `spell` from
+/// `caster`, by the effect's mechanic, whatever the spell's attributes
+/// (mangos's `Creature::IsImmuneToSpellEffect`, Thistle Tea's
+/// `CreatureImmunity.effect?`).
+pub fn effect_immune(map: &Map, target: Guid, caster: Guid, mechanic: u32) -> bool {
+    target != caster && guid::is_unit(target) && mechanic_immune(map, target, mechanic)
 }
 
 /// Whether fleeing is barred: an aura that prevents it, feigned death,
@@ -1222,6 +1227,7 @@ pub fn regenerate(map: &mut Map) {
         .filter(|(_, c)| c.alive() && !c.evading && c.owner.is_none_or(|o| !guid::is_player(o)))
         .filter(|(_, c)| c.engagement.regen_at.is_none_or(|t| t <= now))
         .map(|(_, c)| c.guid)
+        .filter(|&g| !crate::game::map::event_ai::feigning(map, g))
         .collect();
     for &g in &due {
         let stats = regenerated_stats(map, g);
@@ -1272,10 +1278,22 @@ pub fn regenerate(map: &mut Map) {
 
 /// The creatures' flight timers, and their regeneration.
 pub fn update(map: &mut Map) {
-    regenerate(map);
-    sweep_leashes(map);
-    watch_for_enemies(map);
-    crate::game::map::assistance::update(map);
+    {
+        let _z = crate::zone!("regeneration");
+        regenerate(map);
+    }
+    {
+        let _z = crate::zone!("leashes");
+        sweep_leashes(map);
+    }
+    {
+        let _z = crate::zone!("watching for enemies");
+        watch_for_enemies(map);
+    }
+    {
+        let _z = crate::zone!("assistance");
+        crate::game::map::assistance::update(map);
+    }
     let now = map.now;
     // Only in a dungeon or a raid does a creature pulse its map (as
     // `zone_fighter` has it), so only there is every creature looked at.

@@ -67,6 +67,15 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   still runs out of time. Thistle Tea refuses all three.
 - **A charm or Mind Control ending** leaves the freed creature's cast or channel running, as mangos's `Uncharm` does;
   Thistle Tea interrupts it and clears its global cooldown.
+- **Kept as mangos-classic has them** (round 3):
+  - Missed periodic ticks after a stalled update run one an update afterwards; Thistle Tea runs them at once.
+  - An abandoned quest doesn't give back the item that started it.
+  - A creature's Bear Form is model 902, whatever its own.
+  - A charm's spells are rolled at each charm; Thistle Tea rolls them once a spawn.
+  - Ghost Wolf and disguises set no scale or reach of their own.
+  - Full bags at a vendor get mangos's inventory failure, not `BUY_FAILED cant_carry_more`.
+- **A cast is checked again as it ends** (range with mangos's tolerance, facing, life, still a foe), and one that
+  fails there costs nothing.
 - **A refusal's error code** is mangos's where Thistle Tea sends another: a two-hander with nowhere for the off hand
   gets `InventoryFull`, not `cant_equip_with_twohanded`; a split into the wrong kind of bag, `ItemDoesntGoIntoBag`.
 
@@ -143,7 +152,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Pets:**
   - A pet takes crowd-controlled targets, and doesn't hold off while on Stay.
   - Auto Shot isn't cancelled by pacify or range, and its dead zone is measured centre to centre.
-  - A wand's shot takes no damage-done or school bonuses.
 - **Swings:** errors repeat each second, and the off hand rolls the main hand's weapon skill.
 
 ### Quests and events

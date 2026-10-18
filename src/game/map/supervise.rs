@@ -112,10 +112,13 @@ impl Health {
 }
 
 impl Map {
-    /// Run one step of the update; a panic costs the step, this once.
+    /// Run one step of the update; a panic costs the step, this once. A
+    /// Tracy zone each, named by the step, at the caller's line.
+    #[track_caller]
     pub fn step(&mut self, name: &'static str, f: impl FnOnce(&mut Map)) {
         #[cfg(all(feature = "world-bench", unix))]
         let probe = super::bench_probe::enabled().then(super::bench_probe::thread_cpu);
+        let _z = crate::tracy::Zone::named("update step", name);
         let result = catch(|| {
             #[cfg(test)]
             if self.faults.any() {

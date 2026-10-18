@@ -83,6 +83,9 @@ pub struct Objects {
     pub closes: Vec<(Instant, Guid, u32)>,
     /// Spawned objects used up, back at their time: (when, spawn).
     pub respawns: Vec<(Instant, u32)>,
+    /// Used-up spawns a script brought out for a while (command 9), with
+    /// when they were to come back: (object, spawn, when).
+    pub brought_out: Vec<(Guid, u32, Instant)>,
     /// A quest object's spell with a cast time, landing: (when, object,
     /// spell, user).
     pub pending_spells: Vec<(Instant, Guid, u32, Guid)>,
@@ -199,7 +202,8 @@ fn ritual_of(t: &GameObjectTemplate, owner: Option<Guid>, target: Option<Guid>) 
     }
 }
 
-fn same_group(map: &Map, a: Guid, b: Guid) -> bool {
+/// Whether `a` and `b` are one player or in one group or raid.
+pub fn same_group(map: &Map, a: Guid, b: Guid) -> bool {
     a == b
         || map
             .realm
@@ -446,6 +450,8 @@ pub fn despawn_then(map: &mut Map, g: Guid, back: Option<Duration>) {
         despawn(map, l);
     }
     if let (Some(s), Some(back)) = (spawn, back) {
+        // One return a spawn: this one's.
+        map.objects.respawns.retain(|(_, x)| *x != s);
         map.objects.respawns.push((map.now + back, s));
     }
 }
@@ -1524,7 +1530,7 @@ pub fn update(map: &mut Map) {
         map.objects.respawns.retain(|(t, _)| *t > now);
         let data = map.realm.data.clone();
         for s in due {
-            // A script may have brought it out already.
+            // Out already (an event's, a pool's).
             if crate::game::map::scripts::object_of_spawn(map, s).is_some() {
                 continue;
             }

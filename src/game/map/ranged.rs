@@ -11,7 +11,6 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
-use crate::game::data::items::Body;
 use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::combat::{self, AutoRepeat, Hand, Outcome};
@@ -40,39 +39,31 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
     None
 }
 
+/// A shot's result, laid out as any cast's: a gear failure names the gear
+/// the spell wants, which the client reads after the reason.
 fn cast_result(map: &Map, g: Guid, spell: u32, failure: Option<u8>) {
-    let Some(p) = map.players.get(&g) else {
-        return;
-    };
-    let mut b = Body::default();
-    b.u32(spell);
-    match failure {
-        None => {
-            b.u8(0);
-        }
-        Some(r) => {
-            b.u8(2).u8(r);
-        }
-    }
-    p.outbound.send_frame(b.frame(spells::SMSG_CAST_RESULT));
+    spells::send_cast_result(map, g, spell, failure);
 }
 
-/// The inventory index of a round of the ammunition a player has chosen;
-/// with none chosen, or none of it left, the first the weapon takes, which
-/// becomes the choice.
+/// The inventory index of a carried round of the ammunition a player has
+/// chosen, if the weapon takes it (mangos's and Thistle Tea's "no ammo"
+/// for arrows in a gun); with none chosen, or none of it left, the first
+/// the weapon takes, which becomes the choice.
 fn ammo_index(map: &mut Map, g: Guid, ammo_type: u32) -> Option<usize> {
     let data = map.realm.data.clone();
     let p = map.players.get_mut(&g)?;
+    let fits = |entry: u32| {
+        data.item(entry)
+            .is_some_and(|t| t.class == ITEM_CLASS_PROJECTILE && t.subclass == ammo_type)
+    };
     let ammo = p.fields.get_u32(PLAYER_AMMO_ID);
     if ammo != 0
-        && let Some(i) = p.items.iter().position(|i| i.entry == ammo)
+        && fits(ammo)
+        && let Some(i) = p.items.iter().position(|i| i.entry == ammo && i.carried())
     {
         return Some(i);
     }
-    let i = p.items.iter().position(|i| {
-        data.item(i.entry)
-            .is_some_and(|t| t.class == ITEM_CLASS_PROJECTILE && t.subclass == ammo_type)
-    })?;
+    let i = p.items.iter().position(|i| i.carried() && fits(i.entry))?;
     let entry = p.items[i].entry;
     p.fields.set_u32(PLAYER_AMMO_ID, entry);
     crate::game::map::auras::recalc(map, g);
@@ -91,25 +82,68 @@ const INVENTORY_THROWN: u32 = 25;
 /// point of a single thrown weapon's durability; nothing for a wand. The
 /// look of what flies, for the shot's packet; or why it can't be paid.
 pub fn pay_ammunition(map: &mut Map, g: Guid) -> Result<Option<(u32, u32)>, u8> {
+    let (look, payment) = plan_ammunition(map, g)?;
+    spend(map, g, payment);
+    Ok(look)
+}
+
+/// What a ranged attack is to cost, worked out before it is paid
+/// ([`spend`]), so that a shot is struck with the weapon it was loosed
+/// from: the last of a stack of knives still hits as a knife (Thistle
+/// Tea's `Ammunition.plan`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Payment {
+    Nothing,
+    /// One of the item (a thrown stack, or a round of ammunition).
+    One(Guid),
+    /// A point of the item's durability (a single thrown weapon).
+    Wear(Guid),
+}
+
+/// [`pay_ammunition`]'s cost and look, not yet paid.
+pub fn plan_ammunition(map: &mut Map, g: Guid) -> Result<(Option<(u32, u32)>, Payment), u8> {
     let data = map.realm.data.clone();
     let Some(weapon) = combat::hand_weapon(map, g, Hand::Ranged) else {
         return Err(SPELL_FAILED_EQUIPPED_ITEM_CLASS);
     };
     let look = |entry: u32| data.item(entry).map(|t| (t.display_id, t.inventory_type));
     let Some(t) = data.item(weapon.entry) else {
-        return Ok(None);
+        return Ok((None, Payment::Nothing));
     };
     if t.inventory_type == INVENTORY_THROWN {
-        let Some(i) = map.players.get(&g).and_then(|p| {
-            p.items
-                .iter()
-                .position(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == 17)
-        }) else {
-            return Err(SPELL_FAILED_EQUIPPED_ITEM_CLASS);
+        let payment = if t.stackable <= 1 {
+            Payment::Wear(weapon.guid)
+        } else {
+            Payment::One(weapon.guid)
         };
-        if t.stackable <= 1 {
+        return Ok((look(weapon.entry), payment));
+    }
+    if weapon.ammo_type != 0 {
+        let Some(i) = ammo_index(map, g, weapon.ammo_type) else {
+            return Err(SPELL_FAILED_NO_AMMO);
+        };
+        let item = &map.players[&g].items[i];
+        return Ok((look(item.entry), Payment::One(item.guid)));
+    }
+    Ok((None, Payment::Nothing))
+}
+
+/// Pay what [`plan_ammunition`] worked out.
+pub fn spend(map: &mut Map, g: Guid, payment: Payment) {
+    let data = map.realm.data.clone();
+    match payment {
+        Payment::Nothing => {}
+        Payment::One(item) => {
+            if let Some(i) = map.players.get(&g).and_then(|p| p.item_by_guid(item)) {
+                crate::game::map::inventory::take_item(map, g, i, 1);
+            }
+        }
+        Payment::Wear(item) => {
             let Some(p) = map.players.get_mut(&g) else {
-                return Ok(None);
+                return;
+            };
+            let Some(i) = p.item_by_guid(item) else {
+                return;
             };
             let f = &mut p.items[i].fields;
             let durability = f.get_u32(ITEM_FIELD_DURABILITY);
@@ -120,20 +154,8 @@ pub fn pay_ammunition(map: &mut Map, g: Guid) -> Result<Option<(u32, u32)>, u8> 
                     p.refresh_inventory(&data);
                 }
             }
-        } else {
-            crate::game::map::inventory::take_item(map, g, i, 1);
         }
-        return Ok(look(weapon.entry));
     }
-    if weapon.ammo_type != 0 {
-        let Some(i) = ammo_index(map, g, weapon.ammo_type) else {
-            return Err(SPELL_FAILED_NO_AMMO);
-        };
-        let entry = map.players[&g].items[i].entry;
-        crate::game::map::inventory::take_item(map, g, i, 1);
-        return Ok(look(entry));
-    }
-    Ok(None)
 }
 
 /// The projectile a player's ranged spell shows, as mangos's
@@ -156,21 +178,64 @@ pub fn ammo_shown(map: &Map, g: Guid) -> Option<(u32, u32)> {
 }
 
 /// `CMSG_SET_AMMO`: the ammunition the ranged weapon uses.
+/// Refused with mangos's `CanUseAmmo` and Thistle Tea's reasons: the dead
+/// choose nothing (nor clear it); the ammunition must be carried (not in
+/// the bank), be ammunition, and be of the player's class, race, level and
+/// skill. The choice is kept over a logout.
 pub fn set_ammo(map: &mut Map, g: Guid, item: u32) {
+    use crate::game::map::inventory::{self, Fail};
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let usable = item == 0
-        || (p.items.iter().any(|i| i.entry == item)
-            && data
-                .item(item)
-                .is_some_and(|t| t.class == ITEM_CLASS_PROJECTILE));
-    if !usable {
+    let refusal = if p.death != crate::game::map::death::Death::Alive {
+        Some(Fail::YouAreDead)
+    } else if item == 0 {
+        None
+    } else if !p.items.iter().any(|i| i.entry == item && i.carried()) {
+        Some(Fail::NotFound)
+    } else {
+        match data.item(item) {
+            None => Some(Fail::NotFound),
+            Some(t) if t.inventory_type != INVENTORY_AMMO => Some(Fail::OnlyAmmo),
+            Some(t) => usable_by(p, &data, t).err(),
+        }
+    };
+    if let Some(fail) = refusal {
+        inventory::send_fail(p, fail, Guid::zero());
         return;
     }
     p.fields.set_u32(PLAYER_AMMO_ID, item);
     crate::game::map::auras::recalc(map, g);
+}
+
+/// Inventory type: ammunition.
+const INVENTORY_AMMO: u32 = 24;
+
+/// Whether `p` may use an item of `t` at all (mangos's `CanUseItem`): its
+/// class, race, level and skill.
+fn usable_by(
+    p: &crate::game::map::player::Player,
+    data: &crate::game::data::GameData,
+    t: &crate::game::data::items::ItemTemplate,
+) -> Result<(), crate::game::map::inventory::Fail> {
+    use crate::game::map::inventory::{self, Fail};
+    let fits = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of - 1)) != 0;
+    if !fits(t.allowable_class, p.row.class) || !fits(t.allowable_race, p.row.race) {
+        return Err(Fail::NeverUse);
+    }
+    if u32::from(p.level()) < t.required_level {
+        return Err(Fail::Level(t.required_level as u8));
+    }
+    // The skill it asks for, even where every weapon and armor is allowed.
+    if t.required_skill != 0 {
+        match crate::game::map::skills::value(p, t.required_skill) {
+            None | Some(0) => return Err(Fail::NoProficiency),
+            Some(v) if v < t.required_skill_rank => return Err(Fail::Skill),
+            Some(_) => {}
+        }
+    }
+    inventory::proficient(p, &inventory::Proficiency::of(p, data), t)
 }
 
 /// Start auto-repeating `spell` at the targets' unit.
@@ -190,7 +255,13 @@ pub fn start(map: &mut Map, g: Guid, spell: u32, targets: Targets) {
     let Some(c) = map.combat_mut(g) else {
         return;
     };
-    let ready = c.auto_repeat.map(|a| a.next_at).unwrap_or(now);
+    // Stopped and started again, it waits for the weapon as it would have
+    // (Thistle Tea's toggled Shoot keeps its last launch's cooldown).
+    let ready = c
+        .auto_repeat
+        .map(|a| a.next_at)
+        .or(c.ranged_ready_at)
+        .unwrap_or(now);
     c.auto_repeat = Some(AutoRepeat {
         spell,
         target,
@@ -213,19 +284,29 @@ pub fn cancel(map: &mut Map, g: Guid, tell: bool) {
     }
 }
 
+/// Whether `g` is shooting a wand (Shoot, of the magic damage class), not
+/// Auto Shot.
+fn wanding(map: &Map, g: Guid) -> bool {
+    map.combat(g)
+        .and_then(|c| c.auto_repeat)
+        .and_then(|ar| map.realm.data.spells.get(ar.spell))
+        .is_some_and(|s| s.dmg_class == 1)
+}
+
+/// A player begins casting another spell: a wand stops, Auto Shot goes on.
+pub fn cast_begun(map: &mut Map, g: Guid) {
+    if wanding(map, g) {
+        cancel(map, g, true);
+    }
+}
+
 /// A player moved: a wand stops; Auto Shot waits until they stand.
 pub fn moved(map: &mut Map, g: Guid) {
     let now = map.now;
-    let Some(ar) = map.combat(g).and_then(|c| c.auto_repeat) else {
+    if map.combat(g).and_then(|c| c.auto_repeat).is_none() {
         return;
-    };
-    let wand = map
-        .realm
-        .data
-        .spells
-        .get(ar.spell)
-        .is_some_and(|s| s.dmg_class == 1);
-    if wand {
+    }
+    if wanding(map, g) {
         cancel(map, g, true);
         return;
     }
@@ -277,19 +358,30 @@ fn shoot(map: &mut Map, g: Guid) {
     let (min, max) = data.spells.range(s);
     let d = combat::dist(me.position, them.position);
     let reach = me.combat_reach + them.combat_reach;
-    if d > max + reach + 1.0 || (min > 0.0 && d < min) || !combat::facing(&me, &them) {
+    let out_of_range = d > max + reach + 1.0 || (min > 0.0 && d < min);
+    // Out of range, a wand stops (mangos's repeat failing its cast); Auto
+    // Shot waits.
+    if out_of_range && s.dmg_class == 1 {
+        cancel(map, g, true);
         return;
     }
-    let Some(weapon) = combat::hand_weapon(map, g, Hand::Ranged) else {
+    if out_of_range || !combat::facing(&me, &them) {
+        return;
+    }
+    // A broken weapon, or one the spell doesn't take (a bow for a wand's
+    // Shoot), stops it: mangos checks each repeat's cast again.
+    let weapon = combat::hand_weapon(map, g, Hand::Ranged)
+        .filter(|_| spells::checks::equipped_ok(map, g, s));
+    let Some(weapon) = weapon else {
         cancel(map, g, true);
         return;
     };
-    // A round of ammunition.
-    let ammo_display = match pay_ammunition(map, g) {
-        Ok(look) => look,
+    // A round of ammunition, paid once the shot is struck.
+    let (ammo_display, payment) = match plan_ammunition(map, g) {
+        Ok(planned) => planned,
         Err(reason) => {
-            cancel(map, g, true);
             cast_result(map, g, ar.spell, Some(reason));
+            cancel(map, g, true);
             return;
         }
     };
@@ -303,7 +395,11 @@ fn shoot(map: &mut Map, g: Guid) {
     {
         a.next_at = now + Duration::from_millis(u64::from(period));
     }
+    if let Some(c) = map.combat_mut(g) {
+        c.ranged_ready_at = Some(now + Duration::from_millis(u64::from(period)));
+    }
     resolve(map, g, target, s, weapon, ammo_display);
+    spend(map, g, payment);
 }
 
 /// A shot's roll, damage and logs.
@@ -331,6 +427,11 @@ fn resolve(
         } else {
             lo
         };
+        // Its school's damage done that fits it (Wand Specialization).
+        let rolled = rolled
+            * crate::game::map::auras::auras(map, g).map_or(1.0, |a| {
+                crate::game::map::derive::wand_pct(a, 1 << school, &weapon)
+            });
         // A wand crits as a spell does.
         if outcome != Outcome::Miss {
             let crit = combat::derived(map, g).spell_crit[school as usize];
@@ -354,14 +455,28 @@ fn resolve(
     } else {
         raw
     };
+    // A wand's school the target is immune to: nothing, and it says so.
+    let immune = wand && outcome != Outcome::Miss && combat::school_immune(map, target, school);
     let damage = match outcome {
+        _ if immune => 0,
         Outcome::Miss => 0,
         Outcome::Crit if wand => mitigated * 3 / 2,
         Outcome::Crit => (mitigated as f32 * combat::crit_multiplier(map, g, target)) as u32,
         _ => mitigated,
     };
+    // A wand's magic is partly resisted as a spell of its school is.
+    let resisted = if wand && school & 1 == 0 && damage > 0 {
+        let as_spell = crate::game::data::spells::SpellTemplate {
+            school: school.trailing_zeros(),
+            ..s.clone()
+        };
+        spells::outcome::partial_resist(map, g, target, &as_spell, damage, false)
+    } else {
+        0
+    };
+    let damage = damage - resisted;
     let (left, absorbed) = if damage > 0 {
-        crate::game::map::auras::absorb(map, target, damage, school)
+        crate::game::map::auras::absorb_and_share(map, g, target, damage, school)
     } else {
         (0, 0)
     };
@@ -372,7 +487,7 @@ fn resolve(
             ammo_inventory_type: inventory_type,
         });
     }
-    let missed = outcome == Outcome::Miss;
+    let missed = outcome == Outcome::Miss || immune;
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_GO {
         cast_item: g,
         caster: g,
@@ -382,7 +497,11 @@ fn resolve(
         misses: if missed {
             vec![SpellMiss {
                 target,
-                miss_info: SpellMissInfo::Miss,
+                miss_info: if immune {
+                    SpellMissInfo::Immune
+                } else {
+                    SpellMissInfo::Miss
+                },
             }]
         } else {
             Vec::new()
@@ -403,7 +522,7 @@ fn resolve(
             school: SpellSchool::try_from(school.trailing_zeros() as u8)
                 .unwrap_or(SpellSchool::Normal),
             absorbed_damage: absorbed,
-            resisted: 0,
+            resisted,
             periodic_log: school & 1 != 0,
             unused: 0,
             blocked: 0,

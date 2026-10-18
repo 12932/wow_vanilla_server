@@ -78,13 +78,23 @@ pub fn movement_of(msg: ClientOpcodeMessage) -> Result<(MovementInfo, Relay), Cl
 
 fn finite(info: &MovementInfo) -> bool {
     let p = info.position;
-    p.x.is_finite()
+    let in_world = p.x.is_finite()
         && p.y.is_finite()
         && p.z.is_finite()
         && info.orientation.is_finite()
         && p.x.abs() < 20_000.0
         && p.y.abs() < 20_000.0
-        && p.z.abs() < 20_000.0
+        && p.z.abs() < 20_000.0;
+    // A place on deck is on a deck: within 50 yards across and 100 up, as
+    // mangos's `VerifyMovementInfo` has it (NaN is on none).
+    in_world
+        && info.flags.get_on_transport().is_none_or(|t| {
+            let d = t.transport.position;
+            d.x.abs() <= 50.0
+                && d.y.abs() <= 50.0
+                && d.z.abs() <= 100.0
+                && t.transport.orientation.is_finite()
+        })
 }
 
 /// A movement packet from `guid`'s client.
@@ -269,7 +279,14 @@ fn height(info: &MovementInfo) -> (f32, Guid) {
 fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Option<f32> {
     let falling = info.flags.get_jumping().is_some() || info.flags.get_fallingfar();
     let (z, transport) = height(info);
-    if info.flags.get_swimming().is_some() {
+    // Swimming ends a fall, and so does slowing it: what was fallen before
+    // Slow Fall (or a hover) took hold doesn't count once it is gone
+    // (Thistle Tea's `Falling` discards it).
+    use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER};
+    if info.flags.get_swimming().is_some()
+        || p.auras.has(AURA_FEATHER_FALL)
+        || p.auras.has(AURA_HOVER)
+    {
         p.fall_from = None;
         p.misc.fall_far = false;
         return None;
@@ -403,6 +420,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
     }
     p.awaiting_worldport = false;
     visibility::send_self(map, guid);
+    crate::game::map::death::resend_water_walk(map, guid);
     map.visibility_dirty.insert(guid);
     crate::game::map::battleground::arrived(map, guid);
     crate::game::map::eviction::arrived(map, guid);

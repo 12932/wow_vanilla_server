@@ -12,6 +12,12 @@ the questions waiting for you.
 ## Questions for you
 
 **Answered (2026-10-18):**
+- **Battleground view distance:** 400 yards, against the world's 100, done in `c380d54` (`[world]
+  battleground_visibility_yards`).
+- **Ghosts:** a ghost walks on water, and sees only what is within 45 yards of its corpse, players too, as mangos has
+  it. This replaces bugs3's "ghosts see every player". A agent stage (`fix/ghost`) is on it.
+- **Wrong passwords:** no lockout. **Account creation:** keep `auto`, with the name as the password. Both are
+  deferred until much later (review item 33).
 - **#10:** keep swinging on arrival.
 - **#18:** keep moving unusable gear at login.
 - **#27:** snares stack, as mangos-classic has them: they coexist and the strongest counts. Done.
@@ -130,6 +136,46 @@ the questions waiting for you.
     funnels. Keep vmangos's?
 39. **New weapon skills** (from 3j). wvs starts them at their cap; mangos and Thistle Tea start them at 1. Changing
     it means every level-60 combat test needs its skills raised. Change it?
+
+40. **How a creature a player controls heals** out of combat (from 3p), whether charmed or a pet: Thistle Tea's spirit ×
+    4, mangos-classic's 13% of its health, or wvs's current twentieth?
+
+41. **Cancelling Stealth while Vanish is on** (from 3q). Should both come off, as Thistle Tea has it? mangos's
+    `CMSG_CANCEL_AURA` takes only the spell named, so Vanish keeps the rogue stealthed. wvs follows mangos for now.
+
+42. **An interrupt on a creature immune to silence** (from 3m). Should it still lock out the school? mangos-classic
+    locks it; Thistle Tea, following vmangos, spares the creature. wvs locks it.
+43. **A fear that damage may break** (from 3m). Should a fear without the damage-interrupt flag break on damage by
+    chance, as mangos-classic does? wvs doesn't break it.
+
+44. **A staying pet's fight** (from 3r). Should a pet told to Stay keep fighting its current victim, as Thistle Tea
+    has it? This turns on #19, so it's left as it is. A staying pet now chases only the victim its master's
+    Attack named.
+45. **Corpses** (from 3r). Two cases differ from Thistle Tea:
+    - A fallen hound with no kin left: wvs leaves a lootable corpse; Thistle Tea despawns it at once.
+    - A dead pet's corpse: wvs keeps a hunter pet's 60 s and a summoned pet's 5 s, as mangos does; Thistle Tea keeps
+      them an hour and 15 s.
+
+    Which should wvs follow?
+
+46. **Fade's threat given back** (from review 3, R3-3). When Fade ends, wvs gives back its whole amount, as Thistle
+    Tea does, even if it took less: 100 threat can come back as 820. mangos gives back only what Fade took. Follow
+    mangos? The fix is one line, but it changes a parity test that pins Thistle Tea's behaviour.
+
+47. **Quest-log slot visibility** (from 4b). Every observer can see the ids of a player's quest-log slots in wvs.
+    mangos-classic shows them to the group only, and Thistle Tea to no one. Follow mangos, which needs group-only
+    update fields, or Thistle Tea?
+48. **Druid form attack power** (from 4b). Which is 1.12's?
+    - Thistle Tea gives no share by level.
+    - mangos-classic gives level × 3 for every druid.
+    - wvs now gives level × 2 plus agility in Cat Form, and level × 3 in Bear Form.
+
+49. **Fresh creature guids for each dungeon copy?** (from 4a). wvs builds a copy's creature guids from the database's,
+    so two copies' creatures share guids. No client sees two copies at once. Thistle Tea gives each copy fresh ones.
+50. **Nerub'enkan's scarabs** (from 4a). vmangos's own EventAI (1057701) despawns a Crypt Scarab within 5 yards of its
+    victim, so his swarm vanishes on arrival, in Thistle Tea too. Keep it, or exempt his summons?
+51. **A creature-owned pet's death** (from 4c). What does its killer get? Nothing (mangos-classic), or three quarters
+    of the XP and the credits (Thistle Tea, vmangos)? wvs gives nothing.
 
 ## Decisions made (override any)
 
@@ -254,8 +300,9 @@ the questions waiting for you.
     - **`SMSG_GROUP_LIST`** ends with a byte, as Thistle Tea and mangos-classic send it (mangos-zero omits it).
     - **The equipped-item-class cast result** carries the real inventory-type mask, as mangos-zero does; Thistle Tea
       sends 0.
-    - **Ghosts** see every player, as in Thistle Tea; mangos limits this. Ghosts see only creatures within 45 yards
-      of their corpse.
+    - **Ghosts** (replaced at your word, `fix/ghost`): a ghost sees only what is within 45 yards of its corpse. The
+      exceptions are its group, its side's ghosts, spirit healers, its own corpse, and boats and elevators. A ghost
+      walks on water. Its group's living members see it, as in mangos.
     - **Single-target auras** end when their caster leaves the world, as mangos and Thistle Tea have it.
     - **Spawn flags:** disabled spawns (0x2) stay out, hidden ones (0x40) are concealed, and dead ones (0x80) lie as
       corpses.
@@ -411,6 +458,266 @@ the questions waiting for you.
     - **Ties in threat** keep the current victim, as Thistle Tea's `Threat.reselect` and mangos do. So Shazzrah keeps
       his victim after Blink's threat wipe, though his script says to attack a random player.
 
+27. **The test suites** (your ask: unit tests in a minute or two). Details in `docs/TESTING.md`.
+    - **Fast:** `cargo nextest run --lib` runs the 1,201 tests that don't need the real world, in about 25 s. It took
+      about 10 minutes before.
+    - **Extended:** `cargo extended` runs every test (1,450) in about 3 minutes. It runs before every merge and push.
+    - **Marking:** a test that reads the real world is marked `#[ignore = "extended"]`. If one is left unmarked, it
+      fails in the fast suite with a message saying so, so it can't slip in.
+    - **The world's snapshot:** the real world loads once per test build and is shared through a snapshot, keyed on
+      the databases and the test binary, so a test's load takes 0.9 s rather than 8.4 s. The long walks run in
+      parallel shards.
+    - **Left as they are:**
+      - The walks still poll in real time, so a much faster machine could outrun them.
+      - Compiling the crate at opt-level 1 for the extended suite would bring it to about 2 minutes. But a dozen walks
+        fail at that speed, for the same reason, and it costs a second build.
+    - **One assertion's timing changed:** Ragnaros's check waits for the map's next update, where his summoned
+      events run. It failed every time on an idle machine.
+28. **Quest 1560 (Tooga)** wasn't a server bug. The escort walk gave each walk a fixed number of looks, while Tooga's
+    progress went by the clock, so on a quiet machine his 3,300 yards outlasted the walk. The walk now counts the
+    map's updates, and a follower keeps up with its lead.
+29. **an agent CLI** now runs the stages (your ask), on Opus 5.5.
+
+30. **Round 3 so far (3m to 3r).** These rows keep mangos-classic's behaviour where Thistle Tea's isn't 1.12's (marked
+    wrong-for-1.12):
+    - **A weapon swap in combat** resets only the melee timers. The ranged timer and a queued Auto Shot run on.
+    - **A scripted flight** with no flight master costs nothing.
+    - **Abandoning a quest** doesn't give back the item that started it. Thistle Tea gives it back.
+    - **A creature's Bear Form** is always model 902. Thistle Tea picks one by the creature's own model.
+    - **Food** heals at its own period in a fight or out. Thistle Tea folds it into the 2 s tick, out of combat only.
+    - **A pet's focus** comes back at 12 every 2 s, mangos's rate. Thistle Tea gives 25 every 4 s.
+    - **A disarmed unit** can't parry, even with an off-hand weapon.
+    - **Merge note:** 3q renews a parent's linked auras on a refresh, and 3o's test has a link back to its parent.
+      Together they recursed until the stack overflowed. A refresh made by a link no longer renews its own links.
+31. **The agents ran the machine out of memory** (30 GB). the orchestrator stopped all seven agent agents when memory ran
+    short. Their committed work is merged above, and their branches and worktrees are kept. How to resume them, with
+    fewer at once and a cap on each agent's memory, is waiting on you.
+
+32. **Tests that race the map's own clock** (found merging round 3; for the code review). The harness's tests
+    query a map while its own 20 Hz update runs on real time. Three tests failed today only because an update
+    did or didn't land between two of their queries:
+    - Ragnaros's spawned events;
+    - the gear's auras after a login;
+    - the lava test's health, which a stats resync reset.
+
+    Each now waits for what it checks. The class remains, though, and a much faster or slower machine will find more
+    of them. **The fix** would be a harness mode in which a test steps the map itself, with no update loop of its
+    own. That is a few days' work across the harness and its tests, so I left it for your say.
+
+33. **Code review, first findings** (auth, connections, sessions, the store):
+    - **Item and money moves are saved apart** (fixed, `70cd32f`). A trade changes two characters, and mail and auctions
+      move items between a character and a record. Each side is saved on its own time: the record at once, a
+      character at its 5-minute save or logout. A crash in between, such as an abort, the OOM killer or a power cut,
+      duplicates or loses the item. mangos saves both sides in one transaction, and so will wvs.
+    - **A failed reconnect proof tells the client it is banned** (fixed). It is now answered as Thistle Tea answers it
+      (`FailUnknown0`) and closed. mangos closes without an answer.
+    - **No lockout after wrong passwords.** Nothing slows a password guesser beyond the cap on open connections.
+      mangos has `WrongPass.MaxCount`, off by default. Add one, per account and per address, with a back-off? That
+      is your call, as it's a policy.
+    - **A save that fails is lost** until the character's next save, after three tries if the database was busy. In
+      WAL mode with a single writer that should only happen with a full disk. A failed logout save loses the session
+      since the last save. Keeping failed saves to retry is possible, but the right answer to a full disk is an
+      operator alert, so I've left it.
+    - **The fix for saves apart:** `Store::save_together` writes the characters and records involved in one
+      transaction, retried whole and never split. It covers:
+      - a trade;
+      - mail sent or taken: its item, its money, a letter made of it, and cash on delivery;
+      - an auction put up, bid on, bought out, cancelled or swept;
+      - a charter or emblem bought.
+
+      A test for each reads both sides back with no other save, and fails without the fix.
+      - **Left, minor:** founding a guild saves the guild apart from taking the charter. A crash in between leaves a
+        guild and an unused charter, but nothing of value is copied.
+      - **Left, minor:** a deleted character's top bid is cleared without a refund, as before.
+    - **GM account commands miss lowercase names** (fix queued). `.ban alice 10` answers "No account alice." because
+      accounts are stored in capitals and the command matches exactly. `.unban` and `.account gm` have the same bug.
+    - **`creation = "auto"` is the shipped default.** An unknown name gets an account whose password is the name.
+      That's right for development and load tests, but an open server should set `existing`. Change the default and
+      have the load tests set `auto`? It's your call, since it changes how a fresh server behaves.
+    - **Sound as they are:**
+      - the handshakes (timeouts, size caps, panic guards);
+      - the outbound budget and backpressure;
+      - the rate and bad-packet limits;
+      - the session-key cache's bounds;
+      - the supervision: restart, quarantine and back-off, the panic hook, and unwinding in release;
+      - the registry's locks, always taken in the same order;
+      - the damage, absorb, block and timer arithmetic, which is bounded wherever I looked.
+
+34. **3p's choices** (combat and power, finished):
+    - **A polymorphed player** heals a tenth of their health a tick, in a fight too, as Thistle Tea has it. mangos
+      has no rule of its own; Polymorph's tooltip says the target "will regenerate very quickly".
+    - **Damage sharing** (Blessing of Sacrifice, Soul Link) now takes its share of swings, shots and ticks too, after
+      shields, as mangos's `CalculateDamageAbsorbAndResist` does. Before, only direct spells were shared.
+    - **Burns and drains** take only a pool the target shows, from the living. A burn with a multiplier of 0 burns
+      mana and does no damage. A drain gives nothing back for a power the caster doesn't use.
+    - **Costs:** a percentage cost is added to the flat one instead of replacing it, and god mode pays nothing.
+    - **Silence and pacify** go by the spell's prevention type, so a wand's Shoot works under silence.
+    - **A flaky test, left as it was:** `tests_p3_ai_scripts::a_checked_event_whose_actions_fail_fires_again_until_they_succeed`
+      failed 1 run in 12, at different points.
+
+35. **3q's choices** (auras, finished):
+    - **Periodic ticks** run one an update, on the aura's own cadence, as mangos's `Aura::Update` does. After a
+      stalled update, the missed ticks follow over the next updates, so none is lost. Thistle Tea runs them all at
+      once.
+    - **A player's cast is checked again as it ends:** range with mangos's tolerance (a tenth, at most 3 yards),
+      facing, life, and still a foe. One that fails there costs no mana and starts no cooldown.
+    - **Ignite** keeps one burn a target, its first mage's, whoever crits after.
+    - **A victim killed by a blow** procs only its death, as mangos's `canProcVictim` has it. So Blessed Recovery
+      doesn't go off on a killing crit.
+    - **Death clears diminishing returns**, as mangos's `ClearDiminishings` does.
+36. **3n's choices** (the player, finished):
+    - **The ammunition chosen** is kept over a logout, in the character's saved state.
+    - **A vendor out of reach** is told so. A broken weapon's enchantments don't go off.
+    - **A scripted route** is refused in a fight or far from its first node.
+    - **A shared quest's offer** ends with the sharer's quest, group or presence.
+    - **Starting items** come in whole stacks.
+    - **The lava test's fragility had a cause:** a gear sync worked a player's stats out afresh every time. It now
+      does so only when an item breaks or is mended.
+37. **3o's choices** (the loaders, finished):
+    - **A tamed beast** owes its spells' training points.
+    - **A demon** keeps the name it drew, kept in its saved state.
+    - **A player's guardian** keeps its template's flags.
+    - **Not copied from Thistle Tea**, where mangos sets nothing: Ghost Wolf's 0.8 scale and reach, and a
+      disguise's scale.
+
+38. **3m's choices** (spells and classes, finished):
+    - **Silence and pacify** go by the spell's prevention type, as mangos-classic has it. Pacify stops a wand's
+      Shoot, and neither stops the Hearthstone.
+    - **Lower ranks stay known** beside a higher one, as mangos keeps them. Thistle Tea drops them; this is
+      question 37.
+    - **A cooldown that waits for its aura** holds its category's other spells too.
+    - **A heal's threat** goes by `spell_threat`, and a spell of no threat makes none.
+    - **Combustion and its crit** come and go together.
+    - **A wow_messages bug, found and left:** `CMSG_CAST_SPELL` reads a corpse's GUID after the location fields,
+      where 1.12 sends it before them. Fixing it means reading the packet by hand, or a fork fix like the others.
+
+39. **3r's choices** (creatures, pets and world systems, finished):
+    - **Sessile creatures** stand in a fight unless a script lets them chase, and `NO_MELEE_FLEE` ones don't swing,
+      as mangos and Thistle Tea have it. You'll notice it on repair bots, combat dummies and water guardians.
+    - **A template's effect-mechanic immunity** keeps off only the effect with that mechanic. So a blow with a stun
+      now hurts a stun-immune creature, where it used to be refused whole.
+    - **A creature without an addon** has its weapons out, as mangos's `InitEntry` sets it.
+    - **A moderator's channel message** reaches members who ignore them.
+    - **A react state a script set** is kept over a respawn.
+40. **A 500-bot race, here** (checking your crash):
+    - **Load:** 492 of 500 bots alive, about 236,000 relayed moves a second.
+    - **The packets:** none that wow_messages couldn't read, and every bot's look valid for the client.
+    - **The map's update:** with 490 players on Booty Bay's docks, it ran over its 50 ms only 8 times, at most 79 ms.
+    - **Your client's crash** was at the same spot as the earlier bad-look ones (`0x006194DD`, texture compositing).
+      It is waiting on its `.dmp` and the build's commit.
+
+41. **The client crash at `0x006194DD`** (your race, 2026-10-18; fixed in `12c055a`). A creature walking a two-point
+    path that came into view crashed the client.
+    - **Why:** the 1.12 client counts a create's spline segments as its points less three, then copies that count
+      unchecked. mangos sends its spline's padded array: a linear path's last point again, and a smooth path's
+      extrapolated first point too. wvs sent the bare path, so two points became a count of -1.
+    - **The fix:** creates now carry mangos's array.
+    - **Next:** a agent stage (`work/clientemu`) is building your idea, a test that runs what wvs sends through
+      `WoW.exe`'s own parsing code under an emulator, so the next such packet fails a test before it reaches a client.
+42. **Review 2, the map core** (findings in `runs/review/review2.md`). Fixed, each with a test:
+    - **Copies and bags:**
+      - an empty dungeon copy lost its save in seconds, so a group back after a wipe got a fresh copy;
+      - bank bag slots bought were lost at every login.
+    - **Bans:**
+      - a `.ban`'s kick let the client straight back in on its cached session key;
+      - `.ban` and `.levelup` with huge numbers overflowed;
+      - GM account commands now find a name in any case.
+    - **Movement:**
+      - a NaN or far transport offset was relayed and saved;
+      - the first move after a login went unchecked.
+    - **Config:** an unreadable `config.toml` silently ran on the defaults.
+    - **Copies stopping:** a player sent into a stopping copy was lost.
+    - **Left for you, the hard ones:**
+      - **H1. Transport-flag teleport:** a client claiming to be on a transport skips the speed check, so it can
+        teleport. A fix checks the transport's GUID and where it is on its route.
+      - **M1. Height:** the speed check ignores height.
+      - **M2. Copy race:** two group members entering at once can get different copies.
+      - **M3. Shutdown:** shutdown can miss a player mid-transfer.
+      - **M4. Empty pools:** health or mana saved at 0 load as full, so a relog refills a mage.
+      - **Eleven minor ones** are in the findings file.
+
+43. **Review 3, combat, spells and auras** (findings in `runs/review/review3.md`). Fixed, each with a test:
+    - **Spells:**
+      - reagents banked mid-cast let the spell go off for free, an item duplication;
+      - an interrupted cast was told twice;
+      - a cast during a channel didn't end the channel.
+    - **Threat:** a spell counted its caster's threat auras twice (160 rather than 130 under +30%).
+    - **Leaving the map:** a player who logged out kept their channel and stayed on creatures' threat lists.
+    - **Robustness:** a panic in a proc left the proc depth raised for good.
+    - **Creatures:**
+      - one switching victims moved its leash origin;
+      - an attacker killed by a damage shield swung on from its corpse;
+      - a creature down in a linked feign death ran its timers;
+      - one that forgot its victim could turn to one it can't attack.
+    - **Combat:** a dual-wielder's hands swung in the same step.
+    - **Auras:**
+      - restored stacks showed as one;
+      - a replaced aura was never wholly removed, so a cooldown waiting for it never started;
+      - a pet area aura of two effects gave the pet only its last.
+    - **Left, the harder ones:**
+      - **R3-15:** a death action that despawns its creature cuts the death short, so loot and its summoner's and
+        group's death events are skipped.
+      - **R3-16:** a new aura's index can go stale after the auras it replaces end.
+      - **R3-31 (speed):** heals, Fade and logouts walk all 25,000 creatures to find the threat lists they're on. A
+        per-unit index of who holds them would fix it.
+      - **Twelve minor ones** are in the findings file.
+
+44. **4b's choices** (the core: stats, skills, wands, movement):
+    - **A percentage of damage done that wants an item** counts only for a hand whose weapon fits it, and never for
+      spells, as mangos has it. Before, Wand Specialization raised every spell by 25%.
+    - **A wand's Shoot** stops for any cast that isn't triggered, or when its target goes out of range. Auto Shot
+      waits through both.
+    - **Animal forms** make a player a beast: cat, bear, travel, aquatic and Ghost Wolf.
+    - **Rounding:**
+      - an ability's armor cut rounds to a whole number, as Thistle Tea has it;
+      - a fall after Slow Fall counts from where the player last was.
+    - **Creatures** carry 0x10 in `UNIT_FIELD_BYTES_2`.
+
+45. **The client-code harness** (your idea; `tools/client_check/`, `docs/TESTING.md`).
+    - **What it is:** `WoW.exe` itself, under the Unicorn emulator. It runs the client's own parsers on what wvs
+      sends: update objects and their creates, movement blocks and splines, monster moves.
+    - **What fails it:** a fault, a read past a packet's end, or an absurd count.
+    - **The proof:** it reproduces every crash captured so far. The gorilla's spline gives -1 at `0x6194DD`, the
+      forgotten object a null read at `0x45353C`, plus a 41-word mask overrun and a read past an end. The padded
+      spline passes, and live traffic gives no false positives.
+    - **The test:** the extended suite's `tests_client_emu::the_packets_wvs_sends_pass_the_client` runs it on a
+      crowd's capture.
+    - **Out of its reach:** the bad-look crash, which happens in drawing rather than in parsing.
+46. **4a's choices** (encounter scripts and instances, 171 rows):
+    - **Blackrock Spire's alcoves** follow mangos-classic's roster (`DoSortRoomEventMobs`): a spawn by a rune that
+      rolled a summoner or veteran guards it too.
+    - **Stage 3h's leads:** Doom'rel's failure was the test racing the map, and Nerub'enkan's missing scarabs are the
+      data's own EventAI (question 50).
+47. **4c's choices** (world entities and the network):
+    - **Chairs** seat one, on the nearest seat at the chair's height (`SIT_LOW_CHAIR` and up), from 3 yards. Before,
+      a chair sat everyone at its centre on the ground.
+    - **Guardians:** a second cast of a guardian sends its kind away, and a triggered one adds to them.
+    - **Wild summons** (a Field Repair Bot, fireworks) are creatures of their own.
+    - **Auction notices:** the outbid were told "You won". The client also read past the end of a refused shot's cast
+      result. Both are fixed.
+    - **Skinning:** a skin with an empty loot table is skinned once.
+    - **Spell hits:** a harmful spell of damage class 0 never misses, as in mangos.
+    - **Rifts** replace an invader that despawned.
+    - **Demonic Sacrifice** ends with a new demon.
+
+48. **Tracy, reworked** (your ask; `docs/PROFILING.md`). Set `WOW_TRACY=1` and connect Tracy v0.13.1.
+    - **What you see:**
+      - a frame per map update, named by the map;
+      - a zone per update step, packet (by opcode), store transaction and load stage;
+      - plots once a second, of each map's players, creatures awake, mailbox and outbound, and the realm's;
+      - warnings and errors as messages.
+    - **Off:** it costs nothing measurable. It records only while a profiler is connected, and listens on localhost
+      only.
+    - **Your calls:**
+      - The `tracy` feature is on by default, so a release build can be profiled with no rebuild. That costs a C++
+        build once.
+      - System tracing stays: Tracy's sampling comes with it, and it needs administrator rights to do anything.
+    - **What 100 bots showed:**
+      - An Eastern Kingdoms update takes 2.8 ms, most of it the despawn steps' three looks through every creature
+        (1 ms).
+      - The worst hitches are navmesh tiles loaded during an update, at 20 to 116 ms each. Loading them ahead, or off
+        the map's thread, is the next performance lead.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -448,5 +755,27 @@ the questions waiting for you.
 | 3j: matrix gaps, the loader on the real data (124 rows) | merged | fab8aaa |
 | 3h: matrix gaps, encounter scripts (70 rows) | merged | b8e080f |
 | The matrix after the second round | 3,785 of 8,396 applicable covered or accepted (45.1%) | |
+| Quest 1560's walk | merged | 8dc7a49 |
+| Fast and extended test suites | merged | eef0000 |
+| Round 3 (3m to 3r), the work committed before the agents stopped | merged | 208be0b |
+| 3p: combat and power (179 rows) | merged | 1e01c85 |
+| Review fix 1: trades, mail and auctions saved together; the reconnect answer | merged | 70cd32f |
+| 3q: auras (167 rows) | merged | d437cd0 |
+| 3n: the player (68 rows) | merged | a3d93c0 |
+| 3o: the loaders (100 rows) | merged | b9f364f |
+| 3m: spells and classes | merged | d70cd01 |
+| 3r: creatures, pets and world systems | merged | 2d71df2 |
+| 4b: the core (stats, skills, wands, movement) | merged | fd5b963 |
+| Review 2 (map core) and review 3 (combat, spells, auras) | merged | f90d87f, 1e8c8a5 |
+| The race's client crash (create splines) | fixed | 12c055a |
+| 4a: encounter scripts and instances (171 rows) | merged | f91c46b |
+| Battleground view distance, 400 yards | done | c380d54 |
+| The client-code harness | merged | eb9b73b |
+| 4c: world entities and the network (77 rows) | merged | afc079c |
+| Ghosts: water walking, sight by the corpse | merged | 7aa9d29 |
+| Tracy reworked | merged | 479b728 |
+| The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
+| The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
+| The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
 ## Left for later, and why

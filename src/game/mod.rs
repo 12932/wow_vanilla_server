@@ -48,6 +48,8 @@ mod tests_bugs4;
 #[cfg(test)]
 mod tests_bugs5;
 #[cfg(test)]
+mod tests_client_emu;
+#[cfg(test)]
 mod tests_combat;
 #[cfg(test)]
 mod tests_combat2;
@@ -59,6 +61,8 @@ mod tests_combat5;
 mod tests_creatures4;
 #[cfg(test)]
 mod tests_events;
+#[cfg(test)]
+mod tests_ghost;
 #[cfg(test)]
 mod tests_gifts;
 #[cfg(test)]
@@ -80,6 +84,50 @@ mod tests_p3_ai_pets;
 #[cfg(test)]
 mod tests_p3_ai_scripts;
 #[cfg(test)]
+mod tests_p3_aura2;
+#[cfg(test)]
+mod tests_p3_aura2_areas;
+#[cfg(test)]
+mod tests_p3_aura2_dispel;
+#[cfg(test)]
+mod tests_p3_aura2_dr;
+#[cfg(test)]
+mod tests_p3_aura2_immunity;
+#[cfg(test)]
+mod tests_p3_aura2_periodic;
+#[cfg(test)]
+mod tests_p3_aura2_real;
+#[cfg(test)]
+mod tests_p3_aura2_spells;
+#[cfg(test)]
+mod tests_p3_aura2_sync;
+#[cfg(test)]
+mod tests_p3_cast;
+#[cfg(test)]
+mod tests_p3_cast2;
+#[cfg(test)]
+mod tests_p3_cast3;
+#[cfg(test)]
+mod tests_p3_cast4;
+#[cfg(test)]
+mod tests_p3_cast5;
+#[cfg(test)]
+mod tests_p3_cast6;
+#[cfg(test)]
+mod tests_p3_cast7;
+#[cfg(test)]
+mod tests_p3_cast8;
+#[cfg(test)]
+mod tests_p3_cast9;
+#[cfg(test)]
+mod tests_p3_cast_class;
+#[cfg(test)]
+mod tests_p3_cast_kit;
+#[cfg(test)]
+mod tests_p3_cast_mage;
+#[cfg(test)]
+mod tests_p3_cast_priest;
+#[cfg(test)]
 mod tests_p3_combat;
 #[cfg(test)]
 mod tests_p3_combat10;
@@ -89,6 +137,26 @@ mod tests_p3_combat11;
 mod tests_p3_combat2;
 #[cfg(test)]
 mod tests_p3_combat3;
+#[cfg(test)]
+mod tests_p3_combat3_assist;
+#[cfg(test)]
+mod tests_p3_combat3_block;
+#[cfg(test)]
+mod tests_p3_combat3_combo;
+#[cfg(test)]
+mod tests_p3_combat3_control;
+#[cfg(test)]
+mod tests_p3_combat3_defense;
+#[cfg(test)]
+mod tests_p3_combat3_disarm;
+#[cfg(test)]
+mod tests_p3_combat3_immune;
+#[cfg(test)]
+mod tests_p3_combat3_power;
+#[cfg(test)]
+mod tests_p3_combat3_regen;
+#[cfg(test)]
+mod tests_p3_combat3_share;
 #[cfg(test)]
 mod tests_p3_combat4;
 #[cfg(test)]
@@ -132,6 +200,8 @@ mod tests_p3_core_strat;
 #[cfg(test)]
 mod tests_p3_core_trade;
 #[cfg(test)]
+mod tests_p3_creature2;
+#[cfg(test)]
 mod tests_p3_entity;
 #[cfg(test)]
 mod tests_p3_entity_effects;
@@ -158,6 +228,20 @@ mod tests_p3_items_professions;
 #[cfg(test)]
 mod tests_p3_items_quests;
 #[cfg(test)]
+mod tests_p3_loader2_items;
+#[cfg(test)]
+mod tests_p3_loader2_mobs;
+#[cfg(test)]
+mod tests_p3_loader2_pets;
+#[cfg(test)]
+mod tests_p3_loader2_procs;
+#[cfg(test)]
+mod tests_p3_loader2_quests;
+#[cfg(test)]
+mod tests_p3_loader2_spells;
+#[cfg(test)]
+mod tests_p3_loader2_world;
+#[cfg(test)]
 mod tests_p3_loader_play;
 #[cfg(test)]
 mod tests_p3_loader_spells;
@@ -181,6 +265,22 @@ mod tests_p3_network_real;
 mod tests_p3_network_wire;
 #[cfg(test)]
 mod tests_p3_player;
+#[cfg(test)]
+mod tests_p3_player2_ammo;
+#[cfg(test)]
+mod tests_p3_player2_chars;
+#[cfg(test)]
+mod tests_p3_player2_gear;
+#[cfg(test)]
+mod tests_p3_player2_gm;
+#[cfg(test)]
+mod tests_p3_player2_home;
+#[cfg(test)]
+mod tests_p3_player2_npc;
+#[cfg(test)]
+mod tests_p3_player2_quests;
+#[cfg(test)]
+mod tests_p3_player2_taxi;
 #[cfg(test)]
 mod tests_p3_player_chat;
 #[cfg(test)]
@@ -226,6 +326,66 @@ mod tests_p3_world_pvp;
 #[cfg(test)]
 mod tests_p3_world_travel;
 #[cfg(test)]
+mod tests_p4_core_ap;
+#[cfg(test)]
+mod tests_p4_core_combat;
+#[cfg(test)]
+mod tests_p4_core_entity;
+#[cfg(test)]
+mod tests_p4_core_fields;
+#[cfg(test)]
+mod tests_p4_core_mob;
+#[cfg(test)]
+mod tests_p4_core_motion;
+#[cfg(test)]
+mod tests_p4_core_pen;
+#[cfg(test)]
+mod tests_p4_core_skills;
+#[cfg(test)]
+mod tests_p4_core_spell;
+#[cfg(test)]
+mod tests_p4_core_stats;
+#[cfg(test)]
+mod tests_p4_core_versus;
+#[cfg(test)]
+mod tests_p4_core_walk;
+#[cfg(test)]
+mod tests_p4_core_wand;
+#[cfg(test)]
+mod tests_p4_scripts_bosses;
+#[cfg(test)]
+mod tests_p4_scripts_brd;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons2;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons3;
+#[cfg(test)]
+mod tests_p4_scripts_gnomes;
+#[cfg(test)]
+mod tests_p4_scripts_instances;
+#[cfg(test)]
+mod tests_p4_scripts_strat;
+#[cfg(test)]
+mod tests_p4_world;
+#[cfg(test)]
+mod tests_p4_world_guardians;
+#[cfg(test)]
+mod tests_p4_world_items;
+#[cfg(test)]
+mod tests_p4_world_loot;
+#[cfg(test)]
+mod tests_p4_world_net;
+#[cfg(test)]
+mod tests_p4_world_real;
+#[cfg(test)]
+mod tests_p4_world_rewards;
+#[cfg(test)]
+mod tests_p4_world_scripts;
+#[cfg(test)]
+mod tests_p4_world_spells;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
@@ -252,11 +412,19 @@ mod tests_pvp4;
 #[cfg(test)]
 mod tests_pvp5;
 #[cfg(test)]
+mod tests_review2;
+#[cfg(test)]
+mod tests_review3;
+#[cfg(test)]
+mod tests_review4;
+#[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
 mod tests_rules5;
+#[cfg(test)]
+mod tests_save_together;
 #[cfg(test)]
 mod tests_scripts;
 #[cfg(test)]
@@ -299,6 +467,7 @@ use crate::game::store::{Startup, Store};
 #[derive(Debug, Clone)]
 pub struct RealmConfig {
     pub visibility_yards: f32,
+    pub battleground_visibility_yards: f32,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -331,6 +500,7 @@ impl RealmConfig {
     pub fn from_config(c: &crate::config::ServerConfig) -> Self {
         Self {
             visibility_yards: c.world.visibility_yards.clamp(20.0, 500.0),
+            battleground_visibility_yards: c.world.battleground_visibility_yards.clamp(20.0, 500.0),
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,
@@ -440,6 +610,13 @@ impl Realm {
                 );
             }
         }
+        // Honor earned since the last sweep (a kill, a battleground's win)
+        // is kept too: the sweep that writes it runs only every so often.
+        let honor = self.social.honor.lock().take_dirty();
+        for e in honor {
+            self.store
+                .put_record(crate::game::honor::KIND, u64::from(e.guid), &e);
+        }
         if tokio::time::timeout(limit, self.store.flush())
             .await
             .is_err()
@@ -484,6 +661,9 @@ pub async fn run(users: crate::auth::UserCache) {
     for m in [0, 1] {
         realm.maps.get(&realm, map::MapKey::world(m));
     }
+    if crate::tracy::on() {
+        tokio::spawn(plot_realm(realm.clone()));
+    }
     let listener = TcpListener::bind("0.0.0.0:8085")
         .await
         .expect("bind the world listener on 0.0.0.0:8085");
@@ -520,6 +700,34 @@ pub async fn run(users: crate::auth::UserCache) {
     info!("shutting down: saving everyone");
     realm.shutdown().await;
     info!("saved; exiting");
+}
+
+/// Tracy's plots of the realm, once a second while Tracy is on: who is
+/// online, packets in and out a second, and the store's queue.
+async fn plot_realm(realm: Arc<Realm>) {
+    use crate::tracy::{Format, Plot};
+    use std::sync::atomic::Ordering::Relaxed;
+    let online = Plot::new("realm: players online", Format::Number);
+    let packets_in = Plot::new("realm: packets in a second", Format::Number);
+    let packets_out = Plot::new("realm: packets out a second", Format::Number);
+    let store = Plot::new("realm: store queue", Format::Number);
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    let (mut last_in, mut last_out) = (
+        conn::PACKETS_IN.load(Relaxed),
+        conn::PACKETS_OUT.load(Relaxed),
+    );
+    loop {
+        ticker.tick().await;
+        let (now_in, now_out) = (
+            conn::PACKETS_IN.load(Relaxed),
+            conn::PACKETS_OUT.load(Relaxed),
+        );
+        online.set(realm.registry.online_count() as f64);
+        packets_in.set(now_in.saturating_sub(last_in) as f64);
+        packets_out.set(now_out.saturating_sub(last_out) as f64);
+        store.set(realm.store.queued() as f64);
+        (last_in, last_out) = (now_in, now_out);
+    }
 }
 
 async fn shutdown_signal() {

@@ -11,3 +11,4 @@ pub mod numeric;
 pub mod profile;
 pub mod server;
 pub mod setup;
+pub mod tracy;

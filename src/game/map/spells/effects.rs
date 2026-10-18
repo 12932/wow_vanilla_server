@@ -168,6 +168,14 @@ pub fn dr_aura_gone(map: &mut Map, target: Guid, spell: u32) {
     }
 }
 
+/// A finisher's duration at `combo` points: from the base at none to the
+/// most at five, a fifth of the way for each, as mangos's
+/// `CalculateSpellDuration` and Thistle Tea's `duration_for_combo_points`;
+/// no further past five.
+pub fn combo_duration(base: u32, max: u32, combo: u8) -> u32 {
+    base + max.saturating_sub(base) * u32::from(combo.min(5)) / 5
+}
+
 /// An aura's duration: the spell's at the caster's level, longer for a
 /// finishing move's combo points, with the caster's modifiers.
 fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8) -> Option<u32> {
@@ -178,7 +186,7 @@ fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8
         && let Some(d) = map.realm.data.spells.durations.get(&s.duration_index)
         && d.max > base as i32
     {
-        ms = base + (d.max as u32 - base) * u32::from(combo) / 5;
+        ms = combo_duration(base, d.max as u32, combo);
     }
     Some(m.apply_ms(mods::OP_DURATION, ms))
 }
@@ -258,6 +266,7 @@ pub fn run(
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let mut aura_effects = Vec::new();
     let mut weapon = Vec::new();
+    let mut pet_aura = Vec::new();
     for index in 0..3 {
         if !which[index] {
             continue;
@@ -289,6 +298,12 @@ pub fn run(
             | EFFECT_WEAPON_DAMAGE_NOSCHOOL
             | EFFECT_NORMALIZED_WEAPON_DMG
             | EFFECT_WEAPON_PERCENT_DAMAGE => weapon.push((index, points)),
+            // On the pet together, after (`pets::area_aura`).
+            crate::game::map::pets::EFFECT_APPLY_AREA_AURA_PET
+                if !crate::game::map::battleground::plants(s) =>
+            {
+                pet_aura.push((index, points))
+            }
             _ => effect(map, caster, target, s, index, points, &here, item, t),
         }
         if e.chain_target > 1 {
@@ -301,6 +316,9 @@ pub fn run(
     }
     if !weapon.is_empty() {
         weapon_damage(map, caster, target, s, &weapon, l);
+    }
+    if !pet_aura.is_empty() {
+        crate::game::map::pets::area_aura(map, caster, s, &pet_aura);
     }
     if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);
@@ -532,7 +550,7 @@ fn effect(
         // A beacon's planting is the battleground's: see `run_untargeted`.
         _ if crate::game::map::battleground::plants(s) => {}
         _ if crate::game::map::pets::handles(s, index) => {
-            crate::game::map::pets::effect(map, caster, target, s, index, amount)
+            crate::game::map::pets::effect(map, caster, target, s, index, amount, l.triggered)
         }
         _ if crate::game::map::extra_effects::effect(
             map, caster, target, s, index, amount, item,
@@ -659,8 +677,23 @@ fn effect(
             let h = outcome::healing_taken(map, target, max as f32) as u32;
             heal(map, caster, target, s.id, h, false);
         }
+        // Into any pool the target has, shown or not, alive, of a power
+        // that is one and never less (mangos's `EffectEnergize`, Thistle
+        // Tea's `PowerRestoration`); logged for the whole amount.
         EFFECT_ENERGIZE => {
-            let power = e.misc_value.clamp(0, 4) as u16;
+            if !(0..5).contains(&e.misc_value)
+                || amount < 0
+                || !map.unit_view(target).is_some_and(|u| u.alive)
+            {
+                return;
+            }
+            let power = e.misc_value as u16;
+            if map
+                .unit_fields(target)
+                .is_none_or(|f| f.get_u32(UNIT_FIELD_MAXPOWER1 + power) == 0)
+            {
+                return;
+            }
             if let Some(f) = map.unit_fields_mut(target) {
                 let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
                 let now = f.get_u32(UNIT_FIELD_POWER1 + power);
@@ -680,8 +713,22 @@ fn effect(
             }
             super::scripts::after_energize(map, caster, s);
         }
+        // A pool the target has shown, alive, and a power that is one
+        // (mangos's `EffectPowerDrain` and `EffectPowerBurn`, Thistle Tea's
+        // `PowerLeech` and `PowerBurn`): a druid in cat form keeps their
+        // mana from a Mana Burn.
         EFFECT_POWER_DRAIN | EFFECT_POWER_BURN => {
-            let power = e.misc_value.clamp(0, 4) as u16;
+            if !(0..5).contains(&e.misc_value) || !map.unit_view(target).is_some_and(|u| u.alive) {
+                return;
+            }
+            let power = e.misc_value as u16;
+            let shown = shown_power(map, target);
+            if shown != power
+                && !(e.effect == EFFECT_POWER_DRAIN
+                    && power == crate::game::map::pets::POWER_HAPPINESS)
+            {
+                return;
+            }
             let taken = map
                 .unit_fields_mut(target)
                 .map(|f| {
@@ -691,12 +738,19 @@ fn effect(
                     t
                 })
                 .unwrap_or(0);
-            let mult = if e.multiple_value > 0.0 {
-                e.multiple_value
-            } else {
-                1.0
-            };
             if e.effect == EFFECT_POWER_DRAIN {
+                // Nothing back from oneself, nor of a power one doesn't
+                // use; a multiplier of none is one (Thistle Tea's).
+                let mult = if caster == target || shown_power(map, caster) != power {
+                    0.0
+                } else {
+                    let base = if e.multiple_value > 0.0 {
+                        e.multiple_value
+                    } else {
+                        1.0
+                    };
+                    l.mods.apply(super::mods::OP_MULTIPLE_VALUE, base).max(0.0)
+                };
                 super::log::power_drain(map, caster, s.id, target, taken, power, mult);
                 if let Some(f) = map.unit_fields_mut(caster) {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
@@ -707,9 +761,21 @@ fn effect(
                     );
                 }
             } else {
-                // Mana burned is damage.
+                // What is burned is damage, by the multiplier as the
+                // caster's modifiers have it (none is none: Chains of Ice
+                // burns without harm), a crit's half more and no spell
+                // power.
+                let mult = l
+                    .mods
+                    .apply(super::mods::OP_MULTIPLE_VALUE, e.multiple_value)
+                    .max(0.0);
+                let mut damage = taken as f32 * mult;
+                if l.crit {
+                    let pct = l.mods.pct[super::mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
+                    damage += damage * 0.5 * (1.0 + pct);
+                }
                 let d = outcome::Damage {
-                    amount: (taken as f32 * mult) as u32,
+                    amount: damage as u32,
                     resisted: 0,
                     blocked: 0,
                 };
@@ -1017,6 +1083,7 @@ fn effect(
             }
         }
         EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
+            let data = map.realm.data.clone();
             let pct = e.effect == EFFECT_DURABILITY_DAMAGE_PCT;
             let slot = e.misc_value;
             // -1 is what is worn, -2 that and what is carried in the bags
@@ -1051,13 +1118,18 @@ fn effect(
                 super::log::durability(map, caster, s.id, target, entry);
             }
             if let Some(p) = map.players.get_mut(&target) {
+                let mut turned = false;
                 for it in p.items.iter_mut().filter(|i| scoped(i)) {
                     let max = it.fields.get_u32(ITEM_FIELD_MAXDURABILITY);
                     let now = it.fields.get_u32(ITEM_FIELD_DURABILITY);
-                    it.fields.set_u32(
-                        ITEM_FIELD_DURABILITY,
-                        crate::game::map::vendor::worn(max, now, amount, pct),
-                    );
+                    let then = crate::game::map::vendor::worn(max, now, amount, pct);
+                    it.fields.set_u32(ITEM_FIELD_DURABILITY, then);
+                    turned |= max > 0 && (now == 0) != (then == 0);
+                }
+                // Gear broken or mended gives what it gives no more, or
+                // again.
+                if turned {
+                    p.apply_stats(&data);
                 }
                 p.gear_dirty = true;
             }
@@ -1407,6 +1479,11 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
             .filter(|s| s.kind == crate::game::map::pets::Kind::Possessed)
             .map(|s| s.owner)
     };
+    // A launch begins a fall of its own: what came before it is gone
+    // (Thistle Tea's `Knockback` resets the fall).
+    if let Some(p) = map.players.get_mut(&target) {
+        p.fall_from = None;
+    }
     if let Some(p) = mover.and_then(|g| map.players.get(&g)) {
         let mut b = crate::game::data::items::Body::default();
         crate::game::update::write_packed_guid(&mut b.0, target);
@@ -1439,6 +1516,7 @@ pub fn proficiency(map: &Map, player: Guid, s: &SpellTemplate) {
 
 /// The effects with no unit: a persistent area at the destination, a
 /// missile's spell there, an object to open.
+#[allow(clippy::too_many_arguments)]
 pub fn run_untargeted(
     map: &mut Map,
     caster: Guid,
@@ -1448,6 +1526,7 @@ pub fn run_untargeted(
     combo: u8,
     // The effects the professions ran (opening locks, gathering): skipped.
     done: u8,
+    triggered: bool,
 ) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     for index in 0..3 {
@@ -1535,7 +1614,7 @@ pub fn run_untargeted(
                 && super::targets::implicit(e.target_a) == super::targets::Implicit::Location =>
             {
                 let amount = m.points(s, index, points_with(s, index, level, combo));
-                crate::game::map::pets::effect(map, caster, caster, s, index, amount);
+                crate::game::map::pets::effect(map, caster, caster, s, index, amount, triggered);
             }
             _ => {}
         }
@@ -1611,6 +1690,16 @@ pub fn tick_areas(map: &mut Map) {
         for g in inside {
             match e.aura {
                 AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
+                    // Each tick of a ground area rolls its hit on whom it
+                    // finds, a resisted one dealing nothing and the area
+                    // going on (mangos's `PeriodicTick` for a persistent
+                    // area, Thistle Tea's ground ticks); an aura's DoT
+                    // doesn't.
+                    let hit = outcome::roll_hit(map, area.caster, g, s, &Mods::default());
+                    if !hit.lands() {
+                        outcome::send_miss(map, area.caster, g, area.spell, hit);
+                        continue;
+                    }
                     let h = area_holder(&area, s);
                     periodic_damage(
                         map,
@@ -1875,4 +1964,14 @@ pub fn refresh_area_auras(map: &mut Map) {
             auras::remove_spell(map, member, spell, Some(caster));
         }
     }
+}
+
+/// The power a unit shows, as an offset from `UNIT_FIELD_POWER1`: a
+/// player's by class and form, a creature's by its field.
+pub fn shown_power(map: &Map, g: Guid) -> u16 {
+    if let Some(p) = map.players.get(&g) {
+        return u16::from(p.power_type());
+    }
+    map.unit_fields(g)
+        .map_or(0, |f| u16::from(f.get_byte(UNIT_FIELD_BYTES_0, 3)))
 }

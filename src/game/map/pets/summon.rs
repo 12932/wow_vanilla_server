@@ -18,6 +18,8 @@ pub const KIND_HUNTER: u8 = 1;
 pub const KIND_DEMON: u8 = 2;
 /// Growl, rank 1: every hunter's pet knows it.
 const GROWL: u32 = 2649;
+/// The class script Demonic Sacrifice's buffs carry.
+const DEMONIC_SACRIFICE_SCRIPT: i32 = 2228;
 
 /// A template, or a stand-in for an entry the data lacks.
 fn template(data: &GameData, entry: u32) -> CreatureTemplate {
@@ -65,15 +67,20 @@ pub fn spawn(
         .unwrap_or(t.faction);
     // Under a player's control if its owner is: a player, or one of theirs
     // (mangos copies the caster's flag, Thistle Tea's `attach_owner` sets
-    // it for a player's). A creature's keeps its template's flags.
+    // it for a player's). A creature's keeps its template's flags. A pet
+    // with a bar has that flag alone (mangos's `Pet`); a guardian, totem
+    // or companion keeps its template's beside it (mangos's `SetFlag`,
+    // Thistle Tea's `attach_owner`).
     let controlled = guid::is_player(owner)
         || map
             .unit_fields(owner)
             .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED));
     let f = &mut c.fields;
     f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
-    if controlled {
+    if controlled && kind.controlled() {
         f.set_u32(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
+    } else if controlled {
+        f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED, true);
     }
     // A companion keeps its template's: some give quests, as Children's
     // Week's orphans (mangos's `EffectSummonCritter`); the others none.
@@ -295,6 +302,41 @@ pub fn family_passives(data: &GameData, family: u32) -> Vec<u32> {
 }
 
 /// The spells a charmed creature can be told to cast.
+/// A charmed creature's abilities from `creature_charm_spells`, if it has
+/// any: one roll a slot picks at most one by its availability, which
+/// recovers over a time rolled from its slot's range (Thistle Tea's
+/// `CharmSpells.select`); a spell that charms or possesses isn't offered.
+/// (spell, cooldown in milliseconds), in slot order.
+pub fn pick_charm_spells(
+    data: &GameData,
+    entry: u32,
+    rng: &mut impl rand::Rng,
+) -> Option<Vec<(u32, u32)>> {
+    let options = data.pets.charm_spells.get(&entry)?;
+    let controls = |id: u32| {
+        data.spells.get(id).is_some_and(|s| {
+            s.has_aura(crate::game::map::auras::AURA_MOD_CHARM)
+                || s.has_aura(crate::game::map::auras::AURA_MOD_POSSESS)
+        })
+    };
+    let mut out = Vec::new();
+    for slot in 0..4 {
+        let roll = rng.random_range(0.0f32..1.0) * 100.0;
+        let mut sum = 0.0;
+        let picked = options.iter().filter(|o| o.slot == slot).find(|o| {
+            let hit = roll > sum && roll <= sum + o.availability;
+            sum += o.availability;
+            hit
+        });
+        if let Some(o) = picked.filter(|o| data.spells.get(o.spell).is_some() && !controls(o.spell))
+        {
+            let cooldown = rng.random_range(o.cooldown_min_ms..=o.cooldown_max_ms);
+            out.push((o.spell, cooldown));
+        }
+    }
+    Some(out)
+}
+
 pub fn charm_spells(data: &GameData, entry: u32) -> Vec<u32> {
     if let Some(list) = data
         .pets
@@ -526,6 +568,16 @@ pub fn summon_demon(map: &mut Map, owner: Guid, entry: u32, spell: u32) {
     if let Some(old) = pet_of(map, owner) {
         dismiss(map, old);
     }
+    // A demon summoned ends what Demonic Sacrifice gave for the last
+    // (its buffs' class script 2228), as mangos-classic's `EffectSummonPet`.
+    if guid::is_player(owner) {
+        crate::game::map::auras::remove_where(map, owner, |h| {
+            h.effects.iter().any(|x| {
+                x.kind == crate::game::map::auras::AURA_OVERRIDE_CLASS_SCRIPTS
+                    && x.misc == DEMONIC_SACRIFICE_SCRIPT
+            })
+        });
+    }
     let level = map
         .unit_view(owner)
         .map(|u| u.level)
@@ -539,11 +591,31 @@ pub fn summon_demon(map: &mut Map, owner: Guid, entry: u32, spell: u32) {
         .copied()
         .filter(|s| data.spells.get(*s).is_some_and(control::autocastable))
         .collect();
+    // The name this demon drew before, else a new one, kept.
+    let kept = map.players.get(&owner).and_then(|p| {
+        p.row
+            .state
+            .pets
+            .demon_names
+            .iter()
+            .find(|(e, _)| *e == entry)
+            .map(|(_, n)| n.clone())
+    });
+    let name = match kept {
+        Some(n) => n,
+        None => {
+            let drawn = demon_name(&data, entry);
+            if let (Some(n), Some(p)) = (&drawn, map.players.get_mut(&owner)) {
+                p.row.state.pets.demon_names.push((entry, n.clone()));
+            }
+            drawn.unwrap_or_else(|| t.name.clone())
+        }
+    };
     let r = PetRecord {
         number,
         entry,
         kind: KIND_DEMON,
-        name: demon_name(&data, entry).unwrap_or_else(|| t.name.clone()),
+        name,
         level,
         bar: control::default_bar(&data, &spells, &autocast, false).to_vec(),
         spells,
@@ -627,6 +699,15 @@ pub fn remove(map: &mut Map, g: Guid) {
     let totem = state(map, g).map(|s| s.kind) == Some(Kind::Totem);
     if totem {
         totems::lift_auras(map, g);
+        // Those who see it watch it sink, as mangos-classic's
+        // `Totem::UnSummon` and Thistle Tea's totem show it go.
+        if let Some(frame) =
+            crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_DESPAWN_ANIM {
+                guid: g,
+            })
+        {
+            map.send_to_observers(g, &frame, false);
+        }
     }
     if let Some(owner) = owner
         && let Some(p) = map.players.get_mut(&owner)

@@ -29,6 +29,9 @@ mod summon;
 mod totems;
 mod wild;
 
+/// Whether a unit is held by crowd control a pet leaves be.
+#[cfg(test)]
+pub(crate) use ai::breakable_cc;
 /// A pet sent at a target, or stopped where it is: for scripts.
 pub use ai::{attack as attack_target, stop as stop_where};
 pub use control::{button, handle, learn, send_spells};
@@ -171,6 +174,12 @@ pub struct PetState {
     /// fight up until it is back (mangos's `IsRetreating`, Thistle Tea's
     /// recall).
     pub returning: bool,
+    /// A charmed creature's charm spells and the cooldowns rolled for them
+    /// (`creature_charm_spells`), in place of their own: milliseconds.
+    pub charm_cooldowns: Vec<(u32, u32)>,
+    /// The victim its master's Attack named, which a staying pet goes
+    /// after (any other it fights only where it stands).
+    pub commanded: Option<Guid>,
 }
 
 impl PetState {
@@ -207,6 +216,8 @@ impl PetState {
             was_hostile: false,
             eyes: None,
             returning: false,
+            charm_cooldowns: Vec::new(),
+            commanded: None,
         }
     }
 }
@@ -325,7 +336,8 @@ pub fn taught(s: &SpellTemplate) -> Option<u32> {
         .map(|i| s.effects[i].trigger_spell)
 }
 
-/// Effect `index` of `s`, cast by `caster` on `target`.
+/// Effect `index` of `s`, cast by `caster` on `target`; `triggered` if
+/// another spell or an aura cast it.
 pub fn effect(
     map: &mut Map,
     caster: Guid,
@@ -333,11 +345,12 @@ pub fn effect(
     s: &SpellTemplate,
     index: usize,
     amount: i32,
+    triggered: bool,
 ) {
     let e = s.effects[index];
     // The stacking trinkets' hit scripts ride the same hook.
     if crate::game::map::trinkets::handles(s) {
-        crate::game::map::trinkets::effect(map, caster, s);
+        crate::game::map::trinkets::effect(map, caster, target, s);
         return;
     }
     if teaches_pet(s, index) {
@@ -394,29 +407,65 @@ pub fn effect(
         | EFFECT_SUMMON_DEMON => {
             let count = amount.clamp(1, 5) as usize;
             // A creature's wild summons and guardians are creatures of
-            // their own.
-            if matches!(e.effect, EFFECT_SUMMON_WILD | EFFECT_SUMMON_GUARDIAN)
-                && wild::by_creature(map, caster)
+            // their own, and so is a player's wild summon: of its
+            // template's faction, each cast another (mangos-classic's
+            // `EffectSummonWild`, Thistle Tea's `WildSummon`). A Field
+            // Repair Bot stands where it is put.
+            if e.effect == EFFECT_SUMMON_WILD
+                || (e.effect == EFFECT_SUMMON_GUARDIAN && wild::by_creature(map, caster))
             {
                 wild::summon(map, caster, e.misc_value.max(0) as u32, s, index, count);
                 return;
             }
+            let entry = e.misc_value.max(0) as u32;
+            // A player's guardian: a second cast of their own sends those
+            // of its entry away, and summons none again unless the spell
+            // has a time and a category (mangos-classic's
+            // `EffectSummonGuardian`, Thistle Tea's `GuardianOwner`); one
+            // another spell triggers adds to them.
+            if e.effect == EFFECT_SUMMON_GUARDIAN && guid::is_player(caster) {
+                if !triggered {
+                    let old = wild::guardians_of(map, caster, entry);
+                    let found = !old.is_empty();
+                    for g in old {
+                        summon::remove(map, g);
+                    }
+                    if found && !(s.duration_index != 0 && s.category != 0) {
+                        return;
+                    }
+                }
+                for _ in 0..count {
+                    totems::summon_guardian(map, caster, entry, s, false);
+                }
+                return;
+            }
             for i in 0..count {
-                totems::summon_guardian(map, caster, e.misc_value.max(0) as u32, s, i == 0);
+                totems::summon_guardian(map, caster, entry, s, i == 0);
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),
         EFFECT_SUMMON_POSSESSED => {
             totems::summon_possessed(map, caster, e.misc_value.max(0) as u32, s)
         }
-        EFFECT_APPLY_AREA_AURA_PET => {
-            if let Some(pet) = pet_of(map, caster)
-                && map.unit_view(pet).is_some_and(|u| u.alive)
-            {
-                crate::game::map::auras::apply(map, caster, pet, s, index, amount);
-            }
-        }
+        EFFECT_APPLY_AREA_AURA_PET => area_aura(map, caster, s, &[(index, amount)]),
         _ => {}
+    }
+}
+
+/// A pet area aura's effects (each index and amount) on `caster`'s pet,
+/// as one holder: a spell of two (Soul Link) puts both on.
+pub fn area_aura(map: &mut Map, caster: Guid, s: &SpellTemplate, effects: &[(usize, i32)]) {
+    if let Some(pet) = pet_of(map, caster)
+        && map.unit_view(pet).is_some_and(|u| u.alive)
+    {
+        let _ = crate::game::map::auras::apply_spell(
+            map,
+            caster,
+            pet,
+            s,
+            effects,
+            crate::game::map::auras::Context::default(),
+        );
     }
 }
 
@@ -709,7 +758,13 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
         .creature_template(c.entry)
         .map(|t| t.name.clone())
         .unwrap_or_default();
-    s.spells = summon::charm_spells(&data, c.entry);
+    match summon::pick_charm_spells(&data, c.entry, &mut rand::rng()) {
+        Some(picked) => {
+            s.spells = picked.iter().map(|(spell, _)| *spell).collect();
+            s.charm_cooldowns = picked;
+        }
+        None => s.spells = summon::charm_spells(&data, c.entry),
+    }
     s.bar = control::default_bar(&data, &s.spells, &[], possess);
     s.react = if possess {
         REACT_PASSIVE
@@ -912,10 +967,13 @@ mod tests {
 /// What the tests reach of a hunter's pet and the summons.
 #[cfg(test)]
 pub mod testing {
+    pub use super::ai::regen;
     pub use super::control::good_name;
     pub use super::hunter::{
         HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,
-        show_training_points, tick,
+        pet_xp_to_level, show_training_points, tame, tick,
     };
-    pub use super::summon::{UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, from_record, spawn};
+    pub use super::summon::{
+        UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, from_record, record_of, spawn, summon_demon,
+    };
 }

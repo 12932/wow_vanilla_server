@@ -166,6 +166,16 @@ action button in a character used to be such a bad save: the `character_spells` 
 keys failed the insert, and with it the whole batch, at every save. The second copy is now ignored (a spell) or
 replaces the first (a button).
 
+**Saving together.** A character is saved whole at its periodic save, at logout and by `.save`, but mail, auctions
+and guilds are records saved at once. So an item or money moving between them reached the database at two times,
+and a crash in between copied or lost it: a trade with one side saved, a mail with its item still in the sender's
+saved bags, a mail taken whose item was in neither. Now each such move is one request, `Store::save_together`, that
+writes the characters' rows and the records in one transaction, as mangos-classic does; `Map::save_together` builds
+the rows and puts off those players' periodic saves. It is retried as a batch is and, when its batch fails, goes
+alone whole, never in parts. Its sites: a trade, a mail sent, its item or money taken or made a letter, an auction
+put up, bid on or bought out, cancelled or ended by the sweep, and a guild's charter or emblem bought.
+(`a_save_together_lands_whole_or_not_at_all`, and `tests_save_together` for the sites)
+
 **A field that won't load** used to cost the character's whole state. A character's state beyond its columns is
 JSON, and a float that was NaN is saved as `null`, which an `f32` won't take back. The whole state then failed to
 parse and went back to its defaults: quests, reputation, pets, talents and the hearthstone's place. A GM's

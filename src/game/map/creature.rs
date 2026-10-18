@@ -30,6 +30,9 @@ const WANDER_PAUSE_MS: (u64, u64) = (4_000, 10_000);
 /// Spline flags: falling, run mode, flying (a Catmull-Rom spline).
 pub const SPLINE_FALLING: u32 = 0x2;
 pub const SPLINE_RUN_MODE: u32 = 0x100;
+
+/// `UNIT_FIELD_BYTES_2`'s misc flags: a creature's auras shown as they are.
+pub const UNIT_BYTE2_FLAG_AURAS: u8 = 0x10;
 pub const SPLINE_FLYING: u32 = 0x200;
 
 /// Where a creature is going.
@@ -381,6 +384,12 @@ impl Creature {
         fields.set_u32(UNIT_FIELD_DISPLAYID, display);
         fields.set_u32(UNIT_FIELD_NATIVEDISPLAYID, display);
         fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, template.mount_display_id);
+        // Weapons out, unless its addon says otherwise (mangos's
+        // `InitEntry`, Thistle Tea's sheath of 1).
+        fields.set_byte(UNIT_FIELD_BYTES_2, 0, 1);
+        // Its buffs shown as buffs, and dispellable as such (mangos's
+        // `UNIT_BYTE2_FLAG_AURAS`, Thistle Tea's misc flags 0x10).
+        fields.set_byte(UNIT_FIELD_BYTES_2, 1, UNIT_BYTE2_FLAG_AURAS);
         let attack = if template.base_attack_time > 0 {
             template.base_attack_time
         } else {
@@ -469,6 +478,11 @@ impl Creature {
         let Some(d) = data.display_info.get(&display) else {
             return;
         };
+        // Its gender, the model's (mangos's `InitEntry` from the model's
+        // info, Thistle Tea's from the display's addon).
+        if let Some(gender) = d.gender {
+            self.fields.set_byte(UNIT_FIELD_BYTES_0, 2, gender);
+        }
         let native = if d.scale > 0.0 { d.scale } else { 1.0 };
         let scale = template
             .and_then(|t| {
@@ -583,9 +597,10 @@ impl Creature {
                     .set_u32(UNIT_FIELD_NATIVEDISPLAYID, addon.display_id);
                 own_display = false;
             }
-            if addon.mount_display_id != 0 {
+            // Its own mount, none, or (-1) its template's.
+            if addon.mount_display_id >= 0 {
                 c.fields
-                    .set_u32(UNIT_FIELD_MOUNTDISPLAYID, addon.mount_display_id);
+                    .set_u32(UNIT_FIELD_MOUNTDISPLAYID, addon.mount_display_id as u32);
             }
             if addon.equipment_id > 0 {
                 equipment = addon.equipment_id as u32;

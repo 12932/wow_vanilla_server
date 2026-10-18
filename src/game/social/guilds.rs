@@ -18,6 +18,7 @@ use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::registry::{Online, Team};
 use crate::game::social::{send_frame, send_to};
+use crate::game::store::Records;
 
 pub const KIND_GUILD: &str = "guild";
 pub const KIND_PETITION: &str = "petition";
@@ -1008,34 +1009,38 @@ pub fn chat(
 /// `MSG_SAVE_GUILD_EMBLEM`: the leader buys the guild an emblem.
 pub fn save_emblem(map: &mut Map, g: Guid, m: &MSG_SAVE_GUILD_EMBLEM_Client) {
     let realm = map.realm.clone();
-    let Some(p) = map.players.get_mut(&g) else {
+    let Some(money) = map.players.get(&g).map(|p| p.money()) else {
         return;
     };
-    let result = {
-        let mut guilds = realm.social.guilds.lock();
-        match guilds.of_mut(g) {
-            None => GuildEmblemResult::NoGuild,
-            Some(guild) if guild.leader != guid::counter(g) => GuildEmblemResult::NotGuildMaster,
-            Some(_) if p.money() < EMBLEM_COST => GuildEmblemResult::NotEnoughMoney,
-            Some(guild) => {
-                guild.emblem = Emblem {
-                    style: m.emblem_style,
-                    color: m.emblem_color,
-                    border_style: m.border_style,
-                    border_color: m.border_color,
-                    background: m.background_color,
-                };
-                save(&realm, guild);
-                guild.event(&realm, GuildEvent::TabardChanged, &[]);
-                GuildEmblemResult::Success
+    let mut guilds = realm.social.guilds.lock();
+    let result = match guilds.of_mut(g) {
+        None => GuildEmblemResult::NoGuild,
+        Some(guild) if guild.leader != guid::counter(g) => GuildEmblemResult::NotGuildMaster,
+        Some(_) if money < EMBLEM_COST => GuildEmblemResult::NotEnoughMoney,
+        Some(guild) => {
+            guild.emblem = Emblem {
+                style: m.emblem_style,
+                color: m.emblem_color,
+                border_style: m.border_style,
+                border_color: m.border_color,
+                background: m.background_color,
+            };
+            let mut records = Records::new();
+            records.put(KIND_GUILD, u64::from(guild.id), guild);
+            guild.event(&realm, GuildEvent::TabardChanged, &[]);
+            if let Some(p) = map.players.get_mut(&g) {
+                p.set_money(money - EMBLEM_COST);
             }
+            // The emblem and what it cost, together, under the guilds'
+            // lock.
+            map.save_together(&[g], records);
+            GuildEmblemResult::Success
         }
     };
-    if result == GuildEmblemResult::Success {
-        let money = p.money();
-        p.set_money(money - EMBLEM_COST);
+    drop(guilds);
+    if let Some(p) = map.players.get(&g) {
+        p.outbound.send(&MSG_SAVE_GUILD_EMBLEM_Server { result });
     }
-    p.outbound.send(&MSG_SAVE_GUILD_EMBLEM_Server { result });
 }
 
 /// At login: the guild's fields, the MOTD, and the others told.
@@ -1161,13 +1166,13 @@ pub fn petition_buy(map: &mut Map, g: Guid, name: &str) {
         name: name.to_owned(),
         signers: Vec::new(),
     };
-    save_petition(&realm, &petition);
-    realm
-        .social
-        .guilds
-        .lock()
-        .petitions
-        .insert(petition.id, petition);
+    // The charter, its petition and its cost together.
+    let mut records = Records::new();
+    records.put(KIND_PETITION, u64::from(petition.id), &petition);
+    let mut guilds = realm.social.guilds.lock();
+    guilds.petitions.insert(petition.id, petition);
+    map.save_together(&[g], records);
+    drop(guilds);
 }
 
 fn signatures(petition: &Petition, item: Guid) -> SMSG_PETITION_SHOW_SIGNATURES {
@@ -1354,6 +1359,16 @@ pub fn petition_rename(realm: &Realm, me: &Online, item: Guid, name: &str) {
 /// `CMSG_TURN_IN_PETITION`: enough signatures make the guild.
 pub fn petition_turn_in(map: &mut Map, g: Guid, item: Guid) {
     let realm = map.realm.clone();
+    // The charter in hand (mangos's `HandleTurnInPetitionOpcode`): one
+    // sold or destroyed founds nothing.
+    if map
+        .players
+        .get(&g)
+        .and_then(|p| p.item_by_guid(item))
+        .is_none()
+    {
+        return;
+    }
     let needed = realm.config.petition_signatures as usize;
     let petition = {
         let guilds = realm.social.guilds.lock();

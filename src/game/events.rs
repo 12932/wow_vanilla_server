@@ -155,13 +155,27 @@ pub fn quest_offered(realm: &Realm, quest: u32) -> bool {
     }
 }
 
-/// Whether a spawn tied (or not) to an event is out with `active` on.
-pub fn spawned(tie: Option<i32>, active: &AHashSet<u32>) -> bool {
-    match tie {
-        None | Some(0) => true,
-        Some(e) if e > 0 => active.contains(&(e as u32)),
-        Some(e) => !active.contains(&e.unsigned_abs()),
+/// Whether a spawn tied (or not) to events is out with `active` on: in any
+/// event it is tied to (a positive id), if any; in none it is kept out of
+/// (a negative one), as vmangos spawns and unspawns each event's own list.
+pub fn spawned(ties: &[i32], active: &AHashSet<u32>) -> bool {
+    let mut during = false;
+    let mut on = false;
+    for &e in ties {
+        if e > 0 {
+            during = true;
+            on |= active.contains(&e.unsigned_abs());
+        } else if e < 0 && active.contains(&e.unsigned_abs()) {
+            return false;
+        }
     }
+    !during || on
+}
+
+/// A spawn's ties to events, from `game_event_creature` or
+/// `game_event_gameobject`.
+pub fn ties(of: &AHashMap<u32, Vec<i32>>, spawn: u32) -> &[i32] {
+    of.get(&spawn).map_or(&[], Vec::as_slice)
 }
 
 /// The events on now, as the realm last worked them out.
@@ -257,7 +271,7 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
         .collect();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
         for s in spawns {
-            let tie = data.event_creatures.get(&s.guid).copied();
+            let tie = data.event_creatures.get(&s.guid);
             let looks_differ = data.world.event_creatures.contains_key(&s.guid);
             if tie.is_none() && !looks_differ {
                 continue;
@@ -269,7 +283,7 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                     map,
                     crate::game::map::pools::Member::Creature(s.guid),
                 );
-            match (spawned(tie, on), out) {
+            match (spawned(ties(&data.event_creatures, s.guid), on), out) {
                 (true, None) | (false, Some(_)) if pooled => {}
                 (true, None) => {
                     if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
@@ -302,7 +316,7 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
     }
     if let Some(spawns) = data.gameobject_spawns.get(&map.key.map) {
         for s in spawns {
-            let Some(tie) = data.event_objects.get(&s.guid).copied() else {
+            let Some(tie) = data.event_objects.get(&s.guid) else {
                 continue;
             };
             let out = objects.get(&s.guid).copied();
@@ -310,7 +324,7 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
             {
                 continue;
             }
-            match (spawned(Some(tie), on), out) {
+            match (spawned(tie, on), out) {
                 (true, None) => {
                     if let Some(t) = data.gameobject_templates.get(&s.entry) {
                         map.add_gameobject(GameObject::from_spawn(t, s));
@@ -397,9 +411,9 @@ mod tests {
         assert!(!e.active(999_999));
         assert!(!e.active(2_000_000));
         let on: AHashSet<u32> = [1].into_iter().collect();
-        assert!(spawned(Some(1), &on));
-        assert!(!spawned(Some(-1), &on));
-        assert!(spawned(Some(-2), &on));
-        assert!(spawned(None, &on));
+        assert!(spawned(&[1], &on));
+        assert!(!spawned(&[-1], &on));
+        assert!(spawned(&[-2], &on));
+        assert!(spawned(&[], &on));
     }
 }

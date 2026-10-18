@@ -127,8 +127,25 @@ pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Option<i64> {
         }
         _ => false,
     };
+    // The offer holds while the sharer has the quest under way and the two
+    // are still in one group (Thistle Tea's `QuestSharing.refresh` and
+    // `cancel`); gone, it is gone, with nothing to say.
+    let still = map.players.get(&sharer).is_some_and(|s| {
+        s.journal
+            .slot_of(quest)
+            .is_some_and(|i| !s.journal.log[i].failed)
+    }) && others(map, sharer).contains(&g);
+    if !still {
+        if let Some(p) = map.players.get_mut(&g) {
+            p.misc.quest_shared = None;
+        }
+        return None;
+    }
     let why = if !near {
         Some(QuestPartyMessage::TooFar)
+    } else if !crate::game::events::quest_offered(&map.realm, quest) {
+        // Its event over since it was offered.
+        Some(QuestPartyMessage::CantTakeQuest)
     } else if !map
         .players
         .get(&g)
@@ -152,6 +169,15 @@ pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Option<i64> {
         .and_then(|s| s.journal.slot_of(quest).map(|i| s.journal.log[i].expires))
         .unwrap_or(0);
     Some(expires)
+}
+
+/// A shared quest admitted but not taken after all (no room for its
+/// items): the offer goes, and the sharer hears it can't be taken.
+pub fn refused(map: &mut Map, g: Guid, sharer: Guid) {
+    if let Some(p) = map.players.get_mut(&g) {
+        p.misc.quest_shared = None;
+    }
+    result(map, sharer, g, QuestPartyMessage::CantTakeQuest);
 }
 
 /// `MSG_QUEST_PUSH_RESULT` from a member: told to the one sharing with

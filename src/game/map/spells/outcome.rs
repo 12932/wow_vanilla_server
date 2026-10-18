@@ -171,9 +171,17 @@ pub fn binary(s: &SpellTemplate) -> bool {
 }
 
 /// A spell a reflection may turn back: single-target magic whose
-/// attributes don't forbid it.
+/// attributes don't forbid it, not an ability, a passive or a spell past
+/// immunities (mangos's `IsReflectableSpell`, Thistle Tea's
+/// `reflectable?`).
 pub fn reflectable(s: &SpellTemplate) -> bool {
-    !area(s) && s.dmg_class == 1 && !s.attr(1, sd::ATTR_EX_NO_REFLECTION)
+    !area(s)
+        && s.dmg_class == 1
+        && !s.attr(1, sd::ATTR_EX_NO_REFLECTION)
+        && !s.attr(
+            0,
+            sd::ATTR_ABILITY | sd::ATTR_PASSIVE | sd::ATTR_NO_IMMUNITIES,
+        )
 }
 
 /// A spell that hits an area.
@@ -314,9 +322,14 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     let Some(a) = auras::auras(map, target) else {
         return Hit::Hit;
     };
+    // A spell that pierces school immunities still meets an immunity to
+    // damage (mangos's `CanPierceImmuneAura` against `IsImmuneToDamage`,
+    // Thistle Tea's `DamageImmunity`).
+    let mask = s.school_mask();
     if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-        && !s.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES)
-        && a.school_immune(s.school_mask())
+        && ((!s.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES)
+            && a.immune_by(AURA_SCHOOL_IMMUNITY, mask))
+            || a.immune_by(AURA_DAMAGE_IMMUNITY, mask))
     {
         return Hit::Immune;
     }
@@ -356,6 +369,11 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
         if reflect > 0 && chance(map, reflect as f32) {
             return Hit::Reflect;
         }
+    }
+    // A spell of no damage class never misses (mangos-classic's
+    // `SpellHitResult`, Thistle Tea's unclassified spells): no magic roll.
+    if s.dmg_class == 0 {
+        return Hit::Hit;
     }
     let chance = spell_hit_chance(map, caster, target, s, m);
     if roll_strict(map, chance) {
@@ -397,11 +415,15 @@ pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate
     } else {
         0.0
     } + a.sum_mask(AURA_MOD_RESIST_CHANCE, s.school_mask()) as f32;
+    // The target's own change to the chance of its attackers' spells of the
+    // school (mangos's `MagicSpellHitChance`, Thistle Tea's
+    // `attacker_spell_hit_chance`).
+    let versus = a.sum_mask(AURA_MOD_ATTACKER_SPELL_HIT_CHANCE, s.school_mask()) as f32;
     magic_hit_chance(
         caster_level,
         target_level,
         guid::is_player(target),
-        hit_bonus - aoe,
+        hit_bonus + versus - aoe,
         mechanic,
         binary_resist,
     )
@@ -550,15 +572,12 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
 
 /// More crit against a creature type (Monster Slaying, Humanoid Slaying).
 pub fn crit_versus(map: &Map, caster: Guid, target: Guid) -> f32 {
-    let creature_type = map
-        .creature(target)
-        .and_then(|c| map.realm.data.creature_template(c.entry))
-        .map(|t| t.creature_type)
-        .unwrap_or(7);
-    if creature_type == 0 {
+    // Its type's bit: a player's a humanoid's, or a beast's in a beast's
+    // form (`combat::creature_type_mask`).
+    let bit = combat::creature_type_mask(map, target);
+    if bit == 0 {
         return 0.0;
     }
-    let bit = 1u32 << (creature_type - 1).min(31);
     auras::auras(map, caster).map_or(0.0, |a| {
         a.sum_mask(AURA_MOD_CRIT_PERCENT_VERSUS, bit) as f32
     })
@@ -575,7 +594,7 @@ pub fn frozen(map: &Map, g: Guid) -> bool {
 
 /// Shatter's crit chance against the frozen, from the caster's override
 /// class scripts 849 to 913.
-fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
+pub fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
     let data = &map.realm.data;
     auras::auras(map, caster).map_or(0.0, |a| {
         a.effects()
@@ -707,12 +726,8 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
         return (done + from_spirit.max(0)) as f32;
     }
     let mut p = d.spell_power[school_index(s)] as f32;
-    let creature_type = map
-        .creature(target)
-        .and_then(|c| map.realm.data.creature_template(c.entry))
-        .map(|t| t.creature_type)
-        .unwrap_or(7);
-    if creature_type > 0
+    let bit = combat::creature_type_mask(map, target);
+    if bit != 0
         && let Some(a) = auras::auras(map, caster)
     {
         // Gear's and potions' spell damage against a creature type (aura
@@ -723,7 +738,7 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
                 matches!(
                     x.kind,
                     AURA_MOD_DAMAGE_DONE_CREATURE | AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
-                ) && (x.misc as u32) & (1 << (creature_type - 1).min(31)) != 0
+                ) && (x.misc as u32) & bit != 0
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
             .sum::<f32>();
@@ -768,15 +783,10 @@ pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate)
     let mut m = if physical(s) && s.school == 0 {
         1.0
     } else {
-        a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, s.school_mask())
+        crate::game::map::derive::spell_pct(a, s.school_mask())
     };
-    let creature_type = map
-        .creature(target)
-        .and_then(|c| map.realm.data.creature_template(c.entry))
-        .map(|t| t.creature_type)
-        .unwrap_or(7);
-    if creature_type > 0 {
-        let bit = 1 << (creature_type - 1).min(31);
+    let bit = combat::creature_type_mask(map, target);
+    if bit != 0 {
         m *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, bit);
     }
     m
@@ -900,8 +910,10 @@ pub fn damage(
         d = l.mods.apply(mods::OP_DAMAGE, d);
     }
     if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
+        // What armor takes off, whole, as a white blow's (Thistle Tea's
+        // `armor_reduced_damage`): 1000 at 14.003% leaves 860, not 859.
         let armor = resistance(map, caster, target, 0);
-        d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
+        d -= (d * combat::armor_reduction(armor as u32, level(map, caster))).trunc();
     }
     if !fixed {
         d = taken_of(map, caster, target, s, index, Kind::Direct, 1, d);
@@ -1095,8 +1107,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     if d.amount > 0 && caster != target && guid::is_unit(target) && !l.triggered {
         crate::game::map::ai::attacked(map, target, caster);
     }
-    let amount = split(map, caster, target, s, d.amount);
-    let (left, absorbed) = auras::absorb(map, target, amount, s.school_mask());
+    let (left, absorbed) = auras::absorb_and_share(map, caster, target, d.amount, s.school_mask());
     let frame = damage_log(
         caster, target, s.id, s.school, left, absorbed, d.resisted, d.blocked, l.crit,
     );
@@ -1138,46 +1149,11 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     );
     let items = death_items(map, target, left);
     if left > 0 {
-        combat::deal_damage_by(map, caster, target, left, 1, Some(s.id));
+        // Its threat by the auras of its school (`super::threat`).
+        combat::deal_damage_by(map, caster, target, left, s.school_mask(), Some(s.id));
     }
     give_death_items(map, target, items);
     super::threat(map, caster, target, s, left as f32, &l.mods);
-}
-
-/// Blessing of Sacrifice and its kind: a share of the damage (or a flat
-/// amount of each hit) goes to the aura's caster instead.
-pub fn split(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: u32) -> u32 {
-    let shares: Vec<(Guid, u32)> = auras::auras(map, target)
-        .map(|a| {
-            a.effects()
-                .filter(|(h, x)| {
-                    matches!(x.kind, AURA_SPLIT_DAMAGE_PCT | AURA_SPLIT_DAMAGE_FLAT)
-                        && h.caster != target
-                        && (x.misc as u32) & s.school_mask() != 0
-                })
-                .map(|(h, x)| {
-                    let v = if x.kind == AURA_SPLIT_DAMAGE_PCT {
-                        damage * x.amount.max(0) as u32 / 100
-                    } else {
-                        (x.amount.max(0) as u32).min(damage)
-                    };
-                    (h.caster, v)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut left = damage;
-    for (to, share) in shares {
-        let share = share.min(left);
-        if share == 0 || map.unit_view(to).is_none_or(|u| !u.alive) {
-            continue;
-        }
-        left -= share;
-        let frame = damage_log(caster, to, s.id, s.school, share, 0, 0, 0, false);
-        map.send_to_observers(to, &frame, true);
-        combat::deal_damage(map, caster, to, share);
-    }
-    left
 }
 
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its

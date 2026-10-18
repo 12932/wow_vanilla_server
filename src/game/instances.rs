@@ -182,6 +182,21 @@ impl Instances {
         true
     }
 
+    /// How many copies `account` has entered in the hour to `now`, for the
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn entries_within_hour(&self, account: &str, now: i64) -> usize {
+        self.entries
+            .get(account)
+            .map_or(0, |e| e.iter().filter(|(_, at)| *at + 3600 > now).count())
+    }
+
+    /// The last copy id handed out, for the tests.
+    #[cfg(test)]
+    pub(crate) fn last_id(&self) -> u32 {
+        self.next_id
+    }
+
     /// Whether players are bound to copy `id` of a raid.
     fn saved(&self, id: u32) -> bool {
         self.raids.get(&id).is_some_and(|r| !r.players.is_empty())

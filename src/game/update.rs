@@ -134,6 +134,38 @@ pub fn write_packed_guid(out: &mut Vec<u8>, guid: Guid) {
     out[mask_at] = mask;
 }
 
+/// `SplineFlags::FLYING`: the client draws the path smooth (Catmull-Rom).
+const SPLINE_FLYING: u32 = 0x0000_0200;
+
+/// A create's spline points as mangos-classic sends them, its spline's
+/// whole array (`MoveSpline::getPath`, `SplineBase::InitLinear` and
+/// `InitCatmullRom`): a linear path with its last point again; a smooth one
+/// with a point before its first (the first less the step to the second)
+/// and its last again. The 1.12 client counts a create's segments as its
+/// points less three (`0x454770`, `lea esi, [eax - 3]`), and a create whose
+/// spline had fewer points crashed it, copying a count of -1 (`0x6194DD`).
+pub fn create_spline_points(flags: u32, path: &[Vector3d]) -> Vec<Vector3d> {
+    let (Some(&first), Some(&last)) = (path.first(), path.last()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(path.len() + 3);
+    if flags & SPLINE_FLYING != 0 {
+        let second = path.get(1).copied().unwrap_or(first);
+        out.push(Vector3d {
+            x: first.x * 2.0 - second.x,
+            y: first.y * 2.0 - second.y,
+            z: first.z * 2.0 - second.z,
+        });
+    }
+    out.extend_from_slice(path);
+    if path.len() == 1 {
+        // A path of one point is the point twice, as mangos asks for two.
+        out.push(last);
+    }
+    out.push(last);
+    out
+}
+
 fn write_vector(out: &mut Vec<u8>, v: Vector3d) {
     out.extend_from_slice(&v.x.to_le_bytes());
     out.extend_from_slice(&v.y.to_le_bytes());
@@ -212,8 +244,9 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                 out.extend_from_slice(&spline.time_passed.to_le_bytes());
                 out.extend_from_slice(&spline.duration.to_le_bytes());
                 out.extend_from_slice(&spline.id.to_le_bytes());
-                out.extend_from_slice(&(spline.nodes.len() as u32).to_le_bytes());
-                for n in &spline.nodes {
+                let points = create_spline_points(spline.flags, &spline.nodes);
+                out.extend_from_slice(&(points.len() as u32).to_le_bytes());
+                for n in &points {
                     write_vector(out, *n);
                 }
                 write_vector(out, spline.final_node);
@@ -526,6 +559,80 @@ mod tests {
         f.set_u32(UNIT_FIELD_LEVEL, 3);
         f.set_u32(UNIT_FIELD_DISPLAYID, 903);
         f
+    }
+
+    fn v(x: f32, y: f32, z: f32) -> Vector3d {
+        Vector3d { x, y, z }
+    }
+
+    /// The crash of 2026-10-18: a gorilla walking a two-point path came into
+    /// view, and the 1.12 client, counting the create's segments as its
+    /// points less three, copied a count of -1. A create's spline carries
+    /// mangos's whole array: a linear path with its last point again, a
+    /// smooth one with a point before its first too, so never fewer than
+    /// three.
+    #[test]
+    fn a_create_spline_never_has_fewer_points_than_the_client_counts_from() {
+        let (a, b, c) = (v(1.0, 2.0, 3.0), v(4.0, 6.0, 3.0), v(9.0, 9.0, 9.0));
+        assert_eq!(create_spline_points(0, &[a, b]), vec![a, b, b]);
+        assert_eq!(
+            create_spline_points(SPLINE_FLYING, &[a, b]),
+            vec![v(-2.0, -2.0, 3.0), a, b, b]
+        );
+        assert_eq!(create_spline_points(0, &[a, b, c]), vec![a, b, c, c]);
+        assert_eq!(create_spline_points(0, &[a]), vec![a, a, a]);
+        assert!(create_spline_points(0, &[]).is_empty());
+        for flags in [0, SPLINE_FLYING, 0x100, 0x100 | SPLINE_FLYING] {
+            for n in 1..8 {
+                let path: Vec<Vector3d> = (0..n).map(|i| v(i as f32, 0.0, 0.0)).collect();
+                assert!(
+                    create_spline_points(flags, &path).len() >= 3,
+                    "{flags:#x} {n}"
+                );
+            }
+        }
+        // As the block carries it: the gorilla's three points.
+        let g = guid::unit(1557, 2521);
+        let fields = unit_fields(g);
+        let spline = SplineState {
+            flags: 0,
+            time_passed: 1675,
+            duration: 1768,
+            id: 446,
+            nodes: vec![v(-13719.4, 249.08, 28.52), v(-13718.58, 253.25, 29.73)],
+            final_node: v(-13718.58, 253.25, 29.73),
+        };
+        let block = create_block(
+            &Create {
+                guid: g,
+                type_id: TypeId::Unit,
+                placement: Placement::Living {
+                    flags: 0x0040_0000,
+                    timestamp: 0,
+                    position: v(-13718.63, 253.03, 29.67),
+                    orientation: 1.38,
+                    pitch: 0.0,
+                    fall_time: 0.0,
+                    speeds: Speeds::default(),
+                    spline: Some(spline),
+                },
+                fields: &fields,
+                is_self: false,
+                melee_target: None,
+            },
+            Visibility::Public,
+        );
+        let header: Vec<u8> = [1675u32, 1768, 446]
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .collect();
+        let at = block
+            .windows(header.len())
+            .position(|w| w == header)
+            .expect("the spline's times and id")
+            + header.len();
+        let count = u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
+        assert_eq!(count, 3);
     }
 
     #[test]

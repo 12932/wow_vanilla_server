@@ -448,6 +448,7 @@ impl Terrain {
         self.tiles
             .entry(key)
             .or_insert_with(|| {
+                let _z = crate::zone!("terrain tile");
                 let path = dir.join(format!("{map:04}{:02}{:02}.map", key.0, key.1));
                 let tile = std::fs::read(&path).ok().and_then(|b| Tile::decode(&b));
                 if tile.is_none() {

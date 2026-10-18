@@ -136,26 +136,55 @@ thread_local! {
     static DEPTH: Cell<u8> = const { Cell::new(0) };
 }
 
+/// A level deeper in procs, while it lives: the depth before is put back
+/// as it goes, a panic's unwinding too (the depth is the thread's, and a
+/// worker's thread runs every map on it).
+struct Deeper(u8);
+
+impl Deeper {
+    /// A level deeper, unless procs are already as deep as they go.
+    fn enter() -> Option<Self> {
+        let depth = DEPTH.get();
+        if depth >= 3 {
+            return None;
+        }
+        DEPTH.set(depth + 1);
+        Some(Self(depth))
+    }
+}
+
+impl Drop for Deeper {
+    fn drop(&mut self) {
+        DEPTH.set(self.0);
+    }
+}
+
 /// Run the procs of both units for `e`.
 pub fn trigger(map: &mut Map, e: Event) {
-    let depth = DEPTH.get();
-    if depth >= 3 {
+    let Some(deeper) = Deeper::enter() else {
         return;
-    }
-    DEPTH.set(depth + 1);
-    let from_proc = depth > 0;
+    };
+    let from_proc = deeper.0 > 0;
     if e.actor_flags != 0 {
         run(map, e.actor, e.target, e.actor_flags, &e, true, from_proc);
     }
-    if e.target_flags != 0 && e.target != e.actor {
-        run(map, e.target, e.actor, e.target_flags, &e, false, from_proc);
+    // A victim the blow killed procs nothing but its being killed (mangos's
+    // `ProcDamageAndSpell`: `canProcVictim` wants it alive): no Blessed
+    // Recovery from a killing crit.
+    let target_flags = if map.unit_view(e.target).is_some_and(|u| u.alive) {
+        e.target_flags
+    } else {
+        e.target_flags & PROC_KILLED
+    };
+    if target_flags != 0 && e.target != e.actor {
+        run(map, e.target, e.actor, target_flags, &e, false, from_proc);
     }
     if landed(e.ex) && !from_proc {
         // Weapons' enchantments and chance-on-hit spells.
         crate::game::map::enchant::weapon_procs(map, &e);
         target_triggers(map, &e);
     }
-    DEPTH.set(depth);
+    drop(deeper);
 }
 
 fn landed(ex: u32) -> bool {
@@ -220,7 +249,11 @@ pub fn outcome_allowed(pe: Option<&ProcEvent>, ex: u32) -> bool {
 
 /// Whether the triggering spell passes `spell_proc_event`'s school and
 /// family rules.
-fn spell_allowed(pe: Option<&ProcEvent>, spell: Option<&SpellTemplate>, school: u32) -> bool {
+pub(crate) fn spell_allowed(
+    pe: Option<&ProcEvent>,
+    spell: Option<&SpellTemplate>,
+    school: u32,
+) -> bool {
     let Some(pe) = pe else {
         return true;
     };
@@ -522,7 +555,7 @@ pub fn spell_damage(
     if !map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }
-    let (left, absorbed) = auras::absorb(map, target, damage, school);
+    let (left, absorbed) = auras::absorb_and_share(map, caster, target, damage, school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLNONMELEEDAMAGELOG {
         target,
         attacker: caster,
@@ -644,6 +677,25 @@ pub fn damage_shields(map: &mut Map, attacker: Guid, victim: Guid) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panic_in_a_proc_leaves_the_depth_as_it_was() {
+        let deeper = || {
+            let _outer = Deeper::enter().expect("the first level");
+            let _inner = Deeper::enter().expect("the second");
+            panic!("a proc's spell panics");
+        };
+        for _ in 0..3 {
+            assert!(std::panic::catch_unwind(deeper).is_err());
+            assert_eq!(DEPTH.get(), 0, "the depth is put back");
+        }
+        // And procs still go three deep.
+        let levels: Vec<_> = (0..4).map_while(|_| Deeper::enter()).collect();
+        assert_eq!(levels.len(), 3);
+        // Out again innermost first, as calls return.
+        levels.into_iter().rev().for_each(drop);
+        assert_eq!(DEPTH.get(), 0);
+    }
 
     #[test]
     fn procs_a_minute_scale_with_weapon_speed() {

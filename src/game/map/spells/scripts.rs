@@ -299,7 +299,11 @@ pub fn dummy(
         // Preparation: the rogue's cooldowns are done.
         14185 => reset_cooldowns(map, caster, s.id, |t| t.family_name == FAMILY_ROGUE),
         // Blood Fury: a share of attack power, and the healing penalty.
-        20572 if index == 0 || s.effects[0].effect != EFFECT_DUMMY => {
+        // A player's alone, as mangos's dummy has it.
+        20572
+            if (index == 0 || s.effects[0].effect != EFFECT_DUMMY)
+                && map.players.contains_key(&caster) =>
+        {
             let ap = map
                 .players
                 .get(&caster)

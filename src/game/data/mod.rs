@@ -144,7 +144,8 @@ pub struct CreatureSpawn {
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatureAddon {
     pub display_id: u32,
-    pub mount_display_id: u32,
+    /// The mount it rides: -1 its template's, 0 none.
+    pub mount_display_id: i32,
     pub equipment_id: i32,
     pub stand_state: u8,
     pub sheath_state: u8,
@@ -202,6 +203,9 @@ pub struct DisplayInfo {
     /// Its model's height (`CreatureModelData`'s collision height), at
     /// object scale one: where the head is, for the breath; 0 for unknown.
     pub height: f32,
+    /// The model's gender (`creature_display_info_addon`'s: 0 male, 1
+    /// female, 2 none), where vmangos gives one.
+    pub gender: Option<u8>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -517,8 +521,10 @@ pub struct GameData {
     pub events: AHashMap<u32, GameEvent>,
     /// Creature and object spawns tied to an event: during it (a positive
     /// id) or outside it (negative).
-    pub event_creatures: AHashMap<u32, i32>,
-    pub event_objects: AHashMap<u32, i32>,
+    /// A spawn may be tied to more than one (Hallow's End's and the
+    /// Harvest Festival's, the Darkmoon Faire's building and the Faire).
+    pub event_creatures: AHashMap<u32, Vec<i32>>,
+    pub event_objects: AHashMap<u32, Vec<i32>>,
     /// `gameobject_requirement`: spawn → (0 a creature dead, 1 an object
     /// open; its spawn).
     pub object_requirements: AHashMap<u32, (u8, u32)>,

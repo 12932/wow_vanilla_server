@@ -81,9 +81,14 @@ pub fn load(db: &Connection, dbc: Option<&Connection>, d: &mut WorldData) {
     }) {
         d.pois.insert(entry, p);
     }
+    // A link to an event `game_event` hasn't (the war effort's 22) is
+    // dropped, as mangos's and Thistle Tea's loaders drop it: its quests
+    // are ordinary ones, not ones never offered.
     for (quest, event) in rows(
         db,
-        "SELECT * FROM game_event_quest WHERE patch_min <= 10",
+        "SELECT q.quest, q.event FROM game_event_quest q \
+         JOIN game_event e ON e.entry = q.event \
+         WHERE q.event > 0 AND q.patch_min <= 10",
         |c| (c.u32("quest"), c.u32("event")),
     ) {
         d.event_quests.insert(quest, event);

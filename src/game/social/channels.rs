@@ -225,6 +225,12 @@ fn not_member(realm: &Realm, me: &Online, name: &str) {
 
 impl Channels {
     /// The channels a player is in.
+    /// How many channels there are.
+    #[cfg(test)]
+    pub fn count(&self) -> usize {
+        self.by_key.len()
+    }
+
     pub fn of(&self, g: Guid) -> Vec<String> {
         self.by_key
             .values()
@@ -301,7 +307,11 @@ pub fn leave(realm: &Realm, me: &Online, name: &str, tell: bool) {
         to_one(realm, me.guid, &c.notify(YOU_LEFT));
     }
     c.remove(realm, me.guid);
-    if c.members.is_empty() && !c.constant() && c.password.is_empty() && c.banned.is_empty() {
+    // Empty, it goes, its password and bans with it (mangos's
+    // `ChannelMgr::LeftChannel`, Thistle Tea's `Channels.put`): kept, an
+    // empty channel locked by a password nobody remembers would stay for
+    // good, one for every name a client cares to lock.
+    if c.members.is_empty() && !c.constant() {
         channels.by_key.remove(&k);
     }
 }
@@ -354,9 +364,12 @@ pub fn say(
     }) else {
         return;
     };
+    // A moderator's words reach even those ignoring them (mangos's
+    // `Channel::Say`, Thistle Tea's).
+    let heard_by_all = c.moderator(me.guid);
     let lists = realm.social.lists.lock();
     for member in &c.members {
-        if !lists.ignores(member.guid, me.guid) {
+        if heard_by_all || !lists.ignores(member.guid, me.guid) {
             send_frame(realm, member.guid, &frame);
         }
     }
@@ -384,8 +397,15 @@ pub fn list(realm: &Realm, me: &Online, name: &str) {
 /// What a command on a channel needs: the channel, with the player in it.
 fn with_member(realm: &Realm, me: &Online, name: &str, f: impl FnOnce(&mut Channel)) {
     let mut channels = realm.social.channels.lock();
-    match channels.by_key.get_mut(&key(me, name)) {
-        Some(c) if c.member(me.guid).is_some() => f(c),
+    let k = key(me, name);
+    match channels.by_key.get_mut(&k) {
+        Some(c) if c.member(me.guid).is_some() => {
+            f(c);
+            // Its last member kicked out: it goes, as at a leave.
+            if c.members.is_empty() && !c.constant() {
+                channels.by_key.remove(&k);
+            }
+        }
         Some(c) => to_one(realm, me.guid, &c.notify(NOT_MEMBER)),
         None => not_member(realm, me, name),
     }

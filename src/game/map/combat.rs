@@ -103,6 +103,9 @@ pub struct Combat {
     pub queued: Option<u32>,
     /// Auto Shot, Shoot: repeating at the ranged weapon's speed.
     pub auto_repeat: Option<AutoRepeat>,
+    /// When the ranged weapon is ready again after its last shot, kept
+    /// though the repeat stops.
+    pub ranged_ready_at: Option<Instant>,
     /// Main-hand attacks owed at once, and Reckoning's banked ones.
     pub extra_attacks: u32,
     pub held_extra_attacks: u32,
@@ -548,9 +551,15 @@ fn zero_difference(level: u32) -> u32 {
 /// Rage a warrior gets for dealing (or, with `taken`, taking) `damage`, in
 /// tenths, as the field holds it.
 pub fn rage_for(damage: u32, level: u32, taken: bool) -> u32 {
+    rage_scaled(damage, level, taken, 1.0)
+}
+
+/// [`rage_for`], scaled by `by` before it is rounded down (mangos's
+/// `Player::RewardRage`, Berserker Rage's 1.3).
+pub fn rage_scaled(damage: u32, level: u32, taken: bool, by: f32) -> u32 {
     let l = level as f32;
     let c = 0.009_110_784 * l * l + 3.225_598 * l + 4.265_291;
-    (damage as f32 / c * if taken { 2.5 } else { 7.5 } * 10.0) as u32
+    (damage as f32 / c * if taken { 2.5 } else { 7.5 } * by * 10.0) as u32
 }
 
 /// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
@@ -680,13 +689,24 @@ impl Map {
 
 /// Whether `a` may attack `b`.
 pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
+    can_attack_alive_or_not(map, a, b, false)
+}
+
+/// [`can_attack`], of a spell at `b` that may be cast at the dead: a
+/// corpse of an enemy is one still (mangos's `CanAttackSpell` with
+/// `SPELL_ATTR_EX2_ALLOW_DEAD_TARGET`).
+pub fn can_attack_dead(map: &Map, a: Guid, b: Guid) -> bool {
+    can_attack_alive_or_not(map, a, b, true)
+}
+
+fn can_attack_alive_or_not(map: &Map, a: Guid, b: Guid, dead_ok: bool) -> bool {
     if a == b {
         return false;
     }
     let (Some(ua), Some(ub)) = (map.unit_view(a), map.unit_view(b)) else {
         return false;
     };
-    if !ua.alive || !ub.alive {
+    if !ua.alive || (!ub.alive && !dead_ok) {
         return false;
     }
     // One no one may attack: not attackable, made so by an aura, not
@@ -1063,8 +1083,16 @@ pub fn derived(map: &Map, g: Guid) -> crate::game::map::derive::Derived {
 /// The unit's creature type as a mask, for the auras against one: a player
 /// is a humanoid.
 pub fn creature_type_mask(map: &Map, g: Guid) -> u32 {
-    if map.players.contains_key(&g) {
-        return 1 << 6;
+    if let Some(p) = map.players.get(&g) {
+        // A player is a humanoid, but in a form `SpellShapeshiftForm` makes
+        // a beast (cat, bear, dire bear, travel, aquatic, ghost wolf), as
+        // mangos's `GetCreatureType` and Thistle Tea's have it.
+        let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
+        return if matches!(form, 1 | 3 | 4 | 5 | 8 | 14 | 15 | 16) {
+            1
+        } else {
+            1 << 6
+        };
     }
     map.creature(g)
         .and_then(|c| map.realm.data.creature_template(c.entry))
@@ -1513,7 +1541,7 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
             c.in_extra_attack = true;
         }
         for _ in 0..owed {
-            if !map.unit_view(victim).is_some_and(|u| u.alive) {
+            if !still_swinging(map, attacker, victim) {
                 break;
             }
             swing(map, attacker, victim, Hand::Main, true);
@@ -1537,12 +1565,29 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         crate::game::map::spells::cast_triggered(map, attacker, spell, Some(victim));
         return;
     }
-    if main_due && map.unit_view(victim).is_some_and(|u| u.alive) {
+    if main_due && still_swinging(map, attacker, victim) {
         swing(map, attacker, victim, Hand::Main, false);
     }
-    if off_due && map.unit_view(victim).is_some_and(|u| u.alive) {
+    // The main hand's swing puts the off-hand's a moment later, which it
+    // waits for (mangos asks `isAttackReady(OFF_ATTACK)` after it).
+    let off_due = off_due
+        && map
+            .combat(attacker)
+            .is_some_and(|c| c.next_offhand.is_none_or(|t| t <= now));
+    if off_due && still_swinging(map, attacker, victim) {
         swing(map, attacker, victim, Hand::Off, false);
     }
+}
+
+/// Whether `attacker` goes on swinging at `victim` after a blow: both
+/// alive (a damage shield's answer may have killed the striker), and the
+/// attack not stopped.
+fn still_swinging(map: &Map, attacker: Guid, victim: Guid) -> bool {
+    map.unit_view(victim).is_some_and(|u| u.alive)
+        && map.unit_view(attacker).is_some_and(|u| u.alive)
+        && map
+            .combat(attacker)
+            .is_some_and(|c| c.attacking && c.victim == victim)
 }
 
 /// One swing of `hand`, landed or not. An extra attack leaves the timer
@@ -1643,7 +1688,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         hit_info |= HITINFO_LEFTSWING;
     }
     let (left, absorbed) = if damage > 0 {
-        auras::absorb(map, victim, damage, school)
+        auras::absorb_and_share(map, attacker, victim, damage, school)
     } else {
         (0, 0)
     };
@@ -1740,7 +1785,14 @@ pub fn blow(
     kept: f32,
 ) -> (u32, u32, u32, u32) {
     match outcome {
-        Outcome::Miss => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED, 0, 0),
+        // A swing's own flag with the miss, as mangos's
+        // `CalculateMeleeDamage` starts every swing (Thistle Tea's 0x12).
+        Outcome::Miss => (
+            HITINFO_NORMALSWING2 | HITINFO_MISS,
+            VICTIMSTATE_UNAFFECTED,
+            0,
+            0,
+        ),
         Outcome::Dodge => (HITINFO_NORMALSWING2, VICTIMSTATE_DODGE, 0, 0),
         Outcome::Parry => (HITINFO_NORMALSWING2, VICTIMSTATE_PARRY, 0, 0),
         Outcome::Block => {
@@ -2030,10 +2082,12 @@ pub fn gain_rage(map: &mut Map, g: Guid, damage: u32, taken: bool) {
     if p.fields.get_byte(UNIT_FIELD_BYTES_0, 3) != 1 {
         return;
     }
-    let mut gain = rage_for(damage, u32::from(p.level()), taken);
-    if taken && p.auras.has_spell(SPELL_BERSERKER_RAGE) {
-        gain = gain * 13 / 10;
-    }
+    let by = if taken && p.auras.has_spell(SPELL_BERSERKER_RAGE) {
+        1.3
+    } else {
+        1.0
+    };
+    let gain = rage_scaled(damage, u32::from(p.level()), taken, by);
     let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 1).max(1000);
     let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
     p.fields
@@ -2310,15 +2364,28 @@ pub fn cancel_queued(map: &mut Map, g: Guid) {
 /// healer's threat, split among them (mangos's `threatAssist`, Thistle
 /// Tea's `heal_threat`).
 pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained: u32) {
+    use crate::game::data::spells as sd;
     if gained == 0 || healer.is_zero() {
         return;
     }
-    let school = map
-        .realm
-        .data
+    let data = map.realm.data.clone();
+    let s = data.spells.get(spell);
+    // A spell of no threat, none at first, or none for its help, gives
+    // none (mangos's `threatAssist`).
+    if s.is_some_and(|s| {
+        s.attr(1, sd::ATTR_EX_NO_THREAT)
+            || s.attr(2, sd::ATTR_EX2_NO_INITIAL_THREAT)
+            || s.attr(4, sd::ATTR_EX4_NO_HELPFUL_THREAT)
+    }) {
+        return;
+    }
+    let school = s.map_or(2, |s| s.school_mask());
+    // `spell_threat`'s multiplier, as mangos's `DealHeal` takes it.
+    let spell_mult = data
         .spells
-        .get(spell)
-        .map_or(2, |s| s.school_mask());
+        .threat
+        .get(&spell)
+        .map_or(1.0, |(_, m)| m.max(0.0));
     let fighting: Vec<Guid> = map
         .creatures
         .iter()
@@ -2329,8 +2396,8 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
     if fighting.is_empty() {
         return;
     }
-    let threat =
-        gained as f32 * 0.5 * threat_multiplier(map, healer, school) / fighting.len() as f32;
+    let threat = gained as f32 * 0.5 * spell_mult * threat_multiplier(map, healer, school)
+        / fighting.len() as f32;
     for c in fighting {
         crate::game::map::ai::add_threat(map, c, healer, threat);
     }
@@ -2396,6 +2463,14 @@ fn deal_damage_with(
     {
         return;
     }
+    // A spirit of redemption takes nothing, unattackable (mangos's
+    // `SPELL_AURA_MOD_UNATTACKABLE`, Thistle Tea's absorbing it all), but
+    // the death its end brings.
+    if crate::game::map::spells::redemption::spirit(map, victim)
+        && !map.spells.redeemed.contains(&victim)
+    {
+        return;
+    }
     // A pet's blows count as its master's for duels and honor.
     let by = crate::game::map::pets::master(map, attacker);
     let damage = if guid::is_player(victim) && guid::is_player(by) {
@@ -2433,6 +2508,12 @@ fn deal_damage_with(
         return;
     };
     let left = f.get_u32(UNIT_FIELD_HEALTH).saturating_sub(damage);
+    // A linked feign death keeps it down, not dead: a killing blow, before
+    // any floor holds it up (Thistle Tea's `LinkedFeignDeath.prevent`, ahead
+    // of the invincibility threshold).
+    if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
+        return;
+    }
     // A script can keep a creature from falling below a floor, and an
     // unkillable one (vmangos's `CREATURE_STATIC_FLAG_UNKILLABLE`) never
     // falls below one health unless a script's floor lets it (Thistle
@@ -2446,10 +2527,6 @@ fn deal_damage_with(
     } else {
         left
     };
-    // A linked feign death keeps it down, not dead.
-    if left == 0 && crate::game::map::event_ai::feign_death(map, victim) {
-        return;
-    }
     // A priest with Spirit of Redemption becomes a spirit instead: in a
     // battleground, defeated all the same, the death to come (Thistle Tea's
     // `count_death?: false`).

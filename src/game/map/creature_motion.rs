@@ -776,9 +776,13 @@ pub fn talk_pause(map: &mut Map, g: Guid) {
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    c.motion = Motion::Idle {
-        until: Some(now + TALK_PAUSE),
+    // It only ever waits longer (vmangos's `AddPauseTime`): a longer wait
+    // already set stands.
+    let until = match c.motion {
+        Motion::Idle { until: Some(t) } if t > now + TALK_PAUSE => t,
+        _ => now + TALK_PAUSE,
     };
+    c.motion = Motion::Idle { until: Some(until) };
     let at = c.position;
     if moving {
         map.next_spline_id = map.next_spline_id.wrapping_add(1);

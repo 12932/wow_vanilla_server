@@ -185,6 +185,47 @@ async fn a_reconnect_needs_a_session_and_its_proof() {
     }
 }
 
+/// A wrong reconnect proof (a stale session) isn't told the account is
+/// banned: it is answered as Thistle Tea answers it, `<<3, 1>>`
+/// (`FailUnknown0`), and the connection closed. Both reconnects: 1.12's
+/// protocol (3, as 2) and 8.
+#[tokio::test]
+async fn a_wrong_reconnect_proof_is_not_told_banned() {
+    accounts().set_password("STALE", "SECRET").unwrap();
+    let users = users();
+    let mut s = login_server(users.clone()).await;
+    let client = log_in(&mut s, "STALE", "SECRET").await;
+    drop(s);
+    for protocol in [3u8, 8] {
+        let mut s = login_server(users.clone()).await;
+        let mut c = challenge(2, "STALE");
+        c[1] = protocol;
+        s.write_all(&c).await.unwrap();
+        let c = read_n(&mut s, 2 + 16 + 16).await;
+        assert_eq!(
+            &c[..2],
+            &[2, 0],
+            "protocol {protocol}: the reconnect challenge"
+        );
+        let values = client.calculate_reconnect_values(c[2..18].try_into().unwrap());
+        let mut proof = vec![3];
+        proof.extend_from_slice(&values.challenge_data);
+        let mut p = values.proof;
+        p[0] ^= 1;
+        proof.extend_from_slice(&p);
+        proof.extend_from_slice(&[0; 20]);
+        proof.push(0);
+        s.write_all(&proof).await.unwrap();
+        let answer = read_n(&mut s, 2).await;
+        assert_eq!(
+            answer,
+            vec![3, 1],
+            "protocol {protocol}: FailUnknown0, not FailBanned"
+        );
+        rest(&mut s).await;
+    }
+}
+
 /// A session key the auth server holds for `name`, as a login leaves it,
 /// and the client's half of it.
 fn session(users: &UserCache, name: &str) -> [u8; 40] {
@@ -304,4 +345,50 @@ async fn the_world_takes_a_proof_over_the_session_key_and_refuses_others() {
             "{name}: AUTH_FAILED, in the clear"
         );
     }
+}
+
+/// A ban outlasts the session made before it: the reconnect the 1.12
+/// client tries after the ban's kick is told the account is banned, as a
+/// logon is, and the world won't take the old session key (mangos's
+/// HandleAuthSession answers AUTH_BANNED), where both went on as before.
+#[tokio::test]
+async fn a_ban_outlasts_the_session_made_before_it() {
+    accounts().set_password("OUTLAW", "SECRET").unwrap();
+    let users = users();
+    let mut s = login_server(users.clone()).await;
+    log_in(&mut s, "OUTLAW", "SECRET").await;
+    drop(s);
+    assert!(accounts().ban("OUTLAW", -1, "testing"));
+    for protocol in [3u8, 8] {
+        let mut s = login_server(users.clone()).await;
+        let mut c = challenge(2, "OUTLAW");
+        c[1] = protocol;
+        s.write_all(&c).await.unwrap();
+        assert_eq!(
+            rest(&mut s).await,
+            vec![2, 3],
+            "protocol {protocol}: FailBanned"
+        );
+    }
+    let key = session(&users, "OUTLAW");
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(
+        crate::game::harness::test_config(),
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        Some(users),
+    );
+    let mut s = world_server(realm).await;
+    let server_seed = auth_challenge(&mut s).await;
+    let seed = ProofSeed::new();
+    let client_seed = seed.seed();
+    let (proof, _) =
+        seed.into_client_header_crypto(&NormalizedString::new("OUTLAW").unwrap(), key, server_seed);
+    auth_session(&mut s, "OUTLAW", client_seed, proof).await;
+    assert_eq!(
+        rest(&mut s).await,
+        vec![0, 3, 0xEE, 0x01, 28],
+        "AUTH_BANNED, in the clear"
+    );
 }

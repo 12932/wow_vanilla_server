@@ -99,6 +99,10 @@ pub struct Runner {
     depth: u32,
 }
 
+/// How deep scripts may start scripts at once (a relay, a step's script
+/// for those near, an object's scripts on its use).
+const MAX_DEPTH: u32 = 32;
+
 impl Runner {
     fn sweep(&mut self) {
         if self.depth == 0 {
@@ -123,6 +127,16 @@ pub fn start_checked(
     checked: Option<(Guid, usize)>,
 ) {
     if id == 0 || !map.realm.data.scripts.table(table).contains_key(&id) {
+        return;
+    }
+    // A script that starts itself (or a ring of them) at once, with no
+    // delay between, would run on until the stack is gone: a start that
+    // deep is a loop in the data, and goes no further.
+    if map.scripts.depth >= MAX_DEPTH {
+        tracing::debug!(
+            "{}: script {id} ({table:?}) started {MAX_DEPTH} deep: dropped",
+            map.key
+        );
         return;
     }
     let now = map.now;
@@ -1032,7 +1046,7 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let (spawn, entry) = (c.spawn_guid, c.entry);
+    let (spawn, entry, alive) = (c.spawn_guid, c.entry, c.alive());
     let summoner = c.scripted.as_deref().and_then(|s| s.summoner);
     crate::game::map::combat::leave_combat(map, g);
     stop_for(map, g);
@@ -1047,6 +1061,10 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
             crate::game::map::ai::quiet_death_for(map, g, respawn);
             if let Some(s) = summoner {
                 event_ai::summoned_despawned(map, s, g, entry);
+            }
+            // Gone, its slaves flagged to go with it go too.
+            if alive {
+                crate::game::map::creature_groups::despawned(map, g);
             }
         }
     }
@@ -1480,6 +1498,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             let g = map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, s));
             map.object_resets
                 .push((now + Duration::from_secs(u64::from(d2.max(5))), g, u32::MAX));
+            // One used up comes back when it was to, once the script
+            // takes it in again.
+            if let Some(i) = map.objects.respawns.iter().position(|(_, x)| *x == spawn) {
+                let (at, _) = map.objects.respawns.remove(i);
+                map.objects.brought_out.push((g, spawn, at));
+            }
             true
         }
         // Summon a creature: datalong the entry, datalong2 the despawn
@@ -1888,12 +1912,14 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         42 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_melee = d1 == 0;
+                s.melee_on = d1 != 0;
             }
             true
         }
         43 => {
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.no_combat_movement = d1 == 0;
+                s.combat_movement_on = d1 != 0;
             }
             true
         }
@@ -2003,7 +2029,12 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             true
         }
         // React state: 0 passive, 1 defensive, 2 aggressive.
+        // React state: 0 passive, 1 defensive, 2 aggressive; another, or
+        // a source not a creature, fails (Thistle Tea's `set_react_state`).
         59 => {
+            if d1 > 2 || map.creature(source).is_none() {
+                return false;
+            }
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 use crate::game::map::assistance::Reaction;
                 s.passive = d1 == 0;
@@ -3208,7 +3239,22 @@ pub fn update_objects(map: &mut Map) {
     map.object_resets.retain(|(t, _, _)| *t > now);
     for (_, g, state) in due {
         if state == u32::MAX {
-            map.remove_gameobject(g);
+            let held = map
+                .objects
+                .brought_out
+                .iter()
+                .position(|(o, ..)| *o == g)
+                .map(|i| map.objects.brought_out.remove(i));
+            let out = map.gameobject(g).is_some();
+            // Gone as any object goes: its trap, ritual and closes with it.
+            crate::game::map::objects::despawn_then(map, g, None);
+            // Still out (not used up again meanwhile): back when it was
+            // due to be.
+            if let Some((_, spawn, at)) = held
+                && out
+            {
+                map.objects.respawns.push((at.max(now), spawn));
+            }
         } else {
             set_object_state(map, g, state);
         }

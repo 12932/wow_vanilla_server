@@ -4283,8 +4283,8 @@ mod world_around {
             .unwrap()
             .extend([spawn(20, 1.0), spawn(21, 2.0)]);
         // 20 comes with the event, 21 goes with it.
-        d.event_creatures.insert(20, 9);
-        d.event_creatures.insert(21, -9);
+        d.event_creatures.insert(20, vec![9]);
+        d.event_creatures.insert(21, vec![-9]);
         d.weather.insert(12, [[100, 0, 0]; 4]);
         d
     }

@@ -11,6 +11,8 @@
 //! needs no migration.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 
@@ -114,6 +116,8 @@ pub struct CharacterState {
     #[serde(skip)]
     pub caches: Vec<(u8, Vec<u8>)>,
     pub action_bar_toggles: u8,
+    /// The bank's bag slots bought (`PLAYER_BYTES_2`'s third byte).
+    pub bank_bag_slots: u8,
     pub explored_zones: Vec<u32>,
     pub taxi_mask: Vec<u32>,
     pub bind: Option<Bind>,
@@ -144,6 +148,8 @@ pub struct CharacterState {
     pub watched_faction: Option<u32>,
     /// How drunk the player was at logout (`map::intoxication`).
     pub drunk: u32,
+    /// The ammunition chosen (`PLAYER_AMMO_ID`), as mangos keeps `ammoId`.
+    pub ammo: u32,
     /// Rested XP waiting, and the rest the player was in at logout.
     pub rest_bonus: f32,
     pub rest_type: Option<crate::game::map::rest::RestType>,
@@ -200,6 +206,10 @@ pub struct PetsState {
     /// What untraining the pet last cost, and when (Unix seconds).
     pub untrain_cost: u32,
     pub untrain_at: i64,
+    /// The names the warlock's demons drew, by entry: each keeps its own
+    /// when summoned again (mangos's `character_pet`, Thistle Tea's
+    /// remembered names).
+    pub demon_names: Vec<(u32, String)>,
 }
 
 /// A flight's rest: the points still to fly, where it lands, and the
@@ -348,7 +358,13 @@ enum Request {
     SetAccountData(String, u8, u32, Vec<u8>),
     PutRecord(&'static str, u64, String),
     DeleteRecord(&'static str, u64),
+    /// Characters and records an item or money moved between: written in
+    /// one transaction, never apart.
+    Together(Vec<CharacterRow>, Vec<RecordOp>),
     Flush(oneshot::Sender<()>),
+    /// A record as stored, for the tests to read back.
+    #[cfg(test)]
+    Record(&'static str, u64, oneshot::Sender<Option<String>>),
     /// The thread panics on it, as a bug would.
     #[cfg(test)]
     Panic,
@@ -360,10 +376,56 @@ enum Request {
     BadSave,
 }
 
+/// A change to a record, kept to be written with others.
+#[derive(Debug)]
+enum RecordOp {
+    Put(&'static str, u64, String),
+    Delete(&'static str, u64),
+    /// A change whose writing panics, as a bad one would.
+    #[cfg(test)]
+    Bad,
+}
+
+/// Records changed with characters, for `Store::save_together`: an item or
+/// money moved between a character and a mail, an auction or a guild.
+/// Each is encoded as it is added, so it is the record as it was then.
+#[derive(Debug, Default)]
+pub struct Records(Vec<RecordOp>);
+
+impl Records {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Keep `value` under its kind and id, as `Store::put_record` does.
+    pub fn put<T: Serialize>(&mut self, kind: &'static str, id: u64, value: &T) {
+        match serde_json::to_string(value) {
+            Ok(data) => self.0.push(RecordOp::Put(kind, id, data)),
+            Err(e) => warn!("encoding {kind} {id}: {e}"),
+        }
+    }
+
+    pub fn delete(&mut self, kind: &'static str, id: u64) {
+        self.0.push(RecordOp::Delete(kind, id));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// A change that fails as it is written, and with it the rest.
+    #[cfg(test)]
+    pub fn bad_for_test(&mut self) {
+        self.0.push(RecordOp::Bad);
+    }
+}
+
 /// A handle to the store's thread.
 #[derive(Clone)]
 pub struct Store {
     tx: std_mpsc::Sender<Request>,
+    /// Requests sent and not yet taken by the thread.
+    queued: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for Store {
@@ -376,6 +438,7 @@ impl Store {
     /// Open (or create) the store at `path`, migrate it, and start its
     /// thread. `:memory:` gives a store that lasts as long as the process.
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<(Store, Startup)> {
+        let _z = crate::zone!("load: the character store");
         let conn = Connection::open(path.as_ref())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -388,52 +451,68 @@ impl Store {
             startup.names.len()
         );
         let (tx, rx) = std_mpsc::channel();
-        thread::Builder::new()
-            .name("store".into())
-            .spawn(move || run(conn, rx))
-            .expect("spawn the store thread");
-        Ok((Store { tx }, startup))
+        let queued = Arc::new(AtomicUsize::new(0));
+        {
+            let queued = queued.clone();
+            thread::Builder::new()
+                .name("store".into())
+                .spawn(move || run(conn, rx, &queued))
+                .expect("spawn the store thread");
+        }
+        Ok((Store { tx, queued }, startup))
+    }
+
+    fn send(&self, req: Request) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+        if self.tx.send(req).is_err() {
+            self.queued.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Requests waiting for the store's thread.
+    pub fn queued(&self) -> usize {
+        self.queued.load(Ordering::Relaxed)
     }
 
     pub async fn characters(&self, account: &str) -> Vec<CharacterRow> {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Request::Characters(account.to_owned(), tx));
+        self.send(Request::Characters(account.to_owned(), tx));
         rx.await.unwrap_or_default()
     }
 
     pub async fn load(&self, guid: u32) -> Option<CharacterRow> {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Request::Load(guid, tx));
+        self.send(Request::Load(guid, tx));
         rx.await.ok().flatten()
     }
 
     pub async fn create(&self, row: CharacterRow) -> Result<(), CreateError> {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Request::Create(Box::new(row), tx));
+        self.send(Request::Create(Box::new(row), tx));
         rx.await.unwrap_or(Err(CreateError::Failed))
     }
 
     pub async fn delete(&self, account: &str, guid: u32) -> bool {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Request::Delete(account.to_owned(), guid, tx));
+        self.send(Request::Delete(account.to_owned(), guid, tx));
         rx.await.unwrap_or(false)
     }
 
     /// Save a character, items, spells and actions included, replacing what
     /// was stored.
     pub fn save(&self, row: CharacterRow) {
-        let _ = self.tx.send(Request::Save(Box::new(row)));
+        self.send(Request::Save(Box::new(row)));
     }
 
     /// The account's data blocks: `(type, time, data)`.
     pub async fn account_data(&self, account: &str) -> Vec<(u8, u32, Vec<u8>)> {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Request::AccountData(account.to_owned(), tx));
+        self.send(Request::AccountData(account.to_owned(), tx));
         rx.await.unwrap_or_default()
     }
 
     pub fn set_account_data(&self, account: &str, kind: u8, time: u32, data: Vec<u8>) {
-        let _ = self.tx.send(Request::SetAccountData(
+        self.send(Request::SetAccountData(
             account.to_owned(),
             kind,
             time,
@@ -446,26 +525,46 @@ impl Store {
     pub fn put_record<T: Serialize>(&self, kind: &'static str, id: u64, value: &T) {
         match serde_json::to_string(value) {
             Ok(data) => {
-                let _ = self.tx.send(Request::PutRecord(kind, id, data));
+                self.send(Request::PutRecord(kind, id, data));
             }
             Err(e) => warn!("encoding {kind} {id}: {e}"),
         }
     }
 
     pub fn delete_record(&self, kind: &'static str, id: u64) {
-        let _ = self.tx.send(Request::DeleteRecord(kind, id));
+        self.send(Request::DeleteRecord(kind, id));
+    }
+
+    /// Save characters and records in one transaction: what moved between
+    /// them (an item, money) reaches the database on every side or on
+    /// none. A failure is tried again as other saves are, and is never
+    /// split into its parts (mangos-classic's `BeginTransaction` around
+    /// `SaveInventoryAndGoldToDB` and the mail or auction row).
+    pub fn save_together(&self, rows: Vec<CharacterRow>, records: Records) {
+        if rows.is_empty() && records.is_empty() {
+            return;
+        }
+        self.send(Request::Together(rows, records.0));
+    }
+
+    /// A record as stored (once what was sent before is written).
+    #[cfg(test)]
+    pub async fn record(&self, kind: &'static str, id: u64) -> Option<String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Request::Record(kind, id, tx));
+        rx.await.ok().flatten()
     }
 
     /// Wait until everything sent before is written.
     pub async fn flush(&self) {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Request::Flush(tx));
+        self.send(Request::Flush(tx));
         let _ = rx.await;
     }
 
     #[cfg(test)]
     fn send_test(&self, req: Request) {
-        let _ = self.tx.send(req);
+        self.send(req);
     }
 
     /// Make the store's thread panic, as a bug would.
@@ -547,16 +646,16 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
 
 /// The store's thread. It outlives a panic in what it does: that request
 /// is lost (its caller hears nothing), not every save after it.
-fn run(mut conn: Connection, rx: std_mpsc::Receiver<Request>) {
+fn run(mut conn: Connection, rx: std_mpsc::Receiver<Request>, queued: &AtomicUsize) {
     loop {
-        match catch(|| serve_all(&mut conn, &rx)) {
+        match catch(|| serve_all(&mut conn, &rx, queued)) {
             Ok(()) => return,
             Err(e) => error!("the store panicked: {e}; going on"),
         }
     }
 }
 
-fn serve_all(conn: &mut Connection, rx: &std_mpsc::Receiver<Request>) {
+fn serve_all(conn: &mut Connection, rx: &std_mpsc::Receiver<Request>, queued: &AtomicUsize) {
     while let Ok(first) = rx.recv() {
         // Saves queued together go in one transaction.
         let mut batch = vec![first];
@@ -566,6 +665,7 @@ fn serve_all(conn: &mut Connection, rx: &std_mpsc::Receiver<Request>) {
                 break;
             }
         }
+        queued.fetch_sub(batch.len(), Ordering::Relaxed);
         let mut saves: Vec<Request> = Vec::new();
         for req in batch {
             if is_save(&req) {
@@ -594,6 +694,7 @@ fn is_save(req: &Request) -> bool {
             | Request::SetAccountData(..)
             | Request::PutRecord(..)
             | Request::DeleteRecord(..)
+            | Request::Together(..)
     )
 }
 
@@ -604,6 +705,26 @@ fn describe(req: &Request) -> String {
         Request::SetAccountData(account, kind, ..) => format!("{account}'s account data {kind}"),
         Request::PutRecord(kind, id, _) => format!("{kind} {id}"),
         Request::DeleteRecord(kind, id) => format!("deleting {kind} {id}"),
+        Request::Together(rows, records) => {
+            let names: Vec<String> = rows
+                .iter()
+                .map(|r| format!("{} ({})", r.name, r.guid))
+                .collect();
+            let changes: Vec<String> = records
+                .iter()
+                .map(|r| match r {
+                    RecordOp::Put(kind, id, _) => format!("{kind} {id}"),
+                    RecordOp::Delete(kind, id) => format!("deleting {kind} {id}"),
+                    #[cfg(test)]
+                    RecordOp::Bad => "a bad change".to_owned(),
+                })
+                .collect();
+            format!(
+                "together: characters [{}], records [{}]",
+                names.join(", "),
+                changes.join(", ")
+            )
+        }
         _ => "a request".to_owned(),
     }
 }
@@ -613,7 +734,8 @@ const BUSY_TRIES: u32 = 3;
 
 /// Write saves in one transaction. If that fails (the database busy past
 /// its timeout, a bad row, a panic), the busy are tried again, and the
-/// rest each go alone: one bad save is lost, not those batched with it.
+/// rest each go alone: one bad save is lost, not those batched with it. A
+/// save together is one request, so it goes alone whole: never in parts.
 fn write_saves(conn: &mut Connection, saves: Vec<Request>) {
     if saves.is_empty() {
         return;
@@ -659,6 +781,8 @@ fn busy(e: &rusqlite::Error) -> bool {
 }
 
 fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()> {
+    let z = crate::zone!("store transaction");
+    z.value(saves.len() as u64);
     {
         let tx = conn.transaction()?;
         for s in saves {
@@ -671,17 +795,20 @@ fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()>
                         params![account, kind, time, data],
                     )?;
                 }
-                Request::PutRecord(kind, id, data) => {
-                    tx.execute(
-                        "INSERT OR REPLACE INTO records (kind, id, data) VALUES (?1, ?2, ?3)",
-                        params![kind, *id as i64, data],
-                    )?;
-                }
-                Request::DeleteRecord(kind, id) => {
-                    tx.execute(
-                        "DELETE FROM records WHERE kind = ?1 AND id = ?2",
-                        params![kind, *id as i64],
-                    )?;
+                Request::PutRecord(kind, id, data) => put_record(&tx, kind, *id, data)?,
+                Request::DeleteRecord(kind, id) => delete_record(&tx, kind, *id)?,
+                Request::Together(rows, records) => {
+                    for row in rows {
+                        save_row(&tx, row)?;
+                    }
+                    for r in records {
+                        match r {
+                            RecordOp::Put(kind, id, data) => put_record(&tx, kind, *id, data)?,
+                            RecordOp::Delete(kind, id) => delete_record(&tx, kind, *id)?,
+                            #[cfg(test)]
+                            RecordOp::Bad => panic!("the store's test change panics"),
+                        }
+                    }
                 }
                 #[cfg(test)]
                 Request::BadSave => panic!("the store's test save panics"),
@@ -692,7 +819,20 @@ fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()>
     }
 }
 
+fn put_record(conn: &Connection, kind: &str, id: u64, data: &str) -> rusqlite::Result<()> {
+    conn.prepare_cached("INSERT OR REPLACE INTO records (kind, id, data) VALUES (?1, ?2, ?3)")?
+        .execute(params![kind, id as i64, data])?;
+    Ok(())
+}
+
+fn delete_record(conn: &Connection, kind: &str, id: u64) -> rusqlite::Result<()> {
+    conn.prepare_cached("DELETE FROM records WHERE kind = ?1 AND id = ?2")?
+        .execute(params![kind, id as i64])?;
+    Ok(())
+}
+
 fn serve(conn: &Connection, req: Request) {
+    let _z = crate::zone!("store request");
     match req {
         Request::Characters(account, reply) => {
             let rows = characters_for(conn, &account).unwrap_or_else(|e| {
@@ -768,6 +908,19 @@ fn serve(conn: &Connection, req: Request) {
             let _ = reply.send(());
         }
         #[cfg(test)]
+        Request::Record(kind, id, reply) => {
+            let data = conn
+                .query_row(
+                    "SELECT data FROM records WHERE kind = ?1 AND id = ?2",
+                    params![kind, id as i64],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten();
+            let _ = reply.send(data);
+        }
+        #[cfg(test)]
         Request::Panic => panic!("the store's test panic"),
         #[cfg(test)]
         Request::Sleep(d) => std::thread::sleep(d),
@@ -776,7 +929,8 @@ fn serve(conn: &Connection, req: Request) {
         Request::Save(_)
         | Request::SetAccountData(..)
         | Request::PutRecord(..)
-        | Request::DeleteRecord(..) => {}
+        | Request::DeleteRecord(..)
+        | Request::Together(..) => {}
     }
 }
 
@@ -1045,5 +1199,57 @@ mod tests {
         assert!(store.load(1).await.is_none());
         drop(store);
         let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A save together lands whole or not at all: with one bad part, none
+    /// of its characters or records is written, while the saves batched
+    /// with it still are; and it isn't split when another in its batch
+    /// fails.
+    #[tokio::test]
+    async fn a_save_together_lands_whole_or_not_at_all() {
+        let (store, _) = Store::open(":memory:").unwrap();
+        store.create(row(1, "Alice")).await.unwrap();
+        store.create(row(2, "Bob")).await.unwrap();
+        let level = |r: Option<CharacterRow>| r.map(|r| r.level);
+
+        // A bad part: neither character, nor the record, is written.
+        store.hold_for_test(std::time::Duration::from_millis(100));
+        let mut alone = row(2, "Bob");
+        alone.level = 5;
+        store.save(alone);
+        let (mut a, mut b) = (row(1, "Alice"), row(2, "Bob"));
+        a.level = 20;
+        b.level = 30;
+        let mut records = Records::new();
+        records.put("mail", 7, &"a letter");
+        records.bad_for_test();
+        store.save_together(vec![a, b], records);
+        store.put_record("mail", 8, &"another");
+        assert_eq!(level(store.load(1).await), Some(3));
+        assert_eq!(level(store.load(2).await), Some(5), "the save beside it");
+        assert_eq!(store.record("mail", 7).await, None);
+        assert_eq!(
+            store.record("mail", 8).await.as_deref(),
+            Some("\"another\"")
+        );
+
+        // Whole: both characters and the record, and a bad save batched
+        // with it costs it nothing.
+        store.hold_for_test(std::time::Duration::from_millis(100));
+        store.bad_save_for_test();
+        let (mut a, mut b) = (row(1, "Alice"), row(2, "Bob"));
+        a.level = 21;
+        b.level = 31;
+        let mut records = Records::new();
+        records.put("mail", 7, &"a letter");
+        records.delete("mail", 8);
+        store.save_together(vec![a, b], records);
+        assert_eq!(level(store.load(1).await), Some(21));
+        assert_eq!(level(store.load(2).await), Some(31));
+        assert_eq!(
+            store.record("mail", 7).await.as_deref(),
+            Some("\"a letter\"")
+        );
+        assert_eq!(store.record("mail", 8).await, None);
     }
 }

@@ -360,11 +360,21 @@ async fn majordomo(realm: &Arc<Realm>) -> (Client, Guid, crate::game::map::MapHa
     hurry(&map, boss, 28.2).await;
     let rag = map.query(|m| first(m, RAGNAROS)).await.flatten();
     let rag = rag.expect("Ragnaros called up");
-    // His spawned events, which hold him there, run at the map's next
-    // update (`event_ai::spawned`), not at once: an idle machine got here
-    // before it.
+    // His spawned events, which hold him there and start his speech, run at
+    // the map's next update (`event_ai::spawned`), not at once: an idle
+    // machine got here before it. Wait for the speech's run itself, since
+    // a sessile creature holds still without them.
     assert!(
-        until(&map, 1000, move |m| !event_ai::combat_movement(m, rag)).await,
+        until(&map, 1000, move |m| m
+            .scripts
+            .runs
+            .iter()
+            .any(|r| r.source == rag))
+        .await,
+        "Ragnaros's speech begun"
+    );
+    assert!(
+        map.query(move |m| !event_ai::combat_movement(m, rag)).await == Some(true),
         "Ragnaros stays where he rose"
     );
     hurry(&map, boss, 47.0).await;

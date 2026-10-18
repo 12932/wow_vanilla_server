@@ -164,8 +164,10 @@ fn data() -> GameData {
             under_the_tree(GAILY_SPAWN, GAILY_WRAPPED, -4919.12, -980.604, 501.456),
         ],
     );
-    d.event_objects.insert(CAREFULLY_SPAWN, GIFTS_EVENT as i32);
-    d.event_objects.insert(GAILY_SPAWN, GIFTS_EVENT as i32);
+    d.event_objects
+        .insert(CAREFULLY_SPAWN, vec![GIFTS_EVENT as i32]);
+    d.event_objects
+        .insert(GAILY_SPAWN, vec![GIFTS_EVENT as i32]);
     d.npc.gossip_menus.insert(
         PRESENTS_MENU,
         GossipMenu {
@@ -1059,7 +1061,7 @@ fn the_real_winter_veil_loads() {
     assert!(
         under
             .iter()
-            .all(|s| d.event_objects.get(s) == Some(&(GIFTS_EVENT as i32)))
+            .all(|s| d.event_objects.get(s) == Some(&vec![GIFTS_EVENT as i32]))
     );
     assert!(d.events.contains_key(&2) && d.events.contains_key(&GIFTS_EVENT));
     assert_eq!(

@@ -21,6 +21,15 @@ use super::mods::{self, Mods};
 /// `Attributes`: the cooldown starts when the aura goes.
 const ATTR_COOLDOWN_ON_EVENT: u32 = 0x200_0000;
 
+/// A charmed creature's charm spell recovers over the time its slot
+/// rolled, in place of its own (Thistle Tea's `CharmSpells`).
+fn charm_cooldown(map: &Map, caster: Guid, spell: u32) -> Option<u32> {
+    map.creature(caster)
+        .and_then(|c| c.pet.as_ref())
+        .and_then(|p| p.charm_cooldowns.iter().find(|(id, _)| *id == spell))
+        .map(|(_, ms)| *ms)
+}
+
 /// Start `s`'s cooldowns for `caster`: the item's, if an item cast it, or
 /// the spell's; a "cooldown on event" spell's waits for its aura to go.
 pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Option<Guid>) {
@@ -40,6 +49,7 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
         ),
         _ => (s.recovery_time, s.category, s.category_recovery_time),
     };
+    let recovery = charm_cooldown(map, caster, s.id).unwrap_or(recovery);
     let recovery = m.apply_ms(mods::OP_COOLDOWN, recovery);
     let category_recovery = m.apply_ms(mods::OP_COOLDOWN, category_recovery);
     if recovery == 0 && category_recovery == 0 {
@@ -158,7 +168,8 @@ pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    let recovery = s.recovery_time.max(s.category_recovery_time);
+    let recovery =
+        charm_cooldown(map, target, spell).unwrap_or(s.recovery_time.max(s.category_recovery_time));
     if let Some(c) = map.caster_mut(target) {
         c.cooldowns
             .insert(spell, now + Duration::from_millis(u64::from(recovery)));
@@ -325,6 +336,7 @@ pub fn restore(map: &mut Map, player: Guid) {
         }
         let caster = Guid::new(a.caster);
         let caster = if caster.is_zero() { player } else { caster };
+        let item = (a.item != 0).then(|| Guid::new(a.item));
         // Its ticks as its caster's modifiers have them now.
         let m = super::mods::for_spell(map, caster, s);
         let _ = auras::apply_spell(
@@ -334,7 +346,7 @@ pub fn restore(map: &mut Map, player: Guid) {
             s,
             &effects,
             auras::Context {
-                item: (a.item != 0).then(|| Guid::new(a.item)),
+                item,
                 equipped: false,
                 combo: a.combo,
                 duration: Some(a.left),
@@ -347,13 +359,8 @@ pub fn restore(map: &mut Map, player: Guid) {
                 ),
             },
         );
-        if let Some(h) = auras::auras_mut(map, player).and_then(|x| {
-            x.holders
-                .iter_mut()
-                .find(|h| h.spell == a.spell && h.caster == caster)
-        }) {
-            h.stacks = a.stacks.max(1);
-        }
+        // Its stacks, on its bar and in the stats.
+        auras::set_stacks(map, player, a.spell, caster, item, a.stacks.max(1));
     }
     send(map, player, &cooldowns);
 }

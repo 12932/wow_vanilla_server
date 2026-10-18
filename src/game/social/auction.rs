@@ -16,7 +16,7 @@ use crate::game::map::Map;
 use crate::game::map::player::Item;
 use crate::game::social::mail::{self, DAY, Mail};
 use crate::game::social::send_to;
-use crate::game::store::ItemRow;
+use crate::game::store::{ItemRow, Records};
 
 pub const KIND_AUCTION: &str = "auction";
 /// The shortest auction, which deposits are counted in.
@@ -132,6 +132,13 @@ pub fn market_of(house: AuctionHouse) -> u32 {
 /// `AuctionHouse.dbc`: the deposit and the cut, in percent.
 pub fn rates(house: u32) -> (u32, u32) {
     if house == 7 { (25, 15) } else { (5, 5) }
+}
+
+/// The house's cut of an auction's bid, worked out wide: a bid of 28,634
+/// gold times the goblins' 15 is past a `u32` (mangos's `GetAuctionCut`
+/// works it out in floats).
+fn cut_of(a: &Auction) -> u32 {
+    (u64::from(a.bid) * u64::from(rates(a.house).1) / 100) as u32
 }
 
 /// Thistle Tea's deposit (`Auction.deposit`): the item's sell price, by
@@ -292,9 +299,15 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
         deposit,
         expires_at: mail::now() + i64::from(secs),
     };
-    save(&realm, &a);
+    let mut records = Records::new();
+    records.put(KIND_AUCTION, u64::from(a.id), &a);
     let id = a.id;
     auctions.auctions.insert(id, a);
+    // The auction with its item, and the seller without it or the
+    // deposit, in one transaction (mangos's `HandleAuctionSellItem`), sent
+    // under the auctions' lock so that no later change to it is written
+    // first.
+    map.save_together(&[g], records);
     drop(auctions);
     command_result(
         map,
@@ -305,17 +318,43 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
 }
 
 /// The auction won: the item to the winner, the money to the seller.
-fn settle(realm: &Realm, a: &Auction) {
-    let (_, cut) = rates(a.house);
-    let cut = a.bid * cut / 100;
-    mail::post(
+/// The mails and the auction's end go in `records`, to be saved together.
+fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
+    let cut = cut_of(a);
+    mail::post_in(
         realm,
         mail_from(a, a.bidder, WON, Some(a.item.clone()), 0, 0),
+        records,
     );
     let delay = realm.config.mail_delay.as_secs() as i64;
-    mail::post(
+    mail::post_in(
         realm,
-        mail_from(a, a.owner, SOLD, None, a.bid - cut + a.deposit, delay),
+        mail_from(
+            a,
+            a.owner,
+            SOLD,
+            None,
+            (a.bid - cut).saturating_add(a.deposit),
+            delay,
+        ),
+        records,
+    );
+    // The winner is told they won (a bid of 0), the seller that it sold
+    // (no bidder named), as mangos-classic's `SendAuctionBidderNotification`
+    // and `SendAuctionOwnerNotification` tell them: the client shows a
+    // named bidder's notice as a bid, and a bid's as an outbid.
+    send_to(
+        realm,
+        guid::player(a.bidder),
+        &SMSG_AUCTION_BIDDER_NOTIFICATION {
+            auction_house: AuctionHouse::try_from(a.house).unwrap_or(AuctionHouse::Goblin),
+            auction_id: a.id,
+            bidder: guid::player(a.bidder),
+            won: 0,
+            out_bid: a.outbid(),
+            item_template: a.item.entry,
+            item_random_property_id: random_property(realm, &a.item),
+        },
     );
     send_to(
         realm,
@@ -324,12 +363,12 @@ fn settle(realm: &Realm, a: &Auction) {
             auction_id: a.id,
             bid: a.bid,
             auction_out_bid: 0,
-            bidder: guid::player(a.bidder),
+            bidder: Guid::zero(),
             item: a.item.entry,
             item_random_property_id: random_property(realm, &a.item),
         },
     );
-    realm.store.delete_record(KIND_AUCTION, u64::from(a.id));
+    records.delete(KIND_AUCTION, u64::from(a.id));
 }
 
 /// `CMSG_AUCTION_PLACE_BID`: a bid, or the buyout.
@@ -383,7 +422,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         return;
     }
     let least = if a.bid > 0 {
-        a.bid + a.outbid()
+        a.bid.saturating_add(a.outbid())
     } else {
         a.start_bid
     };
@@ -401,9 +440,14 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         fail(map, R::ErrNotEnoughMoney);
         return;
     }
+    let mut records = Records::new();
     if a.bidder != 0 && a.bidder != me {
         // The one outbid gets their money back.
-        mail::post(&realm, mail_from(a, a.bidder, OUTBID, None, a.bid, 0));
+        mail::post_in(
+            &realm,
+            mail_from(a, a.bidder, OUTBID, None, a.bid, 0),
+            &mut records,
+        );
         send_to(
             &realm,
             guid::player(a.bidder),
@@ -411,7 +455,8 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
                 auction_house: house,
                 auction_id: a.id,
                 bidder: g,
-                won: 0,
+                // The bid lost: not 0, which the client shows as won.
+                won: a.bid,
                 out_bid: a.outbid(),
                 item_template: a.item.entry,
                 item_random_property_id: random_property(&realm, &a.item),
@@ -425,8 +470,9 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let done = buyout.then(|| a.clone());
     if let Some(a) = &done {
         auctions.auctions.remove(&a.id);
+        settle(&realm, a, &mut records);
     } else {
-        save(&realm, a);
+        records.put(KIND_AUCTION, u64::from(a.id), a);
         send_to(
             &realm,
             guid::player(a.owner),
@@ -440,14 +486,15 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
             },
         );
     }
-    drop(auctions);
     if let Some(p) = map.players.get_mut(&g) {
         let money = p.money();
         p.set_money(money - cost);
     }
-    if let Some(a) = done {
-        settle(&realm, &a);
-    }
+    // The bidder's money, the auction (or its settling mails) and the
+    // outbid's refund in one transaction (mangos's
+    // `HandleAuctionPlaceBid`), under the auctions' lock.
+    map.save_together(&[g], records);
+    drop(auctions);
     fail(
         map,
         R::Ok {
@@ -461,6 +508,11 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
 /// the seller pays the cut and the bidder is paid back.
 pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     let realm = map.realm.clone();
+    // At an auctioneer, as any other auction command (mangos's
+    // `HandleAuctionRemoveItem`).
+    if house_at(map, g, m.auctioneer).is_none() {
+        return;
+    }
     let mut auctions = realm.social.auctions.lock();
     let Some(a) = auctions
         .auctions
@@ -470,11 +522,7 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     else {
         return;
     };
-    let fee = if a.bidder > 0 {
-        a.bid * rates(a.house).1 / 100
-    } else {
-        0
-    };
+    let fee = if a.bidder > 0 { cut_of(&a) } else { 0 };
     if map.players.get(&g).is_none_or(|p| p.money() < fee) {
         drop(auctions);
         command_result(
@@ -488,22 +536,28 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
         return;
     }
     auctions.auctions.remove(&a.id);
-    drop(auctions);
-    realm.store.delete_record(KIND_AUCTION, u64::from(a.id));
+    let mut records = Records::new();
+    records.delete(KIND_AUCTION, u64::from(a.id));
     if let Some(p) = map.players.get_mut(&g) {
         let money = p.money();
         p.set_money(money - fee);
     }
     if a.bidder > 0 {
-        mail::post(
+        mail::post_in(
             &realm,
             mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+            &mut records,
         );
     }
-    mail::post(
+    mail::post_in(
         &realm,
         mail_from(&a, a.owner, CANCELLED, Some(a.item.clone()), 0, 0),
+        &mut records,
     );
+    // The auction gone, its item mailed back, the bid refunded and the
+    // seller's fee in one transaction (mangos's `HandleAuctionRemoveItem`).
+    map.save_together(&[g], records);
+    drop(auctions);
     command_result(
         map,
         g,
@@ -662,13 +716,17 @@ pub fn sweep(realm: &Realm) {
             .filter_map(|id| auctions.auctions.remove(id))
             .collect()
     };
+    // Each auction's end and the mails it sends in one transaction: apart,
+    // a crash between them would keep the item in both, or in neither.
     for a in done {
+        let mut records = Records::new();
         if a.bidder > 0 {
-            settle(realm, &a);
+            settle(realm, &a, &mut records);
         } else {
-            mail::post(
+            mail::post_in(
                 realm,
                 mail_from(&a, a.owner, EXPIRED, Some(a.item.clone()), 0, 0),
+                &mut records,
             );
             send_to(
                 realm,
@@ -679,8 +737,9 @@ pub fn sweep(realm: &Realm) {
                     random_property_id: random_property(realm, &a.item),
                 },
             );
-            realm.store.delete_record(KIND_AUCTION, u64::from(a.id));
+            records.delete(KIND_AUCTION, u64::from(a.id));
         }
+        realm.store.save_together(Vec::new(), records);
     }
 }
 
@@ -694,8 +753,21 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
         .map(|a| a.id)
         .collect();
     for id in owned {
-        auctions.auctions.remove(&id);
-        realm.store.delete_record(KIND_AUCTION, u64::from(id));
+        let Some(a) = auctions.auctions.remove(&id) else {
+            continue;
+        };
+        // A bid on it is paid back, as a cancel pays it, in one
+        // transaction with the auction's end.
+        let mut records = Records::new();
+        records.delete(KIND_AUCTION, u64::from(id));
+        if a.bidder > 0 {
+            mail::post_in(
+                realm,
+                mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+                &mut records,
+            );
+        }
+        realm.store.save_together(Vec::new(), records);
     }
     for a in auctions
         .auctions

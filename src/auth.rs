@@ -299,6 +299,12 @@ pub(crate) async fn handle(mut stream: TcpStream, users: UserCache) {
     }
 }
 
+/// Whether `account` is banned now: a session it made before the ban
+/// doesn't outlast it.
+pub fn banned(account: &str) -> bool {
+    crate::accounts::get().is_some_and(|a| a.banned(account))
+}
+
 async fn reconnect_version_8(
     mut stream: TcpStream,
     r: CMD_AUTH_RECONNECT_CHALLENGE_Client,
@@ -308,6 +314,15 @@ async fn reconnect_version_8(
 
     debug!("Reconnect version: {}", r.protocol_version);
 
+    // Banned since the session was made: told so, as a logon is.
+    if banned(&r.account_name) {
+        let _ = CMD_AUTH_RECONNECT_CHALLENGE_Server {
+            result: CMD_AUTH_RECONNECT_CHALLENGE_Server_LoginResult::FailBanned,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
+    }
     // An account with no session to resume is told so, as Thistle Tea
     // answers it, rather than cut off.
     let challenge = users_lock(&users)
@@ -345,9 +360,11 @@ async fn reconnect_version_8(
     };
 
     if !success {
+        // A stale session: Thistle Tea answers `FailUnknown0` and closes
+        // (not banned, which the client would tell its player).
         or_return!(
             CMD_AUTH_RECONNECT_PROOF_Server {
-                result: LoginResult::FailBanned,
+                result: LoginResult::FailUnknown0,
             }
             .tokio_write(&mut stream)
             .await
@@ -375,6 +392,15 @@ async fn reconnect_version_2(
 
     debug!("Reconnect version: {}", r.protocol_version);
 
+    // Banned since the session was made: told so, as a logon is.
+    if banned(&r.account_name) {
+        let _ = CMD_AUTH_RECONNECT_CHALLENGE_Server {
+            result: CMD_AUTH_RECONNECT_CHALLENGE_Server_LoginResult::FailBanned,
+        }
+        .tokio_write(&mut stream)
+        .await;
+        return;
+    }
     // An account with no session to resume is told so, as Thistle Tea
     // answers it, rather than cut off.
     let challenge = users_lock(&users)
@@ -412,9 +438,11 @@ async fn reconnect_version_2(
     };
 
     if !success {
+        // A stale session: Thistle Tea answers `FailUnknown0` and closes
+        // (not banned, which the client would tell its player).
         or_return!(
             CMD_AUTH_RECONNECT_PROOF_Server {
-                result: LoginResult::FailBanned,
+                result: LoginResult::FailUnknown0,
             }
             .tokio_write(&mut stream)
             .await

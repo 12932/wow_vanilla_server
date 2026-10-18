@@ -211,7 +211,7 @@ pub(crate) fn unit_type_allowed(map: &Map, s: &SpellTemplate, g: Guid) -> bool {
 }
 
 /// Whether `caster` has the item `s` needs equipped.
-fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
+pub(crate) fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
     // No spell asks for a consumable (class 0): 0 and -1 are none.
     if s.equipped_item_class <= 0 {
         return true;
@@ -245,6 +245,11 @@ pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bo
         || f.get_jumping().is_some()
         || f.get_fallingfar()
 }
+
+/// `PreventionType`: what silence keeps from being cast, and what pacify
+/// does.
+pub const PREVENTION_SILENCE: u32 = 1;
+pub const PREVENTION_PACIFY: u32 = 2;
 
 /// Why `caster` can't cast `s` at `t` now, if it can't.
 pub fn check(
@@ -311,6 +316,16 @@ pub fn check(
                     .get(&s.category)
                     .is_some_and(|t| *t > now))
             || c.pending_cooldowns.contains(&s.id)
+            // A cooldown waiting for its event holds its category too, as
+            // mangos's permanent cooldown and Thistle Tea's pending one do.
+            || (s.category != 0
+                && c.pending_cooldowns.iter().any(|p| {
+                    map.realm
+                        .data
+                        .spells
+                        .get(*p)
+                        .is_some_and(|t| t.category == s.category)
+                }))
         {
             return Some(if s.attr(0, 0x200_0000) {
                 fail::DONT_REPORT
@@ -350,13 +365,19 @@ pub fn check(
         if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
             return Some(fail::NOT_IN_CONTROL);
         }
-        // Silence stops spells (anything of magic damage class, or not an
-        // ability); pacify stops abilities.
-        let spell_like = s.dmg_class == 1 || (!s.melee_or_ranged() && !s.ability());
-        if spell_like && !frees && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE)) {
+        // Silence stops what its prevention type says silence stops, and
+        // pacify what pacify does (mangos's `Spell::CheckCasterAuras`,
+        // Thistle Tea's `CombatControl`): a wand's Shoot goes on under a
+        // silence.
+        if s.prevention_type == PREVENTION_SILENCE
+            && !frees
+            && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE))
+        {
             return Some(fail::SILENCED);
         }
-        if s.melee_or_ranged() && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE)) {
+        if s.prevention_type == PREVENTION_PACIFY
+            && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE))
+        {
             return Some(fail::PACIFIED);
         }
     }
@@ -487,7 +508,8 @@ pub fn check(
 
 /// What a cast pays for, checked again as it goes off (mangos's
 /// `CheckCast` at the cast, Thistle Tea's launch): the power it costs (a
-/// caster drained while casting has none to pay), its reagents, and room
+/// caster drained while casting has none to pay), its reagents (carried,
+/// where they are taken from: not banked meanwhile), and room
 /// for what it makes. Why it fails, if it does.
 pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
     if let Some(why) = super::unpayable(map, caster, s, cost) {
@@ -497,7 +519,7 @@ pub fn at_launch(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Optio
         && !p.gm
         && s.reagents
             .iter()
-            .any(|(r, n)| *r != 0 && p.count_of(*r) < *n)
+            .any(|(r, n)| *r != 0 && p.carried_count_of(*r) < *n)
     {
         return Some(fail::REAGENTS);
     }
@@ -529,6 +551,53 @@ fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
 }
 
 /// Whether `s` brings back the dead.
+/// A player's cast at a unit as it ends, before it costs anything: the
+/// unit is still there, alive (unless the spell is for the dead), still a
+/// foe for a harmful spell, in range with mangos's tolerance (a tenth of
+/// the range, at most three yards, beyond the reaches) and in front if the
+/// spell must be cast forward (mangos's `CheckCast(false)` and
+/// `CheckRange(false)`, Thistle Tea's launch checks). Why not, if not.
+pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mods) -> Option<u8> {
+    let target = t.unit.filter(|u| *u != caster)?;
+    let Some(u) = map.unit_view(target) else {
+        return Some(fail::BAD_TARGETS);
+    };
+    if !map.players.contains_key(&caster) {
+        return None;
+    }
+    if !u.alive && !for_the_dead(s) && !resurrects(s) {
+        return Some(fail::TARGETS_DEAD);
+    }
+    let requires_enemy = s
+        .effects
+        .iter()
+        .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy) || e.target_a == 53);
+    if (requires_enemy || !auras::positive(s) && !resurrects(s))
+        && !combat::can_attack(map, caster, target)
+        && !s.has_effect(95)
+    {
+        return Some(fail::TARGET_FRIENDLY);
+    }
+    let me = map.unit_view(caster)?;
+    let (_, max) = map.realm.data.spells.range(s);
+    let max = m.apply(mods::OP_RANGE, max);
+    let d = dist(me.position, u.position);
+    let reach = if s.melee_or_ranged() && max <= 5.0 {
+        combat::melee_range(&me, &u) + 1.0
+    } else {
+        max + me.combat_reach + u.combat_reach + (max * 0.1).min(3.0)
+    };
+    if max > 0.0 && d > reach {
+        return Some(fail::OUT_OF_RANGE);
+    }
+    let forward = !s.on_next_swing()
+        && (s.range_index == RANGE_MELEE || s.custom(sd::CUSTOM_FACE_TARGET) || s.auto_repeat());
+    if forward && d >= OVERLAP_DISTANCE && !facing(map, caster, target, std::f32::consts::PI) {
+        return Some(fail::UNIT_NOT_INFRONT);
+    }
+    None
+}
+
 fn resurrects(s: &SpellTemplate) -> bool {
     s.effects.iter().any(|e| matches!(e.effect, 18 | 113))
 }
@@ -607,10 +676,12 @@ fn check_target(
                 Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
             )
         });
-        if (requires_enemy || harmful && !resurrects(s))
-            && !combat::can_attack(map, caster, target)
-            && !s.has_effect(95)
-        {
+        let attackable = if u.alive {
+            combat::can_attack(map, caster, target)
+        } else {
+            combat::can_attack_dead(map, caster, target)
+        };
+        if (requires_enemy || harmful && !resurrects(s)) && !attackable && !s.has_effect(95) {
             return Some(fail::TARGET_FRIENDLY);
         }
         if requires_friend && combat::can_attack(map, caster, target) {
@@ -654,6 +725,26 @@ fn check_target(
         })
     {
         return Some(fail::IMMUNE);
+    }
+    // A helpful spell whose every effect the target is immune to by its
+    // mechanic (a shield on a Weakened Soul) is refused before it costs
+    // anything, as mangos's `CheckCast` has it.
+    if !harmful
+        && !triggered
+        && auras::auras(map, target).is_some_and(|a| {
+            let mut effects = s.effects.iter().filter(|e| e.effect != 0).peekable();
+            effects.peek().is_some()
+                && effects.all(|e| {
+                    let mechanic = if e.mechanic != 0 {
+                        e.mechanic
+                    } else {
+                        s.mechanic
+                    };
+                    mechanic != 0 && a.mechanic_immune(mechanic)
+                })
+        })
+    {
+        return Some(fail::TARGET_AURASTATE);
     }
     if target != caster && !triggered {
         let me = map.unit_view(caster)?;

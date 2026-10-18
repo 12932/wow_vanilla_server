@@ -210,27 +210,69 @@ pub fn real_data() -> Option<&'static GameData> {
 /// `dbc.sqlite`. A missing database gives the empty world, with a warning.
 pub fn load(dir: &Path) -> GameData {
     let started = Instant::now();
+    let _z = crate::zone!("load");
     let mut data = GameData::empty();
     let dbc = open(&dir.join("dbc.sqlite"));
     if let Some(dbc) = &dbc {
+        let _z = crate::zone!("load: dbc");
         load_dbc(dbc, &mut data);
     }
     if let Some(db) = open(&dir.join("vmangos.sqlite")) {
-        load_vmangos(&db, &mut data);
-        load_npcs(&db, dbc.as_ref(), &mut data);
-        load_spells(&db, dbc.as_ref(), &mut data);
-        crate::game::map::boss_mechanics::fixups(&mut data);
-        super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
-        load_pets(&db, dbc.as_ref(), &mut data);
-        load_misc(&db, dbc.as_ref(), &mut data);
-        super::scripts_load::load(&db, &mut data);
-        super::world::load(&db, dbc.as_ref(), &mut data.world);
-        spell_only_nodes(&mut data);
-        let _ = super::tt_scripts::install(&mut data);
+        // A zone a stage, so a slow start shows which.
+        {
+            let _z = crate::zone!("load: vmangos");
+            load_vmangos(&db, &mut data);
+        }
+        {
+            let _z = crate::zone!("load: npcs");
+            load_npcs(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: spells");
+            load_spells(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: boss fixups");
+            crate::game::map::boss_mechanics::fixups(&mut data);
+        }
+        {
+            let _z = crate::zone!("load: crafts");
+            super::crafts::load(&db, dbc.as_ref(), &mut data.crafts);
+        }
+        {
+            let _z = crate::zone!("load: pets");
+            load_pets(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: misc");
+            load_misc(&db, dbc.as_ref(), &mut data);
+        }
+        {
+            let _z = crate::zone!("load: scripts");
+            super::scripts_load::load(&db, &mut data);
+        }
+        {
+            let _z = crate::zone!("load: world");
+            super::world::load(&db, dbc.as_ref(), &mut data.world);
+        }
+        {
+            let _z = crate::zone!("load: spell-only nodes");
+            spell_only_nodes(&mut data);
+        }
+        {
+            let _z = crate::zone!("load: Thistle Tea's scripts");
+            let _ = super::tt_scripts::install(&mut data);
+        }
         // Alterac Valley's NPCs as the battleground drives them, over the
         // general import.
-        crate::game::map::battleground::av_scripts::install(&mut data);
-        super::scripts_load::link_templates(&mut data);
+        {
+            let _z = crate::zone!("load: Alterac Valley");
+            crate::game::map::battleground::av_scripts::install(&mut data);
+        }
+        {
+            let _z = crate::zone!("load: linking templates");
+            super::scripts_load::link_templates(&mut data);
+        }
     }
     let spawns: usize = data.creature_spawns.values().map(Vec::len).sum();
     let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();
@@ -473,11 +515,12 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
     }) {
         data.class_level_stats.insert(c.0, c.1);
     }
-    for (id, radius, reach) in rows(db, "SELECT * FROM creature_display_info_addon", |c| {
+    for (id, radius, reach, gender) in rows(db, "SELECT * FROM creature_display_info_addon", |c| {
         (
             c.u32("display_id"),
             c.f32("bounding_radius"),
             c.f32("combat_reach"),
+            c.u32("gender"),
         )
     }) {
         let d = data.display_info.entry(id).or_insert(DisplayInfo {
@@ -486,6 +529,7 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
         });
         d.bounding_radius = radius;
         d.combat_reach = reach;
+        d.gender = u8::try_from(gender).ok().filter(|g| *g <= 2);
     }
 
     let templates = latest_patch(rows(db, "SELECT * FROM creature_template", |c| {
@@ -637,7 +681,7 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
             c.i64("patch"),
             CreatureAddon {
                 display_id: c.u32("display_id"),
-                mount_display_id: c.u32("mount_display_id"),
+                mount_display_id: c.i32("mount_display_id"),
                 equipment_id: c.i32("equipment_id"),
                 stand_state: c.u8("stand_state"),
                 sheath_state: c.u8("sheath_state"),
@@ -1307,6 +1351,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     c.i32(&format!("RewRepValue{}", i + 1)),
                 )
             }),
+            reputation_no_spillover: c.u32("RewRepSpilloverMask"),
             required_min_rep: (c.u32("RequiredMinRepFaction"), c.i32("RequiredMinRepValue")),
             required_max_rep: (c.u32("RequiredMaxRepFaction"), c.i32("RequiredMaxRepValue")),
             rep_objective: (c.u32("RepObjectiveFaction"), c.i32("RepObjectiveValue")),
@@ -1449,12 +1494,12 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     for (guid, event) in rows(db, "SELECT * FROM game_event_creature", |c| {
         (c.u32("guid"), c.i64("event") as i32)
     }) {
-        data.event_creatures.insert(guid, event);
+        data.event_creatures.entry(guid).or_default().push(event);
     }
     for (guid, event) in rows(db, "SELECT * FROM game_event_gameobject", |c| {
         (c.u32("guid"), c.i64("event") as i32)
     }) {
-        data.event_objects.insert(guid, event);
+        data.event_objects.entry(guid).or_default().push(event);
     }
     for (guid, req) in rows(db, "SELECT * FROM gameobject_requirement", |c| {
         (c.u32("guid"), (c.u8("reqType"), c.u32("reqGuid")))
@@ -2193,6 +2238,30 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     ) {
         let _ = build;
         pets.spell_lists.insert(list, spells);
+    }
+    // Cooldowns are seconds, but for a few in milliseconds already (as
+    // Thistle Tea reads them: 1000 or more).
+    let ms = |v: u32| if v >= 1000 { v } else { v * 1000 };
+    for (entry, c) in rows(
+        db,
+        "SELECT * FROM creature_charm_spells \
+         WHERE patch_min <= 10 AND patch_max >= 10 AND availability > 0 AND slot <= 3 \
+         ORDER BY entry, slot, spell_id",
+        |c| {
+            let (a, b) = (c.u32("cooldown_min"), c.u32("cooldown_max"));
+            (
+                c.u32("entry"),
+                super::pets::CharmSpell {
+                    slot: c.u32("slot"),
+                    spell: c.u32("spell_id"),
+                    availability: c.f32("availability"),
+                    cooldown_min_ms: ms(a.min(b)),
+                    cooldown_max_ms: ms(a.max(b)),
+                },
+            )
+        },
+    ) {
+        pets.charm_spells.entry(entry).or_default().push(c);
     }
     for (entry, list) in rows(
         db,

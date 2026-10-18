@@ -153,12 +153,20 @@ fn units_around(
     v.into_iter().map(|(g, _)| g).collect()
 }
 
-/// Whether `g` is in front of `caster`, within `degrees`.
-fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
+/// Whether `g` is in front of `caster`, within `degrees`; behind it, for a
+/// negative cone (Onyxia's Tail Sweep's -120, as mangos's `PUSH_CONE` takes
+/// it with `isInBack`).
+pub(crate) fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
     let (Some(me), Some(p)) = (map.unit_view(caster), map.position_of(g)) else {
         return false;
     };
-    let a = (p.y - me.position.y).atan2(p.x - me.position.x) - me.orientation;
+    let facing = if degrees < 0 {
+        me.orientation + std::f32::consts::PI
+    } else {
+        me.orientation
+    };
+    let degrees = degrees.abs();
+    let a = (p.y - me.position.y).atan2(p.x - me.position.x) - facing;
     let a = a.sin().atan2(a.cos()).abs();
     a <= degrees as f32 * std::f32::consts::PI / 360.0
 }
@@ -336,6 +344,22 @@ pub fn effect_targets(
             }
         }
         (EnemyLocation, _) => t.unit.into_iter().collect(),
+        // Every script unit in a cone before the caster (60), as mangos's
+        // `TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60`.
+        (ScriptUnits, _) if e.target_a == 60 => {
+            let degrees = map
+                .realm
+                .data
+                .spells
+                .cones
+                .get(&s.id)
+                .copied()
+                .unwrap_or(60);
+            script_area(map, caster, center(map, caster, t, false), s, r)
+                .into_iter()
+                .filter(|g| *g != about && in_cone(map, caster, *g, degrees))
+                .collect()
+        }
         (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, t, r),
         // vmangos's script units about the source (7) or the destination
         // (8): every one of them there, as Separation Anxiety and
@@ -353,7 +377,7 @@ pub fn effect_targets(
 /// No more than `max` of `out` (0 for no limit), as Thistle Tea's
 /// `TargetLimit` and target resolver pick them: each once, a random few
 /// when there are too many, the one aimed at among them if it is there.
-fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<Guid>) {
+pub(crate) fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<Guid>) {
     let mut seen = ahash::AHashSet::new();
     out.retain(|g| seen.insert(*g));
     if max == 0 || out.len() <= max {
@@ -433,10 +457,18 @@ pub fn script_target(
     g: Guid,
 ) -> bool {
     let data = &map.realm.data.spells;
+    // A creature row (1) names the living, a dead one's (2) corpses
+    // (vmangos's `SPELL_TARGET_TYPE_CREATURE` and `_DEAD`).
+    let alive = map.creature(g).map(|c| c.alive());
     data.script_targets.get(&spell).is_some_and(|v| {
         v.iter().any(|(k, e)| {
             kinds.contains(k)
                 && *e == entry
+                && match (*k, alive) {
+                    (1, Some(alive)) => alive,
+                    (2, Some(alive)) => !alive,
+                    _ => true,
+                }
                 && data
                     .script_target_conditions
                     .get(&(spell, *k, *e))
@@ -456,7 +488,7 @@ fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius:
     }
     units_around(map, at, radius, |g| {
         map.creature(g)
-            .is_some_and(|c| c.alive() && script_target(map, caster, s.id, &[1, 2], c.entry, g))
+            .is_some_and(|c| script_target(map, caster, s.id, &[1, 2], c.entry, g))
     })
 }
 

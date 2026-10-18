@@ -11,8 +11,10 @@ pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
+
 pub use effects::{
-    add_combo_points, dr_aura_gone, release_retained_combo_points, retained_combo_points_expired,
+    add_combo_points, combo_duration, dr_aura_gone, release_retained_combo_points,
+    retained_combo_points_expired, shown_power,
 };
 pub mod environment;
 pub mod health_sync;
@@ -526,9 +528,9 @@ fn power_index(s: &SpellTemplate) -> Option<u16> {
     (s.power_type < 5).then_some(s.power_type as u16)
 }
 
-/// What `s` costs `caster` before modifiers: its own cost, a share of base
-/// mana (of base health, or of the power's maximum), or all it has; with
-/// school cost auras.
+/// What `s` costs `caster` before modifiers: its own cost and a share of
+/// base mana (of base health, or of the power's maximum), or all it has;
+/// with school cost auras.
 pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
@@ -538,16 +540,6 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
             || field(UNIT_FIELD_HEALTH),
             |i| field(UNIT_FIELD_POWER1 + i),
         )
-    } else if s.mana_cost_percentage > 0 {
-        let base = match power_index(s) {
-            Some(0) => field(UNIT_FIELD_BASE_MANA),
-            Some(i) => field(UNIT_FIELD_MAXPOWER1 + i),
-            None => match field(UNIT_FIELD_BASE_HEALTH) {
-                0 => field(UNIT_FIELD_MAXHEALTH),
-                base => base,
-            },
-        };
-        base * s.mana_cost_percentage / 100
     } else {
         // The rank it is cast at goes no higher than its last level.
         let rank = if s.max_level > 0 {
@@ -555,7 +547,23 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         } else {
             level
         };
-        s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level)
+        let flat = s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level);
+        // A share is on top of the flat cost (mangos's
+        // `Spell::CalculatePowerCost`, Thistle Tea's `Resources`).
+        let share = if s.mana_cost_percentage > 0 {
+            let base = match power_index(s) {
+                Some(0) => field(UNIT_FIELD_BASE_MANA),
+                Some(i) => field(UNIT_FIELD_MAXPOWER1 + i),
+                None => match field(UNIT_FIELD_BASE_HEALTH) {
+                    0 => field(UNIT_FIELD_MAXHEALTH),
+                    base => base,
+                },
+            };
+            base * s.mana_cost_percentage / 100
+        } else {
+            0
+        };
+        flat + share
     } as i32;
     // A spell that scales with its caster's level costs as much more, as
     // vmangos's `CalculatePowerCost` (and Thistle Tea's `CostScaling`) has it.
@@ -582,7 +590,7 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
 /// any other as much power (`NO_POWER`). An ordinary creature, not a pet,
 /// pays no rage, focus, energy or happiness, nor mana when it has none.
 pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
-    if cost == 0 {
+    if cost == 0 || crate::game::map::gm_dev::invulnerable(map, caster) {
         return None;
     }
     let f = map.unit_fields(caster)?;
@@ -604,6 +612,10 @@ pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -
 /// the power, as much of it as there is.
 fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
     let now = map.now;
+    // A GM in god mode pays nothing (Thistle Tea's `Resources.spend_power`).
+    if crate::game::map::gm_dev::invulnerable(map, caster) {
+        return;
+    }
     let Some(index) = power_index(s) else {
         if let Some(f) = map.unit_fields_mut(caster) {
             let health = f.get_u32(UNIT_FIELD_HEALTH);
@@ -628,7 +640,7 @@ fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
     }
 }
 
-fn targets_of(t: &SpellCastTargets) -> Targets {
+pub(crate) fn targets_of(t: &SpellCastTargets) -> Targets {
     let f = &t.target_flags;
     Targets {
         unit: f.get_unit().map(|u| u.unit_target),
@@ -811,6 +823,26 @@ pub fn cast(
         crate::game::map::ranged::start(map, caster, spell, targets);
         return true;
     }
+    // A spell cast while channelling ends the channel, unless either may
+    // be cast with another (mangos's `SetCurrentCastedSpell`).
+    let channel = map
+        .caster(caster)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell);
+    if let Some(channel) = channel
+        && !s.attr(4, sd::ATTR_EX4_ALLOW_CAST_WHILE_CASTING)
+        && !data
+            .spells
+            .get(channel)
+            .is_some_and(|c| c.attr(4, sd::ATTR_EX4_ALLOW_CAST_WHILE_CASTING))
+    {
+        interrupt(map, caster);
+    }
+    // Another spell cast stops a wand (mangos's `SetCurrentCastedSpell`,
+    // `SPELL_ATTR_EX3_CASTING_CANCELS_AUTOREPEAT` on Shoot); Auto Shot
+    // goes on.
+    crate::game::map::ranged::cast_begun(map, caster);
     let now = map.now;
     let time = cast_time(map, caster, s, &m);
     // A spell of the ranged slot shows its projectile (mangos's
@@ -1149,7 +1181,7 @@ fn execute(
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
+    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions, triggered);
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however
@@ -1262,7 +1294,7 @@ fn launch_failed(map: &Map, caster: Guid, spell: u32, code: u8) {
 
 /// How long something at `speed` yards a second takes from `caster` to
 /// `target`: at least five yards' worth.
-fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
+pub(crate) fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
     match (map.position_of(caster), map.position_of(target)) {
         (Some(a), Some(b)) => {
             let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
@@ -1387,13 +1419,15 @@ fn land(
             }
             let mechanic = s.effects[i].mechanic;
             if mechanic != 0
-                && !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-                && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic))
+                && ((!s.attr(0, sd::ATTR_NO_IMMUNITIES)
+                    && auras::auras(map, aim).is_some_and(|a| a.mechanic_immune(mechanic)))
+                    || crate::game::map::creature_combat::effect_immune(map, aim, caster, mechanic))
             {
                 *on = false;
                 immune = true;
             } else if !s.attr(0, sd::ATTR_NO_IMMUNITIES)
-                && auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+                && (auras::auras(map, aim).is_some_and(|a| outcome::state_immune(a, &s.effects[i]))
+                    || crate::game::map::extra_effects::effect_immune(map, aim, s, i))
             {
                 // An aura of a kind kept off (mangos's `IsImmuneToSpellEffect`).
                 *on = false;
@@ -1415,7 +1449,7 @@ fn land(
     let deals = s
         .effects
         .iter()
-        .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
+        .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 62 | 67 | 75 | 121));
     // Damage that ignores its caster's modifiers ignores their crit too
     // (mangos's `CalculateCritAmount`); a heal's may still crit.
     let unmodified = s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
@@ -1598,8 +1632,10 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
     }
 }
 
-/// Threat a spell's damage (or effect) adds beyond the damage itself: its
-/// `spell_threat`, the threat modifiers and the caster's threat auras.
+/// Threat a spell's damage (or effect) adds beyond what the damage itself
+/// made (its school's threat auras on it, `deal_damage`'s): its
+/// `spell_threat`, the threat modifiers, the auras on those too, as Thistle
+/// Tea's `SpellThreat.multiplier` has it.
 pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: f32, m: &Mods) {
     if !guid::is_unit(target) || s.attr(1, sd::ATTR_EX_NO_THREAT) {
         return;
@@ -1612,11 +1648,10 @@ pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dama
         .get(&s.id)
         .copied()
         .unwrap_or((0, 1.0));
-    let pct = m.pct[mods::OP_THREAT]
-        + auras::auras(map, caster)
-            .map_or(0, |a| a.sum_mask(auras::AURA_MOD_THREAT, s.school_mask()));
-    let total = (damage * mult.max(0.0) + flat as f32) * (100 + pct).max(0) as f32 / 100.0;
-    let extra = total - damage;
+    let auras = crate::game::map::combat::threat_multiplier(map, caster, s.school_mask());
+    let pct = m.pct[mods::OP_THREAT];
+    let total = (damage * mult.max(0.0) + flat as f32) * auras * (100 + pct).max(0) as f32 / 100.0;
+    let extra = total - damage * auras;
     if extra.abs() > 0.01 {
         crate::game::map::ai::add_threat(map, target, caster, extra);
     }
@@ -1677,7 +1712,8 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         amount as f32,
     ) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
-    let (left, absorbed) = auras::absorb(map, target, amount - resisted, h.school);
+    let (left, absorbed) =
+        auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
         target,
         caster: h.caster,
@@ -1780,6 +1816,11 @@ pub fn heal_crit(
     periodic: bool,
     crit: bool,
 ) {
+    // Down in a linked feign death, nothing heals it (Thistle Tea's
+    // fallen pose).
+    if crate::game::map::event_ai::feigning(map, target) {
+        return;
+    }
     let Some(f) = map.unit_fields_mut(target) else {
         return;
     };
@@ -1861,7 +1902,6 @@ pub fn interrupt(map: &mut Map, g: Guid) {
                 c.other_gcds.retain(|(cat, _)| *cat != category);
             }
         }
-        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
     }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
@@ -2146,17 +2186,20 @@ pub fn update(map: &mut Map) {
         let Some(s) = data.spells.get(casting.spell) else {
             continue;
         };
-        // The target must still be here.
-        if let Some(t) = casting.targets.unit
-            && t != g
-            && map.unit_view(t).is_none()
-        {
-            if let Some(p) = map.players.get(&g) {
-                p.outbound.send(&SMSG_SPELL_FAILURE {
-                    guid: g,
-                    spell: casting.spell,
-                    result: SpellCastResult::BadTargets,
-                });
+        // The target must still be here; a player's still alive, a foe, in
+        // range and in front as the cast ends, or it fails before it costs.
+        let m = mods::for_spell(map, g, s);
+        if let Some(code) = checks::at_finish(map, g, s, &casting.targets, &m) {
+            if code == checks::fail::BAD_TARGETS {
+                if let Some(p) = map.players.get(&g) {
+                    p.outbound.send(&SMSG_SPELL_FAILURE {
+                        guid: g,
+                        spell: casting.spell,
+                        result: SpellCastResult::BadTargets,
+                    });
+                }
+            } else {
+                launch_failed(map, g, casting.spell, code);
             }
             continue;
         }
@@ -2338,7 +2381,11 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let Some(i) = p.item_at(bag, slot) else {
+    // Not one sold, in the vendor's buyback slots.
+    let Some(i) = p
+        .item_at(bag, slot)
+        .filter(|_| !crate::game::map::vendor::in_buyback(bag, slot))
+    else {
         return;
     };
     let item = &p.items[i];
