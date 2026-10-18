@@ -778,3 +778,55 @@ async fn an_auction_is_cancelled_only_at_an_auctioneer() {
     let still = realm.social.auctions.lock().auctions.contains_key(&9);
     assert!(still, "not cancelled away from the house");
 }
+
+/// R4-16. An item bought back is held to its unique limit, as one bought
+/// is (mangos's `CanStoreItem`): sell a unique ring, take another, and the
+/// first can't be bought back as a second.
+#[tokio::test]
+async fn a_unique_item_bought_back_keeps_its_limit() {
+    const RING: u32 = 990_403;
+    let realm = harness::realm_with({
+        let mut d = data();
+        let mut ring = item(RING);
+        ring.max_count = 1;
+        d.items.insert(RING, ring);
+        d
+    });
+    let mut a = Client::connect(&realm, "R4UQ");
+    let g = a.enter("Ringer", Race::Human, Class::Warrior).await;
+    a.sees(vendor_guid()).await;
+    let first = on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1000);
+        crate::game::map::inventory::add_item(m, g, RING, 1, false).unwrap();
+        let p = &m.players[&g];
+        p.items.iter().find(|i| i.entry == RING).unwrap().guid
+    })
+    .await;
+    a.send(CMSG_SELL_ITEM {
+        vendor: vendor_guid(),
+        item: first,
+        amount: 0,
+    })
+    .await;
+    handled(&mut a).await;
+    on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, RING, 1, false).expect("one again");
+    })
+    .await;
+    a.send(CMSG_BUYBACK_ITEM {
+        guid: vendor_guid(),
+        slot: BuybackSlot::Slot1,
+    })
+    .await;
+    handled(&mut a).await;
+    let (rings, first_at) = on_map(&realm, move |m| {
+        (m.players[&g].count_of(RING), place(m, g, first))
+    })
+    .await;
+    assert_eq!(rings, 1, "still one");
+    assert_eq!(
+        first_at.map(|f| f.1),
+        Some(BUYBACK_START),
+        "the sold one still sold"
+    );
+}
