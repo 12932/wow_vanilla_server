@@ -22,9 +22,9 @@ use crate::game::store::BAG_PLAYER;
 const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 const AUCTIONEER: u32 = 3170;
 /// Sells for 100 each: three for two hours at the goblins' 25% leave 75.
-const GOODS: u32 = 9600;
+pub(crate) const GOODS: u32 = 9600;
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = GameData::empty();
     d.creature_templates.insert(
         AUCTIONEER,
@@ -71,7 +71,7 @@ fn data() -> GameData {
     d
 }
 
-fn auctioneer() -> Guid {
+pub(crate) fn auctioneer() -> Guid {
     guid::unit(AUCTIONEER, 1)
 }
 
@@ -87,7 +87,7 @@ async fn on_map<T: Send + 'static>(
         .expect("the map answers")
 }
 
-async fn player(realm: &Arc<Realm>, account: &str, name: &str) -> Client {
+pub(crate) async fn player(realm: &Arc<Realm>, account: &str, name: &str) -> Client {
     let mut c = Client::connect(realm, account);
     c.enter(name, Race::Human, Class::Warrior).await;
     c.sees(auctioneer()).await;
@@ -96,7 +96,7 @@ async fn player(realm: &Arc<Realm>, account: &str, name: &str) -> Client {
     c
 }
 
-async fn set_money(realm: &Arc<Realm>, g: Guid, money: u32) {
+pub(crate) async fn set_money(realm: &Arc<Realm>, g: Guid, money: u32) {
     on_map(realm, move |m| {
         m.players.get_mut(&g).unwrap().set_money(money)
     })
@@ -108,7 +108,7 @@ async fn money(realm: &Arc<Realm>, g: Guid) -> u32 {
 }
 
 /// Three goods in `g`'s first backpack slot.
-async fn goods(realm: &Arc<Realm>, g: Guid) -> Guid {
+pub(crate) async fn goods(realm: &Arc<Realm>, g: Guid) -> Guid {
     on_map(realm, move |m| {
         let d = m.realm.data.clone();
         let counter = m
@@ -150,7 +150,13 @@ type A = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction;
 type R = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult;
 type R2 = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo;
 
-async fn sell(c: &mut Client, item: Guid, bid: u32, buyout: u32, minutes: u32) -> (u32, A) {
+pub(crate) async fn sell(
+    c: &mut Client,
+    item: Guid,
+    bid: u32,
+    buyout: u32,
+    minutes: u32,
+) -> (u32, A) {
     c.clear();
     c.send(CMSG_AUCTION_SELL_ITEM {
         auctioneer: auctioneer(),
@@ -163,7 +169,7 @@ async fn sell(c: &mut Client, item: Guid, bid: u32, buyout: u32, minutes: u32) -
     result(c).await
 }
 
-async fn bid(c: &mut Client, id: u32, price: u32) -> A {
+pub(crate) async fn bid(c: &mut Client, id: u32, price: u32) -> A {
     c.clear();
     c.send(CMSG_AUCTION_PLACE_BID {
         auctioneer: auctioneer(),
@@ -174,7 +180,7 @@ async fn bid(c: &mut Client, id: u32, price: u32) -> A {
     result(c).await.1
 }
 
-fn ok(a: &A) -> bool {
+pub(crate) fn ok(a: &A) -> bool {
     matches!(
         a,
         A::BidPlaced {

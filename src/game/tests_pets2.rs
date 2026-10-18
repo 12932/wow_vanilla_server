@@ -100,6 +100,9 @@ fn more() -> GameData {
         [summon_guardian, none, none],
     );
     guardian.duration_index = 4;
+    // Timed and of a category, a recast replaces it (mangos-classic's
+    // `EffectSummonGuardian`; without, a recast only sends it away).
+    guardian.category = 4;
     let mut lore_effect = effect(6, 0, 6);
     lore_effect.aura = 121;
     let mut lore = spell(BEAST_LORE, "Beast Lore", [lore_effect, none, none]);

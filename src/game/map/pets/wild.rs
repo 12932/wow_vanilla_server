@@ -188,7 +188,7 @@ fn guardian_spell(map: &Map, spell: u32) -> bool {
 
 /// The guardians of `owner` (of `entry`, or all for 0): a player's, a
 /// creature's that follow it, and those its guardian spells made.
-fn guardians_of(map: &Map, owner: Guid, entry: u32) -> Vec<Guid> {
+pub(super) fn guardians_of(map: &Map, owner: Guid, entry: u32) -> Vec<Guid> {
     let of_entry = |g: &Guid| entry == 0 || map.creature(*g).is_some_and(|c| c.entry == entry);
     if let Some(p) = map.players.get(&owner) {
         return p.owned.guardians.iter().copied().filter(of_entry).collect();

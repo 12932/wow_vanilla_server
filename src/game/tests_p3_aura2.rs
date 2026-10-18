@@ -208,6 +208,7 @@ pub(crate) fn data() -> GameData {
             id,
             name: format!("Bolt {id}"),
             school,
+            dmg_class: 1,
             equipped_item_class: -1,
             range_index: 1,
             ..Default::default()

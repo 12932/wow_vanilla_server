@@ -326,6 +326,23 @@ fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
         mail_from(a, a.owner, SOLD, None, a.bid - cut + a.deposit, delay),
         records,
     );
+    // The winner is told they won (a bid of 0), the seller that it sold
+    // (no bidder named), as mangos-classic's `SendAuctionBidderNotification`
+    // and `SendAuctionOwnerNotification` tell them: the client shows a
+    // named bidder's notice as a bid, and a bid's as an outbid.
+    send_to(
+        realm,
+        guid::player(a.bidder),
+        &SMSG_AUCTION_BIDDER_NOTIFICATION {
+            auction_house: AuctionHouse::try_from(a.house).unwrap_or(AuctionHouse::Goblin),
+            auction_id: a.id,
+            bidder: guid::player(a.bidder),
+            won: 0,
+            out_bid: a.outbid(),
+            item_template: a.item.entry,
+            item_random_property_id: random_property(realm, &a.item),
+        },
+    );
     send_to(
         realm,
         guid::player(a.owner),
@@ -333,7 +350,7 @@ fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
             auction_id: a.id,
             bid: a.bid,
             auction_out_bid: 0,
-            bidder: guid::player(a.bidder),
+            bidder: Guid::zero(),
             item: a.item.entry,
             item_random_property_id: random_property(realm, &a.item),
         },
@@ -425,7 +442,8 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
                 auction_house: house,
                 auction_id: a.id,
                 bidder: g,
-                won: 0,
+                // The bid lost: not 0, which the client shows as won.
+                won: a.bid,
                 out_bid: a.outbid(),
                 item_template: a.item.entry,
                 item_random_property_id: random_property(&realm, &a.item),

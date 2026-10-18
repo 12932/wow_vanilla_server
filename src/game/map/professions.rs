@@ -802,9 +802,13 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     let Some(t) = data.creature_template(entry) else {
         return;
     };
-    let Some(table) = data.loot.skinning.get(&t.skinning_loot_id) else {
-        return;
-    };
+    // A skin of no rows yields nothing, and is skinned all the same (Thistle
+    // Tea's empty skinning table): not left to be tried for ever.
+    let table = data
+        .loot
+        .skinning
+        .get(&t.skinning_loot_id)
+        .map_or(&[][..], |t| &t[..]);
     // The attempt may fail: the skill rolled from 25 below to 37 above
     // must reach the corpse's need (Thistle Tea's `Skinning.attempt?`).
     let skill = map

@@ -336,7 +336,8 @@ pub fn taught(s: &SpellTemplate) -> Option<u32> {
         .map(|i| s.effects[i].trigger_spell)
 }
 
-/// Effect `index` of `s`, cast by `caster` on `target`.
+/// Effect `index` of `s`, cast by `caster` on `target`; `triggered` if
+/// another spell or an aura cast it.
 pub fn effect(
     map: &mut Map,
     caster: Guid,
@@ -344,6 +345,7 @@ pub fn effect(
     s: &SpellTemplate,
     index: usize,
     amount: i32,
+    triggered: bool,
 ) {
     let e = s.effects[index];
     // The stacking trinkets' hit scripts ride the same hook.
@@ -405,15 +407,40 @@ pub fn effect(
         | EFFECT_SUMMON_DEMON => {
             let count = amount.clamp(1, 5) as usize;
             // A creature's wild summons and guardians are creatures of
-            // their own.
-            if matches!(e.effect, EFFECT_SUMMON_WILD | EFFECT_SUMMON_GUARDIAN)
-                && wild::by_creature(map, caster)
+            // their own, and so is a player's wild summon: of its
+            // template's faction, each cast another (mangos-classic's
+            // `EffectSummonWild`, Thistle Tea's `WildSummon`). A Field
+            // Repair Bot stands where it is put.
+            if e.effect == EFFECT_SUMMON_WILD
+                || (e.effect == EFFECT_SUMMON_GUARDIAN && wild::by_creature(map, caster))
             {
                 wild::summon(map, caster, e.misc_value.max(0) as u32, s, index, count);
                 return;
             }
+            let entry = e.misc_value.max(0) as u32;
+            // A player's guardian: a second cast of their own sends those
+            // of its entry away, and summons none again unless the spell
+            // has a time and a category (mangos-classic's
+            // `EffectSummonGuardian`, Thistle Tea's `GuardianOwner`); one
+            // another spell triggers adds to them.
+            if e.effect == EFFECT_SUMMON_GUARDIAN && guid::is_player(caster) {
+                if !triggered {
+                    let old = wild::guardians_of(map, caster, entry);
+                    let found = !old.is_empty();
+                    for g in old {
+                        summon::remove(map, g);
+                    }
+                    if found && !(s.duration_index != 0 && s.category != 0) {
+                        return;
+                    }
+                }
+                for _ in 0..count {
+                    totems::summon_guardian(map, caster, entry, s, false);
+                }
+                return;
+            }
             for i in 0..count {
-                totems::summon_guardian(map, caster, e.misc_value.max(0) as u32, s, i == 0);
+                totems::summon_guardian(map, caster, entry, s, i == 0);
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),

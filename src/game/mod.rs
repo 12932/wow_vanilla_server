@@ -117,7 +117,6 @@ mod tests_p3_cast7;
 mod tests_p3_cast8;
 #[cfg(test)]
 mod tests_p3_cast9;
-#[cfg(test)]
 mod tests_p3_cast_class;
 #[cfg(test)]
 mod tests_p3_cast_kit;
@@ -354,17 +353,35 @@ mod tests_p4_scripts_bosses;
 #[cfg(test)]
 mod tests_p4_scripts_brd;
 #[cfg(test)]
-mod tests_p4_scripts_dungeons;
-#[cfg(test)]
 mod tests_p4_scripts_dungeons2;
 #[cfg(test)]
 mod tests_p4_scripts_dungeons3;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons;
 #[cfg(test)]
 mod tests_p4_scripts_gnomes;
 #[cfg(test)]
 mod tests_p4_scripts_instances;
 #[cfg(test)]
 mod tests_p4_scripts_strat;
+#[cfg(test)]
+mod tests_p4_world;
+#[cfg(test)]
+mod tests_p4_world_guardians;
+#[cfg(test)]
+mod tests_p4_world_items;
+#[cfg(test)]
+mod tests_p4_world_loot;
+#[cfg(test)]
+mod tests_p4_world_net;
+#[cfg(test)]
+mod tests_p4_world_real;
+#[cfg(test)]
+mod tests_p4_world_rewards;
+#[cfg(test)]
+mod tests_p4_world_scripts;
+#[cfg(test)]
+mod tests_p4_world_spells;
 #[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]

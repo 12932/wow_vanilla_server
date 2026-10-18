@@ -1181,7 +1181,7 @@ fn execute(
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions);
+    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions, triggered);
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however
@@ -1294,7 +1294,7 @@ fn launch_failed(map: &Map, caster: Guid, spell: u32, code: u8) {
 
 /// How long something at `speed` yards a second takes from `caster` to
 /// `target`: at least five yards' worth.
-fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
+pub(crate) fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u32 {
     match (map.position_of(caster), map.position_of(target)) {
         (Some(a), Some(b)) => {
             let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
