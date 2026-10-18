@@ -297,3 +297,157 @@ async fn the_ground_the_water_or_a_teleport_ends_a_fall_and_one_may_start_below_
         fall_damage(30.0, max)
     );
 }
+
+const KNOCK: u32 = 97_951;
+const LAUNCH: u32 = 97_952;
+const PULL: u32 = 97_953;
+const BOLT: u32 = 97_954;
+
+fn knock_world() -> crate::game::data::GameData {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut d = data();
+    let effect = |effect: u32, misc: i32, points: i32, target_a: u32| SpellEffect {
+        effect,
+        misc_value: misc,
+        base_points: points - 1,
+        base_dice: 1,
+        target_a,
+        ..Default::default()
+    };
+    for (id, e) in [
+        (KNOCK, effect(98, 120, 70, 6)),
+        (LAUNCH, effect(98, 100, 100, 1)),
+        (PULL, effect(124, 300, 0, 6)),
+    ] {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            equipped_item_class: -1,
+            range_index: 1,
+            ..Default::default()
+        };
+        s.effects[0] = e;
+        d.spells.spells.insert(id, s);
+    }
+    // A bolt of three seconds.
+    d.spells.cast_times.insert(5, 3_000);
+    let mut bolt = SpellTemplate {
+        id: BOLT,
+        name: "Bolt".into(),
+        equipped_item_class: -1,
+        range_index: 1,
+        casting_time_index: 5,
+        ..Default::default()
+    };
+    bolt.effects[0] = effect(2, 0, 10, 6);
+    d.spells.spells.insert(BOLT, bolt);
+    d
+}
+
+/// `SMSG_MOVE_KNOCK_BACK`'s cos, sin, horizontal and vertical speeds.
+fn launch_of(b: &[u8]) -> [f32; 4] {
+    let at = 1 + b[0].count_ones() as usize + 4;
+    std::array::from_fn(|i| f32::from_le_bytes(b[at + i * 4..at + i * 4 + 4].try_into().unwrap()))
+}
+
+#[tokio::test]
+async fn a_knockback_throws_a_player_away_from_its_caster_or_back_from_herself_breaking_her_cast() {
+    use crate::game::map::spells;
+    let realm = harness::realm_with(knock_world());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    jump(&a, START.2 + 100.0).await;
+    at(&realm, g, START.2 + 100.0).await;
+    let r = on_map(&realm, move |m| {
+        crate::game::tests_p3_combat::level(m, g, 60);
+        // A brute ten yards south of her.
+        let brute =
+            crate::game::tests_p3_combat::spawn(m, g, crate::game::tests_p3_combat::BRUTE, 20, 0.0);
+        let p = m.players[&g].position();
+        m.creature_mut(brute).unwrap().position = Vector3d { y: p.y - 10.0, ..p };
+        m.players.get_mut(&g).unwrap().spells.push(BOLT);
+        let bolt = spells::cast(
+            m,
+            g,
+            BOLT,
+            spells::Targets {
+                unit: Some(brute),
+                ..Default::default()
+            },
+            None,
+        );
+        let casting = m.players[&g].caster.casting.is_some();
+        spells::cast_triggered(m, brute, KNOCK, Some(g));
+        let after = (
+            m.players[&g].caster.casting.is_none(),
+            m.players[&g].fall_from,
+        );
+        (bolt, casting, after)
+    })
+    .await;
+    assert_eq!(
+        r,
+        (true, true, (true, None)),
+        "the cast broken, the fall forgotten"
+    );
+    let b = a.wait_frame("the knockback", 0x0EF, |_| true).await;
+    let [cos, sin, xy, z] = launch_of(&b);
+    // North, away from the brute: 12 along, 7 up (sent as -7, as mangos).
+    assert!(
+        cos.abs() < 0.001 && (sin - 1.0).abs() < 0.001,
+        "{cos} {sin}"
+    );
+    assert_eq!((xy, z), (12.0, -7.0));
+    // Her own launch: backward, facing east.
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().movement.orientation = 0.0;
+        spells::cast_triggered(m, g, LAUNCH, Some(g));
+    })
+    .await;
+    let b = a.wait_frame("the launch", 0x0EF, |_| true).await;
+    let [cos, sin, ..] = launch_of(&b);
+    assert!(
+        (cos + 1.0).abs() < 0.001 && sin.abs() < 0.001,
+        "{cos} {sin}"
+    );
+}
+
+#[tokio::test]
+async fn a_rooted_stunned_or_dead_player_isnt_thrown_or_pulled_nor_one_pulled_at_herself() {
+    use crate::game::map::spells;
+    let realm = harness::realm_with(knock_world());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let brute = on_map(&realm, move |m| {
+        crate::game::tests_p3_combat::level(m, g, 60);
+        crate::game::tests_p3_combat::spawn(m, g, crate::game::tests_p3_combat::BRUTE, 20, 20.0)
+    })
+    .await;
+    for (n, kind) in [auras::AURA_MOD_ROOT, auras::AURA_MOD_STUN]
+        .into_iter()
+        .enumerate()
+    {
+        on_map(&realm, move |m| {
+            aura_of(m, g, 97_961 + n as u32, kind, 0, 1);
+            spells::cast_triggered(m, brute, KNOCK, Some(g));
+            spells::cast_triggered(m, brute, PULL, Some(g));
+            auras::remove_spell(m, g, 97_961 + n as u32, None);
+        })
+        .await;
+    }
+    on_map(&realm, move |m| {
+        spells::cast_triggered(m, g, PULL, Some(g));
+        crate::game::map::combat::deal_damage(m, brute, g, 10_000_000);
+        spells::cast_triggered(m, brute, KNOCK, Some(g));
+        spells::cast_triggered(m, brute, PULL, Some(g));
+    })
+    .await;
+    let thrown = tokio::time::timeout(
+        Duration::from_millis(300),
+        a.wait_frame("a throw", 0x0EF, |_| true),
+    )
+    .await;
+    assert!(thrown.is_err(), "none thrown");
+}
