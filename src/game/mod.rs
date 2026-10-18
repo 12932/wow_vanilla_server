@@ -570,6 +570,13 @@ impl Realm {
                 );
             }
         }
+        // Honor earned since the last sweep (a kill, a battleground's win)
+        // is kept too: the sweep that writes it runs only every so often.
+        let honor = self.social.honor.lock().take_dirty();
+        for e in honor {
+            self.store
+                .put_record(crate::game::honor::KIND, u64::from(e.guid), &e);
+        }
         if tokio::time::timeout(limit, self.store.flush())
             .await
             .is_err()

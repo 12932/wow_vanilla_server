@@ -830,3 +830,38 @@ async fn a_unique_item_bought_back_keeps_its_limit() {
         "the sold one still sold"
     );
 }
+
+/// R4-17. Honor earned since the honor sweep last wrote it (every five
+/// seconds) is written at a shutdown too, rather than lost with the
+/// process: a battleground's win and a SIGTERM fall close together.
+#[tokio::test]
+async fn honor_earned_just_before_a_shutdown_is_kept() {
+    use crate::game::honor::{Award, AwardKind, KIND};
+    let dir = std::env::temp_dir().join(format!("wvs-r4-honor-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("characters.sqlite");
+    let (store, startup) = crate::game::store::Store::open(&db).unwrap();
+    let realm = Realm::new(harness::test_config(), store, startup, data(), None);
+    {
+        let mut h = realm.social.honor.lock();
+        h.register(4242, 0, 60);
+        h.award(
+            4242,
+            Award {
+                kind: AwardKind::Bonus,
+                points: 400.0,
+                victim: None,
+                victim_rank: 0,
+            },
+        );
+    }
+    realm.shutdown().await;
+    let (_store, startup) = crate::game::store::Store::open(&db).unwrap();
+    let kept = startup
+        .records
+        .iter()
+        .any(|(kind, id, _)| kind == KIND && *id == 4242);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(kept, "the honor is in the store");
+}
