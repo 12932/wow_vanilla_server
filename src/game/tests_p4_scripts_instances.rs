@@ -404,7 +404,11 @@ async fn an_unsaved_leader_promoted_lets_the_raid_copy_go() {
     go(&realm, &mut a, 0).await;
     go(&realm, &mut b, 0).await;
     groups::set_leader(&realm, &realm.registry.online(a.guid).unwrap(), c.guid);
-    assert_eq!(bind(&realm, a.guid), Some(world.instance), "Alice's save kept");
+    assert_eq!(
+        bind(&realm, a.guid),
+        Some(world.instance),
+        "Alice's save kept"
+    );
     assert_eq!(bind(&realm, b.guid), Some(world.instance), "Bob's");
     let fresh = go(&realm, &mut c, RAID).await;
     assert_ne!(fresh, world, "Carol's is a new copy");
@@ -463,15 +467,27 @@ async fn a_copy_is_a_groups_only_if_it_has_it() {
     let d = player(&realm, "Dave").await;
     let online = |g: Guid| realm.registry.online(g).unwrap();
     // Bob's party of three has a copy Alice went into.
-    assert!(groups::join_directly(&realm, &online(b.guid), &online(a.guid)));
-    assert!(groups::join_directly(&realm, &online(b.guid), &online(c.guid)));
+    assert!(groups::join_directly(
+        &realm,
+        &online(b.guid),
+        &online(a.guid)
+    ));
+    assert!(groups::join_directly(
+        &realm,
+        &online(b.guid),
+        &online(c.guid)
+    ));
     let theirs = go(&realm, &mut a, DUNGEONS[1]).await;
     go(&realm, &mut a, 0).await;
     let party = group_id(&realm, b.guid).unwrap();
     leave(&realm, a.guid);
     assert_eq!(group_id(&realm, b.guid), Some(party), "Bob's party lasts");
     // Alice leads a party of her own.
-    assert!(groups::join_directly(&realm, &online(a.guid), &online(d.guid)));
+    assert!(groups::join_directly(
+        &realm,
+        &online(a.guid),
+        &online(d.guid)
+    ));
     assert_eq!(
         instances::save_of(&realm, theirs.instance).unwrap().owner,
         Some(instances::Owner::Group(party)),
@@ -484,7 +500,11 @@ async fn a_copy_is_a_groups_only_if_it_has_it() {
     leave(&realm, b.guid);
     let solo = go(&realm, &mut b, DUNGEONS[2]).await;
     go(&realm, &mut b, 0).await;
-    assert!(groups::join_directly(&realm, &online(a.guid), &online(b.guid)));
+    assert!(groups::join_directly(
+        &realm,
+        &online(a.guid),
+        &online(b.guid)
+    ));
     assert!(
         !instances::belongs(&realm, b.guid, solo),
         "his old copy isn't the party's"

@@ -280,8 +280,6 @@ mod tests_p3_scripts_raids;
 #[cfg(test)]
 mod tests_p3_spells;
 #[cfg(test)]
-mod tests_p4_scripts_instances;
-#[cfg(test)]
 mod tests_p3_spells_auras;
 #[cfg(test)]
 mod tests_p3_spells_damage;
@@ -297,6 +295,10 @@ mod tests_p3_world_events;
 mod tests_p3_world_pvp;
 #[cfg(test)]
 mod tests_p3_world_travel;
+#[cfg(test)]
+mod tests_p4_scripts_dungeons;
+#[cfg(test)]
+mod tests_p4_scripts_instances;
 #[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
