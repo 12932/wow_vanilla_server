@@ -230,11 +230,13 @@ async fn the_gm_threat_list_runs_highest_first_and_an_evade_empties_it() {
                 .unwrap()
                 .fields
                 .set_guid(UNIT_FIELD_TARGET, brute);
+            // In the same turn of the map: its own update in between would
+            // drop the wolf and helper, who aren't fighting the brute.
+            crate::game::map::gm::command(m, ga, "threat");
             brute
         })
         .await
         .unwrap();
-    a.say(".threat").await;
     let list = a.system_message("Threat:").await;
     assert_eq!(
         list, "Threat: creature 3701 30, creature 3702 20, Alice 10",
