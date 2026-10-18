@@ -32,8 +32,6 @@ mod tests_ai5_spells;
 #[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
-mod tests_review2;
-#[cfg(test)]
 mod tests_bg5;
 #[cfg(test)]
 mod tests_bg6;
@@ -323,6 +321,8 @@ mod tests_pvp3;
 mod tests_pvp4;
 #[cfg(test)]
 mod tests_pvp5;
+#[cfg(test)]
+mod tests_review2;
 #[cfg(test)]
 mod tests_robust;
 #[cfg(test)]

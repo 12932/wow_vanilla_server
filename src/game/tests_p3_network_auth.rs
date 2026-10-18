@@ -383,11 +383,8 @@ async fn a_ban_outlasts_the_session_made_before_it() {
     let server_seed = auth_challenge(&mut s).await;
     let seed = ProofSeed::new();
     let client_seed = seed.seed();
-    let (proof, _) = seed.into_client_header_crypto(
-        &NormalizedString::new("OUTLAW").unwrap(),
-        key,
-        server_seed,
-    );
+    let (proof, _) =
+        seed.into_client_header_crypto(&NormalizedString::new("OUTLAW").unwrap(), key, server_seed);
     auth_session(&mut s, "OUTLAW", client_seed, proof).await;
     assert_eq!(
         rest(&mut s).await,
