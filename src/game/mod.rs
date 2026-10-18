@@ -300,6 +300,8 @@ mod tests_p4_scripts_dungeons;
 #[cfg(test)]
 mod tests_p4_scripts_dungeons2;
 #[cfg(test)]
+mod tests_p4_scripts_dungeons3;
+#[cfg(test)]
 mod tests_p4_scripts_instances;
 #[cfg(test)]
 mod tests_parity_combat;
