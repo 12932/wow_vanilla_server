@@ -261,3 +261,27 @@ async fn the_first_move_after_logging_in_is_checked() {
     let now = on(&map, move |m| m.players[&g].position()).await;
     assert!((now.x - at.x).abs() < 0.01, "and there: {now:?}");
 }
+
+/// A ban too long to count to is for good, where its end wrapped into the
+/// past and `.ban` said "banned" of an account free to log in.
+#[tokio::test]
+async fn a_ban_too_long_to_count_is_for_good() {
+    crate::accounts::install(crate::accounts::Accounts::in_memory(
+        crate::accounts::Creation::Auto,
+        false,
+    ));
+    let accounts = crate::accounts::get().unwrap();
+    accounts.set_password("FOREVER", "PW").unwrap();
+    let realm = realm(GameData::empty(), true, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.say(".ban forever 9223372036854775807 testing").await;
+    let reply = a
+        .wait_for("the GM's answer", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => Some(c.message.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(reply, "FOREVER is banned.");
+    assert!(accounts.banned("FOREVER"), "and banned");
+}

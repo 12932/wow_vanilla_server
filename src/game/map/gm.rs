@@ -67,8 +67,13 @@ fn ban(map: &Map, args: &[&str]) -> String {
     let until = if time.eq_ignore_ascii_case("perm") {
         -1
     } else {
+        // Past the end of time is for good, not a wrap into the past (no
+        // ban at all).
         match time.parse::<i64>() {
-            Ok(m) if m > 0 => chrono::Utc::now().timestamp() + m * 60,
+            Ok(m) if m > 0 => m
+                .checked_mul(60)
+                .and_then(|s| chrono::Utc::now().timestamp().checked_add(s))
+                .unwrap_or(-1),
             _ => return "Use: .ban <account> <minutes|perm> [reason]".into(),
         }
     };
