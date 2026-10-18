@@ -324,6 +324,8 @@ mod tests_p4_world_real;
 #[cfg(test)]
 mod tests_p4_world_rewards;
 #[cfg(test)]
+mod tests_p4_world_scripts;
+#[cfg(test)]
 mod tests_p4_world_spells;
 #[cfg(test)]
 mod tests_parity_combat;
