@@ -12,6 +12,8 @@ the questions waiting for you.
 ## Questions for you
 
 **Answered (2026-10-18):**
+- **Wrong passwords:** no lockout. **Account creation:** keep `auto`, with the name as the password. Both are
+  deferred until much later (review item 33).
 - **#10:** keep swinging on arrival.
 - **#18:** keep moving unusable gear at login.
 - **#27:** snares stack, as mangos-classic has them: they coexist and the strongest counts. Done.
