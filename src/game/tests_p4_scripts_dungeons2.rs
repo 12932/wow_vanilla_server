@@ -281,3 +281,167 @@ async fn blackfathoms_own_spawns_dont_count_toward_the_shrine() {
     .await
     .unwrap();
 }
+
+/// Molten Core's script: a rune can't be doused while its lieutenant
+/// lives, and doused puts out its circle for good; the last rune out
+/// brings Majordomo, once; Golemagg's spawn or evade resets his fight and
+/// brings his ragers back as new, in his copy alone, unless he is beaten;
+/// his ragers go with him and don't come back, though another boss's death
+/// leaves them; Majordomo's death has Ragnaros roar seven seconds on and
+/// turn on the raid three after; Ragnaros's death settles the raid; and
+/// Majordomo beaten brings out the Cache of the Firelord, once.
+#[tokio::test]
+#[ignore = "extended"]
+async fn molten_cores_script_runs_its_runes_and_bosses() {
+    const LIEUTENANTS: [u32; 7] = [12098, 12056, 12264, 11988, 12057, 11982, 12259];
+    const RUNES: [u32; 7] = [176951, 176952, 176953, 176954, 176955, 176956, 176957];
+    const GOLEMAGG: u32 = 11988;
+    const RAGER: u32 = 11672;
+    const RAGERS: [u32; 2] = [56685, 56699];
+    let Some(realm) = realm() else {
+        return;
+    };
+    // The roster: Golemagg's ragers are of the raid, by him.
+    let boss = spawn_of(&realm, 409, GOLEMAGG);
+    for s in RAGERS {
+        let r = realm.data.creature_spawns[&409]
+            .iter()
+            .find(|x| x.guid == s)
+            .unwrap();
+        assert!(r.entries.contains(&RAGER));
+        assert!(((r.x - boss.x).powi(2) + (r.y - boss.y).powi(2)).sqrt() < 150.0);
+    }
+    let (_c, me, map) = inside(&realm, "Runes", 409, GOLEMAGG).await;
+    let (_d, _, other) = inside(&realm, "Elsewhere", 409, GOLEMAGG).await;
+    map.query(move |m| {
+        assert_eq!(
+            instance_script::guid_data(m, 12),
+            first(m, GOLEMAGG),
+            "Golemagg is index 12"
+        );
+        // Sulfuron's rune.
+        assert!(scripts::object_of_spawn(m, 43157).is_some());
+        instance_script::object_used(m, RUNES[0]);
+        assert_eq!(data(m, 16), 0, "lit while Sulfuron lives");
+        kill_all(m, me, 12098);
+        instance_script::object_used(m, RUNES[0]);
+        assert_eq!(data(m, 16), DONE);
+        assert!(
+            scripts::object_of_spawn(m, 43157).is_none(),
+            "its circle out"
+        );
+        instance_script::settle_spawns(m);
+        assert!(scripts::object_of_spawn(m, 43157).is_none(), "and stays");
+        // Golemagg's fight, reset with his ragers.
+        let ragers = RAGERS.map(|s| scripts::creature_of_spawn(m, s).unwrap());
+        for event in [Event::Spawned, Event::Evade] {
+            set(m, 3, IN_PROGRESS);
+            kill(m, me, ragers[0]);
+            let g = first(m, GOLEMAGG).unwrap();
+            instance_script::creature_event(m, g, event);
+            assert_eq!(data(m, 3), 0, "{event:?} resets it");
+            assert!(
+                ragers
+                    .iter()
+                    .all(|r| m.creature(*r).is_some_and(|c| c.alive())),
+                "{event:?}: both ragers back"
+            );
+        }
+        let g = first(m, GOLEMAGG).unwrap();
+        crate::game::map::ai::attacked(m, g, me);
+        assert_eq!(data(m, 3), IN_PROGRESS, "his pull");
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        other.query(|m| data(m, 3)).await,
+        Some(0),
+        "the other copy's own"
+    );
+    map.query(move |m| {
+        // Another boss's death leaves his ragers.
+        kill_all(m, me, 12057);
+        assert_eq!(living(m, RAGER).len(), 2);
+        let g = first(m, GOLEMAGG).unwrap();
+        crate::game::map::ai::enter_evade(m, g);
+        kill(m, me, g);
+        assert_eq!(data(m, 3), DONE);
+        assert!(living(m, RAGER).is_empty(), "his ragers go with him");
+        // Spawned again, a rager goes; nothing brings them back.
+        let r = scripts::creature_of_spawn(m, RAGERS[0]).unwrap();
+        crate::game::map::ai::respawn_now(m, r);
+        instance_script::creature_event(m, r, Event::Spawned);
+        assert!(
+            living(m, RAGER).is_empty(),
+            "a dead lieutenant's guard stays"
+        );
+        for event in [Event::Spawned, Event::Aggro, Event::Evade] {
+            instance_script::creature_event(m, g, event);
+            assert_eq!(data(m, 3), DONE);
+            assert!(living(m, RAGER).is_empty());
+        }
+        // Every lieutenant dead, the runes out one by one.
+        for e in LIEUTENANTS {
+            kill_all(m, me, e);
+        }
+        for (i, rune) in RUNES.iter().enumerate() {
+            assert!(living(m, 12018).is_empty(), "no Majordomo with {i} out");
+            instance_script::object_used(m, *rune);
+        }
+        assert_eq!(living(m, 12018).len(), 1, "Majordomo, with the last");
+        instance_script::object_used(m, RUNES[6]);
+        assert_eq!(living(m, 12018).len(), 1, "once");
+        // Majordomo beaten (he submits, rather than falls to a blow: his
+        // death as the script hears of it).
+        assert!(scripts::object_of_spawn(m, 362148).is_none());
+        let majordomo = first(m, 12018).unwrap();
+        instance_script::creature_event(m, majordomo, Event::Death);
+        assert_eq!(data(m, 8), DONE);
+        assert!(scripts::object_of_spawn(m, 362148).is_some(), "the Cache");
+        set(m, 8, DONE);
+        let caches = m
+            .gameobjects
+            .iter()
+            .filter(|(_, o)| o.spawn_guid == Some(362148))
+            .count();
+        assert_eq!(caches, 1, "once");
+        let roar = m
+            .instance
+            .timers
+            .iter()
+            .find(|(_, k)| *k == 3)
+            .map(|(t, _)| *t);
+        let left = roar.map(|t| t.saturating_duration_since(m.now));
+        assert!(about(left, 7.0), "Ragnaros roars in seven: {left:?}");
+        // Ragnaros, as Majordomo's script calls him up: out of reach.
+        let rag = summon(
+            m,
+            11502,
+            wow_world_messages::vanilla::Vector3d {
+                x: 840.0,
+                y: -812.0,
+                z: -229.6,
+            },
+            0.0,
+        );
+        if let Some(f) = m.unit_fields_mut(rag) {
+            f.set_flag(UNIT_FIELD_FLAGS, IMMUNE_TO_PLAYER, true);
+        }
+        hurry_copy(m, Duration::from_millis(7050));
+        assert!(
+            m.instance.timers.iter().any(|(_, k)| *k == 4),
+            "then engages"
+        );
+        assert_ne!(unit_flags(m, rag) & IMMUNE_TO_PLAYER, 0);
+        hurry_copy(m, Duration::from_millis(3050));
+        assert_eq!(
+            unit_flags(m, rag) & IMMUNE_TO_PLAYER,
+            0,
+            "three on, in reach"
+        );
+        kill(m, me, rag);
+        assert_eq!(data(m, 9), DONE, "the raid settled");
+    })
+    .await
+    .unwrap();
+}
