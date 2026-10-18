@@ -3147,6 +3147,17 @@ async fn take_escort(
     Ok((c, g, map))
 }
 
+/// How fast a walk's escortee goes: an escort's at 30 yards a second; a
+/// follower's (led to `goal`), which goes no further than the player's
+/// side, at 200, ten yards a 50 ms update, more than the eight yards a
+/// look leads it by. So a follower's walk is paced by the map's updates,
+/// not by how long they take: at 30 yards a second it made 1.5 yards in a
+/// 50 ms update, and Tooga's 3,300 yards outlasted the walk's 1,500 looks
+/// unless the machine was busy enough to make the updates long.
+fn escortee_speed(goal: Option<Vector3d>) -> f32 {
+    if goal.is_some() { 200.0 } else { 30.0 }
+}
+
 /// An escort or follower quest: taken, the escortee hurried along (out of
 /// its fights, which it waits out, and kept whole), the player at its
 /// side, or, for a follower, the player leading it to its goal: whether
@@ -3166,16 +3177,26 @@ async fn walk_escort(
     }
     let (_c, g, map) = taken?;
     let mut last = String::new();
-    for _ in 0..1500 {
+    // Counted in the map's updates, which move the escortee, not in looks,
+    // which may come more than once an update.
+    let (mut updates, mut seen) = (0, None);
+    while updates < 1500 {
         let state = map
             .query(move |m| {
                 let Some((e, at)) = escortee_of(m, quest) else {
-                    return (explored(m, g, quest), true, String::from("no escort"));
+                    return (
+                        explored(m, g, quest),
+                        true,
+                        String::from("no escort"),
+                        m.stats.updates,
+                    );
                 };
-                // Not so fast it outruns the player between looks.
+                // Not so fast it outruns the player between looks, or for a
+                // follower, as fast as its lead (see `escortee_speed`).
+                let speed = escortee_speed(goal);
                 if let Some(c) = m.creature_mut(e) {
-                    c.speeds.walk = 30.0;
-                    c.speeds.run = 30.0;
+                    c.speeds.walk = speed;
+                    c.speeds.run = speed;
                 }
                 let fighting = m
                     .creature(e)
@@ -3238,10 +3259,15 @@ async fn walk_escort(
                             .get_u32(crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE)),
                         crate::game::map::map_events::active(m, quest),
                     ),
+                    m.stats.updates,
                 )
             })
             .await
             .unwrap();
+        if seen != Some(state.3) {
+            seen = Some(state.3);
+            updates += 1;
+        }
         last = state.2;
         if std::env::var("ESCORT_TRACE").is_ok() {
             eprintln!("escort {quest}: {last}");
@@ -3339,6 +3365,21 @@ async fn the_real_escort_quests_are_walked() {
         .filter(|(q, _)| ![7046, 4261].contains(q))
         .collect();
     assert!(unexpected.is_empty(), "{unexpected:?}");
+}
+
+/// Tooga (1560), led the 3,300 yards from Gadgetzan to Torta, is
+/// credited within the walk's 1,500 updates however long they take: a
+/// follower keeps up with the player's lead each update.
+#[tokio::test]
+async fn the_real_tooga_is_led_to_torta() {
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (_, torta) = spawn_of(&realm, 6015).expect("Torta's spawn");
+    walk_escort(&realm, 1560, 5955, Some(torta))
+        .await
+        .expect("Tooga's quest credited");
 }
 
 /// The escorts' steps the catalog's first import left out are there, as
