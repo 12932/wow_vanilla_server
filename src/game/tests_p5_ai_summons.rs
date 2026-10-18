@@ -13,8 +13,8 @@ use wow_world_messages::vanilla::*;
 use crate::game::data::GameData;
 use crate::game::data::spells::SpellEffect;
 use crate::game::fields::*;
-use crate::game::map::pets::{self, Kind};
 use crate::game::map::MapHandle;
+use crate::game::map::pets::{self, Kind};
 use crate::game::tests_pets::{
     self, STRENGTH_OF_EARTH, STRENGTH_OF_EARTH_TOTEM, WOLF, cast, enter, learn, place,
 };
@@ -58,7 +58,12 @@ async fn standing(map: &MapHandle, g: Guid) -> (Option<Guid>, Vec<Guid>) {
 }
 
 /// Wait for `g` to have `earth` earth totems and `wards` wards.
-async fn wait_standing(map: &MapHandle, g: Guid, earth: bool, wards: usize) -> (Option<Guid>, Vec<Guid>) {
+async fn wait_standing(
+    map: &MapHandle,
+    g: Guid,
+    earth: bool,
+    wards: usize,
+) -> (Option<Guid>, Vec<Guid>) {
     for _ in 0..100 {
         let s = standing(map, g).await;
         if s.0.is_some() == earth && s.1.len() == wards {
@@ -141,7 +146,10 @@ async fn wards_stand_beside_the_elements_and_go_alone_when_struck_and_all_with_t
         .await
         .unwrap();
     assert!(gone, "no corpse to loot, nothing to respawn");
-    assert!(has_aura(&map, gs, WARD_AURA).await, "the other ward's aura holds");
+    assert!(
+        has_aura(&map, gs, WARD_AURA).await,
+        "the other ward's aura holds"
+    );
 
     // The other shaman's, at their logout.
     cast(&t, STRENGTH_OF_EARTH_TOTEM, None).await;
@@ -197,7 +205,11 @@ fn critter_data() -> GameData {
 
 async fn critter_of(map: &MapHandle, g: Guid) -> Option<Guid> {
     for _ in 0..100 {
-        if let Some(c) = map.query(move |m| m.players[&g].owned.critter).await.flatten() {
+        if let Some(c) = map
+            .query(move |m| m.players[&g].owned.critter)
+            .await
+            .flatten()
+        {
             return Some(c);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -241,7 +253,12 @@ async fn a_timed_companion_goes_when_its_time_is_up_and_a_death_takes_both_pets(
         .await;
     for _ in 0..100 {
         let left = map
-            .query(move |m| (m.creature(critter).is_some(), m.players[&gh].owned.pet.is_some()))
+            .query(move |m| {
+                (
+                    m.creature(critter).is_some(),
+                    m.players[&gh].owned.pet.is_some(),
+                )
+            })
             .await
             .unwrap();
         if left == (false, false) {

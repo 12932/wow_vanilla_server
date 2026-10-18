@@ -26,7 +26,12 @@ fn dumped_events(entry: u32) -> Vec<u32> {
     root["events"]
         .get(entry.to_string())
         .and_then(|l| l.as_array())
-        .map(|l| l.iter().filter_map(|e| e["id"].as_u64()).map(|i| i as u32).collect())
+        .map(|l| {
+            l.iter()
+                .filter_map(|e| e["id"].as_u64())
+                .map(|i| i as u32)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -84,7 +89,11 @@ async fn the_ported_scripts_stand_over_their_creatures_own_ai() {
     }
     // Tervosh's turn-in: his words and the Lady's blessing on the player.
     let tervosh = quest_steps(d, 1265, false);
-    assert!(tervosh.iter().any(|s| s.command == 0 && s.dataint[0] == 1751));
+    assert!(
+        tervosh
+            .iter()
+            .any(|s| s.command == 0 && s.dataint[0] == 1751)
+    );
     assert!(
         tervosh
             .iter()
@@ -94,7 +103,9 @@ async fn the_ported_scripts_stand_over_their_creatures_own_ai() {
     for quest in [994, 995] {
         let steps = quest_steps(d, quest, false);
         assert!(
-            steps.iter().any(|s| s.command == 10 && s.datalong[0] == 3694),
+            steps
+                .iter()
+                .any(|s| s.command == 10 && s.datalong[0] == 3694),
             "{quest}"
         );
     }
@@ -178,7 +189,9 @@ async fn a_chicken_offers_cluck_to_a_lucky_chicken_and_takes_it_back_for_a_cheer
     })
     .await;
     assert!(
-        until(&map, 3_000, move |m| npc_flags(m, cheered) & QUEST_GIVER != 0).await,
+        until(&map, 3_000, move |m| npc_flags(m, cheered) & QUEST_GIVER
+            != 0)
+        .await,
         "the /cheer"
     );
 }
@@ -216,7 +229,10 @@ async fn plucky_johnson_turns_back_for_a_chicken_but_not_a_stranger_s_beckon() {
         .query(move |m| (faction(m, plucky), npc_flags(m, plucky) & GOSSIP))
         .await
         .unwrap();
-    assert_eq!(after_beckon, chicken, "a stranger's /beckon: still a chicken");
+    assert_eq!(
+        after_beckon, chicken,
+        "a stranger's /beckon: still a chicken"
+    );
     assert_eq!(chicken.1, 0, "no talk from a chicken");
     c.clear();
     c.send(emote(TEXT_EMOTE_CHICKEN)).await;
@@ -303,7 +319,11 @@ async fn the_soul_gem_tames_yenniku_only_for_one_on_the_quest() {
         })
         .await
         .unwrap();
-    assert_eq!(on_quest, (1, 83, false), "the second phase, Horde, at peace");
+    assert_eq!(
+        on_quest,
+        (1, 83, false),
+        "the second phase, Horde, at peace"
+    );
     assert_eq!(stunned, 64, "he looks stunned");
     let again = map
         .query(move |m| {
@@ -385,9 +405,10 @@ async fn a_trapped_rabid_bear_is_captured_for_its_trapper_once() {
     let away = off(at, -15.0, 0.0);
     map.query(move |m| put(m, me, away)).await;
     assert!(
-        until(&map, 8_000, move |m| m
-            .position_of(bear)
-            .is_some_and(|p| crate::game::map::combat::dist(p, away) < 5.0))
+        until(&map, 8_000, move |m| {
+            m.position_of(bear)
+                .is_some_and(|p| crate::game::map::combat::dist(p, away) < 5.0)
+        })
         .await,
         "at the trapper's heels"
     );
@@ -479,7 +500,9 @@ async fn a_lazy_peon_wakes_for_the_quest_once_chops_wood_and_sleeps_again() {
     );
     // To the nearest pile, and to work.
     assert!(
-        until(&map, 25_000, move |m| emote_state(m, peon) == EMOTE_STATE_WORK_CHOPWOOD).await,
+        until(&map, 25_000, move |m| emote_state(m, peon)
+            == EMOTE_STATE_WORK_CHOPWOOD)
+        .await,
         "chopping wood"
     );
     let (phase, by_pile) = map
@@ -552,7 +575,17 @@ async fn the_combat_gadgets_fight_with_their_own_spells_on_their_timers() {
         until(&map, 3_000, move |m| has(m, chicken, 13168)).await,
         "a fury as it starts"
     );
-    timed_cast(&mut c, &map, chicken, 883603, 13168, (25.0, 25.0), (25.0, 25.0), None).await;
+    timed_cast(
+        &mut c,
+        &map,
+        chicken,
+        883603,
+        13168,
+        (25.0, 25.0),
+        (25.0, 25.0),
+        None,
+    )
+    .await;
     let squawk = timer(&map, chicken, 883601).await;
     assert!(between(squawk, 30.0, 80.0), "{squawk:?}");
     c.clear();
@@ -563,14 +596,24 @@ async fn the_combat_gadgets_fight_with_their_own_spells_on_their_timers() {
     })
     .await;
     fire(&map, chicken, 883601).await;
-    assert!(cast_any_of(&mut c, chicken, 23060, Duration::from_secs(3)).await.is_some());
+    assert!(
+        cast_any_of(&mut c, chicken, 23060, Duration::from_secs(3))
+            .await
+            .is_some()
+    );
     assert!(
         map.query(move |m| spent(m, chicken, 883601)).await.unwrap(),
         "squawks once"
     );
     clear(&map, vec![chicken]);
     for (entry, events) in [
-        (12473, vec![(1247301, 9658, (5.0, 5.0), (22.5, 22.5)), (1247302, 8873, (10.0, 60.0), (10.0, 60.0))]),
+        (
+            12473,
+            vec![
+                (1247301, 9658, (5.0, 5.0), (22.5, 22.5)),
+                (1247302, 8873, (10.0, 60.0), (10.0, 60.0)),
+            ],
+        ),
         (8776, vec![(877601, 9591, (1.0, 1.0), (2.0, 2.0))]),
         (9556, vec![(955601, 15980, (1.0, 2.5), (9.8, 15.2))]),
         (10656, vec![(1065601, 15980, (1.0, 2.5), (9.8, 15.2))]),
@@ -622,7 +665,14 @@ async fn felwoods_oozes_wear_their_auras_and_go_into_their_jars() {
             assert!(map.query(move |m| has(m, g, aura)).await.unwrap(), "worn");
             assert!(about(timer(&map, g, id).await, 60.0), "a minute on");
         } else {
-            kit(&mut c, &map, g, d, &[(id, aura, (3.0, 3.0), (60.0, 60.0), false)]).await;
+            kit(
+                &mut c,
+                &map,
+                g,
+                d,
+                &[(id, aura, (3.0, 3.0), (60.0, 60.0), false)],
+            )
+            .await;
         }
         let (other, own) = map
             .query(move |m| {
@@ -672,7 +722,10 @@ async fn murkdeep_sunders_and_nets_and_flees_once_nearly_beaten() {
         .await,
         "flees"
     );
-    assert!(map.query(move |m| spent(m, g, 1032303)).await.unwrap(), "once");
+    assert!(
+        map.query(move |m| spent(m, g, 1032303)).await.unwrap(),
+        "once"
+    );
 }
 
 /// The Magrami spectre drifts in its blue haze; at the magnet (its walk's
@@ -694,7 +747,11 @@ async fn the_magrami_spectre_turns_green_and_hostile_and_curses_its_foe() {
     let turned = map
         .query(move |m| {
             crate::game::map::event_ai::movement_inform(m, spectre, 9, 2);
-            (has(m, spectre, 17327), has(m, spectre, 18951), faction(m, spectre))
+            (
+                has(m, spectre, 17327),
+                has(m, spectre, 18951),
+                faction(m, spectre),
+            )
         })
         .await
         .unwrap();
@@ -713,7 +770,14 @@ async fn the_magrami_spectre_turns_green_and_hostile_and_curses_its_foe() {
     clear(&map, vec![spectre]);
     let (g, d) = set_on_dummy(&map, 11560, at).await;
     c.sees(g).await;
-    kit(&mut c, &map, g, d, &[(1156004, 18159, (5.0, 9.0), (15.0, 21.0), true)]).await;
+    kit(
+        &mut c,
+        &map,
+        g,
+        d,
+        &[(1156004, 18159, (5.0, 9.0), (15.0, 21.0), true)],
+    )
+    .await;
 }
 
 /// Belnistrasz fights with Fireball and Frost Nova only while he isn't
@@ -764,7 +828,10 @@ async fn belnistrasz_fights_only_out_of_his_chant_and_takes_it_up_again() {
             .is_none(),
         "no Fireball in his chant"
     );
-    assert!(heard(&mut c, g, Duration::from_secs(2)).await.is_some(), "a cry");
+    assert!(
+        heard(&mut c, g, Duration::from_secs(2)).await.is_some(),
+        "a cry"
+    );
     let again = map
         .query(move |m| {
             crate::game::map::event_ai::aggro(m, g, d);
@@ -773,7 +840,10 @@ async fn belnistrasz_fights_only_out_of_his_chant_and_takes_it_up_again() {
         .await
         .unwrap();
     assert_eq!(again, 2);
-    assert!(heard(&mut c, g, Duration::from_millis(500)).await.is_none(), "once");
+    assert!(
+        heard(&mut c, g, Duration::from_millis(500)).await.is_none(),
+        "once"
+    );
     // Out of the fight in the chant: its channel again.
     c.clear();
     map.query(move |m| crate::game::map::event_ai::evade(m, g))
@@ -875,7 +945,13 @@ async fn malowns_curses_are_chance_rolls_on_fixed_timers() {
         .collect();
     assert_eq!(
         rolls,
-        [(1114303, 65), (1114304, 45), (1114305, 3), (1114306, 3), (1114307, 5)]
+        [
+            (1114303, 65),
+            (1114304, 45),
+            (1114305, 3),
+            (1114306, 3),
+            (1114307, 5)
+        ]
     );
     assert!(
         events
@@ -948,9 +1024,7 @@ async fn slims_friend_bly_and_obsidion_fight_with_their_kits() {
         &map,
         g,
         d,
-        &[
-            (760401, 11972, (5.0, 5.0), (15.0, 15.0), true),
-        ],
+        &[(760401, 11972, (5.0, 5.0), (15.0, 15.0), true)],
     )
     .await;
     // Revenge waits on a blow dodged, parried or blocked (its aura state);
@@ -1018,5 +1092,8 @@ async fn grenka_cant_be_fought_hidden_and_flees_once_nearly_dead() {
         .await,
         "flees"
     );
-    assert!(map.query(move |m| spent(m, g, 449002)).await.unwrap(), "once");
+    assert!(
+        map.query(move |m| spent(m, g, 449002)).await.unwrap(),
+        "once"
+    );
 }

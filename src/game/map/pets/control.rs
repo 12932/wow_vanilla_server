@@ -453,9 +453,10 @@ fn set_action(map: &mut Map, player: Guid, pet: Guid, slots: &[(u32, u32)]) {
             _ if action == 0 => matches!(kind, ACT_DISABLED | ACT_ENABLED | ACT_PASSIVE | 0),
             ACT_DISABLED | ACT_ENABLED | ACT_PASSIVE => {
                 s.spells.contains(&action)
-                    && data.spells.get(action).is_some_and(|t| {
-                        !t.passive() && (kind != ACT_ENABLED || autocastable(t))
-                    })
+                    && data
+                        .spells
+                        .get(action)
+                        .is_some_and(|t| !t.passive() && (kind != ACT_ENABLED || autocastable(t)))
             }
             _ => false,
         };

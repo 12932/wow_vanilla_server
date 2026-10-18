@@ -161,7 +161,10 @@ async fn a_staying_pet_takes_on_only_what_is_in_its_reach() {
             let at = m.creature(pet).unwrap().position;
             s_at(m, pet, at);
             // A hostile wolf ten yards off.
-            let wolf_at = Vector3d { x: at.x + 10.0, ..at };
+            let wolf_at = Vector3d {
+                x: at.x + 10.0,
+                ..at
+            };
             crate::game::map::scripts::place(m, far, wolf_at, 0.0);
             think(m, 1);
             let distant = victim(m, pet);
@@ -173,14 +176,21 @@ async fn a_staying_pet_takes_on_only_what_is_in_its_reach() {
                     m.creature(pet).unwrap().motion,
                     crate::game::map::creature::Motion::Moving(_)
                 );
-            let near = Vector3d { x: at.x + 1.0, ..at };
+            let near = Vector3d {
+                x: at.x + 1.0,
+                ..at
+            };
             crate::game::map::scripts::place(m, far, near, 0.0);
             think(m, 1);
             (distant, struck_from_afar, victim(m, pet))
         })
         .await
         .unwrap();
-    assert_eq!(picks, (None, true, Some(far)), "none afar, held where it stays when struck from afar, the near");
+    assert_eq!(
+        picks,
+        (None, true, Some(far)),
+        "none afar, held where it stays when struck from afar, the near"
+    );
 }
 
 fn s_at(m: &mut Map, pet: Guid, at: Vector3d) {
@@ -268,7 +278,10 @@ fn autocast_data() -> GameData {
         e.aura = kind;
         e
     };
-    let mut add = |id: u32, name: &str, e: SpellEffect, f: &dyn Fn(&mut crate::game::data::spells::SpellTemplate)| {
+    let mut add = |id: u32,
+                   name: &str,
+                   e: SpellEffect,
+                   f: &dyn Fn(&mut crate::game::data::spells::SpellTemplate)| {
         let mut s = tests_pets::spell(id, name, [e, none, none]);
         s.duration_index = 4;
         f(&mut s);
@@ -282,11 +295,16 @@ fn autocast_data() -> GameData {
     add(PROWL, "Prowl", aura(4, 0), &|s| {
         s.attributes[0] |= 0x0010_0000 | 0x1000_0000;
     });
-    add(MEND, "Mend", {
-        let mut e = aura(AURA_PERIODIC_HEAL, 5);
-        e.amplitude = 3000;
-        e
-    }, &|_| {});
+    add(
+        MEND,
+        "Mend",
+        {
+            let mut e = aura(AURA_PERIODIC_HEAL, 5);
+            e.amplitude = 3000;
+            e
+        },
+        &|_| {},
+    );
     add(STACKING, "Stacking", aura(29, 1), &|s| s.stack_amount = 3);
     let mut area = tests_pets::effect(35, 1, 1);
     area.aura = 29;
@@ -337,7 +355,11 @@ async fn a_pets_autocast_buffs_wait_for_their_time() {
             };
             steps.push(with(m, &[DASH, MEND, PROWL]));
             crate::game::map::auras::remove_spell(m, pet, PROWL, None);
-            let max = m.creature(pet).unwrap().fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            let max = m
+                .creature(pet)
+                .unwrap()
+                .fields
+                .get_u32(UNIT_FIELD_MAXHEALTH);
             m.creature_mut(pet)
                 .unwrap()
                 .fields
@@ -346,7 +368,10 @@ async fn a_pets_autocast_buffs_wait_for_their_time() {
             crate::game::map::auras::remove_spell(m, pet, MEND, None);
             // A victim twenty yards off.
             let at = m.creature(pet).unwrap().position;
-            let off = Vector3d { x: at.x + 20.0, ..at };
+            let off = Vector3d {
+                x: at.x + 20.0,
+                ..at
+            };
             crate::game::map::scripts::place(m, far, off, 0.0);
             pets::attack_target(m, pet, far);
             m.note_fighting(pet);
@@ -363,7 +388,11 @@ async fn a_pets_autocast_buffs_wait_for_their_time() {
         })
         .await
         .unwrap();
-    assert_eq!(steps[0], [(PROWL, 1)], "idle: Prowl, no Dash, no heal at full health");
+    assert_eq!(
+        steps[0],
+        [(PROWL, 1)],
+        "idle: Prowl, no Dash, no heal at full health"
+    );
     assert_eq!(steps[1], [(MEND, 1)], "a wound: the heal");
     assert_eq!(steps[2], [(DASH, 1)], "fighting from afar: Dash, not Prowl");
     assert_eq!(steps[3], [(STACKING, 1)]);

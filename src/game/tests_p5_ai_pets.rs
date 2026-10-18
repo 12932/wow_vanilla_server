@@ -101,7 +101,11 @@ async fn the_stable_sells_two_stalls_and_swaps_pets_into_the_stall_left() {
     h.send(CMSG_BUY_STABLE_SLOT { npc: master }).await;
     assert_eq!(stable_result(&mut h).await, StableResult::SuccessBuySlot);
     h.send(CMSG_BUY_STABLE_SLOT { npc: master }).await;
-    assert_eq!(stable_result(&mut h).await, StableResult::ErrStable, "no third");
+    assert_eq!(
+        stable_result(&mut h).await,
+        StableResult::ErrStable,
+        "no third"
+    );
     let (slots, left) = map
         .query(move |m| {
             let p = &m.players[&gh];
@@ -272,7 +276,14 @@ fn training_data() -> GameData {
     add(DASH, "Dash", hit, 0, 270, 1);
     add(HOWL, "Howl", hit, 0, 270, 1);
     add(SCREECH, "Screech", hit, 0, 999, 1);
-    add(FAMILY, "Family Passive", tests_pets::effect(6, 0, 1), 0, 211, 1);
+    add(
+        FAMILY,
+        "Family Passive",
+        tests_pets::effect(6, 0, 1),
+        0,
+        211,
+        1,
+    );
     let mut fortitude = tests_pets::spell(FORTITUDE, "Fortitude", [stamina(3), none, none]);
     fortitude.duration_index = 4;
     d.spells.spells.insert(FORTITUDE, fortitude);
@@ -329,11 +340,6 @@ async fn teach(h: &Client, map: &MapHandle, gh: Guid, pet: Guid, spell: u32) {
     panic!("the pet never learned {spell}");
 }
 
-fn set_pet(map: &MapHandle, pet: Guid, f: impl FnOnce(&mut Map) + Send + 'static) {
-    let _ = pet;
-    map.call(f);
-}
-
 /// The points, spells, bar and autocast of `pet`.
 async fn book(map: &MapHandle, pet: Guid) -> (i32, Vec<u32>, Vec<u32>, Vec<u32>, u32) {
     map.query(move |m| {
@@ -371,7 +377,7 @@ async fn book(map: &MapHandle, pet: Guid) -> (i32, Vec<u32>, Vec<u32>, Vec<u32>,
 async fn a_pet_pays_only_an_upgrades_difference_and_learns_free_abilities_in_debt() {
     let (_realm, mut h, gh, map, pet, _wolf) = tamed_with(training_data()).await;
     h.sees(pet).await;
-    set_pet(&map, pet, move |m| {
+    map.call(move |m| {
         let s = pets::state_mut(m, pet).unwrap();
         s.training_points = 10;
         if let Some(c) = m.creature_mut(pet) {
@@ -379,7 +385,7 @@ async fn a_pet_pays_only_an_upgrades_difference_and_learns_free_abilities_in_deb
         }
     });
     teach(&h, &map, gh, pet, GORE).await;
-    set_pet(&map, pet, move |m| {
+    map.call(move |m| {
         let s = pets::state_mut(m, pet).unwrap();
         s.autocast = vec![GORE];
         pets::sync_record(m, s_owner(m, pet));
@@ -406,8 +412,14 @@ async fn a_pet_pays_only_an_upgrades_difference_and_learns_free_abilities_in_deb
     );
     assert!(bar.contains(&GORE_2), "{bar:?}");
     assert_eq!(autocast, [GORE_2]);
-    assert_eq!(refused(&map, gh, GORE_2).await, Some(SpellCastResult::SpellLearned));
-    assert_eq!(refused(&map, gh, GORE).await, Some(SpellCastResult::SpellLearned));
+    assert_eq!(
+        refused(&map, gh, GORE_2).await,
+        Some(SpellCastResult::SpellLearned)
+    );
+    assert_eq!(
+        refused(&map, gh, GORE).await,
+        Some(SpellCastResult::SpellLearned)
+    );
 
     // In debt: Growl, free, is taught; Great Stamina, for 2, isn't.
     map.call(move |m| {
@@ -480,10 +492,23 @@ async fn training_is_refused_for_the_wrong_pet_family_level_points_and_a_fifth_a
     assert_eq!(refused(&map, gw, GROWL).await, Some(SpellCastResult::NoPet));
 
     map.call(move |m| pets::state_mut(m, pet).unwrap().training_points = 0);
-    assert_eq!(refused(&map, gh, SCREECH).await, Some(SpellCastResult::BadTargets));
-    assert_eq!(refused(&map, gh, GROWL).await, None, "a free ability of any pet's");
-    assert_eq!(refused(&map, gh, GORE_2).await, Some(SpellCastResult::Lowlevel));
-    assert_eq!(refused(&map, gh, NOTHING).await, Some(SpellCastResult::NotKnown));
+    assert_eq!(
+        refused(&map, gh, SCREECH).await,
+        Some(SpellCastResult::BadTargets)
+    );
+    assert_eq!(
+        refused(&map, gh, GROWL).await,
+        None,
+        "a free ability of any pet's"
+    );
+    assert_eq!(
+        refused(&map, gh, GORE_2).await,
+        Some(SpellCastResult::Lowlevel)
+    );
+    assert_eq!(
+        refused(&map, gh, NOTHING).await,
+        Some(SpellCastResult::NotKnown)
+    );
     assert_eq!(
         refused(&map, gh, STAMINA_1).await,
         Some(SpellCastResult::TrainingPoints)
@@ -497,13 +522,19 @@ async fn training_is_refused_for_the_wrong_pet_family_level_points_and_a_fifth_a
             c.fields.set_u32(UNIT_FIELD_LEVEL, 10);
         }
     });
-    assert_eq!(refused(&map, gh, HOWL).await, Some(SpellCastResult::TooManySkills));
+    assert_eq!(
+        refused(&map, gh, HOWL).await,
+        Some(SpellCastResult::TooManySkills)
+    );
     assert_eq!(refused(&map, gh, GORE_2).await, None, "an upgrade");
     assert_eq!(refused(&map, gh, STAMINA_1).await, None, "a passive");
 
     map.query(move |m| crate::game::map::combat::kill(m, wolf, pet))
         .await;
-    assert_eq!(refused(&map, gh, GROWL).await, Some(SpellCastResult::TargetsDead));
+    assert_eq!(
+        refused(&map, gh, GROWL).await,
+        Some(SpellCastResult::TargetsDead)
+    );
     let _ = Kind::Hunter;
 }
 
@@ -607,7 +638,11 @@ async fn untraining_refunds_the_points_and_takes_the_taught_and_their_stats() {
     assert_eq!(points, 30, "10 levels at the fourth rank");
     assert_eq!(spells, [FAMILY], "the family's passive kept");
     assert!(autocast.is_empty());
-    assert_eq!(auras, [false, true], "the taught passive goes, another's buff stays");
+    assert_eq!(
+        auras,
+        [false, true],
+        "the taught passive goes, another's buff stays"
+    );
     assert_eq!((s, max), (stamina - 5, health - 50));
     let left = map.query(move |m| m.players[&gh].money()).await.unwrap();
     assert_eq!(left, 0);
@@ -627,7 +662,11 @@ async fn untraining_refunds_the_points_and_takes_the_taught_and_their_stats() {
         tokio::time::sleep(Duration::from_millis(20)).await;
         dead = stats().await;
     }
-    assert_eq!((dead.2, dead.3, dead.4.len()), (0, 30, 1), "untrained, still dead");
+    assert_eq!(
+        (dead.2, dead.3, dead.4.len()),
+        (0, 30, 1),
+        "untrained, still dead"
+    );
 }
 
 const REVIVE_PET: u32 = 982;
@@ -706,7 +745,16 @@ async fn a_pets_hunger_and_loyalty_keep_their_own_clocks_stop_in_death_and_start
         .unwrap();
     let max = log[0].2;
     let half = max / 2;
-    assert_eq!(&log[..4], &[(700_000, 1_000, max), (691_250, 1_000, max), (691_250, 1_000, max), (691_250, 1_020, max)], "a happy pet's loyalty gains 20");
+    assert_eq!(
+        &log[..4],
+        &[
+            (700_000, 1_000, max),
+            (691_250, 1_000, max),
+            (691_250, 1_000, max),
+            (691_250, 1_020, max)
+        ],
+        "a happy pet's loyalty gains 20"
+    );
     assert_eq!(log[4], (358_250, 1_020, 0), "death costs a third");
     assert_eq!(log[5], log[4], "nothing while dead");
     assert_eq!(log[6], (358_250, 1_020, half), "revived at half");
@@ -732,7 +780,10 @@ async fn revive_pet_brings_the_corpse_to_its_masters_side_as_it_was() {
             let c = m.creature_mut(pet).unwrap();
             c.fields.set_u32(HAPPINESS, 500_000);
             let at = m.players[&gh].position();
-            let far = Vector3d { x: at.x + 15.0, ..at };
+            let far = Vector3d {
+                x: at.x + 15.0,
+                ..at
+            };
             crate::game::map::scripts::place(m, pet, far, 0.0);
             crate::game::map::combat::kill(m, wolf, pet);
             let c = m.creature(pet).unwrap();
@@ -788,7 +839,11 @@ async fn a_pets_mood_scales_the_flat_damage_its_buffs_add() {
     let mut might = tests_pets::effect(6, 19, 1);
     might.aura = 13;
     might.misc_value = 1;
-    let mut s = tests_pets::spell(MIGHT, "Might", [might, SpellEffect::default(), SpellEffect::default()]);
+    let mut s = tests_pets::spell(
+        MIGHT,
+        "Might",
+        [might, SpellEffect::default(), SpellEffect::default()],
+    );
     s.duration_index = 4;
     d.spells.spells.insert(MIGHT, s);
     let (realm, mut h, gh, map, pet, wolf) = tamed_with(d).await;
@@ -801,8 +856,15 @@ async fn a_pets_mood_scales_the_flat_damage_its_buffs_add() {
         .query(move |m| {
             let t = m.realm.data.spells.get(MIGHT).cloned().unwrap();
             for (caster, g) in [(gh, pet), (gw, imp)] {
-                crate::game::map::auras::apply_spell(m, caster, g, &t, &[(0, 20)], Default::default())
-                    .unwrap();
+                crate::game::map::auras::apply_spell(
+                    m,
+                    caster,
+                    g,
+                    &t,
+                    &[(0, 20)],
+                    Default::default(),
+                )
+                .unwrap();
             }
             let blow = |m: &mut Map, g: Guid, happiness: Option<u32>| {
                 if let Some(happiness) = happiness {
@@ -913,7 +975,10 @@ async fn set_action(h: &mut Client, pet: Guid, first: (u32, u32), second: Option
 }
 
 /// `msg`, handled.
-async fn handled(h: &mut Client, msg: impl Into<wow_world_messages::vanilla::opcodes::ClientOpcodeMessage>) {
+async fn handled(
+    h: &mut Client,
+    msg: impl Into<wow_world_messages::vanilla::opcodes::ClientOpcodeMessage>,
+) {
     h.clear();
     h.send(msg).await;
     h.send(CMSG_REQUEST_PET_INFO {}).await;
@@ -956,10 +1021,22 @@ async fn a_pets_bar_is_edited_whole_and_its_commands_kept() {
         ((5, pets::button(attack.0, attack.1)), None),
         // A good half with a slot off the bar, a spell it doesn't know, or
         // Growl in no state of a spell's.
-        ((6, gore(pets::ACT_ENABLED)), Some((10, gore(pets::ACT_ENABLED)))),
-        ((6, gore(pets::ACT_ENABLED)), Some((5, pets::button(9_999, pets::ACT_DISABLED)))),
-        ((6, gore(pets::ACT_ENABLED)), Some((5, pets::button(GROWL, 0xFF)))),
-        ((6, gore(pets::ACT_ENABLED)), Some((6, gore(pets::ACT_DISABLED)))),
+        (
+            (6, gore(pets::ACT_ENABLED)),
+            Some((10, gore(pets::ACT_ENABLED))),
+        ),
+        (
+            (6, gore(pets::ACT_ENABLED)),
+            Some((5, pets::button(9_999, pets::ACT_DISABLED))),
+        ),
+        (
+            (6, gore(pets::ACT_ENABLED)),
+            Some((5, pets::button(GROWL, 0xFF))),
+        ),
+        (
+            (6, gore(pets::ACT_ENABLED)),
+            Some((6, gore(pets::ACT_DISABLED))),
+        ),
     ] {
         set_action(&mut h, pet, edit, second).await;
         assert_eq!(bar(&map, pet).await, swapped, "{edit:?} {second:?}");
@@ -973,11 +1050,17 @@ async fn a_pets_bar_is_edited_whole_and_its_commands_kept() {
     };
     handled(&mut h, toggle(GORE, true)).await;
     let on = bar(&map, pet).await;
-    assert_eq!((on[0], on[6]), ((GORE, pets::ACT_ENABLED), (GORE, pets::ACT_ENABLED)));
+    assert_eq!(
+        (on[0], on[6]),
+        ((GORE, pets::ACT_ENABLED), (GORE, pets::ACT_ENABLED))
+    );
     h.send(toggle(GORE, false)).await;
     handled(&mut h, toggle(9_999, true)).await;
     let off = bar(&map, pet).await;
-    assert_eq!((off[0], off[6]), ((GORE, pets::ACT_DISABLED), (GORE, pets::ACT_DISABLED)));
+    assert_eq!(
+        (off[0], off[6]),
+        ((GORE, pets::ACT_DISABLED), (GORE, pets::ACT_DISABLED))
+    );
     let autocast = map
         .query(move |m| pets::state(m, pet).unwrap().autocast.clone())
         .await
