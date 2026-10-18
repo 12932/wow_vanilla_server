@@ -398,6 +398,8 @@ mod tests_p5_spell_cost;
 #[cfg(test)]
 mod tests_p5_spell_holiday;
 #[cfg(test)]
+mod tests_p5_spell_hunter;
+#[cfg(test)]
 mod tests_p5_spell_paladin;
 #[cfg(test)]
 mod tests_p5_spell_procs;

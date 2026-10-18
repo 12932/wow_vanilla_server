@@ -192,3 +192,65 @@ async fn a_burn_of_a_power_the_target_hasnt_is_refused() {
     assert_eq!(powers, [Some(1), Some(0)], "rage and mana");
     assert_eq!(ragey, Some(fail::BAD_TARGETS), "one of rage");
 }
+
+const COUNTERATTACK: u32 = 990_620;
+const RIPOSTE: u32 = 990_621;
+
+fn reactive(d: &mut GameData) {
+    let mut counter = bare(COUNTERATTACK, 0);
+    counter.script_name = "spell_hunter_counterattack".into();
+    counter.dmg_class = 2;
+    effect(&mut counter, 0, damage(10));
+    let mut riposte = bare(RIPOSTE, 0);
+    riposte.caster_aura_state = 1;
+    riposte.dmg_class = 2;
+    effect(&mut riposte, 0, damage(10));
+    insert(d, [counter, riposte]);
+}
+
+/// Counterattack wants a parry of a blow from its target, a dodge won't
+/// do, nor another target, nor a parry gone stale; Riposte isn't opened by
+/// a rogue's dodge but is by a parry (Thistle Tea's reactive windows and
+/// `validate_reactive/4`).
+#[tokio::test]
+async fn counterattack_and_riposte_want_a_parry() {
+    use crate::game::map::combat::{Outcome, after_outcome};
+    let realm = fast_realm(reactive);
+    let (_a, h, map) = kit::player(&realm, "P5VF", "Hunterer", Race::Dwarf, Class::Hunter).await;
+    let (_b, r, _) = kit::player(&realm, "P5VG", "Riposter", Race::Dwarf, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, h, 60, &[COUNTERATTACK]);
+            kit::ready(m, r, 60, &[RIPOSTE]);
+            let one = kit::dummy(m, h, 60, 2.0);
+            let two = kit::dummy(m, h, 60, 3.0);
+            after_outcome(m, one, h, Outcome::Dodge);
+            let dodged = why(m, h, COUNTERATTACK, one);
+            after_outcome(m, one, h, Outcome::Parry);
+            let parried = (why(m, h, COUNTERATTACK, one), why(m, h, COUNTERATTACK, two));
+            kit::pass(m, 6_000);
+            let stale = why(m, h, COUNTERATTACK, one);
+            let near = kit::dummy(m, r, 60, 2.0);
+            after_outcome(m, near, r, Outcome::Dodge);
+            let rogue_dodged = why(m, r, RIPOSTE, near);
+            after_outcome(m, near, r, Outcome::Parry);
+            let rogue_parried = why(m, r, RIPOSTE, near);
+            (dodged, parried, stale, rogue_dodged, rogue_parried)
+        })
+        .await
+        .unwrap();
+    let (dodged, parried, stale, rogue_dodged, rogue_parried) = out;
+    assert_eq!(dodged, Some(fail::BAD_TARGETS), "a dodge won't do");
+    assert_eq!(
+        parried,
+        (None, Some(fail::BAD_TARGETS)),
+        "its parrier alone"
+    );
+    assert_eq!(stale, Some(fail::BAD_TARGETS), "a stale parry");
+    assert_eq!(
+        rogue_dodged,
+        Some(fail::CASTER_AURASTATE),
+        "a rogue's dodge opens nothing"
+    );
+    assert_eq!(rogue_parried, None);
+}
