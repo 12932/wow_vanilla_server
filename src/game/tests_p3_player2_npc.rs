@@ -286,7 +286,7 @@ async fn an_item_bought_back_is_the_one_sold_and_an_empty_slot_has_nothing() {
         guid: c,
         slot: BuybackSlot::Slot1,
     };
-    a.send(back.clone()).await;
+    a.send(back).await;
     handled(&mut a).await;
     let bought = on(&map, move |m| {
         let p = &m.players[&ga];
