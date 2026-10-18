@@ -1957,6 +1957,45 @@ pub fn parry_haste(map: &mut Map, g: Guid) {
     *slot = Some(now + Duration::from_millis(shortened as u64));
 }
 
+/// A weapon put in the main or off hand in a fight starts that hand's
+/// swing over, a whole period of the new weapon away, hasted as the hand
+/// is (mangos's `Player::EquipItem` and `resetAttackTimer`, Thistle Tea's
+/// `AttackTimers.equipment_changed`). The other hand, the ranged slot and a
+/// weapon taken off leave the timers as they are, as mangos has them.
+pub fn weapon_put_in_hand(map: &mut Map, g: Guid, slot: u8) {
+    use crate::game::map::inventory::{SLOT_MAIN_HAND, SLOT_OFF_HAND};
+    if slot != SLOT_MAIN_HAND && slot != SLOT_OFF_HAND {
+        return;
+    }
+    let now = map.now;
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let fighting = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    let weapon = p
+        .item_at(crate::game::store::BAG_PLAYER, slot)
+        .and_then(|i| data.item(p.items[i].entry))
+        .is_some_and(|t| t.class == 2);
+    if !fighting || !weapon || p.death != Death::Alive {
+        return;
+    }
+    let field = if slot == SLOT_OFF_HAND {
+        UNIT_FIELD_BASEATTACKTIME + 1
+    } else {
+        UNIT_FIELD_BASEATTACKTIME
+    };
+    let period = p.fields.get_u32(field).max(100);
+    let at = Some(now + Duration::from_millis(u64::from(period)));
+    if let Some(c) = map.combat_mut(g) {
+        if slot == SLOT_OFF_HAND {
+            c.next_offhand = at;
+        } else {
+            c.next_swing = at;
+        }
+    }
+}
+
 /// `CMSG_SETSHEATHED` (Thistle Tea's `Sheath.request`): weapons out or
 /// away; a channel and the auras that sheathing breaks end first.
 pub fn sheathe(map: &mut Map, g: Guid, state: u8) {

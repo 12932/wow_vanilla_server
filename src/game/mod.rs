@@ -388,6 +388,8 @@ mod tests_p4_world_scripts;
 #[cfg(test)]
 mod tests_p4_world_spells;
 #[cfg(test)]
+mod tests_p5_combat;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
