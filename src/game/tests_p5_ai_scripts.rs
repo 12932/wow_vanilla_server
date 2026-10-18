@@ -907,3 +907,116 @@ async fn malowns_curses_are_chance_rolls_on_fixed_timers() {
         "every 20 seconds, cast or not: {lefts:?}"
     );
 }
+
+/// Combat kits: Slim's friend poisons its blade as it comes and fights
+/// with Backstab and Crippling Poison; Bly bashes; and Obsidion lies out
+/// of reach as he waits, and may be struck once he fights (Thistle Tea's
+/// `tapoke_slim_jahn`, `zul_farrak` and `obsidion` ports).
+#[tokio::test]
+#[ignore = "extended"]
+async fn slims_friend_bly_and_obsidion_fight_with_their_kits() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Kitted").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    // Slim's friend, its blade poisoned as it comes.
+    let friend = summon_near(&map, 4971, off(at, 3.0, 0.0)).await;
+    assert!(
+        until(&map, 3_000, move |m| has(m, friend, 3616)).await,
+        "its poisoned blade"
+    );
+    clear(&map, vec![friend]);
+    let (g, d) = set_on_dummy(&map, 4971, at).await;
+    c.sees(g).await;
+    kit(
+        &mut c,
+        &map,
+        g,
+        d,
+        &[
+            (497102, 7992, (5.0, 8.9), (8.4, 15.3), true),
+            (497103, 15582, (0.5, 0.5), (2.1, 5.6), true),
+        ],
+    )
+    .await;
+    clear(&map, vec![g, d]);
+    let (g, d) = set_on_dummy(&map, 7604, at).await;
+    c.sees(g).await;
+    kit(
+        &mut c,
+        &map,
+        g,
+        d,
+        &[
+            (760401, 11972, (5.0, 5.0), (15.0, 15.0), true),
+        ],
+    )
+    .await;
+    // Revenge waits on a blow dodged, parried or blocked (its aura state);
+    // its timer is the data's.
+    assert!(timer(&map, g, 760402).await.is_some());
+    clear(&map, vec![g, d]);
+    // Obsidion lies, not to be struck; in his fight, he stands to it.
+    let obsidion = summon_near(&map, 8400, off(at, 3.0, 0.0)).await;
+    assert!(
+        until(&map, 3_000, move |m| stand_state(m, obsidion) == 7
+            && unit_flags(m, obsidion) & 0x100 != 0)
+        .await,
+        "resting, out of reach"
+    );
+    let g = obsidion;
+    let d = map
+        .query(move |m| {
+            tough(m, g);
+            if let Some(f) = m.unit_fields_mut(g) {
+                f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, 14);
+            }
+            let d = dummy(m, off(at, 5.0, 0.0));
+            crate::game::map::ai::attacked(m, g, d);
+            d
+        })
+        .await
+        .unwrap();
+    c.sees(g).await;
+    assert!(
+        until(&map, 3_000, move |m| unit_flags(m, g) & 0x100 == 0).await,
+        "to be struck once fighting"
+    );
+    let _ = d;
+}
+
+/// Grenka can't be fought while she hides, and flees once when nearly
+/// dead (Thistle Tea's `test_of_endurance` port).
+#[tokio::test]
+#[ignore = "extended"]
+async fn grenka_cant_be_fought_hidden_and_flees_once_nearly_dead() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = hero(&realm, "Enduring").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let grenka = summon_near(&map, 4490, off(at, 3.0, 0.0)).await;
+    assert!(
+        until(&map, 3_000, move |m| unit_flags(m, grenka) & 0x300 == 0x300).await,
+        "not to be fought, hidden"
+    );
+    clear(&map, vec![grenka]);
+    let (g, _d) = set_on_dummy(&map, 4490, at).await;
+    map.query(move |m| {
+        if let Some(f) = m.unit_fields_mut(g) {
+            let flags = f.get_u32(UNIT_FIELD_FLAGS) & !0x300;
+            f.set_u32(UNIT_FIELD_FLAGS, flags);
+        }
+        set_pct(m, g, 10);
+    })
+    .await;
+    assert!(
+        until(&map, 3_000, move |m| unit_flags(m, g)
+            & crate::game::map::auras::UNIT_FLAG_FLEEING
+            != 0)
+        .await,
+        "flees"
+    );
+    assert!(map.query(move |m| spent(m, g, 449002)).await.unwrap(), "once");
+}
