@@ -212,3 +212,75 @@ async fn a_loan_comes_back_however_it_ends_and_never_twice() {
     assert_eq!(out, vec![(Some(50.0), None); 2]);
     assert_eq!(evaded, (Some(10.0), None));
 }
+
+const FADE: u32 = 96_892;
+
+fn fade_data() -> GameData {
+    let mut d = data();
+    add_spells(
+        &mut d,
+        [aura_spell(
+            FADE,
+            Some(10_000),
+            &[(AURA_MOD_TOTAL_THREAT, 0, 0)],
+        )],
+    );
+    d
+}
+
+/// Thistle Tea's Fade: cast out of a fight it holds nothing anywhere; in
+/// one, the brutes fighting Alice hold 50 less of hers until it runs out
+/// (not a moment before), or is taken off, dispelled, or she dies.
+#[tokio::test]
+async fn fade_holds_threat_back_until_it_ends_however_it_ends() {
+    let (_realm, _a, alice, map) = setup_with(fade_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let _ = put(m, alice, alice, FADE, &[-50]);
+            let alone = m.spells.temp_threat.is_empty();
+            auras::remove_spell(m, alice, FADE, None);
+            let fighting = |m: &mut Map| {
+                let one = spawn(m, alice, BRUTE, 1, 3.0);
+                let two = spawn(m, alice, BRUTE, 1, 4.0);
+                for (b, t) in [(one, 100.0), (two, 200.0)] {
+                    let c = m.creature_mut(b).unwrap();
+                    c.threat = vec![(alice, t)];
+                    c.combat.victim = alice;
+                    m.note_fighting(b);
+                }
+                (one, two)
+            };
+            let (one, two) = fighting(m);
+            let _ = put(m, alice, alice, FADE, &[-50]);
+            let faded = (threat(m, one, alice), threat(m, two, alice));
+            m.now += Duration::from_millis(9_999);
+            auras::update(m);
+            let before = threat(m, one, alice);
+            m.now += Duration::from_millis(1);
+            auras::update(m);
+            let after = (threat(m, one, alice), threat(m, two, alice));
+            let mut ended = Vec::new();
+            for how in 0..3 {
+                let (one, _) = fighting(m);
+                let _ = put(m, alice, alice, FADE, &[-50]);
+                match how {
+                    0 => auras::remove_spell(m, alice, FADE, None),
+                    1 => auras::remove_where(m, alice, |h| h.spell == FADE),
+                    _ => auras::remove_where(m, alice, |_| true),
+                }
+                ended.push(threat(m, one, alice));
+            }
+            (alone, faded, before, after, ended)
+        })
+        .await
+        .unwrap();
+    let (alone, faded, before, after, ended) = got;
+    assert!(alone, "out of a fight, nothing held");
+    assert_eq!(
+        faded,
+        ((Some(50.0), Some(-50.0)), (Some(150.0), Some(-50.0)))
+    );
+    assert_eq!(before, (Some(50.0), Some(-50.0)), "not before its end");
+    assert_eq!(after, ((Some(100.0), None), (Some(200.0), None)));
+    assert_eq!(ended, vec![(Some(100.0), None); 3]);
+}
