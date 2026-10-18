@@ -457,6 +457,26 @@ the questions waiting for you.
     of them. **The fix** would be a harness mode in which a test steps the map itself, with no update loop of its
     own. That is a few days' work across the harness and its tests, so I left it for your say.
 
+33. **Code review, first findings** (auth, connections, sessions, the store):
+    - **Item and money moves are saved apart** (fix queued). A trade changes two characters, and mail and auctions
+      move items between a character and a record. Each side is saved on its own time: the record at once, a
+      character at its 5-minute save or logout. A crash in between, such as an abort, the OOM killer or a power cut,
+      duplicates or loses the item. mangos saves both sides in one transaction, and so will wvs.
+    - **A failed reconnect proof tells the client it is banned** (fix queued). mangos closes the connection without
+      an answer.
+    - **No lockout after wrong passwords.** Nothing slows a password guesser beyond the cap on open connections.
+      mangos has `WrongPass.MaxCount`, off by default. Add one, per account and per address, with a back-off? That
+      is your call, as it's a policy.
+    - **A save that fails is lost** until the character's next save, after three tries if the database was busy. In
+      WAL mode with a single writer that should only happen with a full disk. A failed logout save loses the session
+      since the last save. Keeping failed saves to retry is possible, but the right answer to a full disk is an
+      operator alert, so I've left it.
+    - **Sound as they are:**
+      - the handshakes (timeouts, size caps, panic guards);
+      - the outbound budget and backpressure;
+      - the rate and bad-packet limits;
+      - the session-key cache's bounds.
+
 ## Progress
 
 | Stage | State | Commit |
