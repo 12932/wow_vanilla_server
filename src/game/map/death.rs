@@ -554,14 +554,14 @@ pub fn nearest_graveyard(
 /// have it: of the zone's own, the nearest on `here`; else, from a
 /// dungeon, the nearest outside by horizontal distance from its entrance;
 /// else one on any map. With none of the zone's, the nearest on `here`.
-pub fn graveyard_for<'a>(
-    data: &'a crate::game::data::GameData,
+pub fn graveyard_for(
+    data: &crate::game::data::GameData,
     here: u32,
     zone: u32,
     faction: u32,
     pos: Vector3d,
     open: impl Fn(u32) -> bool,
-) -> Option<&'a crate::game::data::Graveyard> {
+) -> Option<&crate::game::data::Graveyard> {
     use crate::game::data::Graveyard;
     let allowed = |gy: &Graveyard| (gy.faction == 0 || gy.faction == faction) && open(gy.id);
     let near =
