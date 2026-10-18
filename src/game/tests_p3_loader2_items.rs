@@ -192,6 +192,14 @@ async fn real_gear_crit_and_dodge_come_back_after_a_login() {
     assert!(auras_worn.contains(&13_669));
     relog(&mut c).await;
     let map = realm.registry.online(g).unwrap().map();
+    // The gear's auras come back at the map's next gear step after the
+    // login (`inventory::sync_gear_all`), not with it.
+    for _ in 0..200 {
+        if on(&map, move |m| spells_on(m, g).contains(&13_669)).await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     let (restored, auras_back, removed) = on(&map, move |m| {
         derive::unit(m, g);
         let restored = read(m);
@@ -204,7 +212,7 @@ async fn real_gear_crit_and_dodge_come_back_after_a_login() {
     .await;
     assert!(
         close(restored.0, worn.0) && close(restored.1, worn.1),
-        "{restored:?}"
+        "{restored:?} after a login, {worn:?} worn"
     );
     assert_eq!(auras_back, auras_worn);
     assert!(
