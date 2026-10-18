@@ -1213,11 +1213,12 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
 /// The bounding radius Thistle Tea takes for a unit with none.
 const DEFAULT_BOUNDING_RADIUS: f32 = 0.389;
 
-/// Set a game object's state (0 open, 1 closed, 2 active), with a reset
-/// after `reset` if it has one.
+/// Set a game object's state (0 open, 1 closed, 2 active), its flags as
+/// they are; a use's close still to come doesn't undo it.
 pub fn set_object_state(map: &mut Map, object: Guid, state: u32) {
     if let Some(o) = map.gameobject_mut(object) {
         o.fields.set_u32(GAMEOBJECT_STATE, state);
+        crate::game::map::objects::forget_close(map, object);
     }
 }
 
