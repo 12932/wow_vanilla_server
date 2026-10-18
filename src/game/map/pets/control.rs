@@ -432,21 +432,53 @@ fn set_action(map: &mut Map, player: Guid, pet: Guid, slots: &[(u32, u32)]) {
     let Some(s) = state_mut(map, pet) else {
         return;
     };
+    // The edit is checked whole before either half is put on (Thistle
+    // Tea's `PetControls.update`): each slot on the bar and named once; a
+    // spell the pet knows, in a state its kind allows; and the commands
+    // and stances moved about, but none taken off nor doubled.
+    let mut bar = s.bar;
+    let mut seen = Vec::new();
     for &(position, b) in slots {
-        let Some(slot) = s.bar.get_mut(position as usize) else {
-            continue;
+        let Some(slot) = bar.get_mut(position as usize) else {
+            return;
         };
-        let (action, kind) = unpack(b);
-        let fixed = |b: u32| matches!(unpack(b).1, ACT_COMMAND | ACT_REACTION);
-        // Commands and stances stay where they are.
-        if fixed(*slot) != fixed(b) {
-            continue;
+        if seen.contains(&position) {
+            return;
         }
-        if !matches!(kind, ACT_COMMAND | ACT_REACTION) && action != 0 && !s.spells.contains(&action)
-        {
-            continue;
+        seen.push(position);
+        let (action, kind) = unpack(b);
+        let fits = match kind {
+            ACT_COMMAND => action <= u32::from(COMMAND_DISMISS),
+            ACT_REACTION => action <= u32::from(REACT_AGGRESSIVE),
+            _ if action == 0 => matches!(kind, ACT_DISABLED | ACT_ENABLED | ACT_PASSIVE | 0),
+            ACT_DISABLED | ACT_ENABLED | ACT_PASSIVE => {
+                s.spells.contains(&action)
+                    && data.spells.get(action).is_some_and(|t| {
+                        !t.passive() && (kind != ACT_ENABLED || autocastable(t))
+                    })
+            }
+            _ => false,
+        };
+        if !fits {
+            return;
         }
         *slot = b;
+    }
+    let fixed = |bar: &[u32; 10]| {
+        let mut f: Vec<u32> = bar
+            .iter()
+            .copied()
+            .filter(|b| matches!(unpack(*b).1, ACT_COMMAND | ACT_REACTION))
+            .collect();
+        f.sort_unstable();
+        f
+    };
+    if fixed(&bar) != fixed(&s.bar) {
+        return;
+    }
+    s.bar = bar;
+    for &(_, b) in slots {
+        let (action, kind) = unpack(b);
         if action != 0 && data.spells.get(action).is_some_and(autocastable) {
             match kind {
                 ACT_ENABLED if !s.autocast.contains(&action) => s.autocast.push(action),

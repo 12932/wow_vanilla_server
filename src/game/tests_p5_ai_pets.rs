@@ -883,3 +883,122 @@ async fn a_pet_comes_back_from_a_logout_as_loyal_as_it_left() {
         .flatten();
     assert_eq!(restored, Some((4, 12_345, 45, (-46i32) as u32, true)));
 }
+
+/// The pet's bar, by slot: each button's action and kind.
+async fn bar(map: &MapHandle, pet: Guid) -> Vec<(u32, u32)> {
+    map.query(move |m| {
+        pets::state(m, pet)
+            .unwrap()
+            .bar
+            .iter()
+            .map(|b| (b & 0x00FF_FFFF, b >> 24))
+            .collect()
+    })
+    .await
+    .unwrap()
+}
+
+async fn set_action(h: &mut Client, pet: Guid, first: (u32, u32), second: Option<(u32, u32)>) {
+    h.clear();
+    h.send(CMSG_PET_SET_ACTION {
+        guid: pet,
+        position1: first.0,
+        data1: first.1,
+        extra: second.map(|(position2, data2)| CMSG_PET_SET_ACTION_extra { position2, data2 }),
+    })
+    .await;
+    // Handled before what is asked next.
+    h.send(CMSG_REQUEST_PET_INFO {}).await;
+    pet_bar(h).await;
+}
+
+/// `msg`, handled.
+async fn handled(h: &mut Client, msg: impl Into<wow_world_messages::vanilla::opcodes::ClientOpcodeMessage>) {
+    h.clear();
+    h.send(msg).await;
+    h.send(CMSG_REQUEST_PET_INFO {}).await;
+    pet_bar(h).await;
+}
+
+/// The pet's bar is edited whole or not at all: a command may change
+/// places with a spell, but not come off it, nor be doubled; an edit with
+/// a slot off the bar, a spell it doesn't know or one in a state it can't
+/// be in changes neither half. Autocast turns on and off for every copy of
+/// the spell on the bar, and not for one the pet doesn't know; nobody but
+/// its master edits it (Thistle Tea's `PetControls.update`, mangos's
+/// `HandlePetSetAction` and `HandlePetSpellAutocastOpcode`).
+#[tokio::test]
+async fn a_pets_bar_is_edited_whole_and_its_commands_kept() {
+    let (realm, mut h, gh, map, pet, _wolf) = tamed_with(training_data()).await;
+    h.sees(pet).await;
+    map.call(move |m| pets::state_mut(m, pet).unwrap().training_points = 10);
+    teach(&h, &map, gh, pet, GORE).await;
+    teach(&h, &map, gh, pet, GROWL).await;
+    let start = bar(&map, pet).await;
+    let attack = (u32::from(pets::COMMAND_ATTACK), pets::ACT_COMMAND);
+    assert_eq!(start[0], attack);
+    let gore_at = start.iter().position(|b| b.0 == GORE).unwrap() as u32;
+    let gore = |kind| pets::button(GORE, kind);
+    // Attack and Gore change places.
+    set_action(
+        &mut h,
+        pet,
+        (gore_at, pets::button(attack.0, attack.1)),
+        Some((0, gore(pets::ACT_DISABLED))),
+    )
+    .await;
+    let swapped = bar(&map, pet).await;
+    assert_eq!(swapped[gore_at as usize], attack);
+    assert_eq!(swapped[0].0, GORE);
+    // Attack taken off, or doubled: refused.
+    for (edit, second) in [
+        ((gore_at, 0), None),
+        ((5, pets::button(attack.0, attack.1)), None),
+        // A good half with a slot off the bar, a spell it doesn't know, or
+        // Growl in no state of a spell's.
+        ((6, gore(pets::ACT_ENABLED)), Some((10, gore(pets::ACT_ENABLED)))),
+        ((6, gore(pets::ACT_ENABLED)), Some((5, pets::button(9_999, pets::ACT_DISABLED)))),
+        ((6, gore(pets::ACT_ENABLED)), Some((5, pets::button(GROWL, 0xFF)))),
+        ((6, gore(pets::ACT_ENABLED)), Some((6, gore(pets::ACT_DISABLED)))),
+    ] {
+        set_action(&mut h, pet, edit, second).await;
+        assert_eq!(bar(&map, pet).await, swapped, "{edit:?} {second:?}");
+    }
+    // Autocast, on and off, for every copy on the bar.
+    set_action(&mut h, pet, (6, gore(pets::ACT_DISABLED)), None).await;
+    let toggle = |id: u32, on: bool| CMSG_PET_SPELL_AUTOCAST {
+        guid: pet,
+        id,
+        autocast_enabled: on,
+    };
+    handled(&mut h, toggle(GORE, true)).await;
+    let on = bar(&map, pet).await;
+    assert_eq!((on[0], on[6]), ((GORE, pets::ACT_ENABLED), (GORE, pets::ACT_ENABLED)));
+    h.send(toggle(GORE, false)).await;
+    handled(&mut h, toggle(9_999, true)).await;
+    let off = bar(&map, pet).await;
+    assert_eq!((off[0], off[6]), ((GORE, pets::ACT_DISABLED), (GORE, pets::ACT_DISABLED)));
+    let autocast = map
+        .query(move |m| pets::state(m, pet).unwrap().autocast.clone())
+        .await
+        .unwrap();
+    assert!(!autocast.contains(&9_999) && !autocast.contains(&GORE));
+    // Another's edit.
+    let (o, go, _) = enter(&realm, "O", "Other", Race::Dwarf, Class::Hunter).await;
+    o.send(CMSG_PET_SET_ACTION {
+        guid: pet,
+        position1: 6,
+        data1: 0,
+        extra: None,
+    })
+    .await;
+    o.send(toggle(GORE, true)).await;
+    // Handled: their name asked after.
+    o.send(CMSG_NAME_QUERY { guid: go }).await;
+    sleep(200).await;
+    assert_eq!(bar(&map, pet).await, off, "not theirs");
+}
+
+async fn sleep(ms: u64) {
+    tokio::time::sleep(Duration::from_millis(ms)).await;
+}
