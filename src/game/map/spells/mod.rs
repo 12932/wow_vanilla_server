@@ -273,12 +273,20 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     let skills_before = crate::game::map::skills::ids(p);
     // A higher rank takes the lower's place on the bars; a talent's rank
     // takes it in the spellbook too.
-    let (old, talent) = supersedes(&map.realm.data, &p.spells, spell);
+    let data = map.realm.data.clone();
+    let (old, talent) = supersedes(&data, &p.spells, spell);
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    if talent && let Some(old) = old {
-        p.spells.retain(|s| *s != old);
+    if talent && old.is_some() {
+        let ranks: Vec<u32> = data
+            .spells
+            .talents
+            .values()
+            .find(|t| t.ranks.contains(&spell))
+            .map(|t| t.ranks.to_vec())
+            .unwrap_or_default();
+        p.spells.retain(|s| *s == spell || !ranks.contains(s));
     }
     p.spells.push(spell);
     if let Some(old) = old {
@@ -324,9 +332,15 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
 /// it (the skill line's `superseded_by`, or a talent's ranks), and whether
 /// it is a talent's.
 fn supersedes(data: &GameData, known: &[u32], spell: u32) -> (Option<u32>, bool) {
+    // A talent's rank: the highest other rank known, below or above it
+    // (mangos's `addSpell` unlearns every other rank).
     let talent = data.spells.talents.values().find_map(|t| {
-        let i = t.ranks.iter().position(|r| *r == spell)?;
-        (i > 0 && known.contains(&t.ranks[i - 1])).then(|| t.ranks[i - 1])
+        t.ranks.iter().position(|r| *r == spell)?;
+        t.ranks
+            .iter()
+            .rev()
+            .find(|r| **r != 0 && **r != spell && known.contains(r))
+            .copied()
     });
     if talent.is_some() {
         return (talent, true);
