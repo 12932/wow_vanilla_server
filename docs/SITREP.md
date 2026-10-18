@@ -431,6 +431,21 @@ the questions waiting for you.
     map's updates, and a follower keeps up with its lead.
 29. **an agent CLI** now runs the stages (your ask), on Opus 5.5.
 
+30. **Round 3 so far (3m to 3r).** These rows keep mangos-classic's behaviour where Thistle Tea's isn't 1.12's (marked
+    wrong-for-1.12):
+    - **A weapon swap in combat** resets only the melee timers. The ranged timer and a queued Auto Shot run on.
+    - **A scripted flight** with no flight master costs nothing.
+    - **Abandoning a quest** doesn't give back the item that started it. Thistle Tea gives it back.
+    - **A creature's Bear Form** is always model 902. Thistle Tea picks one by the creature's own model.
+    - **Food** heals at its own period in a fight or out. Thistle Tea folds it into the 2 s tick, out of combat only.
+    - **A pet's focus** comes back at 12 every 2 s, mangos's rate. Thistle Tea gives 25 every 4 s.
+    - **A disarmed unit** can't parry, even with an off-hand weapon.
+    - **Merge note:** 3q renews a parent's linked auras on a refresh, and 3o's test has a link back to its parent.
+      Together they recursed until the stack overflowed. A refresh made by a link no longer renews its own links.
+31. **The agents ran the machine out of memory** (30 GB). the orchestrator stopped all seven agent agents when memory ran
+    short. Their committed work is merged above, and their branches and worktrees are kept. How to resume them, with
+    fewer at once and a cap on each agent's memory, is waiting on you.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -470,5 +485,7 @@ the questions waiting for you.
 | The matrix after the second round | 3,785 of 8,396 applicable covered or accepted (45.1%) | |
 | Quest 1560's walk | merged | 8dc7a49 |
 | Fast and extended test suites | merged | eef0000 |
+| Round 3 (3m to 3r), the work committed before the agents stopped | merged | 208be0b |
+| The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
 ## Left for later, and why
