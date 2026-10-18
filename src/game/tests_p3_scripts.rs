@@ -81,15 +81,6 @@ pub(super) fn tough(m: &mut Map, g: Guid) {
     }
 }
 
-/// `dx`, `dy` yards from the start.
-pub(super) fn at(dx: f32, dy: f32) -> Vector3d {
-    Vector3d {
-        x: START.0 + dx,
-        y: START.1 + dy,
-        z: START.2,
-    }
-}
-
 /// `c` at `at` in map `id`'s world or copy, by a teleport across maps:
 /// the map they are in then.
 pub(super) async fn go(realm: &Arc<Realm>, c: &mut Client, id: u32, at: Vector3d) -> MapHandle {
@@ -204,13 +195,6 @@ pub(super) fn summon(m: &mut Map, entry: u32, at: Vector3d, o: f32) -> Guid {
         s.summoner = None;
     }
     g
-}
-
-/// [`summon`] from a handle, `dx`, `dy` from the start.
-pub(super) async fn summon_at(map: &MapHandle, entry: u32, dx: f32, dy: f32) -> Guid {
-    map.query(move |m| summon(m, entry, at(dx, dy), 0.0))
-        .await
-        .unwrap()
 }
 
 /// Those summoned go, so the next scenario starts clear.
@@ -344,6 +328,7 @@ pub(super) async fn cast_any_of(
 /// A timed cast of `g`'s, pulled just now: its event `id` first due
 /// `first` seconds on (from, to); made due, `spell` goes (at `at`, if
 /// given) and is due again `repeat` seconds on.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn timed_cast(
     c: &mut Client,
     map: &MapHandle,
@@ -1027,17 +1012,6 @@ async fn molten_cores_lieutenants_fight_as_thistle_tea_scripts_them() {
     if wanted("rager") {
         core_rager(&realm).await;
     }
-}
-
-/// The spells of the auras on `g`.
-pub(super) async fn auras_on(map: &MapHandle, g: Guid) -> Vec<u32> {
-    map.query(move |m| {
-        auras::auras(m, g)
-            .map(|a| a.holders.iter().map(|h| h.spell).collect())
-            .unwrap_or_default()
-    })
-    .await
-    .unwrap()
 }
 
 const FIREWALKER: u32 = 11666;

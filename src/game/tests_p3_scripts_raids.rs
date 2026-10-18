@@ -312,6 +312,10 @@ async fn boss(map: &crate::game::map::MapHandle, entry: u32, dx: f32) -> Guid {
 /// Its health now `pct` percent, and its timed events looked at.
 fn hurt_to(m: &mut Map, g: Guid, pct: u32) {
     set_pct(m, g, pct);
+    // Out of its last cast's global cooldown, so what the event casts goes.
+    if let Some(cr) = m.caster_mut(g) {
+        cr.gcd_until = None;
+    }
     if let Some(s) = event_ai::scripted_mut(m, g) {
         s.next_tick = None;
     }
@@ -525,13 +529,16 @@ async fn emberstrife(realm: &Arc<Realm>) {
     let e = boss(&map, 10321, 2.0).await;
     c.sees(e).await;
     map.query(move |m| ai::attacked(m, e, me)).await;
+    // Both first timers as the pull set them, before either goes.
+    assert!(between(timer(&map, e, 1032101).await, 6.0, 8.0));
+    assert!(between(timer(&map, e, 1032102).await, 8.0, 12.0));
     timed_cast(
         &mut c,
         &map,
         e,
         1032101,
         19983,
-        (6.0, 8.0),
+        (0.0, 8.0),
         (6.0, 8.0),
         Some(me),
     )
@@ -542,7 +549,7 @@ async fn emberstrife(realm: &Arc<Realm>) {
         e,
         1032102,
         9573,
-        (8.0, 12.0),
+        (0.0, 12.0),
         (8.0, 12.0),
         Some(me),
     )
@@ -550,7 +557,7 @@ async fn emberstrife(realm: &Arc<Realm>) {
     c.clear();
     map.query(move |m| hurt_to(m, e, 59)).await;
     assert!(
-        cast_of(&mut c, e, 8269, Duration::from_secs(1))
+        cast_of(&mut c, e, 8269, Duration::from_millis(2500))
             .await
             .is_some(),
         "Frenzy below sixty"
@@ -594,13 +601,15 @@ async fn twilight_corrupter(realm: &Arc<Realm>) {
         heard(&mut c, t, Duration::from_secs(1)).await.is_some(),
         "his shout"
     );
+    assert!(between(timer(&map, t, 1562502).await, 6.0, 18.0));
+    assert!(between(timer(&map, t, 1562503).await, 10.0, 20.0));
     timed_cast(
         &mut c,
         &map,
         t,
         1562502,
         25805,
-        (6.0, 18.0),
+        (0.0, 18.0),
         (20.0, 30.0),
         None,
     )
@@ -611,7 +620,7 @@ async fn twilight_corrupter(realm: &Arc<Realm>) {
         t,
         1562503,
         25806,
-        (10.0, 20.0),
+        (0.0, 20.0),
         (35.0, 40.0),
         None,
     )

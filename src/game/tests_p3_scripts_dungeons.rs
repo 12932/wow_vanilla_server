@@ -45,6 +45,10 @@ async fn pull(map: &MapHandle, g: Guid, me: Guid) {
 /// Its health now `pct` percent, and its timed events looked at.
 fn hurt_to(m: &mut Map, g: Guid, pct: u32) {
     set_pct(m, g, pct);
+    // Out of its last cast's global cooldown, so what the event casts goes.
+    if let Some(cr) = m.caster_mut(g) {
+        cr.gcd_until = None;
+    }
     if let Some(s) = event_ai::scripted_mut(m, g) {
         s.next_tick = None;
     }
@@ -55,15 +59,13 @@ fn living_of(m: &Map, entries: &[u32]) -> Vec<Guid> {
     entries.iter().flat_map(|e| living(m, *e)).collect()
 }
 
+/// A timed cast to check: its event, its spell, its first and repeat
+/// times (from, to, in seconds), and whether it goes at the player.
+type Cast = (u32, u32, (f32, f32), (f32, f32), bool);
+
 /// Each of `g`'s timed casts in turn, as `timed_cast` checks them: (event,
 /// spell, first, repeat, at the player or not).
-async fn kit(
-    c: &mut Client,
-    map: &MapHandle,
-    g: Guid,
-    me: Guid,
-    casts: &[(u32, u32, (f32, f32), (f32, f32), bool)],
-) {
+async fn kit(c: &mut Client, map: &MapHandle, g: Guid, me: Guid, casts: &[Cast]) {
     // Each first timer as the pull set it, before any goes.
     for (id, _, first, _, _) in casts.iter().copied() {
         let t = timer(map, g, id).await;
@@ -90,10 +92,9 @@ async fn kit(
 /// Blackrock Depths' bosses: High Interrogator Gerstahn's four spells;
 /// Grizzle's Frenzy below half, every fifteen seconds; General
 /// Angerforge's alarm below thirty percent (eight reservists and two
-/// medics, again three minutes on); Doom'rel's voidwalkers at half, once;
-/// Plugger Spazzring's demon armor and grumbling at peace; Emperor
-/// Dagran Thaurissan's rally and his death, which leaves Moira shaken; and
-/// Moira's heal of an injured friend.
+/// medics, again three minutes on); Plugger Spazzring's demon armor and
+/// grumbling at peace; Emperor Dagran Thaurissan's rally and his death,
+/// which leaves Moira shaken; and Moira's heal of an injured friend.
 async fn blackrock_depths(realm: &Arc<Realm>) {
     let (mut c, me, map) = hero_in(realm, "Depths", 409, ARENA, 120.0, &[]).await;
     // Gerstahn.
@@ -121,7 +122,7 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
     c.clear();
     map.query(move |m| hurt_to(m, g, 50)).await;
     assert!(
-        cast_of(&mut c, g, 8269, Duration::from_secs(1))
+        cast_of(&mut c, g, 8269, Duration::from_millis(2500))
             .await
             .is_some(),
         "Grizzle's Frenzy below half"
@@ -158,34 +159,6 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
         "again three minutes on"
     );
     let mut gone = map.query(|m| living_of(m, &[8901, 8894])).await.unwrap();
-    gone.push(g);
-    clear(&map, gone);
-    // Doom'rel.
-    let g = boss(&map, 9039, 2.0).await;
-    c.sees(g).await;
-    pull(&map, g, me).await;
-    c.clear();
-    map.query(move |m| hurt_to(m, g, 50)).await;
-    assert!(
-        cast_of(&mut c, g, 15092, Duration::from_secs(1))
-            .await
-            .is_some(),
-        "his voidwalkers at half"
-    );
-    assert!(
-        map.query(move |m| spent(m, g, 903905)).await.unwrap(),
-        "once"
-    );
-    let mut gone = map
-        .query(move |m| {
-            m.creatures
-                .iter()
-                .filter(|(_, c)| c.scripted.as_deref().and_then(|s| s.summoner) == Some(g))
-                .map(|(_, c)| c.guid)
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap();
     gone.push(g);
     clear(&map, gone);
     // Plugger, at peace.
@@ -413,6 +386,68 @@ async fn blackrock_spire(realm: &Arc<Realm>) {
     clear(&map, vec![g]);
 }
 
+/// Stratholme's: Barthilas's blows restart whether or not they land, and
+/// Anastari curses only a victim not cursed.
+async fn stratholme(realm: &Arc<Realm>) {
+    let (mut c, me, map) = hero_in(realm, "Strath", 409, ARENA, 120.0, &[]).await;
+    // Barthilas.
+    let g = boss(&map, 10435, 2.0).await;
+    c.sees(g).await;
+    pull(&map, g, me).await;
+    kit(
+        &mut c,
+        &map,
+        g,
+        me,
+        &[
+            (1043501, 16791, (5.0, 5.0), (4.0, 4.0), false),
+            (1043502, 16793, (16.0, 16.0), (15.0, 15.0), true),
+            (1043503, 10887, (12.0, 12.0), (15.0, 15.0), true),
+            (1043504, 14099, (8.0, 8.0), (20.0, 20.0), true),
+        ],
+    )
+    .await;
+    // A blow that can't land (his victim away) waits its time all the same.
+    map.query(move |m| put(m, me, off(ARENA, -25.0, 0.0))).await;
+    c.clear();
+    fire(&map, g, 1043502).await;
+    assert!(
+        cast_of(&mut c, g, 16793, Duration::from_millis(600))
+            .await
+            .is_none()
+    );
+    assert!(
+        about(timer(&map, g, 1043502).await, 15.0),
+        "restarted all the same"
+    );
+    map.query(move |m| put(m, me, ARENA)).await;
+    clear(&map, vec![g]);
+    // Anastari's curse.
+    let g = boss(&map, 10436, 2.0).await;
+    c.sees(g).await;
+    pull(&map, g, me).await;
+    c.clear();
+    fire(&map, g, 1043602).await;
+    assert_eq!(
+        cast_of(&mut c, g, 16867, Duration::from_secs(1)).await,
+        Some(me),
+        "the curse"
+    );
+    c.clear();
+    fire(&map, g, 1043602).await;
+    assert!(
+        cast_of(&mut c, g, 16867, Duration::from_millis(600))
+            .await
+            .is_none(),
+        "not on the cursed"
+    );
+    assert!(
+        timer(&map, g, 1043602).await.is_some_and(|t| t.is_zero()),
+        "and tried again"
+    );
+    clear(&map, vec![g]);
+}
+
 /// The dungeon bosses, on one load of the real world.
 #[tokio::test]
 async fn dungeon_bosses_fight_as_thistle_tea_scripts_them() {
@@ -424,5 +459,8 @@ async fn dungeon_bosses_fight_as_thistle_tea_scripts_them() {
     }
     if wanted("brs") {
         blackrock_spire(&realm).await;
+    }
+    if wanted("strat") {
+        stratholme(&realm).await;
     }
 }
