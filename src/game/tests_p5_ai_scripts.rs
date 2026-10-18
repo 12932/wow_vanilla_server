@@ -785,3 +785,125 @@ async fn belnistrasz_fights_only_out_of_his_chant_and_takes_it_up_again() {
         "the chant taken up"
     );
 }
+
+/// Maleki the Pallid holds his ground as a fight starts and keeps it
+/// within 40 yards; hurt to 60 percent he drains his victim and from then
+/// closes to 20 yards (Thistle Tea's `stratholme` Maleki, vmangos's
+/// `boss_maleki_the_pallid`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn maleki_holds_his_ground_until_hurt_then_drains_his_victim_from_closer() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Drained").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let maleki = summon_near(&map, 10438, off(at, 15.0, 0.0)).await;
+    c.sees(maleki).await;
+    let held = map
+        .query(move |m| {
+            tough(m, maleki);
+            crate::game::map::ai::attacked(m, maleki, me);
+            crate::game::map::event_ai::combat_movement(m, maleki)
+        })
+        .await
+        .unwrap();
+    assert!(!held, "he holds his ground");
+    // Fifteen yards off, unhurt: still held.
+    let far = map
+        .query(move |m| {
+            due(m, maleki, 1043806);
+            due(m, maleki, 1043807);
+            crate::game::map::event_ai::combat_movement(m, maleki)
+        })
+        .await
+        .unwrap();
+    assert!(!far, "within 40 yards he stands");
+    c.clear();
+    map.query(move |m| {
+        crate::game::map::spells::interrupt(m, maleki);
+        if let Some(cr) = m.caster_mut(maleki) {
+            cr.gcd_until = None;
+        }
+        set_pct(m, maleki, 50);
+        due(m, maleki, 1043805);
+    })
+    .await;
+    let drained = c
+        .gets(Duration::from_secs(3), |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(s)
+                if s.caster == maleki && [17238, 17243].contains(&s.spell) =>
+            {
+                Some(s.hits.clone())
+            }
+            _ => None,
+        })
+        .await;
+    // Thistle Tea's mana test counts a unit with no mana as full, so a
+    // warrior is drained of mana before life (`mana_percent`, as wvs
+    // reads it too).
+    assert_eq!(drained, Some(vec![me]), "a drain on his victim");
+    let closing = map
+        .query(move |m| {
+            crate::game::map::spells::interrupt(m, maleki);
+            crate::game::map::scripts::place(m, maleki, off(at, 30.0, 0.0), 0.0);
+            due(m, maleki, 1043809);
+            (
+                crate::game::map::event_ai::phase(m, maleki),
+                crate::game::map::event_ai::combat_movement(m, maleki),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(closing, (1, true), "past 20 yards he closes in");
+}
+
+/// Malown the Accursed's curses are chance rolls on fixed timers: each
+/// comes due again on its own time whether its roll went or not (Thistle
+/// Tea's `stratholme` Malown).
+#[tokio::test]
+#[ignore = "extended"]
+async fn malowns_curses_are_chance_rolls_on_fixed_timers() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let events = &realm.data.scripts.ai_events[&11143];
+    let rolls: Vec<(u32, u32)> = events
+        .iter()
+        .filter(|e| e.kind == crate::game::data::scripts::EVENT_TIMER_IN_COMBAT)
+        .map(|e| (e.id, e.chance))
+        .collect();
+    assert_eq!(
+        rolls,
+        [(1114303, 65), (1114304, 45), (1114305, 3), (1114306, 3), (1114307, 5)]
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| e.flags & crate::game::data::scripts::EF_CHECK_RESULT == 0)
+    );
+    let (_c, me, map) = hero(&realm, "Cursed").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let malown = summon_near(&map, 11143, off(at, 3.0, 0.0)).await;
+    let lefts = map
+        .query(move |m| {
+            tough(m, malown);
+            crate::game::map::ai::attacked(m, malown, me);
+            let mut lefts = Vec::new();
+            for _ in 0..20 {
+                if let Some(cr) = m.caster_mut(malown) {
+                    cr.gcd_until = None;
+                }
+                crate::game::map::spells::interrupt(m, malown);
+                due(m, malown, 1114305);
+                lefts.push(left(m, malown, 1114305));
+            }
+            lefts
+        })
+        .await
+        .unwrap();
+    assert!(
+        lefts.iter().all(|l| about(*l, 20.0)),
+        "every 20 seconds, cast or not: {lefts:?}"
+    );
+}
