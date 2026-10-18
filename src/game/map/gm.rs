@@ -213,8 +213,13 @@ fn go(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         parse_coordinate(args.get(1)),
         parse_coordinate(args.get(2)),
     ) else {
-        return Some("Usage: .go [xyz] <x> <y> <z> [map]".to_owned());
+        return Some("Usage: .go [xyz] <x> <y> <z> [map] [facing]".to_owned());
     };
+    // Nothing past the facing, and a facing given is a number (Thistle
+    // Tea's `.go xyz` takes no stray words).
+    if args.len() > 5 || (args.len() == 5 && parse_f32(args.get(4)).is_none()) {
+        return Some("Usage: .go [xyz] <x> <y> <z> [map] [facing]".to_owned());
+    }
     let target = match args.get(3) {
         Some(&"here") | None => map.key,
         Some(m) => match m.parse::<u32>() {

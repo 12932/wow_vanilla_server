@@ -244,7 +244,7 @@ fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
 }
 
 fn damage(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
-    let Some(amount) = num::<u32>(args.first()) else {
+    let Some(amount) = num::<u32>(args.first()).filter(|a| *a > 0) else {
         return Some("Usage: .damage <amount>".into());
     };
     let t = selected(map, g);
