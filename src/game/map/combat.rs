@@ -2329,15 +2329,28 @@ pub fn cancel_queued(map: &mut Map, g: Guid) {
 /// healer's threat, split among them (mangos's `threatAssist`, Thistle
 /// Tea's `heal_threat`).
 pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained: u32) {
+    use crate::game::data::spells as sd;
     if gained == 0 || healer.is_zero() {
         return;
     }
-    let school = map
-        .realm
-        .data
+    let data = map.realm.data.clone();
+    let s = data.spells.get(spell);
+    // A spell of no threat, none at first, or none for its help, gives
+    // none (mangos's `threatAssist`).
+    if s.is_some_and(|s| {
+        s.attr(1, sd::ATTR_EX_NO_THREAT)
+            || s.attr(2, sd::ATTR_EX2_NO_INITIAL_THREAT)
+            || s.attr(4, sd::ATTR_EX4_NO_HELPFUL_THREAT)
+    }) {
+        return;
+    }
+    let school = s.map_or(2, |s| s.school_mask());
+    // `spell_threat`'s multiplier, as mangos's `DealHeal` takes it.
+    let spell_mult = data
         .spells
-        .get(spell)
-        .map_or(2, |s| s.school_mask());
+        .threat
+        .get(&spell)
+        .map_or(1.0, |(_, m)| m.max(0.0));
     let fighting: Vec<Guid> = map
         .creatures
         .iter()
@@ -2348,8 +2361,8 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
     if fighting.is_empty() {
         return;
     }
-    let threat =
-        gained as f32 * 0.5 * threat_multiplier(map, healer, school) / fighting.len() as f32;
+    let threat = gained as f32 * 0.5 * spell_mult * threat_multiplier(map, healer, school)
+        / fighting.len() as f32;
     for c in fighting {
         crate::game::map::ai::add_threat(map, c, healer, threat);
     }

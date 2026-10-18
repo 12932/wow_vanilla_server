@@ -228,7 +228,11 @@ pub fn outcome_allowed(pe: Option<&ProcEvent>, ex: u32) -> bool {
 
 /// Whether the triggering spell passes `spell_proc_event`'s school and
 /// family rules.
-fn spell_allowed(pe: Option<&ProcEvent>, spell: Option<&SpellTemplate>, school: u32) -> bool {
+pub(crate) fn spell_allowed(
+    pe: Option<&ProcEvent>,
+    spell: Option<&SpellTemplate>,
+    school: u32,
+) -> bool {
     let Some(pe) = pe else {
         return true;
     };

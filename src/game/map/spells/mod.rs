@@ -640,7 +640,7 @@ fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
     }
 }
 
-fn targets_of(t: &SpellCastTargets) -> Targets {
+pub(crate) fn targets_of(t: &SpellCastTargets) -> Targets {
     let f = &t.target_flags;
     Targets {
         unit: f.get_unit().map(|u| u.unit_target),

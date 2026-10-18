@@ -873,7 +873,20 @@ pub fn aura_gone(map: &mut Map, target: Guid, h: &Holder) {
             auras::remove_spell(map, target, id, Some(h.caster));
         }
     }
+    // Combustion and its crit go together, either way (mangos's
+    // `RemoveSpellAuraHolder`): cancelling the crit takes Combustion.
+    let other = match h.spell {
+        COMBUSTION => COMBUSTION_CRIT,
+        COMBUSTION_CRIT => COMBUSTION,
+        _ => return,
+    };
+    if auras::auras(map, target).is_some_and(|a| a.has_spell(other)) {
+        auras::remove_spell(map, target, other, None);
+    }
 }
+
+const COMBUSTION: u32 = 11129;
+const COMBUSTION_CRIT: u32 = 28682;
 
 /// Improved Blizzard's chill by its script.
 const BLIZZARD_CHILL: [(i32, u32); 3] = [(836, 12484), (988, 12485), (989, 12486)];
