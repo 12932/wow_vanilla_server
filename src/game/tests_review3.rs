@@ -282,3 +282,41 @@ async fn a_player_leaving_the_map_ends_their_channel_and_their_threat() {
     assert!(!out.1, "the channel's aura goes with its caster");
     assert!(!out.2, "and the creature forgets them");
 }
+
+/// A creature that turns to a new victim mid-fight (its last feigned death
+/// or vanished: `ai::forget`) keeps its fight's start and the leash's
+/// origin, where the fight began, not where it turned.
+#[tokio::test]
+async fn a_creature_turning_mid_fight_keeps_its_leash_origin() {
+    let realm = fast_realm(|_| {});
+    let (_c, hunter, map) = human(&realm, "R3OR", "Kiter", Class::Rogue).await;
+    let (_c2, mage, _) = human(&realm, "R3OS", "Bystander", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            use crate::game::map::ai;
+            let k = dummy(m, hunter, 60, 3.0);
+            ai::attacked(m, k, hunter);
+            ai::add_threat(m, k, mage, 1.0);
+            let c = m.creature(k).unwrap();
+            let (origin, start, attacking) =
+                (c.engagement.origin, c.combat_start, c.combat.attacking);
+            // Dragged forty yards off, it loses the hunter.
+            m.now += std::time::Duration::from_secs(5);
+            let c = m.creature_mut(k).unwrap();
+            c.position.x += 40.0;
+            ai::forget(m, hunter);
+            let c = m.creature(k).unwrap();
+            (
+                attacking,
+                c.combat.victim == mage && c.combat.attacking,
+                origin.is_some() && c.engagement.origin == origin,
+                c.combat_start == start,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(out.0, "it fights the hunter");
+    assert!(out.1, "and turns on the mage");
+    assert!(out.2, "its leash still from where the fight began");
+    assert!(out.3, "and the fight's start kept");
+}

@@ -179,8 +179,12 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         }
         return;
     }
-    c.combat_start = Some(now);
-    c.engagement.origin = Some(c.position);
+    // A fight's start and its leash's origin are where it began, not
+    // where it turned to another (its victim feigning death, vanishing).
+    if first {
+        c.combat_start = Some(now);
+        c.engagement.origin = Some(c.position);
+    }
     c.engagement.last_hostile = Some(now);
     c.combat.victim = attacker;
     c.combat.attacking = true;
