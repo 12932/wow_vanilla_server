@@ -194,6 +194,7 @@ const SMSG_GROUP_LIST_OPCODE: u16 = 0x07D;
 /// `PLAYER_FLAGS_GROUP_LEADER` on `g`, in whatever map they are: on for
 /// the group's leader, off for everyone else, as each is sent the roster
 /// (mangos's `UpdateGroupLeaderFlag`, Thistle Tea's `set_group_leader`).
+/// What they see is worked out again: a group sees its ghosts.
 fn set_leader_flag(realm: &Realm, g: Guid, leader: bool) {
     use crate::game::fields::PLAYER_FLAGS;
     use crate::game::map::player::PLAYER_FLAGS_GROUP_LEADER;
@@ -204,6 +205,7 @@ fn set_leader_flag(realm: &Realm, g: Guid, leader: bool) {
         if let Some(p) = m.players.get_mut(&g) {
             p.fields
                 .set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GROUP_LEADER, leader);
+            m.visibility_dirty.insert(g);
         }
     });
 }

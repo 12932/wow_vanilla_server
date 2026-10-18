@@ -2035,7 +2035,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
         }
-        AURA_WATER_WALK if !still(map, AURA_WATER_WALK) => {
+        // A ghost goes on walking on water.
+        AURA_WATER_WALK
+            if !still(map, AURA_WATER_WALK) && !crate::game::map::death::is_ghost(map, target) =>
+        {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_LAND_WALK {
                     guid: target,
