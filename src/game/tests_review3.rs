@@ -237,3 +237,48 @@ async fn a_cast_during_a_channel_ends_the_channel() {
         "one with a cast time"
     );
 }
+
+/// A player taken out of the map (a logout, a disconnect) ends their
+/// channel, its aura on its target with it, and comes off the threat lists
+/// of the creatures they fought (mangos's `RemoveFromWorld`: the cast
+/// interrupted, the hostile references deleted).
+#[tokio::test]
+async fn a_player_leaving_the_map_ends_their_channel_and_their_threat() {
+    use crate::game::data::spells::ATTR_EX_CHANNELED;
+    const CHANNEL: u32 = 990_350;
+    let realm = fast_realm(|d| {
+        let mut channel = bare(CHANNEL, 5);
+        channel.duration_index = LASTS_5S;
+        channel.attributes[1] |= ATTR_EX_CHANNELED;
+        effect(
+            &mut channel,
+            0,
+            crate::game::data::spells::SpellEffect {
+                amplitude: 1_000,
+                ..aura(crate::game::map::auras::AURA_PERIODIC_DAMAGE, 0, 10, 6)
+            },
+        );
+        insert(d, [channel]);
+    });
+    let (_c, warlock, map) = human(&realm, "R3LV", "Leaver", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            use super::tests_p3_spells_kit::{cast_fresh, has};
+            ready(m, warlock, 60, &[CHANNEL]);
+            let k = dummy(m, warlock, 60, 3.0);
+            cast_fresh(m, warlock, CHANNEL, at(k));
+            crate::game::map::ai::attacked(m, k, warlock);
+            crate::game::map::ai::add_threat(m, k, warlock, 10.0);
+            let before = (has(m, k, CHANNEL), threat_on(m, k, warlock) > 0.0);
+            let _gone = m.take_player(warlock);
+            let listed = m
+                .creature(k)
+                .is_some_and(|c| c.threat.iter().any(|(g, _)| *g == warlock));
+            (before, has(m, k, CHANNEL), listed)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (true, true), "channelling at it, on its list");
+    assert!(!out.1, "the channel's aura goes with its caster");
+    assert!(!out.2, "and the creature forgets them");
+}
