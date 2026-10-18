@@ -1232,3 +1232,155 @@ fn a_guard_post_regains_whole_minutes_and_at_most_ten_charges() {
     assert_eq!(full.charges, 9, "ten at most, one spent");
     assert_eq!(full.recharged_at, t0 + secs(900));
 }
+
+/// Thistle Tea's `TemporaryFaction`: a faction a script set (command 22)
+/// gives way to the old one at the fight's end when its flags say so; over
+/// a respawn it is gone when its flags say, and kept otherwise.
+#[tokio::test]
+async fn a_scripts_faction_comes_off_at_the_fights_end_or_the_respawn_as_flagged() {
+    use crate::game::map::event_ai::{FACTION_RESTORE_COMBAT_STOP, FACTION_RESTORE_RESPAWN};
+    let d = linked(&[(311, 310, 0), (313, 312, 0)]);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(313)).await;
+    let set = |m: &mut Map, s: u32, faction: u32, flags: u32| {
+        let step = crate::game::tests_p3_entity::step(22, [faction, flags, 0, 0]);
+        scripts::execute(m, &step, of(s), Guid::zero());
+    };
+    let faction = |m: &Map, s: u32| {
+        m.creature(of(s))
+            .unwrap()
+            .fields
+            .get_u32(UNIT_FIELD_FACTIONTEMPLATE)
+    };
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let pack = faction(m, 310);
+        let humans = crate::game::tests_p3_combat::HUMANS;
+        // Off when the fight stops.
+        set(m, 310, humans, FACTION_RESTORE_COMBAT_STOP);
+        let set_to = faction(m, 310);
+        crate::game::map::ai::attacked(m, of(310), ga);
+        crate::game::map::ai::enter_evade(m, of(310));
+        let after_fight = faction(m, 310);
+        // Over a respawn: gone with its flag, kept without.
+        set(m, 311, humans, FACTION_RESTORE_RESPAWN);
+        set(m, 312, humans, 0);
+        for s in [311, 312] {
+            die(m, ga, s);
+            crate::game::map::ai::respawn_now(m, of(s));
+        }
+        (pack, set_to, after_fight, faction(m, 311), faction(m, 312))
+    })
+    .await;
+    let humans = crate::game::tests_p3_combat::HUMANS;
+    assert_eq!(out.1, humans, "set");
+    assert_eq!(out.2, out.0, "back at the fight's end");
+    assert_eq!(out.3, out.0, "gone with the respawn");
+    assert_eq!(out.4, humans, "kept over the respawn");
+}
+
+/// Thistle Tea's `SummonDespawn`, every type a summon may have (vmangos's
+/// `TempSummonType`s, and Thistle Tea's eleventh): whether its time runs
+/// from the summoning; what its time coming does to it alive and calm, alive
+/// and fighting, and dead; what its death does; and whether a fight's end
+/// starts its time again.
+#[tokio::test]
+async fn a_summons_despawn_type_decides_its_time_its_death_and_its_corpse() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let rows = on(&map, move |m| {
+        hardy(m, ga);
+        let after = std::time::Duration::from_secs(60);
+        let summoner = spawn(m, ga, BRUTE, 20, 10.0);
+        let mut rows = Vec::new();
+        for kind in 1..=11 {
+            let new = |m: &mut Map| {
+                let at = m.creature(summoner).unwrap().position;
+                scripts::summon(m, summoner, BRUTE, at, 0.0, Some((after, kind))).unwrap()
+            };
+            let due = |m: &mut Map, g: Guid| {
+                let now = m.now;
+                if let Some(s) = event_ai::scripted_mut(m, g) {
+                    s.despawn_at = Some(now);
+                }
+                event_ai::update_despawns(m);
+            };
+            // 'G' gone, 'C' a corpse, 'A' alive, 'W' waiting, 'R' its time
+            // started again.
+            let what = |m: &Map, g: Guid| match m.creature(g) {
+                None => 'G',
+                Some(c) if !c.alive() => {
+                    if event_ai::scripted(m, g)
+                        .is_some_and(|s| s.despawn_at.is_some_and(|t| t > m.now))
+                    {
+                        'R'
+                    } else {
+                        'C'
+                    }
+                }
+                Some(_) => {
+                    if event_ai::scripted(m, g)
+                        .is_some_and(|s| s.despawn_at.is_some_and(|t| t > m.now))
+                    {
+                        'W'
+                    } else {
+                        'A'
+                    }
+                }
+            };
+            let timed = {
+                let g = new(m);
+                let t = event_ai::scripted(m, g).is_some_and(|s| s.despawn_at.is_some());
+                due(m, g);
+                (t, what(m, g))
+            };
+            let fighting = {
+                let g = new(m);
+                crate::game::map::ai::attacked(m, g, ga);
+                due(m, g);
+                what(m, g)
+            };
+            let (death, dead_due) = {
+                let g = new(m);
+                if let Some(s) = event_ai::scripted_mut(m, g) {
+                    s.despawn_at = None;
+                }
+                crate::game::map::combat::deal_damage(m, ga, g, 10_000_000);
+                let death = what(m, g);
+                if m.creature(g).is_some() {
+                    due(m, g);
+                }
+                (death, what(m, g))
+            };
+            let restarts = {
+                let g = new(m);
+                crate::game::map::ai::attacked(m, g, ga);
+                if let Some(s) = event_ai::scripted_mut(m, g) {
+                    s.despawn_at = None;
+                }
+                event_ai::combat_stopped(m, g, false);
+                event_ai::scripted(m, g).is_some_and(|s| s.despawn_at.is_some())
+            };
+            rows.push((kind, timed.0, timed.1, fighting, death, dead_due, restarts));
+        }
+        rows
+    })
+    .await;
+    let expected = [
+        // Timed from the summoning; due calm, fighting; at death; due dead;
+        // started again after a fight.
+        (1, true, 'G', 'W', 'C', 'C', true),
+        (2, true, 'G', 'W', 'G', 'G', true),
+        (3, true, 'G', 'G', 'C', 'G', false),
+        (4, true, 'G', 'W', 'R', 'G', true),
+        (5, false, 'A', 'A', 'G', 'G', false),
+        (6, false, 'A', 'A', 'R', 'G', false),
+        (7, false, 'A', 'A', 'C', 'C', false),
+        (8, false, 'A', 'A', 'C', 'C', false),
+        (9, true, 'G', 'G', 'C', 'G', false),
+        (10, true, 'G', 'G', 'G', 'G', false),
+        (11, false, 'C', 'W', 'C', 'C', false),
+    ];
+    for (row, want) in rows.iter().zip(expected) {
+        assert_eq!(*row, want, "despawn type {}", want.0);
+    }
+}
