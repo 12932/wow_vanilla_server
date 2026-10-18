@@ -128,3 +128,94 @@ async fn an_events_run_is_aimed_at_the_object_the_unit_or_nothing() {
     assert_eq!(at_unit, [(a, kobold)], "a unit's at it");
     assert!(empty.is_empty(), "no steps, no run");
 }
+
+const MOUNT: u32 = 991_100;
+const SLOW: u32 = 991_101;
+const HOLLY: u32 = 25860;
+const REINDEER: u32 = 25858;
+const SWIFT_REINDEER: u32 = 25859;
+
+fn reindeer_kit(d: &mut GameData) {
+    use crate::game::map::auras::{
+        AURA_DUMMY, AURA_MOD_DECREASE_SPEED, AURA_MOD_INCREASE_MOUNTED_SPEED, AURA_MOUNTED,
+    };
+    let lasting = |id: u32, effects: &[SpellEffect]| {
+        let mut s = bare(id, 0);
+        s.duration_index = LASTS_LONG;
+        for (i, e) in effects.iter().enumerate() {
+            effect(&mut s, i, *e);
+        }
+        s
+    };
+    let mut holly = bare(HOLLY, 0);
+    effect(
+        &mut holly,
+        0,
+        SpellEffect {
+            effect: 3,
+            target_a: 25,
+            ..Default::default()
+        },
+    );
+    insert(
+        d,
+        [
+            lasting(
+                MOUNT,
+                &[
+                    aura(AURA_MOUNTED, KOBOLD as i32, 0, 1),
+                    aura(AURA_MOD_INCREASE_MOUNTED_SPEED, 0, 100, 1),
+                ],
+            ),
+            lasting(SLOW, &[aura(AURA_MOD_DECREASE_SPEED, 0, -20, 1)]),
+            lasting(REINDEER, &[aura(AURA_DUMMY, 0, 0, 1)]),
+            lasting(SWIFT_REINDEER, &[aura(AURA_DUMMY, 0, 0, 1)]),
+            holly,
+        ],
+    );
+}
+
+/// Holly's reindeer goes by the mount's speed as it is (a slowed swift
+/// mount gives the slow reindeer), read before the mount goes; it does
+/// nothing unmounted, nor at someone else (Thistle Tea's Holly tests).
+#[tokio::test]
+async fn holly_turns_a_mount_into_a_reindeer_of_its_speed() {
+    use super::tests_p3_spells_kit::has;
+    let realm = fast_realm(reindeer_kit);
+    let (_a, a, map) = human(&realm, "P5EB", "Rider", Class::Warrior).await;
+    let (_b, b, _) = human(&realm, "P5EC", "Other", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[]);
+            let reindeer = |m: &Map, g| (has(m, g, REINDEER), has(m, g, SWIFT_REINDEER));
+            let ride = |m: &mut Map, slowed: bool| {
+                for s in [MOUNT, SLOW, REINDEER, SWIFT_REINDEER] {
+                    crate::game::map::auras::remove_spell(m, a, s, None);
+                }
+                kit::apply(m, a, a, MOUNT);
+                if slowed {
+                    kit::apply(m, a, a, SLOW);
+                }
+                spells::cast_triggered(m, a, HOLLY, Some(a));
+                (reindeer(m, a), has(m, a, MOUNT))
+            };
+            let swift = ride(m, false);
+            let slowed = ride(m, true);
+            for s in [MOUNT, SLOW, REINDEER, SWIFT_REINDEER] {
+                crate::game::map::auras::remove_spell(m, a, s, None);
+            }
+            spells::cast_triggered(m, a, HOLLY, Some(a));
+            let unmounted = reindeer(m, a);
+            kit::apply(m, b, b, MOUNT);
+            spells::cast_triggered(m, a, HOLLY, Some(b));
+            let at_another = (reindeer(m, b), has(m, b, MOUNT));
+            (swift, slowed, unmounted, at_another)
+        })
+        .await
+        .unwrap();
+    let (swift, slowed, unmounted, at_another) = out;
+    assert_eq!(swift, ((false, true), false), "swift, the mount gone");
+    assert_eq!(slowed, ((true, false), false), "slowed, the slow kind");
+    assert_eq!(unmounted, (false, false), "nothing unmounted");
+    assert_eq!(at_another, ((false, false), true), "nothing at another");
+}
