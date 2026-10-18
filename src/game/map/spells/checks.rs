@@ -246,6 +246,11 @@ pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bo
         || f.get_fallingfar()
 }
 
+/// `PreventionType`: what silence keeps from being cast, and what pacify
+/// does.
+pub const PREVENTION_SILENCE: u32 = 1;
+pub const PREVENTION_PACIFY: u32 = 2;
+
 /// Why `caster` can't cast `s` at `t` now, if it can't.
 pub fn check(
     map: &mut Map,
@@ -350,13 +355,19 @@ pub fn check(
         if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
             return Some(fail::NOT_IN_CONTROL);
         }
-        // Silence stops spells (anything of magic damage class, or not an
-        // ability); pacify stops abilities.
-        let spell_like = s.dmg_class == 1 || (!s.melee_or_ranged() && !s.ability());
-        if spell_like && !frees && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE)) {
+        // Silence stops what its prevention type says silence stops, and
+        // pacify what pacify does (mangos's `Spell::CheckCasterAuras`,
+        // Thistle Tea's `CombatControl`): a wand's Shoot goes on under a
+        // silence.
+        if s.prevention_type == PREVENTION_SILENCE
+            && !frees
+            && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE))
+        {
             return Some(fail::SILENCED);
         }
-        if s.melee_or_ranged() && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE)) {
+        if s.prevention_type == PREVENTION_PACIFY
+            && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE))
+        {
             return Some(fail::PACIFIED);
         }
     }
