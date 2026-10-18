@@ -113,9 +113,10 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 - **Performance:** perf2's whole-world fixes are in (staggered timers, the awake set once an update, tiles read off
   the map's thread and let go when idle). Left: BVHs built on the map's thread, a tile cap for the whole world awake
   (about 13 GB), and Kalimdor with the navmesh unmeasured ([PERFORMANCE.md](PERFORMANCE.md)).
-- **Flaky tests:** flaky1 fixed the ones that failed under load ([TESTING.md](TESTING.md), "Under load"). One
-  remains: `creatures_spread_round_their_victim`, about 1 run in 60–80 of the fast suite (Stratholme's bosses were
-  a test looking before its boss was seen).
+- **Flaky tests:** flaky1 fixed the ones that failed under load ([TESTING.md](TESTING.md), "Under load"). Two
+  remain: `creatures_spread_round_their_victim`, about 1 run in 60–80 of the fast suite, and
+  `tests_items3::the_elixir_and_the_fish_turn_their_eater_into_one_thing_each_time`, which failed once under load on
+  2026-10-19 and not in 40 runs alone (Stratholme's bosses were a test looking before its boss was seen).
 
 ## How the work was run
 - **Isolation:** each stage was an agent on its own git worktree and branch (`<worktree>/<stage>`). It worked from a
