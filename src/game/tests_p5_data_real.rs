@@ -372,3 +372,190 @@ async fn a_trinkets_bonus_goes_with_its_aura_and_never_comes_alone() {
     assert!(back, "the armor back");
     assert!(!dead, "death takes them all");
 }
+
+const HOLY_POWER: u32 = 28_789;
+const TOTEMIC_POWER: u32 = 28_823;
+const HOLY_LIGHT: u32 = 635;
+const LESSER_HEAL: u32 = 2050;
+const HOLY_SHOCK: u32 = 20_473;
+
+/// `g`'s class, as its fields say it.
+fn set_class(m: &mut Map, g: Guid, class: u8) {
+    if let Some(f) = m.unit_fields_mut(g) {
+        f.set_byte(UNIT_FIELD_BYTES_0, 1, class);
+    }
+}
+
+/// Thistle Tea's Holy Power and Totemic Power: the buff for the healed
+/// one's class, whatever their power (a warrior's armor, a mana user's
+/// mana, a fighter's attack power, a caster's spell power); none for a
+/// class there isn't, nor the dead.
+#[tokio::test]
+#[ignore = "extended"]
+async fn holy_and_totemic_power_give_the_healed_ones_classs_buff() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, healer, map) = player(&realm, "P5D5", "Holypowa", Race::Human, Class::Paladin).await;
+    let (_d, other, _) = player(&realm, "P5D6", "Healeda", Race::Human, Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            ready(m, healer, 60, &[]);
+            ready(m, other, 60, &[]);
+            let mut out = Vec::new();
+            for (id, heal) in [(HOLY_POWER, HOLY_LIGHT), (TOTEMIC_POWER, 331)] {
+                apply(m, healer, healer, id);
+                let h = holder(m, healer, id).unwrap();
+                for class in [1u8, 2, 3, 4, 5, 7, 8, 9, 11, 0, 6] {
+                    for power in [0u8, 1, 3] {
+                        set_class(m, other, class);
+                        if let Some(f) = m.unit_fields_mut(other) {
+                            f.set_byte(UNIT_FIELD_BYTES_0, 3, power);
+                        }
+                        let before: Vec<u32> = auras::auras(m, other)
+                            .map(|a| a.holders.iter().map(|h| h.spell).collect())
+                            .unwrap_or_default();
+                        spells::class_scripts::proc(m, healer, other, &h, Some(heal), true);
+                        let given: Vec<u32> = auras::auras(m, other)
+                            .map(|a| {
+                                a.holders
+                                    .iter()
+                                    .map(|h| h.spell)
+                                    .filter(|s| !before.contains(s))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        for s in &given {
+                            auras::remove_spell(m, other, *s, None);
+                        }
+                        out.push((id, class, given));
+                    }
+                }
+                auras::remove_spell(m, healer, id, None);
+            }
+            // The dead get none.
+            set_class(m, other, 1);
+            apply(m, healer, healer, HOLY_POWER);
+            let h = holder(m, healer, HOLY_POWER).unwrap();
+            let kobold = dummy(m, healer, 60, 2.0);
+            crate::game::map::combat::deal_damage(m, kobold, other, 10_000_000);
+            spells::class_scripts::proc(m, healer, other, &h, Some(HOLY_LIGHT), true);
+            let dead = auras::auras(m, other).is_some_and(|a| a.has_spell(28_790));
+            (out, dead)
+        })
+        .await
+        .unwrap();
+    let (out, dead) = got;
+    let holy = [
+        28_790, 28_795, 28_791, 28_791, 28_795, 28_795, 28_793, 28_793, 28_795,
+    ];
+    let totemic = [
+        28_827, 28_824, 28_826, 28_826, 28_824, 28_824, 28_825, 28_825, 28_824,
+    ];
+    for (id, class, given) in out {
+        let i = [1u8, 2, 3, 4, 5, 7, 8, 9, 11]
+            .iter()
+            .position(|c| *c == class);
+        let want: Vec<u32> = match (id, i) {
+            (HOLY_POWER, Some(i)) => vec![holy[i]],
+            (_, Some(i)) => vec![totemic[i]],
+            _ => vec![],
+        };
+        assert_eq!(given, want, "{id} on class {class}");
+    }
+    assert!(!dead, "none for the dead");
+}
+
+/// Thistle Tea's Holy Power proc: only Holy Light and Flash of Light that
+/// land on the living count (not another class's heal, Holy Shock, a
+/// harmful spell, a tick, a resist or a cast's end); the aura's charges
+/// and cooldown are shared, and one on oneself or an overheal counts.
+#[tokio::test]
+#[ignore = "extended"]
+async fn holy_power_procs_on_its_heals_with_its_charges_and_cooldown() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        if let Some(s) = d.spells.spells.get_mut(&HOLY_POWER) {
+            s.proc_chance = 100;
+            s.proc_charges = 2;
+        }
+        if let Some(p) = d.spells.proc_events.get_mut(&HOLY_POWER) {
+            p.cooldown = 2_000;
+        }
+    });
+    let (_c, healer, map) = player(&realm, "P5D7", "Holypowb", Race::Human, Class::Paladin).await;
+    let (_d, other, _) = player(&realm, "P5D8", "Healedb", Race::Human, Class::Mage).await;
+    let got = map
+        .query(move |m| {
+            ready(m, healer, 60, &[]);
+            ready(m, other, 60, &[]);
+            set_class(m, other, 8);
+            let heal = |to: Guid, flags: u32, ex: u32, spell: u32| Event {
+                actor: healer,
+                target: to,
+                actor_flags: flags,
+                target_flags: 0,
+                ex,
+                spell: Some(spell),
+                damage: 0,
+                school: 2,
+                ..Default::default()
+            };
+            let gave = |m: &mut Map, e: Event, buff: u32| {
+                procs::trigger(m, e);
+                let to = e.target;
+                let got = has(m, to, buff);
+                auras::remove_spell(m, to, buff, None);
+                got
+            };
+            apply(m, healer, healer, HOLY_POWER);
+            let mut refused = Vec::new();
+            for e in [
+                heal(other, PROC_DONE_POSITIVE_SPELL, EX_NORMAL_HIT, LESSER_HEAL),
+                heal(other, PROC_DONE_POSITIVE_SPELL, EX_NORMAL_HIT, HOLY_SHOCK),
+                heal(other, PROC_DONE_NEGATIVE_SPELL, EX_NORMAL_HIT, HOLY_LIGHT),
+                heal(other, PROC_DONE_PERIODIC, EX_PERIODIC_POSITIVE, HOLY_LIGHT),
+                heal(other, PROC_DONE_POSITIVE_SPELL, EX_RESIST, HOLY_LIGHT),
+                heal(other, PROC_DONE_POSITIVE_SPELL, EX_CAST_END, HOLY_LIGHT),
+            ] {
+                refused.push((e.spell, e.actor_flags, e.ex, gave(m, e, 28_793)));
+            }
+            let charges = holder(m, healer, HOLY_POWER).map(|h| h.charges);
+            // An overheal (no health given) on the mage: the caster's buff.
+            let first = gave(
+                m,
+                heal(other, PROC_DONE_POSITIVE_SPELL, EX_NORMAL_HIT, HOLY_LIGHT),
+                28_793,
+            );
+            let spent = holder(m, healer, HOLY_POWER).map(|h| h.charges);
+            m.now += Duration::from_millis(1_999);
+            let cooling = gave(
+                m,
+                heal(healer, PROC_DONE_POSITIVE_SPELL, EX_NORMAL_HIT, HOLY_LIGHT),
+                28_795,
+            );
+            m.now += Duration::from_millis(1);
+            // On herself, a paladin: the mana user's buff, the last charge.
+            let own = gave(
+                m,
+                heal(healer, PROC_DONE_POSITIVE_SPELL, EX_NORMAL_HIT, HOLY_LIGHT),
+                28_795,
+            );
+            let gone = !has(m, healer, HOLY_POWER);
+            (refused, charges, first, spent, cooling, own, gone)
+        })
+        .await
+        .unwrap();
+    let (refused, charges, first, spent, cooling, own, gone) = got;
+    for (spell, flags, ex, gave) in refused {
+        assert!(!gave, "{spell:?} {flags:#x} {ex:#x}: none");
+    }
+    assert_eq!(charges, Some(2), "no charge spent on those");
+    assert!(first, "Holy Light, an overheal, counts");
+    assert_eq!(spent, Some(1));
+    assert!(!cooling, "within its cooldown");
+    assert!(own && gone, "on herself, and its charges spent");
+}

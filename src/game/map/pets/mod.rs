@@ -736,6 +736,9 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     }
     crate::game::map::combat::leave_combat(map, unit);
     crate::game::map::spells::interrupt(map, unit);
+    // Its own way ends where it is (Thistle Tea's `ControlSync` stops the
+    // path; mangos's charm puts it to follow its charmer).
+    crate::game::map::ai::halt(map, unit);
     let faction = map
         .players
         .get(&master)

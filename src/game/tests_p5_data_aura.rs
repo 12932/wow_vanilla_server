@@ -423,3 +423,81 @@ async fn a_break_comes_before_the_auras_own_tick_and_nothing_outlives_the_aura()
         .unwrap();
     assert_eq!(got, (true, 0, false));
 }
+
+/// What a charmed brute offers: two spells and a charm of its own,
+/// each slot always rolled.
+const CHARM_ONE: u32 = 96_740;
+const CHARM_TWO: u32 = 96_741;
+const CHARM_CHARM: u32 = 96_742;
+
+fn charm_data() -> GameData {
+    let mut d = data();
+    add_spells(
+        &mut d,
+        [
+            aura_spell(CHARM_ONE, Some(1_000), &[(AURA_DUMMY, 0, 0)]),
+            aura_spell(CHARM_TWO, Some(1_000), &[(AURA_DUMMY, 0, 0)]),
+            aura_spell(CHARM_CHARM, Some(1_000), &[(AURA_MOD_CHARM, 0, 0)]),
+        ],
+    );
+    let slot = |slot, spell| crate::game::data::pets::CharmSpell {
+        slot,
+        spell,
+        availability: 100.0,
+        cooldown_min_ms: 0,
+        cooldown_max_ms: 0,
+    };
+    d.pets.charm_spells.insert(
+        BRUTE,
+        vec![slot(0, CHARM_ONE), slot(1, CHARM_CHARM), slot(2, CHARM_TWO)],
+    );
+    d
+}
+
+/// Thistle Tea's control: a creature taken on the move stops where it is;
+/// it offers its rolled abilities in their slots' order, never a charm;
+/// let go, it shows no player's control nor a pet's fight, and fights on
+/// (its master, as mangos's creature turns on its charmer).
+#[tokio::test]
+async fn a_creature_taken_stops_offers_its_rolled_spells_and_let_go_is_its_own() {
+    let (_realm, _a, ga, map) = setup_with(charm_data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 1, 5.0);
+            let at = m.creature(brute).unwrap().position;
+            crate::game::map::scripts::move_to(
+                m,
+                brute,
+                Vector3d {
+                    x: at.x + 20.0,
+                    ..at
+                },
+                false,
+            );
+            let walking = matches!(
+                m.creature(brute).unwrap().motion,
+                crate::game::map::creature::Motion::Moving(_)
+            );
+            crate::game::map::pets::charmed(m, ga, brute, false);
+            let stopped = matches!(
+                m.creature(brute).unwrap().motion,
+                crate::game::map::creature::Motion::Idle { .. }
+            );
+            let offered = crate::game::map::pets::state(m, brute).map(|s| s.spells.clone());
+            crate::game::map::pets::uncharmed(m, ga, brute);
+            let flags = m
+                .unit_fields(brute)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_FLAGS));
+            let fights = m.creature(brute).map(|c| c.combat.victim);
+            (walking, stopped, offered, flags, fights)
+        })
+        .await
+        .unwrap();
+    let (walking, stopped, offered, flags, fights) = got;
+    assert!(walking, "on its way");
+    assert!(stopped, "stopped where it was");
+    assert_eq!(offered, Some(vec![CHARM_ONE, CHARM_TWO]));
+    assert_eq!(flags & 0x808, 0, "no player's control nor pet's fight");
+    assert_eq!(fights, Some(ga), "it turns on its master");
+    assert_ne!(flags & 0x8_0000, 0, "and fights on");
+}
