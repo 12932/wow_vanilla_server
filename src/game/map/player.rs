@@ -120,6 +120,13 @@ impl Item {
         );
         item.fields.set_u32(ITEM_FIELD_DURABILITY, row.durability);
         item.fields.set_u32(ITEM_FIELD_FLAGS, row.flags);
+        // The charges left as saved (mangos's `LoadFromDB`); an item kept
+        // before they were has its template's, from `new`.
+        if let Some(charges) = row.charges {
+            for (i, c) in charges.iter().enumerate() {
+                item.fields.set_i32(ITEM_FIELD_SPELL_CHARGES + i as u16, *c);
+            }
+        }
         item.data = row.data.clone();
         if let Some(text) = row
             .data
@@ -146,6 +153,9 @@ impl Item {
             durability: self.fields.get_u32(ITEM_FIELD_DURABILITY),
             flags: self.fields.get_u32(ITEM_FIELD_FLAGS),
             data: crate::game::map::enchant::encode(self),
+            charges: Some(std::array::from_fn(|i| {
+                self.fields.get_u32(ITEM_FIELD_SPELL_CHARGES + i as u16) as i32
+            })),
         }
     }
 
