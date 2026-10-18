@@ -473,11 +473,12 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
     }) {
         data.class_level_stats.insert(c.0, c.1);
     }
-    for (id, radius, reach) in rows(db, "SELECT * FROM creature_display_info_addon", |c| {
+    for (id, radius, reach, gender) in rows(db, "SELECT * FROM creature_display_info_addon", |c| {
         (
             c.u32("display_id"),
             c.f32("bounding_radius"),
             c.f32("combat_reach"),
+            c.u32("gender"),
         )
     }) {
         let d = data.display_info.entry(id).or_insert(DisplayInfo {
@@ -486,6 +487,7 @@ fn load_creatures(db: &Connection, data: &mut GameData) {
         });
         d.bounding_radius = radius;
         d.combat_reach = reach;
+        d.gender = u8::try_from(gender).ok().filter(|g| *g <= 2);
     }
 
     let templates = latest_patch(rows(db, "SELECT * FROM creature_template", |c| {

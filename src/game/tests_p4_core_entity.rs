@@ -2,7 +2,7 @@
 //! health set to a share and drained, a floor of health, a split too small
 //! to take, what a death clears (a walk, a snare, temporary auras and their
 //! spell modifiers, one soul shard a warlock), a spirit of redemption
-//! taking nothing, and the leash.
+//! taking nothing, the leash, and who heeds a distraction.
 
 use std::time::Duration;
 
@@ -396,4 +396,72 @@ async fn the_leash_snaps_past_its_range_at_once_and_else_waits_its_twelve_second
         .await
         .unwrap();
     assert_eq!(r, (true, false, true, false, true, false, true));
+}
+
+#[tokio::test]
+async fn a_distraction_holds_only_a_creature_that_can_heed_it_and_ends_with_a_fight_or_its_time() {
+    use crate::game::map::creature_motion::{distract, distracted, held_by_distraction};
+    let (_realm, _a, g, map) = setup(Class::Rogue).await;
+    let r = map
+        .query(move |m| {
+            let point = |m: &Map| {
+                let p = m.players[&g].position();
+                Vector3d {
+                    x: p.x,
+                    y: p.y + 5.0,
+                    ..p
+                }
+            };
+            let at = point(m);
+            // The dead, and the stunned, confused, feared or feigning.
+            let dead = spawn(m, g, BRUTE, 20, 2.0);
+            combat::deal_damage(m, g, dead, 1_000_000);
+            distract(m, dead, at, 10);
+            let mut ignored = vec![held_by_distraction(m, dead)];
+            for (n, kind) in [
+                auras::AURA_MOD_STUN,
+                auras::AURA_MOD_CONFUSE,
+                auras::AURA_MOD_FEAR,
+                auras::AURA_FEIGN_DEATH,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let c = spawn(m, g, BRUTE, 20, 3.0 + n as f32);
+                aura_of(m, c, 97_801 + n as u32, kind, 0, 1);
+                distract(m, c, at, 10);
+                ignored.push(held_by_distraction(m, c));
+            }
+            // One that heeds it, until its time is up.
+            let calm = spawn(m, g, BRUTE, 20, 8.0);
+            distract(m, calm, at, 10);
+            let held = distracted(m, calm);
+            m.creature_mut(calm).unwrap().engagement.distracted_until =
+                Some(m.now - Duration::from_millis(1));
+            let expired = (
+                distracted(m, calm),
+                m.creature(calm).unwrap().engagement.distracted_until,
+            );
+            // Another, until a fight: then for good.
+            let other = spawn(m, g, BRUTE, 20, 9.0);
+            distract(m, other, at, 10);
+            crate::game::map::ai::attacked(m, other, g);
+            combat::engage(m, g, other);
+            let fought = distracted(m, other);
+            (
+                ignored,
+                held,
+                expired,
+                fought,
+                m.creature(other).unwrap().engagement.distracted_until,
+            )
+        })
+        .await
+        .unwrap();
+    let (ignored, held, expired, fought, cleared) = r;
+    assert_eq!(ignored, vec![false; 5]);
+    assert!(held);
+    assert_eq!(expired, (false, None));
+    assert!(!fought);
+    assert_eq!(cleared, None);
 }
