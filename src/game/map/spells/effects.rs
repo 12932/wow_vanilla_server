@@ -1134,6 +1134,7 @@ fn effect(
                 p.gear_dirty = true;
             }
         }
+        EFFECT_DUMMY if crate::game::map::pets::pet_aura_dummy(map, caster, target, s) => {}
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
             if !super::class_scripts::dummy(map, caster, target, s, index, amount)
                 && !super::holiday::effect(map, caster, target, s)

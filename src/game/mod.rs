@@ -404,6 +404,8 @@ mod tests_p5_spell_swiftmend;
 #[cfg(test)]
 mod tests_p5_spell_targets;
 #[cfg(test)]
+mod tests_p5_spell_warlock;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

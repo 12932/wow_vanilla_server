@@ -1497,8 +1497,17 @@ fn land(
         if !effects[i] {
             continue;
         }
+        // A pet aura's dummy is the pet's to answer, not a script's
+        // (Soul Link's old link, Thistle Tea's preference).
         if matches!(e.effect, EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT)
             && map.realm.data.scripts.spell.contains_key(&s.id)
+            && !map
+                .realm
+                .data
+                .pets
+                .owner_auras
+                .iter()
+                .any(|(spell, ..)| *spell == s.id)
         {
             crate::game::map::scripts::start(
                 map,
