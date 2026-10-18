@@ -66,8 +66,10 @@ There is no world tick.
 - **Game data** (`src/game/data/`): vmangos's `vmangos.sqlite` and the client's `dbc.sqlite`, loaded once from
   `[world] data_dir` into immutable tables. A template's row is its latest patch up to 10; a spawn is kept if its
   patch range has 10. Without the databases the server runs on `wow_world_base` and `wow_items`.
-- **Navmesh** (`map/nav.rs`): a rustigator bake from `[world] nav_dir`, a map's tiles loaded as first needed. Zones
-  and areas come from it, and with them the free-for-all flag of an arena.
+- **Navmesh** (`map/nav.rs`, `map/tiles.rs`): a rustigator bake from `[world] nav_dir`. Its tiles are read off the
+  map's thread, ahead of the players, and let go once idle (`[world] tile_unload_secs`); until a tile lands, queries
+  answer as if there were no navmesh. Tests read them at once (`RealmConfig::tiles_in_background` off). Zones and areas
+  come from it, and with them the free-for-all flag of an arena.
 - **The data setup** (`src/setup/`, also the `wvs-setup` binary; `src/server.rs` starts both): asks where the
   player's WoW client is and checks it (`discover.rs`), works out what of the navmesh and terrain is left to build (`plan.rs`, with the
   estimates in `maps.rs`) and builds it through a `Builder`: rustigator's, or `Fake` in the tests. The questions and

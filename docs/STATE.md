@@ -61,7 +61,7 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 - **Parity:**
   - Thistle Tea's 8,850 tests were mapped to wvs tests ([parity/README.md](parity/README.md)).
   - Five rounds of stages ported them, fixing wvs where it differed, checked against mangos-classic.
-  - The matrix went from 21% to 63.4% covered or accepted. Where Thistle Tea isn't 1.12, wvs keeps mangos's behaviour
+  - The matrix went from 21% to 64.5% covered or accepted. Where Thistle Tea isn't 1.12, wvs keeps mangos's behaviour
     and the row says why (46 rows).
 - **The kobold's reach:** fixed.
 - **Robustness:** the supervision above, packet guards, and chaos tests. wow_messages' crash bugs were guarded in wvs
@@ -93,7 +93,7 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - ahash's maps only, enforced by clippy.
 
 ## What's left
-- **Parity:** 3,015 rows are still gap. The biggest areas:
+- **Parity:** 2,914 rows are still gap. The biggest areas:
   - the player, about 370;
   - spells, about 300;
   - combat, about 300;
@@ -110,11 +110,12 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - a death that despawns its creature cuts its own death short;
   - the threat-list scans of every creature;
   - the rest are listed there.
-- **Performance:** the whole-world fixes in `work/perf2`: staggered timers, the awake set once per update, navmesh
-  tiles loaded off the map's thread and unloaded when unused.
-- **Flaky tests:** flaky1 fixed the ones that failed under load ([TESTING.md](TESTING.md), "Under load"). Two
-  remain: Stratholme's bosses fail about 1 run in 3 even alone, and `creatures_spread_round_their_victim` about 1 in
-  60–80 in the fast suite.
+- **Performance:** perf2's whole-world fixes are in (staggered timers, the awake set once an update, tiles read off
+  the map's thread and let go when idle). Left: BVHs built on the map's thread, a tile cap for the whole world awake
+  (about 13 GB), and Kalimdor with the navmesh unmeasured ([PERFORMANCE.md](PERFORMANCE.md)).
+- **Flaky tests:** flaky1 fixed the ones that failed under load ([TESTING.md](TESTING.md), "Under load"). One
+  remains: `creatures_spread_round_their_victim`, about 1 run in 60–80 of the fast suite (Stratholme's bosses were
+  a test looking before its boss was seen).
 
 ## How the work was run
 - **Isolation:** each stage was an agent on its own git worktree and branch (`<worktree>/<stage>`). It worked from a

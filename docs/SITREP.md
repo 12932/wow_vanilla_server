@@ -6,8 +6,8 @@ review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS
 question and decision in full; this page is the index.
 
 ## In short
-- **Parity:** 5,316 of Thistle Tea's 8,379 applicable tests have a wvs test that checks the same behaviour, or an
-  accepted difference (63.4%, from 21% when the matrix was first mapped). The rest are listed by area in
+- **Parity:** 5,404 of Thistle Tea's 8,378 applicable tests have a wvs test that checks the same behaviour, or an
+  accepted difference (64.5%, from 21% when the matrix was first mapped). The rest are listed by area in
   [parity/matrix.csv](parity/matrix.csv).
 - **The kobold:** fixed. A unit no longer swings from beyond its reach; two running units get the client's 8/3 yards.
 - **Robustness:**
@@ -151,9 +151,10 @@ Until you answer, wvs keeps what the line says.
 | ahash's maps only | merged | 8a1e3ad |
 | flaky1: the load-only failures | merged | d4ed4ad |
 | 4d: items, quests, objects, events | 63.4% | cacd475 |
+| Molten Core's fire after flaky1; Stratholme's flake | fixed | 040ee2f, and the next |
+| 5c: combat | 64.5% | a8bb809 |
+| perf2: the whole world awake, round two | merged | its merge |
 
-**Still running as of this writing:**
-- 5c, 5d and 5e;
-- perf2.
+**Still running as of this writing:** 5d and 5e.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

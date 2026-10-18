@@ -856,6 +856,38 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
       - auto-rewarded quests (flag 0x400; the data has one, 9378).
     - **A lead:** mangos adds the Death Ray's damage left after absorbs to its charge; wvs, like Thistle Tea, adds
       the base amount.
+    - **Merged with a fix:** flaky1's rule for a creature's cast failing at a target it may no longer attack stopped
+      Ragnaros's Elemental Fire at the Majordomo he had made friendly. It now applies only where the effect must
+      target an enemy, as mangos's `CheckCast` filters it (`040ee2f`).
+
+56. **5c's choices** (combat, 102 rows). Where Thistle Tea and mangos differ it follows mangos, and the rows are
+    `wrong-for-1.12`:
+    - **Swing timers:** only a weapon put in the main or off hand resets its swing; taking one off, a break, a ranged
+      swap, a form or a disarm reset nothing.
+    - **Pet kills** proc the master's on-kill auras as well as the pet's; Thistle Tea procs the pet's alone.
+    - **A feral main hand** trains unarmed; Thistle Tea trains nothing.
+    - **Stopping an attack** doesn't clear a player's selection.
+    - **Owed extra attacks** are kept until swung; Thistle Tea clears them on an attack stop, a death or a mount.
+    - **Seated crits:** a player with no crit chance at all doesn't crit a seated one (mangos's `CanCrit`).
+    - **A struck creature** stands when it enters the fight, not at each blow (mangos stands it unless stunned).
+    - **Beyond Thistle Tea's tests:** critters train no weapon skill, and spell damage now goes taken modifiers,
+      then crit, then armor (armor came first), which moves every physical ability's numbers.
+    - **Left open:** the real-data rows (Spirit Tap, Shadowguard, Lightning Shield, Deep Wounds, the racials, death
+      items), proximity, feign death, the shared leash clocks, assistance, disarm, and most of kill and group
+      rewards.
+
+57. **perf2** (the whole world awake, round two; [PERFORMANCE.md](PERFORMANCE.md)). Standing, a fully awake continent
+    now keeps 50 ms an update; walking, nearly.
+    - **Aggro scans run at exactly 500 ms,** as the constant says; on the old beat they ran every 550–680 ms. That
+      costs 2–4 ms an update with everything awake; a longer interval, or skipping creatures with no player in
+      reach, would take it back.
+    - **The navmesh uses `rustigator-pathfind` directly** (the same repository and revision), as rustigator's
+      wrapper can't take a tile decoded elsewhere.
+    - **Tiles are asked for within the view distance and 20 yards** of each player (+0.7 GB at 3% of the world
+      awake), and let go after `[world] tile_unload_secs` (300, mangos's `GridCleanUpDelay`).
+    - **A dungeon copy that is one WMO** is still read whole when it starts.
+    - **Left:** BVHs still built on the map's thread (up to 27 ms a tile); with the whole world awake nothing
+      unloads (about 13 GB), so a tile cap would bound it; Kalimdor with the navmesh unmeasured; fixes 5 and 6.
 
 
 ## Left for later, and why
