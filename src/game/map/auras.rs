@@ -1572,7 +1572,16 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
-            crate::game::map::spells::interrupt(map, target);
+            // Only what silence prevents is stopped (mangos's
+            // `HandleAuraModSilence`): not a Hearthstone or a wand.
+            let silenced_cast = map
+                .caster(target)
+                .and_then(|c| c.casting.as_ref())
+                .and_then(|c| map.realm.data.spells.get(c.spell))
+                .is_some_and(|s| s.prevention_type == 1);
+            if silenced_cast {
+                crate::game::map::spells::interrupt(map, target);
+            }
             // Both at once pacifies as well (Thistle Tea's `CombatControl`).
             if a.kind == AURA_MOD_PACIFY_SILENCE {
                 crate::game::map::combat::stop_attack(map, target);

@@ -522,3 +522,44 @@ async fn a_melee_spell_faces_its_target_unless_overlapping_or_triggered() {
     assert_eq!(out[5], ok, "next swing");
     assert_eq!(out[6], ok, "overlapping");
 }
+
+/// A silence stops a cast under way that silence prevents, and lets a
+/// Hearthstone's kind (prevention type 0) go on (mangos's
+/// `HandleAuraModSilence`).
+#[tokio::test]
+async fn a_silence_stops_only_the_casts_it_prevents() {
+    let mut spell = helpful(990_490);
+    spell.casting_time_index = CAST_3S;
+    let mut stone = spell.clone();
+    stone.id = 990_491;
+    stone.prevention_type = 0;
+    let both = [spell, stone];
+    let realm = fast_realm(move |d| {
+        ranges(d);
+        insert(d, both);
+    });
+    let (_c, mage, map) = human(&realm, "P3VI", "Hushed", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[990_490, 990_491]);
+            let mut kept = Vec::new();
+            for id in [990_490, 990_491] {
+                fresh(m, mage);
+                spells::cast(m, mage, id, Default::default(), None);
+                let began = super::tests_p3_spells_kit::casting(m, mage);
+                control(m, mage, 990_492, AURA_MOD_SILENCE);
+                kept.push((began, super::tests_p3_spells_kit::casting(m, mage)));
+                remove_spell(m, mage, 990_492, None);
+                spells::interrupt(m, mage);
+            }
+            kept
+        })
+        .await
+        .unwrap();
+    assert_eq!(out[0], (Some(990_490), None), "a spell is stopped");
+    assert_eq!(
+        out[1],
+        (Some(990_491), Some(990_491)),
+        "a Hearthstone isn't"
+    );
+}
