@@ -680,13 +680,24 @@ impl Map {
 
 /// Whether `a` may attack `b`.
 pub fn can_attack(map: &Map, a: Guid, b: Guid) -> bool {
+    can_attack_alive_or_not(map, a, b, false)
+}
+
+/// [`can_attack`], of a spell at `b` that may be cast at the dead: a
+/// corpse of an enemy is one still (mangos's `CanAttackSpell` with
+/// `SPELL_ATTR_EX2_ALLOW_DEAD_TARGET`).
+pub fn can_attack_dead(map: &Map, a: Guid, b: Guid) -> bool {
+    can_attack_alive_or_not(map, a, b, true)
+}
+
+fn can_attack_alive_or_not(map: &Map, a: Guid, b: Guid, dead_ok: bool) -> bool {
     if a == b {
         return false;
     }
     let (Some(ua), Some(ub)) = (map.unit_view(a), map.unit_view(b)) else {
         return false;
     };
-    if !ua.alive || !ub.alive {
+    if !ua.alive || (!ub.alive && !dead_ok) {
         return false;
     }
     // One no one may attack: not attackable, made so by an aura, not

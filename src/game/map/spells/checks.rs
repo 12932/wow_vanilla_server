@@ -350,13 +350,17 @@ pub fn check(
         if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
             return Some(fail::NOT_IN_CONTROL);
         }
-        // Silence stops spells (anything of magic damage class, or not an
-        // ability); pacify stops abilities.
-        let spell_like = s.dmg_class == 1 || (!s.melee_or_ranged() && !s.ability());
-        if spell_like && !frees && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE)) {
+        // Silence stops what the spell says silence prevents (its
+        // prevention type 1: spells, not a wand's Shoot or a Hearthstone);
+        // pacify what pacify does (2: abilities and the wand), as mangos's
+        // `CheckCasterAuras` and Thistle Tea have it.
+        if s.prevention_type == 1
+            && !frees
+            && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE))
+        {
             return Some(fail::SILENCED);
         }
-        if s.melee_or_ranged() && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE)) {
+        if s.prevention_type == 2 && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE)) {
             return Some(fail::PACIFIED);
         }
     }
@@ -607,10 +611,12 @@ fn check_target(
                 Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
             )
         });
-        if (requires_enemy || harmful && !resurrects(s))
-            && !combat::can_attack(map, caster, target)
-            && !s.has_effect(95)
-        {
+        let attackable = if u.alive {
+            combat::can_attack(map, caster, target)
+        } else {
+            combat::can_attack_dead(map, caster, target)
+        };
+        if (requires_enemy || harmful && !resurrects(s)) && !attackable && !s.has_effect(95) {
             return Some(fail::TARGET_FRIENDLY);
         }
         if requires_friend && combat::can_attack(map, caster, target) {
