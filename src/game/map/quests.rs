@@ -1391,12 +1391,13 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
         let _ = inventory::add_item(map, player, *item, (*count).max(1), true);
     }
     let level = map.players.get(&player).map(|p| p.level()).unwrap_or(1);
-    let xp = if level >= crate::game::map::stats::MAX_LEVEL {
+    let max_level = crate::game::map::stats::max_level();
+    let xp = if level >= max_level {
         0
     } else {
-        quest_xp(&q, level)
+        crate::config::scaled(quest_xp(&q, level), map.cfg.rates.xp_quest)
     };
-    let money = if level >= crate::game::map::stats::MAX_LEVEL {
+    let money = if level >= max_level {
         q.reward_money.max(0) as u32 + q.reward_money_max_level
     } else {
         q.reward_money.max(0) as u32

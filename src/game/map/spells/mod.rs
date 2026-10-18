@@ -1272,7 +1272,7 @@ pub struct InFlight {
 /// Whether spells take time to get where they go (tests land them at
 /// once).
 fn travels(map: &Map) -> bool {
-    map.spells.travel.unwrap_or(map.realm.config.spell_travel)
+    map.spells.travel.unwrap_or(map.cfg.spell_travel)
 }
 
 /// A cast that can't go off as it ends (its power, ammunition, reagents

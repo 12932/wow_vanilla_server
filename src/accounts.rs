@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use wow_srp::normalized_string::NormalizedString;
 use wow_srp::server::SrpVerifier;
@@ -21,7 +21,7 @@ pub const MODERATOR: u8 = 1;
 pub const GAME_MASTER: u8 = 2;
 pub const ADMINISTRATOR: u8 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Creation {
     /// An unknown name gets an account, with the name as its password.

@@ -236,7 +236,7 @@ async fn a_trade_saves_both_sides_together() {
     assert_eq!(alice.money, MONEY - 100 + 50);
     assert_eq!(bob.money, MONEY + 100 - 50);
     // Their periodic saves put off: they were just saved.
-    let interval = realm.config.save_interval;
+    let interval = realm.config().save_interval;
     let (ga, gb) = (a.guid, b.guid);
     let later = on_map(&realm, move |m| {
         [ga, gb]

@@ -258,13 +258,24 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
             let mut rng = rand::rng();
             let mut items = Vec::new();
             if let Some(table) = data.loot.item.get(&t.entry) {
-                loot::roll(&data, table, &wanted, &mut rng, &mut items, 0);
+                let rates = &map.cfg.rates;
+                loot::roll_rated(
+                    &data,
+                    table,
+                    &wanted,
+                    &mut rng,
+                    &mut items,
+                    0,
+                    &|_| false,
+                    rates,
+                );
             }
             let gold = if t.max_money_loot > t.min_money_loot {
                 rand::RngExt::random_range(&mut rng, t.min_money_loot..=t.max_money_loot)
             } else {
                 t.min_money_loot
             };
+            let gold = crate::config::scaled(gold, map.cfg.rates.drop_money);
             (gold, items)
         }
     };

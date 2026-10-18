@@ -326,7 +326,7 @@ fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
         mail_from(a, a.bidder, WON, Some(a.item.clone()), 0, 0),
         records,
     );
-    let delay = realm.config.mail_delay.as_secs() as i64;
+    let delay = realm.config().mail_delay.as_secs() as i64;
     mail::post_in(
         realm,
         mail_from(

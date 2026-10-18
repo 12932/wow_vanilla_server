@@ -341,6 +341,9 @@ pub struct MapStats {
 pub struct Map {
     pub key: MapKey,
     pub realm: Arc<Realm>,
+    /// The realm's settings, taken at the start of each update: a reload
+    /// is seen whole, between updates, never mid-step.
+    pub cfg: Arc<crate::game::RealmConfig>,
     pub handle: MapHandle,
     pub players: AHashMap<Guid, Player>,
     pub creatures: Slab<Creature>,
@@ -644,6 +647,7 @@ impl Map {
         let profile = MapProfile::new(key, &realm);
         Self {
             key,
+            cfg: realm.config_arc(),
             realm,
             handle,
             players: AHashMap::new(),
@@ -905,7 +909,7 @@ impl Map {
             pets::sync_record(self, guid);
             if let Some(p) = self.players.get_mut(&guid) {
                 rows.push(p.to_row(now));
-                p.save_at = now + self.realm.config.save_interval;
+                p.save_at = now + self.cfg.save_interval;
             }
         }
         self.realm.store.save_together(rows, records);
@@ -916,7 +920,7 @@ impl Map {
         let now = self.now;
         if let Some(p) = self.players.get_mut(&guid) {
             let row = p.to_row(now);
-            p.save_at = now + self.realm.config.save_interval;
+            p.save_at = now + self.cfg.save_interval;
             self.realm.store.save(row);
         }
     }
@@ -991,7 +995,7 @@ impl Map {
         let since = *self.empty_since.get_or_insert(self.now);
         // One its raid's reset took goes at once.
         if crate::game::instances::expired(&self.realm, self.key)
-            || self.now.duration_since(since) >= self.realm.config.instance_unload
+            || self.now.duration_since(since) >= self.cfg.instance_unload
         {
             self.realm.maps.stop(self.key);
             crate::game::instances::unloaded(&self.realm, self.key);
@@ -1086,6 +1090,11 @@ impl Map {
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;
+        // A reload's settings, if there was one: one pointer load.
+        let cfg = self.realm.config();
+        if !Arc::ptr_eq(&cfg, &self.cfg) {
+            self.cfg = arc_swap::Guard::into_inner(cfg);
+        }
 
         // Each step under its own guard: one that panics costs itself,
         // this once, and the rest (the flushes most of all) go on.

@@ -351,7 +351,7 @@ pub fn enforced(map: &Map, team: Team, zone: u32) -> bool {
     let Some(a) = map.realm.data.area(zone) else {
         return false;
     };
-    let pvp_realm = map.realm.config.pvp_realm;
+    let pvp_realm = map.cfg.pvp_realm;
     let capital = a.flags & AREA_FLAG_CAPITAL != 0;
     match (a.team, team) {
         // AreaTable's team: 2 the Alliance's, 4 the Horde's, 0 contested.
@@ -662,12 +662,15 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
     if let Some(p) = map.players.get_mut(&victim) {
         p.honor_damage = DamageHistory::default();
     }
+    let rate = map.cfg.rates.honor;
     for (g, share) in shares {
         register(map, g);
+        // The server's rate scales the share, so the ledger keeps what is
+        // given (mangos's `Rate.Honor`).
         let award = map.realm.social.honor.lock().player_kill(
             guid::counter(g),
             guid::counter(victim),
-            share,
+            share * rate,
         );
         if let Some(a) = award {
             credit(map, g, a.points as i32, victim, a.victim_rank);
@@ -707,6 +710,7 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
                 .map(|p| (g, p.level()))
         })
         .collect();
+    let rate = map.cfg.rates.honor;
     for (g, level) in recipients {
         let award = if civilian
             && (mob_level <= crate::game::map::combat::gray_level(u32::from(level)) || xp_free)
@@ -720,7 +724,7 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
         } else if leader {
             Some(Award {
                 kind: AwardKind::Honorable,
-                points: 488.0,
+                points: 488.0 * rate,
                 victim: Some(u64::from(entry) << 32),
                 victim_rank: 19,
             })
@@ -742,8 +746,9 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
     }
 }
 
-/// Bonus honor: battleground objectives and wins.
+/// Bonus honor: battleground objectives and wins, at the server's rate.
 pub fn bonus_honor(map: &mut Map, g: Guid, amount: u32) {
+    let amount = crate::config::scaled(amount, map.cfg.rates.honor);
     register(map, g);
     map.realm.social.honor.lock().award(
         guid::counter(g),

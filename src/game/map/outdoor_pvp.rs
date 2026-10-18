@@ -344,7 +344,7 @@ fn eligible(map: &Map, p: &crate::game::map::player::Player) -> bool {
             .fields
             .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
         && p.flight.is_none()
-        && (map.realm.config.pvp_realm || p.pvp.desired)
+        && (map.cfg.pvp_realm || p.pvp.desired)
         && !p.auras.has(crate::game::map::auras::AURA_MOD_STEALTH)
         && !p.auras.has(crate::game::map::auras::AURA_MOD_INVISIBILITY)
 }

@@ -10,7 +10,7 @@ use crate::game::map::{Map, MapKey, chat};
 
 const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, .die, .revive, .levelup [n], .gm [on|off], .speed <multiplier>, \
 .online, .maps, .save, .announce <text>, .kick <name>, .spawn <entry>, .account create|password <name> <password>, \
-.account gm <name> <level>, .ban <account> <minutes|perm> [reason], .unban <account>, .ticket list|<id>|respond <id> <answer>|close <id>, .honor [week|points <n>], .arena start|stop|status|history, .help";
+.account gm <name> <level>, .reload config, .ban <account> <minutes|perm> [reason], .unban <account>, .ticket list|<id>|respond <id> <answer>|close <id>, .honor [week|points <n>], .arena start|stop|status|history, .help";
 
 /// The GM level a command needs: moderators look and talk, game masters
 /// change the world, administrators run accounts.
@@ -23,7 +23,7 @@ pub fn needed_level(command: &str) -> u8 {
         "gps" | "online" | "maps" | "save" | "announce" | "kick" | "gm" | "help" | "ticket" => {
             MODERATOR
         }
-        "account" | "ban" | "unban" => ADMINISTRATOR,
+        "account" | "ban" | "unban" | "reload" => ADMINISTRATOR,
         // Anyone may ask about the arena; starting and stopping is checked
         // within.
         "arena" => crate::accounts::PLAYER,
@@ -96,6 +96,26 @@ fn unban(args: &[&str]) -> String {
     }
 }
 
+/// `.reload config`: the file and the environment read again, off the
+/// map, and what is safe to change live put in; the reply, when it is
+/// done, says what changed and what needs a restart.
+fn reload(map: &Map, guid: Guid, args: &[&str]) -> String {
+    if !matches!(args, ["config"]) {
+        return "Use: .reload config".into();
+    }
+    let realm = map.realm.clone();
+    tokio::spawn(async move {
+        let reply = match crate::game::reload_from_disk(realm.clone()).await {
+            Ok(report) => report.to_string(),
+            Err(e) => format!("The config wasn't reloaded: {e}"),
+        };
+        if let Some(o) = realm.registry.online(guid) {
+            chat::send_system(&o.outbound, &reply);
+        }
+    });
+    "Reloading the config.".into()
+}
+
 /// Run a command (`text` without its `.`).
 pub fn command(map: &mut Map, guid: Guid, text: &str) {
     let Some(p) = map.players.get(&guid) else {
@@ -107,7 +127,14 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         return;
     };
     let name = name.to_ascii_lowercase();
-    let needed = needed_level(&name);
+    // The config's level for it (`[gm] command_levels`), else the server's.
+    let needed = map
+        .cfg
+        .gm
+        .command_levels
+        .get(&name)
+        .copied()
+        .unwrap_or_else(|| needed_level(&name));
     if level < needed {
         chat::send_system(
             &p.outbound,
@@ -120,6 +147,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         "account" => Some(account(map, &args)),
         "ban" => Some(ban(map, &args)),
         "unban" => Some(unban(&args)),
+        "reload" => Some(reload(map, guid, &args)),
         "go" => go(map, guid, &args),
         "gps" => gps(map, guid),
         "speed" => speed(map, guid, &args),
@@ -159,7 +187,10 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             let data = map.realm.data.clone();
             let target = target_or_self(map, guid);
             let level = map.players.get_mut(&target).map(|p| {
-                let level = i32::from(p.level()).saturating_add(n).clamp(1, 60) as u8;
+                let level = i32::from(p.level())
+                    .saturating_add(n)
+                    .clamp(1, i32::from(crate::game::map::stats::max_level()))
+                    as u8;
                 crate::game::map::stats::set_level(p, &data, level);
                 level
             });

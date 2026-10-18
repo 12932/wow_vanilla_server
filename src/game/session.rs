@@ -194,7 +194,7 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
         mut inbound,
     } = connection;
     let (control, control_rx) = mpsc::unbounded_channel();
-    let mut rate = PacketRate::new(realm.config.max_packets_per_sec);
+    let mut rate = PacketRate::new(realm.config().max_packets_per_sec);
     let mut s = Session {
         realm,
         account: Arc::from(account),
@@ -336,6 +336,27 @@ impl Session {
         self.outbound.send(&SMSG_CHAR_ENUM { characters });
     }
 
+    /// The account's GM level.
+    fn gm_level(&self) -> u8 {
+        if self.realm.config().everyone_gm {
+            crate::accounts::ADMINISTRATOR
+        } else {
+            crate::accounts::get().map_or(crate::accounts::PLAYER, |a| a.gm_level(&self.account))
+        }
+    }
+
+    /// The level a new character starts at: `[players] start_level`, or a
+    /// GM's `[gm] start_level` if higher.
+    fn start_level(&self) -> u8 {
+        let cfg = self.realm.config();
+        let level = if self.gm_level() > crate::accounts::PLAYER {
+            cfg.players.start_level.max(cfg.gm.start_level)
+        } else {
+            cfg.players.start_level
+        };
+        level.clamp(1, crate::game::map::stats::max_level())
+    }
+
     async fn create(&mut self, c: CMSG_CHAR_CREATE) {
         let result = self.try_create(c).await;
         self.outbound.send(&SMSG_CHAR_CREATE { result });
@@ -365,12 +386,12 @@ impl Session {
             return WorldResult::CharCreateNameInUse;
         }
         let existing = self.realm.store.characters(&self.account).await;
-        if existing.len() >= self.realm.config.max_characters_per_account {
+        if existing.len() >= self.realm.config().max_characters_per_account {
             return WorldResult::CharCreateAccountLimit;
         }
         // On a PvP realm, an account's characters are all of one side.
         let team = crate::game::registry::Team::of_race(race);
-        if self.realm.config.pvp_realm
+        if self.realm.config().pvp_realm
             && existing
                 .iter()
                 .any(|r| crate::game::registry::Team::of_race(r.race) != team)
@@ -390,7 +411,8 @@ impl Session {
             hair_style: c.hair_style,
             hair_color: c.hair_color,
             facial_hair: c.facial_hair,
-            level: 1,
+            level: self.start_level(),
+            money: self.realm.config().players.start_money,
             map: start.map,
             x: start.x,
             y: start.y,
@@ -545,11 +567,7 @@ impl Session {
         };
         let key = MapKey::world(row.map);
         let map = self.realm.maps.get(&self.realm, key);
-        let gm_level = if self.realm.config.everyone_gm {
-            crate::accounts::ADMINISTRATOR
-        } else {
-            crate::accounts::get().map_or(crate::accounts::PLAYER, |a| a.gm_level(&self.account))
-        };
+        let gm_level = self.gm_level();
         let online = Arc::new(Online::new(
             &name,
             gm_level,

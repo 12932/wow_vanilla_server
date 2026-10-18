@@ -25,12 +25,14 @@ use crate::game::map::auras::{self, *};
 use crate::game::map::combat::dist;
 use crate::game::map::creature::Motion;
 
-/// The leash's reach around where the fight began.
+/// The leash's reach around where the fight began, by default
+/// (`[creatures] leash_radius`).
 pub const THREAT_RADIUS: f32 = 50.0;
 /// Without a hostile act this long, a creature beyond its threat radius
-/// goes home.
+/// goes home, by default (`[creatures] leash_timeout_secs`).
 pub const LEASH_TIMEOUT: Duration = Duration::from_secs(12);
-/// A victim it can't reach this long, and it goes home.
+/// A victim it can't reach this long, and it goes home, by default
+/// (`[creatures] unreachable_timeout_secs`).
 pub const UNREACHABLE_TIMEOUT: Duration = Duration::from_secs(24);
 /// How long a creature flees, and how far it looks for help.
 pub const FLEE_FOR: Duration = Duration::from_secs(7);
@@ -561,9 +563,9 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     let controlled = controlled(c) || c.owner.is_some();
     if extra & EXTRA_NO_UNREACHABLE_EVADE == 0
         && !controlled
-        && c.engagement
-            .unreachable_since
-            .is_some_and(|t| now.duration_since(t) > UNREACHABLE_TIMEOUT)
+        && c.engagement.unreachable_since.is_some_and(|t| {
+            now.duration_since(t) > Duration::from_secs(map.cfg.creatures.unreachable_timeout_secs)
+        })
     {
         return true;
     }
@@ -572,7 +574,11 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
         return false;
     }
     // The threat radius, or half again its reach of the victim if more.
-    let radius = THREAT_RADIUS.max(1.5 * crate::game::map::ai::attack_distance(map, g, victim));
+    let radius = map
+        .cfg
+        .creatures
+        .leash_radius
+        .max(1.5 * crate::game::map::ai::attack_distance(map, g, victim));
     if d <= radius {
         return false;
     }
@@ -582,7 +588,8 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     {
         return false;
     }
-    extended_at(map, c).is_none_or(|t| now.duration_since(t) > LEASH_TIMEOUT)
+    let timeout = Duration::from_secs(map.cfg.creatures.leash_timeout_secs);
+    extended_at(map, c).is_none_or(|t| now.duration_since(t) > timeout)
 }
 
 /// The template's mechanic immunity: `mechanic` (1 to 31) is in its mask.

@@ -80,7 +80,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     }
     out.send(&SMSG_ACTION_BUTTONS { data: buttons });
     crate::game::map::reputation::send_login(p, &map.realm.data);
-    crate::game::map::rest::restore(p, map.now);
+    crate::game::map::rest::restore(p, map.now, &map.cfg.rates);
     crate::game::map::intoxication::restore(p);
     crate::game::map::exploration::init(p);
     let out = &p.outbound;
@@ -141,7 +141,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
             );
         }
     }
-    let motd = &map.realm.config.motd;
+    let motd = &map.cfg.motd;
     if !motd.is_empty() {
         chat::send_system(&p.outbound, motd);
     }
@@ -220,7 +220,7 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         });
         return;
     }
-    let delay = map.realm.config.logout_delay;
+    let delay = map.cfg.logout_delay;
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };

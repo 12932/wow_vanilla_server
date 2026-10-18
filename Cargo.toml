@@ -72,7 +72,7 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 rand = "0.10.1"
 dotenvy = "0.15.7"
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
-toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
+toml = { version = "1.1.2", default-features = false, features = ["parse", "display", "serde"] }
 kanal = "0.1.1"
 arc-swap = "1.7.1"
 mimalloc = { version = "0.1", default-features = false }

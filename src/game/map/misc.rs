@@ -46,6 +46,8 @@ pub const SUMMON_FOR: Duration = Duration::from_secs(120);
 pub struct PlayerMisc {
     pub rest_since: Option<Instant>,
     pub rest_checked_at: Option<Instant>,
+    /// `[rates] rest_in_game`, as the rest check last read it (none: 1).
+    pub rest_rate: Option<f32>,
     pub breath: Option<crate::game::map::environment::Mirror>,
     pub fatigue: Option<crate::game::map::environment::Mirror>,
     /// Lava's grace: a second touching it before it burns.

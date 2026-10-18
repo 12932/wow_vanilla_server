@@ -9,6 +9,7 @@
 //! over greed). Quest items drop for each member who needs them; gold is
 //! split among the members near.
 
+use crate::config::RatesConfig;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -221,6 +222,7 @@ fn is_quest_item(e: &LootEntry) -> bool {
 }
 
 /// A reference rolled into, if its condition holds for the looter.
+#[allow(clippy::too_many_arguments)]
 fn reference(
     data: &GameData,
     e: &LootEntry,
@@ -229,13 +231,14 @@ fn reference(
     out: &mut Vec<LootSlot>,
     depth: u32,
     allowed: &dyn Fn(u32) -> bool,
+    rates: &RatesConfig,
 ) {
     if e.condition != 0 && !allowed(e.condition) {
         return;
     }
     if let Some(r) = data.loot.reference.get(&(e.min.unsigned_abs())) {
         for _ in 0..e.max.max(1) {
-            roll_for(data, r, wanted, rng, out, depth + 1, allowed);
+            roll_rated(data, r, wanted, rng, out, depth + 1, allowed, rates);
         }
     }
 }
@@ -268,6 +271,27 @@ pub fn roll(
     roll_for(data, entries, wanted, rng, out, depth, &|_| false);
 }
 
+/// The drop rates of 1.12 itself.
+static AS_THEY_ARE: std::sync::LazyLock<RatesConfig> = std::sync::LazyLock::new(Default::default);
+
+/// An ungrouped entry's chance at `rates` (mangos's `LootStoreItem::Roll`):
+/// a reference's, a quest item's, or its quality's. A group's entries are
+/// picked among at their own chances, as mangos picks them.
+fn rated_chance(data: &GameData, e: &LootEntry, rates: &RatesConfig) -> f32 {
+    let chance = e.chance.abs();
+    if rates.drops_as_they_are() {
+        return chance;
+    }
+    let rate = if e.min < 0 {
+        rates.drop_item_referenced
+    } else if is_quest_item(e) {
+        rates.drop_item_quest
+    } else {
+        rates.drop_item(data.item(e.item).map_or(0, |t| t.quality))
+    };
+    chance * rate
+}
+
 /// [`roll`], a reference with a condition rolled if `allowed` says the
 /// condition holds.
 pub fn roll_for(
@@ -278,6 +302,30 @@ pub fn roll_for(
     out: &mut Vec<LootSlot>,
     depth: u32,
     allowed: &dyn Fn(u32) -> bool,
+) {
+    roll_rated(
+        data,
+        entries,
+        wanted,
+        rng,
+        out,
+        depth,
+        allowed,
+        &AS_THEY_ARE,
+    );
+}
+
+/// [`roll_for`] at the server's drop rates (`[rates] drop_item_*`).
+#[allow(clippy::too_many_arguments)]
+pub fn roll_rated(
+    data: &GameData,
+    entries: &[LootEntry],
+    wanted: &[u32],
+    rng: &mut impl rand::Rng,
+    out: &mut Vec<LootSlot>,
+    depth: u32,
+    allowed: &dyn Fn(u32) -> bool,
+    rates: &RatesConfig,
 ) {
     let skip = |e: &LootEntry| is_quest_item(e) && !wanted.contains(&e.item);
     if depth > MAX_DEPTH {
@@ -291,11 +339,11 @@ pub fn roll_for(
     groups.sort_unstable();
     groups.dedup();
     for e in entries.iter().filter(|e| e.group == 0 && !skip(e)) {
-        if !chance(rng, e.chance.abs()) {
+        if !chance(rng, rated_chance(data, e, rates)) {
             continue;
         }
         if e.min < 0 {
-            reference(data, e, wanted, rng, out, depth, allowed);
+            reference(data, e, wanted, rng, out, depth, allowed, rates);
         } else {
             out.push(slot_for(data, e, rng));
         }
@@ -323,7 +371,7 @@ pub fn roll_for(
             continue;
         };
         if e.min < 0 {
-            reference(data, &e, wanted, rng, out, depth, allowed);
+            reference(data, &e, wanted, rng, out, depth, allowed, rates);
         } else {
             out.push(slot_for(data, &e, rng));
         }
@@ -341,9 +389,19 @@ pub fn personal(
     owner: Guid,
     wanted: &[u32],
     kind: LootKind,
+    rates: &RatesConfig,
 ) -> Loot {
     let mut items = Vec::new();
-    roll(data, table, wanted, &mut rand::rng(), &mut items, 0);
+    roll_rated(
+        data,
+        table,
+        wanted,
+        &mut rand::rng(),
+        &mut items,
+        0,
+        &|_| false,
+        rates,
+    );
     Loot {
         items,
         owner: Some(owner),
@@ -376,6 +434,7 @@ pub fn tap_group(map: &Map, tapper: Guid, at: wow_world_messages::vanilla::Vecto
 /// A creature died: its loot is rolled for its tapper and their group.
 pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     let data = map.realm.data.clone();
+    let cfg = map.cfg.clone();
     let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) else {
         return;
     };
@@ -403,7 +462,16 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         && t.loot_id != 0
         && let Some(table) = data.loot.creature.get(&t.loot_id)
     {
-        roll(&data, table, &wanted, &mut rng, &mut items, 0);
+        roll_rated(
+            &data,
+            table,
+            &wanted,
+            &mut rng,
+            &mut items,
+            0,
+            &|_| false,
+            &cfg.rates,
+        );
     }
     let gold = if !allowed {
         0
@@ -412,6 +480,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     } else {
         t.gold_min
     };
+    let gold = crate::config::scaled(gold, cfg.rates.drop_money);
     let mut loot = Loot {
         items,
         gold,
@@ -1263,7 +1332,7 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         if let Some(table) = data.loot.gameobject.get(&loot_id) {
             let allowed =
                 |c: u32| crate::game::map::conditions::met(map, c, Some(object), Some(player));
-            roll_for(
+            roll_rated(
                 &data,
                 table,
                 &wanted,
@@ -1271,6 +1340,7 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
                 &mut items,
                 0,
                 &allowed,
+                &map.cfg.rates,
             );
         }
         let gold = if t.gold_max > t.gold_min {
@@ -1278,6 +1348,7 @@ pub fn open_object(map: &mut Map, player: Guid, object: Guid) {
         } else {
             t.gold_min
         };
+        let gold = crate::config::scaled(gold, map.cfg.rates.drop_money);
         // A chest behind a lock shows as one opened (Thistle Tea's
         // `Gathering`, mangos's chests).
         let kind = if t.kind == crate::game::map::professions::GO_CHEST && t.data[0] != 0 {
