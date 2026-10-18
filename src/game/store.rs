@@ -158,6 +158,10 @@ pub struct CharacterState {
     pub last_talent_wipe: i64,
     /// The hunter's pets and the warlock's demon.
     pub pets: PetsState,
+    /// Each skill's value (skill, value): its cap and step come again from
+    /// the level and the spells. None for a character saved before skills
+    /// were, whose weapon skills stay at their caps (`skills::init`).
+    pub skills: Option<Vec<(u32, u32)>>,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

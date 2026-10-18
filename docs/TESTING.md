@@ -139,6 +139,19 @@ every frame its clients receive (`Client::captured`), and runs the checker over 
 It is `#[ignore = "extended"]` (it emulates x86 through `uv`, so it is slow) but needs no real world: it builds its
 own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than passing quietly.
 
+## What the tests' realm changes
+
+`harness::test_config` is the realm's defaults but for what the tests want quick (logouts, mail, a battleground's
+start) and one rule: `[players] always_max_skill_for_level` is on, so a test's players have their weapon skills and
+Defense at their caps at login and at every level a test gives them, where a live realm starts a new weapon skill at
+1 (mangos's `AlwaysMaxSkillForLevel`). A skill learned mid-test is at 1 until the next level, as mangos has it. A test
+of the skills' own rise sets the value it starts from (`skills::set_value`), or turns the rule off for its player
+(`p.skills_maxed = false`) or its realm (`tests_rules_skills::live_realm`).
+
+A player's fight is looked at for its end every 1.2 s (`combat::COMBAT_CHECK`). A test of it moves the map's clock in
+a query (`m.now += ...`, then `combat::update_players`), or makes the look due (`next_check`). A combat flag a test
+sets by hand, without `combat::enter`, is never looked at, so it stays until the test takes it off.
+
 ## Under load
 
 The extended suite runs on a shared machine, beside other suites (a load average of 15 to 40), where a map's 20 Hz

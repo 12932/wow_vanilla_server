@@ -558,6 +558,8 @@ mod tests_rules5;
 #[cfg(test)]
 mod tests_rules_fight;
 #[cfg(test)]
+mod tests_rules_skills;
+#[cfg(test)]
 mod tests_save_together;
 #[cfg(test)]
 mod tests_scripts;

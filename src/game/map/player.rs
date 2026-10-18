@@ -291,6 +291,10 @@ pub struct Player {
     /// Gear's outdoor-only spells are held off indoors: outside again,
     /// they want putting back.
     pub gear_held_indoors: bool,
+    /// `[players] always_max_skill_for_level`, as it was at login: the
+    /// weapon and defense skills are put at their cap at login and each
+    /// level.
+    pub skills_maxed: bool,
 }
 
 impl Player {
@@ -378,6 +382,7 @@ impl Player {
             honor_damage: Default::default(),
             gear_dirty: true,
             gear_held_indoors: false,
+            skills_maxed: false,
             row,
         };
         p.init_fields(data);
@@ -682,6 +687,7 @@ impl Player {
         row.state.category_cooldowns =
             crate::game::map::spells::cooldowns::saved_category_cooldowns(self, now);
         row.spells = self.spells.clone();
+        row.state.skills = Some(crate::game::map::skills::saved(self));
         row
     }
 }

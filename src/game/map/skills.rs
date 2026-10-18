@@ -72,6 +72,17 @@ pub fn set_bonuses(p: &mut Player) {
 /// (mangos's `SKILL_RANGE_MONO`, Thistle Tea's `:mono`).
 const ARMOR: &[u32] = &[293, 413, 414, 415, 433];
 
+/// The weapon skills (`SkillLine` category 6) and Defense: learned at 1,
+/// up to five a level, raised by use (mangos's `SKILL_RANGE_LEVEL`,
+/// `UpdateSpellTrainedSkills` and `LearnDefaultSkills`; Thistle Tea's
+/// `:level` skills). Dual Wield, of the same category, is `MAXIMIZED` in
+/// `SkillRaceClassInfo`, and stays at its cap. (mangos makes Fist Weapons
+/// a one-point skill, as its blows go by Unarmed; wvs trains it as the
+/// weapon's own.)
+pub const WEAPONS: &[u32] = &[
+    43, 44, 45, 46, 54, 55, 95, 136, 160, 162, 172, 173, 176, 226, 228, 229, 473,
+];
+
 fn cap(p: &Player, skill: u32, step: u32) -> u32 {
     if LANGUAGES.contains(&skill) {
         300
@@ -98,10 +109,11 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
             else {
                 return;
             };
-            let start = if LANGUAGES.contains(&skill) || !PROFESSIONS.contains(&skill) {
-                max
-            } else {
+            // A weapon skill or a profession from 1; the rest at the cap.
+            let start = if WEAPONS.contains(&skill) || PROFESSIONS.contains(&skill) {
                 1
+            } else {
+                max
             };
             (free, start)
         }
@@ -164,7 +176,54 @@ pub fn forget_skill(p: &mut Player, skill: u32) {
 /// Thistle Tea's `initial_skills` takes it (learned with the spell, for the
 /// character's race and class). Without the skill the client garbles even
 /// its own player's speech.
+///
+/// Then the values saved come back over them (mangos's `_LoadSkills`, each
+/// within its cap); a character saved before skills were keeps its weapon
+/// skills at their caps, as it had them.
 pub fn init(p: &mut Player, data: &GameData) {
+    derive(p, data);
+    match p.row.state.skills.clone() {
+        Some(saved) => {
+            for (skill, value) in saved {
+                set_value(p, skill, value.max(1));
+            }
+        }
+        None => {
+            for skill in WEAPONS {
+                if let Some(max) = max_value(p, *skill) {
+                    set_value(p, *skill, max);
+                }
+            }
+        }
+    }
+}
+
+/// Every skill's value, to save.
+pub fn saved(p: &Player) -> Vec<(u32, u32)> {
+    known(p)
+        .into_iter()
+        .filter_map(|s| value(p, s).map(|v| (s, v)))
+        .collect()
+}
+
+/// The level's skills at their caps: the weapon skills, Defense, and the
+/// rest that rise with the level (mangos's `UpdateSkillsForLevel` under
+/// `AlwaysMaxSkillForLevel`).
+pub fn maximize(p: &mut Player) {
+    for i in 0..SLOTS {
+        let base = PLAYER_SKILL_INFO_1_1 + i * 3;
+        let skill = p.fields.get_u32(base) & 0xFFFF;
+        if skill == 0 || LANGUAGES.contains(&skill) || PROFESSIONS.contains(&skill) {
+            continue;
+        }
+        let max = p.fields.get_u32(base + 1) >> 16;
+        if max > 1 {
+            p.fields.set_u32(base + 1, max | (max << 16));
+        }
+    }
+}
+
+fn derive(p: &mut Player, data: &GameData) {
     let spells = p.spells.clone();
     let (class_bit, race_bit) = (
         1u32 << (p.row.class.max(1) - 1),
@@ -308,5 +367,8 @@ pub fn level_up(p: &mut Player) {
         let value = p.fields.get_u32(base + 1) & 0xFFFF;
         p.fields
             .set_u32(base + 1, value.max(1).min(max) | (max << 16));
+    }
+    if p.skills_maxed {
+        maximize(p);
     }
 }

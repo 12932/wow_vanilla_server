@@ -992,8 +992,9 @@ async fn a_level_raises_the_weapon_skills_caps_not_the_armors_and_the_same_level
     let got = on_map(&realm, move |m| {
         let data = m.realm.data.clone();
         let p = m.players.get_mut(&g).unwrap();
+        // The realm's rule, not the tests' caps.
+        p.skills_maxed = false;
         skills::learn_skill(p, 43, 1);
-        skills::set_value(p, 43, 1);
         skills::learn_skill(p, 415, 1);
         let before = (skills::max_value(p, 43), skills::max_value(p, 415));
         stats::set_level(p, &data, 6);
