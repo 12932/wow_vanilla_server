@@ -184,3 +184,94 @@ async fn a_chain_heal_jumps_to_the_most_hurt_and_back_to_its_caster() {
         "the friend first, then back to the caster at half"
     );
 }
+
+const MEND: u32 = 990_910;
+const QUIET_MEND: u32 = 990_911;
+const LOUD_MEND: u32 = 990_912;
+
+fn mends(d: &mut GameData) {
+    let mend = |id: u32| {
+        let mut s = bare(id, 1);
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                effect: 10,
+                target_a: 21,
+                ..damage(100)
+            },
+        );
+        s
+    };
+    let mut quiet = mend(QUIET_MEND);
+    quiet.attributes[4] |= crate::game::data::spells::ATTR_EX4_NO_HELPFUL_THREAT;
+    insert(d, [mend(MEND), quiet, mend(LOUD_MEND)]);
+    d.spells.threat.insert(LOUD_MEND, (0, 2.0));
+}
+
+fn threat_of(m: &Map, k: Guid, g: Guid) -> f32 {
+    m.creature(k)
+        .and_then(|c| c.threat.iter().find(|(t, _)| *t == g).map(|(_, v)| *v))
+        .unwrap_or(0.0)
+}
+
+/// A heal's threat on those fighting the healed: half the health it gave
+/// (a crit's too, what it gave and no more), none at full health, none
+/// for a spell of no helpful threat, twice for a `spell_threat` of two
+/// (Thistle Tea's heal threat, mangos's `threatAssist`).
+#[tokio::test]
+async fn a_heal_threatens_by_half_what_it_gave_and_its_spells_multiplier() {
+    let realm = fast_realm(mends);
+    let (_c, mage, map) = human(&realm, "P3TH", "Mender", Class::Mage).await;
+    let (_d, friend, _) = human(&realm, "P3TI", "Mended", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            let at_me = m.players[&mage].position();
+            if let Some(p) = m.players.get_mut(&friend) {
+                p.movement.position = Vector3d {
+                    x: at_me.x + 3.0,
+                    ..at_me
+                };
+            }
+            let k = dummy(m, mage, 60, 10.0);
+            crate::game::map::combat::engage(m, k, friend);
+            crate::game::map::ai::add_threat(m, k, friend, 1.0);
+            if let Some(f) = m.unit_fields_mut(friend) {
+                f.set_u32(UNIT_FIELD_MAXHEALTH, 10_000);
+            }
+            let mut seen = Vec::new();
+            for (spell, health_at) in [
+                (MEND, 100),
+                (MEND, 9_950),
+                (MEND, 10_000),
+                (QUIET_MEND, 100),
+                (LOUD_MEND, 100),
+            ] {
+                set_health(m, friend, health_at);
+                let before = threat_of(m, k, mage);
+                fresh(m, mage);
+                spells::cast(m, mage, spell, at(friend), None);
+                seen.push(threat_of(m, k, mage) - before);
+            }
+            // A crit of 150 that gives 120.
+            set_health(m, friend, 9_880);
+            let before = threat_of(m, k, mage);
+            spells::heal_crit(m, mage, friend, MEND, 150, false, true);
+            seen.push(threat_of(m, k, mage) - before);
+            seen
+        })
+        .await
+        .unwrap();
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(close(out[0], 50.0), "half of 100: {}", out[0]);
+    assert!(close(out[1], 25.0), "half of the 50 it gave: {}", out[1]);
+    assert!(close(out[2], 0.0), "none at full health: {}", out[2]);
+    assert!(close(out[3], 0.0), "none of no helpful threat: {}", out[3]);
+    assert!(close(out[4], 100.0), "twice, by spell_threat: {}", out[4]);
+    assert!(
+        close(out[5], 60.0),
+        "a crit's half of what it gave: {}",
+        out[5]
+    );
+}

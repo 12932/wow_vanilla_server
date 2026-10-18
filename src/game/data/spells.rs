@@ -160,6 +160,10 @@ pub const ATTR_EX3_IGNORE_CASTER_MODIFIERS: u32 = 0x2000_0000;
 /// `AttributesEx4` (word 4): the target's damage taken modifiers don't
 /// count (Decimate).
 pub const ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS: u32 = 0x100;
+/// No threat for the help it gives (a heal's, a buff's).
+pub const ATTR_EX4_NO_HELPFUL_THREAT: u32 = 0x8;
+/// No threat when it first lands.
+pub const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 
 impl SpellTemplate {
     pub fn passive(&self) -> bool {
