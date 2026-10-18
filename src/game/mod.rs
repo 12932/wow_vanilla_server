@@ -358,6 +358,8 @@ mod tests_p4_items_gear2;
 #[cfg(test)]
 mod tests_p4_items_honor;
 #[cfg(test)]
+mod tests_p4_items_quests;
+#[cfg(test)]
 mod tests_p4_items_use;
 #[cfg(test)]
 mod tests_p4_items_use2;

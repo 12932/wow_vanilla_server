@@ -260,8 +260,9 @@ fn relations(map: &Map, giver: Guid) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// Whether `player` meets a quest's `RequiredCondition`, with `giver` as
-/// the source; a breadcrumb, its targets' too (Thistle Tea's
-/// `breadcrumb_conditions_met?`).
+/// the source; a breadcrumb, its targets' too, and their events running
+/// (Thistle Tea's `breadcrumb_conditions_met?`, and its `base_can_take`
+/// of each target, which wants the target's event).
 pub fn condition_ok(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
     let data = &map.realm.data;
     let own = |quest: u32| match data.scripts.quest_condition.get(&quest) {
@@ -274,7 +275,11 @@ pub fn condition_ok(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
             .quest_graph()
             .breadcrumb_targets
             .get(&quest)
-            .is_none_or(|targets| targets.iter().all(|t| own(*t)))
+            .is_none_or(|targets| {
+                targets
+                    .iter()
+                    .all(|t| own(*t) && crate::game::events::quest_offered(&map.realm, *t))
+            })
 }
 
 /// Where `p` is with a quest an ender takes back: done, under way, or
