@@ -508,6 +508,7 @@ async fn ragnaros(mut c: Client, me: Guid, map: crate::game::map::MapHandle, rag
 
 /// Molten Core's encounters, on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn molten_cores_encounters_run_as_thistle_tea_scripts_them() {
     let Some(realm) = realm() else {
         return;

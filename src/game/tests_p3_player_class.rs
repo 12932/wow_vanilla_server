@@ -171,6 +171,7 @@ const BUCKLER: u32 = 2129;
 const KOBOLD: u32 = 6;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_warriors_stances_set_the_form_one_at_a_time_and_lock_their_abilities_and_gear_to_them() {
     if !have_data() {
         return;
@@ -246,6 +247,7 @@ async fn a_warriors_stances_set_the_form_one_at_a_time_and_lock_their_abilities_
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_warriors_execute_bloodrage_sunder_shouts_and_cooldowns_do_what_they_say() {
     if !have_data() {
         return;
@@ -428,6 +430,7 @@ fn feared(m: &Map, g: Guid) -> bool {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_priests_shield_wards_shackle_mana_burn_levitate_protection_and_dispels() {
     if !have_data() {
         return;
@@ -569,6 +572,7 @@ async fn a_priests_shield_wards_shackle_mana_burn_levitate_protection_and_dispel
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn levitate_floats_its_target_and_breaks_on_damage() {
     if !have_data() {
         return;
@@ -619,6 +623,7 @@ fn health(m: &Map, g: Guid) -> u32 {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_warlocks_life_tap_death_coil_conflagrate_and_curses() {
     if !have_data() {
         return;
@@ -745,6 +750,7 @@ const BLESSING_OF_WISDOM: u32 = 19742;
 const BLESSING_OF_KINGS: u32 = 20217;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_paladins_seal_goes_into_its_judgement_and_blessings_shield_kings_and_ownership() {
     if !have_data() {
         return;
@@ -897,6 +903,7 @@ fn cooling(m: &Map, g: Guid, spell: u32) -> bool {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_rogues_combo_points_backstab_stealth_vanish_preparation_and_buffs() {
     if !have_data() {
         return;
@@ -1016,6 +1023,7 @@ async fn a_rogues_combo_points_backstab_stealth_vanish_preparation_and_buffs() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn cold_snap_readies_the_frost_spells_alone() {
     if !have_data() {
         return;

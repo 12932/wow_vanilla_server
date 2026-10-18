@@ -764,6 +764,7 @@ async fn an_enslaved_demon_serves_until_the_aura_ends() {
 /// knows each of its spells at its highest rank by then, a tamed level 9
 /// wolf its Bite and Growl, and the families, levels and totems load.
 #[test]
+#[ignore = "extended"]
 fn the_real_pets_know_their_spells() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {

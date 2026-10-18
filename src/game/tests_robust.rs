@@ -1408,6 +1408,7 @@ mod chaos {
     /// thousands, in random orders. No map ever panics, and every player's
     /// map still answers them.
     #[tokio::test]
+    #[ignore = "extended"]
     async fn random_client_messages_never_panic_a_map() {
         chaos(false).await;
     }
@@ -1415,6 +1416,7 @@ mod chaos {
     /// The same, as GMs, a quarter of it GM commands with random
     /// arguments.
     #[tokio::test]
+    #[ignore = "extended"]
     async fn random_gm_commands_never_panic_a_map() {
         chaos(true).await;
     }

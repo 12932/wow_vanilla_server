@@ -97,6 +97,7 @@ async fn settled(c: &mut Client) {
 /// keeps the swing's timer, lets a waiting Heroic Strike go with its
 /// button told it was interrupted, and leaves Auto Shot running.
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_attack_aims_and_stopping_it_keeps_the_timer_and_drops_heroic_strike() {
     if !have_data() {
         return;
@@ -259,6 +260,7 @@ fn trigger_at(realm: &Realm, id: u32) -> (u32, Vector3d) {
 /// one of 8 into a copy at its entrance, won't reset while they are in it,
 /// and its exit goes back to Orgrimmar.
 #[tokio::test]
+#[ignore = "extended"]
 async fn ragefire_chasm_turns_the_young_away_and_its_exit_leads_out() {
     if !have_data() {
         return;
@@ -391,6 +393,7 @@ async fn duel(realm: &Arc<Realm>, a: &mut Client, b: &mut Client) {
 /// flee and lose, the duel complete; one interrupted by a death from
 /// elsewhere completes as not finished.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_duel_has_its_bounds_and_its_ends() {
     if !have_data() {
         return;

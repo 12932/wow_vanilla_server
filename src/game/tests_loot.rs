@@ -844,6 +844,7 @@ fn a_random_property_rolls_and_is_kept() {
 /// The real data's locks, sets, properties and fishing skills load, and
 /// a copper vein needs mining.
 #[test]
+#[ignore = "extended"]
 fn the_real_crafting_data_loads() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

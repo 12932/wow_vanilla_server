@@ -451,6 +451,7 @@ async fn stratholme(realm: &Arc<Realm>) {
 
 /// The dungeon bosses, on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn dungeon_bosses_fight_as_thistle_tea_scripts_them() {
     let Some(realm) = realm() else {
         return;

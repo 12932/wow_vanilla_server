@@ -196,6 +196,7 @@ fn masks_go_between_the_clients_count_and_wvss() {
 }
 
 #[test]
+#[ignore = "extended"]
 fn the_real_races_know_their_capitals_and_each_side_flies_its_own_mount() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
@@ -471,6 +472,7 @@ fn a_ship_and_a_zeppelin_are_open_to_the_sky_only_at_their_deck_spots() {
 }
 
 #[test]
+#[ignore = "extended"]
 fn the_real_taxi_tables_have_stormwinds_node_the_spells_paths_and_the_bank_slots_prices() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

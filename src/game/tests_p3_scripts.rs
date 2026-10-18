@@ -987,6 +987,7 @@ async fn core_rager(realm: &Arc<Realm>) {
 
 /// Molten Core's lieutenants, on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn molten_cores_lieutenants_fight_as_thistle_tea_scripts_them() {
     let Some(realm) = realm() else {
         return;
@@ -1444,6 +1445,7 @@ async fn lava_surger(realm: &Arc<Realm>) {
 
 /// Molten Core's trash, on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn molten_cores_trash_fights_as_thistle_tea_scripts_it() {
     let Some(realm) = realm() else {
         return;

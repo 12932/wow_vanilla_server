@@ -340,6 +340,7 @@ async fn spawn_addon_auras(realm: &Arc<Realm>) {
 
 /// The mechanics on one load of the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_encounter_mechanics() {
     let Some(realm) = realm() else {
         return;

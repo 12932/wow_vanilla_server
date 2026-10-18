@@ -85,6 +85,7 @@ fn xp(m: &Map, g: Guid) -> u32 {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_dead_are_not_killed_again() {
     if !have_data() {
         return;
@@ -374,6 +375,7 @@ async fn only_an_item_the_player_has_that_starts_the_quest_starts_it() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_ritual_of_dooms_cooldown_waits_for_its_portal() {
     if !have_data() {
         return;
@@ -432,6 +434,7 @@ async fn the_ritual_of_dooms_cooldown_waits_for_its_portal() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_pet_autocasts_its_positive_spells() {
     if !have_data() {
         return;
@@ -568,6 +571,7 @@ async fn an_objects_gossip_options_show_and_are_chosen() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn disarm_trap_spends_the_trap_and_opens_no_loot() {
     if !have_data() {
         return;
@@ -612,6 +616,7 @@ async fn disarm_trap_spends_the_trap_and_opens_no_loot() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_locked_objects_loot_is_for_those_who_opened_it() {
     if !have_data() {
         return;
@@ -653,6 +658,7 @@ fn fill_bags(m: &mut Map, g: Guid) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn crafting_into_full_bags_fails_before_it_costs_anything() {
     if !have_data() {
         return;
@@ -716,6 +722,7 @@ async fn crafting_into_full_bags_fails_before_it_costs_anything() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_cast_with_nothing_left_to_pay_with_fails() {
     if !have_data() {
         return;
@@ -967,6 +974,7 @@ async fn a_fight_stops_a_cast_not_for_one() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn healing_threat_is_split_and_by_the_healers_threat() {
     if !have_data() {
         return;
@@ -1211,6 +1219,7 @@ async fn a_charter_is_bought_only_from_a_guild_master_near() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn only_what_the_client_lets_go_is_unlearned() {
     if !have_data() {
         return;
@@ -1419,6 +1428,7 @@ async fn a_party_quest_starts_once_and_no_share_is_answered_unasked() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_freed_creature_turns_on_its_master_in_earnest() {
     if !have_data() {
         return;

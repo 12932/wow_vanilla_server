@@ -26,12 +26,29 @@ pub const WAIT: Duration = Duration::from_secs(20);
 /// `WVS_DATA` if it is set, else `data/` in the checkout. A test whose data
 /// isn't there passes without running.
 pub fn real_data(what: &str) -> std::path::PathBuf {
+    extended_only(what);
     std::env::var_os("WVS_DATA")
         .map_or_else(
             || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data"),
             std::path::PathBuf::from,
         )
         .join(what)
+}
+
+/// The real world is for the extended suite only: under nextest, any other
+/// profile fails the test that asks for it, so that a test needing the real
+/// world is never quietly in the fast suite (or quietly passing there
+/// without running). See docs/TESTING.md.
+fn extended_only(what: &str) {
+    if let Ok(profile) = std::env::var("NEXTEST_PROFILE")
+        && profile != "extended"
+    {
+        panic!(
+            "this test reads the real world (data/{what}), which is for the extended suite only \
+             (nextest profile `{profile}`): mark it `#[ignore = \"extended\"]` and run it with \
+             `cargo nextest run --lib --profile extended --run-ignored all`; see docs/TESTING.md"
+        );
+    }
 }
 
 pub fn test_config() -> RealmConfig {

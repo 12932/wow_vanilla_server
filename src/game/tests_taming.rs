@@ -194,6 +194,7 @@ async fn tame_with(c: &mut Client, map: &MapHandle, g: Guid, rod: u32, channel: 
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_dwarf_hunter_tames_with_the_rods_and_learns_tame_beast() {
     if !have_data() {
         return;

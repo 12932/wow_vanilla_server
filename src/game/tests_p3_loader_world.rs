@@ -106,6 +106,7 @@ fn a_spirit_goes_to_its_zones_nearest_graveyard_of_its_side() {
 /// inside, the Horde's own outside Orgrimmar and the Alliance the one
 /// shared, measured from the entrance; nothing for a map without any.
 #[test]
+#[ignore = "extended"]
 fn the_real_graveyards_link_their_zones_sides_and_facings() {
     let Some(d) = real() else {
         return;
@@ -149,6 +150,7 @@ fn option(d: &GameData, menu: u32, id: u32) -> &crate::game::data::npc::GossipOp
 /// `tests_p3_loader_play`), the Tamed Kodo's greeting script, and
 /// Tharnariun's lost trap option with its condition and item.
 #[test]
+#[ignore = "extended"]
 fn the_real_gossip_menus_load_as_thistle_tea_reads_them() {
     let Some(d) = real() else {
         return;

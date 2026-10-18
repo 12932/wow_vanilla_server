@@ -744,6 +744,7 @@ static DB: std::sync::LazyLock<std::path::PathBuf> =
 /// Scourgestones' commission, the heads' turn-in gates, menu 4264's
 /// greeting, and the nearby-player failure conditions.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_conditions() {
     let dir = DB.as_path();
     if !dir.join("vmangos.sqlite").exists() {

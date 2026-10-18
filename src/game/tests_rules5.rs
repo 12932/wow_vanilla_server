@@ -1301,6 +1301,7 @@ async fn a_copy_holds_as_many_as_its_map_template_says() {
 /// Common's 98 from `SkillLineAbility`, as Thistle Tea gives it), so the
 /// client doesn't garble its own player's speech.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_new_character_has_their_languages_as_skills() {
     let db = &crate::game::harness::real_data("db");
     if !db.join("vmangos.sqlite").exists() {

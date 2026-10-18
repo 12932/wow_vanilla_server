@@ -771,6 +771,7 @@ async fn a_linked_aura_holds_its_spell_while_it_lasts() {
 /// that does it; Rajaxx's captains and Loatheb's maggots have their
 /// masters by `creature_linking_template`.
 #[test]
+#[ignore = "extended"]
 fn the_real_data_links_barkskin_and_the_masters() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

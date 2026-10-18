@@ -1,0 +1,18 @@
+# The test suites (docs/TESTING.md).
+#
+# The fast suite, `cargo nextest run --lib`: every test that doesn't need the
+# real world. A test that reads the real world (`harness::real_data`, so
+# `load::real_data()` too) is marked `#[ignore = "extended"]`; unmarked, it
+# fails in this profile.
+#
+# The extended suite, `cargo nextest run --lib --profile extended --run-ignored all`:
+# every test, the real world's too, before a merge or a push.
+
+[profile.default]
+# A test this slow belongs in the extended suite, or wants simulated time.
+slow-timeout = { period = "15s" }
+
+[profile.extended]
+# The hand-run probes (`probe_*`, `#[ignore]`d too) print, and check nothing.
+default-filter = "not test(/::probe_/)"
+slow-timeout = { period = "60s" }

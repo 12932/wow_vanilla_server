@@ -517,6 +517,7 @@ async fn taerars_shades_are_his_guardians(map: &MapHandle) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn creature_spell_lists_and_summons_on_the_real_data() {
     let Some(realm) = realm() else {
         return;

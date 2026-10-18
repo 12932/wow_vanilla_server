@@ -140,6 +140,7 @@ fn check(m: &mut Map, g: Guid, after: Duration) {
 }
 
 #[test]
+#[ignore = "extended"]
 fn the_tiles_know_the_deep_sea_lava_water_and_dry_ground() {
     let Some(mut t) = tiles() else {
         return;
@@ -174,6 +175,7 @@ fn the_tiles_know_the_deep_sea_lava_water_and_dry_ground() {
 }
 
 #[test]
+#[ignore = "extended"]
 fn a_wmo_names_its_liquid() {
     let dir = BAKE.as_path();
     let Some(mut nav) = Nav::open(dir, "MoltenCore") else {
@@ -202,6 +204,7 @@ fn a_wmo_names_its_liquid() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_liquid_is_a_wmos_first_then_the_terrains() {
     let Some(realm) = realm(true) else {
         return;
@@ -224,6 +227,7 @@ async fn the_liquid_is_a_wmos_first_then_the_terrains() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn lava_burns_after_a_second_in_it() {
     let Some(realm) = realm(false) else {
         return;
@@ -271,6 +275,7 @@ async fn lava_burns_after_a_second_in_it() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_deep_sea_tires_but_the_shallows_and_dry_ground_dont() {
     let Some(realm) = realm(false) else {
         return;
@@ -324,6 +329,7 @@ async fn the_deep_sea_tires_but_the_shallows_and_dry_ground_dont() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_terrain_gives_the_zone_and_area_without_a_navmesh() {
     let Some(realm) = realm(false) else {
         return;
@@ -362,7 +368,7 @@ async fn naxxramas_slime_puts_its_spell_on_while_in_it() {
 
 /// Where the tiles have each kind of liquid (run by hand).
 #[test]
-#[ignore]
+#[ignore = "a probe, run by hand"]
 fn probe_the_tiles() {
     let Some(mut t) = Terrain::open(TERRAIN.as_path(), 0) else {
         return;

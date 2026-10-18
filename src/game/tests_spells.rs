@@ -110,6 +110,7 @@ fn sure_crit() -> SpellTemplate {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
     if !have_data() {
         return;
@@ -228,6 +229,7 @@ async fn a_mage_at_sixty_crits_ignites_and_takes_her_talents() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_rogues_eviscerate_scales_with_combo_points_and_spends_them() {
     if !have_data() {
         return;
@@ -422,6 +424,7 @@ fn player_spells(data: &crate::game::data::GameData) -> Vec<u32> {
 }
 
 #[test]
+#[ignore = "extended"]
 fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
     if !have_data() {
         return;
@@ -495,6 +498,7 @@ fn nine_in_ten_of_the_spells_players_have_run_every_effect() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn auras_cooldowns_and_crowd_control_hold_as_they_should() {
     if !have_data() {
         return;

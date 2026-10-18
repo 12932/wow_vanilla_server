@@ -41,6 +41,7 @@ fn buff(m: &mut Map, g: Guid, id: u32, kind: u32, misc: i32, amount: i32) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn wards_take_a_tenth_of_their_schools_power_and_mana_shield_none() {
     if !have_data() {
         return;
@@ -103,6 +104,7 @@ async fn wards_take_a_tenth_of_their_schools_power_and_mana_shield_none() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_shield_holds_what_it_had_when_cast_and_goes_as_auras_go() {
     if !have_data() {
         return;
@@ -165,6 +167,7 @@ fn flags(m: &Map, g: Guid) -> u32 {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn detect_magic_shows_a_units_auras_while_one_is_on_it() {
     if !have_data() {
         return;
@@ -277,6 +280,7 @@ const DEADLY_POISON: u32 = 2818;
 const BLIZZARD: u32 = 10;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_full_debuff_bar_gives_way_by_worth_and_age() {
     if !have_data() {
         return;
@@ -342,6 +346,7 @@ async fn a_full_debuff_bar_gives_way_by_worth_and_age() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_refresh_on_a_full_bar_stacks_in_place_and_a_root_given_way_frees() {
     if !have_data() {
         return;
@@ -410,6 +415,7 @@ async fn a_refresh_on_a_full_bar_stacks_in_place_and_a_root_given_way_frees() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_full_buff_bar_keeps_its_lasting_buffs_and_death_its_passives() {
     if !have_data() {
         return;
@@ -484,6 +490,7 @@ fn channel_spell(m: &Map, g: Guid) -> u32 {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_self_channel_ends_when_its_aura_is_taken_or_gives_way() {
     if !have_data() {
         return;
@@ -540,6 +547,7 @@ async fn a_self_channel_ends_when_its_aura_is_taken_or_gives_way() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_crowd_control_a_full_bar_refuses_spends_no_returns() {
     if !have_data() {
         return;
@@ -625,6 +633,7 @@ fn charges(m: &Map, g: Guid, spell: u32) -> Option<u32> {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn charge_modifiers_add_to_their_spells_charges_flat_then_percent() {
     if !have_data() {
         return;
@@ -767,6 +776,7 @@ fn sure_nightfall(d: &mut crate::game::data::GameData) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn nightfall_goes_off_on_corruptions_ticks_alone_by_its_charges_and_cooldown() {
     if !have_data() {
         return;
@@ -821,6 +831,7 @@ async fn nightfall_goes_off_on_corruptions_ticks_alone_by_its_charges_and_cooldo
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn improved_blizzard_chills_from_blizzard_alone() {
     if !have_data() {
         return;
@@ -875,6 +886,7 @@ fn sure_heal_scripts(d: &mut crate::game::data::GameData) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn heals_over_time_go_off_by_their_ticks_and_direct_heals_by_their_cast() {
     if !have_data() {
         return;
@@ -944,6 +956,7 @@ fn clear(m: &mut Map, g: Guid) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn food_drink_well_fed_and_flasks_replace_their_own_kind() {
     if !have_data() {
         return;
@@ -1022,6 +1035,7 @@ const SCORPID_POISON: u32 = 6411;
 const DIVINE_SHIELD: u32 = 642;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_boomerang_and_a_scorpid_surprise_roll_their_rare_extras() {
     if !have_data() {
         return;
@@ -1092,6 +1106,7 @@ async fn a_boomerang_and_a_scorpid_surprise_roll_their_rare_extras() {
 const MIND_CONTROL: u32 = 605;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn mind_control_takes_a_creature_and_lets_it_go_on_its_master_unless_dead() {
     if !have_data() {
         return;
@@ -1171,6 +1186,7 @@ fn stunned(m: &Map, g: Guid) -> bool {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_immunity_to_an_auras_kind_keeps_it_off_and_a_purging_one_takes_it() {
     if !have_data() {
         return;
@@ -1235,6 +1251,7 @@ const STEALTH: u32 = 1784;
 const LESSER_INVISIBILITY: u32 = 66;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn faerie_fire_takes_stealth_and_invisibility_and_keeps_them_off() {
     if !have_data() {
         return;
@@ -1296,6 +1313,7 @@ fn slow_spells(d: &mut crate::game::data::GameData) {
 /// lasts, and the strongest slows. Attack-speed slows don't: a weaker or
 /// shorter one is passed over (Thistle Tea's `Slow`, after vmangos).
 #[tokio::test]
+#[ignore = "extended"]
 async fn snares_stack_and_the_strongest_slows_but_attack_speed_slows_dont() {
     if !have_data() {
         return;
@@ -1376,6 +1394,7 @@ fn held_down(m: &Map, g: Guid) -> (bool, bool) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_shapeshift_frees_from_roots_and_snares_and_a_stance_doesnt() {
     if !have_data() {
         return;
@@ -1464,6 +1483,7 @@ fn form_and_vis(m: &Map, g: Guid) -> (u8, u8) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn stealth_marks_the_visibility_byte_not_the_form() {
     if !have_data() {
         return;
@@ -1571,6 +1591,7 @@ fn place(m: &mut Map, viewer: Guid, target: Guid, yards: f32) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn who_sees_through_stealth_and_invisibility() {
     if !have_data() {
         return;
@@ -1652,6 +1673,7 @@ fn victim(m: &Map, c: Guid) -> Guid {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_taunt_borrows_threat_while_it_lasts_and_the_newest_holds() {
     if !have_data() {
         return;
@@ -1749,6 +1771,7 @@ fn dispel_resist(d: &mut crate::game::data::GameData) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_dispel_takes_its_kind_a_stack_a_try_unless_held_on() {
     if !have_data() {
         return;
@@ -1806,6 +1829,7 @@ fn run_speed(m: &Map, g: Guid) -> f32 {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_mount_runs_by_its_own_bonus_and_a_slow_multiplies() {
     if !have_data() {
         return;

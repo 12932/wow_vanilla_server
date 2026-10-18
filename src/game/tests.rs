@@ -2446,6 +2446,7 @@ mod real {
     }
 
     #[tokio::test]
+    #[ignore = "extended"]
     async fn every_class_fights_with_its_starting_spells() {
         let dir = &crate::game::harness::real_data("db");
         if !dir.join("vmangos.sqlite").exists() {

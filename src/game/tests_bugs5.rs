@@ -91,6 +91,7 @@ fn spell_hit(m: &mut Map, attacker: Guid, g: Guid, spell: u32) {
 /// levels above them strike back every time, where a spell of theirs would
 /// land one time in five.
 #[tokio::test]
+#[ignore = "extended"]
 async fn holy_shields_damage_never_misses() {
     if !have_data() {
         return;
@@ -125,6 +126,7 @@ async fn holy_shields_damage_never_misses() {
 /// Obsidian Armor has no answer to a physical spell, so its ten seconds
 /// don't start, and the fire that follows is answered.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_proc_that_comes_to_nothing_starts_no_cooldown() {
     if !have_data() {
         return;
@@ -178,6 +180,7 @@ async fn a_proc_that_comes_to_nothing_starts_no_cooldown() {
 /// `HandleOverrideClassScriptAuraProc`, Thistle Tea's `ClassScript`), so
 /// nothing came of it: its charge stays.
 #[tokio::test]
+#[ignore = "extended"]
 async fn nightfall_gives_no_shadow_trance_for_a_killing_tick() {
     if !have_data() {
         return;
@@ -234,6 +237,7 @@ async fn nightfall_gives_no_shadow_trance_for_a_killing_tick() {
 /// inherited by the totem as it is put down. Without it the pulse is four
 /// seconds.
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_activation_time_modifier_quickens_a_totems_pulse() {
     if !have_data() {
         return;
@@ -287,6 +291,7 @@ async fn an_activation_time_modifier_quickens_a_totems_pulse() {
 /// `HandleAuraModTotalManaPercentRegen` and Thistle Tea's `period_ms` give
 /// it.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_percent_mana_tick_threatens_by_half_what_it_gave() {
     if !have_data() {
         return;
@@ -357,6 +362,7 @@ async fn a_percent_mana_tick_threatens_by_half_what_it_gave() {
 /// spell_threat_test and mangos's `threatAssist` have it; one of mana makes
 /// none, as Thistle Tea has it.
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_energize_of_rage_threatens_and_one_of_mana_doesnt() {
     if !have_data() {
         return;

@@ -121,6 +121,7 @@ fn timed() -> auras::Context {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn capacity_stance_rage_and_ramps() {
     if !have_data() {
         return;
@@ -188,6 +189,7 @@ async fn capacity_stance_rage_and_ramps() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn override_class_scripts_and_reactive_armor() {
     if !have_data() {
         return;
@@ -237,6 +239,7 @@ async fn override_class_scripts_and_reactive_armor() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn feign_death_and_breaking_crowd_control() {
     if !have_data() {
         return;
@@ -330,6 +333,7 @@ async fn feign_death_and_breaking_crowd_control() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_smaller_spell_scripts() {
     if !have_data() {
         return;

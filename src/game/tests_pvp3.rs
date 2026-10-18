@@ -783,6 +783,7 @@ async fn eastwall_held_brings_a_linked_squad_and_crown_guard_a_walking_spirit() 
 /// The real valley: its NPCs' fighting is Thistle Tea's, their routes are
 /// there, the beacons' plantings and the altars are vmangos's.
 #[test]
+#[ignore = "extended"]
 fn the_real_valley_is_scripted_as_thistle_tea_scripts_it() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {

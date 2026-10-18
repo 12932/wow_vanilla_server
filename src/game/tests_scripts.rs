@@ -675,6 +675,7 @@ async fn a_pool_spawns_its_limit_and_a_condition_gates_a_step() {
 /// The real data: every EventAI event type in the world database is one
 /// the engine knows, and the boss scripts are in place.
 #[test]
+#[ignore = "extended"]
 fn the_real_eventai_uses_known_event_types() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
@@ -721,6 +722,7 @@ fn the_real_eventai_uses_known_event_types() {
 /// The real Deadmines: Rhahk'Zor's death opens his door, and the copy's
 /// EventAI creatures fight a player without trouble.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_deadmines_opens_rhahkzors_door() {
     let dir = &crate::game::harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {

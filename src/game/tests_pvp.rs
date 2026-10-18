@@ -817,6 +817,7 @@ async fn a_plaguelands_tower_falls_to_those_standing_at_it() {
 /// Valley node's banner in its first state, its generals but not their
 /// captains' graves.
 #[test]
+#[ignore = "extended"]
 fn the_real_battlegrounds_start_with_their_first_events() {
     use crate::game::map::battleground::{ab, av, initial_events};
     let dir = &crate::game::harness::real_data("db");

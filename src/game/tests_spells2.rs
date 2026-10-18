@@ -108,6 +108,7 @@ fn plain_aura(id: u32, kind: u32, misc: i32) -> SpellTemplate {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn outdoors_mounts_magnets_sight_areas_and_shields() {
     if !have_data() {
         return;
@@ -347,6 +348,7 @@ async fn outdoors_mounts_magnets_sight_areas_and_shields() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn spirit_of_redemption_heals_on_then_dies() {
     if !have_data() {
         return;
@@ -444,6 +446,7 @@ async fn eyes_of_the_beast_moves_the_pet_then_gives_it_back() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn eating_still_level_scaled_costs_and_spell_areas() {
     if !have_data() {
         return;
@@ -547,6 +550,7 @@ async fn eating_still_level_scaled_costs_and_spell_areas() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_meteor_is_shared_among_those_it_falls_on() {
     if !have_data() {
         return;
@@ -601,6 +605,7 @@ async fn a_meteor_is_shared_among_those_it_falls_on() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_buff_too_high_for_its_target_goes_on_at_a_lower_rank() {
     if !have_data() {
         return;
@@ -648,6 +653,7 @@ async fn a_buff_too_high_for_its_target_goes_on_at_a_lower_rank() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn hallows_end_tricks_treats_and_costumes() {
     if !have_data() {
         return;

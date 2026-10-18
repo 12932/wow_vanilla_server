@@ -431,6 +431,7 @@ static BAKE: std::sync::LazyLock<std::path::PathBuf> =
 /// The real navmesh and terrain: a Loch Frenzy keeps to its loch, at its
 /// depth, and after a target on the bank swims only to the water's edge.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_fish_keeps_to_its_water() {
     let bake = BAKE.as_path();
     if !bake.join("Azeroth.map").exists() || !TERRAIN.as_path().exists() {
@@ -516,6 +517,7 @@ async fn a_fish_keeps_to_its_water() {
 /// The real navmesh: a flyer killed in the air falls to the ground under
 /// it.
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_flyer_killed_in_the_air_falls() {
     let bake = BAKE.as_path();
     if !bake.join("Azeroth.map").exists() {

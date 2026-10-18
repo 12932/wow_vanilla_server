@@ -1264,6 +1264,7 @@ async fn a_battleground_portal_lists_its_battle_for_its_side_and_levels_and_says
 }
 
 #[test]
+#[ignore = "extended"]
 fn the_real_portals_say_their_side_battle_and_exit() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
@@ -1283,6 +1284,7 @@ fn the_real_portals_say_their_side_battle_and_exit() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn deserter_is_a_harmful_quarter_hour_that_cant_be_cancelled_and_outlasts_death() {
     let Some(real) = crate::game::data::load::real_data() else {
         return;

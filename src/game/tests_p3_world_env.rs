@@ -397,6 +397,7 @@ const SPARED: [(&str, Change, Change); 5] = [
 ];
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_dead_a_ghost_a_god_a_spirit_and_a_flyer_neither_drown_nor_tire_nor_burn() {
     let Some(realm) = terrain_realm() else {
         return;
@@ -453,6 +454,7 @@ async fn the_dead_a_ghost_a_god_a_spirit_and_a_flyer_neither_drown_nor_tire_nor_
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn water_breathing_refills_the_breath_under_water_and_its_end_drowns_again() {
     let Some(realm) = terrain_realm() else {
         return;
@@ -874,6 +876,7 @@ async fn a_campfires_spell_burns_a_player_as_the_world_does_and_only_soaks_a_cre
 }
 
 #[test]
+#[ignore = "extended"]
 fn the_real_models_heights_put_a_humans_head_two_yards_up_and_a_gnomes_one() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
@@ -893,6 +896,7 @@ fn the_real_models_heights_put_a_humans_head_two_yards_up_and_a_gnomes_one() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_waterline_is_the_models_height_at_its_scale() {
     let Some(_) = terrain_realm() else {
         return;
@@ -1240,6 +1244,7 @@ async fn lavas_grace_comes_back_ten_times_as_fast_and_is_kept_when_one_steps_in_
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_environmental_fires_are_fire_and_burn_without_a_fight() {
     let Some(real) = crate::game::data::load::real_data() else {
         return;

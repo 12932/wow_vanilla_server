@@ -745,6 +745,7 @@ async fn the_scourge_invasion_counts_its_victories() {
 /// paths and elevator frames load, and every escort in the catalog has its
 /// quest and a path to walk.
 #[test]
+#[ignore = "extended"]
 fn the_real_world_data_loads() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;

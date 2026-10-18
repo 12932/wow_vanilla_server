@@ -1478,6 +1478,7 @@ async fn the_nightmare_manifests(realm: &Arc<Realm>) {
 
 /// The Nightmare Manifests, walked through on the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_nightmare_manifests_is_done_end_to_end() {
     if !have_data() {
         return;
@@ -2118,6 +2119,7 @@ async fn the_balance_of_light_and_shadow(realm: &Arc<Realm>) {
 /// The Gizelton Caravan's two quests, walked on the real world (on its
 /// own, for its long road).
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_gizelton_caravan_is_done_end_to_end() {
     if !have_data() {
         return;
@@ -2130,6 +2132,7 @@ async fn the_gizelton_caravan_is_done_end_to_end() {
 /// world: Freedom for All Creatures, The Great Masquerade, The Balance of
 /// Light and Shadow (and the Gizelton Caravan, on its own).
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_imported_event_quests_are_done_end_to_end() {
     if !have_data() {
         return;
@@ -2493,6 +2496,7 @@ fn event_sources(data: &GameData) -> std::collections::BTreeMap<u32, Vec<String>
 /// but the five no one raises: its area trigger, the script that credits
 /// it and what starts that, the spell and what casts it, its escort.
 #[test]
+#[ignore = "extended"]
 fn every_real_event_quest_has_its_source() {
     let Some(d) = crate::game::data::load::real_data() else {
         return;
@@ -2925,6 +2929,7 @@ async fn quest_start_once(realm: &Arc<Realm>, quest: u32, horde: bool) -> Result
 /// gossip option or a quest's start script, walked one by one on the real
 /// world: each in a fresh hero's log, its source set off, its credit seen.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_database_event_quests_are_walked() {
     if !have_data() {
         return;
@@ -3259,6 +3264,7 @@ async fn walk_escort(
 
 /// The escort and follower quests, walked one by one on the real world.
 #[tokio::test]
+#[ignore = "extended"]
 async fn the_real_escort_quests_are_walked() {
     if !have_data() {
         return;

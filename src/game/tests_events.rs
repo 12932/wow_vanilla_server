@@ -1063,6 +1063,7 @@ fn wanted(name: &str) -> bool {
 
 /// Creatures, gossip, objects, spells and places.
 #[tokio::test]
+#[ignore = "extended"]
 async fn event_quests_are_done_as_thistle_tea_does_them() {
     if !have_data() {
         return;
@@ -1114,6 +1115,7 @@ async fn event_quests_are_done_as_thistle_tea_does_them() {
 
 /// Map events: a doctor's patients, an escort, defenses and a brawl.
 #[tokio::test]
+#[ignore = "extended"]
 async fn event_quests_with_their_map_events_are_done() {
     if !have_data() {
         return;

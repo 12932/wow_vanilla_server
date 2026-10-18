@@ -31,6 +31,7 @@ fn hit(m: &mut Map, from: wow_world_messages::Guid, to: wow_world_messages::Guid
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn damage_cancels_a_hearthstone_and_a_bandage_and_pushes_back_only_what_it_should() {
     if !have_data() {
         return;
@@ -136,6 +137,7 @@ async fn damage_cancels_a_hearthstone_and_a_bandage_and_pushes_back_only_what_it
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_creatures_cast_isnt_pushed_back_and_pushback_may_be_resisted() {
     if !have_data() {
         return;
@@ -194,6 +196,7 @@ async fn a_creatures_cast_isnt_pushed_back_and_pushback_may_be_resisted() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_channel_is_cut_short_by_others_harm_alone_and_its_auras_with_it() {
     if !have_data() {
         return;
@@ -285,6 +288,7 @@ async fn a_channel_is_cut_short_by_others_harm_alone_and_its_auras_with_it() {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_blizzard_cut_to_nothing_ends_and_takes_its_area() {
     if !have_data() {
         return;
@@ -357,6 +361,7 @@ const RESTORATION: u32 = 11359;
 const FIRE_BLAST: u32 = 2136;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_cast_given_up_gives_back_its_global_cooldown_and_kick_stops_what_silence_could() {
     if !have_data() {
         return;
@@ -488,6 +493,7 @@ fn gcd_spells(d: &mut crate::game::data::GameData) {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_global_cooldown_takes_its_modifiers_not_haste_and_holds_what_it_should() {
     if !have_data() {
         return;
@@ -575,6 +581,7 @@ async fn a_global_cooldown_takes_its_modifiers_not_haste_and_holds_what_it_shoul
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn cooldowns_hold_their_spell_and_category_for_the_longer() {
     if !have_data() {
         return;
@@ -639,6 +646,7 @@ const SUMMON_IMP: u32 = 688;
 const HEALTH_FUNNEL: u32 = 755;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn health_funnel_takes_its_health_a_second_and_ends_without_it() {
     if !have_data() {
         return;
@@ -690,6 +698,7 @@ const SKELETAL_WARRIOR: u32 = 48;
 const IMP: u32 = 416;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_reach() {
     if !have_data() {
         return;
@@ -939,6 +948,7 @@ const CHAIN_LIGHTNING: u32 = 421;
 const ARCTIC_REACH: u32 = 16758;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_area_takes_its_count_its_kinds_and_its_reach() {
     if !have_data() {
         return;
@@ -1011,6 +1021,7 @@ async fn an_area_takes_its_count_its_kinds_and_its_reach() {
 const SLICE_AND_DICE: u32 = 5171;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn slice_and_dice_goes_at_the_combo_target_and_spends_its_points() {
     if !have_data() {
         return;
@@ -1097,6 +1108,7 @@ const AIMED_SHOT: u32 = 19434;
 const RAPID_FIRE: u32 = 3045;
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn a_ranged_ability_is_sped_by_ranged_haste_and_a_spell_by_casting_speed() {
     if !have_data() {
         return;
@@ -1152,6 +1164,7 @@ fn feared(m: &Map, g: wow_world_messages::Guid) -> bool {
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn fear_ward_is_spent_by_the_fear_it_keeps_off_and_conflagrate_wants_immolate() {
     if !have_data() {
         return;
@@ -1205,6 +1218,7 @@ async fn fear_ward_is_spent_by_the_fear_it_keeps_off_and_conflagrate_wants_immol
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn an_emote_ends_feign_death_and_a_weapon_spell_unarmed_wants_its_weapon() {
     if !have_data() {
         return;
@@ -1260,6 +1274,7 @@ async fn an_emote_ends_feign_death_and_a_weapon_spell_unarmed_wants_its_weapon()
 }
 
 #[tokio::test]
+#[ignore = "extended"]
 async fn resurrection_is_at_the_dead_it_is_aimed_at() {
     if !have_data() {
         return;
