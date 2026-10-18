@@ -414,4 +414,8 @@ pub fn accept(map: &mut Map, g: Guid) {
         }
         status(map, s, S::TradeComplete);
     }
+    // Both sides saved at once (mangos's `SaveInventoryAndGoldToDB` of
+    // each, in one transaction): one saved alone would copy or lose what
+    // changed hands.
+    map.save_together(&[g, with], crate::game::store::Records::new());
 }
