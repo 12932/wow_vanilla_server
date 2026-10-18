@@ -280,6 +280,8 @@ mod tests_p3_scripts_raids;
 #[cfg(test)]
 mod tests_p3_spells;
 #[cfg(test)]
+mod tests_p4_scripts_instances;
+#[cfg(test)]
 mod tests_p3_spells_auras;
 #[cfg(test)]
 mod tests_p3_spells_damage;
