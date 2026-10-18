@@ -154,6 +154,10 @@ the questions waiting for you.
 
     Which should wvs follow?
 
+46. **Fade's threat given back** (from review 3, R3-3). When Fade ends, wvs gives back its whole amount, as Thistle
+    Tea does, even if it took less: 100 threat can come back as 820. mangos gives back only what Fade took. Follow
+    mangos? The fix is one line, but it changes a parity test that pins Thistle Tea's behaviour.
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -611,6 +615,32 @@ the questions waiting for you.
       - **M3. Shutdown:** shutdown can miss a player mid-transfer.
       - **M4. Empty pools:** health or mana saved at 0 load as full, so a relog refills a mage.
       - **Eleven minor ones** are in the findings file.
+
+43. **Review 3, combat, spells and auras** (findings in `runs/review/review3.md`). Fixed, each with a test:
+    - **Spells:**
+      - reagents banked mid-cast let the spell go off for free, an item duplication;
+      - an interrupted cast was told twice;
+      - a cast during a channel didn't end the channel.
+    - **Threat:** a spell counted its caster's threat auras twice (160 rather than 130 under +30%).
+    - **Leaving the map:** a player who logged out kept their channel and stayed on creatures' threat lists.
+    - **Robustness:** a panic in a proc left the proc depth raised for good.
+    - **Creatures:**
+      - one switching victims moved its leash origin;
+      - an attacker killed by a damage shield swung on from its corpse;
+      - a creature down in a linked feign death ran its timers;
+      - one that forgot its victim could turn to one it can't attack.
+    - **Combat:** a dual-wielder's hands swung in the same step.
+    - **Auras:**
+      - restored stacks showed as one;
+      - a replaced aura was never wholly removed, so a cooldown waiting for it never started;
+      - a pet area aura of two effects gave the pet only its last.
+    - **Left, the harder ones:**
+      - **R3-15:** a death action that despawns its creature cuts the death short, so loot and its summoner's and
+        group's death events are skipped.
+      - **R3-16:** a new aura's index can go stale after the auras it replaces end.
+      - **R3-31 (speed):** heals, Fade and logouts walk all 25,000 creatures to find the threat lists they're on. A
+        per-unit index of who holds them would fix it.
+      - **Twelve minor ones** are in the findings file.
 
 ## Progress
 
