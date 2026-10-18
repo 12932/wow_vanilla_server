@@ -171,6 +171,9 @@ pub struct PetState {
     /// fight up until it is back (mangos's `IsRetreating`, Thistle Tea's
     /// recall).
     pub returning: bool,
+    /// The victim its master's Attack named, which a staying pet goes
+    /// after (any other it fights only where it stands).
+    pub commanded: Option<Guid>,
 }
 
 impl PetState {
@@ -207,6 +210,7 @@ impl PetState {
             was_hostile: false,
             eyes: None,
             returning: false,
+            commanded: None,
         }
     }
 }

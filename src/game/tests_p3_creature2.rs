@@ -2386,3 +2386,92 @@ async fn a_creature_dragged_from_its_spawn_calls_for_help_each_second() {
         "again in a second"
     );
 }
+
+/// Thistle Tea's `PetBT` with Stay (`return_test.exs`): Attack keeps a
+/// staying pet's Stay and its spot, and it goes after the victim named;
+/// that victim dead, it goes back to its spot. A victim it took up of
+/// itself there it doesn't chase when it leaves its reach.
+#[tokio::test]
+async fn a_staying_pet_goes_after_its_masters_victim_and_back_but_chases_no_other() {
+    use crate::game::map::pets::{self, ACT_COMMAND, COMMAND_ATTACK, COMMAND_STAY};
+    use crate::game::tests_pets::{WOLF, tamed};
+    use wow_world_messages::vanilla::CMSG_PET_ACTION;
+    let (_realm, h, gh, map, pet, wolf) = tamed().await;
+    on(&map, move |m| {
+        crate::game::map::combat::leave_combat(m, gh);
+        crate::game::map::combat::leave_combat(m, pet);
+        crate::game::map::combat::leave_combat(m, wolf);
+    })
+    .await;
+    let order = |command: u8, target: Guid| CMSG_PET_ACTION {
+        pet,
+        data: pets::button(u32::from(command), ACT_COMMAND),
+        target,
+    };
+    h.send(order(COMMAND_STAY, Guid::zero())).await;
+    until(&map, "staying", move |m| {
+        pets::state(m, pet).is_some_and(|s| s.command == COMMAND_STAY)
+    })
+    .await;
+    let spot = on(&map, move |m| pets::state(m, pet).unwrap().stay_at)
+        .await
+        .unwrap();
+    h.send(order(COMMAND_ATTACK, wolf)).await;
+    until(&map, "the pet goes for the wolf", move |m| {
+        crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot) > 2.0
+    })
+    .await;
+    let kept = on(&map, move |m| {
+        let s = pets::state(m, pet).unwrap();
+        (s.command, s.stay_at)
+    })
+    .await;
+    assert_eq!(kept, (COMMAND_STAY, Some(spot)), "Stay and its spot kept");
+    on(&map, move |m| {
+        crate::game::map::combat::deal_damage(m, gh, wolf, 10_000_000)
+    })
+    .await;
+    until(&map, "back at its spot", move |m| {
+        crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot) < 1.0
+            && !m.creature(pet).unwrap().combat.attacking
+    })
+    .await;
+    // A wolf that came at it, then backs off out of its reach.
+    let other = crate::game::tests_pets::place(&map, gh, WOLF, 0x70_0009, 0.0).await;
+    on(&map, move |m| {
+        let at = m.position_of(pet).unwrap();
+        let c = m.creature_mut(other).unwrap();
+        c.position = at;
+        c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 10_000_000);
+        c.fields.set_u32(UNIT_FIELD_HEALTH, 10_000_000);
+        crate::game::map::ai::attacked(m, other, pet);
+    })
+    .await;
+    until(&map, "it fights back", move |m| {
+        m.creature(pet).unwrap().combat.attacking
+    })
+    .await;
+    on(&map, move |m| {
+        let c = m.creature_mut(other).unwrap();
+        c.position.x += 15.0;
+        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+        let a = crate::game::map::auras::AURA_MOD_ROOT;
+        aura_of(m, other, 97_960, a, 0, 0);
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let moved = on(&map, move |m| {
+        let c = m.creature(pet).unwrap();
+        crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot)
+    })
+    .await;
+    let fighting = on(&map, move |m| {
+        m.creature(pet).unwrap().combat.victim == other
+    })
+    .await;
+    assert!(fighting, "still its victim");
+    assert!(
+        moved < 1.0,
+        "it doesn't chase one it took up itself: {moved}"
+    );
+}
