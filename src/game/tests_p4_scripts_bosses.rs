@@ -420,3 +420,90 @@ async fn stratholmes_bosses_fight_as_thistle_tea_scripts_them() {
         "three riflemen"
     );
 }
+
+/// The Wailing Caverns' disciple: he greets (698) and offers nothing while
+/// a Fanglord lives; with all four dead (field four special) he greets
+/// with 699 and offers to begin, and begun he takes the party's side and
+/// walks his path of 32 points, holding at the seventh, fifteenth and
+/// thirtieth; at the thirtieth his ritual calls the moccasins (12
+/// seconds), seven ectoplasms (52) and Mutanus last (102).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_disciple_begins_once_the_fanglords_are_dead() {
+    use super::tests_p4_scripts_dungeons::{inside, set};
+    const DISCIPLE: u32 = 3678;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let route = realm
+        .data
+        .scripts
+        .routes
+        .iter()
+        .find(|((e, _), _)| *e == DISCIPLE)
+        .map(|(_, p)| p.clone())
+        .expect("his route");
+    assert_eq!(route.len(), 32);
+    let holds: Vec<u32> = route
+        .iter()
+        .filter(|p| p.wait_ms > 60_000)
+        .map(|p| p.point)
+        .collect();
+    assert_eq!(holds, [7, 15, 30]);
+    let ritual = route.iter().find(|p| p.point == 30).unwrap().script_id;
+    let (mut c, _, map) = inside(&realm, "Disciple", 43, DISCIPLE).await;
+    let d = super::tests_p4_scripts_dungeons::alive(&map, DISCIPLE).await[0];
+    c.sees(d).await;
+    c.clear();
+    hello(&c, d).await;
+    let before = c
+        .wait_for("his menu", |m| match m {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g)
+                if g.guid == d =>
+            {
+                Some((g.title_text_id, g.gossips.len()))
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(before, (698, 0), "nothing while a Fanglord lives");
+    map.query(|m| set(m, 4, 4)).await;
+    c.clear();
+    hello(&c, d).await;
+    let begin = option(&mut c, d, "Let the event begin!").await;
+    choose(&c, d, begin).await;
+    assert!(
+        until(&map, 2000, move |m| faction(m, d) == 250
+            && m.creature(d).map(|c| c.movement_type)
+                == Some(crate::game::map::creature::MOVEMENT_WAYPOINT))
+        .await,
+        "on the party's side, on his way"
+    );
+    // The ritual.
+    let count = |m: &Map, e: u32| living(m, e).len();
+    map.query(move |m| {
+        let before = [5762, 5763, 3654].map(|e| count(m, e));
+        crate::game::map::scripts::start(
+            m,
+            crate::game::data::scripts::ScriptTable::Movement,
+            ritual,
+            d,
+            d,
+        );
+        let on = |m: &mut Map, ms: u64| {
+            for _ in 0..ms / 500 {
+                hurry_runs(m, None, Duration::from_millis(500));
+            }
+        };
+        on(m, 13_000);
+        assert!(count(m, 5762) > before[0], "the moccasins");
+        assert_eq!(count(m, 5763), before[1]);
+        on(m, 40_000);
+        assert_eq!(count(m, 5763), before[1] + 7, "seven ectoplasms");
+        assert_eq!(count(m, 3654), before[2], "Mutanus last");
+        on(m, 50_000);
+        assert_eq!(count(m, 3654), before[2] + 1, "Mutanus");
+    })
+    .await
+    .unwrap();
+}
