@@ -575,7 +575,7 @@ pub fn frozen(map: &Map, g: Guid) -> bool {
 
 /// Shatter's crit chance against the frozen, from the caster's override
 /// class scripts 849 to 913.
-fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
+pub fn shatter(map: &Map, caster: Guid, s: &SpellTemplate) -> f32 {
     let data = &map.realm.data;
     auras::auras(map, caster).map_or(0.0, |a| {
         a.effects()
