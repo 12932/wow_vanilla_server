@@ -516,3 +516,107 @@ async fn a_trainer_lists_only_alive_and_within_reach() {
     .await;
     assert!(listed(&mut a, t).await, "free again");
 }
+
+/// A flight master of a faction (72) its players may be honored with, at
+/// the first of three nodes in a line; each hop's fare twenty-five.
+const FLIGHT_MASTER: u32 = 3754;
+const FLIGHT_FACTION: u32 = 72;
+const FLIGHT_TEMPLATE: u32 = 1072;
+
+fn flights_world() -> GameData {
+    use crate::game::data::npc::{TaxiNode, TaxiPathNode};
+    let mut d = world();
+    d.faction_templates.insert(
+        FLIGHT_TEMPLATE,
+        crate::game::data::FactionTemplate {
+            faction: FLIGHT_FACTION,
+            ..crate::game::tests_p3_combat::faction(FLIGHT_TEMPLATE, 0x1, 0x2)
+        },
+    );
+    d.misc.factions.insert(
+        FLIGHT_FACTION,
+        crate::game::data::misc::FactionDef {
+            id: FLIGHT_FACTION,
+            index: 19,
+            name: "Stormwind".into(),
+            ..Default::default()
+        },
+    );
+    d.creature_templates.insert(
+        FLIGHT_MASTER,
+        CreatureTemplate {
+            faction: FLIGHT_TEMPLATE,
+            npc_flags: npc::NPC_FLAG_FLIGHTMASTER,
+            ..template(FLIGHT_MASTER, 7)
+        },
+    );
+    let start = crate::game::tests_p3_combat::START;
+    for (id, dx) in [(2, 0.0), (3, 100.0), (4, 200.0)] {
+        d.npc.taxi_nodes.insert(
+            id,
+            TaxiNode {
+                id,
+                map: 0,
+                x: start.0 + dx,
+                y: start.1,
+                z: start.2,
+                name: format!("Node {id}"),
+                mounts: [0, 0],
+            },
+        );
+    }
+    for (from, path) in [(2, 500), (3, 501)] {
+        d.npc.taxi_paths.insert((from, from + 1), (path, 25));
+        let x0 = start.0 + 100.0 * (from - 2) as f32;
+        d.npc.taxi_path_nodes.insert(
+            path,
+            (0..3)
+                .map(|i| TaxiPathNode {
+                    map: 0,
+                    x: x0 + 50.0 * i as f32,
+                    y: start.1,
+                    z: start.2,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+    }
+    d
+}
+
+/// Thistle Tea's `Taxi.activate` "rounds the honored flightmaster discount
+/// for each path": an express flight of two hops pays each hop's fare a
+/// tenth off, rounded, to one honored by the flight master's faction:
+/// twice 23 for twice 25, where the whole would be 45.
+#[tokio::test]
+async fn an_honored_flight_takes_a_tenth_off_each_hop() {
+    for (honored, paid) in [(false, 50), (true, 46)] {
+        let (_realm, mut a, ga, map) = setup_with(flights_world(), Class::Warrior).await;
+        let master = on(&map, move |m| {
+            let p = m.players.get_mut(&ga).unwrap();
+            p.row.state.taxi_mask = vec![(1 << 2) | (1 << 3) | (1 << 4)];
+            p.set_money(100);
+            if honored {
+                crate::game::map::reputation::modify(m, ga, FLIGHT_FACTION, 9000, false);
+            }
+            spawn(m, ga, FLIGHT_MASTER, 20, 2.0)
+        })
+        .await;
+        a.sees(master).await;
+        a.send(CMSG_ACTIVATETAXIEXPRESS {
+            guid: master,
+            total_cost: 0,
+            nodes: vec![2, 3, 4],
+        })
+        .await;
+        let reply = a
+            .wait_for("SMSG_ACTIVATETAXIREPLY", |m| match m {
+                ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(r) => Some(r.reply),
+                _ => None,
+            })
+            .await;
+        assert_eq!(reply, ActivateTaxiReply::Ok);
+        let money = on(&map, move |m| m.players[&ga].money()).await;
+        assert_eq!(100 - money, paid, "honored {honored}");
+    }
+}
