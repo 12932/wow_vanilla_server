@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
@@ -195,7 +196,7 @@ async fn a_dead_pet_stays_out_of_the_stable() {
     money(&map, gh, 1_000);
     h.send(CMSG_BUY_STABLE_SLOT { npc: master }).await;
     assert_eq!(stable_result(&mut h).await, StableResult::SuccessBuySlot);
-    map.query(move |m| crate::game::map::ai::die(m, pet, wolf))
+    map.query(move |m| crate::game::map::combat::kill(m, wolf, pet))
         .await;
     h.send(CMSG_STABLE_PET {
         stable_master: master,
@@ -219,6 +220,9 @@ const DASH: u32 = 9403;
 const HOWL: u32 = 9404;
 const SCREECH: u32 = 9501;
 const NOTHING: u32 = 9999;
+/// A family's passive, and another's stamina buff.
+const FAMILY: u32 = 9701;
+const FORTITUDE: u32 = 9801;
 /// The teaching of `spell`.
 const fn teaching(spell: u32) -> u32 {
     if spell == GORE {
@@ -268,6 +272,10 @@ fn training_data() -> GameData {
     add(DASH, "Dash", hit, 0, 270, 1);
     add(HOWL, "Howl", hit, 0, 270, 1);
     add(SCREECH, "Screech", hit, 0, 999, 1);
+    add(FAMILY, "Family Passive", tests_pets::effect(6, 0, 1), 0, 211, 1);
+    let mut fortitude = tests_pets::spell(FORTITUDE, "Fortitude", [stamina(3), none, none]);
+    fortitude.duration_index = 4;
+    d.spells.spells.insert(FORTITUDE, fortitude);
     for (rank, first) in [(GORE_2, GORE), (STAMINA_2, STAMINA_1)] {
         d.spells.ranks.insert(
             rank,
@@ -493,8 +501,131 @@ async fn training_is_refused_for_the_wrong_pet_family_level_points_and_a_fifth_a
     assert_eq!(refused(&map, gh, GORE_2).await, None, "an upgrade");
     assert_eq!(refused(&map, gh, STAMINA_1).await, None, "a passive");
 
-    map.query(move |m| crate::game::map::ai::die(m, pet, wolf))
+    map.query(move |m| crate::game::map::combat::kill(m, wolf, pet))
         .await;
     assert_eq!(refused(&map, gh, GROWL).await, Some(SpellCastResult::TargetsDead));
     let _ = Kind::Hunter;
+}
+
+/// The next untraining price this client is quoted.
+async fn quote(h: &mut Client) -> u32 {
+    h.wait_for("SMSG_PET_UNLEARN_CONFIRM", |m| match m {
+        ServerOpcodeMessage::SMSG_PET_UNLEARN_CONFIRM(c) => Some(c.talent_reset_cost),
+        _ => None,
+    })
+    .await
+}
+
+/// Untraining refunds the points the pet's loyalty has brought it, and
+/// takes what it was taught away with the stats it gave, but leaves its
+/// family's passives and another's buff on it; it is 10 silver, then 50.
+/// Without the money nothing changes, a dead pet is untrained dead, and a
+/// pet with one spell or none, or another's, isn't offered it (Thistle
+/// Tea's `PetUntraining`, mangos's `HandlePetUnlearnOpcode`).
+#[tokio::test]
+async fn untraining_refunds_the_points_and_takes_the_taught_and_their_stats() {
+    let (_realm, mut h, gh, map, pet, wolf) = tamed_with(training_data()).await;
+    h.sees(pet).await;
+    map.call(move |m| {
+        let s = pets::state_mut(m, pet).unwrap();
+        s.training_points = 10;
+        s.spells.push(FAMILY);
+        s.family_spells = vec![FAMILY];
+    });
+    // A pet that knows one spell has nothing to forget.
+    map.call(move |m| {
+        let s = pets::state_mut(m, pet).unwrap();
+        s.spells = vec![FAMILY];
+        pets::untrain_offer(m, gh);
+    });
+    let offered = h
+        .gets(Duration::from_millis(200), |m| match m {
+            ServerOpcodeMessage::SMSG_PET_UNLEARN_CONFIRM(_) => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(offered.is_none(), "one spell: nothing to untrain");
+    teach(&h, &map, gh, pet, GORE).await;
+    teach(&h, &map, gh, pet, STAMINA_1).await;
+    let fortitude = map
+        .query(move |m| {
+            let t = m.realm.data.spells.get(FORTITUDE).cloned().unwrap();
+            crate::game::map::auras::apply_spell(m, gh, pet, &t, &[(0, 3)], Default::default())
+                .is_ok()
+        })
+        .await
+        .unwrap();
+    assert!(fortitude);
+    let stats = || async {
+        map.query(move |m| {
+            let c = m.creature(pet).expect("the pet");
+            let s = c.pet.as_deref().unwrap();
+            (
+                c.fields.get_u32(UNIT_FIELD_STAT0 + 2),
+                c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+                c.fields.get_u32(UNIT_FIELD_HEALTH),
+                s.training_points,
+                s.spells.clone(),
+                s.autocast.clone(),
+                [STAMINA_1, FORTITUDE].map(|x| c.auras.has_spell(x)),
+            )
+        })
+        .await
+        .unwrap()
+    };
+    let (stamina, health, ..) = stats().await;
+    // Loyal to the fourth rank at level 10: 30 points to come back.
+    map.call(move |m| {
+        if let Some(c) = m.creature_mut(pet) {
+            c.fields.set_byte(UNIT_FIELD_BYTES_1, 1, 4);
+            c.fields.set_u32(UNIT_FIELD_LEVEL, 10);
+        }
+    });
+    money(&map, gh, 1_000);
+    map.call(move |m| pets::untrain_offer(m, gh));
+    assert_eq!(quote(&mut h).await, 1_000, "10 silver");
+    // Without the money: refused, the pet as it was.
+    money(&map, gh, 999);
+    h.send(CMSG_PET_UNLEARN { pet }).await;
+    h.wait_for("SMSG_BUY_FAILED", |m| match m {
+        ServerOpcodeMessage::SMSG_BUY_FAILED(f) => Some(f.result),
+        _ => None,
+    })
+    .await;
+    assert_eq!(stats().await.3, 7, "1 and 2 spent");
+    money(&map, gh, 1_000);
+    h.send(CMSG_PET_UNLEARN { pet }).await;
+    let mut after = stats().await;
+    for _ in 0..50 {
+        if after.3 == 30 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        after = stats().await;
+    }
+    let (s, max, _, points, spells, autocast, auras) = after;
+    assert_eq!(points, 30, "10 levels at the fourth rank");
+    assert_eq!(spells, [FAMILY], "the family's passive kept");
+    assert!(autocast.is_empty());
+    assert_eq!(auras, [false, true], "the taught passive goes, another's buff stays");
+    assert_eq!((s, max), (stamina - 5, health - 50));
+    let left = map.query(move |m| m.players[&gh].money()).await.unwrap();
+    assert_eq!(left, 0);
+    // A second time: 50 silver. A dead pet is untrained, and stays dead.
+    teach(&h, &map, gh, pet, GROWL).await;
+    map.query(move |m| crate::game::map::combat::kill(m, wolf, pet))
+        .await;
+    map.call(move |m| pets::untrain_offer(m, gh));
+    assert_eq!(quote(&mut h).await, 5_000);
+    money(&map, gh, 5_000);
+    h.send(CMSG_PET_UNLEARN { pet }).await;
+    let mut dead = stats().await;
+    for _ in 0..50 {
+        if dead.4.len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        dead = stats().await;
+    }
+    assert_eq!((dead.2, dead.3, dead.4.len()), (0, 30, 1), "untrained, still dead");
 }
