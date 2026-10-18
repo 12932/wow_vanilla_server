@@ -26,6 +26,9 @@ const DRUID: u8 = 11;
 /// The spells that teach parrying and blocking.
 pub const SPELL_PARRY: u32 = 3127;
 pub const SPELL_BLOCK: u32 = 107;
+/// The spell effects that teach parrying and blocking.
+const EFFECT_PARRY: u32 = 22;
+const EFFECT_BLOCK: u32 = 23;
 pub const SPELL_DUAL_WIELD: u32 = 674;
 
 /// What combat reads of a unit's stats.
@@ -534,8 +537,19 @@ pub fn player(p: &mut Player, data: &GameData) {
         + p.auras
             .sum_misc(AURA_MOD_SKILL_TALENT, SKILL_DEFENSE as i32)
             .max(0) as u32;
-    let knows_parry = p.spells.contains(&SPELL_PARRY);
-    let knows_block = p.spells.contains(&SPELL_BLOCK);
+    // Any spell of Parry's or Block's effect teaches it (mangos's
+    // `EffectParry` and `EffectBlock`, Thistle Tea's `Proficiency`).
+    let knows = |id: u32, effect: u32| {
+        p.spells.iter().any(|s| {
+            *s == id
+                || data
+                    .spells
+                    .get(*s)
+                    .is_some_and(|t| t.effects.iter().any(|e| e.effect == effect))
+        })
+    };
+    let knows_parry = knows(SPELL_PARRY, EFFECT_PARRY);
+    let knows_block = knows(SPELL_BLOCK, EFFECT_BLOCK);
     let knows_dual_wield = p.spells.contains(&SPELL_DUAL_WIELD);
     let a = &p.auras;
     let f = &mut p.fields;

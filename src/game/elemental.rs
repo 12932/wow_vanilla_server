@@ -265,13 +265,15 @@ pub fn update(map: &mut Map) {
             }
         }
     }
-    // Invaders out an hour go.
+    // Invaders out an hour go (only they: Omen, summoned too, has a
+    // lifetime of his own).
     let old: Vec<Guid> = map
         .creatures
         .iter()
         .filter(|(_, c)| {
-            c.summoned_at
-                .is_some_and(|t| now.duration_since(t) > INVADER_LIFETIME)
+            ELEMENTS.iter().any(|e| e.invader == c.entry)
+                && c.summoned_at
+                    .is_some_and(|t| now.duration_since(t) > INVADER_LIFETIME)
         })
         .map(|(_, c)| c.guid)
         .collect();

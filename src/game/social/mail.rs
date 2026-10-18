@@ -329,7 +329,7 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
     }
     if let Some(i) = item_at {
         let item = &p.items[i];
-        let bound = item.fields.get_u32(ITEM_FIELD_FLAGS) & 0x1 != 0;
+        let bound = crate::game::map::items::bound_now(&realm.data, item);
         let bag_with_items = p
             .items
             .iter()

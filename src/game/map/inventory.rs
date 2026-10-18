@@ -503,7 +503,8 @@ pub fn proficient(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<()
 
 /// Whether `p` may use an item of `t` at all (mangos's `CanUseItem`): of
 /// its classes and races, the skill at its rank and the spell it asks for,
-/// its level, its honor rank and its standing.
+/// its level, its honor rank, the weapon's or armor's proficiency (the
+/// item's own skill, mangos's `CanUseItem(Item*)`) and its standing.
 pub fn can_use(p: &Player, data: &GameData, t: &ItemTemplate) -> Result<(), Fail> {
     let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
     if !allows(t.allowable_class, p.row.class) || !allows(t.allowable_race, p.row.race) {
@@ -525,6 +526,7 @@ pub fn can_use(p: &Player, data: &GameData, t: &ItemTemplate) -> Result<(), Fail
     if u32::from(p.level()) < t.required_level {
         return Err(Fail::Level(t.required_level as u8));
     }
+    proficient(p, &Proficiency::of(p, data), t)?;
     if t.required_reputation_faction != 0
         && !crate::game::map::reputation::meets(
             p,
@@ -670,13 +672,42 @@ fn plan(
     t: &ItemTemplate,
     count: u32,
 ) -> Result<(Vec<(usize, u32)>, Vec<(u8, u8, u32)>), Fail> {
-    let entry = t.entry;
-    let stack = t.stackable.max(1);
-    if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
+    if t.max_count > 0 && p.count_of(t.entry) + count > t.max_count {
         return Err(Fail::CantCarryMore);
     }
+    let (mut onto, mut new_slots) = (Vec::new(), Vec::new());
+    let left = plan_rest(p, data, t, count, &mut onto, &mut new_slots);
+    if left > 0 {
+        return Err(Fail::InventoryFull);
+    }
+    Ok((onto, new_slots))
+}
+
+/// Whether an item may take more of its kind onto it: not an opened
+/// container with its loot still in it (mangos's `CanBeMergedPartlyWith`,
+/// "already looted").
+fn mergeable(p: &Player, item: &Item) -> bool {
+    crate::game::map::items_misc::kept_loot(&item.data).is_none()
+        && p.misc
+            .item_loot
+            .as_ref()
+            .is_none_or(|(l, _)| *l != item.guid)
+}
+
+/// [`plan`]'s search for what is left of `count` once `onto` and
+/// `new_slots` are taken: onto the stacks carried, then into free carried
+/// slots. What still doesn't fit.
+fn plan_rest(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+    onto: &mut Vec<(usize, u32)>,
+    new_slots: &mut Vec<(u8, u8, u32)>,
+) -> u32 {
+    let entry = t.entry;
+    let stack = t.stackable.max(1);
     let mut left = count;
-    let mut onto: Vec<(usize, u32)> = Vec::new();
     for (i, item) in p.items.iter().enumerate() {
         if left == 0 {
             break;
@@ -687,30 +718,28 @@ fn plan(
             && item.carried()
             && item.count() < stack
             && !(item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END)
+            && !onto.iter().any(|(k, _)| *k == i)
+            && mergeable(p, item)
         {
             let add = (stack - item.count()).min(left);
             onto.push((i, add));
             left -= add;
         }
     }
-    let mut new_slots = Vec::new();
-    if left > 0 {
-        for (bag, slot) in crate::game::map::items::carry_slots(data, p, Some(t)) {
-            if left == 0 {
-                break;
-            }
-            if p.item_at(bag, slot).is_some() {
-                continue;
-            }
-            let n = left.min(stack);
-            new_slots.push((bag, slot, n));
-            left -= n;
+    for (bag, slot) in crate::game::map::items::carry_slots(data, p, Some(t)) {
+        if left == 0 {
+            break;
         }
+        if p.item_at(bag, slot).is_some()
+            || new_slots.iter().any(|(b, s, _)| (*b, *s) == (bag, slot))
+        {
+            continue;
+        }
+        let n = left.min(stack);
+        new_slots.push((bag, slot, n));
+        left -= n;
     }
-    if left > 0 {
-        return Err(Fail::InventoryFull);
-    }
-    Ok((onto, new_slots))
+    left
 }
 
 /// [`plan`] for a purchase dropped at `(bag, slot)` (mangos's
@@ -733,6 +762,15 @@ fn plan_at(
     if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
         return Err(Fail::CantCarryMore);
     }
+    // A worn bag not made for it refuses it, any slot of it or one named
+    // (mangos's `_CanStoreItem_InBag`); a slot past its end isn't one.
+    if (BAG_START..BAG_END).contains(&bag)
+        && p.bag_size(data, bag) > 0
+        && slot.is_none_or(|s| s < p.bag_size(data, bag))
+        && !crate::game::map::items::fits_bag(data, p, bag, Some(t))
+    {
+        return Err(Fail::DoesntGoIntoBag);
+    }
     let places = crate::game::map::items::carry_slots(data, p, Some(t));
     let in_bag: Vec<(u8, u8)> = places.iter().filter(|(b, _)| *b == bag).copied().collect();
     let mut left = count;
@@ -747,7 +785,11 @@ fn plan_at(
             });
         }
         match p.item_at(bag, slot) {
-            Some(i) if p.items[i].entry == entry && p.items[i].count() < stack => {
+            Some(i)
+                if p.items[i].entry == entry
+                    && p.items[i].count() < stack
+                    && mergeable(p, &p.items[i]) =>
+            {
                 let add = (stack - p.items[i].count()).min(left);
                 onto.push((i, add));
                 left -= add;
@@ -768,6 +810,7 @@ fn plan_at(
             if let Some(i) = p.item_at(at.0, at.1)
                 && p.items[i].entry == entry
                 && !onto.iter().any(|(k, _)| *k == i)
+                && mergeable(p, &p.items[i])
             {
                 let room = stack.saturating_sub(p.items[i].count());
                 let add = room.min(left);
@@ -830,6 +873,7 @@ pub fn may_equip_new(
     {
         return Err(Fail::TwoHanded);
     }
+    off_hand_put_away(p, data, t, slot)?;
     if let Some(f) = crate::game::map::spells::class_scripts::combat_change_refused(
         p,
         data,
@@ -840,6 +884,30 @@ pub fn may_equip_new(
         return Err(f);
     }
     Ok(())
+}
+
+/// Where what the off hand holds goes as a new two-hander is put on in
+/// the main hand `slot`: the item and a free carried slot for it (mangos's
+/// `CanEquipItem` stores it, `AutoUnequipOffhandIfNeed` puts it there);
+/// with none free, the two-hander isn't put on ("inventory is full").
+#[allow(clippy::type_complexity)]
+fn off_hand_put_away(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    slot: u8,
+) -> Result<Option<(usize, (u8, u8))>, Fail> {
+    let Some(off) = p.item_at(BAG_PLAYER, SLOT_OFF_HAND) else {
+        return Ok(None);
+    };
+    if slot != SLOT_MAIN_HAND || t.inventory_type != 17 {
+        return Ok(None);
+    }
+    crate::game::map::items::carry_slots(data, p, data.item(p.items[off].entry))
+        .into_iter()
+        .find(|s| p.item_at(s.0, s.1).is_none())
+        .map(|place| Some((off, place)))
+        .ok_or(Fail::InventoryFull)
 }
 
 /// Where a purchase goes: anywhere, into a bag (a slot of it, or any), or
@@ -869,7 +937,8 @@ pub fn room_to(
 }
 
 /// [`add_item`], to `to`: a new item worn is bound if it binds on equip,
-/// and starts its use spells' equip cooldown, as one put on.
+/// and starts its use spells' equip cooldown, as one put on; a two-hander
+/// puts what the off hand holds away first.
 pub fn add_item_to(
     map: &mut Map,
     g: Guid,
@@ -898,6 +967,12 @@ pub fn add_item_to(
     let t = data.item(entry).ok_or(Fail::NotFound)?;
     let p = map.players.get(&g).ok_or(Fail::NotFound)?;
     may_equip_new(p, &data, t, count, slot, now)?;
+    if let Some((off, (bag, at))) = off_hand_put_away(p, &data, t, slot)? {
+        let p = map.players.get_mut(&g).ok_or(Fail::NotFound)?;
+        p.items[off].bag = bag;
+        p.items[off].slot = at;
+        p.refresh_inventory(&data);
+    }
     store_planned(
         map,
         g,
@@ -1201,7 +1276,13 @@ fn slot_exists(p: &Player, data: &GameData, bag: u8, slot: u8) -> bool {
 
 /// Whether an item may go to `(bag, slot)`: equipment rules for equipment
 /// slots, empty bags only into bag slots, no bag into itself.
-fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Result<(), Fail> {
+pub(crate) fn may_place(
+    p: &Player,
+    data: &GameData,
+    item: &Item,
+    bag: u8,
+    slot: u8,
+) -> Result<(), Fail> {
     if !slot_exists(p, data, bag, slot) {
         return Err(Fail::DoesntGoToSlot);
     }
@@ -1411,13 +1492,18 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     }
     let equipped =
         (to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END).then_some((p.items[a].entry, p.items[a].guid));
+    // What it swapped with, put on where it was (two trinkets swapped):
+    // each is equipped, as mangos's `SwapItem` equips both.
+    let swapped = b
+        .filter(|_| from.0 == BAG_PLAYER && from.1 < EQUIPMENT_END)
+        .map(|b| (p.items[b].entry, p.items[b].guid));
     // Worn, or a bag put on the bag bar or in the bank's (mangos's
     // `IsBagPos`): one bound on equip is theirs.
     if to.0 == BAG_PLAYER && (to.1 < BAG_END || (BANK_BAG_START..BANK_BAG_END).contains(&to.1)) {
         crate::game::map::items::on_equip(&data, &mut p.items[a]);
     }
     p.refresh_inventory(&data);
-    if let Some((entry, item)) = equipped {
+    for (entry, item) in [equipped, swapped].into_iter().flatten() {
         crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
         crate::game::map::items::equipped(map, g, item);
     }
@@ -1581,6 +1667,17 @@ pub fn split(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8), count: u32) {
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
+    // An opened container with its loot still in it isn't split (mangos's
+    // `SplitItem`, Thistle Tea's "item locked").
+    if !mergeable(p, &p.items[a]) {
+        let ag = p.items[a].guid;
+        crate::game::map::items_misc::fail(
+            p,
+            wow_world_messages::vanilla::InventoryResult::ItemLocked,
+            ag,
+        );
+        return;
+    }
     if count == 0 || count >= p.items[a].count() {
         let ag = p.items[a].guid;
         send_fail(p, Fail::SplitTooMany, ag);
@@ -1709,18 +1806,28 @@ pub fn sync_gear_all(map: &mut Map) {
 /// gear they took off.
 /// An item's or a set's spell that names forms (a weapon's feral attack
 /// power) holds only in them, as Thistle Tea's `EquipmentSpells.eligible?`
-/// has it; a form taken or left syncs again.
+/// has it; a form taken or left syncs again. One only for outdoors holds
+/// only there (mangos's `UpdateArea` casts a set's outdoor passives again
+/// outside): indoors it is held off, and outside again it comes back
+/// (`spells::environment::reconcile`).
 pub fn sync_gear(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
+    let indoors = crate::game::map::spells::environment::outdoors(map, g) == Some(false);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
     p.gear_dirty = false;
     let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
-    let in_form = |spell: u32| {
-        data.spells
-            .get(spell)
-            .is_none_or(|s| crate::game::map::spells::checks::form_error(s, form).is_none())
+    let mut held_indoors = false;
+    let mut in_form = |spell: u32| {
+        let Some(s) = data.spells.get(spell) else {
+            return true;
+        };
+        if indoors && s.attr(0, crate::game::data::spells::ATTR_ONLY_OUTDOORS) {
+            held_indoors = true;
+            return false;
+        }
+        crate::game::map::spells::checks::form_error(s, form).is_none()
     };
     let mut wanted: Vec<(Guid, u32)> = Vec::new();
     for item in p
@@ -1752,6 +1859,7 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
             .into_iter()
             .filter(|(_, s)| in_form(*s)),
     );
+    p.gear_held_indoors = held_indoors;
     wanted.sort_unstable_by_key(|(g, s)| (g.guid(), *s));
     wanted.dedup();
     let have: Vec<(Guid, u32)> = p

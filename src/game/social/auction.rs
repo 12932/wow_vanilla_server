@@ -249,7 +249,7 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
     // Carried, not worn nor banked; not bound, conjured, timed, nor a bag
     // with something in it (mangos's `HandleAuctionSellItem`, Thistle Tea's
     // `validate_sale`), as mangos tells it.
-    let bound = item.fields.get_u32(crate::game::fields::ITEM_FIELD_FLAGS) & 0x1 != 0;
+    let bound = crate::game::map::items::bound_now(&realm.data, item);
     let worn = item.bag == crate::game::store::BAG_PLAYER && item.slot < 19;
     let conjured = realm
         .data

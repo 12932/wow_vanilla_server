@@ -209,7 +209,7 @@ pub fn set_item(map: &mut Map, g: Guid, slot: u8, bag: u8, bag_slot: u8) {
     let Some(i) = p.item_at(bag, bag_slot) else {
         return;
     };
-    if !tradable(p, i, slot != NOT_TRADED) {
+    if !tradable(&map.realm.data, p, i, slot != NOT_TRADED) {
         return;
     }
     let (guid, count) = (p.items[i].guid, p.items[i].count());
@@ -257,7 +257,12 @@ pub fn unaccept(map: &mut Map, g: Guid) {
 /// that holds anything), and for a slot that trades it, not soulbound
 /// (mangos's `CanBeTraded`, Thistle Tea's `validate_item` and
 /// `validate_slot`).
-fn tradable(p: &crate::game::map::player::Player, i: usize, traded: bool) -> bool {
+fn tradable(
+    data: &crate::game::data::GameData,
+    p: &crate::game::map::player::Player,
+    i: usize,
+    traded: bool,
+) -> bool {
     use crate::game::map::inventory::{BAG_END, BAG_START, PACK_END, PACK_START};
     let item = &p.items[i];
     let carried = if item.bag == crate::game::store::BAG_PLAYER {
@@ -266,8 +271,15 @@ fn tradable(p: &crate::game::map::player::Player, i: usize, traded: bool) -> boo
     } else {
         (BAG_START..BAG_END).contains(&item.bag)
     };
-    let bound = item.fields.get_u32(ITEM_FIELD_FLAGS) & 0x1 != 0;
-    carried && !(traded && bound)
+    let bound = crate::game::map::items::bound_now(data, item);
+    // An opened container with its loot still in it isn't traded
+    // (mangos's `CanBeTraded`, Thistle Tea's "item locked").
+    let opened = crate::game::map::items_misc::kept_loot(&item.data).is_some()
+        || p.misc
+            .item_loot
+            .as_ref()
+            .is_some_and(|(l, _)| *l == item.guid);
+    carried && !(traded && (bound || opened))
 }
 
 /// Whether `g`'s offer is still what the partner was shown: each item
@@ -281,8 +293,9 @@ fn offer_holds(map: &Map, g: Guid) -> bool {
     };
     (0..NOT_TRADED).all(|slot| {
         t.items[slot].is_none_or(|it| {
-            p.item_by_guid(it)
-                .is_some_and(|i| tradable(p, i, true) && p.items[i].count() == t.counts[slot])
+            p.item_by_guid(it).is_some_and(|i| {
+                tradable(&map.realm.data, p, i, true) && p.items[i].count() == t.counts[slot]
+            })
         })
     })
 }

@@ -117,6 +117,7 @@ const FAIL_BAD_TARGETS: u8 = 0x0a;
 const FAIL_CANT_BE_DISENCHANTED: u8 = 0x0c;
 const FAIL_CHEST_IN_USE: u8 = 0x15;
 const FAIL_ITEM_GONE: u8 = 0x26;
+const FAIL_LOWLEVEL: u8 = 0x2b;
 const FAIL_LOW_CASTLEVEL: u8 = 0x2c;
 const FAIL_NOT_FISHABLE: u8 = 0x34;
 const FAIL_ONLY_STEALTHED: u8 = 0x57;
@@ -519,6 +520,15 @@ pub fn check(
                 });
                 if !fits || item.count() != 1 {
                     return Some(FAIL_BAD_TARGETS);
+                }
+                // A lasting enchantment wants an item of its level; a
+                // coating doesn't (mangos's `CheckItems`).
+                if e.effect == EFFECT_ENCHANT_ITEM
+                    && data
+                        .item(item.entry)
+                        .is_some_and(|it| it.item_level < s.base_level)
+                {
+                    return Some(FAIL_LOWLEVEL);
                 }
             }
             _ => {}
@@ -959,6 +969,15 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid, spell: u32) {
         send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
     };
+    // Not with a disenchanted item's dust still in its window: the new
+    // window would take its place, and the dust be lost (Thistle Tea's
+    // `already_open`). The item is kept.
+    if p.looting
+        .is_some_and(|l| map.loot_state.item_loot.contains_key(&l))
+    {
+        send_failure(map, caster, spell, FAIL_ALREADY_OPEN);
+        return;
+    }
     crate::game::map::inventory::take_item(map, caster, i, 1);
     let value = map
         .players

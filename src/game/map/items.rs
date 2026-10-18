@@ -20,6 +20,9 @@ use crate::game::store::BAG_PLAYER;
 pub const ITEM_FLAG_SOULBOUND: u32 = 0x1;
 /// The template's flags: conjured by a spell.
 pub const TEMPLATE_FLAG_CONJURED: u32 = 0x2;
+/// A timed item whose time runs while its owner is away too (mangos's
+/// `ITEM_FLAG_REAL_DURATION`).
+pub const TEMPLATE_FLAG_REAL_DURATION: u32 = 0x10000;
 
 /// `bonding`.
 pub const BIND_ON_PICKUP: u32 = 1;
@@ -45,6 +48,20 @@ const TICK: Duration = Duration::from_secs(1);
 
 pub fn bound(item: &Item) -> bool {
     item.fields.get_u32(ITEM_FIELD_FLAGS) & ITEM_FLAG_SOULBOUND != 0
+}
+
+/// `SpellItemEnchantment`'s flags: an enchantment that binds what it is on.
+pub const ENCHANTMENT_SOULBOUND: u32 = 0x1;
+
+/// Whether `item` may not change hands: bound, or bearing an enchantment
+/// that binds it for as long as it lasts (a poison, a shaman's weapon),
+/// as mangos's `IsBoundByEnchant` and Thistle Tea's `Enchantments.bound?`
+/// have it. An ordinary enchantment doesn't bind.
+pub fn bound_now(data: &GameData, item: &Item) -> bool {
+    bound(item)
+        || crate::game::map::enchant::active(item).any(|(_, e)| {
+            data.crafts.enchant_flags.get(&e.id).copied().unwrap_or(0) & ENCHANTMENT_SOULBOUND != 0
+        })
 }
 
 fn bind(item: &mut Item) {
@@ -286,19 +303,50 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
     }
 }
 
-/// A player coming into the world: conjured items left alone too long are
+/// A player coming into the world: a real-time item's time ran on while
+/// they were away, and one whose time is up is gone, with what is in it
+/// (mangos's `UpdateItemDuration(time_diff, true)` as they log in, by
+/// `ITEM_FLAG_REAL_DURATION` as Thistle Tea's `ItemLifetime` reads it;
+/// any other timed item waited); conjured items left alone too long are
 /// gone.
 pub fn on_login(p: &mut Player, data: &GameData) {
     let now = crate::game::social::mail::now();
     let away = now - p.row.logout_time;
-    if p.row.logout_time <= 0 || away < CONJURED_OFFLINE {
+    if p.row.logout_time <= 0 {
         return;
     }
     let before = p.items.len();
-    p.items.retain(|i| {
-        data.item(i.entry)
-            .is_none_or(|t| t.flags & TEMPLATE_FLAG_CONJURED == 0)
-    });
+    let away_secs = u32::try_from(away.max(0)).unwrap_or(u32::MAX);
+    let real_time = |entry: u32| {
+        data.item(entry)
+            .is_some_and(|t| t.flags & TEMPLATE_FLAG_REAL_DURATION != 0)
+    };
+    let mut gone: Vec<Guid> = Vec::new();
+    for item in p.items.iter_mut() {
+        let left = item.fields.get_u32(ITEM_FIELD_DURATION);
+        if left == 0 || !real_time(item.entry) {
+            continue;
+        }
+        if left <= away_secs {
+            gone.push(item.guid);
+        } else {
+            item.fields.set_u32(ITEM_FIELD_DURATION, left - away_secs);
+        }
+    }
+    let bags: Vec<u8> = p
+        .items
+        .iter()
+        .filter(|i| gone.contains(&i.guid) && i.bag == BAG_PLAYER)
+        .map(|i| i.slot)
+        .collect();
+    p.items
+        .retain(|i| !gone.contains(&i.guid) && !bags.contains(&i.bag));
+    if away >= CONJURED_OFFLINE {
+        p.items.retain(|i| {
+            data.item(i.entry)
+                .is_none_or(|t| t.flags & TEMPLATE_FLAG_CONJURED == 0)
+        });
+    }
     if p.items.len() != before {
         p.refresh_inventory(data);
     }

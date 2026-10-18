@@ -114,13 +114,17 @@ pub fn reconcile(map: &mut Map, g: Guid, _now: Instant) {
     };
     let data = map.realm.data.clone();
     if !outside {
-        let gone = auras::auras(map, g).is_some_and(|a| {
-            a.holders.iter().any(|h| {
-                data.spells
-                    .get(h.spell)
-                    .is_some_and(|s| s.attr(0, sd::ATTR_ONLY_OUTDOORS))
-            })
-        });
+        let (mut gone, mut gear) = (false, false);
+        for h in auras::auras(map, g).map_or(&[][..], |a| &a.holders[..]) {
+            if data
+                .spells
+                .get(h.spell)
+                .is_some_and(|s| s.attr(0, sd::ATTR_ONLY_OUTDOORS))
+            {
+                gone = true;
+                gear |= h.equipped;
+            }
+        }
         if gone {
             auras::remove_where(map, g, |h| {
                 data.spells
@@ -128,7 +132,17 @@ pub fn reconcile(map: &mut Map, g: Guid, _now: Instant) {
                     .is_some_and(|s| s.attr(0, sd::ATTR_ONLY_OUTDOORS))
             });
         }
+        // Gear's held off until outside again.
+        if gear && let Some(p) = map.players.get_mut(&g) {
+            p.gear_held_indoors = true;
+        }
         return;
+    }
+    // Outside again: gear's outdoor spells held off come back.
+    if let Some(p) = map.players.get_mut(&g)
+        && std::mem::take(&mut p.gear_held_indoors)
+    {
+        p.gear_dirty = true;
     }
     // Outside again: the outdoor passives the player knows come back.
     let missing: Vec<u32> = map

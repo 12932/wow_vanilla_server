@@ -281,6 +281,33 @@ impl Active {
             Kind::Follower { .. } => None,
         }
     }
+
+    /// Every creature it summoned, in order.
+    #[cfg(test)]
+    pub fn summoned(&self) -> &[Guid] {
+        &self.summoned
+    }
+
+    /// Its summons' times `by` on: they go sooner.
+    #[cfg(test)]
+    pub fn hurry_summons(&mut self, by: Duration) {
+        for (_, t) in self.summons.iter_mut() {
+            if let Some(s) = t.checked_sub(by) {
+                *t = s;
+            }
+        }
+    }
+}
+
+/// `creature`'s escort runs `acts` now, as a point's would: whether it has
+/// one. For the tests, which try each act on an escort under way.
+#[cfg(test)]
+pub fn act(map: &mut Map, creature: Guid, acts: &'static [Act]) -> bool {
+    let Some(i) = map.escorts.iter().position(|a| a.creature == creature) else {
+        return false;
+    };
+    run_acts(map, i, acts);
+    true
 }
 
 /// How far from a player a giver's escortee may stand.

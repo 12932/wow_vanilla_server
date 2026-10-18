@@ -288,6 +288,9 @@ pub struct Player {
     pub honor_damage: crate::game::map::pvp::DamageHistory,
     /// The gear changed: its auras want bringing in line.
     pub gear_dirty: bool,
+    /// Gear's outdoor-only spells are held off indoors: outside again,
+    /// they want putting back.
+    pub gear_held_indoors: bool,
 }
 
 impl Player {
@@ -374,6 +377,7 @@ impl Player {
             pvp: Default::default(),
             honor_damage: Default::default(),
             gear_dirty: true,
+            gear_held_indoors: false,
             row,
         };
         p.init_fields(data);

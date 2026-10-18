@@ -92,15 +92,23 @@ pub fn members_of(map: &Map, g: Guid) -> Vec<Guid> {
     out
 }
 
+/// The spawn leading `g`'s group, `g`'s own if it leads one a script
+/// made (0 for a leader with no spawn); none out of a group.
+pub fn group_leader(map: &Map, g: Guid) -> Option<u32> {
+    if is_script_leader(map, g) {
+        return spawn_of(map, g).or(Some(0));
+    }
+    leader_of(map, g)
+}
+
 /// Whether every other member of `g`'s group here is dead (Thistle Tea's
-/// `CreatureGroup.dead?`, which leaves out the one asking).
+/// `CreatureGroup.dead?`, which leaves out the one asking); with no group,
+/// it is, as vmangos's `CONDITION_CREATURE_GROUP_DEAD` has it.
 pub fn all_dead(map: &Map, g: Guid) -> bool {
-    let members = members_of(map, g);
-    !members.is_empty()
-        && members
-            .iter()
-            .filter(|m| **m != g)
-            .all(|m| map.creature(*m).is_none_or(|c| !c.alive()))
+    members_of(map, g)
+        .iter()
+        .filter(|m| **m != g)
+        .all(|m| map.creature(*m).is_none_or(|c| !c.alive()))
 }
 
 /// A script puts `g` in `leader`'s group, at a distance and angle (in

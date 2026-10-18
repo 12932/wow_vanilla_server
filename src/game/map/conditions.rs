@@ -295,12 +295,40 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
         }),
         10 => player(&|p| commissioned(map, p)),
         22 => player(&|p| !p.journal.has(v1 as u32) && !p.journal.rewarded.contains(&(v1 as u32))),
+        // Available: to be taken (mangos's `CanTakeQuest`), its event on
+        // and its own condition met, and a breadcrumb's targets' too (an
+        // unknown among them unknown).
         19 => match map.realm.data.npc.quests.get(&(v1 as u32)) {
-            Some(q) => player(&|p| {
-                !p.journal.has(q.id)
-                    && !p.journal.rewarded.contains(&q.id)
-                    && crate::game::map::quests::can_take(p, q, &map.realm.data)
-            }),
+            Some(q) => {
+                let data = &map.realm.data;
+                let offered = |quest: u32| {
+                    let own = data
+                        .scripts
+                        .quest_condition
+                        .get(&quest)
+                        .map_or(Truth::Met, |c| child(*c as i32, source, target));
+                    Truth::all([
+                        Truth::of(crate::game::events::quest_offered(&map.realm, quest)),
+                        own,
+                    ])
+                };
+                let targets: &[u32] = data
+                    .npc
+                    .quest_graph()
+                    .breadcrumb_targets
+                    .get(&q.id)
+                    .map_or(&[], Vec::as_slice);
+                Truth::all(
+                    [player(&|p| {
+                        !p.journal.has(q.id)
+                            && !p.journal.rewarded.contains(&q.id)
+                            && crate::game::map::quests::can_take(p, q, data)
+                    })]
+                    .into_iter()
+                    .chain([offered(q.id)])
+                    .chain(targets.iter().map(|t| offered(*t))),
+                )
+            }
             None => Truth::Unknown,
         },
         12 => Truth::of(map.realm.social.events.lock().contains(&(v1 as u32))),
@@ -580,7 +608,7 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
             }
         }
         57 => present(source).map_or(Truth::Unknown, |s| {
-            let leader = crate::game::map::creature_groups::leader_of(map, s);
+            let leader = crate::game::map::creature_groups::group_leader(map, s);
             Truth::of(leader.is_some() && (v1 == 0 || leader == Some(v1 as u32)))
         }),
         58 => present(source).map_or(Truth::Unknown, |s| {

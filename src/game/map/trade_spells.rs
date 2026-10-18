@@ -255,6 +255,11 @@ pub fn check(map: &Map, caster: Guid, owner: Guid, c: &TradeCast) -> Option<u8> 
         if !fits || target.count() != 1 {
             return Some(fail::BAD_TARGETS);
         }
+        // A lasting enchantment wants an item of its level (mangos's
+        // `CheckItems`).
+        if s.has_effect(EFFECT_ENCHANT_ITEM) && t.item_level < s.base_level {
+            return Some(fail::LOWLEVEL);
+        }
     }
     if lock {
         if t.lock_id == 0 || target.fields.get_u32(ITEM_FIELD_FLAGS) & ITEM_FLAG_UNLOCKED != 0 {

@@ -485,9 +485,10 @@ fn despawn_from_view(map: &mut Map, g: Guid) {
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    let cell = c.cell;
+    let (cell, entry) = (c.cell, c.entry);
     let observers: Vec<Guid> = c.observers.drain().collect();
     map.grid.remove(g, cell);
+    crate::game::omen::left(map, g, entry);
     for o in observers {
         if let Some(p) = map.players.get_mut(&o) {
             p.known.remove(&g);

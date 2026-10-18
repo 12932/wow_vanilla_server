@@ -83,6 +83,10 @@ pub(super) fn operate(map: &mut Map, entry: u32, act: Act) {
                     .map(|x| u32::from(x.state))
             })
             .unwrap_or(1);
+        // A new state: a use's close still to come doesn't undo it.
+        if !matches!(act, Act::Inert | Act::Active) {
+            crate::game::map::objects::forget_close(map, g);
+        }
         let Some(o) = map.gameobject_mut(g) else {
             continue;
         };

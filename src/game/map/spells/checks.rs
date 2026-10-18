@@ -235,6 +235,29 @@ pub(crate) fn equipped_ok(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
         .any(|t| t.class as i32 == s.equipped_item_class && fits(t.subclass))
 }
 
+/// Whether `caster`'s item `item`, a spell's target, is of the kind `s`
+/// wants (mangos's `IsFitToSpellRequirements`): its class and subclass,
+/// and its inventory type for a spell at items. An item that isn't the
+/// caster's (one in a trade window) is checked where it is.
+fn target_item_fits(map: &Map, caster: Guid, s: &SpellTemplate, item: Guid) -> bool {
+    const TARGET_FLAG_ITEM: u32 = 0x10;
+    let Some(t) = map
+        .players
+        .get(&caster)
+        .and_then(|p| p.item_by_guid(item).map(|i| p.items[i].entry))
+        .and_then(|entry| map.realm.data.item(entry))
+    else {
+        return true;
+    };
+    (s.equipped_item_class < 0
+        || (t.class as i32 == s.equipped_item_class
+            && (s.equipped_item_subclass_mask <= 0
+                || s.equipped_item_subclass_mask & (1 << t.subclass) != 0)))
+        && (s.equipped_item_inventory_type_mask <= 0
+            || s.targets & TARGET_FLAG_ITEM == 0
+            || s.equipped_item_inventory_type_mask & (1 << t.inventory_type) != 0)
+}
+
 /// Whether a spell focus object of `focus` is near `at`.
 /// Whether a client's movement flags say it is going somewhere: walking,
 /// strafing, jumping or falling.
@@ -490,8 +513,14 @@ pub fn check(
             return Some(fail::NO_EDIBLE_CORPSES);
         }
         // Without the weapon or item it wants, as mangos's `CheckItems`
-        // and Thistle Tea answer it.
-        if !equipped_ok(map, caster, s) {
+        // and Thistle Tea answer it: at an item, that item is what must be
+        // of the kind (an enchantment's bracer, not the gear its enchanter
+        // wears); else something worn.
+        let fits = match t.item {
+            Some(item) => target_item_fits(map, caster, s, item),
+            None => equipped_ok(map, caster, s),
+        };
+        if !fits {
             return Some(fail::EQUIPPED_ITEM_CLASS);
         }
         if s.equipped_item_class == 2

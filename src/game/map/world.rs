@@ -661,6 +661,11 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if !crate::game::map::objects::in_use_range(map, player, object) {
         return;
     }
+    // A quest giver or a page: not under an immunity it bars; the auras a
+    // use breaks go.
+    if !crate::game::map::objects::prepare_use(map, player, object) {
+        return;
+    }
     // A locked chest opens by its spell, not by a hand.
     let gm = map.players.get(&player).is_some_and(|p| p.gm);
     let locked_chest = map.gameobject(object).is_some_and(|o| {

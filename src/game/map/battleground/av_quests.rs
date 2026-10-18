@@ -590,10 +590,15 @@ pub fn gossip_select(map: &mut Map, g: Guid, npc: Guid, option: u32) -> bool {
             );
         }
         Action::TakeBeacon(i) => {
-            let ready = extras(map).is_some_and(|x| {
-                let f = x.air[i];
-                f.phase == FleetPhase::Ready && !f.launched && f.count >= WING_COMMANDERS[i].goal
-            });
+            // Asked again as the menu was: the standing too, which may have
+            // fallen since it was shown (Thistle Tea's `Air.take_beacon`).
+            let ready = standing(map, g, s) >= 0
+                && extras(map).is_some_and(|x| {
+                    let f = x.air[i];
+                    f.phase == FleetPhase::Ready
+                        && !f.launched
+                        && f.count >= WING_COMMANDERS[i].goal
+                });
             if ready
                 && crate::game::map::inventory::add_item(map, g, WING_COMMANDERS[i].beacon, 1, true)
                     .is_ok()
@@ -604,7 +609,9 @@ pub fn gossip_select(map: &mut Map, g: Guid, npc: Guid, option: u32) -> bool {
             send_gossip_complete(map, g);
         }
         Action::LaunchAir(i) => {
-            launch_air(map, i, npc);
+            if standing(map, g, s) >= 0 {
+                launch_air(map, i, npc);
+            }
             send_gossip_complete(map, g);
         }
         Action::LaunchCavalry => {

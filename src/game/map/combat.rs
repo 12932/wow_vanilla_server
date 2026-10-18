@@ -2532,11 +2532,14 @@ fn deal_damage_with(
     } else {
         left
     };
-    // A priest with Spirit of Redemption becomes a spirit instead: in a
-    // battleground, defeated all the same, the death to come (Thistle Tea's
-    // `count_death?: false`).
+    // A priest with Spirit of Redemption becomes a spirit instead: the kill's
+    // honor is had now, the spirit's end giving none (mangos's `Unit::Kill`
+    // rewards before the spirit, Thistle Tea's honor at the initial
+    // defeat); in a battleground, defeated all the same, the death to come
+    // (Thistle Tea's `count_death?: false`).
     if left == 0 && crate::game::map::spells::redemption::saves(map, victim) {
         let by = crate::game::map::pets::master(map, attacker);
+        honor(map, by, victim);
         crate::game::map::battleground::defeated(map, victim, by, false);
         return;
     }

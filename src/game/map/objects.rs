@@ -765,19 +765,33 @@ fn open(map: &mut Map, object: Guid, alternative: bool, close_ms: u32) {
     };
     set_state(map, object, next);
     set_flag(map, object, GO_FLAG_IN_USE, true);
+    // A close still to come is an older use's: this state is newer
+    // (Thistle Tea's revision).
+    forget_close(map, object);
     if close_ms > 0 {
         let at = map.now + Duration::from_millis(u64::from(close_ms));
-        map.objects.closes.retain(|(_, o, _)| *o != object);
         map.objects.closes.push((at, object, back));
     }
 }
 
-/// An object back as it rests, no longer in use, its close forgotten.
+/// An object's close still to come forgotten: a newer state stands.
+pub fn forget_close(map: &mut Map, object: Guid) {
+    map.objects.closes.retain(|(_, o, _)| *o != object);
+    // A script's state back after a while too; not an object's going.
+    map.object_resets
+        .retain(|(_, o, state)| *o != object || *state == u32::MAX);
+}
+
+/// An object back as it rests, no longer in use, its close forgotten (a
+/// quest object's use over, its cooldown left).
 pub fn reset(map: &mut Map, object: Guid) {
     let back = resting_state(map, object);
     set_state(map, object, back);
     set_flag(map, object, GO_FLAG_IN_USE, false);
-    map.objects.closes.retain(|(_, o, _)| *o != object);
+    forget_close(map, object);
+    if let Some(g) = map.objects.goobers.get_mut(&object) {
+        g.active_until = None;
+    }
 }
 
 /// A door or button used: its linked trap springs on the user, and it
@@ -978,10 +992,37 @@ pub fn use_goober(map: &mut Map, player: Guid, object: Guid) -> bool {
     if t.kind != GO_GOOBER {
         return false;
     }
-    if !in_reach(map, player, object) || !requirement_met(map, object) {
+    if !in_reach(map, player, object)
+        || !requirement_met(map, object)
+        || !prepare_use(map, player, object)
+    {
         return true;
     }
     goober(map, player, object, &t, false);
+    true
+}
+
+/// A quest giver, a page or a quest object about to be used (Thistle
+/// Tea's `GameObjectInteraction.prepare_*_use`): not by one under a school
+/// immunity (Divine Shield) if its template says so, as mangos's
+/// `CannotBeUsedUnderImmunity` has it; else the user's auras a use breaks
+/// (`AURA_INTERRUPT_FLAG_LOOTING`, 0x800) go. Whether it may be used.
+pub fn prepare_use(map: &mut Map, user: Guid, object: Guid) -> bool {
+    let Some(t) = template(map, object) else {
+        return true;
+    };
+    let no_damage_immune = match t.kind {
+        crate::game::map::world::GO_QUESTGIVER => t.data[5],
+        GO_GOOBER => t.data[11],
+        GO_TEXT => 0,
+        _ => return true,
+    };
+    let immune = crate::game::map::auras::auras(map, user)
+        .is_some_and(|a| a.has(crate::game::map::auras::AURA_SCHOOL_IMMUNITY));
+    if no_damage_immune != 0 && immune {
+        return false;
+    }
+    crate::game::map::auras::interrupt(map, user, crate::game::map::auras::INTERRUPT_USE);
     true
 }
 
@@ -1104,33 +1145,60 @@ pub fn within_reach(map: &Map, player: Guid, object: Guid) -> bool {
     let (Some(p), Some(o)) = (map.players.get(&player), map.gameobject(object)) else {
         return false;
     };
-    let at = p.position();
-    let (dx, dy, dz) = (
-        at.x - o.position.x,
-        at.y - o.position.y,
-        at.z - o.position.z,
-    );
-    let r = INTERACT_YARDS;
+    let mut q = [0.0f32; 4];
+    for (i, v) in q.iter_mut().enumerate() {
+        *v = o.fields.get_f32(GAMEOBJECT_ROTATION + i as u16);
+    }
+    let scale = o.fields.get_f32(OBJECT_FIELD_SCALE_X);
     let bounds = map
         .realm
         .data
         .gameobject_templates
         .get(&o.entry)
-        .and_then(|t| t.bounds)
-        .filter(|(lo, hi)| lo.iter().chain(hi.iter()).any(|v| *v != 0.0));
-    let Some((lo, hi)) = bounds else {
-        return (dx * dx + dy * dy + dz * dz).sqrt() <= r;
-    };
-    let mut q = [0.0f32; 4];
-    for (i, v) in q.iter_mut().enumerate() {
-        *v = o.fields.get_f32(GAMEOBJECT_ROTATION + i as u16);
-    }
+        .and_then(|t| t.bounds);
+    within(
+        p.position(),
+        o.position,
+        rotation(q, o.orientation),
+        scale,
+        bounds,
+        INTERACT_YARDS,
+    )
+}
+
+/// An object's rotation: its quaternion, or, with no z and w, one turned
+/// by its facing (Thistle Tea's `GameObjectInteraction.rotation`).
+pub fn rotation(q: [f32; 4], orientation: f32) -> [f32; 4] {
     if q[2] == 0.0 && q[3] == 0.0 {
-        q[2] = (o.orientation / 2.0).sin();
-        q[3] = (o.orientation / 2.0).cos();
+        [
+            q[0],
+            q[1],
+            (orientation / 2.0).sin(),
+            (orientation / 2.0).cos(),
+        ]
+    } else {
+        q
     }
-    let (x, y, z) = inverse_rotate((dx, dy, dz), q);
-    let scale = o.fields.get_f32(OBJECT_FIELD_SCALE_X);
+}
+
+/// Whether `at` is within `r` of an object at `origin`: of its model's
+/// box, scaled (a scale of none is 1) and turned by `rotation`, the radius
+/// unscaled; of its origin, in three dimensions, with no box or one of
+/// nothing but zeroes (Thistle Tea's `GameObjectInteraction.within?`).
+pub fn within(
+    at: Vector3d,
+    origin: Vector3d,
+    rotation: [f32; 4],
+    scale: f32,
+    bounds: Option<([f32; 3], [f32; 3])>,
+    r: f32,
+) -> bool {
+    let d = (at.x - origin.x, at.y - origin.y, at.z - origin.z);
+    let bounds = bounds.filter(|(lo, hi)| lo.iter().chain(hi.iter()).any(|v| *v != 0.0));
+    let Some((lo, hi)) = bounds else {
+        return d.0 * d.0 + d.1 * d.1 + d.2 * d.2 <= r * r;
+    };
+    let (x, y, z) = inverse_rotate(d, rotation);
     let scale = if scale > 0.0 { scale } else { 1.0 };
     let inside = |v: f32, l: f32, h: f32| v >= l * scale - r && v <= h * scale + r;
     inside(x, lo[0], hi[0]) && inside(y, lo[1], hi[1]) && inside(z, lo[2], hi[2])

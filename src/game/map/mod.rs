@@ -12,6 +12,7 @@ pub mod battleground;
 #[cfg(all(feature = "world-bench", unix))]
 pub mod bench_probe;
 pub mod boss_mechanics;
+pub mod captured;
 pub mod charge;
 pub mod chat;
 pub mod cinematic;
@@ -886,6 +887,7 @@ impl Map {
             spells::interrupt(self, guid);
         }
         ai::forget(self, guid);
+        captured::leaving(self, guid);
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);
         battleground::departing(self, guid);
@@ -1530,6 +1532,7 @@ impl Map {
         {
             event_ai::summoned_despawned(self, s, guid, c.entry);
         }
+        crate::game::omen::left(self, guid, c.entry);
         Some(c)
     }
 

@@ -2236,6 +2236,9 @@ pub fn update(map: &mut Map) {
         );
     }
     for g in done {
+        // The Death Ray's hurt has its last tick while its channel is
+        // still under way.
+        crate::game::map::item_scripts::channel_running_out(map, g);
         // A channel run its course still has its last tick, while it is
         // still the caster's channel (its trigger aims at its target).
         if let Some(casting) = map

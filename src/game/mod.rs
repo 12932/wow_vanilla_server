@@ -356,6 +356,32 @@ mod tests_p4_core_walk;
 #[cfg(test)]
 mod tests_p4_core_wand;
 #[cfg(test)]
+mod tests_p4_items_av;
+#[cfg(test)]
+mod tests_p4_items_bags;
+#[cfg(test)]
+mod tests_p4_items_conditions;
+#[cfg(test)]
+mod tests_p4_items_crafts;
+#[cfg(test)]
+mod tests_p4_items_events;
+#[cfg(test)]
+mod tests_p4_items_gear;
+#[cfg(test)]
+mod tests_p4_items_gear2;
+#[cfg(test)]
+mod tests_p4_items_honor;
+#[cfg(test)]
+mod tests_p4_items_objects;
+#[cfg(test)]
+mod tests_p4_items_quests;
+#[cfg(test)]
+mod tests_p4_items_quests2;
+#[cfg(test)]
+mod tests_p4_items_use;
+#[cfg(test)]
+mod tests_p4_items_use2;
+#[cfg(test)]
 mod tests_p4_scripts_bosses;
 #[cfg(test)]
 mod tests_p4_scripts_brd;
