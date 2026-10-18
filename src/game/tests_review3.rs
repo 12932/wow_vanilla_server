@@ -391,3 +391,42 @@ async fn a_striker_killed_by_a_damage_shield_swings_no_more() {
     );
 }
 
+/// A dual-wielder's two hands don't swing in one step: the main hand's
+/// swing puts the off-hand's a moment later (mangos's
+/// `ATTACK_DISPLAY_DELAY`), and it waits for it.
+#[tokio::test]
+async fn the_hands_dont_swing_together() {
+    let realm = fast_realm(|_| {});
+    let (_c, rogue, map) = human(&realm, "R3DW", "Twohands", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            use crate::game::map::combat;
+            ready(m, rogue, 60, &[]);
+            let k = dummy(m, rogue, 60, 2.0);
+            swinging_at(m, rogue, k);
+            let now = m.now;
+            let p = m.players.get_mut(&rogue).unwrap();
+            p.derived.dual_wield = true;
+            p.combat.next_swing = Some(now);
+            p.combat.next_offhand = Some(now);
+            combat::FORCED_OUTCOME.with(|f| f.set(Some(combat::Outcome::Hit)));
+            combat::try_swing(m, rogue);
+            combat::FORCED_OUTCOME.with(|f| f.set(None));
+            let c = &m.players[&rogue].combat;
+            (
+                c.next_swing.map(|t| t - now),
+                c.next_offhand.map(|t| t - now),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(
+        out.0.is_some_and(|d| d.as_millis() >= 1_000),
+        "the main hand swung: {out:?}"
+    );
+    assert_eq!(
+        out.1,
+        Some(std::time::Duration::from_millis(200)),
+        "the off-hand waits its moment"
+    );
+}

@@ -1557,6 +1557,12 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     if main_due && still_swinging(map, attacker, victim) {
         swing(map, attacker, victim, Hand::Main, false);
     }
+    // The main hand's swing puts the off-hand's a moment later, which it
+    // waits for (mangos asks `isAttackReady(OFF_ATTACK)` after it).
+    let off_due = off_due
+        && map
+            .combat(attacker)
+            .is_some_and(|c| c.next_offhand.is_none_or(|t| t <= now));
     if off_due && still_swinging(map, attacker, victim) {
         swing(map, attacker, victim, Hand::Off, false);
     }
