@@ -134,6 +134,13 @@ pub fn rates(house: u32) -> (u32, u32) {
     if house == 7 { (25, 15) } else { (5, 5) }
 }
 
+/// The house's cut of an auction's bid, worked out wide: a bid of 28,634
+/// gold times the goblins' 15 is past a `u32` (mangos's `GetAuctionCut`
+/// works it out in floats).
+fn cut_of(a: &Auction) -> u32 {
+    (u64::from(a.bid) * u64::from(rates(a.house).1) / 100) as u32
+}
+
 /// Thistle Tea's deposit (`Auction.deposit`): the item's sell price, by
 /// the 2-hour periods, at the house's rate.
 pub fn deposit(sell_price: u32, count: u32, secs: u32, house: u32) -> u32 {
@@ -313,8 +320,7 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
 /// The auction won: the item to the winner, the money to the seller.
 /// The mails and the auction's end go in `records`, to be saved together.
 fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
-    let (_, cut) = rates(a.house);
-    let cut = a.bid * cut / 100;
+    let cut = cut_of(a);
     mail::post_in(
         realm,
         mail_from(a, a.bidder, WON, Some(a.item.clone()), 0, 0),
@@ -323,7 +329,14 @@ fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
     let delay = realm.config.mail_delay.as_secs() as i64;
     mail::post_in(
         realm,
-        mail_from(a, a.owner, SOLD, None, a.bid - cut + a.deposit, delay),
+        mail_from(
+            a,
+            a.owner,
+            SOLD,
+            None,
+            (a.bid - cut).saturating_add(a.deposit),
+            delay,
+        ),
         records,
     );
     send_to(
@@ -392,7 +405,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         return;
     }
     let least = if a.bid > 0 {
-        a.bid + a.outbid()
+        a.bid.saturating_add(a.outbid())
     } else {
         a.start_bid
     };
@@ -486,11 +499,7 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     else {
         return;
     };
-    let fee = if a.bidder > 0 {
-        a.bid * rates(a.house).1 / 100
-    } else {
-        0
-    };
+    let fee = if a.bidder > 0 { cut_of(&a) } else { 0 };
     if map.players.get(&g).is_none_or(|p| p.money() < fee) {
         drop(auctions);
         command_result(

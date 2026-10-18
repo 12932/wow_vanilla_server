@@ -401,3 +401,48 @@ async fn a_script_starting_itself_at_once_stops() {
     .await;
     assert_eq!(left, 0, "it ran to its end, and was swept");
 }
+
+fn mails_to(realm: &Realm, counter: u32) -> Vec<crate::game::social::mail::Mail> {
+    realm
+        .social
+        .mail
+        .lock()
+        .mails
+        .values()
+        .filter(|m| m.receiver == counter)
+        .cloned()
+        .collect()
+}
+
+/// R4-7. The house's cut of a big bid is worked out wide: 30,000 gold won
+/// at the goblins' house (15%) pays the seller 25,500, rather than the cut
+/// overflowing a `u32` (a panic in a debug build, a cut of almost nothing
+/// in a release one).
+#[test]
+fn a_big_bids_cut_doesnt_overflow() {
+    use crate::game::social::auction::{self, Auction};
+    let realm = harness::realm_with(GameData::empty());
+    realm.social.auctions.lock().auctions.insert(
+        7,
+        Auction {
+            id: 7,
+            market: 7,
+            house: 7,
+            item: crate::game::store::ItemRow {
+                guid: 1,
+                entry: WIDGET,
+                count: 1,
+                ..Default::default()
+            },
+            owner: 1,
+            start_bid: 1,
+            bid: 300_000_000,
+            bidder: 2,
+            expires_at: 0,
+            ..Default::default()
+        },
+    );
+    auction::sweep(&realm);
+    let paid: Vec<u32> = mails_to(&realm, 1).iter().map(|m| m.money).collect();
+    assert_eq!(paid, vec![255_000_000], "the bid less 15%");
+}
