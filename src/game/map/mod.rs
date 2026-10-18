@@ -385,6 +385,8 @@ pub struct Map {
     pub nav: Option<nav::Nav>,
     /// The map's terrain tiles: liquid kinds and areas.
     pub terrain: Option<terrain::Terrain>,
+    /// A sweep for idle tiles is under way (`tiles::update`).
+    pub tiles_unloading: bool,
     pub grid: Grid,
     /// Objects whose visibility must be worked out at the next update.
     pub visibility_dirty: ahash::AHashSet<Guid>,
@@ -808,6 +810,7 @@ impl Map {
             vendor_stock: AHashMap::new(),
             nav: None,
             terrain: None,
+            tiles_unloading: false,
             grid: Grid::new(),
             visibility_dirty: ahash::AHashSet::new(),
             forget: AHashMap::new(),

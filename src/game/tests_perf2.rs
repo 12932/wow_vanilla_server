@@ -351,3 +351,116 @@ async fn a_map_asks_ahead_for_the_tiles_around_its_players() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+#[test]
+#[ignore = "extended"]
+fn a_tile_no_one_has_been_near_is_let_go_and_read_again_when_needed() {
+    use crate::game::map::nav::{Nav, tile_of};
+    use crate::game::map::terrain::Terrain;
+    let idle = Duration::from_secs(300);
+    let at = |s: u64| Instant::now() + Duration::from_secs(s);
+    let mut nav = Nav::open(&BAKE, "Azeroth").expect("the bake");
+    let mut terrain = Terrain::open(&TERRAIN, 0).expect("the tiles");
+    let t = tile_of(GOLDSHIRE.x, GOLDSHIRE.y);
+    nav.receive(at(0));
+    terrain.receive(at(0));
+    let ground = nav.ground(GOLDSHIRE.x, GOLDSHIRE.y, GOLDSHIRE.z);
+    assert!(ground.is_some());
+    assert!(terrain.area_bit(GOLDSHIRE.x, GOLDSHIRE.y).is_some());
+    assert_eq!((nav.tiles_in(), terrain.tiles_read()), (1, 1));
+    // Someone near it keeps it.
+    nav.receive(at(200));
+    terrain.receive(at(200));
+    nav.want(t);
+    terrain.want(t);
+    nav.receive(at(450));
+    terrain.receive(at(450));
+    assert_eq!((nav.unload_idle(idle), terrain.unload_idle(idle)), (0, 0));
+    // No one near it for longer: let go.
+    nav.receive(at(800));
+    terrain.receive(at(800));
+    assert_eq!((nav.unload_idle(idle), terrain.unload_idle(idle)), (1, 1));
+    assert_eq!((nav.tiles_in(), terrain.tiles_read()), (0, 0));
+    // Needed again, read again: here at once; on the server in the
+    // background, as no navmesh until it is in.
+    assert_eq!(nav.ground(GOLDSHIRE.x, GOLDSHIRE.y, GOLDSHIRE.z), ground);
+    assert_eq!(nav.tiles_in(), 1);
+    let mut nav = Nav::open(&BAKE, "Azeroth").unwrap();
+    nav.in_background();
+    nav.receive(at(0));
+    until("the tile", || {
+        nav.ground(GOLDSHIRE.x, GOLDSHIRE.y, GOLDSHIRE.z);
+        nav.receive(at(0));
+        nav.tiles_in() == 1
+    });
+    nav.receive(at(400));
+    assert_eq!(nav.unload_idle(idle), 1);
+    assert_eq!(nav.ground(GOLDSHIRE.x, GOLDSHIRE.y, GOLDSHIRE.z), None);
+    until("the tile again", || {
+        nav.receive(at(400));
+        nav.tiles_in() == 1
+    });
+    assert_eq!(nav.ground(GOLDSHIRE.x, GOLDSHIRE.y, GOLDSHIRE.z), ground);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "extended"]
+async fn a_map_lets_go_of_the_tiles_its_players_have_left_and_keeps_theirs() {
+    use crate::game::map::nav::tile_of;
+    let mut cfg = crate::game::harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    cfg.tiles_in_background = true;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(
+        cfg,
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        None,
+    );
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    let has = |m: &Map, t| m.nav.as_ref().is_some_and(|n| n.has_tile(t));
+    let home = map
+        .query(move |m| {
+            let p = m.players[&g].position();
+            tile_of(p.x, p.y)
+        })
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !map.query(move |m| has(m, home)).await.unwrap() {
+        assert!(Instant::now() < deadline, "the player's tile within 60 s");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Gone to Goldshire's tile (what they see worked out again there), and
+    // long enough after, the update's sweep: Northshire's is let go,
+    // Goldshire's asked for and kept.
+    let away = tile_of(GOLDSHIRE.x, GOLDSHIRE.y);
+    assert_ne!(home, away);
+    let (home_kept, away_asked) = map
+        .query(move |m| {
+            m.players.get_mut(&g).unwrap().movement.position = GOLDSHIRE;
+            crate::game::map::visibility::refresh(m, g);
+            m.now += Duration::from_secs(400);
+            m.stats.updates = 1000;
+            crate::game::map::tiles::update(m);
+            // A sweep is spread over updates, as long as it takes.
+            while m.tiles_unloading {
+                m.stats.updates += 1;
+                crate::game::map::tiles::update(m);
+            }
+            let n = m.nav.as_ref().unwrap();
+            (n.has_tile(home), n.tiles_loading() + n.tiles_in())
+        })
+        .await
+        .unwrap();
+    assert!(!home_kept, "the tile left is let go");
+    assert!(away_asked > 0, "the tile come to is asked for");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !map.query(move |m| has(m, away)).await.unwrap() {
+        assert!(Instant::now() < deadline, "the new tile within 60 s");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

@@ -1,8 +1,9 @@
 //! A map's navmesh, from a rustigator bake: paths, ground heights, line of
 //! sight, and the zone and area a point is in.
 //!
-//! Its ADT tiles load as they are first needed. On the server they are
-//! read off the map's thread (`map/tiles.rs`): until a
+//! Its ADT tiles load as they are first needed, and go again once no one
+//! has been near one for a while (`[world] tile_unload_secs`). On the
+//! server they are read off the map's thread (`map/tiles.rs`): until a
 //! tile is in, a query over it answers as a map with no navmesh would (a
 //! path is straight, a line of sight clear, a height unknown), so the map
 //! never waits on the disk. Tests load them at once, as they are asked for.
@@ -229,7 +230,14 @@ impl Nav {
     pub fn want(&mut self, t: (i32, i32)) {
         if self.background.is_some() {
             self.ready_tile(t);
-        } else if let Some(tile) = self.tiles.get_mut(&t) {
+        } else {
+            self.keep(t);
+        }
+    }
+
+    /// Tile `t` (`tile_of`) is near someone: kept, if it is in.
+    pub fn keep(&mut self, t: (i32, i32)) {
+        if let Some(tile) = self.tiles.get_mut(&t) {
             tile.used = self.now;
         }
     }
@@ -273,6 +281,37 @@ impl Nav {
             }
         }
         n
+    }
+
+    /// Let go of the tiles in that haven't been used or wanted for `idle`:
+    /// how many. One needed again is read again.
+    pub fn unload_idle(&mut self, idle: Duration) -> usize {
+        self.unload_idle_within(idle, Duration::MAX).0
+    }
+
+    /// [`Nav::unload_idle`], as many as `budget` allows (at least one):
+    /// how many, and whether idle ones are left. A busy tile takes
+    /// milliseconds to drop (and the disk's time, where its idle pages were
+    /// swapped out), so the map spreads a sweep over its updates.
+    pub fn unload_idle_within(&mut self, idle: Duration, budget: Duration) -> (usize, bool) {
+        let now = self.now;
+        let mut idle: Vec<(i32, i32)> = self
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.state == State::In && now.saturating_duration_since(t.used) > idle)
+            .map(|(k, _)| *k)
+            .collect();
+        let started = Instant::now();
+        let mut n = 0;
+        while let Some((x, y)) = idle.pop() {
+            let _ = self.map.unload_adt(x, y);
+            self.tiles.remove(&(x, y));
+            n += 1;
+            if started.elapsed() >= budget {
+                break;
+            }
+        }
+        (n, !idle.is_empty())
     }
 
     /// The zone and area at a point; where the point says nothing, those

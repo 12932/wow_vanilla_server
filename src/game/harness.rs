@@ -137,6 +137,7 @@ pub fn test_config() -> RealmConfig {
         max_characters_per_account: 10,
         nav_dir: None,
         terrain_dir: None,
+        tile_unload: Duration::from_secs(300),
         petition_signatures: 1,
         mail_delay: Duration::ZERO,
         instance_unload: Duration::from_millis(200),

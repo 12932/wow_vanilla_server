@@ -4,11 +4,11 @@
 //! liquid's surface but not its kind outside WMOs; these give the kind
 //! (water, ocean, magma, slime, the deep sea) and an area where the navmesh
 //! has none. Tiles are read as they are first asked for (off the map's
-//! thread on the server: `map/tiles.rs`), and only a wet tile keeps its
-//! heights.
+//! thread on the server: `map/tiles.rs`), and let go once no one has been
+//! near for a while; only a wet tile keeps its heights.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ahash::{AHashMap, AHashSet};
 use std::collections::hash_map::Entry;
@@ -525,7 +525,18 @@ impl Terrain {
         };
         if self.background.is_some() {
             self.slot((row, column));
-        } else if let Some(s) = self.tiles.get_mut(&(row, column)) {
+        } else {
+            self.keep((tx, ty));
+        }
+    }
+
+    /// The tile under the navmesh's tile `t` is near someone: kept, if it
+    /// is read.
+    pub fn keep(&mut self, (tx, ty): (i32, i32)) {
+        let (Ok(row), Ok(column)) = (u8::try_from(ty), u8::try_from(tx)) else {
+            return;
+        };
+        if let Some(s) = self.tiles.get_mut(&(row, column)) {
             s.used = self.now;
         }
     }
@@ -548,6 +559,34 @@ impl Terrain {
             }
         }
         n
+    }
+
+    /// Let go of the tiles read that haven't been used or wanted for
+    /// `idle`: how many. One needed again is read again.
+    pub fn unload_idle(&mut self, idle: Duration) -> usize {
+        self.unload_idle_within(idle, Duration::MAX).0
+    }
+
+    /// [`Terrain::unload_idle`], as many as `budget` allows (at least
+    /// one): how many, and whether idle ones are left.
+    pub fn unload_idle_within(&mut self, idle: Duration, budget: Duration) -> (usize, bool) {
+        let now = self.now;
+        let mut idle: Vec<(u8, u8)> = self
+            .tiles
+            .iter()
+            .filter(|(_, s)| s.tile.is_some() && now.saturating_duration_since(s.used) > idle)
+            .map(|(k, _)| *k)
+            .collect();
+        let started = Instant::now();
+        let mut n = 0;
+        while let Some(key) = idle.pop() {
+            self.tiles.remove(&key);
+            n += 1;
+            if started.elapsed() >= budget {
+                break;
+            }
+        }
+        (n, !idle.is_empty())
     }
 
     /// The terrain's liquid at a point.

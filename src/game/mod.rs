@@ -483,6 +483,9 @@ pub struct RealmConfig {
     pub nav_dir: Option<std::path::PathBuf>,
     /// Thistle Tea's terrain tiles (`MMMMRRCC.map`): liquid kinds and areas.
     pub terrain_dir: Option<std::path::PathBuf>,
+    /// How long a tile no one is near is kept (`[world] tile_unload_secs`);
+    /// zero keeps them all.
+    pub tile_unload: Duration,
     pub petition_signatures: u32,
     pub mail_delay: Duration,
     pub instance_unload: Duration,
@@ -531,6 +534,7 @@ impl RealmConfig {
             max_characters_per_account: c.players.characters_per_realm,
             nav_dir: c.world.nav_dir.clone(),
             terrain_dir: c.world.terrain_dir.clone(),
+            tile_unload: Duration::from_secs(c.world.tile_unload_secs),
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
             instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,

@@ -4,12 +4,15 @@
 //! ([`read`]), and handed to its map, which takes it in at its next update
 //! ([`update`]): the map never waits on the disk. The tiles around each
 //! player are asked for ahead ([`ahead`]), as they arrive and as they
-//! move, so that most are in before anything there needs them. Until a tile is in, a
+//! move, so that most are in before anything there needs them; those no
+//! one has been near for `[world] tile_unload_secs` are let go, and read
+//! again if they are needed. Until a tile is in, a
 //! query over it answers as a map without one would (`nav.rs`,
 //! `terrain.rs`). The tests read tiles at once, as they are asked for
 //! (`RealmConfig::tiles_in_background`).
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use smallvec::SmallVec;
 
@@ -25,6 +28,10 @@ const READERS: usize = 4;
 /// tile is in before a creature it holds wakes, and walking a few seconds
 /// at a run doesn't outpace the reading.
 const AHEAD_OF_PLAYERS: f32 = 20.0;
+/// How often, in updates, idle tiles are looked for (ten seconds).
+const UNLOAD_EVERY: u64 = 200;
+/// How long an update spends letting go of idle tiles, once some are found.
+const UNLOAD_BUDGET: Duration = Duration::from_millis(2);
 
 type Job = Box<dyn FnOnce() + Send>;
 
@@ -79,7 +86,8 @@ pub fn tiles_around(x: f32, y: f32, r: f32) -> SmallVec<[(i32, i32); 4]> {
     tiles
 }
 
-/// Take in the tiles read since the last update.
+/// Take in the tiles read since the last update, and now and then let go
+/// of idle ones.
 pub fn update(map: &mut Map) {
     let now = map.now;
     if let Some(nav) = map.nav.as_mut() {
@@ -87,6 +95,59 @@ pub fn update(map: &mut Map) {
     }
     if let Some(terrain) = map.terrain.as_mut() {
         terrain.receive(now);
+    }
+    let idle = map.cfg.tile_unload;
+    if idle.is_zero() {
+        return;
+    }
+    if map.stats.updates.is_multiple_of(UNLOAD_EVERY) {
+        keep_near_players(map);
+        map.tiles_unloading = true;
+    }
+    // A sweep goes on over as many updates as it takes.
+    if map.tiles_unloading {
+        let nav = map
+            .nav
+            .as_mut()
+            .map_or((0, false), |n| n.unload_idle_within(idle, UNLOAD_BUDGET));
+        let terrain = map
+            .terrain
+            .as_mut()
+            .map_or((0, false), |t| t.unload_idle_within(idle, UNLOAD_BUDGET));
+        map.tiles_unloading = nav.1 || terrain.1;
+        if nav.0 + terrain.0 > 0 {
+            tracing::debug!(
+                "{}: let go of {} navmesh and {} terrain tiles",
+                map.key,
+                nav.0,
+                terrain.0
+            );
+        }
+    }
+}
+
+/// The tiles around each player are used now: a player standing still asks
+/// about nothing, and an awake creature far from every player keeps its
+/// own by asking about it.
+fn keep_near_players(map: &mut Map) {
+    let reach = map.cfg.visibility_yards + AHEAD_OF_PLAYERS;
+    let near: Vec<(i32, i32)> = map
+        .players
+        .values()
+        .flat_map(|p| {
+            let at = p.position();
+            tiles_around(at.x, at.y, reach)
+        })
+        .collect();
+    if let Some(nav) = map.nav.as_mut() {
+        for &t in &near {
+            nav.keep(t);
+        }
+    }
+    if let Some(terrain) = map.terrain.as_mut() {
+        for &t in &near {
+            terrain.keep(t);
+        }
     }
 }
 
