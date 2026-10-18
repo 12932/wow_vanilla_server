@@ -314,6 +314,8 @@ mod tests_p4_world;
 #[cfg(test)]
 mod tests_p4_world_guardians;
 #[cfg(test)]
+mod tests_p4_world_items;
+#[cfg(test)]
 mod tests_p4_world_loot;
 #[cfg(test)]
 mod tests_p4_world_net;
