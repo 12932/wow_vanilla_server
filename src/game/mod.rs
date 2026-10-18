@@ -388,6 +388,8 @@ mod tests_p4_world_scripts;
 #[cfg(test)]
 mod tests_p4_world_spells;
 #[cfg(test)]
+mod tests_p5_spell;
+#[cfg(test)]
 mod tests_p5_spell_holiday;
 #[cfg(test)]
 mod tests_p5_spell_procs;

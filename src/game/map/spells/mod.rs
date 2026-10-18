@@ -1503,12 +1503,25 @@ fn land(
             );
         }
         if e.effect == 61 && e.misc_value > 0 {
+            // An event with no target of its own lands once, on its caster,
+            // and is aimed at the object, else the unit picked, else at
+            // nothing (vmangos's `EffectSendEvent`, Thistle Tea's
+            // `SendEvent.target`).
+            let at = if e.target_a == 0 && e.target_b == 0 {
+                [l.targets.object, l.targets.unit]
+                    .into_iter()
+                    .flatten()
+                    .find(|g| !g.is_zero() && *g != caster)
+                    .unwrap_or(Guid::zero())
+            } else {
+                aim
+            };
             crate::game::map::scripts::start(
                 map,
                 crate::game::data::scripts::ScriptTable::Event,
                 e.misc_value as u32,
                 caster,
-                aim,
+                at,
             );
         }
     }
