@@ -224,12 +224,18 @@ pub fn effect_targets(
                 g != about && enemy(g)
             })
         }
+        // At the caster's own place (18) the destination is the caster's,
+        // whatever the cast was aimed at (mangos's
+        // `TARGET_LOCATION_CASTER_DEST`): a triggered Hellfire Effect about
+        // the warlock, not their selection.
         (_, AoeEnemyAtDest)
         | (AoeEnemyAtDest, _)
         | (_, AoeEnemyAtChannel)
-        | (AoeEnemyAtChannel, _) => units_around(map, center(map, caster, t, true), r, |g| {
-            g != about && enemy(g)
-        }),
+        | (AoeEnemyAtChannel, _) => {
+            units_around(map, center(map, caster, t, e.target_a != 18), r, |g| {
+                g != about && enemy(g)
+            })
+        }
         (_, AoeEnemyInCone) | (AoeEnemyInCone, _) => {
             let degrees = map
                 .realm
@@ -247,7 +253,7 @@ pub fn effect_targets(
             units_around(map, center(map, caster, t, false), r, ally)
         }
         (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => {
-            units_around(map, center(map, caster, t, true), r, ally)
+            units_around(map, center(map, caster, t, e.target_a != 18), r, ally)
         }
         (PartyAroundCaster, _) | (_, PartyAroundCaster) => {
             let at = center(map, caster, t, e.target_a == 34);
