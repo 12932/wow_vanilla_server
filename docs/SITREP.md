@@ -445,18 +445,6 @@ the questions waiting for you.
     - **A disarmed unit** can't parry, even with an off-hand weapon.
     - **Merge note:** 3q renews a parent's linked auras on a refresh, and 3o's test has a link back to its parent.
       Together they recursed until the stack overflowed. A refresh made by a link no longer renews its own links.
-34. **3p's choices** (combat and power, finished):
-    - **A polymorphed player** heals a tenth of their health a tick, in a fight too, as Thistle Tea has it. mangos
-      has no rule of its own; Polymorph's tooltip says the target "will regenerate very quickly".
-    - **Damage sharing** (Blessing of Sacrifice, Soul Link) now takes its share of swings, shots and ticks too, after
-      shields, as mangos's `CalculateDamageAbsorbAndResist` does. Before, only direct spells were shared.
-    - **Burns and drains** take only a pool the target shows, from the living. A burn with a multiplier of 0 burns
-      mana and does no damage. A drain gives nothing back for a power the caster doesn't use.
-    - **Costs:** a percentage cost is added to the flat one instead of replacing it, and god mode pays nothing.
-    - **Silence and pacify** go by the spell's prevention type, so a wand's Shoot works under silence.
-    - **A flaky test, left as it was:** `tests_p3_ai_scripts::a_checked_event_whose_actions_fail_fires_again_until_they_succeed`
-      failed 1 run in 12, at different points.
-
 31. **The agents ran the machine out of memory** (30 GB). the orchestrator stopped all seven agent agents when memory ran
     short. Their committed work is merged above, and their branches and worktrees are kept. How to resume them, with
     fewer at once and a cap on each agent's memory, is waiting on you.
@@ -499,6 +487,18 @@ the questions waiting for you.
       - the supervision: restart, quarantine and back-off, the panic hook, and unwinding in release;
       - the registry's locks, always taken in the same order;
       - the damage, absorb, block and timer arithmetic, which is bounded wherever I looked.
+
+34. **3p's choices** (combat and power, finished):
+    - **A polymorphed player** heals a tenth of their health a tick, in a fight too, as Thistle Tea has it. mangos
+      has no rule of its own; Polymorph's tooltip says the target "will regenerate very quickly".
+    - **Damage sharing** (Blessing of Sacrifice, Soul Link) now takes its share of swings, shots and ticks too, after
+      shields, as mangos's `CalculateDamageAbsorbAndResist` does. Before, only direct spells were shared.
+    - **Burns and drains** take only a pool the target shows, from the living. A burn with a multiplier of 0 burns
+      mana and does no damage. A drain gives nothing back for a power the caster doesn't use.
+    - **Costs:** a percentage cost is added to the flat one instead of replacing it, and god mode pays nothing.
+    - **Silence and pacify** go by the spell's prevention type, so a wand's Shoot works under silence.
+    - **A flaky test, left as it was:** `tests_p3_ai_scripts::a_checked_event_whose_actions_fail_fires_again_until_they_succeed`
+      failed 1 run in 12, at different points.
 
 ## Progress
 
