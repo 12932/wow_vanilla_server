@@ -639,3 +639,149 @@ async fn felwoods_oozes_wear_their_auras_and_go_into_their_jars() {
         clear(&map, vec![g, d]);
     }
 }
+
+/// Murkdeep sunders his victim's armor every 5 to 9 seconds and nets it
+/// every 9 to 15, and flees once when nearly beaten (Thistle Tea's
+/// `murkdeep`, vmangos's `npc_murkdeep`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn murkdeep_sunders_and_nets_and_flees_once_nearly_beaten() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Netted").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let (g, d) = set_on_dummy(&map, 10323, at).await;
+    c.sees(g).await;
+    kit(
+        &mut c,
+        &map,
+        g,
+        d,
+        &[
+            (1032301, 11971, (0.0, 5.0), (5.0, 9.0), true),
+            (1032302, 6533, (0.0, 20.0), (9.0, 15.0), true),
+        ],
+    )
+    .await;
+    map.query(move |m| set_pct(m, g, 10)).await;
+    assert!(
+        until(&map, 3_000, move |m| unit_flags(m, g)
+            & crate::game::map::auras::UNIT_FLAG_FLEEING
+            != 0)
+        .await,
+        "flees"
+    );
+    assert!(map.query(move |m| spent(m, g, 1032303)).await.unwrap(), "once");
+}
+
+/// The Magrami spectre drifts in its blue haze; at the magnet (its walk's
+/// end) or home it turns green and hostile; in a fight it curses its foe
+/// 5 to 9 seconds in and every 15 to 21 (Thistle Tea's `magrami_spectre`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_magrami_spectre_turns_green_and_hostile_and_curses_its_foe() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Haunted").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let spectre = summon_near(&map, 11560, off(at, 3.0, 0.0)).await;
+    assert!(
+        until(&map, 3_000, move |m| has(m, spectre, 17327)).await,
+        "blue as it spawns"
+    );
+    let turned = map
+        .query(move |m| {
+            crate::game::map::event_ai::movement_inform(m, spectre, 9, 2);
+            (has(m, spectre, 17327), has(m, spectre, 18951), faction(m, spectre))
+        })
+        .await
+        .unwrap();
+    assert_eq!(turned, (false, true, 16), "green and hostile at the magnet");
+    clear(&map, vec![spectre]);
+    let spectre = summon_near(&map, 11560, off(at, 3.0, 0.0)).await;
+    assert!(until(&map, 3_000, move |m| has(m, spectre, 17327)).await);
+    let home = map
+        .query(move |m| {
+            crate::game::map::event_ai::reached_home(m, spectre);
+            (has(m, spectre, 18951), faction(m, spectre))
+        })
+        .await
+        .unwrap();
+    assert_eq!(home, (true, 16), "and at home");
+    clear(&map, vec![spectre]);
+    let (g, d) = set_on_dummy(&map, 11560, at).await;
+    c.sees(g).await;
+    kit(&mut c, &map, g, d, &[(1156004, 18159, (5.0, 9.0), (15.0, 21.0), true)]).await;
+}
+
+/// Belnistrasz fights with Fireball and Frost Nova only while he isn't
+/// chanting; struck in his chant, he cries out once; and whenever a
+/// wave's death drops him out of the fight during it, he takes the
+/// chant's channel up again (Thistle Tea's `belnistrasz`, vmangos's
+/// `npc_belnistrasz`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn belnistrasz_fights_only_out_of_his_chant_and_takes_it_up_again() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Chanter").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let (g, d) = set_on_dummy(&map, 8516, at).await;
+    c.sees(g).await;
+    kit(
+        &mut c,
+        &map,
+        g,
+        d,
+        &[
+            (851601, 9053, (1.0, 1.0), (2.0, 3.0), true),
+            (851602, 11831, (6.0, 6.0), (10.0, 15.0), true),
+        ],
+    )
+    .await;
+    // Chanting (the first phase): no spells; a blow has him cry out, once,
+    // into the second.
+    c.clear();
+    let phase = map
+        .query(move |m| {
+            crate::game::map::event_ai::set_phase(m, g, 1);
+            if let Some(cr) = m.caster_mut(g) {
+                cr.gcd_until = None;
+            }
+            due(m, g, 851601);
+            crate::game::map::event_ai::aggro(m, g, d);
+            crate::game::map::event_ai::phase(m, g)
+        })
+        .await
+        .unwrap();
+    assert_eq!(phase, 2, "he cries out, warned");
+    assert!(
+        cast_any_of(&mut c, g, 9053, Duration::from_millis(800))
+            .await
+            .is_none(),
+        "no Fireball in his chant"
+    );
+    assert!(heard(&mut c, g, Duration::from_secs(2)).await.is_some(), "a cry");
+    let again = map
+        .query(move |m| {
+            crate::game::map::event_ai::aggro(m, g, d);
+            crate::game::map::event_ai::phase(m, g)
+        })
+        .await
+        .unwrap();
+    assert_eq!(again, 2);
+    assert!(heard(&mut c, g, Duration::from_millis(500)).await.is_none(), "once");
+    // Out of the fight in the chant: its channel again.
+    c.clear();
+    map.query(move |m| crate::game::map::event_ai::evade(m, g))
+        .await;
+    assert!(
+        cast_any_of(&mut c, g, 12774, Duration::from_secs(2))
+            .await
+            .is_some(),
+        "the chant taken up"
+    );
+}
