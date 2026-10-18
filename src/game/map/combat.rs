@@ -1306,7 +1306,7 @@ pub fn weapon_damage(
         };
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
-        damage += a
+        let mut flat = a
             .effects()
             .filter(|(h, x)| {
                 x.kind == AURA_MOD_DAMAGE_DONE
@@ -1317,7 +1317,7 @@ pub fn weapon_damage(
             .sum::<f32>();
         let kind = creature_type_mask(map, victim);
         if kind != 0 {
-            damage += a.sum_mask(AURA_MOD_DAMAGE_DONE_CREATURE, kind) as f32;
+            flat += a.sum_mask(AURA_MOD_DAMAGE_DONE_CREATURE, kind) as f32;
             let ap = a.sum_mask(
                 if hand == Hand::Ranged {
                     AURA_MOD_RANGED_ATTACK_POWER_VERSUS
@@ -1326,7 +1326,21 @@ pub fn weapon_damage(
                 },
                 kind,
             );
-            damage += ap as f32 / 14.0 * speed;
+            flat += ap as f32 / 14.0 * speed;
+        }
+        // A player's flat bonuses take the hand's percentages, as its
+        // weapon's damage in the fields has: damage done, and the off
+        // hand's half and its bonus (mangos's `TOTAL_VALUE` under the
+        // hand's `TOTAL_PCT`, and `MeleeDamageBonusDone`'s target bonuses).
+        if is_player {
+            let mut pct = crate::game::map::derive::physical_pct_for(a, weapon.as_ref());
+            if hand == Hand::Off {
+                pct *= 0.5 * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+            }
+            flat *= pct;
+        }
+        damage += flat;
+        if kind != 0 {
             damage *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, kind);
         }
         damage *= school_pct;

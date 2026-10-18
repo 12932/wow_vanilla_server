@@ -398,6 +398,8 @@ mod tests_p5_combat_procs;
 #[cfg(test)]
 mod tests_p5_combat_kills;
 #[cfg(test)]
+mod tests_p5_combat_damage;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
