@@ -396,6 +396,8 @@ mod tests_p5_data_procs;
 #[cfg(test)]
 mod tests_p5_data_real;
 #[cfg(test)]
+mod tests_p5_data_threat;
+#[cfg(test)]
 mod tests_p5_player;
 #[cfg(test)]
 mod tests_p5_player_items;
