@@ -34,6 +34,9 @@ const BUFF: u32 = 991_003;
 const POISON_STRIKE: u32 = 991_004;
 const OTHER_STRIKE: u32 = 991_005;
 const IMPROVED_POISONS: u32 = 991_006;
+/// Windfury's kind, always: an extra attack.
+const WINDFURY: u32 = 9_107;
+const WINDFURY_ATTACK: u32 = 991_007;
 
 fn enchants(d: &mut GameData) {
     d.items.insert(
@@ -73,9 +76,22 @@ fn enchants(d: &mut GameData) {
             ..aura(AURA_ADD_FLAT_MODIFIER, 18, 10, 1)
         },
     );
+    let mut windfury = bare(WINDFURY_ATTACK, 0);
+    effect(
+        &mut windfury,
+        0,
+        crate::game::data::spells::SpellEffect {
+            effect: 19,
+            base_points: 0,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
     insert(
         d,
         [
+            windfury,
             strike(STRIKE, 0, 0),
             strike(RATED_STRIKE, 0, 0),
             strike(POISON_STRIKE, 8, 0x1000),
@@ -91,6 +107,7 @@ fn enchants(d: &mut GameData) {
         (HELPFUL, 100, BUFF),
         (POISON, 20, POISON_STRIKE),
         (NOT_A_POISON, 20, OTHER_STRIKE),
+        (WINDFURY, 100, WINDFURY_ATTACK),
     ] {
         d.spells.enchantments.insert(
             id,
@@ -115,6 +132,11 @@ fn enchant(m: &mut Map, g: Guid, id: u32) {
 /// `n` blows of `ex` from `g` at `target`: the strikes their enchantment
 /// sent, by the damage done.
 fn strikes(m: &mut Map, g: Guid, target: Guid, ex: u32, n: u32) -> u32 {
+    strikes_of(m, g, target, ex, n, false)
+}
+
+/// [`strikes`], of extra attacks or not.
+fn strikes_of(m: &mut Map, g: Guid, target: Guid, ex: u32, n: u32, extra_attack: bool) -> u32 {
     let before = health(m, target);
     for _ in 0..n {
         procs::trigger(
@@ -127,6 +149,7 @@ fn strikes(m: &mut Map, g: Guid, target: Guid, ex: u32, n: u32) -> u32 {
                 ex,
                 school: 1,
                 damage: if ex == EX_MISS { 0 } else { 10 },
+                extra_attack,
                 ..Default::default()
             },
         );
@@ -137,7 +160,9 @@ fn strikes(m: &mut Map, g: Guid, target: Guid, ex: u32, n: u32) -> u32 {
 /// Its flat chance (a fifth); its rate a minute over a flat chance (six on
 /// a two-second sword, a fifth); neither, the weapon's speed's (3.6%,
 /// mangos's `GetWeaponProcChance`); nothing from a miss; a helpful one on
-/// the wielder (Thistle Tea's `trigger_weapon_enchant/5` tests).
+/// the wielder; an extra attack procs it, but not another extra attack
+/// (Thistle Tea's `trigger_weapon_enchant/5` and `resolve_weapon_enchant/5`
+/// tests).
 #[tokio::test]
 async fn an_enchantments_spell_goes_by_its_chance_or_rate_on_a_blow_that_lands() {
     let realm = fast_realm(enchants);
@@ -157,11 +182,32 @@ async fn an_enchantments_spell_goes_by_its_chance_or_rate_on_a_blow_that_lands()
             enchant(m, g, HELPFUL);
             strikes(m, g, kobold, EX_NORMAL_HIT, 1);
             let helped = (has(m, g, BUFF), has(m, kobold, BUFF));
-            (flat, missed, rated, bare, helped)
+            // An extra attack's blow: an ordinary enchantment procs, a
+            // Windfury doesn't bring more.
+            enchant(m, g, FLAT);
+            let extra = strikes_of(m, g, kobold, EX_NORMAL_HIT, 2_000, true);
+            enchant(m, g, WINDFURY);
+            let extras = |m: &Map| m.combat(g).map_or(0, |c| c.extra_attacks);
+            strikes_of(m, g, kobold, EX_NORMAL_HIT, 1, true);
+            let from_extra = extras(m);
+            strikes_of(m, g, kobold, EX_NORMAL_HIT, 1, false);
+            let from_blow = extras(m);
+            (
+                flat, missed, rated, bare, helped, extra, from_extra, from_blow,
+            )
         })
         .await
         .unwrap();
-    let (flat, missed, rated, bare, helped) = out;
+    let (flat, missed, rated, bare, helped, extra, from_extra, from_blow) = out;
+    assert!(
+        (300..=500).contains(&extra),
+        "an extra attack procs: {extra}"
+    );
+    assert_eq!(
+        (from_extra, from_blow),
+        (0, 1),
+        "Windfury not from its own swing"
+    );
     assert!((300..=500).contains(&flat), "a fifth of 2000: {flat}");
     assert_eq!(missed, 0, "nothing from a miss");
     assert!(
