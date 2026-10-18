@@ -756,3 +756,112 @@ async fn real_unit_targets_name_places_cones_and_corpses() {
     assert_eq!(out.1, (true, true), "the living or the dead");
     assert_eq!(out.2, (false, true), "his corpse alone");
 }
+
+const SHIELD_BLOCK: u32 = 2565;
+const SMALL_TARGE: u32 = 1167;
+
+/// Thistle Tea's blocks (`shield_block_dbc_test.exs`): Shield Block holds
+/// one charge, which Improved Shield Block's ranks make two, each a half
+/// second, a second or two longer; Block and Parry give their skills, and
+/// the shaman's talent teaches Parry; Shield Specialization's ranks raise
+/// the block value by their percent of it all, strength's share too (as
+/// mangos's `GetShieldBlockValue`); gear's and the Glyph's add theirs flat.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_shield_block_and_block_value() {
+    if !have_data() {
+        return;
+    }
+    let d = real().unwrap();
+    assert_eq!(spell(d, SHIELD_BLOCK).proc_charges, 1);
+    let talent = spell(d, 16_268);
+    assert_eq!(
+        (talent.effects[0].effect, talent.effects[0].trigger_spell),
+        (36, 18_848)
+    );
+    assert_eq!(spell(d, 18_848).effects[0].effect, 22, "Parry");
+    assert_eq!(spell(d, 107).effects[0].effect, 23, "Block");
+    let realm = realm();
+    let (_c, g, map) = enter(&realm, "P3OBLOK", "Blocka", Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        spells::learn(m, g, 107);
+        let counter = m
+            .realm
+            .next_item
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = m.players.get_mut(&g).unwrap();
+        p.items
+            .retain(|i| !(i.bag == crate::game::store::BAG_PLAYER && i.slot == 16));
+        let p = m.players.get_mut(&g).unwrap();
+        p.items.push(crate::game::map::player::Item::new(
+            &data,
+            guid::item(counter),
+            g,
+            SMALL_TARGE,
+            crate::game::store::BAG_PLAYER,
+            16,
+            1,
+        ));
+        p.refresh_inventory(&data);
+        crate::game::map::inventory::sync_gear(m, g);
+        crate::game::map::derive::unit(m, g);
+        let value = |m: &mut Map| {
+            crate::game::map::derive::unit(m, g);
+            crate::game::map::combat::block_value(m, g)
+        };
+        let base = value(m);
+        let strength = m.players[&g].fields.get_u32(UNIT_FIELD_STAT0) as f32;
+        let mut pct = Vec::new();
+        for (id, p) in [
+            (16_253, 5),
+            (16_298, 10),
+            (16_299, 15),
+            (16_300, 20),
+            (16_301, 25),
+            (20_148, 10),
+            (20_149, 20),
+            (20_150, 30),
+        ] {
+            apply_real(m, g, g, id);
+            pct.push((id, p, value(m)));
+            auras::remove_spell(m, g, id, None);
+        }
+        let mut flat = Vec::new();
+        for id in [23_562, 28_773] {
+            apply_real(m, g, g, id);
+            flat.push((id, value(m)));
+            auras::remove_spell(m, g, id, None);
+        }
+        let mut charges = Vec::new();
+        for (id, ms) in [(12_945, 5_500u64), (12_307, 6_000), (12_944, 7_000)] {
+            apply_real(m, g, g, id);
+            let now = m.now;
+            spells::cast_triggered(m, g, SHIELD_BLOCK, Some(g));
+            let h = auras::auras(m, g)
+                .and_then(|a| a.holders.iter().find(|h| h.spell == SHIELD_BLOCK).cloned())
+                .unwrap();
+            charges.push((
+                h.charges,
+                h.expires.map(|t| t.duration_since(now)),
+                Duration::from_millis(ms),
+            ));
+            auras::remove_spell(m, g, SHIELD_BLOCK, None);
+            auras::remove_spell(m, g, id, None);
+        }
+        (base, strength, pct, flat, charges)
+    })
+    .await;
+    let (base, strength, pct, flat, charges) = out;
+    // The shield's 3, and strength's share, less one.
+    let raw = 3.0 + strength / 20.0 - 1.0;
+
+    assert_eq!(base, raw as u32);
+    for (id, p, v) in pct {
+        assert_eq!(v, (raw * (100 + p) as f32 / 100.0) as u32, "{id}");
+    }
+    assert_eq!(flat, vec![(23_562, base + 30), (28_773, base + 235)]);
+    for (n, at, want) in charges {
+        assert_eq!((n, at), (2, Some(want)));
+    }
+}
