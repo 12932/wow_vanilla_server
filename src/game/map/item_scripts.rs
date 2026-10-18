@@ -281,6 +281,10 @@ fn dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, item: Opt
                 trigger(map, caster, o, caster);
             }
         }
+        // A transporter does nothing for the dead (Thistle Tea's dummy
+        // outcomes).
+        GNOMISH_TRANSPORTER | TRANSPORTER_ARRIVAL
+            if !map.unit_view(caster).is_some_and(|u| u.alive) => {}
         GNOMISH_TRANSPORTER if guid::is_player(caster) => {
             match pick(&[(2, Some(23441)), (1, Some(23446)), (1, None)]) {
                 Some(Some(o)) => trigger(map, caster, o, caster),
