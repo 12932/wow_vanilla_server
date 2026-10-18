@@ -1,0 +1,199 @@
+//! The fourth code review's findings (the world's systems: the social
+//! services, inventory, loot, quests, vendors, objects, scripts and PvP),
+//! each shown on made-up data in the fast suite.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::*;
+
+use crate::game::Realm;
+use crate::game::data::*;
+use crate::game::guid;
+use crate::game::harness::{self, Client};
+use crate::game::map::inventory::{BUYBACK_START, PACK_START};
+use crate::game::map::{Map, MapKey, vendor};
+use crate::game::store::BAG_PLAYER;
+
+const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+const VENDOR: u32 = 990_400;
+const WIDGET: u32 = 990_401;
+
+fn item(entry: u32) -> ItemTemplate {
+    ItemTemplate {
+        entry,
+        name: format!("Item {entry}"),
+        display_id: 1000,
+        stackable: 1,
+        allowable_class: -1,
+        allowable_race: -1,
+        buy_count: 1,
+        buy_price: 10,
+        sell_price: 5,
+        ..Default::default()
+    }
+}
+
+/// A vendor beside the start, and widgets in stacks of twenty.
+fn data() -> GameData {
+    let mut d = GameData::empty();
+    d.creature_templates.insert(
+        VENDOR,
+        CreatureTemplate {
+            entry: VENDOR,
+            name: "Vendor".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            display_scales: [1.0, 0.0, 0.0, 0.0],
+            level_min: 2,
+            level_max: 2,
+            faction: 35,
+            unit_class: 1,
+            health_max: 50,
+            npc_flags: vendor::NPC_FLAG_VENDOR,
+            ..Default::default()
+        },
+    );
+    d.creature_spawns.insert(
+        0,
+        vec![CreatureSpawn {
+            guid: 1,
+            entries: vec![VENDOR],
+            map: 0,
+            x: START.0 + 2.0,
+            y: START.1,
+            z: START.2,
+            ..Default::default()
+        }],
+    );
+    let mut widget = item(WIDGET);
+    widget.stackable = 20;
+    d.items.insert(WIDGET, widget);
+    d
+}
+
+async fn on_map<T: Send + 'static>(
+    realm: &Arc<Realm>,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
+    realm
+        .maps
+        .get(realm, MapKey::world(0))
+        .query(f)
+        .await
+        .expect("the map answers")
+}
+
+fn vendor_guid() -> Guid {
+    guid::unit(VENDOR, 1)
+}
+
+/// Wait until `a`'s earlier packets have been handled.
+async fn handled(a: &mut Client) {
+    a.send(CMSG_NAME_QUERY { guid: a.guid }).await;
+    a.wait_for("SMSG_NAME_QUERY_RESPONSE", |m| match m {
+        ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(_) => Some(()),
+        _ => None,
+    })
+    .await;
+}
+
+/// Where `item` is, if `g` has it.
+fn place(m: &Map, g: Guid, item: Guid) -> Option<(u8, u8, u32)> {
+    let p = &m.players[&g];
+    p.item_by_guid(item)
+        .map(|i| (p.items[i].bag, p.items[i].slot, p.items[i].count()))
+}
+
+fn carried_widgets(m: &Map, g: Guid) -> u32 {
+    m.players[&g].carried_count_of(WIDGET)
+}
+
+/// R4-1. A sold item waits in a buyback slot for its price back; moving,
+/// splitting, storing or mailing it from there is refused (mangos's
+/// `IsValidPos` on the source), rather than taking it back for nothing
+/// with the sale's money kept.
+#[tokio::test]
+async fn a_sold_item_leaves_its_buyback_slot_only_bought_back() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "R4BB");
+    let g = a.enter("Seller", Race::Human, Class::Warrior).await;
+    a.sees(vendor_guid()).await;
+    let widgets = on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, WIDGET, 10, false).unwrap();
+        let p = &m.players[&g];
+        p.items.iter().find(|i| i.entry == WIDGET).unwrap().guid
+    })
+    .await;
+    a.send(CMSG_SELL_ITEM {
+        vendor: vendor_guid(),
+        item: widgets,
+        amount: 0,
+    })
+    .await;
+    handled(&mut a).await;
+    let (sold_at, money) = on_map(&realm, move |m| {
+        (place(m, g, widgets), m.players[&g].money())
+    })
+    .await;
+    let slot = BUYBACK_START;
+    assert_eq!(sold_at, Some((BAG_PLAYER, slot, 10)), "sold, in buyback");
+    assert_eq!(money, 50, "paid for ten");
+    let free = PACK_START + 5;
+    a.send(CMSG_SWAP_ITEM {
+        destination_bag: BAG_PLAYER,
+        destionation_slot: free,
+        source_bag: BAG_PLAYER,
+        source_slot: slot,
+    })
+    .await;
+    a.send(CMSG_SPLIT_ITEM {
+        source_bag: BAG_PLAYER,
+        source_slot: slot,
+        destination_bag: BAG_PLAYER,
+        destination_slot: free,
+        amount: 4,
+    })
+    .await;
+    a.send(CMSG_AUTOSTORE_BAG_ITEM {
+        source_bag: BAG_PLAYER,
+        source_slot: slot,
+        destination_bag: BAG_PLAYER,
+    })
+    .await;
+    a.send(CMSG_AUTOEQUIP_ITEM {
+        source_bag: BAG_PLAYER,
+        source_slot: slot,
+    })
+    .await;
+    // Nor mailed to another, the sale's money kept.
+    let mut b = Client::connect(&realm, "R4BB2");
+    b.enter("Mailee", Race::Human, Class::Warrior).await;
+    on_map(&realm, move |m| {
+        m.players.get_mut(&g).unwrap().set_money(1000)
+    })
+    .await;
+    a.send(CMSG_SEND_MAIL {
+        mailbox: Guid::zero(),
+        receiver: "Mailee".into(),
+        subject: "Sold".into(),
+        body: String::new(),
+        unknown1: 0,
+        unknown2: 0,
+        item: widgets,
+        money: Gold::new(0),
+        cash_on_delivery_amount: 0,
+        unknown3: 0,
+        unknown4: 0,
+    })
+    .await;
+    handled(&mut a).await;
+    let (now_at, carried) = on_map(&realm, move |m| {
+        (place(m, g, widgets), carried_widgets(m, g))
+    })
+    .await;
+    assert_eq!(now_at, Some((BAG_PLAYER, slot, 10)), "still sold");
+    assert_eq!(carried, 0, "none of it back for nothing");
+}

@@ -2381,7 +2381,11 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     let Some(p) = map.players.get(&player) else {
         return;
     };
-    let Some(i) = p.item_at(bag, slot) else {
+    // Not one sold, in the vendor's buyback slots.
+    let Some(i) = p
+        .item_at(bag, slot)
+        .filter(|_| !crate::game::map::vendor::in_buyback(bag, slot))
+    else {
         return;
     };
     let item = &p.items[i];

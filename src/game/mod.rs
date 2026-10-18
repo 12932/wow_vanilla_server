@@ -98,6 +98,8 @@ mod tests_p3_aura2_spells;
 #[cfg(test)]
 mod tests_p3_aura2_sync;
 #[cfg(test)]
+mod tests_p3_cast;
+#[cfg(test)]
 mod tests_p3_cast2;
 #[cfg(test)]
 mod tests_p3_cast3;
@@ -113,8 +115,6 @@ mod tests_p3_cast7;
 mod tests_p3_cast8;
 #[cfg(test)]
 mod tests_p3_cast9;
-#[cfg(test)]
-mod tests_p3_cast;
 #[cfg(test)]
 mod tests_p3_cast_class;
 #[cfg(test)]
@@ -377,6 +377,8 @@ mod tests_pvp5;
 mod tests_review2;
 #[cfg(test)]
 mod tests_review3;
+#[cfg(test)]
+mod tests_review4;
 #[cfg(test)]
 mod tests_robust;
 #[cfg(test)]

@@ -341,6 +341,7 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         if (bound && !me.gm)
             || bag_with_items
             || item.bag == crate::game::store::BAG_PLAYER && item.slot < 19
+            || crate::game::map::vendor::in_buyback(item.bag, item.slot)
         {
             fail(map, Two::ErrMailAttachmentInvalid);
             return;

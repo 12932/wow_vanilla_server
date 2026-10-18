@@ -999,6 +999,12 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     if from == to {
         return;
     }
+    // A sold item is the vendor's until bought back (mangos's
+    // `IsValidPos` on the source).
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         send_fail(p, Fail::SlotEmpty, Guid::zero());
         return;
@@ -1196,6 +1202,10 @@ pub fn stow(map: &mut Map, g: Guid, from: (u8, u8), slots: &[(u8, u8)], full: Fa
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
@@ -1265,6 +1275,10 @@ pub fn split(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8), count: u32) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
+    if crate::game::map::vendor::in_buyback(from.0, from.1) {
+        send_fail(p, Fail::NotFound, Guid::zero());
+        return;
+    }
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
