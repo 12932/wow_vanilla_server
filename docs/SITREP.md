@@ -11,6 +11,12 @@ the questions waiting for you.
 
 ## Questions for you
 
+**Answered (2026-10-18):**
+- **#10:** keep swinging on arrival.
+- **#18:** keep moving unusable gear at login.
+- **#27:** snares stack, as mangos-classic has them: they coexist and the strongest counts (being done).
+- **#20:** explained; waiting on your go to switch to Thistle Tea's and mangos's model.
+
 1. **Death's wear, three small differences** (from 2a). Should they be aligned with Thistle Tea? Until you say so,
    they stay documented and unchanged.
    - Spirit of Redemption: wvs wears gear down when the spirit ends. Thistle Tea does at the fatal blow, and only if
@@ -361,6 +367,7 @@ the questions waiting for you.
 | 2g+2i: world, social, second pass (3 items, and 8 systems line by line) | merged | ef1db26 |
 | Robustness (all 8 items, and a remote abort fixed) | merged | 5f53bef |
 | wow_messages stop layout | done | 2bed07d |
+| wow_messages fork round 2 (crash bugs, 7 layouts), repinned everywhere | merged | 3eacdd1 |
 | Performance (CPU −77% idle, −55% arena, −38% crowd; load ×10 faster) | merged | 8775d80 |
 | 3a: matrix gaps, spells and auras (195 rows) | merged | 5e26640 |
 | 3b: matrix gaps, combat and creature AI (259 rows) | merged | |
