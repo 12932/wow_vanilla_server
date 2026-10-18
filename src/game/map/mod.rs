@@ -846,6 +846,11 @@ impl Map {
             self.empty_since = None;
             return;
         }
+        // Just emptied: the save is touched, so the realm's sweep counts
+        // its empty time from now, as this copy's own clock does.
+        if self.empty_since.is_none() {
+            crate::game::instances::touch(&self.realm, self.key);
+        }
         let since = *self.empty_since.get_or_insert(self.now);
         // One its raid's reset took goes at once.
         if crate::game::instances::expired(&self.realm, self.key)
