@@ -7,6 +7,7 @@
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::spells::{SpellEffect, SpellTemplate};
+use crate::game::map::Map;
 use crate::game::map::auras::{
     AURA_MOD_AOE_AVOIDANCE, AURA_MOD_RESIST_CHANCE, AURA_REFLECT_SPELLS,
 };
@@ -113,4 +114,128 @@ async fn which_spells_roll_the_magic_hit_and_against_what() {
         (Hit::Resist, Hit::Hit),
         "an area avoided, a bolt not"
     );
+}
+
+const LEECH: u32 = 98_410;
+const ENERGIZE: u32 = 98_411;
+
+/// Thistle Tea's "periodic leech threat goes to the drained creature
+/// without splitting among attackers", "player and creature owners
+/// receive grants and leeches" and "direct leech threat routes only to
+/// creatures", as mangos-classic's `PeriodicTick`: a mana leech's tick
+/// takes from the creature it is on and gives its caster the mana, half
+/// of it threat on the drained creature for the caster alone; a dead
+/// caster's leech gives nothing; a creature's grant of mana fills a
+/// player's pool, a player's a creature's.
+#[tokio::test]
+async fn a_leech_drains_to_its_living_caster_and_threatens_the_drained() {
+    use crate::game::fields::*;
+    use crate::game::map::auras::{self, AURA_PERIODIC_MANA_LEECH};
+    let mut d = data();
+    let mut leech = SpellTemplate {
+        id: LEECH,
+        name: "Leech".into(),
+        dmg_class: 1,
+        duration_index: 9,
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    leech.effects[0] = SpellEffect {
+        effect: 6,
+        aura: AURA_PERIODIC_MANA_LEECH,
+        amplitude: 1000,
+        base_points: 9,
+        base_dice: 1,
+        multiple_value: 1.0,
+        target_a: 6,
+        ..Default::default()
+    };
+    d.spells.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 60_000,
+            per_level: 0,
+            max: 60_000,
+        },
+    );
+    d.spells.spells.insert(LEECH, leech);
+    let mut energize = bolt(ENERGIZE, 1, false);
+    energize.effects[0] = SpellEffect {
+        effect: 30,
+        misc_value: 0,
+        base_points: 29,
+        base_dice: 1,
+        target_a: 6,
+        ..Default::default()
+    };
+    d.spells.spells.insert(ENERGIZE, energize);
+    let (_realm, _a, g, map) = setup_with(d, Class::Mage).await;
+    let out = on(&map, move |m| {
+        let brute = spawn(m, g, BRUTE, 20, 4.0);
+        let helper = spawn(m, g, BRUTE, 20, 6.0);
+        for c in [brute, helper] {
+            let f = m.unit_fields_mut(c).unwrap();
+            f.set_byte(UNIT_FIELD_BYTES_0, 3, 0);
+            f.set_u32(UNIT_FIELD_MAXPOWER1, 1_000);
+            f.set_u32(UNIT_FIELD_POWER1, 500);
+        }
+        let mana = |m: &Map, u| m.unit_fields(u).unwrap().get_u32(UNIT_FIELD_POWER1);
+        let set_mana =
+            |m: &mut Map, u, v| m.unit_fields_mut(u).unwrap().set_u32(UNIT_FIELD_POWER1, v);
+        set_mana(m, g, 0);
+        crate::game::map::ai::attacked(m, brute, g);
+        crate::game::map::ai::attacked(m, brute, helper);
+        let threat = |m: &Map, by| {
+            m.creature(brute)
+                .unwrap()
+                .threat
+                .iter()
+                .find(|(t, _)| *t == by)
+                .map_or(0.0, |(_, v)| *v)
+        };
+        let before = (threat(m, g), threat(m, helper));
+        let s = m.realm.data.spells.get(LEECH).cloned().unwrap();
+        let _ = auras::apply_spell(m, g, brute, &s, &[(0, 10)], auras::Context::default());
+        let tick = |m: &mut Map| {
+            let now = m.now;
+            if let Some(a) = auras::auras_mut(m, brute) {
+                for h in a.holders.iter_mut().filter(|h| h.spell == LEECH) {
+                    for x in h.effects.iter_mut() {
+                        x.next_tick = Some(now);
+                    }
+                }
+            }
+            auras::update(m);
+        };
+        tick(m);
+        let drained = (
+            mana(m, brute),
+            mana(m, g),
+            threat(m, g) - before.0,
+            threat(m, helper) - before.1,
+        );
+        crate::game::map::combat::deal_damage(m, brute, g, 1_000_000);
+        tick(m);
+        let dead = (mana(m, brute), mana(m, g));
+        // Grants: a creature's to a player, a player's to a creature.
+        crate::game::map::death::resurrect(m, g, 1.0);
+        set_mana(m, g, 10);
+        set_mana(m, helper, 10);
+        crate::game::map::spells::cast_triggered(m, helper, ENERGIZE, Some(g));
+        crate::game::map::spells::cast_triggered(m, g, ENERGIZE, Some(helper));
+        (drained, dead, (mana(m, g), mana(m, helper)))
+    })
+    .await;
+    let (drained, dead, granted) = out;
+    assert_eq!((drained.0, drained.1), (490, 10), "ten taken, ten given");
+    assert!(
+        (drained.2 - 5.0).abs() < 1e-3,
+        "half of it threat for the caster: {}",
+        drained.2
+    );
+    assert_eq!(drained.3, 0.0, "none for another on the list");
+    assert_eq!(dead, (490, 10), "a dead caster's leech takes nothing");
+    assert_eq!(granted.0, 40, "a creature's grant fills a player");
+    assert_eq!(granted.1, 40, "a player's a creature");
 }
