@@ -13,7 +13,7 @@ use wow_world_messages::vanilla::*;
 use super::tests_p3_scripts::*;
 use crate::game::data::scripts::ScriptStep;
 use crate::game::fields::*;
-use crate::game::map::Map;
+use crate::game::map::{Map, MapHandle};
 
 /// The events Thistle Tea's dump has for `entry`, by id.
 fn dumped_events(entry: u32) -> Vec<u32> {
@@ -509,4 +509,76 @@ async fn a_lazy_peon_wakes_for_the_quest_once_chops_wood_and_sleeps_again() {
         until(&map, 5_000, move |m| has(m, peon, PEON_SLEEP)).await,
         "asleep at home"
     );
+}
+
+/// `entry` summoned by `at` and set on a dummy: the two.
+async fn set_on_dummy(map: &MapHandle, entry: u32, at: Vector3d) -> (Guid, Guid) {
+    map.query(move |m| {
+        let g = summon(m, entry, off(at, 3.0, 0.0), 0.0);
+        let d = dummy(m, off(at, 5.0, 0.0));
+        tough(m, g);
+        if let Some(f) = m.unit_fields_mut(g) {
+            f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, 14);
+        }
+        if let Some(f) = m.unit_fields_mut(d) {
+            f.set_u32(UNIT_FIELD_MAXPOWER1, 10_000);
+            f.set_u32(UNIT_FIELD_POWER1, 10_000);
+        }
+        crate::game::map::ai::attacked(m, g, d);
+        (g, d)
+    })
+    .await
+    .unwrap()
+}
+
+/// The engineers' combat gadgets in a fight: the battle chicken flies into
+/// a fury as it starts and every 25 seconds, and squawks once, 30 to 80
+/// seconds in; the arcanite dragonling buffets its victim 5 seconds in
+/// and every 22.5, and breathes fire every 10 to 60; the emerald whelp
+/// spits acid every two seconds; felhounds burn their victim's mana every
+/// 9.8 to 15.2 (Thistle Tea's ports of vmangos's gadget AIs).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_combat_gadgets_fight_with_their_own_spells_on_their_timers() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Engineer").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let (chicken, _) = set_on_dummy(&map, 8836, at).await;
+    c.sees(chicken).await;
+    assert!(
+        until(&map, 3_000, move |m| has(m, chicken, 13168)).await,
+        "a fury as it starts"
+    );
+    timed_cast(&mut c, &map, chicken, 883603, 13168, (25.0, 25.0), (25.0, 25.0), None).await;
+    let squawk = timer(&map, chicken, 883601).await;
+    assert!(between(squawk, 30.0, 80.0), "{squawk:?}");
+    c.clear();
+    map.query(move |m| {
+        if let Some(cr) = m.caster_mut(chicken) {
+            cr.gcd_until = None;
+        }
+    })
+    .await;
+    fire(&map, chicken, 883601).await;
+    assert!(cast_any_of(&mut c, chicken, 23060, Duration::from_secs(3)).await.is_some());
+    assert!(
+        map.query(move |m| spent(m, chicken, 883601)).await.unwrap(),
+        "squawks once"
+    );
+    clear(&map, vec![chicken]);
+    for (entry, events) in [
+        (12473, vec![(1247301, 9658, (5.0, 5.0), (22.5, 22.5)), (1247302, 8873, (10.0, 60.0), (10.0, 60.0))]),
+        (8776, vec![(877601, 9591, (1.0, 1.0), (2.0, 2.0))]),
+        (9556, vec![(955601, 15980, (1.0, 2.5), (9.8, 15.2))]),
+        (10656, vec![(1065601, 15980, (1.0, 2.5), (9.8, 15.2))]),
+    ] {
+        let (g, d) = set_on_dummy(&map, entry, at).await;
+        c.sees(g).await;
+        for (id, spell, first, repeat) in events {
+            timed_cast(&mut c, &map, g, id, spell, first, repeat, Some(d)).await;
+        }
+        clear(&map, vec![g, d]);
+    }
 }
