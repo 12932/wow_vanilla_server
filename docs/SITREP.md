@@ -461,12 +461,12 @@ the questions waiting for you.
     own. That is a few days' work across the harness and its tests, so I left it for your say.
 
 33. **Code review, first findings** (auth, connections, sessions, the store):
-    - **Item and money moves are saved apart** (fix queued). A trade changes two characters, and mail and auctions
+    - **Item and money moves are saved apart** (fixed, `70cd32f`). A trade changes two characters, and mail and auctions
       move items between a character and a record. Each side is saved on its own time: the record at once, a
       character at its 5-minute save or logout. A crash in between, such as an abort, the OOM killer or a power cut,
       duplicates or loses the item. mangos saves both sides in one transaction, and so will wvs.
-    - **A failed reconnect proof tells the client it is banned** (fix queued). mangos closes the connection without
-      an answer.
+    - **A failed reconnect proof tells the client it is banned** (fixed). It is now answered as Thistle Tea answers it
+      (`FailUnknown0`) and closed. mangos closes without an answer.
     - **No lockout after wrong passwords.** Nothing slows a password guesser beyond the cap on open connections.
       mangos has `WrongPass.MaxCount`, off by default. Add one, per account and per address, with a back-off? That
       is your call, as it's a policy.
@@ -474,6 +474,17 @@ the questions waiting for you.
       WAL mode with a single writer that should only happen with a full disk. A failed logout save loses the session
       since the last save. Keeping failed saves to retry is possible, but the right answer to a full disk is an
       operator alert, so I've left it.
+    - **The fix for saves apart:** `Store::save_together` writes the characters and records involved in one
+      transaction, retried whole and never split. It covers:
+      - a trade;
+      - mail sent or taken: its item, its money, a letter made of it, and cash on delivery;
+      - an auction put up, bid on, bought out, cancelled or swept;
+      - a charter or emblem bought.
+
+      A test for each reads both sides back with no other save, and fails without the fix.
+      - **Left, minor:** founding a guild saves the guild apart from taking the charter. A crash in between leaves a
+        guild and an unused charter, but nothing of value is copied.
+      - **Left, minor:** a deleted character's top bid is cleared without a refund, as before.
     - **GM account commands miss lowercase names** (fix queued). `.ban alice 10` answers "No account alice." because
       accounts are stored in capitals and the command matches exactly. `.unban` and `.account gm` have the same bug.
     - **`creation = "auto"` is the shipped default.** An unknown name gets an account whose password is the name.
@@ -541,6 +552,7 @@ the questions waiting for you.
 | Fast and extended test suites | merged | eef0000 |
 | Round 3 (3m to 3r), the work committed before the agents stopped | merged | 208be0b |
 | 3p: combat and power (179 rows) | merged | 1e01c85 |
+| Review fix 1: trades, mail and auctions saved together; the reconnect answer | merged | 70cd32f |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
 ## Left for later, and why
