@@ -197,6 +197,8 @@ async fn a_warriors_stances_set_the_form_one_at_a_time_and_lock_their_abilities_
             );
             let kobold = spawn(m, w, KOBOLD, 60, 2.0);
             equip(m, w, SWORD, 15);
+            // Out of the Battle Stance a warrior logs in in.
+            auras::remove_spell(m, w, BATTLE_STANCE, None);
             let mut out = Vec::new();
             // No stance: Hamstring wants battle or berserker.
             out.push(("none", form(m, w), check(m, w, HAMSTRING, kobold)));

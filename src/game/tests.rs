@@ -2363,6 +2363,9 @@ mod real {
             // What the last spell left (Grovel kneels, and holds) goes, and
             // so does its fight.
             auras::clear_on_death(m, g);
+            // So does the spell's own aura: a warrior logs in in Battle
+            // Stance, which death keeps.
+            auras::remove_spell(m, g, spell, None);
             crate::game::map::combat::leave_combat(m, g);
             let s = data.spells.get(spell).unwrap();
             let counter = m.next_creature_counter;
