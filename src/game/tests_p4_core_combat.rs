@@ -65,7 +65,7 @@ fn a_creatures_damage_range_is_its_class_damage_by_the_template_multiplier_once(
 }
 
 #[tokio::test]
-async fn the_combat_flag_goes_when_the_fight_does_or_six_seconds_after_the_last_blow() {
+async fn the_combat_flag_goes_when_the_fight_does_or_when_no_creature_holds_her() {
     let (_realm, _a, g, map) = setup(Class::Warrior).await;
     let r = map
         .query(move |m| {
@@ -80,21 +80,22 @@ async fn the_combat_flag_goes_when_the_fight_does_or_six_seconds_after_the_last_
             let fighting = (flag(m, g), flag(m, brute));
             combat::leave_combat(m, g);
             let left = flag(m, g);
-            // Again, and the clock runs out.
+            // Again; the brute holding her, she stays in at its look.
             forced_swing(m, g, brute, Outcome::Hit);
             combat::stop_attack(m, g);
             let again = flag(m, g);
-            // No creature holds her on its threat list.
-            crate::game::map::ai::forget(m, g);
-            let past = m.now - (combat::COMBAT_TIMEOUT + Duration::from_millis(100));
-            m.players.get_mut(&g).unwrap().combat.last_action = Some(past);
-            m.players.get_mut(&g).unwrap().combat.attackers.clear();
+            m.now += Duration::from_secs(30);
             combat::update_players(m);
-            (fighting, left, again, flag(m, g))
+            let held = flag(m, g);
+            // No creature holds her on its threat list: out at the next.
+            crate::game::map::ai::forget(m, g);
+            m.now += combat::COMBAT_CHECK;
+            combat::update_players(m);
+            (fighting, left, again, held, flag(m, g))
         })
         .await
         .unwrap();
-    assert_eq!(r, ((true, true), false, true, false));
+    assert_eq!(r, ((true, true), false, true, true, false));
 }
 
 #[tokio::test]

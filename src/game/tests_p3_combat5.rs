@@ -129,8 +129,14 @@ async fn switching_victims_stops_the_old_attack_and_its_strike_but_keeps_the_swi
     .await;
 }
 
+/// The next update looks at `g`'s fight for its end.
+fn look_now(m: &mut Map, g: Guid) {
+    let now = m.now;
+    m.combat_mut(g).unwrap().next_check = Some(now);
+}
+
 #[tokio::test]
-async fn a_fight_holds_a_player_for_its_window_and_not_for_an_attack_that_lands_nowhere() {
+async fn an_attack_that_lands_nowhere_holds_no_one_and_ends_with_the_fight() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;
     let r = map
         .query(move |m| {
@@ -142,55 +148,67 @@ async fn a_fight_holds_a_player_for_its_window_and_not_for_an_attack_that_lands_
             c.position.x += 20.0;
             c.combat = Default::default();
             c.threat.clear();
-            let now = m.now;
-            let ago = |s: u64| now - Duration::from_millis(s);
             {
                 let c = m.combat_mut(ga).unwrap();
                 c.victim = far;
                 c.attacking = true;
-                c.last_action = Some(ago(2_000));
                 c.attackers.insert(far);
             }
+            // Not yet looked at: still in it.
+            let now = m.now;
+            m.combat_mut(ga).unwrap().next_check = Some(now + Duration::from_millis(500));
             combat::update_players(m);
-            let within = in_combat(m, ga);
-            // Past the window, swinging at it holds them no longer, though
-            // the attack stays on.
-            m.combat_mut(ga).unwrap().last_action = Some(ago(7_000));
+            let before = in_combat(m, ga);
+            // Looked at, nothing holds them: out, the attack stopped with
+            // it (mangos's `HandleExitCombat`), and looked at no more.
+            look_now(m, ga);
             combat::update_players(m);
-            let lapsed = (
+            let c = m.combat(ga).unwrap();
+            let after = (
                 in_combat(m, ga),
-                m.combat(ga).unwrap().attacking,
-                m.combat(ga).unwrap().attackers.is_empty(),
+                c.attacking,
+                c.attackers.is_empty(),
+                c.next_check,
             );
-            (within, lapsed)
+            (before, after)
         })
         .await
         .unwrap();
     assert!(r.0);
-    assert_eq!(r.1, (false, true, true));
+    assert_eq!(r.1, (false, false, true, None));
 }
 
 #[tokio::test]
-async fn a_dead_victim_stops_the_swings_and_the_fight_lingers_for_its_window() {
+async fn a_dead_victim_ends_the_fight_at_the_next_look_with_no_window() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;
     let r = map
         .query(move |m| {
             let brute = spawn(m, ga, BRUTE, 20, 1.0);
             forced_swing(m, ga, brute, Outcome::Miss);
+            // Begun, it is looked at the next update, then every 1.2 s.
+            let first = m.combat(ga).unwrap().next_check == Some(m.now);
+            combat::update_players(m);
+            let held = (
+                in_combat(m, ga),
+                m.combat(ga).unwrap().next_check == Some(m.now + combat::COMBAT_CHECK),
+            );
             combat::kill(m, ga, brute);
             let now = m.now;
             m.combat_mut(ga).unwrap().next_swing = Some(now);
             combat::try_swing(m, ga);
+            // Dead, it holds no one; she is out at the next look.
             combat::update_players(m);
-            let lingering = (m.combat(ga).unwrap().attacking, in_combat(m, ga));
-            m.combat_mut(ga).unwrap().last_action = Some(now - Duration::from_millis(7_000));
+            let waiting = (m.combat(ga).unwrap().attacking, in_combat(m, ga));
+            look_now(m, ga);
             combat::update_players(m);
-            (lingering, in_combat(m, ga))
+            (first, held, waiting, in_combat(m, ga))
         })
         .await
         .unwrap();
-    assert_eq!(r.0, (false, true));
-    assert!(!r.1);
+    assert!(r.0, "looked at the update after it began");
+    assert_eq!(r.1, (true, true));
+    assert_eq!(r.2, (false, true));
+    assert!(!r.3);
 }
 
 #[tokio::test]
@@ -200,23 +218,74 @@ async fn a_live_creature_with_the_player_on_its_list_holds_them_and_a_dead_or_go
         .query(move |m| {
             let brute = spawn(m, ga, BRUTE, 20, 1.0);
             forced_swing(m, ga, brute, Outcome::Miss);
-            let now = m.now;
             let c = m.creature_mut(brute).unwrap();
             c.combat.attacking = true;
             c.combat.victim = ga;
             c.threat = vec![(ga, 10.0)];
             m.combat_mut(ga).unwrap().attacking = false;
-            m.combat_mut(ga).unwrap().last_action = Some(now - Duration::from_secs(60));
+            look_now(m, ga);
             combat::update_players(m);
             let held = in_combat(m, ga);
-            combat::kill(m, ga, brute);
-            m.combat_mut(ga).unwrap().last_action = Some(now - Duration::from_secs(60));
+            // Attacking her, though she is off its list: still held.
+            m.creature_mut(brute).unwrap().threat.clear();
+            look_now(m, ga);
             combat::update_players(m);
-            (held, in_combat(m, ga))
+            let attacked = in_combat(m, ga);
+            combat::kill(m, ga, brute);
+            look_now(m, ga);
+            combat::update_players(m);
+            let killed = in_combat(m, ga);
+            // Another on her list, gone from the world.
+            let other = spawn(m, ga, BRUTE, 20, 1.0);
+            forced_swing(m, ga, other, Outcome::Miss);
+            m.remove_creature(other);
+            look_now(m, ga);
+            combat::update_players(m);
+            (held, attacked, killed, in_combat(m, ga))
         })
         .await
         .unwrap();
-    assert_eq!(r, (true, false));
+    assert_eq!(r, (true, true, false, false));
+}
+
+#[tokio::test]
+async fn a_creature_that_evades_lets_the_player_go_at_the_next_look() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 1.0);
+            // Struck by it: in the fight with no timer of her own.
+            forced_swing(m, brute, ga, Outcome::Miss);
+            let struck = (in_combat(m, ga), m.combat(ga).unwrap().combat_until);
+            look_now(m, ga);
+            combat::update_players(m);
+            let held = in_combat(m, ga);
+            ai::enter_evade(m, brute);
+            look_now(m, ga);
+            combat::update_players(m);
+            (struck, held, in_combat(m, ga))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, (true, None), "a creature's blow sets no timer");
+    assert!(r.1, "held while it fights her");
+    assert!(!r.2, "out once it evades");
+}
+
+#[tokio::test]
+async fn a_creature_taking_the_player_on_puts_them_in_the_fight_before_any_blow() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 10.0);
+            let before = in_combat(m, ga);
+            // It aggroes on her (mangos's `EngageInCombatWith`).
+            ai::attacked(m, brute, ga);
+            (before, in_combat(m, ga))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (false, true));
 }
 
 #[tokio::test]

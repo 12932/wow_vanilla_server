@@ -281,6 +281,9 @@ pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a client has to acknowledge a teleport before its movement is
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
+/// A teleport within the map shorter than this, in yards, keeps the
+/// player's fight ([`Map::near_teleport`], mangos's `NearTeleportTo`).
+pub const NEAR_TELEPORT_KEEPS_COMBAT: f32 = 100.0;
 
 /// The first of `g`'s beats of period `every` after `now`, counted from
 /// `start` (the map's). Each object keeps to a phase of its own in the
@@ -1160,12 +1163,48 @@ impl Map {
     /// A map named without its copy is this copy when it is this map (a
     /// spell's place within a dungeon, BWL's orb), or the player's copy of
     /// another.
+    ///
+    /// It ends the player's fight (mangos's `TeleportTo` without
+    /// `TELE_TO_NOT_LEAVE_COMBAT`); [`Map::near_teleport`] and
+    /// [`Map::teleport_with`] are the teleports that may keep it.
     pub fn teleport(
         &mut self,
         guid: Guid,
         key: MapKey,
         position: wow_world_messages::vanilla::Vector3d,
         orientation: f32,
+    ) {
+        self.teleport_with(guid, key, position, orientation, false);
+    }
+
+    /// A teleport within this map that keeps the player's fight if it is
+    /// shorter than [`NEAR_TELEPORT_KEEPS_COMBAT`] (mangos's
+    /// `NearTeleportTo`): a spell's (Blink, a teleport to its caster or
+    /// its place on this map), Stuck's, a chair's.
+    pub fn near_teleport(
+        &mut self,
+        guid: Guid,
+        position: wow_world_messages::vanilla::Vector3d,
+        orientation: f32,
+    ) {
+        let keep = self.position_of(guid).is_some_and(|at| {
+            let (dx, dy, dz) = (at.x - position.x, at.y - position.y, at.z - position.z);
+            dx * dx + dy * dy + dz * dz < NEAR_TELEPORT_KEEPS_COMBAT * NEAR_TELEPORT_KEEPS_COMBAT
+        });
+        let key = self.key;
+        self.teleport_with(guid, key, position, orientation, keep);
+    }
+
+    /// [`Map::teleport`], keeping the player's fight if `keep_combat` and
+    /// the teleport is within this map (mangos's
+    /// `TELE_TO_NOT_LEAVE_COMBAT`, which a far teleport ignores).
+    pub fn teleport_with(
+        &mut self,
+        guid: Guid,
+        key: MapKey,
+        position: wow_world_messages::vanilla::Vector3d,
+        orientation: f32,
+        keep_combat: bool,
     ) {
         let mut key = key;
         if key.instance == 0 && key.map == self.key.map {
@@ -1203,6 +1242,12 @@ impl Map {
         // way too (Thistle Tea's `disengage_for_world_transition`), and a
         // flight (its `cancel_authoritative_movement`).
         npc::cancel_flight(self, guid);
+        // The player's fight ends, but not their pet's (mangos's
+        // `CombatStop`, not `CombatStopWithPets`): the creatures keep them
+        // on their lists, and a blow puts them back in it.
+        if self.players.contains_key(&guid) && (key != self.key || !keep_combat) {
+            combat::leave_combat(self, guid);
+        }
         crate::game::map::spells::interrupts::teleported(self, guid);
         if self.players.contains_key(&guid)
             && self.caster(guid).is_some_and(|c| c.casting.is_some())

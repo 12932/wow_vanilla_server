@@ -1621,12 +1621,22 @@ const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 /// or none as it lands. Missing, it does if the creature saw the caster or
 /// the miss breaks stealth, and the cast was the caster's own with threat.
 /// Damage puts it in the fight anyway (`outcome::deal`).
+///
+/// The players' sides of a fight it starts are in it too, a player struck
+/// as well as one striking (`combat::struck`); and a helpful spell landing
+/// on one in a fight puts its caster in it (`combat::assisted`), unless it
+/// makes no threat (mangos's `CasterHitTargetWithSpell`).
 fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Launch, hit: bool) {
     if target == caster
-        || !guid::is_unit(target)
-        || auras::positive(s)
+        || !(guid::is_unit(target) || guid::is_player(target))
         || !(guid::is_player(caster) || guid::is_unit(caster))
     {
+        return;
+    }
+    if auras::positive(s) {
+        if hit && !s.attr(1, ATTR_EX_NO_THREAT) && !s.attr(2, ATTR_EX2_NO_INITIAL_THREAT) {
+            combat::assisted(map, caster, target);
+        }
         return;
     }
     let seen = stealth::sees(map, target, caster);
@@ -1646,8 +1656,11 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
         (seen || breaks) && (breaks || (own && !s.attr(1, ATTR_EX_NO_THREAT)))
     };
     if fights {
-        crate::game::map::ai::attacked(map, target, caster);
-        crate::game::map::creature_combat::hostile_act(map, target);
+        if guid::is_unit(target) {
+            crate::game::map::ai::attacked(map, target, caster);
+            crate::game::map::creature_combat::hostile_act(map, target);
+        }
+        combat::struck(map, caster, target);
     }
 }
 
