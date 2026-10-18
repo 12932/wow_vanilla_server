@@ -321,3 +321,192 @@ async fn the_soul_gem_tames_yenniku_only_for_one_on_the_quest() {
         .unwrap();
     assert_eq!(evaded, 0, "no longer stunned-looking");
 }
+
+const RABID_THISTLE_BEAR: u32 = 2164;
+const CAPTURED_BEAR: u32 = 11836;
+const BEAR_CAPTURED_IN_TRAP: u32 = 9439;
+
+/// The kills `g` has toward the quest that asks for `entry`.
+fn kills_of(m: &Map, g: Guid, quest: u32) -> u32 {
+    m.players[&g]
+        .journal
+        .log
+        .iter()
+        .find(|l| l.quest == quest)
+        .map_or(0, |l| l.kills.iter().sum())
+}
+
+/// Another spell does nothing to a rabid thistle bear; the trap's
+/// captures it for the trapper: it becomes the friendly captured bear,
+/// counts for the trapper's quest, gives up its fight and follows them;
+/// trapped again, it counts no more (Thistle Tea's port of vmangos's
+/// `npc_rabid_thistle_bear`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_trapped_rabid_bear_is_captured_for_its_trapper_once() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let quest = *realm
+        .data
+        .npc
+        .quests
+        .iter()
+        .find(|(_, q)| {
+            q.required_kills
+                .iter()
+                .any(|(e, _)| *e == CAPTURED_BEAR as i32)
+        })
+        .expect("a quest for the captured bear")
+        .0;
+    let (_c, me, map) = hero(&realm, "Trapper").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let bear = summon_near(&map, RABID_THISTLE_BEAR, off(at, 4.0, 0.0)).await;
+    let (other, captured) = map
+        .query(move |m| {
+            crate::game::tests_p3_entity::take_quest(m, me, quest);
+            crate::game::map::ai::attacked(m, bear, me);
+            crate::game::map::event_ai::spell_hit(m, bear, me, 133, 4);
+            let other = (m.creature(bear).unwrap().entry, kills_of(m, me, quest));
+            crate::game::map::event_ai::spell_hit(m, bear, me, BEAR_CAPTURED_IN_TRAP, 1);
+            let c = m.creature(bear).unwrap();
+            (other, (c.entry, kills_of(m, me, quest)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(other, (RABID_THISTLE_BEAR, 0), "another spell: nothing");
+    assert_eq!(captured, (CAPTURED_BEAR, 1), "captured, and counted");
+    assert!(
+        until(&map, 3_000, move |m| at_peace(m, bear)).await,
+        "its fight given up"
+    );
+    // It follows the trapper away.
+    let away = off(at, -15.0, 0.0);
+    map.query(move |m| put(m, me, away)).await;
+    assert!(
+        until(&map, 8_000, move |m| m
+            .position_of(bear)
+            .is_some_and(|p| crate::game::map::combat::dist(p, away) < 5.0))
+        .await,
+        "at the trapper's heels"
+    );
+    let again = map
+        .query(move |m| {
+            crate::game::map::event_ai::spell_hit(m, bear, me, BEAR_CAPTURED_IN_TRAP, 1);
+            kills_of(m, me, quest)
+        })
+        .await
+        .unwrap();
+    assert_eq!(again, 1, "once");
+}
+
+const LAZY_PEON: u32 = 10556;
+const PEON_SLEEP: u32 = 17743;
+const AWAKEN_PEON: u32 = 19938;
+const LAZY_PEONS: u32 = 5441;
+const LUMBER_PILE: u32 = 175784;
+const EMOTE_STATE_WORK_CHOPWOOD: u32 = 234;
+
+/// A lazy peon in Durotar, asleep, falls asleep again whenever its sleep
+/// lapses; another spell does nothing, but Awaken Peon wakes it, counting
+/// once for the player's Lazy Peons however often it is hit; awake, it
+/// walks to the nearest lumber pile and chops wood there, and at home it
+/// sleeps again (Thistle Tea's port of vmangos's `npc_lazy_peon`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_lazy_peon_wakes_for_the_quest_once_chops_wood_and_sleeps_again() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let at = super::tests_p4_scripts_dungeons::spawn_of(&realm, 1, LAZY_PEON);
+    let (mut c, me, _) = hero(&realm, "Waker").await;
+    let map = go(&realm, &mut c, 1, at).await;
+    let peon = {
+        let mut found = None;
+        for _ in 0..40 {
+            found = map
+                .query(move |m| {
+                    m.creatures
+                        .iter()
+                        .filter(|(_, c)| c.entry == LAZY_PEON && c.alive())
+                        .min_by(|(_, a), (_, b)| {
+                            crate::game::map::combat::dist(a.position, at)
+                                .total_cmp(&crate::game::map::combat::dist(b.position, at))
+                        })
+                        .map(|(_, c)| c.guid)
+                })
+                .await
+                .flatten();
+            if found.is_some() {
+                break;
+            }
+            sleep_ms(100).await;
+        }
+        found.expect("a lazy peon")
+    };
+    assert!(
+        until(&map, 5_000, move |m| has(m, peon, PEON_SLEEP)).await,
+        "asleep"
+    );
+    map.query(move |m| crate::game::map::auras::remove_spell(m, peon, PEON_SLEEP, None))
+        .await;
+    assert!(
+        until(&map, 5_000, move |m| has(m, peon, PEON_SLEEP)).await,
+        "asleep again as its sleep lapses"
+    );
+    let (other, woken, again) = map
+        .query(move |m| {
+            crate::game::tests_p3_entity::take_quest(m, me, LAZY_PEONS);
+            crate::game::map::event_ai::spell_hit(m, peon, me, 133, 4);
+            let other = (kills_of(m, me, LAZY_PEONS), has(m, peon, PEON_SLEEP));
+            crate::game::map::event_ai::spell_hit(m, peon, me, AWAKEN_PEON, 1);
+            let woken = (
+                kills_of(m, me, LAZY_PEONS),
+                crate::game::map::event_ai::phase(m, peon),
+            );
+            crate::game::map::event_ai::spell_hit(m, peon, me, AWAKEN_PEON, 1);
+            (other, woken, kills_of(m, me, LAZY_PEONS))
+        })
+        .await
+        .unwrap();
+    assert_eq!(other, (0, true), "another spell: still asleep");
+    assert_eq!(woken, (1, 1), "counted, and up");
+    assert_eq!(again, 1, "once a nap");
+    assert!(
+        until(&map, 4_000, move |m| !has(m, peon, PEON_SLEEP)).await,
+        "awake"
+    );
+    // To the nearest pile, and to work.
+    assert!(
+        until(&map, 25_000, move |m| emote_state(m, peon) == EMOTE_STATE_WORK_CHOPWOOD).await,
+        "chopping wood"
+    );
+    let (phase, by_pile) = map
+        .query(move |m| {
+            let p = m.position_of(peon).unwrap();
+            let nearest = m
+                .gameobjects
+                .iter()
+                .filter(|(_, o)| o.entry == LUMBER_PILE)
+                .map(|(_, o)| crate::game::map::combat::dist(o.position, p))
+                .fold(f32::MAX, f32::min);
+            (crate::game::map::event_ai::phase(m, peon), nearest)
+        })
+        .await
+        .unwrap();
+    assert_eq!(phase, 2);
+    assert!(by_pile < 6.0, "at a lumber pile: {by_pile}");
+    // Home: asleep again.
+    let home = map
+        .query(move |m| {
+            crate::game::map::event_ai::reached_home(m, peon);
+            crate::game::map::event_ai::phase(m, peon)
+        })
+        .await
+        .unwrap();
+    assert_eq!(home, 0);
+    assert!(
+        until(&map, 5_000, move |m| has(m, peon, PEON_SLEEP)).await,
+        "asleep at home"
+    );
+}
