@@ -373,6 +373,8 @@ async fn stratholmes_bosses_fight_as_thistle_tea_scripts_them() {
     clear(&map, vec![timmy]);
     // Ramstein's Knockout.
     let ramstein = pulled(&map, 10439, me).await;
+    // Seen first, as Timmy is, or his cast goes to no one.
+    c.sees(ramstein).await;
     let knockout = map
         .query(move |m| event_with(m, 10439, 12000))
         .await
