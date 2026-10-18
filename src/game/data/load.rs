@@ -1307,6 +1307,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
                     c.i32(&format!("RewRepValue{}", i + 1)),
                 )
             }),
+            reputation_no_spillover: c.u32("RewRepSpilloverMask"),
             required_min_rep: (c.u32("RequiredMinRepFaction"), c.i32("RequiredMinRepValue")),
             required_max_rep: (c.u32("RequiredMaxRepFaction"), c.i32("RequiredMaxRepValue")),
             rep_objective: (c.u32("RepObjectiveFaction"), c.i32("RepObjectiveValue")),
@@ -2193,6 +2194,30 @@ fn load_pets(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     ) {
         let _ = build;
         pets.spell_lists.insert(list, spells);
+    }
+    // Cooldowns are seconds, but for a few in milliseconds already (as
+    // Thistle Tea reads them: 1000 or more).
+    let ms = |v: u32| if v >= 1000 { v } else { v * 1000 };
+    for (entry, c) in rows(
+        db,
+        "SELECT * FROM creature_charm_spells \
+         WHERE patch_min <= 10 AND patch_max >= 10 AND availability > 0 AND slot <= 3 \
+         ORDER BY entry, slot, spell_id",
+        |c| {
+            let (a, b) = (c.u32("cooldown_min"), c.u32("cooldown_max"));
+            (
+                c.u32("entry"),
+                super::pets::CharmSpell {
+                    slot: c.u32("slot"),
+                    spell: c.u32("spell_id"),
+                    availability: c.f32("availability"),
+                    cooldown_min_ms: ms(a.min(b)),
+                    cooldown_max_ms: ms(a.max(b)),
+                },
+            )
+        },
+    ) {
+        pets.charm_spells.entry(entry).or_default().push(c);
     }
     for (entry, list) in rows(
         db,

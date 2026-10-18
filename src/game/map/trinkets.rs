@@ -43,6 +43,8 @@ fn initial(parent: u32) -> Option<u32> {
     match parent {
         UNSTABLE_POWER => Some(UNSTABLE_POWER_BONUS),
         RESTLESS_STRENGTH => Some(RESTLESS_STRENGTH_BONUS),
+        BRITTLE_ARMOR => Some(BRITTLE_ARMOR_BONUS),
+        MERCURIAL_SHIELD => Some(MERCURIAL_SHIELD_BONUS),
         _ => None,
     }
 }
@@ -154,13 +156,41 @@ pub fn proc(map: &mut Map, owner: Guid, h: &Holder, e: &Event) -> bool {
     }
 }
 
-/// Whether `s` is one of the scripts a hit casts.
+/// The dummy scripts Brittle Armor and Mercurial Shield trigger as they go
+/// on: each gives its bonus, which starts full (mangos's 29284 and 29286,
+/// Thistle Tea's `spell_brittle_armor_dummy` and
+/// `spell_mercurial_shield_dummy`).
+const BRITTLE_ARMOR_DUMMY: &str = "spell_brittle_armor_dummy";
+const MERCURIAL_SHIELD_DUMMY: &str = "spell_mercurial_shield_dummy";
+
+/// Whether `s` is one of the scripts a hit casts, or a dummy that gives a
+/// bonus.
 pub fn handles(s: &SpellTemplate) -> bool {
     matches!(s.id, BRITTLE_ARMOR_HIT | MERCURIAL_SHIELD_HIT)
+        || matches!(
+            s.script_name.as_str(),
+            BRITTLE_ARMOR_DUMMY | MERCURIAL_SHIELD_DUMMY
+        )
 }
 
-/// A hit's script: a stack off its bonus.
-pub fn effect(map: &mut Map, caster: Guid, s: &SpellTemplate) {
+/// A hit's script: a stack off its bonus. A dummy's: its bonus on the
+/// target.
+pub fn effect(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) {
+    let give = match s.script_name.as_str() {
+        BRITTLE_ARMOR_DUMMY => Some(BRITTLE_ARMOR_BONUS),
+        MERCURIAL_SHIELD_DUMMY => Some(MERCURIAL_SHIELD_BONUS),
+        _ => None,
+    };
+    if let Some(bonus) = give {
+        // The dummy runs before its trinket's aura is on, which then gives
+        // the bonus itself (`applied`); a dummy on its own gives it to an
+        // aura already there.
+        let parent = parent_of(bonus).unwrap_or(0);
+        if auras::auras(map, target).is_some_and(|a| a.has_spell(parent)) {
+            crate::game::map::spells::cast_triggered(map, caster, bonus, Some(target));
+        }
+        return;
+    }
     let bonus = match s.id {
         BRITTLE_ARMOR_HIT => BRITTLE_ARMOR_BONUS,
         MERCURIAL_SHIELD_HIT => MERCURIAL_SHIELD_BONUS,

@@ -2247,12 +2247,43 @@ fn form_display(form: u8, race: u8) -> u32 {
     }
 }
 
+/// The Orb of Deception: a transform of no creature, into the other side's
+/// race of the wearer's own sex.
+const ORB_OF_DECEPTION: u32 = 16739;
+
+/// The Orb of Deception's look for a wearer's native model, as mangos's
+/// `OrbOfDeception` script picks it.
+fn deception_display(native: u32) -> Option<u32> {
+    Some(match native {
+        1479 => 10134,
+        1478 => 10135,
+        59 => 10136,
+        49 => 10137,
+        50 => 10138,
+        51 => 10139,
+        52 => 10140,
+        53 => 10141,
+        54 => 10142,
+        55 => 10143,
+        56 => 10144,
+        58 => 10145,
+        57 => 10146,
+        60 => 10147,
+        1563 => 10148,
+        1564 => 10149,
+        _ => return None,
+    })
+}
+
 /// The look a unit shows: its newest transform's (a harmful one's before
 /// any helpful), else its form's, else its own, as mangos's
 /// `RestoreDisplayId` and Thistle Tea's `Appearance` work it out whenever
 /// a transform or a form comes or goes.
 fn sync_display(map: &mut Map, target: Guid) {
     let data = map.realm.data.clone();
+    let native = map
+        .unit_fields(target)
+        .map_or(0, |f| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
     let Some(a) = auras(map, target) else {
         return;
     };
@@ -2263,9 +2294,12 @@ fn sync_display(map: &mut Map, target: Guid) {
             h.effects
                 .iter()
                 .filter(|x| x.kind == AURA_TRANSFORM)
-                .map(move |x| (h.positive, x.misc))
+                .map(move |x| (h.spell, h.positive, x.misc))
         })
-        .filter_map(|(positive, misc)| {
+        .filter_map(|(spell, positive, misc)| {
+            if misc == 0 && spell == ORB_OF_DECEPTION {
+                return deception_display(native).map(|d| (positive, d));
+            }
             data.creature_template(misc.max(0) as u32)
                 .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
                 .map(|d| (positive, d))

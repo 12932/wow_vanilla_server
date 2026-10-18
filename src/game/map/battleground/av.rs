@@ -783,13 +783,18 @@ pub fn graveyard(map: &Map, s: usize, pos: Vector3d) -> Option<(Vector3d, f32)> 
 /// The mines' supplies, Irondeep's then Coldtooth's.
 const SUPPLIES: [[u32; 3]; 2] = [[178785, 178788, 178789], [178784, 178786, 178787]];
 
+/// The mine whose supplies object `entry` is: 0 Irondeep, 1 Coldtooth.
+pub fn supply_mine(entry: u32) -> Option<usize> {
+    SUPPLIES.iter().position(|e| e.contains(&entry))
+}
+
 /// Whether `object` is a mine's supplies the side `s` may not take: only
 /// the side holding the mine may (Thistle Tea's `Mine.supply_allowed?`).
 pub fn supplies_barred(map: &Map, s: Option<usize>, object: Guid) -> bool {
     let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
         return false;
     };
-    let Some(mine) = SUPPLIES.iter().position(|e| e.contains(&entry)) else {
+    let Some(mine) = supply_mine(entry) else {
         return false;
     };
     let Some(m) = map.battleground.as_ref() else {

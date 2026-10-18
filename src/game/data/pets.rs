@@ -65,6 +65,19 @@ pub struct PetAbility {
     pub cost: u32,
 }
 
+/// One of a creature's charm spells: a candidate for its slot (of four),
+/// taken at `availability` percent, recovering over the cooldown range in
+/// place of its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+pub struct CharmSpell {
+    pub slot: u32,
+    pub spell: u32,
+    pub availability: f32,
+    pub cooldown_min_ms: u32,
+    pub cooldown_max_ms: u32,
+}
+
 #[derive(Debug, Default)]
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct PetData {
@@ -77,6 +90,9 @@ pub struct PetData {
     pub spell_lists: AHashMap<u32, Vec<u32>>,
     /// Creatures' `pet_spell_list_id`.
     pub creature_spell_list: AHashMap<u32, u32>,
+    /// `creature_charm_spells`: what a creature offers whoever charms it,
+    /// by entry, in slot order.
+    pub charm_spells: AHashMap<u32, Vec<CharmSpell>>,
     /// Totems' `totem_spell_id`: the spell each works.
     pub totem_spells: AHashMap<u32, u32>,
     /// `spell_pet_auras`: an owner's aura (by spell) gives its pet another.
