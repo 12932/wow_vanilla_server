@@ -1,6 +1,7 @@
 //! The third code review's findings (combat, spells, auras, threat and
 //! creature AI), each shown on made-up data in the fast suite.
 
+use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
 use super::tests_p3_cast_kit::*;
@@ -429,4 +430,79 @@ async fn the_hands_dont_swing_together() {
         Some(std::time::Duration::from_millis(200)),
         "the off-hand waits its moment"
     );
+}
+
+/// A creature down in a linked feign death runs none of its timed events
+/// while it lies there: an in-combat timer that raises its phase doesn't.
+#[tokio::test]
+async fn a_creature_down_in_a_linked_feign_death_runs_no_timed_events() {
+    use crate::game::data::scripts::{AiEvent, EVENT_TIMER_IN_COMBAT, ScriptStep};
+    use crate::game::fields::{UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH};
+    use crate::game::map::{ai, combat, event_ai, scripts};
+    use crate::game::tests_p3_combat::{data, setup_with, spawn, template};
+    use crate::game::tests_p3_entity::{on, step};
+    const HOUND: u32 = 3_790;
+    const RAISE: u32 = 1;
+    let mut d = data();
+    let mut hound = template(HOUND, 1);
+    hound.static_flags1 |= combat::STATIC_UNKILLABLE;
+    d.creature_templates.insert(HOUND, hound);
+    // Every second in a fight, its phase one higher.
+    d.scripts.ai_scripts.insert(
+        RAISE,
+        vec![ScriptStep {
+            id: RAISE,
+            command: 44,
+            datalong: [1, 1, 0, 0],
+            ..Default::default()
+        }],
+    );
+    d.scripts.ai_events.insert(
+        HOUND,
+        vec![AiEvent {
+            kind: EVENT_TIMER_IN_COMBAT,
+            chance: 100,
+            flags: 1,
+            params: [60_000, 60_000, 1_000, 1_000],
+            actions: [RAISE, 0, 0],
+            ..Default::default()
+        }],
+    );
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let f = &mut m.players.get_mut(&ga).unwrap().fields;
+        f.set_u32(UNIT_FIELD_MAXHEALTH, 100_000_000);
+        f.set_u32(UNIT_FIELD_HEALTH, 100_000_000);
+        let h = spawn(m, ga, HOUND, 20, 3.0);
+        let feign = ScriptStep {
+            dataint: [0, 0, 0, 0],
+            ..step(scripts::C_LINKED_FEIGN_DEATH, [60_000, HOUND, 30, 0])
+        };
+        scripts::execute(m, &feign, h, Guid::zero());
+        ai::attacked(m, h, ga);
+        // Its timer due now; then down.
+        let now = m.now;
+        if let Some(s) = m.creature_mut(h).and_then(|c| c.scripted.as_deref_mut()) {
+            for t in s.timers.iter_mut() {
+                *t = Some(now);
+            }
+        }
+        combat::deal_damage(m, ga, h, 10_000_000);
+        let down = event_ai::feigning(m, h);
+        let before = event_ai::phase(m, h);
+        for _ in 0..5 {
+            m.now += std::time::Duration::from_secs(1);
+            ai::update_creatures(m);
+        }
+        (
+            down,
+            before,
+            event_ai::phase(m, h),
+            event_ai::feigning(m, h),
+        )
+    })
+    .await;
+    assert!(out.0, "down");
+    assert_eq!(out.2, out.1, "its timer waits while it lies there");
+    assert!(out.3, "still down");
 }

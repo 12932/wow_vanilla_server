@@ -767,8 +767,14 @@ pub fn update_creatures(map: &mut Map) {
 fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
     // Under control, its leash is kept.
     crate::game::map::creature_combat::maintain_leash(map, g);
-    // Its timed events wait while it walks home.
-    if !map.creatures.get(key).is_some_and(|c| c.evading) {
+    // Its timed events wait while it walks home, and while it lies in a
+    // linked feign death (its fight's flag kept, they would fire on).
+    if !map.creatures.get(key).is_some_and(|c| {
+        c.evading
+            || c.scripted
+                .as_deref()
+                .is_some_and(|s| s.feign.is_some_and(|f| f.down_at.is_some()))
+    }) {
         crate::game::map::event_ai::tick(map, g);
     }
     let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
