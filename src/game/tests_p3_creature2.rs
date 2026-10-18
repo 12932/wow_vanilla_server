@@ -2461,7 +2461,6 @@ async fn a_staying_pet_goes_after_its_masters_victim_and_back_but_chases_no_othe
     .await;
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let moved = on(&map, move |m| {
-        let c = m.creature(pet).unwrap();
         crate::game::map::combat::dist(m.position_of(pet).unwrap(), spot)
     })
     .await;
@@ -2473,5 +2472,71 @@ async fn a_staying_pet_goes_after_its_masters_victim_and_back_but_chases_no_othe
     assert!(
         moved < 1.0,
         "it doesn't chase one it took up itself: {moved}"
+    );
+}
+
+const WATCHFUL: u32 = 3_803;
+const FRIENDLY_WATCHER: u32 = 3_804;
+
+/// Thistle Tea's `Proximity.hear`: a hostile creature near a player
+/// notices them; not one on a taxi, until they land; and a friendly one
+/// never does.
+#[tokio::test]
+async fn a_creature_notices_a_player_near_unless_on_a_taxi_or_friendly() {
+    let mut d = data();
+    // The friend's side: of the humans', at war with no one.
+    d.faction_templates
+        .insert(43, crate::game::tests_p3_combat::faction(43, 0x8, 0));
+    for (entry, faction) in [
+        (WATCHFUL, crate::game::tests_p3_combat::PACK),
+        (FRIENDLY_WATCHER, 43),
+    ] {
+        let mut t = template(entry, 7);
+        t.faction = faction;
+        t.detection_range = 15.0;
+        t.level_min = 1;
+        t.level_max = 1;
+        d.creature_templates.insert(entry, t);
+    }
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    const TAXI: u32 = 0x0010_0000;
+    let (watcher, friend) = on(&map, move |m| {
+        hardy(m, ga);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, TAXI, true);
+        (
+            spawn(m, ga, WATCHFUL, 1, 6.0),
+            spawn(m, ga, FRIENDLY_WATCHER, 1, 6.0),
+        )
+    })
+    .await;
+    a.sees(watcher).await;
+    let fighting = move |m: &Map| {
+        [watcher, friend].map(|g| {
+            let c = m.creature(g).unwrap();
+            c.combat.attacking && c.combat.victim == ga
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert_eq!(
+        on(&map, move |m| fighting(m)).await,
+        [false, false],
+        "on a taxi, unnoticed"
+    );
+    on(&map, move |m| {
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, TAXI, false);
+    })
+    .await;
+    until(&map, "landed, noticed", move |m| fighting(m)[0]).await;
+    assert!(
+        !on(&map, move |m| fighting(m)[1]).await,
+        "the friendly one never"
     );
 }
