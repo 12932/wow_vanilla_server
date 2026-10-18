@@ -645,13 +645,17 @@ impl Auras {
 }
 
 /// Whether a spell is helpful: no harmful effects, aimed at a friend.
+/// `SPELL_EFFECT_INSTAKILL`.
+const EFFECT_INSTAKILL: u32 = 1;
+
 pub fn positive(s: &SpellTemplate) -> bool {
-    // vmangos's own word on it first.
-    if s.custom(sd::CUSTOM_NEGATIVE) {
-        return false;
-    }
+    // vmangos's own word on it first, its positive over its negative (as
+    // Thistle Tea's `harmful_instakill?`; no spell has both).
     if s.custom(sd::CUSTOM_POSITIVE) {
         return true;
+    }
+    if s.custom(sd::CUSTOM_NEGATIVE) {
+        return false;
     }
     if s.attr(0, sd::ATTR_DEBUFF) {
         return false;
@@ -707,6 +711,12 @@ pub fn positive(s: &SpellTemplate) -> bool {
                 AURA_MOD_DAMAGE_TAKEN | AURA_MOD_DAMAGE_PERCENT_TAKEN | AURA_MOD_MELEE_DAMAGE_TAKEN
             ) && e.base_points + e.base_dice > 0)
             || matches!(e.target_a, 6 | 15 | 16 | 22 | 24 | 28) && e.effect != 0
+            // An instant kill of anything but the caster alone (Death
+            // Touch at any unit), but a Voidwalker's Sacrifice (Thistle
+            // Tea's `harmful_instakill?`).
+            || e.effect == EFFECT_INSTAKILL
+                && !(e.target_a == 1 && e.target_b == 0)
+                && !(s.family_name == 5 && s.family_flags & 0x0200_0000 != 0)
     })
 }
 

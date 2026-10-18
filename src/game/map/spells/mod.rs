@@ -13,8 +13,8 @@ pub mod dynamic;
 mod effects;
 
 pub use effects::{
-    add_combo_points, dr_aura_gone, release_retained_combo_points, retained_combo_points_expired,
-    shown_power,
+    add_combo_points, combo_duration, dr_aura_gone, release_retained_combo_points,
+    retained_combo_points_expired, shown_power,
 };
 pub mod environment;
 pub mod health_sync;

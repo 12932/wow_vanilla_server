@@ -168,6 +168,14 @@ pub fn dr_aura_gone(map: &mut Map, target: Guid, spell: u32) {
     }
 }
 
+/// A finisher's duration at `combo` points: from the base at none to the
+/// most at five, a fifth of the way for each, as mangos's
+/// `CalculateSpellDuration` and Thistle Tea's `duration_for_combo_points`;
+/// no further past five.
+pub fn combo_duration(base: u32, max: u32, combo: u8) -> u32 {
+    base + max.saturating_sub(base) * u32::from(combo.min(5)) / 5
+}
+
 /// An aura's duration: the spell's at the caster's level, longer for a
 /// finishing move's combo points, with the caster's modifiers.
 fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8) -> Option<u32> {
@@ -178,7 +186,7 @@ fn aura_duration(map: &Map, caster: Guid, s: &SpellTemplate, m: &Mods, combo: u8
         && let Some(d) = map.realm.data.spells.durations.get(&s.duration_index)
         && d.max > base as i32
     {
-        ms = base + (d.max as u32 - base) * u32::from(combo) / 5;
+        ms = combo_duration(base, d.max as u32, combo);
     }
     Some(m.apply_ms(mods::OP_DURATION, ms))
 }
