@@ -537,3 +537,51 @@ fn the_real_spawns_keep_every_event_they_are_tied_to() {
     faire.sort_unstable();
     assert_eq!(faire, vec![-23, -4], "away for the Faire and its building");
 }
+
+/// R4-11. A quest taken with what it asks for already carried is told
+/// complete at once (`SMSG_QUESTUPDATE_COMPLETE`, Thistle Tea's
+/// `force_accept`), as one finished later is, rather than its log entry
+/// shown done with no word of it.
+#[tokio::test]
+async fn a_quest_taken_done_is_told_complete() {
+    const QUEST: u32 = 990_460;
+    let realm = harness::realm_with({
+        let mut d = data();
+        d.creature_templates.get_mut(&VENDOR).unwrap().npc_flags |= 0x2;
+        d.npc.quests.insert(
+            QUEST,
+            crate::game::data::npc::Quest {
+                id: QUEST,
+                title: "Widgets".into(),
+                min_level: 1,
+                level: 1,
+                required_items: [(WIDGET, 1), (0, 0), (0, 0), (0, 0)],
+                ..Default::default()
+            },
+        );
+        d.npc.creature_starts.insert(VENDOR, vec![QUEST]);
+        d
+    });
+    let mut a = Client::connect(&realm, "R4QC");
+    let g = a.enter("Quester", Race::Human, Class::Warrior).await;
+    a.sees(vendor_guid()).await;
+    on_map(&realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, WIDGET, 1, false).unwrap();
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: vendor_guid(),
+        quest_id: QUEST,
+    })
+    .await;
+    let told = a
+        .gets(Duration::from_secs(1), |m| match m {
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_COMPLETE(c) => Some(c.quest_id),
+            _ => None,
+        })
+        .await;
+    let taken = on_map(&realm, move |m| m.players[&g].journal.has(QUEST)).await;
+    assert!(taken, "taken");
+    assert_eq!(told, Some(QUEST), "and told complete");
+}
