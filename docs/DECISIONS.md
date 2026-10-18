@@ -204,6 +204,13 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     and their source items? Thistle Tea does. wvs and mangos-classic's `HandleUnlearnSkillOpcode` don't. Three matrix
     rows are left gap on this.
 
+57. **A passive party aura on its caster** (from 5d, `priority:69`). mangos-classic's `IsNeedVisibleSlot` shows a
+    passive party aura on its caster too; Thistle Tea and wvs hide it. Which is 1.12's?
+
+58. **Buffs on a shapeshifted target** (from 5d, `shapeshift:124`, `:134`). Thistle Tea refuses a buff that
+    shapeshifting cancels (Water Walking) on a shapeshifted target; mangos-classic has no such refusal, and wvs allows
+    it. Should wvs refuse?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -889,5 +896,20 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Left:** BVHs still built on the map's thread (up to 27 ms a tile); with the whole world awake nothing
       unloads (about 13 GB), so a tile cap would bound it; Kalimdor with the navmesh unmeasured; fixes 5 and 6.
 
+
+58. **5d's choices** (auras and objective carriers, 151 rows; 13 fixes):
+    - **The dead's speeds:** a player lying dead takes back the speeds their slows and swim bonuses changed; before,
+      they stayed until release.
+    - **Restless Strength's** flat damage still goes on each blow, not into the hands' damage fields the client
+      shows (`depleting_aura:32` left gap).
+    - **Tracking fields** combine every tracking aura's bits; mangos sets one aura's at a time, and in play only one
+      is on at once.
+    - **Following mangos where Thistle Tea isn't 1.12** (`wrong-for-1.12`): a friend's school protection on a flag
+      carrier lands and drops the flag; releasing a charmed creature interrupts only its auto-repeat and melee
+      spells; a spell modifier gives an aura whole points; a victim of a persistent area aura's pure periodic damage
+      gets a debuff slot.
+    - **Merged with a fix:** 5b's rule that an item's spell costs no power wraps 5d's cost in mangos's order.
+    - **Left:** about 290 aura rows (breakable control, capacity, caster modifiers, dispel, linked, persistent area,
+      stealth detection and more) and all the world loader rows.
 
 ## Left for later, and why

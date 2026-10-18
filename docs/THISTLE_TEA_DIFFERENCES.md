@@ -78,6 +78,11 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   fails there costs nothing.
 - **A refusal's error code** is mangos's where Thistle Tea sends another: a two-hander with nowhere for the off hand
   gets `InventoryFull`, not `cant_equip_with_twohanded`; a split into the wrong kind of bag, `ItemDoesntGoIntoBag`.
+- **Kept as mangos-classic has them** (round 5):
+  - A friend's school protection on a flag carrier lands, and drops the flag; Thistle Tea refuses it.
+  - A charmed creature released stops only its auto-repeat and melee spells, not a prepared cast or a channel.
+  - A spell modifier gives an aura whole points.
+  - A victim of a persistent area aura's pure periodic damage gets a debuff slot.
 
 ## Not yet matching
 
