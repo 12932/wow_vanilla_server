@@ -1832,3 +1832,66 @@ async fn a_hunters_pet_keeps_its_mood_growth_stance_and_autocast_put_away_and_go
     .await;
     assert_eq!(away, (true, true), "gone, to come back");
 }
+
+/// Thistle Tea's `AreaTriggerCooldown.claim`: a trigger with a cooldown
+/// runs its script for the first through and rests until its cooldown is
+/// over (vmangos's `m_areaTriggerCooldowns`); one without a cooldown never
+/// rests. Each copy of a map has its own (`Map::trigger_cooldowns`).
+#[tokio::test]
+async fn an_area_trigger_with_a_cooldown_rests_after_it_fires() {
+    use wow_world_messages::vanilla::CMSG_AREATRIGGER;
+    let mut d = data();
+    let (x, y, z) = crate::game::tests_p3_combat::START;
+    for (id, cooldown) in [(9_001, Some(30)), (9_002, None)] {
+        d.area_triggers.insert(
+            id,
+            crate::game::data::AreaTrigger {
+                id,
+                map: 0,
+                x,
+                y,
+                z,
+                radius: 5.0,
+                ..Default::default()
+            },
+        );
+        // Each run summons a brute.
+        let mut summon = crate::game::tests_p3_entity::step(10, [BRUTE, 60_000, 0, 0]);
+        summon.x = x + 3.0;
+        summon.y = y;
+        summon.z = z;
+        d.scripts.areatrigger.insert(id, vec![summon]);
+        if let Some(secs) = cooldown {
+            d.scripts.areatrigger_cooldown.insert(id, secs);
+        }
+    }
+    let (_realm, a, ga, map) = setup_with(d, Class::Warrior).await;
+    on(&map, move |m| hardy(m, ga)).await;
+    let brutes = |m: &Map| m.creatures.iter().filter(|(_, c)| c.entry == BRUTE).count();
+    let mut runs = Vec::new();
+    for id in [9_001, 9_001, 9_002, 9_002] {
+        let before = on(&map, move |m| brutes(m)).await;
+        a.send(CMSG_AREATRIGGER { trigger_id: id }).await;
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        runs.push(on(&map, move |m| brutes(m)).await - before);
+    }
+    assert_eq!(
+        runs,
+        [1, 0, 1, 1],
+        "the cooled trigger rests; the other doesn't"
+    );
+    // Its cooldown over, it runs again.
+    on(&map, move |m| {
+        let now = m.now;
+        m.trigger_cooldowns.insert(9_001, now);
+    })
+    .await;
+    let before = on(&map, move |m| brutes(m)).await;
+    a.send(CMSG_AREATRIGGER { trigger_id: 9_001 }).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(
+        on(&map, move |m| brutes(m)).await - before,
+        1,
+        "rested, it runs again"
+    );
+}
