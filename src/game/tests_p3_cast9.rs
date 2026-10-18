@@ -129,3 +129,106 @@ async fn a_mount_shows_until_death_and_an_allowed_cast_keeps_it() {
         "and its speed: {dead_speed}"
     );
 }
+
+const STEALTH: u32 = 990_960;
+const OPENER: u32 = 990_961;
+const AMBUSH: u32 = 990_962;
+const SAP: u32 = 990_963;
+const VANISHING: u32 = 990_964;
+
+fn stealth_kit(d: &mut GameData) {
+    use crate::game::data::spells::{ATTR_EX_ALLOW_WHILE_STEALTHED, ATTR_ONLY_STEALTHED};
+    let mut stealth = lasting(STEALTH, &[aura(AURA_MOD_STEALTH, 0, 5, 1)]);
+    stealth.aura_interrupt_flags = INTERRUPT_CAST;
+    let opener = |id: u32| {
+        let mut s = lasting(id, &[aura(AURA_DUMMY, 0, 0, 1)]);
+        s.attributes[0] |= ATTR_ONLY_STEALTHED;
+        s
+    };
+    let mut ambush = opener(AMBUSH);
+    ambush.attributes[1] |= ATTR_EX_ALLOW_WHILE_STEALTHED;
+    let mut sap = opener(SAP);
+    sap.spell_icon = 249;
+    let mut vanishing = lasting(VANISHING, &[aura(AURA_DUMMY, 0, 0, 1)]);
+    vanishing.spell_icon = 252;
+    insert(d, [stealth, opener(OPENER), ambush, sap, vanishing]);
+}
+
+/// An opener wants stealth (any caster's, but not when triggered), and an
+/// ordinary one takes it; a spell stealth allows, one of the stealth
+/// spells' icons (Vanish's), or a triggered cast keeps it; Sap keeps it
+/// by the strongest Improved Sap known alone (90%, never their sum), and
+/// without the talent never (Thistle Tea's `Stealth.validate` and
+/// `preserve?`).
+#[tokio::test]
+async fn an_opener_wants_stealth_and_takes_it_unless_stealth_allows_it() {
+    let realm = fast_realm(stealth_kit);
+    let (_c, rogue, map) = human(&realm, "P3SE", "Sneaker", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, rogue, 60, &[OPENER, AMBUSH, SAP, VANISHING]);
+            let hidden = |m: &mut Map| {
+                if !has(m, rogue, STEALTH) {
+                    put(m, rogue, STEALTH);
+                }
+            };
+            let cast = |m: &mut Map, id: u32| {
+                super::tests_p3_spells_kit::fresh(m, rogue);
+                spells::cast(m, rogue, id, Default::default(), None)
+            };
+            let unstealthed = cast(m, OPENER);
+            let triggered = {
+                super::tests_p3_spells_kit::fresh(m, rogue);
+                spells::cast_triggered(m, rogue, OPENER, Some(rogue));
+                has(m, rogue, OPENER)
+            };
+            let mut kept = Vec::new();
+            for id in [OPENER, AMBUSH, VANISHING] {
+                hidden(m);
+                let went = cast(m, id);
+                kept.push((went, has(m, rogue, STEALTH)));
+            }
+            hidden(m);
+            super::tests_p3_spells_kit::fresh(m, rogue);
+            spells::cast_triggered(m, rogue, OPENER, Some(rogue));
+            let after_triggered = has(m, rogue, STEALTH);
+            // Sap, with no talent, then all three ranks: 90% each time.
+            hidden(m);
+            cast(m, SAP);
+            let untalented = has(m, rogue, STEALTH);
+            for id in [14076, 14094, 14095] {
+                spells::learn(m, rogue, id);
+            }
+            m.spells.rolls = Some(true);
+            let mut sapped = 0;
+            for _ in 0..1_000 {
+                hidden(m);
+                cast(m, SAP);
+                if has(m, rogue, STEALTH) {
+                    sapped += 1;
+                }
+            }
+            (
+                unstealthed,
+                triggered,
+                kept,
+                after_triggered,
+                untalented,
+                sapped,
+            )
+        })
+        .await
+        .unwrap();
+    let (unstealthed, triggered, kept, after_triggered, untalented, sapped) = out;
+    assert!(!unstealthed, "no opener without stealth");
+    assert!(triggered, "but triggered, it goes");
+    assert_eq!(kept[0], (true, false), "an opener takes stealth");
+    assert_eq!(kept[1], (true, true), "one stealth allows keeps it");
+    assert_eq!(kept[2], (true, true), "as does Vanish's kind");
+    assert!(after_triggered, "a triggered cast keeps it");
+    assert!(!untalented, "Sap without Improved Sap takes it");
+    assert!(
+        (850..=950).contains(&sapped),
+        "the strongest rank's 90%: {sapped} of 1,000"
+    );
+}
