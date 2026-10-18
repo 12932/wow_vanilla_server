@@ -1977,3 +1977,51 @@ async fn a_group_of_two_brackets_isnt_queued_and_a_copy_left_empty_closes() {
     }
     assert!(closed, "the copy closed");
 }
+
+/// In a battleground a player sees out to the battleground's own distance
+/// (400 yards by default), where in the world they see 100: two players
+/// 300 yards apart know each other in Warsong Gulch, and not in the world.
+#[tokio::test]
+async fn a_battleground_is_seen_further_than_the_world() {
+    let realm = delayed(gulch(), Duration::from_secs(120));
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let c = player(&realm, "C", "Cara", Race::Human).await;
+    let apart = |ga: Guid, gb: Guid| {
+        move |m: &mut crate::game::map::Map| {
+            let at = m.players[&ga].position();
+            let p = m.players.get_mut(&gb)?;
+            p.movement.position = Vector3d {
+                x: at.x + 300.0,
+                ..at
+            };
+            let to = p.movement.position;
+            crate::game::map::visibility::moved(m, gb, to, to);
+            crate::game::map::visibility::refresh(m, gb);
+            crate::game::map::visibility::refresh(m, ga);
+            Some((
+                m.players[&ga].known.contains(&gb),
+                crate::game::map::visibility::radius(m),
+            ))
+        }
+    };
+    // Apart in the world: 300 yards, beyond its 100.
+    let world = realm.registry.online(a.guid).unwrap().map();
+    assert_eq!(
+        world.query(apart(a.guid, c.guid)).await.flatten(),
+        Some((false, 100.0))
+    );
+    queue(&a, Map::WarsongGulch).await;
+    queue(&b, Map::WarsongGulch).await;
+    let map = into(&realm, &mut a, Map::WarsongGulch).await;
+    into(&realm, &mut b, Map::WarsongGulch).await;
+    let mut seen = None;
+    for _ in 0..200 {
+        seen = map.query(apart(a.guid, b.guid)).await.flatten();
+        if seen.is_some_and(|(knows, _)| knows) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(seen, Some((true, 400.0)), "300 yards off in the gulch");
+}

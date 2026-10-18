@@ -16,6 +16,16 @@ pub const MARGIN: f32 = 10.0;
 /// How far an object moves before its visibility is worked out again.
 pub const MOVE_THRESHOLD: f32 = 8.0;
 
+/// How far a player sees on `map`: a battleground's own distance, else the
+/// world's.
+pub fn radius(map: &Map) -> f32 {
+    if crate::game::battlegrounds::bg_of_map(map.key.map).is_some() {
+        map.realm.config.battleground_visibility_yards
+    } else {
+        map.realm.config.visibility_yards
+    }
+}
+
 fn dist2(a: Vector3d, b: Vector3d) -> f32 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
 }
@@ -76,7 +86,7 @@ pub fn refresh(map: &mut Map, object: Guid) {
         c.vis_anchor = pos;
     }
     crate::game::map::conditions::locate(map, object, true);
-    let radius = map.realm.config.visibility_yards;
+    let radius = radius(map);
     let keep = radius + MARGIN;
     let (r2, keep2) = (radius * radius, keep * keep);
 

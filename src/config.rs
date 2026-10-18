@@ -112,6 +112,10 @@ impl NetworkConfig {
 pub struct WorldConfig {
     /// How far players see, in yards.
     pub visibility_yards: f32,
+    /// How far players see in a battleground, in yards: further than in the
+    /// world, so a battle's far side is in view (mangos-classic's
+    /// `Visibility.Distance.BG`).
+    pub battleground_visibility_yards: f32,
     /// How often each online character is saved.
     pub save_interval_secs: u64,
     /// The character store.
@@ -164,6 +168,7 @@ impl Default for WorldConfig {
     fn default() -> Self {
         Self {
             visibility_yards: 100.0,
+            battleground_visibility_yards: 400.0,
             save_interval_secs: 300,
             characters_db: PathBuf::from("characters.sqlite"),
             data_dir: None,

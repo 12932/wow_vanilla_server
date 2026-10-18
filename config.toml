@@ -8,6 +8,8 @@ outbound_channel_bytes = 4194304
 
 [world]
 visibility_yards = 100.0
+# How far players see in a battleground: further, so a battle's far side is in view.
+battleground_visibility_yards = 400.0
 save_interval_secs = 300
 characters_db = "characters.sqlite"
 # The directory with vmangos.sqlite and dbc.sqlite, as Thistle Tea exports them; data/db if unset.

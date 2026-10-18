@@ -443,6 +443,7 @@ use crate::game::store::{Startup, Store};
 #[derive(Debug, Clone)]
 pub struct RealmConfig {
     pub visibility_yards: f32,
+    pub battleground_visibility_yards: f32,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -475,6 +476,7 @@ impl RealmConfig {
     pub fn from_config(c: &crate::config::ServerConfig) -> Self {
         Self {
             visibility_yards: c.world.visibility_yards.clamp(20.0, 500.0),
+            battleground_visibility_yards: c.world.battleground_visibility_yards.clamp(20.0, 500.0),
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,

@@ -129,6 +129,7 @@ fn snapshot_path(dir: &std::path::Path) -> Option<(std::path::PathBuf, String)> 
 pub fn test_config() -> RealmConfig {
     RealmConfig {
         visibility_yards: 100.0,
+        battleground_visibility_yards: 400.0,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,
