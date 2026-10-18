@@ -917,8 +917,10 @@ pub fn damage(
         d = l.mods.apply(mods::OP_DAMAGE, d);
     }
     if s.school == 0 && !s.custom(sd::CUSTOM_IGNORE_ARMOR) {
+        // What armor takes off, whole, as a white blow's (Thistle Tea's
+        // `armor_reduced_damage`): 1000 at 14.003% leaves 860, not 859.
         let armor = resistance(map, caster, target, 0);
-        d *= 1.0 - combat::armor_reduction(armor as u32, level(map, caster));
+        d -= (d * combat::armor_reduction(armor as u32, level(map, caster))).trunc();
     }
     if !fixed {
         d = taken_of(map, caster, target, s, index, Kind::Direct, 1, d);
