@@ -302,6 +302,8 @@ mod tests_p4_core_entity;
 #[cfg(test)]
 mod tests_p4_core_fields;
 #[cfg(test)]
+mod tests_p4_core_motion;
+#[cfg(test)]
 mod tests_p4_core_skills;
 #[cfg(test)]
 mod tests_p4_core_spell;
