@@ -65,8 +65,8 @@ fn casting(m: &Map, g: Guid) -> Option<u32> {
 /// combat spells", "combat refresh ... do not run entry interruption" and
 /// "player contact ... share interruption", as mangos's `SetInCombatState`
 /// has it: a ten-second cast not for a fight stops as a blow puts its
-/// caster in one; one for a fight goes on; and in a fight already, another
-/// blow stops nothing.
+/// caster in one, and so does a channel not for one; one for a fight goes
+/// on; and in a fight already, another blow stops nothing.
 #[tokio::test]
 async fn a_cast_not_for_a_fight_stops_as_one_begins() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
@@ -100,10 +100,20 @@ async fn a_cast_not_for_a_fight_stops_as_one_begins() {
             in_combat(m, ga);
             combat::engage(m, brute, ga);
             let refreshed = casting(m, ga);
-            (began, struck, ordinary, refreshed)
+            // Channelled, out of the fight: it stops too.
+            combat::leave_combat(m, ga);
+            let now = m.now;
+            if let Some(c) = m.players.get_mut(&ga).unwrap().caster.casting.as_mut() {
+                c.duration = 0;
+                c.channel_until = Some(now + std::time::Duration::from_secs(10));
+            }
+            combat::engage(m, brute, ga);
+            let channel = casting(m, ga);
+            (began, struck, ordinary, refreshed, channel)
         })
         .await
         .unwrap();
+    assert_eq!(r.4, None, "a peaceful channel stops");
     assert_eq!(r.0, Some(PEACEFUL), "begun");
     assert_eq!(r.1, None, "stopped by the fight");
     assert_eq!(r.2, Some(ORDINARY), "a fight's goes on");
