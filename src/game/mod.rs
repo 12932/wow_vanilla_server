@@ -90,13 +90,13 @@ mod tests_p3_aura2_real;
 #[cfg(test)]
 mod tests_p3_aura2_spells;
 #[cfg(test)]
+mod tests_p3_cast;
+#[cfg(test)]
 mod tests_p3_cast2;
 #[cfg(test)]
 mod tests_p3_cast3;
 #[cfg(test)]
 mod tests_p3_cast4;
-#[cfg(test)]
-mod tests_p3_cast;
 #[cfg(test)]
 mod tests_p3_cast_class;
 #[cfg(test)]

@@ -365,7 +365,12 @@ async fn majordomo(realm: &Arc<Realm>) -> (Client, Guid, crate::game::map::MapHa
     // machine got here before it. Wait for the speech's run itself, since
     // a sessile creature holds still without them.
     assert!(
-        until(&map, 1000, move |m| m.scripts.runs.iter().any(|r| r.source == rag)).await,
+        until(&map, 1000, move |m| m
+            .scripts
+            .runs
+            .iter()
+            .any(|r| r.source == rag))
+        .await,
         "Ragnaros's speech begun"
     );
     assert!(
