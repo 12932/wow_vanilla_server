@@ -154,3 +154,160 @@ async fn a_helpful_ability_isnt_dodged_and_a_wholly_resisted_spell_is_a_resist()
     assert!(!stunned, "nothing on");
     assert_eq!(missed(&mut ca, STUN).await, 2, "told a resist");
 }
+
+const SWIPE: u32 = 991_310;
+const ON_DODGE: u32 = 991_311;
+const ON_PARRY: u32 = 991_312;
+const DODGE_MARK: u32 = 991_313;
+const PARRY_MARK: u32 = 991_314;
+const THIRST: u32 = 991_315;
+const THIRST_MARK: u32 = 991_316;
+const SWORD: u32 = 991_317;
+
+fn reactions(d: &mut GameData) {
+    use crate::game::data::spells::ProcEvent;
+    use crate::game::map::auras::{AURA_DUMMY, AURA_PROC_TRIGGER_SPELL};
+    use crate::game::map::procs::{EX_DODGE, EX_PARRY, PROC_TAKEN_MELEE_SPELL};
+    kit_data(d);
+    d.items.insert(
+        SWORD,
+        crate::game::data::items::ItemTemplate {
+            entry: SWORD,
+            class: 2,
+            subclass: 7,
+            name: "Sword".into(),
+            display_id: 1000,
+            inventory_type: 13,
+            delay: 2000,
+            stackable: 1,
+            ..Default::default()
+        },
+    );
+    let mark = |id: u32| {
+        let mut s = bare(id, 0);
+        s.duration_index = LASTS_15S;
+        effect(&mut s, 0, aura(AURA_DUMMY, 0, 0, 1));
+        s
+    };
+    let on = |id: u32, mark: u32| {
+        let mut s = bare(id, 0);
+        s.duration_index = LASTS_LONG;
+        s.proc_flags = PROC_TAKEN_MELEE_SPELL;
+        s.proc_chance = 100;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                trigger_spell: mark,
+                ..aura(AURA_PROC_TRIGGER_SPELL, 0, 0, 1)
+            },
+        );
+        s
+    };
+    let mut swipe = bare(SWIPE, 0);
+    swipe.dmg_class = 2;
+    effect(&mut swipe, 0, damage(10));
+    let mut thirst = bare(THIRST, 0);
+    thirst.dmg_class = 2;
+    thirst.attributes[3] |= ATTR_EX3_ALWAYS_HIT;
+    effect(&mut thirst, 0, damage(10));
+    effect(
+        &mut thirst,
+        1,
+        SpellEffect {
+            effect: 64,
+            trigger_spell: THIRST_MARK,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    effect(
+        &mut thirst,
+        2,
+        SpellEffect {
+            effect: 10,
+            base_points: 49,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    insert(
+        d,
+        [
+            swipe,
+            on(ON_DODGE, DODGE_MARK),
+            on(ON_PARRY, PARRY_MARK),
+            mark(DODGE_MARK),
+            mark(PARRY_MARK),
+            thirst,
+            mark(THIRST_MARK),
+        ],
+    );
+    for (id, ex) in [(ON_DODGE, EX_DODGE), (ON_PARRY, EX_PARRY)] {
+        d.spells.proc_events.insert(
+            id,
+            ProcEvent {
+                ex,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// A melee ability dodged or parried reaches the victim's procs on a dodge
+/// or a parry (Thistle Tea's avoided melee ability reactions); an ability's
+/// trigger and heal at its caster land on the caster, its damage on the
+/// target alone (its caster-targeted trigger effects).
+#[tokio::test]
+async fn avoided_abilities_reach_the_victims_procs_and_caster_effects_stay_with_the_caster() {
+    let realm = fast_realm(reactions);
+    let (_a, a, map) = human(&realm, "P5FE", "Avoider", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[]);
+            // A parry wants a weapon.
+            super::tests_p3_combat::equip(m, a, SWORD, 15);
+            let kobold = kit::dummy(m, a, 60, 2.0);
+            kit::apply(m, a, a, ON_DODGE);
+            kit::apply(m, a, a, ON_PARRY);
+            let avoid = |m: &mut Map, dodge: f32, parry: f32| {
+                // The marks off first: an aura's going works the stats out
+                // again.
+                for s in [DODGE_MARK, PARRY_MARK] {
+                    crate::game::map::auras::remove_spell(m, a, s, None);
+                }
+                if let Some(p) = m.players.get_mut(&a) {
+                    p.derived.dodge = dodge;
+                    p.derived.parry = parry;
+                }
+                spells::cast_triggered(m, kobold, SWIPE, Some(a));
+                (has(m, a, DODGE_MARK), has(m, a, PARRY_MARK))
+            };
+            let dodged = avoid(m, 100.0, 0.0);
+            let parried = avoid(m, 0.0, 100.0);
+            // The ability with effects at its caster.
+            if let Some(p) = m.players.get_mut(&a) {
+                p.derived.dodge = 0.0;
+                p.derived.parry = 0.0;
+            }
+            kit::set_health(m, a, 100);
+            let before = health(m, kobold);
+            spells::cast_triggered(m, a, THIRST, Some(kobold));
+            let thirst = (
+                before - health(m, kobold),
+                has(m, a, THIRST_MARK),
+                has(m, kobold, THIRST_MARK),
+                health(m, a) > 100,
+            );
+            (dodged, parried, thirst)
+        })
+        .await
+        .unwrap();
+    let (dodged, parried, (hurt, mine, theirs, healed)) = out;
+    assert_eq!(dodged, (true, false), "a dodge's");
+    assert_eq!(parried, (false, true), "a parry's");
+    assert!(hurt > 0, "the target hurt");
+    assert!(mine && !theirs, "the trigger at the caster");
+    assert!(healed, "the heal on the caster");
+}
