@@ -24,6 +24,7 @@ const HOLY_SHOCK: u32 = 20473;
 const DIVINE_INTERVENTION: u32 = 19752;
 const BLESSING_OF_LIGHT: u32 = 19977;
 const HOLY_LIGHT: u32 = 639;
+const RETRIBUTION_AURA: u32 = 7294;
 
 fn realm() -> std::sync::Arc<crate::game::Realm> {
     kit::realm_plus(|d| {
@@ -131,7 +132,8 @@ async fn judgements_give_to_the_striker_and_released_seals_land_on_the_victim() 
 
 /// A seal procs on a blow that lands, not one avoided; Seal of Light
 /// heals its paladin for the blows they strike, not for those they take
-/// (Thistle Tea's `trigger_seal/2` tests).
+/// (Thistle Tea's `trigger_seal/2` tests). Retribution Aura strikes back
+/// (its aura-derived effects).
 #[tokio::test]
 #[ignore = "extended"]
 async fn seals_proc_on_blows_that_land_and_seal_of_light_heals_its_paladin() {
@@ -164,11 +166,18 @@ async fn seals_proc_on_blows_that_land_and_seal_of_light_heals_its_paladin() {
                 struck += health(m, p) - 100;
                 set_health(m, p, 100);
             }
-            (missed, taken, struck, has(m, kobold, SEAL_OF_LIGHT_HEAL))
+            let on_kobold = has(m, kobold, SEAL_OF_LIGHT_HEAL);
+            // Retribution Aura strikes back at a blow, and stays.
+            kit::apply(m, p, p, RETRIBUTION_AURA);
+            let before = health(m, kobold);
+            procs::damage_shields(m, kobold, p);
+            let retribution = (before - health(m, kobold), has(m, p, RETRIBUTION_AURA));
+            (missed, taken, struck, on_kobold, retribution)
         })
         .await
         .unwrap();
-    let (missed, taken, struck, on_kobold) = out;
+    let (missed, taken, struck, on_kobold, retribution) = out;
+    assert!(retribution.0 > 0 && retribution.1, "{retribution:?}");
     assert_eq!(missed, 0, "nothing from a miss");
     assert_eq!(taken, 0, "nothing from a blow taken");
     assert!(struck > 0, "the paladin healed for blows struck");
