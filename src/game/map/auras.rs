@@ -2668,6 +2668,102 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
 }
 
+/// [`absorb`], then the shares of what is left that others take (Blessing
+/// of Sacrifice, Soul Link, a Voidwalker's Sacrifice): (what's left, what
+/// was absorbed or shared).
+pub fn absorb_and_share(
+    map: &mut Map,
+    attacker: Guid,
+    target: Guid,
+    damage: u32,
+    school: u32,
+) -> (u32, u32) {
+    let (left, absorbed) = absorb(map, target, damage, school);
+    let after = share(map, attacker, target, left, school);
+    (after, absorbed + (left - after))
+}
+
+/// The shares of `damage` from `attacker` that the casters of `target`'s
+/// split auras take instead, as mangos's `CalculateDamageAbsorbAndResist`
+/// and Thistle Tea's `DamageSharing` have them: none of one's own damage;
+/// each from a caster alive here, of the damage's school; the flat ones
+/// first, each as much as it says (its stacks rolled in), then each share
+/// of what is left, rounded down. A flat share is soaked by its taker's
+/// shields, a share by none; one immune to the school, or on a flight,
+/// takes it all absorbed. Each is logged under its aura's spell, and the
+/// attacker gets the credit. What is left.
+pub fn share(map: &mut Map, attacker: Guid, target: Guid, damage: u32, school: u32) -> u32 {
+    if damage == 0 || attacker == target {
+        return damage;
+    }
+    let Some(a) = auras(map, target) else {
+        return damage;
+    };
+    let mut links: Vec<(bool, Guid, u32, i32)> = a
+        .effects()
+        .filter(|(h, x)| {
+            matches!(x.kind, AURA_SPLIT_DAMAGE_PCT | AURA_SPLIT_DAMAGE_FLAT)
+                && h.caster != target
+                && (x.misc as u32) & school != 0
+        })
+        .map(|(h, x)| {
+            (
+                x.kind == AURA_SPLIT_DAMAGE_PCT,
+                h.caster,
+                h.spell,
+                x.amount * h.stacks.max(1) as i32,
+            )
+        })
+        .collect();
+    if links.is_empty() {
+        return damage;
+    }
+    links.sort_by_key(|l| l.0);
+    let mut left = damage;
+    for (percent, to, spell, amount) in links {
+        if left == 0 {
+            break;
+        }
+        if map.unit_view(to).is_none_or(|u| !u.alive) {
+            continue;
+        }
+        let taken = if percent {
+            (u64::from(left) * amount.max(0) as u64 / 100).min(u64::from(left)) as u32
+        } else {
+            (amount.max(0) as u32).min(left)
+        };
+        if taken == 0 {
+            continue;
+        }
+        left -= taken;
+        let spared = map.players.get(&to).is_some_and(|p| p.flight.is_some())
+            || auras(map, to).is_some_and(|x| x.school_immune(school));
+        let (hurt, soaked) = if spared {
+            (0, taken)
+        } else if percent {
+            (taken, 0)
+        } else {
+            absorb(map, to, taken, school)
+        };
+        let frame = crate::game::map::spells::outcome::damage_log(
+            attacker,
+            to,
+            spell,
+            school.trailing_zeros(),
+            hurt,
+            soaked,
+            0,
+            0,
+            false,
+        );
+        map.send_to_observers(to, &frame, true);
+        if hurt > 0 {
+            crate::game::map::combat::deal_damage(map, attacker, to, hurt);
+        }
+    }
+    left
+}
+
 /// Damage of `school` a unit takes, less what its absorb auras soak, then
 /// its mana shields, each no more than the mana there is pays for at its
 /// spell's rate (its effect's multiple value, with the unit's modifiers),

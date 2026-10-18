@@ -522,7 +522,7 @@ pub fn spell_damage(
     if !map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }
-    let (left, absorbed) = auras::absorb(map, target, damage, school);
+    let (left, absorbed) = auras::absorb_and_share(map, caster, target, damage, school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLNONMELEEDAMAGELOG {
         target,
         attacker: caster,

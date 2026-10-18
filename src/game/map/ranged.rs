@@ -361,7 +361,7 @@ fn resolve(
         _ => mitigated,
     };
     let (left, absorbed) = if damage > 0 {
-        crate::game::map::auras::absorb(map, target, damage, school)
+        crate::game::map::auras::absorb_and_share(map, g, target, damage, school)
     } else {
         (0, 0)
     };

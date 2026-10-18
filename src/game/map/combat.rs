@@ -1649,7 +1649,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         hit_info |= HITINFO_LEFTSWING;
     }
     let (left, absorbed) = if damage > 0 {
-        auras::absorb(map, victim, damage, school)
+        auras::absorb_and_share(map, attacker, victim, damage, school)
     } else {
         (0, 0)
     };

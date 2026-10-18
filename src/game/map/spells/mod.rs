@@ -1688,7 +1688,8 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         amount as f32,
     ) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
-    let (left, absorbed) = auras::absorb(map, target, amount - resisted, h.school);
+    let (left, absorbed) =
+        auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
         target,
         caster: h.caster,

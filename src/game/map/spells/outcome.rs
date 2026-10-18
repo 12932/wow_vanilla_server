@@ -1095,8 +1095,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     if d.amount > 0 && caster != target && guid::is_unit(target) && !l.triggered {
         crate::game::map::ai::attacked(map, target, caster);
     }
-    let amount = split(map, caster, target, s, d.amount);
-    let (left, absorbed) = auras::absorb(map, target, amount, s.school_mask());
+    let (left, absorbed) = auras::absorb_and_share(map, caster, target, d.amount, s.school_mask());
     let frame = damage_log(
         caster, target, s.id, s.school, left, absorbed, d.resisted, d.blocked, l.crit,
     );
@@ -1142,42 +1141,6 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     }
     give_death_items(map, target, items);
     super::threat(map, caster, target, s, left as f32, &l.mods);
-}
-
-/// Blessing of Sacrifice and its kind: a share of the damage (or a flat
-/// amount of each hit) goes to the aura's caster instead.
-pub fn split(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: u32) -> u32 {
-    let shares: Vec<(Guid, u32)> = auras::auras(map, target)
-        .map(|a| {
-            a.effects()
-                .filter(|(h, x)| {
-                    matches!(x.kind, AURA_SPLIT_DAMAGE_PCT | AURA_SPLIT_DAMAGE_FLAT)
-                        && h.caster != target
-                        && (x.misc as u32) & s.school_mask() != 0
-                })
-                .map(|(h, x)| {
-                    let v = if x.kind == AURA_SPLIT_DAMAGE_PCT {
-                        damage * x.amount.max(0) as u32 / 100
-                    } else {
-                        (x.amount.max(0) as u32).min(damage)
-                    };
-                    (h.caster, v)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut left = damage;
-    for (to, share) in shares {
-        let share = share.min(left);
-        if share == 0 || map.unit_view(to).is_none_or(|u| !u.alive) {
-            continue;
-        }
-        left -= share;
-        let frame = damage_log(caster, to, s.id, s.school, share, 0, 0, 0, false);
-        map.send_to_observers(to, &frame, true);
-        combat::deal_damage(map, caster, to, share);
-    }
-    left
 }
 
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
