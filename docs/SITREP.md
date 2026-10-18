@@ -99,19 +99,37 @@ the questions waiting for you.
     the crash bugs, in your fork. Nothing is reported upstream without your say.
 26. **The reconnect protocol version** (from 3f). Both 2 and 3 are accepted. Which does the 1.12.1 client send?
 
-27. **Snares** (from 3a). wvs now follows Thistle Tea and vmangos: one snare at a time, and a weaker or shorter
-    one is passed over. mangos-classic lets snares coexist, with the strongest counting. Which?
+27. **Snares** (from 3a). Answered: they stack, as mangos-classic has them (`6aec095`). Each stays on as long as it
+    lasts, and the strongest slows.
 28. **A charm or Mind Control ending** (from 3a). Should the freed creature's cast or channel be interrupted
     (Thistle Tea), or carry on (mangos's `Uncharm`, and wvs today)?
 29. **Talent reset decay** (from 3d). After one reset, should the cost fall back to 1 gold after a month (Thistle
     Tea), or stay at 5 gold (mangos, and wvs)?
 30. **Melee attack-speed slows** (from 3d). They don't stack, as vmangos and Thistle Tea have it (done); mangos-classic
-    multiplies them. Keep?
+    multiplies them. Keep? The snare answer left them as they are.
 
 31. **A creature-owned totem when its owner dies** (from 3i). Should it outlive its owner until it expires (Thistle
     Tea), or go with it (mangos, and wvs)?
 32. **A scripted follower's evade** (from 3i). Should it evade where it stands (Thistle Tea), or to its place by its
     leader (mangos)? wvs walks it to its spawn.
+
+33. **A teleport within the map** (from 3l). Should one that isn't a spell's end the player's fight? mangos's
+    `TeleportTo` does, unless `NOT_LEAVE_COMBAT` is set, and Thistle Tea does, holding the pet until the client
+    acknowledges. wvs doesn't.
+34. **A transport's deck offset** (from 3l). wvs takes any offset the client sends. mangos-classic ignores a movement
+    whose offset passes 50, 50 or 100 yards (`VerifyMovementInfo`); Thistle Tea refuses the boarding. Which?
+35. **A second login** while the character is still in the world (from 3l). wvs kicks the first session and logs in
+    afresh. mangos-classic hands the character to the new session; Thistle Tea refuses with 0x41. Which?
+36. **The Warsong flag on a mount** (from bugs5). Does the 1.12 client let a mounted player pick it up? wvs now
+    refuses it, as Thistle Tea does; mangos-classic doesn't check.
+37. **Lower ranks of rage and energy spells** (from 3j). Should they leave the spellbook when a higher one is
+    learned, as in mangos? That needs a "known but inactive" spell state. wvs keeps them.
+38. **vmangos's spell corrections** (from 3j). wvs applies vmangos's `spell_mod` and `spell_effect_mod`, where
+    Thistle Tea reads the raw DBC. So Concussive Shot and Piercing Howl are dazes, not snares; Blessed Sunfruit
+    Juice and Alterac Spring Water aren't Well Fed; and Blood Siphon and Blood Funnel are a heal and a hit, not
+    funnels. Keep vmangos's?
+39. **New weapon skills** (from 3j). wvs starts them at their cap; mangos and Thistle Tea start them at 1. Changing
+    it means every level-60 combat test needs its skills raised. Change it?
 
 ## Decisions made (override any)
 
@@ -346,6 +364,53 @@ the questions waiting for you.
       their master's attackers.
     - **A pet recalled to Follow** takes no new fight until it's back.
 
+22. **3l's choices** (world entities):
+    - **The known-spell check** is now on the client's cast request only. Scripts and a possessed player's AI may
+      cast a spell the player hasn't learned.
+    - **Kept mangos's over Thistle Tea's** (rows marked wrong-for-1.12):
+      - a charmed summon still runs out of time;
+      - a dead master's pet may still cast at their word;
+      - a pet on Stay answers an attacker from afar (mangos's `PetAI::AttackedBy`), though of its own accord it takes
+        on only what is in its reach.
+    - **Merge note:** pets choose targets by 3i's order, with 3l's Stay reach, and pass over breakable crowd control.
+
+23. **bugs5's choices:**
+    - **Charged modifiers** (Clearcasting, Presence of Mind, Nature's Swiftness) are spent only by a cast they change,
+      as Thistle Tea has it. Before, a harmful hit could use up a fresh Clearcasting.
+    - **The Warsong flag** also refuses players who are mounted, crowd-controlled, feigning death, possessed or in
+      Spirit of Redemption, as Thistle Tea does. mangos-classic leaves these to the client.
+    - **Mana from a periodic energize** makes no threat, as in Thistle Tea. mangos-classic gives half of it.
+    - **A dead target of a tick** runs none of its own procs, as mangos does.
+    - **A totem** takes its shaman's modifiers when summoned, not a second later.
+
+24. **3k's choices** (inventory, groups, social, guilds, trade, auctions, PvP, instances):
+    - **Error codes:** where Thistle Tea and mangos send different codes for a refusal, wvs keeps mangos's.
+    - **Turn-ins** plan the whole change, as Thistle Tea does: the slots that taken items free count, and items in the
+      bank aren't taken. mangos checks each reward alone, before taking anything.
+    - **A two-hander** may put the off hand into the backpack slot it just left (Thistle Tea). mangos checks for room
+      first.
+    - **A deleted guild rank's members** move to the lowest rank left (Thistle Tea). mangos leaves them on a rank that
+      no longer exists.
+    - **Duel bounds** are Thistle Tea's 75 and 70 yards, not mangos's 50 and 40.
+    - **The dead:** creatures drop a dead player from their threat lists at once.
+    - **Merge note:** a script's data add (mode 1) wraps as an unsigned 32 bits (3k, as mangos and Thistle Tea), and
+      any mode other than set, add or take away is still refused (master, as Thistle Tea's `ScriptStep`).
+
+25. **3j's choices** (the loader, on the real data):
+    - **vmangos's spell corrections win** over the raw DBC (question 38).
+    - **Healing Way's 18%** truncates in f32 (235, as mangos), not Thistle Tea's 236.
+    - **Merge note:** 3j and an earlier stage both scaled a target's flat damage taken (Dampen and Amplify Magic) by
+      the spell's coefficient. The merge keeps 3j's rules (a creature's spell takes the whole unless its table says
+      otherwise, and Decimate's kind ignores the target's modifiers) and the earlier stage's cap: a cut takes at most
+      half the damage, as Thistle Tea's `DamageReceived` has it. mangos has no cap.
+
+26. **3h's choices** (encounter scripts):
+    - **A script's evade** (command 33) acts only on a living creature, as Thistle Tea's does. Before, a Core Rager's
+      leash found Golemagg's corpse, "evaded" it, and the instance reset both ragers.
+    - **Summoned creatures** hold their template's weapons, as a spawn does.
+    - **Ties in threat** keep the current victim, as Thistle Tea's `Threat.reselect` and mangos do. So Shazzrah keeps
+      his victim after Blink's threat wipe, though his script says to attack a random player.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -376,5 +441,12 @@ the questions waiting for you.
 | 3c: matrix gaps, items, quests, loot, professions (241 rows) | merged | |
 | 3d: matrix gaps, player systems (311 rows) | merged | 5e26640 |
 | 3e: matrix gaps, world systems (140 rows) | merged | |
+| 3l: matrix gaps, world entities | merged | 36db44d |
+| Bugs, batch 5 (Holy Shield, the Warsong flag, op 19, mana ticks, procs, Nightfall) | merged | f09cc53 |
+| Snares stack (your #27) | done | 6aec095 |
+| 3k: matrix gaps, inventory, groups, social, guilds, trade, PvP, instances, Stratholme | merged | e904b5f |
+| 3j: matrix gaps, the loader on the real data (124 rows) | merged | fab8aaa |
+| 3h: matrix gaps, encounter scripts (70 rows) | merged | b8e080f |
+| The matrix after the second round | 3,785 of 8,396 applicable covered or accepted (45.1%) | |
 
 ## Left for later, and why

@@ -4,16 +4,17 @@
 Phase 1a of [FULL_PARITY_PLAN.md](../FULL_PARITY_PLAN.md): its headline, covered over applicable, measures how close
 wvs is.
 
-## Where it stands (2026-10-18, after Phase 3's first round)
+## Where it stands (2026-10-18, after Phase 3's second round)
 
 Every row is mapped. Phase 1a found 1,781 of the 8,429 applicable tests covered (21%). Phase 3's first round (3a to
-3f) settled 1,377 more rows, most as covered, with a fix where a test showed wvs differed. The open gaps are listed by
+3f) settled 1,377 more rows and its second (3h to 3l) 786, most as covered, with a fix where a test showed wvs
+differed. The open gaps are listed by
 feature in [FINDINGS.md](FINDINGS.md).
 
 | Area | Covered or accepted / applicable | | The rest |
 |---|---|---|---|
-| game/core | 1966 / 5423 | 36.3% | gap 3436, not-applicable 250, wrong-for-1.12 21 |
-| game/world | 686 / 2571 | 26.7% | gap 1884, not-applicable 150, wrong-for-1.12 1 |
+| game/core | 2471 / 5407 | 45.7% | gap 2915, not-applicable 266, wrong-for-1.12 21 |
+| game/world | 967 / 2567 | 37.7% | gap 1595, not-applicable 154, wrong-for-1.12 5 |
 | game/network | 222 / 261 | 85.1% | gap 38, not-applicable 6, wrong-for-1.12 1 |
 | game/inbound | 101 / 119 | 84.9% | gap 16, not-applicable 1, wrong-for-1.12 2 |
 | . | 17 / 20 | 85.0% | gap 3, not-applicable 1 |
@@ -25,7 +26,7 @@ feature in [FINDINGS.md](FINDINGS.md).
 | db/mangos | 0 / 4 | 0.0% | gap 4 |
 | native | 0 / 0 | 100.0% | not-applicable 3 |
 | web/utils | 0 / 0 | 100.0% | not-applicable 2 |
-| **all** | 2999 / 8416 | 35.6% | gap 5392, not-applicable 434, wrong-for-1.12 25 |
+| **all** | 3785 / 8396 | 45.1% | gap 4582, not-applicable 454, wrong-for-1.12 29 |
 
 ## The columns
 

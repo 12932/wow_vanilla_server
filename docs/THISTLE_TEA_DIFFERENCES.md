@@ -56,7 +56,19 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   Tea and vmangos keep one, passing over a weaker or shorter one. (Attack-speed slows keep Thistle Tea's rule.)
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
+- **vmangos's spell corrections** (`spell_mod`, `spell_effect_mod`) win over the raw DBC Thistle Tea reads:
+  Concussive Shot and Piercing Howl are dazes, not snares; Blessed Sunfruit Juice and Alterac Spring Water aren't
+  Well Fed; Blood Siphon and Blood Funnel are a heal and a hit, not funnels.
+- **New weapon skills** start at their cap; Thistle Tea and mangos start them at 1.
+- **Lower ranks of rage and energy spells** stay in the spellbook; mangos takes them out.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
+- **Pets, as mangos has them:** a pet on Stay answers an attacker from afar (`PetAI::AttackedBy`), though of its own
+  accord it takes on only what is in its reach; a dead master's pet still casts at their word; and a charmed summon
+  still runs out of time. Thistle Tea refuses all three.
+- **A charm or Mind Control ending** leaves the freed creature's cast or channel running, as mangos's `Uncharm` does;
+  Thistle Tea interrupts it and clears its global cooldown.
+- **A refusal's error code** is mangos's where Thistle Tea sends another: a two-hander with nowhere for the off hand
+  gets `InventoryFull`, not `cant_equip_with_twohanded`; a split into the wrong kind of bag, `ItemDoesntGoIntoBag`.
 
 ## Not yet matching
 
@@ -65,8 +77,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - A dispel by mechanic (effect 108) skips passive auras and matches effects' mechanics. Thistle Tea matches only the
   spell's own mechanic, passive or not.
 - Gear's spells aren't held to the outdoors, as Thistle Tea's `EquipmentSpells.eligible?` also holds them.
-- Blessing of Light's bonus goes into Holy Light's and Flash of Light's base points. Thistle Tea adds it to the flat
-  healing taken, so it goes by the coefficient.
 - Extra attacks leave the swing timer alone; Thistle Tea and vmangos restart the main hand's after them.
 - A dead master's guardian isn't removed for distance (Thistle Tea: beyond 120 yards).
 - A channel's cost per second (Health Funnel's health, others' mana) isn't charged; Thistle Tea charges it each tick.
@@ -161,6 +171,14 @@ Thistle Tea, with these exceptions:
 - **Escorts.** The escort catalog leaves out its summons' own steps and their despawn kinds. 2078's follower starts on
   accept, not from its gossip option.
 
+### Players and the world
+
+- A teleport within the map doesn't end the player's fight; Thistle Tea clears it and holds the pet until the client
+  acknowledges.
+- A transport's deck offset is taken as the client sends it; Thistle Tea refuses a boarding out of range.
+- A second login while the character is in the world kicks the first session; Thistle Tea refuses it with 0x41.
+- Totems and dynamic objects leave without `SMSG_GAMEOBJECT_DESPAWN_ANIM`.
+
 ## Tests and tooling
 
 - **wow_messages** comes from 12932's fork (`12932/wow_messages`, branch `vanilla-1.12-layouts`), as it does for
@@ -174,5 +192,4 @@ Thistle Tea, with these exceptions:
 - **Load-sensitive tests.** Each real-data test loads the whole world. On a machine running several suites at once
   (load average 40 to 50 on 16 cores) a few can time out; they pass run alone. The harness waits 20 seconds for
   what a test expects.
-- Not covered by a test of their own: the meeting stone's in-progress message, and Ritual of Summoning's dungeon and
-  battleground refusals.
+- Not covered by a test of their own: Ritual of Summoning's dungeon and battleground refusals.
