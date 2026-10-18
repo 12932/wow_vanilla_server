@@ -73,16 +73,24 @@ without running. How the setup came about is in [docs/DATA_SETUP_PLAN.md](docs/D
 
 ## Configuration
 
-`config.toml` next to the working directory; every key is optional and the defaults are in `src/config.rs`. An
-unknown key is an error. The environment (or `.env`) sets `WOW_REALM_ADDRESS` (the realm list's `host:port`),
-`WOW_TRACY=1` (the Tracy profiler) and `RUST_LOG`.
+`config.toml` in the working directory, in sections by subject: `[network]`, `[world]`, `[visibility]`, `[rates]`,
+`[creatures]`, `[players]`, `[battleground]`, `[anticheat]`, `[accounts]`, `[gm]`, `[spawn]` and `[arena]`. Every key
+is optional; [config.example.toml](config.example.toml) has them all, with their defaults, ranges and meanings, and
+`wow_vanilla_server --print-config` prints the effective ones. Keys named after mangos's (`Rate.XP.Kill` is `[rates]
+xp_kill`) say so. An unknown key is an error, and a value out of range is clamped with a warning.
+
+Any key can be set from the environment, over the file: `WVS__RATES__XP_KILL=2`. `.reload config` (level 3) or
+SIGHUP reads both again and puts in the rates, distances, timers and MOTD; ports, paths and the store need a restart.
+The environment (or `.env`) also sets `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY=1` (the Tracy
+profiler) and `RUST_LOG`. All of it is in [docs/CONFIG.md](docs/CONFIG.md).
 
 Characters are kept in `characters.sqlite` (`[world] characters_db`), saved at logout, every five minutes, and for
 everyone on SIGTERM or Ctrl-C.
 
 ## GM commands
 
-In chat, by GM level (1 moderator, 2 game master, 3 administrator). A player's `.` line is just chat.
+In chat, by GM level (1 moderator, 2 game master, 3 administrator; `[gm] command_levels` changes a command's). A
+player's `.` line is just chat.
 
 | Command | Level | Does |
 |---|---|---|
@@ -98,6 +106,7 @@ In chat, by GM level (1 moderator, 2 game master, 3 administrator). A player's `
 | `.arena status`, `.arena history` | 0 | The battle on, and the last champions |
 | `.account create\|password <name> <password>`, `.account gm <name> <level>` | 3 | Accounts |
 | `.ban <account> <minutes\|perm> [reason]`, `.unban <account>` | 3 | Bans (and kicks) |
+| `.reload config` | 3 | Reads `config.toml` and the environment again; says what changed, and what needs a restart |
 
 ## What it runs
 
