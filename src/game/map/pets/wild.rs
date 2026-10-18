@@ -138,6 +138,11 @@ pub fn summon(
             view.orientation,
         );
         summon::creature_stats(&data, &mut c, t, level);
+        // Its template's weapons, as mangos's `InitEntry` gives every
+        // creature.
+        if let Some(items) = data.creature_equipment.get(&t.equipment_id) {
+            c.set_equipment(&data, *items);
+        }
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
         let faction = if guardian {
             c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);

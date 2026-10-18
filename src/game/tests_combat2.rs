@@ -833,3 +833,37 @@ async fn a_creatures_attack_power_moves_its_damage_by_vmangos_s_ratio() {
     // (7 * 100 + 3 * 200) / (10 * 100) = 1.3.
     assert!((after / before - 1.3).abs() < 0.01, "{before} {after}");
 }
+
+/// A GM's `.spawn` is built as a world spawn is: the user's Drek'Thar came
+/// with nothing in his hands, and a bare template's health.
+#[tokio::test]
+async fn a_spawned_creature_holds_its_weapons_and_has_its_stats() {
+    let (_realm, mut a, _ga, map) = setup(Class::Warrior).await;
+    a.sees(unit(BRUTE)).await;
+    a.say(&format!(".spawn {}", BRUTE.0)).await;
+    let spawned = a
+        .wait_for("the spawned brute", |m| {
+            harness::creates(m)
+                .into_iter()
+                .find(|g| guid::is_unit(*g) && guid::entry(*g) == BRUTE.0 && *g != unit(BRUTE))
+        })
+        .await;
+    let look = move |m: &Map, g: Guid| {
+        m.unit_fields(g).map(|f| {
+            (
+                f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY),
+                f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 1),
+                f.get_u32(UNIT_VIRTUAL_ITEM_INFO),
+                f.get_u32(UNIT_FIELD_MAXHEALTH),
+            )
+        })
+    };
+    let (world, ours) = map
+        .query(move |m| (look(m, unit(BRUTE)), look(m, spawned)))
+        .await
+        .unwrap();
+    let ours = ours.unwrap();
+    assert_eq!(ours.0, 1000 + AXE % 1000, "the axe in its main hand");
+    assert_eq!(ours.1, 1000 + CLEAVER % 1000, "the cleaver in its off hand");
+    assert_eq!(Some(ours), world, "as the world's brute");
+}

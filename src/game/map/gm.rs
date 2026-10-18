@@ -334,32 +334,49 @@ fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         .and_then(|a| a.parse::<u32>().ok())
         .unwrap_or(0);
     let p = map.players.get(&guid)?;
-    let template = map
-        .realm
-        .data
-        .creature_template(entry)
-        .cloned()
-        .unwrap_or_else(|| CreatureTemplate {
-            entry,
-            name: "Creature".to_owned(),
-            display_ids: [262, 0, 0, 0],
-            level_min: 1,
-            level_max: 1,
-            faction: 14,
-            health_max: 100,
-            ..Default::default()
-        });
+    let (at, orientation) = (p.position(), p.movement.orientation);
     let counter = map.next_creature_counter;
     map.next_creature_counter += 1;
-    let level = template.level_min.max(1);
+    // A known entry is built as a world spawn of it is, with its weapons,
+    // stats, flags and auras (built bare, Drek'Thar held nothing). It
+    // doesn't respawn.
+    let data = map.realm.data.clone();
+    let spawn = crate::game::data::CreatureSpawn {
+        guid: counter | 0x80_0000,
+        entries: vec![entry],
+        map: map.key.map,
+        x: at.x,
+        y: at.y,
+        z: at.z,
+        orientation,
+        ..Default::default()
+    };
+    if let Some(mut c) = Creature::from_spawn(&data, &spawn, &mut rand::rng()) {
+        c.spawn_guid = None;
+        let g = map.add_creature(c);
+        let name = data
+            .creature_template(entry)
+            .map_or("", |t| t.name.as_str());
+        return Some(format!("Spawned {name} ({g})."));
+    }
+    let template = CreatureTemplate {
+        entry,
+        name: "Creature".to_owned(),
+        display_ids: [262, 0, 0, 0],
+        level_min: 1,
+        level_max: 1,
+        faction: 14,
+        health_max: 100,
+        ..Default::default()
+    };
     let mut c = Creature::new(
         guid::unit(entry, counter | 0x80_0000),
         &template,
-        level,
-        p.position(),
-        p.movement.orientation,
+        1,
+        at,
+        orientation,
     );
-    c.fit_model(&map.realm.data, Some(&template));
+    c.fit_model(&data, Some(&template));
     let g = map.add_creature(c);
     Some(format!("Spawned {} ({g}).", template.name))
 }
