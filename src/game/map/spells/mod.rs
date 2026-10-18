@@ -1728,6 +1728,19 @@ pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
 /// resist (a tenth as likely as a direct hit's), absorbed, logged, dealt;
 /// a leech heals its caster by what it took.
 pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u32, leech: bool) {
+    periodic_damage_of(map, h, target, amount as f32, leech);
+}
+
+/// [`periodic_damage`] of an amount with a fraction: the target's
+/// modifiers on it, then rounded without bias (a half when the rolls are
+/// fixed), as Thistle Tea's `PeriodicDamage` dithers it.
+pub fn periodic_damage_of(
+    map: &mut Map,
+    h: &auras::Holder,
+    target: Guid,
+    amount: f32,
+    leech: bool,
+) {
     let data = map.realm.data.clone();
     let s = data
         .spells
@@ -1758,8 +1771,14 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         index,
         outcome::Kind::Dot,
         h.stacks,
-        amount as f32,
-    ) as u32;
+        amount,
+    );
+    let roll = if outcome::rolling(map) {
+        rand::rng().random_range(0.0f32..1.0)
+    } else {
+        0.5
+    };
+    let amount = crate::game::map::reputation::dither(amount, roll).max(0) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
     let (left, absorbed) =
         auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);

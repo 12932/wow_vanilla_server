@@ -394,6 +394,8 @@ mod tests_p5_data_carrier;
 #[cfg(test)]
 mod tests_p5_data_gear;
 #[cfg(test)]
+mod tests_p5_data_periodic;
+#[cfg(test)]
 mod tests_p5_data_procs;
 #[cfg(test)]
 mod tests_p5_data_real;

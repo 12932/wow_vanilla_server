@@ -2617,7 +2617,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     .unit_fields(target)
                     .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
                     .unwrap_or(0);
-                (max as i32 * a.amount * stacks / 100).max(0) as u32
+                (max as i32 * a.amount * stacks / 100).max(0) as f32
             } else {
                 // Curse of Agony and Starshards grow as they go.
                 let ramp = if a.kind == AURA_PERIODIC_DAMAGE {
@@ -2636,10 +2636,21 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 } else {
                     stacks
                 };
-                ((a.amount * stacks).max(0) as f32 + ramp).round().max(0.0) as u32
+                ((a.amount * stacks).max(0) as f32 + ramp).max(0.0)
             };
-            let amount = crate::game::map::item_scripts::periodic_damage(map, target, h, amount);
-            crate::game::map::spells::periodic_damage(
+            // A ramp's fraction stays until the target's modifiers are
+            // on, then rounds without bias (Thistle Tea's `PeriodicDamage`).
+            let amount = if h.spell == crate::game::map::item_scripts::DEATH_RAY_PERIODIC {
+                crate::game::map::item_scripts::periodic_damage(
+                    map,
+                    target,
+                    h,
+                    amount.round() as u32,
+                ) as f32
+            } else {
+                amount
+            };
+            crate::game::map::spells::periodic_damage_of(
                 map,
                 h,
                 target,
