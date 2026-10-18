@@ -1318,13 +1318,18 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     }
     let equipped =
         (to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END).then_some((p.items[a].entry, p.items[a].guid));
+    // What it swapped with, put on where it was (two trinkets swapped):
+    // each is equipped, as mangos's `SwapItem` equips both.
+    let swapped = b
+        .filter(|_| from.0 == BAG_PLAYER && from.1 < EQUIPMENT_END)
+        .map(|b| (p.items[b].entry, p.items[b].guid));
     // Worn, or a bag put on the bag bar or in the bank's (mangos's
     // `IsBagPos`): one bound on equip is theirs.
     if to.0 == BAG_PLAYER && (to.1 < BAG_END || (BANK_BAG_START..BANK_BAG_END).contains(&to.1)) {
         crate::game::map::items::on_equip(&data, &mut p.items[a]);
     }
     p.refresh_inventory(&data);
-    if let Some((entry, item)) = equipped {
+    for (entry, item) in [equipped, swapped].into_iter().flatten() {
         crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
         crate::game::map::items::equipped(map, g, item);
     }
@@ -1618,18 +1623,28 @@ pub fn sync_gear_all(map: &mut Map) {
 /// gear they took off.
 /// An item's or a set's spell that names forms (a weapon's feral attack
 /// power) holds only in them, as Thistle Tea's `EquipmentSpells.eligible?`
-/// has it; a form taken or left syncs again.
+/// has it; a form taken or left syncs again. One only for outdoors holds
+/// only there (mangos's `UpdateArea` casts a set's outdoor passives again
+/// outside): indoors it is held off, and outside again it comes back
+/// (`spells::environment::reconcile`).
 pub fn sync_gear(map: &mut Map, g: Guid) {
     let data = map.realm.data.clone();
+    let indoors = crate::game::map::spells::environment::outdoors(map, g) == Some(false);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
     p.gear_dirty = false;
     let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
-    let in_form = |spell: u32| {
-        data.spells
-            .get(spell)
-            .is_none_or(|s| crate::game::map::spells::checks::form_error(s, form).is_none())
+    let mut held_indoors = false;
+    let mut in_form = |spell: u32| {
+        let Some(s) = data.spells.get(spell) else {
+            return true;
+        };
+        if indoors && s.attr(0, crate::game::data::spells::ATTR_ONLY_OUTDOORS) {
+            held_indoors = true;
+            return false;
+        }
+        crate::game::map::spells::checks::form_error(s, form).is_none()
     };
     let mut wanted: Vec<(Guid, u32)> = Vec::new();
     for item in p
@@ -1661,6 +1676,7 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
             .into_iter()
             .filter(|(_, s)| in_form(*s)),
     );
+    p.gear_held_indoors = held_indoors;
     wanted.sort_unstable_by_key(|(g, s)| (g.guid(), *s));
     wanted.dedup();
     let have: Vec<(Guid, u32)> = p

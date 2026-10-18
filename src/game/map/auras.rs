@@ -1331,6 +1331,12 @@ fn replaces(
         return true;
     }
     if old.spell == new.spell {
+        // Gear's passive stands beside another's cast of its spell, as
+        // mangos's `AddSpellAuraHolder` lets a passive stack with itself
+        // (Thistle Tea's sources apart).
+        if new.passive && new.equipped {
+            return false;
+        }
         // Another caster's: replaced unless the effects stand together (or
         // its stacks are anyone's).
         return !spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS)
