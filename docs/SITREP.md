@@ -471,11 +471,19 @@ the questions waiting for you.
       WAL mode with a single writer that should only happen with a full disk. A failed logout save loses the session
       since the last save. Keeping failed saves to retry is possible, but the right answer to a full disk is an
       operator alert, so I've left it.
+    - **GM account commands miss lowercase names** (fix queued). `.ban alice 10` answers "No account alice." because
+      accounts are stored in capitals and the command matches exactly. `.unban` and `.account gm` have the same bug.
+    - **`creation = "auto"` is the shipped default.** An unknown name gets an account whose password is the name.
+      That's right for development and load tests, but an open server should set `existing`. Change the default and
+      have the load tests set `auto`? It's your call, since it changes how a fresh server behaves.
     - **Sound as they are:**
       - the handshakes (timeouts, size caps, panic guards);
       - the outbound budget and backpressure;
       - the rate and bad-packet limits;
-      - the session-key cache's bounds.
+      - the session-key cache's bounds;
+      - the supervision: restart, quarantine and back-off, the panic hook, and unwinding in release;
+      - the registry's locks, always taken in the same order;
+      - the damage, absorb, block and timer arithmetic, which is bounded wherever I looked.
 
 ## Progress
 
