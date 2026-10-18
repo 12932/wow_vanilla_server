@@ -446,6 +446,17 @@ the questions waiting for you.
     short. Their committed work is merged above, and their branches and worktrees are kept. How to resume them, with
     fewer at once and a cap on each agent's memory, is waiting on you.
 
+32. **Tests that race the map's own clock** (found merging round 3; for the code review). The harness's tests
+    query a map while its own 20 Hz update runs on real time. Three tests failed today only because an update
+    did or didn't land between two of their queries:
+    - Ragnaros's spawned events;
+    - the gear's auras after a login;
+    - the lava test's health, which a stats resync reset.
+
+    Each now waits for what it checks. The class remains, though, and a much faster or slower machine will find more
+    of them. **The fix** would be a harness mode in which a test steps the map itself, with no update loop of its
+    own. That is a few days' work across the harness and its tests, so I left it for your say.
+
 ## Progress
 
 | Stage | State | Commit |
