@@ -355,3 +355,57 @@ async fn a_players_wild_summons_are_their_own_and_add_up() {
     }
     assert_eq!(owned, 0, "none of them a guardian");
 }
+
+const BURNING_WISH: u32 = 18_789;
+
+/// Thistle Tea's "reviving a guardian removes sacrifice without reviving a
+/// different retained pet", as mangos-classic's `EffectSummonPet` has it
+/// for a warlock: a demon summoned ends the buff Demonic Sacrifice gave
+/// for the last (Burning Wish, of class script 2228).
+#[tokio::test]
+async fn a_demon_summoned_ends_demonic_sacrifices_buff() {
+    use crate::game::map::auras::{self, AURA_OVERRIDE_CLASS_SCRIPTS};
+    let mut d = crate::game::tests_pets::data();
+    let mut wish = spell(
+        BURNING_WISH,
+        &[SpellEffect {
+            effect: 6,
+            aura: AURA_OVERRIDE_CLASS_SCRIPTS,
+            misc_value: 2228,
+            target_a: 1,
+            ..Default::default()
+        }],
+    );
+    wish.duration_index = 4;
+    d.spells.durations.insert(
+        4,
+        SpellDuration {
+            base: 60_000,
+            per_level: 0,
+            max: 60_000,
+        },
+    );
+    d.spells.spells.insert(BURNING_WISH, wish);
+    let realm = crate::game::harness::realm_with(d);
+    let (_w, gw, map) =
+        crate::game::tests_pets::enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    let out = on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, gw, BURNING_WISH, Some(gw));
+        let had = auras::auras(m, gw).is_some_and(|a| a.has_spell(BURNING_WISH));
+        crate::game::map::spells::cast_triggered(
+            m,
+            gw,
+            crate::game::tests_pets::SUMMON_IMP,
+            Some(gw),
+        );
+        let imp = m.players[&gw].owned.pet.is_some();
+        let kept = auras::auras(m, gw).is_some_and(|a| a.has_spell(BURNING_WISH));
+        (had, imp, kept)
+    })
+    .await;
+    assert_eq!(
+        out,
+        (true, true, false),
+        "the buff, the imp, and the buff gone"
+    );
+}

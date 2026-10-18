@@ -18,6 +18,8 @@ pub const KIND_HUNTER: u8 = 1;
 pub const KIND_DEMON: u8 = 2;
 /// Growl, rank 1: every hunter's pet knows it.
 const GROWL: u32 = 2649;
+/// The class script Demonic Sacrifice's buffs carry.
+const DEMONIC_SACRIFICE_SCRIPT: i32 = 2228;
 
 /// A template, or a stand-in for an entry the data lacks.
 fn template(data: &GameData, entry: u32) -> CreatureTemplate {
@@ -565,6 +567,16 @@ pub fn summon_demon(map: &mut Map, owner: Guid, entry: u32, spell: u32) {
     let data = map.realm.data.clone();
     if let Some(old) = pet_of(map, owner) {
         dismiss(map, old);
+    }
+    // A demon summoned ends what Demonic Sacrifice gave for the last
+    // (its buffs' class script 2228), as mangos-classic's `EffectSummonPet`.
+    if guid::is_player(owner) {
+        crate::game::map::auras::remove_where(map, owner, |h| {
+            h.effects.iter().any(|x| {
+                x.kind == crate::game::map::auras::AURA_OVERRIDE_CLASS_SCRIPTS
+                    && x.misc == DEMONIC_SACRIFICE_SCRIPT
+            })
+        });
     }
     let level = map
         .unit_view(owner)
