@@ -345,9 +345,11 @@ async fn reconnect_version_8(
     };
 
     if !success {
+        // A stale session: Thistle Tea answers `FailUnknown0` and closes
+        // (not banned, which the client would tell its player).
         or_return!(
             CMD_AUTH_RECONNECT_PROOF_Server {
-                result: LoginResult::FailBanned,
+                result: LoginResult::FailUnknown0,
             }
             .tokio_write(&mut stream)
             .await
@@ -412,9 +414,11 @@ async fn reconnect_version_2(
     };
 
     if !success {
+        // A stale session: Thistle Tea answers `FailUnknown0` and closes
+        // (not banned, which the client would tell its player).
         or_return!(
             CMD_AUTH_RECONNECT_PROOF_Server {
-                result: LoginResult::FailBanned,
+                result: LoginResult::FailUnknown0,
             }
             .tokio_write(&mut stream)
             .await

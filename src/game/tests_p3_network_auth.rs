@@ -185,6 +185,47 @@ async fn a_reconnect_needs_a_session_and_its_proof() {
     }
 }
 
+/// A wrong reconnect proof (a stale session) isn't told the account is
+/// banned: it is answered as Thistle Tea answers it, `<<3, 1>>`
+/// (`FailUnknown0`), and the connection closed. Both reconnects: 1.12's
+/// protocol (3, as 2) and 8.
+#[tokio::test]
+async fn a_wrong_reconnect_proof_is_not_told_banned() {
+    accounts().set_password("STALE", "SECRET").unwrap();
+    let users = users();
+    let mut s = login_server(users.clone()).await;
+    let client = log_in(&mut s, "STALE", "SECRET").await;
+    drop(s);
+    for protocol in [3u8, 8] {
+        let mut s = login_server(users.clone()).await;
+        let mut c = challenge(2, "STALE");
+        c[1] = protocol;
+        s.write_all(&c).await.unwrap();
+        let c = read_n(&mut s, 2 + 16 + 16).await;
+        assert_eq!(
+            &c[..2],
+            &[2, 0],
+            "protocol {protocol}: the reconnect challenge"
+        );
+        let values = client.calculate_reconnect_values(c[2..18].try_into().unwrap());
+        let mut proof = vec![3];
+        proof.extend_from_slice(&values.challenge_data);
+        let mut p = values.proof;
+        p[0] ^= 1;
+        proof.extend_from_slice(&p);
+        proof.extend_from_slice(&[0; 20]);
+        proof.push(0);
+        s.write_all(&proof).await.unwrap();
+        let answer = read_n(&mut s, 2).await;
+        assert_eq!(
+            answer,
+            vec![3, 1],
+            "protocol {protocol}: FailUnknown0, not FailBanned"
+        );
+        rest(&mut s).await;
+    }
+}
+
 /// A session key the auth server holds for `name`, as a login leaves it,
 /// and the client's half of it.
 fn session(users: &UserCache, name: &str) -> [u8; 40] {
