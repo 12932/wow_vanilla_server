@@ -34,29 +34,13 @@ Each number is the question's number in [DECISIONS.md](DECISIONS.md), where it i
 Until you answer, wvs keeps what the line says.
 
 **Server and operations**
-- **#53 The listen address:** login and world listen on every interface. With `creation = "auto"` and
-  `everyone_gm = true`, anyone who reaches them gets an administrator. Default to localhost?
-- **#3 A hung map:** should it abort the server, so systemd or Docker restarts it? Today the watchdog only logs it.
 - **#2 A restarted map's players:** they're saved and sent to the character screen. Should they go straight back in
   instead?
 - **#4 wow_messages' crash bugs:** guarded in wvs and fixed in your fork. Report them upstream, which would be public?
-- **#54 Defaults that differ from mangos:**
-
-  | Setting | wvs | mangos |
-  |---|---|---|
-  | Instance view distance | 100 | 170 |
-  | Leash radius | 50 | 30 |
-  | Assistance radius | 10 | 5 |
-  | Rare corpse decay | wvs's own | mangos's |
-
-  Switch?
 - **#49 Dungeon copies:** give each copy's creatures fresh guids? Today copies share them.
 - **#26 Reconnect protocol:** both 2 and 3 are accepted. Which does the 1.12.1 client send?
 
 **Combat and creatures**
-- **#20 The player combat timer:** move to Thistle Tea's and mangos's model? That is no PvE timer, 5 s for PvP.
-  Explained, waiting on your go.
-- **#33 Teleports:** should a teleport within the map end the player's fight, as mangos and Thistle Tea do?
 - **#28 A charm's end:** should it interrupt the freed creature's cast (Thistle Tea), or let it go on (mangos, wvs)?
 - **#42 Interrupts:** should one lock out the school on a creature immune to silence? mangos does, Thistle Tea doesn't.
 - **#43 Fears:** should a fear without the damage-break flag break by chance, as in mangos?
@@ -71,19 +55,13 @@ Until you answer, wvs keeps what the line says.
 - **#1 Death's wear:** three small differences from Thistle Tea. Align them?
 
 **Spells, auras and talents**
-- **#38 vmangos's spell corrections:** keep them winning over the raw DBC Thistle Tea reads? Concussive Shot and
-  Piercing Howl are dazes, for example.
 - **#37 Lower spell ranks:** should lower ranks of rage and energy spells leave the spellbook, as in mangos?
-- **#39 New weapon skills:** start them at 1, as in mangos and Thistle Tea? wvs starts them at their cap.
 - **#30 Attack-speed slows:** keep them one at a time (Thistle Tea), or multiply them (mangos-classic)?
 - **#29 Talent reset cost:** fall back to 1 gold after a month (Thistle Tea), or stay at 5 (mangos, wvs)?
 - **#41 Stealth and Vanish:** should cancelling Stealth while Vanish is on remove both?
 - **#46 Fade:** when it ends, give back only what it took (mangos), or its whole amount (Thistle Tea, wvs)?
 - **#48 Druid form attack power:** which is 1.12's? Thistle Tea, mangos and wvs all differ.
 - **#8 Failed openings:** hold back `SMSG_SPELL_GO` for one, as Thistle Tea does?
-- **#13 Charged items:** they come back full after a relog, a mail or an auction, since charges aren't saved. Fix?
-- **#11 Packet order:** an update's blocks go at its end, so a packet naming a new object can arrive first. Fix it
-  generally? It touches the hot path.
 - **#57 A passive party aura on its caster** (from 5d): shown on the caster too, as mangos-classic's
   `IsNeedVisibleSlot` has it, or hidden, as Thistle Tea and wvs have it? Which is 1.12's?
 - **#58 Buffs on a shapeshifted target** (from 5d): refuse one that shapeshifting cancels (Water Walking), as Thistle
@@ -99,7 +77,6 @@ Until you answer, wvs keeps what the line says.
 **Quests, items and the world**
 - **#56 Unlearning a profession** (from 4d): should it drop that profession's quests, as Thistle Tea does? mangos and
   wvs don't.
-- **#22 Abandoning a quest:** keep its collected items (mangos, wvs), or destroy them (Thistle Tea)?
 - **#21 The grey quest "!":** show it up to 4 levels below (wvs), 7 (mangos), or at any gap (Thistle Tea)?
 - **#23 An untapped creature's soul shard:** give one, as mangos does, or none, as Thistle Tea?
 - **#35 A second login:** kick the first session (wvs), hand over the character (mangos), or refuse (Thistle Tea)?
@@ -126,6 +103,16 @@ Until you answer, wvs keeps what the line says.
 - **Ghosts:** water walking, and sight only within 45 yards of the corpse, for every kind of object.
 - **Battlegrounds:** a 400-yard view distance.
 - **#55** the world-awake fixes landed (perf2, DECISIONS 57).
+- **2026-10-19, being done now:**
+  - **#11** fix the packet order: nothing reaches a client about an object before its create.
+  - **#3** remove the watchdog completely.
+  - **#13** save item charges.
+  - **#33** a teleport within the map ends the player's fight.
+  - **#20** the player combat timer as mangos and Thistle Tea have it.
+  - **#54** mangos's defaults: instance view distance 170, leash 30, assistance 5, and its rare corpse decay.
+  - **#39** new weapon skills start at 1.
+- **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
+  vmangos's spell corrections; #22 an abandoned quest's collected items.
 
 ## Progress
 | Stage | Result | Commit |
