@@ -180,6 +180,31 @@ the questions waiting for you.
 52. **`.honor week`** (from review 4, R4-23). The GM command loses the rest of that week's honor. When should the
     week re-rank: at the real week's end, which decays rank points twice, or the day after the command?
 
+53. **The listen address** (from the config stage). Login (3724) and the world (8085) listen on every interface,
+    hard-coded. With the shipped `creation = "auto"` and `everyone_gm = true`, anyone who can reach those ports gets
+    an administrator, and now `.reload config` too. Add `[network] bind_address`?
+    - **Defaulting to 127.0.0.1** is safe, but your remote client then needs `0.0.0.0` set in `config.toml`.
+    - **Defaulting to 0.0.0.0** keeps today's behaviour.
+54. **Defaults that differ from mangos** (from the config stage). Kept as wvs had them:
+    - instance view distance: 100, mangos 170;
+    - leash radius: 50, mangos 30;
+    - assistance radius: 10, mangos 5;
+    - corpse decay for rares, rare elites and bosses.
+
+    Switch to mangos's?
+55. **The whole world awake** (from the load test). With every creature on both continents awake, from 6,471
+    observers, a continent's update needs 25 to 29 ms of CPU at p50, but 81 to 87 ms at p99, and 20 to 25% of
+    updates go over 50 ms. The fixes, cheapest first:
+    1. **Stagger the 500 ms aggro and environment timers,** which run in step and spike every tenth update. Hours.
+    2. **Prune the awake set once per update,** saving about 11%. A day.
+    3. **Load navmesh tiles ahead of players, on a background thread,** where they now stall the map's thread. A few
+       days.
+    4. **Unload unused tiles,** as memory reaches 13 GB at 100%. A day or two.
+
+    1, 2 and 3 should bring a fully awake continent to 27 to 34 ms, evenly spread. Past that, a continent needs
+    regions with their own update loops, or creature turns run in parallel: weeks, and not needed for a realm of a
+    few thousand mostly in cities. Do 1 to 4?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -752,6 +777,26 @@ the questions waiting for you.
       - **R4-22:** a destroyed charter keeps its name reserved.
       - **Minor ones,** and four speed leads, are in the findings file.
 
+50. **The config stage** (your ask; `docs/CONFIG.md`).
+    - **The file:** `config.toml` in sections (`[network]`, `[world]`, `[visibility]`, `[rates]`, `[creatures]`,
+      `[players]`, `[battleground]`, `[anticheat]`, `[accounts]`, `[gm]`, `[spawn]`, `[arena]`). Keys are named after
+      mangos's where it has them (`Rate.XP.Kill` is `[rates] xp_kill`).
+    - **Overrides:** any key from the environment, as `WVS__RATES__XP_KILL=2`.
+    - **Reference:** `--print-config`, and a `config.example.toml` generated from the code.
+    - **Hot reload:** `.reload config` or SIGHUP for rates, distances, timers and the MOTD; ports and paths need a
+      restart.
+    - **Moved in at their old defaults:** XP, drops by quality, money, honor, reputation, rest, respawn and corpse
+      decay, skill gains, aggro, leash and assistance, start level and money, the level cap, battleground timers,
+      the speed check, and GM command levels.
+    - **Old keys still load.**
+51. **The whole-world-awake load test** (`docs/PERFORMANCE.md`, "The whole world awake").
+    - **The tools:**
+      - `tools/world_points.py` (cover points, `docs/world_points.csv`);
+      - `wvs-world-bench` (behind the `world-bench` feature);
+      - peon's `--spread world --points` (peon `b4fe387`).
+    - **peon:** it drove 350 bots across the world on this machine at 0.24 cores of server. Memory, not CPU, was the
+      limit (question 55).
+
 ## Progress
 
 | Stage | State | Commit |
@@ -809,6 +854,8 @@ the questions waiting for you.
 | Ghosts: water walking, sight by the corpse | merged | 7aa9d29 |
 | Tracy reworked | merged | 479b728 |
 | Review 4 (the world's systems) | merged | de5cf4a |
+| Configurable settings | merged | 287d03a |
+| The whole-world-awake load test | merged | a1e8835 |
 | The matrix after round 4's first three | 4,909 of 8,380 applicable covered or accepted (58.6%) | |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |

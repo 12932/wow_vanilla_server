@@ -858,6 +858,7 @@ async fn plot_realm(realm: Arc<Realm>) {
         store.set(realm.store.queued() as f64);
         (last_in, last_out) = (now_in, now_out);
     }
+}
 
 /// SIGHUP reloads the config, as `.reload config` does.
 fn reload_on_hangup(realm: Arc<Realm>) {
