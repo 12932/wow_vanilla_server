@@ -61,6 +61,12 @@ characters_db = "characters.sqlite"
 # Default unset. Needs a restart.
 #terrain_dir =
 
+# Seconds a navmesh or terrain tile is kept with no player or
+# awake creature near it and nothing asking about it; then it is
+# let go, and read again if it is needed. 0 keeps every tile read.
+# Default 300. Range 0 to 86400, clamped. Changes at a reload. mangos: GridCleanUpDelay.
+tile_unload_secs = 300
+
 # Shown to every player at login.
 # Default "Welcome to wow_vanilla_server.". Changes at a reload. mangos: Motd.
 motd = "Welcome to wow_vanilla_server."

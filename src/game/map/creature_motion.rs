@@ -183,7 +183,8 @@ pub fn route(
     to: Vector3d,
 ) -> Option<(Vec<Vector3d>, bool, bool)> {
     let hab = habitat(map, g);
-    if map.nav.is_none() {
+    // With no navmesh, or its tiles here still being read: straight.
+    if map.nav_at(&[from, to]).is_none() {
         return Some((vec![from, to], true, hab.fly));
     }
     if hab.fly {

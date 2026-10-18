@@ -86,7 +86,7 @@ pub fn fear_point(
     rng: &mut impl rand::Rng,
 ) -> Option<Vector3d> {
     let to = fear_destination(at, frightener_distance, rng);
-    let Some(nav) = map.nav.as_mut() else {
+    let Some(nav) = map.nav_at(&[at, to]) else {
         return Some(to);
     };
     let reachable = nav.walk_hit(at, to).unwrap_or(to);
@@ -100,7 +100,7 @@ pub fn confusion_point(
     anchor: Vector3d,
     rng: &mut impl rand::Rng,
 ) -> Option<Vector3d> {
-    let p = match map.nav.as_mut() {
+    let p = match map.nav_at(&[anchor]) {
         Some(nav) => crate::game::map::world::wander_point(nav, anchor, CONFUSION_RADIUS, rng)?,
         None => {
             let a = rng.random_range(0.0f32..std::f32::consts::TAU);

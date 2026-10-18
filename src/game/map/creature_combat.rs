@@ -1027,8 +1027,10 @@ fn watch_for_enemies(map: &mut Map) {
         |_, c| c.guid,
     );
     for g in watching {
+        // Each on its own phase of the second (`next_beat`).
+        let next = crate::game::map::next_beat(map.started, g, WATCH_EVERY, now);
         if let Some(c) = map.creature_mut(g) {
-            c.engagement.watch_at = Some(now + WATCH_EVERY);
+            c.engagement.watch_at = Some(next);
         }
         if !guard_call_ready(map, g) {
             continue;

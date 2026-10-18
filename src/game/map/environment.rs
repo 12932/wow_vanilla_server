@@ -202,11 +202,16 @@ pub fn update(map: &mut Map) {
         })
         .map(|p| p.guid)
         .collect();
+    let started = map.started;
     for g in due {
         let Some(p) = map.players.get_mut(&g) else {
             continue;
         };
-        p.misc.env_checked_at = Some(now);
+        // Checked as of the player's last beat (`next_beat`), so the next
+        // check comes on their own phase of the interval, not everyone's
+        // in the same update.
+        p.misc.env_checked_at =
+            Some(crate::game::map::next_beat(started, g, CHECK_EVERY, now) - CHECK_EVERY);
         let alive = p.death == Death::Alive;
         let ghost = matches!(p.death, Death::Ghost { .. });
         // A ghost still tires in the deep sea; a body lying there doesn't.

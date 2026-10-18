@@ -502,6 +502,8 @@ mod tests_parity_spells;
 #[cfg(test)]
 mod tests_parity_world;
 #[cfg(test)]
+mod tests_perf2;
+#[cfg(test)]
 mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
@@ -583,6 +585,9 @@ pub struct RealmConfig {
     pub nav_dir: Option<std::path::PathBuf>,
     /// Thistle Tea's terrain tiles (`MMMMRRCC.map`): liquid kinds and areas.
     pub terrain_dir: Option<std::path::PathBuf>,
+    /// How long a tile no one is near is kept (`[world] tile_unload_secs`);
+    /// zero keeps them all.
+    pub tile_unload: Duration,
     pub petition_signatures: u32,
     pub mail_delay: Duration,
     pub instance_unload: Duration,
@@ -605,6 +610,10 @@ pub struct RealmConfig {
     /// Whether bolts and missiles take time to arrive (tests land them at
     /// once).
     pub spell_travel: bool,
+    /// Whether the navmesh's and the terrain's tiles are read off the
+    /// maps' threads (`map/tiles.rs`); tests read them at once, as they
+    /// are asked for, so that what a test sees doesn't hang on the disk.
+    pub tiles_in_background: bool,
     pub arena: crate::game::map::arena::ArenaConfig,
     pub rates: crate::config::RatesConfig,
     pub creatures: crate::config::CreaturesConfig,
@@ -627,6 +636,7 @@ impl RealmConfig {
             max_characters_per_account: c.players.characters_per_realm,
             nav_dir: c.world.nav_dir.clone(),
             terrain_dir: c.world.terrain_dir.clone(),
+            tile_unload: Duration::from_secs(c.world.tile_unload_secs),
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
             instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,
@@ -640,6 +650,7 @@ impl RealmConfig {
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
             spell_travel: true,
+            tiles_in_background: true,
             arena: c.arena.clone(),
             rates: c.rates.clone(),
             creatures: c.creatures.clone(),

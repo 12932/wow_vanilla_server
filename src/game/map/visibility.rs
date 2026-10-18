@@ -65,6 +65,10 @@ pub fn refresh(map: &mut Map, object: Guid) {
     let Some(pos) = map.position_of(object) else {
         return;
     };
+    // Arrived or moved on: the navmesh and terrain about them, ahead.
+    if guid::is_player(object) {
+        crate::game::map::tiles::ahead(map, pos);
+    }
     // A boat or zeppelin: everyone in the map knows it.
     if map.globals.contains(&object) {
         let unaware: Vec<Guid> = map

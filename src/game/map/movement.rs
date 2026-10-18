@@ -218,7 +218,7 @@ fn remember_safe_position(map: &mut Map, g: Guid) {
         return;
     }
     let o = p.movement.orientation;
-    let on_ground = map.nav.as_mut().is_none_or(|n| {
+    let on_ground = map.nav_at(&[at]).is_none_or(|n| {
         n.ground(at.x, at.y, at.z)
             .is_some_and(|z| (z - at.z).abs() <= SAFE_SURFACE)
     });

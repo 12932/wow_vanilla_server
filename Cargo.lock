@@ -1752,21 +1752,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
 
 [[package]]
-name = "rustigator"
-version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
-dependencies = [
- "glam 0.34.1",
- "rustigator-mapbuild",
- "rustigator-parser",
- "rustigator-pathfind",
- "rustigator-util",
- "thiserror",
- "tracing",
- "wow_world_base",
-]
-
-[[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
 source = "git+https://github.com/12932/rustigator?rev=69652f821cfaad1aeb218727ef9c5a847821c15b#69652f821cfaad1aeb218727ef9c5a847821c15b"
@@ -2909,6 +2894,7 @@ dependencies = [
  "dialoguer",
  "dotenvy",
  "flate2",
+ "glam 0.34.1",
  "indicatif 0.18.6",
  "kanal",
  "libc",
@@ -2920,8 +2906,8 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "rusqlite",
- "rustigator",
  "rustigator-mapbuild",
+ "rustigator-pathfind",
  "serde",
  "serde_json",
  "slab",

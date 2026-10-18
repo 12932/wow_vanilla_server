@@ -210,6 +210,10 @@ settings! {
         /// if unset and there. Without them liquids have no kind outside
         /// WMOs: no deep-sea fatigue, no lava in the open.
         terrain_dir: Option<PathBuf> = None, Any, Restart, "";
+        /// Seconds a navmesh or terrain tile is kept with no player or
+        /// awake creature near it and nothing asking about it; then it is
+        /// let go, and read again if it is needed. 0 keeps every tile read.
+        tile_unload_secs: u64 = 300, Clamp(0.0, 86_400.0), Live, "GridCleanUpDelay";
         /// Shown to every player at login.
         motd: String = "Welcome to wow_vanilla_server.".to_owned(), Any, Live, "Motd";
         /// Names no character may take.

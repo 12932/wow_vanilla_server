@@ -252,6 +252,22 @@ In short:
   rate falls to 9 a second.
 - **Memory** is the other limit: 13 GB at 100%, nearly all of it navmesh.
 
+Round two (at the end of this section) made four of the fixes this found: the 500 ms timers each on a phase of their
+own, the awake set pruned once an update, navmesh and terrain tiles read off the map's thread, and idle tiles let go.
+Since:
+
+- **Standing, a fully awake continent keeps 50 ms.** Every point without the navmesh, the update's CPU at p99 is
+  30 and 34 ms (the slowest update 35 and 38), from 44 and 42; all of Eastern Kingdoms with the navmesh, 32 and
+  34 ms once its tiles are in, from 56 to 59. Kalimdor with the navmesh needs more memory than this round had.
+- **The beat is gone**, and with it most updates over 50 ms. The median rises, by up to 3 ms at 100%: creatures now
+  look for enemies every 500 ms, as the constant says, where on the beat they looked every 550 to 680 ms.
+- **No read of a tile waits in the map**: logins, teleports and populating no longer stall, and the watchdog no
+  longer calls a map hung. Taking a tile in and building its collision stay on the map's thread.
+- **Walking at 100% nearly keeps it**: 0% to 2% of updates go over 50 ms of CPU, against 1% to 6% before, with p99
+  at 42 to 55 ms.
+- **Memory**: tiles no one is near are let go (`[world] tile_unload_secs`), so a walking crowd's memory stays level,
+  but with every point awake every tile is near someone, and the whole world still takes about 13 GB.
+
 ### The points
 
 `tools/world_points.py` is a greedy set cover of the creature spawns of maps 0 and 1 (vmangos's `creature` rows in
@@ -484,6 +500,8 @@ This agent was capped at 10 GB, and the server needs about 8 GB for 400 bots spr
 
 ### Does a continent keep 50 ms?
 
+Before round two (below, with the answer since):
+
 **Up to a quarter of the points, yes.** That is 670 to 948 players a continent and 9,000 to 10,000 awake creatures,
 at p99 31 ms of CPU.
 
@@ -504,7 +522,8 @@ view. Even so, the margin is thin:
 
 ### The bottlenecks, and what each fix would cost
 
-None of these is done here. Each one needs the update's debug checks kept, or extended.
+As this section first found them. Round two (below) made the first four fixes; 5 and 6 are open. Each one needs
+the update's debug checks kept, or extended.
 
 1. **The 500 ms beat** (the spikes, and most updates over 50 ms). A creature's first aggro check, and a player's first
    environment check, could come at a random point of the 500 ms interval rather than all at once. The timers would
@@ -544,3 +563,230 @@ None of these is done here. Each one needs the update's debug checks kept, or ex
      map freely.
 
    Neither is needed at a real realm's 3,000 players, who are mostly in cities and instances.
+
+### Round two: the four fixes
+
+Fixes 1 to 4 of the list above, one commit each, in this order: the timers, the awake set, the tiles read off the
+map's thread, the idle tiles let go. Each was measured with `wvs-world-bench` before and after its commit.
+
+**How this round measured.**
+
+- **Without the navmesh, at every fraction.** This round's agent ran under a 10 GB memory cap (its cgroup's
+  `memory.max`), and with the navmesh the benchmark passes 9 GB within 20 seconds of the logins at 10%, and needs
+  13 GB at 100%. So the series at 10%, 25%, 50% and 100% ran with `nav_dir` unset (the terrain kept), at 0.5 to
+  0.9 GB. The timers and the awake set don't depend on the navmesh, but the creatures' turns do: without it they
+  walk straight, and a turn is cheaper. Standing at 100%, the median update is 22 to 26 ms of CPU without the
+  navmesh, where round one's was 25 to 29 with it.
+- **With the navmesh, at 3% and on one continent.** 194 observers (`--fraction 0.03`, 5.3 to 6.7 GB); and every
+  point of Eastern Kingdoms with no one on Kalimdor (2,562 observers, the map-0 lines of `docs/world_points.csv`,
+  6.4 to 6.9 GB),
+  which is one continent fully awake. Kalimdor alone needs more than the cap allows.
+- **In pairs.** The build before a commit and the build after it ran one after the other for each fraction and
+  mode, so that both saw about the same machine. The load average was 7 to 39 over the round, and changed within
+  minutes; each pair gives its own. At a load average over 30, a third to a half of an update's wall time is spent
+  preempted, so the wall time's "over 50 ms" says more about the machine than the server there. The tables give the
+  share over 50 ms of CPU as well, which the machine's load doesn't add to.
+- **The scripts** are in `runs/perf2`: `bench.sh` (a run under a 9 GB RSS guard and the 5-minute cap), `ab.sh` (two
+  builds alternated), `pair.py` (the tables below) and `beat.py` (the autocorrelation).
+
+The tables give each continent's CPU an update at p50/p95/p99/max, before and after (in bold).
+
+#### 1. The 500 ms timers, each on a phase of its own (`Map::next_beat`)
+
+A creature's aggro check, a player's environment check and a civilian's watch for enemies (each second) set their
+next time to the update's time plus their interval. An update takes every timer that came due since the last, and
+sets each to the same next time, so timers only ever gather: once two fell in the same update, they stay together.
+On a slow update more fall in, so the timers gathered on the slow updates, the beat that made every ninth or tenth
+update cost twice the others.
+
+Each now keeps to a phase of its own in its interval, from its guid (a Fibonacci hash of it, in milliseconds): its
+next time is the first of its beats after now. Its period is still the interval. Its first check comes as before,
+at once (a creature as it comes into view, a player as they arrive), and only the second may come sooner, by up to
+the interval. mangos reacts to movement within its AI relocation delay (`Visibility.AIRelocationNotifyDelay`,
+1000 ms), to a creature added or respawned within `CreatureRespawnAggroDelay` (5000 ms), and ticks its mirror
+timers every 2000 ms, so a check up to 500 ms sooner is within what it allows.
+
+The beat, as the autocorrelation of an update's CPU time at a lag of 10 updates, at 100% standing: +0.88 and +0.68
+before, +0.26 and +0.13 after (a pair of profiled runs, load average 15). The series, one build after the other
+(not alternated), load average 9 to 28:
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|---|
+| 647 | no | 6.5/12/14/15 → **5.7/6.6/7.1/7.6** | 7.4/12/14/16 → **6.2/7.2/7.7/8.3** | 1.1%, 1.7% → 0.0%, 0.0% | 0.0%, 0.0% → 0.0%, 0.0% | 20-25, 17-10 |
+| 647 | yes | 5.8/8.7/10/47 → **5.6/7.1/7.7/9.2** | 6.4/9.1/11/42 → **6.0/7.6/8.5/10** | 0.1%, 0.3% → 0.0%, 0.0% | 0.0%, 0.0% → 0.0%, 0.0% | 25-26, 9-9 |
+| 1,618 | no | 9.6/15/17/22 → **13/16/17/19** | 11/21/24/27 → **15/18/19/23** | 0.2%, 0.6% → 2.6%, 3.8% | 0.0%, 0.0% → 0.0%, 0.0% | 25-19, 9-19 |
+| 1,618 | yes | 10/17/20/25 → **12/16/19/21** | 12/17/20/22 → **14/19/21/24** | 1.6%, 2.3% → 2.6%, 3.3% | 0.0%, 0.0% → 0.0%, 0.0% | 18-19, 19-22 |
+| 3,236 | no | 16/39/42/48 → **20/25/27/33** | 20/33/36/42 → **23/28/31/35** | 4.9%, 4.6% → 8.2%, 13.3% | 0.0%, 0.0% → 0.0%, 0.0% | 21-22, 23-25 |
+| 3,236 | yes | 16/29/33/51 → **19/27/32/92** | 19/30/34/38 → **22/30/35/70** | 2.9%, 4.2% → 12.1%, 16.8% | 0.1%, 0.0% → 0.2%, 0.1% | 22-21, 28-28 |
+| 6,471 | no | 22/43/48/51 → **27/33/36/41** | 26/52/59/68 → **32/39/43/51** | 13.8%, 19.5% → 2.3%, 3.6% | 0.3%, 6.5% → 0.0%, 0.1% | 22-20, 28-27 |
+| 6,471 | yes | 23/36/46/53 → **27/42/48/58** | 27/45/51/57 → **30/49/55/61** | 2.4%, 5.9% → 7.7%, 13.3% | 0.1%, 1.4% → 0.8%, 3.8% | 17-13, 26-26 |
+
+At 100% the updates over 50 ms fall from 14% and 20% to 2% and 4%, and p99 from 48 and 59 ms to 36 and 43. The
+median rises, by 5 or 6 ms here and 7 to 9 in the alternated pair below, and the profile says why: `aggro_scan`'s
+samples rose by 35%. On the beat, an update long enough to gather the timers also delayed the next one, so creatures
+looked every 550 to 680 ms; now they look every 500 ms, as `AGGRO_SCAN_EVERY` says. The same pair alternated at a
+load average of 31 to 39:
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|---|
+| 3,236 | no | 16/37/40/43 → **18/20/21/27** | 19/40/45/50 → **20/24/25/28** | 13.6%, 23.6% → 0.0%, 0.0% | 0.0%, 0.1% → 0.0%, 0.0% | 37-34, 31-20 |
+| 6,471 | no | 24/65/70/78 → **31/42/48/57** | 30/52/59/64 → **39/51/57/63** | 44.7%, 65.2% → 63.9%, 75.9% | 12.9%, 10.6% → 0.8%, 6.0% | 39-35, 34-33 |
+| 6,471 | yes | 24/55/66/79 → **32/48/61/71** | 31/61/76/129 → **39/62/79/104** | 33.4%, 45.4% → 61.6%, 76.6% | 8.7%, 14.3% → 4.0%, 17.4% | 34-32, 33-38 |
+
+Walking, the bench's observers send their heartbeats together every 250 ms, and the update after each batch works
+out their visibility, a beat of 5 updates that is the bench's, not the server's (real clients aren't in step).
+
+#### 2. The awake set pruned once an update (`Awake`)
+
+`Map::awake` is now an `Awake`: the set, its keys sorted, and the guids added since. The update's first look lets go
+of those no longer awake and sorts the keys; the four looks after it filter the same keys. What is added between
+looks (a creature drawn into a fight by another's turn, a helper called, a summons) is kept aside and merged into the
+keys at the next look, so every look still finds what a look through every creature would, in its order, which
+debug builds still check at every look. A creature that comes back under a new key (its guid taken out of the map
+and put back) is added again, whether it is awake then or later.
+
+Alternated, load average 12 to 23:
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|---|
+| 647 | no | 6.1/7.4/8.0/9.1 → **5.8/6.9/7.6/8.5** | 6.6/8.2/9.1/9.7 → **6.3/7.5/8.3/9.5** | 0.0%, 0.0% → 0.0%, 0.1% | 0.0%, 0.0% → 0.0%, 0.0% | 14-17, 17-16 |
+| 647 | yes | 5.6/7.2/8.0/9.4 → **5.6/7.0/7.8/8.5** | 6.0/7.5/8.3/11 → **6.0/7.5/8.4/10** | 0.0%, 0.0% → 0.0%, 0.0% | 0.0%, 0.0% → 0.0%, 0.0% | 15-12, 12-12 |
+| 1,618 | no | 11/14/15/18 → **11/13/14/15** | 13/15/16/18 → **12/14/15/16** | 0.2%, 0.0% → 0.0%, 0.0% | 0.0%, 0.0% → 0.0%, 0.0% | 18-15, 15-17 |
+| 1,618 | yes | 12/16/19/21 → **9.8/13/15/50** | 13/18/20/23 → **11/14/16/36** | 0.6%, 0.5% → 0.1%, 0.0% | 0.0%, 0.0% → 0.1%, 0.0% | 17-23, 21-15 |
+| 3,236 | no | 18/21/22/24 → **16/19/21/25** | 21/24/25/28 → **19/22/24/28** | 0.0%, 0.2% → 0.0%, 0.3% | 0.0%, 0.0% → 0.0%, 0.0% | 14-15, 18-12 |
+| 3,236 | yes | 17/24/27/29 → **16/23/26/30** | 19/27/29/33 → **18/27/30/33** | 0.8%, 0.8% → 1.5%, 2.1% | 0.0%, 0.0% → 0.0%, 0.0% | 12-15, 14-18 |
+| 6,471 | no | 26/32/36/48 → **24/28/30/33** | 31/37/41/52 → **27/33/36/53** | 2.5%, 3.0% → 0.0%, 0.5% | 0.0%, 0.1% → 0.0%, 0.1% | 19-20, 19-18 |
+| 6,471 | yes | 24/38/43/52 → **22/35/44/49** | 27/42/50/55 → **25/42/54/59** | 0.8%, 3.6% → 0.5%, 2.2% | 0.2%, 0.8% → 0.0%, 1.8% | 18-17, 18-14 |
+
+At 100% standing, the creatures' combat step (the threat, the fights' aura states, the watch and the calls for help)
+goes from 3.6 and 4.6 ms an update to 1.4 and 1.8, and p99 from 36 and 41 ms to 30 and 36.
+
+#### 3. Tiles read off the map's thread (`map/tiles.rs`)
+
+- **The readers.** Four threads read and decode the tiles (the navmesh's `.nav` with rustigator-pathfind's
+  `NavFile::from_bytes`, the terrain's `.map`), and send them to the map, which takes them in at its next update
+  (`PathfindMap::load_nav_file`), for at most 3 ms an update (at least one tile). The navmesh is now
+  rustigator-pathfind's map, not rustigator's wrapper of it, which can't take a tile decoded elsewhere.
+- **Ahead of the players.** As a player arrives, and each time their visibility is worked out again (every
+  8 yards), the map asks for the tiles within what they see and 20 yards more. The creatures a player wakes are
+  within that, and wander, chase and walk home about as far; one further off asks for its own tile as it goes.
+- **No wait.** Until a tile is in, a query over it answers as a map with no navmesh would: a path is straight, a
+  line of sight clear, heights and liquids unknown; a wanderer walks to a random point, and a feared or confused
+  unit goes where it would. Once the tile is in, the next query uses it.
+- **Tests** read tiles at once, as before (`RealmConfig::tiles_in_background`, off in `harness::test_config`), so
+  what a test sees doesn't hang on the disk. A dungeon that is one WMO is still read whole as its copy starts.
+
+The stalls, alternated, 194 observers with the navmesh:
+
+| | Populated | Observers in place | Events over 200 ms, updates over 1 s | Watchdog alarms | Peak RSS |
+|---|---|---|---|---|---|
+| Standing, before | 4.1 s | 14.0 s | 18 | 0 | 5.3 GB |
+| Standing, after | 0.1 s | 0.1 s | 0 | 0 | 6.0 GB |
+| Walking, before | 4.5 s | 20.1 s | 41 | 1 | 6.0 GB |
+| Walking, after | 0.2 s | 0.2 s | 0 | 0 | 6.7 GB |
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|---|
+| 194 | no | 3.2/4.3/4.9/22 → **3.6/5.5/24/58** | 4.1/5.3/6.3/20 → **4.3/7.3/21/48** | 0.0%, 0.1% → 0.9%, 0.7% | 0.0%, 0.0% → 0.2%, 0.0% | 23-21, 21-29 |
+| 194 | yes | 3.6/5.5/18/120 → **3.5/12/26/73** | 4.6/8.0/28/119 → **4.4/12/27/54** | 2.1%, 3.6% → 1.3%, 1.9% | 0.4%, 0.5% → 0.2%, 0.1% | 32-32, 32-38 |
+
+Walking, the slowest update's wall time falls from 815 and 1,679 ms to 373 and 461. Two costs stay on the map's
+thread, and show in the CPU's tail: taking a tile in (a few milliseconds for a busy one, more under load), and
+building a tile's collision (its BVH, up to 27 ms) at the first query that needs it. Before, both came while the
+observers were placed, before the measurement; now tiles arrive during it. The memory rises by 0.7 GB at 3%: the
+tiles ahead of a player are read whether or not anything there asks. Without the navmesh (the terrain's tiles only)
+there is no change past the noise.
+
+A tile's costs, cold, from the real bake (a sample of 28 of Eastern Kingdoms' and 32 of Kalimdor's): reading it
+83 ms on average and up to 250, decoding 3 ms (up to 12), taking it in 3 ms (up to 11), its BVH 5 ms (up to 27).
+
+#### 4. Idle tiles let go (`[world] tile_unload_secs`)
+
+Every 10 seconds the map marks the tiles around each player as used (a player standing still asks about nothing),
+and lets go of the tiles, navmesh and terrain, that no one has used, asked about or stood near for
+`tile_unload_secs` (300 by default, mangos's `GridCleanUpDelay`; 0 keeps them all; a reload changes it). An awake
+creature far from every player keeps its tile by asking about it. A tile needed again is read again through the
+readers of fix 3. Letting go of a busy tile takes milliseconds, so a sweep is spread over updates, 2 ms each.
+
+A long walk shows it: 194 observers walking for 200 seconds with the navmesh, `tile_unload_secs` at 30:
+
+| Build | Tiles in at the end (EK, Kal) | RSS at 40 / 80 / 120 / 160 / 200 s | Peak RSS | EK CPU p50/p95/p99/max ms | Kal CPU p50/p95/p99/max ms | Slowest update, wall (EK, Kal) | Load |
+|---|---|---|---|---|---|---|---|
+| Before (fix 3) | 239, 346 | 6.7 / 6.8 / 7.1 / 7.6 / 8.0 GB | 8.0 GB | 3.0/4.5/16/343 | 3.7/6.0/17/142 | 346, 164 ms | 21-18 |
+| After | 156, 244 | 6.8 / 6.6 / 6.7 / 6.7 / 6.7 GB | 6.8 GB | 2.7/5.4/11/40 | 3.4/7.3/15/84 | 55, 106 ms | 20-7 |
+
+At the default of 300 seconds no tile goes within the benchmark's minute, and the pair is as before:
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|---|
+| 194 | no | 3.1/4.7/19/44 → **3.1/4.5/25/70** | 3.7/5.8/14/59 → **3.7/9.1/24/37** | 0.0%, 0.2% → 0.6%, 0.2% | 0.0%, 0.2% → 0.3%, 0.0% | 11-16, 18-21 |
+| 194 | yes | 3.2/5.1/12/56 → **3.0/5.1/15/84** | 3.9/7.2/19/68 → **3.7/7.1/23/193** | 0.1%, 0.2% → 0.2%, 0.4% | 0.1%, 0.2% → 0.2%, 0.4% | 20-20, 18-14 |
+
+Dropping a tile whose pages were swapped out reads them back first: under this agent's cap, one sweep that let go of
+dozens of tiles at once held an update for 2.2 s of wall time with 15 ms of CPU, which is why a sweep is now spread
+over updates.
+
+#### The start and the end
+
+The build before round two and the build after it, alternated, without the navmesh:
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, wall (EK, Kal) | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|---|
+| 647 | no | 5.5/11/13/15 → **6.3/7.9/8.5/10** | 6.1/12/13/15 → **6.8/8.6/9.6/11** | 0.1%, 0.0% → 0.3%, 0.3% | 0.0%, 0.0% → 0.0%, 0.0% | 17-19, 20-20 |
+| 647 | yes | 5.5/8.5/9.9/11 → **6.3/8.5/9.7/12** | 6.1/9.4/11/13 → **6.8/9.2/10/12** | 0.0%, 0.0% → 1.2%, 1.2% | 0.0%, 0.0% → 0.0%, 0.0% | 20-17, 18-20 |
+| 1,618 | no | 10/20/23/25 → **12/14/15/15** | 12/25/28/31 → **13/15/16/18** | 1.6%, 2.8% → 0.1%, 0.1% | 0.0%, 0.0% → 0.0%, 0.0% | 24-22, 22-19 |
+| 1,618 | yes | 10/17/19/34 → **11/15/16/21** | 12/19/22/24 → **12/16/18/23** | 3.4%, 6.6% → 0.1%, 0.0% | 0.0%, 0.0% → 0.0%, 0.0% | 21-19, 19-16 |
+| 3,236 | no | 14/30/33/34 → **18/23/26/31** | 17/26/28/29 → **20/27/31/37** | 0.0%, 0.0% → 5.6%, 7.2% | 0.0%, 0.0% → 0.0%, 0.0% | 13-10, 11-14 |
+| 3,236 | yes | 19/34/39/44 → **19/28/33/38** | 22/37/45/54 → **21/31/37/50** | 33.3%, 35.7% → 21.1%, 20.0% | 0.0%, 0.2% → 0.0%, 0.1% | 16-21, 23-23 |
+| 6,471 | no | 20/38/44/48 → **23/28/30/35** | 25/39/42/46 → **27/31/34/38** | 0.4%, 0.5% → 0.0%, 0.0% | 0.0%, 0.0% → 0.0%, 0.0% | 8-13, 12-15 |
+| 6,471 | yes | 21/45/53/66 → **22/37/42/49** | 28/43/54/64 → **26/41/52/58** | 2.9%, 2.7% → 0.3%, 2.0% | 1.8%, 1.3% → 0.0%, 1.5% | 16-17, 15-13 |
+
+At 100% the update rate goes from 18 a second to 19 or 20.
+
+All of Eastern Kingdoms with the navmesh (2,562 observers, Kalimdor empty), alternated:
+
+| Build | Walk | CPU p50/p95/p99/max ms | Over 50 ms, CPU | After the first 3 s: CPU | Over 50 ms, CPU | Over 50 ms, wall | Updates/s | Populated, in place | Peak RSS | Load |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Before, first pair | no | 21/56/59/65 | 8.9% | 21/55/59/65 | 8.8% | 9.0% | 19.7 | 2.5 s, 13.5 s | 6.4 GB | 10-11 |
+| After, first pair | no | 24/35/60/99 | 1.7% | 24/28/32/51 | 0.1% | 1.8% | 19.9 | 0.1 s, 1.6 s | 6.7 GB | 13-10 |
+| After, second pair | no | 25/36/59/123 | 1.7% | 25/30/34/73 | 0.2% | 2.9% | 19.7 | 0.1 s, 1.8 s | 6.6 GB | 9-9 |
+| Before, second pair | no | 20/54/56/61 | 9.8% | 20/54/56/61 | 9.6% | 9.8% | 19.8 | 3.3 s, 27.5 s | 6.4 GB | 10-9 |
+| Before, first pair | yes | 22/49/60/201 | 4.4% | 22/50/60/201 | 4.4% | 5.2% | 19.2 | 1.1 s, 6.5 s | 6.8 GB | 10-10 |
+| After, first pair | yes | 31/54/68/102 | 8.5% | 31/51/64/102 | 5.8% | 28.5% | 16.9 | 0.1 s, 2.0 s | 6.7 GB | 12-19 |
+| After, second pair | yes | 22/46/60/116 | 2.8% | 22/44/55/116 | 1.7% | 2.8% | 19.6 | 0.1 s, 1.1 s | 7.2 GB | 12-8 |
+| Before, second pair | yes | 21/51/61/124 | 5.6% | 21/51/63/124 | 5.7% | 6.3% | 19.1 | 0.9 s, 7.0 s | 6.7 GB | 7-8 |
+
+The first pair ran with the round-two build before its sweep was spread over updates; no tile goes within these runs,
+so that makes no difference. In the first pair's walking run the load average rose from 12 to 19 as it ran, and the
+second pair, on a quieter machine, has the same build at 22/44/55/116. In the first 3 s of a window the last tiles
+were still arriving: taking them in and building their BVHs made updates of 60 to 120 ms of CPU.
+
+#### Does a fully awake continent keep 50 ms now?
+
+**Standing, yes.** With every point awake and no navmesh, on a quiet machine (load average 8 to 15), p99 is 30 and
+34 ms of CPU, the slowest update 35 and 38, and none goes over 50 ms of wall time; round one's build had p99 44 and
+42. All of Eastern Kingdoms with the navmesh, once its tiles are in: p99 32 and 34 ms, 0.1% and 0.2% of updates over
+50 ms of CPU, where round one's build had p99 56 to 59 and 9% to 10% over, the beat. The median is 24 to 25 ms, which
+leaves a margin of half the budget at the median and a third at p99.
+
+**Walking, nearly.** Without the navmesh, walking at 100%: p99 42 and 52 ms, the slowest update 49 and 58, 0% and
+1.5% of updates over 50 ms of CPU (1.8% and 1.3% before). All of Eastern Kingdoms with the navmesh, walking, on the
+quieter pair: p99 55 ms and 1.7% over 50 ms of CPU, against 63 ms and 5.7%. What is left in the tail is the walkers'
+own work (visibility worked out for thousands of them in step, the bench's) and tiles arriving.
+
+**Kalimdor with the navmesh** couldn't be measured whole here: it needs more than the 10 GB cap. Without the navmesh
+its update is 3 to 4 ms dearer than Eastern Kingdoms', and in round one it was 4 to 6 ms dearer with it; by those, it
+would be at about 37 to 40 ms at p99 standing, inside 50 ms, but that is an estimate.
+
+#### What is left
+
+- **Taking a tile in, and its BVH, on the map's thread.** Up to tens of milliseconds a tile, while tiles arrive. The
+  BVH could be built on the readers' threads (rustigator's `warm_cell` takes `&self`, and the map is `Sync`), with the
+  map shared behind an `Arc` and a tile counted in only once it is warm.
+- **Memory with every point awake.** Every tile is near someone, so none goes, and the whole world is about 13 GB.
+  A cap on the tiles in would bound it, at the cost of reading tiles again and creatures walking straight meanwhile.
+- **The aggro scans' rate.** 500 ms exactly costs 2 to 4 ms an update at 100% over the gathered beat's 550 to
+  680 ms. A longer interval (mangos's is event-driven, within 1000 ms) or a scan that skips creatures with no
+  player within reach would take it back.
+- **Walking at 100%**, which the creatures' own work and visibility bound (fixes 5 and 6 above).
+- **Kalimdor, and the whole world, with the navmesh**: to be measured where 13 GB are free.

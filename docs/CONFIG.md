@@ -107,6 +107,7 @@ The world: saves, the message of the day, the character store and the data's pat
 | `data_dir` | The directory with `vmangos.sqlite` and `dbc.sqlite`, as Thistle Tea exports them; `data/db` if unset and there. Without it the world is empty. | `unset` |  | restart | `DataDir` |
 | `nav_dir` | A rustigator bake, the directory with `Azeroth.map`; `data/nav` if unset and there. Without it creatures walk straight lines and zones come from the client. | `unset` |  | restart |  |
 | `terrain_dir` | Thistle Tea's terrain tiles (`nix run .#terrain-data`); `data/terrain` if unset and there. Without them liquids have no kind outside WMOs: no deep-sea fatigue, no lava in the open. | `unset` |  | restart |  |
+| `tile_unload_secs` | Seconds a navmesh or terrain tile is kept with no player or awake creature near it and nothing asking about it; then it is let go, and read again if it is needed. 0 keeps every tile read. | `300` | 0 to 86400, clamped | live | `GridCleanUpDelay` |
 | `motd` | Shown to every player at login. | `"Welcome to wow_vanilla_server."` |  | live | `Motd` |
 | `reserved_names` | Names no character may take. | `[]` |  | restart |  |
 | `petition_signatures` | Signatures a guild charter needs. | `9` | 0 to 9, clamped | live | `MinPetitionSigns` |
