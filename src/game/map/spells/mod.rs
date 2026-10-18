@@ -823,6 +823,22 @@ pub fn cast(
         crate::game::map::ranged::start(map, caster, spell, targets);
         return true;
     }
+    // A spell cast while channelling ends the channel, unless either may
+    // be cast with another (mangos's `SetCurrentCastedSpell`).
+    let channel = map
+        .caster(caster)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell);
+    if let Some(channel) = channel
+        && !s.attr(4, sd::ATTR_EX4_ALLOW_CAST_WHILE_CASTING)
+        && !data
+            .spells
+            .get(channel)
+            .is_some_and(|c| c.attr(4, sd::ATTR_EX4_ALLOW_CAST_WHILE_CASTING))
+    {
+        interrupt(map, caster);
+    }
     let now = map.now;
     let time = cast_time(map, caster, s, &m);
     // A spell of the ranged slot shows its projectile (mangos's

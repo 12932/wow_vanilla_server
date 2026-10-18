@@ -159,14 +159,81 @@ async fn an_interrupted_cast_is_told_once() {
     })
     .await
     .unwrap();
-    let interrupted = |b: &[u8]| {
-        b.len() >= 6 && b[..4] == SPELL.to_le_bytes() && b[4] == 2 && b[5] == 0x23
-    };
-    c.wait_frame("the cast interrupted", 0x130, interrupted).await;
+    let interrupted =
+        |b: &[u8]| b.len() >= 6 && b[..4] == SPELL.to_le_bytes() && b[4] == 2 && b[5] == 0x23;
+    c.wait_frame("the cast interrupted", 0x130, interrupted)
+        .await;
     let again = tokio::time::timeout(
         std::time::Duration::from_millis(500),
         c.wait_frame("told again", 0x130, interrupted),
     )
     .await;
     assert!(again.is_err(), "told twice");
+}
+
+/// A spell cast while channelling ends the channel first (mangos's
+/// `SetCurrentCastedSpell`): its fields clear and its aura comes off its
+/// target, whether the new spell is instant or has a cast time.
+#[tokio::test]
+async fn a_cast_during_a_channel_ends_the_channel() {
+    use crate::game::data::spells::ATTR_EX_CHANNELED;
+    use crate::game::fields::UNIT_CHANNEL_SPELL;
+    const CHANNEL: u32 = 990_340;
+    const INSTANT_BOLT: u32 = 990_341;
+    const SLOW_BOLT: u32 = 990_342;
+    let realm = fast_realm(|d| {
+        let mut channel = bare(CHANNEL, 5);
+        channel.duration_index = LASTS_5S;
+        channel.attributes[1] |= ATTR_EX_CHANNELED;
+        effect(
+            &mut channel,
+            0,
+            crate::game::data::spells::SpellEffect {
+                amplitude: 1_000,
+                ..aura(crate::game::map::auras::AURA_PERIODIC_DAMAGE, 0, 10, 6)
+            },
+        );
+        let mut instant = bare(INSTANT_BOLT, 2);
+        effect(&mut instant, 0, damage(10));
+        let mut slow = bare(SLOW_BOLT, 2);
+        slow.casting_time_index = CAST_2S;
+        effect(&mut slow, 0, damage(10));
+        insert(d, [channel, instant, slow]);
+    });
+    let (_c, warlock, map) = human(&realm, "R3CH", "Channeller", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            use super::tests_p3_spells_kit::{cast_fresh, casting, has};
+            ready(m, warlock, 60, &[CHANNEL, INSTANT_BOLT, SLOW_BOLT]);
+            let k = dummy(m, warlock, 60, 3.0);
+            let mut seen = Vec::new();
+            for next in [INSTANT_BOLT, SLOW_BOLT] {
+                cast_fresh(m, warlock, CHANNEL, at(k));
+                let channelling = (
+                    casting(m, warlock),
+                    m.unit_fields(warlock).unwrap().get_u32(UNIT_CHANNEL_SPELL),
+                    has(m, k, CHANNEL),
+                );
+                if let Some(c) = m.caster_mut(warlock) {
+                    c.gcd_until = None;
+                }
+                spells::cast(m, warlock, next, at(k), None);
+                seen.push((
+                    channelling,
+                    casting(m, warlock),
+                    m.unit_fields(warlock).unwrap().get_u32(UNIT_CHANNEL_SPELL),
+                    has(m, k, CHANNEL),
+                ));
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    let on = (Some(CHANNEL), CHANNEL, true);
+    assert_eq!(out[0], (on, None, 0, false), "an instant spell");
+    assert_eq!(
+        out[1],
+        (on, Some(SLOW_BOLT), 0, false),
+        "one with a cast time"
+    );
 }

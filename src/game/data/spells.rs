@@ -160,6 +160,9 @@ pub const ATTR_EX3_IGNORE_CASTER_MODIFIERS: u32 = 0x2000_0000;
 /// `AttributesEx4` (word 4): the target's damage taken modifiers don't
 /// count (Decimate).
 pub const ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS: u32 = 0x100;
+/// It may be cast while another spell is channelled, or channelled while
+/// another is cast (mangos's `SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING`).
+pub const ATTR_EX4_ALLOW_CAST_WHILE_CASTING: u32 = 0x80;
 
 impl SpellTemplate {
     pub fn passive(&self) -> bool {
