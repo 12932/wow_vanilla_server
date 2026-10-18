@@ -144,6 +144,16 @@ the questions waiting for you.
 43. **A fear that damage may break** (from 3m). Should a fear without the damage-interrupt flag break on damage by
     chance, as mangos-classic does? wvs doesn't break it.
 
+44. **A staying pet's fight** (from 3r). Should a pet told to Stay keep fighting its current victim, as Thistle Tea
+    has it? This turns on #19, so it's left as it is. A staying pet now chases only the victim its master's
+    Attack named.
+45. **Corpses** (from 3r). Two cases differ from Thistle Tea:
+    - A fallen hound with no kin left: wvs leaves a lootable corpse; Thistle Tea despawns it at once.
+    - A dead pet's corpse: wvs keeps a hunter pet's 60 s and a summoned pet's 5 s, as mangos does; Thistle Tea keeps
+      them an hour and 15 s.
+
+    Which should wvs follow?
+
 ## Decisions made (override any)
 
 1. **The kobold's reach.** wvs let a unit swing from a yard beyond its melee range. Thistle Tea (`in_melee_range?`)
@@ -557,6 +567,21 @@ the questions waiting for you.
     - **A wow_messages bug, found and left:** `CMSG_CAST_SPELL` reads a corpse's GUID after the location fields,
       where 1.12 sends it before them. Fixing it means reading the packet by hand, or a fork fix like the others.
 
+39. **3r's choices** (creatures, pets and world systems, finished):
+    - **Sessile creatures** stand in a fight unless a script lets them chase, and `NO_MELEE_FLEE` ones don't swing,
+      as mangos and Thistle Tea have it. You'll notice it on repair bots, combat dummies and water guardians.
+    - **A template's effect-mechanic immunity** keeps off only the effect with that mechanic. So a blow with a stun
+      now hurts a stun-immune creature, where it used to be refused whole.
+    - **A creature without an addon** has its weapons out, as mangos's `InitEntry` sets it.
+    - **A moderator's channel message** reaches members who ignore them.
+    - **A react state a script set** is kept over a respawn.
+40. **A 500-bot race, here** (checking your crash):
+    - **Load:** 492 of 500 bots alive, about 236,000 relayed moves a second.
+    - **The packets:** none that wow_messages couldn't read, and every bot's look valid for the client.
+    - **The map's update:** with 490 players on Booty Bay's docks, it ran over its 50 ms only 8 times, at most 79 ms.
+    - **Your client's crash** was at the same spot as the earlier bad-look ones (`0x006194DD`, texture compositing).
+      It is waiting on its `.dmp` and the build's commit.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -603,6 +628,7 @@ the questions waiting for you.
 | 3n: the player (68 rows) | merged | a3d93c0 |
 | 3o: the loaders (100 rows) | merged | b9f364f |
 | 3m: spells and classes | merged | d70cd01 |
+| 3r: creatures, pets and world systems | merged | 2d71df2 |
 | The matrix after 3p, 3q, 3n and 3o | 4,425 of 8,385 applicable covered or accepted (52.8%) | |
 | The matrix, partway through round 3 | 4,348 of 8,385 applicable covered or accepted (51.9%) | |
 
