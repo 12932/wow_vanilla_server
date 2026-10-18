@@ -11,6 +11,7 @@ pub mod class_scripts;
 pub mod cooldowns;
 pub mod dynamic;
 mod effects;
+pub use effects::shown_power;
 pub use effects::{
     add_combo_points, dr_aura_gone, release_retained_combo_points, retained_combo_points_expired,
 };
@@ -526,9 +527,9 @@ fn power_index(s: &SpellTemplate) -> Option<u16> {
     (s.power_type < 5).then_some(s.power_type as u16)
 }
 
-/// What `s` costs `caster` before modifiers: its own cost, a share of base
-/// mana (of base health, or of the power's maximum), or all it has; with
-/// school cost auras.
+/// What `s` costs `caster` before modifiers: its own cost and a share of
+/// base mana (of base health, or of the power's maximum), or all it has;
+/// with school cost auras.
 pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
@@ -538,16 +539,6 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
             || field(UNIT_FIELD_HEALTH),
             |i| field(UNIT_FIELD_POWER1 + i),
         )
-    } else if s.mana_cost_percentage > 0 {
-        let base = match power_index(s) {
-            Some(0) => field(UNIT_FIELD_BASE_MANA),
-            Some(i) => field(UNIT_FIELD_MAXPOWER1 + i),
-            None => match field(UNIT_FIELD_BASE_HEALTH) {
-                0 => field(UNIT_FIELD_MAXHEALTH),
-                base => base,
-            },
-        };
-        base * s.mana_cost_percentage / 100
     } else {
         // The rank it is cast at goes no higher than its last level.
         let rank = if s.max_level > 0 {
@@ -555,7 +546,23 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         } else {
             level
         };
-        s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level)
+        let flat = s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level);
+        // A share is on top of the flat cost (mangos's
+        // `Spell::CalculatePowerCost`, Thistle Tea's `Resources`).
+        let share = if s.mana_cost_percentage > 0 {
+            let base = match power_index(s) {
+                Some(0) => field(UNIT_FIELD_BASE_MANA),
+                Some(i) => field(UNIT_FIELD_MAXPOWER1 + i),
+                None => match field(UNIT_FIELD_BASE_HEALTH) {
+                    0 => field(UNIT_FIELD_MAXHEALTH),
+                    base => base,
+                },
+            };
+            base * s.mana_cost_percentage / 100
+        } else {
+            0
+        };
+        flat + share
     } as i32;
     // A spell that scales with its caster's level costs as much more, as
     // vmangos's `CalculatePowerCost` (and Thistle Tea's `CostScaling`) has it.
@@ -582,7 +589,7 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
 /// any other as much power (`NO_POWER`). An ordinary creature, not a pet,
 /// pays no rage, focus, energy or happiness, nor mana when it has none.
 pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -> Option<u8> {
-    if cost == 0 {
+    if cost == 0 || crate::game::map::gm_dev::invulnerable(map, caster) {
         return None;
     }
     let f = map.unit_fields(caster)?;
@@ -604,6 +611,10 @@ pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -
 /// the power, as much of it as there is.
 fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
     let now = map.now;
+    // A GM in god mode pays nothing (Thistle Tea's `Resources.spend_power`).
+    if crate::game::map::gm_dev::invulnerable(map, caster) {
+        return;
+    }
     let Some(index) = power_index(s) else {
         if let Some(f) = map.unit_fields_mut(caster) {
             let health = f.get_u32(UNIT_FIELD_HEALTH);
@@ -1415,7 +1426,7 @@ fn land(
     let deals = s
         .effects
         .iter()
-        .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 67 | 75 | 121));
+        .any(|e| matches!(e.effect, 2 | 7 | 9 | 10 | 17 | 31 | 58 | 62 | 67 | 75 | 121));
     // Damage that ignores its caster's modifiers ignores their crit too
     // (mangos's `CalculateCritAmount`); a heal's may still crit.
     let unmodified = s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS)
@@ -1677,7 +1688,8 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         amount as f32,
     ) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
-    let (left, absorbed) = auras::absorb(map, target, amount - resisted, h.school);
+    let (left, absorbed) =
+        auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
         target,
         caster: h.caster,

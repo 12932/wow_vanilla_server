@@ -912,6 +912,7 @@ mod tests {
 /// What the tests reach of a hunter's pet and the summons.
 #[cfg(test)]
 pub mod testing {
+    pub use super::ai::regen;
     pub use super::control::good_name;
     pub use super::hunter::{
         HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,

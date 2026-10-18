@@ -90,6 +90,24 @@ mod tests_p3_combat2;
 #[cfg(test)]
 mod tests_p3_combat3;
 #[cfg(test)]
+mod tests_p3_combat3_assist;
+#[cfg(test)]
+mod tests_p3_combat3_block;
+#[cfg(test)]
+mod tests_p3_combat3_control;
+#[cfg(test)]
+mod tests_p3_combat3_defense;
+#[cfg(test)]
+mod tests_p3_combat3_disarm;
+#[cfg(test)]
+mod tests_p3_combat3_immune;
+#[cfg(test)]
+mod tests_p3_combat3_power;
+#[cfg(test)]
+mod tests_p3_combat3_regen;
+#[cfg(test)]
+mod tests_p3_combat3_share;
+#[cfg(test)]
 mod tests_p3_combat4;
 #[cfg(test)]
 mod tests_p3_combat5;

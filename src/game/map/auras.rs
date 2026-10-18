@@ -601,6 +601,14 @@ impl Auras {
             .any(|(_, a)| (a.misc as u32) & mask != 0 && mask != 0)
     }
 
+    /// Whether a school `mask` is stopped by an immunity of `kind` alone
+    /// (`AURA_SCHOOL_IMMUNITY`, which a spell may pierce, or
+    /// `AURA_DAMAGE_IMMUNITY`, which it may not).
+    pub fn immune_by(&self, kind: u32, mask: u32) -> bool {
+        self.of(kind)
+            .any(|(_, a)| (a.misc as u32) & mask != 0 && mask != 0)
+    }
+
     /// Whether a mechanic is stopped.
     pub fn mechanic_immune(&self, mechanic: u32) -> bool {
         mechanic != 0
@@ -1572,7 +1580,18 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
-            crate::game::map::spells::interrupt(map, target);
+            // Only a cast that silence prevents is cut short (mangos's
+            // `HandleAuraModSilence`, Thistle Tea's `CombatControl`).
+            let silenceable = map
+                .caster(target)
+                .and_then(|c| c.casting.as_ref())
+                .and_then(|c| map.realm.data.spells.get(c.spell))
+                .is_some_and(|s| {
+                    s.prevention_type == crate::game::map::spells::checks::PREVENTION_SILENCE
+                });
+            if silenceable {
+                crate::game::map::spells::interrupt(map, target);
+            }
             // Both at once pacifies as well (Thistle Tea's `CombatControl`).
             if a.kind == AURA_MOD_PACIFY_SILENCE {
                 crate::game::map::combat::stop_attack(map, target);
@@ -2390,8 +2409,18 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
     let stacks = h.stacks.max(1) as i32;
     match a.kind {
-        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_DAMAGE_PERCENT
-            if auras(map, target).is_some_and(|x| x.school_immune(h.school)) =>
+        AURA_PERIODIC_DAMAGE
+        | AURA_PERIODIC_LEECH
+        | AURA_PERIODIC_DAMAGE_PERCENT
+        | AURA_PERIODIC_MANA_LEECH
+        | AURA_POWER_BURN_MANA
+            if auras(map, target).is_some_and(|x| x.school_immune(h.school))
+                && !map
+                    .realm
+                    .data
+                    .spells
+                    .get(h.spell)
+                    .is_some_and(|s| s.attr(0, crate::game::data::spells::ATTR_NO_IMMUNITIES)) =>
         {
             // A tick on one immune to its school (Divine Shield, Ice Block).
             crate::game::map::spells::log::immune(map, h.caster, target, h.spell);
@@ -2548,9 +2577,17 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
         }
+        // A power that is one, the pool the target shows (a druid shifted
+        // out of it keeps it till they shift back), and for a leech, a
+        // caster alive to take it (mangos's `PeriodicTick`).
+        AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA
+            if !(0..5).contains(&a.misc)
+                || crate::game::map::spells::shown_power(map, target) != a.misc as u16
+                || (a.kind == AURA_PERIODIC_MANA_LEECH
+                    && !map.unit_view(h.caster).is_some_and(|u| u.alive)) => {}
         AURA_PERIODIC_MANA_LEECH | AURA_POWER_BURN_MANA => {
             let take = (a.amount * stacks).max(0) as u32;
-            let power = a.misc.clamp(0, 4) as u16;
+            let power = a.misc as u16;
             let taken = map
                 .unit_fields_mut(target)
                 .map(|f| {
@@ -2560,12 +2597,23 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     t
                 })
                 .unwrap_or(0);
-            let mult = map
-                .realm
-                .data
-                .spells
-                .get(h.spell)
-                .map_or(1.0, |s| s.effects[a.effect as usize].multiple_value);
+            // The multiplier, with the caster's modifiers as they are now;
+            // nothing back to a caster without the pool.
+            let data = map.realm.data.clone();
+            let mult = data.spells.get(h.spell).map_or(1.0, |s| {
+                crate::game::map::spells::mods::for_spell(map, h.caster, s).apply(
+                    crate::game::map::spells::mods::OP_MULTIPLE_VALUE,
+                    s.effects[a.effect as usize].multiple_value,
+                )
+            });
+            let pool = map
+                .unit_fields(h.caster)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_MAXPOWER1 + power));
+            let mult = if a.kind == AURA_PERIODIC_MANA_LEECH && pool == 0 {
+                0.0
+            } else {
+                mult.max(0.0)
+            };
             if a.kind == AURA_PERIODIC_MANA_LEECH {
                 periodic_log(
                     map,
@@ -2577,15 +2625,21 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                         misc_value2: u32::from(power),
                     },
                 );
-                let gain = (taken as f32 * mult.max(0.0)) as u32;
-                if let Some(f) = map.unit_fields_mut(h.caster) {
+                let gain = (taken as f32 * mult) as u32;
+                let gained = map.unit_fields_mut(h.caster).map_or(0, |f| {
                     let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
                     let now = f.get_u32(UNIT_FIELD_POWER1 + power);
-                    f.set_u32(UNIT_FIELD_POWER1 + power, (now + gain).min(max));
+                    let to = (now + gain).min(max);
+                    f.set_u32(UNIT_FIELD_POWER1 + power, to);
+                    to - now
+                });
+                // Half what came back is threat on the one drained.
+                if gained > 0 {
+                    crate::game::map::ai::add_threat(map, target, h.caster, gained as f32 * 0.5);
                 }
                 crate::game::map::proc_scripts::leeched(map, target, h, power);
             } else {
-                let damage = (taken as f32 * mult.max(0.0)) as u32;
+                let damage = (taken as f32 * mult) as u32;
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
             }
         }
@@ -2637,6 +2691,102 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         _ => {}
     }
+}
+
+/// [`absorb`], then the shares of what is left that others take (Blessing
+/// of Sacrifice, Soul Link, a Voidwalker's Sacrifice): (what's left, what
+/// was absorbed or shared).
+pub fn absorb_and_share(
+    map: &mut Map,
+    attacker: Guid,
+    target: Guid,
+    damage: u32,
+    school: u32,
+) -> (u32, u32) {
+    let (left, absorbed) = absorb(map, target, damage, school);
+    let after = share(map, attacker, target, left, school);
+    (after, absorbed + (left - after))
+}
+
+/// The shares of `damage` from `attacker` that the casters of `target`'s
+/// split auras take instead, as mangos's `CalculateDamageAbsorbAndResist`
+/// and Thistle Tea's `DamageSharing` have them: none of one's own damage;
+/// each from a caster alive here, of the damage's school; the flat ones
+/// first, each as much as it says (its stacks rolled in), then each share
+/// of what is left, rounded down. A flat share is soaked by its taker's
+/// shields, a share by none; one immune to the school, or on a flight,
+/// takes it all absorbed. Each is logged under its aura's spell, and the
+/// attacker gets the credit. What is left.
+pub fn share(map: &mut Map, attacker: Guid, target: Guid, damage: u32, school: u32) -> u32 {
+    if damage == 0 || attacker == target {
+        return damage;
+    }
+    let Some(a) = auras(map, target) else {
+        return damage;
+    };
+    let mut links: Vec<(bool, Guid, u32, i32)> = a
+        .effects()
+        .filter(|(h, x)| {
+            matches!(x.kind, AURA_SPLIT_DAMAGE_PCT | AURA_SPLIT_DAMAGE_FLAT)
+                && h.caster != target
+                && (x.misc as u32) & school != 0
+        })
+        .map(|(h, x)| {
+            (
+                x.kind == AURA_SPLIT_DAMAGE_PCT,
+                h.caster,
+                h.spell,
+                x.amount * h.stacks.max(1) as i32,
+            )
+        })
+        .collect();
+    if links.is_empty() {
+        return damage;
+    }
+    links.sort_by_key(|l| l.0);
+    let mut left = damage;
+    for (percent, to, spell, amount) in links {
+        if left == 0 {
+            break;
+        }
+        if map.unit_view(to).is_none_or(|u| !u.alive) {
+            continue;
+        }
+        let taken = if percent {
+            (u64::from(left) * amount.max(0) as u64 / 100).min(u64::from(left)) as u32
+        } else {
+            (amount.max(0) as u32).min(left)
+        };
+        if taken == 0 {
+            continue;
+        }
+        left -= taken;
+        let spared = map.players.get(&to).is_some_and(|p| p.flight.is_some())
+            || auras(map, to).is_some_and(|x| x.school_immune(school));
+        let (hurt, soaked) = if spared {
+            (0, taken)
+        } else if percent {
+            (taken, 0)
+        } else {
+            absorb(map, to, taken, school)
+        };
+        let frame = crate::game::map::spells::outcome::damage_log(
+            attacker,
+            to,
+            spell,
+            school.trailing_zeros(),
+            hurt,
+            soaked,
+            0,
+            0,
+            false,
+        );
+        map.send_to_observers(to, &frame, true);
+        if hurt > 0 {
+            crate::game::map::combat::deal_damage(map, attacker, to, hurt);
+        }
+    }
+    left
 }
 
 /// Damage of `school` a unit takes, less what its absorb auras soak, then
