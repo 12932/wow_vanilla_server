@@ -684,8 +684,18 @@ impl Map {
     }
 }
 
-/// `CMSG_CAST_SPELL`.
+/// `CMSG_CAST_SPELL`: a spell the player knows. Only the client's request
+/// asks that (mangos's `HandleCastSpellOpcode`); a script's or an item's
+/// cast is the player's whether they know it or not.
 pub fn cast_request(map: &mut Map, caster: Guid, spell: u32, t: &SpellCastTargets) {
+    if map
+        .players
+        .get(&caster)
+        .is_some_and(|p| !p.spells.contains(&spell))
+    {
+        send_cast_result(map, caster, spell, Some(fail::NOT_KNOWN));
+        return;
+    }
     let targets = targets_of(t);
     cast(map, caster, spell, targets, None);
 }
@@ -1824,8 +1834,13 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     }) {
         map.send_to_observers(g, &frame, false);
     }
+    // The caster's client is told why too, and lets the button go, but
+    // for a channel (mangos's `Spell::cancel`, Thistle Tea's interrupted
+    // cast result).
     if casting.channel_until.is_some() {
         end_channel(map, g, &casting);
+    } else {
+        send_cast_result(map, g, casting.spell, Some(fail::INTERRUPTED));
     }
 }
 

@@ -169,6 +169,58 @@ pub fn send_forced_reactions(map: &Map, g: Guid) {
     }
 }
 
+/// A forced reaction to `faction` at `forced` came (`applied`) or went:
+/// the player is told them all again, and friendly now, forced so or by
+/// their own standing once the force is gone, they and their pet stop
+/// fighting the faction's units, and its units stop fighting them
+/// (mangos's `HandleForceReaction` and `StopAttackFaction`, Thistle Tea's
+/// `stop_attack_factions`).
+pub fn forced_reaction_changed(map: &mut Map, g: Guid, faction: u32, forced: i32, applied: bool) {
+    send_forced_reactions(map, g);
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let friendly = if applied {
+        forced >= misc::RANK_FRIENDLY as i32
+    } else {
+        rank(p, &data, faction) >= misc::RANK_FRIENDLY
+    };
+    if friendly && faction != 0 {
+        stop_attacking_faction(map, g, faction);
+    }
+}
+
+fn stop_attacking_faction(map: &mut Map, g: Guid, faction: u32) {
+    let data = map.realm.data.clone();
+    let of_faction = |map: &Map, u: Guid| {
+        map.unit_fields(u)
+            .and_then(|f| {
+                data.faction_templates
+                    .get(&f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+            })
+            .is_some_and(|t| t.faction == faction)
+    };
+    let pet = crate::game::map::pets::pet_of(map, g);
+    for unit in std::iter::once(g).chain(pet) {
+        let victim = map.combat(unit).filter(|c| c.attacking).map(|c| c.victim);
+        if let Some(v) = victim
+            && of_faction(map, v)
+        {
+            crate::game::map::combat::stop_attack(map, unit);
+            crate::game::map::spells::interrupt(map, unit);
+        }
+        let fighting: Vec<Guid> = map
+            .creatures
+            .iter()
+            .filter(|(_, c)| c.threat.iter().any(|(t, _)| *t == unit))
+            .map(|(_, c)| c.guid)
+            .filter(|c| of_faction(map, *c))
+            .collect();
+        crate::game::map::ai::forget_by(map, unit, fighting);
+    }
+}
+
 /// The reputation packets a client gets at login.
 pub fn send_login(p: &mut Player, data: &GameData) {
     init(p, data);

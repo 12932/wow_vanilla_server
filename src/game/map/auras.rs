@@ -1473,7 +1473,13 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let kind = a.kind;
     let misc = a.misc;
     match kind {
-        AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
+        AURA_FORCE_REACTION => crate::game::map::reputation::forced_reaction_changed(
+            map,
+            target,
+            misc.max(0) as u32,
+            a.amount,
+            true,
+        ),
         AURA_LINKED => linked(map, target, h, a.trigger),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             crate::game::map::combat::stop_attack(map, target);
@@ -1736,7 +1742,13 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
 fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let still = |map: &Map, k: u32| auras(map, target).is_some_and(|x| x.has(k));
     match a.kind {
-        AURA_FORCE_REACTION => crate::game::map::reputation::send_forced_reactions(map, target),
+        AURA_FORCE_REACTION => crate::game::map::reputation::forced_reaction_changed(
+            map,
+            target,
+            a.misc.max(0) as u32,
+            a.amount,
+            false,
+        ),
         AURA_LINKED => remove_spell(map, target, a.trigger, Some(h.caster)),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
             // A logout's countdown holds the player as a stun does (Thistle

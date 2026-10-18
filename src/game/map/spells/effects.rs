@@ -752,8 +752,11 @@ fn effect(
             let to = lands_on(map, caster, target, &e, t);
             crate::game::map::npc::bind_home(map, to, caster);
         }
+        // A leap: a player's client is sent there, a creature put there;
+        // not one on a flight (mangos's `EffectLeap`, Thistle Tea's `Leap`).
         EFFECT_LEAP => {
-            if let Some(me) = map.unit_view(caster) {
+            let flying = map.players.get(&caster).is_some_and(|p| p.flight.is_some());
+            if let Some(me) = map.unit_view(caster).filter(|_| !flying) {
                 let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
                 let o = me.orientation + leap_angle(e.target_a, e.target_b);
                 let want = Vector3d {
@@ -762,7 +765,11 @@ fn effect(
                     z: me.position.z,
                 };
                 let to = first_clear(map, me.position, want);
-                map.teleport(caster, map.key, to, me.orientation);
+                if map.players.contains_key(&caster) {
+                    map.teleport(caster, map.key, to, me.orientation);
+                } else {
+                    super::super::scripts::place(map, caster, to, me.orientation);
+                }
             }
         }
         // A run to the target, and a swing there if it is a harmful spell

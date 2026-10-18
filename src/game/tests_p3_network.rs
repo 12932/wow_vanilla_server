@@ -1382,7 +1382,11 @@ async fn a_teleport_in_the_map_is_shown_as_one() {
         })
         .await;
     assert_eq!(seen.player, ga);
-    assert_eq!(seen.info.flags, MovementInfo_MovementFlags::empty(), "standing");
+    assert_eq!(
+        seen.info.flags,
+        MovementInfo_MovementFlags::empty(),
+        "standing"
+    );
     assert_eq!((seen.info.position, seen.info.orientation), (to, 1.5));
 }
 

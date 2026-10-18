@@ -100,6 +100,24 @@ mod tests_p3_combat8;
 #[cfg(test)]
 mod tests_p3_combat9;
 #[cfg(test)]
+mod tests_p3_entity;
+#[cfg(test)]
+mod tests_p3_entity_effects;
+#[cfg(test)]
+mod tests_p3_entity_env;
+#[cfg(test)]
+mod tests_p3_entity_eventai;
+#[cfg(test)]
+mod tests_p3_entity_mob;
+#[cfg(test)]
+mod tests_p3_entity_objects;
+#[cfg(test)]
+mod tests_p3_entity_pets;
+#[cfg(test)]
+mod tests_p3_entity_player;
+#[cfg(test)]
+mod tests_p3_entity_scripts;
+#[cfg(test)]
 mod tests_p3_items;
 #[cfg(test)]
 mod tests_p3_items_loot;

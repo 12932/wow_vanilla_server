@@ -86,7 +86,7 @@ pub struct Objects {
     /// A quest object's spell with a cast time, landing: (when, object,
     /// spell, user).
     pub pending_spells: Vec<(Instant, Guid, u32, Guid)>,
-    next_trap_look: Option<Instant>,
+    pub next_trap_look: Option<Instant>,
 }
 
 /// An object a spell summoned.
@@ -1426,7 +1426,8 @@ fn finish_channel(map: &mut Map, g: Guid, object: Guid) {
 
 /// A unit's channel ended before its ritual was done: an owner's portal
 /// goes; a helper leaves (a persistent ritual short of helpers may be
-/// done again).
+/// done again), and a placed ritual everyone has left is led by whoever
+/// comes next (Thistle Tea's `Ritual.leave`).
 pub fn channel_ended(map: &mut Map, g: Guid, spell: u32) {
     let owned: Vec<Guid> = map
         .objects
@@ -1444,6 +1445,9 @@ pub fn channel_ended(map: &mut Map, g: Guid, spell: u32) {
             r.users.retain(|u| *u != g);
             if r.completed && r.persistent && r.users.len() < r.required {
                 r.completed = false;
+            }
+            if r.owner.is_none() && r.users.is_empty() {
+                r.first = None;
             }
         }
     }

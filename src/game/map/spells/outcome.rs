@@ -1156,10 +1156,16 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
     let target_level = level(map, target);
     let creature = map.creature(target);
     // A soul shard only from a death worth something to its caster (Thistle
-    // Tea's `DeathItem.eligible?`): not grey, a player or tapped, not a
-    // pet or a totem.
-    let shard_target = creature
-        .is_none_or(|c| c.pet.is_none() && crate::game::map::pets::owner_of(map, target).is_none());
+    // Tea's `DeathItem.eligible?`, mangos's `isHonorOrXPTarget`): not grey,
+    // a player or tapped, not a pet or a totem, nor a creature worth no
+    // experience.
+    let shard_target = creature.is_none_or(|c| {
+        c.pet.is_none()
+            && crate::game::map::pets::owner_of(map, target).is_none()
+            && data
+                .creature_template(c.entry)
+                .is_none_or(|t| t.xp_rate() > 0.0 && t.static_flags1 & 0x2 == 0)
+    });
     let mut items: Vec<(Guid, u32, u32)> = Vec::new();
     for (h, x) in a.effects() {
         let item = u32::try_from(x.mask).unwrap_or(0);

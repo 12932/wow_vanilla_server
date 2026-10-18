@@ -593,7 +593,11 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_PET_NAME_QUERY(m) => name_query(map, g, m.pet_number, m.guid),
         C::CMSG_REQUEST_PET_INFO => send_spells(map, g),
         C::CMSG_PET_CANCEL_AURA(m) => {
-            if commands(map, g, m.guid) {
+            // A dead pet's master is told so (mangos's
+            // `HandlePetCancelAuraOpcode`).
+            if commands(map, g, m.guid) && !map.unit_view(m.guid).is_some_and(|u| u.alive) {
+                feedback(map, g, PetFeedback::PetDead);
+            } else if commands(map, g, m.guid) {
                 let helpful = crate::game::map::auras::auras(map, m.guid).is_some_and(|a| {
                     a.holders
                         .iter()
