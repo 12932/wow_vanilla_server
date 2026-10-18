@@ -1555,26 +1555,39 @@ async fn sessile_creatures_stand_and_combat_dummies_neither_swing_nor_chase() {
         [far, freed].map(|g| m.position_of(g).unwrap())
     })
     .await;
+    // At least 600 ms for what shouldn't happen to have had its chance; what
+    // should is waited for a while more, as a loaded machine's map updates
+    // late.
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    let out = on(&map, move |m| {
-        let moved =
-            |g: Guid, from| crate::game::map::combat::dist(m.position_of(g).unwrap(), from) > 0.5;
-        let swung = |g: Guid| {
-            m.creature(g)
-                .unwrap()
-                .combat
-                .next_swing
-                .is_some_and(|t| t > m.now)
-        };
-        (
-            moved(far, start[0]),
-            swung(near),
-            swung(dummy),
-            moved(freed, start[1]),
-            m.creature(dummy).unwrap().combat.attacking,
-        )
-    })
-    .await;
+    let mut out;
+    let mut waited = 0;
+    loop {
+        out = on(&map, move |m| {
+            let moved = |g: Guid, from| {
+                crate::game::map::combat::dist(m.position_of(g).unwrap(), from) > 0.5
+            };
+            let swung = |g: Guid| {
+                m.creature(g)
+                    .unwrap()
+                    .combat
+                    .next_swing
+                    .is_some_and(|t| t > m.now)
+            };
+            (
+                moved(far, start[0]),
+                swung(near),
+                swung(dummy),
+                moved(freed, start[1]),
+                m.creature(dummy).unwrap().combat.attacking,
+            )
+        })
+        .await;
+        if (out.1 && out.3) || waited >= 30 {
+            break;
+        }
+        waited += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     assert!(!out.0, "the sessile brute doesn't chase");
     assert!(out.1, "but swings in reach");
     assert!(!out.2, "the dummy doesn't swing");
