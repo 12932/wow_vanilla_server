@@ -300,8 +300,9 @@ the questions waiting for you.
     - **`SMSG_GROUP_LIST`** ends with a byte, as Thistle Tea and mangos-classic send it (mangos-zero omits it).
     - **The equipped-item-class cast result** carries the real inventory-type mask, as mangos-zero does; Thistle Tea
       sends 0.
-    - **Ghosts** see every player, as in Thistle Tea; mangos limits this. Ghosts see only creatures within 45 yards
-      of their corpse.
+    - **Ghosts** (replaced at your word, `fix/ghost`): a ghost sees only what is within 45 yards of its corpse. The
+      exceptions are its group, its side's ghosts, spirit healers, its own corpse, and boats and elevators. A ghost
+      walks on water. Its group's living members see it, as in mangos.
     - **Single-target auras** end when their caster leaves the world, as mangos and Thistle Tea have it.
     - **Spawn flags:** disabled spawns (0x2) stay out, hidden ones (0x40) are concealed, and dead ones (0x80) lie as
       corpses.
