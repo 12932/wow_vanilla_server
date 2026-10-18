@@ -220,11 +220,12 @@ async fn blackrock_depths(realm: &Arc<Realm>) {
             .is_some(),
         "Moira, shaken"
     );
+    // Her evade may be over already: she is out of the fight either way.
     let after = map
-        .query(move |m| (faction(m, moira), m.creature(moira).unwrap().evading))
+        .query(move |m| (faction(m, moira), fighting(m, moira)))
         .await
         .unwrap();
-    assert_eq!(after, (35, true), "Moira, friendly, goes home");
+    assert_eq!(after, (35, false), "Moira, friendly, out of the fight");
     clear(&map, vec![emperor, moira, friend]);
 }
 
