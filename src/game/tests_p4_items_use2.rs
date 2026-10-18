@@ -511,7 +511,9 @@ fn ward(m: &Map, g: Guid, spell: u32) -> Option<i32> {
 /// against fire (300 to 500 of it); frost goes through it; fire is
 /// soaked, partly then wholly, and the ward used up goes. Unused, it
 /// runs out in six seconds, and the armor answers again ten seconds
-/// after it last did.
+/// after it last did. Thistle Tea's "removing equipment prevents new
+/// procs but lets an existing ward expire": the breastplate taken off, its
+/// ward stays its six seconds, and there is no ward more.
 #[tokio::test]
 #[ignore = "extended"]
 async fn obsidian_armor_wards_against_the_school_that_hit() {
@@ -542,8 +544,15 @@ async fn obsidian_armor_wards_against_the_school_that_hit() {
             pass(m, 9_100);
             bolt(m, foe, w, 2);
             let again = on(m, w, &ABSORBS);
+            // The breastplate taken off: the ward stays its time, and
+            // there is no answer more.
+            strip(m, w);
+            let kept = (!gear(m, w, OBSIDIAN_ARMOR), on(m, w, &ABSORBS));
             pass(m, 6_100);
-            let ran_out = on(m, w, &ABSORBS);
+            let expired = on(m, w, &ABSORBS);
+            pass(m, 5_000);
+            bolt(m, foe, w, 2);
+            let ran_out = (kept, expired, on(m, w, &ABSORBS));
             (
                 worn,
                 wards,
@@ -587,7 +596,10 @@ async fn obsidian_armor_wards_against_the_school_that_hit() {
     assert!(used_up, "used up, gone");
     assert!(within.is_empty(), "its ten seconds");
     assert_eq!(again, vec![27533], "after them");
-    assert!(ran_out.is_empty(), "six seconds");
+    let (kept, expired, unanswered) = ran_out;
+    assert_eq!(kept, (true, vec![27533]), "taken off, the ward stays");
+    assert!(expired.is_empty(), "six seconds");
+    assert!(unanswered.is_empty(), "no answer unworn");
 }
 
 /// Fire, nature, frost, shadow and arcane, by school index.
