@@ -411,6 +411,26 @@ the questions waiting for you.
     - **Ties in threat** keep the current victim, as Thistle Tea's `Threat.reselect` and mangos do. So Shazzrah keeps
       his victim after Blink's threat wipe, though his script says to attack a random player.
 
+27. **The test suites** (your ask: unit tests in a minute or two). Details in `docs/TESTING.md`.
+    - **Fast:** `cargo nextest run --lib` runs the 1,201 tests that don't need the real world, in about 25 s. It took
+      about 10 minutes before.
+    - **Extended:** `cargo extended` runs every test (1,450) in about 3 minutes. It runs before every merge and push.
+    - **Marking:** a test that reads the real world is marked `#[ignore = "extended"]`. If one is left unmarked, it
+      fails in the fast suite with a message saying so, so it can't slip in.
+    - **The world's snapshot:** the real world loads once per test build and is shared through a snapshot, keyed on
+      the databases and the test binary, so a test's load takes 0.9 s rather than 8.4 s. The long walks run in
+      parallel shards.
+    - **Left as they are:**
+      - The walks still poll in real time, so a much faster machine could outrun them.
+      - Compiling the crate at opt-level 1 for the extended suite would bring it to about 2 minutes. But a dozen walks
+        fail at that speed, for the same reason, and it costs a second build.
+    - **One assertion's timing changed:** Ragnaros's check waits for the map's next update, where his summoned
+      events run. It failed every time on an idle machine.
+28. **Quest 1560 (Tooga)** wasn't a server bug. The escort walk gave each walk a fixed number of looks, while Tooga's
+    progress went by the clock, so on a quiet machine his 3,300 yards outlasted the walk. The walk now counts the
+    map's updates, and a follower keeps up with its lead.
+29. **an agent CLI** now runs the stages (your ask), on Opus 5.5.
+
 ## Progress
 
 | Stage | State | Commit |
@@ -448,5 +468,7 @@ the questions waiting for you.
 | 3j: matrix gaps, the loader on the real data (124 rows) | merged | fab8aaa |
 | 3h: matrix gaps, encounter scripts (70 rows) | merged | b8e080f |
 | The matrix after the second round | 3,785 of 8,396 applicable covered or accepted (45.1%) | |
+| Quest 1560's walk | merged | 8dc7a49 |
+| Fast and extended test suites | merged | eef0000 |
 
 ## Left for later, and why
