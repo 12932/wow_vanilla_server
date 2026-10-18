@@ -250,3 +250,124 @@ async fn a_passive_pet_fights_nothing_and_a_pet_keeps_its_living_victim() {
         "passive; defensive, its attacker; kept; the other; the guardian breaks the sap"
     );
 }
+
+// A pet's own buffs: Dash (a speed whose cooldown outlasts it), Prowl
+// (not in a fight, and ending an attack), Mend (a heal over time), a buff
+// that stacks, and one over its party.
+const DASH: u32 = 9980;
+const PROWL: u32 = 9981;
+const MEND: u32 = 9982;
+const STACKING: u32 = 9983;
+const AREA: u32 = 9984;
+
+fn autocast_data() -> GameData {
+    let mut d = data();
+    let none = SpellEffect::default();
+    let aura = |kind: u32, points: i32| {
+        let mut e = tests_pets::effect(6, points, 1);
+        e.aura = kind;
+        e
+    };
+    let mut add = |id: u32, name: &str, e: SpellEffect, f: &dyn Fn(&mut crate::game::data::spells::SpellTemplate)| {
+        let mut s = tests_pets::spell(id, name, [e, none, none]);
+        s.duration_index = 4;
+        f(&mut s);
+        d.spells.spells.insert(id, s);
+    };
+    use crate::game::map::auras::{AURA_MOD_INCREASE_SPEED, AURA_PERIODIC_HEAL};
+    add(DASH, "Dash", aura(AURA_MOD_INCREASE_SPEED, 40), &|s| {
+        s.duration_index = 3;
+        s.recovery_time = 30_000;
+    });
+    add(PROWL, "Prowl", aura(4, 0), &|s| {
+        s.attributes[0] |= 0x0010_0000 | 0x1000_0000;
+    });
+    add(MEND, "Mend", {
+        let mut e = aura(AURA_PERIODIC_HEAL, 5);
+        e.amplitude = 3000;
+        e
+    }, &|_| {});
+    add(STACKING, "Stacking", aura(29, 1), &|s| s.stack_amount = 3);
+    let mut area = tests_pets::effect(35, 1, 1);
+    area.aura = 29;
+    area.radius_index = 9;
+    add(AREA, "Area", area, &|_| {});
+    d
+}
+
+/// The pet's buffs on itself, with their stacks, by spell.
+fn buffs(m: &Map, pet: Guid) -> Vec<(u32, u32)> {
+    let mut b: Vec<(u32, u32)> = crate::game::map::auras::auras(m, pet)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| [DASH, PROWL, MEND, STACKING, AREA].contains(&h.spell))
+                .map(|h| (h.spell, h.stacks.max(1)))
+                .collect()
+        })
+        .unwrap_or_default();
+    b.sort_unstable();
+    b
+}
+
+/// What a pet's autocast puts on itself: idle, a buff for a fight waits
+/// (Dash, whose cooldown outlasts it), Prowl doesn't, and a heal waits
+/// for a wound; in a fight Prowl, which would end its attack, waits, and
+/// Dash goes only while its victim is out of reach. A buff that stacks is
+/// cast again over itself; one over the party isn't (Thistle Tea's
+/// `Autocast.allowed?`).
+#[tokio::test]
+async fn a_pets_autocast_buffs_wait_for_their_time() {
+    let (_realm, _h, gh, map, pet, far) = tamed_with(autocast_data()).await;
+    let steps = map
+        .query(move |m| {
+            for g in [gh, pet, far] {
+                combat::leave_combat(m, g);
+            }
+            sturdy(m, &[far]);
+            let mut steps = Vec::new();
+            let with = |m: &mut Map, autocast: &[u32]| {
+                if let Some(c) = m.caster_mut(pet) {
+                    c.cooldowns.clear();
+                    c.gcd_until = None;
+                }
+                pets::state_mut(m, pet).unwrap().autocast = autocast.to_vec();
+                think(m, 1);
+                buffs(m, pet)
+            };
+            steps.push(with(m, &[DASH, MEND, PROWL]));
+            crate::game::map::auras::remove_spell(m, pet, PROWL, None);
+            let max = m.creature(pet).unwrap().fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            m.creature_mut(pet)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_HEALTH, max / 2);
+            steps.push(with(m, &[DASH, MEND]));
+            crate::game::map::auras::remove_spell(m, pet, MEND, None);
+            // A victim twenty yards off.
+            let at = m.creature(pet).unwrap().position;
+            let off = Vector3d { x: at.x + 20.0, ..at };
+            crate::game::map::scripts::place(m, far, off, 0.0);
+            pets::attack_target(m, pet, far);
+            m.note_fighting(pet);
+            steps.push(with(m, &[PROWL, DASH]));
+            crate::game::map::auras::remove_spell(m, pet, DASH, None);
+            combat::stop_attack(m, pet);
+            combat::leave_combat(m, pet);
+            combat::leave_combat(m, far);
+            steps.push(with(m, &[STACKING]));
+            steps.push(with(m, &[STACKING]));
+            steps.push(with(m, &[AREA]));
+            steps.push(with(m, &[AREA]));
+            steps
+        })
+        .await
+        .unwrap();
+    assert_eq!(steps[0], [(PROWL, 1)], "idle: Prowl, no Dash, no heal at full health");
+    assert_eq!(steps[1], [(MEND, 1)], "a wound: the heal");
+    assert_eq!(steps[2], [(DASH, 1)], "fighting from afar: Dash, not Prowl");
+    assert_eq!(steps[3], [(STACKING, 1)]);
+    assert_eq!(steps[4], [(STACKING, 2)], "stacked");
+    assert_eq!(steps[5], [(STACKING, 2), (AREA, 1)]);
+    assert_eq!(steps[6], [(STACKING, 2), (AREA, 1)], "not again");
+}
