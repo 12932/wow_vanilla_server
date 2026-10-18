@@ -445,3 +445,101 @@ async fn molten_cores_script_runs_its_runes_and_bosses() {
     .await
     .unwrap();
 }
+
+/// The real world's content for these scripts: Blackfathom's fires and
+/// portal, one each and shut, Kelris reporting his death; the Deadmines'
+/// three boss doors, its alarm's two pirates, the gunpowder and its lines;
+/// Scholomance's gates spawning open, Gandling reporting his failure and
+/// his death and Kirtonos his evade, the shadow portal rooms' map events;
+/// Stratholme's Timmy spawner, Willey's gate open, the bosses' lines.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_real_dungeons_content() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let d = &realm.data;
+    let states = |map: u32, entry: u32| -> Vec<u8> {
+        d.gameobject_spawns[&map]
+            .iter()
+            .filter(|s| s.entry == entry)
+            .map(|s| s.state)
+            .collect()
+    };
+    for (map, script) in [
+        (48, "instance_blackfathom_deeps"),
+        (36, "instance_deadmines"),
+        (289, "instance_scholomance"),
+    ] {
+        assert_eq!(d.scripts.map_templates[&map].script_name, script);
+    }
+    for e in 21117..=21121 {
+        assert_eq!(states(48, e), vec![1], "{e}");
+    }
+    for e in [13965, 16400, 16399] {
+        assert_eq!(states(36, e).len(), 1, "{e}");
+    }
+    for s in [79289, 79290] {
+        let p = d.creature_spawns[&36].iter().find(|x| x.guid == s).unwrap();
+        assert_eq!(p.entries, vec![657]);
+    }
+    assert!(d.items.get(&5397).is_some_and(|i| i.spells[0].id == 6250));
+    for t in [1148, 1149, 6150, 6441, 6442, 6447, 6504, 6530] {
+        assert!(d.npc.broadcast_texts.contains_key(&t), "{t}");
+    }
+    for e in [175570, 177371, 177372, 177373, 177375, 177376, 177377] {
+        assert_eq!(states(289, e), vec![0], "{e} open");
+    }
+    for e in [175167, 175564] {
+        assert_eq!(states(289, e), vec![1], "{e}");
+    }
+    for e in 5618..=5623 {
+        assert!(
+            d.scripts.event.get(&e).is_some_and(|s| s.len() >= 3),
+            "map event {e}"
+        );
+    }
+    let timmy = d.creature_spawns[&329]
+        .iter()
+        .find(|x| x.guid == 54070)
+        .unwrap();
+    assert!(timmy.entries.contains(&10418));
+    assert_eq!(states(329, 175969), vec![0], "Willey's gate open");
+    // Kelris.
+    let (_c, me, map) = inside(&realm, "Kelris", 48, 4832).await;
+    map.query(move |m| kill_all(m, me, 4832)).await;
+    assert!(
+        until(&map, 3000, |m| data(m, 10) == DONE).await,
+        "Kelris reports his death"
+    );
+    // Gandling and Kirtonos.
+    let (_c, me, map) = inside(&realm, "Herald", 289, 175564).await;
+    let (gandling, kirtonos) = map
+        .query(move |m| {
+            let at = m.position_of(me).unwrap();
+            let g = summon(m, 1853, at, 0.0);
+            instance_script::object_used(m, 175564);
+            let k = first(m, 10506).unwrap();
+            crate::game::map::ai::attacked(m, g, me);
+            crate::game::map::ai::attacked(m, k, me);
+            crate::game::map::ai::enter_evade(m, g);
+            crate::game::map::ai::enter_evade(m, k);
+            (g, k)
+        })
+        .await
+        .unwrap();
+    assert!(
+        until(&map, 3000, |m| data(m, 0) == FAILED && data(m, 7) == FAILED).await,
+        "Gandling's failure and Kirtonos's evade reported"
+    );
+    map.query(move |m| {
+        set(m, 0, IN_PROGRESS);
+        kill(m, me, gandling);
+        let _ = kirtonos;
+    })
+    .await;
+    assert!(
+        until(&map, 3000, |m| data(m, 0) == DONE).await,
+        "Gandling's death reported"
+    );
+}
