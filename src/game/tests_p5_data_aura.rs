@@ -501,3 +501,220 @@ async fn a_creature_taken_stops_offers_its_rolled_spells_and_let_go_is_its_own()
     assert_eq!(fights, Some(ga), "it turns on its master");
     assert_ne!(flags & 0x8_0000, 0, "and fights on");
 }
+
+/// Thistle Tea's mana user: every magic school's spells cost 100 less,
+/// fire's 10 more twice over (two stacks) and half again; a rogue's talent
+/// of half off its first family flag; spells of 200 mana in fire, of 20
+/// and a tenth of base mana in frost, of 50 in frost, of all the mana, of
+/// all the health, and of 150 energy in frost.
+const COST_LESS: u32 = 96_750;
+const FIRE_MORE: u32 = 96_751;
+const FIRE_SHARE: u32 = 96_752;
+const HALF_OFF: u32 = 96_753;
+const FIRE_SPELL: u32 = 96_755;
+const FIRE_FAMILY: u32 = 96_756;
+const FIRE_OTHER: u32 = 96_757;
+const FROST_SHARE: u32 = 96_758;
+const FROST_CHEAP: u32 = 96_759;
+const ALL_MANA: u32 = 96_760;
+const ALL_HEALTH: u32 = 96_761;
+const FROST_ENERGY: u32 = 96_762;
+
+fn cost_data() -> GameData {
+    let mut d = data();
+    let mut more = aura_spell(
+        FIRE_MORE,
+        Some(10_000),
+        &[(AURA_MOD_POWER_COST_SCHOOL, 4, 0)],
+    );
+    more.stack_amount = 2;
+    let mut half = aura_spell(HALF_OFF, None, &[(AURA_ADD_PCT_MODIFIER, 14, 0)]);
+    half.family_name = 8;
+    half.effects[0].item_type = 1;
+    let costs = |id: u32, school: u32, mana: u32, power: u32| {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Costs {id}"),
+            school,
+            mana_cost: mana,
+            power_type: power,
+            equipped_item_class: -1,
+            range_index: 1,
+            ..Default::default()
+        };
+        // A dummy effect: nothing that works the caster's stats out again.
+        s.effects[0] = crate::game::data::spells::SpellEffect {
+            effect: 3,
+            target_a: 1,
+            base_dice: 1,
+            ..Default::default()
+        };
+        s
+    };
+    let mut family = costs(FIRE_FAMILY, 2, 200, 0);
+    family.family_name = 8;
+    family.family_flags = 1;
+    let mut other = family.clone();
+    other.id = FIRE_OTHER;
+    other.family_flags = 2;
+    let mut share = costs(FROST_SHARE, 4, 20, 0);
+    share.mana_cost_percentage = 10;
+    let mut all_mana = costs(ALL_MANA, 2, 200, 0);
+    all_mana.attributes[1] = crate::game::data::spells::ATTR_EX_USE_ALL_MANA;
+    let mut all_health = all_mana.clone();
+    all_health.id = ALL_HEALTH;
+    all_health.power_type = u32::MAX - 1;
+    add_spells(
+        &mut d,
+        [
+            aura_spell(
+                COST_LESS,
+                Some(5_000),
+                &[(AURA_MOD_POWER_COST_SCHOOL, 126, 0)],
+            ),
+            more,
+            aura_spell(
+                FIRE_SHARE,
+                Some(10_000),
+                &[(AURA_MOD_POWER_COST_SCHOOL_PCT, 4, 0)],
+            ),
+            half,
+            costs(FIRE_SPELL, 2, 200, 0),
+            family,
+            other,
+            share,
+            costs(FROST_CHEAP, 4, 50, 0),
+            all_mana,
+            all_health,
+            costs(FROST_ENERGY, 4, 150, 3),
+        ],
+    );
+    d
+}
+
+/// Thistle Tea's costs, in mangos's order: the schools' flat changes, the
+/// caster's spell modifiers, then the schools' shares (200 fire: 180; half
+/// off by the talent: 90; another flag: 180); a share of base mana before
+/// the flat change (20 and 100, less 100: 20); one cancelled and the rest
+/// run out, the cost and the client's fields back (330, then 200 and
+/// nothing shown). A free spell spends nothing and starts no five-second
+/// rule; a paid one spends what it costs and does. One of all the mana or
+/// health takes it all, nothing changing it; energy is changed by school
+/// too, and starts no rule.
+#[tokio::test]
+async fn costs_go_by_school_then_spell_then_school_share() {
+    let (_realm, _a, ga, map) = setup_with(cost_data(), Class::Priest).await;
+    let got = map
+        .query(move |m| {
+            // Thistle Tea's mana user's pools (the stats worked out again
+            // as auras change put them back).
+            let pools = |m: &mut Map| {
+                if let Some(f) = m.unit_fields_mut(ga) {
+                    f.set_u32(UNIT_FIELD_HEALTH, 500);
+                    f.set_u32(UNIT_FIELD_MAXHEALTH, 500);
+                    f.set_u32(UNIT_FIELD_MAXPOWER1, 2_000);
+                    f.set_u32(UNIT_FIELD_POWER1, 1_000);
+                    f.set_u32(UNIT_FIELD_BASE_MANA, 1_000);
+                    f.set_u32(UNIT_FIELD_MAXPOWER1 + 3, 100);
+                    f.set_u32(UNIT_FIELD_POWER1 + 3, 100);
+                }
+            };
+            let _ = put(m, ga, ga, COST_LESS, &[-100]);
+            let _ = put(m, ga, ga, FIRE_MORE, &[10]);
+            let _ = put(m, ga, ga, FIRE_MORE, &[10]);
+            let _ = put(m, ga, ga, FIRE_SHARE, &[50]);
+            let cost = |m: &Map, id: u32| {
+                let s = m.realm.data.spells.get(id).unwrap().clone();
+                let mods = spells::mods::for_spell(m, ga, &s);
+                spells::spell_cost(m, ga, &s, &mods)
+            };
+            let shown = |m: &Map| {
+                let f = m.unit_fields(ga).unwrap();
+                (
+                    (0..7)
+                        .map(|i| f.get_u32(UNIT_FIELD_POWER_COST_MODIFIER + i) as i32)
+                        .collect::<Vec<_>>(),
+                    (0..7)
+                        .map(|i| f.get_f32(UNIT_FIELD_POWER_COST_MULTIPLIER + i))
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let fields = shown(m);
+            let plain = cost(m, FIRE_SPELL);
+            let _ = put(m, ga, ga, HALF_OFF, &[-50]);
+            let talent = (cost(m, FIRE_FAMILY), cost(m, FIRE_OTHER));
+            auras::remove_spell(m, ga, HALF_OFF, None);
+            pools(m);
+            let share = cost(m, FROST_SHARE);
+            let free = cost(m, FROST_CHEAP);
+            pools(m);
+            let all = (cost(m, ALL_MANA), cost(m, ALL_HEALTH));
+            // Paying.
+            pools(m);
+            let before = m.players[&ga].mana_spent_at;
+            spells::cast(m, ga, FROST_CHEAP, spells::Targets::default(), None);
+            let after_free = (
+                m.unit_fields(ga).unwrap().get_u32(UNIT_FIELD_POWER1),
+                m.players[&ga].mana_spent_at == before,
+            );
+            crate::game::tests_p3_spells_kit::fresh(m, ga);
+            spells::cast(m, ga, FIRE_SPELL, spells::Targets::default(), None);
+            let paid = (
+                m.unit_fields(ga).unwrap().get_u32(UNIT_FIELD_POWER1),
+                m.players[&ga].mana_spent_at == Some(m.now),
+            );
+            crate::game::tests_p3_spells_kit::fresh(m, ga);
+            m.players.get_mut(&ga).unwrap().mana_spent_at = None;
+            pools(m);
+            spells::cast(m, ga, FROST_ENERGY, spells::Targets::default(), None);
+            let energy = (
+                m.unit_fields(ga).unwrap().get_u32(UNIT_FIELD_POWER1 + 3),
+                m.players[&ga].mana_spent_at,
+            );
+            crate::game::tests_p3_spells_kit::fresh(m, ga);
+            pools(m);
+            spells::cast(m, ga, ALL_MANA, spells::Targets::default(), None);
+            let drained = m.unit_fields(ga).unwrap().get_u32(UNIT_FIELD_POWER1);
+            // One cancelled, then the rest run out.
+            auras::remove_spell(m, ga, COST_LESS, None);
+            let cancelled = cost(m, FIRE_SPELL);
+            m.now += Duration::from_secs(10);
+            auras::update(m);
+            let expired = cost(m, FIRE_SPELL);
+            let cleared = shown(m);
+            (
+                fields, plain, talent, share, free, all, after_free, paid, energy, drained,
+                cancelled, expired, cleared,
+            )
+        })
+        .await
+        .unwrap();
+    let (
+        fields,
+        plain,
+        talent,
+        share,
+        free,
+        all,
+        after_free,
+        paid,
+        energy,
+        drained,
+        cancelled,
+        expired,
+        cleared,
+    ) = got;
+    assert_eq!(fields.0, vec![0, -100, -80, -100, -100, -100, -100]);
+    assert_eq!(fields.1, vec![0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(plain, 180);
+    assert_eq!(talent, (90, 180));
+    assert_eq!(share, 20);
+    assert_eq!(free, 0);
+    assert_eq!(all, (1_000, 500), "all of it, nothing changing it");
+    assert_eq!(after_free, (1_000, true), "free: nothing spent, no rule");
+    assert_eq!(paid, (820, true));
+    assert_eq!(energy, (50, None), "energy less 100, no rule");
+    assert_eq!(drained, 0);
+    assert_eq!((cancelled, expired), (330, 200));
+    assert_eq!(cleared, (vec![0; 7], vec![0.0; 7]));
+}
