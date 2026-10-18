@@ -18,6 +18,9 @@ wowm-capture = []
 # permissions): with `WVS_PPROF=<prefix>` the server profiles a window and
 # writes a flame graph and its top functions (`src/profile.rs`).
 pprof = ["dep:pprof"]
+# The whole world awake (`wvs-world-bench`, docs/PERFORMANCE.md): the
+# benchmark's binary, and the maps' probe it reads (`map/bench_probe.rs`).
+world-bench = []
 # Tracy, the frame profiler: with `WOW_TRACY=1` the server's maps, packets and
 # store show in Tracy's profiler, and without it they cost a flag's load
 # (`src/tracy.rs`, docs/PROFILING.md). Off, with `--no-default-features`, the
@@ -105,6 +108,13 @@ path = "src/main.rs"
 [[bin]]
 name = "wvs-setup"
 path = "src/bin/wvs-setup.rs"
+
+# The whole world awake: the server alone, observers all over both
+# continents (docs/PERFORMANCE.md). Built only with the feature.
+[[bin]]
+name = "wvs-world-bench"
+path = "src/bin/wvs-world-bench.rs"
+required-features = ["world-bench"]
 
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,
 # wow_messages, the navmesh, compression): the suite takes a third less time,

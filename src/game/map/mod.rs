@@ -9,6 +9,8 @@ pub mod assistance;
 pub mod auction;
 pub mod auras;
 pub mod battleground;
+#[cfg(all(feature = "world-bench", unix))]
+pub mod bench_probe;
 pub mod boss_mechanics;
 pub mod charge;
 pub mod chat;
@@ -538,6 +540,20 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
         MapEvent::Packet(g, _) => Some(*g),
         _ => None,
     };
+    #[cfg(all(feature = "world-bench", unix))]
+    let _probe = bench_probe::enabled().then(|| {
+        let kind = match &event {
+            MapEvent::Arrive(a) => match a.kind {
+                ArrivalKind::Login(_) => "a login",
+                ArrivalKind::Transfer(_) => "a transfer",
+            },
+            MapEvent::Packet(_, m) => m.message_name(),
+            MapEvent::Disconnect(_) => "a disconnect",
+            MapEvent::Call(_) => "a call",
+            MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
+        };
+        EventProbe(map.key, bench_probe::event_start(), Instant::now(), kind)
+    });
     match guarded(map, "an event", |m| m.handle_event(event)) {
         Some(stop) => stop,
         None => {
@@ -546,6 +562,17 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
             }
             false
         }
+    }
+}
+
+/// An event's CPU time, for the world benchmark, when it is dropped.
+#[cfg(all(feature = "world-bench", unix))]
+struct EventProbe(MapKey, bench_probe::Start, Instant, &'static str);
+
+#[cfg(all(feature = "world-bench", unix))]
+impl Drop for EventProbe {
+    fn drop(&mut self) {
+        bench_probe::event_done(self.0, &self.1, self.2.elapsed(), self.3);
     }
 }
 
@@ -1095,6 +1122,8 @@ impl Map {
         if !Arc::ptr_eq(&cfg, &self.cfg) {
             self.cfg = arc_swap::Guard::into_inner(cfg);
         }
+        #[cfg(all(feature = "world-bench", unix))]
+        let probe = bench_probe::enabled().then(bench_probe::start);
 
         // Each step under its own guard: one that panics costs itself,
         // this once, and the rest (the flushes most of all) go on.
@@ -1148,6 +1177,10 @@ impl Map {
         self.stats.window_total += took;
         self.stats.window_max = self.stats.window_max.max(took);
         self.stats.max_update = self.stats.max_update.max(took);
+        #[cfg(all(feature = "world-bench", unix))]
+        if let Some(start) = probe {
+            bench_probe::update_done(self, took, start);
+        }
         if took > UPDATE_INTERVAL {
             warn!(
                 "{} update took {} ms ({} players, {} creatures)",
