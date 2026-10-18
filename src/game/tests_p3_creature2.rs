@@ -111,7 +111,7 @@ async fn a_fallen_hound_takes_the_killing_blow_and_nothing_more() {
     .await;
     assert_eq!(out.0, (true, 1, 0, false, false), "hurt, still fighting");
     assert_eq!(out.1, (true, 1, 7, true, true), "down at one, fallen");
-    assert_eq!(out.2.0, true, "its foe's threat kept");
+    assert!(out.2.0, "its foe's threat kept");
     assert_eq!(out.2.1, Some(ga), "and its tap");
     assert!(out.2.2, "its auras gone");
     assert!(!out.2.3, "no longer swinging");
