@@ -1564,7 +1564,7 @@ async fn real_gossip_defaults_side_conditions_and_mount_trainers() {
         dummy(m, alliance, BATTLEMASTER, 60, 2.0)
     })
     .await;
-    a.sees(master).await;
+    a.sees_on(&kalimdor, master).await;
     a.send(CMSG_GOSSIP_HELLO { guid: master }).await;
     let gossips = a
         .wait_for("the battlemaster's menu", |msg| match msg {
