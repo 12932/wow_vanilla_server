@@ -946,3 +946,136 @@ async fn harness_wait(
     }
     false
 }
+
+// The Explosive Sheep and the Goblin Bomb, on the real data.
+
+/// Whether `lost` is one of `spell`'s blasts, `base` and `sides` its
+/// points, landed (or a crit's half again), or none (resisted).
+fn blast_or_none(lost: u32, base: u32, sides: u32) -> bool {
+    let (low, high) = (base + 1, base + sides);
+    lost == 0 || (low..=high).contains(&lost) || (low * 3 / 2..=high * 3 / 2 + 1).contains(&lost)
+}
+
+/// Thistle Tea's "the first landed swing spends its sole charge and
+/// requests a blast": the Explosive Sheep's and the Goblin Bomb's passive
+/// has one charge; a missed swing keeps it, the first landed spends it
+/// and blasts the enemies about (the Sheep's 135 to 165, the Bomb's 315
+/// to 385), not one twenty yards off; the guardian dies of it, and no
+/// swing blasts again.
+#[tokio::test]
+#[ignore = "extended"]
+async fn an_explosive_guardians_first_landed_swing_spends_its_charge_and_blasts() {
+    use crate::game::map::procs::{self, Event};
+    use crate::game::tests_p3_spells_kit::{have_data, holder, player, ready, realm, spawn};
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_a, g, map) = player(&realm, "U4X1", "Sapper", Race::Human, Class::Warrior).await;
+    for (summon, entry, passive, base, sides) in
+        [(4074, 2675, 4051, 134, 31), (13258, 8937, 13260, 314, 71)]
+    {
+        let out = map
+            .query(move |m| {
+                ready(m, g, 60, &[]);
+                spells::cast_triggered(m, g, summon, Some(g));
+                let guardian = m
+                    .creatures
+                    .iter()
+                    .find(|(_, c)| c.entry == entry && c.alive())
+                    .map(|(_, c)| c.guid)
+                    .expect("the guardian");
+                let charges = holder(m, guardian, passive).map(|h| h.charges);
+                let near = [spawn(m, guardian, 6, 1, 2.0), spawn(m, guardian, 6, 1, 3.0)];
+                let far = spawn(m, guardian, 6, 1, 20.0);
+                let full = health(m, near[0]);
+                let swing = |m: &mut Map, ex| {
+                    procs::trigger(
+                        m,
+                        Event {
+                            actor: guardian,
+                            target: near[0],
+                            actor_flags: procs::PROC_DONE_MELEE,
+                            target_flags: procs::PROC_TAKEN_MELEE,
+                            ex,
+                            damage: if ex == procs::EX_MISS { 0 } else { 5 },
+                            school: 1,
+                            ..Default::default()
+                        },
+                    )
+                };
+                swing(m, procs::EX_MISS);
+                let after_miss = (
+                    holder(m, guardian, passive).is_some(),
+                    full - health(m, near[0]),
+                );
+                swing(m, procs::EX_NORMAL_HIT);
+                let lost = near.map(|n| full - health(m, n));
+                let far_lost = full - health(m, far);
+                let spent = holder(m, guardian, passive).is_none();
+                let dead = m.creature(guardian).is_none_or(|c| !c.alive());
+                swing(m, procs::EX_NORMAL_HIT);
+                let again = near.map(|n| full - health(m, n));
+                (charges, after_miss, lost, far_lost, spent, dead, again)
+            })
+            .await
+            .unwrap();
+        let (charges, after_miss, lost, far_lost, spent, dead, again) = out;
+        assert_eq!(charges, Some(1), "{entry}: one charge");
+        assert_eq!(after_miss, (true, 0), "{entry}: a miss keeps it");
+        for l in lost {
+            assert!(blast_or_none(l, base, sides), "{entry}: {l}");
+        }
+        assert!(lost.iter().any(|l| *l > 0), "{entry}: blasted {lost:?}");
+        assert_eq!(far_lost, 0, "{entry}: not twenty yards off");
+        assert!(spent, "{entry}: the charge spent");
+        assert!(dead, "{entry}: it dies of it");
+        assert_eq!(again, lost, "{entry}: once");
+    }
+}
+
+/// Thistle Tea's "solo malfunctions hit the caster without damaging
+/// unrelated units": the dispenser's malfunction (13261) hurts its user
+/// 315 to 385, and not another player beside them, nor a creature.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_dispensers_malfunction_hurts_its_user_alone() {
+    use crate::game::tests_p3_spells_kit::{have_data, player, ready, realm, spawn};
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_a, g, map) = player(&realm, "U4X2", "Fumbler", Race::Human, Class::Warrior).await;
+    let (_b, friend, _) = player(&realm, "U4X3", "Bystander", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            ready(m, friend, 60, &[]);
+            let pos = m.players[&g].position();
+            m.players.get_mut(&friend).unwrap().movement.position = Vector3d {
+                x: pos.x + 1.0,
+                ..pos
+            };
+            let kobold = spawn(m, g, 6, 60, 2.0);
+            for u in [g, friend] {
+                let f = m.unit_fields_mut(u).unwrap();
+                f.set_u32(UNIT_FIELD_MAXHEALTH, 5_000);
+                f.set_u32(UNIT_FIELD_HEALTH, 5_000);
+            }
+            let full = health(m, kobold);
+            spells::cast_triggered(m, g, MALFUNCTION, Some(g));
+            (
+                5_000 - health(m, g),
+                5_000 - health(m, friend),
+                full - health(m, kobold),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(
+        out.0 > 0 && blast_or_none(out.0, 314, 71),
+        "its user: {}",
+        out.0
+    );
+    assert_eq!((out.1, out.2), (0, 0), "no one else");
+}
