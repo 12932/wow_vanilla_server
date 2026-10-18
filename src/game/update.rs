@@ -585,7 +585,10 @@ mod tests {
         for flags in [0, SPLINE_FLYING, 0x100, 0x100 | SPLINE_FLYING] {
             for n in 1..8 {
                 let path: Vec<Vector3d> = (0..n).map(|i| v(i as f32, 0.0, 0.0)).collect();
-                assert!(create_spline_points(flags, &path).len() >= 3, "{flags:#x} {n}");
+                assert!(
+                    create_spline_points(flags, &path).len() >= 3,
+                    "{flags:#x} {n}"
+                );
             }
         }
         // As the block carries it: the gorilla's three points.
