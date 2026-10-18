@@ -88,6 +88,8 @@ mod tests_p3_cast3;
 #[cfg(test)]
 mod tests_p3_cast4;
 #[cfg(test)]
+mod tests_p3_cast5;
+#[cfg(test)]
 mod tests_p3_cast_class;
 #[cfg(test)]
 mod tests_p3_cast_kit;
