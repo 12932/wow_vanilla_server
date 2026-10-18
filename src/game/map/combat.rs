@@ -1080,8 +1080,16 @@ pub fn derived(map: &Map, g: Guid) -> crate::game::map::derive::Derived {
 /// The unit's creature type as a mask, for the auras against one: a player
 /// is a humanoid.
 pub fn creature_type_mask(map: &Map, g: Guid) -> u32 {
-    if map.players.contains_key(&g) {
-        return 1 << 6;
+    if let Some(p) = map.players.get(&g) {
+        // A player is a humanoid, but in a form `SpellShapeshiftForm` makes
+        // a beast (cat, bear, dire bear, travel, aquatic, ghost wolf), as
+        // mangos's `GetCreatureType` and Thistle Tea's have it.
+        let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
+        return if matches!(form, 1 | 3 | 4 | 5 | 8 | 14 | 15 | 16) {
+            1
+        } else {
+            1 << 6
+        };
     }
     map.creature(g)
         .and_then(|c| map.realm.data.creature_template(c.entry))
