@@ -59,6 +59,19 @@ fn full_stacks(bonus: u32) -> bool {
     )
 }
 
+/// Whether `spell` is a bonus that starts full with no parent from `caster`
+/// on to give it: it doesn't go on (Thistle Tea's late deliveries, which
+/// can't make a missing source).
+pub fn orphan(existing: &Auras, spell: u32, caster: Guid) -> bool {
+    parent_of(spell).is_some_and(|parent| {
+        full_stacks(spell)
+            && !existing
+                .holders
+                .iter()
+                .any(|h| h.spell == parent && h.caster == caster)
+    })
+}
+
 /// A holder about to go on: a bonus whose parent is on starts full;
 /// Ascendance holds six charges.
 pub fn prepare(existing: &Auras, holder: &mut Holder, s: &SpellTemplate) {

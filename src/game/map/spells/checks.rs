@@ -16,7 +16,7 @@ use crate::game::map::combat::{self, dist};
 
 use super::mods::{self, Mods};
 use super::targets::{self, Implicit};
-use super::{Targets, power_cost, unpayable};
+use super::{Targets, spell_cost, unpayable};
 
 /// `SpellCastResult` codes.
 pub mod fail {
@@ -479,7 +479,7 @@ pub fn check(
         let cost = if item.is_some() {
             0
         } else {
-            m.apply_ms(mods::OP_COST, power_cost(map, caster, s))
+            spell_cost(map, caster, s, m)
         };
         if let Some(r) = unpayable(map, caster, s, cost) {
             return Some(r);

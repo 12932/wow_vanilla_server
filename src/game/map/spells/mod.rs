@@ -568,15 +568,25 @@ fn power_index(s: &SpellTemplate) -> Option<u16> {
 /// base mana (of base health, or of the power's maximum), or all it has;
 /// with school cost auras.
 pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
+    spell_cost(map, caster, s, &mods::Mods::default())
+}
+
+/// What `s` costs `caster`, in mangos's `CalculatePowerCost`'s order: all
+/// the power there is for a spell that takes it all, nothing changing it;
+/// else its own cost and share, the school's flat change, the caster's
+/// spell modifiers `m`, the level's scaling, then the school's share.
+pub fn spell_cost(map: &Map, caster: Guid, s: &SpellTemplate, m: &mods::Mods) -> u32 {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     let f = map.unit_fields(caster);
     let field = |field: u16| f.map(|f| f.get_u32(field)).unwrap_or(0);
-    let mut cost = if s.attr(1, sd::ATTR_EX_USE_ALL_MANA) {
-        power_index(s).map_or_else(
+    if s.attr(1, sd::ATTR_EX_USE_ALL_MANA) {
+        return power_index(s).map_or_else(
             || field(UNIT_FIELD_HEALTH),
             |i| field(UNIT_FIELD_POWER1 + i),
-        )
-    } else {
+        );
+    }
+    let a = auras::auras(map, caster);
+    let mut cost = {
         // The rank it is cast at goes no higher than its last level.
         let rank = if s.max_level > 0 {
             level.min(s.max_level)
@@ -601,6 +611,10 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
         };
         flat + share
     } as i32;
+    if let Some(a) = a {
+        cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
+    }
+    cost = m.apply(mods::OP_COST, cost as f32) as i32;
     // A spell that scales with its caster's level costs as much more, as
     // vmangos's `CalculatePowerCost` (and Thistle Tea's `CostScaling`) has it.
     if s.attr(0, sd::ATTR_LEVEL_DAMAGE_CALCULATION) && s.spell_level > 0 && level > 0 {
@@ -611,9 +625,8 @@ pub fn power_cost(map: &Map, caster: Guid, s: &SpellTemplate) -> u32 {
             (cost as f32 / divisor) as i32
         };
     }
-    if let Some(a) = auras::auras(map, caster) {
+    if let Some(a) = a {
         // The shares add, as the client's cost multiplier field does.
-        cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
         let share = a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL_PCT, s.school_mask());
         cost = (cost as f32 * (1.0 + share as f32 / 100.0)) as i32;
     }
@@ -1044,7 +1057,7 @@ fn execute(
         let cost = if item.is_some() {
             0
         } else {
-            m.apply_ms(mods::OP_COST, power_cost(map, caster, s))
+            spell_cost(map, caster, s, &m)
         };
         paid = cost;
         if let Some(r) = checks::at_launch(map, caster, s, cost) {
@@ -1756,6 +1769,19 @@ pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
 /// resist (a tenth as likely as a direct hit's), absorbed, logged, dealt;
 /// a leech heals its caster by what it took.
 pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u32, leech: bool) {
+    periodic_damage_of(map, h, target, amount as f32, leech);
+}
+
+/// [`periodic_damage`] of an amount with a fraction: the target's
+/// modifiers on it, then rounded without bias (a half when the rolls are
+/// fixed), as Thistle Tea's `PeriodicDamage` dithers it.
+pub fn periodic_damage_of(
+    map: &mut Map,
+    h: &auras::Holder,
+    target: Guid,
+    amount: f32,
+    leech: bool,
+) {
     let data = map.realm.data.clone();
     let s = data
         .spells
@@ -1786,8 +1812,14 @@ pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u
         index,
         outcome::Kind::Dot,
         h.stacks,
-        amount as f32,
-    ) as u32;
+        amount,
+    );
+    let roll = if outcome::rolling(map) {
+        rand::rng().random_range(0.0f32..1.0)
+    } else {
+        0.5
+    };
+    let amount = crate::game::map::reputation::dither(amount, roll).max(0) as u32;
     let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
     let (left, absorbed) =
         auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);

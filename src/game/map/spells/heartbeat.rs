@@ -2,8 +2,9 @@
 //! vmangos) has it, for a harmful aura of more than ten seconds whose spell
 //! checks: on a player (or what a player controls) it ends at a time drawn
 //! from vmangos's spread, about twelve seconds in (sooner with diminishing
-//! returns); on a creature it rolls the spell's hit again every five
-//! seconds and ends on a miss (not for fear, roots, silences or confusion).
+//! returns); on a creature (a player's pet or charmed one too) it rolls the
+//! spell's hit again every five seconds and ends on a miss (not for fear,
+//! roots, silences or confusion). It breaks before its own ticks due then.
 
 use std::time::{Duration, Instant};
 
@@ -67,6 +68,13 @@ pub fn prepare(
         return None;
     }
     let now = map.now;
+    let mut beat = Heartbeat {
+        break_at: None,
+        next_check: None,
+        hit_chance: 10_000,
+        player_delay: None,
+        rate: 1.0,
+    };
     if player_controlled(map, target) {
         let sample: f64 = if super::outcome::rolling(map) {
             rand::rng().random_range(f64::EPSILON..1.0)
@@ -74,49 +82,68 @@ pub fn prepare(
             0.5
         };
         let delay = (12_000.0 + 3_000.0 / 99f64.ln() * (sample / (1.0 - sample)).ln()).max(0.0);
-        // Diminished returns shorten it alike.
-        let level = map.unit_view(caster).map_or(1, |u| u.level);
-        let full = map
-            .realm
-            .data
-            .spells
-            .duration(s, level)
-            .unwrap_or(ms)
-            .max(1);
-        let rate = (f64::from(ms) / f64::from(full)).min(1.0);
-        return Some(Heartbeat {
-            break_at: Some(now + Duration::from_millis((delay * rate) as u64)),
-            next_check: None,
-            hit_chance: 10_000,
-            player_delay: Some(delay),
-            rate,
-        });
+        let rate = rate(map, caster, s, ms);
+        beat.break_at = Some(now + Duration::from_millis((delay * rate) as u64));
+        beat.player_delay = Some(delay);
+        beat.rate = rate;
     }
-    if !s.attr(0, ATTR_HEARTBEAT_RESIST)
-        || s.effects
+    // A creature rolls too, a player's pet or charmed one as well (Thistle
+    // Tea's `creature_hit_chance` is any mob's).
+    if !guid::is_player(target)
+        && s.attr(0, ATTR_HEARTBEAT_RESIST)
+        && !s
+            .effects
             .iter()
             .any(|e| CREATURE_EXCLUSIONS.contains(&e.aura))
     {
-        return None;
+        let mods = super::mods::for_spell(map, caster, s);
+        beat.next_check = Some(now + INTERVAL);
+        // A spell that always hits always holds.
+        beat.hit_chance = if s.attr(3, crate::game::data::spells::ATTR_EX3_ALWAYS_HIT) {
+            10_000
+        } else {
+            super::outcome::spell_hit_chance(map, caster, target, s, &mods)
+        };
     }
-    let mods = super::mods::for_spell(map, caster, s);
-    Some(Heartbeat {
-        break_at: None,
-        next_check: Some(now + INTERVAL),
-        hit_chance: super::outcome::spell_hit_chance(map, caster, target, s, &mods),
-        player_delay: None,
-        rate: 1.0,
-    })
+    (beat.break_at.is_some() || beat.next_check.is_some()).then_some(beat)
 }
 
-/// A holder refreshed: a player's keeps its drawn delay, started again
-/// from now at the new rate; a creature's keeps its next roll and chance.
+/// The share of `s`'s full duration that `ms` is: diminished returns
+/// shorten a player's break alike.
+fn rate(map: &Map, caster: Guid, s: &SpellTemplate, ms: u32) -> f64 {
+    let level = map.unit_view(caster).map_or(1, |u| u.level);
+    let full = map
+        .realm
+        .data
+        .spells
+        .duration(s, level)
+        .unwrap_or(ms)
+        .max(1);
+    (f64::from(ms) / f64::from(full)).min(1.0)
+}
+
+/// A holder of `s` from `caster` refreshed, to last `duration`: a player's
+/// keeps its drawn delay, started again from now at the new rate; a
+/// creature's keeps its next roll and chance. Refreshed too short to check
+/// anew (diminished returns), it keeps the old (Thistle Tea's holder keeps
+/// its heartbeat, rescheduled).
 pub fn refreshed(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
     old: Option<Heartbeat>,
     new: Option<Heartbeat>,
-    now: Instant,
+    duration: Option<u32>,
 ) -> Option<Heartbeat> {
-    let mut new = new?;
+    let now = map.now;
+    let Some(mut new) = new else {
+        let (mut old, ms) = (old?, duration?);
+        if let Some(delay) = old.player_delay {
+            old.rate = rate(map, caster, s, ms);
+            old.break_at = Some(now + Duration::from_millis((delay * old.rate) as u64));
+        }
+        return Some(old);
+    };
     let Some(old) = old else {
         return Some(new);
     };

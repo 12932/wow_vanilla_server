@@ -919,6 +919,10 @@ pub fn apply_spell(
     if pos && matches!(spell.mechanic, 16 | 19 | 25) && existing.mechanic_immune(spell.mechanic) {
         return Err(Refused::Immune);
     }
+    // A depleting trinket's bonus comes only with its trinket's aura.
+    if crate::game::map::trinkets::orphan(existing, spell.id, caster) {
+        return Err(Refused::Bounced);
+    }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
     // A weaker attack-speed slow doesn't take a stronger one's place, nor
     // one as strong that lasts less: it is passed over, the rest of its
@@ -1038,17 +1042,28 @@ pub fn apply_spell(
     let mut gone = Vec::new();
     let mut kept_slot = None;
     let mut refreshed = None;
+    // The same spell from the same caster and item: refreshed, and a stack
+    // more.
+    let same = |h: &Holder| {
+        h.spell == spell.id
+            && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
+            && h.item == ctx.item
+    };
+    let beat = existing.holders.iter().find(|h| same(h)).map(|old| {
+        crate::game::map::spells::heartbeat::refreshed(
+            map,
+            caster,
+            spell,
+            old.heartbeat,
+            holder.heartbeat,
+            holder.duration,
+        )
+    });
     {
         let Some(a) = auras_mut(map, target) else {
             return Ok(());
         };
-        // The same spell from the same caster and item: refreshed, and a
-        // stack more.
-        if let Some(i) = a.holders.iter().position(|h| {
-            h.spell == spell.id
-                && (h.caster == caster || spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS))
-                && h.item == ctx.item
-        }) {
+        if let Some(i) = a.holders.iter().position(same) {
             let old = &mut a.holders[i];
             let stacks = if spell.stack_amount > 1 {
                 (old.stacks + 1).min(spell.stack_amount)
@@ -1061,14 +1076,12 @@ pub fn apply_spell(
                 .map(|x| (x.effect, x.next_tick, x.ticks))
                 .collect();
             let slot = old.slot;
-            let beat = old.heartbeat;
             *old = Holder {
                 stacks,
                 slot,
                 ..holder.clone()
             };
-            old.heartbeat =
-                crate::game::map::spells::heartbeat::refreshed(beat, holder.heartbeat, now);
+            old.heartbeat = beat.flatten();
             // A stacking aura keeps its ticks' rhythm (and some others).
             if crate::game::map::spells::class_scripts::preserves_periodic_timer(spell) {
                 for x in old.effects.iter_mut() {
@@ -1740,15 +1753,8 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             crate::game::map::spells::interrupts::mounted(map, target, h.spell);
         }
-        AURA_TRACK_CREATURES => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_CREATURES, 1 << (misc - 1).clamp(0, 31));
-            }
-        }
-        AURA_TRACK_RESOURCES => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_RESOURCES, 1 << (misc - 1).clamp(0, 31));
-            }
+        AURA_TRACK_CREATURES | AURA_TRACK_RESOURCES | AURA_TRACK_STEALTHED => {
+            tracking(map, target);
         }
         AURA_MOD_SCALE => {
             if let Some(f) = map.unit_fields_mut(target) {
@@ -1976,15 +1982,8 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             crate::game::map::spells::interrupts::dismounted(map, target);
         }
-        AURA_TRACK_CREATURES if !still(map, AURA_TRACK_CREATURES) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_CREATURES, 0);
-            }
-        }
-        AURA_TRACK_RESOURCES if !still(map, AURA_TRACK_RESOURCES) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_u32(PLAYER_TRACK_RESOURCES, 0);
-            }
+        AURA_TRACK_CREATURES | AURA_TRACK_RESOURCES | AURA_TRACK_STEALTHED => {
+            tracking(map, target);
         }
         AURA_MOD_SCALE => {
             if let Some(f) = map.unit_fields_mut(target) {
@@ -2108,6 +2107,32 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         _ => {}
+    }
+}
+
+/// A player's tracking fields from its auras (Thistle Tea's `PlayerSync`):
+/// each creature and resource kind's bit (a kind outside the field's 32
+/// none), and Track Hidden's flag (mangos's `PLAYER_FIELD_BYTE_TRACK_STEALTHED`).
+fn tracking(map: &mut Map, target: Guid) {
+    let Some(a) = map.players.get(&target).map(|p| &p.auras) else {
+        return;
+    };
+    let bits = |kind: u32| {
+        a.effects()
+            .filter(|(_, x)| x.kind == kind && (1..=32).contains(&x.misc))
+            .fold(0u32, |b, (_, x)| b | 1 << (x.misc - 1))
+    };
+    let (creatures, resources) = (bits(AURA_TRACK_CREATURES), bits(AURA_TRACK_RESOURCES));
+    let hidden = a.has(AURA_TRACK_STEALTHED);
+    if let Some(f) = map.unit_fields_mut(target) {
+        f.set_u32(PLAYER_TRACK_CREATURES, creatures);
+        f.set_u32(PLAYER_TRACK_RESOURCES, resources);
+        let flags = f.get_byte(PLAYER_FIELD_BYTES, 0);
+        f.set_byte(
+            PLAYER_FIELD_BYTES,
+            0,
+            if hidden { flags | 0x02 } else { flags & !0x02 },
+        );
     }
 }
 
@@ -2492,6 +2517,20 @@ pub fn update(map: &mut Map) {
         if ticks.is_empty() && !expired && !crate::game::map::spells::heartbeat::any_due(a, now) {
             continue;
         }
+        // Crowd control that breaks now breaks before its ticks due now
+        // (Thistle Tea's `Aura.Heartbeat` runs first).
+        crate::game::map::spells::heartbeat::update(map, g);
+        let ticks: Vec<(Holder, Aura)> = match auras(map, g) {
+            Some(a) => ticks
+                .into_iter()
+                .filter(|(h, _)| {
+                    a.holders
+                        .iter()
+                        .any(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         // One tick an update, each on its aura's own cadence: an update
         // late by more than an interval leaves the next tick due at once,
         // for the next update (mangos's `Aura::Update`).
@@ -2499,7 +2538,6 @@ pub fn update(map: &mut Map) {
         if expired {
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
-        crate::game::map::spells::heartbeat::update(map, g);
     }
 }
 
@@ -2620,7 +2658,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     .unit_fields(target)
                     .map(|f| f.get_u32(UNIT_FIELD_MAXHEALTH))
                     .unwrap_or(0);
-                (max as i32 * a.amount * stacks / 100).max(0) as u32
+                (max as i32 * a.amount * stacks / 100).max(0) as f32
             } else {
                 // Curse of Agony and Starshards grow as they go.
                 let ramp = if a.kind == AURA_PERIODIC_DAMAGE {
@@ -2639,10 +2677,21 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 } else {
                     stacks
                 };
-                ((a.amount * stacks).max(0) as f32 + ramp).round().max(0.0) as u32
+                ((a.amount * stacks).max(0) as f32 + ramp).max(0.0)
             };
-            let amount = crate::game::map::item_scripts::periodic_damage(map, target, h, amount);
-            crate::game::map::spells::periodic_damage(
+            // A ramp's fraction stays until the target's modifiers are
+            // on, then rounds without bias (Thistle Tea's `PeriodicDamage`).
+            let amount = if h.spell == crate::game::map::item_scripts::DEATH_RAY_PERIODIC {
+                crate::game::map::item_scripts::periodic_damage(
+                    map,
+                    target,
+                    h,
+                    amount.round() as u32,
+                ) as f32
+            } else {
+                amount
+            };
+            crate::game::map::spells::periodic_damage_of(
                 map,
                 h,
                 target,

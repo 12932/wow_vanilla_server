@@ -1005,7 +1005,10 @@ fn speed(map: &mut Map, g: Guid) {
     let mut told: Vec<(u16, f32)> = Vec::new();
     if let Some(p) = map.players.get_mut(&g) {
         let speed = (RUN_SPEED * p.speed_rate * run_multiplier(&p.auras, mounted)).max(0.5);
-        let ghost = p.death != crate::game::map::death::Death::Alive;
+        // A ghost's speeds are its own (`death`); one lying dead takes
+        // back what its auras took as they go (mangos's `UpdateSpeed` on
+        // the auras removed at death, Thistle Tea's death restoring them).
+        let ghost = matches!(p.death, crate::game::map::death::Death::Ghost { .. });
         if !ghost && (speed - p.speeds.run).abs() > 0.01 {
             p.speeds.run = speed;
             p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {

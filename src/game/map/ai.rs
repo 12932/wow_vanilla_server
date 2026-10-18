@@ -1059,13 +1059,26 @@ fn attacker_of(map: &Map, g: Guid) -> Option<Guid> {
 /// The caster of the newest taunt on `g` it may fight (Thistle Tea's
 /// `taunt_caster`): an older one holds when the newest can't.
 fn taunter(map: &Map, g: Guid) -> Option<Guid> {
-    map.creature(g)?
-        .auras
-        .holders
-        .iter()
-        .rev()
-        .filter(|h| h.has(crate::game::map::auras::AURA_MOD_TAUNT))
-        .map(|h| h.caster)
+    // Newest by when each went on, a refreshed one anew (mangos puts a
+    // refreshed holder on again, last); as old, the later on the list.
+    let mut taunts: Vec<(Option<std::time::Instant>, usize, Guid)> =
+        map.creature(g)?
+            .auras
+            .holders
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.has(crate::game::map::auras::AURA_MOD_TAUNT))
+            .map(|(i, h)| {
+                let applied = h.expires.zip(h.duration).and_then(|(t, ms)| {
+                    t.checked_sub(std::time::Duration::from_millis(u64::from(ms)))
+                });
+                (applied, i, h.caster)
+            })
+            .collect();
+    taunts.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    taunts
+        .into_iter()
+        .map(|(_, _, t)| t)
         .find(|t| valid_victim(map, g, *t))
 }
 

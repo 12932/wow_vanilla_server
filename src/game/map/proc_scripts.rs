@@ -56,6 +56,31 @@ const MANA_DRAIN_LEECH: u32 = 27526;
 /// Hellfire.
 const PYROCLASM: &[(u32, f32)] = &[(18096, 13.0), (18073, 26.0)];
 const PYROCLASM_STUN: u32 = 18093;
+
+/// The chance, in percent, that Pyroclasm's rank `id` on `owner` stuns
+/// `other` for `spell`: the rank's share spread over the spell's ticks (Hellfire's
+/// fifteen, Rain of Fire's four; Soul Fire's one), for a living other one;
+/// none for another spell, oneself or the dead.
+pub fn pyroclasm_chance(
+    map: &Map,
+    owner: Guid,
+    other: Guid,
+    id: u32,
+    spell: Option<u32>,
+) -> Option<f32> {
+    let (_, pct) = PYROCLASM.iter().find(|(s, _)| *s == id)?;
+    let s = spell.and_then(|s| map.realm.data.spells.get(s))?;
+    let ticks = if s.family_name == 5 && s.spell_icon == 184 && s.spell_visual == 2253 {
+        1.0
+    } else if s.family_name == 5 && s.family_flags & 0x40 != 0 {
+        15.0
+    } else if s.family_name == 5 && s.family_flags & 0x20 != 0 {
+        4.0
+    } else {
+        return None;
+    };
+    (other != owner && map.unit_view(other).is_some_and(|u| u.alive)).then_some(pct / ticks)
+}
 const BLESSED_RECOVERY: &[(u32, u32)] = &[(27811, 27813), (27815, 27817), (27816, 27818)];
 const PERSISTENT_SHIELD: u32 = 26467;
 const PERSISTENT_SHIELD_ABSORB: u32 = 26470;
@@ -197,25 +222,9 @@ pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> O
         crate::game::map::spells::cast_triggered(map, owner, MANA_DRAIN_LEECH, Some(other));
         return Outcome::Done;
     }
-    if let Some((_, pct)) = PYROCLASM.iter().find(|(s, _)| *s == id) {
-        let ticks = e
-            .spell
-            .and_then(|s| map.realm.data.spells.get(s))
-            .and_then(|s| {
-                if s.family_name == 5 && s.spell_icon == 184 && s.spell_visual == 2253 {
-                    Some(1.0)
-                } else if s.family_name == 5 && s.family_flags & 0x40 != 0 {
-                    Some(15.0)
-                } else if s.family_name == 5 && s.family_flags & 0x20 != 0 {
-                    Some(4.0)
-                } else {
-                    None
-                }
-            });
-        if let Some(ticks) = ticks
-            && other != owner
-            && map.unit_view(other).is_some_and(|u| u.alive)
-            && rng.random_range(0.0f32..100.0) < pct / ticks
+    if PYROCLASM.iter().any(|(s, _)| *s == id) {
+        if let Some(chance) = pyroclasm_chance(map, owner, other, id, e.spell)
+            && rng.random_range(0.0f32..100.0) < chance
         {
             crate::game::map::spells::cast_triggered(map, owner, PYROCLASM_STUN, Some(other));
         }

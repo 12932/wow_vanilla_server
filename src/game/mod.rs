@@ -442,6 +442,24 @@ mod tests_p5_combat_taken;
 #[cfg(test)]
 mod tests_p5_combat_zone;
 #[cfg(test)]
+mod tests_p5_data_aura;
+#[cfg(test)]
+mod tests_p5_data_carrier;
+#[cfg(test)]
+mod tests_p5_data_dr;
+#[cfg(test)]
+mod tests_p5_data_gear;
+#[cfg(test)]
+mod tests_p5_data_periodic;
+#[cfg(test)]
+mod tests_p5_data_procs;
+#[cfg(test)]
+mod tests_p5_data_real;
+#[cfg(test)]
+mod tests_p5_data_single;
+#[cfg(test)]
+mod tests_p5_data_threat;
+#[cfg(test)]
 mod tests_p5_player;
 #[cfg(test)]
 mod tests_p5_player_items;
