@@ -44,7 +44,8 @@ cargo run --bin wow_vanilla_server -- --print-config --defaults > config.example
 ## Hot reload
 
 `.reload config` (GM level 3) and SIGHUP (on Unix) read `config.toml` and the environment again, off the maps'
-threads. A config that doesn't load is reported and changes nothing. Otherwise:
+threads. The environment is the process's own: `.env` is read once, at start, so a variable changed there waits for a
+restart. A config that doesn't load is reported and changes nothing. Otherwise:
 
 - **What changes live:** every key marked *live* below takes its new value. These are the rates, distances, timers,
   the MOTD, new characters' settings, the battleground, anticheat and GM settings.
