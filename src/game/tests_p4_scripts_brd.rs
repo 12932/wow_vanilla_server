@@ -288,6 +288,18 @@ async fn the_ring_of_law() {
             .collect();
         assert!(!crowd.is_empty());
         assert!(crowd.iter().all(|g| faction(m, *g) == 15), "the crowd calm");
+        let beyond: Vec<Guid> = [8916, 8896, 8902, 8904, 8893, 8894, 8895]
+            .iter()
+            .flat_map(|e| living(m, *e))
+            .filter(|g| {
+                m.position_of(*g)
+                    .is_some_and(|p| crate::game::map::combat::dist(p, stands) > 75.0)
+            })
+            .collect();
+        assert!(
+            beyond.iter().all(|g| faction(m, *g) != 15),
+            "only those in the stands"
+        );
         let late = summon(m, 8916, stands, 0.0);
         instance_script::creature_event(m, late, Event::Spawned);
         assert_eq!(faction(m, late), 15, "one spawning after too");

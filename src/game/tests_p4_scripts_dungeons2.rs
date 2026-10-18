@@ -543,3 +543,35 @@ async fn the_real_dungeons_content() {
         "Gandling's death reported"
     );
 }
+
+/// Stratholme's Baron run, on the real world: the gauntlet's gate opened
+/// starts it once, and its spell goes on every player in the copy, not on
+/// another copy's.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_barons_run_marks_everyone_in_the_copy() {
+    const GATE: u32 = 175357;
+    const RUN: u32 = 27861;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, a, map) = inside(&realm, "Ysida", 329, GATE).await;
+    let at = spawn_of(&realm, 329, GATE);
+    let (_d, b) = joins(&realm, "Rider", &map, at).await;
+    let (_e, other, elsewhere) = inside(&realm, "Elsewhere", 329, GATE).await;
+    map.query(|m| {
+        instance_script::object_used(m, GATE);
+        instance_script::object_used(m, GATE);
+        assert_eq!(data(m, 0), IN_PROGRESS);
+    })
+    .await;
+    assert!(
+        until(&map, 2000, move |m| has(m, a, RUN) && has(m, b, RUN)).await,
+        "both in the copy"
+    );
+    assert_eq!(
+        elsewhere.query(move |m| has(m, other, RUN)).await,
+        Some(false),
+        "not another copy's"
+    );
+}

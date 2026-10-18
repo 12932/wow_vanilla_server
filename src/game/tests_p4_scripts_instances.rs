@@ -529,3 +529,52 @@ fn missed_resets_are_skipped_without_drift() {
         assert_eq!(instances::next_reset(map, d + 2 * p + 1) % DAY, 4 * 3600);
     }
 }
+
+/// Thistle Tea's `materialize/2` in the open world: a spawn's creature
+/// keeps its database guid as its own; in a copy it keeps it as its spawn.
+#[tokio::test]
+async fn the_open_world_keeps_database_guids() {
+    let mut d = copies();
+    d.creature_templates.insert(1000, template(1000, "Spawned"));
+    for (map, guid) in [(0, 70_001), (DUNGEONS[0], 70_002)] {
+        d.creature_spawns
+            .entry(map)
+            .or_default()
+            .push(CreatureSpawn {
+                guid,
+                entries: vec![1000],
+                map,
+                x: 3.0,
+                ..Default::default()
+            });
+    }
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = Realm::new(cfg, store, startup, d, None);
+    let mut a = player(&realm, "Alice").await;
+    assert_eq!(
+        key_of(&realm, a.guid),
+        MapKey::world(0),
+        "in the open world"
+    );
+    let of = |realm: &Arc<Realm>, g: Guid| {
+        let map = realm.registry.online(g).unwrap().map();
+        async move {
+            map.query(|m| {
+                m.creatures
+                    .iter()
+                    .find(|(_, c)| c.entry == 1000)
+                    .map(|(_, c)| (c.guid, c.spawn_guid))
+            })
+            .await
+            .flatten()
+            .unwrap()
+        }
+    };
+    let (g, spawn) = of(&realm, a.guid).await;
+    assert_eq!((guid::counter(g), spawn), (70_001, Some(70_001)));
+    go(&realm, &mut a, DUNGEONS[0]).await;
+    let (_, spawn) = of(&realm, a.guid).await;
+    assert_eq!(spawn, Some(70_002), "its spawn kept in a copy");
+}

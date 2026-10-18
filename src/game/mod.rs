@@ -308,6 +308,8 @@ mod tests_p4_scripts_gnomes;
 #[cfg(test)]
 mod tests_p4_scripts_instances;
 #[cfg(test)]
+mod tests_p4_scripts_strat;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
