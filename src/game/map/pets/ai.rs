@@ -241,7 +241,7 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
 /// (Polymorph, Sap, Gouge): a pet leaves it be of its own accord, but an
 /// aggressive guardian (Thistle Tea's `Targeting.crowd_control_allowed?`,
 /// mangos's `HasAuraPetShouldAvoidBreaking`).
-fn breakable_cc(map: &Map, v: Guid) -> bool {
+pub(crate) fn breakable_cc(map: &Map, v: Guid) -> bool {
     use crate::game::map::auras::{
         AURA_MOD_CONFUSE, AURA_MOD_STUN, AURA_TRANSFORM, INTERRUPT_DAMAGE,
     };
