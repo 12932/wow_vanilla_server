@@ -144,3 +144,75 @@ fn a_rules_school_and_family_mask_pick_the_spells_it_takes() {
     assert!(!spell_allowed(Some(&trap), Some(&spell(2, 3, 0x4)), 0x4));
     assert!(!spell_allowed(Some(&trap), None, 0), "nor a swing");
 }
+
+/// `CMSG_CAST_SPELL`'s targets as the client lays them out, read as the
+/// session reads them: the spell, then the flags and each field in its
+/// order.
+fn read_targets(flags: u16, fields: &[u8]) -> Option<crate::game::map::spells::Targets> {
+    use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
+    let mut body = 116u32.to_le_bytes().to_vec();
+    body.extend(flags.to_le_bytes());
+    body.extend(fields);
+    let mut plain = ((body.len() + 4) as u16).to_be_bytes().to_vec();
+    plain.extend(0x12Eu32.to_le_bytes());
+    plain.extend(body);
+    match ClientOpcodeMessage::read_unencrypted(&plain[..]).ok()? {
+        ClientOpcodeMessage::CMSG_CAST_SPELL(c) => {
+            Some(crate::game::map::spells::targets_of(&c.targets))
+        }
+        _ => None,
+    }
+}
+
+/// A packed GUID's bytes.
+fn packed(g: u64) -> Vec<u8> {
+    let mut mask = 0u8;
+    let mut out = vec![0];
+    for (i, b) in g.to_le_bytes().iter().enumerate() {
+        if *b != 0 {
+            mask |= 1 << i;
+            out.push(*b);
+        }
+    }
+    out[0] = mask;
+    out
+}
+
+fn floats(v: [f32; 3]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// The targets of a cast as the client sends them: an item's GUID, a
+/// destination's three floats, a unit and a destination in their order,
+/// a corpse alone as an object; and what the server writes of a unit and a
+/// destination reads back as it was (Thistle Tea's `TargetCodec`).
+#[test]
+fn a_casts_targets_read_from_the_packet_and_round_trip() {
+    use wow_world_messages::Guid;
+    let item = read_targets(0x10, &packed(0x4000_00AA)).unwrap();
+    assert_eq!(item.item, Some(Guid::new(0x4000_00AA)));
+    let dest = read_targets(0x40, &floats([1.0, 2.0, 3.0])).unwrap();
+    let d = dest.dest.unwrap();
+    assert_eq!((d.x, d.y, d.z), (1.0, 2.0, 3.0));
+    let mut both = packed(0xAABBCC);
+    both.extend(floats([1.0, 2.0, 3.0]));
+    let both = read_targets(0x42, &both).unwrap();
+    assert_eq!(both.unit, Some(Guid::new(0xAABBCC)));
+    assert!(
+        both.dest
+            .is_some_and(|d| (d.x, d.y, d.z) == (1.0, 2.0, 3.0))
+    );
+    // A corpse alone (wow_messages reads a corpse's GUID after the
+    // locations, where 1.12 sends it before them).
+    for flags in [0x0200u16, 0x8000] {
+        let corpse = 0xF000_0000_0000_002A;
+        let t = read_targets(flags, &packed(corpse)).unwrap();
+        assert_eq!(t.object, Some(Guid::new(corpse)), "a corpse, {flags:#x}");
+    }
+    let back = crate::game::map::spells::targets_of(&crate::game::map::spells::wire_targets(&both));
+    assert_eq!(back.unit, both.unit);
+    assert!(
+        back.dest
+            .is_some_and(|d| (d.x, d.y, d.z) == (1.0, 2.0, 3.0))
+    );
+}
