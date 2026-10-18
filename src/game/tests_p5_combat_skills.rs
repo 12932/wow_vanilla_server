@@ -128,7 +128,14 @@ async fn melee_and_ranged_abilities_train_their_weapon_once_a_cast() {
             let p = m.players.get_mut(&ga).unwrap();
             skills::learn_skill(p, UNARMED, 1);
             skills::set_value(p, UNARMED, 10);
-            aura_of(m, ga, 90_863, crate::game::map::auras::AURA_MOD_DISARM, 0, 0);
+            aura_of(
+                m,
+                ga,
+                90_863,
+                crate::game::map::auras::AURA_MOD_DISARM,
+                0,
+                0,
+            );
             cast(m, ga, STRIKE_OF, brute);
             let disarmed = (skill(m, ga, UNARMED), skill(m, ga, SWORDS));
             (struck, dodged, shot, bolt, critter, disarmed)

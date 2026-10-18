@@ -97,9 +97,21 @@ async fn an_ability_adds_every_flat_before_every_percentage_and_a_spell_loses_at
         })
         .await
         .unwrap();
-    assert_eq!(r.0, [240, 150, 340, 0], "(100 + 20) x 2; (100 + 20 + 30) x 2 x 0.5; (100 + 20 + 50) x 2; none");
-    assert_eq!(r.1, [50, 0, 0], "a spell loses half at most, an ability all");
-    assert_eq!(r.2, [180, 100], "(100 + 40 x 0.5) x 1.5; frost takes neither");
+    assert_eq!(
+        r.0,
+        [240, 150, 340, 0],
+        "(100 + 20) x 2; (100 + 20 + 30) x 2 x 0.5; (100 + 20 + 50) x 2; none"
+    );
+    assert_eq!(
+        r.1,
+        [50, 0, 0],
+        "a spell loses half at most, an ability all"
+    );
+    assert_eq!(
+        r.2,
+        [180, 100],
+        "(100 + 40 x 0.5) x 1.5; frost takes neither"
+    );
 }
 
 /// Thistle Tea's "physical spells apply target bonuses and critical damage

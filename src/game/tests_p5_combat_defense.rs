@@ -42,5 +42,9 @@ async fn avoidance_auras_give_no_parry_or_block_a_player_has_not_learned() {
         .await
         .unwrap();
     assert_eq!(r.0, (0.0, 0.0), "nothing unlearned");
-    assert!(r.1.0 >= 25.0 && r.1.1 >= 25.0, "learned, the auras count: {:?}", r.1);
+    assert!(
+        r.1.0 >= 25.0 && r.1.1 >= 25.0,
+        "learned, the auras count: {:?}",
+        r.1
+    );
 }

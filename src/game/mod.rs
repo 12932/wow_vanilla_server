@@ -392,6 +392,10 @@ mod tests_p5_combat;
 #[cfg(test)]
 mod tests_p5_combat_damage;
 #[cfg(test)]
+mod tests_p5_combat_defense;
+#[cfg(test)]
+mod tests_p5_combat_engage;
+#[cfg(test)]
 mod tests_p5_combat_feedback;
 #[cfg(test)]
 mod tests_p5_combat_heal;
@@ -400,19 +404,15 @@ mod tests_p5_combat_kills;
 #[cfg(test)]
 mod tests_p5_combat_procs;
 #[cfg(test)]
+mod tests_p5_combat_rewards;
+#[cfg(test)]
 mod tests_p5_combat_skills;
-#[cfg(test)]
-mod tests_p5_combat_taken;
-#[cfg(test)]
-mod tests_p5_combat_engage;
 #[cfg(test)]
 mod tests_p5_combat_state;
 #[cfg(test)]
-mod tests_p5_combat_rewards;
+mod tests_p5_combat_taken;
 #[cfg(test)]
 mod tests_p5_combat_zone;
-#[cfg(test)]
-mod tests_p5_combat_defense;
 #[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]

@@ -58,7 +58,9 @@ fn begin(m: &mut Map, g: Guid, spell: u32) {
 }
 
 fn casting(m: &Map, g: Guid) -> Option<u32> {
-    m.caster(g).and_then(|c| c.casting.as_ref()).map(|c| c.spell)
+    m.caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .map(|c| c.spell)
 }
 
 /// Thistle Tea's "interrupts delayed peaceful casts once", "preserves

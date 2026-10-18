@@ -48,7 +48,13 @@ fn data() -> GameData {
 }
 
 /// Alice and Bob, grouped, in the dungeon; its map and its boss.
-async fn in_the_dungeon() -> (std::sync::Arc<crate::game::Realm>, Client, Client, MapHandle, Guid) {
+async fn in_the_dungeon() -> (
+    std::sync::Arc<crate::game::Realm>,
+    Client,
+    Client,
+    MapHandle,
+    Guid,
+) {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
     a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -141,7 +147,11 @@ async fn a_bosss_pulse_draws_in_the_living_and_leaves_the_fight_as_it_was() {
     let (by_npc, pulled, later) = r;
     assert_eq!(by_npc, (None, None), "a creature's pull draws no one in");
     assert_eq!(pulled, (true, None), "the dead left out");
-    assert_eq!(later, (Some(25.0), true, true), "Bob in, the rest as it was");
+    assert_eq!(
+        later,
+        (Some(25.0), true, true),
+        "Bob in, the rest as it was"
+    );
 }
 
 /// Thistle Tea's "combat exit clears the pulse": an evade ends the boss's
