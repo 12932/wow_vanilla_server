@@ -296,3 +296,125 @@ async fn a_blow_wears_each_player_by_their_own_roll() {
         "both; the victim alone; over the roll; nothing dealt; one's own harm"
     );
 }
+
+/// Two swords, each with a chance-on-hit spell of a hundred percent: the
+/// main hand's marks its victim; the off hand's marks it otherwise, and
+/// its second gives extra attacks.
+const MAIN_SWORD: u32 = 64_601;
+const OFF_SWORD: u32 = 64_602;
+const MAIN_MARK: u32 = 95_610;
+const OFF_MARK: u32 = 95_611;
+const EXTRA_MARK: u32 = 95_612;
+
+fn proc_world() -> crate::game::data::GameData {
+    use crate::game::data::items::ItemSpell;
+    use crate::game::tests_p3_entity::{aura_effect, spell};
+    let mut d = crate::game::tests_p3_combat::data();
+    d.spells.durations.insert(
+        9,
+        crate::game::data::spells::SpellDuration {
+            base: 30_000,
+            per_level: 0,
+            max: 30_000,
+        },
+    );
+    for id in [MAIN_MARK, OFF_MARK, EXTRA_MARK] {
+        // A harmful mark on the enemy (a snare of nothing).
+        let mut s = spell(
+            id,
+            &[aura_effect(
+                crate::game::map::auras::AURA_MOD_DECREASE_SPEED,
+                -1,
+                0,
+                6,
+            )],
+        );
+        s.duration_index = 9;
+        s.proc_chance = 100;
+        if id == EXTRA_MARK {
+            s.effects[1] = crate::game::data::spells::SpellEffect {
+                effect: 19,
+                base_points: 0,
+                base_dice: 1,
+                target_a: 1,
+                ..Default::default()
+            };
+        }
+        d.spells.spells.insert(id, s);
+    }
+    let sword = |entry: u32, procs: &[u32]| {
+        let mut t = d.items[&crate::game::tests_p3_combat::SWORD].clone();
+        t.entry = entry;
+        for (i, id) in procs.iter().enumerate() {
+            t.spells[i] = ItemSpell {
+                id: *id,
+                trigger: 2,
+                ..Default::default()
+            };
+        }
+        t
+    };
+    let main = sword(MAIN_SWORD, &[MAIN_MARK]);
+    let off = sword(OFF_SWORD, &[OFF_MARK, EXTRA_MARK]);
+    d.items.insert(MAIN_SWORD, main);
+    d.items.insert(OFF_SWORD, off);
+    d
+}
+
+/// Thistle Tea's `WeaponProcs` "offhand hits use only the current offhand
+/// weapon" and "extra attack recursion stops before spending enchantment
+/// charges": a main-hand hit procs the main hand's spell alone, an
+/// off-hand hit the off hand's; and an extra attack's hit doesn't proc the
+/// spell that gives extra attacks.
+#[tokio::test]
+async fn each_hand_procs_its_own_weapon_and_an_extra_attack_no_more() {
+    use crate::game::map::procs::{EX_NORMAL_HIT, Event, PROC_DONE_MELEE, PROC_DONE_OFFHAND};
+    let (_realm, _a, ga, map) =
+        crate::game::tests_p3_combat::setup_with(proc_world(), Class::Warrior).await;
+    let marks = on(&map, move |m| {
+        crate::game::tests_p3_combat::equip(m, ga, MAIN_SWORD, 15);
+        crate::game::tests_p3_combat::equip(m, ga, OFF_SWORD, 16);
+        let mut out = Vec::new();
+        for (offhand, extra_attack) in [(false, false), (true, false), (true, true)] {
+            let brute = crate::game::tests_p3_combat::spawn(
+                m,
+                ga,
+                crate::game::tests_p3_combat::BRUTE,
+                20,
+                3.0,
+            );
+            let e = Event {
+                actor: ga,
+                target: brute,
+                actor_flags: if offhand {
+                    PROC_DONE_OFFHAND
+                } else {
+                    PROC_DONE_MELEE
+                },
+                ex: EX_NORMAL_HIT,
+                damage: 10,
+                school: 1,
+                offhand,
+                extra_attack,
+                ..Default::default()
+            };
+            crate::game::map::enchant::weapon_procs(m, &e);
+            let has = |spell| {
+                crate::game::map::auras::auras(m, brute).is_some_and(|a| a.has_spell(spell))
+            };
+            out.push((has(MAIN_MARK), has(OFF_MARK), has(EXTRA_MARK)));
+            m.remove_creature(brute);
+        }
+        out
+    })
+    .await;
+    assert_eq!(
+        marks,
+        [
+            (true, false, false),
+            (false, true, true),
+            (false, true, false)
+        ],
+        "the main hand's; the off hand's; the off hand's but the extra attacks'"
+    );
+}
