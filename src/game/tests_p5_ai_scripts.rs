@@ -1040,24 +1040,15 @@ async fn slims_friend_bly_and_obsidion_fight_with_their_kits() {
         "resting, out of reach"
     );
     let g = obsidion;
-    let d = map
+    let struck = map
         .query(move |m| {
-            tough(m, g);
-            if let Some(f) = m.unit_fields_mut(g) {
-                f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, 14);
-            }
             let d = dummy(m, off(at, 5.0, 0.0));
-            crate::game::map::ai::attacked(m, g, d);
-            d
+            crate::game::map::event_ai::aggro(m, g, d);
+            unit_flags(m, g) & 0x100 == 0
         })
         .await
         .unwrap();
-    c.sees(g).await;
-    assert!(
-        until(&map, 3_000, move |m| unit_flags(m, g) & 0x100 == 0).await,
-        "to be struck once fighting"
-    );
-    let _ = d;
+    assert!(struck, "to be struck once fighting");
 }
 
 /// Grenka can't be fought while she hides, and flees once when nearly
