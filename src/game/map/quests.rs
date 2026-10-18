@@ -1532,6 +1532,8 @@ pub fn abandon(map: &mut Map, player: Guid, slot: u8) {
     };
     p.journal.clear(usize::from(slot));
     refresh_log(p, &data);
+    // The auras its being taken gave go with it.
+    crate::game::map::spell_areas::reconcile(map, player);
 }
 
 /// Whether `item` is a bag, worn or in the bank's bag slots, with

@@ -585,3 +585,64 @@ async fn a_quest_taken_done_is_told_complete() {
     assert!(taken, "taken");
     assert_eq!(told, Some(QUEST), "and told complete");
 }
+
+/// R4-12. A quest abandoned takes the auras its being taken gave
+/// (`spell_area`'s quest_start_active), as one rewarded does, rather than
+/// leaving them until the player changes area.
+#[tokio::test]
+async fn an_abandoned_quests_area_aura_goes() {
+    use super::tests_p3_cast_kit::{LASTS_LONG, aura, bare, effect, fast_realm, insert};
+    const QUEST: u32 = 990_470;
+    const BLESSING: u32 = 990_471;
+    let realm = fast_realm(|d| {
+        let mine = data();
+        d.creature_templates.extend(mine.creature_templates);
+        d.creature_spawns.extend(mine.creature_spawns);
+        d.creature_templates.get_mut(&VENDOR).unwrap().npc_flags |= 0x2;
+        d.npc.quests.insert(
+            QUEST,
+            crate::game::data::npc::Quest {
+                id: QUEST,
+                title: "Blessed".into(),
+                min_level: 1,
+                level: 1,
+                ..Default::default()
+            },
+        );
+        d.npc.creature_starts.insert(VENDOR, vec![QUEST]);
+        let mut s = bare(BLESSING, 0);
+        s.duration_index = LASTS_LONG;
+        effect(&mut s, 0, aura(29, 0, 5, 1));
+        insert(d, [s]);
+        d.scripts
+            .spell_areas
+            .push(crate::game::data::scripts::SpellArea {
+                spell: BLESSING,
+                quest_start: QUEST,
+                quest_start_active: true,
+                gender: 2,
+                autocast: true,
+                ..Default::default()
+            });
+    });
+    let mut a = Client::connect(&realm, "R4SA");
+    let g = a.enter("Blessed", Race::Human, Class::Warrior).await;
+    a.sees(vendor_guid()).await;
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: vendor_guid(),
+        quest_id: QUEST,
+    })
+    .await;
+    handled(&mut a).await;
+    let blessed = on_map(&realm, move |m| m.players[&g].auras.has_spell(BLESSING)).await;
+    assert!(blessed, "blessed while it is taken");
+    a.send(CMSG_QUESTLOG_REMOVE_QUEST { slot: 0 }).await;
+    handled(&mut a).await;
+    let (taken, still) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (p.journal.has(QUEST), p.auras.has_spell(BLESSING))
+    })
+    .await;
+    assert!(!taken, "abandoned");
+    assert!(!still, "and the blessing with it");
+}
