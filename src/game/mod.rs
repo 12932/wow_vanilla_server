@@ -48,6 +48,8 @@ mod tests_bugs4;
 #[cfg(test)]
 mod tests_bugs5;
 #[cfg(test)]
+mod tests_client_emu;
+#[cfg(test)]
 mod tests_combat;
 #[cfg(test)]
 mod tests_combat2;
@@ -98,6 +100,8 @@ mod tests_p3_aura2_spells;
 #[cfg(test)]
 mod tests_p3_aura2_sync;
 #[cfg(test)]
+mod tests_p3_cast;
+#[cfg(test)]
 mod tests_p3_cast2;
 #[cfg(test)]
 mod tests_p3_cast3;
@@ -113,8 +117,6 @@ mod tests_p3_cast7;
 mod tests_p3_cast8;
 #[cfg(test)]
 mod tests_p3_cast9;
-#[cfg(test)]
-mod tests_p3_cast;
 #[cfg(test)]
 mod tests_p3_cast_class;
 #[cfg(test)]
