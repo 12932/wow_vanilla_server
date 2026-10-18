@@ -2314,3 +2314,75 @@ async fn a_held_path_waits_on_its_summons_or_its_signal_and_runs_its_release() {
     assert_eq!(out.4, (true, 2), "run out unreleased: the expired script");
     assert!(out.5, "a summons hold run out lets go");
 }
+
+/// A pack that answers calls, hostile to humans, calling within 5 yards.
+const CALLERS: u32 = 41;
+const CALLER: u32 = 3_801;
+const SILENT_CALLER: u32 = 3_802;
+
+/// Thistle Tea's `call_for_help_step`: a creature dragged more than ten
+/// yards from its spawn calls its friends near each second; near its
+/// spawn, or between pulses, it is quiet; with no victim, or no range to
+/// call over, it calls no one.
+#[tokio::test]
+async fn a_creature_dragged_from_its_spawn_calls_for_help_each_second() {
+    let mut d = data();
+    let mut f = crate::game::tests_p3_combat::faction(CALLERS, 0x2, 0x1);
+    f.flags |= 0x1;
+    d.faction_templates.insert(CALLERS, f);
+    for (entry, range) in [(CALLER, 5.0), (SILENT_CALLER, 0.0)] {
+        let mut t = template(entry, 7);
+        t.faction = CALLERS;
+        t.call_for_help_range = range;
+        d.creature_templates.insert(entry, t);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        // A caller and a friend beside it; `away` yards from its spawn.
+        let pair = |m: &mut Map, entry: u32, yards: f32, away: f32| {
+            let g = spawn(m, ga, entry, 20, yards);
+            let h = spawn(m, ga, CALLER, 20, yards + 2.0);
+            crate::game::map::ai::attacked(m, g, ga);
+            if let Some(c) = m.creature_mut(g) {
+                c.home.x += away;
+                c.engagement.pulse_at = None;
+            }
+            (g, h)
+        };
+        let joined = |m: &Map, h: Guid| m.creature(h).is_some_and(|c| c.combat.attacking);
+        // Each pull's own call, made at once, is not what's asked: a
+        // helper put in after it.
+        let dragged = pair(m, CALLER, 3.0, 20.0);
+        let near = pair(m, CALLER, 8.0, 5.0);
+        let silent = pair(m, SILENT_CALLER, 13.0, 20.0);
+        let waiting = pair(m, CALLER, 18.0, 20.0);
+        for (_, h) in [dragged, near, silent, waiting] {
+            crate::game::map::combat::leave_combat(m, h);
+            crate::game::map::ai::enter_evade(m, h);
+            if let Some(c) = m.creature_mut(h) {
+                c.evading = false;
+            }
+        }
+        let now = m.now;
+        m.creature_mut(waiting.0).unwrap().engagement.pulse_at =
+            Some(now + std::time::Duration::from_secs(1));
+        crate::game::map::assistance::update(m);
+        let pulsed = m.creature(dragged.0).unwrap().engagement.pulse_at;
+        (
+            [dragged, near, silent, waiting].map(|(_, h)| joined(m, h)),
+            pulsed.map(|t| t.duration_since(now)),
+        )
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        [true, false, false, false],
+        "dragged, it calls; near its spawn, with no range, or between pulses, not"
+    );
+    assert_eq!(
+        out.1,
+        Some(std::time::Duration::from_secs(1)),
+        "again in a second"
+    );
+}
