@@ -133,9 +133,20 @@ fn pull(map: &mut Map, caster: Guid, target: Guid, speed: f32) {
     p.outbound.send_frame(b.frame(SMSG_MOVE_KNOCK_BACK));
 }
 
-/// The item cast from turns into `entry` where it lies, its enchantments
-/// kept and its wear in proportion.
+/// The item cast from turns into `entry` where it lies, if the new item may
+/// lie there (mangos's `ConvertItem`, Thistle Tea's replacements): in a bag
+/// it goes in, worn where it may be worn (a two-hander putting the off
+/// hand's item away, if there is room), a bag only if empty, and a unique
+/// one only if no other is had, the bank's counted. It is a new item of its
+/// own: its own random property and time, the old one's permanent and
+/// temporary enchantments, and its wear in proportion. Refused, the old
+/// item stays and the player is told why.
 pub fn change_item(map: &mut Map, g: Guid, item: Guid, entry: u32) {
+    use crate::game::map::enchant;
+    use crate::game::map::inventory::{
+        self, BAG_END, BAG_START, BANK_BAG_END, BANK_BAG_START, Fail, SLOT_MAIN_HAND, SLOT_OFF_HAND,
+    };
+    use crate::game::store::BAG_PLAYER;
     let data = map.realm.data.clone();
     let Some(new) = data.item(entry) else {
         return;
@@ -146,22 +157,77 @@ pub fn change_item(map: &mut Map, g: Guid, item: Guid, entry: u32) {
     let Some(i) = p.items.iter().position(|it| it.guid == item) else {
         return;
     };
-    let old = p.items.remove(i);
-    let mut row = old.to_row();
+    let old = &p.items[i];
+    let at = (old.bag, old.slot);
+    let mut replacement =
+        crate::game::map::player::Item::new(&data, old.guid, g, entry, at.0, at.1, 1);
+    let property = enchant::roll_random_property(&data, entry, &mut rand::rng());
+    if property != 0 {
+        enchant::set_random_property(&data, &mut replacement, property);
+    }
+    for slot in [enchant::PERM_SLOT, enchant::TEMP_SLOT] {
+        let e = enchant::get(old, slot);
+        if e.id != 0 {
+            enchant::set(&mut replacement, slot, e);
+        }
+    }
     let (wear, max) = (
         old.fields.get_u32(ITEM_FIELD_DURABILITY),
         old.fields.get_u32(ITEM_FIELD_MAXDURABILITY),
     );
-    row.entry = entry;
-    row.durability = if new.max_durability > 0 && max > 0 && wear < max {
+    if new.max_durability > 0 && max > 0 && wear < max {
         let loss = (new.max_durability * (max - wear) / max).max(1);
-        new.max_durability.saturating_sub(loss)
+        replacement.fields.set_u32(
+            ITEM_FIELD_DURABILITY,
+            new.max_durability.saturating_sub(loss),
+        );
+    }
+    let bag_slot = at.0 == BAG_PLAYER
+        && ((BAG_START..BAG_END).contains(&at.1) || (BANK_BAG_START..BANK_BAG_END).contains(&at.1));
+    let others = p
+        .items
+        .iter()
+        .filter(|x| x.entry == entry && x.guid != item)
+        .filter(|x| !crate::game::map::vendor::in_buyback(x.bag, x.slot))
+        .count() as u32;
+    let worn = at.0 == BAG_PLAYER && at.1 < inventory::EQUIPMENT_END;
+    let why = if bag_slot && p.items.iter().any(|x| x.bag == at.1) {
+        Some(Fail::OnlyEmptyBags)
+    } else if new.max_count > 0 && others + 1 > new.max_count {
+        Some(Fail::CantCarryMore)
     } else {
-        new.max_durability
+        inventory::may_place(p, &data, &replacement, at.0, at.1).err()
     };
+    // A two-hander's off hand put away: where it can be carried.
+    let off_hand = match p.item_at(BAG_PLAYER, SLOT_OFF_HAND) {
+        Some(off)
+            if why.is_none() && at == (BAG_PLAYER, SLOT_MAIN_HAND) && new.inventory_type == 17 =>
+        {
+            let t = data.item(p.items[off].entry);
+            match crate::game::map::items::carry_slots(&data, p, t)
+                .into_iter()
+                .find(|s| p.item_at(s.0, s.1).is_none())
+            {
+                Some(place) => Some(Ok((off, place))),
+                None => Some(Err(Fail::TwoHanded)),
+            }
+        }
+        _ => None,
+    };
+    if let Some(f) = why.or(off_hand.and_then(|o| o.err())) {
+        inventory::send_fail(p, f, item);
+        return;
+    }
+    if let Some(Ok((off, (bag, slot)))) = off_hand {
+        p.items[off].bag = bag;
+        p.items[off].slot = slot;
+    }
+    if worn || bag_slot {
+        crate::game::map::items::on_equip(&data, &mut replacement);
+    }
+    let old = p.items.remove(i);
     p.outbound
         .send(&wow_world_messages::vanilla::SMSG_DESTROY_OBJECT { guid: old.guid });
-    let replacement = crate::game::map::player::Item::from_row(&data, &row, g);
     let mut batch = crate::game::update::Batch::new();
     batch.push(&crate::game::update::create_block(
         &replacement.create(),

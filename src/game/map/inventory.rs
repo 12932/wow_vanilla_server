@@ -499,6 +499,19 @@ pub fn can_equip(p: &Player, prof: &Proficiency, t: &ItemTemplate, slot: u8) -> 
     if !slots_for(t.inventory_type).contains(&slot) {
         return Err(Fail::DoesntGoToSlot);
     }
+    can_use(p, prof, t)?;
+    // A weapon in the off hand takes Dual Wield, learned (Thistle Tea's
+    // and vmangos's `dual_wield?`), not a level.
+    if slot == SLOT_OFF_HAND && wants_dual_wield(t) && !prof.dual_wield {
+        return Err(Fail::CantDualWield);
+    }
+    Ok(())
+}
+
+/// Whether `p`, of proficiency `prof`, may use an item of template `t`, as
+/// it is put on and as it is used (mangos's `CanUseItem`, Thistle Tea's
+/// `ItemEligibility`): its class and race, level, honor rank, and skill.
+pub fn can_use(p: &Player, prof: &Proficiency, t: &ItemTemplate) -> Result<(), Fail> {
     if t.allowable_class != -1
         && t.allowable_class != 0
         && t.allowable_class & (1 << (p.row.class - 1)) == 0
@@ -517,13 +530,7 @@ pub fn can_equip(p: &Player, prof: &Proficiency, t: &ItemTemplate, slot: u8) -> 
     if !crate::game::map::pvp::rank_allows_use(p, t) {
         return Err(Fail::Rank);
     }
-    proficient(p, prof, t)?;
-    // A weapon in the off hand takes Dual Wield, learned (Thistle Tea's
-    // and vmangos's `dual_wield?`), not a level.
-    if slot == SLOT_OFF_HAND && wants_dual_wield(t) && !prof.dual_wield {
-        return Err(Fail::CantDualWield);
-    }
-    Ok(())
+    proficient(p, prof, t)
 }
 
 /// Gear worn that its wearer can no longer use (a character made when
@@ -619,13 +626,42 @@ fn plan(
     t: &ItemTemplate,
     count: u32,
 ) -> Result<(Vec<(usize, u32)>, Vec<(u8, u8, u32)>), Fail> {
-    let entry = t.entry;
-    let stack = t.stackable.max(1);
-    if t.max_count > 0 && p.count_of(entry) + count > t.max_count {
+    if t.max_count > 0 && p.count_of(t.entry) + count > t.max_count {
         return Err(Fail::CantCarryMore);
     }
+    let (mut onto, mut new_slots) = (Vec::new(), Vec::new());
+    let left = plan_rest(p, data, t, count, &mut onto, &mut new_slots);
+    if left > 0 {
+        return Err(Fail::InventoryFull);
+    }
+    Ok((onto, new_slots))
+}
+
+/// Whether an item may take more of its kind onto it: not an opened
+/// container with its loot still in it (mangos's `CanBeMergedPartlyWith`,
+/// "already looted").
+fn mergeable(p: &Player, item: &Item) -> bool {
+    crate::game::map::items_misc::kept_loot(&item.data).is_none()
+        && p.misc
+            .item_loot
+            .as_ref()
+            .is_none_or(|(l, _)| *l != item.guid)
+}
+
+/// [`plan`]'s search for what is left of `count` once `onto` and
+/// `new_slots` are taken: onto the stacks carried, then into free carried
+/// slots. What still doesn't fit.
+fn plan_rest(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+    onto: &mut Vec<(usize, u32)>,
+    new_slots: &mut Vec<(u8, u8, u32)>,
+) -> u32 {
+    let entry = t.entry;
+    let stack = t.stackable.max(1);
     let mut left = count;
-    let mut onto: Vec<(usize, u32)> = Vec::new();
     for (i, item) in p.items.iter().enumerate() {
         if left == 0 {
             break;
@@ -636,26 +672,116 @@ fn plan(
             && item.carried()
             && item.count() < stack
             && !(item.bag == BAG_PLAYER && item.slot < EQUIPMENT_END)
+            && !onto.iter().any(|(k, _)| *k == i)
+            && mergeable(p, item)
         {
             let add = (stack - item.count()).min(left);
             onto.push((i, add));
             left -= add;
         }
     }
-    let mut new_slots = Vec::new();
-    if left > 0 {
-        for (bag, slot) in crate::game::map::items::carry_slots(data, p, Some(t)) {
-            if left == 0 {
-                break;
+    for (bag, slot) in crate::game::map::items::carry_slots(data, p, Some(t)) {
+        if left == 0 {
+            break;
+        }
+        if p.item_at(bag, slot).is_some()
+            || new_slots.iter().any(|(b, s, _)| (*b, *s) == (bag, slot))
+        {
+            continue;
+        }
+        let n = left.min(stack);
+        new_slots.push((bag, slot, n));
+        left -= n;
+    }
+    left
+}
+
+/// [`plan`] from where the client dropped a new item (a purchase's bag and
+/// slot): that slot first, empty or a stack of its kind with room; then
+/// that bag's stacks and free slots (slot 255: those alone); then wherever
+/// [`plan`] puts the rest. A slot that isn't one, holds something else or
+/// a full stack, or a bag not made for the item, refuses it. As mangos's
+/// `_CanStoreItem` searches, and Thistle Tea's explicit destinations.
+#[allow(clippy::type_complexity)]
+fn plan_to(
+    p: &Player,
+    data: &GameData,
+    t: &ItemTemplate,
+    count: u32,
+    to: (u8, u8),
+) -> Result<(Vec<(usize, u32)>, Vec<(u8, u8, u32)>), Fail> {
+    use crate::game::map::items::{KEYRING_START, fits_bag, is_key, keyring_size};
+    let (bag, slot) = to;
+    if t.max_count > 0 && p.count_of(t.entry) + count > t.max_count {
+        return Err(Fail::CantCarryMore);
+    }
+    let stack = t.stackable.max(1);
+    let slots: Vec<u8> = if bag == BAG_PLAYER {
+        let keys = if is_key(t) {
+            KEYRING_START..KEYRING_START + keyring_size(p.level())
+        } else {
+            0..0
+        };
+        keys.chain(PACK_START..PACK_END).collect()
+    } else if (BAG_START..BAG_END).contains(&bag) && p.bag_size(data, bag) > 0 {
+        (0..p.bag_size(data, bag)).collect()
+    } else {
+        return Err(Fail::DoesntGoToSlot);
+    };
+    if slot != u8::MAX && !slots.contains(&slot) {
+        return Err(Fail::DoesntGoToSlot);
+    }
+    if bag != BAG_PLAYER && !fits_bag(data, p, bag, Some(t)) {
+        return Err(Fail::DoesntGoIntoBag);
+    }
+    let mut left = count;
+    let (mut onto, mut new_slots) = (Vec::new(), Vec::new());
+    if slot != u8::MAX {
+        match p.item_at(bag, slot) {
+            None => {
+                let n = left.min(stack);
+                new_slots.push((bag, slot, n));
+                left -= n;
             }
-            if p.item_at(bag, slot).is_some() {
-                continue;
+            Some(i)
+                if p.items[i].entry == t.entry
+                    && p.items[i].count() < stack
+                    && mergeable(p, &p.items[i]) =>
+            {
+                let n = (stack - p.items[i].count()).min(left);
+                onto.push((i, n));
+                left -= n;
             }
-            let n = left.min(stack);
-            new_slots.push((bag, slot, n));
+            Some(_) => return Err(Fail::CantStack),
+        }
+    }
+    // That bag's stacks, then its free slots.
+    for &s in &slots {
+        if left == 0 {
+            break;
+        }
+        if let Some(i) = p.item_at(bag, s)
+            && p.items[i].entry == t.entry
+            && p.items[i].count() < stack
+            && !onto.iter().any(|(k, _)| *k == i)
+            && mergeable(p, &p.items[i])
+        {
+            let n = (stack - p.items[i].count()).min(left);
+            onto.push((i, n));
             left -= n;
         }
     }
+    for &s in &slots {
+        if left == 0 {
+            break;
+        }
+        if p.item_at(bag, s).is_none() && !new_slots.iter().any(|(b, x, _)| (*b, *x) == (bag, s)) {
+            let n = left.min(stack);
+            new_slots.push((bag, s, n));
+            left -= n;
+        }
+    }
+    let left = plan_rest(p, data, t, left, &mut onto, &mut new_slots);
     if left > 0 {
         return Err(Fail::InventoryFull);
     }
@@ -797,6 +923,41 @@ pub fn add_created_item(map: &mut Map, g: Guid, entry: u32, count: u32) -> Resul
     store(map, g, entry, count, true, NewItemCreationType::Created, 0)
 }
 
+/// Whether `count` of item `entry` fits from where the client dropped it,
+/// `to` (a bag and slot, slot 255 for anywhere in the bag), as
+/// [`add_item_to`] would put it.
+pub fn room_at(
+    p: &Player,
+    data: &GameData,
+    entry: u32,
+    count: u32,
+    to: (u8, u8),
+) -> Result<(), Fail> {
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    plan_to(p, data, t, count, to).map(|_| ())
+}
+
+/// [`add_item`] from where the client dropped the item, `to`: that slot,
+/// then that bag, then anywhere it goes ([`plan_to`]).
+pub fn add_item_to(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    to: (u8, u8),
+) -> Result<(), Fail> {
+    store_at(
+        map,
+        g,
+        entry,
+        count,
+        true,
+        NewItemCreationType::Received,
+        0,
+        Some(to),
+    )
+}
+
 fn store(
     map: &mut Map,
     g: Guid,
@@ -806,6 +967,20 @@ fn store(
     creation: NewItemCreationType,
     property: u32,
 ) -> Result<(), Fail> {
+    store_at(map, g, entry, count, alert, creation, property, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_at(
+    map: &mut Map,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    alert: bool,
+    creation: NewItemCreationType,
+    property: u32,
+    to: Option<(u8, u8)>,
+) -> Result<(), Fail> {
     let data = map.realm.data.clone();
     let Some(t) = data.item(entry).cloned() else {
         return Err(Fail::NotFound);
@@ -814,7 +989,10 @@ fn store(
     let Some(p) = map.players.get_mut(&g) else {
         return Err(Fail::NotFound);
     };
-    let (onto, new_slots) = plan(p, &data, &t, count)?;
+    let (onto, new_slots) = match to {
+        Some(to) => plan_to(p, &data, &t, count, to)?,
+        None => plan(p, &data, &t, count)?,
+    };
     // Where it went, for the push: the item, and its slot; a stack it
     // joined is no one slot (-1, Thistle Tea's and mangos's).
     let mut last = None;
@@ -902,7 +1080,13 @@ fn slot_exists(p: &Player, data: &GameData, bag: u8, slot: u8) -> bool {
 
 /// Whether an item may go to `(bag, slot)`: equipment rules for equipment
 /// slots, empty bags only into bag slots, no bag into itself.
-fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Result<(), Fail> {
+pub(crate) fn may_place(
+    p: &Player,
+    data: &GameData,
+    item: &Item,
+    bag: u8,
+    slot: u8,
+) -> Result<(), Fail> {
     if !slot_exists(p, data, bag, slot) {
         return Err(Fail::DoesntGoToSlot);
     }
@@ -984,6 +1168,34 @@ fn may_place(p: &Player, data: &GameData, item: &Item, bag: u8, slot: u8) -> Res
     }
     if bag != BAG_PLAYER && !crate::game::map::items::fits_bag(data, p, bag, t) {
         return Err(Fail::DoesntGoIntoBag);
+    }
+    Ok(())
+}
+
+/// Whether a new item `entry` (a purchase) may be put on in `slot` of the
+/// equipment or the bag bar, from the carried slot it would first go to
+/// ([`move_item`]'s rules): room for it there, and for what it puts away:
+/// a two-hander over a weapon puts that where it was, and the off hand's
+/// item wants another slot (mangos's `CanEquipNewItem`, "inventory is
+/// full").
+pub fn may_equip_new(p: &Player, data: &GameData, entry: u32, slot: u8) -> Result<(), Fail> {
+    let t = data.item(entry).ok_or(Fail::NotFound)?;
+    let free: Vec<(u8, u8)> = crate::game::map::items::carry_slots(data, p, Some(t))
+        .into_iter()
+        .filter(|(b, s)| p.item_at(*b, *s).is_none())
+        .collect();
+    let Some(&(bag, at)) = free.first() else {
+        return Err(Fail::InventoryFull);
+    };
+    let new = Item::new(data, Guid::zero(), p.guid, entry, bag, at, 1);
+    may_place(p, data, &new, BAG_PLAYER, slot)?;
+    if slot == SLOT_MAIN_HAND
+        && t.inventory_type == 17
+        && p.item_at(BAG_PLAYER, SLOT_OFF_HAND).is_some()
+        && p.item_at(BAG_PLAYER, SLOT_MAIN_HAND).is_some()
+        && free.len() < 2
+    {
+        return Err(Fail::InventoryFull);
     }
     Ok(())
 }
@@ -1268,6 +1480,17 @@ pub fn split(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8), count: u32) {
     let Some(a) = p.item_at(from.0, from.1) else {
         return;
     };
+    // An opened container with its loot still in it isn't split (mangos's
+    // `SplitItem`, Thistle Tea's "item locked").
+    if !mergeable(p, &p.items[a]) {
+        let ag = p.items[a].guid;
+        crate::game::map::items_misc::fail(
+            p,
+            wow_world_messages::vanilla::InventoryResult::ItemLocked,
+            ag,
+        );
+        return;
+    }
     if count == 0 || count >= p.items[a].count() {
         let ag = p.items[a].guid;
         send_fail(p, Fail::SplitTooMany, ag);

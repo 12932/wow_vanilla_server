@@ -2389,6 +2389,28 @@ pub fn use_item(map: &mut Map, player: Guid, bag: u8, slot: u8, t: &SpellCastTar
     let Some(template) = data.items.get(&item.entry) else {
         return;
     };
+    // Used only by whom it may be worn by: its class and race, level, honor
+    // rank, skill and standing (mangos's `CanUseItem` at
+    // `HandleUseItemOpcode`, Thistle Tea's `ItemEligibility`).
+    let prof = crate::game::map::inventory::Proficiency::of(p, &data);
+    let usable = crate::game::map::inventory::can_use(p, &prof, template).and_then(|()| {
+        if template.required_reputation_faction != 0
+            && !crate::game::map::reputation::meets(
+                p,
+                &data,
+                template.required_reputation_faction,
+                template.required_reputation_rank,
+            )
+        {
+            Err(crate::game::map::inventory::Fail::Reputation)
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(f) = usable {
+        crate::game::map::inventory::send_fail(p, f, item_guid);
+        return;
+    }
     // Trigger 0: on use.
     let Some((index, spell)) = template
         .spells

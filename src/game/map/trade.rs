@@ -267,7 +267,14 @@ fn tradable(p: &crate::game::map::player::Player, i: usize, traded: bool) -> boo
         (BAG_START..BAG_END).contains(&item.bag)
     };
     let bound = item.fields.get_u32(ITEM_FIELD_FLAGS) & 0x1 != 0;
-    carried && !(traded && bound)
+    // An opened container with its loot still in it isn't traded
+    // (mangos's `CanBeTraded`, Thistle Tea's "item locked").
+    let opened = crate::game::map::items_misc::kept_loot(&item.data).is_some()
+        || p.misc
+            .item_loot
+            .as_ref()
+            .is_some_and(|(l, _)| *l == item.guid);
+    carried && !(traded && (bound || opened))
 }
 
 /// Whether `g`'s offer is still what the partner was shown: each item

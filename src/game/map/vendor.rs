@@ -182,6 +182,19 @@ fn buy_failed(map: &Map, player: Guid, npc: Guid, item: u32, result: BuyResult) 
 
 /// `CMSG_BUY_ITEM`: `amount` stacks of an item's buy count.
 pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
+    buy_to(map, player, npc, item, amount, None);
+}
+
+/// [`buy`], the item stored from `to` (a bag and slot) if one is given
+/// ([`inventory::add_item_to`]). Whether it was bought.
+fn buy_to(
+    map: &mut Map,
+    player: Guid,
+    npc: Guid,
+    item: u32,
+    amount: u8,
+    to: Option<(u8, u8)>,
+) -> bool {
     // The dead buy nothing, and are told nothing; a vendor out of reach
     // (or dead, or not one) is too far (mangos's `BuyItemFromVendor`).
     let alive = map
@@ -189,26 +202,26 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         .get(&player)
         .is_some_and(|p| p.death == crate::game::map::death::Death::Alive);
     if !alive {
-        return;
+        return false;
     }
     let Some(entry) = vendor_entry(map, player, npc, NPC_FLAG_VENDOR) else {
         buy_failed(map, player, npc, item, BuyResult::DistanceTooFar);
-        return;
+        return false;
     };
     let data = map.realm.data.clone();
     let list = data.vendor_items(entry);
     let Some((index, v)) = list.iter().enumerate().find(|(_, v)| v.item == item) else {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
-        return;
+        return false;
     };
     if v.condition != 0
         && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player))
     {
         buy_failed(map, player, npc, item, BuyResult::CantFindItem);
-        return;
+        return false;
     }
     let Some(t) = data.item(item) else {
-        return;
+        return false;
     };
     // A standing short of the item's: its own faction's, else the
     // vendor's (mangos's `BuyItemFromVendor`, Thistle Tea's
@@ -221,7 +234,7 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         !crate::game::map::reputation::meets(p, &data, faction, t.required_reputation_rank)
     }) {
         buy_failed(map, player, npc, item, BuyResult::ReputationRequire);
-        return;
+        return false;
     }
     if map
         .players
@@ -229,7 +242,7 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         .is_some_and(|p| !crate::game::map::pvp::rank_allows_buy(p, t))
     {
         buy_failed(map, player, npc, item, BuyResult::RankRequire);
-        return;
+        return false;
     }
     // A standing the item asks for: with its faction, or the vendor's if
     // it names a rank alone, as mangos's BuyItemFromVendor and Thistle
@@ -246,24 +259,28 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
         })
     {
         buy_failed(map, player, npc, item, BuyResult::ReputationRequire);
-        return;
+        return false;
     }
     let count = u32::from(amount.max(1)) * t.buy_count.max(1);
     let left = stock_left(map, npc, v, t.buy_count);
     if left != u32::MAX && left < count {
         buy_failed(map, player, npc, item, BuyResult::ItemAlreadySold);
-        return;
+        return false;
     }
     let cost = crate::game::map::reputation::price(map, player, npc, price(t, count));
     if map.players.get(&player).is_none_or(|p| p.money() < cost) {
         buy_failed(map, player, npc, item, BuyResult::NotEnoughtMoney);
-        return;
+        return false;
     }
-    if let Err(f) = inventory::add_item(map, player, item, count, true) {
+    let added = match to {
+        Some(to) => inventory::add_item_to(map, player, item, count, to),
+        None => inventory::add_item(map, player, item, count, true),
+    };
+    if let Err(f) = added {
         if let Some(p) = map.players.get(&player) {
             inventory::send_fail(p, f, Guid::zero());
         }
-        return;
+        return false;
     }
     // A purchase starts the restock interval over.
     let new_left = if v.max_count > 0 {
@@ -287,13 +304,17 @@ pub fn buy(map: &mut Map, player: Guid, npc: Guid, item: u32, amount: u8) {
             amount_bought: count,
         });
     }
+    true
 }
 
-/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, and a new item put
-/// where the client dropped it: a slot of the backpack (the bag is the
-/// player) or of a bag worn, or (slot 255) anywhere in that bag, as
-/// mangos's BuyItemFromVendor stores it at the position asked and Thistle
-/// Tea's `buy_in_slot` sends it.
+/// `CMSG_BUY_ITEM_IN_SLOT`: bought as [`buy`] buys, and put where the
+/// client dropped it: into that slot of the backpack (the bag is the
+/// player) or of a bag worn, empty or a stack of its kind; then the rest in
+/// that bag, then anywhere (slot 255: anywhere in that bag first), as
+/// mangos's `BuyItemFromVendor` stores it at the position asked and Thistle
+/// Tea's explicit destinations. Dropped on an equipment or bag slot, it is
+/// put on there (a two-hander putting the off hand's item away), and not
+/// bought if it can't be.
 pub fn buy_in_slot(
     map: &mut Map,
     player: Guid,
@@ -320,39 +341,39 @@ pub fn buy_in_slot(
     let Some(bag) = bag else {
         return;
     };
+    let worn = bag == BAG_PLAYER && slot < BAG_END;
+    if !worn {
+        buy_to(map, player, npc, item, amount, Some((bag, slot)));
+        return;
+    }
+    // Put on (mangos's `CanEquipNewItem`): one item, that may go there.
+    let count = u32::from(amount.max(1)) * data.item(item).map_or(1, |t| t.buy_count.max(1));
+    let ready = if count != 1 {
+        Err(Fail::DoesntGoToSlot)
+    } else {
+        inventory::may_equip_new(p, &data, item, slot)
+    };
+    if let Err(f) = ready {
+        inventory::send_fail(p, f, Guid::zero());
+        return;
+    }
     let before: Vec<Guid> = p
         .items
         .iter()
         .filter(|i| i.entry == item)
         .map(|i| i.guid)
         .collect();
-    buy(map, player, npc, item, amount);
-    let Some(p) = map.players.get(&player) else {
+    if !buy_to(map, player, npc, item, amount, None) {
         return;
-    };
-    let Some(new) = p
-        .items
-        .iter()
-        .find(|i| i.entry == item && !before.contains(&i.guid))
-        .map(|i| (i.bag, i.slot))
-    else {
-        return;
-    };
-    let (first, end) = if bag == BAG_PLAYER {
-        (inventory::PACK_START, inventory::PACK_END)
-    } else {
-        (0, p.bag_size(&data, bag))
-    };
-    let to = if slot == u8::MAX {
-        (first..end).find(|s| p.item_at(bag, *s).is_none())
-    } else {
-        Some(slot).filter(|s| (first..end).contains(s) && p.item_at(bag, *s).is_none())
-    };
-    if let Some(to) = to
-        && new != (bag, to)
-        && !(slot == u8::MAX && new.0 == bag)
-    {
-        inventory::move_item(map, player, new, (bag, to));
+    }
+    let new = map.players.get(&player).and_then(|p| {
+        p.items
+            .iter()
+            .find(|i| i.entry == item && !before.contains(&i.guid))
+            .map(|i| (i.bag, i.slot))
+    });
+    if let Some(new) = new {
+        inventory::move_item(map, player, new, (BAG_PLAYER, slot));
     }
 }
 
