@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::items::ItemTemplate;
@@ -196,4 +197,155 @@ async fn a_change_out_of_a_fight_or_of_armor_or_haste_leaves_the_swing_alone() {
     assert_eq!(armor.0, Some(0), "a helm");
     assert_eq!(off.0, Some(0), "a weapon taken off");
     assert_eq!(hasted.0, Some(1200), "haste mid-swing");
+}
+
+/// Food on `g`: an aura that standing ends.
+fn food(m: &mut Map, g: Guid, id: u32) {
+    let mut effects = [crate::game::data::spells::SpellEffect::default(); 3];
+    effects[0] = crate::game::data::spells::SpellEffect {
+        effect: 6,
+        aura: crate::game::map::auras::AURA_DUMMY,
+        target_a: 1,
+        ..Default::default()
+    };
+    let s = crate::game::data::spells::SpellTemplate {
+        id,
+        name: "Food".into(),
+        equipped_item_class: -1,
+        aura_interrupt_flags: crate::game::map::auras::INTERRUPT_NOT_SEATED,
+        duration_index: 0,
+        effects,
+        ..Default::default()
+    };
+    let _ = crate::game::map::auras::apply_spell(
+        m,
+        g,
+        g,
+        &s,
+        &[(0, 0)],
+        crate::game::map::auras::Context::default(),
+    );
+}
+
+fn posture(m: &Map, g: Guid) -> (u8, bool) {
+    let p = &m.players[&g];
+    let fed = crate::game::map::auras::auras(m, g)
+        .is_some_and(|a| a.holders.iter().any(|h| h.spell == 90_510));
+    (p.stand_state(), fed)
+}
+
+/// Thistle Tea's "direct damage stands all seated poses and removes
+/// sitting-only auras once" and "periodic damage ... retain their
+/// posture", as mangos's `DealDamage` has it since 1.5: a player sitting,
+/// sleeping or kneeling who is struck (a swing that misses too, or a
+/// spell) stands, told so, and their food ends; a periodic tick leaves
+/// them as they were; god mode, nothing.
+#[tokio::test]
+async fn a_seated_player_struck_stands_and_their_food_ends_but_a_tick_leaves_them_seated() {
+    let (_realm, mut a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let brute = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 2.0);
+            let c = m.creature_mut(brute).unwrap();
+            c.fields.set_f32(UNIT_FIELD_MINDAMAGE, 0.0);
+            c.fields.set_f32(UNIT_FIELD_MAXDAMAGE, 0.0);
+            brute
+        })
+        .await
+        .unwrap();
+    for (state, outcome) in [
+        (UnitStandState::Sit, combat::Outcome::Miss),
+        (UnitStandState::Sleep, combat::Outcome::Hit),
+        (UnitStandState::Kneel, combat::Outcome::Dodge),
+    ] {
+        a.send(CMSG_STANDSTATECHANGE {
+            animation_state: state,
+        })
+        .await;
+        a.wait_for("the posture", |m| match m {
+            ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(u) if u.state == state => Some(()),
+            _ => None,
+        })
+        .await;
+        let (seated, struck) = map
+            .query(move |m| {
+                food(m, ga, 90_510);
+                let seated = posture(m, ga);
+                forced_swing(m, brute, ga, outcome);
+                (seated, posture(m, ga))
+            })
+            .await
+            .unwrap();
+        assert_eq!(seated, (state.as_int(), true), "{state:?} with food");
+        assert_eq!(struck, (0, false), "{state:?} struck: {outcome:?}");
+        a.wait_for("standing", |m| match m {
+            ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(u) if u.state == UnitStandState::Stand => {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    }
+    // A tick of a periodic aura: still seated, still fed; a spell's blow
+    // stands them.
+    a.send(CMSG_STANDSTATECHANGE {
+        animation_state: UnitStandState::Sit,
+    })
+    .await;
+    a.wait_for("sitting", |m| match m {
+        ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(u) if u.state == UnitStandState::Sit => {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    let (ticked, spell) = map
+        .query(move |m| {
+            food(m, ga, 90_510);
+            combat::deal_periodic_damage(m, brute, ga, 5, 1, None, false);
+            let ticked = posture(m, ga);
+            let s = m.realm.data.spells.get(STRIKE).cloned().unwrap();
+            crate::game::map::spells::spell_damage(m, brute, ga, &s, 5);
+            (ticked, posture(m, ga))
+        })
+        .await
+        .unwrap();
+    assert_eq!(ticked, (1, true), "a tick");
+    assert_eq!(spell, (0, false), "a spell");
+}
+
+/// Thistle Tea's "seated physical abilities crit before avoidance" and
+/// "cannot-crit ... retain precedence over seated crits": an ability on a
+/// seated player crits ahead of the dodge it would have rolled, unless it
+/// can't crit; a player with no chance at all to crit doesn't (mangos's
+/// `CanCrit`, a chance of at least 0.005%), where Thistle Tea crits anyway.
+#[test]
+fn an_ability_on_a_seated_player_crits_before_avoidance_unless_it_cant_crit() {
+    let seated = combat::Roll {
+        victim_is_player: true,
+        standing: false,
+        dodge: 100.0,
+        ..even(60)
+    };
+    // The roll would land in the dodge.
+    assert_eq!(combat::roll_special(&seated, 9_999, 9_999), combat::Outcome::Crit);
+    let cant = combat::Roll {
+        can_crit: false,
+        ..seated
+    };
+    assert_ne!(combat::roll_special(&cant, 9_999, 0), combat::Outcome::Crit);
+    let no_chance = combat::Roll { crit: 0.0, ..seated };
+    assert_ne!(combat::roll_special(&no_chance, 9_999, 0), combat::Outcome::Crit);
+    // A creature's base crit stands in: it crits a seated player.
+    let creature = combat::Roll {
+        attacker_is_player: false,
+        crit: 0.0,
+        ..seated
+    };
+    assert_eq!(combat::roll_special(&creature, 9_999, 9_999), combat::Outcome::Crit);
+    let standing = combat::Roll {
+        standing: true,
+        ..seated
+    };
+    assert_eq!(combat::roll_special(&standing, 9_999, 9_999), combat::Outcome::Dodge);
 }

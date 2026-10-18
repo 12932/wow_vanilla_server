@@ -1117,6 +1117,8 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     {
         p.outbound.send_frame(frame);
     }
+    // Absorbed whole, it stands a seated target still.
+    combat::stand_struck(map, target);
     if left > 0 {
         // What an absorb took pushes nothing back (Thistle Tea's
         // `take_unblocked_damage`, mangos's `DealDamage`).

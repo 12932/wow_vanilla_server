@@ -16,7 +16,7 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
     SMSG_ATTACKSTART, SMSG_ATTACKSTOP, SMSG_ATTACKSWING_BADFACING, SMSG_ATTACKSWING_CANT_ATTACK,
     SMSG_ATTACKSWING_DEADTARGET, SMSG_ATTACKSWING_NOTINRANGE, SMSG_ATTACKSWING_NOTSTANDING,
-    Vector3d,
+    SMSG_STANDSTATE_UPDATE, UnitStandState, Vector3d,
 };
 
 use crate::game::conn::encode;
@@ -1730,6 +1730,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     // A blow on the immune trains nothing (Thistle Tea's `CombatSkills`).
     if !immune {
         skill_gains(map, attacker, victim, hand);
+        stand_struck(map, victim);
     }
     if left > 0 {
         // A blow on a caster pushes its cast back.
@@ -2447,6 +2448,29 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
     }
 }
 
+/// A seated, sleeping or kneeling player struck stands up, and what wants
+/// them seated ends (food, drink): any blow, a miss or one absorbed whole
+/// too, but no periodic tick (mangos's `DealDamage`, since 1.5; Thistle
+/// Tea's `Emote.on_damage`). A creature stands as it enters the fight
+/// ([`crate::game::map::creature_combat::stand_up`]).
+pub fn stand_struck(map: &mut Map, victim: Guid) {
+    if crate::game::map::gm_dev::invulnerable(map, victim) {
+        return;
+    }
+    let Some(p) = map.players.get_mut(&victim) else {
+        return;
+    };
+    // Standing, or dead (7).
+    if matches!(p.stand_state(), 0 | 7) || p.death != Death::Alive {
+        return;
+    }
+    p.set_stand_state(0);
+    p.outbound.send(&SMSG_STANDSTATE_UPDATE {
+        state: UnitStandState::Stand,
+    });
+    auras::interrupt(map, victim, INTERRUPT_NOT_SEATED);
+}
+
 /// Damage a unit: rage, threat, health, death.
 pub fn deal_damage(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
     deal_damage_school(map, attacker, victim, damage, 1);
@@ -2473,6 +2497,9 @@ pub fn deal_damage_by(
     school: u32,
     spell: Option<u32>,
 ) {
+    if map.unit_view(victim).is_some_and(|u| u.alive) {
+        stand_struck(map, victim);
+    }
     deal_damage_with(map, attacker, victim, damage, school, spell, true);
 }
 
