@@ -1032,7 +1032,7 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let (spawn, entry) = (c.spawn_guid, c.entry);
+    let (spawn, entry, alive) = (c.spawn_guid, c.entry, c.alive());
     let summoner = c.scripted.as_deref().and_then(|s| s.summoner);
     crate::game::map::combat::leave_combat(map, g);
     stop_for(map, g);
@@ -1047,6 +1047,10 @@ pub fn despawn_with(map: &mut Map, g: Guid, respawn: Option<Duration>) {
             crate::game::map::ai::quiet_death_for(map, g, respawn);
             if let Some(s) = summoner {
                 event_ai::summoned_despawned(map, s, g, entry);
+            }
+            // Gone, its slaves flagged to go with it go too.
+            if alive {
+                crate::game::map::creature_groups::despawned(map, g);
             }
         }
     }

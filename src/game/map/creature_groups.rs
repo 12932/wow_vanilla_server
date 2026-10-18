@@ -285,6 +285,25 @@ pub fn respawned(map: &mut Map, g: Guid) {
     }
 }
 
+/// `g` was despawned alive: its living slaves flagged to go with it go
+/// (vmangos's `LINKING_EVENT_DESPAWN`, Thistle Tea's `:despawn`).
+pub fn despawned(map: &mut Map, g: Guid) {
+    let Some(spawn) = spawn_of(map, g) else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    for (slave, (master, flags)) in &data.scripts.links {
+        if *master == spawn
+            && flags & LINK_DESPAWN_ON_DESPAWN != 0
+            && let Some(s) = creature_of_spawn(map, *slave)
+            && s != g
+            && map.creature(s).is_some_and(|c| c.alive())
+        {
+            crate::game::map::scripts::despawn(map, s);
+        }
+    }
+}
+
 /// Whether a linked slave may spawn now: some won't while their master is
 /// dead (or alive).
 pub fn may_spawn(map: &Map, spawn: u32) -> bool {
