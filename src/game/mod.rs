@@ -320,6 +320,8 @@ mod tests_p4_core_versus;
 #[cfg(test)]
 mod tests_p4_core_walk;
 #[cfg(test)]
+mod tests_p4_core_wand;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

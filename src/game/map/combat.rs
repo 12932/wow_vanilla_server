@@ -103,6 +103,9 @@ pub struct Combat {
     pub queued: Option<u32>,
     /// Auto Shot, Shoot: repeating at the ranged weapon's speed.
     pub auto_repeat: Option<AutoRepeat>,
+    /// When the ranged weapon is ready again after its last shot, kept
+    /// though the repeat stops.
+    pub ranged_ready_at: Option<Instant>,
     /// Main-hand attacks owed at once, and Reckoning's banked ones.
     pub extra_attacks: u32,
     pub held_extra_attacks: u32,

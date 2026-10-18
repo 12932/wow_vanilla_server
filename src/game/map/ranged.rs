@@ -267,7 +267,13 @@ pub fn start(map: &mut Map, g: Guid, spell: u32, targets: Targets) {
     let Some(c) = map.combat_mut(g) else {
         return;
     };
-    let ready = c.auto_repeat.map(|a| a.next_at).unwrap_or(now);
+    // Stopped and started again, it waits for the weapon as it would have
+    // (Thistle Tea's toggled Shoot keeps its last launch's cooldown).
+    let ready = c
+        .auto_repeat
+        .map(|a| a.next_at)
+        .or(c.ranged_ready_at)
+        .unwrap_or(now);
     c.auto_repeat = Some(AutoRepeat {
         spell,
         target,
@@ -290,19 +296,29 @@ pub fn cancel(map: &mut Map, g: Guid, tell: bool) {
     }
 }
 
+/// Whether `g` is shooting a wand (Shoot, of the magic damage class), not
+/// Auto Shot.
+fn wanding(map: &Map, g: Guid) -> bool {
+    map.combat(g)
+        .and_then(|c| c.auto_repeat)
+        .and_then(|ar| map.realm.data.spells.get(ar.spell))
+        .is_some_and(|s| s.dmg_class == 1)
+}
+
+/// A player begins casting another spell: a wand stops, Auto Shot goes on.
+pub fn cast_begun(map: &mut Map, g: Guid) {
+    if wanding(map, g) {
+        cancel(map, g, true);
+    }
+}
+
 /// A player moved: a wand stops; Auto Shot waits until they stand.
 pub fn moved(map: &mut Map, g: Guid) {
     let now = map.now;
-    let Some(ar) = map.combat(g).and_then(|c| c.auto_repeat) else {
+    if map.combat(g).and_then(|c| c.auto_repeat).is_none() {
         return;
-    };
-    let wand = map
-        .realm
-        .data
-        .spells
-        .get(ar.spell)
-        .is_some_and(|s| s.dmg_class == 1);
-    if wand {
+    }
+    if wanding(map, g) {
         cancel(map, g, true);
         return;
     }
@@ -354,7 +370,14 @@ fn shoot(map: &mut Map, g: Guid) {
     let (min, max) = data.spells.range(s);
     let d = combat::dist(me.position, them.position);
     let reach = me.combat_reach + them.combat_reach;
-    if d > max + reach + 1.0 || (min > 0.0 && d < min) || !combat::facing(&me, &them) {
+    let out_of_range = d > max + reach + 1.0 || (min > 0.0 && d < min);
+    // Out of range, a wand stops (mangos's repeat failing its cast); Auto
+    // Shot waits.
+    if out_of_range && s.dmg_class == 1 {
+        cancel(map, g, true);
+        return;
+    }
+    if out_of_range || !combat::facing(&me, &them) {
         return;
     }
     // A broken weapon, or one the spell doesn't take (a bow for a wand's
@@ -383,6 +406,9 @@ fn shoot(map: &mut Map, g: Guid) {
         && let Some(a) = c.auto_repeat.as_mut()
     {
         a.next_at = now + Duration::from_millis(u64::from(period));
+    }
+    if let Some(c) = map.combat_mut(g) {
+        c.ranged_ready_at = Some(now + Duration::from_millis(u64::from(period)));
     }
     resolve(map, g, target, s, weapon, ammo_display);
     spend(map, g, payment);
@@ -413,6 +439,11 @@ fn resolve(
         } else {
             lo
         };
+        // Its school's damage done that fits it (Wand Specialization).
+        let rolled = rolled
+            * crate::game::map::auras::auras(map, g).map_or(1.0, |a| {
+                crate::game::map::derive::wand_pct(a, 1 << school, &weapon)
+            });
         // A wand crits as a spell does.
         if outcome != Outcome::Miss {
             let crit = combat::derived(map, g).spell_crit[school as usize];
@@ -436,12 +467,26 @@ fn resolve(
     } else {
         raw
     };
+    // A wand's school the target is immune to: nothing, and it says so.
+    let immune = wand && outcome != Outcome::Miss && combat::school_immune(map, target, school);
     let damage = match outcome {
+        _ if immune => 0,
         Outcome::Miss => 0,
         Outcome::Crit if wand => mitigated * 3 / 2,
         Outcome::Crit => (mitigated as f32 * combat::crit_multiplier(map, g, target)) as u32,
         _ => mitigated,
     };
+    // A wand's magic is partly resisted as a spell of its school is.
+    let resisted = if wand && school & 1 == 0 && damage > 0 {
+        let as_spell = crate::game::data::spells::SpellTemplate {
+            school: school.trailing_zeros(),
+            ..s.clone()
+        };
+        spells::outcome::partial_resist(map, g, target, &as_spell, damage, false)
+    } else {
+        0
+    };
+    let damage = damage - resisted;
     let (left, absorbed) = if damage > 0 {
         crate::game::map::auras::absorb_and_share(map, g, target, damage, school)
     } else {
@@ -454,7 +499,7 @@ fn resolve(
             ammo_inventory_type: inventory_type,
         });
     }
-    let missed = outcome == Outcome::Miss;
+    let missed = outcome == Outcome::Miss || immune;
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_GO {
         cast_item: g,
         caster: g,
@@ -464,7 +509,11 @@ fn resolve(
         misses: if missed {
             vec![SpellMiss {
                 target,
-                miss_info: SpellMissInfo::Miss,
+                miss_info: if immune {
+                    SpellMissInfo::Immune
+                } else {
+                    SpellMissInfo::Miss
+                },
             }]
         } else {
             Vec::new()
@@ -485,7 +534,7 @@ fn resolve(
             school: SpellSchool::try_from(school.trailing_zeros() as u8)
                 .unwrap_or(SpellSchool::Normal),
             absorbed_damage: absorbed,
-            resisted: 0,
+            resisted,
             periodic_log: school & 1 != 0,
             unused: 0,
             blocked: 0,

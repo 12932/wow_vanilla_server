@@ -778,7 +778,7 @@ pub fn done_multiplier(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate)
     let mut m = if physical(s) && s.school == 0 {
         1.0
     } else {
-        a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, s.school_mask())
+        crate::game::map::derive::spell_pct(a, s.school_mask())
     };
     let bit = combat::creature_type_mask(map, target);
     if bit != 0 {
