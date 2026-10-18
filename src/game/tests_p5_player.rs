@@ -330,3 +330,49 @@ use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 fn ghost(d: Death) -> bool {
     matches!(d, Death::Ghost { .. })
 }
+
+/// Thistle Tea's `SelfResurrection` "prioritizes a captured Soulstone
+/// without spending an Ankh" and "does not offer an unknown or malformed
+/// resurrection spell": a shaman with a Soulstone on them as they die is
+/// offered the stone's resurrection, not Reincarnation; and a
+/// Reincarnation with no self-resurrection in it is offered not at all.
+#[tokio::test]
+async fn a_soulstone_comes_before_reincarnation_and_a_malformed_one_is_not_offered() {
+    const SOULSTONE: u32 = 20_707;
+    const STONE_RES: u32 = 3026;
+    for malformed in [false, true] {
+        let mut d = reincarnation_world();
+        if malformed {
+            d.spells.spells.get_mut(&REINCARNATION).unwrap().effects[0].effect = 3;
+        }
+        let realm = crate::game::harness::realm_with(d);
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Thrall", Race::Orc, Class::Shaman).await;
+        let key = realm.registry.online(ga).expect("online").map().key;
+        let map = realm.maps.get(&realm, key);
+        let offered = on(&map, move |m| {
+            crate::game::map::spells::learn(m, ga, REINCARNATION_PASSIVE);
+            crate::game::map::inventory::add_item(m, ga, ANKH, 1, false).unwrap();
+            let bare = {
+                death::kill(m, ga);
+                let s = m.players[&ga].fields.get_u32(PLAYER_SELF_RES_SPELL);
+                death::resurrect(m, ga, 1.0);
+                s
+            };
+            crate::game::tests_p3_combat::aura_of(m, ga, SOULSTONE, 4, 0, 1);
+            death::kill(m, ga);
+            let stoned = m.players[&ga].fields.get_u32(PLAYER_SELF_RES_SPELL);
+            (bare, stoned, m.players[&ga].count_of(ANKH))
+        })
+        .await;
+        if malformed {
+            assert_eq!(offered.0, 0, "a Reincarnation that raises no one");
+        } else {
+            assert_eq!(
+                offered,
+                (REINCARNATION, STONE_RES, 1),
+                "the stone first, the Ankh kept"
+            );
+        }
+    }
+}
