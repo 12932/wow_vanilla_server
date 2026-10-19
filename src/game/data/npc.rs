@@ -115,6 +115,10 @@ pub struct Quest {
     pub breadcrumb_for: u32,
     pub source_item: u32,
     pub source_item_count: u32,
+    /// `SrcSpell`: cast on the player as they accept it (mangos's
+    /// `HandleQuestgiverAcceptQuestOpcode`: Moonglade's Teleport to
+    /// Moonglade, 19027).
+    pub source_spell: u32,
     pub limit_time: u32,
     pub flags: u32,
     pub special_flags: u32,

@@ -3199,14 +3199,7 @@ fn group_here(map: &Map, player: Guid) -> Vec<Guid> {
 
 /// A quest's exploration objective met for `player`.
 pub fn quest_explored(map: &mut Map, player: Guid, quest: u32) {
-    let Some(p) = map.players.get_mut(&player) else {
-        return;
-    };
-    let Some(slot) = p.journal.slot_of(quest) else {
-        return;
-    };
-    p.journal.log[slot].explored = true;
-    crate::game::map::quests::check(map, player, quest);
+    crate::game::map::quests::event_happens(map, player, quest);
 }
 
 /// A script's cast, with vmangos's cast flags: 0x1 interrupts the cast

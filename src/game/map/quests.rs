@@ -860,6 +860,9 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     {
         inventory::take_item(map, player, i, count);
     }
+    if q.source_spell != 0 {
+        crate::game::map::spells::cast_triggered(map, player, q.source_spell, Some(player));
+    }
 }
 
 /// The log's update fields, from the journal.
@@ -1192,6 +1195,58 @@ pub fn explored(map: &mut Map, player: Guid, trigger: u32) {
     };
     p.journal.log[slot].explored = true;
     check(map, player, quest);
+}
+
+/// `QuestFlags`: a flag quest, never in the log, rewarded as soon as its
+/// event happens (mangos's `QUEST_FLAGS_AUTO_REWARDED`).
+pub const QUEST_FLAGS_AUTO_REWARDED: u32 = 0x400;
+
+/// A quest's event has happened for `player` (a spell's quest credit, a
+/// script's): in the log, it is explored and checked; a flag quest not in
+/// the log is rewarded at once, silently, if its level, class, race, skill,
+/// quests before and condition let them have it (mangos's
+/// `AreaExploredOrEventHappens`, `CanCompleteQuest` and `CompleteQuest`:
+/// the attunement to Naxxramas, 9378, is one).
+pub fn event_happens(map: &mut Map, player: Guid, quest: u32) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    if let Some(slot) = p.journal.slot_of(quest) {
+        p.journal.log[slot].explored = true;
+        check(map, player, quest);
+        return;
+    }
+    let Some(q) = data
+        .npc
+        .quests
+        .get(&quest)
+        .filter(|q| q.flags & QUEST_FLAGS_AUTO_REWARDED != 0)
+    else {
+        return;
+    };
+    let takes = map
+        .players
+        .get(&player)
+        .is_some_and(|p| can_take(p, q, &data));
+    if !takes || !condition_ok(map, player, player, quest) {
+        return;
+    }
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    p.journal.rewarded.insert(quest);
+    refresh_log(p, &data);
+    let cast = if q.reward_spell_cast != 0 {
+        q.reward_spell_cast
+    } else {
+        q.reward_spell
+    };
+    if cast != 0 {
+        crate::game::map::spells::cast_triggered(map, player, cast, Some(player));
+    }
+    crate::game::map::reputation::quest_rewarded(map, player, q);
+    crate::game::map::spell_areas::reconcile(map, player);
 }
 
 /// Whether `player` is in a raid group: only raid quests count there.

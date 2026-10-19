@@ -1323,6 +1323,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             breadcrumb_for: c.u32("BreadcrumbForQuestId"),
             source_item: c.u32("SrcItemId"),
             source_item_count: c.u32("SrcItemCount"),
+            source_spell: c.u32("SrcSpell"),
             limit_time: c.u32("LimitTime"),
             flags: c.u32("QuestFlags"),
             special_flags: c.u32("SpecialFlags"),

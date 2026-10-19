@@ -1150,12 +1150,7 @@ fn effect(
             } else {
                 caster
             };
-            if let Some(p) = map.players.get_mut(&target)
-                && let Some(slot) = p.journal.slot_of(quest)
-            {
-                p.journal.log[slot].explored = true;
-                crate::game::map::quests::check(map, target, quest);
-            }
+            crate::game::map::quests::event_happens(map, target, quest);
         }
         EFFECT_DURABILITY_DAMAGE | EFFECT_DURABILITY_DAMAGE_PCT => {
             let data = map.realm.data.clone();
