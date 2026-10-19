@@ -635,3 +635,91 @@ async fn a_pets_or_a_puppets_blow_flags_its_master() {
     assert_eq!(pet_blow, (true, true, true, true, false), "Alice's pet");
     assert_eq!(puppet_blow, (true, true), "Grom's puppet");
 }
+
+/// A shared meteor splits its base among those it falls on before the
+/// caster's spell power is added to each share, and each target's own
+/// mitigation then takes its part of its share: one fallen on alone
+/// takes 202 more than each of three, with the bonus or without; one
+/// taking half fire damage takes half its share (Thistle Tea's "splits
+/// the base before outgoing bonuses and target mitigation").
+#[tokio::test]
+async fn a_shared_meteors_base_is_split_before_bonuses_and_mitigation() {
+    use crate::game::map::auras::{self, AURA_MOD_DAMAGE_DONE, AURA_MOD_DAMAGE_PERCENT_TAKEN};
+    use crate::game::tests_p3_combat::{BRUTE, setup_with, spawn};
+    use crate::game::tests_p3_entity::{aura_effect, spell};
+    use crate::game::tests_p3_entity_effects as fx;
+    const FIRE_POWER: u32 = 99_810;
+    const HALF_FIRE: u32 = 99_811;
+    let mut d = fx::world();
+    // A magic spell, as a meteor is: spell power counts for it.
+    let meteor = d.spells.spells.get_mut(&fx::METEOR).unwrap();
+    meteor.dmg_class = 1;
+    meteor.effects[0].bonus_coefficient = 1.0;
+    d.spells.spells.insert(
+        FIRE_POWER,
+        spell(
+            FIRE_POWER,
+            &[aura_effect(AURA_MOD_DAMAGE_DONE, 300, 1 << 2, 1)],
+        ),
+    );
+    d.spells.spells.insert(
+        HALF_FIRE,
+        spell(
+            HALF_FIRE,
+            &[aura_effect(AURA_MOD_DAMAGE_PERCENT_TAKEN, -50, 1 << 2, 1)],
+        ),
+    );
+    let (_realm, _a, ga, map) = setup_with(d, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            let trio: Vec<Guid> = (0..3)
+                .map(|i| spawn(m, ga, BRUTE, 20, 10.0 + i as f32))
+                .collect();
+            let lone = spawn(m, ga, BRUTE, 20, 40.0);
+            let (at_trio, at_lone) = (
+                m.position_of(trio[1]).unwrap(),
+                m.position_of(lone).unwrap(),
+            );
+            let fall = |m: &mut Map, at| {
+                let mut all = trio.clone();
+                all.push(lone);
+                fx::heal(m, &all);
+                crate::game::map::spells::cast_triggered_with(
+                    m,
+                    ga,
+                    fx::METEOR,
+                    crate::game::map::spells::Targets {
+                        dest: Some(at),
+                        ..Default::default()
+                    },
+                );
+                (
+                    trio.iter().map(|g| fx::lost(m, *g)).collect::<Vec<_>>(),
+                    fx::lost(m, lone),
+                )
+            };
+            let plain = (fall(m, at_trio).0, fall(m, at_lone).1);
+            let power = m.realm.data.spells.get(FIRE_POWER).cloned().unwrap();
+            auras::apply(m, ga, ga, &power, 0, 300);
+            let powered = (fall(m, at_trio).0, fall(m, at_lone).1);
+            let half = m.realm.data.spells.get(HALF_FIRE).cloned().unwrap();
+            auras::apply(m, trio[0], trio[0], &half, 0, -50);
+            let halved = fall(m, at_trio).0;
+            (plain, powered, halved)
+        })
+        .await
+        .unwrap();
+    let ((plain3, plain1), (pow3, pow1), halved) = out;
+    assert_eq!((plain3.clone(), plain1), (vec![100, 100, 100], 302));
+    assert_eq!(
+        pow3[0], 400,
+        "a third of the base, and the bonus whole: {pow3:?}"
+    );
+    assert!(pow3.iter().all(|d| *d == pow3[0]), "{pow3:?}");
+    assert_eq!(pow1 - pow3[0], 202, "the bonus added to each share whole");
+    assert_eq!(halved[1], pow3[0]);
+    assert!(
+        halved[0].abs_diff(pow3[0] / 2) <= 1,
+        "half the share: {halved:?} of {pow3:?}"
+    );
+}

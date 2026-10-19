@@ -19,7 +19,7 @@ use crate::game::tests_p3_entity::{aura_effect, on, spell};
 /// 302 fire to the enemies within ten yards of where it falls, shared;
 /// the same with a second effect of 90 at its target; the same, not
 /// shared; and fire proofing.
-const METEOR: u32 = 99_000;
+pub(super) const METEOR: u32 = 99_000;
 const METEOR_AND_BOLT: u32 = 99_001;
 const FIREBALL_RAIN: u32 = 99_002;
 const LIMITED_METEOR: u32 = 99_003;
@@ -46,7 +46,7 @@ fn meteor(id: u32, shared: bool) -> crate::game::data::spells::SpellTemplate {
     s
 }
 
-fn world() -> GameData {
+pub(super) fn world() -> GameData {
     let mut d = data();
     d.spells.radii.insert(13, 10.0);
     let mut both = meteor(METEOR_AND_BOLT, true);
@@ -80,13 +80,13 @@ fn world() -> GameData {
 
 const FULL: u32 = 100_000;
 
-fn lost(m: &Map, g: Guid) -> u32 {
+pub(super) fn lost(m: &Map, g: Guid) -> u32 {
     FULL - m
         .unit_fields(g)
         .map_or(FULL, |f| f.get_u32(UNIT_FIELD_HEALTH))
 }
 
-fn heal(m: &mut Map, gs: &[Guid]) {
+pub(super) fn heal(m: &mut Map, gs: &[Guid]) {
     for g in gs {
         if let Some(f) = m.unit_fields_mut(*g) {
             f.set_u32(UNIT_FIELD_HEALTH, FULL);
