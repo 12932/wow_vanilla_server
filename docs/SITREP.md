@@ -163,6 +163,8 @@ hours), the crate version bumped with each merge.
 
 ## Rounds 6 to 8: the Thistle Tea alignment, by area
 Round 7's 7g to 7m and round 8's 8a to 8f went out together as **0.1.28** (the memory stop held the tests back).
+**The full extended suite at 0.1.28** (23:05, 873 s): 3,114 of 3,117 passed; the three that failed (Balnazzar's,
+Windsor's and Lady Jaina's scripts) pass alone, timing under load, queued to be made to wait on what they check.
 
 ### Round 6
 Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to 6j the rest), merged as they finish.
