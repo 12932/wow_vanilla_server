@@ -582,3 +582,55 @@ async fn a_triggered_aura_keeps_to_its_source_refreshed_or_its_own_time() {
     assert_eq!(own_end, Vec::<u32>::new());
     assert_eq!(ticked, [lifetime::TICKED], "the one tick's result stays");
 }
+
+/// Thistle Tea's `Linked` "retains consumed child state across unrelated
+/// transitions": a linked aura's spent charge and used-up shield stay
+/// spent as other auras come, tick and go on the unit; it isn't made
+/// again but with its parent.
+#[tokio::test]
+async fn a_linked_auras_spent_charges_stay_spent_as_other_auras_change() {
+    const HOLDING: u32 = 97_520;
+    const HELD: u32 = 97_521;
+    let mut d = data();
+    let mut holding = spell(HOLDING, &[effect(auras::AURA_LINKED, 0, 0, HELD)]);
+    holding.custom_flags = CUSTOM_POSITIVE;
+    let mut held = spell(HELD, &[effect(auras::AURA_SCHOOL_ABSORB, 127, 0, 0)]);
+    held.custom_flags = CUSTOM_POSITIVE;
+    held.proc_charges = 2;
+    held.effects[0].base_points = 99;
+    held.effects[0].base_dice = 1;
+    for s in [holding, held] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let state = |m: &Map| {
+            auras::auras(m, ga)
+                .and_then(|a| a.holders.iter().find(|h| h.spell == HELD))
+                .map(|h| (h.charges, h.effects[0].left))
+        };
+        put(m, ga, ga, HOLDING, 0, for_ms(12_000));
+        let fresh = state(m);
+        auras::spend_charge(m, ga, HELD, ga);
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        let (left, _) = auras::absorb(m, ga, 30, 1);
+        let spent = state(m);
+        // Others come, tick and go.
+        put(m, ga, ga, PULSE, 0, auras::Context::default());
+        pass(m, 5000);
+        auras::remove_where(m, ga, |h| h.spell == PULSE || h.spell == MARK);
+        put(m, brute, ga, LASTING[1], 1, auras::Context::default());
+        pass(m, 1000);
+        (fresh, left, spent, state(m))
+    })
+    .await;
+    let (fresh, left, spent, after) = out;
+    assert_eq!(fresh.map(|s| s.0), Some(2));
+    assert_eq!(left, 0, "the shield took it");
+    assert_eq!(spent.map(|s| s.0), Some(1), "a charge spent");
+    assert!(
+        spent.is_some_and(|s| s.1 < fresh.unwrap().1),
+        "the shield used"
+    );
+    assert_eq!(after, spent, "as it was");
+}
