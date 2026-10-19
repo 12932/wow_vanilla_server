@@ -787,6 +787,8 @@ mod tests_p8_ai_retreat;
 #[cfg(test)]
 mod tests_p8_ai_scripts;
 #[cfg(test)]
+mod tests_p8_ai_spells;
+#[cfg(test)]
 mod tests_p8_spell_amounts;
 #[cfg(test)]
 mod tests_p8_spell_effects;
