@@ -266,6 +266,17 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **Facing within 1.4 yards** isn't forgiven (mangos's `HasInArc`); Thistle Tea's is `wrong-for-1.12`.
   - **Left:** about 150 rows (distancing, formations and following, spreading attackers, pet autocast, waypoints);
     Silithus's wind stones have no steps in Thistle Tea's scripts and would be ported by hand.
+- **6i, entities in the world (0.1.20):** any spell of a player's that reaches another player's flagged side (the
+  player, their pet or totem) flags the caster, hit or miss (mangos's `Spell::FillTargetMap`): heals, Sap and marks
+  did not; a threat-making heal on someone contested contests the healer. A creature's Summon Pet now makes its
+  demon (NPC warlocks had none); a pet's instant spell starts its fight. **My calls:**
+  - **PvP flagging is mangos's:** Sap, a no-threat harmful spell (Beast Lore, Mind Vision) and a "threat only on a
+    miss" spell that hits all flag the caster; Thistle Tea flags no one for them (`wrong-for-1.12`). Sap still
+    starts no fight.
+  - **A creature's demon is a guardian** (mangos): defensive, several on recasts, kept after the summoner dies and
+    gone when it leaves the world; Thistle Tea gives one aggressive pet (`wrong-for-1.12`).
+  - **Left:** 133 rows (game objects' casts and summons, event sinks, corpse group loot); the force-move counter is
+    always 0 where mangos counts up per session; spells with mangos's PvP attribute should flag the victim too.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -354,7 +365,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | The 15:38 extended run's four failures | fixed | 37a0656 |
 | 6f: creature scripts | 73.8% | dd31c4f |
 | 6h: creature AI | 74.5% | 4738983 |
+| 6i: entities in the world | 75.1% | cabc8d6 |
 
-**Running now:** round 6 (6i, 6j) and round 7 (7a the player, 7b spells, 7c loaders).
+**Running now:** round 6 (6j) and round 7 (7a the player, 7b spells, 7c loaders, 7d combat).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
