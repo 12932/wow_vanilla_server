@@ -1390,6 +1390,7 @@ impl Map {
         self.step("objects", objects::update);
         self.step("member stats", social::push_member_stats);
         self.step("duels", duel::update);
+        self.step("trades", trade::update);
         self.step("battleground", battleground::update);
         self.step("bones", bones::update);
         self.step("eviction", eviction::update);

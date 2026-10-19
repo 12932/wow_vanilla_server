@@ -17,6 +17,8 @@ use crate::game::update;
 pub const MARGIN: f32 = 10.0;
 /// How far an object moves before its visibility is worked out again.
 pub const MOVE_THRESHOLD: f32 = 8.0;
+/// How far a stealthed unit moves before who sees it is worked out again.
+pub const STEALTH_THRESHOLD: f32 = 2.0;
 
 /// How far a player sees on `map`: a battleground's own distance, a
 /// dungeon's or raid's, else the continents'.
@@ -58,9 +60,18 @@ fn dist2(a: Vector3d, b: Vector3d) -> f32 {
 /// what comes into its sight is as late, for its distance, as for a
 /// walker, and a flight across a continent takes a quarter of the looks
 /// (each over a window sixteen times the size).
+///
+/// A stealthed unit is looked at every [`STEALTH_THRESHOLD`] yards: who
+/// sees it turns on yards (Thistle Tea's stealthed walker, announced every
+/// two).
 pub fn moved(map: &mut Map, object: Guid, anchor: Vector3d, position: Vector3d) {
+    let stealthed = || {
+        crate::game::map::auras::auras(map, object)
+            .is_some_and(|a| a.has(crate::game::map::auras::AURA_MOD_STEALTH))
+    };
     let threshold = match map.players.get(&object) {
         Some(p) if p.flight.is_some() => MOVE_THRESHOLD * sight(map, p) / radius(map),
+        _ if stealthed() => STEALTH_THRESHOLD,
         _ => MOVE_THRESHOLD,
     };
     if dist2(anchor, position) >= threshold * threshold {

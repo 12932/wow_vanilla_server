@@ -91,6 +91,8 @@ pub struct Ledger {
     pub weekday: u8,
     /// Entries changed since they were last kept.
     pub dirty: ahash::AHashSet<u32>,
+    /// A week settled by an award's [`Ledger::on`], for the sweep to tell.
+    pub week_turned: bool,
 }
 
 /// Today, in days since 1970.
@@ -174,6 +176,17 @@ impl Ledger {
             self.day = day;
         }
         settled
+    }
+
+    /// The ledger as of `day`, for an award: the calendar moved on first,
+    /// so the first award after midnight goes on the new day, not the one
+    /// the sweep last saw (Thistle Tea's "settles before the first award
+    /// after midnight"). A week this settles is told at the next sweep.
+    pub fn on(&mut self, day: i64) -> &mut Self {
+        if self.advance(day) {
+            self.week_turned = true;
+        }
+        self
     }
 
     /// Rank the week so far, now, rather than at its end (a GM's

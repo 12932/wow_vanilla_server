@@ -567,6 +567,18 @@ mod tests_p6_spell_power;
 #[cfg(test)]
 mod tests_p6_spell_range;
 #[cfg(test)]
+mod tests_p6_world;
+#[cfg(test)]
+mod tests_p6_world_events;
+#[cfg(test)]
+mod tests_p6_world_scripts;
+#[cfg(test)]
+mod tests_p6_world_sight;
+#[cfg(test)]
+mod tests_p6_world_system;
+#[cfg(test)]
+mod tests_p6_world_trade;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

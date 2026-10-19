@@ -667,11 +667,13 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
         register(map, g);
         // The server's rate scales the share, so the ledger keeps what is
         // given (mangos's `Rate.Honor`).
-        let award = map.realm.social.honor.lock().player_kill(
-            guid::counter(g),
-            guid::counter(victim),
-            share * rate,
-        );
+        let award = map
+            .realm
+            .social
+            .honor
+            .lock()
+            .on(honor::today())
+            .player_kill(guid::counter(g), guid::counter(victim), share * rate);
         if let Some(a) = award {
             credit(map, g, a.points as i32, victim, a.victim_rank);
             refresh(map, g);
@@ -735,7 +737,12 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
             continue;
         };
         register(map, g);
-        map.realm.social.honor.lock().award(guid::counter(g), a);
+        map.realm
+            .social
+            .honor
+            .lock()
+            .on(honor::today())
+            .award(guid::counter(g), a);
         let shown = if a.kind == AwardKind::Dishonorable {
             -(a.points as i32)
         } else {
@@ -750,7 +757,7 @@ pub fn creature_killed(map: &mut Map, killer: Guid, creature: Guid) {
 pub fn bonus_honor(map: &mut Map, g: Guid, amount: u32) {
     let amount = crate::config::scaled(amount, map.cfg.rates.honor);
     register(map, g);
-    map.realm.social.honor.lock().award(
+    map.realm.social.honor.lock().on(honor::today()).award(
         guid::counter(g),
         Award {
             kind: AwardKind::Bonus,
@@ -796,7 +803,7 @@ pub fn rank_allows_buy(p: &Player, t: &crate::game::data::ItemTemplate) -> bool 
 pub fn sweep(realm: &crate::game::Realm) {
     let (settled, saves) = {
         let mut h = realm.social.honor.lock();
-        let settled = h.advance(honor::today());
+        let settled = h.advance(honor::today()) | std::mem::take(&mut h.week_turned);
         (settled, h.take_dirty())
     };
     for e in saves {

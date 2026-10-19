@@ -1774,6 +1774,12 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_MOD_TAUNT => {
             crate::game::map::ai::taunted(map, target, h.caster);
         }
+        // What the unit sees through changed: what it sees is worked out
+        // again now, not when it next moves (mangos's
+        // `HandleInvisibilityDetect`, `UpdateVisibilityForOwner`).
+        AURA_MOD_STEALTH_DETECT | AURA_MOD_INVISIBILITY_DETECTION => {
+            crate::game::map::visibility::stealth_changed(map, target);
+        }
         AURA_MOD_STEALTH | AURA_MOD_INVISIBILITY => {
             crate::game::map::combat::stop_attack(map, target);
             // Stealth's creep flag is of the visibility byte (3), not the
@@ -1992,6 +1998,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_MOD_TAUNT => {
             crate::game::map::ai::taunt_ended(map, target, h.caster);
+        }
+        AURA_MOD_STEALTH_DETECT | AURA_MOD_INVISIBILITY_DETECTION => {
+            crate::game::map::visibility::stealth_changed(map, target);
         }
         AURA_MOD_STEALTH | AURA_MOD_INVISIBILITY => {
             if a.kind == AURA_MOD_STEALTH
