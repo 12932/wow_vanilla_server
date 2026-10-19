@@ -86,10 +86,10 @@ pub(super) async fn travel(realm: &Arc<Realm>, c: &mut Client, id: u32, at: Vect
 
 /// The line of broadcast text `id`.
 pub(super) fn line(realm: &Realm, id: u32) -> String {
-    realm
-        .data
-        .npc
-        .broadcast_line(id, false)
+    let npc = &realm.data.npc;
+    npc.broadcast_line(id, false)
+        .filter(|l| !l.is_empty())
+        .or_else(|| npc.broadcast_line(id, true))
         .unwrap_or_else(|| panic!("text {id}"))
         .to_owned()
 }
@@ -2041,4 +2041,289 @@ async fn dashel_gives_up_in_the_quest_fight_and_sends_his_thugs_off() {
         .await
         .unwrap();
     assert_eq!(done, (true, usual, 0x2, 0), "credited, and himself again");
+}
+
+const DAPHNE: u32 = 6182;
+
+/// Daphne Stilwell cheers each beaten wave once, by the phase her escort
+/// marked it with: going home from the first, the second and the third
+/// she has her own line, and then none until the next (Thistle Tea's
+/// `daphne_stilwell`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn daphne_cheers_each_beaten_wave_once() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, _me, map, daphne) = hero_by(&realm, "Valorous", DAPHNE).await;
+    for (phase, text) in [(1, 5269), (2, 2369), (3, 2358)] {
+        c.clear();
+        let after = map
+            .query(move |m| {
+                event_ai::set_phase(m, daphne, phase);
+                event_ai::evade(m, daphne);
+                event_ai::phase(m, daphne)
+            })
+            .await
+            .unwrap();
+        assert_eq!(after, 0, "wave {phase}: cheered");
+        assert!(
+            hears(&mut c, &realm, daphne, text).await,
+            "wave {phase}'s line"
+        );
+        c.clear();
+        map.query(move |m| event_ai::evade(m, daphne)).await;
+        assert_eq!(
+            heard(&mut c, daphne, Duration::from_millis(400)).await,
+            None,
+            "wave {phase}: once"
+        );
+    }
+}
+
+/// Daphne's escort (Tome of Valor, 1651), as Thistle Tea's catalog has
+/// it: credit at point 17, at once on again; three Defias waves of
+/// three, four and five raiders at points 7, 8 and 9, each marked by its
+/// phase.
+#[test]
+fn daphnes_escort_brings_three_growing_waves() {
+    use crate::game::map::escorts::{Act, escort};
+    let e = escort(1651).expect("Tome of Valor");
+    assert_eq!(
+        (e.entry, e.credit_point, e.instant_respawn),
+        (DAPHNE, Some(17), true)
+    );
+    for (point, wave, raiders) in [(7, 1, 3), (8, 2, 4), (9, 3, 5)] {
+        let acts = e
+            .points
+            .iter()
+            .find(|(p, _)| *p == point)
+            .map(|(_, a)| *a)
+            .unwrap();
+        assert!(
+            acts.iter()
+                .any(|a| matches!(a, Act::EventPhase(w) if *w == wave)),
+            "{point}: wave {wave}"
+        );
+        let summoned = acts
+            .iter()
+            .filter(|a| matches!(a, Act::Summon { entry: 6180, .. }))
+            .count();
+        assert_eq!(summoned, raiders, "{point}");
+    }
+}
+
+/// Henze and Narm Faulk thank whoever raises them with the Symbol of Life
+/// (Thistle Tea's `faulk`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_faulks_thank_whoever_raises_them() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Raiser").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    for entry in [6172, 6177] {
+        let g = summon_near(&map, entry, off(at, 3.0, 0.0)).await;
+        c.sees(g).await;
+        c.clear();
+        map.query(move |m| {
+            event_ai::update_despawns(m);
+            event_ai::spell_hit(m, g, me, 1, 1);
+        })
+        .await;
+        assert_eq!(
+            heard(&mut c, g, Duration::from_millis(400)).await,
+            None,
+            "{entry}: not another spell"
+        );
+        map.query(move |m| event_ai::spell_hit(m, g, me, 8593, 2))
+            .await;
+        assert!(hears(&mut c, &realm, g, 2281).await, "{entry}: thanks");
+        clear(&map, vec![g]);
+    }
+}
+
+const CAPTURED_OOZE: u32 = 10290;
+const PRIMAL_OOZE: u32 = 6557;
+
+/// A captured Felwood ooze, let out: with a primal ooze within five
+/// yards it melds with it; with one within thirty, it follows it; with
+/// none about, it dissolves (Thistle Tea's `captured_felwood_ooze`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_captured_ooze_melds_follows_or_dissolves() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Oozer").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let ooze = summon_near(&map, CAPTURED_OOZE, off(at, 3.0, 0.0)).await;
+    let primal = summon_near(&map, PRIMAL_OOZE, off(at, 20.0, 0.0)).await;
+    c.sees(ooze).await;
+    let following = map
+        .query(move |m| {
+            event_ai::update_despawns(m);
+            for id in [1029001, 1029003] {
+                due(m, ooze, id);
+            }
+            let alive = m.creature(ooze).is_some();
+            due(m, ooze, 1029002);
+            (alive, m.creature(ooze).map(|c| c.motion.clone()))
+        })
+        .await
+        .unwrap();
+    assert!(
+        following.0,
+        "not melded nor dissolved, with one 20 yards off"
+    );
+    assert!(
+        until(&map, 3_000, move |m| m
+            .position_of(ooze)
+            .zip(m.position_of(primal))
+            .is_some_and(
+                |(a, b)| crate::game::map::combat::dist(a, b) < 10.0
+            ))
+        .await,
+        "follows it: {:?}",
+        following.1
+    );
+    c.clear();
+    map.query(move |m| {
+        crate::game::map::scripts::place(m, primal, off(at, 5.0, 0.0), 0.0);
+        if let Some(cr) = m.caster_mut(ooze) {
+            cr.gcd_until = None;
+        }
+        due(m, ooze, 1029001);
+    })
+    .await;
+    assert_eq!(
+        cast_any_of(&mut c, ooze, 16032, crate::game::harness::WAIT).await,
+        Some(primal),
+        "melds with it"
+    );
+    clear(&map, vec![primal]);
+    let gone = map
+        .query(move |m| {
+            crate::game::map::scripts::despawn(m, primal);
+            crate::game::map::spells::interrupt(m, ooze);
+            due(m, ooze, 1029003);
+            hurry_runs(m, Some(ooze), Duration::from_millis(100));
+            m.creature(ooze).is_none_or(|c| c.despawned || !c.alive())
+        })
+        .await
+        .unwrap();
+    assert!(gone, "dissolves with none about");
+}
+
+const OBSIDION: u32 = 8400;
+const DORIUS: u32 = 8421;
+const LATHORIC: u32 = 8391;
+
+/// Rise, Obsidion! (3566): taking it has Obsidion, lying out of reach,
+/// call Dorius to the scene; Dorius speaks six lines six seconds apart,
+/// unmasks as Lathoric the Black a second after the last, and five on
+/// rallies: Obsidion stands, may be struck, and both go for the nearest
+/// player; Obsidion smashes the ground every eight seconds and knocks
+/// his victim away every twelve (Thistle Tea's `obsidion`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn obsidion_rises_as_dorius_unmasks_and_fights_with_smash_and_knockback() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, obsidion) = hero_by(&realm, "Risen", OBSIDION).await;
+    let resting = map
+        .query(move |m| {
+            m.players.get_mut(&me).unwrap().gm = false;
+            (stand_state(m, obsidion), unit_flags(m, obsidion) & 0x100)
+        })
+        .await
+        .unwrap();
+    assert_eq!(resting, (7, 0x100), "lying, out of reach");
+    let script = realm.data.scripts.quest_start_script[&3566];
+    let dorius = map
+        .query(move |m| {
+            crate::game::map::scripts::start(
+                m,
+                crate::game::data::scripts::ScriptTable::QuestStart,
+                script,
+                me,
+                me,
+            );
+            hurry_runs(m, None, Duration::from_millis(100));
+            event_ai::update_despawns(m);
+            first(m, DORIUS)
+        })
+        .await
+        .flatten()
+        .expect("Dorius called");
+    c.sees(dorius).await;
+    for (text, secs) in [
+        (4393, 5.0),
+        (4394, 6.0),
+        (4395, 6.0),
+        (4396, 6.0),
+        (4397, 6.0),
+        (4398, 6.0),
+    ] {
+        hurry_all(&map, secs).await;
+        assert!(hears(&mut c, &realm, dorius, text).await, "Dorius's {text}");
+    }
+    hurry_all(&map, 1.0).await;
+    assert_eq!(
+        map.query(move |m| m.creature(dorius).map(|c| c.entry))
+            .await
+            .flatten(),
+        Some(LATHORIC),
+        "unmasked"
+    );
+    hurry_all(&map, 5.0).await;
+    assert!(
+        hears(&mut c, &realm, dorius, 4391).await,
+        "Lathoric's rally"
+    );
+    let risen = map
+        .query(move |m| {
+            hurry_runs(m, None, Duration::from_millis(100));
+            (
+                stand_state(m, obsidion),
+                unit_flags(m, obsidion) & 0x100,
+                victim(m, obsidion) == me,
+                victim(m, dorius) == me,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        risen,
+        (0, 0, true, true),
+        "risen, to be struck, both on the player"
+    );
+    map.query(move |m| tough(m, obsidion)).await;
+    kit_on(
+        &mut c,
+        &map,
+        obsidion,
+        me,
+        &[
+            (840005, 12734, (8.0, 8.0), (8.0, 8.0), true),
+            (840006, 10101, (12.0, 12.0), (12.0, 12.0), true),
+        ],
+    )
+    .await;
+}
+
+/// `g`'s timed casts in its fight with `d`, each as [`timed_cast`] has it:
+/// its event, spell, first and repeat windows, and whether at `d`.
+pub(super) async fn kit_on(
+    c: &mut Client,
+    map: &MapHandle,
+    g: Guid,
+    d: Guid,
+    casts: &[(u32, u32, (f32, f32), (f32, f32), bool)],
+) {
+    for (id, spell, first, repeat, at_victim) in casts.iter().copied() {
+        timed_cast(c, map, g, id, spell, first, repeat, at_victim.then_some(d)).await;
+    }
 }
