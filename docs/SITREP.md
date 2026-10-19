@@ -117,6 +117,10 @@ Until you answer, wvs keeps what the line says.
   below (a setting); #7 locked doors and buttons don't open by hand without their key.
 - **2026-10-19, the raid's fixes:** queries have their own rate, `.gear` fills health and mana, `.character spells`,
   guards and land-bound swimmers wander, raiders on the ground and casting (DECISIONS 68).
+- **2026-10-19, the review's findings ([CODE_REVIEW.md](CODE_REVIEW.md)):** H1 (the transport flag skips the
+  speed check) and M1 (the speed check ignores height) are accepted as they are; M2 (two members entering a
+  dungeon at once can get different copies) and M3 (a shutdown can miss a player between maps) are to fix, not
+  started; M4 (a pool saved at 0 loads full) explained, waiting on you.
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 
