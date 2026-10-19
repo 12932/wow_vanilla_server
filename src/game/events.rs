@@ -244,6 +244,9 @@ pub fn spawn_creature(
             .set_u32(crate::game::fields::UNIT_FIELD_DISPLAYID, e.display);
         c.fields
             .set_u32(crate::game::fields::UNIT_FIELD_NATIVEDISPLAYID, e.display);
+        // Its size and reach the model's (Thistle Tea's explicit event
+        // model).
+        c.fit_model(data, None);
     }
     if e.equipment != 0
         && let Some(items) = data.creature_equipment.get(&e.equipment)
@@ -287,27 +290,23 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                 (true, None) | (false, Some(_)) if pooled => {}
                 (true, None) => {
                     if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
-                        map.add_creature(c);
+                        let g = map.add_creature(c);
+                        came_in(map, g);
                     }
                 }
                 (false, Some((g, _))) => {
                     map.remove_creature(g);
                 }
-                // Out, and looking as it should in the events on? One in a
-                // fight isn't replaced under its foes: it changes when the
-                // fight is over (Thistle Tea changes it where it stands).
+                // Out, and looking as it should in the events on? A living
+                // one changes where it stands, its fight and all (mangos's
+                // `UpdateEntry` from `UpdateCreatureData`, Thistle Tea's
+                // `CreatureEvent.reconcile`); a corpse takes them at its
+                // respawn.
                 (true, Some((g, worn)))
                     if looks_differ && worn != looks(&data, s.guid, on).map_or(0, |e| e.event) =>
                 {
-                    if let Some(c) = map.creature_mut(g)
-                        && fighting(c)
-                    {
-                        c.event_looks_due = true;
-                        continue;
-                    }
-                    map.remove_creature(g);
-                    if let Some(c) = spawn_creature(&data, s, on, &mut rng) {
-                        map.add_creature(c);
+                    if map.creature(g).is_some_and(|c| c.alive() && !c.despawned) {
+                        reconcile(map, g, s, on);
                     }
                 }
                 _ => {}
@@ -348,42 +347,134 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
     }
 }
 
-/// Whether a creature is in a fight, or on its way home from one.
-pub fn fighting(c: &Creature) -> bool {
-    c.combat.attacking
-        || c.evading
-        || !c.threat.is_empty()
-        || c.fields.has_flag(
-            crate::game::fields::UNIT_FIELD_FLAGS,
-            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-        )
+/// The looks of `event` for `spawn`, if it has them.
+fn looks_of(
+    data: &GameData,
+    spawn: u32,
+    event: u32,
+) -> Option<crate::game::data::world::EventCreature> {
+    data.world
+        .event_creatures
+        .get(&spawn)?
+        .iter()
+        .find(|e| e.event == event)
+        .copied()
 }
 
-/// A creature whose looks changed while it fought, its fight over, takes
-/// the looks of the events on now.
-pub fn caught_up(map: &mut Map, g: Guid) {
+/// The spells that go with an event's looks (mangos's
+/// `ApplyGameEventSpells`): as they begin, the end's aura off and the
+/// start's cast; as they end, the start's aura off and the end's cast, the
+/// creature on itself.
+fn event_spells(
+    map: &mut Map,
+    g: Guid,
+    looks: &crate::game::data::world::EventCreature,
+    begins: bool,
+) {
+    let (cast, remove) = if begins {
+        (looks.spell_start, looks.spell_end)
+    } else {
+        (looks.spell_end, looks.spell_start)
+    };
+    if remove != 0 {
+        crate::game::map::auras::remove_spell(map, g, remove, None);
+    }
+    if cast != 0 && map.realm.data.spells.get(cast).is_some() {
+        crate::game::map::spells::cast_triggered(map, g, cast, Some(g));
+    }
+}
+
+/// A spawn's creature come into the world in an event's looks, alive, takes
+/// their start spell (mangos's `UpdateEntry` with its event's data).
+pub fn came_in(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g).filter(|c| c.alive() && c.event_looks != 0) else {
+        return;
+    };
+    let (spawn, worn) = (c.spawn_guid, c.event_looks);
+    let Some(e) = spawn.and_then(|s| looks_of(&map.realm.data, s, worn)) else {
+        return;
+    };
+    event_spells(map, g, &e, true);
+}
+
+/// A living creature takes the looks of the events on where it stands
+/// (mangos's `UpdateEntry` from `GameEventMgr::UpdateCreatureData`, Thistle
+/// Tea's `CreatureEvent.reconcile`): the entry they name, or else its
+/// spawn's own, its fight, health in proportion and auras kept, and its
+/// own spell list, its timers anew; its look, size and weapons as it would
+/// spawn in them, a morph on it kept over its new look; and the spells
+/// that go with the looks it leaves and takes.
+fn reconcile(map: &mut Map, g: Guid, s: &crate::game::data::CreatureSpawn, on: &AHashSet<u32>) {
+    use crate::game::fields::*;
+    let data = map.realm.data.clone();
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let old = looks_of(&data, s.guid, c.event_looks);
+    let new = looks(&data, s.guid, on);
+    let display = c.fields.get_u32(UNIT_FIELD_DISPLAYID);
+    let morph = (display != c.fields.get_u32(UNIT_FIELD_NATIVEDISPLAYID)).then_some(display);
+    // Its own entry: the one it is, unless that is the looks' it leaves.
+    let own = if s.entries.contains(&c.entry) && old.is_none_or(|o| o.entry != c.entry) {
+        c.entry
+    } else {
+        s.entries.first().copied().unwrap_or(c.entry)
+    };
+    let entry = new.map(|e| e.entry).filter(|e| *e != 0).unwrap_or(own);
+    let mut spawn = s.clone();
+    spawn.entries = vec![entry];
+    let Some(fresh) = spawn_creature(&data, &spawn, on, &mut rand::rng()) else {
+        return;
+    };
+    if let Some(o) = old {
+        event_spells(map, g, &o, false);
+    }
+    if map.creature(g).is_some_and(|c| c.entry != entry) {
+        crate::game::map::scripts::update_entry(map, g, entry);
+        if let Some(c) = map.creature_mut(g) {
+            c.caster.spell_list = None;
+            if let Some(s) = c.scripted.as_deref_mut() {
+                s.base_spell_list = None;
+            }
+        }
+    }
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    c.event_looks_due = false;
-    let (Some(spawn), worn) = (c.spawn_guid, c.event_looks) else {
-        return;
-    };
-    let data = map.realm.data.clone();
-    let on = current(&map.realm);
-    if worn == looks(&data, spawn, &on).map_or(0, |e| e.event) {
-        return;
+    let f = &fresh.fields;
+    c.fields.set_u32(
+        UNIT_FIELD_NATIVEDISPLAYID,
+        f.get_u32(UNIT_FIELD_NATIVEDISPLAYID),
+    );
+    c.fields.set_u32(
+        UNIT_FIELD_DISPLAYID,
+        morph.unwrap_or_else(|| f.get_u32(UNIT_FIELD_DISPLAYID)),
+    );
+    let grown = c.auras.product(crate::game::map::auras::AURA_MOD_SCALE);
+    c.fields.set_f32(
+        OBJECT_FIELD_SCALE_X,
+        f.get_f32(OBJECT_FIELD_SCALE_X) * grown,
+    );
+    for field in [UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_COMBATREACH] {
+        c.fields.set_f32(field, f.get_f32(field));
     }
-    let Some(s) = data
-        .creature_spawns
-        .get(&map.key.map)
-        .and_then(|v| v.iter().find(|s| s.guid == spawn))
-    else {
-        return;
-    };
-    map.remove_creature(g);
-    if let Some(c) = spawn_creature(&data, s, &on, &mut rand::rng()) {
-        map.add_creature(c);
+    c.fields
+        .set_byte(UNIT_FIELD_BYTES_0, 2, f.get_byte(UNIT_FIELD_BYTES_0, 2));
+    for i in 0..3 {
+        c.fields.set_u32(
+            UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i,
+            f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i),
+        );
+    }
+    for i in 0..6 {
+        c.fields.set_u32(
+            UNIT_VIRTUAL_ITEM_INFO + i,
+            f.get_u32(UNIT_VIRTUAL_ITEM_INFO + i),
+        );
+    }
+    c.event_looks = fresh.event_looks;
+    if let Some(n) = new {
+        event_spells(map, g, &n, true);
     }
 }
 

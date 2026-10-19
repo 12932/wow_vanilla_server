@@ -75,6 +75,7 @@ pub fn populate(map: &mut Map) {
             if let Some(c) = crate::game::events::spawn_creature(&data, s, &on, &mut rng) {
                 let g = map.add_creature(c);
                 crate::game::map::ai::lie_dead_if_spawned_so(map, g, s);
+                crate::game::events::came_in(map, g);
                 if let Some(back) = save.as_ref().and_then(|v| v.dead.get(&s.guid)).copied()
                     && back > unix
                 {

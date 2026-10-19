@@ -662,6 +662,7 @@ fn spawn_creature_with(
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
         lie_dead_if_spawned_so(map, g, spawn);
+        crate::game::events::came_in(map, g);
         if let Some(mut t) = faction {
             // Cleared, it is its respawned self's again (mangos's
             // `ClearTemporaryFaction`, the template's): not the faction it
@@ -862,12 +863,6 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
     let Some(c) = map.creatures.get(key).filter(|c| c.guid == g && c.alive()) else {
         return;
     };
-    // An event changed its looks while it fought: its fight over, it
-    // takes them.
-    if c.event_looks_due && !crate::game::events::fighting(c) {
-        crate::game::events::caught_up(map, g);
-        return;
-    }
     if c.evading {
         evade_step(map, g);
     } else if c.combat.attacking {

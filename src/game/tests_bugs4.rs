@@ -364,11 +364,12 @@ async fn a_pet_spares_civilians() {
     until(&map, "the pet at the wolf", move |m| fighting(m, pet, wolf)).await;
 }
 
-/// A game event starting changes no creature under its foes: one in a
-/// fight keeps its looks, and its fight, and takes the event's when the
-/// fight is over (Thistle Tea changes the living creature in place).
+/// A game event starting changes a creature in a fight where it stands:
+/// it takes the event's looks and keeps its fight (Thistle Tea's
+/// `CreatureEvent.reconcile`, mangos's `UpdateEntry`); it isn't replaced
+/// under its foes.
 #[tokio::test]
-async fn an_event_changes_no_creature_in_a_fight() {
+async fn an_event_changes_a_creature_in_a_fight_where_it_stands() {
     const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
     let mut d = tests_pets::data();
     d.creature_spawns.insert(
@@ -425,12 +426,8 @@ async fn an_event_changes_no_creature_in_a_fight() {
         .await
         .unwrap();
     assert!(fights, "the wolf fights on");
-    assert_eq!(worn, before, "in its own looks");
-    // Its fight over, it takes the event's.
-    map.query(move |m| crate::game::map::ai::enter_evade(m, wolf))
-        .await
-        .unwrap();
-    until(&map, "the event's looks", move |m| display(m) == Some(4321)).await;
+    assert_ne!(before, Some(4321));
+    assert_eq!(worn, Some(4321), "in the event's looks at once");
 }
 
 static DB: std::sync::LazyLock<std::path::PathBuf> =
