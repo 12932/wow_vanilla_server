@@ -381,6 +381,13 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     the template's.
   - **Left:** 130 rows (triggered hits, the AI's environment, event sinks, formations, wild summons); Lunar
     Festival fireworks, cheer speakers and the Ghost Magnet don't exist in wvs (content work).
+- **7g, creature scripts, round 7 (with 7h):** 50 rows, every one a test of a ported script, step by step: the
+  Gizelton Caravan, Freedom for All Creatures (Kindal), the Stormwind Rendezvous and the Great Masquerade, the
+  Balance of Light and Shadow (Eris's waves), the Nightmare Manifests (Eranikus, Tyrande, Remulos), Gnomeregan
+  (Emi, Grubbis, Thermaplugg), Mizzle, Balnazzar. No fixes needed. **Found, for the next round:** a creature's line
+  aimed at another creature keeps a literal `$n`; the test client couldn't parse some melee blows (HitInfo 32770
+  and 18) in Eranikus's fight, to go through the client check. **Left:** Alterac Valley's 15 rows (wvs builds them
+  in `av_scripts.rs`, not from Thistle Tea's events).
 
 ## Answered
 - **#10** keep swinging on arrival.
