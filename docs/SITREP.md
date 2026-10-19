@@ -250,6 +250,22 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   **Left:** 65 rows (Alterac Valley 16, Gnomeregan 9, the Gizelton Caravan 9, Eris Havenfire 8, the Stormwind
   Rendezvous 8, Eranikus 7, Kindal 7). **To look into:** a test hero was at war with Booty Bay before any fight
   (the agent worked around it); it may be the reputation fix above or a creature's temporary war.
+- **6h, creature AI (0.1.19):** a repeat shot (Auto Shot, wands) is checked again each shot: pacify, Hawk Eye's
+  range, the dead zone from both reaches, sight, a stealthed player-side target; a swing error is told once while it
+  lasts (mangos's `LastSwingErrorMsg`); no swing at a victim gone unseen; a pet faces before its first swing; 30 of
+  Thistle Tea's imported trigger, object and event scripts tested on the real world. 6d and 6h both gave each hand
+  its own weapon skill; I kept 6d's (it also has the skill against players). **My calls:**
+  - **Auto Shot stops when its target goes out of range** (mangos's `_UpdateAutoRepeatSpell`), reversing round 4b's
+    "Auto Shot waits through both".
+  - **The stealth check on shots** is for player-side targets only (mangos's `CheckCast`); Thistle Tea checks every
+    target.
+  - **Restarting an attack clears the swing error** (Thistle Tea; mangos clears it on a landed swing).
+  - **A failed swing** leaves the hands due and retries at the next update, keeping a later main-hand deadline
+    (Thistle Tea); mangos sets both to 100 ms.
+  - **Melee swings don't check line of sight** (mangos); Thistle Tea does.
+  - **Facing within 1.4 yards** isn't forgiven (mangos's `HasInArc`); Thistle Tea's is `wrong-for-1.12`.
+  - **Left:** about 150 rows (distancing, formations and following, spreading attackers, pet autocast, waypoints);
+    Silithus's wind stones have no steps in Thistle Tea's scripts and would be ported by hand.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -337,7 +353,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6e: spells in the world | 72.9% | fce32da |
 | The 15:38 extended run's four failures | fixed | 37a0656 |
 | 6f: creature scripts | 73.8% | dd31c4f |
+| 6h: creature AI | 74.5% | 4738983 |
 
-**Running now:** round 6 (6h, 6i, 6j) and round 7 (7a, the player).
+**Running now:** round 6 (6i, 6j) and round 7 (7a the player, 7b spells, 7c loaders).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
