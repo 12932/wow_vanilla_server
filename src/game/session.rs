@@ -462,6 +462,15 @@ impl Session {
             row.z = spawn.z;
             row.orientation = spawn.orientation;
         }
+        // Home is where they start, until an innkeeper binds them
+        // elsewhere (mangos's `_LoadHomeBind`, from the race's start).
+        row.state.bind = Some(crate::game::store::Bind {
+            map: row.map,
+            zone: row.zone,
+            x: row.x,
+            y: row.y,
+            z: row.z,
+        });
         for (entry, slot, count) in &start.items {
             let item = self.realm.next_item.fetch_add(1, Ordering::Relaxed);
             row.items.push(ItemRow {
