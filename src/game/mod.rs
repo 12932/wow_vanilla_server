@@ -619,6 +619,8 @@ mod tests_p7_loader_items;
 #[cfg(test)]
 mod tests_p7_loader_quests;
 #[cfg(test)]
+mod tests_p7_loader_spells;
+#[cfg(test)]
 mod tests_p7_loader_world;
 #[cfg(test)]
 mod tests_parity_combat;

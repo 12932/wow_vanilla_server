@@ -36,7 +36,10 @@ async fn arcane_cloaking_attunes_to_naxxramas() {
     let realm = realm();
     let d = realm.data.clone();
     let dread = &d.npc.quests[&9123];
-    assert_eq!((dread.reward_spell, dread.reward_spell_cast), (0, ARCANE_CLOAKING));
+    assert_eq!(
+        (dread.reward_spell, dread.reward_spell_cast),
+        (0, ARCANE_CLOAKING)
+    );
     let flag = &d.npc.quests[&NAXXRAMAS_FLAG];
     assert_ne!(
         flag.flags & crate::game::map::quests::QUEST_FLAGS_AUTO_REWARDED,
@@ -47,13 +50,21 @@ async fn arcane_cloaking_attunes_to_naxxramas() {
     let trigger = &d.spells.get(29_296).unwrap().effects[0];
     assert_eq!((trigger.aura, trigger.trigger_spell), (23, 29_294));
     let credit = &d.spells.get(29_294).unwrap().effects[0];
-    assert_eq!((credit.effect, credit.misc_value), (16, NAXXRAMAS_FLAG as i32));
+    assert_eq!(
+        (credit.effect, credit.misc_value),
+        (16, NAXXRAMAS_FLAG as i32)
+    );
 
     let (_c, g, map) = player(&realm, "P7QNAXX", "Attuna", Race::Human, Class::Mage).await;
     let attuned = |level: u8| {
         on(&map, move |m| {
             ready(m, g, level, &[]);
-            m.players.get_mut(&g).unwrap().journal.rewarded.remove(&NAXXRAMAS_FLAG);
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .journal
+                .rewarded
+                .remove(&NAXXRAMAS_FLAG);
             crate::game::map::spells::cast_triggered(m, g, ARCANE_CLOAKING, Some(g));
             let cloaked = has(m, g, 29_296);
             pass(m, 2100);

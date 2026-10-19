@@ -1854,6 +1854,9 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
             }
         }
     }
+    // A swing ends what attacking does (Honorless Target; mangos's
+    // `AttackerStateUpdate`, `AURA_INTERRUPT_FLAG_ATTACKING`).
+    auras::interrupt(map, attacker, auras::INTERRUPT_ATTACK);
     // A next-swing spell takes the main hand's swing.
     if hand == Hand::Main
         && !extra
