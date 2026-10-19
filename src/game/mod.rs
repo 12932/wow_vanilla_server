@@ -697,6 +697,16 @@ mod tests_p7_spell_teleport;
 #[cfg(test)]
 mod tests_p7_spell_totems;
 #[cfg(test)]
+mod tests_p7_world_combat;
+#[cfg(test)]
+mod tests_p7_world_nav;
+#[cfg(test)]
+mod tests_p7_world_sight;
+#[cfg(test)]
+mod tests_p7_world_spells;
+#[cfg(test)]
+mod tests_p7_world_system;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

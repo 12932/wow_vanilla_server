@@ -3232,7 +3232,11 @@ pub fn group_shares(levels: &[u32], mob_level: u32, o: &KillXp) -> (Vec<u32>, Op
 /// XP and kill credit for a creature's death: the tapper's, or shared with
 /// their group near the corpse (Thistle Tea's `GroupReward`): the living
 /// and the original tapper count; the dead earn nothing, and a released
-/// spirit no quest credit.
+/// spirit no quest credit. The group is the one the tapper was in as they
+/// tapped it, while it holds together, the tapper too if they have left
+/// it, and not a group they have joined since (mangos's
+/// `GetGroupLootRecipient`, Thistle Tea's `KillReward.selection`); else
+/// the tapper's own.
 fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
     let Some(at) = map.creature(victim).map(|c| c.position) else {
         return;

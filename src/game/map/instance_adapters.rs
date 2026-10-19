@@ -813,7 +813,7 @@ fn rfd_wave(map: &mut Map, entry: u32, count: usize) {
             let to = map
                 .nav
                 .as_mut()
-                .and_then(|n| n.random_point(gong, 5.0))
+                .and_then(|n| crate::game::map::world::wander_point(n, gong, 5.0, &mut rand::rng()))
                 .unwrap_or(gong);
             walk_to(map, g, [to.x, to.y, to.z], true);
         }

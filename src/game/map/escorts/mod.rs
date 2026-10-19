@@ -706,9 +706,14 @@ fn run_acts(map: &mut Map, i: usize, acts: &'static [Act]) {
                 for _ in 0..count {
                     let pos = (scatter > 0.0)
                         .then(|| {
-                            map.nav
-                                .as_mut()
-                                .and_then(|n| n.random_point(place, scatter))
+                            map.nav.as_mut().and_then(|n| {
+                                crate::game::map::world::wander_point(
+                                    n,
+                                    place,
+                                    scatter,
+                                    &mut rand::rng(),
+                                )
+                            })
                         })
                         .flatten()
                         .unwrap_or(place);
