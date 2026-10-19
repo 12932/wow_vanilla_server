@@ -718,6 +718,11 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     }
 }
 
+/// A pet nothing fights leaves its fight this long after its last blow.
+/// (mangos has a pet leave with its master, `HandleExitCombat`; wvs's
+/// pets keep their own window.)
+const CALM_AFTER: Duration = Duration::from_secs(6);
+
 /// Out of the fight: the combat flag goes when nothing fights it.
 fn calm(map: &mut Map, g: Guid, now: Instant) {
     let fighting = map.combat(g).is_some_and(|c| {
@@ -728,7 +733,7 @@ fn calm(map: &mut Map, g: Guid, now: Instant) {
     let since = map
         .combat(g)
         .and_then(|c| c.last_action)
-        .is_some_and(|t| now.duration_since(t) < combat::COMBAT_TIMEOUT);
+        .is_some_and(|t| now.duration_since(t) < CALM_AFTER);
     if !fighting
         && !since
         && map.unit_fields(g).is_some_and(|f| {

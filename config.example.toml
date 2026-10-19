@@ -299,6 +299,11 @@ characters_per_realm = 10
 # Default false. Needs a restart. mangos: GameType.
 pvp_realm = false
 
+# Weapon skills and Defense at their caps, at login and each
+# level, rather than raised by use from 1.
+# Default false. Changes at a reload. mangos: AlwaysMaxSkillForLevel.
+always_max_skill_for_level = false
+
 # Battlegrounds' queues and matches.
 [battleground]
 

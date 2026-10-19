@@ -720,7 +720,6 @@ pub fn on_attacked(map: &mut Map, creature: Guid, attacker: Guid) -> bool {
         return true;
     }
     if let Some(master) = owner_of(map, attacker).filter(|m| guid::is_player(*m)) {
-        let now = map.now;
         if let Some(c) = map.creature_mut(creature) {
             if c.tapped_by.is_none() {
                 c.tapped_by = Some(master);
@@ -731,14 +730,9 @@ pub fn on_attacked(map: &mut Map, creature: Guid, attacker: Guid) -> bool {
         }
         // The master is in the fight too.
         if let Some(p) = map.players.get_mut(&master) {
-            p.combat.last_action = Some(now);
             p.combat.attackers.insert(creature);
-            p.fields.set_flag(
-                UNIT_FIELD_FLAGS,
-                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-                true,
-            );
         }
+        crate::game::map::combat::enter(map, master, false);
     }
     false
 }

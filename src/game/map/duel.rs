@@ -197,8 +197,10 @@ pub fn yield_to(map: &mut Map, loser: Guid) {
     let Some(d) = map.players.get(&loser).and_then(|p| p.duel) else {
         return;
     };
-    combat::stop_attack(map, loser);
-    combat::stop_attack(map, d.opponent);
+    // Both sides' fights end, their pets' too (mangos's `CombatStopWithPets`
+    // as a duel is won or yielded).
+    combat::stop_with_pets(map, d.opponent);
+    combat::stop_with_pets(map, loser);
     crate::game::map::spells::cast_triggered(map, loser, SPELL_GROVEL, Some(loser));
     end(map, loser, Some(DuelWinnerReason::Won));
 }
@@ -344,7 +346,16 @@ pub fn left(map: &mut Map, g: Guid, flees: bool) {
         .map(|d| d.phase == Phase::Fighting);
     match fighting {
         Some(true) if flees => end(map, g, Some(DuelWinnerReason::Fled)),
-        Some(_) => end(map, g, None),
+        // Interrupted by another's killing blow: both fights end, as a win
+        // ends them (mangos's `DealDamage`).
+        Some(true) => {
+            if let Some(other) = map.players.get(&g).and_then(|p| p.duel).map(|d| d.opponent) {
+                combat::stop_with_pets(map, other);
+            }
+            combat::stop_with_pets(map, g);
+            end(map, g, None);
+        }
+        Some(false) => end(map, g, None),
         None => {}
     }
 }

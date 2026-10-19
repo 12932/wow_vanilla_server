@@ -29,6 +29,12 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         let on = p.row.state.flags & flag != 0;
         p.fields.set_flag(PLAYER_FLAGS, flag, on);
     }
+    // The level's skills at their caps, if the realm says so (mangos's
+    // `AlwaysMaxSkillForLevel`, at login and each level).
+    p.skills_maxed = map.cfg.players.always_max_skill_for_level;
+    if p.skills_maxed {
+        crate::game::map::skills::maximize(p);
+    }
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_VERIFY_WORLD {
         map: map_enum(map.key.map),

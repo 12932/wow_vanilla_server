@@ -64,8 +64,19 @@ pub const AURA_STATE_HUNTER_PARRY: u32 = 1 << 6;
 /// How long a reactive window stays open.
 pub const REACTIVE_WINDOW: Duration = Duration::from_millis(4000);
 
-/// A player leaves combat this long after their last blow given or taken.
-pub const COMBAT_TIMEOUT: Duration = Duration::from_secs(6);
+/// A player in a fight with another player's side (a player, their pet, in
+/// a duel too) stays in it at least this long after the last blow either
+/// way (mangos's `TriggerCombatTimer(true)`, Thistle Tea's
+/// `@pvp_combat_ms`). Against creatures there is no timer: a player is in
+/// the fight while a creature holds them on its threat list.
+pub const PVP_COMBAT: Duration = Duration::from_secs(5);
+/// How often a player's fight is looked at for its end, the first time at
+/// the next update after it began (mangos's `COMBAT_MANAGER_TICK`, and
+/// `OnCombatStart` priming it).
+pub const COMBAT_CHECK: Duration = Duration::from_millis(1200);
+/// Bloodrage's rage over time: while it lasts the warrior stays in combat
+/// (mangos's `Bloodrage` aura script, `SetForcedCombat`).
+pub const SPELL_BLOODRAGE_REGEN: u32 = 29131;
 /// A PvP flag lasts this long after the last PvP blow.
 pub const PVP_TIMEOUT: Duration = Duration::from_secs(300);
 /// An error for a swing that can't land is sent at most this often.
@@ -94,7 +105,12 @@ pub struct Combat {
     pub attacking: bool,
     pub next_swing: Option<Instant>,
     pub next_offhand: Option<Instant>,
+    /// When it last entered or was kept in a fight ([`enter`]).
     pub last_action: Option<Instant>,
+    /// A player's PvP combat timer: in the fight at least until then.
+    pub combat_until: Option<Instant>,
+    /// When a player's fight is next looked at for its end.
+    pub next_check: Option<Instant>,
     pub last_pvp: Option<Instant>,
     pub swing_error_at: Option<Instant>,
     /// Units fighting this one.
@@ -1033,29 +1049,133 @@ pub fn behind(victim: &UnitView, attacker: &UnitView) -> bool {
     !in_arc(victim, attacker, std::f32::consts::PI)
 }
 
-/// Both units are in combat, now.
-pub fn engage(map: &mut Map, a: Guid, b: Guid) {
+/// `g` is in combat, now: its flag, and what a fight's start stops. A
+/// player-controlled unit fighting another player's side (`pvp`) has the
+/// PvP timer set again; a player's fight is looked at for its end at the
+/// next update after it began. Only the living fight (mangos's
+/// `SetInCombatState`).
+pub fn enter(map: &mut Map, g: Guid, pvp: bool) {
     let now = map.now;
-    for (x, y) in [(a, b), (b, a)] {
-        if let Some(c) = map.combat_mut(x) {
-            c.last_action = Some(now);
-            c.attackers.insert(y);
+    if guid::is_player(g) && !map.unit_view(g).is_some_and(|u| u.alive) {
+        return;
+    }
+    let Some(f) = map.unit_fields_mut(g) else {
+        return;
+    };
+    let fresh = !f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+    if let Some(c) = map.combat_mut(g) {
+        c.last_action = Some(now);
+        if pvp {
+            c.combat_until = Some(now + PVP_COMBAT);
         }
-        let Some(f) = map.unit_fields_mut(x) else {
-            continue;
-        };
-        let fresh = !f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
-        f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
-        if fresh {
-            crate::game::map::spells::combat_began(map, x);
+        if fresh || c.next_check.is_none() {
+            c.next_check = Some(now);
         }
     }
-    // A blow on a flagged unit flags the attacker; a flagged player's blow
-    // flags the one struck. A pet's blows count as its master's.
+    if fresh {
+        crate::game::map::spells::combat_began(map, g);
+    }
+}
+
+/// Whether a fight between `a` and `b` is one between two players' sides:
+/// it runs the PvP timer (mangos's `SetInCombatWith`, both units
+/// `UNIT_FLAG_PLAYER_CONTROLLED`).
+fn pvp_fight(map: &Map, a: Guid, b: Guid) -> bool {
     let (ma, mb) = (
         crate::game::map::pets::master(map, a),
         crate::game::map::pets::master(map, b),
     );
+    guid::is_player(ma) && guid::is_player(mb) && ma != mb
+}
+
+/// A harmful act of `attacker`'s landed on `victim`: the players' sides of
+/// it are in the fight, a pet's master with it (mangos's
+/// `SetInCombatWithAggressor` and `SetInCombatWithVictim`, the controller
+/// joining in `SetInCombatState`). A creature's own side is its AI's
+/// ([`crate::game::map::ai::attacked`]).
+pub fn struck(map: &mut Map, attacker: Guid, victim: Guid) {
+    if attacker == victim {
+        return;
+    }
+    let pvp = pvp_fight(map, attacker, victim);
+    let mut sides = vec![
+        attacker,
+        victim,
+        crate::game::map::pets::master(map, attacker),
+        crate::game::map::pets::master(map, victim),
+    ];
+    sides.sort_unstable();
+    sides.dedup();
+    for g in sides {
+        if guid::is_player(crate::game::map::pets::master(map, g)) {
+            enter(map, g, pvp);
+        }
+    }
+}
+
+/// `helper` helped `helped` (a heal, a buff): if `helped` is in a fight,
+/// so is the helper, and on the PvP timer if `helped` is another player's
+/// side flagged for PvP (mangos's `SetInCombatWithAssisted`). What keeps
+/// the helper there after is the threat its help made.
+pub fn assisted(map: &mut Map, helper: Guid, helped: Guid) {
+    if helper == helped
+        || !guid::is_player(crate::game::map::pets::master(map, helper))
+        || !map
+            .unit_fields(helped)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT))
+    {
+        return;
+    }
+    let pvp = pvp_fight(map, helper, helped)
+        && map
+            .unit_fields(helped)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP));
+    enter(map, helper, pvp);
+}
+
+/// `g`'s fight ends, and its pet's, guardians' and charmed unit's
+/// (mangos's `CombatStopWithPets`).
+pub fn stop_with_pets(map: &mut Map, g: Guid) {
+    leave_combat(map, g);
+    let owned: Vec<Guid> = map
+        .players
+        .get(&g)
+        .map(|p| {
+            p.owned
+                .pet
+                .into_iter()
+                .chain(p.owned.charm)
+                .chain(p.owned.guardians.iter().copied())
+                .collect()
+        })
+        .unwrap_or_default();
+    for u in owned {
+        leave_combat(map, u);
+    }
+}
+
+/// Both units are in combat, now.
+pub fn engage(map: &mut Map, a: Guid, b: Guid) {
+    let pvp = pvp_fight(map, a, b);
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    for (x, y) in [(a, b), (b, a)] {
+        if let Some(c) = map.combat_mut(x) {
+            c.attackers.insert(y);
+        }
+        enter(map, x, pvp);
+    }
+    // A pet's fight is its master's (mangos's `SetInCombatState`).
+    for m in [ma, mb] {
+        if m != a && m != b && guid::is_player(m) {
+            enter(map, m, pvp);
+        }
+    }
+    // A blow on a flagged unit flags the attacker; a flagged player's blow
+    // flags the one struck. A pet's blows count as its master's.
     pvp_contact(map, ma, mb, Contact::Attack);
     pvp_contact(map, mb, ma, Contact::Attacked);
     if guid::is_unit(b) {
@@ -3020,38 +3140,8 @@ pub fn update_players(map: &mut Map) {
     for g in fighting {
         sync_aura_state(map, g);
     }
-    let data = map.realm.data.clone();
-    // Who creatures fighting hold a threat on: it keeps a player in a
-    // fight, so it matters only if someone is in one (and saves a look at
-    // every creature when no one is).
-    let threatened: ahash::AHashSet<Guid> =
-        if map.players.values().any(|p| p.combat.last_action.is_some()) {
-            let fighting = map.awake_where(|c| c.alive() && c.combat.attacking, |k, _| k);
-            fighting
-                .into_iter()
-                .filter_map(|k| map.creatures.get(k))
-                .flat_map(|c| c.threat.iter().map(|(t, _)| *t))
-                .collect()
-        } else {
-            Default::default()
-        };
+    leave_finished_fights(map);
     for p in map.players.values_mut() {
-        if threatened.contains(&p.guid) && p.combat.last_action.is_some() {
-            p.combat.last_action = Some(now);
-        }
-        // Swinging at no one in reach, or meaning to, holds no one in a
-        // fight (Thistle Tea's `attack intent alone`, mangos's combat
-        // timer): only blows and threat do.
-        if p.combat
-            .last_action
-            .is_some_and(|t| now.duration_since(t) > COMBAT_TIMEOUT)
-        {
-            p.combat.last_action = None;
-            p.combat.attackers.clear();
-            p.fields
-                .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
-            crate::game::map::reputation::end_temporary_war(p, &data);
-        }
         if p.combat
             .last_pvp
             .is_some_and(|t| now.duration_since(t) > PVP_TIMEOUT)
@@ -3064,6 +3154,57 @@ pub fn update_players(map: &mut Map) {
                 p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, false);
             }
         }
+    }
+}
+
+/// Players whose fight is over leave it, looked at every
+/// [`COMBAT_CHECK`] (mangos's `CombatManager::Update`): one is over when
+/// no living creature holds the player on its threat list or attacks them,
+/// the PvP timer has run out, and no Bloodrage holds them in it. Swinging
+/// at no one in reach, or meaning to, holds no one: the attack stops with
+/// the fight (mangos's `HandleExitCombat`, its `CombatStop`).
+fn leave_finished_fights(map: &mut Map) {
+    let now = map.now;
+    let due: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| p.combat.next_check.is_some_and(|t| t <= now))
+        .map(|p| p.guid)
+        .collect();
+    if due.is_empty() {
+        return;
+    }
+    let held: ahash::AHashSet<Guid> = {
+        let fighting = map.awake_where(
+            |c| c.alive() && (c.combat.attacking || !c.threat.is_empty()),
+            |k, _| k,
+        );
+        fighting
+            .into_iter()
+            .filter_map(|k| map.creatures.get(k))
+            .flat_map(|c| {
+                c.threat
+                    .iter()
+                    .map(|(t, _)| *t)
+                    .chain(c.combat.attacking.then_some(c.combat.victim))
+            })
+            .collect()
+    };
+    for g in due {
+        let Some(p) = map.players.get_mut(&g) else {
+            continue;
+        };
+        p.combat.next_check = Some(now + COMBAT_CHECK);
+        if !p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT) {
+            p.combat.next_check = None;
+            continue;
+        }
+        let timed = p.combat.combat_until.is_some_and(|t| t > now);
+        let forced = p.auras.has_spell(SPELL_BLOODRAGE_REGEN);
+        if held.contains(&g) || timed || forced {
+            continue;
+        }
+        leave_combat(map, g);
     }
 }
 
@@ -3091,6 +3232,8 @@ pub fn leave_combat(map: &mut Map, g: Guid) {
     if let Some(c) = map.combat_mut(g) {
         c.attackers.clear();
         c.last_action = None;
+        c.combat_until = None;
+        c.next_check = None;
         c.auto_repeat = None;
     }
     if let Some(f) = map.unit_fields_mut(g) {

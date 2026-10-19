@@ -795,8 +795,14 @@ fn effect(
                 // The hearthstone and its kind: home.
                 None => home(map, target),
             };
-            if let Some((m, pos, o)) = to {
-                map.teleport(target, crate::game::map::MapKey::world(m), pos, o);
+            // Within this map, it keeps a fight if it is short (mangos's
+            // `EffectTeleportUnits` by `NearTeleportTo`).
+            match to {
+                Some((m, pos, o)) if m == map.key.map => map.near_teleport(target, pos, o),
+                Some((m, pos, o)) => {
+                    map.teleport(target, crate::game::map::MapKey::world(m), pos, o)
+                }
+                None => {}
             }
         }
         // To the caster, as mangos's `EffectTeleUnitsFaceCaster` and
@@ -840,7 +846,7 @@ fn effect(
                     first_clear(map, from, ahead(d))
                 };
                 let facing = (-o).rem_euclid(std::f32::consts::TAU);
-                map.teleport(target, map.key, at, facing);
+                map.near_teleport(target, at, facing);
             }
         }
         // Back to where it last stood on the ground (Thistle Tea's
@@ -853,6 +859,15 @@ fn effect(
                 .and_then(|p| p.safe_position)
                 .filter(|(m, _, _)| *m == here)
             {
+                // A long way, it ends the fight (mangos's `NearTeleportTo`).
+                let far = map.position_of(target).is_some_and(|at| {
+                    let (dx, dy, dz) = (at.x - pos.x, at.y - pos.y, at.z - pos.z);
+                    let keeps = crate::game::map::NEAR_TELEPORT_KEEPS_COMBAT;
+                    dx * dx + dy * dy + dz * dz >= keeps * keeps
+                });
+                if far {
+                    crate::game::map::combat::leave_combat(map, target);
+                }
                 crate::game::map::movement::teleport_within(map, target, pos, o);
             }
         }
@@ -874,7 +889,7 @@ fn effect(
                 };
                 let to = first_clear(map, me.position, want);
                 if map.players.contains_key(&caster) {
-                    map.teleport(caster, map.key, to, me.orientation);
+                    map.near_teleport(caster, to, me.orientation);
                 } else {
                     super::super::scripts::place(map, caster, to, me.orientation);
                 }

@@ -529,15 +529,10 @@ pub fn shapeshifted(map: &mut Map, g: Guid, before: u8, form: u8) {
 
 /// After an energize: Bloodrage keeps the warrior in combat.
 pub fn after_energize(map: &mut Map, caster: Guid, s: &SpellTemplate) {
-    if script(s, "spell_warrior_bloodrage")
-        && let Some(p) = map.players.get_mut(&caster)
-    {
-        p.fields.set_flag(
-            UNIT_FIELD_FLAGS,
-            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-            true,
-        );
-        p.combat.last_action = Some(map.now);
+    // Its rage over time holds them there while it lasts
+    // (`combat::SPELL_BLOODRAGE_REGEN`).
+    if script(s, "spell_warrior_bloodrage") && map.players.contains_key(&caster) {
+        crate::game::map::combat::enter(map, caster, false);
     }
 }
 

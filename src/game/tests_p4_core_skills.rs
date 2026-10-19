@@ -42,6 +42,8 @@ async fn a_skills_bonuses_go_in_its_slot_apart_from_its_value_signed_and_by_thei
             level(m, g, 60);
             let p = m.players.get_mut(&g).unwrap();
             skills::learn_skill(p, 95, 1);
+            // Learned from 1 (a weapon skill's start), raised to its cap.
+            skills::set_value(p, 95, 300);
             let plain = slot(m, g, 95).unwrap().1;
             // +3 of ten stacks, -5 of two: temporary; +2 of three: permanent.
             aura_of(m, g, 96_001, auras::AURA_MOD_SKILL, 95, 3);

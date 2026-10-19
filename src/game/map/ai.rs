@@ -131,6 +131,15 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     if !c.alive() || c.evading {
         return;
     }
+    // The player it fights is in the fight too, as it begins and as it
+    // goes on (mangos's `EngageInCombatWith`, `SetInCombatWithVictim`).
+    let master = crate::game::map::pets::master(map, attacker);
+    if guid::is_player(master) {
+        combat::enter(map, master, false);
+    }
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
     if c.tapped_by.is_none() && guid::is_player(attacker) {
         c.tapped_by = Some(attacker);
     }

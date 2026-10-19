@@ -758,7 +758,8 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
             if dx * dx + dy * dy + dz * dz > CHAIR_REACH * CHAIR_REACH {
                 return;
             }
-            map.teleport(player, map.key, seat, orientation);
+            // A step to the seat keeps a fight (mangos's `NearTeleportTo`).
+            map.near_teleport(player, seat, orientation);
             if let Some(p) = map.players.get_mut(&player) {
                 p.set_stand_state(STAND_STATE_SIT_LOW_CHAIR.saturating_add(height.min(3) as u8));
             }

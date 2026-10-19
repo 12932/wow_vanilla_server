@@ -188,6 +188,7 @@ New characters, the level cap, and the realm's type.
 | `start_money` | Copper new characters start with. | `0` | 0 to 2147483647, clamped | live | `StartPlayerMoney` |
 | `characters_per_realm` | Characters an account may have on the realm. | `10` | 1 to 10, clamped | live | `CharactersPerRealm` |
 | `pvp_realm` | A PvP realm: an account's characters are all of one side, and everyone is flagged for PvP. | `false` |  | restart | `GameType` |
+| `always_max_skill_for_level` | Weapon skills and Defense at their caps, at login and each level, rather than raised by use from 1. | `false` |  | live | `AlwaysMaxSkillForLevel` |
 
 ### `[battleground]`
 

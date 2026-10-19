@@ -417,6 +417,9 @@ settings! {
         /// A PvP realm: an account's characters are all of one side, and
         /// everyone is flagged for PvP.
         pvp_realm: bool = false, Any, Restart, "GameType";
+        /// Weapon skills and Defense at their caps, at login and each
+        /// level, rather than raised by use from 1.
+        always_max_skill_for_level: bool = false, Any, Live, "AlwaysMaxSkillForLevel";
     }
 }
 

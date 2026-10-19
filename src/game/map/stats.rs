@@ -216,12 +216,14 @@ pub fn give_xp(map: &mut Map, g: Guid, amount: u32, victim: Option<Guid>) {
         return;
     }
     let data = map.realm.data.clone();
+    let maxed = map.cfg.players.always_max_skill_for_level;
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
     if p.level() >= max_level() {
         return;
     }
+    p.skills_maxed = maxed;
     let now = map.now;
     // A kill draws as much again from the rested pool.
     let base = amount;

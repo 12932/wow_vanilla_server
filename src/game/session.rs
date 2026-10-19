@@ -423,6 +423,9 @@ impl Session {
             spells: start.spells.clone(),
             ..Default::default()
         };
+        // Its skills start as a new character's: weapons and defense at 1
+        // (`skills::init`).
+        row.state.skills = Some(Vec::new());
         // The flight points the race knows from the first.
         if let Some(r) = self.realm.data.races.get(&race) {
             row.state.taxi_mask = crate::game::map::npc::mask_from_client(&[r.starting_taxi_mask]);

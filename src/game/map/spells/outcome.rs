@@ -1117,8 +1117,12 @@ pub fn damage_log(
 pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Damage, l: &Landing) {
     // Its damage puts a creature in the fight, whether it saw the caster
     // or not; a proc's doesn't (Thistle Tea's `Engagement.on_damage`).
-    if d.amount > 0 && caster != target && guid::is_unit(target) && !l.triggered {
-        crate::game::map::ai::attacked(map, target, caster);
+    // The players' sides of it too (mangos's `HandleDamageDealt`).
+    if d.amount > 0 && caster != target && !l.triggered {
+        if guid::is_unit(target) {
+            crate::game::map::ai::attacked(map, target, caster);
+        }
+        combat::struck(map, caster, target);
     }
     let (left, absorbed) = auras::absorb_and_share(map, caster, target, d.amount, s.school_mask());
     let frame = damage_log(
