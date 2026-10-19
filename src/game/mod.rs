@@ -647,6 +647,8 @@ mod tests_p7_player_social;
 #[cfg(test)]
 mod tests_p7_player_spells;
 #[cfg(test)]
+mod tests_p7_scripts;
+#[cfg(test)]
 mod tests_p7_spell_caster;
 #[cfg(test)]
 mod tests_p7_spell_channel;
