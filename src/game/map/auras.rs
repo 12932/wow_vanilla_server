@@ -656,6 +656,21 @@ impl Auras {
 /// `SPELL_EFFECT_INSTAKILL`.
 const EFFECT_INSTAKILL: u32 = 1;
 
+/// Shadow Trance's and Netherwind Focus's.
+const ONE_CAST_MODIFIERS: [u32; 2] = [17_941, 22_008];
+
+/// The charges an aura of `spell` starts with: its own, but one for the
+/// modifiers spent by the next cast though their data has none (mangos's
+/// `HandleAddModifier`: Shadow Trance's instant Shadow Bolt, Netherwind
+/// Focus's instant spell).
+pub fn own_charges(spell: &SpellTemplate) -> u32 {
+    if ONE_CAST_MODIFIERS.contains(&spell.id) {
+        1
+    } else {
+        spell.proc_charges
+    }
+}
+
 pub fn positive(s: &SpellTemplate) -> bool {
     // vmangos's own word on it first, its positive over its negative (as
     // Thistle Tea's `harmful_instakill?`; no spell has both).
@@ -724,7 +739,12 @@ pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEff
                 e.aura,
                 AURA_MOD_DAMAGE_TAKEN | AURA_MOD_DAMAGE_PERCENT_TAKEN | AURA_MOD_MELEE_DAMAGE_TAKEN
             ) && e.base_points + e.base_dice > 0)
-            || matches!(e.target_a, 6 | 15 | 16 | 22 | 24 | 28) && e.effect != 0
+            || matches!(e.target_a, 6 | 15 | 16 | 24 | 28) && e.effect != 0
+            // The caster's place is neither friend nor foe (mangos's
+            // `TARGET_LOCATION_CASTER_SRC`, neutral): its area says which,
+            // so the Healing Auras about their ward help (Thistle Tea's
+            // "healing wards select friends").
+            || e.target_a == 22 && matches!(e.target_b, 2 | 15 | 16 | 24 | 28 | 36 | 54) && e.effect != 0
             // An instant kill of anything but the caster alone (Death
             // Touch at any unit), but a Voidwalker's Sacrifice (Thistle
             // Tea's `harmful_instakill?`).
@@ -993,7 +1013,7 @@ pub fn apply_spell(
         positive: pos,
         passive,
         stacks: 1,
-        charges: ctx.charges.unwrap_or(spell.proc_charges),
+        charges: ctx.charges.unwrap_or_else(|| own_charges(spell)),
         expires: duration.map(|ms| now + Duration::from_millis(u64::from(ms))),
         duration,
         level,

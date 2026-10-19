@@ -779,6 +779,18 @@ mod tests_p7_world_spells;
 #[cfg(test)]
 mod tests_p7_world_system;
 #[cfg(test)]
+mod tests_p8_loader_combat;
+#[cfg(test)]
+mod tests_p8_loader_limits;
+#[cfg(test)]
+mod tests_p8_loader_mods;
+#[cfg(test)]
+mod tests_p8_loader_procs;
+#[cfg(test)]
+mod tests_p8_loader_rogue;
+#[cfg(test)]
+mod tests_p8_loader_spells;
+#[cfg(test)]
 mod tests_p8_spell_amounts;
 #[cfg(test)]
 mod tests_p8_spell_effects;

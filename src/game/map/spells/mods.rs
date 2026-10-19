@@ -82,14 +82,21 @@ impl Mods {
 
     /// Effect `index`'s points with all effects' modifiers, then those to
     /// its aura's speed, haste or attack power (mangos's
-    /// `CalculateAuraEffectValue`).
+    /// `CalculateAuraEffectValue`), each in whole numbers as mangos's
+    /// `ApplySpellMod<int32>` works them out: 30 haste and 6% more is 31.
     pub fn points(&self, s: &SpellTemplate, index: usize, points: i32) -> i32 {
-        let v = self.apply(OP_ALL_EFFECTS, points as f32);
+        let whole = |op: usize, v: i32| {
+            if !self.any(op) {
+                return v;
+            }
+            let pct = i64::from((100 + self.pct[op]).max(0));
+            ((i64::from(v) + i64::from(self.flat[op])) * pct / 100) as i32
+        };
+        let v = whole(OP_ALL_EFFECTS, points);
         match aura_op(s.effects[index].aura) {
-            Some(op) => self.apply(op, v),
+            Some(op) => whole(op, v),
             None => v,
         }
-        .round() as i32
     }
 }
 

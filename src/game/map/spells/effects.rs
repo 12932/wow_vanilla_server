@@ -1849,17 +1849,54 @@ pub fn tick_areas(map: &mut Map) {
                     let level = map.unit_view(area.caster).map(|u| u.level).unwrap_or(1);
                     let amount = points(s, area.index, level);
                     let left = area.ends.saturating_duration_since(now).as_millis() as u32;
+                    // What the unit holds of the spell's other areas from
+                    // this caster stays in the holder with this one (Flare's
+                    // two immunities), as mangos's `DynamicObjectUpdater`
+                    // adds an area's effect to the holder already there.
+                    let held = auras::auras(map, g).and_then(|a| {
+                        a.holders
+                            .iter()
+                            .find(|h| h.spell == area.spell && h.caster == area.caster)
+                            .map(|h| {
+                                h.effects
+                                    .iter()
+                                    .map(|x| (usize::from(x.effect), x.amount))
+                                    .collect::<Vec<_>>()
+                            })
+                    });
+                    let added = held
+                        .as_ref()
+                        .is_some_and(|h| h.iter().all(|(i, _)| *i != area.index));
+                    let mut effects: Vec<(usize, i32)> = held
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|(i, _)| *i != area.index)
+                        .collect();
+                    effects.push((area.index, amount));
+                    effects.sort_unstable_by_key(|(i, _)| *i);
                     let _ = auras::apply_spell(
                         map,
                         area.caster,
                         g,
                         s,
-                        &[(area.index, amount)],
+                        &effects,
                         auras::Context {
                             duration: Some(Some(left.min(area.period.as_millis() as u32 + 500))),
                             ..Default::default()
                         },
                     );
+                    // An immunity come into the holder so purges what it
+                    // keeps off, as one put on does.
+                    if added
+                        && let Some(h) = auras::auras(map, g).and_then(|a| {
+                            a.holders
+                                .iter()
+                                .find(|h| h.spell == area.spell && h.caster == area.caster)
+                                .cloned()
+                        })
+                    {
+                        super::immunity::applied(map, g, &h);
+                    }
                 }
             }
         }
