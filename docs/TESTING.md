@@ -5,8 +5,8 @@ process of its own. They are in two suites.
 
 | Suite | Command | What | Time (16 cores, debug) |
 |---|---|---|---|
-| Fast | `cargo nextest run --lib` | every test that doesn't need the real world (1,201) | about 25 s |
-| Extended | `cargo extended` | every test (1,448), the real world's too | about 3 minutes |
+| Fast | `cargo nextest run --lib` | every test that doesn't need the real world (about 1,950) | about 30 s |
+| Extended | `cargo extended` | every test (about 2,340), the real world's too | about 7 minutes at 8 threads, 13 at 4 |
 
 `cargo extended` is an alias (`.cargo/config.toml`) for `cargo nextest run --lib --profile extended --run-ignored
 all`. Run the fast suite as you work, and the extended one before a merge or a push. Both use the same debug build,

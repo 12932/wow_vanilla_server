@@ -62,6 +62,9 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Guards, as mangos-classic calls them:** a civilian calls one guard each time it takes a victim, with no posts,
   charges or cooldowns, no call on sight and no rousing of a guard nearby (Thistle Tea's `GuardCall` ports vmangos's
   `GuardMgr`). Each town's alarm escalates (Avoidance, then two elite a call, then Jaina for Stormwind): wvs's own.
+- **The Stormwind Elite Guard** (101756) is wvs's own: the Alterac Valley warmaster's fight, a charge at healers,
+  two at Stormwind's alarm of 50 and four with Jaina. The warmasters' second Whirlwind now waits its 2 s, and their
+  scripts stop when they evade, as Thistle Tea has them.
 - **`.gear`** replaces what is worn, teaches the skills its items need and leaves its target at full health and
   mana; Thistle Tea's `.debug random equipment` fills only empty slots.
 - **`.character spells`** teaches what the class's trainers would, rank by rank, prerequisites met, talent ranks only

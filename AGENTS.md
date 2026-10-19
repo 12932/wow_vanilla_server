@@ -47,7 +47,7 @@ There is no world tick.
   in a second block. Blocks are batched per observer per update; big batches are compressed. A client with creates
   waiting for it is held (`Outbound::hold`): what is sent to it meanwhile waits, in order, until it is let go at the
   event's end (`Map::after_events`) or at the update's "held" step, creates and forgets first.
-- **Guards** (`map/guards.rs`, `jaina.rs`): a civilian with `CALLS_GUARDS` calls a guard per victim it takes
+- **Guards** (`map/guards.rs`, `map/elites.rs`, `jaina.rs`): a civilian with `CALLS_GUARDS` calls a guard per victim it takes
   (mangos-classic's `HandleSpawnGuard`); each town keeps an alarm that escalates (`[guards]`), and at its top Jaina
   comes from Theramore to Stormwind, her state in `Realm::social.jaina`, across maps 0 and 1.
 - **Visibility** (`visibility.rs`): a 50-yard grid, an exact distance test at `[world] visibility_yards` (100), and

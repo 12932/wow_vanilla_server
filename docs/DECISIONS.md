@@ -1085,4 +1085,23 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **`SMSG_SPELLLOGMISS`:** wvs's layout is mangos's and the client's (`0x5E7E00`); the fork's `SpellMissInfo` is
       a u32 (question 60). `tools/client_check/spell_log_miss.py` checks it, every kind of miss in the scenario.
 
+70. **The Stormwind Elite Guard** (your design, 2026-10-19; `feat/elites`, `map/elites.rs`).
+    - **The unit:** entry 101756, made in code, level 62 elite, the Royal Guard's model, faction, speeds, notice,
+      resistances, guard flag and loot, and the Tower Point Warmaster's toughness (health ×20, 64,740; damage ×13.5,
+      about 1,690 a main-hand blow, 2 s). Two swords: 21573 (the Alliance PvP longsword, display 34128) and 23456
+      (Grand Marshal's Swiftblade, 36066); the off hand swings at half.
+    - **Its fight,** the warmaster's (`av_scripts::warmaster()`): Charge, Cleave, Demoralizing Shout, Whirlwind
+      twice 2 s apart, Enrage once below 30%. **The charge** goes to a random hostile healer (priest, druid, shaman,
+      paladin) in sight 8 to 25 yards off, one who healed in the last 5 s first, else its victim at that range; the
+      one charged is raised to the top of its threat.
+    - **When:** in Jaina's city (Stormwind), two (`elite_count`) as the alarm rises through `elite_from` (50), once
+      a crossing, as guards (5 minutes out of combat, wandering); four (`jaina_elites`) with Jaina, `jaina_elites_yards`
+      (40) out at random angles, walking to her side and fighting on the way, leaving with her flash (or staying as
+      guards if she dies).
+    - **You might override:** Enrage once a fight (warmasters recast it each 2 minutes); the warmaster's immunities
+      not copied; Elite Guards not counted in the alarm; they take the alarm's Avoidance; the 5 s heal window a
+      constant; Jaina's four walk in rather than flash.
+    - **A fix to Alterac Valley:** the warmasters' second Whirlwind went off with the first (an EventAI action's
+      delay is ignored); it is now a timed sub-script, and their scripts stop at an evade, as Thistle Tea.
+
 ## Left for later, and why
