@@ -277,6 +277,18 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     gone when it leaves the world; Thistle Tea gives one aggressive pet (`wrong-for-1.12`).
   - **Left:** 133 rows (game objects' casts and summons, event sinks, corpse group loot); the force-move counter is
     always 0 where mangos counts up per session; spells with mangos's PvP attribute should flag the victim too.
+- **7a, the player, round 7 (0.1.21):** 58 rows. Fixes: gear bound to another map closes its open loot window
+  (mangos's `Loot::~Loot`); a place's spell auras are judged again when an aura they depend on comes or goes, and at
+  a resurrection (mangos); meeting stones refuse the dead, the flying, one controlling another and an unusable
+  stone. New GM commands: `.debug position [guid]` with the facing, and `.instance data [field]` (read only).
+  **My calls:**
+  - **Meeting stones** refuse the dead (Thistle Tea; mangos doesn't check), the flying and a controller (mangos).
+  - **Remote bank access:** mangos checks for a banker only when buying a slot, so a client can reach its bank from
+    anywhere; Thistle Tea refuses without a banker near. I chose **Thistle Tea's check** (it is how the real
+    server behaved, and it stops a remote-bank exploit); it goes to the next player round. Tell me if you'd rather
+    keep mangos's.
+  - **Left:** 241 rows, mostly bigger designs: movement counters and acks, Charge as server movement, cross-map and
+    corpse-targeted resurrection, a game object's gossip option, quests' source spells, auto-rewarded event quests.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -366,7 +378,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6f: creature scripts | 73.8% | dd31c4f |
 | 6h: creature AI | 74.5% | 4738983 |
 | 6i: entities in the world | 75.1% | cabc8d6 |
+| 7a: the player, round 7 | 75.7% | 5b07acc |
 
-**Running now:** round 6 (6j) and round 7 (7a the player, 7b spells, 7c loaders, 7d combat).
+**Running now:** round 6 (6j) and round 7 (7b spells, 7c loaders, 7d combat, 7e the world).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
