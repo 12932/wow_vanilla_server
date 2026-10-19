@@ -65,17 +65,24 @@ pub struct Session {
 /// in the world, holding the account's place.
 impl Drop for Session {
     fn drop(&mut self) {
-        // At shutdown the maps have saved everyone; and with the runtime
-        // gone (a test's end) there is no map to go to.
-        if self.realm.maps.is_closed() || tokio::runtime::Handle::try_current().is_err() {
+        // With the runtime gone (a test's end) there is no map to go to.
+        if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
         // A player handed over and not yet passed on goes on to their
-        // map, to be saved there.
+        // map, to be saved there; at shutdown too, as a map asked for then
+        // saves whoever comes. The queue closed first: one handed over as
+        // the session goes is passed on by `transfer` itself, not lost
+        // with it.
+        self.control_rx.close();
         while let Ok(ctl) = self.control_rx.try_recv() {
             if let Control::Transfer { .. } = ctl {
                 self.control(ctl);
             }
+        }
+        // At shutdown the maps save everyone.
+        if self.realm.maps.is_closed() {
+            return;
         }
         self.disconnect();
     }

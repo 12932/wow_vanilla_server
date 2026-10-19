@@ -238,14 +238,23 @@ impl Maps {
             if !h.is_closed() {
                 return h.clone();
             }
-            tracing::error!("{key}'s actor has gone; starting it again");
+            if !self.is_closed() {
+                tracing::error!("{key}'s actor has gone; starting it again");
+            }
         }
         let (tx, rx) = mpsc::unbounded_channel();
         let handle = MapHandle { key, tx };
-        let map = Map::new(key, realm.clone(), handle.clone());
-        tokio::spawn(run(map, rx));
+        // Read under the lock `Maps::close` takes: a map started before
+        // the shutdown hears of it, and one asked for after is never
+        // started, but saves whoever comes to it (`let_go`).
+        if self.is_closed() {
+            tokio::spawn(let_go_all(realm.clone(), key, rx));
+        } else {
+            let map = Map::new(key, realm.clone(), handle.clone());
+            tokio::spawn(run(map, rx));
+            info!("started {key}");
+        }
         handles.insert(key, handle.clone());
-        info!("started {key}");
         handle
     }
 
@@ -261,14 +270,16 @@ impl Maps {
         self.handles.read().values().cloned().collect()
     }
 
-    /// The server is shutting down; the maps save everyone and stop.
-    pub fn close(&self) {
-        self.closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+    /// The server is shutting down: every map started, to be told to save
+    /// everyone. None starts after ([`Maps::get`]).
+    pub fn close(&self) -> Vec<MapHandle> {
+        let handles = self.handles.write();
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        handles.values().cloned().collect()
     }
 
     pub fn is_closed(&self) -> bool {
-        self.closed.load(std::sync::atomic::Ordering::Relaxed)
+        self.closed.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -757,17 +768,21 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 guarded(&mut map, "after an event", Map::after_events);
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved.
+                let mut stop = false;
                 for _ in 0..512 {
                     match rx.try_recv() {
                         Ok(event) => {
                             if handle_guarded(&mut map, event) {
-                                hand_on(&map, &mut rx);
-                                return;
+                                stop = true;
+                                break;
                             }
                             guarded(&mut map, "after an event", Map::after_events);
                         }
                         Err(_) => break,
                     }
+                }
+                if stop {
+                    break;
                 }
             }
             _ = ticker.tick() => {
@@ -789,7 +804,53 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             }
         }
     }
-    hand_on(&map, &mut rx);
+    finish(map, rx).await;
+}
+
+/// What a map that has stopped does with what is still sent to it: hands
+/// it on ([`hand_on`]), or, as the server shuts down, saves who comes for
+/// as long as anyone may ([`let_go_all`]). A player handed to it after its
+/// shutdown isn't lost with its queue: their session may have taken them
+/// from their old map before the shutdown, and pass them on after.
+async fn finish(map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
+    if map.realm.maps.is_closed() {
+        let (realm, key) = (map.realm.clone(), map.key);
+        drop(map);
+        let_go_all(realm, key, rx).await;
+    } else {
+        hand_on(&map, &mut rx);
+    }
+}
+
+/// A map's queue once the server is shutting down, until every handle to
+/// it has gone: each player arriving is saved where they were going and
+/// let go ([`let_go`]).
+async fn let_go_all(realm: Arc<Realm>, key: MapKey, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
+    while let Some(e) = rx.recv().await {
+        let_go(&realm, key, e);
+    }
+}
+
+/// What a map that won't take a player does with them, as the server
+/// shuts down or into a copy that has gone: one arriving from another map
+/// is saved where they were going, and they go offline and their session
+/// ends. A shutdown is answered; the rest is dropped.
+fn let_go(realm: &Realm, key: MapKey, event: MapEvent) {
+    match event {
+        MapEvent::Arrive(a) => {
+            let Arrival { kind, online } = *a;
+            if let ArrivalKind::Transfer(mut p) = kind {
+                p.row.map = key.map;
+                realm.store.save(p.to_row(Instant::now()));
+            }
+            realm.registry.go_offline(online.guid);
+            let _ = online.session.send(crate::game::session::Control::Kick);
+        }
+        MapEvent::Shutdown(reply) => {
+            let _ = reply.send(());
+        }
+        _ => {}
+    }
 }
 
 /// What was sent to a map that has stopped (a copy unloaded or reset as a
@@ -808,14 +869,7 @@ fn hand_on(map: &Map, rx: &mut mpsc::UnboundedReceiver<MapEvent>) {
     // again at once): saved where they were going, and let go.
     if realm.maps.is_closed() || crate::game::instances::expired(realm, map.key) {
         for e in rest {
-            let MapEvent::Arrive(a) = e else { continue };
-            let Arrival { kind, online } = *a;
-            if let ArrivalKind::Transfer(mut p) = kind {
-                p.row.map = map.key.map;
-                realm.store.save(p.to_row(Instant::now()));
-            }
-            realm.registry.go_offline(online.guid);
-            let _ = online.session.send(crate::game::session::Control::Kick);
+            let_go(realm, map.key, e);
         }
         return;
     }
@@ -968,6 +1022,9 @@ impl Map {
     fn arrive(&mut self, arrival: Arrival) {
         let Arrival { kind, online } = arrival;
         online.set_map(self.handle.clone());
+        if self.key.instance != 0 {
+            crate::game::instances::arrived(&self.realm, self.key, online.guid);
+        }
         match kind {
             ArrivalKind::Login(row) => {
                 let mut p = Player::from_row(&self.realm.data.clone(), *row, online, self.now);

@@ -381,3 +381,181 @@ async fn a_player_on_the_way_into_a_copy_that_stops_arrives() {
     }
     assert!(there, "Alice is in the copy started again");
 }
+
+/// The Stockade, for one: a copy with a single place.
+const ONE_PLACE: u32 = 34;
+
+/// Alice and Bob, in a party.
+async fn party(realm: &Arc<Realm>) -> (Client, Client) {
+    let mut a = Client::connect(realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let (ao, bo) = (
+        realm.registry.online(a.guid).unwrap(),
+        realm.registry.online(b.guid).unwrap(),
+    );
+    assert!(crate::game::social::groups::join_directly(realm, &ao, &bo));
+    (a, b)
+}
+
+type Given = Result<MapKey, instances::Refused>;
+
+/// `key_for` for `a` and `b` at once, each on a thread of its own, `n`
+/// times, each time into a copy of `map` the group has yet to make: what
+/// each was given.
+fn at_once(realm: &Arc<Realm>, a: Guid, b: Guid, map: u32, n: usize) -> Vec<(Given, Given)> {
+    tokio::task::block_in_place(|| {
+        (0..n)
+            .map(|_| {
+                realm.social.instances.lock().forget_admissions();
+                let start = std::sync::Barrier::new(2);
+                std::thread::scope(|s| {
+                    let one = s.spawn(|| {
+                        start.wait();
+                        instances::key_for(realm, a, false, map)
+                    });
+                    let other = s.spawn(|| {
+                        start.wait();
+                        instances::key_for(realm, b, false, map)
+                    });
+                    (one.join().unwrap(), other.join().unwrap())
+                })
+            })
+            .collect()
+    })
+}
+
+/// Review 2's M2: two of a group going into a dungeon at once, each from
+/// their own map's thread, go into the same copy, the one the first of
+/// them made. Before, `key_for` let go of the copies between choosing a
+/// new copy and storing it, so each could make one: the second went into
+/// a copy their group didn't own, and was put out a minute later.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_of_a_group_going_in_at_once_go_into_one_copy() {
+    let realm = realm(dungeon(), false, Duration::from_secs(600));
+    let (a, b) = party(&realm).await;
+    for (i, given) in at_once(&realm, a.guid, b.guid, DUNGEON, 300)
+        .into_iter()
+        .enumerate()
+    {
+        match given {
+            (Ok(one), Ok(other)) => assert_eq!(one, other, "time {i}: one copy"),
+            other => panic!("time {i}: both let in, not {other:?}"),
+        }
+    }
+}
+
+/// Review 2's M2, its admission: a copy with one place left lets in one of
+/// two going in at once, and turns the other away as full. Before, the
+/// count was of those already inside, and neither was yet, so both were
+/// let in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_copys_last_place_goes_to_one_of_two_at_once() {
+    let mut data = dungeon();
+    data.maps.insert(
+        ONE_PLACE,
+        MapInfo {
+            id: ONE_PLACE,
+            internal_name: "StormwindJail".into(),
+            name: "The Stockade".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    data.scripts.map_templates.insert(
+        ONE_PLACE,
+        MapTemplate {
+            map: ONE_PLACE,
+            map_type: 1,
+            player_limit: 1,
+            ..Default::default()
+        },
+    );
+    let realm = realm(data, false, Duration::from_secs(600));
+    let (a, b) = party(&realm).await;
+    let full = Err(instances::Refused::Abort(TransferAbortReason::IsFull));
+    for (i, given) in at_once(&realm, a.guid, b.guid, ONE_PLACE, 300)
+        .into_iter()
+        .enumerate()
+    {
+        let (one, other) = &given;
+        assert!(
+            (one.is_ok() && *other == full) || (*one == full && other.is_ok()),
+            "time {i}: one let in, one full, not {given:?}"
+        );
+    }
+}
+
+const WIDGET: u32 = 990_201;
+
+/// Review 2's M3: a player between maps as the shutdown begins (taken
+/// from one, and handed by their session to a map not yet started) is
+/// saved where they were going: their place, level and items on the
+/// record when the shutdown is done. Before, the map was started after
+/// the shutdown had told the maps to save everyone, never heard of it,
+/// and kept them, unsaved.
+#[tokio::test]
+async fn a_player_between_maps_as_the_shutdown_begins_is_saved() {
+    let mut data = GameData::empty();
+    data.items.insert(
+        WIDGET,
+        ItemTemplate {
+            entry: WIDGET,
+            name: "Widget".into(),
+            display_id: 1000,
+            stackable: 1,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    let realm = realm(data, false, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let from = map_of(&realm, g);
+    let kalimdor = MapKey::world(1);
+    assert!(
+        realm.maps.all().iter().all(|h| h.key != kalimdor),
+        "Kalimdor not started"
+    );
+    // Level 5 and a widget since her last save, and she leaves the
+    // Eastern Kingdoms for Orgrimmar, as a teleport takes her.
+    let mut player = on(&from, move |m| {
+        let data = m.realm.data.clone();
+        crate::game::map::stats::set_level(m.players.get_mut(&g).unwrap(), &data, 5);
+        crate::game::map::inventory::add_item(m, g, WIDGET, 1, false).expect("room");
+        m.take_player(g)
+    })
+    .await
+    .expect("Alice");
+    player.movement.position = Vector3d {
+        x: 1629.0,
+        y: -4373.0,
+        z: 31.0,
+    };
+    let session = player.online.session.clone();
+    // The shutdown begins before her session hands her on.
+    let shutdown = tokio::spawn({
+        let realm = realm.clone();
+        async move { realm.shutdown_within(Duration::from_secs(5)).await }
+    });
+    while !realm.maps.is_closed() {
+        tokio::task::yield_now().await;
+    }
+    crate::game::session::transfer(&realm, &session, player, kalimdor);
+    shutdown.await.unwrap();
+    let row = realm
+        .store
+        .load(crate::game::guid::counter(g))
+        .await
+        .unwrap();
+    assert_eq!((row.map, row.x, row.y), (1, 1629.0, -4373.0), "her place");
+    assert_eq!(row.level, 5, "her level");
+    assert!(
+        row.items.iter().any(|i| i.entry == WIDGET),
+        "her widget: {:?}",
+        row.items
+    );
+    assert!(realm.registry.online(g).is_none(), "and she is offline");
+}

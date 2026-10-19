@@ -116,7 +116,16 @@ pub struct Instances {
     pub saves: AHashMap<u32, InstanceSave>,
     /// Each account's copies entered in the last hour: (copy, Unix seconds).
     entries: AHashMap<String, Vec<(MapKey, i64)>>,
+    /// Those let into each copy and not in it yet, with when (Unix
+    /// seconds): they count against its limit until they arrive, so two
+    /// let in at once can't both take its last place.
+    on_the_way: AHashMap<MapKey, Vec<(Guid, i64)>>,
 }
+
+/// How long one let into a copy counts against its limit before they
+/// arrive: a way in takes a moment, so one not there a minute on isn't
+/// coming.
+const ON_THE_WAY_SECS: i64 = 60;
 
 impl Instances {
     pub fn load(records: &[(String, u64, String)]) -> Self {
@@ -227,6 +236,38 @@ impl Instances {
         }
         changed
     }
+
+    /// `g` is let into `key`: on their way there, and nowhere else. A way
+    /// in that never ended is forgotten too.
+    fn heading(&mut self, g: Guid, key: MapKey, now: i64) {
+        self.on_the_way.retain(|_, way| {
+            way.retain(|(p, at)| *p != g && *at + ON_THE_WAY_SECS > now);
+            !way.is_empty()
+        });
+        self.on_the_way.entry(key).or_default().push((g, now));
+    }
+
+    /// Those on their way into `key` now, but `g`.
+    fn coming(&mut self, key: MapKey, g: Guid, now: i64) -> Vec<Guid> {
+        let Some(way) = self.on_the_way.get_mut(&key) else {
+            return Vec::new();
+        };
+        way.retain(|(_, at)| *at + ON_THE_WAY_SECS > now);
+        let coming = way.iter().map(|(p, _)| *p).filter(|p| *p != g).collect();
+        if way.is_empty() {
+            self.on_the_way.remove(&key);
+        }
+        coming
+    }
+
+    /// Every copy's owner, account's hour and way in forgotten, for a test
+    /// that makes many copies.
+    #[cfg(test)]
+    pub(crate) fn forget_admissions(&mut self) {
+        self.owned.clear();
+        self.entries.clear();
+        self.on_the_way.clear();
+    }
 }
 
 pub fn instance_type(realm: &Realm, map: u32) -> u32 {
@@ -299,6 +340,11 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
         return Err(Refused::RaidGroupOnly);
     }
     let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
+    let account = account_of(realm, g);
+    let now = now();
+    // One lock from choosing the copy to storing it, admission between:
+    // two of a group going in at once both find the copy the first made,
+    // and two let into a copy's last place can't both take it.
     let mut inst = realm.social.instances.lock();
     let bound = inst.raid_bind(me, map);
     let group_bound = group_bind(&inst, group, map);
@@ -320,16 +366,16 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     {
         return Err(Refused::Abort(TransferAbortReason::NotFound));
     }
-    let id = match selected {
-        Some(id) => id,
-        None => inst.new_id(),
-    };
+    // A new copy's id is spent only once it is let in.
+    let id = selected.unwrap_or(inst.next_id + 1);
     let key = MapKey { map, instance: id };
-    drop(inst);
-    admit_copy(realm, g, gm, key)?;
-    let mut inst = realm.social.instances.lock();
+    if !gm {
+        admit_locked(&mut inst, realm, g, &account, key, now)?;
+    }
+    if selected.is_none() {
+        inst.new_id();
+    }
     inst.owned.entry((owner, map)).or_insert(id);
-    let now = now();
     let save = inst.saves.entry(id).or_insert_with(|| InstanceSave {
         id,
         map,
@@ -356,28 +402,62 @@ fn admit_copy(realm: &Realm, g: Guid, gm: bool, key: MapKey) -> Result<(), Refus
     if gm {
         return Ok(());
     }
-    let account = realm
+    let account = account_of(realm, g);
+    let mut inst = realm.social.instances.lock();
+    admit_locked(&mut inst, realm, g, &account, key, now())
+}
+
+/// `g`'s account, for its hourly count.
+fn account_of(realm: &Realm, g: Guid) -> String {
+    realm
         .registry
         .online(g)
         .map(|o| o.account.to_string())
-        .unwrap_or_default();
-    let mut inst = realm.social.instances.lock();
+        .unwrap_or_default()
+}
+
+/// [`admit_copy`] with the copies locked, from the count to the way in:
+/// those inside and those let in on their way count against its limit,
+/// and one let in is on their way until they arrive ([`arrived`]).
+fn admit_locked(
+    inst: &mut Instances,
+    realm: &Realm,
+    g: Guid,
+    account: &str,
+    key: MapKey,
+    now: i64,
+) -> Result<(), Refused> {
     if inst.saves.get(&key.instance).is_some_and(|s| s.expired) {
         return Err(Refused::Abort(TransferAbortReason::NotFound));
     }
-    let inside = realm
+    let mut inside: ahash::AHashSet<Guid> = realm
         .registry
         .all_online()
         .iter()
         .filter(|o| o.guid != g && o.map().key == key)
-        .count();
-    if inside >= limit(&realm.data, key.map) {
+        .map(|o| o.guid)
+        .collect();
+    inside.extend(inst.coming(key, g, now));
+    if inside.len() >= limit(&realm.data, key.map) {
         return Err(Refused::Abort(TransferAbortReason::IsFull));
     }
-    if !inst.admit(&account, key, now()) {
+    if !inst.admit(account, key, now) {
         return Err(Refused::Abort(TransferAbortReason::TooManyInstances));
     }
+    inst.heading(g, key, now);
     Ok(())
+}
+
+/// `g` has arrived in the copy `key`: counted inside it now, no more on
+/// their way.
+pub fn arrived(realm: &Realm, key: MapKey, g: Guid) {
+    let mut inst = realm.social.instances.lock();
+    if let Some(way) = inst.on_the_way.get_mut(&key) {
+        way.retain(|(p, _)| *p != g);
+        if way.is_empty() {
+            inst.on_the_way.remove(&key);
+        }
+    }
 }
 
 /// `g` goes into copy `key`: it is the one of its map they last went into,
