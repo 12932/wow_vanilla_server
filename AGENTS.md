@@ -18,6 +18,7 @@ cargo nextest run --lib             # the fast suite: every test that doesn't ne
 cargo extended                      # the extended suite: every test, before a merge or a push
 cargo build --release --bin wow_vanilla_server
 cargo run --release --bin wvs-setup  # data/nav and data/terrain from a WoW client
+cargo bench --bench sync            # channels, locks and live config, five minutes ("-- channels" for one group)
 ```
 
 Tests run under nextest, never `cargo test`. The fast suite takes about 25 s on 16 cores. `cargo extended` is an
