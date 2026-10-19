@@ -108,11 +108,12 @@ Until you answer, wvs keeps what the line says.
   - **#13** item charges are saved (DECISIONS 60).
   - **#54** mangos's defaults: instance view 170, leash 30, assistance 5, rare corpses 900, 1200 and 3600 s
     (DECISIONS 61).
+  - **#20** the player combat timer as mangos has it: no PvE timer, 5 s between players (DECISIONS 62).
+  - **#33** a teleport within the map ends the fight, but for mangos's near teleports under 100 yards, Blink's
+    among them (DECISIONS 62).
+  - **#39** new weapon skills start at 1, and skills are now saved (DECISIONS 62).
 - **2026-10-19, being done now:**
   - **#11** fix the packet order: nothing reaches a client about an object before its create.
-  - **#33** a teleport within the map ends the player's fight.
-  - **#20** the player combat timer as mangos and Thistle Tea have it.
-  - **#39** new weapon skills start at 1.
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 

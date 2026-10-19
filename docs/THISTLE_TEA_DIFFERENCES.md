@@ -59,7 +59,12 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **vmangos's spell corrections** (`spell_mod`, `spell_effect_mod`) win over the raw DBC Thistle Tea reads:
   Concussive Shot and Piercing Howl are dazes, not snares; Blessed Sunfruit Juice and Alterac Spring Water aren't
   Well Fed; Blood Siphon and Blood Funnel are a heal and a hit, not funnels.
-- **New weapon skills** start at their cap; Thistle Tea and mangos start them at 1.
+- **The player's combat**, as mangos-classic's `CombatManager` has it: a player leaves combat once no creature holds
+  them on its threat list, the 5 s timer runs only between players (and their pets), and Bloodrage holds a warrior in
+  combat while it lasts. Thistle Tea also gives 5 s for a creature's blow and for any help.
+- **A teleport within the map** ends the fight unless it is a near teleport under 100 yards (Blink, a spell's
+  teleport, a chair), as mangos's `TELE_TO_NOT_LEAVE_COMBAT` callers have it; Thistle Tea goes by the teleport's
+  type, and holds the pet until the client acknowledges.
 - **mangos's defaults:** a creature's leash is 30 yards (Thistle Tea's is 50) and its call for help reaches 5 yards.
 - **Lower ranks of rage and energy spells** stay in the spellbook; mangos takes them out.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.

@@ -130,7 +130,7 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     Juice and Alterac Spring Water aren't Well Fed; and Blood Siphon and Blood Funnel are a heal and a hit, not
     funnels. Keep vmangos's?
 39. **New weapon skills** (from 3j). wvs starts them at their cap; mangos and Thistle Tea start them at 1. Changing
-    it means every level-60 combat test needs its skills raised. Change it?
+    it means every level-60 combat test needs its skills raised. Change it? Answered 2026-10-19: yes (decision 62).
 
 40. **How a creature a player controls heals** out of combat (from 3p), whether charmed or a pet: Thistle Tea's spirit ×
     4, mangos-classic's 13% of its health, or wvs's current twentieth?
@@ -945,5 +945,23 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
       rare, rare elite and boss corpses 900, 1200 and 3600 s. The harness takes its view distances from the defaults.
     - **Left as wvs has it:** a corpse is cut short at its whole respawn, where mangos cuts it at 90%, and mangos's
       own per-template `CorpseDelay` and encounter bosses' times aren't read.
+
+62. **The combat timer, teleports and weapon skills** (questions 20, 33 and 39; `fix/rules`). Where mangos-classic and
+    Thistle Tea differ, mangos's.
+    - **Combat (#20):** every 1.2 s a player leaves combat when no creature holds them on its threat list, their
+      timer is 0 and Bloodrage isn't on. The 5 s timer runs only between player-controlled units, duels included;
+      a creature's blow sets none. A healer joins the fight, held 5 s only for a PvP-flagged target. Spells between
+      players now put both in combat. When nothing holds the player, their attack stops too (mangos's `CombatStop`).
+    - **Teleports (#33):** `Map::teleport` ends the fight; another map's always does. mangos's near teleports under
+      100 yards keep it (`Map::near_teleport`: Blink, teleport to caster, a spell's teleport within the map, a chair).
+      The creatures keep the player on their threat lists, so their next blow brings them back in.
+    - **Weapon skills (#39):** weapon skills and Defense start at 1 and rise by use; Dual Wield stays at its cap.
+      **Skills are now saved**: wvs never saved them. A character saved before keeps its weapon skills at their caps.
+      `[players] always_max_skill_for_level` (mangos's `AlwaysMaxSkillForLevel`, off by default) caps them at login
+      and each level; the harness turns it on.
+    - **You might override:** pets keep their own 6 s window (in mangos a pet leaves combat with its master); Fist
+      Weapons train as other weapons (mangos makes them a 1/1 skill counted as Unarmed).
+    - **Left:** mangos holds a spell's caster in combat from launch for its travel and 500 ms (wvs, when it lands);
+      a pet unsummoned by a same-map teleport past 50 yards; skill values kept for forgotten talents.
 
 ## Left for later, and why
