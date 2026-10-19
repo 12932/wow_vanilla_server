@@ -723,7 +723,12 @@ pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEff
                 e.aura,
                 AURA_MOD_DAMAGE_TAKEN | AURA_MOD_DAMAGE_PERCENT_TAKEN | AURA_MOD_MELEE_DAMAGE_TAKEN
             ) && e.base_points + e.base_dice > 0)
-            || matches!(e.target_a, 6 | 15 | 16 | 22 | 24 | 28) && e.effect != 0
+            || matches!(e.target_a, 6 | 15 | 16 | 24 | 28) && e.effect != 0
+            // The caster's place is neither friend nor foe (mangos's
+            // `TARGET_LOCATION_CASTER_SRC`, neutral): its area says which,
+            // so the Healing Auras about their ward help (Thistle Tea's
+            // "healing wards select friends").
+            || e.target_a == 22 && matches!(e.target_b, 2 | 15 | 16 | 24 | 28 | 36 | 54) && e.effect != 0
             // An instant kill of anything but the caster alone (Death
             // Touch at any unit), but a Voidwalker's Sacrifice (Thistle
             // Tea's `harmful_instakill?`).
