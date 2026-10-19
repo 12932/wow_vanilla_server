@@ -217,6 +217,30 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     mangos adds it flat.
   - **Left:** a spell's procs run once per damaging effect, where both references run them once per target; 119
     rows open (fleeing for help, proximity aggro, leashes, pet combat, kill credit, Feign Death and more).
+- **6e, spells as the world runs them (0.1.17):** a chain jumps in sight of the last target; group spells take pets
+  (a pet's group is its master's); a harmful raid spell (Plague) spares its carrier; a duel's two sides can't help
+  each other; drains and Health Funnel do nothing while their caster is dead; party auras by each member's level;
+  Cannibalize from both edges and not on a flight; a spell at the pet wants it out, alive and in sight (`NO_PET`);
+  spell foci looked for as far as their kind reaches; a leap with no radius stays put; script targets within the
+  effect's radius, else the spell's range, else 100 yards (mangos's); script areas naming no creature hit every unit
+  (Coarse Dynamite and Cozy Fire hit no one before). It also fixed the extended Charge test (6b's minimum range now
+  counts from both edges, so Charge at 10 yards is too close). **My calls:**
+  - **A healing chain** goes to the most health missing, the last target's group first (Thistle Tea's and mangos's
+    `ChainHealingOrder`); newer mangos ranks by health percentage.
+  - **`wrong-for-1.12`, mangos's way:** no level filter on raid areas; Cannibalize won't eat the body of a player
+    who is offline; no projection of the caster's movement for areas about the caster; spells at any unit
+    (dispels) may be cast at duellists by others and at units immune to players.
+  - **No `SMSG_CLEAR_COOLDOWN`** when Cannibalize is refused (mangos sends none).
+  - **A pet's spell area rules** are its master's race, gender, quests, auras and place.
+  - **Left:** per-effect script target masks (four 1.12 spells, all on objects), summons and teleports to a unit's
+    place, Void Zone's lift, game objects' own spells; about 60 rows in the area untouched.
+- **The 15:38 extended run's four failures (0.1.17, `fix/extended1019`):** none a crash. Round 6b's minimum range
+  (beyond both units' reaches, mangos's `GetMinMaxRange`) put Charge's test and the starting spells' kobold too
+  close; the tests moved, and the Blink test now expects fear and Polymorph to hold (Blink cancels stuns and roots
+  only, round 6c). **A real bug:** a standing raised to Neutral never ended its war, so with 6a's interaction rule a
+  player raised from Hated with the Brood of Nozdormu couldn't take Anachronos's quest; it now ends, as mangos's
+  `SetOneFactionReputation` (Thistle Tea never clears it). Triage's test was racing the doctor's one-a-second pace
+  on a loaded machine; it waits by the clock.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -301,7 +325,9 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6c: the world's loaders | 70.2% | cd3605e |
 | 6g: the world's systems | 71.0% | 2febcb2 |
 | 6d: combat | 72.0% | fd2fa71 |
+| 6e: spells in the world | 72.9% | fce32da |
+| The 15:38 extended run's four failures | fixed | 37a0656 |
 
-**Running now:** round 6 (6e, 6f, 6h, 6i), and `fix/extended1019` for the four tests the 15:38 extended run failed.
+**Running now:** round 6 (6f, 6h, 6i, 6j).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
