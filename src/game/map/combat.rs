@@ -3106,6 +3106,12 @@ fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             }
         }
     } else {
+        // A creature a player charmed or possessed is worth nothing to
+        // anyone, though its death lets it go first (Thistle Tea's
+        // `KillCredit.capture`, before the blow releases the control).
+        let controlled = map
+            .creature(victim)
+            .is_some_and(|c| c.owner.is_some_and(guid::is_player));
         if crate::game::map::pets::died(map, killer, victim) {
             return;
         }
@@ -3117,7 +3123,7 @@ fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             .and_then(|c| c.tapped_by)
             .filter(|_| allowed)
             .unwrap_or_else(|| crate::game::map::pets::master(map, killer));
-        if guid::is_player(tapper) {
+        if guid::is_player(tapper) && !controlled {
             if allowed {
                 reward(map, tapper, victim);
             } else {
@@ -3125,7 +3131,7 @@ fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
             }
         }
         crate::game::map::local_defense::fallen(map, victim, killer);
-        crate::game::map::ai::die_by(map, victim, tapper, killer);
+        crate::game::map::ai::die_rewarding(map, victim, tapper, killer, !controlled);
     }
     if killer != victim {
         procs::trigger(

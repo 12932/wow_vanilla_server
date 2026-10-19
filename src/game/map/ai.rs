@@ -359,6 +359,12 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
 /// It died to `killer`, `tapper` holding its tap. Its scripts run on to
 /// its corpse's end, as Thistle Tea's do.
 pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
+    die_rewarding(map, creature, tapper, killer, true);
+}
+
+/// [`die_by`]; with `reputation` false, its kill is worth no standing to
+/// anyone (one a player controlled: Thistle Tea's `KillCredit`).
+pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, reputation: bool) {
     // Who a raid's bind is for, as Thistle Tea's `raid_killer` has it: the
     // killer, or the player whose pet it is, or, for one that killed
     // itself, who tapped it. Only a player binds.
@@ -367,7 +373,7 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     } else {
         crate::game::map::pets::master(map, killer)
     };
-    if guid::is_player(tapper) {
+    if reputation && guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
     // Honor sees the auras it died with (Honorless Target), before death
