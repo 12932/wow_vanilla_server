@@ -471,6 +471,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   cat form ends Water Walking and Moonkin keeps it (Thistle Tea; mangos ends it on every form). **Found on master**
   (round 7 and 8's merges, untested together): two of 7j's size tests against 7k's transforms, and Symbol of Life
   no longer reviving Henze Faulk; `fix/master1019` is on them, with the two flaky tests.
+- **8a, the player, round 8:** **a login waits for the account's character to finish leaving** (up to 5 s, 1 s
+  for a ghost) before reading it, so a fast reconnect no longer loads it from before its last save (7i's find);
+  **the bank moves items only at the banker it was opened at** (my call of 7a, Thistle Tea's `Bank.authorize`; the
+  NPC check's 5 yards past both bodies); worn or mended gear works the stats out again; worn gear sells (mangos), a
+  sale ends a cast; a spell's taxi from a node with no mount flies unmounted; a stable swap for a pet that can't come
+  out moves nothing; a kill's reputation takes its faction's aura bonus (190, mangos); GM commands' limits.
+  **My calls:** any cast ends at a sale (mangos; Thistle Tea only the sold item's); reputation losses take no aura
+  bonus (wvs's, kept; mangos shrinks them); `wrong-for-1.12`: taking a weapon off doesn't reset the swing timer, a
+  saved flight resumes at login, abandoning a quest doesn't give its starter item back.
 
 ## Answered
 - **#10** keep swinging on arrival.
