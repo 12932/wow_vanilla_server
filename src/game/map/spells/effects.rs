@@ -841,9 +841,28 @@ fn effect(
             if map.players.get(&target).is_some_and(|p| p.flight.is_some()) => {}
         EFFECT_TELEPORT_UNITS => {
             let data = map.realm.data.clone();
+            // To the place of the unit aimed at (53, 63): a creature's
+            // Blink (28401) puts it where its victim stands, facing as it
+            // did, its fight kept (mangos's `EffectTeleportUnits` to the
+            // destination `TARGET_LOCATION_CASTER_TARGET_POSITION` sets).
+            let at_unit = [e.target_a, e.target_b]
+                .iter()
+                .any(|a| matches!(a, 53 | 63))
+                .then(|| t.unit.filter(|u| *u != target))
+                .flatten()
+                .and_then(|u| map.position_of(u));
             // Jaina's Teleport in her city keeps its victim there.
             let to = match crate::game::jaina::teleport_to(map, caster, s.id) {
                 Some(to) => Some(to),
+                // Its own facing, or another sent there turned to the
+                // caster.
+                None if at_unit.is_some() => at_unit.map(|at| {
+                    let o = match map.position_of(caster).filter(|_| target != caster) {
+                        Some(c) => (c.y - at.y).atan2(c.x - at.x),
+                        None => map.unit_view(target).map_or(0.0, |u| u.orientation),
+                    };
+                    (map.key.map, at, o)
+                }),
                 None => match data.spells.target_positions.get(&s.id) {
                     Some(&(m, x, y, z, o)) => Some((m, Vector3d { x, y, z }, o)),
                     // The hearthstone and its kind: home.
@@ -852,7 +871,12 @@ fn effect(
             };
             // Within this map, it keeps a fight if it is short (mangos's
             // `EffectTeleportUnits` by `NearTeleportTo`).
+            // A creature is put there, as a leap puts one (mangos's
+            // `NearTeleportTo` relocates any unit).
             match to {
+                Some((m, pos, o)) if m == map.key.map && !map.players.contains_key(&target) => {
+                    super::super::scripts::place(map, target, pos, o)
+                }
                 Some((m, pos, o)) if m == map.key.map => map.near_teleport(target, pos, o),
                 Some((m, pos, o)) => {
                     map.teleport(target, crate::game::map::MapKey::world(m), pos, o)

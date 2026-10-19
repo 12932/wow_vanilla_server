@@ -118,6 +118,43 @@ fn database_data() -> GameData {
     d
 }
 
+/// A wild summon at an enemy's place (53); a teleport of its caster to
+/// the place of the unit it is cast at (63), as a creature's Blink
+/// (28401) has it.
+const AT_ENEMY: u32 = 997_820;
+const BLINK_TO: u32 = 997_821;
+
+fn unit_place_data() -> GameData {
+    let mut d = database_data();
+    let mut summon = bare(AT_ENEMY, 2);
+    summon.mana_cost = 10;
+    summon.range_index = 1;
+    effect(
+        &mut summon,
+        0,
+        SpellEffect {
+            effect: pets::EFFECT_SUMMON_WILD,
+            misc_value: WILD_ONE as i32,
+            target_a: 53,
+            radius_index: 8,
+            ..Default::default()
+        },
+    );
+    let mut blink = bare(BLINK_TO, 3);
+    effect(
+        &mut blink,
+        0,
+        SpellEffect {
+            effect: spells::EFFECT_TELEPORT_UNITS,
+            target_a: 1,
+            target_b: 63,
+            ..Default::default()
+        },
+    );
+    insert(&mut d, [summon, blink]);
+    d
+}
+
 fn near(a: Vector3d, b: Vector3d) -> bool {
     crate::game::map::combat::dist(a, b) < 0.01
 }
@@ -260,4 +297,99 @@ async fn a_spell_at_its_database_place_is_there_on_its_map() {
         })
         .await;
     assert!(near(go, PLACE), "its go names the place: {go:?}");
+}
+
+/// Thistle Tea's `SpellLocations.resolve_requirements/4` "summons at the
+/// unit without treating its position selector as an area" and
+/// "unit-location teleports move the caster rather than the selected
+/// unit", and `resolve/2` "triggered summons retain the original caster
+/// and selected-unit destination": Alice's wild summon at an enemy's
+/// place (53) comes once where the brute stands, not where she sent it
+/// nor about another brute beside it, her mana spent; triggered at the
+/// brute, there too. A brute's teleport at its place's unit (63) puts the
+/// brute where Alice stands, facing as it did and still fighting her
+/// (mangos's `EffectTeleportUnits` to `TARGET_LOCATION_CASTER_TARGET_
+/// POSITION`'s destination); her own puts her by the other brute.
+#[tokio::test]
+async fn a_spell_at_a_units_place_summons_there_and_its_teleport_goes_there() {
+    let (_realm, _a, ga, map) = setup_with(unit_place_data(), Class::Mage).await;
+    let out = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 12.0);
+        let beside = spawn(m, ga, BRUTE, 20, 13.0);
+        let at = m.position_of(brute).unwrap();
+        let mana = |m: &Map| m.players[&ga].fields.get_u32(UNIT_FIELD_POWER1);
+        let before = mana(m);
+        let cast = spells::cast(
+            m,
+            ga,
+            AT_ENEMY,
+            Targets {
+                unit: Some(brute),
+                dest: Some(SENT),
+                ..Default::default()
+            },
+            None,
+        );
+        let spent = before - mana(m);
+        let summoned = of_entry(m, WILD_ONE);
+        spells::cast_triggered(m, ga, AT_ENEMY, Some(brute));
+        let triggered = of_entry(m, WILD_ONE);
+        // The brute fights her, and blinks to her.
+        crate::game::map::ai::attacked(m, brute, ga);
+        let her = m.players[&ga].position();
+        let facing = m.creature(brute).unwrap().orientation;
+        spells::cast(
+            m,
+            brute,
+            BLINK_TO,
+            Targets {
+                unit: Some(ga),
+                ..Default::default()
+            },
+            None,
+        );
+        let c = m.creature(brute).unwrap();
+        let blinked = (c.position, c.orientation, c.combat.victim);
+        // Hers, to the brute beside.
+        let there = m.position_of(beside).unwrap();
+        spells::cast(
+            m,
+            ga,
+            BLINK_TO,
+            Targets {
+                unit: Some(beside),
+                ..Default::default()
+            },
+            None,
+        );
+        let moved = m.players[&ga].position();
+        (
+            at,
+            (cast, spent, summoned),
+            triggered,
+            (her, facing, blinked),
+            (there, moved),
+        )
+    })
+    .await;
+    let (at, (cast, spent, summoned), triggered, (her, facing, blinked), (there, moved)) = out;
+    assert!(cast);
+    assert_eq!(spent, 10, "her mana spent");
+    assert_eq!(summoned.len(), 1, "one summon, no area: {summoned:?}");
+    assert!(near(summoned[0].1, at), "at the brute: {summoned:?}");
+    assert_eq!(triggered.len(), 2);
+    assert!(
+        triggered.iter().all(|(_, p)| near(*p, at)),
+        "triggered at the brute, there too: {triggered:?}"
+    );
+    assert!(
+        near(blinked.0, her),
+        "the brute where she stands: {blinked:?}"
+    );
+    assert!(
+        (blinked.1 - facing).abs() < 0.01,
+        "facing as it did: {blinked:?}"
+    );
+    assert_eq!(blinked.2, ga, "still fighting her");
+    assert!(near(moved, there), "she by the other brute: {moved:?}");
 }
