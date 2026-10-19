@@ -654,12 +654,41 @@ fn heeds_distraction(map: &Map, g: Guid) -> bool {
     })
 }
 
+/// Whether a player heeds a distraction (mangos-classic's
+/// `EffectDistract`): alive, out of a fight and able to react, so not
+/// stunned, feigning death or counting down to a logout
+/// (`UNIT_STAT_CAN_NOT_REACT`), nor moved by the server (fear, confusion,
+/// a charm), on a flight or aboard a transport.
+fn player_heeds_distraction(map: &Map, g: Guid) -> bool {
+    use crate::game::map::auras::{AURA_FEIGN_DEATH, AURA_MOD_STUN};
+    map.players.get(&g).is_some_and(|p| {
+        p.death == crate::game::map::death::Death::Alive
+            && !p.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+            && !p.auras.has(AURA_MOD_STUN)
+            && !p.auras.has(AURA_FEIGN_DEATH)
+            && p.logout_at.is_none()
+            && p.driven.is_none()
+            && p.flight.is_none()
+            && p.movement.flags.get_on_transport().is_none()
+    })
+}
+
 /// Distract (spell effect 69), as Thistle Tea's `Distraction.apply`: a
 /// creature that heeds it stops where it is, turns to `at`, its watchers
 /// told, and stands for the effect's `seconds`, its wandering or patrol
 /// waiting (the point it was bound for kept). One that never moves pays it
-/// no heed.
+/// no heed. A player who heeds it is turned to `at`, and nothing more
+/// (mangos-classic's `EffectDistract`: `SetFacingTo` alone).
 pub fn distract(map: &mut Map, g: Guid, at: Vector3d, seconds: i32) {
+    if guid::is_player(g) {
+        if player_heeds_distraction(map, g) {
+            crate::game::map::player_motion::face_point(map, g, at);
+        }
+        return;
+    }
     if seconds <= 0 || !heeds_distraction(map, g) || sessile(map, g) {
         return;
     }

@@ -1260,12 +1260,13 @@ async fn fear_ward_is_spent_by_the_fear_it_keeps_off_and_conflagrate_wants_immol
 
 #[tokio::test]
 #[ignore = "extended"]
-async fn an_emote_ends_feign_death_and_a_weapon_spell_unarmed_wants_its_weapon() {
+async fn an_emote_is_refused_while_feigning_and_a_weapon_spell_unarmed_wants_its_weapon() {
     if !have_data() {
         return;
     }
     let realm = realm();
-    let (c, hunter, map) = player(&realm, "P3P17", "Feignone", Race::Dwarf, Class::Hunter).await;
+    let (mut c, hunter, map) =
+        player(&realm, "P3P17", "Feignone", Race::Dwarf, Class::Hunter).await;
     map.query(move |m| {
         ready(m, hunter, 60, &[]);
         spells::cast_triggered(m, hunter, FEIGN_DEATH, None);
@@ -1276,26 +1277,27 @@ async fn an_emote_ends_feign_death_and_a_weapon_spell_unarmed_wants_its_weapon()
         .query(move |m| has(m, hunter, FEIGN_DEATH))
         .await
         .unwrap();
+    c.clear();
     c.send(CMSG_TEXT_EMOTE {
         text_emote: TextEmote::Wave,
         emote: 0,
         target: wow_world_messages::Guid::zero(),
     })
     .await;
-    let mut ended = false;
-    for _ in 0..200 {
-        if !map
-            .query(move |m| has(m, hunter, FEIGN_DEATH))
-            .await
-            .unwrap()
-        {
-            ended = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // Feign Death's PREVENT_ANIM refuses it (mangos's
+    // `HandleTextEmoteOpcode`): no one hears it, and the feign stays.
+    let heard = c
+        .gets(Duration::from_millis(300), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_TEXT_EMOTE(_)).then_some(())
+        })
+        .await;
+    let still = map
+        .query(move |m| has(m, hunter, FEIGN_DEATH))
+        .await
+        .unwrap();
     assert!(feigning, "feigning");
-    assert!(ended, "a wave ends it");
+    assert!(heard.is_none(), "the wave is refused");
+    assert!(still, "and the feign stays");
     // Unarmed, a weapon's strike: the weapon is wanted.
     let unarmed = map
         .query(move |m| {

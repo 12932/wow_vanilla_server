@@ -22,6 +22,7 @@ const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 const NONE_WITHIN: Duration = Duration::from_millis(300);
 
 const FOOD: u32 = 433;
+const FEIGN_DEATH: u32 = 5384;
 const DANCE: u32 = 10;
 
 fn data() -> GameData {
@@ -46,6 +47,26 @@ fn data() -> GameData {
             name: "Food".into(),
             effects,
             aura_interrupt_flags: 0x40000,
+            duration_index: 0,
+            equipped_item_class: -1,
+            ..Default::default()
+        },
+    );
+    // Feign Death: its aura (66) on oneself, which an animation would end.
+    let mut effects = [SpellEffect::default(); 3];
+    effects[0] = SpellEffect {
+        effect: 6,
+        aura: 66,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(
+        FEIGN_DEATH,
+        SpellTemplate {
+            id: FEIGN_DEATH,
+            name: "Feign Death".into(),
+            effects,
+            aura_interrupt_flags: crate::game::map::auras::INTERRUPT_ENTER_COMBAT,
             duration_index: 0,
             equipped_item_class: -1,
             ..Default::default()
@@ -272,6 +293,69 @@ async fn a_dance_stays_until_the_dancer_moves_and_the_client_plays_only_two_emot
             .await
             .is_none()
     );
+}
+
+/// Feign Death holds the body (`UNIT_FLAG_PREVENT_ANIM`): a text emote, a
+/// client's emote and a posture are refused while it lasts, nothing played
+/// nor heard, and the feign stays (mangos-classic's `HandleTextEmoteOpcode`,
+/// `HandleEmoteOpcode`, `HandleStandStateChangeOpcode`; Thistle Tea's emote
+/// ends it). Once it ends, a wave is seen again.
+#[tokio::test]
+async fn feign_death_refuses_emotes_and_postures_and_stays() {
+    let realm = players_realm(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let feigning = on_map(&realm, move |m| {
+        crate::game::map::spells::cast_triggered(m, g, FEIGN_DEATH, Some(g));
+        m.players[&g].auras.has_spell(FEIGN_DEATH)
+    })
+    .await;
+    assert!(feigning, "feigning");
+    a.clear();
+    a.send(CMSG_TEXT_EMOTE {
+        text_emote: TextEmote::Wave,
+        emote: 0,
+        target: Guid::zero(),
+    })
+    .await;
+    a.send(CMSG_EMOTE {
+        emote: Emote::OneshotWave,
+    })
+    .await;
+    a.send(CMSG_STANDSTATECHANGE {
+        animation_state: UnitStandState::Sit,
+    })
+    .await;
+    let heard = a
+        .gets(NONE_WITHIN, |m| match m {
+            ServerOpcodeMessage::SMSG_TEXT_EMOTE(_) => Some("a text emote"),
+            ServerOpcodeMessage::SMSG_EMOTE(_) => Some("an emote"),
+            ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(_) => Some("a posture"),
+            _ => None,
+        })
+        .await;
+    assert_eq!(heard, None, "refused while feigning");
+    let (still, posture) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (p.auras.has_spell(FEIGN_DEATH), p.stand_state())
+    })
+    .await;
+    assert!(still, "the feign stays");
+    assert_eq!(posture, 0, "not sat down");
+    // Up again, a wave plays.
+    on_map(&realm, move |m| {
+        crate::game::map::auras::remove_spell(m, g, FEIGN_DEATH, None)
+    })
+    .await;
+    a.send(CMSG_EMOTE {
+        emote: Emote::OneshotWave,
+    })
+    .await;
+    a.wait_for("the wave", |m| match m {
+        ServerOpcodeMessage::SMSG_EMOTE(e) => (e.emote == Emote::OneshotWave).then_some(()),
+        _ => None,
+    })
+    .await;
 }
 
 #[tokio::test]
