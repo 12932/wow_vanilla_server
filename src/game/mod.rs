@@ -535,6 +535,14 @@ mod tests_p5_spell_targets;
 #[cfg(test)]
 mod tests_p5_spell_warlock;
 #[cfg(test)]
+mod tests_p6_ai_melee;
+#[cfg(test)]
+mod tests_p6_ai_ranged;
+#[cfg(test)]
+mod tests_p6_ai_scripts;
+#[cfg(test)]
+mod tests_p6_ai_spells;
+#[cfg(test)]
 mod tests_p6_combat_classes;
 #[cfg(test)]
 mod tests_p6_combat_damage;

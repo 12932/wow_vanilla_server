@@ -79,8 +79,11 @@ pub const COMBAT_CHECK: Duration = Duration::from_millis(1200);
 pub const SPELL_BLOODRAGE_REGEN: u32 = 29131;
 /// A PvP flag lasts this long after the last PvP blow.
 pub const PVP_TIMEOUT: Duration = Duration::from_secs(300);
-/// An error for a swing that can't land is sent at most this often.
-const SWING_ERROR_EVERY: Duration = Duration::from_millis(1000);
+/// The swing errors, as a player is last told of one: not standing, out
+/// of range, facing away.
+const SWING_ERROR_NOT_STANDING: u8 = 1;
+const SWING_ERROR_NOT_IN_RANGE: u8 = 2;
+const SWING_ERROR_BAD_FACING: u8 = 3;
 /// The attacker faces the victim within this arc.
 const FACING_ARC: f32 = 2.0 * std::f32::consts::PI / 3.0;
 /// Reckoning banks up to this many extra attacks.
@@ -112,7 +115,11 @@ pub struct Combat {
     /// When a player's fight is next looked at for its end.
     pub next_check: Option<Instant>,
     pub last_pvp: Option<Instant>,
-    pub swing_error_at: Option<Instant>,
+    /// The swing error the player was last told of, while it lasts: told
+    /// once each time it changes (mangos's `LastSwingErrorMsg`, Thistle
+    /// Tea's `last_swing_error`), cleared by a swing that lands and by
+    /// stopping the attack.
+    pub last_swing_error: Option<u8>,
     /// Units fighting this one.
     pub attackers: AHashSet<Guid>,
     /// A next-swing spell waiting for the main hand (Heroic Strike).
@@ -1643,6 +1650,9 @@ pub fn stop_attack(map: &mut Map, attacker: Guid) {
         return;
     }
     c.attacking = false;
+    // Attacking again is told its errors afresh (Thistle Tea's
+    // `clear_auto_attack`).
+    c.last_swing_error = None;
     let queued = c.queued.take();
     let victim = c.victim;
     if let Some(spell) = queued {
@@ -1688,6 +1698,14 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         stop_attack(map, attacker);
         return;
     }
+    // A player's victim gone from their sight (into stealth, invisible)
+    // isn't swung at: their client has forgotten it, and so stops (Thistle
+    // Tea's `target_valid_same_map?`). A creature's AI lets go of one
+    // itself.
+    if va.is_player && !crate::game::map::spells::stealth::sees(map, attacker, victim) {
+        stop_attack(map, attacker);
+        return;
+    }
     // A stun holds the swing; a pacified unit doesn't swing at all. A
     // spell being cast holds the regular swings, but not the extra attacks
     // a proc owes: they go, and the cast goes on (vmangos's
@@ -1705,15 +1723,15 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         return;
     }
     let error = if !va.standing {
-        Some(encode(&SMSG_ATTACKSWING_NOTSTANDING {}))
+        Some(SWING_ERROR_NOT_STANDING)
     } else if !in_melee_range(&va, &vb) {
-        Some(encode(&SMSG_ATTACKSWING_NOTINRANGE {}))
+        Some(SWING_ERROR_NOT_IN_RANGE)
     } else if va.is_player && !facing(&va, &vb) {
-        Some(encode(&SMSG_ATTACKSWING_BADFACING {}))
+        Some(SWING_ERROR_BAD_FACING)
     } else {
         None
     };
-    if let Some(frame) = error {
+    if let Some(error) = error {
         let Some(c) = map.combat_mut(attacker) else {
             return;
         };
@@ -1721,13 +1739,22 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         if casting {
             return;
         }
-        if c.swing_error_at
-            .is_none_or(|t| now.duration_since(t) >= SWING_ERROR_EVERY)
-        {
-            c.swing_error_at = Some(now);
+        // Told once while it lasts, again when it changes (mangos's
+        // `UpdateMeleeAttackingState`); the hands stay due, and try again
+        // at the next update.
+        if c.last_swing_error != Some(error) {
+            c.last_swing_error = Some(error);
+            let frame = match error {
+                SWING_ERROR_NOT_STANDING => encode(&SMSG_ATTACKSWING_NOTSTANDING {}),
+                SWING_ERROR_NOT_IN_RANGE => encode(&SMSG_ATTACKSWING_NOTINRANGE {}),
+                _ => encode(&SMSG_ATTACKSWING_BADFACING {}),
+            };
             send_to(map, attacker, frame);
         }
         return;
+    }
+    if let Some(c) = map.combat_mut(attacker) {
+        c.last_swing_error = None;
     }
     if extra {
         let owed = map.combat(attacker).map_or(0, |c| c.extra_attacks);

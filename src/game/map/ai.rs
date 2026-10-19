@@ -1572,7 +1572,7 @@ fn announce(map: &mut Map, g: Guid, victim: Guid) {
 
 /// A creature standing in a fight turns to face `target`, and tells its
 /// observers, if it doesn't already (Thistle Tea's `face_target`).
-fn face(map: &mut Map, g: Guid, target: Guid) {
+pub(crate) fn face(map: &mut Map, g: Guid, target: Guid) {
     let (Some(at), Some(to)) = (map.position_of(g), map.position_of(target)) else {
         return;
     };

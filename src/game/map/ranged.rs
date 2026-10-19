@@ -346,6 +346,13 @@ fn shoot(map: &mut Map, g: Guid) {
         cancel(map, g, true);
         return;
     }
+    // Pacified (or silenced, for what silence stops), it stops without a
+    // shot: each repeat is cast again, and fails (mangos's
+    // `_UpdateAutoRepeatSpell` interrupting it, Thistle Tea's `blocked?`).
+    if spells::checks::prevented(map, g, s) {
+        cancel(map, g, true);
+        return;
+    }
     // A cast under way, or a stun, holds the shot.
     if map.caster(g).is_some_and(|c| c.casting.is_some())
         || crate::game::map::auras::held(map, g, false)
@@ -355,17 +362,27 @@ fn shoot(map: &mut Map, g: Guid) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(target)) else {
         return;
     };
+    // Its range as its cast's: the maximum with its modifiers (Hawk Eye),
+    // the dead zone beyond both reaches as the maximum is (mangos's
+    // `GetMinMaxRange`, Thistle Tea's `combat_distance`).
+    let mods = spells::mods::for_spell(map, g, s);
     let (min, max) = data.spells.range(s);
+    let max = mods.apply(spells::mods::OP_RANGE, max).max(0.0);
     let d = combat::dist(me.position, them.position);
     let reach = me.combat_reach + them.combat_reach;
-    let out_of_range = d > max + reach + 1.0 || (min > 0.0 && d < min);
-    // Out of range, a wand stops (mangos's repeat failing its cast); Auto
-    // Shot waits.
-    if out_of_range && s.dmg_class == 1 {
+    let out_of_range = d > max + reach + 1.0 || (min > 0.0 && d < min + reach);
+    // Out of range or sight, or a player's side gone from it (into
+    // stealth), the repeat stops: its cast fails, and mangos interrupts it
+    // (Thistle Tea's `outside_range?` and `combat_distance`).
+    let unseen = !s.attr(2, crate::game::data::spells::ATTR_EX2_IGNORE_LOS)
+        && !spells::checks::line_of_sight(map, me.position, them.position);
+    let concealed =
+        spells::checks::player_side(map, target) && !spells::stealth::sees(map, g, target);
+    if out_of_range || unseen || concealed {
         cancel(map, g, true);
         return;
     }
-    if out_of_range || !combat::facing(&me, &them) {
+    if !combat::facing(&me, &them) {
         return;
     }
     // A broken weapon, or one the spell doesn't take (a bow for a wand's

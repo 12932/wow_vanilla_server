@@ -394,6 +394,13 @@ pub fn attack(map: &mut Map, g: Guid, target: Guid) {
     if let Some(c) = map.creature_mut(g) {
         c.chase_target_at = None;
     }
+    // In reach, it turns to its victim before its first swing, which may
+    // come at once (Thistle Tea's `SetFacing` before a pet's attack).
+    if let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(target))
+        && combat::in_melee_range(&me, &them)
+    {
+        face(map, g, target);
+    }
     combat::start_attack(map, g, target);
     map.note_fighting(g);
     if let Some(c) = map.creature_mut(g) {
@@ -747,13 +754,10 @@ fn calm(map: &mut Map, g: Guid, now: Instant) {
     }
 }
 
+/// Turn to `other`, as a creature does in a fight: its observers are told
+/// with a facing move (Thistle Tea's `SetFacing` before a pet's swing).
 fn face(map: &mut Map, g: Guid, other: Guid) {
-    let (Some(a), Some(b)) = (map.position_of(g), map.position_of(other)) else {
-        return;
-    };
-    if let Some(c) = map.creature_mut(g) {
-        c.orientation = (b.y - a.y).atan2(b.x - a.x);
-    }
+    crate::game::map::ai::face(map, g, other);
 }
 
 /// Stop where it is.
