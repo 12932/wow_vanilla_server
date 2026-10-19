@@ -621,6 +621,8 @@ mod tests_p7_loader_items;
 #[cfg(test)]
 mod tests_p7_loader_quests;
 #[cfg(test)]
+mod tests_p7_loader_scripts;
+#[cfg(test)]
 mod tests_p7_loader_spells;
 #[cfg(test)]
 mod tests_p7_loader_world;
