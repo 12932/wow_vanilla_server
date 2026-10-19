@@ -506,6 +506,13 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   keeps it (mangos); a weapon cast disarmed or without its weapon as it ends fails; a player's owed attacks land
   within 1.4 yards whatever her facing (Thistle Tea's overlap); a unit immune to players takes no help from them
   (mangos's `CanAssist`).
+- **Rounds 7 and 8 merged together, then fixed (`fix/master1019`):** the machine ran short of memory at 19:42 and
+  my test runs were stopped, so rounds 7 and 8 were merged without the fast suite between them. What broke: 7k
+  saves a unit's own size while a growth or transform is on and 7j changes it on an entry change or an event's
+  model, so the size came back as the old entry's; now an entry change or an event's model resets the unit's own
+  size and fits the growths and transform again (mangos's `GetNativeScale` is the current entry's). Henze Faulk's
+  test cast Symbol of Life from beyond the spell's range (6e's range rule, mangos's). The trap and bound-gear
+  flakes were test races (a fight left running killed the hero; the map's once-a-second item check), now fixed.
 
 ## Answered
 - **#10** keep swinging on arrival.
