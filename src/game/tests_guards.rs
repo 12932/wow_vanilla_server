@@ -23,7 +23,7 @@ use crate::game::map::guards::{self, Alarm};
 use crate::game::map::spells::mods::Mods;
 use crate::game::map::spells::outcome::{self, Hit};
 use crate::game::map::{Map, MapKey, ai, event_ai};
-use crate::game::tests_p3_combat::{HELPER, START, data, setup_with, spawn, template};
+use crate::game::tests_p3_combat::{HELPER, START, data, faction, setup_with, spawn, template};
 use crate::game::tests_p3_entity::on;
 use crate::game::tests_p3_entity_objects::until;
 
@@ -687,6 +687,137 @@ async fn jaina_comes_to_stormwind_at_the_third_threshold_and_goes_home_after() {
         matches!(place(m), Place::Away { .. }) && m.realm.social.jaina.lock().visits == 2
     })
     .await;
+}
+
+/// The Alliance's side (Theramore's, Stormwind's): the Horde's enemy.
+const ALLIANCE: u32 = 960_200;
+/// An orc player's faction template.
+const ORCS: u32 = 2;
+
+/// A Horde raider in Stormwind: an orc, brought from the Valley of Trials
+/// to `at` in the Eastern Kingdoms, beyond harm.
+async fn raider(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    name: &str,
+    at: (f32, f32, f32),
+) -> (Client, Guid) {
+    let mut c = Client::connect(realm, name);
+    let g = c.enter(name, Race::Orc, Class::Warrior).await;
+    c.say(&format!(".go xyz {} {} {} 0", at.0, at.1, at.2))
+        .await;
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+    let map = realm.maps.get(realm, MapKey::world(0));
+    on(&map, move |m| hardy(m, g)).await;
+    (c, g)
+}
+
+/// The user's raid: Jaina came to Stormwind "but she just stands still and
+/// doesn't attack anything, even though there are 80 horde in front of
+/// her." Her template takes no one on sight (`flags_extra` 0x2, so
+/// `Reaction::Defensive`), and the raider whose fight called her had died
+/// as she came. In Stormwind she takes on a Horde player within her reach,
+/// and when it dies, the next; at home in Theramore she keeps her no-aggro
+/// (Thrall, beside her there, is left alone).
+#[tokio::test]
+async fn jaina_in_stormwind_takes_on_the_horde_though_the_one_she_came_for_died() {
+    let mut d = world();
+    d.faction_templates.extend([
+        (ALLIANCE, faction(ALLIANCE, 0x1, 0x4)),
+        (ORCS, faction(ORCS, 0x4, 0x1)),
+    ]);
+    // Her real template's flag and reach; the city's people and guards of
+    // her side, and as before taking no one on sight (their reach), so
+    // that only she can take the raiders on.
+    let j = d.creature_templates.get_mut(&jaina::JAINA).unwrap();
+    j.flags_extra |= 0x2;
+    j.detection_range = 20.0;
+    j.faction = ALLIANCE;
+    for e in [CIVILIAN, CITY_GUARD, ROYAL_GUARD] {
+        d.creature_templates.get_mut(&e).unwrap().faction = ALLIANCE;
+    }
+    let (realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    let civ = unit(CIVILIAN);
+    a.sees(civ).await;
+    on(&map, move |m| hardy(m, ga)).await;
+    // At home she lets Thrall be.
+    let (_b, gb, kalimdor) = orc(&realm).await;
+    let start = on(&kalimdor, |m| m.stats.updates).await;
+    until(&kalimdor, "her looks about her at home", move |m| {
+        m.stats.updates > start + 20
+    })
+    .await;
+    let at_home = on(&kalimdor, move |m| {
+        let g = crate::game::map::scripts::creature_of_spawn(m, jaina::SPAWN).unwrap();
+        let c = m.creature(g).unwrap();
+        (
+            crate::game::map::assistance::reaction(m, g),
+            c.combat.attacking && c.combat.victim == gb,
+        )
+    })
+    .await;
+    assert_eq!(
+        at_home,
+        (crate::game::map::assistance::Reaction::Defensive, false),
+        "no aggro at home"
+    );
+    // The raiders: the one whose fight calls her, and two more.
+    let (_h0, foe) = raider(&realm, "Foe", (START.0 - 3.0, START.1, START.2)).await;
+    let (_h1, g1) = raider(&realm, "Grunt", (START.0 - 3.0, START.1 + 2.0, START.2)).await;
+    let (_h2, g2) = raider(&realm, "Peon", (START.0 - 3.0, START.1 - 2.0, START.2)).await;
+    let called = on(&map, move |m| {
+        in_town(m, civ, STORMWIND);
+        // Two Royal Guards from 58: 60, and she is called.
+        set_alarm(m, STORMWIND, 58);
+        ai::attacked(m, civ, foe);
+        // The one she came for dies before she comes.
+        crate::game::map::death::kill(m, foe);
+        place(m)
+    })
+    .await;
+    assert_ne!(called, Place::Home, "she is called");
+    until(&map, "she comes", |m| {
+        matches!(place(m), Place::Away { .. })
+    })
+    .await;
+    let copy = on(&map, |m| match place(m) {
+        Place::Away { copy, .. } => copy,
+        _ => unreachable!(),
+    })
+    .await;
+    let fights = move |m: &Map, g: Guid| {
+        m.creature(copy)
+            .is_some_and(|c| c.combat.attacking && c.combat.victim == g)
+    };
+    until(&map, "she takes on a raider before her", move |m| {
+        fights(m, g1) || fights(m, g2)
+    })
+    .await;
+    let (first, next) = on(&map, move |m| {
+        let first = if fights(m, g1) { g1 } else { g2 };
+        crate::game::map::death::kill(m, first);
+        (first, if first == g1 { g2 } else { g1 })
+    })
+    .await;
+    assert_ne!(first, next);
+    until(&map, "and the next after that one dies", move |m| {
+        fights(m, next)
+    })
+    .await;
+    let home = on(&kalimdor, |m| {
+        crate::game::map::scripts::creature_of_spawn(m, jaina::SPAWN)
+            .map(|g| crate::game::map::assistance::reaction(m, g))
+    })
+    .await;
+    assert_eq!(
+        home,
+        Some(crate::game::map::assistance::Reaction::Defensive),
+        "her home self keeps her no-aggro"
+    );
 }
 
 /// Dead in Stormwind, her corpse lies there, and she is back in Theramore
