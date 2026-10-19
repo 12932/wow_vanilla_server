@@ -304,6 +304,19 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     vmangos, gives three quarters. `wrong-for-1.12` unless you take vmangos as the reference here.
   - **Left:** about 539 rows in its wide area: pets (~70), creatures (~65), auras (~55), movement (~49), stats (34),
     and movement acks (~20, a missing feature).
+- **7b, spells, round 7 (0.1.23):** cast-end procs (nothing raised them, so Unstable Power and Ascendance never
+  spent their stacks and Elemental Focus never procced); a fear that Recklessness's kind stops doesn't block casts;
+  a spell's teleport leaves a flier on their flight (mangos's `IsTaxiFlying`); a heal's tick procs only what a rule
+  asks (vmangos); a channel ends past 1.5 times its range, on a jump, on a turn if it says so, and as it begins if
+  its target avoids it whole (mangos's `WriteSpellGoTargets`); spell groups refuse whole and bounce a weaker buff
+  at the check (`AURA_BOUNCED`); Sap, Distract and Duel refuse a target in a fight. **My calls:**
+  - **A channel's range** is mangos's 1.5 times for every channel; Thistle Tea uses vmangos's 1.3 for hostile
+    targets (`wrong-for-1.12`).
+  - **Triggered casts** raise no cast-end proc (Thistle Tea; mangos raises one for every cast); the proc runs after
+    the hits, so every target of an area cast gets Unstable Power's full bonus (Thistle Tea).
+  - **Any facing change** is a turn; mangos allows 0.1 radians, and more for channels that track their target.
+  - **Left:** Thistle Tea's proc origins (spells triggered by auras don't proc), deferred cooldowns, summons by
+    compass offset, traps and the Transporter.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -395,7 +408,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6i: entities in the world | 75.1% | cabc8d6 |
 | 7a: the player, round 7 | 75.7% | 5b07acc |
 | 6j: the core's other areas | 76.2% | dfcd6e7 |
+| 7b: spells, round 7 | 76.9% | a69e06e |
 
-**Running now:** round 7 (7b spells, 7c loaders, 7d combat, 7e the world, 7f creature AI).
+**Running now:** round 7 (7c loaders, 7d combat, 7e the world, 7f creature AI, 7g creature scripts).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
